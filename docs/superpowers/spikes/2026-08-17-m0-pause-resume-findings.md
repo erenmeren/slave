@@ -609,7 +609,10 @@ timing, not directly observed here).
    consistent with section 1's finding that `session_id` is a stable top-level field.
 3. **Is the working tree in a coherent state (no half-written file)?** Yes — `git status --short`
    shows only the two files attempt 1's completed refactor touched, no partial/corrupt file, and
-   `npm test` passes 6/6.
+   `npm test` passes 6/6. Caveat: this run's denied calls were both read-only (`Read`, `Bash`), not
+   `Edit` — see 3.7 for why "no half-written file" is confirmed for what this run actually denied,
+   but the stronger claim ("an `Edit` specifically can never be interrupted mid-write") is inferred
+   from the hook's pre-execution timing, not directly observed.
 
 ### 3.9 Resulting pause-mechanism definition for M3
 
@@ -631,6 +634,112 @@ are now independently validated:
 
 Session id remains recoverable and the working tree remains coherent across a pause, which is what
 makes resume (Task 5) viable on top of this mechanism.
+
+### 3.10 Post-review hardening: fail-safe behavior and no shared-default fallback
+
+Task review returned two Important findings against `pause-gate.sh` — the one artifact from this
+spike that survives into M3 unmodified. Both are fixed in the committed script. No new `claude` run
+was needed for either fix; all verification below is the script exercised directly in isolation.
+
+**Exit-code / output contract, made explicit (was previously implicit):**
+
+- **Allow:** exit 0, empty stdout.
+- **Deny:** exit 0, stdout is a single-line JSON object with
+  `hookSpecificOutput.permissionDecision == "deny"`. Deny is carried entirely in the JSON *body*,
+  not the exit code — both allow and deny exit 0 in every capture gathered across sections 3.3-3.9.
+- **Write failure / crash:** exit 2, human-readable reason on stderr. This maps to Claude Code's
+  documented general hook exit-code convention (0 = success, 2 = blocking error read from stderr,
+  other nonzero = non-blocking warning). **This path was never exercised by an actual `claude` run
+  in this spike** — no capture in sections 3.3-3.9 shows a nonzero-exit hook_response — so mapping
+  a script crash to "the tool call gets blocked" rests on that general convention, not on evidence
+  gathered here. Stated plainly so M3 does not treat it as confirmed: if that convention turns out
+  not to hold, a crash could fail *open* (tool proceeds) rather than closed, and only a dedicated
+  hook-crash test against a real Claude Code run would confirm which.
+
+**Finding 1 fix — write failure can no longer produce an undefined exit status.** The script
+previously ran under `set -euo pipefail` with an unconditional `printf …; exit 0` for the deny path:
+if `printf` failed (broken stdout pipe, disk full), `-e` would abort the script before its own
+`exit 0` ran, leaving the exit status to whatever `printf` returned — neither a clean allow nor a
+well-formed deny. Fixed by dropping `-e` (kept `-u` and `-o pipefail`) and replacing the two
+inline `printf` sites with a single `deny()` helper that explicitly checks the write's own exit
+status: on success it exits 0 as before; on failure it prints a reason to stderr and exits 2,
+matching the documented crash convention above rather than an accidental leftover status. The deny
+payload is built as one string and written with one `printf '%s\n'` call — at this message length
+(well under Linux's 4096-byte `PIPE_BUF`) the write to a pipe is atomic, so there is no
+partially-delivered-JSON case for a payload this short; the failure mode is strictly all-or-nothing.
+
+Verified directly (script invoked standalone, hook stdin payload simulated with `echo '{}' |`):
+
+```bash
+$ SCRIPT=/home/meren/projects/slave-of-ai/spike/m0-pause-resume/pause-gate.sh
+$ FLAGFILE=/tmp/pause-gate-test-full.flag; touch "$FLAGFILE"
+$ echo '{}' | AITEAMOS_PAUSE_FLAG="$FLAGFILE" "$SCRIPT" > /dev/full
+pause-gate.sh: line 37: printf: write error: No space left on device
+pause-gate.sh: failed to write deny payload (reason was: Paused by AI Team OS. Stop and wait.)
+$ echo "exit status: $?"
+exit status: 2
+```
+
+`/dev/full` deterministically fails every write with `ENOSPC`, giving a reproducible crash case
+(an earlier attempt using a closed pipe reader (`... | :`) was racy and did not reliably trigger
+the failure — not included as evidence for that reason). Exit 2 with a clear stderr reason,
+confirmed.
+
+**Finding 2 fix — removed the shared-default fallback; unset or empty `AITEAMOS_PAUSE_FLAG` now
+denies loudly.** Previously `FLAG="${AITEAMOS_PAUSE_FLAG:-/tmp/aiteamos-pause.flag}"` meant every
+run that forgot to set the variable would share the same hardcoded path — pausing one agent could
+inadvertently pause an unrelated concurrent one sharing that default. Per the controller's ruling,
+implemented exactly as specified rather than as a judgment call: an unset **or empty**
+`AITEAMOS_PAUSE_FLAG` is now a configuration error, and the hook denies with a reason that names the
+misconfiguration explicitly, using the same `deny()` path (exit 0, JSON body) as a normal pause —
+not the exit-2 crash path — because exit-0-with-JSON-body is the mechanism this spike has actually
+confirmed blocks a tool call (section 3.6); routing a misconfiguration through the unconfirmed
+exit-2 path would risk it being silently ignored instead of loudly blocking.
+
+**Why loud-deny and not the other two options (recorded here so M3 inherits the reasoning, not just
+the behavior):** in an autonomous system running several agents concurrently, pause is the
+operator's only intervention lever. Silently falling back to a shared path means pausing one agent
+can freeze unrelated agents — and running agents in parallel is this product's entire premise.
+Silently allowing instead would disable the intervention lever without anyone noticing — worse, not
+better. Denying loudly is the least harmful of the three: it surfaces the misconfiguration at the
+very first tool call of the affected run, rather than during an incident where two unrelated agents
+turn out to have been sharing a pause flag.
+
+Verified directly, all four required cases plus the crash case above:
+
+```bash
+$ SCRIPT=/home/meren/projects/slave-of-ai/spike/m0-pause-resume/pause-gate.sh
+
+# Case A: flag var set, file PRESENT
+$ FLAGFILE=/tmp/pause-gate-test-present.flag; touch "$FLAGFILE"
+$ echo '{}' | AITEAMOS_PAUSE_FLAG="$FLAGFILE" "$SCRIPT"; echo "exit: $?"
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Paused by AI Team OS. Stop and wait."}}
+exit: 0
+
+# Case B: flag var set, file ABSENT
+$ FLAGFILE=/tmp/pause-gate-test-absent.flag; rm -f "$FLAGFILE"
+$ echo '{}' | AITEAMOS_PAUSE_FLAG="$FLAGFILE" "$SCRIPT"; echo "exit: $?"
+exit: 0            # (empty stdout -- allow)
+
+# Case C: AITEAMOS_PAUSE_FLAG UNSET
+$ echo '{}' | env -u AITEAMOS_PAUSE_FLAG "$SCRIPT"; echo "exit: $?"
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"AITEAMOS_PAUSE_FLAG is unset or empty -- refusing to fall back to a shared default path. Set AITEAMOS_PAUSE_FLAG explicitly for this run before retrying."}}
+exit: 0
+
+# Case D: AITEAMOS_PAUSE_FLAG EMPTY string
+$ echo '{}' | AITEAMOS_PAUSE_FLAG="" "$SCRIPT"; echo "exit: $?"
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"AITEAMOS_PAUSE_FLAG is unset or empty -- refusing to fall back to a shared default path. Set AITEAMOS_PAUSE_FLAG explicitly for this run before retrying."}}
+exit: 0
+```
+
+All four match the expected behavior exactly: real pause denies with the pause reason, no pause
+allows silently, and both unset and empty configuration deny loudly with a distinct,
+operator-actionable reason — with no case falling through to a shared default path.
+
+Two Minor findings from the review were deliberately not addressed here, per the controller's
+explicit deferral: the `:-` vs `:?` bash-idiom nuance is subsumed by the finding-2 fix above (there
+is no `:-` default left in the script at all), and the un-captured OS-level exit code detail is
+left as a note for a future spike rather than acted on now.
 
 ## 4. Resume after pause with instruction injection
 
