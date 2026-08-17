@@ -743,7 +743,233 @@ left as a note for a future spike rather than acted on now.
 
 ## 4. Resume after pause with instruction injection
 
-<filled by Task 5>
+**Question:** after a hook-originated pause (section 3), can the operator resume the same session
+with an injected instruction and have it obeyed — the mechanism the entire agent-messaging feature
+("stop working on X, prioritise Y") depends on?
+
+### 4.1 Precondition check — what session 4 actually left behind
+
+Before resuming, the controller's ruling required checking what run 4
+(`session_id: 836bde75-4577-4e87-9218-613cbc455774`, section 3.4–3.5) had actually done, since the
+brief's framing ("continues the Calculator refactor") assumes it made real progress. It did not, and
+the file-state history is more tangled than "denied at its second call" alone suggests:
+
+- Run 4's own tool sequence was: `Read sum.js` (**allowed** — the pause flag was not yet set), then
+  `Read sum.test.js` (**denied**), then `Bash 'ls -la && cat package.json && git diff --stat'`
+  (**denied**), then the model stopped itself. Run 4 made **zero** `Edit` calls. It never wrote
+  anything.
+- The `Calculator` class that `Read sum.js` observed on disk was **not written by this session at
+  all**. It was written by a completely different, unrelated process: "attempt 1", the misfire run
+  from section 3.4 that used the broken `read -t < /dev/null` delay primitive and ran to completion
+  unpaused. That run's own capture (`/tmp/m0-run4-attempt1-misfire.jsonl`) carries
+  `session_id: 24567253-d460-4335-b628-b13fae22564f` — a session with no relationship to
+  `836bde75-...` whatsoever, sharing nothing but the same working directory.
+
+So going into the resume: session `836bde75-...`'s entire pre-pause history consists of one
+successful `Read` (of a file it did not write) and two denied calls. It has no edit history of its
+own to "continue." Any claim that the resumed run "picked up the refactor where it left off" would
+be false — there was no refactor in progress *in this session* to pick up. This is stated plainly
+per the controller's ruling rather than smoothed over.
+
+### 4.2 Exact command executed
+
+```bash
+export AITEAMOS_SPIKE="/home/meren/projects/slave-of-ai/spike/m0-pause-resume"
+export AITEAMOS_PAUSE_FLAG=/tmp/aiteamos-pause-run5.flag
+export SPIKE_REPO="$HOME/.aiteamos-spike/sample-repo"
+
+# Verified absent BEFORE exporting, per the controller's explicit instruction:
+$ ls -la "$AITEAMOS_PAUSE_FLAG"
+ls: cannot access '/tmp/aiteamos-pause-run5.flag': No such file or directory
+
+rm -f "$AITEAMOS_PAUSE_FLAG"
+cd "$SPIKE_REPO"
+SID4=$(grep -o '"session_id":"[^"]*"' /tmp/m0-run4.jsonl | head -1 | cut -d'"' -f4)
+# SID4 = 836bde75-4577-4e87-9218-613cbc455774
+
+claude -p "You were paused by the operator. New instruction: name the class MathKit instead of Calculator, then continue and finish the refactor." \
+  --resume "$SID4" --settings "$AITEAMOS_SPIKE/settings.json" \
+  --permission-mode bypassPermissions \
+  --output-format stream-json --verbose 2>&1 | tee /tmp/m0-run5.jsonl
+```
+
+This differs from the brief's suggested Step 1 command in one respect: `--permission-mode
+bypassPermissions` was added, per the controller's explicit constraint 3 and consistent with
+sections 1 and 3.6 — without it the `Edit` calls needed to perform the rename would be silently
+denied under headless mode's default permission posture, and the run would appear to succeed while
+changing nothing. `--include-hook-events` (used in run 4, section 3.3–3.4) was **not** included this
+time — the brief's Step 1 command doesn't call for it and the controller's command did not add it —
+so, unlike run 4, this run's raw capture has no `hook_started`/`hook_response` lines
+(`grep -c hook_response /tmp/m0-run5.jsonl` → `0`). Whether `pause-gate.sh` fired an *allow* on each
+of this run's tool calls is therefore **inferred** from the absence of denial signals (empty
+`permission_denials`, no `is_error:true` tool results, no `AITEAMOS_PAUSE_FLAG` file ever created
+during the run), not directly observed the way run 4's denials were.
+
+Exit code: `0`. Raw capture: `/tmp/m0-run5.jsonl`, 34 lines, all 34/34 verified to parse as
+standalone JSON (per-line `json.loads`, same method as prior sections). Not committed (throwaway,
+consistent with this spike's other raw captures).
+
+### 4.3 Session id: same as run 4, not a new one
+
+```bash
+$ grep -o '"session_id":"[^"]*"' /tmp/m0-run5.jsonl | sort -u
+"session_id":"836bde75-4577-4e87-9218-613cbc455774"
+```
+
+Every line carries the same UUID run 4 reported — consistent with section 2's finding that `--resume`
+reuses the session id.
+
+### 4.4 Was the injected instruction obeyed? Observed: yes
+
+The rename tool sequence, parsed from `/tmp/m0-run5.jsonl` (`type:"assistant"` lines with `tool_use`
+blocks, in order):
+
+1. Assistant text: *"Resuming with the new name."*
+2. `Read sum.test.js` — the file run 4 was **denied** reading (section 3.5). Result: file content,
+   showing `import { Calculator } from './sum.js';` etc.
+3. `Bash 'ls -la && cat package.json && grep -rn "Calculator" ...'` — succeeded, confirms baseline
+   state.
+4. `Bash 'npm test'` — 6/6 pass, baseline confirmed green before touching anything.
+5. `Edit sum.js`: `old_string: "export class Calculator {"` → `new_string: "export class MathKit {"`.
+6. `Bash 'npm test'` — 1 failure (`sum.test.js` still imports `Calculator`) — an **expected**
+   intermediate failure, not a bug; the assistant's own text calls it out as such before fixing it.
+7. `Edit sum.test.js`: `import { Calculator } from './sum.js';\n\nconst calculator = new Calculator();`
+   → `import { MathKit } ...` / `const mathKit = new MathKit();`.
+8. `Edit sum.test.js` (`replace_all: true`): `calculator.` → `mathKit.` (updates all six call sites).
+9. `Bash 'npm test && grep -rn "Calculator\|calculator" ...'` — 6/6 pass, no leftover references.
+
+Final assistant text (verbatim, in part): *"Done. 6/6 tests pass, no leftover `Calculator`
+references."* Final `result` event: `"is_error":false`, `"stop_reason":"end_turn"`,
+`"terminal_reason":"completed"`, `"permission_denials":[]`, `"num_turns":9`,
+`"total_cost_usd":0.22231250000000002`.
+
+Verified independently against the working tree after the run (Step 2 of the brief, exact commands):
+
+```bash
+$ cd "$SPIKE_REPO" && grep -l "MathKit" *.js
+sum.js
+sum.test.js
+
+$ grep -l "Calculator" *.js; echo "grep_exit=$?"
+grep_exit=1        # no match in any .js file — Calculator is fully gone
+
+$ git diff --stat
+ sum.js      | 21 +++++++++++++++++++--
+ sum.test.js | 28 +++++++++++++++++++++++++---
+ 2 files changed, 44 insertions(+), 5 deletions(-)
+
+$ npm test
+✔ add adds two numbers (0.455584ms)
+✔ subtract subtracts the second number from the first (0.077188ms)
+✔ subtract returns a negative result when the second number is larger (0.056932ms)
+✔ multiply multiplies two numbers (0.542737ms)
+✔ divide divides two numbers (0.10309ms)
+✔ divide throws on division by zero (0.218695ms)
+ℹ tests 6
+ℹ pass 6
+ℹ fail 0
+```
+
+`git diff sum.js sum.test.js` (against the pre-refactor `sum`-function baseline, since neither file
+had been committed since the spike began) confirms `export class MathKit` with all four methods and
+`sum.test.js` importing/instantiating `MathKit` as `mathKit` throughout. **The injected instruction
+was obeyed: fully, correctly, and confirmed both in the stream and independently in the working
+tree.**
+
+### 4.5 Did the resumed agent show awareness of the interrupted intent, or start cold? Observed: awareness, at a granular level
+
+Two independent pieces of directly observed evidence, not inference:
+
+**(i) It read exactly what it didn't already know, and nothing more.** Run 5 opens by
+re-`Read`-ing `sum.test.js` — the one file whose content run 4 was **denied** access to
+(section 3.5, denial #1). It does **not** re-`Read` `sum.js` before editing it — the one file run 4
+*had* successfully read before the pause. Its `Edit sum.js` call's `old_string` —
+`"export class Calculator {"` — matches, character for character, the content run 4's earlier
+successful `Read sum.js` returned (`/tmp/m0-run4.jsonl`, tool result: `"1\texport class Calculator {\n2\t  add(a, b) {..."`).
+This is the same "edit without re-reading" signature section 2 documented for run 3's plain resume
+(2.4, "Context carried over"), and it lines up exactly with what this session did and did not
+actually see before being paused — not a coincidence, and not something a cold start (a fresh
+session with no prior turns) could reproduce, since a cold session would have no `Calculator` text
+in context to anchor an edit on without reading the file first.
+
+**(ii) It re-attempted, verbatim in intent, both actions the hook had denied.** Run 4's two denials
+were `Read sum.test.js` and `Bash 'ls -la && cat package.json && git diff --stat'` (section 3.5).
+Run 5's first two tool calls after resuming are exactly those two actions, retried:
+`Read sum.test.js` (step 2 above) and a near-identical `Bash 'ls -la && cat package.json && grep -rn
+"Calculator" ...'` (step 3 above). The model picked up precisely the two threads that had been cut
+off, in the same order it had originally attempted them.
+
+**(iii) It recalled an instruction from the original prompt that was never repeated in the resume
+prompt.** The resume prompt (section 4.2) says only "name the class MathKit instead of Calculator,
+then continue and finish the refactor" — it does not mention testing cadence. Run 4's *original*
+prompt (section 3.4) was "Refactor sum.js into a Calculator class ... **Run npm test after each
+change**." Run 5's own final summary states: *"Test runs, per your after-each-change instruction:
+1. Baseline before touching anything — 6/6 pass. 2. After renaming the class in `sum.js` — 1
+failure... 3. After updating the test file — 6/6 pass."* — and its tool sequence (steps 4, 6, 9
+above) does in fact run `npm test` after each edit, unprompted by the resume message itself. This
+instruction could only have come from the pre-pause turn of the same session.
+
+The assistant's own text also states this explicitly, unprompted: *"when I resumed, the class-based
+refactor itself was already in place in the working tree (uncommitted) — `sum.js` had a `Calculator`
+class with all four methods, and `sum.test.js` already exercised them through an instance. So the
+work this turn was the rename, not the original refactor."* — which is also the correct, honest
+framing per 4.1: it correctly attributes the pre-existing `Calculator` code to the state of the
+working tree rather than claiming credit for having refactored it itself in a prior turn.
+
+**Conclusion for (c): observed, not inferred.** The resumed agent did not start cold. Its choice of
+what to re-check versus what to trust from memory matched, call for call, what this specific session
+had and had not been able to observe before the pause, and it carried forward a testing-cadence
+instruction from the original (pre-pause) prompt that was not restated in the resume prompt.
+
+### 4.6 What, if anything, was lost across the pause boundary
+
+Nothing was observed to be lost. The only things "missing" from run 5 relative to a hypothetical
+uninterrupted run — the content of `sum.test.js` and the output of the `ls`/`cat`/`git diff` probe —
+are exactly the two things run 4 was denied and therefore never actually obtained in the first
+place; re-fetching them in run 5 is recovery of information genuinely absent from context, not lost
+memory. Everything run 4 *did* successfully observe (the content of `sum.js`) and everything from
+the original pre-pause prompt (the "run npm test after each change" instruction) both carried
+forward intact into run 5, per 4.5. No evidence of session amnesia was observed in this run.
+
+### 4.7 Answers to the three narrowed questions (per the controller's ruling)
+
+1. **Does resume after a hook-pause work at all?** **Observed: yes.** `claude -p ... --resume
+   "$SID4"` against the same session id run 4 reported, with the pause flag cleared and
+   `AITEAMOS_PAUSE_FLAG` pointed at a verified-absent path, exited `0`, reported the same session id
+   throughout, executed four `Edit`/`Bash`-mutating calls with no denials
+   (`"permission_denials":[]`), and its file changes are independently confirmed on disk and by a
+   passing test suite (4.4). A hook-originated pause does not brick the session — resume is a normal
+   `--resume` call once the flag is cleared and the environment is configured correctly.
+
+2. **Is the injected instruction honoured (`MathKit`, not `Calculator`)?** **Observed: yes**, fully.
+   `grep -l "MathKit" *.js` matches both files; `grep -l "Calculator" *.js` matches none; the actual
+   diff (4.4) shows a clean rename with every call site updated; all 6 tests pass. This is the direct
+   evidence the product's agent-messaging feature needs: an operator-injected instruction delivered
+   via a resume prompt was followed exactly, not partially or approximately.
+
+3. **Does the resumed agent show awareness of the interrupted intent rather than starting cold?**
+   **Observed: yes**, at a level more granular than "it remembered the topic" — its choice of what
+   to re-verify versus what to trust from memory tracked precisely what this session had and had not
+   been allowed to see before the pause (4.5-i, ii), and it carried forward an instruction from the
+   original prompt that was absent from the resume prompt (4.5-iii). What is **not** supported by
+   this evidence — flagged explicitly per the controller's ruling — is any claim that the agent
+   "continued the Calculator-to-MathKit refactor from where it left off": there was no refactor in
+   this session's own history to continue (4.1). What the evidence supports instead is narrower and
+   still significant: the *session's conversational context* (what it had read, what it had been
+   told, what it had been denied) survived the pause boundary intact and shaped its behavior on
+   resume, even though the *file-editing work product* did not originate from this session at all.
+
+### 4.8 Verdict for M3
+
+Pause → instruct → resume works as a mechanism: clear the flag, resume the session id, deliver the
+new instruction as the resume prompt, and the CLI treats it as an ordinary next turn with full prior
+context, no special resume-after-pause handling required on the CLI side. The one operational
+requirement `ClaudeCodeAdapter` must get right is exactly what tripped up this spike's own two
+earlier attempts (section 3.2, 3.4): the orchestrator, not the model, owns clearing the pause
+condition and choosing what instruction to inject — the CLI does not know or care that a resume
+follows a hook-originated pause rather than a plain conversational gap (section 2). Operator messages
+queued during a pause can be delivered exactly this way: as the prompt text of a `--resume` call
+issued after the pause flag is cleared.
 
 ## 5. Worktree isolation
 
