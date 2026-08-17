@@ -344,29 +344,44 @@ A reader who conflates the two will either chase settled work or build on an ass
   the absolute-path form. §3 makes absolute paths mandatory, which is why this stays a limitation
   rather than becoming an open question.
 - **A denied `Edit` was never observed** (findings 3.7); both denied calls were read-only. See Q8.
-- **The paused session had no edits of its own** (findings 4.1). See §6.
+  Not settled by findings §7 either: that task's denied call was a `Bash` invocation, not an `Edit`.
+- ~~The paused session had no edits of its own (findings 4.1). See §6.~~ **SETTLED** — findings
+  §7.3–§7.6 paused a session with a real, landed `Edit` (a TDD-RED test file change) already applied
+  before the flag was armed, killed it mid-tool-call, and confirmed the resumed session both knew
+  about that edit without re-reading it and correctly continued the interrupted plan from it. "A
+  session resumed and continued its own in-flight editing work" is now demonstrated. **[Observed]**
 
 ## Open Questions
 
 These are unresolved and someone should measure them. Each names what would settle it. They are
 recorded rather than guessed at, because the point of M0 was to replace guesses with measurements.
 
-- **Q1 — Does `--resume` work when the cwd is a git worktree rather than the repository root?**
-  Session state is stored per project directory and a worktree has a different path. Every resume in
-  the spike ran from the main tree; every worktree run was a fresh session. The two halves of the
-  spike's own question were verified separately and never together. *Settles it:* one run inside
-  `.aiteamos/worktrees/TASK-00X`, then a `--resume` of its session id from that same directory,
-  checking context carried over. **This is the highest-priority measurement before M3 starts**,
-  because the product resumes runs in worktrees by design. If it fails, `--session-id <uuid>`
-  (pre-assigning an id, findings 0) is the first mitigation to try.
-- **Q2 — Does a session remain resumable after the orchestrator kills the process?** The one
-  resume-after-pause measured followed a process that exited cleanly on its own; no run in the spike
-  was ever killed. This ADR requires M3 to kill. *Settles it:* pause a run, `SIGTERM` on the first
-  deny, then `--resume` and check the prior context is present; compare `SIGKILL`.
-- **Q3 — Is a resumed run's `total_cost_usd` that segment's cost or the session's cumulative
-  cost?** Both readings fit the captures. The budget guardrail (spec §9.2) either double-counts or
-  under-counts depending on the answer. *Settles it:* a resume that does almost no work — if its
-  total still exceeds the prior run's, the figure is cumulative.
+- **Q1 — RESOLVED: yes.** `--resume` works with cwd inside a git worktree. One run was started in
+  `.aiteamos/worktrees/TASK-003`, killed mid-tool-call (see Q2), and resumed from that same worktree
+  directory: exit code `0`, same session id, and — with no `Read` tool call preceding it — the
+  resumed run's first line of text correctly named the exact pre-kill state on disk, evidence the
+  worktree-scoped session was read back intact, not reconstructed by inspection. All four subsequent
+  commits landed on the worktree's own branch (`aiteamos/TASK-003-kill-resume`); `main` was never
+  touched. **[Observed]** (findings §7.3, §7.5, §7.6). No mitigation (`--session-id` pre-assignment)
+  was needed.
+- **Q2 — RESOLVED: yes, for `SIGTERM`.** A session killed mid-tool-call remains fully resumable.
+  Sequence measured: a run was paused via the hook, the first observed deny (`PreToolUse:Bash`) was
+  followed immediately by `SIGTERM`; the process exited on its own within a 3-second grace period —
+  `SIGKILL` was never needed for this run. The resumed session (Q1) picked up exactly where the kill
+  left it, including awareness of an edit that had landed but whose verifying test run never
+  happened, and completed the remaining work with commits. **[Observed]** (findings §7.3, §7.6).
+  **Narrower than originally scoped:** only `SIGTERM`, and only a case where the process exited
+  before a `SIGKILL` grace period elapsed, were exercised. Whether a session survives `SIGKILL`
+  specifically (no grace period, no chance for the CLI to flush anything before the OS reclaims the
+  process) remains unmeasured and is not settled by this ADR.
+- **Q3 — RESOLVED: per-segment, not cumulative.** Run 2's aggregated `usage` fields
+  (`cache_read_input_tokens: 126370`, `output_tokens: 1229`) are *larger* than its resume's,
+  run 3's (`119721`, `951`), even though run 3 did real, verified additional work. A cumulative,
+  whole-session running total cannot decrease across a resume that adds turns; since it decreased,
+  each run's reported `usage`/`total_cost_usd` is that run's own segment total, not inherited from
+  prior segments. **[Observed]** (findings §7.7). Consequence: the budget guardrail (spec §9.2)
+  summing `total_cost_usd` across a task's run segments is the *correct* accounting — each resume's
+  figure is additive, not inclusive of what came before. Summing does not double-count.
 - **Q4 — Does the CLI accept a custom or appended system prompt in headless mode?** Never
   exercised. `supportsCustomSystemPrompt` is `false` until measured. *Settles it:* one run with the
   flag, checking the instruction is honoured.

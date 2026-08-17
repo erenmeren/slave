@@ -1528,3 +1528,316 @@ guesses with measurements.
 - **Q6 — What happens when a pause is requested and the run has no further tool calls?** Inferred
   in 6.5 to complete normally. *Settles it:* set the flag after the last tool call of a short run
   and observe the terminal event.
+
+## 7. Kill-then-resume inside a worktree (Q1, Q2, Q3)
+
+**Why this section exists.** ADR 0001 mandates that M3's orchestrator kill the agent process on the
+first observed deny (section 6.5 above), but no run in sections 1–6 was ever killed, so whether a
+killed session can be resumed at all (Q2) was never measured. Separately, `--resume` was never
+exercised with cwd inside a worktree (Q1) — every worktree run in section 5 was a fresh session, and
+every resume in section 2/4 ran from `$SPIKE_REPO` directly. This section runs one experiment that
+settles both, plus Q3 from data already on disk.
+
+### 7.1 Setup — exact commands executed
+
+```bash
+export SPIKE_REPO="$HOME/.aiteamos-spike/sample-repo"
+export AITEAMOS_SPIKE=/home/meren/projects/slave-of-ai/spike/m0-pause-resume
+export AITEAMOS_PAUSE_FLAG=/tmp/aiteamos-pause-7b.flag
+rm -f "$AITEAMOS_PAUSE_FLAG"
+cd "$SPIKE_REPO"
+git worktree add -b aiteamos/TASK-003-kill-resume .aiteamos/worktrees/TASK-003
+git worktree list
+```
+
+Worktree created cleanly at commit `60370cd` (`chore: sample repo` — the same pre-refactor baseline
+section 1 started from; unrelated to the `MathKit` state sections 3–4 left in `$SPIKE_REPO`'s own
+main working tree, which is a different directory from this worktree). `git worktree list` afterward
+showed four entries: `main` at `60370cd`, `TASK-001`/`TASK-002` (section 5, untouched by this task),
+and the new `TASK-003` at `60370cd` on branch `aiteamos/TASK-003-kill-resume`.
+
+### 7.2 Attempt 1 — misfire in the kill-detection loop, diagnosed and corrected in place
+
+The first attempt at the kill command (single foreground `Bash` call, `&`/`wait`, timeout raised to
+`600000` ms, self-held-FIFO delay primitive per section 3.2's established workaround) polled for the
+deny with:
+
+```bash
+grep -q 'permissionDecision":"deny"' /tmp/m0-run7b-part1.jsonl
+```
+
+This pattern **never matched**, even though a deny genuinely occurred (line 68 of that capture,
+confirmed after the fact). The reason: `hook_response.output`/`.stdout` are **JSON-encoded
+strings** (ADR 0001 §4, item 1 — "needs a second parse"), so the deny marker appears
+**backslash-escaped** in the raw capture bytes:
+
+```
+\"permissionDecision\":\"deny\"
+```
+
+not as a plain-quoted substring. The unescaped grep pattern silently found nothing for the entire
+poll budget (240 × 1s), so no kill signal was ever sent. The run — which had been given the same
+four-step Calculator-refactor prompt used in attempt 2 below — was denied once (one `Edit`, mid-run),
+tried no further tool call, and **self-stopped on its own after that single denial** (`terminal_reason:
+"completed"`, `is_error:false`, `stop_reason:"end_turn"`, one entry in `permission_denials`,
+`total_cost_usd: 0.3734845`, session id `700b67e4-958d-47ad-bb39-7c92187a489e`) — a real API cost
+incurred, and a genuinely new data point (self-stop after exactly **one** deny, versus section 3.5's
+two), but **not a kill**, and therefore not usable for Q2. Raw capture:
+`/tmp/m0-run7b-part1.jsonl` (this file was overwritten by attempt 2 below — the summary above is all
+that survives of attempt 1's capture; its session id was extracted before being overwritten and is
+recorded here for completeness, but its content is not otherwise preserved).
+
+**Corrected pattern**, confirmed by `grep -qF 'permissionDecision\":\"deny' <file>` on the attempt-1
+capture before rerunning: matches. The worktree was reset to its clean baseline
+(`git reset --hard 60370cd && git clean -fd`, confirmed empty `git status --short` and only the
+three original files present) before attempt 2, so attempt 2 started from the same untouched state
+attempt 1 did — this is a corrected repeat of the same Step 2 attempt, not a second budgeted run in
+the sense the task's cost-discipline constraint meant (consistent with how section 3.4's own
+attempt-1 misfire was handled).
+
+### 7.3 Attempt 2 (successful) — the kill, exact command executed
+
+```bash
+export SPIKE_REPO="$HOME/.aiteamos-spike/sample-repo"
+export AITEAMOS_SPIKE=/home/meren/projects/slave-of-ai/spike/m0-pause-resume
+export AITEAMOS_PAUSE_FLAG=/tmp/aiteamos-pause-7b.flag
+rm -f "$AITEAMOS_PAUSE_FLAG" /tmp/m0-run7b-part1.jsonl
+WORKTREE="$SPIKE_REPO/.aiteamos/worktrees/TASK-003"
+cd "$WORKTREE"
+
+FIFO="/tmp/aiteamos-delay-7b-2.$$"; mkfifo "$FIFO"
+exec 9<> "$FIFO"; rm -f "$FIFO"
+
+claude -p "Refactor sum.js into a Calculator class with add, subtract, multiply, and divide methods, converting from the existing sum function one method at a time. Step 1: add the add method (keep sum as a re-export if needed) and a matching test, then run npm test. Step 2: add the subtract method and its test, then run npm test again. Step 3: add the multiply method and its test, then run npm test again. Step 4: add the divide method (throwing on division by zero) and its test, then run npm test a final time. Commit after each successful npm test run with a separate commit message for that step." \
+  --settings "$AITEAMOS_SPIKE/settings.json" \
+  --permission-mode bypassPermissions \
+  --output-format stream-json --verbose --include-hook-events < /dev/null > /tmp/m0-run7b-part1.jsonl 2>&1 &
+CLAUDE_PID=$!
+
+# Poll until at least one Edit tool_use has landed (deliberate deviation from
+# "arm on the very first tool call" -- chosen so there is genuine in-flight
+# edit state to inspect at kill time, per this task's own instruction).
+FOUND_EDIT=0
+for i in $(seq 1 240); do
+  if ! kill -0 "$CLAUDE_PID" 2>/dev/null; then break; fi
+  if grep -q '"type":"tool_use"' /tmp/m0-run7b-part1.jsonl 2>/dev/null && grep -q '"name":"Edit"' /tmp/m0-run7b-part1.jsonl 2>/dev/null; then
+    FOUND_EDIT=1; break
+  fi
+  read -t 1 -u 9
+done
+
+touch "$AITEAMOS_PAUSE_FLAG"
+
+# Corrected deny detection (see 7.2): fixed-string match on the escaped form.
+FOUND_DENY=0
+for i in $(seq 1 240); do
+  if ! kill -0 "$CLAUDE_PID" 2>/dev/null; then break; fi
+  if grep -qF 'permissionDecision\":\"deny' /tmp/m0-run7b-part1.jsonl 2>/dev/null; then
+    FOUND_DENY=1; break
+  fi
+  read -t 1 -u 9
+done
+
+if kill -0 "$CLAUDE_PID" 2>/dev/null; then
+  kill -TERM "$CLAUDE_PID"
+  read -t 3 -u 9
+  if kill -0 "$CLAUDE_PID" 2>/dev/null; then
+    kill -KILL "$CLAUDE_PID"
+  fi
+fi
+wait "$CLAUDE_PID"; RC=$?
+exec 9>&-
+```
+
+**Timeline observed:** `FOUND_EDIT=1` at poll iteration 21 (capture at 70 lines). Pause flag armed
+at `19:06:05.972`. `FOUND_DENY=1` at poll iteration 3 (~2s later), `19:06:07.983` — the deny hit
+was `PreToolUse:Bash` denying `npm test 2>&1 | tail -25` (the Step-1 "run the test" call, after the
+Step-1 test-file edit had already landed). `SIGTERM` sent at `19:06:07.984`, one second after arming
+the flag. The process **exited on its own after `SIGTERM` alone** — `SIGKILL` was never needed.
+`wait "$CLAUDE_PID"` reported exit status **143** (128 + 15, the standard shell convention for
+death-by-`SIGTERM`). Final capture: 78 lines, session id `c0c1a7b0-76d8-4cf6-a987-33e2cab60dcc`.
+Raw capture (throwaway, not committed): `/tmp/m0-run7b-part1.jsonl`.
+
+**What the process did before being killed** (parsed tool-call sequence,
+`/tmp/m0-run7b-part1.jsonl`): the agent invoked the `superpowers:test-driven-development` skill,
+read `sum.js`/`sum.test.js`/`package.json`, then followed TDD RED-first: `Edit sum.test.js` (added a
+`Calculator.add` test, importing `Calculator` from `./sum.js`) — **allowed**, landed on disk — then
+`Bash "npm test 2>&1 | tail -25"` — **denied** by the hook (`hook_response` for `PreToolUse:Bash`,
+`hookSpecificOutput.permissionDecision:"deny"`, reason `"Paused by AI Team OS. Stop and wait."`;
+matching `tool_result` carries `is_error:true`, content `"Paused by AI Team OS. Stop and wait."`).
+The kill was sent immediately after — the model never got a further turn to react to the denial.
+
+**What the kill itself produced in the stream — new, first-hand evidence, never seen before in this
+spike.** The capture's last two lines, both written *after* `SIGTERM` was sent:
+
+```json
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user]"}]},"session_id":"c0c1a7b0-76d8-4cf6-a987-33e2cab60dcc", ...}
+```
+```json
+{"is_error":true,"stop_reason":"tool_use","terminal_reason":"aborted_streaming",
+ "subtype":"error_during_execution","num_turns":10,"total_cost_usd":0.2850965,
+ "session_id":"c0c1a7b0-76d8-4cf6-a987-33e2cab60dcc",
+ "permission_denials":[{"tool_name":"Bash","tool_use_id":"toolu_01C6deLvfHJ45h1zAxnABkwQ", ...}],
+ "errors":["[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=tool_use"],
+ "type":"result", ...}
+```
+
+**Observed: the CLI handles `SIGTERM` gracefully rather than dying silently.** It writes a synthetic
+`[Request interrupted by user]` user turn, then still emits a terminal `result` event — but this one
+is shaped distinctly from every normal-completion result event seen elsewhere in this spike:
+`terminal_reason:"aborted_streaming"` (not `"completed"`), `subtype:"error_during_execution"` (not
+`"success"`), `is_error:true` (not `false`), `stop_reason:"tool_use"` (the run stopped mid-tool-call,
+not at `"end_turn"`), plus an `errors` array that appears nowhere in a normal completion. **This is a
+fourth, distinct terminal shape for M3's adapter to recognize** — alongside the normal-completion
+shape (section 1), the permission-denial-but-completed shape (section 1), and the
+hook-denial-but-self-stopped shape (section 3.5) — and it is the one a kill actually produces.
+
+### 7.4 State left behind by the kill — worktree inspection
+
+```bash
+$ cd "$SPIKE_REPO/.aiteamos/worktrees/TASK-003" && git status --short
+ M sum.test.js
+$ git log --oneline -3
+60370cd chore: sample repo
+$ ls
+package.json  sum.js  sum.test.js
+$ cat sum.js
+export function sum(a, b) {
+  return a + b;
+}
+$ cat sum.test.js
+... imports { Calculator, sum } from './sum.js'; ...
+test('Calculator adds two numbers', () => { assert.equal(new Calculator().add(2, 3), 5); });
+$ git branch --show-current
+aiteamos/TASK-003-kill-resume
+```
+
+**Coherent, no half-written file, but internally inconsistent — exactly the mid-TDD-RED state the
+tool sequence predicts.** Exactly one file is modified (`sum.test.js`), the edit itself is complete
+and well-formed (not truncated mid-write — consistent with section 3.7's inference that `PreToolUse`
+fires *before* a tool executes, now reinforced by direct observation that the one `Edit` which did
+land, landed whole). No commit was made (`git log` still shows only the baseline `60370cd`). But
+`sum.test.js` now imports a `Calculator` class from `sum.js` that does not exist yet — `npm test` at
+this point fails with `Calculator is not exported` (confirmed by running it directly; not part of the
+brief's required checks but run for completeness). This is the expected state for a kill landing
+between "write the RED test" and "run it to confirm RED", i.e. exactly where the process was killed,
+not silent data corruption.
+
+### 7.5 Resume — exact command executed
+
+```bash
+export AITEAMOS_PAUSE_FLAG=/tmp/aiteamos-pause-7b.flag
+rm -f "$AITEAMOS_PAUSE_FLAG"
+export SPIKE_REPO="$HOME/.aiteamos-spike/sample-repo"
+export AITEAMOS_SPIKE=/home/meren/projects/slave-of-ai/spike/m0-pause-resume
+cd "$SPIKE_REPO/.aiteamos/worktrees/TASK-003"
+SID=$(grep -o '"session_id":"[^"]*"' /tmp/m0-run7b-part1.jsonl | sort -u | cut -d'"' -f4)
+# SID = c0c1a7b0-76d8-4cf6-a987-33e2cab60dcc
+
+claude -p "You were interrupted mid-step. Continue the Calculator refactor: finish adding the add method to sum.js (matching the test already in sum.test.js), then continue with subtract, multiply, and divide as originally planned, running npm test and committing after each step." \
+  --resume "$SID" \
+  --settings "$AITEAMOS_SPIKE/settings.json" \
+  --permission-mode bypassPermissions \
+  --output-format stream-json --verbose --include-hook-events < /dev/null > /tmp/m0-run7b-part2.jsonl 2>&1
+```
+
+This differs from the brief's suggested Step 4 form in adding `--settings`/`--include-hook-events`
+(the pause hook must still be registered on resume — dropping it would leave every future pause on
+this session unenforceable) and `--permission-mode bypassPermissions` (required per sections 1/3.6
+for edits to land at all). cwd was the worktree directory throughout, per Q1's requirement. Exit
+code: `0`. Raw capture: `/tmp/m0-run7b-part2.jsonl`, 155 lines. Not committed (throwaway, consistent
+with this spike's other raw captures).
+
+### 7.6 Answers to the brief's four resume questions
+
+1. **Did the resume succeed at all after a kill, or did it error?** **Succeeded.** Exit code `0`,
+   terminal `result` event: `is_error:false`, `stop_reason:"end_turn"`, `terminal_reason:"completed"`,
+   `subtype:"success"`, `num_turns:20`, `total_cost_usd:0.7969134999999998`. **[Observed]**
+2. **Did it report the same session id?** **Yes.**
+   `grep -o '"session_id":"[^"]*"' /tmp/m0-run7b-part2.jsonl | sort -u` returns exactly one UUID,
+   `c0c1a7b0-76d8-4cf6-a987-33e2cab60dcc`, the same one the killed run reported on every line.
+   **[Observed]**
+3. **Did it retain context from before the kill?** **Yes, directly.** The very first assistant text
+   of the resumed run, with no `Read` tool call preceding it, states: *"Picking up at Step 1: the
+   test is in place, `sum.js` isn't updated yet. Running the test first to confirm it fails for the
+   right reason."* — an accurate, specific description of the exact state 7.4 found on disk,
+   produced without re-reading the files. `grep`-confirmed: zero `Read` tool calls appear anywhere in
+   `/tmp/m0-run7b-part2.jsonl`'s 155 lines. **[Observed]**
+4. **Did its work land on the worktree's branch and not on `main`?** **Yes, entirely.** After the
+   resume:
+   ```
+   $ git -C "$SPIKE_REPO/.aiteamos/worktrees/TASK-003" log --oneline -5
+   e3aff7f feat: add divide method to Calculator with zero guard
+   0c83443 feat: add multiply method to Calculator
+   42d55c7 feat: add subtract method to Calculator
+   d3d8249 refactor: introduce Calculator class with add method
+   60370cd chore: sample repo
+   $ git -C "$SPIKE_REPO/.aiteamos/worktrees/TASK-003" branch --show-current
+   aiteamos/TASK-003-kill-resume
+   $ npm test   # (run in the worktree)
+   ✔ sum adds two numbers / Calculator adds/subtracts/multiplies/divides/throws — 6/6 pass
+   $ git -C "$SPIKE_REPO" log --oneline -3     # main, unchanged
+   60370cd chore: sample repo
+   ```
+   All four commits landed on `aiteamos/TASK-003-kill-resume`; `main` stayed at the same commit it
+   was at before this task began. `git -C "$SPIKE_REPO" status --short` still shows only the
+   pre-existing, unrelated `sum.js`/`sum.test.js` uncommitted diff from sections 3–4 (out of scope
+   for this task) plus the untracked `.aiteamos/` directory — nothing from this task's runs touched
+   the main working tree. **[Observed]**
+
+**Q1 and Q2 are both settled, positively, by this single experiment:** `--resume` works with cwd
+inside a git worktree (Q1), and a session killed with `SIGTERM` mid-tool-call remains fully
+resumable, with context intact, from that same worktree (Q2). No mitigation (`--session-id
+<uuid>` pre-assignment) was needed.
+
+**One scope note, stated plainly:** this experiment killed with `SIGTERM` and never needed to
+escalate to `SIGKILL` — the process exited on its own within the 3-second grace period. Whether a
+session survives a `SIGKILL` (no grace period, no chance for the CLI to flush anything) was **not**
+exercised here and remains open — see the revised Q2 note below.
+
+### 7.7 Q3 — is `total_cost_usd` per-segment or cumulative? Settled from existing captures, no new run
+
+Per the task's Step 5, no new run was made for this. Comparing run 2 (`/tmp/m0-run2.jsonl`, the
+original run) against run 3 (`/tmp/m0-run3.jsonl`, which resumed run 2's session id and did further
+real work — see section 2):
+
+| Field | Run 2 (original) | Run 3 (resume) |
+|---|---|---|
+| `total_cost_usd` | `0.12904000000000002` | `0.2772455` |
+| `usage.input_tokens` | `8` | `8` |
+| `usage.cache_creation_input_tokens` | `3509` | `19357` |
+| `usage.cache_read_input_tokens` | `126370` | `119721` |
+| `usage.output_tokens` | `1229` | `951` |
+| `num_turns` | `8` | `5` |
+
+**Determination: per-segment, not cumulative. [Observed]** The token counts, not just the dollar
+figure, settle it — and they settle it decisively rather than ambiguously. If `usage` on the
+terminal `result` event were a running cumulative total across the whole session, every field would
+have to be **monotonically non-decreasing** from run 2 to its resume (run 3): a resumed session can
+only have read/written/output *at least* as many cumulative tokens as it had before the resume added
+more turns. Instead, run 3 reports **fewer** `cache_read_input_tokens` (119721 < 126370) and
+**fewer** `output_tokens` (951 < 1229) than run 2 alone — despite run 3 having done real, verified
+additional work (section 2: a `divide(a, b)` function plus two tests, four tool calls, a passing
+`npm test`). A cumulative counter cannot decrease. Since it decreased, `usage` (and by direct
+consequence `total_cost_usd`, which `modelUsage.costUSD` mirrors exactly in both captures) is each
+run's **own segment's aggregated usage** — summed only over that run's own turns (`num_turns: 5` for
+run 3, its own five turns' `iterations`), not inherited from the session's prior segments.
+
+The `cache_creation_input_tokens` jump (3509 → 19357) is consistent with this reading, not
+contradictory to it: on resume, the *first* new API call has to write a fresh cache entry covering
+the entire prior conversation (which run 2 never had to do, since it started from nothing), and every
+subsequent turn *within that same run* then reads from that fresh cache. That is new cache-write cost
+genuinely incurred by *this segment's own first call*, not a re-billing of run 2's already-completed
+work.
+
+**Consequence for M3, stated in the terms the brief raised it:** the budget guardrail's plan to *sum*
+`total_cost_usd` across a task's run segments is the **correct** accounting, not a double-count. Each
+resume's reported figure is additive on top of prior segments' figures, not inclusive of them. Had the
+figure been cumulative, summing would have overcounted and tripped the budget ceiling early; since it
+is per-segment, summing is exactly what is needed to reconstruct the task's true total spend.
+
+**What would make this stronger, stated for completeness:** the specific check the brief names as
+maximally clean — "a resume that does almost no work" — was not run; run 3 did substantive work by
+design, which is why the *decrease* argument (not the *increase* argument) is what actually settles
+it here. A trivial-instruction resume, if `total_cost_usd` still came back non-trivially large,
+would be additional confirming evidence but is not necessary given the monotonicity argument above.
