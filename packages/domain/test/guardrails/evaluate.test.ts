@@ -1,0 +1,62 @@
+import { describe, expect, it } from 'vitest'
+import {
+  DEFAULT_GUARDRAIL_LIMITS,
+  evaluateGuardrails,
+  type WorkspaceStats,
+} from '../../src/guardrails/evaluate.js'
+
+const CALM: WorkspaceStats = {
+  activeRuns: 1,
+  spentUsd: 2,
+  consecutiveFailures: 0,
+  emergencyStopped: false,
+}
+
+describe('evaluateGuardrails', () => {
+  it('reports nothing when everything is within limits', () => {
+    expect(evaluateGuardrails(DEFAULT_GUARDRAIL_LIMITS, CALM)).toEqual([])
+  })
+
+  it('halts scheduling when the concurrency limit is reached', () => {
+    const breaches = evaluateGuardrails(DEFAULT_GUARDRAIL_LIMITS, { ...CALM, activeRuns: 3 })
+    expect(breaches).toHaveLength(1)
+    expect(breaches[0]?.guardrail).toBe('concurrency')
+    expect(breaches[0]?.haltsScheduling).toBe(true)
+  })
+
+  it('warns at 80% of budget without halting', () => {
+    const breaches = evaluateGuardrails(DEFAULT_GUARDRAIL_LIMITS, { ...CALM, spentUsd: 16 })
+    expect(breaches).toHaveLength(1)
+    expect(breaches[0]?.guardrail).toBe('budget_warning')
+    expect(breaches[0]?.haltsScheduling).toBe(false)
+  })
+
+  it('halts when the budget is exhausted', () => {
+    const breaches = evaluateGuardrails(DEFAULT_GUARDRAIL_LIMITS, { ...CALM, spentUsd: 20 })
+    const budget = breaches.find((b) => b.guardrail === 'budget_exhausted')
+    expect(budget?.haltsScheduling).toBe(true)
+  })
+
+  it('halts on the circuit breaker', () => {
+    const breaches = evaluateGuardrails(DEFAULT_GUARDRAIL_LIMITS, { ...CALM, consecutiveFailures: 3 })
+    const breaker = breaches.find((b) => b.guardrail === 'circuit_breaker')
+    expect(breaker?.haltsScheduling).toBe(true)
+  })
+
+  it('halts on emergency stop regardless of other numbers', () => {
+    const breaches = evaluateGuardrails(DEFAULT_GUARDRAIL_LIMITS, { ...CALM, emergencyStopped: true })
+    expect(breaches.some((b) => b.guardrail === 'emergency_stop' && b.haltsScheduling)).toBe(true)
+  })
+
+  it('reports every simultaneous breach', () => {
+    const breaches = evaluateGuardrails(DEFAULT_GUARDRAIL_LIMITS, {
+      activeRuns: 5,
+      spentUsd: 25,
+      consecutiveFailures: 4,
+      emergencyStopped: true,
+    })
+    expect(breaches.map((b) => b.guardrail).sort()).toEqual(
+      ['budget_exhausted', 'circuit_breaker', 'concurrency', 'emergency_stop'].sort(),
+    )
+  })
+})
