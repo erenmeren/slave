@@ -145,14 +145,18 @@ swallowed. **This is the first TDD target, before any database or UI code.**
 ### 5.1 Task
 
 ```
-backlog → ready → assigned → running → verifying → reviewing → done
-                     ↑          │          │           │
-                     │          ↓          ↓           ↓
-                     └────── rework ←──────┴───────────┘
+backlog → ready → assigned → running → verifying → reviewing → merging → done
+                     ↑          │          │           │          │
+                     │          ↓          ↓           ↓          ↓
+                     └────── rework ←──────┴───────────┴──────────┘
                                 │
    blocked ←── (unmet deps)     └──> failed (attempts exhausted)
                                 cancelled (human stop)
 ```
+
+`merging` exists because of D10: post-merge re-verification can fail, and a task must not have to
+leave `done` to go back to `rework`. `done` therefore means "merged to `main` and still green" and
+is genuinely terminal. Without this state, `done` would be a lie the merge queue could retract.
 
 ### 5.2 AgentRun
 
