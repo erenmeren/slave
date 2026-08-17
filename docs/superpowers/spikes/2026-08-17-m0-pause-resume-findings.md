@@ -371,7 +371,266 @@ Raw capture on disk (throwaway, not committed): `/tmp/m0-run3.jsonl`.
 
 ## 3. Tool-call interception via PreToolUse hook
 
-<filled by Task 4>
+**Question:** can a `PreToolUse` hook block a pending tool call on command, and — the design
+question that actually matters — does blocking a tool call by itself constitute a "pause", or does
+the orchestrator still have to terminate the process after observing the block?
+
+**Files produced:** `spike/m0-pause-resume/pause-gate.sh` (executable, the hook script itself — this
+is the one piece of spike code that survives into M3), `spike/m0-pause-resume/settings.json` (the
+hook registration consumed via `--settings`).
+
+### 3.1 Hook registration shape confirmed
+
+The brief's shape was used verbatim, with one required substitution: the `command` field must be an
+**absolute path**, not the `$AITEAMOS_SPIKE/pause-gate.sh` form shown in the brief. That form was
+never actually tested against the CLI — the controller flagged in advance (correctly, based on how
+`--settings` is loaded) that Claude Code may not expand shell variables inside a JSON settings file,
+so only the literal-absolute-path form was exercised:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          { "type": "command", "command": "/home/meren/projects/slave-of-ai/spike/m0-pause-resume/pause-gate.sh" }
+        ]
+      }
+    ]
+  }
+}
+```
+
+**This absolute-path form is the confirmed-working shape.** No other key names or nesting were
+needed — `matcher: "*"` correctly matched every tool name observed (`Skill`, `Read`, `Edit`,
+`Bash`), and `"type":"command"` with a `"command"` string pointing straight at the executable
+script was accepted with no wrapper syntax. The `$AITEAMOS_SPIKE`-variable form from the brief was
+**not** separately tested (out of scope once the absolute path was confirmed working and the run
+budget was fixed at two runs) — so its behavior remains unconfirmed and should not be assumed to
+work if reused elsewhere.
+
+### 3.2 Operational note: the brief's `sleep`-substitute does not delay
+
+Before Step 4, the controller's suggested delay primitive was checked directly, because Step 4
+depends on it for content-based polling:
+
+```bash
+$ read -t 2 < /dev/null; echo "rc=$?"
+rc=1        # returns immediately — no actual 2-second wait
+```
+
+`read -t N < /dev/null` does **not** delay: reading from `/dev/null` hits EOF immediately, and
+bash's `read -t` returns at once on EOF rather than waiting out the timeout. A first attempt at Step
+4 (see 3.4, attempt 1) used exactly this pattern for the poll loop and it produced a busy-loop that
+completed all 200 iterations in a fraction of a second, before the subprocess had written anything —
+so the pause flag was never set and the whole run finished untouched. This is recorded here because
+the same pitfall would silently defeat any orchestrator polling loop built on this "known-good"
+substitute.
+
+**Working substitute**, confirmed empirically:
+
+```bash
+FIFO="/tmp/aiteamos-delay.$$"; mkfifo "$FIFO"
+exec 9<> "$FIFO"; rm -f "$FIFO"     # hold both ends open on fd 9, no EOF, no data
+read -t 2 -u 9; echo "rc=$?"        # rc=142 (SIGALRM), elapsed ~2s — genuinely blocks
+```
+
+Opening a FIFO read-write on a self-held file descriptor gives `read -t` a source that never
+produces data and never hits EOF, so the timeout is what actually governs the wait. This was used
+for all polling in the successful Step 4 run below.
+
+### 3.3 Step 3 — confirm the hook fires, flag absent
+
+```bash
+export AITEAMOS_SPIKE="/home/meren/projects/slave-of-ai/spike/m0-pause-resume"
+export AITEAMOS_PAUSE_FLAG=/tmp/aiteamos-pause.flag
+export SPIKE_REPO="$HOME/.aiteamos-spike/sample-repo"
+rm -f "$AITEAMOS_PAUSE_FLAG"
+cd "$SPIKE_REPO"
+claude -p "Add a subtract(a, b) function to sum.js with a test." \
+  --settings "$AITEAMOS_SPIKE/settings.json" \
+  --permission-mode bypassPermissions \
+  --output-format stream-json --verbose --include-hook-events > /tmp/m0-run3-step3.jsonl 2>&1
+```
+
+Two deviations from the brief's suggested command, both deliberate: `--permission-mode
+bypassPermissions` was added (section 1 established this is required for edits to land at all in
+headless mode — without it this run would show nothing but permission-mode denials, indistinguishable
+from a hook-wiring failure), and `--include-hook-events` was added specifically to make hook firing
+directly observable in the stream (`system/hook_started` and `system/hook_response` lines per hook
+invocation) rather than inferring it indirectly.
+
+**Result: exit code 0, 88/88 lines parse as standalone JSON.** `grep -o '"hook_name":"[^"]*"'`
+shows `PreToolUse:Skill`, `PreToolUse:Read`, `PreToolUse:Edit`, `PreToolUse:Bash` (plus
+`PostToolUse:*`, `SessionStart:startup`, `UserPromptSubmit`, `Stop`) — one `PreToolUse` hook firing
+per tool call, for every tool name used, confirming the `matcher: "*"` registration is live. This is
+the **only** `PreToolUse` hook in play: `~/.claude/settings.json` has `"hooks": {}`, there is no
+project or local settings file for the sample repo, and no `.claude/` directory exists there — so
+every `PreToolUse:*` event in the capture is `pause-gate.sh` firing, not some other pre-existing
+hook. With the flag absent, `pause-gate.sh` exited 0 with empty output on every call (`"outcome":
+"success"`, `"exit_code":0`, empty `"output"`), the run completed normally
+(`permission_denials: []`, `is_error: false`, `terminal_reason: "completed"`, `num_turns: 10`), and
+the work landed for real: `subtract(a, b)` was added to `sum.js`, `npm test` reports 6/6 passing.
+**Step 3 confirms the hook is loaded and firing correctly before Step 4 was attempted**, as required.
+
+Raw capture (throwaway, not committed): `/tmp/m0-run3-step3.jsonl`.
+
+### 3.4 Step 4 — trigger a pause mid-run
+
+**Attempt 1 (misfire, diagnosed not re-run for cost — see 3.2):** used the `read -t N < /dev/null`
+pattern for polling. The poll loop exhausted all 200 iterations near-instantly, the flag was never
+set, and the background run completed on its own with `permission_denials: []` — a full,
+un-paused Calculator refactor. Confirmed from the capture (`/tmp/m0-run4-attempt1-misfire.jsonl`,
+90 lines) rather than assumed. This did not consume a second budgeted run in the sense the
+controller meant — it is the same Step 4 attempt, corrected in place after root-causing the delay
+primitive, per "diagnose from the capture before spending another." One side effect: this attempt's
+un-paused run *did* leave real work behind in `$SPIKE_REPO` (the Calculator refactor completed in
+full) — visible as the starting state for attempt 2 below.
+
+**Attempt 2 (successful), exact command:**
+
+```bash
+export AITEAMOS_SPIKE="/home/meren/projects/slave-of-ai/spike/m0-pause-resume"
+export AITEAMOS_PAUSE_FLAG=/tmp/aiteamos-pause.flag
+export SPIKE_REPO="$HOME/.aiteamos-spike/sample-repo"
+rm -f "$AITEAMOS_PAUSE_FLAG"
+
+FIFO="/tmp/aiteamos-delay.$$"; mkfifo "$FIFO"
+exec 9<> "$FIFO"; rm -f "$FIFO"
+
+cd "$SPIKE_REPO"
+claude -p "Refactor sum.js into a Calculator class with add, subtract, multiply and divide methods. Update all tests. Run npm test after each change." \
+  --settings "$AITEAMOS_SPIKE/settings.json" \
+  --permission-mode bypassPermissions \
+  --output-format stream-json --verbose --include-hook-events < /dev/null > /tmp/m0-run4.jsonl 2>&1 &
+CLAUDE_PID=$!
+
+FOUND=0
+for i in $(seq 1 180); do
+  if ! kill -0 "$CLAUDE_PID" 2>/dev/null; then break; fi
+  if grep -q '"type":"tool_use"' /tmp/m0-run4.jsonl 2>/dev/null; then FOUND=1; break; fi
+  read -t 1 -u 9
+done
+[[ "$FOUND" -eq 1 ]] && touch "$AITEAMOS_PAUSE_FLAG"
+
+wait "$CLAUDE_PID"; echo "exit code: $?"
+exec 9>&-
+```
+
+(One foreground call, `&` + `wait`, no `run_in_background`/monitor tooling, per the controller's
+job-control constraint.) The `< /dev/null` on the `claude` invocation was added after attempt 1's
+capture showed a `"Warning: no stdin data received in 3s..."` line — backgrounding without an
+explicit stdin redirect left the CLI waiting 3 real seconds on inherited stdin before proceeding.
+
+**Timeline observed:** process started 18:58:44; first `"type":"tool_use"` detected at poll
+iteration 5 (18:58:48, ~4s in, capture at 16 lines); pause flag set immediately (18:58:48); process
+exited on its own at 18:58:55 — **7 seconds after the flag was set, with no external kill**, exit
+code 0. Final capture: 38 lines.
+
+Raw capture (throwaway, not committed): `/tmp/m0-run4.jsonl` (successful pause run);
+`/tmp/m0-run4-attempt1-misfire.jsonl` (diagnostic, unpaused).
+
+### 3.5 What the block actually did — the sequence, tool call by tool call
+
+Parsed from `/tmp/m0-run4.jsonl`:
+
+1. `Read sum.js` — **allowed** (flag not yet set at hook time; this call is what the poll loop
+   detected). Result content shows the file **already** contains the `Calculator` class — attempt
+   1's un-paused run had already completed this refactor for real (see 3.4), so this second session
+   started from that state.
+2. `Read sum.test.js` — **denied**. Hook response:
+   `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Paused by AI Team OS. Stop and wait."}}`
+   (byte-for-byte the payload `pause-gate.sh` emits). Tool result: `is_error: true`, content
+   `"Paused by AI Team OS. Stop and wait."`.
+3. **The model did not stop.** Its very next action was `Bash 'ls -la && cat package.json && git
+   diff --stat'` — a different tool, attempting to recover the same information (repo/file state)
+   through an alternate path after the `Read` was denied. This is the exact failure mode the
+   brief's design note predicted: **a denied tool call is not by itself a pause.**
+4. That `Bash` call was also **denied**, same hook payload, same `is_error: true` shape.
+5. Only after the **second** denial did the model stop trying and end its turn on its own,
+   narrating explicitly: *"Two of my three calls came back with 'Paused by AI Team OS. Stop and
+   wait.' — so I'm holding here rather than continuing. ... Let me know when to proceed and I'll
+   pick up from there."* `stop_reason: "end_turn"`, `terminal_reason: "completed"`, `is_error:
+   false`, `num_turns: 4`. The final `result` event's `permission_denials` array carries both
+   denied calls (`Read sum.test.js`, the `Bash` command).
+
+**This run's process exited on its own, without the orchestrator needing to send a kill signal** —
+but only because this particular model, on this particular prompt, chose to stop narrating after
+two denials rather than continuing to probe. Nothing in the observed contract *guarantees* that
+self-limiting behavior; a more persistent retry pattern (more tool alternatives available, a
+different prompt framing) could plausibly continue longer, burning turns and cost before hitting a
+stop. **The safe, deterministic pause contract for M3 cannot rely on the model choosing to stop —
+the orchestrator must still treat the first observed deny event as the pause signal and terminate
+the process itself**, even though in this specific run that step turned out to be unnecessary.
+
+### 3.6 `bypassPermissions` vs. hook deny — confirmed: the hook wins
+
+This run was launched with `--permission-mode bypassPermissions` throughout, and the hook's
+`deny` decision **still took effect** for both blocked calls — visible directly in the
+`is_error: true` tool results, the verbatim deny payload in `hook_response`, and the two entries in
+the terminal `permission_denials` array. **This is a load-bearing positive finding for M3, not a
+critical failure**: a `PreToolUse` hook's structured deny is not overridden by
+`--permission-mode bypassPermissions`. The two mechanisms operate at different layers —
+`bypassPermissions` short-circuits the *interactive* permission prompt (section 1), while a hook's
+`permissionDecision: "deny"` is evaluated independently and still blocks the call. M3 can safely run
+headless with `bypassPermissions` (required for edits to work at all, per section 1) while still
+relying on the pause hook to intervene.
+
+### 3.7 Working tree coherence
+
+```bash
+$ cd "$SPIKE_REPO" && git status --short
+ M sum.js
+ M sum.test.js
+$ npm test
+... 6 tests, 6 pass, 0 fail ...
+```
+
+No half-written file. The paused run (attempt 2) never attempted an `Edit` at all — its two denied
+calls were both read-only/informational (`Read`, `Bash`) — so there was no in-flight write for the
+hook to interrupt mid-byte in this particular run. `sum.js` and `sum.test.js` reflect attempt 1's
+completed Calculator refactor, unchanged by attempt 2, and all 6 tests pass. This run does not by
+itself prove an `Edit` call can never be interrupted mid-write (a hook fires *before* the tool
+executes, per the `PreToolUse` contract, so a denied `Edit` should never partially apply — the tool
+call is refused before it runs, not aborted while running — but this run's actual tool sequence
+happened not to include an `Edit`, so this is inferred from the hook's documented pre-execution
+timing, not directly observed here).
+
+### 3.8 Answers to the brief's three questions
+
+1. **Did the process exit after the deny, or did the model keep trying other tools?** Both, in
+   sequence: it tried **one** alternate tool (`Bash` after `Read` was denied) before stopping on its
+   own. Blocking alone did not immediately halt the model — confirming the brief's design note — but
+   this model self-limited to a single retry rather than looping indefinitely. See 3.5 for why this
+   is not something the pause contract can depend on.
+2. **Is the session id still recoverable from the stream?** Yes — `"session_id":
+   "836bde75-4577-4e87-9218-613cbc455774"` is present on every line of `/tmp/m0-run4.jsonl`,
+   consistent with section 1's finding that `session_id` is a stable top-level field.
+3. **Is the working tree in a coherent state (no half-written file)?** Yes — `git status --short`
+   shows only the two files attempt 1's completed refactor touched, no partial/corrupt file, and
+   `npm test` passes 6/6.
+
+### 3.9 Resulting pause-mechanism definition for M3
+
+Pause is confirmed to be **two-part**, exactly as the brief's design note predicted, and both parts
+are now independently validated:
+
+1. **The hook blocks the side effect.** `pause-gate.sh`, registered as a `PreToolUse` hook with
+   `matcher: "*"` via an absolute path in `--settings`, reliably returns a structured
+   `permissionDecision: "deny"` for every tool call while `$AITEAMOS_PAUSE_FLAG` exists — confirmed
+   firing for `Skill`, `Read`, `Edit`, and `Bash` tool names, and confirmed **not** overridden by
+   `--permission-mode bypassPermissions`.
+2. **The orchestrator must terminate the process on observing the first deny event; it must not
+   wait for the model to stop on its own.** The model tried a different tool once after being
+   denied, then happened to stop itself in this run — but that stopping behavior is not part of any
+   documented contract and cannot be relied upon. M3's `ClaudeCodeAdapter` must watch the event
+   stream for a `system/permission_denied`-shaped signal (or, in this hook-based path, the
+   `is_error: true` tool result following a hook deny) and kill the subprocess itself the moment it
+   sees one, rather than treating "the hook returned deny" as sufficient by itself.
+
+Session id remains recoverable and the working tree remains coherent across a pause, which is what
+makes resume (Task 5) viable on top of this mechanism.
 
 ## 4. Resume after pause with instruction injection
 

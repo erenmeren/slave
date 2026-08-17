@@ -1,0 +1,12 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          { "type": "command", "command": "/home/meren/projects/slave-of-ai/spike/m0-pause-resume/pause-gate.sh" }
+        ]
+      }
+    ]
+  }
+}
