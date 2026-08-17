@@ -37,6 +37,13 @@ describe('evaluateGuardrails', () => {
     expect(budget?.haltsScheduling).toBe(true)
   })
 
+  it('does not emit budget_warning when budget is exhausted (mutual exclusivity)', () => {
+    const breaches = evaluateGuardrails(DEFAULT_GUARDRAIL_LIMITS, { ...CALM, spentUsd: 20 })
+    expect(breaches).toHaveLength(1)
+    expect(breaches.some((b) => b.guardrail === 'budget_warning')).toBe(false)
+    expect(breaches[0]?.guardrail).toBe('budget_exhausted')
+  })
+
   it('halts on the circuit breaker', () => {
     const breaches = evaluateGuardrails(DEFAULT_GUARDRAIL_LIMITS, { ...CALM, consecutiveFailures: 3 })
     const breaker = breaches.find((b) => b.guardrail === 'circuit_breaker')
@@ -58,5 +65,20 @@ describe('evaluateGuardrails', () => {
     expect(breaches.map((b) => b.guardrail).sort()).toEqual(
       ['budget_exhausted', 'circuit_breaker', 'concurrency', 'emergency_stop'].sort(),
     )
+  })
+
+  it('does not breach on concurrency just below the limit', () => {
+    const breaches = evaluateGuardrails(DEFAULT_GUARDRAIL_LIMITS, { ...CALM, activeRuns: 2 })
+    expect(breaches).toHaveLength(0)
+  })
+
+  it('does not warn on budget just below the 80% threshold', () => {
+    const breaches = evaluateGuardrails(DEFAULT_GUARDRAIL_LIMITS, { ...CALM, spentUsd: 15.99 })
+    expect(breaches).toHaveLength(0)
+  })
+
+  it('does not breach on circuit breaker just below the consecutive failure limit', () => {
+    const breaches = evaluateGuardrails(DEFAULT_GUARDRAIL_LIMITS, { ...CALM, consecutiveFailures: 2 })
+    expect(breaches).toHaveLength(0)
   })
 })
