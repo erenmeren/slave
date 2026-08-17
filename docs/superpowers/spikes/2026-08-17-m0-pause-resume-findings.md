@@ -229,7 +229,145 @@ Raw captures on disk (throwaway, not committed): `/tmp/m0-run1.jsonl` (denied ru
 
 ## 2. Session resume
 
-<filled by Task 3>
+**Question:** does `--resume` restore prior context (files edited, functions added), and does the
+resumed run report the same session id or a new one?
+
+### Precondition: `--no-session-persistence` must not be set
+
+Task 1's flag inventory recorded `--no-session-persistence`
+(`claude --help` output, confirmed again here):
+
+```
+--no-session-persistence              Disable session persistence - sessions
+                                       will not be saved to disk and cannot be
+                                       resumed (only works with --print)
+```
+
+Everything below presupposes this flag was **not** passed on the original run. Neither run 1 nor
+run 2 (section 1) used it, so both left resumable session state on disk. **M3's `ClaudeCodeAdapter`
+must never set `--no-session-persistence`** — doing so would make `resume()` impossible regardless
+of any other correct implementation.
+
+### Which session was resumed, and why
+
+The brief's Step 1 takes the session id from `/tmp/m0-run1.jsonl`. Run 1 (default permission mode,
+no `--permission-mode` flag) had both its `Edit` calls denied and made no file changes — see section
+1, "Permission behaviour". Resuming it would let us observe only the same session id / new session
+id question, not whether context (the added `multiply` function) actually carried over, because run
+1 never added `multiply` in the first place.
+
+Per the controller's substitution, this run instead resumed the session id from
+**`/tmp/m0-run2.jsonl`** — the `bypassPermissions` run whose edits actually landed (`multiply(a, b)`
+in `sum.js` and its test, section 1). Resuming run 1's empty session was not separately exercised: it
+would have required a second real API call, and the cost-discipline constraint for this task allowed
+only one resume run.
+
+### Exact command executed
+
+```bash
+export SPIKE_REPO="$HOME/.aiteamos-spike/sample-repo"
+cd "$SPIKE_REPO"
+SID=$(grep -o '"session_id":"[^"]*"' /tmp/m0-run2.jsonl | sort -u | cut -d'"' -f4)
+# SID = e0f04fa5-620a-4f14-ae3b-6255bdbdf102
+claude -p "Now also add a divide(a, b) function that throws on division by zero, with a test." \
+  --resume "$SID" --output-format stream-json --verbose --permission-mode bypassPermissions > /tmp/m0-run3.jsonl 2>&1
+```
+
+This differs from the brief's suggested command in two respects, both required by the controller's
+constraints: (1) `$SID` is read from `/tmp/m0-run2.jsonl`, not `/tmp/m0-run1.jsonl`; (2)
+`--permission-mode bypassPermissions` is added — without it, per section 1's "Permission behaviour"
+finding, the `Edit` calls needed to add `divide` would be silently denied under headless mode's
+default permission posture, and the resume would appear to succeed while changing nothing.
+
+Exit code: `0`. Raw capture: `/tmp/m0-run3.jsonl` (12 lines, all 12/12 verified to parse as
+standalone JSON with a per-line `json.loads` check, consistent with section 1's NDJSON finding).
+
+### Session id behaviour: SAME id, not a new one
+
+```bash
+$ grep -o '"session_id":"[^"]*"' /tmp/m0-run3.jsonl | sort -u
+"session_id":"e0f04fa5-620a-4f14-ae3b-6255bdbdf102"
+```
+
+Every line of `/tmp/m0-run3.jsonl` — from the first `system/init` line to the final `result` line —
+carries `"session_id":"e0f04fa5-620a-4f14-ae3b-6255bdbdf102"`, the exact same UUID run 2 reported.
+`--resume` reuses the original session id; it does not mint a new one. (The CLI does expose
+`--fork-session`, listed in section 0, to opt into a new session id on resume — that flag was not
+used here, so its behaviour was not exercised.)
+
+**Consequence for M3:** since a plain `--resume` keeps the session id stable, `Checkpoint.sessionId`
+does **not** need to be rewritten after every resume — the id captured when the run was first
+created remains valid for all subsequent resumes, as long as `--fork-session` is never passed.
+
+### Context carried over: confirmed, with direct evidence
+
+The resumed run's own final summary names the new function and reports the full, cumulative test
+count:
+
+```
+"result":"Added `divide(a, b)` in `sum.js:9` — throws `Error('Division by zero')` when `b === 0` —
+plus two tests in `sum.test.js` (normal division and the throw). `npm test` passes: 4 tests, 0
+failures."
+```
+
+Four tests passing (not two) means the model was aware `sum` and `multiply` already had tests from
+the prior turn and only needed to add two more.
+
+Stronger evidence is in the tool-call sequence itself (parsed from `/tmp/m0-run3.jsonl`,
+`type:"assistant"` lines with `tool_use` blocks): the run contains **no `Read` tool call at all**.
+Line 1 is `system/init`; line 2 is immediately an `Edit` on `sum.js` whose `old_string` is:
+
+```
+"old_string": "export function multiply(a, b) {\n  return a * b;\n}"
+```
+
+The model reproduced `multiply`'s exact prior body verbatim as an edit anchor without re-reading the
+file first — it was operating from context carried over from run 2, not from a fresh look at disk.
+The matching `tool_result` even states explicitly: `"the file state is current in your context — no
+need to Read it back"`. The same pattern repeats for `sum.test.js`: the second `Edit`'s `old_string`
+is `"import { sum, multiply } from './sum.js';"` — again quoting the prior file content from memory,
+which it then extends to `"import { sum, multiply, divide } from './sum.js';"`.
+
+Full tool sequence in the resume run: `Edit` (sum.js, add divide) → `Edit` (sum.test.js, update
+import) → `Edit` (sum.test.js, add two tests) → `Bash` (`npm test`, succeeded, 4/4 passing) →
+final assistant text. `num_turns: 5`. `"permission_denials":[]`.
+
+### Verification that the resumed run's work landed
+
+```bash
+$ cd "$SPIKE_REPO" && git diff --stat
+ sum.js      | 11 +++++++++++
+ sum.test.js | 14 +++++++++++++-
+ 2 files changed, 24 insertions(+), 1 deletion(-)
+
+$ npm test
+npm notice run sample-repo@1.0.0 test
+npm notice run node --test
+✔ sum adds two numbers (0.370148ms)
+✔ multiply multiplies two numbers (0.067714ms)
+✔ divide divides two numbers (0.06362ms)
+✔ divide throws on division by zero (0.18775ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 4
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+```
+
+`sum.js` now has `sum`, `multiply`, and `divide` (the latter throwing `Error('Division by zero')`
+on `b === 0`); `sum.test.js` has all four corresponding tests, all passing. The diff stat is
+cumulative against the pre-run-2 baseline (`multiply` from run 2 plus `divide` from this resume),
+confirming both runs' edits are present together in the same working tree — consistent with a
+resume operating on the same session/workspace rather than starting fresh.
+
+Cost: `total_cost_usd: 0.2772455` for the resume run (vs. `0.12904...` for run 2 itself) — resuming
+carries forward the full prior conversation as cached input (`cache_read_input_tokens: 119721` on
+the resume's final `usage`), which is why cost is not proportional to the small amount of new work
+requested.
+
+Raw capture on disk (throwaway, not committed): `/tmp/m0-run3.jsonl`.
 
 ## 3. Tool-call interception via PreToolUse hook
 
