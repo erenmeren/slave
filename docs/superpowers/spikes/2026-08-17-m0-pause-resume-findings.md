@@ -1261,4 +1261,270 @@ Raw captures on disk (throwaway, not committed, consistent with the rest of this
 
 ## 6. Verdict and consequences for M3
 
-<filled by Task 7>
+This section is synthesis only. It adds no new measurement — every claim below either cites a
+section above or is explicitly labelled **Inferred**, **Recommendation**, or **Open question**.
+The binding form of these consequences is `docs/decisions/0001-pause-semantics.md` (ADR 0001);
+this section is the reasoning that produced it.
+
+### 6.1 The verdict
+
+**Yes — with one correction to the spec's mental model.** A Claude Code run can be paused at a
+tool-call boundary and resumed from its session id, and a human instruction injected on resume is
+obeyed: a `PreToolUse` hook returning `permissionDecision: "deny"` reliably blocks every tool call
+while a per-run flag file exists (3.3–3.6), the session id survives unchanged (2.3, 4.3), and
+`claude -p "<new instruction>" --resume <sessionId>` picks the session up with its pre-pause
+context intact and follows the injected instruction exactly (4.4–4.5). The correction is that
+**pause is not something the hook does — it is something the orchestrator does, using the hook.**
+The hook removes the agent's ability to cause side effects; it does not stop the agent. In the one
+run where a pause was actually triggered, the model responded to the first deny by trying a
+*different* tool, and only stopped after the second deny (3.5). The pause therefore has two parts,
+and M3 owns the second one.
+
+Two halves of the spike's question were verified separately and never together, and honesty
+requires saying so: **resume was only ever exercised in the main working tree, never inside a
+worktree** (2.2, 4.2 both ran from `$SPIKE_REPO`; the three worktree runs in section 5 were all
+fresh `-p` runs with no `--resume`). See open question **Q1**.
+
+**Gate check (brief, Task 7):** the gate fires only if pause at tool-call boundaries turned out
+*not* to be achievable. It is achievable. Part 2 proceeds unchanged and the `RunStatus` pause
+branch keeps its intended meaning; no restatement is required.
+
+### 6.2 The mechanism, as measured
+
+1. **Launch posture is not optional.** A headless run must be launched with an explicit non-default
+   permission posture or its edit tools do nothing: under the default mode with no TTY, every `Edit`
+   was answered with a `system/permission_denied` event and an `is_error: true` tool result, and the
+   run still terminated normally — `stop_reason: "end_turn"`, `terminal_reason: "completed"`,
+   `is_error: false` on the terminal `result` event — a full event stream that landed nothing
+   (1, "Permission behaviour"). Nothing in the run's terminal event distinguishes this from a
+   successful run; only `permission_denials` being non-empty does.
+2. **The hook's deny survives `bypassPermissions`** (3.6). This is the load-bearing finding: the
+   permission posture in (1) is mandatory, so a pause mechanism that `bypassPermissions` overrode
+   would be unusable. The two mechanisms are independent layers.
+3. **The orchestrator sets a per-run flag file** (`AITEAMOS_PAUSE_FLAG`, unique per run — the
+   script refuses to fall back to a shared default and denies loudly if the variable is unset or
+   empty, 3.10).
+4. **The hook denies the next tool call**, and every one after it, with a stable reason string that
+   the model reads and quotes back (3.5).
+5. **The orchestrator kills the process on the first observed deny.** See 6.5.
+6. **A checkpoint is persisted, then resume is a plain `--resume`.** The CLI has no notion that a
+   resume follows a pause; it treats the resume prompt as an ordinary next turn (4.8).
+
+### 6.3 `ProviderCapabilities` for the Claude Code adapter
+
+| Flag | Value | Evidence |
+|---|---|---|
+| `canPauseMidRun` | `true` | **Observed** (3.3–3.6). Qualified: the pause lands at the *next* tool-call boundary, not instantly, and it is the orchestrator's kill that makes it a pause. |
+| `canResumeSession` | `true` | **Observed** (2.3–2.4, 4.3–4.5). **Provisional** in one respect: never exercised inside a worktree (Q1) and never after an orchestrator-initiated kill (Q2). |
+| `supportsHooks` | `true` | **Observed** (3.3): a `PreToolUse` hook with `matcher: "*"` fired for `Skill`, `Read`, `Edit`, and `Bash`, registered by absolute path via `--settings`. |
+| `streamsToolCalls` | `true` | **Observed** (1): NDJSON, one JSON object per line, `tool_use` blocks with `tool_use_id` on `assistant` events, paired with `tool_result` on `user` events. |
+| `reportsTokenUsage` | `true` | **Observed** (1): `message.usage` per assistant event; aggregated `usage`, `modelUsage`, and `total_cost_usd` on the terminal `result` event. |
+| `supportsCustomSystemPrompt` | `false` (for now) | **Not measured at all.** No run used a system-prompt flag and section 0's flag inventory does not record one. `false` is the fail-safe direction: it makes the orchestrator put standing instructions into the prompt rather than depend on an unverified surface. Flip it only after a measurement (Q4). |
+| `enforcesToolPermissions` | `true` | **Observed but narrower than the name suggests** — see 6.6.1. Enforcement exists via `--permission-mode` (1) and via the `PreToolUse` hook (3.6). `--allowedTools` / `--disallowedTools` were **never exercised** — they appear only in section 0's `--help` inventory. |
+
+### 6.4 What a `Checkpoint` must actually contain
+
+Spec §8 proposes `{ sessionId, lastCompletedStep, worktreeCommit, filesTouched, ts }`. Measurement
+supports the shape but sharpens three fields and adds two:
+
+- **`sessionId` — required, written once, never rewritten.** **Observed** (2.3, 4.3): a plain
+  `--resume` reports the *same* UUID, not a new one. The id captured from the run's first
+  `system/init` line stays valid across every subsequent resume. This holds only while
+  `--fork-session` is never passed (0, 2.3) — M3 must not pass it.
+- **`worktreePath` — required, and new.** Resume must be spawned with its working directory set to
+  the same path the run started in. This is a **Recommendation** driven by Q1: since resume inside a
+  worktree was never exercised, the checkpoint must at minimum carry the exact path so the adapter
+  can reproduce it rather than guess.
+- **`pauseFlagPath` — required, and new.** `AITEAMOS_PAUSE_FLAG` is per-run and must be cleared and
+  verified absent before resuming (4.2); an unset or empty value makes the hook deny every call
+  (3.10). Without this field a resume cannot reliably un-pause itself. **Observed** requirement.
+- **`lastCompletedStep` → `{ lastToolUseId, lastToolName, numTurns }`.** There is no "step" in the
+  stream. What exists is `tool_use_id` per call and `num_turns` on the terminal event (1). Define
+  the field in those terms or it cannot be populated.
+- **`deniedToolUseIds` — new.** The terminal `result` event's `permission_denials` array carries
+  every call the hook blocked, with `tool_name`, `tool_use_id`, and `tool_input` (3.5). Worth
+  persisting: on resume the model re-attempted precisely those calls, in order (4.5-ii), so this is
+  the operator's view of "what the agent was about to do when you stopped it."
+- **`headCommit` + `dirtyFiles` (spec's `worktreeCommit` / `filesTouched`) — required.**
+  **Recommendation**, motivated by a real observation: in 4.1 the code on disk was written by a
+  *different, unrelated session* that merely shared the directory. A checkpoint recording only a
+  session id cannot tell an operator what tree the session was looking at. Note that `HEAD` alone is
+  insufficient — the interesting state throughout this spike was uncommitted, so record
+  `git status --porcelain` alongside `git rev-parse HEAD`.
+- **`cumulativeCostUsd` — required, but see Q3.** Each run segment emits its own `total_cost_usd`
+  (1, 2.4). Whether a resumed run's figure is that segment's cost or the session's cumulative cost
+  was **not determinable** from the captures. The budget guardrail (spec §9.2) depends on the
+  answer.
+
+### 6.5 Must the orchestrator kill the process after a deny? Yes.
+
+**Observed** (3.5): after the first deny the model did not stop. It tried a different tool to obtain
+the same information by another route, was denied again, and only then ended its turn on its own,
+seven seconds later, with no external kill. That self-stop is a property of this model on this
+prompt, not of any documented contract; a more persistent retry pattern would burn turns and cost
+before stopping.
+
+Precisely what the kill buys, and what it does not:
+
+- It does **not** buy safety from side effects. While the flag exists the hook denies *every* tool
+  call (3.3 confirms firing for every tool name observed), so no side effect can land regardless.
+- It **does** buy a deterministic pause point and a bounded cost. Without it, "paused" would mean
+  "the model is still running, still consuming turns, and will stop whenever it feels like it."
+
+**Recommendation:** `SIGTERM` first, escalating to `SIGKILL` after a grace period, so the CLI has a
+chance to flush session state to disk — but note Q2: no run in this spike was ever killed by the
+orchestrator, so the interaction between a killed process and session resumability is unmeasured.
+
+**Inferred, from the mechanism rather than a capture:** the hook is only consulted when a tool call
+is pending. If pause is requested while the model is producing its final text, or after its last
+tool call, no deny will ever appear and the run will simply complete. M3 must handle
+"pause requested, run finished anyway" as a normal outcome — the run is `succeeded`/`failed`, not
+`paused` — and clear the flag. A pause request therefore needs a deadline rather than an unbounded
+wait for a deny that may never come.
+
+### 6.6 Consequences beyond pause
+
+#### 6.6.1 Permissions cannot be built on prompts
+
+The CLI's interactive permission prompt is unusable as a control surface for an autonomous runtime:
+there is no TTY to answer it, and the failure is quiet in the first place an orchestrator would
+look — the run's terminal event, which reports a clean completion (1). Spec §9.2's "permissions enforced at the adapter level" must therefore
+mean explicit configuration chosen before the process starts: `--allowedTools` /
+`--disallowedTools` allow-lists, and/or a hook that denies by policy.
+
+A judgement call, stated as a **Recommendation** so M3 knows it is not measurement: enforce the
+per-agent allow/deny list in the **same `PreToolUse` hook** that implements pause, and treat
+`--allowedTools` / `--disallowedTools` as defence in depth. The reason is asymmetric evidence — the
+hook's deny is measured to work, including under `bypassPermissions` (3.6), while the allow-list
+flags were never run at all. Building the product's permission model on the mechanism that was
+measured, and adding the unmeasured one as a second layer, is the ordering the evidence supports.
+This also gives one place to deny `Bash(git config ...)`, which 6.6.3 needs.
+
+#### 6.6.2 The stream parser must distinguish two denial shapes
+
+**Observed**, and easy to get wrong:
+
+- **Permission-mode denial** (1): `{"type":"system","subtype":"permission_denied","tool_name":...,
+  "tool_use_id":...,"message":"Claude requested permissions to ..."}`.
+- **Hook denial** (3.5): **no `permission_denied` event at all.** The only live signal is
+  `{"type":"system","subtype":"hook_response","hook_name":"PreToolUse:<Tool>", "output":"<JSON
+  string>"}` whose `output` parses to `hookSpecificOutput.permissionDecision == "deny"`, followed by
+  a `tool_result` with `is_error: true` whose content is the deny reason.
+
+Conflating them is not cosmetic: a permission-mode denial means the run is misconfigured and will
+accomplish nothing, while a hook denial means the run is pausing as instructed. An orchestrator that
+read the former as the latter would sit waiting to resume a run that was never paused.
+
+Three parser details that follow directly from the captures:
+
+1. `hook_response.output` is a **JSON-encoded string**, not a nested object — it requires a second
+   parse.
+2. `hook_response` carries **no `tool_use_id`**; only `hook_name` (e.g. `PreToolUse:Read`).
+   Correlation to a specific call must come from the `tool_result` that follows.
+3. Hook events appear **only when `--include-hook-events` is passed**. Run 4 used it and has them;
+   run 5 did not and has zero `hook_response` lines (4.2). **Recommendation:** M3 always passes
+   `--include-hook-events`, because the alternative live signal — an `is_error: true` tool result —
+   is indistinguishable from an ordinary tool failure without matching on the reason string.
+
+The terminal `result` event's `permission_denials` array captures both kinds (1, 3.5), but only at
+the end of the run, which is too late to drive a pause.
+
+#### 6.6.3 `.git/config` is shared state that worktrees do not isolate
+
+**Observed** (5.5): both concurrent agents hit `Author identity unknown`; one wrote
+`git config user.name/user.email` persistently into the shared `.git/config`, the other used a
+per-invocation `git -c` override. They did not collide, but only because the two agents happened to
+make different scoping choices. Two agents both choosing the persistent write, with different
+values, would silently overwrite each other. `.git/config` is one instance of a class: the git
+common directory is shared by every worktree of a repository.
+
+**Recommendation for M3** (not measured, and stated as a recommendation for that reason): the
+orchestrator should make the agent's improvisation unnecessary and impossible.
+
+1. Set `GIT_AUTHOR_NAME` / `GIT_AUTHOR_EMAIL` / `GIT_COMMITTER_NAME` / `GIT_COMMITTER_EMAIL` in the
+   spawned process's environment. This is per-process, writes no file, and cannot leak to a sibling
+   worktree. It also removes the `Author identity unknown` failure that provoked the config write in
+   the first place.
+2. Deny persistent git-config writes through the permission hook (6.6.1).
+3. If a file-based identity is preferred instead, use `git config extensions.worktreeConfig true`
+   once, then `git config --worktree user.*` per worktree (5.5).
+
+Generalise the underlying rule: **N concurrent runs must never write to the git common directory.**
+
+#### 6.6.4 A fresh worktree is not a ready workspace
+
+**Observed** (5.6): neither worktree ever had `node_modules`, and `npm test` succeeded anyway — for
+one specific reason, that the fixture's `package.json` has no dependencies at all and `npm test`
+runs Node's built-in test runner. This says nothing about real repositories. M3's worktree
+provisioning must include an explicit, workspace-configured **setup command list** (the counterpart
+to spec §10's verify commands) that runs after `git worktree add` and before any verify command.
+Whether a shared or symlinked `node_modules` is safe across concurrent worktrees was not tested.
+
+#### 6.6.5 Worktree isolation is sound for the parallelism premise
+
+**Observed** (5.2, 5.4, 5.7): a run confined to a worktree left `main` at its original commit with
+no new files; two concurrent runs on sibling worktrees produced two independent branches, no
+cross-contamination at file or ref level, no git lock contention, and both exited `0`. The
+qualification is 6.6.3 and nothing else. Not covered: two agents committing to the *same* ref
+concurrently (5.5) — M3's one-worktree-per-task design should not produce that case.
+
+### 6.7 Known limitations and open questions
+
+Recorded as limitations rather than smoothed over, because the point of this spike was to replace
+guesses with measurements.
+
+**Limitations of what was measured:**
+
+- **The hook's exit-2 crash path was never exercised by a real `claude` run** (3.10). It was
+  verified standalone against `/dev/full`, but no capture shows a nonzero-exit `hook_response`. That
+  a script crash blocks the tool call rests on Claude Code's documented general hook convention, not
+  on this spike's evidence. If the convention does not hold, a crashing hook could fail *open*.
+- **The `$AITEAMOS_SPIKE` variable form in `settings.json` was never tested** (3.1); only the
+  absolute-path form. M3 must generate absolute paths, or measure the variable form first.
+- **Hook-*allow* during resume is inferred, not observed** (4.2): run 5 omitted
+  `--include-hook-events`, so "the hook fired and allowed" is deduced from the absence of denial
+  signals. 6.6.2's recommendation to always pass `--include-hook-events` closes this gap for M3.
+- **The OS-level exit code was not captured to a durable file in several runs** (3.10). Exit codes
+  were observed in-session but not persisted alongside the captures.
+- **`pause-gate.sh`'s `deny()` interpolates its reason into JSON without escaping.** Safe for
+  today's two static call sites; **not** safe for M3, which will want dynamic reasons (task key,
+  operator name, the operator's own message). Any character requiring JSON escaping would produce a
+  malformed payload, and a malformed deny is an *allow*. **Binding on M3:** build the payload with a
+  real JSON encoder before using any dynamic reason.
+- **The paused session had no edits of its own** (4.1). "Pause → instruct → resume" is observed, and
+  conversational context demonstrably survived the boundary (4.5). What was *not* demonstrated is a
+  session resuming its own in-flight editing work, because the session in question had made zero
+  `Edit` calls before it was paused.
+- **A denied `Edit` was never observed** (3.7). Both denied calls were read-only. That a denied
+  `Edit` cannot partially apply follows from `PreToolUse` firing before the tool runs; it is
+  inferred, not seen.
+
+**Open questions, with what would settle each:**
+
+- **Q1 — Does `--resume` work when the cwd is a git worktree rather than the repository root?**
+  Session state is stored per project directory, and a worktree has a different path from the main
+  tree. Every resume in this spike ran from `$SPIKE_REPO`; every worktree run was a fresh session.
+  *Settles it:* one run inside `.aiteamos/worktrees/TASK-00X`, then a `--resume` of its session id
+  from that same directory, checking that context carried over. This is the single most important
+  unmeasured thing for M3, because the product resumes runs in worktrees by design.
+- **Q2 — Does a session remain resumable after the orchestrator kills the process?** The one
+  resume-after-pause measured (section 4) followed a process that exited cleanly on its own. 6.5
+  requires M3 to kill. *Settles it:* pause a run, `SIGTERM` it on the first deny, then `--resume`
+  its session id and check the prior context is present. Also worth measuring whether `SIGKILL`
+  behaves differently from `SIGTERM`.
+- **Q3 — Is a resumed run's `total_cost_usd` that segment's cost or the session's cumulative
+  cost?** Run 2 reported `0.129` and its resume reported `0.277`; both readings are consistent with
+  either interpretation. The budget guardrail either double-counts or under-counts depending on the
+  answer. *Settles it:* a resume that does almost no work — if its `total_cost_usd` still exceeds
+  the prior run's total, the figure is cumulative.
+- **Q4 — Does the CLI accept a custom or appended system prompt in headless mode?** Never
+  exercised, and not in section 0's flag inventory. `supportsCustomSystemPrompt` is set `false`
+  until this is measured. *Settles it:* one run with the flag, checking the instruction is honoured.
+- **Q5 — Do `--allowedTools` / `--disallowedTools` behave as an enforced allow-list in headless
+  mode, and do they compose with `--permission-mode bypassPermissions` the way the hook does?**
+  Never exercised (0 lists them from `--help` only). *Settles it:* a run under
+  `bypassPermissions` with `--disallowedTools Edit`, checking whether an `Edit` is refused and which
+  event shape the refusal takes.
+- **Q6 — What happens when a pause is requested and the run has no further tool calls?** Inferred
+  in 6.5 to complete normally. *Settles it:* set the flag after the last tool call of a short run
+  and observe the terminal event.
