@@ -977,7 +977,287 @@ issued after the pause flag is cleared.
 
 ## 5. Worktree isolation
 
-<filled by Task 6>
+**Question:** does a headless run confined to a git worktree leave `main` untouched, and do two
+agents running at the same time in sibling worktrees genuinely not interfere with each other? This
+is the parallelism premise the whole product rests on: one worktree per task, several agents
+active at once against the same repository.
+
+### 5.0 Settings file: not used
+
+No `--settings` file was used for any of this section's three runs. Constraint 3 requires that
+*if* a settings file (i.e. the pause hook) is installed, `AITEAMOS_PAUSE_FLAG` must be exported to a
+verified-nonexistent path or every tool call is denied by design. This task does not exercise the
+pause hook, so the simplest correct choice — no settings file at all — was taken. All three runs
+below used only `-p`, `--output-format stream-json`, `--verbose`, and `--permission-mode
+bypassPermissions`.
+
+### 5.1 Step 1 — single worktree, exact commands executed
+
+```bash
+export SPIKE_REPO="$HOME/.aiteamos-spike/sample-repo"
+cd "$SPIKE_REPO"
+git worktree add -b aiteamos/TASK-001-greeting .aiteamos/worktrees/TASK-001
+cd .aiteamos/worktrees/TASK-001
+claude -p "Add a greet(name) function to a new file greet.js, with a test in greet.test.js. Then commit your work with message 'feat: add greet'." \
+  --output-format stream-json --verbose --permission-mode bypassPermissions > /tmp/m0-run6.jsonl 2>&1
+```
+
+One deviation from the brief: `--permission-mode bypassPermissions` was added, and `tee` was
+dropped in favor of a plain redirect (`>`) — same reasoning as section 1, and required by
+constraint 2 for the edit/commit tools to work at all in headless mode. Exit code `0`. Raw capture:
+`/tmp/m0-run6.jsonl`, 59 lines, all 59/59 verified to parse as standalone JSON (per-line
+`json.loads`). `session_id`: `b8c4b4b3-8042-44fd-aab7-66feb03a4493`, top-level on every line,
+consistent with section 1.
+
+The agent worked red-green: `Read` on `sum.js`/`sum.test.js` first, wrote a failing
+`greet.test.js`, ran `npm test` (observed failing, `ERR_MODULE_NOT_FOUND`), wrote `greet.js`, ran
+`npm test` again (2/2 passing), then committed. Its first `git commit` attempt failed with `Exit
+code 128 / Author identity unknown` (this worktree's repository has no `user.name`/`user.email`
+configured anywhere — see 5.5); it then ran `git config user.name "spike" && git config
+user.email "spike@local"` before committing successfully. Final `result` event:
+`"is_error":false`, `"terminal_reason":"completed"`, `"permission_denials":[]`, `"num_turns":13`.
+
+### 5.2 Step 2 — verify isolation, exact commands and output
+
+```bash
+$ git -C "$SPIKE_REPO/.aiteamos/worktrees/TASK-001" log --oneline -3
+7f19319 feat: add greet
+60370cd chore: sample repo
+
+$ ls "$SPIKE_REPO/.aiteamos/worktrees/TASK-001"/greet.js "$SPIKE_REPO/.aiteamos/worktrees/TASK-001"/greet.test.js
+greet.js
+greet.test.js
+
+$ git -C "$SPIKE_REPO/.aiteamos/worktrees/TASK-001" status --short
+# (empty — clean working tree)
+
+$ cd "$SPIKE_REPO" && git log --oneline -1
+60370cd chore: sample repo
+
+$ ls greet.js
+ls: cannot access 'greet.js': No such file or directory
+
+$ git status --short
+ M sum.js
+ M sum.test.js
+?? .aiteamos/
+```
+
+**Confirmed exactly as expected, and matching the brief's prediction:** the commit (`7f19319 feat:
+add greet`) and `greet.js`/`greet.test.js` exist only on branch `aiteamos/TASK-001-greeting`
+inside the worktree. `main` is still at `60370cd chore: sample repo` — the pre-existing commit —
+with no `greet.js`, and its only changes are the pre-existing uncommitted `sum.js`/`sum.test.js`
+edits noted in the controller's constraint 4 (untouched, as instructed) plus the new `.aiteamos/`
+directory itself showing as untracked (`?? .aiteamos/`) — expected, since the worktrees directory
+was created inside the main working tree's path but nothing under it belongs to `main`'s branch.
+`git worktree list` at this point showed both entries pointing at distinct commits:
+
+```
+/home/meren/.aiteamos-spike/sample-repo                              60370cd [main]
+/home/meren/.aiteamos-spike/sample-repo/.aiteamos/worktrees/TASK-001 7f19319 [aiteamos/TASK-001-greeting]
+```
+
+### 5.3 Step 3 — two agents concurrently in separate worktrees, exact command executed
+
+Per constraint 1, this ran as a single foreground `Bash` call (timeout raised to `600000` ms) using
+shell job control (`&` / `wait`), with no `run_in_background`/monitor tooling:
+
+```bash
+export SPIKE_REPO="$HOME/.aiteamos-spike/sample-repo"
+cd "$SPIKE_REPO"
+git worktree add -b aiteamos/TASK-002-upper .aiteamos/worktrees/TASK-002
+
+( cd "$SPIKE_REPO/.aiteamos/worktrees/TASK-001" && claude -p "Add a farewell(name) function with a test, then commit." \
+    --output-format stream-json --verbose --permission-mode bypassPermissions > /tmp/m0-p1.jsonl 2>&1 ) &
+PID1=$!
+( cd "$SPIKE_REPO/.aiteamos/worktrees/TASK-002" && claude -p "Add an upper(text) function with a test, then commit." \
+    --output-format stream-json --verbose --permission-mode bypassPermissions > /tmp/m0-p2.jsonl 2>&1 ) &
+PID2=$!
+
+wait $PID1; RC1=$?
+wait $PID2; RC2=$?
+```
+
+Deviation from the brief: `--permission-mode bypassPermissions` added to both invocations (same
+reasoning as 5.1). Result: `RC1=0`, `RC2=0`. Raw captures: `/tmp/m0-p1.jsonl` (51 lines, 51/51
+parse), `/tmp/m0-p2.jsonl` (45 lines, 45/45 parse — both checked with the same per-line
+`json.loads` method as prior sections). Distinct session ids observed:
+`047bf13b-132c-4e44-ac19-d6bfddaf9e6a` (p1, TASK-001) and `0755a19f-ef6d-4b9c-9815-9d3a8606e519`
+(p2, TASK-002) — each run's own new session, not a resume.
+
+### 5.4 Evidence of independence: branches, files, and refs
+
+```bash
+$ git -C "$SPIKE_REPO/.aiteamos/worktrees/TASK-001" log --oneline -3
+bd75aa1 feat: add farewell
+7f19319 feat: add greet
+60370cd chore: sample repo
+
+$ git -C "$SPIKE_REPO/.aiteamos/worktrees/TASK-002" log --oneline -3
+a152039 feat: add upper(text) function
+60370cd chore: sample repo
+```
+
+TASK-001's branch advanced with exactly one new commit on top of its own prior history (the
+`greet` commit from 5.1) — `farewell`, its own work, and nothing from TASK-002. TASK-002's branch
+advanced with exactly one commit — `upper`, its own work — directly on the shared `60370cd` base,
+with no `farewell`/`greet` commits and no `greet.js`/`farewell.js` files present:
+
+```bash
+$ ls "$SPIKE_REPO/.aiteamos/worktrees/TASK-001"
+farewell.js  farewell.test.js  greet.js  greet.test.js  package.json  sum.js  sum.test.js
+
+$ ls "$SPIKE_REPO/.aiteamos/worktrees/TASK-002"
+package.json  sum.js  sum.test.js
+
+$ ls "$SPIKE_REPO/.aiteamos/worktrees/TASK-001"/upper*
+ls: cannot access '...': No such file or directory   # confirmed absent
+
+$ ls "$SPIKE_REPO/.aiteamos/worktrees/TASK-002"/greet* "$SPIKE_REPO/.aiteamos/worktrees/TASK-002"/farewell*
+ls: cannot access '...': No such file or directory   # confirmed absent, both
+```
+
+TASK-002's agent chose to add `upper()` directly into the existing `sum.js`/`sum.test.js` (its own
+judgment call, since the prompt did not name a target file) rather than a new file — noted because
+it means the two runs' outputs are structurally different (new files vs. edited existing files),
+which makes the absence-of-cross-contamination check above meaningful rather than coincidental (a
+shared new filename could not have collided by accident either way, but the file lists show no
+trace of either run's specific content in the other's tree).
+
+Refs after both runs, confirming two independent branch tips with no shared-ref writes:
+
+```bash
+$ git -C "$SPIKE_REPO" for-each-ref refs/heads --format='%(refname) %(objectname:short)'
+refs/heads/aiteamos/TASK-001-greeting bd75aa1
+refs/heads/aiteamos/TASK-002-upper a152039
+refs/heads/main 60370cd
+```
+
+`main` after the concurrent step: still `60370cd`, still only the pre-existing `sum.js`/
+`sum.test.js` uncommitted diff plus the untracked `.aiteamos/` directory — unchanged from 5.2.
+
+### 5.5 Watch-item 1 — git lock contention: none observed
+
+Both raw captures (`/tmp/m0-p1.jsonl`, `/tmp/m0-p2.jsonl`) and the single-worktree capture
+(`/tmp/m0-run6.jsonl`) were searched directly:
+
+```bash
+$ grep -iE "index\.lock|unable to create|already exists|fatal: .*lock" /tmp/m0-p1.jsonl /tmp/m0-p2.jsonl /tmp/m0-run6.jsonl
+# (no match, grep exit 1)
+```
+
+No index-lock, ref-lock, or "unable to create lock file" error appears anywhere in any of the
+three captures. Both concurrent `git commit` operations succeeded (`RC1=0`, `RC2=0`) even though
+they share the same `.git` directory (`git rev-parse --git-common-dir` returns
+`.../sample-repo/.git` from both worktrees — confirmed directly). This is consistent with why no
+contention occurred: each commit only needs to lock and update its own ref
+(`refs/heads/aiteamos/TASK-001-greeting` vs. `refs/heads/aiteamos/TASK-002-upper`) — two distinct
+files under `.git/refs/heads/`, not the same file — so there was no shared ref for the two
+`git commit`s to race on. This spike ran exactly two concurrent commits; it does not establish
+what happens if two agents ever commit to the *same* branch/ref concurrently (out of scope here —
+M3's one-worktree-per-task design should not produce that case in the first place, but if it ever
+does, this finding does not cover it).
+
+**One genuine, evidence-backed non-isolation finding surfaced here, and it is first-class for
+M3's orchestrator:** local git identity (`user.name`/`user.email`) is **not** per-worktree state —
+it lives in the single shared `.git/config` file (`extensions.worktreeConfig` is unset in this
+repo, confirmed with `git config --get extensions.worktreeConfig` returning exit 1/empty), which
+every worktree of the same repository reads and writes by default. Direct evidence, both commit
+attempts timestamped from the raw captures:
+
+- `18:34:04.288Z` — TASK-001's agent (p1) attempts `git commit` with no identity set; fails, `Exit
+  code 128`, `Author identity unknown`.
+- `18:34:06.165Z` — TASK-002's agent (p2) attempts `git commit`, independently, ~2s later; fails
+  the same way.
+- `18:34:10.608Z` — TASK-001's agent runs `git config user.name "spike" && git config user.email
+  "spike@local"` (a **persistent, shared** write — no `--local`/`--worktree` scoping, so it lands
+  in the shared `.git/config`) and commits successfully.
+- `18:34:14.016Z` — TASK-002's agent, instead of retrying a plain `git commit` against whatever
+  shared config might now exist, commits with `git -c user.name="meren" -c
+  user.email="erenaltan@gmail.com" commit ...` — a **per-invocation** override, not a persistent
+  write, using an identity it apparently derived from this session's own context.
+
+Both commits ended up correctly attributed to the identity each agent intended
+(`bd75aa1` authored `spike <spike@local>`; `a152039` authored `meren <erenaltan@gmail.com>`,
+confirmed via `git show --stat`), so **no functional collision occurred in this run** — but that
+outcome depended on TASK-002 choosing a non-persistent `-c` override rather than also writing to
+the shared config. Confirmed after the fact: `cat "$SPIKE_REPO/.git/config"` shows a single
+`[user]` block with `name = spike` / `email = spike@local` — TASK-001's write, visible from
+*both* worktrees, and the only surviving identity in shared config. Had two concurrent agents both
+chosen to persist a `git config user.*` write with different values, the second write would
+silently overwrite the first, and a build system replaying a divergent identity requirement per
+task could get unpredictable attribution. **Recommendation for M3:** the orchestrator should pin
+git identity for every worktree explicitly and non-persistently — either `git -c user.name=... -c
+user.email=...` per invocation (what TASK-002's agent did on its own) or, if configuring it once is
+preferred, `git config --worktree user.name ...` after first running `git config
+extensions.worktreeConfig true`, so identity does not leak across sibling worktrees. This was not
+tested directly (out of scope, discovered as a side effect of this section's runs, not a planned
+Step), so it is reported as an observation plus a recommendation, not a verified fix.
+
+### 5.6 Watch-item 2 — untracked state (`node_modules`) in fresh worktrees
+
+Neither worktree ever had a `node_modules` directory at any point (`ls .../TASK-001/node_modules`
+and `.../TASK-002/node_modules` both `No such file or directory`, checked after both runs
+completed), and this caused **no problem** in this spike, for one specific reason established by
+inspecting `package.json`:
+
+```json
+{
+  "name": "sample-repo",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": { "test": "node --test" }
+}
+```
+
+The sample repo has **no dependency entries at all** — `npm test` runs `node --test`, Node's
+built-in test runner, which needs nothing installed. `npm test` was run by name in all three
+agent sessions (`grep`-confirmed tool calls: `npm test` appears in run6, p1, and p2's tool-call
+sequences) and succeeded every time straight out of a fresh `git worktree add`, with no `npm
+install` or `npm ci` ever attempted or needed (`grep -io "npm install\|npm ci" ...` across all
+three captures: no match).
+
+**This does not establish that a fresh worktree is safe for `npm test` in general** — it establishes
+only that this specific fixture repo has zero npm dependencies, so the missing-`node_modules`
+question never actually got exercised. **First-class caveat for M3's worktree setup step:** any
+real target repository with actual dependencies (anything with a non-empty `dependencies`/
+`devDependencies` in `package.json`) would need `npm install` (or a shared/symlinked
+`node_modules`, or a package-manager cache) run as an explicit setup step after `git worktree add`
+and before any test/build command — this spike's fixture happens to sidestep that requirement
+entirely rather than proving it unnecessary. M0/M1 should not generalize "tests just worked" from
+this repo to real target repos.
+
+### 5.7 Watch-item 3 — were the concurrent runs genuinely independent?
+
+**Yes, on every axis actually checked:**
+
+- **Process-level:** two separate `claude` subprocesses, two separate PIDs, two separate exit
+  codes (both `0`), two separate session ids (`047bf13b-...` / `0755a19f-...`).
+- **Branch-level:** each worktree's branch advanced with exactly the commit that agent made and no
+  other (5.4) — `farewell` only on TASK-001's branch, `upper` only on TASK-002's branch.
+- **File-level:** neither run's output files appear in the other's tree — confirmed by direct `ls`
+  checks for the other run's expected filenames in each worktree (5.4), not inferred from the
+  commit log alone.
+- **Ref-level:** the two commits landed on two distinct ref files under `.git/refs/heads/`, so
+  there was no shared ref for the two `git commit`s to contend over, and no lock error was observed
+  anywhere in either capture (5.5).
+- **`main`-level:** `main` remained at `60370cd` throughout, with only its pre-existing (out of
+  scope, per controller constraint 4) uncommitted diff and the new untracked `.aiteamos/` directory
+  — untouched by either concurrent run.
+
+**One qualification, not a contradiction:** git identity configuration (`.git/config`) is shared,
+mutable, repo-wide state that both concurrent agents touched (5.5). In this run the two agents'
+choices (a persistent write vs. a per-invocation override) happened not to collide, and both
+commits ended up correctly attributed — but this is process independence with one shared-state
+seam, not total filesystem isolation. Everything that actually constitutes "the work" (branches,
+commits, tracked files) was fully independent; the one piece of shared state observed
+(`user.name`/`user.email` in `.git/config`) did not affect either commit's *content* or which
+*branch* it landed on, only which identity string it could have ended up attributed to had both
+agents made the same scoping choice.
+
+Raw captures on disk (throwaway, not committed, consistent with the rest of this spike):
+`/tmp/m0-run6.jsonl` (Step 1, single worktree), `/tmp/m0-p1.jsonl` (Step 3, TASK-001/farewell),
+`/tmp/m0-p2.jsonl` (Step 3, TASK-002/upper).
 
 ## 6. Verdict and consequences for M3
 
