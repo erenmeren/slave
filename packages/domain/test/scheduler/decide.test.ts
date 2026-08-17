@@ -110,4 +110,33 @@ describe('decide', () => {
     )
     expect(commands).toEqual([])
   })
+
+  it('breaks ties by task id when priorities are equal, choosing the lower id', () => {
+    // Critical: input in descending-id order so stable-sort-by-insertion-order
+    // would pick TASK-9, proving the tie-break clause actually executes.
+    // With equal priorities, only a.id.localeCompare(b.id) determines the winner.
+    // One agent ensures both can't run, making the sort order observable.
+    const commands = decide(
+      world({
+        tasks: [task('TASK-9', { priority: 5 }), task('TASK-2', { priority: 5 })],
+      }),
+    )
+    expect(startedTaskIds(commands)).toEqual(['TASK-2'])
+  })
+
+  it('does not mutate input arrays', () => {
+    const taskArray = Object.freeze([task('TASK-1'), task('TASK-2')] as readonly SchedulableTask[])
+    const agentArray = Object.freeze([alex, emma] as readonly SchedulableAgent[])
+    const testWorld = Object.freeze({
+      tasks: taskArray,
+      agents: agentArray,
+      limits: DEFAULT_GUARDRAIL_LIMITS,
+      stats: { activeRuns: 0, spentUsd: 0, consecutiveFailures: 0, emergencyStopped: false },
+    } as const)
+
+    // Should not throw when called with frozen arrays; implementation must not mutate.
+    const commands = decide(testWorld)
+    expect(commands).toHaveLength(1)
+    expect(commands[0]).toEqual({ kind: 'start_run', taskId: 'TASK-1', agentId: 'alex' })
+  })
 })
