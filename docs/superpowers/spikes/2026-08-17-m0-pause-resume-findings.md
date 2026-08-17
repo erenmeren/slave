@@ -778,7 +778,7 @@ export AITEAMOS_SPIKE="/home/meren/projects/slave-of-ai/spike/m0-pause-resume"
 export AITEAMOS_PAUSE_FLAG=/tmp/aiteamos-pause-run5.flag
 export SPIKE_REPO="$HOME/.aiteamos-spike/sample-repo"
 
-# Verified absent BEFORE exporting, per the controller's explicit instruction:
+# Verified absent immediately after export, before any tool call could run:
 $ ls -la "$AITEAMOS_PAUSE_FLAG"
 ls: cannot access '/tmp/aiteamos-pause-run5.flag': No such file or directory
 
@@ -936,10 +936,14 @@ forward intact into run 5, per 4.5. No evidence of session amnesia was observed 
 1. **Does resume after a hook-pause work at all?** **Observed: yes.** `claude -p ... --resume
    "$SID4"` against the same session id run 4 reported, with the pause flag cleared and
    `AITEAMOS_PAUSE_FLAG` pointed at a verified-absent path, exited `0`, reported the same session id
-   throughout, executed four `Edit`/`Bash`-mutating calls with no denials
-   (`"permission_denials":[]`), and its file changes are independently confirmed on disk and by a
-   passing test suite (4.4). A hook-originated pause does not brick the session — resume is a normal
-   `--resume` call once the flag is cleared and the environment is configured correctly.
+   throughout, executed three `Edit` calls and four `Bash` calls (seven mutating-capable tool calls,
+   matching 4.4's itemization) with no denials (`"permission_denials":[]`), and its file changes are
+   independently confirmed on disk and by a passing test suite (4.4). A hook-originated pause does
+   not brick the session — resume is a normal `--resume` call once the flag is cleared and the
+   environment is configured correctly. Caveat, per 4.2: the *outcome* (completed run, no denials) is
+   directly observed here; that the outcome reflects `pause-gate.sh` explicitly returning allow on
+   each call, rather than the hook simply not firing, is inferred, not observed — this run did not
+   use `--include-hook-events`.
 
 2. **Is the injected instruction honoured (`MathKit`, not `Calculator`)?** **Observed: yes**, fully.
    `grep -l "MathKit" *.js` matches both files; `grep -l "Calculator" *.js` matches none; the actual
