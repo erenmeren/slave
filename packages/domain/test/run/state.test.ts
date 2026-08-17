@@ -97,4 +97,14 @@ describe('applyRunEvent', () => {
     const result = applyRunEvent(initialRunState(), { type: 'tool_call', name: 'Read' })
     expect(result.ok).toBe(false)
   })
+
+  it('counts tool calls while pause is requested but not yet paused', () => {
+    const state = drive(initialRunState(), [
+      { type: 'started', sessionId: 'sess-1' },
+      { type: 'pause_requested' },
+      { type: 'tool_call', name: 'Read' },
+    ])
+    expect(state.toolCalls).toBe(1)
+    expect(state.status).toBe('pause_requested')
+  })
 })
