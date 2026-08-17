@@ -1744,15 +1744,18 @@ claude -p "You were interrupted mid-step. Continue the Calculator refactor: fini
 This differs from the brief's suggested Step 4 form in adding `--settings`/`--include-hook-events`
 (the pause hook must still be registered on resume — dropping it would leave every future pause on
 this session unenforceable) and `--permission-mode bypassPermissions` (required per sections 1/3.6
-for edits to land at all). cwd was the worktree directory throughout, per Q1's requirement. Exit
-code: `0`. Raw capture: `/tmp/m0-run7b-part2.jsonl`, 155 lines. Not committed (throwaway, consistent
-with this spike's other raw captures).
+for edits to land at all). cwd was the worktree directory throughout, per Q1's requirement. Unlike
+the kill run's `wait "$CLAUDE_PID"; RC=$?` (7.3), this was a plain foreground invocation with no
+exit-status capture shown — no OS-level exit code is claimed for it. Raw capture:
+`/tmp/m0-run7b-part2.jsonl`, 155 lines. Not committed (throwaway, consistent with this spike's other
+raw captures).
 
 ### 7.6 Answers to the brief's four resume questions
 
-1. **Did the resume succeed at all after a kill, or did it error?** **Succeeded.** Exit code `0`,
-   terminal `result` event: `is_error:false`, `stop_reason:"end_turn"`, `terminal_reason:"completed"`,
-   `subtype:"success"`, `num_turns:20`, `total_cost_usd:0.7969134999999998`. **[Observed]**
+1. **Did the resume succeed at all after a kill, or did it error?** **Succeeded.** The terminal
+   `result` event reports `is_error:false`, `stop_reason:"end_turn"`, `terminal_reason:"completed"`,
+   `subtype:"success"`, `num_turns:20`, `total_cost_usd:0.7969134999999998` — no OS-level exit code
+   was captured for this invocation. **[Observed]**
 2. **Did it report the same session id?** **Yes.**
    `grep -o '"session_id":"[^"]*"' /tmp/m0-run7b-part2.jsonl | sort -u` returns exactly one UUID,
    `c0c1a7b0-76d8-4cf6-a987-33e2cab60dcc`, the same one the killed run reported on every line.

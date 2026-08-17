@@ -358,8 +358,9 @@ recorded rather than guessed at, because the point of M0 was to replace guesses 
 
 - **Q1 — RESOLVED: yes.** `--resume` works with cwd inside a git worktree. One run was started in
   `.aiteamos/worktrees/TASK-003`, killed mid-tool-call (see Q2), and resumed from that same worktree
-  directory: exit code `0`, same session id, and — with no `Read` tool call preceding it — the
-  resumed run's first line of text correctly named the exact pre-kill state on disk, evidence the
+  directory: terminal `result` event reporting `is_error:false`/`terminal_reason:"completed"`, the
+  same session id, and — with no `Read` tool call preceding it — the resumed run's first line of
+  text correctly named the exact pre-kill state on disk, evidence the
   worktree-scoped session was read back intact, not reconstructed by inspection. All four subsequent
   commits landed on the worktree's own branch (`aiteamos/TASK-003-kill-resume`); `main` was never
   touched. **[Observed]** (findings §7.3, §7.5, §7.6). No mitigation (`--session-id` pre-assignment)
