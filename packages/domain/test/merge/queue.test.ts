@@ -36,4 +36,22 @@ describe('nextMergeCandidate', () => {
     const next = nextMergeCandidate([candidate('TASK-9', 10), candidate('TASK-3', 10)], false)
     expect(next?.taskId).toBe('TASK-3')
   })
+
+  it('uses enqueuedAt as the primary sort key, not task id', () => {
+    // Decorrelated fixture: TASK-9 enqueued earliest but TASK-1 sorts first lexicographically.
+    // Must pick TASK-9 (enqueue time 10) not TASK-1 (enqueue time 20), proving enqueuedAt is primary.
+    const next = nextMergeCandidate([candidate('TASK-1', 20), candidate('TASK-9', 10)], false)
+    expect(next?.taskId).toBe('TASK-9')
+  })
+
+  it('does not mutate input arrays', () => {
+    const queueArray = Object.freeze([
+      candidate('TASK-2', 20),
+      candidate('TASK-1', 10),
+    ] as readonly MergeCandidate[])
+
+    // Should not throw when called with frozen arrays; implementation must not mutate.
+    const next = nextMergeCandidate(queueArray, false)
+    expect(next?.taskId).toBe('TASK-1')
+  })
 })
