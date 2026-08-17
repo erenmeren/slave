@@ -34,13 +34,22 @@ its token usage / cost — the exact contract M3's `ClaudeCodeAdapter` must pars
 
 ### Command
 
-`--output-format stream-json` from the brief is a valid flag as-is; no substitution was needed:
+`--output-format stream-json` from the brief is a valid flag as-is; no flag substitution was needed.
+The brief's Step 1 shows `2>&1 | tee /tmp/m0-run1.jsonl`; the command actually executed used plain
+output redirection instead (`--verbose > /tmp/m0-run1.jsonl 2>&1`, no `tee`, run in the background
+per the synchronous-run constraints of this spike session). Recorded verbatim below as run:
 
 ```bash
 cd "$SPIKE_REPO"
 claude -p "Add a multiply(a, b) function to sum.js and a test for it in sum.test.js. Run npm test when done." \
-  --output-format stream-json --verbose 2>&1 | tee /tmp/m0-run1.jsonl
+  --output-format stream-json --verbose > /tmp/m0-run1.jsonl 2>&1
 ```
+
+The two forms are equivalent for the purposes of this spike — both capture the full stdout+stderr
+byte stream to `/tmp/m0-run1.jsonl` and both leave `stream-json`'s NDJSON framing untouched — but
+`tee` additionally echoes to the terminal, which the redirect form does not. M3 will spawn a child
+process and read its stdout directly (closer to the redirect form), so the redirect form is
+recorded here as the one that was actually run and the one that matters for the adapter's contract.
 
 This first run (raw capture: `/tmp/m0-run1.jsonl`, 31 lines) produced **no file changes** — see
 "Permission behaviour" below. A second run added `--permission-mode bypassPermissions` and is the
