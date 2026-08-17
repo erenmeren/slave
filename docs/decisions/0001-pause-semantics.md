@@ -124,7 +124,8 @@ Clear the flag file and verify it is gone; spawn `claude -p "<queued instruction
 notion that a resume follows a pause — it treats the resume prompt as an ordinary next turn
 (findings 4.8). **[Observed]**
 
-This was measured to work end to end: the injected instruction ("name the class MathKit instead of
+The *outcome* was measured end to end (for what was not, see the second limit below): the injected
+instruction ("name the class MathKit instead of
 Calculator") was followed exactly, verified independently in the working tree and by a passing test
 suite; the session id was unchanged; and the resumed agent showed granular awareness of the
 pre-pause turn — it re-read only the file it had been *denied*, edited from memory the file it had
@@ -132,10 +133,21 @@ already read, re-attempted both denied calls in their original order, and honour
 "run npm test after each change" instruction that appeared only in the pre-pause prompt
 (findings 4.4–4.5). **[Observed]**
 
-**One limit stated plainly:** the paused session had made zero `Edit` calls before the pause, so
-"a session resumed and continued its own in-flight editing work" was **not** demonstrated. What was
-demonstrated is that the session's conversational context survived the pause boundary and shaped
-its behaviour on resume (findings 4.1, 4.7). **[Observed limit]**
+**Two limits stated plainly:**
+
+- The paused session had made zero `Edit` calls before the pause, so "a session resumed and
+  continued its own in-flight editing work" was **not** demonstrated. What was demonstrated is that
+  the session's conversational context survived the pause boundary and shaped its behaviour on
+  resume (findings 4.1, 4.7). **[Observed limit]**
+- **The hook's behaviour during the resume run itself is inferred, not observed.** The resume run
+  omitted `--include-hook-events`, so its capture contains no `hook_response` lines at all
+  (findings 4.2). That `pause-gate.sh` fired and *allowed* each call is deduced from the absence of
+  denial signals — empty `permission_denials`, no `is_error: true` tool results, the flag file
+  verified absent — and is equally consistent with the hook not firing on that run. The outcome
+  (a completed run that obeyed its instruction) is directly observed; the mechanism behind it on
+  that particular run is not. **[Inferred]** Section 3's requirement that M3 always pass
+  `--include-hook-events` closes this gap for the adapter, but it does not retroactively close it
+  for this evidence.
 
 Mapping onto spec §5.2's run state machine:
 
@@ -206,9 +218,22 @@ branches with no cross-contamination at file or ref level and **no git lock cont
 commit locked only its own ref (findings 5.2, 5.4, 5.5, 5.7). **[Observed]**
 
 One seam: **`.git/config` is repo-wide state that worktrees do not isolate, and both concurrent
-agents wrote git identity into it.** They did not collide, but only because one used a persistent
-`git config` write and the other a per-invocation `git -c` override; two persistent writes with
-different values would have silently overwritten each other (findings 5.5). **[Observed]**
+agents hit the same missing-identity failure there — one of them then wrote git identity into it
+persistently.** Both agents' first `git commit` failed with `Author identity unknown`; TASK-001
+recovered by running `git config user.name/user.email` with no scoping flag, which lands in the
+shared `.git/config` and is visible from every worktree, while TASK-002 recovered with a
+per-invocation `git -c user.name=... -c user.email=... commit`, which writes nothing. They did not
+collide only because of that difference; two persistent writes with different values would have
+silently overwritten each other (findings 5.5). **[Observed]**
+
+The corrected fact strengthens the mitigation below rather than weakening it: **the non-persistent,
+supplied-at-invocation form is not merely proposed — it was observed working.** TASK-002's commit
+`a152039` is attributed `meren <erenaltan@gmail.com>` and TASK-001's `bd75aa1` is attributed
+`spike <spike@local>`, each as its own agent intended, with only TASK-001's identity surviving in
+the shared config (findings 5.5). **[Observed]** What that validates is the *family* — identity
+supplied per invocation, persisted nowhere. The specific variant recommended below (environment
+variables) was not itself exercised; it is the member of that family that requires no cooperation
+from the agent. **[Decision]**
 
 **[Decision]** So that N concurrent runs never contend on it, M3 makes the agent's improvisation
 both unnecessary and impossible:
@@ -218,7 +243,10 @@ both unnecessary and impossible:
    and it removes the `Author identity unknown` failure that provoked the config write in the first
    place.
 2. Deny persistent git-config writes through the permission hook.
-3. If a file-based identity is ever preferred, use `git config extensions.worktreeConfig true` once,
+3. Where the orchestrator issues a git command itself, `git -c user.name=... -c user.email=...` is
+   the same non-persistent guarantee at the command level — the form TASK-002's agent arrived at on
+   its own, with correct attribution confirmed (findings 5.5).
+4. If a file-based identity is ever preferred, use `git config extensions.worktreeConfig true` once,
    then `git config --worktree user.*` per worktree.
 
 The general rule: **no run may write to the git common directory.** Identity is only the instance
@@ -272,7 +300,8 @@ the in-flight turn.
 - **Trusting the model to stop after a deny.** Directly contradicted by measurement: it tried
   another tool first (findings 3.5). The self-stop that followed is not part of any contract.
 - **Relying on the interactive permission prompt as the control surface.** There is no TTY in a
-  headless run; the denial is quiet in the exit code (findings 1). Unusable for an autonomous
+  headless run, and the denial is quiet in the run's terminal event, which reports a clean
+  completion (findings 1). Unusable for an autonomous
   runtime.
 - **A single shared pause-flag path.** Pausing one agent would freeze unrelated concurrent agents,
   and running agents in parallel is the product's premise. The flag is per-run, and an unset path is
@@ -288,10 +317,39 @@ the in-flight turn.
 
 ---
 
+## Known Limitations
+
+Two lists, kept separate on purpose. **Known limitations** are things already known to be unmeasured
+in work that is finished — nobody is expected to go and close them, but nobody should read past them
+either. **Open questions** (next section) are things someone should measure before or during M3.
+A reader who conflates the two will either chase settled work or build on an assumption.
+
+- **Hook behaviour during the resume run is inferred, not observed** (findings 4.2, 6.7). The
+  resume run omitted `--include-hook-events`; that the hook fired and allowed each call is deduced
+  from the absence of denial signals. See §6 above. Not worth a run to close: §3 makes
+  `--include-hook-events` mandatory, so M3 will observe this directly from its first run.
+- **OS-level exit codes were not captured to a durable file in several runs** (findings 3.10, 6.7).
+  Exit codes were observed in-session but not persisted alongside the `.jsonl` captures, so no claim
+  in this ADR rests on a process's exit status — and none should. This matters to M3 in one concrete
+  way: the adapter must decide run outcome from the terminal `result` event's fields
+  (`is_error`, `terminal_reason`, `stop_reason`, `permission_denials`), which *were* captured for
+  every run, rather than from the child process's exit code, whose behaviour across the failure
+  cases this spike did not systematically record. §3's denied-edit run is the cautionary case: its
+  terminal event reports a clean completion and only `permission_denials` reveals that nothing
+  happened, so an adapter reading a coarse success/failure signal would misclassify it either way.
+- **`pause-gate.sh`'s exit-2 crash path was never exercised by a real `claude` run**
+  (findings 3.10). It was verified standalone against `/dev/full`. Whether that path fails closed is
+  Q7 — the limitation is recorded here, the measurement that would settle it is there.
+- **The `$AITEAMOS_SPIKE` variable form in `settings.json` was never tested** (findings 3.1); only
+  the absolute-path form. §3 makes absolute paths mandatory, which is why this stays a limitation
+  rather than becoming an open question.
+- **A denied `Edit` was never observed** (findings 3.7); both denied calls were read-only. See Q8.
+- **The paused session had no edits of its own** (findings 4.1). See §6.
+
 ## Open Questions
 
-These are unresolved. Each names what would settle it. They are recorded rather than guessed at,
-because the point of M0 was to replace guesses with measurements.
+These are unresolved and someone should measure them. Each names what would settle it. They are
+recorded rather than guessed at, because the point of M0 was to replace guesses with measurements.
 
 - **Q1 — Does `--resume` work when the cwd is a git worktree rather than the repository root?**
   Session state is stored per project directory and a worktree has a different path. Every resume in
