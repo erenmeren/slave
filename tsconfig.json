@@ -1,4 +1,8 @@
 {
   "files": [],
-  "references": [{ "path": "packages/domain" }, { "path": "packages/db" }]
+  "references": [
+    { "path": "packages/domain" },
+    { "path": "packages/db" },
+    { "path": "packages/events" }
+  ]
 }
