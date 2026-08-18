@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -9,6 +9,8 @@ import { ClaudeCodeAdapter, type StartRunInput } from '../src/claude/adapter.js'
 import type { RuntimeEvent } from '../src/types.js'
 
 const FAKE = fileURLToPath(new URL('./fake-claude.mjs', import.meta.url))
+const repoRoot = fileURLToPath(new URL('../../../', import.meta.url))
+const realGate = path.join(repoRoot, 'scripts/pause-gate.sh')
 
 /**
  * Drains the run's normalized event stream (proving `events()` still works
@@ -34,12 +36,21 @@ describe('ClaudeCodeAdapter', () => {
 
   beforeEach(() => {
     worktreePath = mkdtempSync(path.join(tmpdir(), 'aiteamos-adapter-'))
+    // start() (Task 8) now runs the Task 6 pre-flight gate against
+    // hookPath before spawning anything, so every test here needs a real
+    // discriminating hook script even though most of them never touch
+    // pause behavior directly. A fresh copy per test, not the repo's own
+    // file, since nothing here has any business mutating that.
+    const hookPath = path.join(worktreePath, 'pause-gate.sh')
+    writeFileSync(hookPath, readFileSync(realGate))
+    chmodSync(hookPath, 0o755)
     input = {
       runId: runId('run-1'),
       prompt: 'do the thing',
       worktreePath,
       pauseFlagPath: path.join(worktreePath, 'pause.flag'),
       settingsPath: path.join(worktreePath, 'settings.json'),
+      hookPath,
       gitIdentity: { name: 'Test Agent', email: 'agent@example.com' },
     }
   })
