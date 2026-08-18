@@ -14,7 +14,9 @@
     "test:watch": "vitest",
     "typecheck": "tsc --build --force && tsc -p packages/domain/tsconfig.test.json && tsc -p packages/db/tsconfig.test.json && tsc -p tsconfig.tools.json",
     "db:migrate": "prisma migrate deploy --schema packages/db/prisma/schema.prisma --config packages/db/prisma.config.ts",
-    "db:migrate:test": "node scripts/migrate-test.mjs"
+    "db:migrate:test": "node scripts/migrate-test.mjs",
+    "db:seed": "tsc --build && node --env-file=.env packages/db/dist/seed.js",
+    "db:seed:test": "tsc --build && node scripts/seed-test.mjs"
   },
   "devDependencies": {
     "@types/pg": "^8.23.1",
