@@ -20,6 +20,44 @@ afterAll(async (): Promise<void> => {
   await prisma.$disconnect()
 })
 
+/**
+ * Runs `fn` while a deferred constraint trigger is attached to `ExecutionEvent` that
+ * unconditionally raises. `AFTER INSERT ... DEFERRABLE INITIALLY DEFERRED` fires at COMMIT time,
+ * not at statement time, which is the one failure point today's `appendEvent` signature offers no
+ * other way to create: everything inside the transaction (the insert, the domain validation, the
+ * `pg_notify`) succeeds, and only the COMMIT itself fails.
+ *
+ * That makes it possible to distinguish "the notify was queued on the transaction's own
+ * connection, so Postgres discards it along with everything else when the transaction aborts"
+ * from "the notify already escaped on a separate, autocommitting connection before the abort" —
+ * exactly the distinction between `tx.$executeRaw` and `prisma.$executeRaw` in `appendEvent`.
+ *
+ * Scoped to a single test via try/finally (not shared setup) so no other test in this file runs
+ * with a table that unconditionally fails to commit, and torn down even if `fn` throws.
+ */
+async function withCommitFailure<T>(fn: () => Promise<T>): Promise<T> {
+  await prisma.$executeRawUnsafe(`
+    CREATE OR REPLACE FUNCTION test_fail_after_insert() RETURNS trigger AS $$
+    BEGIN
+      RAISE EXCEPTION 'deliberate commit-time failure for atomicity test';
+    END;
+    $$ LANGUAGE plpgsql;
+  `)
+  await prisma.$executeRawUnsafe(`
+    CREATE CONSTRAINT TRIGGER fail_after_insert
+    AFTER INSERT ON "ExecutionEvent"
+    DEFERRABLE INITIALLY DEFERRED
+    FOR EACH ROW
+    EXECUTE FUNCTION test_fail_after_insert();
+  `)
+  try {
+    return await fn()
+  } finally {
+    await prisma.$executeRawUnsafe('DROP TRIGGER IF EXISTS fail_after_insert ON "ExecutionEvent"')
+    await prisma.$executeRawUnsafe('DROP FUNCTION IF EXISTS test_fail_after_insert()')
+  }
+}
+
 describe('appendEvent', () => {
   it('writes a valid event and returns it parsed', async () => {
     const event = await appendEvent({
@@ -33,6 +71,9 @@ describe('appendEvent', () => {
     expect(event.type).toBe('task.created')
     expect(typeof event.seq).toBe('number')
     expect(event.ts).toMatch(/^\d{4}-\d{2}-\d{2}T/)
+    expect(event.taskId).toBe('task-1')
+    expect(event.agentId).toBeUndefined()
+    expect(event.runId).toBeUndefined()
     expect(await prisma.executionEvent.count()).toBe(1)
   })
 
@@ -68,9 +109,18 @@ describe('appendEvent', () => {
     const seen: EventNotification[] = []
     subscription = await subscribeEvents(url(), (n) => seen.push(n))
 
-    await expect(
-      appendEvent({ type: 'task.created', workspaceId: 'w1', actor: 'human', payload: { nope: 1 } }),
-    ).rejects.toThrow()
+    await withCommitFailure(async () => {
+      await expect(
+        appendEvent({
+          type: 'task.created',
+          workspaceId: 'w1',
+          actor: 'human',
+          payload: { title: 'Should never commit' },
+        }),
+      ).rejects.toThrow()
+    })
+
+    expect(await prisma.executionEvent.count()).toBe(0)
 
     await new Promise((resolve) => setTimeout(resolve, 500))
     expect(seen).toEqual([])
