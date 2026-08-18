@@ -1,0 +1,1209 @@
+# M3 Orchestrator and ClaudeCodeAdapter Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Turn the pure decision core into a system that provisions real git worktrees, spawns real `claude` processes, streams their output into the event log, verifies the result, and advances the task — driven from a CLI, with pause and resume working.
+
+**Architecture:** `packages/providers` holds the `AgentRuntimeAdapter` interface and `ClaudeCodeAdapter`; it depends on `packages/domain` only and never touches the database. `apps/orchestrator` is the single-writer daemon: it loads a `World` from Postgres, calls the domain's existing `decide()`, executes the returned commands, and reacts to observed run state. Run output is consumed by a per-run concurrent pump, not inside the tick.
+
+**Tech Stack:** TypeScript (strict, no `any`), Node 26, Vitest, Prisma 7 + `@prisma/adapter-pg`, PostgreSQL 17 on port 5433, `node:child_process`, real `git`.
+
+**Spec:** `docs/superpowers/specs/2026-08-18-m3-orchestrator-and-adapter-design.md`
+**Parent spec:** `docs/superpowers/specs/2026-08-17-ai-team-os-design.md`
+**Binding prior decision:** `docs/decisions/0001-pause-semantics.md`
+
+## Global Constraints
+
+- TypeScript strict. **No `any` anywhere**, in `src` or `test`.
+- **Every exported function carries an explicit return type.** Load-bearing: `noImplicitReturns` is not set, so TS2366 exhaustiveness checking depends on it.
+- **`packages/providers` must not depend on `packages/db`.** The adapter emits normalized events; the orchestrator persists them.
+- `ExecutionEvent` has exactly one write path: `appendEvent()`.
+- The `EventType` database enum and the domain Zod union stay in exact correspondence — M2's parity test enforces both directions.
+- Postgres host port is **5433**, never 5432.
+- **No run writes to the git common directory.** Identity comes from process environment.
+- Integration tests run against a real database and **never skip silently**.
+- Every `prisma migrate` / `prisma generate` needs `--config packages/db/prisma.config.ts` beside `--schema`; `migrate` does not generate the client.
+- `npm test` is `tsc --build && vitest run`. The integration vitest project is serial (`fileParallelism: false` at the config's **root** level).
+- Conventional commits with the trailer `Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>`.
+- `npm test` and `npm run typecheck` both pass before every commit.
+
+---
+
+## File Structure
+
+| File | Responsibility |
+|---|---|
+| `packages/providers/src/types.ts` | `AgentRuntimeAdapter`, `ProviderCapabilities`, `RuntimeEvent`, `StartRunInput`, `RunOutcome` |
+| `packages/providers/src/claude/stream.ts` | One NDJSON line → one `RuntimeEvent`. Pure. |
+| `packages/providers/src/claude/flags.ts` | Mandatory CLI flag construction. Pure. |
+| `packages/providers/src/claude/settings.ts` | Per-run settings file writer (absolute hook path) |
+| `packages/providers/src/claude/adapter.ts` | Process lifecycle, pause protocol, resume |
+| `packages/providers/test/fake-claude.mjs` | Test instrument: replays NDJSON fixtures |
+| `packages/providers/test/fixtures/*.ndjson` | Captures derived from M0 |
+| `scripts/pause-gate.sh` | `PreToolUse` hook, with a real JSON encoder |
+| `apps/orchestrator/src/world.ts` | Database rows → domain `World` |
+| `apps/orchestrator/src/worktree.ts` | Provision, setup commands, preserve |
+| `apps/orchestrator/src/pump.ts` | `RuntimeEvent` → domain event → `appendEvent` |
+| `apps/orchestrator/src/verify.ts` | Verify commands, artifacts, advance |
+| `apps/orchestrator/src/tick.ts` | Load → decide → execute |
+| `apps/orchestrator/src/sweep.ts` | Timeouts, dead pids, startup reconciliation |
+| `apps/orchestrator/src/cli.ts` | `tick`, `daemon`, `pause`, `resume`, `cancel`, `status` |
+
+---
+
+## Task 1: Measure Q7 and Q8 before any adapter code
+
+Spec §14. Both are load-bearing for a milestone that implements pause. This task writes **no product code**.
+
+**Files:**
+- Create: `docs/superpowers/spikes/2026-08-18-m3-hook-failure-modes.md`
+- Modify: `docs/decisions/0001-pause-semantics.md` (Open Questions section)
+
+**Interfaces:**
+- Produces: a resolved or refuted answer to Q7 and Q8 that Task 8's pause design depends on.
+
+- [ ] **Step 1: Build the Q7 probe**
+
+Create a throwaway directory outside the repo. Write a hook that always exits 2 with no stdout:
+
+```bash
+#!/usr/bin/env bash
+cat > /dev/null
+printf 'deliberate hook crash\n' >&2
+exit 2
+```
+
+Register it as `PreToolUse` with `matcher: "*"` in a settings file using its **absolute path**.
+
+- [ ] **Step 2: Run it and observe whether the tool call proceeds**
+
+```bash
+claude -p "Create a file called probe.txt containing the word hello" \
+  --output-format stream-json --verbose \
+  --permission-mode bypassPermissions \
+  --settings /abs/path/settings.json \
+  --include-hook-events \
+  2>&1 | tee q7-capture.jsonl
+```
+
+Then check whether `probe.txt` exists. **The file's existence is the answer**, not the event stream: if the crashing hook failed open, the tool ran.
+
+- [ ] **Step 3: Build the Q8 probe**
+
+Same shape, but with the real `spike/m0-pause-resume/pause-gate.sh` and a flag file armed **after** the run has read a file and is about to edit it. Prompt the model to edit an existing file with known content. Record the file's bytes before and after.
+
+- [ ] **Step 4: Record what was observed, not what was expected**
+
+Write `docs/superpowers/spikes/2026-08-18-m3-hook-failure-modes.md` with the exact commands, the captures, and a per-question verdict labelled `[Observed]` / `[Inferred]`. If a probe does not produce a clean answer, say so — an inconclusive measurement recorded honestly is worth more than a guess.
+
+- [ ] **Step 5: Update ADR 0001's Open Questions**
+
+Move Q7 and Q8 from Open Questions to a RESOLVED form with the evidence, in the same style the ADR already uses for Q1-Q3.
+
+**If Q7 fails open:** stop and report it. The pause design in Task 8 changes — the orchestrator can no longer treat "flag written" as "side effects blocked" and must fall back to cancel-and-preserve. Do not proceed to Task 8 with a design the measurement contradicts.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add docs/superpowers/spikes/ docs/decisions/0001-pause-semantics.md
+git commit -m "docs: measure Q7 and Q8 hook failure modes"
+```
+
+---
+
+## Task 2: Widen the event union and the EventType enum together
+
+Spec §9. Nine new types, every one drawn verbatim from parent spec §6.2's catalogue.
+
+**Files:**
+- Modify: `packages/domain/src/events/schema.ts`
+- Modify: `packages/db/prisma/schema.prisma` (the `EventType` enum)
+- Modify: `packages/db/src/enums.ts`
+- Test: `packages/db/test/integration/enum-parity.test.ts` (already exists — it must keep passing)
+
+**Interfaces:**
+- Produces: nine new members of the domain `ExecutionEvent` union and the `EventType` enum: `task.verifying`, `task.verify_passed`, `task.verify_failed`, `task.failed`, `run.output`, `run.pause_requested`, `run.stopped`, `run.succeeded`, `run.failed`.
+
+- [ ] **Step 1: Write the failing test**
+
+Add to `packages/domain/test/events/schema.test.ts`:
+
+```ts
+it('parses each event type M3 adds', () => {
+  const base = {
+    seq: 1,
+    ts: new Date().toISOString(),
+    workspaceId: 'w1',
+    actor: 'system' as const,
+  }
+  const cases = [
+    { type: 'task.verifying', payload: { commandCount: 2 } },
+    { type: 'task.verify_passed', payload: { branch: 'aiteamos/TASK-001-x' } },
+    { type: 'task.verify_failed', payload: { command: 'npm test', exitCode: 1 } },
+    { type: 'task.failed', payload: { reason: 'attempt cap reached' } },
+    { type: 'run.output', payload: { text: 'hello' } },
+    { type: 'run.pause_requested', payload: { requestedBy: 'operator' } },
+    { type: 'run.stopped', payload: { reason: 'cancelled' } },
+    { type: 'run.succeeded', payload: { numTurns: 4, costUsd: 0.12 } },
+    { type: 'run.failed', payload: { reason: 'worktree provisioning failed' } },
+  ]
+  for (const c of cases) {
+    const parsed = parseExecutionEvent({ ...base, ...c })
+    expect(parsed.ok, `${c.type} should parse`).toBe(true)
+  }
+})
+```
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Run: `npx vitest run --project unit packages/domain/test/events/schema.test.ts`
+Expected: FAIL — the discriminated union has no member for `task.verifying`.
+
+- [ ] **Step 3: Add the nine members to the domain union**
+
+In `packages/domain/src/events/schema.ts`, following the existing style exactly:
+
+```ts
+  z.object({ ...envelope, type: z.literal('task.verifying'), payload: z.object({ commandCount: z.number().int() }) }),
+  z.object({ ...envelope, type: z.literal('task.verify_passed'), payload: z.object({ branch: z.string() }) }),
+  z.object({
+    ...envelope,
+    type: z.literal('task.verify_failed'),
+    payload: z.object({ command: z.string(), exitCode: z.number().int() }),
+  }),
+  z.object({ ...envelope, type: z.literal('task.failed'), payload: z.object({ reason: z.string() }) }),
+  z.object({ ...envelope, type: z.literal('run.output'), payload: z.object({ text: z.string() }) }),
+  z.object({ ...envelope, type: z.literal('run.pause_requested'), payload: z.object({ requestedBy: z.string() }) }),
+  z.object({ ...envelope, type: z.literal('run.stopped'), payload: z.object({ reason: z.string() }) }),
+  z.object({
+    ...envelope,
+    type: z.literal('run.succeeded'),
+    payload: z.object({ numTurns: z.number().int(), costUsd: z.number() }),
+  }),
+  z.object({ ...envelope, type: z.literal('run.failed'), payload: z.object({ reason: z.string() }) }),
+```
+
+- [ ] **Step 4: Run the unit test again**
+
+Expected: PASS.
+
+- [ ] **Step 5: Run the parity test and watch it fail**
+
+Run: `npx vitest run --project integration packages/db/test/integration/enum-parity.test.ts`
+Expected: FAIL — the domain union now has nine members the database enum lacks. **This failure is the point of the task.** It proves M2's parity test is doing its job.
+
+- [ ] **Step 6: Widen the database enum and the map**
+
+In `packages/db/prisma/schema.prisma`, add to `enum EventType` using the same `@map` dotted-value convention as the existing ten. In `packages/db/src/enums.ts`, add the nine entries to `EVENT_TYPE_BY_DOMAIN_TYPE` — the `satisfies Record<DomainEventType, string>` will not compile until all nine are present.
+
+- [ ] **Step 7: Migrate and generate**
+
+```bash
+npx prisma migrate dev --name widen_event_type_for_m3 \
+  --schema packages/db/prisma/schema.prisma --config packages/db/prisma.config.ts
+npx prisma generate --schema packages/db/prisma/schema.prisma --config packages/db/prisma.config.ts
+npm run db:migrate:test
+```
+
+- [ ] **Step 8: Run the full suite and commit**
+
+```bash
+npm test && npm run typecheck
+git add -A && git commit -m "feat(domain,db): widen the event union for M3"
+```
+
+---
+
+## Task 3: Schema for runs, checkpoints, and workspace commands
+
+Spec §10. One migration carrying five changes.
+
+**Files:**
+- Modify: `packages/db/prisma/schema.prisma`
+- Modify: `packages/db/src/seed.ts`
+- Test: `packages/db/test/integration/checkpoint.test.ts` (create)
+
+**Interfaces:**
+- Produces: `Checkpoint` model; `AgentRun.pid`, `AgentRun.worktreePath`, `AgentRun.terminalAt`; `Workspace.verifyCommands: String[]`; `Workspace.setupCommands: String[]`.
+
+- [ ] **Step 1: Write the failing test**
+
+`packages/db/test/integration/checkpoint.test.ts`:
+
+```ts
+import { prisma } from '../../src/client.js'
+import { afterAll, beforeEach, describe, expect, it } from 'vitest'
+
+beforeEach(async (): Promise<void> => {
+  await prisma.$executeRawUnsafe('TRUNCATE TABLE "Checkpoint" RESTART IDENTITY CASCADE')
+})
+
+afterAll(async (): Promise<void> => {
+  await prisma.$disconnect()
+})
+
+describe('Checkpoint', () => {
+  it('stores everything ADR 0001 requires to resume a run', async (): Promise<void> => {
+    const workspace = await prisma.workspace.create({
+      data: {
+        name: 'w',
+        repoPath: '/tmp/repo',
+        verifyCommands: ['npm test'],
+        setupCommands: ['npm ci'],
+      },
+    })
+    expect(workspace.verifyCommands).toEqual(['npm test'])
+    expect(workspace.setupCommands).toEqual(['npm ci'])
+  })
+})
+```
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Run: `npx vitest run --project integration packages/db/test/integration/checkpoint.test.ts`
+Expected: FAIL — `verifyCommands` is not a known field (it is `verifyCommand`, a single string).
+
+- [ ] **Step 3: Change the schema**
+
+```prisma
+model Checkpoint {
+  id                String   @id @default(uuid())
+  runId             String   @unique
+  sessionId         String
+  worktreePath      String
+  pauseFlagPath     String
+  lastToolUseId     String?
+  lastToolName      String?
+  numTurns          Int      @default(0)
+  deniedToolUseIds  String[]
+  headCommit        String
+  dirtyFiles        String[]
+  cumulativeCostUsd Float    @default(0)
+  cumulativeTokens  Int      @default(0)
+  pauseReason       String?
+  requestedBy       String?
+  ts                DateTime @default(now())
+
+  run AgentRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+}
+```
+
+On `AgentRun` add `pid Int?`, `worktreePath String?`, `terminalAt DateTime?`, and the back-relation `checkpoint Checkpoint?`.
+
+On `Workspace` replace `verifyCommand String` with `verifyCommands String[]` and add `setupCommands String[]`.
+
+- [ ] **Step 4: Update the seed**
+
+In `packages/db/src/seed.ts`, change the workspace creation to supply `verifyCommands: ['npm run build', 'npm test']` and `setupCommands: ['npm ci']`. Keep the existing non-default `maxAttempts: 5` and the comment warning against tidying it back to 3 — that decorrelation is load-bearing for an existing test.
+
+- [ ] **Step 5: Migrate, generate, re-seed**
+
+```bash
+npx prisma migrate dev --name m3_runs_checkpoints_commands \
+  --schema packages/db/prisma/schema.prisma --config packages/db/prisma.config.ts
+npx prisma generate --schema packages/db/prisma/schema.prisma --config packages/db/prisma.config.ts
+npm run db:migrate:test && npm run db:seed
+```
+
+- [ ] **Step 6: Run the test, then the suite, then commit**
+
+```bash
+npm test && npm run typecheck
+git add -A && git commit -m "feat(db): add checkpoints, run process fields, and command lists"
+```
+
+---
+
+## Task 4: `packages/providers` scaffold and the stream parser
+
+The parser is a pure function and carries the three measured traps from spec §5.3.
+
+**Files:**
+- Create: `packages/providers/package.json`, `tsconfig.json`, `tsconfig.test.json`
+- Create: `packages/providers/src/types.ts`, `packages/providers/src/claude/stream.ts`, `packages/providers/src/index.ts`
+- Test: `packages/providers/test/stream.test.ts`
+- Modify: root `tsconfig.json` (add the reference), root `package.json` typecheck script, `vitest.config.ts`
+
+**Interfaces:**
+- Consumes: `RunId` from `@ai-team-os/domain`.
+- Produces:
+  - `type RuntimeEvent = { kind: 'session_started'; sessionId: string } | { kind: 'tool_call'; toolUseId: string; toolName: string } | { kind: 'text'; text: string } | { kind: 'hook_denied'; hookName: string; reason: string } | { kind: 'permission_denied'; toolName: string; toolUseId: string } | { kind: 'terminated'; outcome: RunOutcome } | { kind: 'unparsable'; line: string }`
+  - `interface RunOutcome { readonly isError: boolean; readonly terminalReason: string; readonly stopReason: string | null; readonly numTurns: number; readonly costUsd: number; readonly deniedToolUseIds: readonly string[] }`
+  - `function parseStreamLine(line: string): RuntimeEvent`
+
+- [ ] **Step 1: Scaffold the package**
+
+Mirror `packages/events`' `package.json`, `tsconfig.json` and `tsconfig.test.json` exactly, changing only the name to `@ai-team-os/providers`. Its only dependency is `@ai-team-os/domain`. Add the project reference to the root `tsconfig.json`, add `tsc -p packages/providers/tsconfig.test.json` to the root `typecheck` script, and add the package's test globs to `vitest.config.ts`'s unit project.
+
+- [ ] **Step 2: Write the failing tests**
+
+`packages/providers/test/stream.test.ts`:
+
+```ts
+import { describe, expect, it } from 'vitest'
+import { parseStreamLine } from '../src/claude/stream.js'
+
+describe('parseStreamLine', () => {
+  it('reads the session id from the init line', () => {
+    const line = JSON.stringify({ type: 'system', subtype: 'init', session_id: 'abc-123' })
+    expect(parseStreamLine(line)).toEqual({ kind: 'session_started', sessionId: 'abc-123' })
+  })
+
+  it('double-parses hook_response.output, which is a JSON-encoded string', () => {
+    const inner = JSON.stringify({
+      hookSpecificOutput: { permissionDecision: 'deny', permissionDecisionReason: 'Paused by AI Team OS.' },
+    })
+    const line = JSON.stringify({
+      type: 'system',
+      subtype: 'hook_response',
+      hook_name: 'PreToolUse:Bash',
+      output: inner,
+    })
+    expect(parseStreamLine(line)).toEqual({
+      kind: 'hook_denied',
+      hookName: 'PreToolUse:Bash',
+      reason: 'Paused by AI Team OS.',
+    })
+  })
+
+  it('never conflates a permission-mode denial with a hook denial', () => {
+    const line = JSON.stringify({
+      type: 'system',
+      subtype: 'permission_denied',
+      tool_name: 'Edit',
+      tool_use_id: 'tu_1',
+    })
+    expect(parseStreamLine(line)).toEqual({
+      kind: 'permission_denied',
+      toolName: 'Edit',
+      toolUseId: 'tu_1',
+    })
+  })
+
+  it('reads the outcome from the terminal result event, including its denials', () => {
+    const line = JSON.stringify({
+      type: 'result',
+      is_error: false,
+      terminal_reason: 'completed',
+      stop_reason: 'end_turn',
+      num_turns: 4,
+      total_cost_usd: 0.12,
+      permission_denials: [{ tool_use_id: 'tu_1' }, { tool_use_id: 'tu_2' }],
+    })
+    expect(parseStreamLine(line)).toEqual({
+      kind: 'terminated',
+      outcome: {
+        isError: false,
+        terminalReason: 'completed',
+        stopReason: 'end_turn',
+        numTurns: 4,
+        costUsd: 0.12,
+        deniedToolUseIds: ['tu_1', 'tu_2'],
+      },
+    })
+  })
+
+  it('returns unparsable rather than throwing on a malformed line', () => {
+    expect(parseStreamLine('{not json')).toEqual({ kind: 'unparsable', line: '{not json' })
+  })
+
+  it('returns unparsable when hook_response.output is not valid inner JSON', () => {
+    const line = JSON.stringify({
+      type: 'system',
+      subtype: 'hook_response',
+      hook_name: 'PreToolUse:Bash',
+      output: 'not json at all',
+    })
+    expect(parseStreamLine(line)).toEqual({ kind: 'unparsable', line })
+  })
+})
+```
+
+- [ ] **Step 3: Run them and watch them fail**
+
+Run: `npx vitest run --project unit packages/providers/test/stream.test.ts`
+Expected: FAIL — module not found.
+
+- [ ] **Step 4: Implement the parser**
+
+Write `packages/providers/src/types.ts` with the types from the Interfaces block, then `packages/providers/src/claude/stream.ts`. Use Zod (already a domain dependency) or hand-written narrowing — no `any`, and every branch returns explicitly. The malformed cases return `{ kind: 'unparsable', line }`; nothing throws, because a bad line must not kill a run.
+
+- [ ] **Step 5: Run the tests, then commit**
+
+```bash
+npm test && npm run typecheck
+git add -A && git commit -m "feat(providers): add the claude stream parser"
+```
+
+---
+
+## Task 5: The fake `claude` CLI and its fixtures
+
+Spec §12.1. This is the instrument every later adapter task is tested with.
+
+**Files:**
+- Create: `packages/providers/test/fake-claude.mjs`
+- Create: `packages/providers/test/fixtures/complete.ndjson`, `hook-deny.ndjson`, `permission-denied.ndjson`, `crash.ndjson`, `malformed.ndjson`
+- Test: `packages/providers/test/fake-claude.test.ts`
+
+**Interfaces:**
+- Produces: an executable that takes `--fixture <name>` plus the real CLI's flags, writes the fixture's lines to stdout with a small delay between them, and exits. Mode `hang` writes nothing and sleeps. Mode `crash` writes half the fixture then exits 1.
+
+- [ ] **Step 1: Write the fixtures**
+
+Derive them from M0's real captures where those exist; otherwise hand-write lines in the exact shapes Task 4's tests encode. `complete.ndjson` is: one `system/init`, two `assistant` text lines, two tool calls with results, one terminal `result` with `is_error: false`. `hook-deny.ndjson` is the same up to the first tool call, then a `hook_response` deny, then a `tool_result` with `is_error: true`.
+
+- [ ] **Step 2: Write the failing test**
+
+```ts
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
+import { describe, expect, it } from 'vitest'
+
+const run = promisify(execFile)
+
+describe('fake-claude', () => {
+  it('replays a fixture as NDJSON on stdout', async (): Promise<void> => {
+    const { stdout } = await run('node', [FAKE, '--fixture', 'complete'])
+    const lines = stdout.trim().split('\n').map((l) => JSON.parse(l) as { type: string })
+    expect(lines[0]?.type).toBe('system')
+    expect(lines.at(-1)?.type).toBe('result')
+  })
+
+  it('exits non-zero and truncates the stream in crash mode', async (): Promise<void> => {
+    await expect(run('node', [FAKE, '--fixture', 'crash'])).rejects.toMatchObject({ code: 1 })
+  })
+})
+```
+
+- [ ] **Step 3: Run it, watch it fail, implement the fake, run it again**
+
+Expected first: FAIL (file not found). Then PASS.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add -A && git commit -m "test(providers): add the fake claude cli and fixtures"
+```
+
+---
+
+## Task 6: `ClaudeCodeAdapter` — start, events, cancel
+
+**Files:**
+- Create: `packages/providers/src/claude/flags.ts`, `packages/providers/src/claude/settings.ts`, `packages/providers/src/claude/adapter.ts`
+- Test: `packages/providers/test/adapter-start.test.ts`, `packages/providers/test/flags.test.ts`
+
+**Interfaces:**
+- Produces:
+  - `function claudeFlags(input: { settingsPath: string }): readonly string[]`
+  - `class ClaudeCodeAdapter implements AgentRuntimeAdapter` with `readonly id: 'claude-code'`, `getCapabilities()`, `start(input: StartRunInput): Promise<RunHandle>`, `events(runId: RunId): AsyncIterable<RuntimeEvent>`, `cancel(runId: RunId): Promise<void>`
+  - `interface StartRunInput { readonly runId: RunId; readonly prompt: string; readonly worktreePath: string; readonly pauseFlagPath: string; readonly settingsPath: string; readonly gitIdentity: { readonly name: string; readonly email: string } }`
+  - `interface RunHandle { readonly runId: RunId; readonly pid: number }`
+- Consumes: `parseStreamLine` from Task 4, the fake CLI from Task 5.
+
+- [ ] **Step 1: Write the failing flag test**
+
+```ts
+it('includes every mandatory flag and neither forbidden one', () => {
+  const flags = claudeFlags({ settingsPath: '/abs/s.json' })
+  expect(flags).toEqual(
+    expect.arrayContaining([
+      '--output-format', 'stream-json', '--verbose',
+      '--permission-mode', 'bypassPermissions',
+      '--settings', '/abs/s.json',
+      '--include-hook-events',
+    ]),
+  )
+  expect(flags).not.toContain('--no-session-persistence')
+  expect(flags).not.toContain('--fork-session')
+})
+
+it('refuses a relative settings path', () => {
+  expect(() => claudeFlags({ settingsPath: 'rel/s.json' })).toThrow(/absolute/)
+})
+```
+
+The relative-path rejection matters: ADR 0001 measured only the absolute form, and a settings file the CLI cannot find means the hook never runs — which means pause silently does not work.
+
+- [ ] **Step 2: Write the failing adapter test**
+
+```ts
+it('streams normalized events and reports the pid', async (): Promise<void> => {
+  const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'complete'] })
+  const handle = await adapter.start(input)
+  expect(handle.pid).toBeGreaterThan(0)
+
+  const seen: RuntimeEvent[] = []
+  for await (const event of adapter.events(input.runId)) seen.push(event)
+
+  expect(seen[0]).toEqual({ kind: 'session_started', sessionId: expect.any(String) })
+  expect(seen.at(-1)?.kind).toBe('terminated')
+  expect(seen.some((e) => e.kind === 'unparsable')).toBe(false)
+})
+
+it('sets git identity in the child environment and never writes git config', async (): Promise<void> => {
+  // fixture 'env-echo' prints process.env keys as a result payload
+  const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'env-echo'] })
+  await adapter.start(input)
+  const env = await collectEnvFrom(adapter, input.runId)
+  expect(env['GIT_AUTHOR_NAME']).toBe(input.gitIdentity.name)
+  expect(env['GIT_COMMITTER_EMAIL']).toBe(input.gitIdentity.email)
+  expect(env['AITEAMOS_PAUSE_FLAG']).toBe(input.pauseFlagPath)
+})
+```
+
+- [ ] **Step 3: Run them, watch them fail, implement**
+
+The adapter spawns with `cwd: input.worktreePath`, the env above, and `claudeFlags(...)`. It reads stdout line by line, maps each through `parseStreamLine`, and yields. `cancel()` sends `SIGTERM`, escalating to `SIGKILL` after a grace period.
+
+`getCapabilities()` returns ADR 0001's object verbatim, `supportsCustomSystemPrompt: false` included.
+
+- [ ] **Step 4: Prove the tests bite**
+
+Remove `--include-hook-events` from `claudeFlags` — the flag test must fail. Restore. Remove `GIT_AUTHOR_NAME` from the spawned env — the identity test must fail. Restore. Report both run counts.
+
+- [ ] **Step 5: Commit**
+
+```bash
+npm test && npm run typecheck
+git add -A && git commit -m "feat(providers): add ClaudeCodeAdapter start, events and cancel"
+```
+
+---
+
+## Task 7: `pause-gate.sh` gains a real JSON encoder
+
+ADR 0001 §7, binding. **A malformed deny is an allow**, so this lands before anything writes a dynamic reason.
+
+**Files:**
+- Create: `scripts/pause-gate.sh` (from `spike/m0-pause-resume/pause-gate.sh`)
+- Test: `packages/providers/test/pause-gate.test.ts`
+
+**Interfaces:**
+- Produces: a hook script whose deny payload is valid JSON for **any** reason string.
+
+- [ ] **Step 1: Write the failing test**
+
+```ts
+const REASONS = [
+  'plain reason',
+  'has "double quotes"',
+  'has \\ backslash',
+  'has\nnewline',
+  'has\ttab',
+  'unicode ünïcödé and emoji 🚀',
+]
+
+it.each(REASONS)('produces valid JSON for reason %j', async (reason): Promise<void> => {
+  const { stdout } = await runHook({ flagExists: true, reason })
+  const parsed = JSON.parse(stdout) as {
+    hookSpecificOutput: { permissionDecision: string; permissionDecisionReason: string }
+  }
+  expect(parsed.hookSpecificOutput.permissionDecision).toBe('deny')
+  expect(parsed.hookSpecificOutput.permissionDecisionReason).toBe(reason)
+})
+```
+
+The round-trip assertion is the point: it is not enough that the output parses, the reason must survive intact.
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Expected: FAIL on the quote, backslash, newline and tab cases — `printf` interpolation produces malformed JSON.
+
+- [ ] **Step 3: Implement the encoder**
+
+Copy the script to `scripts/pause-gate.sh` and replace the `printf`-interpolated payload with a real encoder. Prefer piping the reason through a small encoder rather than hand-rolling escapes in bash. Keep every existing property: `set -uo pipefail` without `-e`, explicit exits on every path, the unset-`AITEAMOS_PAUSE_FLAG` loud denial, and the write-failure exit 2.
+
+- [ ] **Step 4: Run the tests again, and re-verify the write-failure path**
+
+```bash
+AITEAMOS_PAUSE_FLAG=/tmp/flag ./scripts/pause-gate.sh > /dev/full ; echo "exit=$?"
+```
+Expected: `exit=2` and a message on stderr.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add -A && git commit -m "fix(hooks): give pause-gate.sh a real JSON encoder"
+```
+
+---
+
+## Task 8: Adapter — `requestPause` and the kill protocol
+
+Spec §5.5. **Do not start this task if Task 1 found Q7 fails open** — report instead.
+
+**Files:**
+- Modify: `packages/providers/src/claude/adapter.ts`
+- Test: `packages/providers/test/adapter-pause.test.ts`
+
+**Interfaces:**
+- Produces: `requestPause(runId: RunId): Promise<void>`; a `{ kind: 'terminated' }` event whose outcome reflects the kill; `PauseOutcome = 'paused' | 'finished_first'`.
+
+- [ ] **Step 1: Write the failing tests**
+
+```ts
+it('kills the process on the first observed hook deny, not on the model stopping', async (): Promise<void> => {
+  const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'hook-deny'] })
+  const handle = await adapter.start(input)
+  await adapter.requestPause(input.runId)
+
+  const seen: RuntimeEvent[] = []
+  for await (const event of adapter.events(input.runId)) seen.push(event)
+
+  const denyIndex = seen.findIndex((e) => e.kind === 'hook_denied')
+  expect(denyIndex).toBeGreaterThanOrEqual(0)
+  // Nothing after the deny except the terminal event: the process was killed,
+  // it did not run to the fixture's natural end.
+  expect(seen.slice(denyIndex + 1).filter((e) => e.kind === 'tool_call')).toEqual([])
+  expect(await isAlive(handle.pid)).toBe(false)
+})
+
+it('treats "pause requested, run finished anyway" as a normal outcome', async (): Promise<void> => {
+  const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'complete'] })
+  await adapter.start(input)
+  await adapter.requestPause(input.runId)
+  const outcome = await adapter.awaitPause(input.runId, { deadlineMs: 2000 })
+  expect(outcome).toBe('finished_first')
+})
+
+it('uses a per-run flag path so pausing one run cannot freeze another', async (): Promise<void> => {
+  const a = await startRun({ runId: runIdA, pauseFlagPath: flagA })
+  const b = await startRun({ runId: runIdB, pauseFlagPath: flagB })
+  await adapter.requestPause(runIdA)
+  expect(existsSync(flagA)).toBe(true)
+  expect(existsSync(flagB)).toBe(false)
+})
+```
+
+- [ ] **Step 2: Run them, watch them fail, implement**
+
+`requestPause` writes the flag file. The stream reader, on the first `hook_denied` event, sends `SIGTERM` and escalates to `SIGKILL` after the grace period. `awaitPause` resolves `'paused'` when the process exits after a deny, or `'finished_first'` when the terminal `result` arrives without one — and clears the flag in both cases.
+
+- [ ] **Step 3: Prove the tests bite**
+
+Remove the kill (let the deny pass through) — the first test must fail. Share one flag path between runs — the third must fail. Report run counts in both directions.
+
+- [ ] **Step 4: Commit**
+
+```bash
+npm test && npm run typecheck
+git add -A && git commit -m "feat(providers): implement the pause protocol"
+```
+
+---
+
+## Task 9: Adapter — checkpoint capture and `resume`
+
+**Files:**
+- Modify: `packages/providers/src/claude/adapter.ts`
+- Create: `packages/providers/src/claude/checkpoint.ts`
+- Test: `packages/providers/test/adapter-resume.test.ts`
+
+**Interfaces:**
+- Produces:
+  - `interface Checkpoint { readonly sessionId: string; readonly worktreePath: string; readonly pauseFlagPath: string; readonly lastToolUseId: string | null; readonly lastToolName: string | null; readonly numTurns: number; readonly deniedToolUseIds: readonly string[]; readonly headCommit: string; readonly dirtyFiles: readonly string[]; readonly cumulativeCostUsd: number; readonly cumulativeTokens: number }`
+  - `resume(runId: RunId, checkpoint: Checkpoint, queuedInstruction: string | null): Promise<RunHandle>`
+
+- [ ] **Step 1: Write the failing tests**
+
+```ts
+it('refuses to resume while the pause flag still exists', async (): Promise<void> => {
+  writeFileSync(checkpoint.pauseFlagPath, '')
+  await expect(adapter.resume(runId, { ...checkpoint, pauseFlagPath: BLOCKED }, null))
+    .rejects.toThrow(/pause flag/)
+})
+
+it('resumes with the same session id and never mints a new one', async (): Promise<void> => {
+  const handle = await adapter.resume(runId, checkpoint, 'name the class MathKit')
+  const args = spawnedArgsFor(handle)
+  expect(args).toContain('--resume')
+  expect(args).toContain(checkpoint.sessionId)
+  expect(args).not.toContain('--fork-session')
+})
+
+it('passes the queued instruction as the prompt', async (): Promise<void> => {
+  const handle = await adapter.resume(runId, checkpoint, 'do the other thing')
+  expect(spawnedArgsFor(handle)).toContain('do the other thing')
+})
+```
+
+The first test is the important one: ADR 0001 measured that a surviving flag makes the hook deny everything, so a resume that does not verify the flag's absence produces a run that cannot act and looks like a pause loop.
+
+- [ ] **Step 2: Run them, watch them fail, implement**
+
+`resume` clears the flag, `stat`s it to confirm absence, and spawns with the same worktree, settings and posture plus `--resume <sessionId>`.
+
+- [ ] **Step 3: Prove the flag check bites**
+
+Remove the absence verification — the first test must fail.
+
+- [ ] **Step 4: Commit**
+
+```bash
+npm test && npm run typecheck
+git add -A && git commit -m "feat(providers): add checkpoint capture and resume"
+```
+
+---
+
+## Task 10: `apps/orchestrator` scaffold and `loadWorld`
+
+**Files:**
+- Create: `apps/orchestrator/package.json`, `tsconfig.json`, `tsconfig.test.json`, `src/world.ts`
+- Test: `apps/orchestrator/test/integration/world.test.ts`
+- Modify: root `tsconfig.json`, root `package.json`, `vitest.config.ts`
+
+**Interfaces:**
+- Produces: `function loadWorld(workspaceId: WorkspaceId): Promise<LoadedWorld>` where `interface LoadedWorld { readonly world: World; readonly skippedNoRole: number }`
+- Consumes: `World`, `SchedulableTask`, `SchedulableAgent` from `@ai-team-os/domain`; `prisma` from `@ai-team-os/db/client`.
+
+- [ ] **Step 1: Write the failing test**
+
+```ts
+it('marks a task ready only when every dependency is done', async (): Promise<void> => {
+  const { world } = await loadWorld(workspaceId)
+  const blocked = world.tasks.find((t) => t.id === blockedTaskId)
+  expect(blocked?.dependenciesDone).toBe(false)
+})
+
+it('counts tasks with no required role instead of silently dropping them', async (): Promise<void> => {
+  const { world, skippedNoRole } = await loadWorld(workspaceId)
+  expect(world.tasks.some((t) => t.id === roleless)).toBe(false)
+  expect(skippedNoRole).toBe(1)
+})
+
+it('reports an agent busy when it holds a non-terminal run', async (): Promise<void> => {
+  const { world } = await loadWorld(workspaceId)
+  expect(world.agents.find((a) => a.id === agentWithRun)?.busy).toBe(true)
+})
+```
+
+- [ ] **Step 2: Run them, watch them fail, implement**
+
+`dependenciesDone` is computed in SQL from `TaskDependency`. `busy` comes from a non-terminal `AgentRun`. `stats.emergencyStopped` is `false` throughout M3.
+
+- [ ] **Step 3: Prove the role test bites**
+
+Give the roleless task a role in the fixture — `skippedNoRole` must drop to 0 and the task must appear.
+
+- [ ] **Step 4: Commit**
+
+```bash
+npm test && npm run typecheck
+git add -A && git commit -m "feat(orchestrator): add loadWorld"
+```
+
+---
+
+## Task 11: Worktree provisioning and setup commands
+
+Real git, a temporary fixture repository.
+
+**Files:**
+- Create: `apps/orchestrator/src/worktree.ts`
+- Test: `apps/orchestrator/test/integration/worktree.test.ts`
+
+**Interfaces:**
+- Produces:
+  - `function provisionWorktree(input: { repoPath: string; baseBranch: string; taskKey: string; slug: string; setupCommands: readonly string[] }): Promise<WorktreeHandle>`
+  - `interface WorktreeHandle { readonly path: string; readonly branch: string; readonly headCommit: string }`
+
+- [ ] **Step 1: Write the failing tests**
+
+```ts
+it('creates a worktree on its own branch from the base branch', async (): Promise<void> => {
+  const wt = await provisionWorktree({ ...base, taskKey: 'TASK-001', slug: 'add-thing' })
+  expect(wt.branch).toBe('aiteamos/TASK-001-add-thing')
+  expect(wt.path).toContain('.aiteamos/worktrees/TASK-001')
+  expect(existsSync(join(wt.path, '.git'))).toBe(true)
+})
+
+it('runs the setup commands inside the worktree before returning', async (): Promise<void> => {
+  const wt = await provisionWorktree({ ...base, setupCommands: ['touch SETUP_RAN'] })
+  expect(existsSync(join(wt.path, 'SETUP_RAN'))).toBe(true)
+})
+
+it('fails loudly when a setup command fails, and preserves the worktree', async (): Promise<void> => {
+  await expect(provisionWorktree({ ...base, setupCommands: ['exit 3'] }))
+    .rejects.toThrow(/setup command/)
+  expect(existsSync(expectedPath)).toBe(true)
+})
+
+it('leaves the base branch untouched', async (): Promise<void> => {
+  const before = headOf(base.repoPath, base.baseBranch)
+  await provisionWorktree(base)
+  expect(headOf(base.repoPath, base.baseBranch)).toBe(before)
+})
+
+it('writes nothing to the git common directory', async (): Promise<void> => {
+  const before = readFileSync(join(base.repoPath, '.git/config'), 'utf8')
+  await provisionWorktree(base)
+  expect(readFileSync(join(base.repoPath, '.git/config'), 'utf8')).toBe(before)
+})
+```
+
+The last test encodes spec §7.3's general rule, which the M0 spike surfaced through a git-identity collision between two concurrent agents.
+
+- [ ] **Step 2: Run them, watch them fail, implement**
+
+Every git invocation the orchestrator issues uses `git -c user.name=... -c user.email=...` so nothing persists.
+
+- [ ] **Step 3: Commit**
+
+```bash
+npm test && npm run typecheck
+git add -A && git commit -m "feat(orchestrator): provision worktrees with setup commands"
+```
+
+---
+
+## Task 12: The event pump
+
+Spec §5.6. `RuntimeEvent` → domain event → `appendEvent`, one concurrent pump per run.
+
+**Files:**
+- Create: `apps/orchestrator/src/pump.ts`
+- Test: `apps/orchestrator/test/integration/pump.test.ts`
+
+**Interfaces:**
+- Produces: `function pumpRun(input: { runId: RunId; taskId: TaskId; agentId: AgentId; workspaceId: WorkspaceId; events: AsyncIterable<RuntimeEvent> }): Promise<RunOutcome | null>`
+- Consumes: `appendEvent` from `@ai-team-os/events`.
+
+- [ ] **Step 1: Write the failing tests**
+
+```ts
+it('emits run.started only when the session id arrives, not at spawn', async (): Promise<void> => {
+  await pumpRun({ ...ids, events: fromArray([
+    { kind: 'session_started', sessionId: 's-1' },
+    { kind: 'terminated', outcome: okOutcome },
+  ]) })
+  const types = await eventTypesFor(ids.runId)
+  expect(types[0]).toBe('run.started')
+})
+
+it('maps a permission-mode denial to guardrail.tripped, never to run.paused', async (): Promise<void> => {
+  await pumpRun({ ...ids, events: fromArray([
+    { kind: 'permission_denied', toolName: 'Edit', toolUseId: 'tu_1' },
+    { kind: 'terminated', outcome: okOutcome },
+  ]) })
+  const types = await eventTypesFor(ids.runId)
+  expect(types).toContain('guardrail.tripped')
+  expect(types).not.toContain('run.paused')
+})
+
+it('records an unparsable line without killing the run', async (): Promise<void> => {
+  const outcome = await pumpRun({ ...ids, events: fromArray([
+    { kind: 'unparsable', line: '{bad' },
+    { kind: 'session_started', sessionId: 's-1' },
+    { kind: 'terminated', outcome: okOutcome },
+  ]) })
+  expect(outcome).not.toBeNull()
+  const types = await eventTypesFor(ids.runId)
+  expect(types).toContain('run.started')
+})
+
+it('reports a clean-completion-with-denials run as failed', async (): Promise<void> => {
+  await pumpRun({ ...ids, events: fromArray([
+    { kind: 'session_started', sessionId: 's-1' },
+    { kind: 'terminated', outcome: { ...okOutcome, deniedToolUseIds: ['tu_1'] } },
+  ]) })
+  expect(await eventTypesFor(ids.runId)).toContain('run.failed')
+})
+```
+
+The last test is the one that matters most: ADR 0001 recorded a run reporting `is_error: false` while landing nothing, detectable only through `permission_denials`.
+
+- [ ] **Step 2: Run them, watch them fail, implement**
+
+- [ ] **Step 3: Prove the denial mapping bites**
+
+Swap the `permission_denied` and `hook_denied` handlers — the second test must fail. Restore. Report run counts.
+
+- [ ] **Step 4: Commit**
+
+```bash
+npm test && npm run typecheck
+git add -A && git commit -m "feat(orchestrator): add the per-run event pump"
+```
+
+---
+
+## Task 13: The tick — decide and execute
+
+**Files:**
+- Create: `apps/orchestrator/src/tick.ts`
+- Test: `apps/orchestrator/test/integration/tick.test.ts`
+
+**Interfaces:**
+- Produces: `function tick(deps: TickDeps): Promise<TickReport>` where `interface TickReport { readonly started: readonly RunId[]; readonly halted: string | null; readonly skippedNoRole: number }`
+- Consumes: `loadWorld` (Task 10), `provisionWorktree` (Task 11), `pumpRun` (Task 12), `decide` from `@ai-team-os/domain`, the adapter from Task 6.
+
+- [ ] **Step 1: Write the failing tests**
+
+```ts
+it('starts a run for a ready task and records its pid and worktree', async (): Promise<void> => {
+  const report = await tick(deps)
+  expect(report.started).toHaveLength(1)
+  const run = await prisma.agentRun.findFirstOrThrow()
+  expect(run.pid).toBeGreaterThan(0)
+  expect(run.worktreePath).toContain('.aiteamos/worktrees/')
+})
+
+it('emits guardrail.tripped and starts nothing when decide halts', async (): Promise<void> => {
+  await setBudgetExhausted(workspaceId)
+  const report = await tick(deps)
+  expect(report.started).toEqual([])
+  expect(report.halted).not.toBeNull()
+  expect(await eventTypesFor(workspaceId)).toContain('guardrail.tripped')
+})
+
+it('records a provisioning failure as a failed run that counts as an attempt', async (): Promise<void> => {
+  await setSetupCommands(workspaceId, ['exit 3'])
+  await tick(deps)
+  const run = await prisma.agentRun.findFirstOrThrow()
+  expect(run.status).toBe('failed')
+  const task = await prisma.task.findFirstOrThrow()
+  expect(task.attempt).toBe(1)
+  expect(await eventTypesFor(workspaceId)).toContain('run.failed')
+})
+```
+
+- [ ] **Step 2: Run them, watch them fail, implement**
+
+- [ ] **Step 3: Prove the attempt counting bites**
+
+Stop incrementing `attempt` on provisioning failure — the third test must fail, and note in the report that without it a permanently unprovisionable task loops forever.
+
+- [ ] **Step 4: Commit**
+
+```bash
+npm test && npm run typecheck
+git add -A && git commit -m "feat(orchestrator): add the tick loop"
+```
+
+---
+
+## Task 14: Verify and advance
+
+Spec §8.
+
+**Files:**
+- Create: `apps/orchestrator/src/verify.ts`
+- Test: `apps/orchestrator/test/integration/verify.test.ts`
+
+**Interfaces:**
+- Produces:
+  - `function runVerify(input: { taskId: TaskId; worktreePath: string; commands: readonly string[]; timeoutMs: number }): Promise<VerifyResult>`
+  - `interface VerifyResult { readonly passed: boolean; readonly failedCommand: string | null; readonly exitCode: number | null; readonly output: string }`
+  - `function advance(input: { taskId: TaskId; result: VerifyResult; branch: string }): Promise<void>`
+
+- [ ] **Step 1: Write the failing tests**
+
+```ts
+it('refuses to pass a task whose verify list is empty', async (): Promise<void> => {
+  const result = await runVerify({ ...base, commands: [] })
+  expect(result.passed).toBe(false)
+  await advance({ taskId, result, branch })
+  expect((await task()).status).not.toBe('done')
+  expect(await eventTypesFor(workspaceId)).toContain('guardrail.tripped')
+})
+
+it('runs the commands in order and stops at the first failure', async (): Promise<void> => {
+  const result = await runVerify({ ...base, commands: ['touch A', 'exit 1', 'touch B'] })
+  expect(result.passed).toBe(false)
+  expect(result.failedCommand).toBe('exit 1')
+  expect(existsSync(join(worktreePath, 'A'))).toBe(true)
+  expect(existsSync(join(worktreePath, 'B'))).toBe(false)
+})
+
+it('attaches the failure output to the next run through lastRejectionReason', async (): Promise<void> => {
+  const result = await runVerify({ ...base, commands: ['echo BOOM >&2; exit 1'] })
+  await advance({ taskId, result, branch })
+  const t = await task()
+  expect(t.status).toBe('rework')
+  expect(t.lastRejectionReason).toContain('BOOM')
+})
+
+it('moves the task to done with its branch when every command passes', async (): Promise<void> => {
+  const result = await runVerify({ ...base, commands: ['true'] })
+  await advance({ taskId, result, branch: 'aiteamos/TASK-001-x' })
+  const t = await task()
+  expect(t.status).toBe('done')
+  expect(t.branch).toBe('aiteamos/TASK-001-x')
+})
+
+it('moves the task to failed when the attempt cap is reached', async (): Promise<void> => {
+  await setAttempt(taskId, 5) // seeded maxAttempts is 5
+  const result = await runVerify({ ...base, commands: ['false'] })
+  await advance({ taskId, result, branch })
+  expect((await task()).status).toBe('failed')
+})
+```
+
+- [ ] **Step 2: Run them, watch them fail, implement**
+
+Each command's exit code and captured output is written as an `Artifact` row. Task transitions emit `task.verifying`, then `task.verify_passed` + `task.done`, or `task.verify_failed` + `task.rework`, or `task.failed`.
+
+- [ ] **Step 3: Prove the empty-list refusal bites**
+
+Make an empty list pass — the first test must fail. This is the behaviour spec §8 exists to protect: assuming success.
+
+- [ ] **Step 4: Commit**
+
+```bash
+npm test && npm run typecheck
+git add -A && git commit -m "feat(orchestrator): add verify and advance"
+```
+
+---
+
+## Task 15: Sweep and startup reconciliation
+
+Spec §3.3 and §3.4.
+
+**Files:**
+- Create: `apps/orchestrator/src/sweep.ts`
+- Test: `apps/orchestrator/test/integration/sweep.test.ts`
+
+**Interfaces:**
+- Produces: `function sweep(deps: SweepDeps): Promise<SweepReport>`, `function reconcileOrphans(deps: SweepDeps): Promise<number>`
+- `interface SweepReport { readonly timedOut: readonly RunId[]; readonly overToolCap: readonly RunId[]; readonly deadPids: readonly RunId[] }`
+
+- [ ] **Step 1: Write the failing tests**
+
+```ts
+it('marks a run failed when its pid is gone but its status is not terminal', async (): Promise<void> => {
+  await givenRun({ status: 'working', pid: 999999 }) // certainly not running
+  const count = await reconcileOrphans(deps)
+  expect(count).toBe(1)
+  const run = await prisma.agentRun.findFirstOrThrow()
+  expect(run.status).toBe('failed')
+  expect(await eventTypesFor(workspaceId)).toContain('run.failed')
+})
+
+it('preserves the worktree of an orphaned run', async (): Promise<void> => {
+  await givenRun({ status: 'working', pid: 999999, worktreePath })
+  await reconcileOrphans(deps)
+  expect(existsSync(worktreePath)).toBe(true)
+})
+
+it('cancels a run past its wall-clock timeout', async (): Promise<void> => {
+  await givenRun({ status: 'working', startedAt: hoursAgo(2) })
+  const report = await sweep(deps)
+  expect(report.timedOut).toHaveLength(1)
+  expect(await eventTypesFor(workspaceId)).toContain('guardrail.tripped')
+})
+
+it('cancels a run past the tool-call ceiling', async (): Promise<void> => {
+  await givenRun({ status: 'working', toolCalls: 500 }) // seeded cap is 200
+  const report = await sweep(deps)
+  expect(report.overToolCap).toHaveLength(1)
+})
+```
+
+- [ ] **Step 2: Run them, watch them fail, implement**
+
+Liveness is `process.kill(pid, 0)` in a try/catch — never a coarse "is the run old" heuristic.
+
+- [ ] **Step 3: Prove the orphan sweep bites**
+
+Skip the orphan pass at startup — the first test must fail, and note that without it every daemon restart leaves the database describing runs that are not running.
+
+- [ ] **Step 4: Commit**
+
+```bash
+npm test && npm run typecheck
+git add -A && git commit -m "feat(orchestrator): add the sweep and startup reconciliation"
+```
+
+---
+
+## Task 16: CLI and daemon
+
+**Files:**
+- Create: `apps/orchestrator/src/cli.ts`, `apps/orchestrator/src/daemon.ts`
+- Modify: root `package.json` (add an `orchestrator` script)
+- Test: `apps/orchestrator/test/integration/cli.test.ts`
+
+**Interfaces:**
+- Produces: `tick`, `daemon`, `pause --run <id>`, `resume --run <id> [--message <text>]`, `cancel --run <id>`, `status`.
+
+- [ ] **Step 1: Write the failing tests**
+
+```ts
+it('runs exactly one tick and prints a report', async (): Promise<void> => {
+  const { stdout } = await runCli(['tick'])
+  expect(JSON.parse(stdout)).toMatchObject({ started: expect.any(Array) })
+})
+
+it('pauses a run and reports the outcome', async (): Promise<void> => {
+  const { stdout } = await runCli(['pause', '--run', runId])
+  expect(stdout).toMatch(/paused|finished_first/)
+})
+
+it('exits non-zero for an unknown run', async (): Promise<void> => {
+  await expect(runCli(['pause', '--run', 'nope'])).rejects.toMatchObject({ code: 1 })
+})
+```
+
+- [ ] **Step 2: Run them, watch them fail, implement**
+
+The daemon wires the periodic timer **and** the M2 `subscribeEvents` wake-up to the same `tick`. On shutdown it awaits the subscription's `close()`, which can take up to ~6.25 seconds — budget past that, do not race it.
+
+- [ ] **Step 3: Commit**
+
+```bash
+npm test && npm run typecheck
+git add -A && git commit -m "feat(orchestrator): add the CLI and daemon"
+```
+
+---
+
+## Task 17: The milestone gate, documentation, and an ADR
+
+Spec §16.
+
+**Files:**
+- Create: `apps/orchestrator/test/integration/milestone-gate.test.ts`
+- Create: `docs/decisions/0004-orchestrator-command-boundary.md`
+- Modify: `README.md`, `docs/architecture.md` (create if absent)
+
+**Interfaces:**
+- Consumes: everything from Tasks 1-16.
+
+- [ ] **Step 1: Write the end-to-end gate test**
+
+Against the fake `claude`, from a seeded ready task: tick → worktree provisioned, setup ran → run streamed → verify green → task `done` with a branch. Then the red path: verify fails → task `rework` with `lastRejectionReason` set. Then the pause path: pause → checkpoint written → resume → run completes.
+
+- [ ] **Step 2: Run it and make it pass**
+
+- [ ] **Step 3: Run the gate once by hand against the real CLI**
+
+Record the captures under `docs/superpowers/spikes/`. State plainly in the report which steps were exercised against the real CLI and which only against the fake — spec §16 requires steps 3-4 to have a real run behind them.
+
+- [ ] **Step 4: Write ADR 0004**
+
+Record the boundary decision: `decide()` was not widened, so M3's reactive behaviour lives outside the pure core, and the cost is paid by the explicit mutations listed in spec §12.3. Include the alternative that was rejected (widening the `Command` union) and why: it would force `World` to carry process state.
+
+- [ ] **Step 5: Document**
+
+README gains an orchestrator section: how to run a tick, how to run the daemon, what a worktree looks like, and the fact that a fresh worktree needs setup commands. `docs/architecture.md` gets the topology and the dependency rule that `packages/providers` never imports `packages/db`.
+
+- [ ] **Step 6: Commit**
+
+```bash
+npm test && npm run typecheck
+git add -A && git commit -m "feat(orchestrator): close the M3 milestone gate"
+```
+
+---
+
+## Self-Review Notes
+
+**Spec coverage:** §1 → Tasks 13-14; §2 → Task 4 (scaffold) and enforced throughout; §3 → Tasks 13, 15; §4 → Task 10; §5 → Tasks 4, 6, 8, 9, 12; §6 → Tasks 3, 9; §7 → Task 11; §8 → Task 14; §9 → Task 2; §10 → Tasks 2, 3; §11 → Task 16; §12 → Tasks 5 and the mutation steps in 6, 8, 9, 12, 13, 14, 15; §13 → Tasks 12, 13, 14, 15; §14 → Task 1; §16 → Task 17.
+
+**Ordering constraint:** Task 1 gates Task 8. Task 7 gates Task 8. Task 2 gates Task 12 (the pump emits types that must exist). Task 3 gates Tasks 10, 13, 14. Tasks 4-6 gate Task 13.
+
+**Known plan risk:** Task 5's fixtures are hand-derived where M0's captures do not cover a shape. A fixture that does not match the real CLI produces an adapter that passes its tests and fails against reality. Task 17 Step 3 is the check that catches it — that is why the real run is part of the gate rather than optional.
