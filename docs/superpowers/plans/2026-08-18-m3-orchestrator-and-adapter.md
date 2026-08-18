@@ -759,7 +759,16 @@ Spec §5.5. **Do not start this task if Task 1 found Q7 fails open** — report 
 - Test: `packages/providers/test/adapter-pause.test.ts`
 
 **Interfaces:**
-- Produces: `requestPause(runId: RunId): Promise<void>`; a `{ kind: 'terminated' }` event whose outcome reflects the kill; `PauseOutcome = 'paused' | 'finished_first' | 'gate_failed'`.
+- Produces: `requestPause(runId: RunId, reason: string): Promise<void>`; `awaitPause(runId: RunId, options: { deadlineMs: number }): Promise<PauseOutcome>`; a `{ kind: 'terminated' }` event whose outcome reflects the kill; `PauseOutcome = 'paused' | 'finished_first' | 'gate_failed'`.
+- Consumes: `preflightGate` from Task 6 (`packages/providers/src/claude/flags.ts`).
+
+`requestPause` takes a `reason` because ADR 0001 §5's checkpoint requires `pauseReason` and
+`requestedBy`, and an operator-supplied reason has no other door into the system. It travels in
+the pause flag file's own contents, not an environment variable: a child's environment is fixed
+when the run is spawned, but the reason is only known later, when the operator actually requests
+the pause — an env var cannot carry a value that doesn't exist yet. `scripts/pause-gate.sh`
+already reads the reason from the flag file and preserves it byte-for-byte, falling back to a
+static default when the file is empty (Task 7, commit `b2f83d8`); this task only has to write it.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -767,7 +776,7 @@ Spec §5.5. **Do not start this task if Task 1 found Q7 fails open** — report 
 it('kills the process on the first observed hook deny, not on the model stopping', async (): Promise<void> => {
   const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'hook-deny'] })
   const handle = await adapter.start(input)
-  await adapter.requestPause(input.runId)
+  await adapter.requestPause(input.runId, 'operator pause')
 
   const seen: RuntimeEvent[] = []
   for await (const event of adapter.events(input.runId)) seen.push(event)
@@ -783,7 +792,7 @@ it('kills the process on the first observed hook deny, not on the model stopping
 it('treats "pause requested, run finished anyway" as a normal outcome', async (): Promise<void> => {
   const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'complete'] })
   await adapter.start(input)
-  await adapter.requestPause(input.runId)
+  await adapter.requestPause(input.runId, 'operator pause')
   const outcome = await adapter.awaitPause(input.runId, { deadlineMs: 2000 })
   expect(outcome).toBe('finished_first')
 })
@@ -794,7 +803,7 @@ it('reports gate_failed, not finished_first, when tool calls proceed after the f
   // two reports an ungated run as a clean finish -- the failure the Q9 measurement found.
   const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'hook-fail-open'] })
   await adapter.start(input)
-  await adapter.requestPause(input.runId)
+  await adapter.requestPause(input.runId, 'operator pause')
   const outcome = await adapter.awaitPause(input.runId, { deadlineMs: 2000 })
   expect(outcome).toBe('gate_failed')
 })
@@ -802,7 +811,7 @@ it('reports gate_failed, not finished_first, when tool calls proceed after the f
 it('uses a per-run flag path so pausing one run cannot freeze another', async (): Promise<void> => {
   const a = await startRun({ runId: runIdA, pauseFlagPath: flagA })
   const b = await startRun({ runId: runIdB, pauseFlagPath: flagB })
-  await adapter.requestPause(runIdA)
+  await adapter.requestPause(runIdA, 'operator pause')
   expect(existsSync(flagA)).toBe(true)
   expect(existsSync(flagB)).toBe(false)
 })
@@ -810,7 +819,11 @@ it('uses a per-run flag path so pausing one run cannot freeze another', async ()
 
 - [ ] **Step 2: Run them, watch them fail, implement**
 
-`requestPause` writes the flag file. The stream reader, on the first `hook_denied` event, sends `SIGTERM` and escalates to `SIGKILL` after the grace period. `awaitPause` resolves `'paused'` when the process exits after a deny; `'finished_first'` when the terminal `result` arrives with no tool call after the flag write; and `'gate_failed'` when tool calls *did* occur after the flag write unaccompanied by a `hook_denied` or `hook_crashed` — spec §5.5's runtime backstop. The flag is cleared in all three cases. `gate_failed` is the pause path's entry into the pause gate failure of spec §13.1: cancel, `run.failed` + `guardrail.tripped`, count the attempt, halt the workspace.
+`start()` calls `preflightGate` (Task 6) against the run's hook and flag paths before the run is
+considered pausable — `preflightGate` was proven in Task 6 but wired into nothing in production
+until here, and a run whose hook does not discriminate must not be allowed to reach a state where
+`requestPause` looks armed while gating nothing. `requestPause` writes `reason` into the flag
+file's contents. The stream reader, on the first `hook_denied` event, sends `SIGTERM` and escalates to `SIGKILL` after the grace period. `awaitPause` resolves `'paused'` when the process exits after a deny; `'finished_first'` when the terminal `result` arrives with no tool call after the flag write; and `'gate_failed'` when tool calls *did* occur after the flag write unaccompanied by a `hook_denied` or `hook_crashed` — spec §5.5's runtime backstop. The flag is cleared in all three cases. `gate_failed` is the pause path's entry into the pause gate failure of spec §13.1: cancel, `run.failed` + `guardrail.tripped`, count the attempt, halt the workspace.
 
 - [ ] **Step 3: Prove the tests bite**
 
@@ -1104,9 +1117,11 @@ Four mutations, because there are now four shapes to conflate (spec §5.3, §12.
 3. Drop the `hook_event` guard so every `hook_response` is classified by `exit_code` — the
    `Stop`-hook test from Task 4 must fail. Without that guard every healthy run ends in a
    fabricated gate failure.
-4. Remove the workspace halt on a gate failure — a test must show a second uncontrollable run
-   starting on the next tick, and a further test must show the halt surviving a reload in a fresh
-   process (it is a `Workspace` column precisely so that it does).
+4. Remove the workspace halt write on a gate failure — the blocking-crash test above, which
+   already asserts `haltedReason` and `haltedAt` are set, must fail. Whether that write then stops
+   a second run from starting on the next tick, and whether it survives a restart in a fresh
+   process, are Task 13's and Task 15's proofs respectively (it is a `Workspace` column precisely
+   so that both hold) — not this task's, which only has to show the pump writes it.
 
 Restore after each. Report run counts.
 
@@ -1166,6 +1181,15 @@ it('records a provisioning failure as a failed run that counts as an attempt', a
   expect(task.attempt).toBe(1)
   expect(await eventTypesFor(workspaceId)).toContain('run.failed')
 })
+
+it('starts no second run on the next tick after a gate failure halted the workspace', async (): Promise<void> => {
+  // The halt Task 12's pump writes on a gate failure (spec §13.1) is the same
+  // `Workspace.haltedReason` column `decide()` reads as `stats.emergencyStopped` — this is the
+  // tick's side of proving that a halted workspace stays uncontrollable-run-free, not the pump's.
+  await prisma.workspace.update({ where: { id: workspaceId }, data: { haltedReason: 'gate failure', haltedAt: new Date() } })
+  const report = await tick(deps)
+  expect(report.started).toEqual([])
+})
 ```
 
 - [ ] **Step 2: Run them, watch them fail, implement**
@@ -1179,7 +1203,7 @@ matters is `Workspace.haltedReason` itself, not this flag) and only emit on the 
 
 - [ ] **Step 3: Prove the attempt counting bites**
 
-Stop incrementing `attempt` on provisioning failure — the third test must fail, and note in the report that without it a permanently unprovisionable task loops forever.
+Stop incrementing `attempt` on provisioning failure — the third test must fail, and note in the report that without it a permanently unprovisionable task loops forever. Ignore an already-set `Workspace.haltedReason` when computing `stats.emergencyStopped` — the new halted-workspace test must fail, showing a second run start on the very next tick, which is exactly the uncontrolled continuation the pump's halt write exists to prevent.
 
 - [ ] **Step 4: Commit**
 
@@ -1306,6 +1330,18 @@ it('cancels a run past the tool-call ceiling', async (): Promise<void> => {
   const report = await sweep(deps)
   expect(report.overToolCap).toHaveLength(1)
 })
+
+it('a workspace halt written by a gate failure is still there for the fresh process that reconciles at startup', async (): Promise<void> => {
+  // Task 12's pump writes `Workspace.haltedReason` on a gate failure; this is startup
+  // reconciliation's proof that a restart cannot lose it -- the column is chosen precisely so a
+  // fresh process, with nothing held over in memory, still sees it (Task 3).
+  await prisma.workspace.update({ where: { id: workspaceId }, data: { haltedReason: 'gate failure', haltedAt: new Date() } })
+  const restarted = new PrismaClient() // simulates the restart: no state carried from the old process
+  await reconcileOrphans({ ...deps, prisma: restarted })
+  const workspace = await restarted.workspace.findUniqueOrThrow({ where: { id: workspaceId } })
+  expect(workspace.haltedReason).toBe('gate failure')
+  await restarted.$disconnect()
+})
 ```
 
 - [ ] **Step 2: Run them, watch them fail, implement**
@@ -1314,7 +1350,7 @@ Liveness is `process.kill(pid, 0)` in a try/catch — never a coarse "is the run
 
 - [ ] **Step 3: Prove the orphan sweep bites**
 
-Skip the orphan pass at startup — the first test must fail, and note that without it every daemon restart leaves the database describing runs that are not running.
+Skip the orphan pass at startup — the first test must fail, and note that without it every daemon restart leaves the database describing runs that are not running. Have the orphan pass clear `Workspace.haltedReason` alongside the runs it fails — the restart test must fail; clearing a workspace-wide halt automatically, on any pass, is reserved for the operator's `clear-halt` (Task 16), never automatic (spec §13.1).
 
 - [ ] **Step 4: Commit**
 
