@@ -2,14 +2,21 @@
   "name": "ai-team-os",
   "private": true,
   "type": "module",
-  "workspaces": ["packages/*", "apps/*"],
-  "engines": { "node": ">=26" },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=26"
+  },
   "scripts": {
-    "test": "vitest run",
+    "test": "tsc --build && vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --build --force && tsc -p packages/domain/tsconfig.test.json"
+    "typecheck": "tsc --build --force && tsc -p packages/domain/tsconfig.test.json && tsc -p packages/db/tsconfig.test.json && tsc -p tsconfig.tools.json"
   },
   "devDependencies": {
+    "@types/pg": "^8.23.1",
+    "pg": "^8.23.0",
     "typescript": "^5.7.0",
     "vitest": "^3.0.0"
   }

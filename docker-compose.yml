@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: aiteamos-postgres
+    environment:
+      POSTGRES_USER: aiteamos
+      POSTGRES_PASSWORD: aiteamos
+      POSTGRES_DB: aiteamos
+    ports:
+      - "5433:5432"
+    volumes:
+      - aiteamos-pgdata:/var/lib/postgresql/data
+      - ./docker/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aiteamos -d aiteamos"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  aiteamos-pgdata:
