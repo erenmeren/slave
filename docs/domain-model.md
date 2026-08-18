@@ -234,6 +234,20 @@ Branding stops at the event boundary: `events/schema.ts` types `taskId`/`agentId
 will need to re-brand these fields before passing them to functions that expect the branded
 types.
 
+## Persistence (M2)
+
+These domain types are now backed by real tables in `packages/db`. `TaskState` maps to the `Task`
+table via `toTaskState`, and `RunState` maps to the `AgentRun` table via `toRunState` — both in
+`packages/db/src/mappers.ts`. Branded ids, which stop at the event boundary per the section above,
+are restored at this same layer: `toTaskState` re-brands `row.assigneeId` and `row.activeRunId`
+with `agentId()` / `runId()`, and the event-log mapper (`toExecutionEvent`, same file) re-brands
+`taskId` / `agentId` / `runId` on the way out of the `ExecutionEvent` table.
+
+The event log itself — its envelope, the single write gate, the single-writer assumption the read
+path depends on, and the notification model — is documented separately in
+`docs/event-model.md`, since it is a system in its own right rather than a straightforward table
+mapping.
+
 ## Environment note: `npm test` / `npm run typecheck` and `allow-scripts`
 
 An esbuild postinstall step was observed running during setup in this environment. It traces to

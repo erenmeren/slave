@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "pre-push: typecheck"
+if ! npm run --silent typecheck; then
+  echo "pre-push: typecheck failed — push refused." >&2
+  exit 1
+fi
+
+echo "pre-push: tests"
+if ! npm test --silent; then
+  echo "pre-push: tests failed — push refused." >&2
+  echo "If the failure is that the database is unreachable, run: docker compose up -d" >&2
+  exit 1
+fi
+
+echo "pre-push: ok"
