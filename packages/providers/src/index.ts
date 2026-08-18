@@ -1,2 +1,5 @@
 export * from './types.js'
 export * from './claude/stream.js'
+export * from './claude/flags.js'
+export * from './claude/settings.js'
+export * from './claude/adapter.js'
