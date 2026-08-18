@@ -98,9 +98,12 @@ Required flags for every run M3 spawns:
   a denial shape at all; it is listed here because it is trivially mistaken for one — Q9.
   **[Observed]**
 
-**All four shapes above are scoped to `hook_event === "PreToolUse"`.** This is not a caveat, it is
-part of the rule (added Fix Round 5, findings §3.4). Every one of the four captures ends with a
-routine `Stop` hook reporting `exit_code: 1` — a healthy line on a healthy run. Classifying it by
+**The three `hook_response` shapes above — hook denial, hook crash, and hook failure — are scoped
+to `hook_event === "PreToolUse"`.** The permission-mode denial carries no `hook_event` field at
+all; it is a `system/permission_denied` line, not a `hook_response`, and the scope does not apply
+to it. This is not a caveat, it is part of the rule (added Fix Round 5, findings §3.4). Every one
+of the four captures ends with a routine `Stop` hook reporting `exit_code: 1` — a healthy line on a
+healthy run. Classifying it by
 `exit_code` without the scope reads it as a hook that failed open, on every run. `hook_event` is
 present on every `hook_response` line in every capture and is the field that scopes the rule.
 **[Observed]**

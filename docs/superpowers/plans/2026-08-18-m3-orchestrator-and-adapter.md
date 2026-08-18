@@ -626,6 +626,8 @@ it('refuses a relative settings path', () => {
 
 The relative-path rejection matters: ADR 0001 measured only the absolute form, and a settings file the CLI cannot find means the hook never runs — which means pause silently does not work.
 
+`preflightGate` spawns the hook script directly to see whether it discriminates. `pause-gate.sh` opens by draining its stdin (`cat > /dev/null`) before it does anything else, so the spawned child's stdin must be closed immediately — or written an empty payload and ended — or the drain blocks forever and the pre-flight hangs instead of passing or failing.
+
 - [ ] **Step 2: Write the failing adapter test**
 
 ```ts
@@ -997,8 +999,8 @@ Spec §5.6. `RuntimeEvent` → domain event → `appendEvent`, one concurrent pu
 - Test: `apps/orchestrator/test/integration/pump.test.ts`
 
 **Interfaces:**
-- Produces: `function pumpRun(input: { runId: RunId; taskId: TaskId; agentId: AgentId; workspaceId: WorkspaceId; events: AsyncIterable<RuntimeEvent> }): Promise<RunOutcome | null>`
-- Consumes: `appendEvent` from `@ai-team-os/events`.
+- Produces: `function pumpRun(input: { runId: RunId; taskId: TaskId; agentId: AgentId; workspaceId: WorkspaceId; events: AsyncIterable<RuntimeEvent>; cancel: () => Promise<void> }): Promise<RunOutcome | null>`
+- Consumes: `appendEvent` from `@ai-team-os/events`; `cancel` is the caller's binding of the adapter's `cancel(runId)` (Task 6) — the pump reacts to a gate failure, it does not hold the process handle.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1040,11 +1042,57 @@ it('reports a clean-completion-with-denials run as failed', async (): Promise<vo
   ]) })
   expect(await eventTypesFor(ids.runId)).toContain('run.failed')
 })
+
+it('reacts to a blocking hook crash before any terminated event arrives: cancels, fails the run, halts the workspace', async (): Promise<void> => {
+  const cancel = vi.fn(async (): Promise<void> => {})
+  await pumpRun({ ...ids, cancel, events: fromArray([
+    { kind: 'session_started', sessionId: 's-1' },
+    { kind: 'hook_crashed', hookName: 'PreToolUse:Bash', exitCode: 2, stderr: 'deliberate hook crash' },
+  ]) })
+  expect(cancel).toHaveBeenCalled()
+  const types = await eventTypesFor(ids.runId)
+  expect(types).toContain('run.failed')
+  expect(types).toContain('guardrail.tripped')
+  const failedEvent = await prisma.executionEvent.findFirstOrThrow({ where: { runId: ids.runId, type: 'run_failed' } })
+  expect((failedEvent.payload as { reason: string }).reason).toMatch(/stopped/i)
+  const task = await prisma.task.findUniqueOrThrow({ where: { id: ids.taskId } })
+  expect(task.attempt).toBe(1)
+  const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: ids.workspaceId } })
+  expect(workspace.haltedReason).not.toBeNull()
+  expect(workspace.haltedAt).not.toBeNull()
+})
+
+it('reacts to a fail-open hook failure with a reason that must not read like the blocking crash above', async (): Promise<void> => {
+  const cancel = vi.fn(async (): Promise<void> => {})
+  await pumpRun({ ...ids, cancel, events: fromArray([
+    { kind: 'session_started', sessionId: 's-1' },
+    { kind: 'hook_failed_open', hookName: 'PreToolUse:Write', exitCode: 127, stderr: '/bin/sh: line 1: /nope/hook.sh: No such file or directory' },
+  ]) })
+  expect(cancel).toHaveBeenCalled()
+  const failedEvent = await prisma.executionEvent.findFirstOrThrow({ where: { runId: ids.runId, type: 'run_failed' } })
+  // Spec §13.1: the blocking crash says the run was stopped; this one must say the run kept
+  // going ungated for the whole window between the flag and the cancel landing. Same wording
+  // as the test above is the conflation ADR 0001 and spec §13.1 warn against.
+  expect((failedEvent.payload as { reason: string }).reason).toMatch(/ungated|no gate|kept (going|running|acting)/i)
+  const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: ids.workspaceId } })
+  expect(workspace.haltedReason).not.toBeNull()
+})
 ```
 
-The last test is the one that matters most: ADR 0001 recorded a run reporting `is_error: false` while landing nothing, detectable only through `permission_denials`.
+The fourth test is the one that matters most: ADR 0001 recorded a run reporting `is_error: false` while landing nothing, detectable only through `permission_denials`. The last two are the pause gate failure of spec §13.1 (not the pause path of Task 8 — this is the pump reacting to a gate failure that arrives outside a requested pause): the pump must not wait for `terminated` to react, and the two shapes must never share a `run.failed` reason.
 
 - [ ] **Step 2: Run them, watch them fail, implement**
+
+On `hook_crashed` or `hook_failed_open`, the pump does not wait for the stream to end. It calls
+`cancel()` immediately (`SIGTERM`, escalating to `SIGKILL` — the one control that does not depend
+on the hook), emits `run.failed` carrying the gate reason and `guardrail.tripped`, increments
+`Task.attempt`, and writes `Workspace.haltedReason` and `haltedAt` (spec §13.1). This is the only
+place either column is ever set to a non-null value; clearing them is an operator action (Task 16).
+`decide()` already returns `halt` once `stats.emergencyStopped` is true (Task 10, Task 13) — this
+task only has to make the column true. Keep the two `run.failed` reasons distinct: `hook_crashed`
+reports a run that stopped and landed nothing beyond the crash; `hook_failed_open` reports a run
+that kept acting with no gate at all, and must name that window rather than imply the run was under
+control.
 
 - [ ] **Step 3: Prove the denial mapping bites**
 
@@ -1100,6 +1148,15 @@ it('emits guardrail.tripped and starts nothing when decide halts', async (): Pro
   expect(await eventTypesFor(workspaceId)).toContain('guardrail.tripped')
 })
 
+it('does not repeat guardrail.tripped on a second tick while still halted', async (): Promise<void> => {
+  await setBudgetExhausted(workspaceId)
+  await tick(deps)
+  const countAfterFirst = (await eventTypesFor(workspaceId)).filter((t) => t === 'guardrail.tripped').length
+  await tick(deps)
+  const countAfterSecond = (await eventTypesFor(workspaceId)).filter((t) => t === 'guardrail.tripped').length
+  expect(countAfterSecond).toBe(countAfterFirst)
+})
+
 it('records a provisioning failure as a failed run that counts as an attempt', async (): Promise<void> => {
   await setSetupCommands(workspaceId, ['exit 3'])
   await tick(deps)
@@ -1112,6 +1169,13 @@ it('records a provisioning failure as a failed run that counts as an attempt', a
 ```
 
 - [ ] **Step 2: Run them, watch them fail, implement**
+
+`decide()` returns the `halt` command on every tick the condition holds (spec §3.2), but
+`guardrail.tripped` is emitted only **on the transition into halted** — never on a tick that
+observes a halt already in effect. At the default 1000ms period, a persistent halt (§13.1) that
+waits for an operator would otherwise write one event per second, forever, into an append-only log.
+Track whether the previous tick was already halted (in memory is enough; the persistence that
+matters is `Workspace.haltedReason` itself, not this flag) and only emit on the `false → true` edge.
 
 - [ ] **Step 3: Prove the attempt counting bites**
 

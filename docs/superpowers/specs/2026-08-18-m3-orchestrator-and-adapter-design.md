@@ -248,7 +248,9 @@ The child emits NDJSON. Five properties were measured and the parser must respec
    position, is what property 2's correlation relies on.
 
 **Four outcome shapes, never conflated. The discriminator is `exit_code`, never `outcome` — and the
-whole classification applies only where `hook_event === "PreToolUse"`.**
+three `hook_response` shapes (hook deny, hook crash, hook failure) are classified only where
+`hook_event === "PreToolUse"`.** The permission-mode denial is not a `hook_response` at all — it
+carries no `hook_event` field — so the scope does not apply to it.
 
 The scope is load-bearing, not defensive. Every measured run ends with a routine `Stop` hook
 reporting `exit_code: 1`; classified by `exit_code` alone it reads as the fourth row below, so an
