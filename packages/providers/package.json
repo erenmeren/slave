@@ -1,0 +1,12 @@
+{
+  "name": "@ai-team-os/providers",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "dependencies": {
+    "@ai-team-os/domain": "*",
+    "zod": "^3.24.0"
+  }
+}
