@@ -54,6 +54,12 @@ export async function subscribeEvents(
   // already in flight" a single piece of state so at most one loop, and at most one new `Client`,
   // is ever created per disconnect.
   let reconnecting = false
+  // The reconnect loop's own promise, tracked so close() can await it. Without this, close() could
+  // resolve while the loop was still parked in its retry delay, promising a fully quiescent
+  // subscription while a Client was about to be opened moments later — a false contract for a
+  // caller (Task 11's createEventStream, and eventually an SSE teardown path) that trusts close()
+  // to mean "no more network I/O from this subscription".
+  let reconnectPromise: Promise<void> | null = null
 
   const detachHandlers = (client: Client): void => {
     client.removeAllListeners('notification')
@@ -82,27 +88,32 @@ export async function subscribeEvents(
     if (closed || reconnecting) return
     reconnecting = true
     current = null
-    void (async (): Promise<void> => {
+    reconnectPromise = (async (): Promise<void> => {
       while (!closed) {
         await delay(RECONNECT_DELAY_MS)
+        // Recheck immediately after the delay, before opening anything: close() may have run
+        // while this loop was parked, and there is no reason to dial Postgres and issue LISTEN
+        // for a subscription that is already torn down. This closes the window rather than
+        // surviving it — previously the loop would proceed straight to open() here regardless.
+        if (closed) break
         try {
           const client = await open()
           if (closed) {
-            // close() ran while this reconnect was in flight. current is already what close()
-            // acted on (null, at this point), so this freshly opened client is not reachable from
-            // anywhere else — end it here rather than leaving it orphaned and listening.
+            // close() ran while `open()` itself was in flight (connect + LISTEN). The client is
+            // not reachable from anywhere else yet, so end it here rather than leaving it
+            // orphaned and listening.
             detachHandlers(client)
             await client.end()
           } else {
             current = client
           }
-          reconnecting = false
-          return
+          break
         } catch {
           // keep retrying until close() is called
         }
       }
       reconnecting = false
+      reconnectPromise = null
     })()
   }
 
@@ -117,11 +128,13 @@ export async function subscribeEvents(
         detachHandlers(client)
         await client.end()
       }
-      // Any reconnect loop currently in flight observes `closed` on its next wake (after its
-      // delay, or immediately after its pending `open()` resolves) and ends the client it opened
-      // itself — see the `if (closed)` branch in scheduleReconnect above. There is no window in
-      // which a racing loop's client becomes reachable without `close()` having a chance to react
-      // to it, by construction of the single `reconnecting` guard.
+      // Await whatever reconnect loop is in flight so this promise cannot resolve while the
+      // subscription is still doing network I/O in the background. The guard above (`reconnecting`)
+      // guarantees there is at most one such loop.
+      const pending = reconnectPromise
+      if (pending !== null) {
+        await pending
+      }
     },
   }
 }
