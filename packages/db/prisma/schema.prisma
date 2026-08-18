@@ -59,6 +59,7 @@ model Workspace {
 
   teams                  Team[]
   providerConfigurations ProviderConfiguration[]
+  tasks                  Task[]
 }
 
 model Team {
@@ -83,6 +84,8 @@ model Agent {
 
   permissions AgentPermission[]
   skills      AgentSkill[]
+  runs        AgentRun[]
+  messages    AgentMessage[]
 
   @@index([teamId])
 }
@@ -145,4 +148,123 @@ model ProviderConfiguration {
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
   @@unique([workspaceId, kind])
+}
+
+enum RunKind {
+  implementation
+  review
+  planning
+}
+
+enum PauseReason {
+  human
+  guardrail
+  emergency_stop
+}
+
+enum MessageCategory {
+  instruction
+  feedback
+  context
+  priority_change
+  question_response
+}
+
+model Task {
+  id                  String     @id @default(uuid())
+  workspaceId         String
+  title               String
+  description         String
+  status              TaskStatus @default(backlog)
+  priority            Int        @default(0)
+  requiredRole        String?
+  assigneeId          String?
+  activeRunId         String?    @unique
+  attempt             Int        @default(0)
+  maxAttempts         Int
+  lastRejectionReason String?
+  branch              String?
+  createdBy           Actor      @default(human)
+  createdAt           DateTime   @default(now())
+  enqueuedAt          DateTime?
+
+  workspace    Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  runs         AgentRun[]
+  artifacts    Artifact[]
+  messages     AgentMessage[]
+  approvals    Approval[]
+  dependencies TaskDependency[] @relation("dependent")
+  dependents   TaskDependency[] @relation("dependedOn")
+
+  @@index([workspaceId, status])
+}
+
+model TaskDependency {
+  taskId          String
+  dependsOnTaskId String
+
+  task      Task @relation("dependent", fields: [taskId], references: [id], onDelete: Cascade)
+  dependsOn Task @relation("dependedOn", fields: [dependsOnTaskId], references: [id], onDelete: Cascade)
+
+  @@id([taskId, dependsOnTaskId])
+}
+
+model AgentRun {
+  id           String       @id @default(uuid())
+  taskId       String
+  agentId      String
+  kind         RunKind      @default(implementation)
+  status       RunStatus    @default(starting)
+  sessionId    String?
+  toolCalls    Int          @default(0)
+  pausedAtStep Int?
+  pauseReason  PauseReason?
+  costUsd      Float        @default(0)
+  startedAt    DateTime     @default(now())
+  endedAt      DateTime?
+
+  task  Task  @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  agent Agent @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@index([taskId])
+  @@index([agentId, status])
+}
+
+model Artifact {
+  id        String   @id @default(uuid())
+  taskId    String
+  kind      String
+  path      String
+  createdAt DateTime @default(now())
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId])
+}
+
+model AgentMessage {
+  id        String          @id @default(uuid())
+  taskId    String?
+  agentId   String
+  category  MessageCategory
+  body      String
+  actor     Actor           @default(human)
+  createdAt DateTime        @default(now())
+
+  task  Task? @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  agent Agent @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@index([agentId, createdAt])
+}
+
+model Approval {
+  id        String   @id @default(uuid())
+  taskId    String
+  approved  Boolean
+  reason    String?
+  decidedAt DateTime @default(now())
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId])
 }
