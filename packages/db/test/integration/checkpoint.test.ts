@@ -1,7 +1,7 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { prisma } from '../../src/client.js'
 
-async function seedRun(): Promise<{ workspaceId: string; taskId: string; agentId: string; runId: string }> {
+async function seedRun(): Promise<string> {
   const workspace = await prisma.workspace.create({
     data: {
       name: 'w',
@@ -23,7 +23,7 @@ async function seedRun(): Promise<{ workspaceId: string; taskId: string; agentId
   const run = await prisma.agentRun.create({
     data: { taskId: task.id, agentId: agent.id },
   })
-  return { workspaceId: workspace.id, taskId: task.id, agentId: agent.id, runId: run.id }
+  return run.id
 }
 
 beforeEach(async (): Promise<void> => {
@@ -38,8 +38,9 @@ afterAll(async (): Promise<void> => {
 
 describe('Checkpoint', () => {
   it('stores everything ADR 0001 requires to resume a run', async (): Promise<void> => {
-    const { runId } = await seedRun()
+    const runId = await seedRun()
 
+    const ts = new Date('2026-08-18T12:34:56.000Z')
     const created = await prisma.checkpoint.create({
       data: {
         runId,
@@ -54,8 +55,13 @@ describe('Checkpoint', () => {
         dirtyFiles: ['src/index.ts', 'src/util.ts'],
         cumulativeCostUsd: 1.2345,
         cumulativeTokens: 45210,
-        pauseReason: 'human',
+        // Deliberately not a PauseReason enum member's spelling — this field is free text (the
+        // operator-supplied reason that went into the hook's deny message), not the category enum
+        // that AgentRun.pauseReason is. Using an enum-shaped value here would be the worst possible
+        // example for the next implementer to copy.
+        pauseReason: 'operator asked to rename the class to MathKit before continuing',
         requestedBy: 'erenaltan@gmail.com',
+        ts,
       },
     })
 
@@ -74,13 +80,13 @@ describe('Checkpoint', () => {
     expect(found.dirtyFiles).toEqual(['src/index.ts', 'src/util.ts'])
     expect(found.cumulativeCostUsd).toBe(1.2345)
     expect(found.cumulativeTokens).toBe(45210)
-    expect(found.pauseReason).toBe('human')
+    expect(found.pauseReason).toBe('operator asked to rename the class to MathKit before continuing')
     expect(found.requestedBy).toBe('erenaltan@gmail.com')
-    expect(found.ts).toBeInstanceOf(Date)
+    expect(found.ts).toEqual(ts)
   })
 
   it('allows the nullable fields to stay null for a checkpoint with no denials yet', async (): Promise<void> => {
-    const { runId } = await seedRun()
+    const runId = await seedRun()
 
     const created = await prisma.checkpoint.create({
       data: {
@@ -104,7 +110,7 @@ describe('Checkpoint', () => {
   })
 
   it('cascades deletion from its run', async (): Promise<void> => {
-    const { runId } = await seedRun()
+    const runId = await seedRun()
     await prisma.checkpoint.create({
       data: {
         runId,
@@ -124,9 +130,8 @@ describe('Checkpoint', () => {
 })
 
 describe('Workspace command lists and halt state', () => {
-  beforeEach(async (): Promise<void> => {
-    await prisma.$executeRawUnsafe('TRUNCATE TABLE "Workspace" RESTART IDENTITY CASCADE')
-  })
+  // No file-scoped beforeEach re-declared here: the top-level beforeEach already truncates
+  // "Workspace" with CASCADE, which is sufficient for this describe block too.
 
   it('round-trips verifyCommands and setupCommands as ordered lists', async (): Promise<void> => {
     const workspace = await prisma.workspace.create({
@@ -158,5 +163,13 @@ describe('Workspace command lists and halt state', () => {
 
     expect(halted.haltedReason).toBe('pause gate failed on run r-1')
     expect(halted.haltedAt).toEqual(haltedAt)
+  })
+
+  it('rejects a workspace created without verifyCommands or setupCommands', async (): Promise<void> => {
+    // Prisma types scalar-list fields as optional in the create input regardless of @default, so
+    // this line typechecks even though both columns are NOT NULL at the database level — the
+    // schema.prisma departure comment is only real if something asserts the runtime rejection it
+    // promises.
+    await expect(prisma.workspace.create({ data: { name: 'w', repoPath: '/tmp/repo' } })).rejects.toThrow()
   })
 })

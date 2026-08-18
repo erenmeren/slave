@@ -40,6 +40,12 @@ enum Actor {
   system
 }
 
+/// verifyCommands/setupCommands are NOT NULL at the database level, a deliberate departure from
+/// Prisma's own DDL convention for a required String[] with no @default (which is a plain
+/// nullable column). An empty verifyCommands is not a neutral default here — it is a refusal to
+/// ever let a task on this workspace verify as complete, so a caller that forgets the field must
+/// fail loudly at creation rather than silently getting `[]`. See the m3_runs_checkpoints_commands
+/// migration for the DDL that enforces this.
 model Workspace {
   id             String    @id @default(uuid())
   name           String
@@ -221,6 +227,9 @@ model AgentRun {
   sessionId    String?
   toolCalls    Int          @default(0)
   pausedAtStep Int?
+  /// The pause's category (human / guardrail / emergency_stop). Contrast with
+  /// Checkpoint.pauseReason, which is the operator-facing free text of *why* — the string that
+  /// went into the hook's deny message. This field is the enum; that one never is.
   pauseReason  PauseReason?
   costUsd      Float        @default(0)
   pid          Int?
@@ -246,11 +255,17 @@ model Checkpoint {
   lastToolUseId     String?
   lastToolName      String?
   numTurns          Int      @default(0)
+  /// Unlike Workspace.verifyCommands/setupCommands, an empty array here is a perfectly ordinary
+  /// value (no denials yet, no dirty files yet) rather than a refusal — so these two stay on
+  /// Prisma's conventional nullable-array DDL rather than getting the NOT NULL enforcement above.
   deniedToolUseIds  String[]
   headCommit        String
   dirtyFiles        String[]
   cumulativeCostUsd Float    @default(0)
   cumulativeTokens  Int      @default(0)
+  /// Free text: the operator-supplied reason that went into the hook's deny message, not the
+  /// AgentRun.pauseReason category enum. Never assign an AgentRun.pauseReason enum member's
+  /// literal spelling here — that would read as this field being the same enum when it is not.
   pauseReason       String?
   requestedBy       String?
   ts                DateTime @default(now())
