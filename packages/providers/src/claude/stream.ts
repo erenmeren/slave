@@ -188,15 +188,15 @@ const resultSchema = z.object({
   type: z.literal('result'),
   // `subtype` (e.g. `success`, `error_max_turns`, `error_during_execution`)
   // is the fallback for a missing `terminal_reason` below. All four
-  // captures are `success` runs where `terminal_reason` is always present;
+  // captures are `success` runs where every field here is always present;
   // it is an error result -- unmeasured here -- where the CLI is plausibly
-  // silent on the narrative fields.
+  // silent on some of them.
   subtype: z.string().optional(),
-  is_error: z.boolean(),
+  is_error: z.boolean().optional(),
   terminal_reason: z.string().optional(),
   stop_reason: z.string().nullable().optional(),
-  num_turns: z.number(),
-  total_cost_usd: z.number(),
+  num_turns: z.number().optional(),
+  total_cost_usd: z.number().optional(),
   // `permission_denials` is checkpoint material, never a live signal, and
   // cannot on its own tell a blocking crash from a genuine deny -- it is
   // read here only to carry the denied tool_use_ids into `RunOutcome`.
@@ -208,25 +208,39 @@ function parseResultLine(raw: unknown, line: string): RuntimeEvent {
   if (!result.success) return { kind: 'unparsable', line }
   const data = result.data
 
-  // A terminal line must always terminate: a failed run that produces no
-  // `terminated` event leaves the orchestrator waiting on a process that is
-  // already gone. `terminal_reason` and `stop_reason` are the two fields
-  // most plausibly absent on an error result, so their absence is
-  // tolerated; `is_error`, `num_turns` and `total_cost_usd` are core
-  // telemetry the CLI computes regardless of outcome, so those remain
-  // required -- their absence still means the line is not trustworthy
-  // enough to report as `terminated`.
-  const terminalReason = data.terminal_reason ?? data.subtype
-  if (terminalReason === undefined) return { kind: 'unparsable', line }
+  // A `result` line must always produce `terminated` -- the alternative is
+  // the orchestrator waiting on a process that has already exited, and no
+  // amount of missing-field caution is worth that. Absence of any field
+  // here is tolerated; only a present-but-wrongly-typed field (caught by
+  // `resultSchema` above) is treated as genuinely malformed.
+  //
+  // `is_error` defaults to `true`, not `false`: a run whose success cannot
+  // be established is not a success, and reporting a failed run as a
+  // success is worse than the reverse.
+  const terminalReasonSource = data.terminal_reason ?? data.subtype
+  let terminalReason: string
+  if (terminalReasonSource !== undefined && data.num_turns !== undefined && data.total_cost_usd !== undefined) {
+    terminalReason = terminalReasonSource
+  } else {
+    // `total_cost_usd` feeds the budget guardrail, so a defaulted (0) cost
+    // must never look like a real, cheap run -- the degradation is folded
+    // into `terminalReason` rather than silently zeroed, since `RunOutcome`
+    // gets no new field to carry it separately.
+    const missing: string[] = []
+    if (terminalReasonSource === undefined) missing.push('terminal_reason')
+    if (data.num_turns === undefined) missing.push('num_turns')
+    if (data.total_cost_usd === undefined) missing.push('total_cost_usd')
+    terminalReason = `${terminalReasonSource ?? 'unknown'} (degraded result line, missing: ${missing.join(', ')})`
+  }
 
   return {
     kind: 'terminated',
     outcome: {
-      isError: data.is_error,
+      isError: data.is_error ?? true,
       terminalReason,
       stopReason: data.stop_reason ?? null,
-      numTurns: data.num_turns,
-      costUsd: data.total_cost_usd,
+      numTurns: data.num_turns ?? 0,
+      costUsd: data.total_cost_usd ?? 0,
       deniedToolUseIds: (data.permission_denials ?? []).map((denial) => denial.tool_use_id),
     },
   }

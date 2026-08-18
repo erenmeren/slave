@@ -278,4 +278,24 @@ describe('parseStreamLine', () => {
       },
     })
   })
+
+  it('still produces terminated for a result line carrying only subtype', () => {
+    // A result line must always produce terminated -- the alternative is the orchestrator
+    // waiting on a process that has already exited. is_error defaults to true (a run whose
+    // success cannot be established is not a success), num_turns/total_cost_usd default to 0
+    // with the undercount surfaced in terminalReason rather than silently zeroed, since
+    // total_cost_usd feeds the budget guardrail.
+    const line = JSON.stringify({ type: 'result', subtype: 'error_max_turns' })
+    expect(parseStreamLine(line)).toEqual({
+      kind: 'terminated',
+      outcome: {
+        isError: true,
+        terminalReason: 'error_max_turns (degraded result line, missing: num_turns, total_cost_usd)',
+        stopReason: null,
+        numTurns: 0,
+        costUsd: 0,
+        deniedToolUseIds: [],
+      },
+    })
+  })
 })
