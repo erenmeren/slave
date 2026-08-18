@@ -29,5 +29,8 @@ require is that no second write path exists — hence the export rule.
   `EVENT_TYPE_BY_DOMAIN_TYPE`. The `satisfies` clause on that map fails the build if the union
   moves without it.
 - If a future writer bypasses `appendEvent`, the guarantee is gone and nothing will report it.
-  That is the cost of choosing the gate over the trigger, and it is why the export rule is a
-  constraint rather than a convention.
+  That is the cost of choosing the gate over the trigger. Note that the export rule is a
+  convention, not a mechanism: `@ai-team-os/db/client` is a declared public subpath (it has to be —
+  `appendEvent` lives in a different package from the client), so any package can import it. Keeping
+  it out of the barrel makes a bypass a deliberate, greppable act rather than an impossible one.
+  See `docs/event-model.md` for the audit command.

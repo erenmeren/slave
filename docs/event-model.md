@@ -49,8 +49,18 @@ them as plain `string` — so `toExecutionEvent` re-brands `row.taskId` / `row.a
 an `ExecutionEvent`. `packages/db` does not export the raw Prisma client from its package root;
 the client lives behind the `@ai-team-os/db/client` subpath declared in `packages/db/package.json`'s
 `exports` map, and `packages/events` is the one package that imports it — from `append.ts`,
-`read.ts`, and two integration tests. This is enforced by not providing an alternative, not by a
-runtime check.
+`read.ts`, and two integration tests.
+
+**This is a convention, not a barrier.** Nothing stops another package from importing
+`@ai-team-os/db/client` and calling `executionEvent.create` directly: the subpath is a declared,
+public export, and two of `packages/events`' own integration tests (`append.test.ts`,
+`stream.test.ts`) do exactly that on purpose, to plant rows the gate would have refused. It has to be
+declared — the design spec places `appendEvent` in `packages/events`, so the client must cross a
+package boundary to reach it, and a package-private client would make the gate itself
+unimplementable. What the arrangement actually buys is that the raw client is absent from the
+barrel every other consumer imports, so reaching it takes a deliberate, greppable import of a
+second subpath. That makes a bypass visible in review; it does not make one impossible, and there
+is no runtime check behind it either. `grep -rn "@ai-team-os/db/client" packages` is the audit.
 
 Inside a single `prisma.$transaction`:
 
