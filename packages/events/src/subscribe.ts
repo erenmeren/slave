@@ -11,6 +11,28 @@ export interface EventSubscription {
 
 const RECONNECT_DELAY_MS = 250
 
+/**
+ * Bounds each phase of `open()` — the TCP connect/handshake and the `LISTEN events` query.
+ *
+ * pg defaults both to "wait forever" (`connectionTimeoutMillis: 0`, no `query_timeout`), which is
+ * only survivable while nothing awaits the reconnect loop. `close()` does await it, so an
+ * unresponsive-but-reachable server — one that accepts TCP and then never speaks the Postgres
+ * protocol, or completes the handshake and then stalls on the query — would park the loop inside
+ * `open()` forever and hang `close()` with it, all the way up through Task 11's
+ * `createEventStream.close()` and M4's SSE teardown.
+ *
+ * Both phases need a bound: `connectionTimeoutMillis` covers only connect + handshake, so a server
+ * that finishes the handshake and then goes quiet is caught by `query_timeout` instead.
+ *
+ * 2s is 10-100x the observed cost of a real connect (~10-30ms locally, a few hundred ms
+ * cross-region), and the cost of erring short is only a retry 250ms later rather than a surfaced
+ * error, so short is the cheap direction. It keeps `close()` worst-case at roughly
+ * RECONNECT_DELAY_MS + one bounded `open()` — and even in the pathological case where a server
+ * stalls at the phase boundary and burns both budgets, the loop still terminates in ~4s instead of
+ * never.
+ */
+const OPEN_TIMEOUT_MS = 2_000
+
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
@@ -77,10 +99,33 @@ export async function subscribeEvents(
   }
 
   const open = async (): Promise<Client> => {
-    const client = new Client({ connectionString })
+    const client = new Client({
+      connectionString,
+      connectionTimeoutMillis: OPEN_TIMEOUT_MS,
+      query_timeout: OPEN_TIMEOUT_MS,
+    })
     attachHandlers(client)
-    await client.connect()
-    await client.query('LISTEN events')
+    try {
+      await client.connect()
+      await client.query('LISTEN events')
+    } catch (error) {
+      // Leave no debris behind a failed attempt. pg cleans up after the two timeouts differently:
+      // a `connectionTimeoutMillis` expiry destroys the socket itself, but a `query_timeout` expiry
+      // only rejects the query and leaves the connection open and `_queryable` — so without this
+      // `end()` a stalled server would leak one live socket per retry. `end()` is itself bounded
+      // here: pg force-destroys the socket rather than waiting when a query is still active, and
+      // no-ops on a client whose connect never completed.
+      detachHandlers(client)
+      // A `Client` that emits `error` with no listener throws, and ending a half-dead client can
+      // still surface one, so swap the reconnect handler for a sink rather than leaving none.
+      client.on('error', () => {})
+      try {
+        await client.end()
+      } catch {
+        // the attempt already failed; nothing further to salvage
+      }
+      throw error
+    }
     return client
   }
 
