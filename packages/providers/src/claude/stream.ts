@@ -4,8 +4,11 @@ import type { RuntimeEvent } from '../types.js'
 /**
  * `parseStreamLine` is a pure, total function: one NDJSON line from the
  * `claude` CLI's `stream-json` output in, one `RuntimeEvent` out. It never
- * throws -- a malformed or unrecognized line becomes `unparsable`, because a
- * bad line must not kill a run.
+ * throws. Invalid JSON, or a recognized shape with required fields missing,
+ * becomes `unparsable`; a well-formed line of a kind this parser has no
+ * decision for (an unrecognized top-level `type`, or `system` `subtype`)
+ * becomes `ignored` -- because a bad or merely-uninteresting line must not
+ * kill a run, and only the former is actually a defect.
  *
  * The traps this carries (measured, spec §5.3):
  *  - `hook_response.output` is a JSON-encoded *string*, needing a second
@@ -46,12 +49,21 @@ export function parseStreamLine(line: string): RuntimeEvent {
     case 'rate_limit_event':
       return { kind: 'ignored', line }
     default:
-      return { kind: 'unparsable', line }
+      // An unrecognized top-level `type`, well-formed JSON with a `type`
+      // field notwithstanding: a future CLI adding a new top-level type
+      // (as `system` subtypes already do routinely, handled the same way
+      // below) is something this parser simply has no decision for, not a
+      // malformed line.
+      return { kind: 'ignored', line }
   }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isToolUseBlock(value: unknown): value is Record<string, unknown> {
+  return isRecord(value) && value.type === 'tool_use'
 }
 
 const envelopeSchema = z.object({ type: z.string() })
@@ -174,9 +186,15 @@ function parseHookResponseLine(raw: unknown, line: string): RuntimeEvent {
 
 const resultSchema = z.object({
   type: z.literal('result'),
+  // `subtype` (e.g. `success`, `error_max_turns`, `error_during_execution`)
+  // is the fallback for a missing `terminal_reason` below. All four
+  // captures are `success` runs where `terminal_reason` is always present;
+  // it is an error result -- unmeasured here -- where the CLI is plausibly
+  // silent on the narrative fields.
+  subtype: z.string().optional(),
   is_error: z.boolean(),
-  terminal_reason: z.string(),
-  stop_reason: z.string().nullable(),
+  terminal_reason: z.string().optional(),
+  stop_reason: z.string().nullable().optional(),
   num_turns: z.number(),
   total_cost_usd: z.number(),
   // `permission_denials` is checkpoint material, never a live signal, and
@@ -189,12 +207,24 @@ function parseResultLine(raw: unknown, line: string): RuntimeEvent {
   const result = resultSchema.safeParse(raw)
   if (!result.success) return { kind: 'unparsable', line }
   const data = result.data
+
+  // A terminal line must always terminate: a failed run that produces no
+  // `terminated` event leaves the orchestrator waiting on a process that is
+  // already gone. `terminal_reason` and `stop_reason` are the two fields
+  // most plausibly absent on an error result, so their absence is
+  // tolerated; `is_error`, `num_turns` and `total_cost_usd` are core
+  // telemetry the CLI computes regardless of outcome, so those remain
+  // required -- their absence still means the line is not trustworthy
+  // enough to report as `terminated`.
+  const terminalReason = data.terminal_reason ?? data.subtype
+  if (terminalReason === undefined) return { kind: 'unparsable', line }
+
   return {
     kind: 'terminated',
     outcome: {
       isError: data.is_error,
-      terminalReason: data.terminal_reason,
-      stopReason: data.stop_reason,
+      terminalReason,
+      stopReason: data.stop_reason ?? null,
       numTurns: data.num_turns,
       costUsd: data.total_cost_usd,
       deniedToolUseIds: (data.permission_denials ?? []).map((denial) => denial.tool_use_id),
@@ -225,26 +255,34 @@ function parseAssistantLine(raw: unknown, line: string): RuntimeEvent {
   if (!envelope.success) return { kind: 'unparsable', line }
 
   const { content } = envelope.data.message
-  // Every real capture carries exactly one content block per assistant
-  // line. A line with zero or several is a recognized shape this parser
-  // does not have single-event semantics for.
+
+  // A `tool_use` block is preferred wherever it appears in the content
+  // array, even alongside other blocks (e.g. `[text, tool_use]`) -- unmeasured
+  // here (every real capture is one block per line), but Task 8's pause test
+  // proves the pause held by *counting* `tool_call` events after a deny.
+  // Falling to `ignored` because the line also carried a text block would
+  // make a tool call that actually happened invisible, and a broken pause
+  // would read as intact. This function returns one event per line, so a
+  // line with more than one `tool_use` block still only surfaces the first.
+  const toolUseBlock = content.find(isToolUseBlock)
+  if (toolUseBlock !== undefined) {
+    const result = toolUseContentSchema.safeParse(toolUseBlock)
+    if (!result.success) return { kind: 'unparsable', line }
+    return { kind: 'tool_call', toolUseId: result.data.id, toolName: result.data.name }
+  }
+
+  // No tool_use block: every real capture carries exactly one content block
+  // per assistant line in that case. A line with zero or several is a
+  // recognized shape this parser does not have single-event semantics for.
   if (content.length !== 1) return { kind: 'ignored', line }
   const [block] = content
   if (!isRecord(block)) return { kind: 'unparsable', line }
 
-  switch (block.type) {
-    case 'tool_use': {
-      const result = toolUseContentSchema.safeParse(block)
-      if (!result.success) return { kind: 'unparsable', line }
-      return { kind: 'tool_call', toolUseId: result.data.id, toolName: result.data.name }
-    }
-    case 'text': {
-      const result = textContentSchema.safeParse(block)
-      if (!result.success) return { kind: 'unparsable', line }
-      return { kind: 'text', text: result.data.text }
-    }
-    default:
-      // `thinking` blocks and any other content type: recognized, not acted on.
-      return { kind: 'ignored', line }
+  if (block.type === 'text') {
+    const result = textContentSchema.safeParse(block)
+    if (!result.success) return { kind: 'unparsable', line }
+    return { kind: 'text', text: result.data.text }
   }
+  // `thinking` blocks and any other content type: recognized, not acted on.
+  return { kind: 'ignored', line }
 }

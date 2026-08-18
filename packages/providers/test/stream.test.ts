@@ -15,6 +15,7 @@ describe('parseStreamLine', () => {
       type: 'system',
       subtype: 'hook_response',
       hook_name: 'PreToolUse:Bash',
+      hook_event: 'PreToolUse',
       output: inner,
     })
     expect(parseStreamLine(line)).toEqual({
@@ -97,6 +98,27 @@ describe('parseStreamLine', () => {
     expect(parseStreamLine(line)).toMatchObject({ kind: 'hook_failed_open', exitCode: 127 })
   })
 
+  it('returns hook_failed_open for a PreToolUse hook_response that exits exactly 1', () => {
+    // The most confusable pair this parser has to keep apart: a PreToolUse
+    // hook_response exiting 1 is a fail-open failure (spec §6), but the
+    // routine Stop hook_response also reports exit_code: 1 on every healthy
+    // run (next test). A mutation that widens the crash check from
+    // `=== 2` to `=== 2 || === 1` passes every other fixture in this file --
+    // 127 and 126 are still fail-open, Stop's exit 1 is still ignored
+    // because hook_event scopes it out first -- and is caught only here.
+    const line = JSON.stringify({
+      type: 'system',
+      subtype: 'hook_response',
+      hook_name: 'PreToolUse:Bash',
+      hook_event: 'PreToolUse',
+      output: 'deliberate hook failure exit 1\n',
+      stderr: 'deliberate hook failure exit 1\n',
+      exit_code: 1,
+      outcome: 'error',
+    })
+    expect(parseStreamLine(line)).toMatchObject({ kind: 'hook_failed_open', exitCode: 1 })
+  })
+
   it('ignores a Stop hook_response that exits 1 rather than classifying it', () => {
     // REGRESSION GUARD. Every healthy run ends with exactly this line -- all four captures,
     // spike 2026-08-18 §3.4. Classified by exit_code without checking hook_event it reads as
@@ -155,6 +177,24 @@ describe('parseStreamLine', () => {
     expect(parseStreamLine(line)).toEqual({ kind: 'ignored', line })
   })
 
+  it('prefers a tool_use block over a text block on the same line, rather than dropping the tool call', () => {
+    // Unmeasured -- every real capture is one block per assistant line -- but Task 8 proves
+    // its pause held by *counting* `tool_call` events after a deny. Falling to `ignored`
+    // because the line also carried text would make a tool call that actually happened
+    // invisible, and a broken pause would read as intact.
+    const line = JSON.stringify({
+      type: 'assistant',
+      message: {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: 'Using Bash.' },
+          { type: 'tool_use', id: 'toolu_multiblock1', name: 'Bash', input: { command: 'echo hi' } },
+        ],
+      },
+    })
+    expect(parseStreamLine(line)).toEqual({ kind: 'tool_call', toolUseId: 'toolu_multiblock1', toolName: 'Bash' })
+  })
+
   it('ignores hook_started, hook_progress and thinking_tokens system lines', () => {
     // Recognized housekeeping lines the real CLI emits constantly; none carry a decision.
     const lines = [
@@ -183,8 +223,59 @@ describe('parseStreamLine', () => {
     expect(parseStreamLine(line)).toEqual({ kind: 'ignored', line })
   })
 
-  it('returns unparsable for a well-formed but unrecognized top-level type', () => {
+  it('ignores a well-formed but unrecognized top-level type, rather than treating it as unparsable', () => {
+    // The two dispatch levels must agree: an unrecognized `system.subtype` is already
+    // `ignored` above. A future CLI adding a new top-level type is the same situation --
+    // something this parser has no decision for -- not a defect.
     const line = JSON.stringify({ type: 'control_response', foo: 'bar' })
-    expect(parseStreamLine(line)).toEqual({ kind: 'unparsable', line })
+    expect(parseStreamLine(line)).toEqual({ kind: 'ignored', line })
+  })
+
+  it('tolerates a missing stop_reason on a result line, defaulting it to null', () => {
+    // Ruling: a failed run that produces no terminal event leaves the orchestrator waiting
+    // on a process that is already gone. All four captures are `subtype: "success"`; an
+    // omitted stop_reason is plausible on an error result the CLI never reached a natural
+    // model stop for.
+    const line = JSON.stringify({
+      type: 'result',
+      subtype: 'error_max_turns',
+      is_error: true,
+      terminal_reason: 'max_turns_exceeded',
+      num_turns: 40,
+      total_cost_usd: 1.5,
+      permission_denials: [],
+    })
+    expect(parseStreamLine(line)).toEqual({
+      kind: 'terminated',
+      outcome: {
+        isError: true,
+        terminalReason: 'max_turns_exceeded',
+        stopReason: null,
+        numTurns: 40,
+        costUsd: 1.5,
+        deniedToolUseIds: [],
+      },
+    })
+  })
+
+  it('defaults terminalReason from subtype when terminal_reason is absent', () => {
+    const line = JSON.stringify({
+      type: 'result',
+      subtype: 'error_during_execution',
+      is_error: true,
+      num_turns: 2,
+      total_cost_usd: 0.01,
+    })
+    expect(parseStreamLine(line)).toEqual({
+      kind: 'terminated',
+      outcome: {
+        isError: true,
+        terminalReason: 'error_during_execution',
+        stopReason: null,
+        numTurns: 2,
+        costUsd: 0.01,
+        deniedToolUseIds: [],
+      },
+    })
   })
 })
