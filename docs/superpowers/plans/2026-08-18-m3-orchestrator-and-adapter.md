@@ -224,7 +224,7 @@ Spec §10. One migration carrying five changes.
 - Test: `packages/db/test/integration/checkpoint.test.ts` (create)
 
 **Interfaces:**
-- Produces: `Checkpoint` model; `AgentRun.pid`, `AgentRun.worktreePath`, `AgentRun.terminalAt`; `Workspace.verifyCommands: String[]`; `Workspace.setupCommands: String[]`.
+- Produces: `Checkpoint` model; `AgentRun.pid`, `AgentRun.worktreePath`, `AgentRun.terminalAt`; `Workspace.verifyCommands: String[]`; `Workspace.setupCommands: String[]`; `Workspace.haltedReason: String?`, `Workspace.haltedAt: DateTime?`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -290,7 +290,14 @@ model Checkpoint {
 
 On `AgentRun` add `pid Int?`, `worktreePath String?`, `terminalAt DateTime?`, and the back-relation `checkpoint Checkpoint?`.
 
-On `Workspace` replace `verifyCommand String` with `verifyCommands String[]` and add `setupCommands String[]`.
+On `Workspace` replace `verifyCommand String` with `verifyCommands String[]` and add
+`setupCommands String[]`, `haltedReason String?` and `haltedAt DateTime?`.
+
+`haltedReason`/`haltedAt` are the persistent workspace halt (spec §13.1). They belong to this same
+migration — spec §10 lists M3 as one migration — and they are what `loadWorld` maps onto
+`stats.emergencyStopped` in Task 10. A local latch was rejected because it dies with the process;
+these columns are chosen so the halt survives a daemon restart, which is the only reason to prefer
+them. M8's emergency stop inherits these columns rather than adding its own.
 
 - [ ] **Step 4: Update the seed**
 
@@ -316,7 +323,17 @@ git add -A && git commit -m "feat(db): add checkpoints, run process fields, and 
 
 ## Task 4: `packages/providers` scaffold and the stream parser
 
-The parser is a pure function and carries the three measured traps from spec §5.3.
+The parser is a pure function and carries the measured traps from spec §5.3: `hook_response.output`
+is a JSON-encoded string needing a second parse; the line carries no `tool_use_id`, so correlation
+goes through the following `tool_result`; `permission_denials` is checkpoint material, never a live
+signal, and cannot tell a blocking crash from a genuine deny; `hook_response` events can arrive
+after the terminal `result`, so the reader does not stop there.
+
+**The classification is scoped to `hook_event === "PreToolUse"`, and the scope is not optional.**
+Within that scope there are four shapes keyed on `exit_code`, never on `outcome`: deny (`0` plus
+deny JSON), blocking crash (`2`), fail-open failure (non-zero and not `2` — the tool ran anyway),
+and otherwise allow. Every other `hook_event` is ignored: `Stop` reports `exit_code: 1` on every
+healthy run, so an unscoped parser reports a broken gate at the end of every successful run.
 
 **Files:**
 - Create: `packages/providers/package.json`, `tsconfig.json`, `tsconfig.test.json`
@@ -327,7 +344,8 @@ The parser is a pure function and carries the three measured traps from spec §5
 **Interfaces:**
 - Consumes: `RunId` from `@ai-team-os/domain`.
 - Produces:
-  - `type RuntimeEvent = { kind: 'session_started'; sessionId: string } | { kind: 'tool_call'; toolUseId: string; toolName: string } | { kind: 'text'; text: string } | { kind: 'hook_denied'; hookName: string; reason: string } | { kind: 'permission_denied'; toolName: string; toolUseId: string } | { kind: 'terminated'; outcome: RunOutcome } | { kind: 'unparsable'; line: string }`
+  - `type RuntimeEvent = { kind: 'session_started'; sessionId: string } | { kind: 'tool_call'; toolUseId: string; toolName: string } | { kind: 'text'; text: string } | { kind: 'hook_denied'; hookName: string; reason: string } | { kind: 'hook_crashed'; hookName: string; exitCode: number; stderr: string } | { kind: 'hook_failed_open'; hookName: string; exitCode: number; stderr: string } | { kind: 'permission_denied'; toolName: string; toolUseId: string } | { kind: 'terminated'; outcome: RunOutcome } | { kind: 'ignored'; line: string } | { kind: 'unparsable'; line: string }`
+  - `hook_crashed` and `hook_failed_open` are separate variants on purpose (spec §5.3, §13.1): the first means the run stopped, the second means it kept going with no gate. `ignored` is a recognized line this parser does not act on — every `hook_response` whose `hook_event` is not `PreToolUse` — and is distinct from `unparsable`, which means the line could not be understood at all.
   - `interface RunOutcome { readonly isError: boolean; readonly terminalReason: string; readonly stopReason: string | null; readonly numTurns: number; readonly costUsd: number; readonly deniedToolUseIds: readonly string[] }`
   - `function parseStreamLine(line: string): RuntimeEvent`
 
@@ -407,14 +425,54 @@ describe('parseStreamLine', () => {
     expect(parseStreamLine('{not json')).toEqual({ kind: 'unparsable', line: '{not json' })
   })
 
-  it('returns unparsable when hook_response.output is not valid inner JSON', () => {
+  it('returns hook_crashed for a PreToolUse hook_response that exits 2', () => {
+    // Measured shape: spike 2026-08-18 §1.4. output is the hook's stderr, not JSON --
+    // treating a failed inner parse as `unparsable` would file a broken gate as stream noise.
     const line = JSON.stringify({
       type: 'system',
       subtype: 'hook_response',
       hook_name: 'PreToolUse:Bash',
-      output: 'not json at all',
+      hook_event: 'PreToolUse',
+      output: 'deliberate hook crash\n',
+      stderr: 'deliberate hook crash\n',
+      exit_code: 2,
+      outcome: 'error',
     })
-    expect(parseStreamLine(line)).toEqual({ kind: 'unparsable', line })
+    expect(parseStreamLine(line)).toMatchObject({ kind: 'hook_crashed', exitCode: 2 })
+  })
+
+  it('returns hook_failed_open for a PreToolUse hook_response that exits non-zero and not 2', () => {
+    // Measured: exit 127 (path missing), 126 (not executable), 1 (script failed) all let the
+    // tool run -- spike 2026-08-18 §6. Must NOT share a variant with hook_crashed.
+    const line = JSON.stringify({
+      type: 'system',
+      subtype: 'hook_response',
+      hook_name: 'PreToolUse:Write',
+      hook_event: 'PreToolUse',
+      output: '/bin/sh: line 1: /nope/hook.sh: No such file or directory\n',
+      stderr: '/bin/sh: line 1: /nope/hook.sh: No such file or directory\n',
+      exit_code: 127,
+      outcome: 'error',
+    })
+    expect(parseStreamLine(line)).toMatchObject({ kind: 'hook_failed_open', exitCode: 127 })
+  })
+
+  it('ignores a Stop hook_response that exits 1 rather than classifying it', () => {
+    // REGRESSION GUARD. Every healthy run ends with exactly this line -- all four captures,
+    // spike 2026-08-18 §3.4. Classified by exit_code without checking hook_event it reads as
+    // hook_failed_open, which under spec §13.1 cancels the run, fails it, and halts the
+    // workspace. On every successful run.
+    const line = JSON.stringify({
+      type: 'system',
+      subtype: 'hook_response',
+      hook_name: 'Stop',
+      hook_event: 'Stop',
+      output: '',
+      stderr: '',
+      exit_code: 1,
+      outcome: 'cancelled',
+    })
+    expect(parseStreamLine(line)).toEqual({ kind: 'ignored', line })
   })
 })
 ```
@@ -443,7 +501,7 @@ Spec §12.1. This is the instrument every later adapter task is tested with.
 
 **Files:**
 - Create: `packages/providers/test/fake-claude.mjs`
-- Create: `packages/providers/test/fixtures/complete.ndjson`, `hook-deny.ndjson`, `permission-denied.ndjson`, `crash.ndjson`, `malformed.ndjson`
+- Create: `packages/providers/test/fixtures/complete.ndjson`, `hook-deny.ndjson`, `hook-crash.ndjson`, `hook-fail-open.ndjson`, `permission-denied.ndjson`, `crash.ndjson`, `malformed.ndjson`
 - Test: `packages/providers/test/fake-claude.test.ts`
 
 **Interfaces:**
@@ -451,7 +509,24 @@ Spec §12.1. This is the instrument every later adapter task is tested with.
 
 - [ ] **Step 1: Write the fixtures**
 
-Derive them from M0's real captures where those exist; otherwise hand-write lines in the exact shapes Task 4's tests encode. `complete.ndjson` is: one `system/init`, two `assistant` text lines, two tool calls with results, one terminal `result` with `is_error: false`. `hook-deny.ndjson` is the same up to the first tool call, then a `hook_response` deny, then a `tool_result` with `is_error: true`.
+Derive them from real captures where those exist; otherwise hand-write lines in the exact shapes Task 4's tests encode. `complete.ndjson` is: one `system/init`, two `assistant` text lines, two tool calls with results, one terminal `result` with `is_error: false`. `hook-deny.ndjson` is the same up to the first tool call, then a `hook_response` deny, then a `tool_result` with `is_error: true`.
+
+The two hook-failure fixtures come from Task 1's captures verbatim
+(`docs/superpowers/spikes/2026-08-18-m3-hook-failure-modes.md`), because inventing their shapes is
+what the measurement was for:
+
+- `hook-crash.ndjson` — `PreToolUse` `hook_response` with `exit_code: 2`, `outcome: "error"`,
+  plain-text `output`, followed by a `tool_result` with `is_error: true` and content
+  `PreToolUse:<Tool> hook error: [<path>]: <stderr>`, and **no** `PostToolUse`. The tool did not run.
+- `hook-fail-open.ndjson` — `PreToolUse` `hook_response` with `exit_code: 127`, `outcome: "error"`,
+  plain-text `output`, then `PostToolUse` **fires**, the `tool_result` is an ordinary success, and
+  the terminal `result` has `is_error: false` with `permission_denials: []`. This fixture must keep
+  making tool calls after the point a pause flag would be armed — that is the behaviour Task 8's
+  backstop test detects.
+
+**Every fixture ends with a `Stop` `hook_response` carrying `exit_code: 1`, `outcome: "cancelled"`,
+including the healthy ones.** All four captures do, and Task 4's regression guard depends on it
+being present in normal traffic rather than only in a failure fixture.
 
 - [ ] **Step 2: Write the failing test**
 
@@ -500,6 +575,7 @@ git add -A && git commit -m "test(providers): add the fake claude cli and fixtur
   - `class ClaudeCodeAdapter implements AgentRuntimeAdapter` with `readonly id: 'claude-code'`, `getCapabilities()`, `start(input: StartRunInput): Promise<RunHandle>`, `events(runId: RunId): AsyncIterable<RuntimeEvent>`, `cancel(runId: RunId): Promise<void>`
   - `interface StartRunInput { readonly runId: RunId; readonly prompt: string; readonly worktreePath: string; readonly pauseFlagPath: string; readonly settingsPath: string; readonly gitIdentity: { readonly name: string; readonly email: string } }`
   - `interface RunHandle { readonly runId: RunId; readonly pid: number }`
+  - `function preflightGate(input: { hookPath: string; flagPath: string }): Promise<void>` — throws if the hook does not discriminate.
 - Consumes: `parseStreamLine` from Task 4, the fake CLI from Task 5.
 
 - [ ] **Step 1: Write the failing flag test**
@@ -517,6 +593,30 @@ it('includes every mandatory flag and neither forbidden one', () => {
   )
   expect(flags).not.toContain('--no-session-persistence')
   expect(flags).not.toContain('--fork-session')
+})
+
+// Spec §5.5: a written settings file is not an armed gate. Q9 measured that a wrong or
+// unexecutable hook path lets every tool call through with an empty `permission_denials`
+// and a terminal event indistinguishable from a healthy run.
+it('preflight rejects a hook path that does not exist', async (): Promise<void> => {
+  await expect(preflightGate({ hookPath: '/nope/hook.sh', flagPath })).rejects.toThrow()
+})
+
+it('preflight rejects a hook that is present but not executable', async (): Promise<void> => {
+  chmodSync(hookPath, 0o644)
+  await expect(preflightGate({ hookPath, flagPath })).rejects.toThrow()
+})
+
+it('preflight rejects a hook that denies unconditionally', async (): Promise<void> => {
+  // Both directions, not one. The real pause-gate.sh emits deny JSON and exits 0 when
+  // AITEAMOS_PAUSE_FLAG is unset -- its deliberate loud-misconfiguration path -- so a
+  // check asserting only "flag present => deny" passes a hook that gates nothing through
+  // by denying everything, and the run accomplishes nothing while looking armed.
+  await expect(preflightGate({ hookPath: alwaysDenyHook, flagPath })).rejects.toThrow()
+})
+
+it('preflight accepts a hook that discriminates', async (): Promise<void> => {
+  await expect(preflightGate({ hookPath: realGate, flagPath })).resolves.toBeUndefined()
 })
 
 it('refuses a relative settings path', () => {
@@ -607,6 +707,24 @@ it.each(REASONS)('produces valid JSON for reason %j', async (reason): Promise<vo
 
 The round-trip assertion is the point: it is not enough that the output parses, the reason must survive intact.
 
+Add the two discrimination cases alongside it, because Task 6's `preflightGate` asserts them and this is where the script itself is under test:
+
+```ts
+it('emits nothing and exits 0 when the flag is absent', async (): Promise<void> => {
+  const { stdout, code } = await runHook({ flagExists: false })
+  expect(stdout).toBe('')
+  expect(code).toBe(0)
+})
+
+it('denies loudly when AITEAMOS_PAUSE_FLAG is unset', async (): Promise<void> => {
+  const { stdout, code } = await runHook({ flagVar: undefined })
+  expect(JSON.parse(stdout).hookSpecificOutput.permissionDecision).toBe('deny')
+  expect(code).toBe(0)
+})
+```
+
+The second is existing behaviour, kept deliberately (ADR 0001 §2) — it is recorded here so the port does not lose it, and so it is visible *why* the pre-flight has to test both directions rather than just the deny.
+
 - [ ] **Step 2: Run it and watch it fail**
 
 Expected: FAIL on the quote, backslash, newline and tab cases — `printf` interpolation produces malformed JSON.
@@ -639,7 +757,7 @@ Spec §5.5. **Do not start this task if Task 1 found Q7 fails open** — report 
 - Test: `packages/providers/test/adapter-pause.test.ts`
 
 **Interfaces:**
-- Produces: `requestPause(runId: RunId): Promise<void>`; a `{ kind: 'terminated' }` event whose outcome reflects the kill; `PauseOutcome = 'paused' | 'finished_first'`.
+- Produces: `requestPause(runId: RunId): Promise<void>`; a `{ kind: 'terminated' }` event whose outcome reflects the kill; `PauseOutcome = 'paused' | 'finished_first' | 'gate_failed'`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -668,6 +786,17 @@ it('treats "pause requested, run finished anyway" as a normal outcome', async ()
   expect(outcome).toBe('finished_first')
 })
 
+it('reports gate_failed, not finished_first, when tool calls proceed after the flag is written', async (): Promise<void> => {
+  // Spec §5.5's runtime backstop. `finished_first` means "no further tool calls", which is
+  // benign; this fixture keeps making them with nothing denying, which is not. Conflating the
+  // two reports an ungated run as a clean finish -- the failure the Q9 measurement found.
+  const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'hook-fail-open'] })
+  await adapter.start(input)
+  await adapter.requestPause(input.runId)
+  const outcome = await adapter.awaitPause(input.runId, { deadlineMs: 2000 })
+  expect(outcome).toBe('gate_failed')
+})
+
 it('uses a per-run flag path so pausing one run cannot freeze another', async (): Promise<void> => {
   const a = await startRun({ runId: runIdA, pauseFlagPath: flagA })
   const b = await startRun({ runId: runIdB, pauseFlagPath: flagB })
@@ -679,11 +808,11 @@ it('uses a per-run flag path so pausing one run cannot freeze another', async ()
 
 - [ ] **Step 2: Run them, watch them fail, implement**
 
-`requestPause` writes the flag file. The stream reader, on the first `hook_denied` event, sends `SIGTERM` and escalates to `SIGKILL` after the grace period. `awaitPause` resolves `'paused'` when the process exits after a deny, or `'finished_first'` when the terminal `result` arrives without one — and clears the flag in both cases.
+`requestPause` writes the flag file. The stream reader, on the first `hook_denied` event, sends `SIGTERM` and escalates to `SIGKILL` after the grace period. `awaitPause` resolves `'paused'` when the process exits after a deny; `'finished_first'` when the terminal `result` arrives with no tool call after the flag write; and `'gate_failed'` when tool calls *did* occur after the flag write unaccompanied by a `hook_denied` or `hook_crashed` — spec §5.5's runtime backstop. The flag is cleared in all three cases. `gate_failed` is the pause path's entry into the pause gate failure of spec §13.1: cancel, `run.failed` + `guardrail.tripped`, count the attempt, halt the workspace.
 
 - [ ] **Step 3: Prove the tests bite**
 
-Remove the kill (let the deny pass through) — the first test must fail. Share one flag path between runs — the third must fail. Report run counts in both directions.
+Remove the kill (let the deny pass through) — the first test must fail. Collapse `gate_failed` into `finished_first` — the backstop test must fail. Share one flag path between runs — the last must fail. Report run counts in every direction.
 
 - [ ] **Step 4: Commit**
 
@@ -782,7 +911,7 @@ it('reports an agent busy when it holds a non-terminal run', async (): Promise<v
 
 - [ ] **Step 2: Run them, watch them fail, implement**
 
-`dependenciesDone` is computed in SQL from `TaskDependency`. `busy` comes from a non-terminal `AgentRun`. `stats.emergencyStopped` is `false` throughout M3.
+`dependenciesDone` is computed in SQL from `TaskDependency`. `busy` comes from a non-terminal `AgentRun`. `stats.emergencyStopped` is **`Workspace.haltedReason !== null`** — a pause gate failure sets it (spec §4, §13.1), and M8 adds the human-facing emergency stop on top of the same column. It is not hardcoded `false`.
 
 - [ ] **Step 3: Prove the role test bites**
 
@@ -919,7 +1048,19 @@ The last test is the one that matters most: ADR 0001 recorded a run reporting `i
 
 - [ ] **Step 3: Prove the denial mapping bites**
 
-Swap the `permission_denied` and `hook_denied` handlers — the second test must fail. Restore. Report run counts.
+Four mutations, because there are now four shapes to conflate (spec §5.3, §12.3), not two:
+
+1. Swap the `permission_denied` and `hook_denied` handlers — the denial test must fail.
+2. Map `hook_failed_open` onto `hook_crashed` — a test must fail. This is the dangerous
+   conflation: it reports a run that kept acting as one that stopped.
+3. Drop the `hook_event` guard so every `hook_response` is classified by `exit_code` — the
+   `Stop`-hook test from Task 4 must fail. Without that guard every healthy run ends in a
+   fabricated gate failure.
+4. Remove the workspace halt on a gate failure — a test must show a second uncontrollable run
+   starting on the next tick, and a further test must show the halt surviving a reload in a fresh
+   process (it is a `Workspace` column precisely so that it does).
+
+Restore after each. Report run counts.
 
 - [ ] **Step 4: Commit**
 
@@ -1128,7 +1269,7 @@ git add -A && git commit -m "feat(orchestrator): add the sweep and startup recon
 - Test: `apps/orchestrator/test/integration/cli.test.ts`
 
 **Interfaces:**
-- Produces: `tick`, `daemon`, `pause --run <id>`, `resume --run <id> [--message <text>]`, `cancel --run <id>`, `status`.
+- Produces: `tick`, `daemon`, `pause --run <id>`, `resume --run <id> [--message <text>]`, `cancel --run <id>`, `clear-halt --workspace <id>`, `status`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1146,11 +1287,20 @@ it('pauses a run and reports the outcome', async (): Promise<void> => {
 it('exits non-zero for an unknown run', async (): Promise<void> => {
   await expect(runCli(['pause', '--run', 'nope'])).rejects.toMatchObject({ code: 1 })
 })
+
+it('clears a workspace safety halt', async (): Promise<void> => {
+  await runCli(['clear-halt', '--workspace', workspaceId])
+  const ws = await prisma.workspace.findUniqueOrThrow({ where: { id: workspaceId } })
+  expect(ws.haltedReason).toBeNull()
+  expect(ws.haltedAt).toBeNull()
+})
 ```
 
 - [ ] **Step 2: Run them, watch them fail, implement**
 
 The daemon wires the periodic timer **and** the M2 `subscribeEvents` wake-up to the same `tick`. On shutdown it awaits the subscription's `close()`, which can take up to ~6.25 seconds — budget past that, do not race it.
+
+`clear-halt --workspace <id>` writes `haltedReason = null`, `haltedAt = null` and is the only thing that does — clearing is an operator action, never automatic (spec §11, §13.1). Its help text must make it unmistakable that it retracts a **workspace-wide safety halt** and starts nothing by itself, so that it cannot be read as a variant of `resume --run`, which continues one paused run. `status` prints any workspace halt with its reason alongside the run list: the halt reason lives in `Workspace.haltedReason`, because `decide()` surfaces only the guardrail *name* (`emergency_stop`) and that says nothing about the hook path that caused it.
 
 - [ ] **Step 3: Commit**
 

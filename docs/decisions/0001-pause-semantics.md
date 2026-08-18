@@ -98,9 +98,25 @@ Required flags for every run M3 spawns:
   a denial shape at all; it is listed here because it is trivially mistaken for one — Q9.
   **[Observed]**
 
-**`exit_code == 2`, exactly, is what distinguishes a blocking hook failure from a non-blocking one.**
-`outcome: "error"` does **not** mean the tool was blocked: all four of exit 1, 2, 126 and 127 report
-it, and only exit 2 blocks (findings §3.1, §6.3). **[Observed]**
+**All four shapes above are scoped to `hook_event === "PreToolUse"`.** This is not a caveat, it is
+part of the rule (added Fix Round 5, findings §3.4). Every one of the four captures ends with a
+routine `Stop` hook reporting `exit_code: 1` — a healthy line on a healthy run. Classifying it by
+`exit_code` without the scope reads it as a hook that failed open, on every run. `hook_event` is
+present on every `hook_response` line in every capture and is the field that scopes the rule.
+**[Observed]**
+
+**`exit_code == 2`, exactly, is what distinguishes a blocking hook failure from a non-blocking one
+— within `PreToolUse`.** `outcome: "error"` does **not** mean the tool was blocked: among the
+`PreToolUse` responses measured, exit 1, 2, 126 and 127 all report it, and only exit 2 blocks
+(findings §3.1, §6.3). **[Observed]**
+
+**`outcome` has at least three values, not two.** `"success"`, `"error"`, and `"cancelled"` —
+counted across the four captures: 24, 6 and 4. Every `"error"` is a `PreToolUse` response; every
+`"cancelled"` is a `Stop` response (findings §3.4). **[Observed]** What `"cancelled"` would mean on
+a `PreToolUse` response is **unmeasured**: it is a plausible shape for a cancelled or timed-out
+hook, and none of the captures contains one. This does not reopen the timeout question — §5.5's
+runtime backstop keys on whether tool calls proceeded after the flag was armed, which is answerable
+whatever shape the hook's own response takes.
 
 M3's stream parser must handle all four shapes and must not conflate them. The difference is
 operational, not cosmetic: a permission-mode denial means the run is misconfigured and will
@@ -116,8 +132,11 @@ still free to act. **[Decision, on observed evidence]**
 Four parser requirements follow from the captures. **[Observed]**
 
 1. `hook_response.output` is a **JSON-encoded string**, not a nested object. It needs a second parse.
-2. `hook_response` carries **no `tool_use_id`** — only `hook_name`. Correlate to a specific call via
-   the `tool_result` that follows it.
+2. `hook_response` carries **no `tool_use_id`**. Correlate to a specific call via the `tool_result`
+   that follows it. It is not otherwise sparse — every such line in the captures carries
+   `hook_name`, `hook_event`, `hook_id`, `exit_code`, `outcome`, `stdout`, `stderr`, `output`,
+   `uuid` and `session_id`. `hook_event` in particular is load-bearing: it is what scopes the
+   classification above to `PreToolUse`.
 3. The terminal `result` event's `permission_denials` array records every kind of block that
    actually blocked — permission-mode denials, hook denies, and blocking (exit-2) hook crashes —
    with `tool_name`, `tool_use_id`, and `tool_input`, and **cannot tell them apart** (M3 findings
@@ -440,8 +459,9 @@ recorded rather than guessed at, because the point of M0 was to replace guesses 
   timeout were **not** measured, and on Claude Code's documented convention those are *non-blocking
   warnings* — meaning `pause-gate.sh` would fail **open** if it ever failed in any way other than
   exit 2. `pause-gate.sh` has no exit-1 path, but "the script is missing or is not executable" is
-  exit 127 and is a real deployment failure. That residual is untested and is the largest remaining
-  risk in the pause mechanism; it was carried forward as Q9 and **Q9 is now resolved: they fail OPEN**. Also unmeasured: whether a crash blocks
+  exit 127 and is a real deployment failure. That residual was carried forward as **Q9 and is now
+  resolved there: they fail OPEN.** Read Q7 as bounded to exit code 2 and Q9 as the answer for
+  everything else. Also unmeasured: whether a crash blocks
   `Edit`, `Task`, `Skill`, or MCP tools (only `Bash`, `Write`, `Read` were crash-blocked), and
   whether a hook that exits 2 *with* stdout behaves the same.
 - **Q8 — RESOLVED: no. It does not partially apply; it does not apply at all.** A run was paused

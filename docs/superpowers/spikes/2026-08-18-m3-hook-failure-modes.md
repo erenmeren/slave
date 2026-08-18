@@ -353,10 +353,11 @@ denies were read-only, and findings §7's was a `Bash`. A denied `Edit` is now o
 
 ---
 
-## 3. Three incidental findings that change M3's parser
+## 3. Four incidental findings that change M3's parser
 
-None of these were the question asked. All three came out of the captures and all three affect code
-Task 8 and the adapter will write.
+None of these were the question asked. All four came out of the captures and all four affect code
+Task 8 and the adapter will write. The fourth (§3.4) was found in Fix Round 5, by re-reading the
+same captures rather than by running anything.
 
 ### 3.1 There is a THIRD `PreToolUse` outcome shape, and it blocks
 
@@ -364,9 +365,14 @@ ADR 0001 §4 names two denial shapes (permission-mode denial, hook deny). The Q7
 third, distinct from both. **[Observed]**
 
 > **CORRECTED in Fix Round 1.** The first version of this section said the discriminator between a
-> blocking crash and an allow is `outcome == "error"` / `exit_code != 0`. **Q9 refutes that.** All
-> of exit 1, 126 and 127 also report `outcome: "error"` and they **do not block**. The discriminator
-> is **`exit_code == 2`, exactly** — see §6. The table below now carries the fourth column.
+> blocking crash and an allow is `outcome == "error"` / `exit_code != 0`. **Q9 refutes that.** Among
+> the **`PreToolUse`** responses measured, exit 1, 126 and 127 also report `outcome: "error"` and
+> they **do not block**. The discriminator is **`exit_code == 2`, exactly** — see §6.
+>
+> **SCOPED in Fix Round 5.** That discriminator holds *within `PreToolUse`* and must not be applied
+> to the whole stream: every capture also ends with a routine `Stop` hook at `exit_code: 1`, which
+> is not a failure of anything (§3.4). The whole of this section is about
+> `hook_event === "PreToolUse"` responses. The table below carries the fourth column from Round 1.
 
 | | hook **deny** (Q8, L24) | hook **crash, blocking** (Q7, L12) | hook **failure, non-blocking** (Q9, L18/23/13) |
 |---|---|---|---|
@@ -391,6 +397,9 @@ Only `exit_code == 2` blocks. Deny / blocking-crash / non-blocking-failure are t
 things with three different operational meanings: the run is pausing as instructed; the gate is
 broken and the run must be failed loudly; the gate is broken **and did not stop anything**.
 
+**All of which is scoped to `hook_event === "PreToolUse"`.** Applied to every `hook_response` in the
+stream, trap 2 fires on a line that is present in all four captures and means nothing — see §3.4.
+
 ### 3.2 `hook_response` events can arrive AFTER the terminal `result` event
 
 Q7 capture, line 37 — the **last** line of the file, after `result` on line 35:
@@ -400,9 +409,24 @@ Q7 capture, line 37 — the **last** line of the file, after `result` on line 35
  "exit_code":0,"outcome":"success",...}
 ```
 
-That is claude-mem's `async: true` `Read` hook reporting late. The Q8 capture shows the same
-ordering (lines 26–27 arrive after the `Edit` deny, for a `Read` that completed earlier).
-**[Observed]**
+That is claude-mem's `async: true` `Read` hook reporting late. **[Observed]**
+
+> **CORRECTED in Fix Round 5.** This section originally cited Q8 lines 26–27 as the same ordering.
+> That citation was wrong: L26–27 *precede* Q8's terminal `result` at L33. They do demonstrate
+> something real, but a different thing — out-of-order **interleaving**, a `Read`'s hook responses
+> arriving after a *later* tool's deny — not arrival after `result`. Checking every capture rather
+> than reasoning from one, the after-`result` claim is in fact supported three times over:
+>
+> | Capture | `result` at | after it |
+> |---|---|---|
+> | q7 | L35 | L36 `Stop`, **L37 `PreToolUse:Read`** (async, exit 0) |
+> | q8 | L33 | L34 `Stop` — and nothing else |
+> | q9a | L31 | L32 `Stop`, **L33 `PostToolUse:Bash`** (async, exit 0) |
+> | q9b | L19 | L20 `Stop`, **L21 `PostToolUse:Bash`** (async, exit 0) |
+>
+> Three of the four captures place a genuine asynchronous `hook_response` after the terminal event,
+> and **all four** place the `Stop` hook's response there. The property is stronger than first
+> stated; only the Q8 citation was wrong. **[Observed]**
 
 M3 must not treat the `result` event as "the stream is closed, stop parsing", and must not assume
 `hook_started`/`hook_response` pairs are ordered or interleaved per tool call. Correlating a
@@ -416,6 +440,45 @@ identically for hook denies (Q8) and hook crashes (Q7), and in both probes the *
 was 0**. `permission_denials` non-empty is the only signal on the terminal event, and it cannot
 distinguish crash from deny (§3.1). The adapter must decide outcome from the event stream's live
 `hook_response` lines, not from the terminal event alone and not from the exit code. **[Observed]**
+
+### 3.4 Every run ends with a `Stop` hook at `exit_code: 1` — and a third `outcome` value
+
+Found in Fix Round 5 by re-reading all four captures for `hook_response` lines that are not
+`success`/0. The last such line in **every** capture is the same, and it is not a failure:
+
+| Capture | Line | `hook_name` | `hook_event` | `exit_code` | `outcome` |
+|---|---|---|---|---|---|
+| q7 | L36 | `Stop` | `Stop` | `1` | `"cancelled"` |
+| q8 | L34 | `Stop` | `Stop` | `1` | `"cancelled"` |
+| q9a | L32 | `Stop` | `Stop` | `1` | `"cancelled"` |
+| q9b | L20 | `Stop` | `Stop` | `1` | `"cancelled"` |
+
+Four of four. These are healthy runs — q8's ended with a correct pause, q9a's and q9b's completed
+their work — so `exit_code: 1` on a `Stop` hook is routine, not a fault. **[Observed]**
+
+**Two things follow, and the first is a defect this document would otherwise have caused.**
+
+1. **The `exit_code` classification of §3.1 and §6 is scoped to `hook_event === "PreToolUse"`.**
+   Stated as a rule over every `hook_response`, "non-zero and not 2 ⇒ failed open" matches this line
+   on every run ever. Under the consequences in §5, that cancels the run, fails it, and halts the
+   workspace — on all four of the runs that produced this evidence, and on every healthy run after
+   them. `hook_event` is the field that scopes it, and it is present on every `hook_response` line in
+   all four captures.
+2. **`outcome` has at least three values, not two.** `"success"`, `"error"`, and `"cancelled"`.
+   Counted across all four captures: 24 `success`, 6 `error`, 4 `cancelled`. Every `"error"` is a
+   `PreToolUse` response; every `"cancelled"` is a `Stop` response. **[Observed]**
+
+   Note the direction of the near-miss. The **round-0** discriminator I retracted
+   (`outcome === "error"`) would *not* have fired on these lines, because they are `"cancelled"`.
+   The **corrected** discriminator (`exit_code` non-zero and not 2) does. Fixing the fail-open bug
+   introduced this one, and only the `hook_event` scope removes both. That is worth stating plainly
+   rather than filing as a footnote: a correction is not automatically safe.
+
+**What `"cancelled"` means is unmeasured.** It is a plausible shape for a hook that was cancelled or
+timed out, and if so it is what a `PreToolUse` timeout would look like — but no `PreToolUse` response
+in these captures carries it, so its meaning for the gate is unknown. This does **not** reopen the
+timeout question: the runtime backstop keys on whether tool calls proceeded after the flag was
+armed, which is answerable whatever shape the hook's own response takes. Recorded and left.
 
 ---
 
@@ -640,6 +703,33 @@ Not designed here, per instruction: the shape of that check is the controller's 
 Task 6. The one thing the measurement does constrain is that a *static* check (does the path exist,
 is it `+x`) would catch 126 and 127 but **not** exit 1 — a hook that is present, executable, and
 broken. Only actually observing the hook fire distinguishes those.
+
+
+### 6.5 The pre-flight check must assert both directions (Fix Round 5)
+
+Local check of the real `spike/m0-pause-resume/pause-gate.sh`, no `claude` involved, all four
+environment states:
+
+| State | stdout | exit |
+|---|---|---|
+| `AITEAMOS_PAUSE_FLAG` set, flag file **present** | deny JSON | 0 |
+| `AITEAMOS_PAUSE_FLAG` set, flag file **absent** | *empty* | 0 |
+| `AITEAMOS_PAUSE_FLAG` **unset** | deny JSON (`"…is unset or empty — refusing to fall back…"`) | 0 |
+| `AITEAMOS_PAUSE_FLAG` **empty string** | deny JSON (same reason) | 0 |
+
+**[Observed]** The bottom two are `pause-gate.sh`'s deliberate loud-configuration-error path (ADR
+0001 §2), and they are why a one-directional pre-flight is insufficient. A check that only asserts
+"flag present ⇒ deny JSON, exit 0" passes for a hook that denies **everything** — including a run
+whose `AITEAMOS_PAUSE_FLAG` was never exported, which would then deny its first tool call and
+accomplish nothing while looking correctly gated.
+
+The check therefore asserts both directions:
+
+- flag present → deny JSON on stdout, exit 0;
+- flag absent → **empty stdout**, exit 0.
+
+Together they establish that the hook discriminates, which is the property the gate actually needs.
+Neither direction proves Claude Code will invoke it (§6.4).
 
 ---
 

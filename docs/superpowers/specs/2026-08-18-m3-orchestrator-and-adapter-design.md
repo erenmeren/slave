@@ -111,7 +111,12 @@ Reconciliation of run output is *not* in the tick. It runs continuously, per run
 - `start_run` → provision the worktree (§7), spawn the run (§5), write the `AgentRun` row. Note
   that `run.started` is **not** emitted here: its payload requires `sessionId`, which does not
   exist until the child's first `system/init` line. It is emitted when that line arrives (§5.4).
-- `halt` → emit `guardrail.tripped` and stop scheduling for that workspace this tick.
+- `halt` → stop scheduling for that workspace this tick, and emit `guardrail.tripped` **on the
+  transition into halted, not on every tick that observes it**. `decide()` returns `halt` on every
+  tick while the condition holds; at the default 1000ms period a persistent workspace halt (§13.1)
+  that waits for an operator would otherwise write one event per second, forever, into an
+  append-only log. The scheduling stop is per tick because the decision is; the event is per
+  transition because the *news* is.
 
 **Two things in this spec are called "halt", and they are not the same thing.** Naming them apart
 here because conflating them is how the per-tick one gets used for the persistent one:
@@ -226,8 +231,10 @@ The child emits NDJSON. Five properties were measured and the parser must respec
 
 1. `hook_response.output` is a **JSON-encoded string**, not a nested object. It needs a second
    parse.
-2. `hook_response` carries **no `tool_use_id`**, only `hook_name`. Correlation to a specific call
-   goes through the `tool_result` that follows it.
+2. `hook_response` carries **no `tool_use_id`**. Correlation to a specific call goes through the
+   `tool_result` that follows it. The line is not otherwise sparse — it carries `hook_name`,
+   **`hook_event`**, `hook_id`, `exit_code`, `outcome`, `stdout`, `stderr`, `output`, `uuid` and
+   `session_id`. `hook_event` is the field the classification below is scoped by.
 3. The terminal `result` event's `permission_denials` array is accurate but arrives at the end.
    It is checkpoint material, never a live signal.
 4. `permission_denials` **cannot distinguish a hook crash from a genuine deny.** A blocking crash
@@ -240,24 +247,37 @@ The child emits NDJSON. Five properties were measured and the parser must respec
    deny for a pending call always precedes that call's `tool_result`. That ordering, not stream
    position, is what property 2's correlation relies on.
 
-**Four outcome shapes, never conflated. The discriminator is `exit_code`, never `outcome`.**
+**Four outcome shapes, never conflated. The discriminator is `exit_code`, never `outcome` — and the
+whole classification applies only where `hook_event === "PreToolUse"`.**
+
+The scope is load-bearing, not defensive. Every measured run ends with a routine `Stop` hook
+reporting `exit_code: 1`; classified by `exit_code` alone it reads as the fourth row below, so an
+unscoped parser declares a broken gate at the end of **every healthy run**. Match `hook_event`
+first, and classify only then.
 
 | Shape | Signal | Tool ran? | Meaning → mapping |
 |---|---|---|---|
 | Permission-mode denial | `system/permission_denied` | no | The run is misconfigured and will accomplish nothing → `guardrail.tripped` |
-| Hook deny | `hook_response` `exit_code === 0`, `output` parses to `permissionDecision: "deny"` | no | The run is pausing as instructed → the pause path in §5.5 → `run.paused` |
-| Hook crash, blocking | `hook_response` `exit_code === 2` | no | The gate is broken **and the run stopped** → pause gate failure (§13.1). Never `paused`: nothing is waiting to be resumed |
-| Hook failure, fails open | `hook_response` `exit_code` non-zero and **not** 2 (measured: 1, 126, 127) | **yes** | The gate is broken **and the tool ran** → pause gate failure (§13.1), reported distinctly from the row above |
+| Hook deny | `hook_event: "PreToolUse"`, `exit_code === 0`, `output` parses to `permissionDecision: "deny"` | no | The run is pausing as instructed → the pause path in §5.5 → `run.paused` |
+| Hook crash, blocking | `hook_event: "PreToolUse"`, `exit_code === 2` | no | The gate is broken **and the run stopped** → pause gate failure (§13.1). Never `paused`: nothing is waiting to be resumed |
+| Hook failure, fails open | `hook_event: "PreToolUse"`, `exit_code` non-zero and **not** 2 (measured: 1, 126, 127) | **yes** | The gate is broken **and the tool ran** → pause gate failure (§13.1), reported distinctly from the row above |
+| *(not a shape)* any other `hook_event` | `SessionStart`, `UserPromptSubmit`, `PostToolUse`, `Stop` | n/a | **Ignored.** `Stop` reports `exit_code: 1`, `outcome: "cancelled"` on every healthy run |
 
 The last two must not share a variant. One means the run stopped and cannot be resumed; the other
 means the run continued with no gate at all, and a side effect has already landed. An operator told
 "the gate broke" needs to know which of those happened, and a resume path must never be offered for
 the second.
 
-**`outcome: "error"` does not mean the tool was blocked.** All of `exit_code` 1, 2, 126 and 127
-report it, and only 2 blocks. A classifier keyed on `outcome` would label a fail-open failure as a
-blocking crash — reporting a run as safely stopped at the moment nothing is stopping it. Key on
-`exit_code === 2`, exactly.
+**`outcome: "error"` does not mean the tool was blocked.** Among `PreToolUse` responses, all of
+`exit_code` 1, 2, 126 and 127 report it, and only 2 blocks. A classifier keyed on `outcome` would
+label a fail-open failure as a blocking crash — reporting a run as safely stopped at the moment
+nothing is stopping it. Key on `exit_code === 2`, exactly, inside the `PreToolUse` scope.
+
+**`outcome` has at least three values.** `"success"`, `"error"` and `"cancelled"`; the third belongs
+to the `Stop` hook in every capture. Treat the set as open rather than exhaustive: an unrecognized
+`outcome` on a `PreToolUse` response is a line the parser has never seen, and §13.1 — not a guess —
+decides what that means. `"cancelled"` is a plausible shape for a cancelled or timed-out hook, and
+its meaning for `PreToolUse` is unmeasured.
 
 An orchestrator that reads the permission-mode denial as a hook deny waits forever to resume a run
 that never paused; one that reads either hook failure as a hook deny reports `run.paused` for a run
@@ -323,13 +343,25 @@ ever be emitted, and the operator would watch a "pausing" run keep working. M3 g
 settings file and its hook path per run, so this is reachable from a single path bug. Two checks
 guard it, and they are not interchangeable.
 
-**Pre-flight, before a run is considered pausable.** Execute the hook script directly with a flag
-file present and assert that it emits deny JSON on stdout and exits 0. It is free, local, and
-synchronous, and it catches the whole deployment class at once: a missing path, a missing execute
-bit, a script broken badly enough to fail on its own, and a script whose deny payload no longer
-parses. **What it does not prove is that Claude Code will actually invoke it** — a correct script
-registered under a matcher that never matches, or in a settings file the CLI does not load, passes
-this check and gates nothing. It is a cheap necessary condition, not a sufficient one.
+**Pre-flight, before a run is considered pausable.** Execute the hook script directly, **twice**,
+and assert both directions:
+
+- flag file **present** → deny JSON on stdout, exit 0;
+- flag file **absent** → **empty stdout**, exit 0.
+
+One direction is not enough, and the measured script is the proof: with `AITEAMOS_PAUSE_FLAG` unset
+or empty, `pause-gate.sh` correctly emits deny JSON and exits 0 — its deliberate loud-configuration
+-error path. A pre-flight asserting only the deny direction therefore passes a hook that denies
+**everything**, including a run whose flag variable was never exported, which would deny its first
+tool call and accomplish nothing while looking perfectly gated. Asserting both directions
+establishes that the hook *discriminates*, which is the property the gate needs.
+
+The check is free, local and synchronous, and it catches the whole deployment class at once: a
+missing path, a missing execute bit, a script broken badly enough to fail on its own, a script whose
+deny payload no longer parses, and a script that denies unconditionally. **What it does not prove is
+that Claude Code will actually invoke it** — a correct script registered under a matcher that never
+matches, or in a settings file the CLI does not load, passes this check and gates nothing. It is a
+cheap necessary condition, not a sufficient one.
 
 **Runtime backstop, and this is the one that matters.** If tool calls are observed in the stream
 after the pause flag was written, and no deny or blocking crash accompanied them, the gate is
@@ -549,8 +581,11 @@ model is faked.
 
 ### 12.2 Real-`claude` tests
 
-A separate vitest project, outside `npm test`, invoked explicitly. It holds the Q7/Q8/Q9 measurements
-(§14) and one end-to-end smoke run. These cost money and are not deterministic; they are a gate a
+A separate vitest project, outside `npm test`, invoked explicitly. It holds one end-to-end smoke
+run. **Q7, Q8 and Q9 are not in it**: they were settled ahead of the adapter by shell probes against
+the real CLI and are closed (§14) — re-running them would spend money to re-derive a recorded
+answer. What belongs here is behaviour that must keep working, not measurements that already
+happened. These cost money and are not deterministic; they are a gate a
 human runs, not a suite CI runs.
 
 ### 12.3 What must be mutation-proved
@@ -610,7 +645,9 @@ Four behaviours, in order:
 4. **Halt scheduling for that workspace** — write `Workspace.haltedReason` and `haltedAt` (§10).
    This is the persistent workspace halt of §3.2, **not** `decide()`'s per-tick `halt` command.
    Implementing it against the command would expire it one tick later and start another
-   uncontrollable run a second after the first was cancelled.
+   uncontrollable run a second after the first was cancelled. The `guardrail.tripped` for the halt
+   is emitted **once, on the transition** — see §3.2; a halt that waits for an operator would
+   otherwise emit one event per second for as long as nobody is looking.
 
 **Why the halt, and not just the failure.** A broken gate is almost always a misconfiguration
 shared by every run in the workspace — one wrong absolute path in generated settings — so the next
@@ -629,12 +666,15 @@ distinction survives all the way to what the operator reads.
 
 **Consequences for two of the other classes.**
 
-- **Unrecognized stream line.** A `hook_response` whose `output` does not parse as inner JSON is
-  **not** an unrecognized line — it is a hook crash, and §5.3 classifies every `hook_response` by
-  `exit_code`. Dropping it as unparsable would silently reclassify a broken gate as stream noise,
-  which is the same conflation in a different place. Only genuinely unknown line *shapes* fall to
-  the drop-and-record rule, and "the run continues" is safe only because a dropped line is not a
-  gate signal.
+- **Unrecognized stream line.** A `PreToolUse` `hook_response` whose `output` does not parse as
+  inner JSON is **not** an unrecognized line — it is a hook crash, and §5.3 classifies every
+  `hook_event: "PreToolUse"` response by `exit_code`. Dropping it as unparsable would silently
+  reclassify a broken gate as stream noise, which is the same conflation in a different place. Only
+  genuinely unknown line *shapes* fall to the drop-and-record rule, and "the run continues" is safe
+  only because a dropped line is not a gate signal. Note the converse with equal care: a
+  `hook_response` for any *other* `hook_event` is neither a gate signal nor an unrecognized line —
+  it is a recognized line this class does not act on. `Stop` reports `exit_code: 1` on every healthy
+  run (§5.3).
 - **Run terminal failure.** That class reads the terminal `result` event, which is blind to gate
   health: a fail-open run ends `is_error: false`, `terminal_reason: "completed"`, child exit code 0
   and `permission_denials: []` (§5.3). Left to that class alone, an ungated run is recorded as a
