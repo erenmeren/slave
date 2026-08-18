@@ -84,6 +84,12 @@ A rejection (`run_failed`, `verify_failed`, `review_rejected`, `merge_failed`) i
 shared `reject()` helper: it goes to `rework` while `attempt < maxAttempts`, and to `failed` once
 attempts are exhausted, always clearing `activeRunId` and setting `lastRejectionReason`.
 
+`TaskState.maxAttempts` (seeded per task by `initialTaskState(maxAttempts)`) and
+`GuardrailLimits.maxAttempts` (`DEFAULT_GUARDRAIL_LIMITS`, currently `3`) are independent numbers
+today — nothing in the code links them. Task creation must seed the former from the latter; until
+a caller does so, a task can legally be created with a `maxAttempts` that disagrees with the
+workspace's guardrail limit.
+
 | From status | Event | To status | Notes |
 |---|---|---|---|
 | `backlog`, `blocked` | `dependencies_satisfied` | `ready` | |
@@ -221,6 +227,12 @@ shared `Brand<T, B>` helper, with one constructor each (`agentId`, `taskId`, `ru
 `workspaceId`) that casts a plain `string` into the branded type. These prevent, at the type
 level, passing e.g. a `TaskId` where a `RunId` is expected, without adding any runtime
 representation beyond a string.
+
+Branding stops at the event boundary: `events/schema.ts` types `taskId`/`agentId`/`runId`/
+`workspaceId` as plain `string` (so, for example, `ExecutionEvent['taskId']` is
+`string | undefined`, not `TaskId | undefined`), meaning M2 consumers reading events back out
+will need to re-brand these fields before passing them to functions that expect the branded
+types.
 
 ## Environment note: `npm test` / `npm run typecheck` and `allow-scripts`
 

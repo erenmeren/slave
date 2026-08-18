@@ -2531,6 +2531,15 @@ written. M1 is complete only when all four are true.
   union is the designed extension point.
 - **Skill and permission models** — no behaviour is exercised by M1's decision functions beyond
   `requiredRole`. They enter in M2 with the schema.
+- **QA-review runs are unrepresentable in M1.** The task machine enters and leaves `reviewing`,
+  but there is no `run_started` transition from `reviewing`, `activeRunId` is null there, and
+  `reviewing` is not in the scheduler's `STARTABLE` set — so the independent QA agent run over
+  the diff (spec D6/§9.5) cannot be scheduled. It needs the review-run model M2 adds.
+- **Guardrails cannot express "pause active runs".** `GuardrailBreach` carries only
+  `haltsScheduling`, and `Command` has no pause variant, but spec §9.2 requires budget breach and
+  emergency stop to pause every active run. Combined with the M1-accepted `concurrency → halt`
+  conflation, `halt` currently carries three distinct meanings; M2 must split the reason and add
+  the pause command.
 
 ## Next Plan
 
