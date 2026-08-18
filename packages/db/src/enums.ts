@@ -17,6 +17,15 @@ export const EVENT_TYPE_BY_DOMAIN_TYPE = {
   'run.resumed': 'run_resumed',
   'agent.message_sent': 'agent_message_sent',
   'guardrail.tripped': 'guardrail_tripped',
+  'task.verifying': 'task_verifying',
+  'task.verify_passed': 'task_verify_passed',
+  'task.verify_failed': 'task_verify_failed',
+  'task.failed': 'task_failed',
+  'run.output': 'run_output',
+  'run.pause_requested': 'run_pause_requested',
+  'run.stopped': 'run_stopped',
+  'run.succeeded': 'run_succeeded',
+  'run.failed': 'run_failed',
 } as const satisfies Record<DomainEventType, string>
 
 export type DbEventType = (typeof EVENT_TYPE_BY_DOMAIN_TYPE)[DomainEventType]

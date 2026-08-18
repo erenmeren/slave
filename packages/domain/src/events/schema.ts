@@ -42,6 +42,23 @@ export const executionEventSchema = z.discriminatedUnion('type', [
     type: z.literal('guardrail.tripped'),
     payload: z.object({ guardrail: z.string(), detail: z.string() }),
   }),
+  z.object({ ...envelope, type: z.literal('task.verifying'), payload: z.object({ commandCount: z.number().int() }) }),
+  z.object({ ...envelope, type: z.literal('task.verify_passed'), payload: z.object({ branch: z.string() }) }),
+  z.object({
+    ...envelope,
+    type: z.literal('task.verify_failed'),
+    payload: z.object({ command: z.string(), exitCode: z.number().int() }),
+  }),
+  z.object({ ...envelope, type: z.literal('task.failed'), payload: z.object({ reason: z.string() }) }),
+  z.object({ ...envelope, type: z.literal('run.output'), payload: z.object({ text: z.string() }) }),
+  z.object({ ...envelope, type: z.literal('run.pause_requested'), payload: z.object({ requestedBy: z.string() }) }),
+  z.object({ ...envelope, type: z.literal('run.stopped'), payload: z.object({ reason: z.string() }) }),
+  z.object({
+    ...envelope,
+    type: z.literal('run.succeeded'),
+    payload: z.object({ numTurns: z.number().int(), costUsd: z.number() }),
+  }),
+  z.object({ ...envelope, type: z.literal('run.failed'), payload: z.object({ reason: z.string() }) }),
 ])
 
 export type ExecutionEvent = z.infer<typeof executionEventSchema>

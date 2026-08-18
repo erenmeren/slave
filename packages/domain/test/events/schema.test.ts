@@ -105,6 +105,30 @@ describe('parseExecutionEvent', () => {
     expect(result.ok).toBe(false)
   })
 
+  it('parses each event type M3 adds', () => {
+    const base = {
+      seq: 1,
+      ts: new Date().toISOString(),
+      workspaceId: 'w1',
+      actor: 'system' as const,
+    }
+    const cases = [
+      { type: 'task.verifying', payload: { commandCount: 2 } },
+      { type: 'task.verify_passed', payload: { branch: 'aiteamos/TASK-001-x' } },
+      { type: 'task.verify_failed', payload: { command: 'npm test', exitCode: 1 } },
+      { type: 'task.failed', payload: { reason: 'attempt cap reached' } },
+      { type: 'run.output', payload: { text: 'hello' } },
+      { type: 'run.pause_requested', payload: { requestedBy: 'operator' } },
+      { type: 'run.stopped', payload: { reason: 'cancelled' } },
+      { type: 'run.succeeded', payload: { numTurns: 4, costUsd: 0.12 } },
+      { type: 'run.failed', payload: { reason: 'worktree provisioning failed' } },
+    ]
+    for (const c of cases) {
+      const parsed = parseExecutionEvent({ ...base, ...c })
+      expect(parsed.ok, `${c.type} should parse`).toBe(true)
+    }
+  })
+
   it('rejects an empty workspaceId', () => {
     const result = parseExecutionEvent({
       ...BASE,
