@@ -48,8 +48,9 @@ them as plain `string` — so `toExecutionEvent` re-brands `row.taskId` / `row.a
 `appendEvent` (`packages/events/src/append.ts`) is the only function in this codebase that writes
 an `ExecutionEvent`. `packages/db` does not export the raw Prisma client from its package root;
 the client lives behind the `@ai-team-os/db/client` subpath declared in `packages/db/package.json`'s
-`exports` map, and `packages/events` is the one module that imports it. This is enforced by not
-providing an alternative, not by a runtime check.
+`exports` map, and `packages/events` is the one package that imports it — from `append.ts`,
+`read.ts`, and two integration tests. This is enforced by not providing an alternative, not by a
+runtime check.
 
 Inside a single `prisma.$transaction`:
 

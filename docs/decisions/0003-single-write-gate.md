@@ -8,8 +8,8 @@
 
 `appendEvent()` in `packages/events` is the only write path to `ExecutionEvent`. It inserts,
 validates the returned row against the domain's Zod union, and issues `pg_notify` — all inside one
-transaction. `packages/db` does not export the Prisma client from its barrel; the one module that
-needs it imports `@ai-team-os/db/client` explicitly.
+transaction. `packages/db` does not export the Prisma client from its barrel; the one package that
+needs it (`packages/events`) imports `@ai-team-os/db/client` explicitly.
 
 ## Rationale
 
