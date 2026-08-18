@@ -219,15 +219,25 @@ function parseResultLine(raw: unknown, line: string): RuntimeEvent {
   // success is worse than the reverse.
   const terminalReasonSource = data.terminal_reason ?? data.subtype
   let terminalReason: string
-  if (terminalReasonSource !== undefined && data.num_turns !== undefined && data.total_cost_usd !== undefined) {
+  if (
+    terminalReasonSource !== undefined &&
+    data.is_error !== undefined &&
+    data.num_turns !== undefined &&
+    data.total_cost_usd !== undefined
+  ) {
     terminalReason = terminalReasonSource
   } else {
     // `total_cost_usd` feeds the budget guardrail, so a defaulted (0) cost
     // must never look like a real, cheap run -- the degradation is folded
     // into `terminalReason` rather than silently zeroed, since `RunOutcome`
-    // gets no new field to carry it separately.
+    // gets no new field to carry it separately. `is_error` belongs in this
+    // same check: the pump maps `terminated` onto `run.succeeded` /
+    // `run.failed` using `is_error`, with `terminalReason` as the reason --
+    // a defaulted `isError: true` with no trace here would produce a
+    // `run.failed` whose own explanation reads like a normal completion.
     const missing: string[] = []
     if (terminalReasonSource === undefined) missing.push('terminal_reason')
+    if (data.is_error === undefined) missing.push('is_error')
     if (data.num_turns === undefined) missing.push('num_turns')
     if (data.total_cost_usd === undefined) missing.push('total_cost_usd')
     terminalReason = `${terminalReasonSource ?? 'unknown'} (degraded result line, missing: ${missing.join(', ')})`

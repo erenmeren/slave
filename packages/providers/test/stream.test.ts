@@ -282,18 +282,44 @@ describe('parseStreamLine', () => {
   it('still produces terminated for a result line carrying only subtype', () => {
     // A result line must always produce terminated -- the alternative is the orchestrator
     // waiting on a process that has already exited. is_error defaults to true (a run whose
-    // success cannot be established is not a success), num_turns/total_cost_usd default to 0
-    // with the undercount surfaced in terminalReason rather than silently zeroed, since
-    // total_cost_usd feeds the budget guardrail.
+    // success cannot be established is not a success); every defaulted field -- is_error
+    // included -- is named in terminalReason rather than silently applied, since
+    // total_cost_usd feeds the budget guardrail and is_error feeds the pump's
+    // succeeded/failed split downstream.
     const line = JSON.stringify({ type: 'result', subtype: 'error_max_turns' })
     expect(parseStreamLine(line)).toEqual({
       kind: 'terminated',
       outcome: {
         isError: true,
-        terminalReason: 'error_max_turns (degraded result line, missing: num_turns, total_cost_usd)',
+        terminalReason: 'error_max_turns (degraded result line, missing: is_error, num_turns, total_cost_usd)',
         stopReason: null,
         numTurns: 0,
         costUsd: 0,
+        deniedToolUseIds: [],
+      },
+    })
+  })
+
+  it('names is_error as defaulted when it alone is missing, rather than reading as a clean success', () => {
+    // The pump (a later task) maps `terminated` onto run.succeeded/run.failed using isError,
+    // with terminalReason as the reason. Without this, a result line missing only is_error
+    // would default to isError: true with terminalReason left untouched -- a run.failed whose
+    // own explanation reads like a normal completion, with nothing recording the default.
+    const line = JSON.stringify({
+      type: 'result',
+      terminal_reason: 'completed',
+      stop_reason: 'end_turn',
+      num_turns: 4,
+      total_cost_usd: 0.12,
+    })
+    expect(parseStreamLine(line)).toEqual({
+      kind: 'terminated',
+      outcome: {
+        isError: true,
+        terminalReason: 'completed (degraded result line, missing: is_error)',
+        stopReason: 'end_turn',
+        numTurns: 4,
+        costUsd: 0.12,
         deniedToolUseIds: [],
       },
     })
