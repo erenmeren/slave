@@ -2767,7 +2767,7 @@ the broken line and confirm `exit=0` again with a clean `git status`.
 
 `README.md`:
 
-```markdown
+````markdown
 # AI Team OS
 
 An autonomous AI engineering team: agents plan, implement, verify, review and merge real work in
@@ -2806,7 +2806,7 @@ That last line is per-clone and is what wires the pre-push hook that runs typech
 
 Integration tests require Postgres to be running. They **fail** rather than skip when it is not:
 a suite that skips reports success for work it did not do.
-```
+````
 
 - [ ] **Step 4: Write the event model document**
 
