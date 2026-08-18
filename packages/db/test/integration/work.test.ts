@@ -1,9 +1,22 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { prisma } from '../../src/client.js'
 
+/**
+ * `maxAttempts` is deliberately 5, not the schema default of 3. A workspace left on the default
+ * makes the "carries maxAttempts from the workspace" assertion below indistinguishable from the
+ * column default doing the work, which is the same confound the seed carries a warning about
+ * (`packages/db/src/seed.ts`). Do not "tidy" this back to 3.
+ */
+const WORKSPACE_MAX_ATTEMPTS = 5
+
 async function seedWorkspace(): Promise<{ workspaceId: string; agentId: string; maxAttempts: number }> {
   const workspace = await prisma.workspace.create({
-    data: { name: 'Checkout Platform', repoPath: '/tmp/checkout', verifyCommand: 'npm test' },
+    data: {
+      name: 'Checkout Platform',
+      repoPath: '/tmp/checkout',
+      verifyCommand: 'npm test',
+      maxAttempts: WORKSPACE_MAX_ATTEMPTS,
+    },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
   const agent = await prisma.agent.create({ data: { teamId: team.id, name: 'Alex', role: 'Backend' } })
@@ -30,7 +43,10 @@ describe('work tables', () => {
 
     expect(task.status).toBe('backlog')
     expect(task.attempt).toBe(0)
-    expect(task.maxAttempts).toBe(3)
+    // 5, the workspace's value — and specifically not 3, the column default, which is what this
+    // assertion used to be satisfied by no matter where the number came from.
+    expect(task.maxAttempts).toBe(WORKSPACE_MAX_ATTEMPTS)
+    expect(task.maxAttempts).not.toBe(3)
   })
 
   it('refuses a task row with no maxAttempts', async () => {

@@ -55,6 +55,7 @@ export const RUN_STATUSES = [
   'failed',
 ] as const
 
+/** Every Actor, as data. Pinned to the domain by the assertions below, same as the two above. */
 export const ACTORS = ['human', 'agent', 'system'] as const
 
 /**
@@ -72,6 +73,12 @@ type _TaskStatusesComplete = Exclude<TaskStatus, (typeof TASK_STATUSES)[number]>
 type _TaskStatusesSound = Exclude<(typeof TASK_STATUSES)[number], TaskStatus>
 type _RunStatusesComplete = Exclude<RunStatus, (typeof RUN_STATUSES)[number]>
 type _RunStatusesSound = Exclude<(typeof RUN_STATUSES)[number], RunStatus>
+// The domain exports no standalone `Actor` alias, but it does not need to: `ExecutionEvent['actor']`
+// is the union, indexed the same way `DomainEventType` is at the top of this file. Spec §5.1 names
+// the domain as Actor's source of truth, and the runtime parity test only compares ACTORS against
+// the *database* — without these two lines nothing pins it to the domain at all.
+type _ActorsComplete = Exclude<ExecutionEvent['actor'], (typeof ACTORS)[number]>
+type _ActorsSound = Exclude<(typeof ACTORS)[number], ExecutionEvent['actor']>
 
 type AssertNever<T extends never> = T
 
@@ -79,3 +86,5 @@ type _AssertTaskStatusesComplete = AssertNever<_TaskStatusesComplete>
 type _AssertTaskStatusesSound = AssertNever<_TaskStatusesSound>
 type _AssertRunStatusesComplete = AssertNever<_RunStatusesComplete>
 type _AssertRunStatusesSound = AssertNever<_RunStatusesSound>
+type _AssertActorsComplete = AssertNever<_ActorsComplete>
+type _AssertActorsSound = AssertNever<_ActorsSound>
