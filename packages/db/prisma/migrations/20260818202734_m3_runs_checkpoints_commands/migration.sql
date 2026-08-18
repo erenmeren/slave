@@ -6,7 +6,10 @@ ADD COLUMN     "worktreePath" TEXT;
 -- AlterTable
 -- `verifyCommands`/`setupCommands` are NOT NULL here, which is a deliberate departure from
 -- Prisma's own generated DDL for a required String[] with no @default (which is a plain nullable
--- TEXT[] — Prisma enforces "required" only at the client's create-input level, not the column).
+-- TEXT[]). Prisma leaves the field optional in the generated create-input type too — see
+-- `verifyCommands?: ...` / `setupCommands?: ...` on `WorkspaceCreateInput` in
+-- `packages/db/src/generated/models/Workspace.ts` — so nothing before the database enforces
+-- this at all; the NOT NULL column is the only real check.
 -- The departure is intentional: an empty verifyCommands is not a neutral default here, it is a
 -- refusal to ever let a task on this workspace verify as complete (see Workspace.verifyCommands
 -- in schema.prisma). A caller that forgets the field should fail loudly at creation, not silently
