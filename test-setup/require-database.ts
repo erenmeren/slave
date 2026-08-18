@@ -5,6 +5,7 @@ import { beforeAll } from 'vitest'
 if (existsSync('.env')) {
   process.loadEnvFile('.env')
 }
+process.env['DATABASE_URL'] = process.env['TEST_DATABASE_URL']
 
 beforeAll(async (): Promise<void> => {
   const url = process.env['TEST_DATABASE_URL']

@@ -1,0 +1,84 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum TaskStatus {
+  backlog
+  ready
+  blocked
+  assigned
+  running
+  verifying
+  reviewing
+  merging
+  rework
+  done
+  failed
+  cancelled
+}
+
+enum RunStatus {
+  starting
+  working
+  pause_requested
+  paused
+  resuming
+  stopping
+  stopped
+  succeeded
+  failed
+}
+
+enum Actor {
+  human
+  agent
+  system
+}
+
+model Workspace {
+  id            String   @id @default(uuid())
+  name          String
+  repoPath      String
+  baseBranch    String   @default("main")
+  verifyCommand String
+  autoMerge     Boolean  @default(false)
+
+  maxConcurrentRuns       Int   @default(3)
+  budgetUsd               Float @default(20)
+  runTimeoutMs            Int   @default(1800000)
+  maxToolCallsPerRun      Int   @default(200)
+  maxAttempts             Int   @default(3)
+  consecutiveFailureLimit Int   @default(3)
+
+  createdAt DateTime @default(now())
+
+  teams Team[]
+}
+
+model Team {
+  id          String @id @default(uuid())
+  workspaceId String
+  name        String
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  agents    Agent[]
+
+  @@index([workspaceId])
+}
+
+model Agent {
+  id           String  @id @default(uuid())
+  teamId       String
+  name         String
+  role         String
+  requiredRole String?
+
+  team Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@index([teamId])
+}
