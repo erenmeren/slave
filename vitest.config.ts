@@ -2,6 +2,13 @@ import { defineConfig } from 'vitest/config'
 
 export default defineConfig({
   test: {
+    // `fileParallelism` sizes the shared worker pool and only takes effect at
+    // this root level — Vitest documents and reads it as a top-level/CLI
+    // option. Setting it inside a single project's `test` block is silently
+    // ignored by the scheduler, which let the "integration" project's test
+    // files run concurrently against the shared Postgres database and
+    // deadlock on overlapping TRUNCATE/INSERT statements.
+    fileParallelism: false,
     projects: [
       {
         test: {
@@ -18,7 +25,6 @@ export default defineConfig({
           exclude: ['**/node_modules/**'],
           environment: 'node',
           setupFiles: ['./test-setup/require-database.ts'],
-          fileParallelism: false,
           poolOptions: { threads: { singleThread: true } },
         },
       },
