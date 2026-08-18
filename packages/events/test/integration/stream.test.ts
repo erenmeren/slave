@@ -94,7 +94,13 @@ describe('createEventStream', () => {
     // never see a duplicate arrive on a later tick — this fixed wait is what makes that visible.
     await wait(500)
     expect(seen.map((e) => e.type)).toEqual(['task.started'])
-  }, 10_000)
+    // 20s, not 10s. The in-test budget is [setup] + 5000ms of expect.poll + 500ms of settling, so
+    // a setup slower than ~4.5s used to convert a legible `expect.poll` failure ("seen.length is
+    // still 0") into an opaque "test timed out in 10000ms" that says nothing about which
+    // assertion was unsatisfied. This hides no failure: every assertion inside keeps its own
+    // tight timeout. It only guarantees that the next occurrence of the timing flake reports
+    // what it saw. (Observed once; not reproduced in the eight runs after.)
+  }, 20_000)
 
   it('delivers an event that was never announced, via the fallback poll, exactly once after settling', async () => {
     const seen: ExecutionEvent[] = []
@@ -114,7 +120,8 @@ describe('createEventStream', () => {
     // Settle past at least two more 300ms ticks so a duplicate delivery has time to show up.
     await wait(700)
     expect(seen.map((e) => e.type)).toEqual(['task.done'])
-  }, 10_000)
+    // 20s for the same reason as the test above: keep the inner expect.poll the thing that fails.
+  }, 20_000)
 
   it('defaults the poll interval to five seconds, too slow to be the transport', () => {
     expect(DEFAULT_POLL_INTERVAL_MS).toBe(5000)

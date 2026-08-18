@@ -54,6 +54,16 @@ export async function createEventStream(options: EventStreamOptions): Promise<Ev
           // packages/domain/src/docs/superpowers/specs/2026-08-18-m2-persistence-and-events-design.md
           // §6.4, and the parent spec's single-writer rule at §3.1. This assumption is silent and
           // load-bearing — a second writer breaks it with no error and no failing test.
+          //
+          // Deliberately advance *before* delivering, not after. Both orderings lose something:
+          // advance-then-deliver permanently skips an event whose `onEvent` throws (an SSE
+          // `res.write` onto a half-closed socket is the realistic case), while
+          // deliver-then-advance re-delivers that event on every subsequent notification and poll
+          // tick, forever, against a consumer that is permanently failing. A stuck stream that
+          // never makes progress is the worse failure, and the consumer — not this layer — is the
+          // only party that can know whether its own write failure is retryable, so the skip is
+          // the cost we accept. A consumer that cannot afford to lose an event must not throw out
+          // of `onEvent`; it should catch, and resume from its own last-delivered `seq`.
           lastSeq = Math.max(lastSeq, event.seq)
           options.onEvent(event)
         }

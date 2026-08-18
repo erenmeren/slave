@@ -1,5 +1,5 @@
 import { EVENT_TYPE_BY_DOMAIN_TYPE, toExecutionEvent, type DomainEventType } from '@ai-team-os/db'
-import { prisma } from '@ai-team-os/db/client'
+import { prisma, type Prisma } from '@ai-team-os/db/client'
 import type { ExecutionEvent } from '@ai-team-os/domain'
 
 export interface AppendableEvent {
@@ -30,13 +30,16 @@ export async function appendEvent(input: AppendableEvent): Promise<ExecutionEven
         agentId: input.agentId ?? null,
         runId: input.runId ?? null,
         actor: input.actor,
-        payload: input.payload as never,
+        payload: input.payload as Prisma.InputJsonValue,
       },
     })
 
     const parsed = toExecutionEvent(row)
     if (!parsed.ok) {
-      throw new Error(`refusing to append an event the domain cannot parse: ${parsed.error}`)
+      throw new Error(
+        'refusing to append an event the domain cannot parse ' +
+          `(type=${input.type}, workspaceId=${input.workspaceId}): ${parsed.error}`,
+      )
     }
 
     const notification = JSON.stringify({ seq: parsed.value.seq, workspaceId: parsed.value.workspaceId })

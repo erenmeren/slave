@@ -16,6 +16,13 @@ export const prisma: PrismaClient = new PrismaClient({ adapter })
 
 export type { PrismaClient }
 
+/**
+ * Re-exported for the input types Prisma generates but does not surface on the model rows —
+ * `Prisma.InputJsonValue` in particular, which is what a caller needs to hand an unknown-shaped
+ * payload to a Json column without reaching for an unchecked assertion.
+ */
+export type { Prisma } from './generated/client.js'
+
 export type {
   AgentRun as AgentRunRow,
   ExecutionEvent as ExecutionEventRow,

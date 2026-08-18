@@ -14,11 +14,28 @@ const url = (): string => process.env['TEST_DATABASE_URL'] ?? ''
  * - `goSilent()` — accept the TCP connection and never speak the protocol at all (hangs connect).
  * - `goSilentAfterHandshake()` — connect and authenticate normally, then swallow the first query
  *   and answer nothing (hangs `LISTEN events`).
+ *
+ * It can also *delay* the server rather than silence it — see
+ * `holdServerMessagesUntilTerminate()`, which is what turns "a FATAL arrives at exactly the wrong
+ * moment" from a race into a deterministic test.
  */
 interface StallableProxy {
   readonly port: number
   goSilent(): void
   goSilentAfterHandshake(): void
+  /**
+   * Stop forwarding what the server says and buffer it instead, then release the whole backlog at
+   * the instant the client sends its Terminate ('X') message — i.e. from inside `client.end()`.
+   *
+   * This exists to place a server-sent error in one specific window: after `close()` has detached
+   * the subscription's `'error'` handler, but before the socket has finished closing. Left to
+   * real timing, a `pg_terminate_backend`'s FATAL almost always lands *before* `close()` runs,
+   * where the still-attached handler makes it harmless, so the dangerous ordering is not
+   * reachable by racing alone.
+   */
+  holdServerMessagesUntilTerminate(): void
+  /** How many server messages are currently parked by the call above. */
+  heldCount(): number
   /** Resolves the first time a connection is stalled by either mode above. */
   stalled(): Promise<void>
   close(): Promise<void>
@@ -27,9 +44,12 @@ interface StallableProxy {
 type ProxyMode = 'forward' | 'silent' | 'silent-after-handshake'
 
 const QUERY_MESSAGE_TAG = 0x51 // 'Q' — the first byte of a simple-query protocol message
+const TERMINATE_MESSAGE_TAG = 0x58 // 'X' — what pg writes from inside `client.end()`
 
 async function startStallableProxy(target: URL): Promise<StallableProxy> {
   let mode: ProxyMode = 'forward'
+  let holding = false
+  const held: Buffer[] = []
   let onStall: () => void = (): void => {}
   const firstStall = new Promise<void>((resolve) => {
     onStall = resolve
@@ -51,7 +71,13 @@ async function startStallableProxy(target: URL): Promise<StallableProxy> {
 
     const up = net.createConnection({ host: target.hostname, port: Number(target.port) })
     track(up)
-    up.on('close', () => down.destroy())
+    let upClosed = false
+    up.on('close', () => {
+      upClosed = true
+      // While holding, the whole point is that the client must not learn the server is gone until
+      // it sends Terminate, so the downstream socket is left alive until the backlog is released.
+      if (!holding) down.destroy()
+    })
     down.on('close', () => up.destroy())
 
     let stalled = false
@@ -62,10 +88,24 @@ async function startStallableProxy(target: URL): Promise<StallableProxy> {
         onStall()
         return
       }
-      up.write(chunk)
+      if (holding && chunk[0] === TERMINATE_MESSAGE_TAG) {
+        holding = false
+        for (const buffered of held) down.write(buffered)
+        held.length = 0
+        // The backend is already gone in this scenario, so nothing upstream will ever close the
+        // downstream socket for us. Send the FIN ourselves, after the released bytes, so the
+        // client's own `end()` completes instead of waiting on a peer that no longer exists.
+        if (upClosed) {
+          down.end()
+          return
+        }
+      }
+      if (up.writable) up.write(chunk)
     })
     up.on('data', (chunk: Buffer) => {
-      if (!stalled) down.write(chunk)
+      if (stalled) return
+      if (holding) held.push(chunk)
+      else down.write(chunk)
     })
   })
 
@@ -83,6 +123,10 @@ async function startStallableProxy(target: URL): Promise<StallableProxy> {
     goSilentAfterHandshake: (): void => {
       mode = 'silent-after-handshake'
     },
+    holdServerMessagesUntilTerminate: (): void => {
+      holding = true
+    },
+    heldCount: (): number => held.length,
     stalled: (): Promise<void> => firstStall,
     close: async (): Promise<void> => {
       for (const socket of sockets) socket.destroy()
@@ -355,4 +399,69 @@ describe('subscribeEvents', () => {
       30_000,
     )
   }
+
+  it(
+    'close() survives a FATAL error that lands while the connection is being ended',
+    async () => {
+      const target = new URL(url())
+      const activeProxy = await startStallableProxy(target)
+      proxy = activeProxy
+
+      const appName = `teardown-fatal-${process.pid}-${Date.now()}`
+      const proxyUrl =
+        `postgresql://${target.username}:${target.password}` +
+        `@127.0.0.1:${activeProxy.port}${target.pathname}?application_name=${appName}`
+
+      // A listener-less `Client` that emits `error` throws out of a socket callback, which is an
+      // uncaught exception, not a rejected promise — so this is what has to be observed. Node
+      // would take the whole process down with it if nothing were listening.
+      const uncaught: unknown[] = []
+      const onUncaught = (error: unknown): void => {
+        uncaught.push(error)
+      }
+      process.on('uncaughtException', onUncaught)
+
+      const probe = new Client({ connectionString: url() })
+      await probe.connect()
+      try {
+        subscription = await subscribeEvents(proxyUrl, () => {})
+
+        const before = await probe.query<{ pid: number }>(pidsForApp, [appName])
+        expect(before.rows).toHaveLength(1)
+        const own = before.rows[0]
+        if (own === undefined) {
+          throw new Error('expected the subscription to have exactly one backend behind the proxy')
+        }
+
+        // Park the server's side of the wire, then kill the backend. Postgres answers the kill
+        // with a FATAL ErrorResponse ("terminating connection due to administrator command"),
+        // which now sits in the proxy instead of reaching the subscription.
+        activeProxy.holdServerMessagesUntilTerminate()
+        await probe.query('SELECT pg_terminate_backend($1)', [own.pid])
+        await expect
+          .poll(() => activeProxy.heldCount(), { timeout: 5_000, interval: 25 })
+          .toBeGreaterThan(0)
+
+        // `close()` detaches every handler and calls `end()`; `end()` writes Terminate; the proxy
+        // releases the FATAL on seeing it. The error therefore arrives in the one window where
+        // the subscription's own `'error'` handler is already gone — the window a Postgres
+        // restart or failover during an SSE disconnect lands in for real.
+        await subscription.close()
+        subscription = null
+        await wait(200)
+
+        // Without the no-op sink `close()` installs, this is
+        // `Unhandled 'error' event ... terminating connection due to administrator command`,
+        // thrown from pg's parser and fatal to the process — verified by removing the sink.
+        expect(uncaught).toEqual([])
+
+        // And the teardown still did its job: nothing is left connected.
+        expect((await probe.query(pidsForApp, [appName])).rowCount ?? 0).toBe(0)
+      } finally {
+        process.off('uncaughtException', onUncaught)
+        await probe.end()
+      }
+    },
+    20_000,
+  )
 })

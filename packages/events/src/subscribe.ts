@@ -89,6 +89,55 @@ export async function subscribeEvents(
     client.removeAllListeners('end')
   }
 
+  /**
+   * End a client that is being thrown away, without letting the teardown itself become the
+   * failure. Every `detachHandlers` in this file is followed by exactly this, because both of
+   * the hazards below apply to all three abandon sites (a failed `open()`, a reconnect that
+   * finished after `close()`, and `close()` itself).
+   *
+   * 1. **The detach removes the only `'error'` listener.** pg wires
+   *    `con.on('error', this._handleErrorEvent)` unconditionally (`pg/lib/client.js`), and
+   *    `_handleErrorEvent` ends in `this.emit('error', err)`. Any socket error or FATAL
+   *    `ErrorResponse` — a Postgres restart, a failover, someone's `pg_terminate_backend` —
+   *    arriving between the detach and the socket actually closing therefore reaches a
+   *    listener-less EventEmitter, and Node throws out of a socket data callback. That kills the
+   *    whole process, not just this subscription, and `close()` is the path an SSE route runs on
+   *    every client disconnect. Reproduced end to end (LISTEN, detach, hold the FATAL behind a
+   *    proxy, release it while `end()` is in flight): `Unhandled 'error' event`, exit 1. The
+   *    no-op sink turns that into nothing at all.
+   *
+   * 2. **`end()` is only sometimes bounded by pg.** It force-destroys the socket when the client
+   *    is no longer `_queryable` (the `connectionTimeoutMillis` path) or still has an active
+   *    query (the `query_timeout` path), but takes a graceful branch — send Terminate, then wait
+   *    for `'close'` — otherwise. A peer that answers `LISTEN` with `ErrorResponse` +
+   *    `ReadyForQuery` and then simply holds the socket open leaves the client `_queryable` with
+   *    no active query, so that graceful branch waits forever: measured still pending at 8038ms
+   *    against a half-open peer, versus 1ms against a normal one. Racing the same `OPEN_TIMEOUT_MS`
+   *    budget and destroying the stream on expiry bounds it without leaking the socket.
+   */
+  const endDiscardedClient = async (client: Client): Promise<void> => {
+    detachHandlers(client)
+    client.on('error', () => {})
+
+    let expiry: ReturnType<typeof setTimeout> | undefined
+    const bounded = new Promise<void>((resolve) => {
+      expiry = setTimeout(() => {
+        // The client is being abandoned either way, so there is nothing to preserve by waiting
+        // for a graceful goodbye the peer may never answer.
+        client.connection.stream.destroy()
+        resolve()
+      }, OPEN_TIMEOUT_MS)
+    })
+
+    try {
+      await Promise.race([client.end(), bounded])
+    } catch {
+      // nothing to salvage from a client that is being discarded
+    } finally {
+      clearTimeout(expiry)
+    }
+  }
+
   const attachHandlers = (client: Client): void => {
     client.on('notification', (message) => {
       const parsed = parseNotification(message.payload)
@@ -111,19 +160,11 @@ export async function subscribeEvents(
     } catch (error) {
       // Leave no debris behind a failed attempt. pg cleans up after the two timeouts differently:
       // a `connectionTimeoutMillis` expiry destroys the socket itself, but a `query_timeout` expiry
-      // only rejects the query and leaves the connection open and `_queryable` — so without this
-      // `end()` a stalled server would leak one live socket per retry. `end()` is itself bounded
-      // here: pg force-destroys the socket rather than waiting when a query is still active, and
-      // no-ops on a client whose connect never completed.
-      detachHandlers(client)
-      // A `Client` that emits `error` with no listener throws, and ending a half-dead client can
-      // still surface one, so swap the reconnect handler for a sink rather than leaving none.
-      client.on('error', () => {})
-      try {
-        await client.end()
-      } catch {
-        // the attempt already failed; nothing further to salvage
-      }
+      // only rejects the query and leaves the connection open and `_queryable` — so without an
+      // `end()` here a stalled server would leak one live socket per retry. `endDiscardedClient`
+      // is what makes that `end()` both bounded and safe; pg's own `end()` is bounded only on the
+      // two timeout paths, not on every path that can reach this catch.
+      await endDiscardedClient(client)
       throw error
     }
     return client
@@ -147,8 +188,7 @@ export async function subscribeEvents(
             // close() ran while `open()` itself was in flight (connect + LISTEN). The client is
             // not reachable from anywhere else yet, so end it here rather than leaving it
             // orphaned and listening.
-            detachHandlers(client)
-            await client.end()
+            await endDiscardedClient(client)
           } else {
             current = client
           }
@@ -170,8 +210,7 @@ export async function subscribeEvents(
       const client = current
       current = null
       if (client !== null) {
-        detachHandlers(client)
-        await client.end()
+        await endDiscardedClient(client)
       }
       // Await whatever reconnect loop is in flight so this promise cannot resolve while the
       // subscription is still doing network I/O in the background. The guard above (`reconnecting`)
