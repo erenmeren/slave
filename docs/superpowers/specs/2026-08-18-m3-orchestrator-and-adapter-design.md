@@ -233,8 +233,8 @@ The child emits NDJSON. Five properties were measured and the parser must respec
 |---|---|---|---|
 | Permission-mode denial | `system/permission_denied` | no | The run is misconfigured and will accomplish nothing → `guardrail.tripped` |
 | Hook deny | `hook_response` `exit_code === 0`, `output` parses to `permissionDecision: "deny"` | no | The run is pausing as instructed → the pause path in §5.5 → `run.paused` |
-| Hook crash, blocking | `hook_response` `exit_code === 2` | no | The gate is broken **and the run stopped** → fail the run loudly. Never `paused`: nothing is waiting to be resumed |
-| Hook failure, fails open | `hook_response` `exit_code` non-zero and **not** 2 (measured: 1, 126, 127) | **yes** | The gate is broken **and the tool ran** → fail the run loudly, distinctly from the row above |
+| Hook crash, blocking | `hook_response` `exit_code === 2` | no | The gate is broken **and the run stopped** → pause gate failure (§13.1). Never `paused`: nothing is waiting to be resumed |
+| Hook failure, fails open | `hook_response` `exit_code` non-zero and **not** 2 (measured: 1, 126, 127) | **yes** | The gate is broken **and the tool ran** → pause gate failure (§13.1), reported distinctly from the row above |
 
 The last two must not share a variant. One means the run stopped and cannot be resumed; the other
 means the run continued with no gate at all, and a side effect has already landed. An operator told
@@ -320,7 +320,7 @@ this check and gates nothing. It is a cheap necessary condition, not a sufficien
 
 **Runtime backstop, and this is the one that matters.** If tool calls are observed in the stream
 after the pause flag was written, and no deny or blocking crash accompanied them, the gate is
-broken → fail the run loudly. This check keys on behaviour rather than on the shape of any failure,
+broken → pause gate failure (§13.1). This check keys on behaviour rather than on the shape of any failure,
 which is what makes it the durable one: tool calls proceeding after the flag was armed is the same
 observation whether the hook was missing, slow, timed out, or exited 1, and it holds for failure
 modes nobody has measured yet.
@@ -540,6 +540,8 @@ mutation in its task:
   stopped while it is still acting.
 - The runtime gate backstop bites — make the hook fail open in the fake `claude` after the flag is
   written and the run must fail loudly rather than report `paused` or a clean finish.
+- A pause gate failure halts the workspace — remove the halt and a test must show a second
+  uncontrollable run starting on the next tick (§13.1).
 - Pause kills on the first observed deny — remove the kill and a test must fail.
 - The pause flag path is per-run — share it and a test must show one run freezing another.
 - An empty verify list refuses rather than passes.
@@ -550,16 +552,70 @@ mutation in its task:
 
 ## 13. Error Taxonomy
 
-Six classes. The rule they share: **no failure is silent — every one emits a domain event.**
+Seven classes. The rule they share: **no failure is silent — every one emits a domain event.**
 
 | Class | Behaviour |
 |---|---|
 | Provisioning failure (worktree, setup command) | The `AgentRun` row exists and goes straight to `failed` with the reason; `run.failed`. The attempt counts, so a repeatedly unprovisionable task reaches the attempt cap instead of looping forever |
 | Spawn failure | Same. Both are attempted runs that failed, and recording them as anything else would make a task that never starts indistinguishable from one nobody scheduled |
-| Unrecognized stream line | Dropped and recorded; the run continues |
-| Run terminal failure | `run.failed`, including the "clean completion with non-empty `permission_denials`" case |
+| Unrecognized stream line | Dropped and recorded; the run continues. **A `hook_response` line is never unrecognized** — see below |
+| Run terminal failure | `run.failed`, including the "clean completion with non-empty `permission_denials`" case. Decides whether the *work* failed, not whether the run was *controllable* — see below |
+| **Pause gate failure** | The control surface failed. Cancel, `run.failed` + `guardrail.tripped`, count the attempt, halt the workspace — see below |
 | Verify failure | `task.verify_failed` → `task.rework` with the output attached; attempt cap exceeded → `task.failed` |
 | Daemon crash | Startup reconciliation (§3.4) |
+
+### 13.1 Pause gate failure
+
+Covers both hook failure shapes of §5.3 — `hook_crashed` (`exit_code === 2`) and
+`hook_failed_open` (any other non-zero). It is its own class rather than a variety of run terminal
+failure because it is a different *kind* of failure: a run terminal failure means the work failed,
+a gate failure means the **control surface** failed. The operator's remedy is not "re-run the
+task", it is "fix the hook path", and filed under run terminal failure that second failure is
+buried inside the first.
+
+Four behaviours, in order:
+
+1. **Cancel the run** — `SIGTERM`, escalating to `SIGKILL`. It is the one control that does not
+   depend on the hook. An agent that cannot be paused must not be left running.
+2. **Emit `run.failed`** carrying the gate reason, **and `guardrail.tripped`**. Two events, because
+   the run failed *and* a guardrail is what failed it.
+3. **Count the attempt**, so a task cannot loop forever against a gate that stays broken.
+4. **Halt scheduling for that workspace.**
+
+**Why the halt, and not just the failure.** A broken gate is almost always a misconfiguration
+shared by every run in the workspace — one wrong absolute path in generated settings — so the next
+run fails open too, and the one after that. Failing runs one at a time while continuing to start
+new uncontrollable ones is the worst available behaviour: it produces a steady stream of agents
+nobody can stop, each one individually accounted for. The halt is what makes the failure bounded
+instead of recurring.
+
+**The two shapes are not equally bad, and the operator must be told which one happened.** After a
+**blocking crash** the run has stopped and nothing landed: the damage is bounded and the message is
+"this run was stopped by a broken gate". After a **fail-open** failure the run kept going with no
+gate at all, so everything it did between the flag being armed and the cancel actually landing is
+work nobody could have stopped — that message is louder, and it must name the window rather than
+imply the run was under control. This is why §5.3 keeps the two in separate variants: the
+distinction survives all the way to what the operator reads.
+
+**Consequences for two of the other classes.**
+
+- **Unrecognized stream line.** A `hook_response` whose `output` does not parse as inner JSON is
+  **not** an unrecognized line — it is a hook crash, and §5.3 classifies every `hook_response` by
+  `exit_code`. Dropping it as unparsable would silently reclassify a broken gate as stream noise,
+  which is the same conflation in a different place. Only genuinely unknown line *shapes* fall to
+  the drop-and-record rule, and "the run continues" is safe only because a dropped line is not a
+  gate signal.
+- **Run terminal failure.** That class reads the terminal `result` event, which is blind to gate
+  health: a fail-open run ends `is_error: false`, `terminal_reason: "completed"`, child exit code 0
+  and `permission_denials: []` (§5.3). Left to that class alone, an ungated run is recorded as a
+  success. Gate health is decided from the live stream by this class, never from the terminal event.
+
+**Open mechanism, deliberately not decided here.** §3.2's `halt` is a domain command from
+`decide()` and is scoped to "this tick". A gate-failure halt that expired at the next tick would
+start another uncontrollable run one second later, which is precisely what the argument above says
+must not happen — so this halt must outlast the tick that raised it and persist until an operator
+clears it. Whether that latch is a `Workspace` column, an orchestrator-local flag, or a `decide()`
+input is a design decision for the task that implements it; §10 currently provisions none of them.
 
 ---
 
