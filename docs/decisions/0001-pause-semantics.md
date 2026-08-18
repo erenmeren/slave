@@ -4,7 +4,9 @@
 **Date:** 2026-08-17
 **Context:** Spec §7 (provider adapter), §8 (pause/resume/checkpoints), §9.2 (guardrails and
 permissions), §10 (git model); spike findings in
-`docs/superpowers/spikes/2026-08-17-m0-pause-resume-findings.md`
+`docs/superpowers/spikes/2026-08-17-m0-pause-resume-findings.md`, and — for Q7/Q8 and §4's third
+block shape — `docs/superpowers/spikes/2026-08-18-m3-hook-failure-modes.md` ("M3 findings" below,
+measured on `claude` 2.1.234)
 
 Spec §8 called the exact hook behaviour, session-resume semantics inside a worktree, and
 token/cost reporting "unverified assumptions" and the highest risk in the project. Milestone 0 was
@@ -76,7 +78,7 @@ Required flags for every run M3 spawns:
 - **Never** `--no-session-persistence` — it makes resume impossible (findings 2).
 - **Never** `--fork-session` — it would mint a new session id on resume (findings 2.3).
 
-### 4. Detecting the pause: two denial shapes, never conflated
+### 4. Detecting the pause: three block shapes, never conflated
 
 - **Permission-mode denial:** `{"type":"system","subtype":"permission_denied","tool_name":...,
   "tool_use_id":...,"message":"Claude requested permissions to ..."}` (findings 1). **[Observed]**
@@ -84,22 +86,35 @@ Required flags for every run M3 spawns:
   `{"type":"system","subtype":"hook_response","hook_name":"PreToolUse:<Tool>","output":"<JSON
   string>"}` whose `output` parses to `hookSpecificOutput.permissionDecision == "deny"`, followed by
   a `tool_result` carrying `is_error: true` and the deny reason as its content (findings 3.5).
-  **[Observed]**
+  **[Observed]** The `hook_response` reports `outcome: "success"`, `exit_code: 0`.
+- **Hook crash** (added by M3 Task 1, findings §3.1): same `hook_response` event type, but
+  `outcome: "error"`, `exit_code: 2`, and `output` is the hook's **plain-text stderr**, not JSON. The
+  `tool_result` is `is_error: true` with content `PreToolUse:<Tool> hook error: [<path>]: <stderr>`.
+  It **blocks the tool call just as a deny does** — Q7. **[Observed]**
 
-M3's stream parser must handle both and must not conflate them. The difference is operational, not
-cosmetic: a permission-mode denial means the run is misconfigured and will accomplish nothing
-(map it to `guardrail.tripped`), while a hook denial means the run is pausing as instructed (map it
-to `run.paused`). An orchestrator that read the first as the second would wait forever to resume a
-run that was never paused.
+M3's stream parser must handle all three and must not conflate them. The difference is operational,
+not cosmetic: a permission-mode denial means the run is misconfigured and will accomplish nothing
+(map it to `guardrail.tripped`); a hook denial means the run is pausing as instructed (map it to
+`run.paused`); a hook crash means the pause gate itself is broken and must **fail the run loudly**,
+never be reported as `paused` — nothing is waiting to be resumed and the operator's only
+intervention lever is dead. An orchestrator that read the first as the second would wait forever to
+resume a run that was never paused; one that read the third as the second would park a run whose
+gate no longer works. **[Decision, on observed evidence]**
 
-Three parser requirements follow from the captures. **[Observed]**
+Four parser requirements follow from the captures. **[Observed]**
 
 1. `hook_response.output` is a **JSON-encoded string**, not a nested object. It needs a second parse.
 2. `hook_response` carries **no `tool_use_id`** — only `hook_name`. Correlate to a specific call via
    the `tool_result` that follows it.
-3. The terminal `result` event's `permission_denials` array records both kinds of denial with
-   `tool_name`, `tool_use_id`, and `tool_input` — useful for the checkpoint, but it arrives at the
-   end of the run and is therefore useless as a live pause signal.
+3. The terminal `result` event's `permission_denials` array records **all three** kinds of block
+   with `tool_name`, `tool_use_id`, and `tool_input` — hook crashes land in it alongside genuine
+   denies (M3 findings §1.5), so it cannot tell them apart. Useful for the checkpoint, but it
+   arrives at the end of the run and is therefore useless as a live pause signal.
+4. `hook_response` events **can arrive after the terminal `result` event** — an `async: true` hook
+   reports late, and one did, as the final line of the Q7 capture (M3 findings §3.2). The parser
+   must not stop reading at `result`, and must not assume `hook_started`/`hook_response` pairs are
+   ordered per tool call. A crash or deny for the *pending* call always precedes its `tool_result`;
+   that ordering, not stream position, is what requirement 2's correlation relies on.
 
 ### 5. What the checkpoint stores
 
@@ -337,14 +352,18 @@ A reader who conflates the two will either chase settled work or build on an ass
   cases this spike did not systematically record. §3's denied-edit run is the cautionary case: its
   terminal event reports a clean completion and only `permission_denials` reveals that nothing
   happened, so an adapter reading a coarse success/failure signal would misclassify it either way.
-- **`pause-gate.sh`'s exit-2 crash path was never exercised by a real `claude` run**
+- ~~**`pause-gate.sh`'s exit-2 crash path was never exercised by a real `claude` run**
   (findings 3.10). It was verified standalone against `/dev/full`. Whether that path fails closed is
-  Q7 — the limitation is recorded here, the measurement that would settle it is there.
+  Q7 — the limitation is recorded here, the measurement that would settle it is there.~~
+  **SETTLED** — a real `claude` 2.1.234 run with an always-exit-2 `PreToolUse` hook blocked every
+  tool call and created nothing on disk. See Q7. **[Observed]**
 - **The `$AITEAMOS_SPIKE` variable form in `settings.json` was never tested** (findings 3.1); only
   the absolute-path form. §3 makes absolute paths mandatory, which is why this stays a limitation
   rather than becoming an open question.
-- **A denied `Edit` was never observed** (findings 3.7); both denied calls were read-only. See Q8.
-  Not settled by findings §7 either: that task's denied call was a `Bash` invocation, not an `Edit`.
+- ~~**A denied `Edit` was never observed** (findings 3.7); both denied calls were read-only. See Q8.
+  Not settled by findings §7 either: that task's denied call was a `Bash` invocation, not an
+  `Edit`.~~ **SETTLED** — M3 findings §2.4 denied a real, pending `Edit` and confirmed the target
+  file byte-identical with an unchanged mtime. See Q8. **[Observed]**
 - ~~The paused session had no edits of its own (findings 4.1). See §6.~~ **SETTLED** — findings
   §7.3–§7.6 paused a session with a real, landed `Edit` (a TDD-RED test file change) already applied
   before the flag was armed, killed it mid-tool-call, and confirmed the resumed session both knew
@@ -393,13 +412,45 @@ recorded rather than guessed at, because the point of M0 was to replace guesses 
 - **Q6 — What happens when pause is requested and the run has no further tool calls?** Inferred to
   complete normally. *Settles it:* set the flag after the last tool call of a short run and observe
   the terminal event.
-- **Q7 — Does a crashing hook fail closed?** `pause-gate.sh`'s exit-2 path was verified standalone
-  against `/dev/full` but never exercised by a real `claude` run; no capture shows a nonzero-exit
-  `hook_response` (findings 3.10). If Claude Code's general exit-code convention does not apply
-  here, a crashing pause hook could fail **open** — the tool call proceeds and the pause silently
-  does not happen. *Settles it:* register a hook that exits 2 and observe whether the tool call
-  runs.
-- **Q8 — Can a denied `Edit` ever partially apply?** Both denied calls in the spike were read-only.
-  `PreToolUse` fires before the tool executes, so a denied `Edit` should never apply at all, but
-  this is inferred from the hook's documented timing, not observed (findings 3.7). *Settles it:* a
-  pause triggered while an `Edit` is the pending call.
+- **Q7 — RESOLVED: it fails CLOSED, for exit code 2.** A hook that exits 2 with empty stdout,
+  registered `PreToolUse`/`matcher: "*"` by absolute path, blocked every tool call in a real
+  `claude` 2.1.234 run under `--permission-mode bypassPermissions`. The model tried `Bash`
+  (`echo hello > probe.txt`), then `Write`, then `Read`; all three were blocked. **The verdict is the
+  filesystem, not the stream: `probe.txt` does not exist** — the working directory is as empty after
+  the run as before it — and no `PostToolUse` event fired for any of the three calls, so no tool body
+  ran. **[Observed]** (M3 findings §1.3–§1.4). `pause-gate.sh`'s exit-2 fallback is therefore backed
+  by a measurement of the mechanism it relies on, not only by the documented convention.
+  **Narrower than the question asked, in one way that matters:** only **exit code 2** was exercised.
+  Exit 1, exit 127 (hook script missing, moved, or not executable), a signal-killed hook, and a hook
+  timeout were **not** measured, and on Claude Code's documented convention those are *non-blocking
+  warnings* — meaning `pause-gate.sh` would fail **open** if it ever failed in any way other than
+  exit 2. `pause-gate.sh` has no exit-1 path, but "the script is missing or is not executable" is
+  exit 127 and is a real deployment failure. That residual is untested and is the largest remaining
+  risk in the pause mechanism; it is carried forward as Q9. Also unmeasured: whether a crash blocks
+  `Edit`, `Task`, `Skill`, or MCP tools (only `Bash`, `Write`, `Read` were crash-blocked), and
+  whether a hook that exits 2 *with* stdout behaves the same.
+- **Q8 — RESOLVED: no. It does not partially apply; it does not apply at all.** A run was paused
+  with `pause-gate.sh` by arming the flag in the window between a completed `Read` of the target file
+  and the `Edit` that followed, so `Edit` was the pending call at the moment of the deny. The `Edit`
+  was genuinely issued (`old_string: "line one: alpha"` → `new_string: "line one: omega"`) and was
+  denied by the hook. **The target file was recorded before and after:** 49 bytes → 49 bytes, sha256
+  `a14dabdc…c48a9f` → the same sha256, and **the mtime was unchanged to the nanosecond**
+  (`19:42:18.330237935`) — the file was never opened for writing. No `.bak`/`.tmp`/swap file was left
+  in the directory, no `PostToolUse:Edit` fired (`PostToolUse:Read` did), and the CLI marked the call
+  `tool_result_meta[0].non_execution_kind == "permission-rule"`. **[Observed]** (M3 findings
+  §2.2–§2.5). **Narrower than the question:** one `Edit` tool call with a single hunk. `MultiEdit`,
+  `NotebookEdit`, `Write` over an existing file, and a `Bash`-mediated write (`sed -i`, `>>`) were
+  **not** exercised — they pass the same `PreToolUse` gate, so the result should generalise, but that
+  is **[Inferred]**, not measured. Nor was an `Edit` blocked by a *crashing* hook rather than a clean
+  deny; Q7's blocked `Write` is the nearest evidence and it created nothing.
+- **Q9 — Do hook failures *other than* exit code 2 fail open?** Raised by Q7's measurement, which
+  covered exit 2 only. Exit 1, exit 127 (the hook script missing, moved, or not executable), a
+  signal-killed hook, and a hook timeout are all unmeasured, and Claude Code's general convention
+  treats nonzero-but-not-2 as a *non-blocking warning* — i.e. the tool call would proceed and the
+  pause would silently not happen. `pause-gate.sh` has no exit-1 path of its own, but a mis-deployed
+  hook is precisely the exit-127 case, so this is a live risk rather than a theoretical one.
+  *Settles it:* one run with a hook that exits 1, and one whose `command` points at a non-existent
+  path, each checking whether the tool call's side effect lands on disk — roughly $0.25 per run at
+  the size Q7 used. Until it is measured, the cheap mitigation is for the adapter to verify the hook
+  path exists and is executable at run-spawn time rather than discovering it at the first tool call
+  (M3 findings §4, §5.4).
