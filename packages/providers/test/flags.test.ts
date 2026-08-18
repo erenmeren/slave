@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { claudeFlags, preflightGate } from '../src/claude/flags.js'
 
 const repoRoot = fileURLToPath(new URL('../../../', import.meta.url))
-const realGate = path.join(repoRoot, 'spike/m0-pause-resume/pause-gate.sh')
+const realGate = path.join(repoRoot, 'scripts/pause-gate.sh')
 
 // preflightGate mints its own temporary flag file internally (see flags.ts) rather than
 // taking a caller-supplied path, so a leftover-file check has to look at its known prefix
@@ -51,8 +51,8 @@ describe('preflightGate', () => {
     dir = mkdtempSync(path.join(tmpdir(), 'aiteamos-preflight-fixture-'))
 
     // A fresh executable copy of the real gate, per test -- some tests
-    // mutate its permissions, and the spike's own script must not be
-    // touched by that.
+    // mutate its permissions, and the repo's own copy of the script must
+    // not be touched by that.
     hookPath = path.join(dir, 'pause-gate.sh')
     writeFileSync(hookPath, readFileSync(realGate))
     chmodSync(hookPath, 0o755)
