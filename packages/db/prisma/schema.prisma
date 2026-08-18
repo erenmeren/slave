@@ -41,12 +41,15 @@ enum Actor {
 }
 
 model Workspace {
-  id            String   @id @default(uuid())
-  name          String
-  repoPath      String
-  baseBranch    String   @default("main")
-  verifyCommand String
-  autoMerge     Boolean  @default(false)
+  id             String    @id @default(uuid())
+  name           String
+  repoPath       String
+  baseBranch     String    @default("main")
+  verifyCommands String[]
+  setupCommands  String[]
+  autoMerge      Boolean   @default(false)
+  haltedReason   String?
+  haltedAt       DateTime?
 
   maxConcurrentRuns       Int   @default(3)
   budgetUsd               Float @default(20)
@@ -220,14 +223,39 @@ model AgentRun {
   pausedAtStep Int?
   pauseReason  PauseReason?
   costUsd      Float        @default(0)
+  pid          Int?
+  worktreePath String?
   startedAt    DateTime     @default(now())
+  terminalAt   DateTime?
   endedAt      DateTime?
 
-  task  Task  @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  agent Agent @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  task       Task        @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  agent      Agent       @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  checkpoint Checkpoint?
 
   @@index([taskId])
   @@index([agentId, status])
+}
+
+model Checkpoint {
+  id                String   @id @default(uuid())
+  runId             String   @unique
+  sessionId         String
+  worktreePath      String
+  pauseFlagPath     String
+  lastToolUseId     String?
+  lastToolName      String?
+  numTurns          Int      @default(0)
+  deniedToolUseIds  String[]
+  headCommit        String
+  dirtyFiles        String[]
+  cumulativeCostUsd Float    @default(0)
+  cumulativeTokens  Int      @default(0)
+  pauseReason       String?
+  requestedBy       String?
+  ts                DateTime @default(now())
+
+  run AgentRun @relation(fields: [runId], references: [id], onDelete: Cascade)
 }
 
 model Artifact {

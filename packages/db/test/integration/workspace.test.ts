@@ -12,7 +12,12 @@ describe('workspace persistence', () => {
 
   it('round-trips a workspace with its guardrail defaults', async () => {
     const created = await prisma.workspace.create({
-      data: { name: 'Checkout Platform', repoPath: '/tmp/checkout', verifyCommand: 'npm test' },
+      data: {
+        name: 'Checkout Platform',
+        repoPath: '/tmp/checkout',
+        verifyCommands: ['npm test'],
+        setupCommands: ['npm ci'],
+      },
     })
 
     const found = await prisma.workspace.findUniqueOrThrow({ where: { id: created.id } })
@@ -26,7 +31,12 @@ describe('workspace persistence', () => {
 
   it('cascades team and agent deletion from the workspace', async () => {
     const workspace = await prisma.workspace.create({
-      data: { name: 'Checkout Platform', repoPath: '/tmp/checkout', verifyCommand: 'npm test' },
+      data: {
+        name: 'Checkout Platform',
+        repoPath: '/tmp/checkout',
+        verifyCommands: ['npm test'],
+        setupCommands: ['npm ci'],
+      },
     })
     const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
     await prisma.agent.create({ data: { teamId: team.id, name: 'Alex', role: 'Backend' } })

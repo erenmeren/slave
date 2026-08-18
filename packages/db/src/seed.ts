@@ -22,7 +22,7 @@ const AGENTS: readonly { name: string; role: string; team: (typeof TEAMS)[number
  */
 export async function seed(): Promise<void> {
   await prisma.$executeRawUnsafe(
-    'TRUNCATE TABLE "ExecutionEvent", "Approval", "AgentMessage", "Artifact", "AgentRun", "TaskDependency", "Task", "AgentSkill", "Skill", "SkillProvider", "AgentPermission", "ProviderConfiguration", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
+    'TRUNCATE TABLE "ExecutionEvent", "Approval", "AgentMessage", "Artifact", "Checkpoint", "AgentRun", "TaskDependency", "Task", "AgentSkill", "Skill", "SkillProvider", "AgentPermission", "ProviderConfiguration", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
   )
 
   const workspace = await prisma.workspace.create({
@@ -30,7 +30,8 @@ export async function seed(): Promise<void> {
       id: WORKSPACE_ID,
       name: 'Checkout Platform',
       repoPath: '/tmp/checkout-platform',
-      verifyCommand: 'npm test',
+      verifyCommands: ['npm run build', 'npm test'],
+      setupCommands: ['npm ci'],
       // Deliberately not the schema default of 3. Every seeded task copies this value below —
       // if it matched the default, that copy would be indistinguishable from a hardcoded
       // literal, and the link between Workspace.maxAttempts and Task.maxAttempts (the thing

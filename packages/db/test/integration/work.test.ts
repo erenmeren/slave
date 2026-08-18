@@ -14,7 +14,8 @@ async function seedWorkspace(): Promise<{ workspaceId: string; agentId: string; 
     data: {
       name: 'Checkout Platform',
       repoPath: '/tmp/checkout',
-      verifyCommand: 'npm test',
+      verifyCommands: ['npm test'],
+      setupCommands: ['npm ci'],
       maxAttempts: WORKSPACE_MAX_ATTEMPTS,
     },
   })

@@ -3,7 +3,12 @@ import { prisma } from '../../src/client.js'
 
 async function seedAgent(): Promise<{ workspaceId: string; agentId: string }> {
   const workspace = await prisma.workspace.create({
-    data: { name: 'Checkout Platform', repoPath: '/tmp/checkout', verifyCommand: 'npm test' },
+    data: {
+      name: 'Checkout Platform',
+      repoPath: '/tmp/checkout',
+      verifyCommands: ['npm test'],
+      setupCommands: ['npm ci'],
+    },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
   const agent = await prisma.agent.create({ data: { teamId: team.id, name: 'Alex', role: 'Backend' } })
