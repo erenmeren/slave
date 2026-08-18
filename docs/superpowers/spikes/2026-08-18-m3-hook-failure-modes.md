@@ -6,9 +6,18 @@
 that implements pause, so they were measured against the real `claude` CLI before any adapter code
 was written.
 
+**Fix Round 1 (same day)** added Q9 — raised by Q7's own limit — at the controller's direction:
+do hook failures *other than* exit 2 fail open? §6 has it.
+
 **Verdict up front:** Q7 — **fails closed** (the tool call did not run). Q8 — **no partial
-application** (the target file was byte-identical, mtime unchanged). Both **[Observed]**. Details,
-limits, and three incidental findings that affect M3's stream parser are below.
+application** (the target file was byte-identical, mtime unchanged). Q9 — **fails OPEN**: a missing
+hook (127), a non-executable hook (126) and a hook that exits 1 all let the tool run, with an empty
+`permission_denials` and a terminal event indistinguishable from a healthy run. All **[Observed]**.
+Details, limits, and the incidental findings that affect M3's stream parser are below.
+
+**One claim from this document's first version is retracted by Q9** and corrected in place: the
+discriminator for "the hook blocked" is `exit_code == 2` **exactly**, not `outcome == "error"`. See
+the correction note in §3.1.
 
 Every claim is labelled **[Observed]** (a capture or a filesystem check shows it), **[Inferred]**
 (it follows from an observed mechanism but was not directly seen), or **[Decision]** (our choice).
@@ -23,8 +32,8 @@ Every claim is labelled **[Observed]** (a capture or a filesystem check shows it
 - Probe root: `~/.aiteamos-m3-probe/` — outside the repository, throwaway. Nothing from it is
   committed; only this document and the ADR edit enter the repo.
 - Repo state at probe time: branch `feature/m3-orchestrator-and-adapter`, HEAD `155f1a8`, tree clean.
-- Two `claude` invocations total. Combined reported cost: **$0.4598** (`total_cost_usd`
-  0.2428725 + 0.2169030).
+- **Four** `claude` invocations total across both rounds. Combined reported cost: **$0.8598**
+  (`total_cost_usd` 0.2428725 + 0.2169030 for Q7/Q8; 0.2093390 + 0.1906820 for Q9).
 
 ### 0.1 Confounder check — other `PreToolUse` hooks on this machine
 
@@ -204,11 +213,10 @@ of the mechanism it relies on, not only by the documented convention.
 
 **What this does NOT cover:**
 
-- **Only exit code 2 was exercised.** A hook that exits 1, or 127 (script missing / not
-  executable), or is killed by a signal, or times out, was **not** measured. The documented
-  convention says other nonzero codes are *non-blocking warnings* — i.e. the tool call would
-  proceed. **A `pause-gate.sh` that failed with exit 1 or 127 would, on that convention, fail
-  OPEN.** This is untested and is the residual risk in this area; see §4.
+- **Only exit code 2 was exercised.** A hook that exits 1, or 126/127 (script not executable /
+  missing), or is killed by a signal, or times out, was **not** measured here. **This was measured
+  in Fix Round 1 and the answer is that they fail OPEN — see §6 (Q9).** Signal-kill and timeout
+  remain unmeasured.
 - **Only `Bash`, `Write`, and `Read` were blocked** in this run. `Edit` was blocked in the Q8 run
   (by a deny, not a crash). No `Task`/`Skill`/MCP tool was exercised here.
 - The crash hook produced **empty stdout**. A hook that exits 2 *with* stdout was not tested.
@@ -355,21 +363,33 @@ Task 8 and the adapter will write.
 ADR 0001 §4 names two denial shapes (permission-mode denial, hook deny). The Q7 capture shows a
 third, distinct from both. **[Observed]**
 
-| | hook **deny** (Q8, line 24) | hook **crash** (Q7, line 12) |
-|---|---|---|
-| `outcome` | `"success"` | `"error"` |
-| `exit_code` | `0` | `2` |
-| `output` | JSON string → `permissionDecision:"deny"` | plain text (`"deliberate hook crash\n"`) |
-| `stderr` | `""` | the reason text |
-| `tool_result` | `is_error:true`, content = deny reason | `is_error:true`, content = `PreToolUse:<Tool> hook error: [<path>]: <stderr>` |
-| in `permission_denials` | yes | **yes** |
-| tool ran? | no | no |
+> **CORRECTED in Fix Round 1.** The first version of this section said the discriminator between a
+> blocking crash and an allow is `outcome == "error"` / `exit_code != 0`. **Q9 refutes that.** All
+> of exit 1, 126 and 127 also report `outcome: "error"` and they **do not block**. The discriminator
+> is **`exit_code == 2`, exactly** — see §6. The table below now carries the fourth column.
 
-A parser that reaches for `JSON.parse(hook_response.output)` and treats a parse failure as "not a
-deny" would read a crash as an allow. Both block; they must be distinguished because their
-*operational meaning* differs — a deny means the run is pausing as instructed, a crash means the
-gate is broken and the run should be failed, not parked as `paused`. The discriminator is
-`outcome == "error"` / `exit_code != 0`, available on the same event. **[Observed]**
+| | hook **deny** (Q8, L24) | hook **crash, blocking** (Q7, L12) | hook **failure, non-blocking** (Q9, L18/23/13) |
+|---|---|---|---|
+| `outcome` | `"success"` | `"error"` | `"error"` |
+| `exit_code` | `0` | `2` | `1`, `126`, `127` |
+| `output` | JSON string → `permissionDecision:"deny"` | plain text (hook stderr) | plain text (hook or shell stderr) |
+| `stderr` | `""` | the reason text | the reason text |
+| `tool_result` | `is_error:true`, deny reason | `is_error:true`, `PreToolUse:<Tool> hook error: [<path>]: <stderr>` | **the tool's normal success result** |
+| `PostToolUse` fires? | no | no | **yes** |
+| in `permission_denials` | yes | yes | **no — the array is empty** |
+| tool ran? | no | no | **YES** |
+
+Two parser traps, not one. **[Observed]**
+
+1. A parser that does `JSON.parse(hook_response.output)` and treats a parse failure as "not a deny"
+   reads a **blocking** crash as an allow.
+2. A parser that treats `outcome == "error"` (or any nonzero `exit_code`) as "blocked" reads a
+   **fail-open** hook failure as a pause. That is the more dangerous direction: it would report
+   `run.paused` for a run that is still free to act.
+
+Only `exit_code == 2` blocks. Deny / blocking-crash / non-blocking-failure are three different
+things with three different operational meanings: the run is pausing as instructed; the gate is
+broken and the run must be failed loudly; the gate is broken **and did not stop anything**.
 
 ### 3.2 `hook_response` events can arrive AFTER the terminal `result` event
 
@@ -401,16 +421,8 @@ distinguish crash from deny (§3.1). The adapter must decide outcome from the ev
 
 ## 4. What could not be settled, and what would settle it
 
-- **Non-2 hook failures.** Exit 1, exit 127 (hook script missing, moved, or not executable), a
-  signal-killed hook, and a hook that exceeds its timeout were all **unmeasured**. On the documented
-  exit-code convention these are *non-blocking warnings*, which would mean the tool call **proceeds**
-  — i.e. `pause-gate.sh` would fail **open** if it ever failed in any way other than exit 2.
-  `pause-gate.sh` has no path that exits 1, but "the script is missing or `chmod -x`" is a real
-  deployment failure and is exactly the 127 case. *Settles it:* one run with a hook that exits 1 and
-  one with a `command` pointing at a non-existent path, checking whether `probe.txt` appears. Cost:
-  roughly $0.25 per run at the size used here, so ~$0.50 for both. Not run, per the instruction not
-  to spend beyond the brief; carried into ADR 0001 as **Q9** for the controller to rule on. This is
-  the single most significant residual risk in the pause mechanism.
+- ~~**Non-2 hook failures.**~~ **MEASURED in Fix Round 1 — see §6. They fail OPEN.** What remains
+  uncovered there: a **signal-killed** hook and a hook that **exceeds its timeout**.
 - **Whether Q7 generalises past `Bash`/`Write`/`Read`.** `Edit`, `Task`, `Skill`, and MCP tools were
   not blocked *by a crash*. The gate is the same, so it should hold; not measured.
 - **Whether Q8 generalises past a single-hunk `Edit`.** `MultiEdit`, `NotebookEdit`, `Write` over an
@@ -429,27 +441,221 @@ distinguish crash from deny (§3.1). The adapter must decide outcome from the ev
 1. **Task 8's pause design stands as written.** Q7 fails closed, so the orchestrator may treat
    "flag written and a deny observed" as "side effects blocked". The fallback to cancel-and-preserve
    is not required. **[Observed basis]**
-2. **The stream parser needs a third branch**, not two: allow / deny / hook-error. Mapping: deny →
-   `run.paused`; hook-error → the gate is broken, fail the run loudly (it must **not** be reported as
-   a pause, because nothing is waiting to be resumed and the operator's lever is dead). **[Decision]**
+2. **The stream parser needs four branches**, not two: allow / deny / blocking hook crash
+   (`exit_code == 2`) / **non-blocking hook failure (any other nonzero `exit_code`, where the tool
+   ran anyway)**. Mapping: deny → `run.paused`; blocking crash → the gate is broken, fail the run
+   loudly (it must **not** be reported as a pause, because nothing is waiting to be resumed and the
+   operator's lever is dead); non-blocking failure → the gate is broken **and a side effect already
+   landed** — also a loud failure, and never a pause. **[Decision]**
 3. **A denied `Edit` needs no compensating cleanup.** The checkpoint's `dirtyFiles` will not contain
    a half-applied edit from the denied call. **[Observed basis]**
-4. **Hook deployment is now a correctness concern, not an ops detail.** The one measured failure
-   mode that fails closed is exit 2. A missing or non-executable `pause-gate.sh` is exit 127 and is
-   unmeasured (ADR 0001 Q9) — verifying the hook path exists and is executable at run-spawn time,
-   rather than discovering it at the first tool call, is the cheap mitigation until Q9 is measured.
-   **[Proposed — the controller's call, not this task's]**
+4. **Hook deployment is a correctness concern, not an ops detail — now measured, not supposed.**
+   The only failure mode that fails closed is exit 2. A missing hook path (127), a non-executable
+   hook (126) and a hook that exits 1 all fail **open**, with an empty `permission_denials` and a
+   clean terminal event. **The evidence therefore supports the requirement that M3 must not treat
+   "settings file written" as "pause gate armed":** a positive check that the hook actually fires is
+   needed *before* a run is considered pausable. See §6.4. **[Observed basis; the design of that
+   check is the controller's call, not this task's]**
 
 ---
 
-## 6. Artefacts
+## 6. Q9 (Fix Round 1) — Do hook failures other than exit 2 fail open?
+
+Raised by Q7's own limit and prioritised by the controller, whose reason is worth restating because
+it defines what the measurement is for: **M3 generates the settings file and its absolute hook path
+per run, in code that does not exist yet.** "The hook path is wrong in a spawned run" is a far more
+likely production failure than "the deny `printf` failed". If that case fails open, a single path
+bug produces runs that cannot be paused — silently, with the flag file sitting there and nothing
+denying it.
+
+Priority order given: (1) hook missing / not executable, (2) exit 1. Both were reached, in two runs.
+
+### 6.1 Run A — missing path (127) and non-executable (126), in one run
+
+Two `PreToolUse` entries with **different matchers**, so one run answers both sub-cases and each
+verdict is attributable to a specific tool:
+
+```json
+{"hooks":{"PreToolUse":[
+  {"matcher":"Write","hooks":[{"type":"command","command":"/home/meren/.aiteamos-m3-probe/no-such-hook.sh"}]},
+  {"matcher":"Bash", "hooks":[{"type":"command","command":"/home/meren/.aiteamos-m3-probe/nonexec-hook.sh"}]}
+]}}
+```
+
+- `no-such-hook.sh` — **does not exist**. Verified absent before the run.
+- `nonexec-hook.sh` — **exists, mode 644 (no execute bit)**, and its body is `exit 2` with a stderr
+  message. Deliberate: if it ever executed it would *block*, so "the file was created" proves the
+  hook did not run **and** that the CLI did not block in its place. Standalone check: invoking it
+  directly gives `Permission denied`, `rc=126`; invoking the missing path gives `No such file or
+  directory`, `rc=127`.
+
+```bash
+P="$HOME/.aiteamos-m3-probe"
+cd "$P/q9a-workdir"                # empty; alpha.txt and beta.txt verified absent
+timeout 300 claude -p "Use the Write tool to create a file called alpha.txt containing the word hello. Then use the Bash tool to run this exact command: echo hello > beta.txt" \
+  --output-format stream-json --verbose \
+  --permission-mode bypassPermissions \
+  --settings "$P/settings-q9a.json" \
+  --include-hook-events \
+  < /dev/null > "$P/q9a-capture.jsonl" 2>&1
+```
+
+**The filesystem (the verdict):**
+
+```
+PRE :  alpha.txt? NO    beta.txt? NO      (empty directory)
+POST:  alpha.txt? YES   beta.txt? YES
+       -rw-r--r-- 6 alpha.txt      -> "hello"
+       -rw-r--r-- 6 beta.txt       -> "hello"
+```
+
+**Both side effects landed.** `claude` exit code 0; capture 33 lines. The model used exactly the
+tools it was told to (`Write` for `alpha.txt` at capture L16, `Bash` `echo hello > beta.txt` at L21),
+so each file is attributable to its own hook entry with no ambiguity. **[Observed]**
+
+Raw `hook_response` for the missing path (L18):
+
+```json
+{"type":"system","subtype":"hook_response","hook_name":"PreToolUse:Write","hook_event":"PreToolUse",
+ "output":"/bin/sh: line 1: /home/meren/.aiteamos-m3-probe/no-such-hook.sh: No such file or directory\n",
+ "stdout":"","stderr":"/bin/sh: line 1: ...: No such file or directory\n",
+ "exit_code":127,"outcome":"error",...}
+```
+
+Raw `hook_response` for the non-executable hook (L23):
+
+```json
+{"type":"system","subtype":"hook_response","hook_name":"PreToolUse:Bash","hook_event":"PreToolUse",
+ "output":"/bin/sh: line 1: /home/meren/.aiteamos-m3-probe/nonexec-hook.sh: Permission denied\n",
+ "stdout":"","stderr":"/bin/sh: line 1: ...: Permission denied\n",
+ "exit_code":126,"outcome":"error",...}
+```
+
+Two mechanism details fall out of these. The `command` is run **through `/bin/sh`** — the failure is
+a *shell* diagnostic, not a CLI one, so the hook binary never started. And `stderr` reaching the
+stream is the shell's, not the hook's: `grep -c 'nonexec hook ran' q9a-capture.jsonl` → **0**, so
+the exit-2 body genuinely never executed. **[Observed]**
+
+What followed each failed hook, in both cases:
+
+- `PostToolUse:Write` / `PostToolUse:Bash` **fired** (L19, L24) — the tool bodies ran.
+- The `tool_result` is a **normal success**: `"File created successfully at: .../alpha.txt"` (L20)
+  and `is_error:false`, `"(Bash completed with no output)"` (L25).
+- Terminal `result` (L31): `is_error:false`, `terminal_reason:"completed"`, `num_turns:3`,
+  `total_cost_usd:0.2093390`, **`permission_denials: []`**.
+
+### 6.2 Run B — exit 1
+
+Run separately rather than folded into Run A, because it is not the same shape: 126/127 are *shell*
+failures where the hook never starts, while exit 1 is the **hook script itself running and failing**.
+That distinction matters for `pause-gate.sh` specifically — it runs under `set -u`, and an unset
+variable reference introduced by a future edit would abort bash with **exit 1**, not 2.
+
+`exit1-hook.sh` (executable): `cat > /dev/null`; `printf 'deliberate hook failure exit 1\n' >&2`;
+`exit 1`. Registered with `matcher: "*"` by absolute path in `settings-q9b.json`.
+
+```bash
+cd "$P/q9b-workdir"                # empty; gamma.txt verified absent
+timeout 300 claude -p "Create a file called gamma.txt containing the word hello" \
+  --output-format stream-json --verbose \
+  --permission-mode bypassPermissions \
+  --settings "$P/settings-q9b.json" \
+  --include-hook-events \
+  < /dev/null > "$P/q9b-capture.jsonl" 2>&1
+```
+
+**The filesystem (the verdict):**
+
+```
+PRE :  gamma.txt? NO
+POST:  gamma.txt? YES   -rw-r--r-- 6   -> "hello"
+```
+
+`claude` exit code 0; capture 21 lines. Stream (L10–L15): `Bash`
+(`echo hello > .../gamma.txt && cat ...`) → `PreToolUse:Bash` `hook_response`
+`{"output":"deliberate hook failure exit 1\n","stderr":"deliberate hook failure exit 1\n",
+"exit_code":1,"outcome":"error"}` → **`PostToolUse:Bash` fired** → `tool_result` `is_error:false`,
+content `"hello"`. Terminal `result`: `is_error:false`, `terminal_reason:"completed"`, `num_turns:2`,
+`total_cost_usd:0.1906820`, **`permission_denials: []`**. **[Observed]**
+
+Note this is the same hook script shape as Q7's, differing only in its exit code — 1 instead of 2 —
+and the outcome inverts completely. The exit code is the whole mechanism.
+
+### 6.3 Q9 verdict
+
+**[Observed] Hook failures other than exit code 2 fail OPEN.** Measured on `claude` 2.1.234, under
+`--permission-mode bypassPermissions`, for three failure modes:
+
+| Failure mode | `exit_code` | `outcome` | Tool ran? | `permission_denials` |
+|---|---|---|---|---|
+| hook path does not exist | `127` | `"error"` | **yes** | `[]` |
+| hook exists, no execute bit | `126` | `"error"` | **yes** | `[]` |
+| hook runs and exits 1 | `1` | `"error"` | **yes** | `[]` |
+| *(Q7, for contrast)* hook exits 2 | `2` | `"error"` | no | 3 entries |
+
+This is exactly what Claude Code's documented convention predicts (0 = success, 2 = blocking error,
+other nonzero = non-blocking warning), so **nothing here is version-sensitive-looking**; 2.1.234
+behaves as documented. **[Observed]**
+
+**The signal available to an orchestrator, and its limit:** the failure *is* visible live — the
+`hook_response` carries `exit_code` and `outcome: "error"`. But the terminal `result` event is
+**completely clean**: `is_error:false`, `terminal_reason:"completed"`, `permission_denials: []`,
+process exit code 0. A fail-open run is indistinguishable from a healthy run on the terminal event
+alone. And even the live signal arrives *concurrently with* the tool that it failed to gate — by the
+time the orchestrator sees it, the side effect has landed. Detection is possible; **prevention is
+not, from the stream.** **[Observed]**
+
+**What this does NOT cover:**
+
+- **A signal-killed hook** (e.g. `SIGKILL` to the hook process) was **not** measured.
+- **A hook that exceeds its configured timeout** was **not** measured. This is a plausible
+  production mode — a slow filesystem check on a loaded host — and the convention offers no guidance
+  on which side of the line a timeout lands.
+- Exit codes were sampled, not enumerated: `1`, `126`, `127`. Any *other* nonzero code (e.g. `3`)
+  is **[Inferred]** to behave the same, from the convention plus these three points.
+- Only `Write` and `Bash` were the tools left ungated. Not `Edit`, `Task`, `Skill`, or MCP tools.
+- **Q9 was measured with a `PreToolUse` hook that is not `pause-gate.sh`.** That a *real*
+  `pause-gate.sh` failing this way leaves pause disabled is **[Inferred]** — the gate is the same
+  mechanism, but the specific script was not made to fail this way in a live run.
+
+### 6.4 The consequence, stated plainly
+
+**The evidence supports the requirement.** M3 **cannot** treat "settings file written" as "pause
+gate armed". A settings file can be written, syntactically valid, with an absolute `command` path
+that is wrong or unexecutable, and the resulting run will:
+
+1. spawn cleanly and report `system/init` normally;
+2. execute **every** tool call unimpeded;
+3. leave `permission_denials` empty and terminate with `is_error:false`,
+   `terminal_reason:"completed"`, process exit code 0;
+4. ignore the pause flag entirely — `requestPause` would write the flag, nothing would deny, no
+   `run.paused` would ever be emitted, and the operator would watch a "pausing" run keep working.
+
+That is precisely the failure class this milestone exists to eliminate, and it is reachable from a
+single path bug in code that does not exist yet. **A positive check that the hook actually fires is
+therefore required before a run is treated as pausable** — "the file is on disk" is not evidence
+that the gate is live, and neither is a clean terminal event. **[Observed basis]**
+
+Not designed here, per instruction: the shape of that check is the controller's ruling and lands in
+Task 6. The one thing the measurement does constrain is that a *static* check (does the path exist,
+is it `+x`) would catch 126 and 127 but **not** exit 1 — a hook that is present, executable, and
+broken. Only actually observing the hook fire distinguishes those.
+
+---
+
+## 7. Artefacts
 
 Throwaway, **not committed**, kept on disk for audit:
 
-- `~/.aiteamos-m3-probe/crash-hook.sh`, `settings-q7.json`, `settings-q8.json`
-- `~/.aiteamos-m3-probe/q7-capture.jsonl` (37 lines), `~/.aiteamos-m3-probe/q8-capture.jsonl` (34 lines)
-- `~/.aiteamos-m3-probe/q7-workdir/` (empty — the Q7 verdict), `~/.aiteamos-m3-probe/q8-workdir/target.txt`
+- `~/.aiteamos-m3-probe/crash-hook.sh`, `nonexec-hook.sh`, `exit1-hook.sh`
+- `~/.aiteamos-m3-probe/settings-q7.json`, `settings-q8.json`, `settings-q9a.json`, `settings-q9b.json`
+- `~/.aiteamos-m3-probe/q7-capture.jsonl` (37 lines), `q8-capture.jsonl` (34), `q9a-capture.jsonl` (33),
+  `q9b-capture.jsonl` (21)
+- `~/.aiteamos-m3-probe/q7-workdir/` (empty — the Q7 verdict), `q8-workdir/target.txt`,
+  `q9a-workdir/{alpha,beta}.txt` (present — the Q9 verdict), `q9b-workdir/gamma.txt` (present)
 - `~/.aiteamos-m3-probe/q8-pause.flag`
 
-No product code was written. Repo changes are this document and ADR 0001's Open Questions and Known
-Limitations sections.
+Four `claude` invocations across both rounds, **$0.8598** total reported cost.
+
+No product code was written. Repo changes are this document and ADR 0001's §4, Known Limitations,
+and Open Questions sections.
