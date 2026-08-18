@@ -102,6 +102,59 @@ describe('ClaudeCodeAdapter', () => {
 
     expect(isAlive(handle.pid)).toBe(false)
   })
+
+  it('spawns the child with cwd set to the worktree path', async (): Promise<void> => {
+    // fixture 'env-echo' also carries the child's process.cwd() in its
+    // terminal result payload, alongside process.env.
+    const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'env-echo'] })
+    await adapter.start(input)
+    for await (const _event of adapter.events(input.runId)) {
+      void _event // drain to completion
+    }
+    const payload = adapter.rawTerminalPayload(input.runId)
+    expect(payload?.cwd).toBe(worktreePath)
+  })
+
+  it('a spawn failure rejects start() without an uncaught exception', async (): Promise<void> => {
+    // Reproduces the two cases the reviewer found: a command that does not
+    // exist, and (separately, see the next test) a worktreePath that does
+    // not exist. Both report their OS-level ENOENT asynchronously, on a
+    // later tick than `start()` itself rejects -- the exact window where an
+    // 'error' listener attached too late used to become an uncaught
+    // exception that killed the whole process, not just this run.
+    let uncaught: unknown
+    const onUncaughtException = (error: unknown): void => {
+      uncaught = error
+    }
+    process.once('uncaughtException', onUncaughtException)
+    try {
+      const adapter = new ClaudeCodeAdapter({ command: '/nope/does-not-exist-claude-binary' })
+      await expect(adapter.start(input)).rejects.toThrow(/failed to spawn/)
+      // Give the asynchronous OS-level error room to surface as an
+      // uncaught exception if it were going to.
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    } finally {
+      process.removeListener('uncaughtException', onUncaughtException)
+    }
+    expect(uncaught).toBeUndefined()
+  })
+
+  it('a spawn failure from a nonexistent worktreePath also rejects cleanly', async (): Promise<void> => {
+    let uncaught: unknown
+    const onUncaughtException = (error: unknown): void => {
+      uncaught = error
+    }
+    process.once('uncaughtException', onUncaughtException)
+    try {
+      const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'complete'] })
+      const badInput: StartRunInput = { ...input, worktreePath: path.join(worktreePath, 'does-not-exist') }
+      await expect(adapter.start(badInput)).rejects.toThrow(/failed to spawn/)
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    } finally {
+      process.removeListener('uncaughtException', onUncaughtException)
+    }
+    expect(uncaught).toBeUndefined()
+  })
 })
 
 function isAlive(pid: number): boolean {

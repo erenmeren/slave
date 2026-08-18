@@ -191,49 +191,88 @@ export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
     return CLAUDE_CODE_CAPABILITIES
   }
 
-  async start(input: StartRunInput): Promise<RunHandle> {
+  start(input: StartRunInput): Promise<RunHandle> {
     const args = [...this.extraArgs, ...claudeFlags({ settingsPath: input.settingsPath }), '-p', input.prompt]
 
-    const child = spawn(this.command, args, {
-      cwd: input.worktreePath,
-      env: buildChildEnv(input),
-      stdio: ['ignore', 'pipe', 'pipe'],
+    return new Promise<RunHandle>((resolve, reject) => {
+      const child = spawn(this.command, args, {
+        cwd: input.worktreePath,
+        env: buildChildEnv(input),
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+
+      const queue = new AsyncEventQueue<RuntimeEvent>()
+      const state: RunState = { child, queue, rawResultPayload: undefined }
+      let settled = false
+
+      // Attached immediately, before anything else -- including the `pid`
+      // check just below. A bad command (`ENOENT`) or a `worktreePath`
+      // that does not exist is reported by the OS asynchronously, on a
+      // later tick than this `spawn()` call returns; `child.pid` is
+      // already `undefined` by the time control returns here in both
+      // cases (confirmed directly against Node), but the *event* still
+      // fires later regardless. Without a listener already registered,
+      // that later 'error' event has no handler and Node treats it as an
+      // uncaught exception -- taking down the whole orchestrator process
+      // for what is an ordinary per-run failure (a stale worktree, a
+      // `claude` binary missing from `PATH`). Reproduced by the reviewer
+      // for both a bad command and a missing `worktreePath`.
+      child.once('error', (error: Error) => {
+        if (!settled) {
+          settled = true
+          reject(
+            new Error(`ClaudeCodeAdapter: failed to spawn "${this.command}" for run ${input.runId}: ${error.message}`),
+          )
+          return
+        }
+        // The run already started successfully; a later spawn-layer error
+        // (e.g. failing to signal the child) is handled the same way the
+        // stream simply ending is -- close the queue, do not crash.
+        queue.close()
+      })
+
+      if (child.pid === undefined) {
+        // Handled by the 'error' listener above in the cases actually
+        // observed (bad command, bad cwd); this is a fallback for a
+        // platform where `pid` is unset with no 'error' event forthcoming.
+        if (!settled) {
+          settled = true
+          reject(new Error(`ClaudeCodeAdapter: failed to spawn "${this.command}" for run ${input.runId}`))
+        }
+        return
+      }
+      if (child.stdout === null) {
+        // Cannot happen with the fixed `stdio: ['ignore', 'pipe', 'pipe']`
+        // above, but the type is `Readable | null` regardless -- checked
+        // rather than cast away, so a future stdio change fails loudly
+        // here instead of readline receiving a value it was never typed
+        // to accept.
+        settled = true
+        reject(new Error(`ClaudeCodeAdapter: run ${input.runId} has no stdout pipe`))
+        return
+      }
+
+      this.runs.set(input.runId, state)
+
+      // stderr is drained, not surfaced as a RuntimeEvent: the normalized
+      // vocabulary comes entirely from stdout's NDJSON stream (spec §5.4).
+      // Draining avoids backpressure stalling the child if it writes a lot.
+      child.stderr?.resume()
+
+      const lines = createInterface({ input: child.stdout })
+      lines.on('line', (line: string) => {
+        captureRawResultPayload(state, line)
+        // Read every line, including anything after the terminal `result`
+        // line -- ADR 0001 records an async hook reporting late, as the
+        // final line of a real capture. A reader that stops at `result`
+        // loses it.
+        queue.push(parseStreamLine(line))
+      })
+      lines.once('close', () => queue.close())
+
+      settled = true
+      resolve({ runId: input.runId, pid: child.pid })
     })
-
-    if (child.pid === undefined) {
-      throw new Error(`ClaudeCodeAdapter: failed to spawn "${this.command}" for run ${input.runId}`)
-    }
-    if (child.stdout === null) {
-      // Cannot happen with the fixed `stdio: ['ignore', 'pipe', 'pipe']`
-      // above, but the type is `Readable | null` regardless -- checked
-      // rather than cast away, so a future stdio change fails loudly here
-      // instead of readline receiving a value it was never typed to accept.
-      throw new Error(`ClaudeCodeAdapter: run ${input.runId} has no stdout pipe`)
-    }
-
-    const queue = new AsyncEventQueue<RuntimeEvent>()
-    const state: RunState = { child, queue, rawResultPayload: undefined }
-    this.runs.set(input.runId, state)
-
-    // stderr is drained, not surfaced as a RuntimeEvent: the normalized
-    // vocabulary comes entirely from stdout's NDJSON stream (spec §5.4).
-    // Draining avoids backpressure stalling the child if it writes a lot.
-    child.stderr?.resume()
-
-    const lines = createInterface({ input: child.stdout })
-    lines.on('line', (line: string) => {
-      captureRawResultPayload(state, line)
-      // Read every line, including anything after the terminal `result`
-      // line -- ADR 0001 records an async hook reporting late, as the final
-      // line of a real capture. A reader that stops at `result` loses it.
-      queue.push(parseStreamLine(line))
-    })
-
-    const finish = (): void => queue.close()
-    lines.once('close', finish)
-    child.once('error', finish)
-
-    return { runId: input.runId, pid: child.pid }
   }
 
   events(runId: RunId): AsyncIterable<RuntimeEvent> {

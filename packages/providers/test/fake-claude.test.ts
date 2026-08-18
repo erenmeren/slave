@@ -130,6 +130,13 @@ describe('fake-claude', () => {
     expect(result?.env?.AITEAMOS_PROBE_VAR).toBe('probe-value')
   })
 
+  it('env-echo also carries the child process cwd in the terminal result', async (): Promise<void> => {
+    const { stdout } = await run('node', [FAKE, '--fixture', 'env-echo'], { cwd: FIXTURES_DIR })
+    const lines = parseLines(stdout)
+    const result = lines.find((l) => l.type === 'result') as { cwd?: string } | undefined
+    expect(result?.cwd).toBe(FIXTURES_DIR)
+  })
+
   it('hang mode writes nothing and does not exit on its own', async (): Promise<void> => {
     const child = await import('node:child_process').then((m) => m.spawn('node', [FAKE, '--fixture', 'hang']))
     let sawExit = false

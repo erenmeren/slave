@@ -83,9 +83,10 @@ async function main() {
 
   if (fixtureName === 'env-echo') {
     // Synthetic by necessity: no real capture carries the child's own
-    // process.env, because nothing about the CLI's stream format ever
-    // would. A later task uses this to prove that git identity and the
-    // pause-flag path set by the caller actually reach the spawned child.
+    // process.env or process.cwd(), because nothing about the CLI's
+    // stream format ever would. A later task uses this to prove that git
+    // identity, the pause-flag path, and the worktree cwd the caller set
+    // actually reach the spawned child.
     const resultLine = JSON.stringify({
       type: 'result',
       subtype: 'success',
@@ -97,6 +98,7 @@ async function main() {
       permission_denials: [],
       session_id: 'fake-env-echo',
       env: process.env,
+      cwd: process.cwd(),
     })
     // The routine Stop hook line, same real shape every fixture ends with
     // (spike doc §3.4), so a consumer reading this mode through the same

@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process'
-import { rm, writeFile } from 'node:fs/promises'
-import { isAbsolute } from 'node:path'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { isAbsolute, join } from 'node:path'
 import { z } from 'zod'
 
 /**
@@ -129,35 +130,50 @@ function runHookScript(input: { readonly hookPath: string; readonly flagPath: st
  * whether pause was ever requested, while looking armed. Asserting the
  * second direction is what proves the hook actually discriminates.
  *
+ * `flagPath` is deliberately **not** a parameter. This check needs to arm
+ * and disarm a flag file to probe the hook, and a caller-supplied path
+ * would make it possible -- by accident, before Task 8's wiring exists to
+ * prevent it -- to point that at a live run's own `pauseFlagPath`, silently
+ * disarming that run's gate mid-flight. Minting an isolated temporary flag
+ * file internally, in its own directory removed afterward regardless of
+ * outcome, makes that mistake impossible to make rather than just
+ * documented against.
+ *
  * What this does **not** prove: that Claude Code will actually invoke the
  * hook. A correct, discriminating script registered under a matcher that
  * never matches, or named in a settings file the CLI never loads, passes
  * this check and still gates nothing. It is a cheap necessary condition on
  * the script itself, not a sufficient one on the wiring around it.
  */
-export async function preflightGate(input: {
-  readonly hookPath: string
-  readonly flagPath: string
-}): Promise<void> {
-  const { hookPath, flagPath } = input
+export async function preflightGate(input: { readonly hookPath: string }): Promise<void> {
+  const { hookPath } = input
+  const dir = await mkdtemp(join(tmpdir(), 'aiteamos-preflight-'))
+  const flagPath = join(dir, 'pause.flag')
 
-  const armed = await withFlagFile(flagPath, true, () => runHookScript({ hookPath, flagPath }))
-  if (armed.exitCode !== 0 || !isDenyOutput(armed.stdout)) {
-    throw new Error(
-      `preflightGate: hook at ${hookPath} did not deny with the pause flag present ` +
-        `(exit code ${String(armed.exitCode)}, stdout ${JSON.stringify(armed.stdout)}). ` +
-        'A working pause gate must deny every tool call while the flag file exists.',
-    )
-  }
+  try {
+    const armed = await withFlagFile(flagPath, true, () => runHookScript({ hookPath, flagPath }))
+    if (armed.exitCode !== 0 || !isDenyOutput(armed.stdout)) {
+      throw new Error(
+        `preflightGate: hook at ${hookPath} did not deny with the pause flag present ` +
+          `(exit code ${String(armed.exitCode)}, stdout ${JSON.stringify(armed.stdout)}). ` +
+          'A working pause gate must deny every tool call while the flag file exists.',
+      )
+    }
 
-  const disarmed = await withFlagFile(flagPath, false, () => runHookScript({ hookPath, flagPath }))
-  if (disarmed.exitCode !== 0 || disarmed.stdout.trim() !== '') {
-    throw new Error(
-      `preflightGate: hook at ${hookPath} did not allow with the pause flag absent ` +
-        `(exit code ${String(disarmed.exitCode)}, stdout ${JSON.stringify(disarmed.stdout)}). ` +
-        'A hook that denies with the flag both present and absent gates nothing -- it is not an ' +
-        'armed gate, it is a broken run.',
-    )
+    const disarmed = await withFlagFile(flagPath, false, () => runHookScript({ hookPath, flagPath }))
+    if (disarmed.exitCode !== 0 || disarmed.stdout.trim() !== '') {
+      throw new Error(
+        `preflightGate: hook at ${hookPath} did not allow with the pause flag absent ` +
+          `(exit code ${String(disarmed.exitCode)}, stdout ${JSON.stringify(disarmed.stdout)}). ` +
+          'A hook that denies with the flag both present and absent gates nothing -- it is not an ' +
+          'armed gate, it is a broken run.',
+      )
+    }
+  } finally {
+    // The whole temporary directory, not just the flag file: this is the
+    // only thing this check ever created, so removing it leaves nothing
+    // behind regardless of which branch above ran or threw.
+    await rm(dir, { recursive: true, force: true })
   }
 }
 
@@ -167,12 +183,5 @@ async function withFlagFile<T>(flagPath: string, present: boolean, run: () => Pr
   } else {
     await rm(flagPath, { force: true })
   }
-  try {
-    return await run()
-  } finally {
-    // Leave no flag file behind: the real flag path this pre-flight checks
-    // is the run's own `pauseFlagPath`, which must not already be armed
-    // when the run actually starts.
-    await rm(flagPath, { force: true })
-  }
+  return run()
 }
