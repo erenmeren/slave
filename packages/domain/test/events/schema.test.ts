@@ -71,4 +71,48 @@ describe('parseExecutionEvent', () => {
     })
     expect(result.ok).toBe(false)
   })
+
+  it('rejects a negative seq', () => {
+    const result = parseExecutionEvent({
+      ...BASE,
+      seq: -1,
+      type: 'task.started',
+      taskId: 'TASK-1',
+      payload: { title: 'x' },
+    })
+    expect(result.ok).toBe(false)
+  })
+
+  it('rejects a non-integer seq', () => {
+    const result = parseExecutionEvent({
+      ...BASE,
+      seq: 1.5,
+      type: 'task.started',
+      taskId: 'TASK-1',
+      payload: { title: 'x' },
+    })
+    expect(result.ok).toBe(false)
+  })
+
+  it('rejects a non-ISO-datetime ts', () => {
+    const result = parseExecutionEvent({
+      ...BASE,
+      ts: 'yesterday',
+      type: 'task.started',
+      taskId: 'TASK-1',
+      payload: { title: 'x' },
+    })
+    expect(result.ok).toBe(false)
+  })
+
+  it('rejects an empty workspaceId', () => {
+    const result = parseExecutionEvent({
+      ...BASE,
+      workspaceId: '',
+      type: 'task.started',
+      taskId: 'TASK-1',
+      payload: { title: 'x' },
+    })
+    expect(result.ok).toBe(false)
+  })
 })

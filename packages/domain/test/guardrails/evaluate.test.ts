@@ -67,6 +67,24 @@ describe('evaluateGuardrails', () => {
     )
   })
 
+  it('reports simultaneous breaches in a pinned, deterministic order', () => {
+    // Order matters beyond mere presence: decide() surfaces the FIRST halting breach
+    // (`.find(b => b.haltsScheduling)`) as the halt reason a human sees, so the emitted
+    // order is itself part of the contract, not an implementation detail.
+    const breaches = evaluateGuardrails(DEFAULT_GUARDRAIL_LIMITS, {
+      activeRuns: 5,
+      spentUsd: 25,
+      consecutiveFailures: 4,
+      emergencyStopped: true,
+    })
+    expect(breaches.map((b) => b.guardrail)).toEqual([
+      'emergency_stop',
+      'concurrency',
+      'budget_exhausted',
+      'circuit_breaker',
+    ])
+  })
+
   it('does not breach on concurrency just below the limit', () => {
     const breaches = evaluateGuardrails(DEFAULT_GUARDRAIL_LIMITS, { ...CALM, activeRuns: 2 })
     expect(breaches).toHaveLength(0)
