@@ -209,7 +209,7 @@ shared default — a shared default would let pausing one agent freeze an unrela
 
 ### 5.3 Parsing the stream
 
-The child emits NDJSON. Three properties were measured and the parser must respect all three:
+The child emits NDJSON. Five properties were measured and the parser must respect all five:
 
 1. `hook_response.output` is a **JSON-encoded string**, not a nested object. It needs a second
    parse.
@@ -217,16 +217,53 @@ The child emits NDJSON. Three properties were measured and the parser must respe
    goes through the `tool_result` that follows it.
 3. The terminal `result` event's `permission_denials` array is accurate but arrives at the end.
    It is checkpoint material, never a live signal.
+4. `permission_denials` **cannot distinguish a hook crash from a genuine deny.** A blocking crash
+   lands in it with the same `tool_name` / `tool_use_id` / `tool_input` shape as a deny, and a
+   fail-open hook failure does not land in it at all. It is checkpoint material and nothing more —
+   in particular it is not a health signal for the gate.
+5. `hook_response` events **can arrive after the terminal `result` event.** An asynchronous hook
+   reports late, so the reader does not stop at `result`, and does not assume that
+   `hook_started` / `hook_response` pairs are ordered per tool call. What *is* ordered: the block or
+   deny for a pending call always precedes that call's `tool_result`. That ordering, not stream
+   position, is what property 2's correlation relies on.
 
-**Two denial shapes, never conflated.** A permission-mode denial means the run is misconfigured
-and will accomplish nothing → `guardrail.tripped`. A hook denial means the run is pausing as
-instructed → the pause path in §5.5. An orchestrator that reads the first as the second waits
-forever to resume a run that never paused.
+**Four outcome shapes, never conflated. The discriminator is `exit_code`, never `outcome`.**
+
+| Shape | Signal | Tool ran? | Meaning → mapping |
+|---|---|---|---|
+| Permission-mode denial | `system/permission_denied` | no | The run is misconfigured and will accomplish nothing → `guardrail.tripped` |
+| Hook deny | `hook_response` `exit_code === 0`, `output` parses to `permissionDecision: "deny"` | no | The run is pausing as instructed → the pause path in §5.5 → `run.paused` |
+| Hook crash, blocking | `hook_response` `exit_code === 2` | no | The gate is broken **and the run stopped** → fail the run loudly. Never `paused`: nothing is waiting to be resumed |
+| Hook failure, fails open | `hook_response` `exit_code` non-zero and **not** 2 (measured: 1, 126, 127) | **yes** | The gate is broken **and the tool ran** → fail the run loudly, distinctly from the row above |
+
+The last two must not share a variant. One means the run stopped and cannot be resumed; the other
+means the run continued with no gate at all, and a side effect has already landed. An operator told
+"the gate broke" needs to know which of those happened, and a resume path must never be offered for
+the second.
+
+**`outcome: "error"` does not mean the tool was blocked.** All of `exit_code` 1, 2, 126 and 127
+report it, and only 2 blocks. A classifier keyed on `outcome` would label a fail-open failure as a
+blocking crash — reporting a run as safely stopped at the moment nothing is stopping it. Key on
+`exit_code === 2`, exactly.
+
+An orchestrator that reads the permission-mode denial as a hook deny waits forever to resume a run
+that never paused; one that reads either hook failure as a hook deny reports `run.paused` for a run
+that is still free to act.
+
+Evidence for all of the above, with captures and file-state checks:
+`docs/superpowers/spikes/2026-08-18-m3-hook-failure-modes.md` (§1, §3, §6).
 
 **Run outcome is read from the terminal `result` event** (`is_error`, `terminal_reason`,
 `stop_reason`, `permission_denials`), never from the child's exit code. ADR 0001 records a run
 that reported clean completion while landing nothing — only `permission_denials` revealed it. An
 adapter reading a coarse success/failure signal misclassifies that case in both directions.
+
+**The terminal event is authoritative for outcome but blind to gate health.** A run whose hook
+failed open ends `is_error: false`, `terminal_reason: "completed"`, child exit code 0, and
+`permission_denials: []` — every terminal field says "healthy" while the run executed ungated. That
+verdict comes from §5.5's runtime backstop, which reads the live stream, not from this event. The
+rule above decides *whether the work succeeded*; it does not decide *whether the run was
+controllable*.
 
 **An unrecognized line does not kill the run.** It is dropped and recorded. M2 established the
 pattern for malformed notification payloads; the reason is the same and so is the discipline:
@@ -263,6 +300,39 @@ trying a different tool.
 consulted when a tool call is pending; if the pause arrives while the model is producing final
 text, no deny will ever come. The run ends `succeeded`/`failed`, the flag is cleared, and the
 pause request carries a deadline rather than waiting indefinitely.
+
+**A written settings file is not an armed gate.** A syntactically valid settings file whose
+absolute `command` path is wrong, or points at a file without the execute bit, or points at a
+script that fails for its own reasons, produces a run that spawns cleanly, executes every tool call
+unimpeded, ignores the pause flag entirely, and terminates reporting success with an empty
+`permission_denials`. `requestPause` would write the flag, nothing would deny, no `run.paused` would
+ever be emitted, and the operator would watch a "pausing" run keep working. M3 generates that
+settings file and its hook path per run, so this is reachable from a single path bug. Two checks
+guard it, and they are not interchangeable.
+
+**Pre-flight, before a run is considered pausable.** Execute the hook script directly with a flag
+file present and assert that it emits deny JSON on stdout and exits 0. It is free, local, and
+synchronous, and it catches the whole deployment class at once: a missing path, a missing execute
+bit, a script broken badly enough to fail on its own, and a script whose deny payload no longer
+parses. **What it does not prove is that Claude Code will actually invoke it** — a correct script
+registered under a matcher that never matches, or in a settings file the CLI does not load, passes
+this check and gates nothing. It is a cheap necessary condition, not a sufficient one.
+
+**Runtime backstop, and this is the one that matters.** If tool calls are observed in the stream
+after the pause flag was written, and no deny or blocking crash accompanied them, the gate is
+broken → fail the run loudly. This check keys on behaviour rather than on the shape of any failure,
+which is what makes it the durable one: tool calls proceeding after the flag was armed is the same
+observation whether the hook was missing, slow, timed out, or exited 1, and it holds for failure
+modes nobody has measured yet.
+
+It also fixes a conflation the pause path would otherwise carry. "Pause requested, run finished
+anyway" above is benign — the run had no further tool calls. "Tool calls are proceeding and nothing
+is stopping them" is not benign, and today both look like the same terminal outcome. The stream
+already carries what separates them: the presence of `run.tool_call` events with timestamps after
+the flag write, unaccompanied by a deny or an `exit_code === 2` crash. The pause path must tell
+those apart before it reports either.
+
+Evidence: `docs/superpowers/spikes/2026-08-18-m3-hook-failure-modes.md` §6.
 
 ### 5.6 Consuming the stream
 
@@ -438,9 +508,12 @@ Minimal, because the milestone gate is driven from the CLI and nothing else cons
 ### 12.1 Real git, real Postgres, fake `claude`
 
 The primary instrument is a **fake `claude` executable** that replays NDJSON fixtures derived from
-M0's real captures. Its modes mirror the error taxonomy of §13: normal completion, hook deny
-(pause), permission-mode denial (misconfiguration), crash mid-stream, hang with no output, and a
-malformed line.
+M0's real captures. Its modes mirror the error taxonomy of §13 and the four outcome shapes of
+§5.3: normal completion, hook deny (pause), permission-mode denial (misconfiguration), **blocking
+hook crash (`exit_code === 2`, tool does not run)**, **fail-open hook failure (`exit_code` 1/126/127
+with the tool running anyway and `permission_denials` empty)**, crash mid-stream, hang with no
+output, and a malformed line. The last two hook modes are what make §12.3's gate mutations
+expressible; without them the fail-open path has no fixture and cannot be proved to bite.
 
 This makes the adapter deterministic and mutation-provable, which is the bar M2 set: if you cannot
 prove a test bites by mutating the code, you do not have a test. Nothing can be mutation-proved
@@ -452,7 +525,7 @@ model is faked.
 
 ### 12.2 Real-`claude` tests
 
-A separate vitest project, outside `npm test`, invoked explicitly. It holds the Q7/Q8 measurements
+A separate vitest project, outside `npm test`, invoked explicitly. It holds the Q7/Q8/Q9 measurements
 (§14) and one end-to-end smoke run. These cost money and are not deterministic; they are a gate a
 human runs, not a suite CI runs.
 
@@ -461,7 +534,12 @@ human runs, not a suite CI runs.
 Each of these is a place where a passing test could mean nothing, so each gets an explicit
 mutation in its task:
 
-- The two denial shapes are not conflated — swap the handlers and a test must fail.
+- The four outcome shapes of §5.3 are not conflated — swap any two handlers and a test must fail.
+  In particular, reclassifying a fail-open hook failure (`exit_code` 1/126/127) as a blocking crash
+  (`exit_code === 2`) must fail a test, because that mutation is the one that reports a run as
+  stopped while it is still acting.
+- The runtime gate backstop bites — make the hook fail open in the fake `claude` after the flag is
+  written and the run must fail loudly rather than report `paused` or a clean finish.
 - Pause kills on the first observed deny — remove the kill and a test must fail.
 - The pause flag path is per-run — share it and a test must show one run freezing another.
 - An empty verify list refuses rather than passes.
@@ -487,21 +565,28 @@ Six classes. The rule they share: **no failure is silent — every one emits a d
 
 ## 14. Measurements That Come First
 
-Two of ADR 0001's open questions are load-bearing for a milestone that implements pause, and both
-are measured **before the adapter is written**:
+Two of ADR 0001's open questions were load-bearing for a milestone that implements pause, and both
+were measured **before the adapter was written**. A third was raised by the first one's limit and
+measured in the same task. Full evidence:
+`docs/superpowers/spikes/2026-08-18-m3-hook-failure-modes.md`; ADR 0001's Open Questions carry the
+resolutions.
 
-- **Q7 — does a crashing hook fail closed?** `pause-gate.sh`'s exit-2 path was verified standalone
-  but never exercised by a real `claude` run. If it fails *open*, the tool call proceeds and the
-  pause silently does not happen — a hole in the exact mechanism M3 depends on. *Settles it:*
-  register a hook that exits 2 and observe whether the tool call runs.
-- **Q8 — can a denied `Edit` partially apply?** Both denied calls in the spike were read-only.
-  `PreToolUse` fires before the tool executes, so a denied `Edit` should never apply, but that is
-  inferred from documented timing rather than observed. *Settles it:* trigger a pause while an
-  `Edit` is the pending call.
-
-If Q7 fails open, the pause design changes: the orchestrator can no longer treat "flag written" as
-"side effects blocked" and must fall back to cancel-and-preserve. That is why it is measured first
-rather than assumed.
+- **Q7 — does a crashing hook fail closed? Yes, for `exit_code` 2.** A hook that exits 2 blocked
+  every tool call and the side effect never reached disk. The pause design in §5.5 therefore stands
+  as written: the orchestrator may treat an observed deny as side effects blocked, and the fallback
+  to cancel-and-preserve is not needed.
+- **Q8 — can a denied `Edit` partially apply? No; it does not apply at all.** A pause triggered
+  while an `Edit` was the pending call left the target file byte-identical with an unchanged mtime
+  and no `PostToolUse`. A denied `Edit` needs no compensating cleanup, and a checkpoint's dirty-file
+  list will not carry a half-applied edit from a denied call.
+- **Q9 — do hook failures *other than* exit 2 fail closed? No. They fail open.** A missing hook
+  path (127), a hook without the execute bit (126), and a hook that runs and exits 1 each let the
+  tool call proceed, with `permission_denials` empty and a terminal event indistinguishable from a
+  healthy run. This is what forces the two gate checks in §5.5 and the fourth outcome shape in §5.3.
+  A signal-killed hook and a hook that exceeds its timeout are **deliberately not measured**: the
+  runtime backstop in §5.5 catches them behaviourally, keying on tool calls proceeding after the
+  flag was armed rather than on the shape of the failure, so knowing the shape of a timeout would
+  not change a decision here.
 
 Q4 (custom system prompt), Q5 (`--allowedTools` enforcement) and Q6 (pause with no further tool
 calls) are **not** measured here. Each is taken on its fail-safe side and recorded as a limitation:
