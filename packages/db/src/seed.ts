@@ -31,6 +31,11 @@ export async function seed(): Promise<void> {
       name: 'Checkout Platform',
       repoPath: '/tmp/checkout-platform',
       verifyCommand: 'npm test',
+      // Deliberately not the schema default of 3. Every seeded task copies this value below —
+      // if it matched the default, that copy would be indistinguishable from a hardcoded
+      // literal, and the link between Workspace.maxAttempts and Task.maxAttempts (the thing
+      // M1's final review found unlinked) would go untested. Do not "tidy" this back to 3.
+      maxAttempts: 5,
     },
   })
 
