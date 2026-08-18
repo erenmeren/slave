@@ -53,8 +53,9 @@ the client lives behind the `@ai-team-os/db/client` subpath declared in `package
 
 **This is a convention, not a barrier.** Nothing stops another package from importing
 `@ai-team-os/db/client` and calling `executionEvent.create` directly: the subpath is a declared,
-public export, and two of `packages/events`' own integration tests (`append.test.ts`,
-`stream.test.ts`) do exactly that on purpose, to plant rows the gate would have refused. It has to be
+public export, and `stream.test.ts` does exactly that on purpose, to plant rows the gate would have
+refused. (`append.test.ts` imports the same subpath, but only for `TRUNCATE`, `count()`, and its
+constraint-trigger fixture — it never bypasses the gate to write an event.) It has to be
 declared — the design spec places `appendEvent` in `packages/events`, so the client must cross a
 package boundary to reach it, and a package-private client would make the gate itself
 unimplementable. What the arrangement actually buys is that the raw client is absent from the
@@ -121,10 +122,19 @@ Two behaviours here matter to whoever wires this into an SSE route (M4):
   deadlines (`connectionTimeoutMillis` for connect/handshake, `query_timeout` for the `LISTEN`
   query) rather than one shared budget. If the first connect attempt exceeds either bound,
   `subscribeEvents()` rejects instead of hanging.
-- **`close()` can take up to roughly 4.2 seconds.** `close()` awaits any reconnect loop already in
-  flight, and that loop's own `open()` call can burn both 2000ms deadlines in the pathological
-  case where a server stalls exactly at the phase boundary, plus the 250ms retry delay
-  (`RECONNECT_DELAY_MS`). Teardown code must not assume `close()` resolves quickly.
+- **`close()` can take up to roughly 6.25 seconds.** `close()` awaits any reconnect loop already in
+  flight. In the pathological case that loop pays the 250ms retry delay (`RECONNECT_DELAY_MS`),
+  then both of `open()`'s 2000ms deadlines against a server that stalls exactly at the phase
+  boundary, and then up to a further 2000ms bounding the `end()` that discards the failed
+  attempt's client. Those three are sequential, so the ceiling is 250 + 2000 + 2000 + 2000.
+
+  Two things that are easy to get wrong here. The `end()` bound is part of the budget, not an
+  afterthought: a peer that answers `LISTEN` with an error and then holds the socket open makes
+  pg's own `end()` wait forever, so it is raced against the same 2000ms and the socket destroyed
+  on expiry. And a slow `close()` does **not** require a reconnect loop at all — discarding a
+  live client goes through the same bounded `end()`, which has been measured at 2007ms against a
+  half-open peer with nothing else in flight. Teardown code must not assume `close()` resolves
+  quickly, and should budget past 6.25s rather than at it.
 
 ### The fallback poll
 

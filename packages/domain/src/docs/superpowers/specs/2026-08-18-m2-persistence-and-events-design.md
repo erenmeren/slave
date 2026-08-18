@@ -163,10 +163,22 @@ it writes serially. Commit order therefore matches `seq` order.
 web app writing directly, or the orchestrator parallelising its own writes — this breaks with no
 error message and no failing test. Any such change requires revisiting this section first.
 
-### 6.5 The gate is protected by not exporting the alternative
+### 6.5 The gate is a reviewable convention, not an enforced barrier
 
-`packages/db` does not export the raw Prisma client. `ExecutionEvent` has one write path. This is
-the price of choosing the application-level gate over a database trigger, and it is paid here.
+`packages/db`'s barrel does not export the raw Prisma client, so `ExecutionEvent` has one write
+path by convention. This is the price of choosing the application-level gate over a database
+trigger, and it is paid here.
+
+**Amended after implementation (M2).** As first written this section claimed the gate was
+protected *by not exporting the alternative*. That protection does not exist and cannot: §4 places
+`appendEvent` in `packages/events`, so the client must cross a package boundary to reach it, and
+`packages/db/package.json` therefore declares a `./client` subpath export. Any package can import
+it, and `stream.test.ts` deliberately does in order to plant rows the gate would have refused.
+
+What the arrangement actually buys is that the client is absent from the barrel every other
+consumer imports, so a bypass takes a deliberate, greppable second import and is visible in
+review. There is no runtime check behind it. `grep -rn "@ai-team-os/db/client" packages` is the
+audit. See `docs/event-model.md` for the same statement at the implementation level.
 
 ---
 

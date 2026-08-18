@@ -26,10 +26,13 @@ const RECONNECT_DELAY_MS = 250
  *
  * 2s is 10-100x the observed cost of a real connect (~10-30ms locally, a few hundred ms
  * cross-region), and the cost of erring short is only a retry 250ms later rather than a surfaced
- * error, so short is the cheap direction. It keeps `close()` worst-case at roughly
- * RECONNECT_DELAY_MS + one bounded `open()` — and even in the pathological case where a server
- * stalls at the phase boundary and burns both budgets, the loop still terminates in ~4s instead of
- * never.
+ * error, so short is the cheap direction.
+ *
+ * The same budget bounds the `end()` that discards a failed attempt's client, so a worst-case
+ * `close()` pays three of these sequentially plus the retry delay: RECONNECT_DELAY_MS, then both
+ * of `open()`'s deadlines against a server stalling at the phase boundary, then the discard —
+ * ~6.25s, not ~4s. The loop terminates either way, which is the point; the number matters only
+ * because M4's SSE teardown budgets against it, so keep it in step with docs/event-model.md.
  */
 const OPEN_TIMEOUT_MS = 2_000
 
