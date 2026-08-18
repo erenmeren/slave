@@ -1,15 +1,20 @@
 import { spawn } from 'node:child_process'
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 
 const repoRoot = fileURLToPath(new URL('../../../', import.meta.url))
 const gatePath = path.join(repoRoot, 'scripts/pause-gate.sh')
 
 interface RunHookOptions {
   readonly flagExists?: boolean
+  // Written verbatim as the pause flag file's content -- the hook reads its deny reason from
+  // there (Fix Round 1: an environment variable can't carry it, because the child's environment
+  // is fixed at spawn time and the reason is only known later, when the operator pauses).
+  // Omitted or `undefined` leaves the flag file empty, which is the hook's own fallback to its
+  // static default message.
   readonly reason?: string
   // Present with value `undefined` means "unset AITEAMOS_PAUSE_FLAG entirely" -- distinct from
   // omitting the key, which means "use this test's own generated flag path". Detected below via
@@ -33,7 +38,7 @@ function runHook(options: RunHookOptions = {}): Promise<RunHookResult> {
   const flagExists = options.flagExists ?? true
 
   if (flagExists) {
-    writeFileSync(flagPath, '')
+    writeFileSync(flagPath, options.reason ?? '')
   }
 
   const env: Record<string, string | undefined> = { ...process.env }
@@ -45,11 +50,6 @@ function runHook(options: RunHookOptions = {}): Promise<RunHookResult> {
     }
   } else {
     env['AITEAMOS_PAUSE_FLAG'] = flagPath
-  }
-  if (options.reason !== undefined) {
-    env['AITEAMOS_PAUSE_REASON'] = options.reason
-  } else {
-    delete env['AITEAMOS_PAUSE_REASON']
   }
 
   return new Promise((resolve, reject) => {
@@ -108,6 +108,16 @@ describe('pause-gate.sh', () => {
     expect(parsed.hookSpecificOutput.permissionDecisionReason).toBe(reason)
   })
 
+  // Fix Round 1: the reason travels in the flag file's own contents now, not an environment
+  // variable, and it must survive the trip byte-for-byte -- neither gaining nor losing trailing
+  // whitespace depending on how the caller wrote it (`printf '%s'` vs. `echo`).
+  it('preserves a trailing newline in the reason rather than stripping it', async (): Promise<void> => {
+    const reason = 'reason with trailing newline\n'
+    const { stdout } = await runHook({ flagExists: true, reason })
+    const parsed = JSON.parse(stdout) as { hookSpecificOutput: { permissionDecisionReason: string } }
+    expect(parsed.hookSpecificOutput.permissionDecisionReason).toBe(reason)
+  })
+
   it('emits nothing and exits 0 when the flag is absent', async (): Promise<void> => {
     const { stdout, code } = await runHook({ flagExists: false })
     expect(stdout).toBe('')
@@ -119,5 +129,24 @@ describe('pause-gate.sh', () => {
     const parsed = JSON.parse(stdout) as { hookSpecificOutput: { permissionDecision: string } }
     expect(parsed.hookSpecificOutput.permissionDecision).toBe('deny')
     expect(code).toBe(0)
+  })
+
+  // Fix Round 1's other requirement: a flag file that exists but cannot be read is the same class
+  // of failure as a write failure, and must get the same response -- exit 2, never an exit 0 with
+  // no body (which would read as allow).
+  it('exits 2 when the pause flag exists but cannot be read', async (): Promise<void> => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'aiteamos-pause-gate-unreadable-'))
+    const flagPath = path.join(dir, 'pause.flag')
+    writeFileSync(flagPath, 'secret')
+    chmodSync(flagPath, 0o000)
+
+    try {
+      const { stdout, code } = await runHook({ flagVar: flagPath })
+      expect(code).toBe(2)
+      expect(stdout).toBe('')
+    } finally {
+      chmodSync(flagPath, 0o600)
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
