@@ -15,3 +15,9 @@ const adapter = new PrismaPg({ connectionString: process.env['DATABASE_URL'] })
 export const prisma: PrismaClient = new PrismaClient({ adapter })
 
 export type { PrismaClient }
+
+export type {
+  AgentRun as AgentRunRow,
+  ExecutionEvent as ExecutionEventRow,
+  Task as TaskRow,
+} from './generated/client.js'
