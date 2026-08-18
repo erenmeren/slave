@@ -113,6 +113,19 @@ Reconciliation of run output is *not* in the tick. It runs continuously, per run
   exist until the child's first `system/init` line. It is emitted when that line arrives (§5.4).
 - `halt` → emit `guardrail.tripped` and stop scheduling for that workspace this tick.
 
+**Two things in this spec are called "halt", and they are not the same thing.** Naming them apart
+here because conflating them is how the per-tick one gets used for the persistent one:
+
+- The **`halt` command** is `decide()`'s per-tick output. It is *derived*, never stored — `decide()`
+  recomputes it from `world.stats` every tick and it expires with the tick that produced it.
+- A **workspace halt** is persistent state: `Workspace.haltedReason` (§10), raised by a pause gate
+  failure (§13.1) and cleared only by an operator (§11).
+
+They compose without either changing: while `haltedReason` is set, every `loadWorld` produces
+`stats.emergencyStopped: true`, so `decide()` returns the `halt` command on *every* tick. The
+scheduling stop persists because its **input** persists, not because the command does. That is why
+the command staying per-tick is correct and must not be "fixed" into a latch.
+
 Everything else M3 does — running verify, writing a checkpoint, moving a task to `rework` — is the
 orchestrator *reacting to observed state*, not executing a domain command. This is the boundary
 chosen deliberately in brainstorming: putting those in the `Command` union would force `World` to
@@ -155,7 +168,7 @@ domain's existing `World` type. Nothing in `World` changes.
 | `agents[].busy` | true when the agent has an `AgentRun` in a non-terminal status |
 | `limits` | the `Workspace` guardrail columns |
 | `stats.activeRuns`, `spentUsd`, `consecutiveFailures` | aggregated from `AgentRun` |
-| `stats.emergencyStopped` | false throughout M3 — the emergency stop switch is M8 (§1.2) |
+| `stats.emergencyStopped` | `Workspace.haltedReason !== null` — set by a pause gate failure (§13.1). M8 adds the *human-facing* emergency stop on top of this same column rather than a second one |
 
 **One type mismatch to resolve, not paper over.** `Task.requiredRole` is nullable in the schema
 while the domain's `SchedulableTask.requiredRole` is not. A task with no required role cannot be
@@ -482,6 +495,7 @@ M3 requires one migration.
 | `AgentRun.terminalAt` | §7.4 — makes future worktree collection a sweep, not a migration |
 | `Workspace.verifyCommand: String` → `verifyCommands: String[]` | Parent spec §10 specifies an ordered list. M2 implemented a single string; this corrects a silent narrowing |
 | `Workspace.setupCommands: String[]` | §7.2 — ADR 0001 requires it and nothing carries it today |
+| `Workspace.haltedReason: String?`, `Workspace.haltedAt: DateTime?` | §13.1 — the persistent workspace halt. `loadWorld` maps `emergencyStopped: haltedReason !== null`; M8's emergency stop inherits these columns rather than adding its own |
 | `EventType` enum widened by nine values | §9 |
 
 The seed is updated for the two `Workspace` changes.
@@ -499,7 +513,17 @@ Minimal, because the milestone gate is driven from the CLI and nothing else cons
 | `pause --run <id>` | write the flag, follow the protocol |
 | `resume --run <id> [--message <text>]` | clear the flag, resume with an optional queued instruction |
 | `cancel --run <id>` | kill and preserve the worktree |
-| `status` | active runs, their pids, worktrees, and states |
+| `clear-halt --workspace <id>` | clear a safety halt so the workspace can schedule again (§13.1) |
+| `status` | active runs, their pids, worktrees, and states, and any workspace halt with its reason |
+
+**`clear-halt` and `resume` are different actions and the help text must not let them blur.**
+`resume --run <id>` continues one paused run that is waiting to be continued. `clear-halt
+--workspace <id>` retracts a safety halt that stopped the *whole workspace* from scheduling
+anything — it starts nothing by itself, it removes the reason nothing was starting. An operator who
+reaches for the wrong one either continues a run while the workspace is still halted (nothing
+happens, confusingly) or clears a safety halt believing they were nudging a single run (the
+dangerous direction). `clear-halt` writes `haltedReason = null`, `haltedAt = null` and is the only
+thing that does.
 
 ---
 
@@ -542,6 +566,9 @@ mutation in its task:
   written and the run must fail loudly rather than report `paused` or a clean finish.
 - A pause gate failure halts the workspace — remove the halt and a test must show a second
   uncontrollable run starting on the next tick (§13.1).
+- The halt survives a restart — that is the property the `Workspace` column was chosen for over a
+  local latch, so a test must reload the world in a fresh process and find the workspace still
+  halted. Untested, this regresses to the disqualified design without anything failing.
 - Pause kills on the first observed deny — remove the kill and a test must fail.
 - The pause flag path is per-run — share it and a test must show one run freezing another.
 - An empty verify list refuses rather than passes.
@@ -580,7 +607,10 @@ Four behaviours, in order:
 2. **Emit `run.failed`** carrying the gate reason, **and `guardrail.tripped`**. Two events, because
    the run failed *and* a guardrail is what failed it.
 3. **Count the attempt**, so a task cannot loop forever against a gate that stays broken.
-4. **Halt scheduling for that workspace.**
+4. **Halt scheduling for that workspace** — write `Workspace.haltedReason` and `haltedAt` (§10).
+   This is the persistent workspace halt of §3.2, **not** `decide()`'s per-tick `halt` command.
+   Implementing it against the command would expire it one tick later and start another
+   uncontrollable run a second after the first was cancelled.
 
 **Why the halt, and not just the failure.** A broken gate is almost always a misconfiguration
 shared by every run in the workspace — one wrong absolute path in generated settings — so the next
@@ -610,12 +640,33 @@ distinction survives all the way to what the operator reads.
   and `permission_denials: []` (§5.3). Left to that class alone, an ungated run is recorded as a
   success. Gate health is decided from the live stream by this class, never from the terminal event.
 
-**Open mechanism, deliberately not decided here.** §3.2's `halt` is a domain command from
-`decide()` and is scoped to "this tick". A gate-failure halt that expired at the next tick would
-start another uncontrollable run one second later, which is precisely what the argument above says
-must not happen — so this halt must outlast the tick that raised it and persist until an operator
-clears it. Whether that latch is a `Workspace` column, an orchestrator-local flag, or a `decide()`
-input is a design decision for the task that implements it; §10 currently provisions none of them.
+**The halt mechanism, and why this shape.** Two new columns, `Workspace.haltedReason String?` and
+`Workspace.haltedAt DateTime?` (§10), and one line in `loadWorld`:
+`emergencyStopped: haltedReason !== null` (§4). `decide()` already does the rest:
+`WorkspaceStats.emergencyStopped` has been in the domain since M1, `evaluateGuardrails` already
+reports it as a halting breach, and `decide()` already returns `halt` for it. Clearing is an operator action
+(`clear-halt`, §11), never automatic: a halt that cleared itself would be a delay, not a halt.
+
+Two rejected alternatives, recorded because the reasons are the point:
+
+- **An orchestrator-local latch** is disqualified outright. It dies with the process, so a daemon
+  crash-loop would resume starting uncontrollable agents — the exact inversion of the guarantee the
+  halt exists to provide. Restart survival is not a nice-to-have for this one; §3.4 exists because
+  restarts leaving bad state is a thing that happens.
+- **A new `World` field** looked like the honest domain-first answer and turned out to be
+  unnecessary: the domain has modelled "this workspace is stopped" since M1. Reusing
+  `emergencyStopped` keeps §3.2's boundary shut — the pure core still knows nothing about processes;
+  it is being told a fact about a workspace, which is what it already consumes — and it avoids a
+  parallel concept that would then need reconciling with M8's. **M8's emergency stop inherits this
+  column** rather than adding its own; the human-facing switch and the automatic gate-failure halt
+  are the same state reached two ways.
+
+**One asymmetry to carry into the implementation.** `decide()` surfaces the halt reason as the
+guardrail *name* (`emergency_stop`), not as the detail string — so the `guardrail.tripped` event on
+the halt path says "emergency stop", which is true but tells the operator nothing about the hook
+path. The operator-facing reason lives in `Workspace.haltedReason`, which is why §11's `status`
+surfaces it and why the `run.failed` from behaviour 2 above is the event that must carry the gate
+detail.
 
 ---
 
