@@ -115,7 +115,7 @@ function buildPrompt(task: {
  * there and Task 11 already found `.aiteamos/` showing up as untracked content. A settings file in
  * the worktree makes every verify see a dirty tree it did not create.
  */
-function runFilePaths(repoPath: string, runId: RunId): { settingsPath: string; pauseFlagPath: string } {
+export function runFilePaths(repoPath: string, runId: RunId): { settingsPath: string; pauseFlagPath: string } {
   const dir = join(repoPath, '.aiteamos', 'runs', runId)
   mkdirSync(dir, { recursive: true })
   return { settingsPath: join(dir, 'settings.json'), pauseFlagPath: join(dir, 'pause.flag') }

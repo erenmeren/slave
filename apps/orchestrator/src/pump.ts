@@ -1,4 +1,6 @@
-import { execFileSync } from 'node:child_process'
+import { execFile } from 'node:child_process'
+import { readFileSync } from 'node:fs'
+import { promisify } from 'node:util'
 import { prisma } from '@ai-team-os/db/client'
 import type { AgentId, RunId, TaskId, WorkspaceId } from '@ai-team-os/domain'
 import { appendEvent } from '@ai-team-os/events'
@@ -9,6 +11,8 @@ import type { RunOutcome, RuntimeEvent } from '@ai-team-os/providers'
  * cap"). It protects an append-only log first and, from M4, a screen -- one runaway paste from a
  * model that decided to echo a file back is otherwise a row nobody can read and nobody can delete.
  */
+const execFileAsync = promisify(execFile)
+
 export const OUTPUT_CAP = 4_000
 
 export interface PumpRunInput {
@@ -34,6 +38,15 @@ export interface PumpRunInput {
    * component that knows *when* the pause happened. Optional so a caller that never pauses (a test
    * with a fixed event array) need not invent them.
    */
+  /**
+   * True when this pump is continuing a run rather than starting one.
+   *
+   * The stream cannot tell the difference -- a resumed process emits `system/init` exactly as a
+   * fresh one does -- so a resumed run produced a *second* `run.started`, which is an illegal
+   * transition from `working` for anything replaying through `applyRunEvent`. The caller knows,
+   * and it is the caller that emits `run.resumed`.
+   */
+  readonly resumed?: boolean
   readonly spawn?: {
     readonly settingsPath: string
     readonly pauseFlagPath: string
@@ -80,6 +93,17 @@ function gateFailureReason(event: {
         `broke until the cancel landed, and nothing could have stopped it in that window: ${stderr}`
 }
 
+/** The name `pause` wrote into the flag file, if it is still there. Provenance, never required. */
+function readPauseRequester(pauseFlagPath: string | undefined): string | null {
+  if (pauseFlagPath === undefined) return null
+  try {
+    const who = readFileSync(pauseFlagPath, 'utf8').trim()
+    return who === '' ? null : who
+  } catch {
+    return null
+  }
+}
+
 /**
  * Persists everything a *fresh process* needs to continue this run.
  *
@@ -98,6 +122,7 @@ async function writeCheckpoint(input: {
   readonly denied: readonly string[]
   readonly spawn: PumpRunInput['spawn']
   readonly pauseReason: string
+  readonly requestedBy: string | null
 }): Promise<void> {
   if (input.spawn === undefined || input.sessionId === null) {
     // No session id means the run never reached `system/init`, so there is nothing to `--resume`.
@@ -109,13 +134,11 @@ async function writeCheckpoint(input: {
 
   const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: input.runId } })
   const worktreePath = run.worktreePath ?? ''
-  const headCommit = worktreePath === '' ? '' : gitOutput(worktreePath, ['rev-parse', 'HEAD'])
+  const headCommit = worktreePath === '' ? '' : await gitOutput(worktreePath, ['rev-parse', 'HEAD'])
   const dirtyFiles =
     worktreePath === ''
       ? []
-      : gitOutput(worktreePath, ['status', '--porcelain'])
-          .split('\n')
-          .filter((line) => line !== '')
+      : (await gitOutput(worktreePath, ['status', '--porcelain'])).split('\n').filter((line) => line !== '')
 
   await prisma.checkpoint.upsert({
     where: { runId: input.runId },
@@ -138,9 +161,12 @@ async function writeCheckpoint(input: {
       dirtyFiles,
       cumulativeCostUsd: run.costUsd,
       pauseReason: input.pauseReason,
+      requestedBy: input.requestedBy,
     },
     update: {
-      sessionId: input.sessionId,
+      // `sessionId` is deliberately absent: it is written once at run start and never rewritten
+      // (ADR 0001 §5, and the adapter's own `Checkpoint` docstring). A plain `--resume` reports the
+      // same UUID, so rewriting it adds a failure mode for no benefit.
       lastToolUseId: input.lastToolUseId,
       lastToolName: input.lastToolName,
       numTurns: input.toolCalls,
@@ -149,15 +175,30 @@ async function writeCheckpoint(input: {
       dirtyFiles,
       cumulativeCostUsd: run.costUsd,
       pauseReason: input.pauseReason,
+      requestedBy: input.requestedBy,
     },
   })
 }
 
-/** Git, read-only, in the run's worktree. A failure here must not take the pause down with it. */
-function gitOutput(cwd: string, args: readonly string[]): string {
+/**
+ * Git, read-only, in the run's worktree.
+ *
+ * Asynchronous, and bounded. This is awaited inside the pump's `for await`, so a synchronous call
+ * here stalls every *other* run's pump, the tick timer and the notification handler along with it --
+ * and an unbounded one (a contended `index.lock`) stalls them indefinitely. A failure must not take
+ * the pause down with it, but it must also not be silent, because an empty `dirtyFiles` reads as a
+ * clean tree.
+ */
+async function gitOutput(cwd: string, args: readonly string[]): Promise<string> {
   try {
-    return execFileSync('git', [...args], { cwd, encoding: 'utf8' }).trim()
-  } catch {
+    const { stdout } = await execFileAsync('git', [...args], {
+      cwd,
+      timeout: 10_000,
+      maxBuffer: 8 * 1024 * 1024,
+    })
+    return stdout.trim()
+  } catch (error) {
+    console.warn(`[pump] git ${args.join(' ')} failed in ${cwd}: ${String(error)}`)
     return ''
   }
 }
@@ -196,14 +237,19 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
   }
 
   let outcome: RunOutcome | null = null
-  let sessionId: string | null = null
+
   let lastToolUseId: string | null = null
   let lastToolName: string | null = null
   const denied: string[] = []
   // Seeded from the row, not from zero, for the same reason the column is incremented: on a resume
   // this pump is continuing a run that already made tool calls, and `pausedAtStep` should say
   // where the *run* is, not where this pump started reading.
-  let toolCalls = (await prisma.agentRun.findUniqueOrThrow({ where: { id: runId } })).toolCalls
+  const startingRow = await prisma.agentRun.findUniqueOrThrow({ where: { id: runId } })
+  let toolCalls = startingRow.toolCalls
+  // Seeded from the row for the same reason the counter is: a resumed pump is continuing a run that
+  // already has a session. Without this, a resumed run that pauses again bails with "nothing could
+  // resume it" and silently leaves the *previous*, now-stale checkpoint for the next resume to use.
+  let sessionId: string | null = startingRow.sessionId
   let unparsableLines = 0
   let paused = false
   let gateFailed = false
@@ -214,12 +260,15 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
         // Spec §5.4: not at spawn. `run.started`'s payload carries the session id, and there is no
         // session id until this line -- a run that dies before it produces `run.failed` instead,
         // which is the accurate account of what happened.
-        await prisma.agentRun.update({
-          where: { id: runId },
+        // Conditional, like every other write in this file that moves the run: an operator's
+        // `cancel` concludes the run and kills the child, and the stream's remaining lines must not
+        // walk a terminal run back to `working`.
+        await prisma.agentRun.updateMany({
+          where: { id: runId, endedAt: null },
           data: { sessionId: event.sessionId, status: 'working' },
         })
         sessionId = event.sessionId
-        await emit('run.started', 'agent', { sessionId: event.sessionId })
+        if (input.resumed !== true) await emit('run.started', 'agent', { sessionId: event.sessionId })
         break
       }
 
@@ -231,7 +280,7 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
         toolCalls += 1
         lastToolUseId = event.toolUseId
         lastToolName = event.toolName
-        await prisma.agentRun.update({ where: { id: runId }, data: { toolCalls: { increment: 1 } } })
+        await prisma.agentRun.updateMany({ where: { id: runId, endedAt: null }, data: { toolCalls: { increment: 1 } } })
         // `summary` carries the tool use id rather than the call's arguments: `RuntimeEvent` never
         // carries the input (Task 4), and widening the parser for a richer summary belongs to M4,
         // where the consumer is. The id at least ties the event back to one stream line.
@@ -269,8 +318,8 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
         // than adjudicating that, because the alternative to an unexpected `paused` row is a
         // killed process still recorded as working.
         paused = true
-        await prisma.agentRun.update({
-          where: { id: runId },
+        await prisma.agentRun.updateMany({
+          where: { id: runId, endedAt: null },
           data: { status: 'paused', pausedAtStep: toolCalls },
         })
         await writeCheckpoint({
@@ -282,6 +331,8 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
           denied,
           spawn: input.spawn,
           pauseReason: event.reason,
+          // Who asked, when the flag file says. §6 lists it as provenance and nothing wrote it.
+          requestedBy: readPauseRequester(input.spawn?.pauseFlagPath),
         })
         await emit('run.paused', 'system', { atStep: toolCalls })
         break
@@ -336,8 +387,8 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
         })
 
         const now = new Date()
-        await prisma.agentRun.update({
-          where: { id: runId },
+        await prisma.agentRun.updateMany({
+          where: { id: runId, endedAt: null },
           data: { status: 'failed', terminalAt: now, endedAt: now },
         })
         // The attempt counts, so a task cannot loop forever against a gate that stays broken.
@@ -381,11 +432,15 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
       unparsableLines > 0 ? ` (${unparsableLines} unparsable line(s) were dropped first)` : ''
     }`
     const now = new Date()
-    await prisma.agentRun.update({
-      where: { id: runId },
+    // Conditional on the run not already being terminal. An operator's `cancel` writes `stopped`
+    // and kills the child; the stream then ends without a terminal event and this branch used to
+    // overwrite that with `failed`, emitting a spurious `run.failed` after `run.stopped` -- which
+    // under a daemon is what happens on *every* cancel.
+    const concluded = await prisma.agentRun.updateMany({
+      where: { id: runId, endedAt: null },
       data: { status: 'failed', terminalAt: now, endedAt: now },
     })
-    await emit('run.failed', 'system', { reason })
+    if (concluded.count > 0) await emit('run.failed', 'system', { reason })
     return null
   }
 
@@ -394,8 +449,8 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
   // terminal flag alone is not what decides this.
   const failed = outcome.isError || outcome.deniedToolUseIds.length > 0
   const terminalNow = new Date()
-  await prisma.agentRun.update({
-    where: { id: runId },
+  const concluded = await prisma.agentRun.updateMany({
+    where: { id: runId, endedAt: null },
     data: {
       status: failed ? 'failed' : 'succeeded',
       costUsd: outcome.costUsd,
@@ -403,6 +458,9 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
       endedAt: terminalNow,
     },
   })
+  // An already-terminal run was concluded by someone else -- an operator's `cancel`, or the sweep.
+  // Their decision stands, and announcing this one would contradict it.
+  if (concluded.count === 0) return outcome
 
   if (failed) {
     const denied =

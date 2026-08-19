@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { realpathSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { prisma } from '@ai-team-os/db/client'
@@ -12,8 +12,9 @@ import {
 import { appendEvent } from '@ai-team-os/events'
 import { ClaudeCodeAdapter } from '@ai-team-os/providers'
 import { runDaemon } from './daemon.js'
+import { NON_TERMINAL_RUN_STATUSES } from './world.js'
 import { pumpRun } from './pump.js'
-import { drainPumps, tick } from './tick.js'
+import { drainPumps, runFilePaths, tick } from './tick.js'
 
 const USAGE = `usage: orchestrator <command> [options]
 
@@ -39,18 +40,42 @@ const USAGE = `usage: orchestrator <command> [options]
 
 interface Args {
   readonly command: string
-  readonly flags: Readonly<Record<string, string>>
+  readonly flags: Flags
 }
 
+type Flags = Readonly<Record<string, string | undefined>>
+
+/**
+ * `--flag value`, `--flag=value`, and `--flag` on its own.
+ *
+ * The `=` form is supported rather than ignored: silently dropping `--workspace=<id>` means a
+ * command runs against whichever workspace happens to be the only one, which is the exact mistake
+ * `resolveWorkspace` exists to prevent. A missing value is `undefined`, not the string `"true"` --
+ * a sentinel that reads as a value is how `pause --by` ended up recording "true" as the operator's
+ * name, and how a legitimate value starting with `--` was silently replaced by it.
+ */
 function parseArgs(argv: readonly string[]): Args {
   const [command = 'help', ...rest] = argv
-  const flags: Record<string, string> = {}
+  const flags: Record<string, string | undefined> = {}
   for (let i = 0; i < rest.length; i += 1) {
     const token = rest[i]
     if (token === undefined || !token.startsWith('--')) continue
+
+    const equals = token.indexOf('=')
+    if (equals > 2) {
+      flags[token.slice(2, equals)] = token.slice(equals + 1)
+      continue
+    }
+
     const next = rest[i + 1]
-    flags[token.slice(2)] = next === undefined || next.startsWith('--') ? 'true' : next
-    if (next !== undefined && !next.startsWith('--')) i += 1
+    if (next === undefined) {
+      flags[token.slice(2)] = undefined
+      continue
+    }
+    // A value is whatever follows, even if it starts with `--`: an operator name or a resume
+    // message is free-form text and may legitimately look like a flag.
+    flags[token.slice(2)] = next
+    i += 1
   }
   return { command, flags }
 }
@@ -90,9 +115,9 @@ function buildAdapter(): ClaudeCodeAdapter {
  * guess, and guessing here means an operator reads one workspace's runs believing they are
  * another's. So: name them and refuse.
  */
-async function resolveWorkspace(flags: Readonly<Record<string, string>>): Promise<WorkspaceId> {
+async function resolveWorkspace(flags: Flags): Promise<WorkspaceId> {
   const given = flags['workspace']
-  if (given !== undefined && given !== 'true') return brandWorkspaceId(given)
+  if (given !== undefined) return brandWorkspaceId(given)
 
   const all = await prisma.workspace.findMany({ select: { id: true, name: true } })
   if (all.length === 1 && all[0] !== undefined) return brandWorkspaceId(all[0].id)
@@ -103,9 +128,9 @@ async function resolveWorkspace(flags: Readonly<Record<string, string>>): Promis
   )
 }
 
-function requireFlag(flags: Readonly<Record<string, string>>, name: string): string {
+function requireFlag(flags: Flags, name: string): string {
   const value = flags[name]
-  if (value === undefined || value === 'true') throw new Error(`--${name} is required`)
+  if (value === undefined) throw new Error(`--${name} is required`)
   return value
 }
 
@@ -118,6 +143,19 @@ function requireFlag(flags: Readonly<Record<string, string>>, name: string): str
  * run whose process outlives its daemon had no path to being killed. The pid is in the row; that is
  * what it is for.
  */
+/** How long a cancelled process gets to exit on its own before it is killed outright. */
+const KILL_GRACE_MS = 2_000
+
+function isAlive(pid: number | null): boolean {
+  if (pid === null || pid <= 0) return false
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM'
+  }
+}
+
 function signalRun(pid: number | null, signal: NodeJS.Signals): boolean {
   if (pid === null || pid <= 0) return false
   try {
@@ -174,7 +212,9 @@ export async function main(argv: readonly string[]): Promise<number> {
       const workspaceId = await resolveWorkspace(flags)
       const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: workspaceId } })
       const runs = await prisma.agentRun.findMany({
-        where: { task: { workspaceId }, endedAt: null },
+        // On the status column, not on `endedAt`: the two can disagree, and everything else in the
+        // system -- `loadWorld`'s busy check, the sweep, the orphan pass -- asks the status.
+        where: { task: { workspaceId }, status: { in: [...NON_TERMINAL_RUN_STATUSES] } },
         orderBy: { startedAt: 'desc' },
       })
       process.stdout.write(
@@ -211,17 +251,27 @@ export async function main(argv: readonly string[]): Promise<number> {
       // it cannot await the outcome -- the daemon's pump is what observes the deny and records
       // `run.paused`. Spec §11 says "write the flag, follow the protocol"; this is the half a
       // separate process can perform.
-      const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: run.task.workspaceId } })
-      const dir = join(workspace.repoPath, '.aiteamos', 'runs', run.id)
-      mkdirSync(dir, { recursive: true })
-      writeFileSync(join(dir, 'pause.flag'), `${requestedBy}\n`)
 
-      await prisma.agentRun.update({
-        where: { id: run.id },
+      // Claimed, not written. `pause_requested` is a non-terminal status, so pausing a run that
+      // already finished puts a *concluded* run back into `activeRuns`, makes its agent look busy,
+      // and leaves it for the next restart's orphan sweep to flip to `failed` -- corrupting the
+      // record of a run that actually succeeded.
+      const claimed = await prisma.agentRun.updateMany({
+        where: { id: run.id, status: { in: ['starting', 'working', 'resuming'] } },
         // `pauseReason` is the *category*, and this is the one place that knows it: an operator
         // asked. Task 12 carried it forward as a column nothing wrote.
         data: { status: 'pause_requested', pauseReason: 'human' },
       })
+      if (claimed.count === 0) {
+        throw new Error(`run ${run.id} cannot be paused: it is ${run.status}`)
+      }
+
+      // The same derivation the tick used to tell the child where its flag is -- re-deriving it as
+      // a second literal is how the two come to disagree, and a gate reading a path nobody writes
+      // means an operator watches a "pausing" run keep working (spec §5.5's named failure).
+      const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: run.task.workspaceId } })
+      const { pauseFlagPath } = runFilePaths(workspace.repoPath, brandRunId(run.id))
+      writeFileSync(pauseFlagPath, `${requestedBy}\n`)
       await appendEvent({
         type: 'run.pause_requested',
         workspaceId: run.task.workspaceId,
@@ -238,9 +288,35 @@ export async function main(argv: readonly string[]): Promise<number> {
     case 'resume': {
       const run = await mustGetRun(requireFlag(flags, 'run'))
       const message = flags['message']
+      // A halt is raised by a pause-gate failure or an unverifiable workspace (§13.1, §8), so
+      // resuming into one relaunches an agent whose gate may still be broken -- the recurrence the
+      // halt exists to bound. The help text promises this; it has to be true.
+      const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: run.task.workspaceId } })
+      if (workspace.haltedReason !== null) {
+        throw new Error(
+          `this workspace is halted (${workspace.haltedReason}). ` +
+            `Nothing will run until an operator retracts it with: clear-halt --workspace ${workspace.id}`,
+        )
+      }
+
       const checkpoint = await prisma.checkpoint.findUnique({ where: { runId: run.id } })
       if (checkpoint === null) {
         throw new Error(`run ${run.id} has no checkpoint: there is nothing to resume it from`)
+      }
+
+      // Claimed before anything irreversible happens, mirroring the domain's own edge
+      // (`resume_requested` is legal only from `paused`). Without it, `resume` re-spawns a
+      // *terminal* run -- measured: a second agent in the finished run's worktree, `terminalAt`
+      // rewritten, a second `run.succeeded` in the log -- and against a live daemon it puts two
+      // agents on one branch while overwriting the pid that could have killed the first. The
+      // adapter's live-child guard cannot help: a CLI invocation is always the cross-process case
+      // its registry is empty for.
+      const claimed = await prisma.agentRun.updateMany({
+        where: { id: run.id, status: 'paused' },
+        data: { status: 'resuming' },
+      })
+      if (claimed.count === 0) {
+        throw new Error(`run ${run.id} is not paused (it is ${run.status}): there is nothing to resume`)
       }
 
       const adapter = buildAdapter()
@@ -272,7 +348,9 @@ export async function main(argv: readonly string[]): Promise<number> {
 
       await prisma.agentRun.update({
         where: { id: run.id },
-        data: { status: 'resuming', pid: handle.pid, pauseReason: null },
+        // `pausedAtStep` is cleared with the pause itself: the domain's `resuming -> working` edge
+        // clears it, and a running run reporting where it once paused reads as still paused.
+        data: { pid: handle.pid, pauseReason: null, pausedAtStep: null },
       })
       await appendEvent({
         type: 'run.resumed',
@@ -295,6 +373,10 @@ export async function main(argv: readonly string[]): Promise<number> {
         workspaceId: brandWorkspaceId(run.task.workspaceId),
         events: adapter.events(brandRunId(run.id)),
         cancel: () => adapter.cancel(brandRunId(run.id)),
+        // The pump cannot tell a continuation from a first spawn -- a resumed process emits
+        // `system/init` just like a fresh one -- so it is told, and `run.resumed` above is the
+        // only announcement. Task 12's carry, closed at the caller that knows.
+        resumed: true,
         spawn: {
           settingsPath: checkpoint.settingsPath,
           pauseFlagPath: checkpoint.pauseFlagPath,
@@ -310,14 +392,26 @@ export async function main(argv: readonly string[]): Promise<number> {
     case 'cancel': {
       const run = await mustGetRun(requireFlag(flags, 'run'))
       const signalled = signalRun(run.pid, 'SIGTERM')
+      if (signalled) {
+        // The adapter's own kill escalates; a CLI cancel that only asks politely is strictly
+        // weaker than the thing it replaces, which reopens a thinner version of the Task 15 carry
+        // it was written to close.
+        await new Promise((res) => setTimeout(res, KILL_GRACE_MS))
+        if (isAlive(run.pid)) signalRun(run.pid, 'SIGKILL')
+      }
       const now = new Date()
       await prisma.agentRun.updateMany({
         where: { id: run.id, endedAt: null },
         data: { status: 'stopped', terminalAt: now, endedAt: now },
       })
+      // `blocked`, not `rework`: the help and the README both say cancel stops a run for good, and
+      // `rework` is startable -- the next tick would hand the task to a fresh agent on the same
+      // worktree, with `attempt` never incremented so repeated cancels never reach the cap. The
+      // spec does not decide this (§11 says only "kill and preserve the worktree"); shipping a
+      // command that says one thing and does another is the part that is not a judgement call.
       await prisma.task.updateMany({
         where: { id: run.taskId, activeRunId: run.id },
-        data: { status: 'rework', activeRunId: null },
+        data: { status: 'blocked', activeRunId: null },
       })
       await appendEvent({
         type: 'run.stopped',
@@ -364,7 +458,10 @@ export async function main(argv: readonly string[]): Promise<number> {
 
 // Run only when invoked as a program. Comparing the resolved argv[1] against this module's own URL
 // is what keeps it from firing when a test runner imports the file.
-if (process.argv[1] !== undefined && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+// `realpathSync`, because Node resolves `import.meta.url` to the real path while `process.argv[1]`
+// keeps the symlink an npm bin install creates -- and a mismatch here means the command exits 0
+// having done nothing at all, which is the worst possible failure for something a cron job wraps.
+if (process.argv[1] !== undefined && fileURLToPath(import.meta.url) === realpathSync(resolve(process.argv[1]))) {
   main(process.argv.slice(2))
     .then(async (code) => {
       await prisma.$disconnect()

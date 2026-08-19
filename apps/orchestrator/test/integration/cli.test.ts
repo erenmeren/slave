@@ -324,6 +324,195 @@ describe('the orchestrator CLI', () => {
     }
   }, 30_000)
 
+  it('clears the halt on the workspace it was told, and no other', async (): Promise<void> => {
+    const other = await seed()
+    for (const id of [fixture.workspaceId, other.workspaceId]) {
+      await prisma.workspace.update({
+        where: { id },
+        data: { haltedReason: 'gate failure', haltedAt: new Date() },
+      })
+    }
+
+    const result = await runCli(['clear-halt', '--workspace', fixture.workspaceId])
+
+    expect(result.code).toBe(0)
+    // The dangerous direction §11 names: an operator retracting a safety halt they did not mean to.
+    // With one workspace in the fixture, ignoring --workspace entirely is indistinguishable from
+    // honouring it.
+    expect((await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspaceId } })).haltedReason).toBeNull()
+    expect(
+      (await prisma.workspace.findUniqueOrThrow({ where: { id: other.workspaceId } })).haltedReason,
+    ).toBe('gate failure')
+  }, 30_000)
+
+  it('shows only the workspace it was asked about', async (): Promise<void> => {
+    const other = await seed()
+    await prisma.agentRun.create({
+      data: { taskId: other.taskId, agentId: other.agentId, status: 'working', pid: process.pid },
+    })
+    await prisma.agentRun.create({
+      data: { taskId: fixture.taskId, agentId: fixture.agentId, status: 'working', pid: process.pid },
+    })
+
+    const result = await runCli(['status', '--workspace', fixture.workspaceId])
+
+    const status = JSON.parse(result.stdout) as { runs: readonly { id: string }[] }
+    expect(status.runs).toHaveLength(1)
+  }, 30_000)
+
+  it('accepts the --flag=value form rather than silently ignoring it', async (): Promise<void> => {
+    await seed()
+
+    const result = await runCli(['status', `--workspace=${fixture.workspaceId}`])
+
+    // Dropping the `=` form means the command runs against whichever workspace happens to be the
+    // only one -- the exact mistake the workspace check exists to prevent, arriving through the
+    // parser instead.
+    expect(result.code).toBe(0)
+    expect(JSON.parse(result.stdout)).toMatchObject({ halt: null })
+  }, 30_000)
+
+  it('records the operator name it was given, even one that looks like a flag', async (): Promise<void> => {
+    const run = await prisma.agentRun.create({
+      data: { taskId: fixture.taskId, agentId: fixture.agentId, status: 'working', pid: process.pid },
+    })
+
+    await runCli(['pause', '--run', run.id, '--by', '--urgent-oncall'])
+
+    const event = await prisma.executionEvent.findFirstOrThrow({
+      where: { runId: run.id, type: 'run_pause_requested' },
+    })
+    expect((event.payload as { requestedBy: string }).requestedBy).toBe('--urgent-oncall')
+  }, 30_000)
+
+  it('refuses to pause a run that has already finished', async (): Promise<void> => {
+    const run = await prisma.agentRun.create({
+      data: {
+        taskId: fixture.taskId,
+        agentId: fixture.agentId,
+        status: 'succeeded',
+        terminalAt: new Date(),
+        endedAt: new Date(),
+      },
+    })
+
+    const result = await runCli(['pause', '--run', run.id])
+
+    // `pause_requested` is non-terminal, so pausing a finished run puts it back into `activeRuns`,
+    // makes its agent look busy, and leaves the next restart's orphan sweep to flip a run that
+    // actually succeeded to `failed`.
+    expect(result.code).not.toBe(0)
+    expect((await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })).status).toBe('succeeded')
+  }, 30_000)
+
+  it('refuses to resume a run that is not paused', async (): Promise<void> => {
+    const run = await prisma.agentRun.create({
+      data: {
+        taskId: fixture.taskId,
+        agentId: fixture.agentId,
+        status: 'succeeded',
+        terminalAt: new Date(),
+        endedAt: new Date(),
+      },
+    })
+    await prisma.checkpoint.create({
+      data: {
+        runId: run.id,
+        sessionId: 's-1',
+        worktreePath: fixture.repoPath,
+        pauseFlagPath: join(fixture.repoPath, 'pause.flag'),
+        settingsPath: join(fixture.repoPath, 'settings.json'),
+        hookPath: join(repoRoot, 'scripts/pause-gate.sh'),
+        gitAuthorName: 'Alex',
+        gitAuthorEmail: 'alex@aiteamos.local',
+        headCommit: 'deadbeef',
+      },
+    })
+
+    const result = await runCli(['resume', '--run', run.id])
+
+    // Against a live daemon this is two agents on one branch, with the pid that could have killed
+    // the first overwritten by the second. The adapter's live-child guard cannot help: a CLI
+    // invocation is always the cross-process case its registry is empty for.
+    expect(result.code).not.toBe(0)
+    const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })
+    expect(after.status).toBe('succeeded')
+    expect(await prisma.executionEvent.count({ where: { runId: run.id, type: 'run_resumed' } })).toBe(0)
+  }, 30_000)
+
+  it('refuses to resume into a halted workspace', async (): Promise<void> => {
+    const run = await prisma.agentRun.create({
+      data: { taskId: fixture.taskId, agentId: fixture.agentId, status: 'paused' },
+    })
+    await prisma.workspace.update({
+      where: { id: fixture.workspaceId },
+      data: { haltedReason: 'the pause gate failed open', haltedAt: new Date() },
+    })
+
+    const result = await runCli(['resume', '--run', run.id])
+
+    // A halt is raised by a gate failure, so resuming into one relaunches an agent whose gate may
+    // still be broken -- the recurrence §13.1 exists to bound. The help text promises this.
+    expect(result.code).not.toBe(0)
+    expect(`${result.stdout}${result.stderr}`).toMatch(/clear-halt/)
+  }, 30_000)
+
+  it('resumes a paused run in its own worktree, session and identity', async (): Promise<void> => {
+    // A real pause, produced by the gate denying the fake CLI's first tool call.
+    await runCli(['tick'], { AITEAMOS_CLAUDE_ARGS: `${FAKE} --fixture hook-deny` })
+    const paused = await prisma.agentRun.findFirstOrThrow()
+    expect(paused.status).toBe('paused')
+    const checkpoint = await prisma.checkpoint.findUniqueOrThrow({ where: { runId: paused.id } })
+
+    // `complete` rather than `env-echo`: the resumed run has to emit a `system/init` line for the
+    // "does it announce itself as started again" assertion below to reach the code at all, and
+    // env-echo emits none. A test that cannot reach the branch it names proves nothing about it.
+    const result = await runCli(['resume', '--run', paused.id, '--message', 'try the other approach'], {
+      AITEAMOS_CLAUDE_ARGS: `${FAKE} --fixture complete`,
+    })
+
+    expect(result.code).toBe(0)
+    expect(await prisma.executionEvent.count({ where: { runId: paused.id, type: 'run_resumed' } })).toBe(1)
+    // Task 12's carry: the stream cannot tell a continuation from a first spawn, so without telling
+    // the pump, a resumed run emits a second `run.started` -- an illegal transition from `working`
+    // for anything replaying the log through the domain's state machine.
+    expect(await prisma.executionEvent.count({ where: { runId: paused.id, type: 'run_started' } })).toBe(1)
+    expect(checkpoint.worktreePath).toContain('.aiteamos')
+    expect(checkpoint.gitAuthorEmail).toContain('@aiteamos.local')
+  }, 60_000)
+
+  it('does not hand a cancelled task straight back to a new agent', async (): Promise<void> => {
+    await runCli(['tick'])
+    const run = await prisma.agentRun.findFirstOrThrow()
+    await prisma.agentRun.update({
+      where: { id: run.id },
+      data: { status: 'working', terminalAt: null, endedAt: null },
+    })
+    await prisma.task.update({
+      where: { id: fixture.taskId },
+      data: { status: 'running', activeRunId: run.id },
+    })
+
+    await runCli(['cancel', '--run', run.id])
+    const report = await runCli(['tick'])
+
+    // The help and the README both say cancel stops a run for good. Parking the task somewhere
+    // startable means the next tick hands it to a fresh agent on the same worktree -- and since
+    // cancelling does not count an attempt, repeated cancels never reach the cap.
+    expect(JSON.parse(report.stdout)).toMatchObject({ started: [] })
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })).status).toBe('blocked')
+  }, 60_000)
+
+  it('defaults to help rather than to doing something', async (): Promise<void> => {
+    const result = await runCli([])
+
+    // A bare invocation that silently ran a tick would start an agent for an operator who typed
+    // the command name to see what it does.
+    expect(result.code).toBe(0)
+    expect(result.stdout).toMatch(/usage/i)
+    expect(await prisma.agentRun.count()).toBe(0)
+  }, 30_000)
+
   it('runs a daemon that ticks and shuts down on a signal', async (): Promise<void> => {
     const orphanTask = await prisma.task.create({
       data: {

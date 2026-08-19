@@ -484,13 +484,61 @@ describe('pumpRun', () => {
     // `start()` cannot rediscover any of this: identity is supplied per-process by design, and the
     // settings file and hook path exist nowhere else. Until this row is written, a paused run
     // cannot be continued by anything -- which is the state the milestone was in.
+    // Every field, because every one of them is something `resume()` spawns with -- a checkpoint
+    // that resumes in the wrong directory under the wrong identity would pass a test that only
+    // checked the row exists.
     const checkpoint = await prisma.checkpoint.findUniqueOrThrow({ where: { runId: ids.runId } })
     expect(checkpoint.sessionId).toBe('s-1')
+    expect(checkpoint.worktreePath).toBe('/tmp')
+    expect(checkpoint.pauseFlagPath).toBe('/tmp/pause.flag')
     expect(checkpoint.settingsPath).toBe('/tmp/settings.json')
     expect(checkpoint.hookPath).toBe('/tmp/pause-gate.sh')
     expect(checkpoint.gitAuthorName).toBe('Alex')
+    expect(checkpoint.gitAuthorEmail).toBe('alex@aiteamos.local')
     expect(checkpoint.lastToolUseId).toBe('tu_1')
+    expect(checkpoint.lastToolName).toBe('Bash')
+    expect(checkpoint.numTurns).toBe(1)
     expect(checkpoint.pauseReason).toBe('operator asked to pause')
+  })
+
+  it('records the tool calls that were denied before the pause', async (): Promise<void> => {
+    await prisma.agentRun.update({ where: { id: ids.runId }, data: { worktreePath: '/tmp' } })
+
+    await pumpRun({
+      ...ids,
+      spawn: {
+        settingsPath: '/tmp/settings.json',
+        pauseFlagPath: '/tmp/pause.flag',
+        hookPath: '/tmp/pause-gate.sh',
+        gitIdentity: { name: 'Alex', email: 'alex@aiteamos.local' },
+      },
+      events: fromArray([
+        { kind: 'session_started', sessionId: 's-1' },
+        { kind: 'permission_denied', toolName: 'Edit', toolUseId: 'tu_denied' },
+        { kind: 'hook_denied', hookName: 'PreToolUse', reason: 'pause' },
+      ]),
+    })
+
+    // ADR 0001 §5: on resume the model re-attempted exactly these calls, in order. It is the
+    // operator's view of what the agent was about to do.
+    const checkpoint = await prisma.checkpoint.findUniqueOrThrow({ where: { runId: ids.runId } })
+    expect(checkpoint.deniedToolUseIds).toEqual(['tu_denied'])
+  })
+
+  it('does not overwrite a run an operator already stopped', async (): Promise<void> => {
+    await prisma.agentRun.update({
+      where: { id: ids.runId },
+      data: { status: 'stopped', terminalAt: new Date(), endedAt: new Date() },
+    })
+
+    await pumpRun({ ...ids, events: fromArray([{ kind: 'session_started', sessionId: 's-1' }]) })
+
+    // An operator's `cancel` writes `stopped` and kills the child; the stream then ends without a
+    // terminal event, and the pump used to overwrite that with `failed` and announce it -- which
+    // under a daemon is what happens on every single cancel.
+    const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+    expect(run.status).toBe('stopped')
+    expect(await eventTypesFor(ids.runId)).not.toContain('run.failed')
   })
 
   it('does not write half a checkpoint for a run nothing could resume', async (): Promise<void> => {
