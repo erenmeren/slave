@@ -18,6 +18,22 @@ import type { Checkpoint } from '../../src/claude/checkpoint.js'
  * exercised in their non-null form here. A second test below exercises the null/empty case
  * specifically, which `packages/db`'s own `checkpoint.test.ts` already covers on the Prisma side
  * but is worth confirming still round-trips starting from this package's own `Checkpoint` values.
+ *
+ * Fix round 2, finding C: a prior version of this file claimed the `data: { ...checkpoint, runId
+ * }` spread below would fail to typecheck if a field existed on one side only. There was no such
+ * spread -- both `data:` blocks enumerated all eleven (then fifteen) fields by hand -- and the
+ * reviewer confirmed a spread would not have caught it anyway (TypeScript does not run
+ * excess-property checking through a spread of a variable). `checkpointCreateFields` below is the
+ * actual mechanism: its return expression carries a `satisfies Record<keyof Checkpoint, unknown>`
+ * clause, which *is* checked against an object literal the same way a direct type annotation is
+ * -- every key of `Checkpoint` must be present (a field added to `Checkpoint` and not listed here
+ * is a missing-property error) and no key outside `Checkpoint` may appear (an excess-property
+ * error), while `satisfies` (unlike a plain `: Type` annotation) leaves each field's own literal
+ * type intact rather than widening it to `unknown`, so the result still flows into
+ * `prisma.checkpoint.create`'s `data:` argument with real, checkable types. One function, shared
+ * by both tests below (dissolves the verbatim duplication the two `data:` blocks used to be) --
+ * see the mutation proof in the m3 fix-round-2 report for `npm run typecheck` failing and passing
+ * on either side of a throwaway field added to `Checkpoint` only.
  */
 
 async function seedRun(): Promise<string> {
@@ -43,6 +59,32 @@ async function seedRun(): Promise<string> {
   return run.id
 }
 
+/**
+ * Every field of `Checkpoint`, enumerated by hand and checked exhaustively against
+ * `keyof Checkpoint` via the `satisfies` clause below -- see this file's own docstring for why
+ * this, and not the spread a previous version of this file described, is what makes the pinning
+ * test catch a field added to `Checkpoint` and nowhere else.
+ */
+function checkpointCreateFields(checkpoint: Checkpoint) {
+  return {
+    sessionId: checkpoint.sessionId,
+    worktreePath: checkpoint.worktreePath,
+    pauseFlagPath: checkpoint.pauseFlagPath,
+    lastToolUseId: checkpoint.lastToolUseId,
+    lastToolName: checkpoint.lastToolName,
+    numTurns: checkpoint.numTurns,
+    deniedToolUseIds: [...checkpoint.deniedToolUseIds],
+    headCommit: checkpoint.headCommit,
+    dirtyFiles: [...checkpoint.dirtyFiles],
+    cumulativeCostUsd: checkpoint.cumulativeCostUsd,
+    cumulativeTokens: checkpoint.cumulativeTokens,
+    settingsPath: checkpoint.settingsPath,
+    hookPath: checkpoint.hookPath,
+    gitAuthorName: checkpoint.gitAuthorName,
+    gitAuthorEmail: checkpoint.gitAuthorEmail,
+  } satisfies Record<keyof Checkpoint, unknown>
+}
+
 beforeEach(async (): Promise<void> => {
   await prisma.$executeRawUnsafe(
     'TRUNCATE TABLE "Checkpoint", "AgentRun", "Task", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
@@ -58,10 +100,8 @@ describe('Checkpoint shape pinning (providers interface <-> db model)', () => {
     const runId = await seedRun()
 
     // Built purely from the providers `Checkpoint` interface -- no field here is copied from, or
-    // checked against, the Prisma model's own shape. If a field existed on one side and not the
-    // other, this object literal (extra prop) or the `data: { ...checkpoint, runId }` spread
-    // below (missing required prop) would fail to typecheck, and the assertions after it would
-    // fail to compile or to pass if a same-named field diverged in type.
+    // checked against, the Prisma model's own shape. If a field existed on the interface and not
+    // here, this object literal itself would fail to typecheck (missing required property).
     const checkpoint: Checkpoint = {
       sessionId: 'session-pin-123',
       worktreePath: '/tmp/worktrees/pin-run-1',
@@ -85,24 +125,7 @@ describe('Checkpoint shape pinning (providers interface <-> db model)', () => {
     }
 
     const created = await prisma.checkpoint.create({
-      data: {
-        runId,
-        sessionId: checkpoint.sessionId,
-        worktreePath: checkpoint.worktreePath,
-        pauseFlagPath: checkpoint.pauseFlagPath,
-        lastToolUseId: checkpoint.lastToolUseId,
-        lastToolName: checkpoint.lastToolName,
-        numTurns: checkpoint.numTurns,
-        deniedToolUseIds: [...checkpoint.deniedToolUseIds],
-        headCommit: checkpoint.headCommit,
-        dirtyFiles: [...checkpoint.dirtyFiles],
-        cumulativeCostUsd: checkpoint.cumulativeCostUsd,
-        cumulativeTokens: checkpoint.cumulativeTokens,
-        settingsPath: checkpoint.settingsPath,
-        hookPath: checkpoint.hookPath,
-        gitAuthorName: checkpoint.gitAuthorName,
-        gitAuthorEmail: checkpoint.gitAuthorEmail,
-      },
+      data: { runId, ...checkpointCreateFields(checkpoint) },
     })
 
     const found = await prisma.checkpoint.findUniqueOrThrow({ where: { id: created.id } })
@@ -153,24 +176,7 @@ describe('Checkpoint shape pinning (providers interface <-> db model)', () => {
     }
 
     const created = await prisma.checkpoint.create({
-      data: {
-        runId,
-        sessionId: checkpoint.sessionId,
-        worktreePath: checkpoint.worktreePath,
-        pauseFlagPath: checkpoint.pauseFlagPath,
-        lastToolUseId: checkpoint.lastToolUseId,
-        lastToolName: checkpoint.lastToolName,
-        numTurns: checkpoint.numTurns,
-        deniedToolUseIds: [...checkpoint.deniedToolUseIds],
-        headCommit: checkpoint.headCommit,
-        dirtyFiles: [...checkpoint.dirtyFiles],
-        cumulativeCostUsd: checkpoint.cumulativeCostUsd,
-        cumulativeTokens: checkpoint.cumulativeTokens,
-        settingsPath: checkpoint.settingsPath,
-        hookPath: checkpoint.hookPath,
-        gitAuthorName: checkpoint.gitAuthorName,
-        gitAuthorEmail: checkpoint.gitAuthorEmail,
-      },
+      data: { runId, ...checkpointCreateFields(checkpoint) },
     })
 
     const found = await prisma.checkpoint.findUniqueOrThrow({ where: { id: created.id } })

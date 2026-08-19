@@ -12,9 +12,36 @@ const FAKE = fileURLToPath(new URL('./fake-claude.mjs', import.meta.url))
 const repoRoot = fileURLToPath(new URL('../../../', import.meta.url))
 const realGate = path.join(repoRoot, 'scripts/pause-gate.sh')
 
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/** Polls for `filePath` to exist, up to `timeoutMs` -- used to observe a grandchild process's pid
+ * written by the throwaway orphan-holding script below, which happens asynchronously relative to
+ * `start()`/`resume()` returning. */
+async function waitForFile(filePath: string, timeoutMs = 2000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (!existsSync(filePath)) {
+    if (Date.now() > deadline) {
+      throw new Error(`waitForFile: ${filePath} did not appear within ${String(timeoutMs)}ms`)
+    }
+    await sleep(10)
+  }
+}
+
 describe('ClaudeCodeAdapter.resume', () => {
   let worktreePath: string
   let hookPath: string
+  let alwaysDenyHookPath: string
   let input: StartRunInput
   let adapter: ClaudeCodeAdapter
   let checkpoint: Checkpoint
@@ -45,6 +72,23 @@ describe('ClaudeCodeAdapter.resume', () => {
     hookPath = path.join(worktreePath, 'pause-gate.sh')
     writeFileSync(hookPath, readFileSync(realGate))
     chmodSync(hookPath, 0o755)
+
+    // The same non-discriminating-hook fixture `flags.test.ts`'s `preflightGate` tests already
+    // use (finding B's ruling: reuse it, do not invent a second one) -- replicated here rather
+    // than imported, since it is a small `beforeEach`-local literal in that file too, not
+    // something it exports.
+    alwaysDenyHookPath = path.join(worktreePath, 'always-deny.sh')
+    writeFileSync(
+      alwaysDenyHookPath,
+      [
+        '#!/usr/bin/env bash',
+        'cat > /dev/null',
+        'printf \'%s\\n\' \'{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"nope"}}\'',
+        'exit 0',
+        '',
+      ].join('\n'),
+    )
+    chmodSync(alwaysDenyHookPath, 0o755)
 
     input = {
       runId: makeRunId('run-resume-1'),
@@ -209,6 +253,186 @@ describe('ClaudeCodeAdapter.resume', () => {
       seen.push(event.kind)
     }
     expect(seen.length).toBeGreaterThan(0)
+  })
+
+  it('rejects when checkpoint.hookPath is relative', async (): Promise<void> => {
+    // Finding B: resume() must run the same absolute-path check start() does, against
+    // checkpoint.hookPath -- otherwise the field travels in the checkpoint and is read by
+    // nothing, which is the whole defect this finding exists to close.
+    await expect(
+      adapter.resume(input.runId, { ...checkpoint, hookPath: 'relative/pause-gate.sh' }, null),
+    ).rejects.toThrow(/absolute/)
+  })
+
+  it('rejects when the hook at checkpoint.hookPath does not discriminate', async (): Promise<void> => {
+    // Finding B: the same preflightGate() call start() makes, run against checkpoint.hookPath.
+    // alwaysDenyHookPath (beforeEach) is the identical non-discriminating fixture flags.test.ts's
+    // preflightGate tests already use -- a hook that denies unconditionally gates nothing, and a
+    // resumed run spawned against it would look armed while doing nothing.
+    await expect(
+      adapter.resume(input.runId, { ...checkpoint, hookPath: alwaysDenyHookPath }, null),
+    ).rejects.toThrow()
+  })
+
+  it('refuses to resume a runId whose previous process is still running, and does not kill it', async (): Promise<void> => {
+    // Finding A, live-child branch: 'hang' never exits on its own, so this process is
+    // deliberately still alive when resume() is called -- the case awaitPause resolving
+    // gate_failed, or a deadline rejection, would otherwise leave reachable and unmanaged.
+    const liveRunId = makeRunId('run-resume-live-child')
+    const liveInput: StartRunInput = {
+      ...input,
+      runId: liveRunId,
+      pauseFlagPath: path.join(worktreePath, 'live-pause.flag'),
+    }
+    const liveAdapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'hang'] })
+    const handle = await liveAdapter.start(liveInput)
+    expect(isAlive(handle.pid)).toBe(true)
+
+    const liveCheckpoint: Checkpoint = {
+      ...checkpoint,
+      worktreePath: liveInput.worktreePath,
+      pauseFlagPath: liveInput.pauseFlagPath,
+      settingsPath: liveInput.settingsPath,
+      hookPath: liveInput.hookPath,
+    }
+
+    try {
+      await expect(liveAdapter.resume(liveRunId, liveCheckpoint, null)).rejects.toThrow(/still running/)
+
+      // The point of the guard: resume() refusing must not itself have killed the process it
+      // declined to adopt. Asserted on the process, not only on the throw.
+      expect(isAlive(handle.pid)).toBe(true)
+    } finally {
+      // This test deliberately leaves a child alive mid-test -- clean it up regardless of
+      // whether the assertions above passed. Killed directly by pid, not via
+      // `liveAdapter.cancel(liveRunId)`: if the guard above were broken, resume() would have
+      // replaced `liveRunId`'s RunState with a *different* process, and cancel() would then kill
+      // the wrong one, orphaning this original `handle.pid` -- exactly the leak this cleanup
+      // exists to prevent regardless of which way the assertions above went. No assertion here
+      // either, deliberately: a failed cleanup must never mask an earlier assertion failure by
+      // throwing over it in `finally`.
+      try {
+        process.kill(handle.pid, 'SIGKILL')
+      } catch {
+        // already gone
+      }
+    }
+  })
+
+  it("closes the previous run's event queue when its process is dead, so a consumer already waiting on it terminates instead of hanging", async (): Promise<void> => {
+    // Finding A, dead-child branch. A process's own death does not guarantee its stdout stream
+    // ever closes on its own: Node's 'exit' event can fire before every process holding the
+    // pipe's write end has released it, and `claude` itself spawning tool subprocesses that
+    // inherit that fd is exactly this shape in production. This throwaway script reproduces it
+    // deterministically -- it spawns a detached grandchild that inherits its own stdout and
+    // hangs indefinitely (holding the pipe open no matter how long anything waits), writes that
+    // grandchild's pid to AITEAMOS_TEST_ORPHAN_PID_FILE so this test can kill it explicitly
+    // afterward, then hangs itself until signaled. Without resume()'s explicit close() call on
+    // the old queue, a consumer already sitting in `for await` over it -- registered before
+    // resume() is even called, matching "the orchestrator's pump" finding A describes -- would
+    // wait on that queue forever, because nothing else will ever close it.
+    const orphanScript = path.join(worktreePath, 'hang-with-orphan.mjs')
+    writeFileSync(
+      orphanScript,
+      [
+        "import { spawn } from 'node:child_process'",
+        "import { writeFileSync } from 'node:fs'",
+        '',
+        "const grandchild = spawn(process.execPath, ['-e', 'setInterval(() => {}, 3600000)'], {",
+        "  stdio: ['ignore', 'inherit', 'ignore'],",
+        '  detached: true,',
+        '})',
+        'grandchild.unref()',
+        "writeFileSync(process.env['AITEAMOS_TEST_ORPHAN_PID_FILE'], String(grandchild.pid))",
+        '',
+        'setInterval(() => {}, 3600000)',
+        '',
+      ].join('\n'),
+    )
+
+    const orphanRunId = makeRunId('run-resume-dead-not-closed')
+    const orphanInput: StartRunInput = {
+      ...input,
+      runId: orphanRunId,
+      pauseFlagPath: path.join(worktreePath, 'orphan-pause.flag'),
+    }
+    const orphanAdapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [orphanScript] })
+    const startPidFile = path.join(worktreePath, 'start-grandchild.pid')
+    const resumePidFile = path.join(worktreePath, 'resume-grandchild.pid')
+    const grandchildPids: number[] = []
+    const immediatePids: number[] = []
+    const previousOrphanEnv = process.env['AITEAMOS_TEST_ORPHAN_PID_FILE']
+
+    try {
+      process.env['AITEAMOS_TEST_ORPHAN_PID_FILE'] = startPidFile
+      const handle = await orphanAdapter.start(orphanInput)
+      immediatePids.push(handle.pid)
+      await waitForFile(startPidFile)
+      grandchildPids.push(Number(readFileSync(startPidFile, 'utf8')))
+
+      // Registered before resume() is called, over the queue that -- without the fix -- would
+      // never close: this run's own process never writes anything either, so nothing is ever
+      // pushed to wake it that way.
+      let drained = false
+      const consumerDone = (async (): Promise<void> => {
+        for await (const _event of orphanAdapter.events(orphanRunId)) {
+          void _event
+        }
+        drained = true
+      })()
+
+      // Kills the immediate process only -- exitCode/signalCode become non-null, but the
+      // grandchild keeps holding the pipe open, so the readline `close` this queue is waiting on
+      // still never fires on its own.
+      await orphanAdapter.cancel(orphanRunId)
+      expect(isAlive(handle.pid)).toBe(false)
+
+      const orphanCheckpoint: Checkpoint = {
+        ...checkpoint,
+        worktreePath: orphanInput.worktreePath,
+        pauseFlagPath: orphanInput.pauseFlagPath,
+        settingsPath: orphanInput.settingsPath,
+        hookPath: orphanInput.hookPath,
+      }
+      process.env['AITEAMOS_TEST_ORPHAN_PID_FILE'] = resumePidFile
+      const resumedHandle = await orphanAdapter.resume(orphanRunId, orphanCheckpoint, null)
+      immediatePids.push(resumedHandle.pid)
+      expect(resumedHandle.runId).toBe(orphanRunId)
+      await waitForFile(resumePidFile)
+      grandchildPids.push(Number(readFileSync(resumePidFile, 'utf8')))
+
+      // Race the stuck consumer against a timeout: without resume()'s explicit close() on the
+      // old queue, consumerDone never settles and this assertion is what turns that into a
+      // failing test rather than an actually-hanging one.
+      const timedOut = Symbol('timed out')
+      const raced = await Promise.race([
+        consumerDone.then(() => 'drained' as const),
+        sleep(3000).then(() => timedOut),
+      ])
+      expect(raced).toBe('drained')
+      expect(drained).toBe(true)
+
+      await orphanAdapter.cancel(orphanRunId)
+    } finally {
+      if (previousOrphanEnv === undefined) {
+        delete process.env['AITEAMOS_TEST_ORPHAN_PID_FILE']
+      } else {
+        process.env['AITEAMOS_TEST_ORPHAN_PID_FILE'] = previousOrphanEnv
+      }
+      // Killed directly by pid, not relied on solely via the cancel() calls above: if an
+      // assertion in the try block had failed partway through, a cancel() call might never have
+      // run, and the immediate processes would otherwise leak. The grandchildren are detached and
+      // outlive cancel() by design regardless, so they always need killing here. No assertions in
+      // this block, deliberately -- a failed cleanup must never mask an earlier assertion failure
+      // by throwing over it in `finally`. Best-effort: a pid already gone throws, which is fine.
+      for (const pid of [...immediatePids, ...grandchildPids]) {
+        try {
+          process.kill(pid, 'SIGKILL')
+        } catch {
+          // already gone
+        }
+      }
+    }
   })
 })
 

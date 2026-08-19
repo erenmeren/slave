@@ -431,19 +431,34 @@ export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
    * gate"). A run whose hook does not discriminate never gets a `RunHandle`
    * or a registered `RunState` at all -- `requestPause` against its
    * `runId` then fails loudly with "no run found" instead of silently
-   * writing a flag file nothing will ever read.
+   * writing a flag file nothing will ever read. `runPreflightGate` below is
+   * shared with `resume()` (fix round 2, finding B): the gate must be
+   * re-armed on every spawn, not just the first one.
    */
   async start(input: StartRunInput): Promise<RunHandle> {
-    if (!isAbsolute(input.hookPath)) {
-      throw new Error(`ClaudeCodeAdapter: hookPath must be absolute, got ${JSON.stringify(input.hookPath)}`)
+    await this.runPreflightGate(input.hookPath, input.runId)
+    return this.spawnRun(input)
+  }
+
+  /**
+   * The Task 6 pre-flight gate itself, factored out so `start()` and `resume()` (fix round 2,
+   * finding B) run the identical check rather than duplicating it. Checked on every spawn, not
+   * once per run: `resume()` carries `hookPath` across a process boundary specifically so a hook
+   * that lost its exec bit or was pruned with a stale worktree between pause and resume fails
+   * loudly here, at spawn time, instead of silently -- the resumed process would otherwise spawn
+   * clean, and the next `requestPause` would write a flag no hook ever reads, running out
+   * `awaitPause`'s full deadline with no error naming the dead gate.
+   */
+  private async runPreflightGate(hookPath: string, runId: RunId): Promise<void> {
+    if (!isAbsolute(hookPath)) {
+      throw new Error(`ClaudeCodeAdapter: hookPath must be absolute, got ${JSON.stringify(hookPath)}`)
     }
     try {
-      await preflightGate({ hookPath: input.hookPath })
+      await preflightGate({ hookPath })
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      throw new Error(`ClaudeCodeAdapter: pause-gate preflight failed for run ${input.runId}: ${message}`)
+      throw new Error(`ClaudeCodeAdapter: pause-gate preflight failed for run ${runId}: ${message}`)
     }
-    return this.spawnRun(input)
   }
 
   private spawnRun(input: StartRunInput): Promise<RunHandle> {
@@ -662,11 +677,25 @@ export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
   }
 
   /**
-   * See the `AgentRuntimeAdapter.resume` docstring for the contract. This implementation:
+   * See the `AgentRuntimeAdapter.resume` docstring for the contract. This implementation, in
+   * order (fix round 2 added steps 2 and 3; the order itself is deliberate, not incidental):
    *
    * 1. Clears and verifies `checkpoint.pauseFlagPath` (`clearAndVerifyPauseFlagAbsent` below) --
    *    the load-bearing step, first, before anything else.
-   * 2. Builds a fresh `StartRunInput`-shaped object entirely from `checkpoint` and the arguments
+   * 2. Re-arms the pause gate at `checkpoint.hookPath` (`runPreflightGate`, shared with `start()`)
+   *    -- finding B: without this, `hookPath` travels in the checkpoint and is read by nothing,
+   *    and a hook that lost its exec bit or was pruned between pause and resume spawns silently
+   *    instead of failing loudly here.
+   * 3. Refuses to clobber a still-live process already registered under `runId` -- finding A:
+   *    `spawnChild`'s `this.runs.set` is unconditional, and `resume()` makes an already-registered
+   *    `runId` the *expected* input rather than a caller error, so a live entry left behind by an
+   *    earlier `awaitPause` timeout or `gate_failed` (neither of which kills the child) would
+   *    otherwise become unreachable -- its queue stranded, its pause flag file fought over by two
+   *    processes. A *dead*-child entry is not an error: its queue is closed here, before
+   *    `spawnChild` replaces the map entry, so a consumer still `for await`-ing the old queue (the
+   *    orchestrator's pump) is woken with `done: true` instead of hanging on an object `events()`
+   *    will never hand out again.
+   * 4. Builds a fresh `StartRunInput`-shaped object entirely from `checkpoint` and the arguments
    *    given -- `settingsPath`, `hookPath` and `gitIdentity` (the latter reassembled from
    *    `checkpoint.gitAuthorName`/`gitAuthorEmail`) come from the checkpoint itself (fix round 1),
    *    not from any prior in-memory record of `runId`, which is what makes resuming a `runId` this
@@ -677,6 +706,29 @@ export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
    */
   async resume(runId: RunId, checkpoint: Checkpoint, queuedInstruction: string | null): Promise<RunHandle> {
     await clearAndVerifyPauseFlagAbsent(checkpoint.pauseFlagPath, runId)
+    await this.runPreflightGate(checkpoint.hookPath, runId)
+
+    const existing = this.runs.get(runId)
+    if (existing !== undefined) {
+      if (existing.child.exitCode === null && existing.child.signalCode === null) {
+        // Not terminated on the caller's behalf -- resume() adopting a kill it was never asked
+        // to perform would paper over a caller bug with an implicit side effect, and this
+        // adapter's whole design is that outcomes are explicit (cancel() exists for exactly
+        // this). After a daemon restart `this.runs` is empty, so the normal cross-restart case
+        // never reaches this branch at all -- that is the point.
+        throw new Error(
+          `ClaudeCodeAdapter: refusing to resume run ${runId} -- its previous process ` +
+            `(pid ${String(existing.child.pid)}) is still running. resume() does not kill a live ` +
+            'child on the caller\'s behalf; cancel() it first if that is what was intended.',
+        )
+      }
+      // The previous process has already exited or been signalled -- close its queue before
+      // `spawnChild` (below) overwrites this `runId`'s `RunState` with a new one. Without this, a
+      // consumer already sitting in `for await` over the old queue would wait forever: `events()`
+      // now hands out a different `AsyncEventQueue` object, so the old iteration can never be
+      // woken by anything that happens to the new one.
+      existing.queue.close()
+    }
 
     const resumedInput: StartRunInput = {
       runId,
