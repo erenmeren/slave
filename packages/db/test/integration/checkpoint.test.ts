@@ -55,6 +55,14 @@ describe('Checkpoint', () => {
         dirtyFiles: ['src/index.ts', 'src/util.ts'],
         cumulativeCostUsd: 1.2345,
         cumulativeTokens: 45210,
+        // Fix round 1: the four spawn-critical fields resume() cannot rediscover on its own once
+        // the process that called start() is gone (see the m3 fix-round-1 brief and
+        // packages/providers' checkpoint.ts docstring for the ruling). Required, NOT NULL, no
+        // Prisma-level @default -- the orchestrator always writes them.
+        settingsPath: '/tmp/worktrees/run-1/.claude/settings.json',
+        hookPath: '/tmp/worktrees/run-1/.claude/pause-gate.sh',
+        gitAuthorName: 'Alex',
+        gitAuthorEmail: 'alex@example.com',
         // Deliberately not a PauseReason enum member's spelling — this field is free text (the
         // operator-supplied reason that went into the hook's deny message), not the category enum
         // that AgentRun.pauseReason is. Using an enum-shaped value here would be the worst possible
@@ -80,6 +88,10 @@ describe('Checkpoint', () => {
     expect(found.dirtyFiles).toEqual(['src/index.ts', 'src/util.ts'])
     expect(found.cumulativeCostUsd).toBe(1.2345)
     expect(found.cumulativeTokens).toBe(45210)
+    expect(found.settingsPath).toBe('/tmp/worktrees/run-1/.claude/settings.json')
+    expect(found.hookPath).toBe('/tmp/worktrees/run-1/.claude/pause-gate.sh')
+    expect(found.gitAuthorName).toBe('Alex')
+    expect(found.gitAuthorEmail).toBe('alex@example.com')
     expect(found.pauseReason).toBe('operator asked to rename the class to MathKit before continuing')
     expect(found.requestedBy).toBe('erenaltan@gmail.com')
     expect(found.ts).toEqual(ts)
@@ -97,6 +109,10 @@ describe('Checkpoint', () => {
         deniedToolUseIds: [],
         headCommit: 'deadbeef',
         dirtyFiles: [],
+        settingsPath: '/tmp/worktrees/run-2/.claude/settings.json',
+        hookPath: '/tmp/worktrees/run-2/.claude/pause-gate.sh',
+        gitAuthorName: 'Alex',
+        gitAuthorEmail: 'alex@example.com',
       },
     })
 
@@ -120,6 +136,10 @@ describe('Checkpoint', () => {
         deniedToolUseIds: [],
         headCommit: 'cafef00d',
         dirtyFiles: [],
+        settingsPath: '/tmp/worktrees/run-3/.claude/settings.json',
+        hookPath: '/tmp/worktrees/run-3/.claude/pause-gate.sh',
+        gitAuthorName: 'Alex',
+        gitAuthorEmail: 'alex@example.com',
       },
     })
 

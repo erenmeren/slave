@@ -1,7 +1,8 @@
 /**
- * The provider-neutral checkpoint shape `resume()` accepts (ADR 0001 §5, M3 design spec §6).
+ * The provider-neutral checkpoint shape `resume()` accepts (ADR 0001 §5, M3 design spec §6, plus
+ * `settingsPath`/`hookPath`/`gitAuthorName`/`gitAuthorEmail` -- fix round 1's ruling below).
  *
- * `packages/db`'s `Checkpoint` Prisma model carries the same eleven fields below, plus
+ * `packages/db`'s `Checkpoint` Prisma model carries the same fifteen fields below, plus
  * provenance columns (`id`, `runId`, `pauseReason`, `requestedBy`, `ts`) that belong to the
  * orchestrator's persistence layer, not to a runtime adapter. The duplication between that model
  * and this interface is deliberate, not an oversight: `packages/providers` may not depend on
@@ -16,6 +17,22 @@
  * this interface, writes it through Prisma, reads it back, and asserts every field survives byte
  * for byte. That test is the one place in this package where a *test* importing `packages/db` is
  * correct rather than a violation of the boundary above.
+ *
+ * **Fix round 1 -- `settingsPath`, `hookPath`, `gitAuthorName`, `gitAuthorEmail` were added here
+ * after Task 9 shipped without them.** The original implementation had `resume()` recover these
+ * from `this.mustGetRun(runId).startInput` -- the *same adapter instance's* memory of the
+ * `StartRunInput` it spawned the run with the first time. That works only while the process that
+ * called `start()` is still alive, which makes a "checkpoint" that cannot actually survive what a
+ * checkpoint exists to survive (ADR 0001 §5 puts `worktreePath` here for exactly this reason: "a
+ * fresh process must be able to resume a run it never started"). These four are the same *kind*
+ * of fact `worktreePath` is -- things the resumed spawn needs and the CLI cannot rediscover from
+ * `--resume <sessionId>` alone -- so they belong in the same place, even though ADR 0001 §5's
+ * original table does not name them: that table was derived from what the CLI needs to resume,
+ * not from what this specific adapter's spawn needs, and this ruling completes the list rather
+ * than contradicting it. `gitIdentity` is flattened to two scalar fields here rather than kept as
+ * a nested `{ name, email }` object -- deliberately, unlike `StartRunInput.gitIdentity`, which
+ * keeps its nested shape: the pinning test writes this shape straight through Prisma, and a
+ * nested object has no column to land in.
  */
 export interface Checkpoint {
   /**
@@ -50,4 +67,26 @@ export interface Checkpoint {
   /** Each run segment reports its own totals (ADR 0001 §5, Q3: per-segment, not cumulative). */
   readonly cumulativeCostUsd: number
   readonly cumulativeTokens: number
+  /**
+   * The run's original `--settings` file, absolute. A resumed process needs the same permission
+   * posture the paused one had -- `--resume <sessionId>` alone tells the CLI which session to
+   * continue, not which settings file governed it, and there is nowhere else a fresh process
+   * (one that never called this run's `start()`) could recover this from.
+   */
+  readonly settingsPath: string
+  /**
+   * The `PreToolUse` hook script `settingsPath` registers, absolute. Not read directly by the
+   * resumed spawn itself, but a fresh process re-deriving a `StartRunInput` for `resume()` has no
+   * other source for it -- the same "the CLI cannot rediscover this" reasoning as `settingsPath`.
+   */
+  readonly hookPath: string
+  /**
+   * Git identity for the resumed process's commits (`GIT_AUTHOR_NAME`/`GIT_COMMITTER_NAME`,
+   * ADR 0001 "Concurrency and the git common directory"). A fresh process has no `git config` to
+   * fall back on -- identity is supplied per-process by design, precisely so it cannot leak from
+   * or be recovered out of shared repo state -- so the checkpoint is the only place left to carry
+   * it across a process boundary the original `start()` call did not survive.
+   */
+  readonly gitAuthorName: string
+  readonly gitAuthorEmail: string
 }

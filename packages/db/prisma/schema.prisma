@@ -263,6 +263,15 @@ model Checkpoint {
   dirtyFiles        String[]
   cumulativeCostUsd Float    @default(0)
   cumulativeTokens  Int      @default(0)
+  /// Fix round 1: the spawn-critical fields `resume()` cannot rediscover on its own, mirroring
+  /// `packages/providers`' `Checkpoint` interface (see that file's docstring for the ruling this
+  /// implements — ADR 0001 §5 puts `worktreePath` here for the same reason). Deliberately no
+  /// `@default` on any of the four: the orchestrator always writes them, and a default would let
+  /// a silently-incomplete checkpoint through the exact gate this task exists to close.
+  settingsPath      String
+  hookPath          String
+  gitAuthorName     String
+  gitAuthorEmail    String
   /// Free text: the operator-supplied reason that went into the hook's deny message, not the
   /// AgentRun.pauseReason category enum. Never assign an AgentRun.pauseReason enum member's
   /// literal spelling here — that would read as this field being the same enum when it is not.

@@ -61,8 +61,9 @@ describe('ClaudeCodeAdapter.resume', () => {
     adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'env-echo'] })
     await adapter.start(input)
     // Drain the initial run so its process has fully exited before any test below calls
-    // resume() against the same runId -- resume() reuses the adapter's own bookkeeping
-    // (settingsPath, hookPath, gitIdentity) recorded at start() time.
+    // resume() against the same runId. Not load-bearing for resume() itself (fix round 1: it no
+    // longer reads anything back off this adapter's memory of `start()`), only so a run's own
+    // stdout is fully consumed before the next thing touches it.
     for await (const _event of adapter.events(input.runId)) {
       void _event
     }
@@ -79,6 +80,14 @@ describe('ClaudeCodeAdapter.resume', () => {
       dirtyFiles: ['src/index.ts'],
       cumulativeCostUsd: 0.42,
       cumulativeTokens: 1234,
+      // Equal to `input`'s own values here, deliberately -- these tests exercise other parts of
+      // the contract. The divergence test below ("resumes using the checkpoint's own spawn
+      // fields...") is the one that sets these to something different from `input` and proves
+      // which source actually reached the spawned process.
+      settingsPath: input.settingsPath,
+      hookPath: input.hookPath,
+      gitAuthorName: input.gitIdentity.name,
+      gitAuthorEmail: input.gitIdentity.email,
     }
   })
 
@@ -147,6 +156,39 @@ describe('ClaudeCodeAdapter.resume', () => {
     expect(payload?.['cwd']).toBe(checkpoint.worktreePath)
   })
 
+  it("resumes using the checkpoint's own spawn fields, not the adapter's memory of the original start()", async (): Promise<void> => {
+    // Deliberately different from `input`'s own settingsPath/gitIdentity, and absolute (required
+    // by `claudeFlags`) -- if `resume()` still read `settingsPath`/`gitAuthorName`/
+    // `gitAuthorEmail` off `mustGetRun(runId).startInput` the way it did before fix round 1, the
+    // spawned process would show `input`'s values here instead, and this test would fail. Every
+    // other test in this file leaves the checkpoint's four fields equal to `input`'s own (set in
+    // `beforeEach`), which is exactly why none of them can tell the two sources apart -- only
+    // this divergence proves which one `resume()` actually used.
+    const divergentCheckpoint: Checkpoint = {
+      ...checkpoint,
+      settingsPath: path.join(worktreePath, 'divergent-settings.json'),
+      gitAuthorName: 'Divergent Author',
+      gitAuthorEmail: 'divergent@example.com',
+    }
+
+    const handle = await adapter.resume(input.runId, divergentCheckpoint, 'do the other thing')
+    const args = await spawnedArgsFor(handle)
+    const payload = adapter.rawTerminalPayload(handle.runId)
+    const env = z.record(z.string(), z.string().optional()).parse(payload?.['env'])
+
+    const settingsIndex = args.indexOf('--settings')
+    expect(settingsIndex).toBeGreaterThanOrEqual(0)
+    expect(args[settingsIndex + 1]).toBe(divergentCheckpoint.settingsPath)
+    expect(args[settingsIndex + 1]).not.toBe(input.settingsPath)
+
+    expect(env['GIT_AUTHOR_NAME']).toBe('Divergent Author')
+    expect(env['GIT_AUTHOR_EMAIL']).toBe('divergent@example.com')
+    expect(env['GIT_COMMITTER_NAME']).toBe('Divergent Author')
+    expect(env['GIT_COMMITTER_EMAIL']).toBe('divergent@example.com')
+    expect(env['GIT_AUTHOR_NAME']).not.toBe(input.gitIdentity.name)
+    expect(env['GIT_AUTHOR_EMAIL']).not.toBe(input.gitIdentity.email)
+  })
+
   it('falls back to a default continuation prompt when no instruction is queued', async (): Promise<void> => {
     const handle = await adapter.resume(input.runId, checkpoint, null)
     const args = await spawnedArgsFor(handle)
@@ -170,15 +212,35 @@ describe('ClaudeCodeAdapter.resume', () => {
   })
 })
 
-function nonExistentRunId(): RunId {
+function neverStartedRunId(): RunId {
   return makeRunId('run-resume-never-started')
 }
 
-describe('ClaudeCodeAdapter.resume against an unknown run', () => {
-  it('rejects rather than silently starting a fresh, untracked process', async (): Promise<void> => {
+/**
+ * Fix round 1 inverts this describe block's whole contract. Before the fix, `resume()` read
+ * `settingsPath`/`hookPath`/`gitIdentity` off `this.mustGetRun(runId).startInput` -- this adapter
+ * instance's own memory of a prior `start()` call against `runId` -- so a `runId` with no such
+ * memory had to reject: there was nowhere else to get those fields from. Now that `Checkpoint`
+ * itself carries them, that lookup is gone, and resuming a `runId` this adapter instance never
+ * `start()`-ed is the *normal* case, not an error: it is exactly what surviving a daemon restart
+ * looks like from a fresh adapter instance's point of view -- the checkpoint was written by a
+ * process that no longer exists, and everything `resume()` needs travels in `checkpoint` instead
+ * of in this instance's memory. A future reader must not "restore" the old rejecting assertion
+ * below; the old test was pinning a limitation this fix deliberately removed, not a contract that
+ * still holds.
+ */
+describe('ClaudeCodeAdapter.resume against a runId this adapter instance never started', () => {
+  it('resumes successfully, and afterwards events()/cancel() work against the resumed run', async (): Promise<void> => {
     const worktreePath = mkdtempSync(path.join(tmpdir(), 'aiteamos-adapter-resume-unknown-'))
     try {
+      const hookPath = path.join(worktreePath, 'pause-gate.sh')
+      writeFileSync(hookPath, readFileSync(realGate))
+      chmodSync(hookPath, 0o755)
+
+      // A fresh adapter instance, deliberately -- never handed this runId to `start()`, matching
+      // what a daemon restart actually looks like: a new process with no memory of prior runs.
       const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'env-echo'] })
+      const runId = neverStartedRunId()
       const checkpoint: Checkpoint = {
         sessionId: 'fake-session-orphan',
         worktreePath,
@@ -191,8 +253,26 @@ describe('ClaudeCodeAdapter.resume against an unknown run', () => {
         dirtyFiles: [],
         cumulativeCostUsd: 0,
         cumulativeTokens: 0,
+        settingsPath: path.join(worktreePath, 'settings.json'),
+        hookPath,
+        gitAuthorName: 'Orphan Author',
+        gitAuthorEmail: 'orphan@example.com',
       }
-      await expect(adapter.resume(nonExistentRunId(), checkpoint, null)).rejects.toThrow()
+
+      const handle = await adapter.resume(runId, checkpoint, null)
+      expect(handle.runId).toBe(runId)
+
+      // events() works against the resumed run: spawnChild registered a fresh RunState under
+      // `runId`, so this is not an "untracked" process despite no prior start() on this instance.
+      const seen: string[] = []
+      for await (const event of adapter.events(runId)) {
+        seen.push(event.kind)
+      }
+      expect(seen.length).toBeGreaterThan(0)
+
+      // cancel() works too, for the same reason -- and resolves cleanly even though env-echo has
+      // already exited by this point (terminateChild is a no-op once the child already exited).
+      await expect(adapter.cancel(runId)).resolves.toBeUndefined()
     } finally {
       rmSync(worktreePath, { recursive: true, force: true })
     }

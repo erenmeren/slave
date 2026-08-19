@@ -74,6 +74,14 @@ describe('Checkpoint shape pinning (providers interface <-> db model)', () => {
       dirtyFiles: ['src/pin.ts', 'src/pin.test.ts'],
       cumulativeCostUsd: 3.1415,
       cumulativeTokens: 98765,
+      // Fix round 1's four spawn-critical fields. Non-empty and distinct from the second test's
+      // values below -- an empty-string default and a genuinely-empty string read back are just
+      // as indistinguishable as an empty array is, so these are set the same way the rest of this
+      // test's non-zero/non-empty values are.
+      settingsPath: '/tmp/worktrees/pin-run-1/.claude/settings.json',
+      hookPath: '/tmp/worktrees/pin-run-1/.claude/pause-gate.sh',
+      gitAuthorName: 'Pin Author',
+      gitAuthorEmail: 'pin-author@example.com',
     }
 
     const created = await prisma.checkpoint.create({
@@ -90,6 +98,10 @@ describe('Checkpoint shape pinning (providers interface <-> db model)', () => {
         dirtyFiles: [...checkpoint.dirtyFiles],
         cumulativeCostUsd: checkpoint.cumulativeCostUsd,
         cumulativeTokens: checkpoint.cumulativeTokens,
+        settingsPath: checkpoint.settingsPath,
+        hookPath: checkpoint.hookPath,
+        gitAuthorName: checkpoint.gitAuthorName,
+        gitAuthorEmail: checkpoint.gitAuthorEmail,
       },
     })
 
@@ -109,6 +121,10 @@ describe('Checkpoint shape pinning (providers interface <-> db model)', () => {
     expect(found.dirtyFiles).toEqual([...checkpoint.dirtyFiles])
     expect(found.cumulativeCostUsd).toBe(checkpoint.cumulativeCostUsd)
     expect(found.cumulativeTokens).toBe(checkpoint.cumulativeTokens)
+    expect(found.settingsPath).toBe(checkpoint.settingsPath)
+    expect(found.hookPath).toBe(checkpoint.hookPath)
+    expect(found.gitAuthorName).toBe(checkpoint.gitAuthorName)
+    expect(found.gitAuthorEmail).toBe(checkpoint.gitAuthorEmail)
   })
 
   it('round-trips the nullable fields and empty arrays a Checkpoint with no denials yet actually has', async (): Promise<void> => {
@@ -126,6 +142,14 @@ describe('Checkpoint shape pinning (providers interface <-> db model)', () => {
       dirtyFiles: [],
       cumulativeCostUsd: 0,
       cumulativeTokens: 0,
+      // Unlike lastToolUseId/deniedToolUseIds above, these four have no null/empty variant on
+      // `Checkpoint` -- they are required strings with no zero value that means anything -- so
+      // this second test still exercises them with real, non-empty values (distinct from the
+      // first test's, so a value bleeding across tests would also be caught).
+      settingsPath: '/tmp/worktrees/pin-run-2/.claude/settings.json',
+      hookPath: '/tmp/worktrees/pin-run-2/.claude/pause-gate.sh',
+      gitAuthorName: 'Second Pin Author',
+      gitAuthorEmail: 'second-pin-author@example.com',
     }
 
     const created = await prisma.checkpoint.create({
@@ -142,6 +166,10 @@ describe('Checkpoint shape pinning (providers interface <-> db model)', () => {
         dirtyFiles: [...checkpoint.dirtyFiles],
         cumulativeCostUsd: checkpoint.cumulativeCostUsd,
         cumulativeTokens: checkpoint.cumulativeTokens,
+        settingsPath: checkpoint.settingsPath,
+        hookPath: checkpoint.hookPath,
+        gitAuthorName: checkpoint.gitAuthorName,
+        gitAuthorEmail: checkpoint.gitAuthorEmail,
       },
     })
 
@@ -154,5 +182,9 @@ describe('Checkpoint shape pinning (providers interface <-> db model)', () => {
     expect(found.dirtyFiles).toEqual([])
     expect(found.cumulativeCostUsd).toBe(0)
     expect(found.cumulativeTokens).toBe(0)
+    expect(found.settingsPath).toBe(checkpoint.settingsPath)
+    expect(found.hookPath).toBe(checkpoint.hookPath)
+    expect(found.gitAuthorName).toBe(checkpoint.gitAuthorName)
+    expect(found.gitAuthorEmail).toBe(checkpoint.gitAuthorEmail)
   })
 })

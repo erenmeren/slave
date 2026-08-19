@@ -143,15 +143,14 @@ export interface AgentRuntimeAdapter {
    * When `null` (no instruction queued), a generic continuation prompt is substituted: `-p` still
    * needs *some* text in headless mode, and there is no queued operator instruction to supply it.
    *
-   * Requires the same adapter instance to have already `start()`-ed `runId` at some point in its
-   * lifetime: `resume` reuses that run's original `settingsPath`, `hookPath`, and `gitIdentity`
-   * (untouched by `queuedInstruction`) rather than re-deriving them from `checkpoint`, which does
-   * not carry them -- deliberately, since they are workspace-provisioning constants, not run
-   * state that changes across a pause. Rejects for an unknown `runId` rather than silently
-   * starting an untracked process (matching `cancel`/`requestPause`'s existing behaviour for the
-   * same case), the same way `canResumeSession: false` on a degraded provider means `resume`
-   * itself must reject rather than silently starting a fresh session (ADR 0001, "Degradation path
-   * if a provider lacks hooks").
+   * Resuming a `runId` this adapter instance never itself `start()`-ed is the normal case, not an
+   * error -- that is exactly what surviving a daemon restart means (fix round 1). `checkpoint`
+   * alone carries everything the spawn needs (`settingsPath`, `hookPath`, `gitAuthorName`,
+   * `gitAuthorEmail`, alongside `worktreePath`/`pauseFlagPath`/`sessionId`), so `resume` does not
+   * look up any prior in-memory record of `runId` before spawning. `spawnChild` (below) registers
+   * a fresh `RunState` under `runId` regardless of whether one already existed, which is what
+   * makes `events()`/`cancel()` work against the resumed run afterwards -- the process is tracked
+   * from the moment it is spawned, not "untracked" for having no prior `start()` on this instance.
    */
   resume(runId: RunId, checkpoint: Checkpoint, queuedInstruction: string | null): Promise<RunHandle>
 }
@@ -301,11 +300,11 @@ interface RunState {
   /**
    * The `StartRunInput` this run's current process was actually spawned with -- from `start()`
    * the first time, or from the `StartRunInput`-shaped object `resume()` builds each time after.
-   * `resume()` reads `settingsPath`, `hookPath`, and `gitIdentity` back off this the same way
-   * `rawTerminalPayload` reads the raw result payload back off `RunState`: workspace-provisioning
-   * constants that do not change across a pause, and that `Checkpoint` deliberately does not
-   * carry (see the `resume` docstring above), so the only place left to recover them from is the
-   * adapter's own memory of the run it already started.
+   * Record-keeping only as of fix round 1: `resume()` no longer reads this back (`Checkpoint` now
+   * carries `settingsPath`/`hookPath`/`gitAuthorName`/`gitAuthorEmail` itself, precisely so a
+   * fresh adapter instance with no memory of this run's `start()` can still resume it), but
+   * `spawnChild` still records it uniformly for both callers rather than special-casing which one
+   * needs it kept, the same reasoning `rawResultPayload` is stored unconditionally for.
    */
   readonly startInput: StartRunInput
 }
@@ -467,7 +466,7 @@ export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
    * `resume()` can supply its own (same worktree, same settings and posture, plus
    * `--resume <sessionId>`) without duplicating everything below it. `spec.startInput` is
    * recorded on the resulting `RunState` regardless of which caller this is -- see that field's
-   * own docstring for why a future `resume()` call needs it.
+   * own docstring for what it is kept for as of fix round 1.
    */
   private spawnChild(spec: {
     readonly runId: RunId
@@ -666,28 +665,27 @@ export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
    * See the `AgentRuntimeAdapter.resume` docstring for the contract. This implementation:
    *
    * 1. Clears and verifies `checkpoint.pauseFlagPath` (`clearAndVerifyPauseFlagAbsent` below) --
-   *    the load-bearing step, first, before anything else is even looked up.
-   * 2. Looks up this run's `startInput` (from the last `start()` or `resume()` against this
-   *    `runId`) for `settingsPath`, `hookPath`, and `gitIdentity` -- rejecting here, via
-   *    `mustGetRun`, for an unknown `runId` rather than silently starting an untracked process.
-   * 3. Builds a fresh `StartRunInput`-shaped object: the checkpoint's worktree and pause-flag
-   *    path (its authoritative view of "where this run currently lives"), the resume prompt in
-   *    place of the original one, and everything else carried forward unchanged -- then spawns it
-   *    through the exact same `spawnChild` pipeline `start()` uses, with `--resume <sessionId>`
-   *    appended.
+   *    the load-bearing step, first, before anything else.
+   * 2. Builds a fresh `StartRunInput`-shaped object entirely from `checkpoint` and the arguments
+   *    given -- `settingsPath`, `hookPath` and `gitIdentity` (the latter reassembled from
+   *    `checkpoint.gitAuthorName`/`gitAuthorEmail`) come from the checkpoint itself (fix round 1),
+   *    not from any prior in-memory record of `runId`, which is what makes resuming a `runId` this
+   *    adapter instance never `start()`-ed work. The checkpoint's worktree and pause-flag path are
+   *    its authoritative view of "where this run currently lives"; the resume prompt replaces the
+   *    original one; everything else carries forward -- then spawns it through the exact same
+   *    `spawnChild` pipeline `start()` uses, with `--resume <sessionId>` appended.
    */
   async resume(runId: RunId, checkpoint: Checkpoint, queuedInstruction: string | null): Promise<RunHandle> {
     await clearAndVerifyPauseFlagAbsent(checkpoint.pauseFlagPath, runId)
 
-    const priorStartInput = this.mustGetRun(runId).startInput
     const resumedInput: StartRunInput = {
       runId,
       prompt: queuedInstruction ?? DEFAULT_RESUME_PROMPT,
       worktreePath: checkpoint.worktreePath,
       pauseFlagPath: checkpoint.pauseFlagPath,
-      settingsPath: priorStartInput.settingsPath,
-      hookPath: priorStartInput.hookPath,
-      gitIdentity: priorStartInput.gitIdentity,
+      settingsPath: checkpoint.settingsPath,
+      hookPath: checkpoint.hookPath,
+      gitIdentity: { name: checkpoint.gitAuthorName, email: checkpoint.gitAuthorEmail },
     }
 
     const args = [
