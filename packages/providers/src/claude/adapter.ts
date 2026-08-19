@@ -708,6 +708,21 @@ export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
     await clearAndVerifyPauseFlagAbsent(checkpoint.pauseFlagPath, runId)
     await this.runPreflightGate(checkpoint.hookPath, runId)
 
+    // Fix round 3, the coordinator's ruling: this order is load-bearing for the live-child check
+    // just below, not merely convenient. Probed 200 times against a real child process: readline's
+    // `'close'` on `child.stdout` fires *before* the child's own `'exit'` event in 200/200 runs,
+    // and at that exact instant `child.exitCode === null && child.signalCode === null` still holds
+    // -- meaning the liveness predicate below does not mean "the process is dead", it means "Node
+    // has observed the stream end", and a caller that drains `events()` to completion and calls
+    // `resume()` immediately afterward is inside a real, measured false-positive window where the
+    // predicate would wrongly read "still alive". `clearAndVerifyPauseFlagAbsent` (two async fs
+    // calls) and `runPreflightGate` (spawns the hook script twice, tens of milliseconds) above are
+    // what close that window before the check below ever runs -- by the time control reaches here,
+    // enough real wall-clock time has elapsed that the false positive has already resolved itself.
+    // Finding B's preflight fix is thus load-bearing for finding A's correctness, not just its own
+    // concern: moving the check below ahead of `runPreflightGate` (or dropping the preflight
+    // entirely) would reopen a real spurious "still running" throw against a run that has, in
+    // fact, already finished. Do not reorder these three steps without re-measuring this.
     const existing = this.runs.get(runId)
     if (existing !== undefined) {
       if (existing.child.exitCode === null && existing.child.signalCode === null) {

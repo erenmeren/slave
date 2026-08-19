@@ -38,6 +38,24 @@ async function waitForFile(filePath: string, timeoutMs = 2000): Promise<void> {
   }
 }
 
+/**
+ * Waits for `filePath` (a grandchild's pid, written by the throwaway orphan-holding script below)
+ * and pushes it into `pids` -- but the push happens in a `finally` around the wait, not after it,
+ * so a `waitForFile` timeout does not skip tracking (fix round 3, finding 1). The grandchild's own
+ * `spawn()` call already returned by the time its script starts running at all, so the process
+ * exists well before its pid file does; if the file simply had not appeared yet when this test's
+ * patience ran out, the process is still real and still needs killing.
+ */
+async function capturePidFile(filePath: string, pids: number[], timeoutMs = 2000): Promise<void> {
+  try {
+    await waitForFile(filePath, timeoutMs)
+  } finally {
+    if (existsSync(filePath)) {
+      pids.push(Number(readFileSync(filePath, 'utf8')))
+    }
+  }
+}
+
 describe('ClaudeCodeAdapter.resume', () => {
   let worktreePath: string
   let hookPath: string
@@ -274,6 +292,25 @@ describe('ClaudeCodeAdapter.resume', () => {
     ).rejects.toThrow()
   })
 
+  it('surfaces the pause-flag error before the hookPath error when both are wrong, pinning clearAndVerifyPauseFlagAbsent before runPreflightGate', async (): Promise<void> => {
+    // Pins the order the coordinator ruled load-bearing (fix round 3): clearAndVerifyPauseFlagAbsent
+    // must run before runPreflightGate -- not just for finding A's liveness-check timing (see the
+    // comment at resume()'s own ordering site), but as its own, separately-swappable pair of lines.
+    // No other test in this file gives both checks something to fail on at the same time, so
+    // swapping these two lines would stay green everywhere else; this one deliberately hands both
+    // a reason to fail and asserts on which error actually surfaces.
+    const blockedFlagPath = path.join(worktreePath, 'stuck-pause-order.flag')
+    mkdirSync(blockedFlagPath)
+
+    await expect(
+      adapter.resume(
+        input.runId,
+        { ...checkpoint, pauseFlagPath: blockedFlagPath, hookPath: 'relative/pause-gate.sh' },
+        null,
+      ),
+    ).rejects.toThrow(/pause flag/)
+  })
+
   it('refuses to resume a runId whose previous process is still running, and does not kill it', async (): Promise<void> => {
     // Finding A, live-child branch: 'hang' never exits on its own, so this process is
     // deliberately still alive when resume() is called -- the case awaitPause resolving
@@ -285,36 +322,60 @@ describe('ClaudeCodeAdapter.resume', () => {
       pauseFlagPath: path.join(worktreePath, 'live-pause.flag'),
     }
     const liveAdapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'hang'] })
-    const handle = await liveAdapter.start(liveInput)
-    expect(isAlive(handle.pid)).toBe(true)
-
-    const liveCheckpoint: Checkpoint = {
-      ...checkpoint,
-      worktreePath: liveInput.worktreePath,
-      pauseFlagPath: liveInput.pauseFlagPath,
-      settingsPath: liveInput.settingsPath,
-      hookPath: liveInput.hookPath,
-    }
+    // Every pid this test's adapter spawns, tracked the moment it exists -- not only the pid the
+    // passing behaviour expects. Fix round 3, finding 1: under a regression, `resume()` below
+    // resolves instead of rejecting, spawning a *second* real process for `liveRunId`; the
+    // previous version of this test discarded that handle via `await expect(...).rejects`, which
+    // throws away a resolved value entirely, leaking the exact process this test exists to prove
+    // is never orphaned. A pid is pushed here at the moment it can exist, not at the moment a
+    // passing run expects it to.
+    const pids: number[] = []
 
     try {
-      await expect(liveAdapter.resume(liveRunId, liveCheckpoint, null)).rejects.toThrow(/still running/)
+      const handle = await liveAdapter.start(liveInput)
+      pids.push(handle.pid)
+      expect(isAlive(handle.pid)).toBe(true)
+
+      const liveCheckpoint: Checkpoint = {
+        ...checkpoint,
+        worktreePath: liveInput.worktreePath,
+        pauseFlagPath: liveInput.pauseFlagPath,
+        settingsPath: liveInput.settingsPath,
+        hookPath: liveInput.hookPath,
+      }
+
+      // A plain try/catch, not `await expect(...).rejects.toThrow(...)`: the latter's whole
+      // mechanism is discarding a resolved value, which is precisely what leaked the second
+      // process before. Whichever way `resume()` settles, its result is captured and the
+      // resolved pid (if any) is recorded before any assertion runs.
+      let rejection: unknown
+      try {
+        const resumedHandle = await liveAdapter.resume(liveRunId, liveCheckpoint, null)
+        pids.push(resumedHandle.pid)
+      } catch (error) {
+        rejection = error
+      }
+
+      expect(rejection).toBeInstanceOf(Error)
+      expect((rejection as Error).message).toMatch(/still running/)
 
       // The point of the guard: resume() refusing must not itself have killed the process it
       // declined to adopt. Asserted on the process, not only on the throw.
       expect(isAlive(handle.pid)).toBe(true)
     } finally {
-      // This test deliberately leaves a child alive mid-test -- clean it up regardless of
-      // whether the assertions above passed. Killed directly by pid, not via
-      // `liveAdapter.cancel(liveRunId)`: if the guard above were broken, resume() would have
-      // replaced `liveRunId`'s RunState with a *different* process, and cancel() would then kill
-      // the wrong one, orphaning this original `handle.pid` -- exactly the leak this cleanup
-      // exists to prevent regardless of which way the assertions above went. No assertion here
-      // either, deliberately: a failed cleanup must never mask an earlier assertion failure by
-      // throwing over it in `finally`.
-      try {
-        process.kill(handle.pid, 'SIGKILL')
-      } catch {
-        // already gone
+      // This test deliberately leaves a child alive mid-test -- clean up every pid tracked above,
+      // regardless of whether the assertions passed. Killed directly by pid, not via
+      // `liveAdapter.cancel(liveRunId)`: under a regression `this.runs` now points at the *new*
+      // process, and cancel() would kill only that one, not necessarily the original -- direct
+      // pid tracking is what makes cleanup independent of the very bookkeeping under test. No
+      // assertion in this block, deliberately: a failed cleanup must never mask an earlier
+      // assertion failure by throwing over it in `finally`.
+      for (const pid of pids) {
+        try {
+          process.kill(pid, 'SIGKILL')
+        } catch {
+          // already gone
+        }
       }
     }
   })
@@ -367,8 +428,7 @@ describe('ClaudeCodeAdapter.resume', () => {
       process.env['AITEAMOS_TEST_ORPHAN_PID_FILE'] = startPidFile
       const handle = await orphanAdapter.start(orphanInput)
       immediatePids.push(handle.pid)
-      await waitForFile(startPidFile)
-      grandchildPids.push(Number(readFileSync(startPidFile, 'utf8')))
+      await capturePidFile(startPidFile, grandchildPids)
 
       // Registered before resume() is called, over the queue that -- without the fix -- would
       // never close: this run's own process never writes anything either, so nothing is ever
@@ -398,8 +458,7 @@ describe('ClaudeCodeAdapter.resume', () => {
       const resumedHandle = await orphanAdapter.resume(orphanRunId, orphanCheckpoint, null)
       immediatePids.push(resumedHandle.pid)
       expect(resumedHandle.runId).toBe(orphanRunId)
-      await waitForFile(resumePidFile)
-      grandchildPids.push(Number(readFileSync(resumePidFile, 'utf8')))
+      await capturePidFile(resumePidFile, grandchildPids)
 
       // Race the stuck consumer against a timeout: without resume()'s explicit close() on the
       // old queue, consumerDone never settles and this assertion is what turns that into a
@@ -418,6 +477,20 @@ describe('ClaudeCodeAdapter.resume', () => {
         delete process.env['AITEAMOS_TEST_ORPHAN_PID_FILE']
       } else {
         process.env['AITEAMOS_TEST_ORPHAN_PID_FILE'] = previousOrphanEnv
+      }
+      // A last sweep, on top of capturePidFile's own retry above: by the time cleanup runs,
+      // several more seconds have passed (the rest of the try body, including a 3s race), which
+      // is enough time for a pid file that had not yet appeared during capturePidFile's own
+      // window to exist now. Checked again here rather than assumed already caught -- the same
+      // "track it the moment it can exist" reasoning applied at the last moment this test gets to
+      // apply it.
+      for (const pidFile of [startPidFile, resumePidFile]) {
+        if (existsSync(pidFile)) {
+          const pid = Number(readFileSync(pidFile, 'utf8'))
+          if (!grandchildPids.includes(pid)) {
+            grandchildPids.push(pid)
+          }
+        }
       }
       // Killed directly by pid, not relied on solely via the cancel() calls above: if an
       // assertion in the try block had failed partway through, a cancel() call might never have
