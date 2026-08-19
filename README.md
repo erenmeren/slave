@@ -9,6 +9,8 @@ real git repositories, with a human supervising rather than prompting.
   `docs/decisions/0001-pause-semantics.md`.
 - **M1** — pure domain core, complete. See `docs/domain-model.md`.
 - **M2** — persistence and event log. See `docs/event-model.md`.
+- **M3** — orchestrator and the Claude Code adapter: real processes, real worktrees, real verify
+  commands, driven from a CLI. See the orchestrator section below and `docs/architecture.md`.
 
 ## Setup
 
@@ -94,3 +96,59 @@ docker compose exec postgres psql -U aiteamos -d aiteamos \
 Condition 1 is the one gap: `docker compose ps` cannot be run at all without a Docker daemon, so
 its check is unavoidably indirect wherever Docker is unavailable — do not read a healthy
 substitute database as proof that Compose was exercised.
+
+## Running the orchestrator
+
+Everything below drives the *development* database configured in `.env`. It spawns real `claude`
+processes, creates real git worktrees inside the workspace's own repository, and spends real money.
+
+```bash
+npm run orchestrator -- help          # the commands, and what clear-halt is not
+npm run orchestrator -- tick          # one scheduling pass, then wait for the run it started
+npm run orchestrator -- daemon        # the loop: a 1s timer plus the event channel
+npm run orchestrator -- status        # active runs, their pids and worktrees, and any halt
+```
+
+`--workspace <id>` may be omitted while the database holds exactly one workspace; with more than
+one it is required, and the error names them.
+
+### What a worktree looks like
+
+A run does its work in a git worktree of the workspace's own repository, on its own branch:
+
+```
+<workspace repo>/
+  .aiteamos/
+    .gitignore                     # `*` — the orchestrator's bookkeeping ignores itself
+    worktrees/T-3f2a9c1b/          # the run's checkout, on aiteamos/T-3f2a9c1b-<slug>
+    runs/<runId>/settings.json     # the per-run --settings file, registering the pause hook
+    runs/<runId>/pause.flag        # written by `pause`, read by the hook
+    artifacts/<taskId>/attempt-01/ # one log per verify command, per attempt
+```
+
+**A fresh worktree is empty of dependencies.** It is a new checkout, so `node_modules` is not
+there and neither is anything else `.gitignore`d. That is what `Workspace.setupCommands` is for
+(`npm ci`, a build) — without them the agent starts in a tree where nothing runs, and verify fails
+for reasons that have nothing to do with its work. Setup runs again when a reworking task adopts
+its previous worktree, because the commonest reason a worktree exists to adopt is a setup command
+that failed the first time.
+
+**Worktrees are preserved on failure and on cancellation.** They are the inspection surface: the
+question after a failed run is "how far did it get", and a removed directory cannot answer it.
+
+### Interrupting a run
+
+```bash
+npm run orchestrator -- pause  --run <id> --by <name>
+npm run orchestrator -- resume --run <id> --message "try the other approach"
+npm run orchestrator -- cancel --run <id>
+```
+
+`pause` arms the hook; the agent stops at its **next tool call**, not immediately — a hook deny
+removes the agent's ability to act without stopping the agent, which is what ADR 0001 measured and
+why the protocol has two parts. `resume` continues from the checkpoint written at the pause, in the
+same worktree and session.
+
+`clear-halt --workspace <id>` is **not** a variant of `resume`. It retracts a workspace-wide safety
+halt — raised when a pause gate fails or a workspace cannot verify — and it starts nothing by
+itself: it removes the reason nothing was starting.
