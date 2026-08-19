@@ -1190,6 +1190,21 @@ it('records a provisioning failure as a failed run that counts as an attempt', a
   expect(await eventTypesFor(workspaceId)).toContain('run.failed')
 })
 
+it('gives a reworked task a second run instead of burning its attempts on provisioning', async (): Promise<void> => {
+  // Task 11's fix round: `decide()` lists `rework` in STARTABLE, so a task that failed verify
+  // arrives back at `provisionWorktree` with the same key, and the worktree and branch from its
+  // first attempt are still there (spec §7.4 preserves them). `provisionWorktree` refuses with a
+  // typed `WorktreeExistsError` rather than clobbering; what it CANNOT know is why the leftovers
+  // exist, so the policy is this task's. Treating it as a plain provisioning failure is the one
+  // outcome that is definitely wrong: it counts an attempt (spec §13) without a run, and the task
+  // reaches its cap without a second agent ever starting.
+  await givenReworkedTaskWithExistingWorktree()
+  const report = await tick(deps)
+  expect(report.started).toHaveLength(1)
+  const task = await prisma.task.findFirstOrThrow()
+  expect(task.attempt).toBe(1) // the failed verify's attempt, not a second one for provisioning
+})
+
 it('starts no second run on the next tick after a gate failure halted the workspace', async (): Promise<void> => {
   // The halt Task 12's pump writes on a gate failure (spec §13.1) is the same
   // `Workspace.haltedReason` column `decide()` reads as `stats.emergencyStopped` — this is the
@@ -1201,6 +1216,22 @@ it('starts no second run on the next tick after a gate failure halted the worksp
 ```
 
 - [ ] **Step 2: Run them, watch them fail, implement**
+
+**`WorktreeExistsError` must be handled explicitly, and the policy decided here.** Two candidates,
+and the report must say which was chosen and why: *adopt* the existing worktree (the branch is where
+the first attempt's work lives, and §8's rework is meant to continue that work rather than start
+beside it) or *escalate* (the worktree may be the wreckage of a crash, which §7.4 preserved on
+purpose for an operator to look at). They are indistinguishable from inside `provisionWorktree`,
+which is why it raises a typed error instead of guessing. Whichever is chosen, the error must not
+fall through to the generic provisioning-failure path.
+
+**`taskKey` and `slug` have to come from somewhere, and nothing says where.** `Task` has no `key`
+column (§10, `schema.prisma`), and neither spec §7.1 nor this plan names a source. This task
+invents them, so it owns the rule: both are validated against `/^[A-Za-z0-9][A-Za-z0-9._-]*$/` by
+`provisionWorktree` (they become a path segment and a branch name), and a synthesized value that
+fails it throws at provisioning. Deriving a slug from a human-written title therefore needs
+sanitising, not truncating. Persist whatever is synthesized — the same key must be reproducible on
+the task's second run, or the adopt case above can never match.
 
 `decide()` returns the `halt` command on every tick the condition holds (spec §3.2), but
 `guardrail.tripped` is emitted only **on the transition into halted** — never on a tick that
