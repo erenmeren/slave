@@ -1,6 +1,7 @@
 import { execFile, spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { join, resolve } from 'node:path'
+import { StringDecoder } from 'node:string_decoder'
 import { promisify } from 'node:util'
 
 const execFileAsync = promisify(execFile)
@@ -52,6 +53,19 @@ const DEFAULT_SETUP_TIMEOUT_MS = 10 * 60_000
 const KILL_GRACE_MS = 2_000
 
 /**
+ * How long to keep reading a finished command's pipes before giving up on them.
+ *
+ * The child exiting and its pipes closing are different events, and only the first is bounded by
+ * anything this module controls: a setup command is free to leave a descendant holding the
+ * inherited stdout -- `setsid`, a double fork, a backgrounded dev server -- and that descendant
+ * keeps `close` from firing for as long as it lives. Measured: a `setsid`'d `sleep 20` made a
+ * 300 ms timeout take 20 seconds to report, and it would do the same to a command that *succeeded*.
+ * So the exit is what settles the command, and this is the bounded grace the pipes get to deliver
+ * whatever was written just before it.
+ */
+const DRAIN_GRACE_MS = 200
+
+/**
  * Task keys and slugs both become path segments and part of a branch name. `join()` collapses
  * `..`, so an unchecked key of `../../../../tmp/x` places the worktree outside the repository
  * entirely, and a value starting with `-` reaches git's argv where it parses as an option. Neither
@@ -100,9 +114,20 @@ export class WorktreeExistsError extends Error {
   constructor(
     readonly path: string,
     readonly branch: string,
-    detail: string,
+    /**
+     * Which half is there, as a field rather than as wording inside `message`.
+     *
+     * The caller's two cases live exactly here. `both` is the shape this task's own previous
+     * attempt leaves: directory and branch, matching, which is what a task returning from
+     * `rework` finds and the only case where adopting is defensible. `directory` alone is a
+     * stray tree with nothing behind it and `branch` alone is the residue of a half-finished
+     * removal -- neither is something a completed provision produced, so neither is safe to
+     * adopt. Collapsing them (by short-circuiting the second check) would hand the caller the
+     * adoptable case and the wreckage under one name.
+     */
+    readonly reason: 'directory' | 'branch' | 'both',
   ) {
-    super(`worktree for this task already exists (${detail}): ${path} on ${branch}`)
+    super(`worktree for this task already exists (${reason}): ${path} on ${branch}`)
     this.name = 'WorktreeExistsError'
   }
 }
@@ -190,6 +215,12 @@ interface SetupOutcome {
  * - **Lifetime.** `execFile`'s timeout signals the immediate child only.
  * - **stdin.** `execFile` hands the child an open pipe nobody ever writes to or closes, so a
  *   command that reads stdin blocks forever. `ignore` gives it EOF immediately.
+ *
+ * The cost of `detached`, stated rather than discovered later: the shell is a session leader
+ * outside the orchestrator's own process group, so a daemon that dies mid-provision leaves it
+ * running against the worktree with nothing to reconcile -- §3.4's startup pass looks for runs
+ * with dead pids, and no `AgentRun` exists yet at provisioning time. That is the right trade for
+ * being able to kill the group at all, and it is Task 15's to sweep.
  */
 async function runSetupCommand(command: string, cwd: string, timeoutMs: number): Promise<SetupOutcome> {
   const child = spawn('/bin/sh', ['-c', command], {
@@ -200,38 +231,63 @@ async function runSetupCommand(command: string, cwd: string, timeoutMs: number):
   })
 
   let tail = ''
-  let captured = 0
-  const collect = (chunk: Buffer): void => {
-    const text = chunk.toString('utf8')
-    captured += text.length
-    tail = (tail + text).slice(-SETUP_OUTPUT_LIMIT)
+  let capturedBytes = 0
+  // One decoder per stream, and never one shared between them: a decoder holds the leading bytes
+  // of a character split across two reads, so feeding it from both pipes would splice one
+  // stream's partial sequence onto the other's. Decoding each chunk with `toString` instead
+  // destroys any multi-byte character that straddles a read -- measured at three replacement
+  // characters in a single non-ASCII failure message, right where the operator is reading.
+  const decoders = { stdout: new StringDecoder('utf8'), stderr: new StringDecoder('utf8') }
+  const collect = (stream: 'stdout' | 'stderr') => (chunk: Buffer): void => {
+    capturedBytes += chunk.length
+    tail = (tail + decoders[stream].write(chunk)).slice(-SETUP_OUTPUT_LIMIT)
   }
-  child.stdout.on('data', collect)
-  child.stderr.on('data', collect)
+  child.stdout.on('data', collect('stdout'))
+  child.stderr.on('data', collect('stderr'))
+
+  // Attached now, not after the exit is awaited. `close` follows `exit` closely enough that a
+  // listener added on the far side of an `await` can miss it entirely -- and then every ordinary
+  // setup command would sit out the full DRAIN_GRACE_MS below, turning a bounded fallback into
+  // the normal path. Measured before it was fixed: two trivial commands took 452ms instead of 42.
+  const closed = new Promise<void>((res) => child.on('close', () => res()))
 
   let timedOut = false
-  const escalations: NodeJS.Timeout[] = []
+  const timers: NodeJS.Timeout[] = []
   const deadline = setTimeout((): void => {
+    // A command that has already finished is not a command that timed out, even if the deadline
+    // lands in the same turn as its exit. Marking it so would report a *succeeding* command as a
+    // timeout, and a provisioning failure costs the task an attempt (spec §13).
+    if (child.exitCode !== null || child.signalCode !== null) return
     timedOut = true
     if (child.pid !== undefined) {
       killGroup(child.pid, 'SIGTERM')
-      escalations.push(setTimeout((): void => killGroup(child.pid as number, 'SIGKILL'), KILL_GRACE_MS))
+      timers.push(setTimeout((): void => killGroup(child.pid as number, 'SIGKILL'), KILL_GRACE_MS))
     }
   }, timeoutMs)
+  timers.push(deadline)
 
   try {
+    // `exit` settles the command; `close` only reports the pipes, which a descendant outside this
+    // process group can hold open indefinitely -- see DRAIN_GRACE_MS.
     const [code, signal] = await new Promise<[number | null, NodeJS.Signals | null]>((res, rej) => {
-      // `close` rather than `exit`: it fires once the pipes have drained, so the tail is complete.
-      child.on('close', (exitCode, exitSignal) => res([exitCode, exitSignal]))
+      child.on('exit', (exitCode, exitSignal) => res([exitCode, exitSignal]))
       child.on('error', rej)
     })
 
-    const output =
-      captured > tail.length ? `…(truncated, ${captured - tail.length} earlier bytes)\n${tail}` : tail
+    await Promise.race([closed, new Promise<void>((res) => timers.push(setTimeout(res, DRAIN_GRACE_MS)))])
+    child.stdout.destroy()
+    child.stderr.destroy()
+
+    // Whatever the decoders still hold is an *incomplete* character -- `write` has already
+    // returned every complete one. It is there because the command's output ended mid-character,
+    // which is what `process.exit` during a large write does, and `end()` would render those
+    // orphaned bytes as U+FFFD. Measured: exactly one, appended to an otherwise clean message.
+    // A replacement character the child never printed is worse than the bytes it stands for.
+    const dropped = capturedBytes - Buffer.byteLength(tail, 'utf8')
+    const output = dropped > 0 ? `…(truncated, ${dropped} earlier bytes)\n${tail}` : tail
     return { code, signal, timedOut, output: output.trim() }
   } finally {
-    clearTimeout(deadline)
-    for (const timer of escalations) clearTimeout(timer)
+    for (const timer of timers) clearTimeout(timer)
   }
 }
 
@@ -294,8 +350,15 @@ export async function provisionWorktree(input: ProvisionWorktreeInput): Promise<
   // Checked *before* the add rather than left to git's refusal, because `worktree add -b` creates
   // the branch first and then fails on the path -- measured -- so letting git refuse leaves a
   // branch behind with no worktree attached, and the next attempt fails differently than this one.
-  if (existsSync(path)) throw new WorktreeExistsError(path, branch, 'directory present')
-  if (await branchExists(repoPath, branch)) throw new WorktreeExistsError(path, branch, 'branch present')
+  // Both halves are evaluated before either is reported: which of them is present is the caller's
+  // whole decision (see WorktreeExistsError.reason), and a short-circuit here would answer
+  // "directory" for the rework case and for a stray tree alike.
+  const hasDirectory = existsSync(path)
+  const hasBranch = await branchExists(repoPath, branch)
+  if (hasDirectory || hasBranch) {
+    const reason = hasDirectory && hasBranch ? 'both' : hasDirectory ? 'directory' : 'branch'
+    throw new WorktreeExistsError(path, branch, reason)
+  }
 
   // `worktree add -b` creates the branch and the leading directories in one step.
   await git(repoPath, 'worktree', 'add', '-b', branch, path, input.baseBranch)
@@ -305,7 +368,12 @@ export async function provisionWorktree(input: ProvisionWorktreeInput): Promise<
   // a failure produces a second, misleading error from the wrong command.
   const timeoutMs = input.setupTimeoutMs ?? DEFAULT_SETUP_TIMEOUT_MS
   for (const command of input.setupCommands) {
-    const outcome = await runSetupCommand(command, path, timeoutMs)
+    // A spawn that never starts (a vanished cwd, no `/bin/sh`) rejects with a bare Node error,
+    // and Task 13 persists whatever lands here as the run's `run.failed` reason. Wrapped so that
+    // reason still names the command rather than reading as an orchestrator crash.
+    const outcome = await runSetupCommand(command, path, timeoutMs).catch((cause: unknown) => {
+      throw new Error(`setup command could not start: ${command}`, { cause })
+    })
     if (outcome.timedOut || outcome.signal !== null || outcome.code !== 0) {
       throw setupFailure(command, timeoutMs, outcome)
     }

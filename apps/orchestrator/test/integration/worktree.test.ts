@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, relative } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -236,6 +236,84 @@ describe('provisionWorktree', () => {
     expect(existsSync(marker)).toBe(false)
   })
 
+  it('escalates to SIGKILL when the timed-out command ignores SIGTERM', async (): Promise<void> => {
+    const started = Date.now()
+
+    await expect(
+      provisionWorktree({
+        ...base,
+        // A shell that traps TERM is not exotic -- it is what any command with its own cleanup
+        // handler looks like from outside. Without the escalation this waits for `sleep 20`.
+        setupCommands: [`trap '' TERM; sleep 20`],
+        setupTimeoutMs: 300,
+      }),
+    ).rejects.toThrow(/timed out/i)
+
+    expect(Date.now() - started).toBeLessThan(5_000)
+  })
+
+  it('gives a timed-out command time to clean up before killing it outright', async (): Promise<void> => {
+    const worktreePath = join(repoPath, '.aiteamos', 'worktrees', 'TASK-001')
+
+    await expect(
+      provisionWorktree({
+        ...base,
+        // SIGTERM first, SIGKILL only after the grace: a command that traps TERM to remove a lock
+        // file or kill its own children has to be given the chance. A zero grace, or a first
+        // signal of SIGKILL, is indistinguishable from the escalation working -- both stop the
+        // command -- and this is the difference.
+        setupCommands: [`trap 'touch CLEANED_UP; exit 9' TERM; sleep 20`],
+        setupTimeoutMs: 300,
+      }),
+    ).rejects.toThrow(/timed out/i)
+
+    expect(existsSync(join(worktreePath, 'CLEANED_UP'))).toBe(true)
+  })
+
+  it('does not wait for a descendant that has left the process group', async (): Promise<void> => {
+    const started = Date.now()
+
+    await expect(
+      provisionWorktree({
+        ...base,
+        // `setsid` is the standard daemonising pattern, and it takes the descendant out of the
+        // group the timeout kills. The shell dies on time, but `close` fires only once every
+        // holder of the inherited pipes has let go -- so awaiting it makes the timeout only as
+        // short as the longest-lived escapee, and the tick that awaits provisioning inline
+        // (spec §3.2) freezes for exactly that long while the message claims 300ms.
+        setupCommands: [`setsid sh -c 'sleep 20' & wait`],
+        setupTimeoutMs: 300,
+      }),
+    ).rejects.toThrow(/timed out/i)
+
+    expect(Date.now() - started).toBeLessThan(5_000)
+  })
+
+  it('captures what a failing command printed on stdout, not only on stderr', async (): Promise<void> => {
+    // `npm ci` and `tsc` put their diagnostics on stdout. Asserting only stderr leaves the stream
+    // that actually carries the error free to be dropped.
+    await expect(
+      provisionWorktree({ ...base, setupCommands: ['echo $((6 * 7)) ; exit 3'] }),
+    ).rejects.toThrow(/exit 3[\s\S]*\b42\b/)
+  })
+
+  it('does not corrupt multi-byte output at a chunk boundary', async (): Promise<void> => {
+    const error = await provisionWorktree({
+      ...base,
+      // A 3-byte character straddling a pipe read is destroyed by decoding each read on its own.
+      // The operator sees replacement characters in the middle of the error they are trying to
+      // read, and a non-ASCII diagnostic is the normal case in most of the world.
+      setupCommands: [`node -e 'process.stderr.write("€".repeat(300000)); process.exit(3)'`],
+    }).then(
+      (): Error => {
+        throw new Error('expected provisioning to reject')
+      },
+      (cause: unknown): Error => cause as Error,
+    )
+
+    expect(error.message).not.toContain('\uFFFD')
+  })
+
   it('gives a setup command a closed stdin rather than a pipe nobody writes to', async (): Promise<void> => {
     // The tick awaits provisioning inline (spec §3.2), so a setup command blocking on a read it
     // will never be answered freezes every workspace, not just this one. `cat` returns only on
@@ -279,6 +357,13 @@ describe('provisionWorktree', () => {
     expect((error as WorktreeExistsError).path).toBe(first.path)
     expect((error as WorktreeExistsError).branch).toBe(first.branch)
 
+    // `both` is the *rework* shape, and it has to be distinguishable as a field rather than as
+    // wording inside the message: the plan gives Task 13 an adopt-versus-escalate decision, and
+    // "directory and branch both present, exactly as this task left them" is the case where
+    // adopting is defensible. Reading it back out of `message` is the practice this class exists
+    // to stop the caller doing to git's stderr.
+    expect((error as WorktreeExistsError).reason).toBe('both')
+
     // `git worktree add -b` creates the branch *before* it fails on the path, so a failed
     // re-provision through git leaves a branch behind with no worktree attached. Refusing before
     // the add is what keeps the repository as it was found.
@@ -295,6 +380,20 @@ describe('provisionWorktree', () => {
     // only the directory would let this one through to git's own refusal.
     expect(error).toBeInstanceOf(WorktreeExistsError)
     expect((error as WorktreeExistsError).branch).toBe('aiteamos/TASK-001-add-thing')
+    expect((error as WorktreeExistsError).reason).toBe('branch')
+  })
+
+  it('tells a stray directory apart from a worktree this task left behind', async (): Promise<void> => {
+    mkdirSync(join(repoPath, '.aiteamos', 'worktrees', 'TASK-001'), { recursive: true })
+
+    const error = await provisionWorktree(base).catch((cause: unknown): unknown => cause)
+
+    // Wreckage, not a rework: a directory with no branch behind it is not something a previous
+    // attempt of this task produced, and adopting it would hand the agent an unrelated tree.
+    // Short-circuiting the branch check once the directory is found collapses this into the
+    // `both` case above, which is the one the caller is most likely to adopt.
+    expect(error).toBeInstanceOf(WorktreeExistsError)
+    expect((error as WorktreeExistsError).reason).toBe('directory')
   })
 
   it('refuses a task key that would place the worktree outside the repository', async (): Promise<void> => {
@@ -305,6 +404,14 @@ describe('provisionWorktree', () => {
       /taskKey/,
     )
     await expect(provisionWorktree({ ...base, slug: '--detach' })).rejects.toThrow(/slug/)
+
+    // Both inputs above are rejected by their *first* character, so they pin the regex's anchor
+    // and say nothing about its character class -- widening the class to admit `/` re-opens path
+    // traversal and leaves them green. This one is legal until its fourth character.
+    await expect(
+      provisionWorktree({ ...base, taskKey: 'ok/../../../../tmp/pwned' }),
+    ).rejects.toThrow(/taskKey/)
+
     expect(existsSync(join(repoPath, '.aiteamos'))).toBe(false)
   })
 
