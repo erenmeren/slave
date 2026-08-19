@@ -1,5 +1,6 @@
-import { execFile } from 'node:child_process'
-import { join } from 'node:path'
+import { execFile, spawn } from 'node:child_process'
+import { existsSync } from 'node:fs'
+import { join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 
 const execFileAsync = promisify(execFile)
@@ -29,12 +30,44 @@ const ORCHESTRATOR_GIT_IDENTITY = {
   email: 'orchestrator@aiteamos.local',
 } as const
 
+/**
+ * How much of a failing setup command's output reaches the thrown message. Task 13 persists that
+ * message as the run's `run.failed` reason, so an unbounded one puts a whole `npm ci` log into a
+ * database column. Bounded from the *front*: the last thing a failing command printed is almost
+ * always the reason it failed.
+ */
+export const SETUP_OUTPUT_LIMIT = 16 * 1024
+
+/**
+ * How long one setup command may run. The tick awaits provisioning inline (spec §3.2), so a
+ * command that never returns freezes the sweep and the reconcile pass for *every* workspace, not
+ * just this one. Spec §8 gives verify commands a timeout from the workspace's guardrails and §7.2
+ * gives setup none, which reads as an omission rather than a decision -- setup is the same class of
+ * arbitrary shell. Ten minutes is chosen to clear a cold `npm ci` on a slow network with room to
+ * spare; Task 13 should pass the workspace's own value once there is one.
+ */
+const DEFAULT_SETUP_TIMEOUT_MS = 10 * 60_000
+
+/** How long a timed-out process group gets to die politely before it is killed outright. */
+const KILL_GRACE_MS = 2_000
+
+/**
+ * Task keys and slugs both become path segments and part of a branch name. `join()` collapses
+ * `..`, so an unchecked key of `../../../../tmp/x` places the worktree outside the repository
+ * entirely, and a value starting with `-` reaches git's argv where it parses as an option. Neither
+ * is hypothetical: `Task` has no key column, so whatever Task 13 passes is synthesized -- plausibly
+ * from a human-written title.
+ */
+const SAFE_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
+
 export interface ProvisionWorktreeInput {
   readonly repoPath: string
   readonly baseBranch: string
   readonly taskKey: string
   readonly slug: string
   readonly setupCommands: readonly string[]
+  /** Per-command, not for the list as a whole. Defaults to {@link DEFAULT_SETUP_TIMEOUT_MS}. */
+  readonly setupTimeoutMs?: number
 }
 
 export interface WorktreeHandle {
@@ -47,6 +80,31 @@ export interface WorktreeHandle {
    * commit read at the end.
    */
   readonly headCommit: string
+}
+
+/**
+ * Thrown when the task's worktree or branch is already there.
+ *
+ * This is a *distinguishable* outcome rather than a raw git failure because it is not an error
+ * condition at all from the caller's side -- it is the normal shape of a task's second run. A task
+ * that fails verify moves to `rework`, `decide()` lists `rework` as startable, and the next run
+ * arrives here with the same key. Refusing is right: reusing a previous attempt's directory hands
+ * the agent someone else's uncommitted state. But the adopt-versus-fail decision needs to know
+ * *why* the leftovers exist, which only the caller does, and it must not be made by string-matching
+ * git's stderr -- git reports the path collision and the branch collision with different exit codes
+ * and different wording.
+ *
+ * Carries both paths so the caller can act without re-deriving them.
+ */
+export class WorktreeExistsError extends Error {
+  constructor(
+    readonly path: string,
+    readonly branch: string,
+    detail: string,
+  ) {
+    super(`worktree for this task already exists (${detail}): ${path} on ${branch}`)
+    this.name = 'WorktreeExistsError'
+  }
 }
 
 /**
@@ -68,18 +126,14 @@ async function git(cwd: string, ...args: readonly string[]): Promise<string> {
   return stdout.trim()
 }
 
-/**
- * `execFile` rejects with an `Error` carrying the child's exit code and captured streams, but
- * types it as a plain `Error`. Narrowing here rather than casting at the throw site keeps the
- * unchecked part to one place and makes a shape that does not match degrade to "unknown exit code"
- * instead of `undefined` leaking into an operator-facing message.
- */
-function describeExecFailure(cause: unknown): { readonly code: string; readonly output: string } {
-  if (typeof cause !== 'object' || cause === null) return { code: 'unknown', output: '' }
-  const shaped = cause as { code?: unknown; stdout?: unknown; stderr?: unknown }
-  const code = typeof shaped.code === 'number' || typeof shaped.code === 'string' ? String(shaped.code) : 'unknown'
-  const streams = [shaped.stderr, shaped.stdout].filter((s): s is string => typeof s === 'string' && s !== '')
-  return { code, output: streams.join('\n').trim() }
+/** True when the ref exists. `show-ref --verify` exits non-zero rather than printing when it does not. */
+async function branchExists(repoPath: string, branch: string): Promise<boolean> {
+  try {
+    await git(repoPath, 'show-ref', '--verify', '--quiet', `refs/heads/${branch}`)
+    return true
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -100,24 +154,107 @@ function setupEnv(): NodeJS.ProcessEnv {
 }
 
 /**
- * Runs one setup command in the worktree, and turns a non-zero exit into a thrown error that names
- * the command, its exit code, and whatever it printed.
+ * Signals the child's whole process group, tolerating a group that has already gone.
  *
- * The captured output is the point. Spec §7.2 exists because ADR 0001 measured a fresh worktree
- * passing `npm test` only through the accident of a zero-dependency fixture repo -- on a real
- * repository setup is what makes verify meaningful, so a setup failure is a provisioning failure,
- * and one reported as a bare exit code is one nobody can act on.
+ * The group, not the process: `spawn(..., { detached: true })` makes the shell a group leader, and
+ * signalling only the shell was measured to leave its children running -- a timed-out `npm ci`
+ * would keep installing after the orchestrator had given up on it, which is a leak the operator
+ * never sees.
  */
-async function runSetupCommand(command: string, cwd: string): Promise<void> {
+function killGroup(pid: number, signal: NodeJS.Signals): void {
   try {
-    await execFileAsync('/bin/sh', ['-c', command], { cwd, env: setupEnv() })
-  } catch (cause) {
-    const { code, output } = describeExecFailure(cause)
-    throw new Error(
-      `setup command failed (exit ${code}): ${command}` + (output === '' ? '' : `\n${output}`),
-      { cause },
-    )
+    process.kill(-pid, signal)
+  } catch {
+    // Already gone, or never started. Nothing to do either way.
   }
+}
+
+interface SetupOutcome {
+  readonly code: number | null
+  readonly signal: NodeJS.Signals | null
+  readonly timedOut: boolean
+  readonly output: string
+}
+
+/**
+ * Runs one setup command in the worktree and reports how it ended.
+ *
+ * `spawn` rather than `execFile`, for three reasons that are all the same reason -- `execFile`'s
+ * conveniences are the wrong shape for arbitrary shell that a real repository supplies:
+ *
+ * - **Output.** `execFile` buffers 1 MiB per stream and *kills the child* past it, rejecting with
+ *   `ERR_CHILD_PROCESS_STDIO_MAXBUFFER`. A succeeding `npm ci` on a real repository exceeds that
+ *   routinely, and reported as a failure it counts as an attempt against the task (spec §13). Here
+ *   the capture is bounded but the command is not: it runs to completion and only the *message*
+ *   is trimmed.
+ * - **Lifetime.** `execFile`'s timeout signals the immediate child only.
+ * - **stdin.** `execFile` hands the child an open pipe nobody ever writes to or closes, so a
+ *   command that reads stdin blocks forever. `ignore` gives it EOF immediately.
+ */
+async function runSetupCommand(command: string, cwd: string, timeoutMs: number): Promise<SetupOutcome> {
+  const child = spawn('/bin/sh', ['-c', command], {
+    cwd,
+    env: setupEnv(),
+    detached: true,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+
+  let tail = ''
+  let captured = 0
+  const collect = (chunk: Buffer): void => {
+    const text = chunk.toString('utf8')
+    captured += text.length
+    tail = (tail + text).slice(-SETUP_OUTPUT_LIMIT)
+  }
+  child.stdout.on('data', collect)
+  child.stderr.on('data', collect)
+
+  let timedOut = false
+  const escalations: NodeJS.Timeout[] = []
+  const deadline = setTimeout((): void => {
+    timedOut = true
+    if (child.pid !== undefined) {
+      killGroup(child.pid, 'SIGTERM')
+      escalations.push(setTimeout((): void => killGroup(child.pid as number, 'SIGKILL'), KILL_GRACE_MS))
+    }
+  }, timeoutMs)
+
+  try {
+    const [code, signal] = await new Promise<[number | null, NodeJS.Signals | null]>((res, rej) => {
+      // `close` rather than `exit`: it fires once the pipes have drained, so the tail is complete.
+      child.on('close', (exitCode, exitSignal) => res([exitCode, exitSignal]))
+      child.on('error', rej)
+    })
+
+    const output =
+      captured > tail.length ? `…(truncated, ${captured - tail.length} earlier bytes)\n${tail}` : tail
+    return { code, signal, timedOut, output: output.trim() }
+  } finally {
+    clearTimeout(deadline)
+    for (const timer of escalations) clearTimeout(timer)
+  }
+}
+
+/**
+ * Turns a non-zero setup outcome into the error an operator reads, naming the command, how it
+ * ended, and what it printed.
+ *
+ * "How it ended" is three different facts, not one. A timeout is the orchestrator's own doing and
+ * has no exit code to report; a signalled death (an OOM-killed `npm ci`, very plausible in a
+ * container) has no exit code either, and its signal is the single most diagnostic thing about it;
+ * only a plain non-zero exit has a code. Collapsing all three into "exit unknown" throws away the
+ * fact the operator needs first.
+ */
+function setupFailure(command: string, timeoutMs: number, outcome: SetupOutcome): Error {
+  const how = outcome.timedOut
+    ? `timed out after ${timeoutMs}ms`
+    : outcome.signal !== null
+      ? `killed by ${outcome.signal}`
+      : `exit ${outcome.code ?? 'unknown'}`
+
+  return new Error(
+    `setup command ${how}: ${command}` + (outcome.output === '' ? '' : `\n${outcome.output}`),
+  )
 }
 
 /**
@@ -128,22 +265,50 @@ async function runSetupCommand(command: string, cwd: string): Promise<void> {
  * failure because they are the inspection surface, and a half-provisioned one is the case where
  * that matters most: the operator's question is "how far did setup get", which a removed directory
  * cannot answer. Task 15's sweep owns collection.
+ *
+ * Leftovers from a previous attempt are refused, not adopted, and refused as a
+ * {@link WorktreeExistsError} the caller can branch on -- see that class for why the decision is
+ * the caller's. One half-state is deliberately left to git: a `.git/worktrees/` metadata entry
+ * whose directory *and* branch are both gone still makes `worktree add` refuse, and it surfaces as
+ * git's own error. It is what a `git worktree prune` exists for and is not this function's to
+ * silently repair.
  */
 export async function provisionWorktree(input: ProvisionWorktreeInput): Promise<WorktreeHandle> {
-  const path = join(input.repoPath, WORKTREE_ROOT, input.taskKey)
+  for (const [field, value] of [
+    ['taskKey', input.taskKey],
+    ['slug', input.slug],
+  ] as const) {
+    if (!SAFE_SEGMENT.test(value)) {
+      throw new Error(
+        `${field} must match ${String(SAFE_SEGMENT)} to be safe as a path segment and a branch name, got: ${value}`,
+      )
+    }
+  }
+
+  // Absolute, because `path` becomes `AgentRun.worktreePath` and spec §5.7 respawns a resumed run
+  // there -- from a process that may have restarted into a different working directory.
+  const repoPath = resolve(input.repoPath)
+  const path = join(repoPath, WORKTREE_ROOT, input.taskKey)
   const branch = `aiteamos/${input.taskKey}-${input.slug}`
 
-  // `worktree add -b` creates the branch and the leading directories in one step, and refuses
-  // rather than clobbering if either the branch or the path already exists -- which is the
-  // behaviour we want on a re-provision, since silently reusing a worktree from a previous
-  // attempt would hand the agent someone else's uncommitted state.
-  await git(input.repoPath, 'worktree', 'add', '-b', branch, path, input.baseBranch)
+  // Checked *before* the add rather than left to git's refusal, because `worktree add -b` creates
+  // the branch first and then fails on the path -- measured -- so letting git refuse leaves a
+  // branch behind with no worktree attached, and the next attempt fails differently than this one.
+  if (existsSync(path)) throw new WorktreeExistsError(path, branch, 'directory present')
+  if (await branchExists(repoPath, branch)) throw new WorktreeExistsError(path, branch, 'branch present')
+
+  // `worktree add -b` creates the branch and the leading directories in one step.
+  await git(repoPath, 'worktree', 'add', '-b', branch, path, input.baseBranch)
 
   // Sequential, and aborting on the first failure: setup commands are an ordered list whose later
   // entries routinely depend on earlier ones (`npm ci` then `npm run build`), so running on after
   // a failure produces a second, misleading error from the wrong command.
+  const timeoutMs = input.setupTimeoutMs ?? DEFAULT_SETUP_TIMEOUT_MS
   for (const command of input.setupCommands) {
-    await runSetupCommand(command, path)
+    const outcome = await runSetupCommand(command, path, timeoutMs)
+    if (outcome.timedOut || outcome.signal !== null || outcome.code !== 0) {
+      throw setupFailure(command, timeoutMs, outcome)
+    }
   }
 
   const headCommit = await git(path, 'rev-parse', 'HEAD')
