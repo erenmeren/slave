@@ -152,6 +152,31 @@ describe('pumpRun', () => {
     expect(run.sessionId).toBe('s-1')
   })
 
+  it('reports a run in progress as working, not still starting', async (): Promise<void> => {
+    let release = (): void => {}
+    const held = new Promise<void>((res) => {
+      release = res
+    })
+
+    async function* stalls(): AsyncIterable<RuntimeEvent> {
+      yield { kind: 'session_started', sessionId: 's-1' }
+      await held
+      yield { kind: 'terminated', outcome: okOutcome }
+    }
+
+    const pumping = pumpRun({ ...ids, events: stalls() })
+
+    // `working` is only observable while the run is running -- every finished stream overwrites it
+    // -- so this is the one shape that can pin it. A row stuck at `starting` misreports to §11's
+    // `status` for the entire life of a run that is very much working.
+    await new Promise((res) => setTimeout(res, 50))
+    const midRun = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+    expect(midRun.status).toBe('working')
+
+    release()
+    await pumping
+  })
+
   it('maps a permission-mode denial to guardrail.tripped, never to run.paused', async (): Promise<void> => {
     await pumpRun({
       ...ids,
@@ -286,6 +311,12 @@ describe('pumpRun', () => {
     const task = await prisma.task.findUniqueOrThrow({ where: { id: ids.taskId } })
     expect(task.attempt).toBe(1)
 
+    // The run row itself is concluded. Left `working` it counts as non-terminal in `loadWorld`,
+    // so the agent holding it stays busy forever and never enters the failure streak.
+    const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+    expect(run.status).toBe('failed')
+    expect(run.terminalAt).not.toBeNull()
+
     const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: ids.workspaceId } })
     expect(workspace.haltedReason).not.toBeNull()
     expect(workspace.haltedAt).not.toBeNull()
@@ -323,6 +354,245 @@ describe('pumpRun', () => {
 
     const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: ids.workspaceId } })
     expect(workspace.haltedReason).not.toBeNull()
+  })
+
+  it('still halts and still says so when the cancel itself fails', async (): Promise<void> => {
+    const cancel = vi.fn(async (): Promise<void> => {
+      throw new Error('SIGTERM failed: process not registered')
+    })
+
+    await pumpRun({
+      ...ids,
+      cancel,
+      events: fromArray([
+        { kind: 'session_started', sessionId: 's-1' },
+        { kind: 'hook_crashed', hookName: 'PreToolUse:Bash', exitCode: 2, stderr: 'boom' },
+      ]),
+    })
+
+    // The worst state the system can reach: an agent running with no gate, a kill that did not
+    // land, and -- if the cancel's rejection escaped -- no halt, so the scheduler keeps starting
+    // more of them. A failed cancel is the case where the halt matters MOST, and it must not be
+    // the one case where the halt does not happen (spec §13's opening rule).
+    const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: ids.workspaceId } })
+    expect(workspace.haltedReason).not.toBeNull()
+
+    const types = await eventTypesFor(ids.runId)
+    expect(types).toContain('run.failed')
+    expect(types).toContain('guardrail.tripped')
+
+    const failedEvent = await prisma.executionEvent.findFirstOrThrow({
+      where: { runId: ids.runId, type: 'run_failed' },
+    })
+    // Louder, not quieter: the operator has to know the process may still be alive.
+    expect((failedEvent.payload as { reason: string }).reason).toMatch(/cancel failed/i)
+  })
+
+  it('cancels before it writes anything about the failure', async (): Promise<void> => {
+    let releaseCancel = (): void => {}
+    const cancelled = new Promise<void>((res) => {
+      releaseCancel = res
+    })
+
+    const pumping = pumpRun({
+      ...ids,
+      cancel: async (): Promise<void> => cancelled,
+      events: fromArray([
+        { kind: 'hook_crashed', hookName: 'PreToolUse:Bash', exitCode: 2, stderr: 'boom' },
+      ]),
+    })
+
+    // Spec §13.1 behaviour 1 is first for a reason: an agent that cannot be paused must not be
+    // left running while the orchestrator writes paperwork. `expect(cancel).toHaveBeenCalled()`
+    // cannot tell an awaited cancel from a fired-and-forgotten one -- this can.
+    await new Promise((res) => setTimeout(res, 50))
+    expect(await prisma.executionEvent.count({ where: { runId: ids.runId } })).toBe(0)
+
+    releaseCancel()
+    await pumping
+    expect(await eventTypesFor(ids.runId)).toContain('run.failed')
+  })
+
+  it('keeps recording what the ungated agent did after the gate failed', async (): Promise<void> => {
+    await pumpRun({
+      ...ids,
+      events: fromArray([
+        { kind: 'session_started', sessionId: 's-1' },
+        { kind: 'hook_failed_open', hookName: 'PreToolUse:Write', exitCode: 127, stderr: 'gone' },
+        { kind: 'tool_call', toolUseId: 'tu_1', toolName: 'Bash' },
+        { kind: 'tool_call', toolUseId: 'tu_2', toolName: 'Write' },
+        { kind: 'text', text: 'and then I did this' },
+      ]),
+    })
+
+    // The fail-open reason promises to name the window between the gate breaking and the cancel
+    // landing. Stopping the loop at the gate failure means refusing to read what happened inside
+    // it -- and for this shape those events are the only record of side effects nobody could stop.
+    const types = await eventTypesFor(ids.runId)
+    expect(types.filter((t) => t === 'run.tool_call')).toHaveLength(2)
+    expect(types).toContain('run.output')
+
+    // Reacted exactly once, all the same: two attempts would double-count against the cap.
+    expect(types.filter((t) => t === 'run.failed')).toHaveLength(1)
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: ids.taskId } })
+    expect(task.attempt).toBe(1)
+  })
+
+  it('records a hook deny as a pause, so the killed process is not read as an orphan', async (): Promise<void> => {
+    const outcome = await pumpRun({
+      ...ids,
+      events: fromArray([
+        { kind: 'session_started', sessionId: 's-1' },
+        { kind: 'tool_call', toolUseId: 'tu_1', toolName: 'Bash' },
+        { kind: 'hook_denied', hookName: 'PreToolUse', reason: 'operator asked to pause' },
+      ]),
+    })
+
+    // Task 8's adapter kills the child on the first deny -- that is what pausing *is* -- so a run
+    // left recorded as `working` presents to Task 15's orphan sweep as exactly the shape it fails:
+    // non-terminal, dead pid. The sweep excludes `paused`, which only works if something writes it.
+    const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+    expect(run.status).toBe('paused')
+    expect(run.pausedAtStep).toBe(1)
+    expect(await eventTypesFor(ids.runId)).toContain('run.paused')
+
+    // A pause is not an outcome, and the adapter's synthetic terminal result on a deny reports
+    // `isError: false` -- which must never be laundered into `run.succeeded`.
+    expect(outcome).toBeNull()
+    expect(await eventTypesFor(ids.runId)).not.toContain('run.succeeded')
+  })
+
+  it('fails a run whose stream ends without a terminal result', async (): Promise<void> => {
+    const outcome = await pumpRun({
+      ...ids,
+      events: fromArray([{ kind: 'session_started', sessionId: 's-1' }]),
+    })
+
+    // The child died without reporting. Not a success, and not silent -- and the row must not be
+    // left non-terminal, or the agent holding it never becomes schedulable again.
+    expect(outcome).toBeNull()
+    const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+    expect(run.status).toBe('failed')
+    expect(run.terminalAt).not.toBeNull()
+    expect(await eventTypesFor(ids.runId)).toContain('run.failed')
+  })
+
+  it('keeps reading after the terminal result, because the stream does not end there', async (): Promise<void> => {
+    await pumpRun({
+      ...ids,
+      events: fromArray([
+        { kind: 'session_started', sessionId: 's-1' },
+        { kind: 'terminated', outcome: okOutcome },
+        // Spec §5.3 property 5: a hook_response can arrive *after* the terminal result. And every
+        // real capture's last line is the routine Stop hook, which the parser classifies
+        // `ignored` -- so a pump that returns at `terminated` stops reading one line early, every
+        // single run, and would miss this gate failure entirely.
+        { kind: 'hook_failed_open', hookName: 'PreToolUse:Write', exitCode: 127, stderr: 'gone' },
+        { kind: 'ignored', line: '{"type":"hook_response","hook_event":"Stop"}' },
+      ]),
+    })
+
+    const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+    expect(run.status).toBe('failed')
+    const types = await eventTypesFor(ids.runId)
+    expect(types).not.toContain('run.succeeded')
+    // An `ignored` line is recognized and not acted on: it must not produce an event of its own.
+    expect(types.filter((t) => t === 'run.output')).toHaveLength(0)
+  })
+
+  it('truncates run.output from the end, keeping the beginning the reader wants', async (): Promise<void> => {
+    await pumpRun({
+      ...ids,
+      events: fromArray([
+        { kind: 'session_started', sessionId: 's-1' },
+        { kind: 'text', text: `HEAD${'x'.repeat(OUTPUT_CAP * 2)}TAIL` },
+        { kind: 'terminated', outcome: okOutcome },
+      ]),
+    })
+
+    const output = await prisma.executionEvent.findFirstOrThrow({
+      where: { runId: ids.runId, type: 'run_output' },
+    })
+    const { text } = output.payload as { text: string }
+
+    // A string of nothing but `x` cannot tell "keep the head" from "keep the tail", nor pin the
+    // boundary -- both `slice(-CAP)` and `slice(0, CAP - 1000)` satisfy it.
+    expect(text.startsWith('HEAD')).toBe(true)
+    expect(text).not.toContain('TAIL')
+    expect(text.length).toBe(OUTPUT_CAP)
+    // And the reader is told the sentence was cut rather than left to think it just stopped.
+    expect(text.endsWith('…')).toBe(true)
+  })
+
+  it('leaves output that exactly fits the cap alone', async (): Promise<void> => {
+    const exact = 'y'.repeat(OUTPUT_CAP)
+
+    await pumpRun({
+      ...ids,
+      events: fromArray([
+        { kind: 'session_started', sessionId: 's-1' },
+        { kind: 'text', text: exact },
+        { kind: 'terminated', outcome: okOutcome },
+      ]),
+    })
+
+    const output = await prisma.executionEvent.findFirstOrThrow({
+      where: { runId: ids.runId, type: 'run_output' },
+    })
+    // Off-by-one at the boundary would add an ellipsis to text that was never truncated.
+    expect((output.payload as { text: string }).text).toBe(exact)
+  })
+
+  it('counts tool calls across a resume instead of refunding the budget', async (): Promise<void> => {
+    await pumpRun({
+      ...ids,
+      events: fromArray([
+        { kind: 'session_started', sessionId: 's-1' },
+        { kind: 'tool_call', toolUseId: 'tu_1', toolName: 'Bash' },
+        { kind: 'tool_call', toolUseId: 'tu_2', toolName: 'Edit' },
+        { kind: 'tool_call', toolUseId: 'tu_3', toolName: 'Bash' },
+        { kind: 'hook_denied', hookName: 'PreToolUse', reason: 'pause' },
+      ]),
+    })
+
+    // The adapter closes the old queue and `events()` hands out a new one, so a resumed run is a
+    // second `pumpRun` on the same row (Task 6/9). A pump that writes an absolute local count
+    // resets `AgentRun.toolCalls` to 1 here -- and that column is what Task 15's §3.3 ceiling
+    // reads, so any agent that pauses once gets its budget silently refunded.
+    await pumpRun({
+      ...ids,
+      events: fromArray([
+        { kind: 'session_started', sessionId: 's-2' },
+        { kind: 'tool_call', toolUseId: 'tu_4', toolName: 'Bash' },
+        { kind: 'terminated', outcome: okOutcome },
+      ]),
+    })
+
+    const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+    expect(run.toolCalls).toBe(4)
+  })
+
+  it('says out loud that it dropped an unparsable line', async (): Promise<void> => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation((): void => {})
+
+    try {
+      await pumpRun({
+        ...ids,
+        events: fromArray([
+          { kind: 'unparsable', line: '{bad' },
+          { kind: 'session_started', sessionId: 's-1' },
+          { kind: 'terminated', outcome: okOutcome },
+        ]),
+      })
+
+      // Spec §13's rule is that no failure is silent. This one is deliberately recorded out of
+      // band rather than as a domain event (§9 invents no catalogue names), and "out of band"
+      // discharges the rule only if the record actually happens.
+      expect(warn).toHaveBeenCalled()
+      expect(warn.mock.calls.flat().join(' ')).toContain('{bad')
+    } finally {
+      warn.mockRestore()
+    }
   })
 
   it('halts once: a second gate failure does not overwrite the first reason', async (): Promise<void> => {
