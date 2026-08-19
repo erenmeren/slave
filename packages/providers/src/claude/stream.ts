@@ -147,16 +147,50 @@ function extractDenyReason(output: string | undefined): string | null {
   return result.data.hookSpecificOutput.permissionDecisionReason
 }
 
+/**
+ * `hook_event` is the authoritative signal, but the real CLI's `hook_name`
+ * is always `<hookEvent>` or `<hookEvent>:<matcher>`, so when `hook_event`
+ * is absent the prefix of `hook_name` is used instead. Shared by
+ * `parseHookResponseLine` below and `isPreToolUseHookResponseLine`, so the
+ * two derivations of "which hook event is this" cannot drift apart.
+ */
+function effectiveHookEventOf(data: { readonly hook_name: string; readonly hook_event?: string | undefined }): string {
+  const [hookNamePrefix] = data.hook_name.split(':')
+  return data.hook_event ?? hookNamePrefix ?? data.hook_name
+}
+
+/**
+ * True when `line` is a `system`/`hook_response` line whose effective hook
+ * event is `PreToolUse`, regardless of the response's outcome -- deny,
+ * crash, fail-open, or a plain allow. The first three each have their own
+ * `RuntimeEvent` kind; the allow case does not (folded into `ignored` by
+ * `parseHookResponseLine` below, deliberately -- see that function's own
+ * comment). The adapter's runtime backstop (spec §5.5) needs to know "was
+ * the `PreToolUse` hook invoked at all" even for that folded case -- proving
+ * a tool call proceeded with no gate response of *any* shape is the
+ * signal that the hook was never invoked, as opposed to invoked and simply
+ * allowing -- so this exists to recover it from the raw line `ignored`
+ * still carries, without adding a field to the shared `RuntimeEvent` union
+ * for a single caller's need.
+ */
+export function isPreToolUseHookResponseLine(line: string): boolean {
+  let raw: unknown
+  try {
+    raw = JSON.parse(line)
+  } catch {
+    return false
+  }
+  const result = hookResponseSchema.safeParse(raw)
+  if (!result.success) return false
+  return effectiveHookEventOf(result.data) === 'PreToolUse'
+}
+
 function parseHookResponseLine(raw: unknown, line: string): RuntimeEvent {
   const result = hookResponseSchema.safeParse(raw)
   if (!result.success) return { kind: 'unparsable', line }
   const data = result.data
 
-  // `hook_event` is the authoritative signal, but the real CLI's `hook_name`
-  // is always `<hookEvent>` or `<hookEvent>:<matcher>`, so when `hook_event`
-  // is absent the prefix of `hook_name` is used instead.
-  const [hookNamePrefix] = data.hook_name.split(':')
-  const effectiveHookEvent = data.hook_event ?? hookNamePrefix ?? data.hook_name
+  const effectiveHookEvent = effectiveHookEventOf(data)
 
   if (effectiveHookEvent !== 'PreToolUse') {
     // Every other hook event, `Stop` included: exit_code is not meaningful

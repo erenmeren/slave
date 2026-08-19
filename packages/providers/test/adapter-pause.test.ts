@@ -132,6 +132,43 @@ describe('ClaudeCodeAdapter pause protocol', () => {
     expect(isAlive(handle.pid)).toBe(false)
   })
 
+  it('keeps the outcome authoritative when a busy event loop delivers the real result line in the same turn as the deny (fix round 1, findings 1/2)', async (): Promise<void> => {
+    // Reproduces the reviewer's exact repro: the stock hook-deny fixture at
+    // its normal 2ms line delay (not slowed down for this test), plus a
+    // genuinely blocking stretch of synchronous work right after
+    // requestPause -- the shape Task 12's pump imposes while it awaits a
+    // Postgres write. At this line delay the child has finished writing
+    // (and exited) well within the busy window, so every remaining line --
+    // including its own genuine `result` line reporting "completed" -- is
+    // already sitting in the stdout pipe and gets delivered in one burst,
+    // in the same turn as the `hook_denied` that triggers the kill, before
+    // the async SIGTERM-then-resolve('paused') below ever gets a turn.
+    const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'hook-deny'] })
+    await adapter.start(input)
+    await adapter.requestPause(input.runId, 'operator pause')
+
+    const busyUntil = Date.now() + 200
+    while (Date.now() < busyUntil) {
+      // Deliberately synchronous: blocks this process's event loop the
+      // same way real synchronous work (or a long-running microtask
+      // chain) would, giving the child every chance to race ahead.
+    }
+
+    const seen: RuntimeEvent[] = []
+    for await (const event of adapter.events(input.runId)) seen.push(event)
+    const terminatedReasons = seen
+      .filter((e): e is Extract<RuntimeEvent, { kind: 'terminated' }> => e.kind === 'terminated')
+      .map((e) => e.outcome.terminalReason)
+    // Ground truth that the race actually happened, not just that the fix
+    // made it unobservable: the fixture's own genuine result line really
+    // was delivered, alongside the synthetic one the kill pushed.
+    expect(terminatedReasons).toContain('completed')
+    expect(terminatedReasons.some((r) => /pause/i.test(r))).toBe(true)
+
+    const outcome = await adapter.awaitPause(input.runId, { deadlineMs: 2000 })
+    expect(outcome).toBe('paused')
+  })
+
   it('treats "pause requested, run finished anyway" as a normal outcome', async (): Promise<void> => {
     const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'complete'] })
     await adapter.start(input)
@@ -163,6 +200,94 @@ describe('ClaudeCodeAdapter pause protocol', () => {
 
     expect(outcome).toBe('gate_failed')
     expect(existsSync(input.pauseFlagPath)).toBe(false)
+  })
+
+  it('reports gate_failed when tool calls proceed with no PreToolUse hook_response at all (fix round 1, finding 3)', async (): Promise<void> => {
+    // hook_failed_open alone cannot see this: it only exists when the hook
+    // *did* run. The likelier real gate failure is that it never ran at
+    // all -- wrong matcher, a settings file that never loaded -- which
+    // preflightGate cannot catch either (its own docstring: it proves the
+    // script, not the wiring). Ground truth, read independently of the
+    // adapter: this fixture is `complete.ndjson` with both PreToolUse
+    // hook_response lines removed -- the same two tool calls proceed, with
+    // zero hook_response lines of any shape (deny, crash, fail-open, or a
+    // plain allow) between the flag write and the terminal result.
+    const fixtureRaw = readFileSync(path.join(FIXTURES_DIR, 'hook-never-invoked.ndjson'), 'utf8')
+    expect(fixtureRaw).not.toContain('"hook_event":"PreToolUse"')
+    expect(fixtureRaw).toContain('"type":"tool_use"')
+
+    const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'hook-never-invoked'] })
+    await adapter.start(input)
+    await adapter.requestPause(input.runId, 'operator pause')
+
+    const outcome = await adapter.awaitPause(input.runId, { deadlineMs: 2000 })
+
+    expect(outcome).toBe('gate_failed')
+    expect(existsSync(input.pauseFlagPath)).toBe(false)
+  })
+
+  it('still reports finished_first for a fixture with real PreToolUse allows, proving finding 3 does not regress the benign case', async (): Promise<void> => {
+    // The exact contradiction the coordinator flagged in the original
+    // brief: `complete.ndjson` has tool calls after the flag write too,
+    // but they are each accompanied by a genuine (if unclassified) allow
+    // response, so the new "no PreToolUse response at all" rule must not
+    // fire for it.
+    const fixtureRaw = readFileSync(path.join(FIXTURES_DIR, 'complete.ndjson'), 'utf8')
+    expect(fixtureRaw).toContain('"hook_event":"PreToolUse"')
+
+    const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'complete'] })
+    await adapter.start(input)
+    await adapter.requestPause(input.runId, 'operator pause')
+
+    const outcome = await adapter.awaitPause(input.runId, { deadlineMs: 2000 })
+
+    expect(outcome).toBe('finished_first')
+  })
+
+  it('resolves finished_first, not a deadline rejection, when requestPause is called after the run already ended (fix round 1, finding 4)', async (): Promise<void> => {
+    const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'complete'] })
+    await adapter.start(input)
+
+    // Drain events() to completion first: the run's own terminal line has
+    // already been processed -- state.runEnded is already true -- by the
+    // time requestPause is called below, so no further line will ever
+    // arrive to resolve the outcome the usual way.
+    for await (const event of adapter.events(input.runId)) {
+      void event
+    }
+
+    await adapter.requestPause(input.runId, 'operator pause')
+    expect(existsSync(input.pauseFlagPath)).toBe(true)
+
+    const outcome = await adapter.awaitPause(input.runId, { deadlineMs: 2000 })
+
+    expect(outcome).toBe('finished_first')
+    // The load-bearing assertion for finding 4: without it, this would be
+    // a deadline rejection with the flag file left on disk forever --
+    // exactly the trap Task 9's resume would walk into at the same path.
+    expect(existsSync(input.pauseFlagPath)).toBe(false)
+  })
+
+  it('removes the flag file even on a genuine deadline rejection (fix round 1, finding 4, the other exit path)', async (): Promise<void> => {
+    // A distinct code path from the test above: this run never ends and
+    // never denies (`hang`), so `awaitPause` has no way to resolve at all
+    // and must genuinely reject at the deadline -- the flag file removal
+    // still has to happen on that path too, not only on the ones that
+    // resolve.
+    const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'hang'], killGraceMs: 300 })
+    await adapter.start(input)
+    await adapter.requestPause(input.runId, 'operator pause')
+    expect(existsSync(input.pauseFlagPath)).toBe(true)
+
+    try {
+      await expect(adapter.awaitPause(input.runId, { deadlineMs: 200 })).rejects.toThrow()
+      expect(existsSync(input.pauseFlagPath)).toBe(false)
+    } finally {
+      // `hang` never exits on its own -- clean up regardless of the
+      // assertions above so a failing run of this test cannot leak a real
+      // background process.
+      await adapter.cancel(input.runId)
+    }
   })
 
   it('uses a per-run flag path so pausing one run cannot freeze another', async (): Promise<void> => {

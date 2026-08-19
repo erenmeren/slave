@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseStreamLine } from '../src/claude/stream.js'
+import { isPreToolUseHookResponseLine, parseStreamLine } from '../src/claude/stream.js'
 
 describe('parseStreamLine', () => {
   it('reads the session id from the init line', () => {
@@ -323,5 +323,48 @@ describe('parseStreamLine', () => {
         deniedToolUseIds: [],
       },
     })
+  })
+})
+
+describe('isPreToolUseHookResponseLine', () => {
+  it('is true for a PreToolUse hook_response that allows (no deny payload, exit 0) -- the case parseStreamLine folds into "ignored"', () => {
+    const line = JSON.stringify({
+      type: 'system',
+      subtype: 'hook_response',
+      hook_name: 'PreToolUse:Write',
+      hook_event: 'PreToolUse',
+      output: '',
+      exit_code: 0,
+    })
+    expect(parseStreamLine(line)).toEqual({ kind: 'ignored', line })
+    expect(isPreToolUseHookResponseLine(line)).toBe(true)
+  })
+
+  it('is true when hook_event is absent and only the hook_name prefix says PreToolUse', () => {
+    const line = JSON.stringify({
+      type: 'system',
+      subtype: 'hook_response',
+      hook_name: 'PreToolUse:Bash',
+      output: '',
+      exit_code: 0,
+    })
+    expect(isPreToolUseHookResponseLine(line)).toBe(true)
+  })
+
+  it('is false for a Stop hook_response, the routine line every fixture ends with', () => {
+    const line = JSON.stringify({
+      type: 'system',
+      subtype: 'hook_response',
+      hook_name: 'Stop',
+      hook_event: 'Stop',
+      output: '',
+      exit_code: 1,
+    })
+    expect(isPreToolUseHookResponseLine(line)).toBe(false)
+  })
+
+  it('is false for a non-hook_response line, and for unparsable text', () => {
+    expect(isPreToolUseHookResponseLine(JSON.stringify({ type: 'assistant' }))).toBe(false)
+    expect(isPreToolUseHookResponseLine('not json')).toBe(false)
   })
 })

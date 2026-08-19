@@ -5,7 +5,7 @@ import { createInterface } from 'node:readline'
 import type { RunId } from '@ai-team-os/domain'
 import type { RunOutcome, RuntimeEvent } from '../types.js'
 import { claudeFlags, preflightGate } from './flags.js'
-import { parseStreamLine } from './stream.js'
+import { isPreToolUseHookResponseLine, parseStreamLine } from './stream.js'
 
 /**
  * The provider-neutral capability profile a runtime adapter reports (spec
@@ -221,6 +221,23 @@ interface PauseState {
   requestedAt: number | undefined
   /** Guards the kill from firing more than once if a second deny is somehow observed. */
   killTriggered: boolean
+  /**
+   * Set once any `tool_call` event is observed while armed. Together with
+   * `sawPreToolUseHookResponseSincePause` below, this is fix round 1's
+   * finding 3: the runtime backstop's other shape, where the `PreToolUse`
+   * hook was never invoked at all (wrong matcher, unloaded settings) --
+   * `hook_failed_open` alone cannot see this, because that event kind only
+   * exists when the hook *did* run.
+   */
+  sawToolCallSincePause: boolean
+  /**
+   * Set once any `PreToolUse` `hook_response` is observed while armed --
+   * deny, crash, fail-open, *or* a plain allow (folded into `ignored` by
+   * `parseStreamLine`, with no distinguishing `RuntimeEvent` field; see
+   * `isPreToolUseHookResponseLine` for how the allow case is still
+   * detected here from the raw line `ignored` still carries).
+   */
+  sawPreToolUseHookResponseSincePause: boolean
   readonly outcome: Deferred<PauseOutcome>
 }
 
@@ -228,6 +245,16 @@ interface RunState {
   readonly child: ChildProcess
   readonly queue: AsyncEventQueue<RuntimeEvent>
   readonly pause: PauseState
+  /**
+   * Set the moment the run's own genuine terminal `result` line is parsed,
+   * independently of whether pause was ever requested. Lets `requestPause`
+   * (fix round 1, finding 4) recognize "pause requested against a run that
+   * already ended" -- ADR 0001's normal "finished anyway" case, reached
+   * here because no further line will ever arrive to resolve it any other
+   * way -- and resolve immediately instead of leaving `awaitPause` to
+   * reject at the deadline with the flag file still on disk.
+   */
+  runEnded: boolean
   /**
    * The parsed JSON body of the run's terminal `result` line, kept
    * verbatim -- before `parseStreamLine` normalizes it into `RunOutcome`
@@ -348,7 +375,15 @@ export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
       const state: RunState = {
         child,
         queue,
-        pause: { flagPath: input.pauseFlagPath, requestedAt: undefined, killTriggered: false, outcome: createDeferred<PauseOutcome>() },
+        pause: {
+          flagPath: input.pauseFlagPath,
+          requestedAt: undefined,
+          killTriggered: false,
+          sawToolCallSincePause: false,
+          sawPreToolUseHookResponseSincePause: false,
+          outcome: createDeferred<PauseOutcome>(),
+        },
+        runEnded: false,
         rawResultPayload: undefined,
       }
       let settled = false
@@ -416,6 +451,17 @@ export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
         // final line of a real capture. A reader that stops at `result`
         // loses it.
         queue.push(event)
+        if (event.kind === 'terminated') {
+          // The run's own genuine terminal line -- never true for the
+          // synthetic `terminated` pushed by `handlePauseTracking` below,
+          // which bypasses this per-line dispatch entirely. Tracked
+          // unconditionally (not just while pause is armed) so a
+          // `requestPause` arriving *after* this already happened -- ADR
+          // 0001's normal "finished anyway" case -- can be recognized as
+          // such (fix round 1, finding 4) instead of waiting forever for a
+          // line that will never come.
+          state.runEnded = true
+        }
         // Pause tracking runs *after* the real event is queued, and
         // *inside* this same synchronous line handler rather than as a
         // second consumer of `events()` -- see `handlePauseTracking`'s own
@@ -449,26 +495,43 @@ export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
    * observation of the stream below; before this call it does nothing,
    * because a `hook_denied` or `hook_failed_open` from *before* the
    * operator ever asked for a pause is not a pause-protocol event at all.
+   *
+   * Fix round 1, finding 4: if the run's own terminal line already arrived
+   * -- `state.runEnded` -- no further line will ever come to resolve the
+   * outcome through `handlePauseTracking`, and without this check
+   * `awaitPause` would wait out its full deadline and reject, leaving the
+   * flag file just written on disk for Task 9's `resume` to trip over.
+   * ADR 0001 calls "pause requested, run finished anyway" a normal outcome
+   * regardless of which side of the request the finish landed on, so this
+   * resolves the same way the in-flight case does: `finished_first`.
    */
   async requestPause(runId: RunId, reason: string): Promise<void> {
     const state = this.mustGetRun(runId)
     await writeFile(state.pause.flagPath, reason, 'utf8')
     state.pause.requestedAt = Date.now()
+    if (state.runEnded) {
+      state.pause.outcome.resolve('finished_first')
+    }
   }
 
   /**
-   * Resolves once `handlePauseTracking` has determined this run's
-   * `PauseOutcome`, or rejects once `deadlineMs` elapses first. The flag
-   * file is removed in all three outcomes -- and only here, once the
-   * outcome is actually known, rather than eagerly at `requestPause` time,
-   * which would disarm the gate before its one observation (the deny, or
-   * its absence) has actually happened.
+   * Resolves once `handlePauseTracking` (or the `requestPause`-after-the-
+   * fact case above) has determined this run's `PauseOutcome`, or rejects
+   * once `deadlineMs` elapses first. The flag file is removed on **every**
+   * exit path -- success or the deadline rejection alike (fix round 1,
+   * finding 4: a leaked flag file on the reject path arms a trap for the
+   * next process Task 9's `resume` spawns at the same `pauseFlagPath`) --
+   * via `finally`, once the outcome is settled one way or another rather
+   * than eagerly at `requestPause` time, which would disarm the gate
+   * before its one observation (the deny, or its absence) has happened.
    */
   async awaitPause(runId: RunId, options: { readonly deadlineMs: number }): Promise<PauseOutcome> {
     const state = this.mustGetRun(runId)
-    const outcome = await raceWithDeadline(state.pause.outcome.promise, options.deadlineMs, runId)
-    await rm(state.pause.flagPath, { force: true })
-    return outcome
+    try {
+      return await raceWithDeadline(state.pause.outcome.promise, options.deadlineMs, runId)
+    } finally {
+      await rm(state.pause.flagPath, { force: true })
+    }
   }
 
   /**
@@ -502,6 +565,24 @@ export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
    * deliberately does not have. For one run's pause outcome -- three
    * possible values, decided by three event kinds -- the duplication is
    * the cheaper of the two costs.
+   *
+   * Fix round 1, findings 1 and 2: once the kill has been triggered, the
+   * outcome is `paused`, full stop -- no later line may resolve it to
+   * anything else. Reproduced by the reviewer against a busy event loop
+   * (the `hook-deny` fixture at its normal 2ms line delay, with 200ms of
+   * synchronous work between `requestPause` and the next drain -- exactly
+   * what Task 12's pump does while writing to Postgres): every line still
+   * buffered in the pipe when the deny is processed is delivered in the
+   * *same* readline turn, including the fixture's own genuine `result`
+   * line, well before the async `terminateChild().then()` below ever gets
+   * a turn to run. `Deferred.resolve` is idempotent -- first call wins --
+   * so whichever branch runs *first* decides the outcome, and without an
+   * explicit guard the synchronous `finished_first` (or `gate_failed`) from
+   * a still-buffered line wins that race every time, silently discarding
+   * the correct `paused` the moment it finally arrives. The fix is not two
+   * `if (killTriggered) return` guards bolted onto the two paths the
+   * reviewer happened to reproduce -- it is the property that after the
+   * kill, the outcome is decided, enforced once, for every branch below it.
    */
   private handlePauseTracking(state: RunState, event: RuntimeEvent): void {
     if (state.pause.requestedAt === undefined) return
@@ -527,13 +608,33 @@ export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
       return
     }
 
+    // Authoritative once the kill has been triggered (see the method
+    // comment above): nothing arriving after this point -- including a
+    // line already sitting in the stdout pipe and delivered in the same
+    // synchronous readline burst as the deny itself -- may resolve the
+    // outcome to anything other than `paused`.
+    if (state.pause.killTriggered) return
+
+    if (event.kind === 'tool_call') {
+      state.pause.sawToolCallSincePause = true
+    }
+    if (
+      event.kind === 'hook_crashed' ||
+      event.kind === 'hook_failed_open' ||
+      (event.kind === 'ignored' && isPreToolUseHookResponseLine(event.line))
+    ) {
+      state.pause.sawPreToolUseHookResponseSincePause = true
+    }
+
     if (event.kind === 'hook_failed_open') {
-      // The runtime backstop (spec §5.5): this event kind exists only for
-      // a `PreToolUse` response whose tool call proceeded (exit code 1,
-      // 126 or 127 -- `hook_crashed`'s exit-2 is the other, blocking,
-      // shape and never reaches this branch). Its mere presence after the
-      // flag was written is the whole signal; no separate bookkeeping of
-      // which tool call it belongs to is needed.
+      // The runtime backstop's first shape (spec §5.5): this event kind
+      // exists only for a `PreToolUse` response whose tool call proceeded
+      // (exit code 1, 126 or 127 -- `hook_crashed`'s exit-2 is the other,
+      // blocking, shape and never reaches this branch). Its mere presence
+      // after the flag was written is the whole signal; no separate
+      // bookkeeping of which tool call it belongs to is needed. Resolved
+      // immediately rather than waiting for the terminal event, matching
+      // spec §5.5's "reads the live stream" framing for the backstop.
       state.pause.outcome.resolve('gate_failed')
       return
     }
@@ -541,10 +642,26 @@ export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
     if (event.kind === 'terminated') {
       // The run's own genuine terminal `result` line (this branch is never
       // reached for the synthetic one pushed above -- that bypasses this
-      // handler entirely). Nothing else since the flag was written
-      // resolved the outcome, so the run simply had no more tool calls
-      // pending when the operator asked to pause -- spec §5.5's "pause
-      // requested, run finished anyway" normal outcome.
+      // handler entirely).
+      if (state.pause.sawToolCallSincePause && !state.pause.sawPreToolUseHookResponseSincePause) {
+        // The runtime backstop's other shape (fix round 1, finding 3): a
+        // tool call proceeded and *no* `PreToolUse` hook_response of any
+        // kind -- not a deny, not a crash, not a fail-open, not even a
+        // plain allow -- was ever observed since the flag was written. The
+        // hook was never invoked at all: wrong matcher, a settings file
+        // that never loaded. `preflightGate` proves the script
+        // discriminates; it cannot prove Claude Code actually invokes it
+        // (its own docstring says so), so this is the only defence against
+        // that failure mode, and it can only be evaluated once the run is
+        // over -- a `hook_response` reporting late (ADR 0001) would make an
+        // earlier per-line verdict wrong.
+        state.pause.outcome.resolve('gate_failed')
+        return
+      }
+      // Nothing since the flag was written resolved the outcome any other
+      // way, so the run simply had no more tool calls pending when the
+      // operator asked to pause -- spec §5.5's "pause requested, run
+      // finished anyway" normal outcome.
       state.pause.outcome.resolve('finished_first')
     }
   }
