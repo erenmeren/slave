@@ -1114,9 +1114,17 @@ Four mutations, because there are now four shapes to conflate (spec §5.3, §12.
 1. Swap the `permission_denied` and `hook_denied` handlers — the denial test must fail.
 2. Map `hook_failed_open` onto `hook_crashed` — a test must fail. This is the dangerous
    conflation: it reports a run that kept acting as one that stopped.
-3. Drop the `hook_event` guard so every `hook_response` is classified by `exit_code` — the
-   `Stop`-hook test from Task 4 must fail. Without that guard every healthy run ends in a
-   fabricated gate failure.
+3. Make the pump defer its gate-failure reaction to the end of the stream — react to
+   `hook_crashed`/`hook_failed_open` only once `terminated` arrives, instead of immediately. Both
+   gate-failure tests above must fail, because neither of their event arrays ever reaches a
+   `terminated`: that is the point of them. A gate failure that waits for the stream to end is a
+   gate failure that never fires, because the run whose gate has failed is precisely the run that
+   may never terminate on its own.
+   (The matching conflation on the *parser* side — dropping the `hook_event` guard so every
+   `hook_response` is classified by `exit_code`, which makes every healthy run end in a fabricated
+   gate failure — belongs to Task 4, whose `Stop`-hook test already covers it. It is named here
+   only so the two halves of one hazard are findable from each other. It is not a mutation of this
+   task's code and must not be run as one of them.)
 4. Remove the workspace halt write on a gate failure — the blocking-crash test above, which
    already asserts `haltedReason` and `haltedAt` are set, must fail. Whether that write then stops
    a second run from starting on the next tick, and whether it survives a restart in a fresh
@@ -1331,6 +1339,19 @@ it('cancels a run past the tool-call ceiling', async (): Promise<void> => {
   expect(report.overToolCap).toHaveLength(1)
 })
 
+it('leaves a paused run alone: it legitimately has no process, and failing it would destroy the pause', async (): Promise<void> => {
+  // A paused run's process was killed by the adapter on purpose -- that is what pausing *is*
+  // (Task 8) -- so it presents with a dead pid and a non-terminal status, which is precisely the
+  // orphan shape the first test above fails. The sweep must discriminate on status, not on
+  // liveness alone, or the first daemon restart destroys every paused run in the fleet along with
+  // the checkpoint written to preserve it.
+  await givenRun({ status: 'paused', pid: 999999 })
+  const count = await reconcileOrphans(deps)
+  expect(count).toBe(0)
+  const run = await prisma.agentRun.findFirstOrThrow()
+  expect(run.status).toBe('paused')
+})
+
 it('a workspace halt written by a gate failure is still there for the fresh process that reconciles at startup', async (): Promise<void> => {
   // Task 12's pump writes `Workspace.haltedReason` on a gate failure; this is startup
   // reconciliation's proof that a restart cannot lose it -- the column is chosen precisely so a
@@ -1348,9 +1369,16 @@ it('a workspace halt written by a gate failure is still there for the fresh proc
 
 Liveness is `process.kill(pid, 0)` in a try/catch — never a coarse "is the run old" heuristic.
 
+`paused` is excluded from the orphan pass *before* liveness is ever consulted. Spec §3.4 says the
+pass marks every non-terminal run with a dead pid `failed`, and `paused` is non-terminal — but a
+paused run has no process by design, so the rule as written would fail exactly the runs this
+milestone built the pause protocol to preserve. Excluding it is completing the rule against Task 8's
+behaviour, not contradicting §3.4: the rule's subject is a run whose process died *unexpectedly*,
+and a paused run's did not.
+
 - [ ] **Step 3: Prove the orphan sweep bites**
 
-Skip the orphan pass at startup — the first test must fail, and note that without it every daemon restart leaves the database describing runs that are not running. Have the orphan pass clear `Workspace.haltedReason` alongside the runs it fails — the restart test must fail; clearing a workspace-wide halt automatically, on any pass, is reserved for the operator's `clear-halt` (Task 16), never automatic (spec §13.1).
+Skip the orphan pass at startup — the first test must fail, and note that without it every daemon restart leaves the database describing runs that are not running. Remove the `paused` exclusion so the pass discriminates on liveness alone — the paused-run test must fail, and it is worth noting in the report that this mutation is the shape of the bug: it is silent, it looks like the sweep working, and it destroys state on a restart rather than on the change that introduced it. Have the orphan pass clear `Workspace.haltedReason` alongside the runs it fails — the restart test must fail; clearing a workspace-wide halt automatically, on any pass, is reserved for the operator's `clear-halt` (Task 16), never automatic (spec §13.1).
 
 - [ ] **Step 4: Commit**
 
