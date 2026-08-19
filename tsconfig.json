@@ -4,6 +4,7 @@
     { "path": "packages/domain" },
     { "path": "packages/db" },
     { "path": "packages/events" },
-    { "path": "packages/providers" }
+    { "path": "packages/providers" },
+    { "path": "apps/orchestrator" }
   ]
 }

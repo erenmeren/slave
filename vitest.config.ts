@@ -13,7 +13,7 @@ export default defineConfig({
       {
         test: {
           name: 'unit',
-          include: ['packages/**/test/**/*.test.ts'],
+          include: ['packages/**/test/**/*.test.ts', 'apps/**/test/**/*.test.ts'],
           exclude: ['**/node_modules/**', '**/test/integration/**'],
           environment: 'node',
         },
@@ -21,7 +21,7 @@ export default defineConfig({
       {
         test: {
           name: 'integration',
-          include: ['packages/**/test/integration/**/*.test.ts'],
+          include: ['packages/**/test/integration/**/*.test.ts', 'apps/**/test/integration/**/*.test.ts'],
           exclude: ['**/node_modules/**'],
           environment: 'node',
           setupFiles: ['./test-setup/require-database.ts'],
