@@ -1,3 +1,4 @@
+export { reconcileOrphans, sweep, type SweepDeps, type SweepReport } from './sweep.js'
 export { advance, runVerify, type AdvanceInput, type RunVerifyInput, type VerifyResult } from './verify.js'
 export { COMMAND_OUTPUT_LIMIT, DEFAULT_COMMAND_TIMEOUT_MS, commandFailure, runShellCommand, type CommandOutcome } from './shell.js'
 export { drainPumps, tick, type TickDeps, type TickReport } from './tick.js'
