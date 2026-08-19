@@ -126,3 +126,56 @@ describe('appendEvent', () => {
     expect(seen).toEqual([])
   })
 })
+
+describe('appendEvent serialization', () => {
+  /**
+   * The single-writer rule `createEventStream` documents as "silent and load-bearing" (stream.ts):
+   * `seq` is assigned at INSERT but a row is visible only at COMMIT, so a lower-`seq` transaction
+   * that commits after a higher-`seq` one is skipped forever by a `seq > lastSeq` cursor. M3's
+   * event pump is the first code to run concurrent appends -- one per active run -- so the rule
+   * has to be enforced here rather than assumed of the caller.
+   */
+  it('assigns seq in the order appends complete, even when they are started together', async (): Promise<void> => {
+    const completions: number[] = []
+
+    await Promise.all(
+      Array.from({ length: 25 }, (_unused, index) =>
+        appendEvent({
+          type: 'task.created',
+          workspaceId: 'w-serial',
+          actor: 'system',
+          payload: { title: `t-${index}` },
+        }).then((event): void => {
+          completions.push(Number(event.seq))
+        }),
+      ),
+    )
+
+    // Strictly increasing in completion order is what "commit order matches seq order" means from
+    // outside the database. Overlapping transactions can assign 7 before 6 and commit 6 second,
+    // and a reader tracking `seq > lastSeq` never sees 6 again.
+    expect(completions).toHaveLength(25)
+    expect([...completions].sort((a, b) => a - b)).toEqual(completions)
+  })
+
+  it('keeps writing after an append fails', async (): Promise<void> => {
+    // Serialization must not mean one poisoned write stops the log: the chain has to survive a
+    // rejection, or a single bad payload wedges every pump in the process.
+    await expect(
+      appendEvent({
+        type: 'task.created',
+        workspaceId: 'w-serial',
+        actor: 'system',
+        payload: { wrong: 'shape' },
+      }),
+    ).rejects.toThrow()
+
+    const after = await appendEvent({
+      type: 'task.created',
+      workspaceId: 'w-serial',
+      actor: 'system',
+      payload: { title: 'still working' },
+    })
+    expect(after.seq).toBeGreaterThan(0)
+  })
+})

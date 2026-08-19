@@ -49,11 +49,16 @@ export async function createEventStream(options: EventStreamOptions): Promise<Ev
           // Safe only under the single-writer rule: `seq` is assigned at INSERT but a row is
           // visible only at COMMIT, so a lower-`seq` transaction that commits after a higher-`seq`
           // one would be skipped forever by `seq > lastSeq`. That can only happen with concurrent
-          // writers; `appendEvent` is the only write path and the orchestrator writes serially, so
-          // commit order matches `seq` order. See design spec
+          // writers. See design spec
           // packages/domain/src/docs/superpowers/specs/2026-08-18-m2-persistence-and-events-design.md
-          // §6.4, and the parent spec's single-writer rule at §3.1. This assumption is silent and
-          // load-bearing — a second writer breaks it with no error and no failing test.
+          // §6.4, and the parent spec's single-writer rule at §3.1.
+          //
+          // This used to read "the orchestrator writes serially" and warn that the assumption was
+          // "silent and load-bearing — a second writer breaks it with no error and no failing
+          // test". M3's event pump became that second writer (one per active run) and, exactly as
+          // predicted, nothing failed. `appendEvent` now serialises appends process-wide, with a
+          // test that fails without it, so this is an enforced guarantee rather than a convention
+          // a caller can quietly stop honouring.
           //
           // Deliberately advance *before* delivering, not after. Both orderings lose something:
           // advance-then-deliver permanently skips an event whose `onEvent` throws (an SSE

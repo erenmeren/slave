@@ -387,10 +387,24 @@ Each active run gets its own concurrent pump that awaits `appendEvent` per event
 drained inside the tick.
 
 Three reasons. M6 requires events visible within one second, and binding delivery to the tick
-period forfeits that by construction. `appendEvent` is transactional, so concurrent pumps are safe
-— the single-writer rule is about the process, not about a single thread of execution. And
-awaiting `appendEvent` per event applies natural backpressure to the child's stdout: if the
-database slows, the pump slows, and no event is lost.
+period forfeits that by construction.
+
+Concurrent pumps are safe because **`appendEvent` serialises appends process-wide**, not because it
+is transactional. That distinction was wrong in an earlier draft of this section and is worth
+stating plainly: transactionality gives atomicity, not commit-order-equals-`seq`-order. `seq` is
+assigned at INSERT and a row is visible only at COMMIT, so two overlapping appends can take 6 and 7
+and commit 7 first — and `createEventStream`, which tracks its position with `seq > lastSeq`, would
+never deliver 6. M2's `stream.ts` documents that dependency and calls it "silent and load-bearing —
+a second writer breaks it with no error and no failing test", which was literally true: M3's pump is
+the first concurrent writer, and nothing failed. The rule is now enforced inside `appendEvent`
+rather than assumed of its callers.
+
+Awaiting `appendEvent` per event is also what keeps the pump from running ahead of the log. Note
+what that does **not** currently buy: the intended backpressure onto the child's stdout is not
+reached today, because the adapter's event queue buffers without bound and nothing pauses the
+reader over the child's output — a slow database grows an in-memory array rather than slowing the
+agent. No event is lost, which is the property this section depends on; the backpressure becomes
+real only when that queue gains a high-water mark.
 
 ### 5.7 Resume
 
