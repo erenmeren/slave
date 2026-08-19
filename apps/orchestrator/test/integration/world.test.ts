@@ -4,6 +4,15 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { loadWorld } from '../../src/world.js'
 
 /**
+ * One teardown for the file, not one per `describe`. A describe-scoped `afterAll` fires when that
+ * block finishes, so disconnecting there tears down the client the later blocks still need --
+ * Prisma reconnects lazily so it happens to work, which is exactly what makes it worth stating.
+ */
+afterAll(async (): Promise<void> => {
+  await prisma.$disconnect()
+})
+
+/**
  * One workspace wired up to exercise every branch `loadWorld` has to get right:
  *
  *  - `doneDep` -> `readyTask` -> `blockedTask` is a two-hop dependency chain, done at the near
@@ -142,9 +151,6 @@ describe('loadWorld', () => {
     fixture = await seedFixture()
   })
 
-  afterAll(async (): Promise<void> => {
-    await prisma.$disconnect()
-  })
 
   it('marks a task ready only when every dependency is done', async (): Promise<void> => {
     const { world } = await loadWorld(workspaceId(fixture.workspaceId))
@@ -272,9 +278,6 @@ describe('loadWorld stats.consecutiveFailures', () => {
     )
   })
 
-  afterAll(async (): Promise<void> => {
-    await prisma.$disconnect()
-  })
 
   it('counts an unbroken run of failures from the most recently concluded backwards', async (): Promise<void> => {
     const id = await seedRuns([
@@ -343,6 +346,22 @@ describe('loadWorld stats.consecutiveFailures', () => {
     // permanent halt on a workspace whose most recent run succeeded.
     expect(world.stats.consecutiveFailures).toBe(0)
   })
+
+  it('orders by conclusion rather than start when the two disagree', async (): Promise<void> => {
+    const id = await seedRuns([
+      // A long run: started first, concluded last.
+      { status: 'failed', startedAt: at('2026-01-01T00:00:00Z'), terminalAt: at('2026-06-01T00:00:00Z') },
+      // A short run that started after it but finished long before it.
+      { status: 'succeeded', startedAt: at('2026-02-01T00:00:00Z'), terminalAt: at('2026-03-01T00:00:00Z') },
+    ])
+
+    const { world } = await loadWorld(workspaceId(id))
+    // The failure is the workspace's most recently *concluded* run, so the streak is 1. Ordering
+    // on `startedAt` alone answers 0 -- and that is the whole content of the `COALESCE`: the case
+    // above pins only its fallback half, which `ORDER BY "startedAt" DESC` satisfies just as well.
+    // Without this case, deleting `terminalAt` from the sort key passes the suite.
+    expect(world.stats.consecutiveFailures).toBe(1)
+  })
 })
 
 describe('loadWorld stats.activeRuns and stats.spentUsd', () => {
@@ -352,9 +371,6 @@ describe('loadWorld stats.activeRuns and stats.spentUsd', () => {
     )
   })
 
-  afterAll(async (): Promise<void> => {
-    await prisma.$disconnect()
-  })
 
   it('counts every non-terminal run, not just the first, and ignores terminal ones', async (): Promise<void> => {
     const id = await seedRuns([
@@ -374,7 +390,10 @@ describe('loadWorld stats.activeRuns and stats.spentUsd', () => {
     // shows up here rather than in production.
     expect(world.stats.activeRuns).toBe(3)
     // Summed across every run regardless of status: a run that already finished still spent.
-    expect(world.stats.spentUsd).toBeCloseTo(10)
+    // `toBe`, not `toBeCloseTo`: every addend here is a dyadic rational and so is every partial
+    // sum, so binary64 represents the total exactly. A tolerance would be covering for nothing and
+    // would quietly weaken the assertion.
+    expect(world.stats.spentUsd).toBe(10)
   })
 
   it('reports zero spend rather than null when a workspace has no runs at all', async (): Promise<void> => {

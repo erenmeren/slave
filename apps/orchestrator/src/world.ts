@@ -162,6 +162,15 @@ async function loadRunStats(
   // stand-in until `terminalAt` is populated. `startedAt DESC` then breaks ties.
   //
   // Raw SQL rather than Prisma's `orderBy`, which cannot express a `COALESCE` sort key.
+  //
+  // Deliberately unbounded: the loop below stops at the first non-`failed` run, but the query
+  // returns every run the workspace has ever concluded. A `LIMIT` would bound the transfer, and
+  // the only bound that is certainly safe -- the workspace's `consecutiveFailureLimit` -- would
+  // also cap the reported number, turning `stats.consecutiveFailures` from "the streak" into
+  // "the streak, up to the limit". `evaluateGuardrails` only ever compares it with `>=` so it
+  // would not notice, but a later consumer reading the figure as a count would. One status column
+  // per concluded run is cheap enough that the trade is not worth making blind; revisit it against
+  // a workspace with a real run history rather than a fixture.
   const concludedRuns = await tx.$queryRaw<{ readonly status: RunStatus }[]>`
     SELECT r.status::text AS status
     FROM "AgentRun" r
@@ -179,6 +188,23 @@ async function loadRunStats(
 
   return { activeRuns, spentUsd: spend._sum.costUsd ?? 0, consecutiveFailures }
 }
+
+/**
+ * How long `loadWorld`'s snapshot transaction may take, and how long it may wait for a pooled
+ * connection before giving up. Prisma's own defaults are 5000/2000 ms; these are deliberately
+ * looser. A `loadWorld` that genuinely needs more than 15 s means something is badly wrong and
+ * failing the tick is the right answer -- but 5 s is tight enough that ordinary contention could
+ * reach it, and a tick that throws `P2028` under load is a worse failure than a tick that takes
+ * six seconds.
+ *
+ * Measured, because the enforcement point is not the obvious one: Prisma checks the budget when it
+ * issues the *next* statement, not while one is running. A single 7 s statement inside a default
+ * transaction completes; the same 7 s followed by any second statement raises `P2028`. The reads
+ * below are five sequential statements, so this budget is checked four times and it is the
+ * *cumulative* elapsed time that matters, not any one query's.
+ */
+const LOAD_WORLD_TIMEOUT_MS = 15_000
+const LOAD_WORLD_MAX_WAIT_MS = 5_000
 
 /**
  * Maps the database onto the domain's `World` (spec §4). This is the only place that translation
@@ -206,7 +232,16 @@ export async function loadWorld(workspaceId: WorkspaceId): Promise<LoadedWorld> 
       const runStats = await loadRunStats(tx, workspaceId)
       return { workspace, taskRows, agentRows, runStats }
     },
-    { isolationLevel: 'RepeatableRead' },
+    {
+      isolationLevel: 'RepeatableRead',
+      // Both numbers are stated rather than defaulted, because wrapping these reads in a
+      // transaction silently imported Prisma's defaults onto a once-per-tick path: a 5 s
+      // transaction budget and a 2 s wait for a pooled connection, neither chosen by anyone. The
+      // failure mode that change introduces is not "the tick is slow" but "the tick throws
+      // P2028", so the budget is worth naming at the size we actually mean.
+      timeout: LOAD_WORLD_TIMEOUT_MS,
+      maxWait: LOAD_WORLD_MAX_WAIT_MS,
+    },
   )
 
   let skippedNoRole = 0
