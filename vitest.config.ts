@@ -1,3 +1,4 @@
+import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vitest/config'
 
 export default defineConfig({
@@ -11,11 +12,16 @@ export default defineConfig({
     fileParallelism: false,
     projects: [
       {
+        // Inline `projects` entries are their own Vite configs — they do not inherit a
+        // `plugins` array declared at this file's root, so the react plugin (JSX
+        // transform for the `.test.tsx` shell tests) has to live on the project itself.
+        plugins: [react()],
         test: {
           name: 'unit',
-          include: ['packages/**/test/**/*.test.ts', 'apps/**/test/**/*.test.ts'],
+          include: ['packages/**/test/**/*.test.{ts,tsx}', 'apps/**/test/**/*.test.{ts,tsx}'],
           exclude: ['**/node_modules/**', '**/test/integration/**'],
           environment: 'node',
+          setupFiles: ['./test-setup/react-cleanup.ts'],
         },
       },
       {

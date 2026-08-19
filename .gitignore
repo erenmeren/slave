@@ -4,3 +4,4 @@ dist/
 .aiteamos/
 .env
 packages/db/src/generated/
+apps/web/.next/
