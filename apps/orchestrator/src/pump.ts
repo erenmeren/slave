@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import { prisma } from '@ai-team-os/db/client'
 import type { AgentId, RunId, TaskId, WorkspaceId } from '@ai-team-os/domain'
 import { appendEvent } from '@ai-team-os/events'
@@ -22,6 +23,23 @@ export interface PumpRunInput {
    * to stop one is a pump that can silently leave an ungated agent running.
    */
   readonly cancel: () => Promise<void>
+  /**
+   * The spawn-critical facts a resumed run cannot rediscover, written into the `Checkpoint` row
+   * when this run pauses.
+   *
+   * Nothing else can supply them. The adapter's `Checkpoint` interface exists precisely because a
+   * *fresh process* -- one that never called this run's `start()` -- has no other source for the
+   * settings file, the hook path or the git identity: identity is supplied per-process by design,
+   * so it cannot be recovered from shared repo state. The tick knows them at spawn; this is the
+   * component that knows *when* the pause happened. Optional so a caller that never pauses (a test
+   * with a fixed event array) need not invent them.
+   */
+  readonly spawn?: {
+    readonly settingsPath: string
+    readonly pauseFlagPath: string
+    readonly hookPath: string
+    readonly gitIdentity: { readonly name: string; readonly email: string }
+  }
 }
 
 /**
@@ -63,6 +81,88 @@ function gateFailureReason(event: {
 }
 
 /**
+ * Persists everything a *fresh process* needs to continue this run.
+ *
+ * Written when the pause is recorded, because that is the only moment all of it is known at once:
+ * the session id and the last tool call come from the stream, the spawn-critical paths come from
+ * whoever started the run, and the working tree state has to be read while it still reflects the
+ * pause. Without this row `resume` has nothing to resume from -- the adapter's `resume()` takes a
+ * checkpoint precisely because a process that never called `start()` cannot rediscover any of it.
+ */
+async function writeCheckpoint(input: {
+  readonly runId: RunId
+  readonly sessionId: string | null
+  readonly toolCalls: number
+  readonly lastToolUseId: string | null
+  readonly lastToolName: string | null
+  readonly denied: readonly string[]
+  readonly spawn: PumpRunInput['spawn']
+  readonly pauseReason: string
+}): Promise<void> {
+  if (input.spawn === undefined || input.sessionId === null) {
+    // No session id means the run never reached `system/init`, so there is nothing to `--resume`.
+    // No spawn facts means the caller cannot support a resume anyway; recording half a checkpoint
+    // would be worse than none, because `resume()` would then fail at the spawn rather than here.
+    console.warn(`[pump] not writing a checkpoint for ${input.runId}: nothing could resume it`)
+    return
+  }
+
+  const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: input.runId } })
+  const worktreePath = run.worktreePath ?? ''
+  const headCommit = worktreePath === '' ? '' : gitOutput(worktreePath, ['rev-parse', 'HEAD'])
+  const dirtyFiles =
+    worktreePath === ''
+      ? []
+      : gitOutput(worktreePath, ['status', '--porcelain'])
+          .split('\n')
+          .filter((line) => line !== '')
+
+  await prisma.checkpoint.upsert({
+    where: { runId: input.runId },
+    // Upsert, not create: a run can be paused, resumed and paused again, and the second pause is
+    // the one an operator would be looking at.
+    create: {
+      runId: input.runId,
+      sessionId: input.sessionId,
+      worktreePath,
+      pauseFlagPath: input.spawn.pauseFlagPath,
+      settingsPath: input.spawn.settingsPath,
+      hookPath: input.spawn.hookPath,
+      gitAuthorName: input.spawn.gitIdentity.name,
+      gitAuthorEmail: input.spawn.gitIdentity.email,
+      lastToolUseId: input.lastToolUseId,
+      lastToolName: input.lastToolName,
+      numTurns: input.toolCalls,
+      deniedToolUseIds: [...input.denied],
+      headCommit,
+      dirtyFiles,
+      cumulativeCostUsd: run.costUsd,
+      pauseReason: input.pauseReason,
+    },
+    update: {
+      sessionId: input.sessionId,
+      lastToolUseId: input.lastToolUseId,
+      lastToolName: input.lastToolName,
+      numTurns: input.toolCalls,
+      deniedToolUseIds: [...input.denied],
+      headCommit,
+      dirtyFiles,
+      cumulativeCostUsd: run.costUsd,
+      pauseReason: input.pauseReason,
+    },
+  })
+}
+
+/** Git, read-only, in the run's worktree. A failure here must not take the pause down with it. */
+function gitOutput(cwd: string, args: readonly string[]): string {
+  try {
+    return execFileSync('git', [...args], { cwd, encoding: 'utf8' }).trim()
+  } catch {
+    return ''
+  }
+}
+
+/**
  * Consumes one run's `RuntimeEvent` stream, writes the domain events it implies, and keeps the
  * run's own row in step with it.
  *
@@ -96,6 +196,10 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
   }
 
   let outcome: RunOutcome | null = null
+  let sessionId: string | null = null
+  let lastToolUseId: string | null = null
+  let lastToolName: string | null = null
+  const denied: string[] = []
   // Seeded from the row, not from zero, for the same reason the column is incremented: on a resume
   // this pump is continuing a run that already made tool calls, and `pausedAtStep` should say
   // where the *run* is, not where this pump started reading.
@@ -114,6 +218,7 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
           where: { id: runId },
           data: { sessionId: event.sessionId, status: 'working' },
         })
+        sessionId = event.sessionId
         await emit('run.started', 'agent', { sessionId: event.sessionId })
         break
       }
@@ -124,6 +229,8 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
         // 6/9) -- so writing a count that starts at zero refunds the tool-call budget every time
         // an agent pauses. Task 15's §3.3 ceiling reads this column.
         toolCalls += 1
+        lastToolUseId = event.toolUseId
+        lastToolName = event.toolName
         await prisma.agentRun.update({ where: { id: runId }, data: { toolCalls: { increment: 1 } } })
         // `summary` carries the tool use id rather than the call's arguments: `RuntimeEvent` never
         // carries the input (Task 4), and widening the parser for a richer summary belongs to M4,
@@ -146,6 +253,7 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
         // removes the agent's ability to act; this is one tool refused, with the agent free to
         // try another -- and ADR 0001 measured it doing exactly that. Reporting it as `run.paused`
         // would tell an operator a run had stopped when it had not.
+        denied.push(event.toolUseId)
         await emit('guardrail.tripped', 'system', {
           guardrail: 'permission_mode',
           detail: `${event.toolName} was denied by the permission mode (${event.toolUseId})`,
@@ -164,6 +272,16 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
         await prisma.agentRun.update({
           where: { id: runId },
           data: { status: 'paused', pausedAtStep: toolCalls },
+        })
+        await writeCheckpoint({
+          runId,
+          sessionId,
+          toolCalls,
+          lastToolUseId,
+          lastToolName,
+          denied,
+          spawn: input.spawn,
+          pauseReason: event.reason,
         })
         await emit('run.paused', 'system', { atStep: toolCalls })
         break

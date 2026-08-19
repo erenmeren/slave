@@ -314,6 +314,15 @@ async function startRun(deps: TickDeps, taskId: TaskId, agentId: AgentId): Promi
       workspaceId: deps.workspaceId,
       events: deps.adapter.events(runId),
       cancel: () => deps.adapter.cancel(runId),
+      // The facts a fresh process cannot rediscover, handed to the component that knows when the
+      // run pauses. Identity is supplied per-process by design, so there is nowhere else to
+      // recover it from once this process is gone.
+      spawn: {
+        settingsPath,
+        pauseFlagPath,
+        hookPath: deps.hookPath,
+        gitIdentity: { name: agent.name, email: `${emailLocalPart(agent)}@aiteamos.local` },
+      },
     })
       .catch((error: unknown): void => {
         console.error(`[tick] pump for run ${runId} failed:`, error)

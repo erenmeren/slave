@@ -462,6 +462,49 @@ describe('pumpRun', () => {
     expect(await eventTypesFor(ids.runId)).not.toContain('run.succeeded')
   })
 
+  it('writes a checkpoint a fresh process could resume from', async (): Promise<void> => {
+    await prisma.agentRun.update({ where: { id: ids.runId }, data: { worktreePath: '/tmp' } })
+
+    await pumpRun({
+      ...ids,
+      spawn: {
+        settingsPath: '/tmp/settings.json',
+        pauseFlagPath: '/tmp/pause.flag',
+        hookPath: '/tmp/pause-gate.sh',
+        gitIdentity: { name: 'Alex', email: 'alex@aiteamos.local' },
+      },
+      events: fromArray([
+        { kind: 'session_started', sessionId: 's-1' },
+        { kind: 'tool_call', toolUseId: 'tu_1', toolName: 'Bash' },
+        { kind: 'hook_denied', hookName: 'PreToolUse', reason: 'operator asked to pause' },
+      ]),
+    })
+
+    // The adapter's `resume()` takes a checkpoint precisely because a process that never called
+    // `start()` cannot rediscover any of this: identity is supplied per-process by design, and the
+    // settings file and hook path exist nowhere else. Until this row is written, a paused run
+    // cannot be continued by anything -- which is the state the milestone was in.
+    const checkpoint = await prisma.checkpoint.findUniqueOrThrow({ where: { runId: ids.runId } })
+    expect(checkpoint.sessionId).toBe('s-1')
+    expect(checkpoint.settingsPath).toBe('/tmp/settings.json')
+    expect(checkpoint.hookPath).toBe('/tmp/pause-gate.sh')
+    expect(checkpoint.gitAuthorName).toBe('Alex')
+    expect(checkpoint.lastToolUseId).toBe('tu_1')
+    expect(checkpoint.pauseReason).toBe('operator asked to pause')
+  })
+
+  it('does not write half a checkpoint for a run nothing could resume', async (): Promise<void> => {
+    await pumpRun({
+      ...ids,
+      events: fromArray([{ kind: 'hook_denied', hookName: 'PreToolUse', reason: 'pause' }]),
+    })
+
+    // No session id means there is nothing to `--resume`, and no spawn facts means the caller could
+    // not support a resume anyway. Half a checkpoint is worse than none: `resume()` would then fail
+    // at the spawn rather than here, with the run already moved.
+    expect(await prisma.checkpoint.count()).toBe(0)
+  })
+
   it('fails a run whose stream ends without a terminal result', async (): Promise<void> => {
     const outcome = await pumpRun({
       ...ids,

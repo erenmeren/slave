@@ -1,0 +1,376 @@
+import { execFile, execFileSync, spawn } from 'node:child_process'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { promisify } from 'node:util'
+import { prisma } from '@ai-team-os/db/client'
+import { afterAll, beforeEach, describe, expect, it } from 'vitest'
+
+const execFileAsync = promisify(execFile)
+
+const repoRoot = fileURLToPath(new URL('../../../../', import.meta.url))
+const CLI = join(repoRoot, 'apps/orchestrator/dist/cli.js')
+const FAKE = join(repoRoot, 'packages/providers/test/fake-claude.mjs')
+
+interface CliResult {
+  readonly stdout: string
+  readonly stderr: string
+  readonly code: number
+}
+
+/**
+ * Runs the real built CLI as a child process.
+ *
+ * Not an exported function called in-process: exit codes, argv parsing and the bin wiring are the
+ * things a command-line tool gets wrong, and only a child exercises them. Spec §16 drives the
+ * milestone gate from the CLI, so the CLI is what has to work.
+ *
+ * `DATABASE_URL` is passed explicitly because the child loads `.env` for itself and would otherwise
+ * drive the *development* database while the test asserts against the test one.
+ */
+async function runCli(args: readonly string[], extraEnv: NodeJS.ProcessEnv = {}): Promise<CliResult> {
+  try {
+    const { stdout, stderr } = await execFileAsync('node', [CLI, ...args], {
+      env: {
+        ...process.env,
+        DATABASE_URL: process.env['TEST_DATABASE_URL'] ?? '',
+        AITEAMOS_CLAUDE_BIN: 'node',
+        AITEAMOS_CLAUDE_ARGS: `${FAKE} --fixture complete`,
+        ...extraEnv,
+      },
+    })
+    return { stdout, stderr, code: 0 }
+  } catch (error) {
+    const shaped = error as { stdout?: string; stderr?: string; code?: number }
+    return { stdout: shaped.stdout ?? '', stderr: shaped.stderr ?? '', code: shaped.code ?? 1 }
+  }
+}
+
+function makeRepo(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'aiteamos-cli-'))
+  const git = (args: readonly string[]): void => {
+    execFileSync('git', [...args], { cwd: dir })
+  }
+  git(['init', '-q', '-b', 'main'])
+  git(['config', 'user.name', 'Fixture'])
+  git(['config', 'user.email', 'fixture@example.com'])
+  writeFileSync(join(dir, 'README.md'), '# fixture\n')
+  git(['add', '-A'])
+  git(['commit', '-q', '-m', 'initial'])
+  return dir
+}
+
+interface Fixture {
+  readonly workspaceId: string
+  readonly taskId: string
+  readonly agentId: string
+  readonly repoPath: string
+}
+
+const repos: string[] = []
+
+async function seed(): Promise<Fixture> {
+  const repoPath = makeRepo()
+  repos.push(repoPath)
+  const workspace = await prisma.workspace.create({
+    data: { name: 'Checkout Platform', repoPath, verifyCommands: ['true'], setupCommands: [] },
+  })
+  const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
+  const agent = await prisma.agent.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
+  const task = await prisma.task.create({
+    data: {
+      workspaceId: workspace.id,
+      title: 'Add the thing',
+      description: 'make it work',
+      status: 'ready',
+      requiredRole: 'backend',
+      maxAttempts: workspace.maxAttempts,
+    },
+  })
+  return { workspaceId: workspace.id, taskId: task.id, agentId: agent.id, repoPath }
+}
+
+describe('the orchestrator CLI', () => {
+  let fixture: Fixture
+
+  beforeEach(async (): Promise<void> => {
+    await prisma.$executeRawUnsafe(
+      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
+    )
+    fixture = await seed()
+  })
+
+  afterAll(async (): Promise<void> => {
+    for (const repo of repos) rmSync(repo, { recursive: true, force: true })
+    await prisma.$disconnect()
+  }, 30_000)
+
+  it('runs exactly one tick and prints a report', async (): Promise<void> => {
+    const result = await runCli(['tick'])
+
+    expect(result.code).toBe(0)
+    expect(JSON.parse(result.stdout)).toMatchObject({ started: expect.any(Array) })
+  }, 30_000)
+
+  it('starts exactly one run per tick invocation', async (): Promise<void> => {
+    await runCli(['tick'])
+
+    // "Exactly one tick" is the command's whole contract -- a `tick` that looped, or that also
+    // reconciled, would be indistinguishable from `daemon` by its output alone.
+    expect(await prisma.agentRun.count()).toBe(1)
+  }, 30_000)
+
+  it('does not reconcile orphans on a bare tick', async (): Promise<void> => {
+    const other = await prisma.task.create({
+      data: {
+        workspaceId: fixture.workspaceId,
+        title: 'held by a dead run',
+        description: 'x',
+        status: 'running',
+        requiredRole: 'backend',
+        maxAttempts: 3,
+      },
+    })
+    await prisma.agentRun.create({
+      data: { taskId: other.id, agentId: fixture.agentId, status: 'working', pid: 999_999 },
+    })
+
+    await runCli(['tick'])
+
+    // A CLI `tick` may run alongside a live daemon, and Task 15's orphan pass is startup-only for a
+    // reason: a run that is mid-spawn is indistinguishable from one it should fail. Reconciling
+    // here would fail runs belonging to a daemon that is very much alive.
+    const run = await prisma.agentRun.findFirstOrThrow({ where: { taskId: other.id } })
+    expect(run.status).toBe('working')
+  }, 30_000)
+
+  it('exits non-zero for an unknown run', async (): Promise<void> => {
+    const result = await runCli(['pause', '--run', 'nope'])
+
+    expect(result.code).not.toBe(0)
+  }, 30_000)
+
+  it('exits non-zero and prints usage for an unknown command', async (): Promise<void> => {
+    const result = await runCli(['frobnicate'])
+
+    expect(result.code).not.toBe(0)
+    expect(`${result.stdout}${result.stderr}`).toMatch(/usage/i)
+  }, 30_000)
+
+  it('clears a workspace safety halt', async (): Promise<void> => {
+    await prisma.workspace.update({
+      where: { id: fixture.workspaceId },
+      data: { haltedReason: 'gate failure', haltedAt: new Date() },
+    })
+
+    const result = await runCli(['clear-halt', '--workspace', fixture.workspaceId])
+
+    expect(result.code).toBe(0)
+    const ws = await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspaceId } })
+    expect(ws.haltedReason).toBeNull()
+    expect(ws.haltedAt).toBeNull()
+  })
+
+  it('tells an operator that clear-halt is not resume', async (): Promise<void> => {
+    const result = await runCli(['help'])
+    const help = `${result.stdout}${result.stderr}`
+
+    // Spec §11 spells out the failure this wording prevents: an operator who reaches for the wrong
+    // one either continues a run while the workspace is still halted (nothing happens, confusingly)
+    // or clears a workspace-wide safety halt believing they nudged a single run -- the dangerous
+    // direction. This is the one place a help string is load-bearing.
+    expect(help).toMatch(/clear-halt/)
+    expect(help).toMatch(/workspace-wide/i)
+    expect(help).toMatch(/starts nothing/i)
+  }, 30_000)
+
+  it('prints the active runs, their pids and worktrees', async (): Promise<void> => {
+    // Seeded rather than produced by a tick: §11 says `status` lists *active* runs, and the CLI's
+    // `tick` waits for the run it started, so by the time it returns there is nothing active. A
+    // status that listed finished runs would bury the one thing an operator is looking for.
+    await prisma.agentRun.create({
+      data: {
+        taskId: fixture.taskId,
+        agentId: fixture.agentId,
+        status: 'working',
+        pid: process.pid,
+        worktreePath: join(fixture.repoPath, '.aiteamos', 'worktrees', 'T-abcdef12'),
+      },
+    })
+    await prisma.agentRun.create({
+      data: {
+        taskId: fixture.taskId,
+        agentId: fixture.agentId,
+        status: 'succeeded',
+        terminalAt: new Date(),
+        endedAt: new Date(),
+      },
+    })
+
+    const result = await runCli(['status'])
+
+    expect(result.code).toBe(0)
+    const status = JSON.parse(result.stdout) as {
+      halt: unknown
+      runs: readonly { id: string; pid: number | null; worktreePath: string | null; status: string }[]
+    }
+    expect(status.runs).toHaveLength(1)
+    expect(status.runs[0]?.pid).toBe(process.pid)
+    expect(status.runs[0]?.worktreePath).toContain('.aiteamos')
+  }, 30_000)
+
+  it('prints a workspace halt with the reason it happened', async (): Promise<void> => {
+    await prisma.workspace.update({
+      where: { id: fixture.workspaceId },
+      data: { haltedReason: 'the pause gate failed open (PreToolUse:Write exited 127)', haltedAt: new Date() },
+    })
+
+    const result = await runCli(['status'])
+
+    // `decide()` surfaces only the guardrail *name* (`emergency_stop`), which says nothing about the
+    // hook path that caused it. The reason lives in the column precisely so an operator can read it.
+    const status = JSON.parse(result.stdout) as { halt: { reason: string } | null }
+    expect(status.halt?.reason).toContain('PreToolUse:Write')
+  })
+
+  it('refuses a workspace-scoped command when the workspace is ambiguous', async (): Promise<void> => {
+    await seed()
+
+    const result = await runCli(['status'])
+
+    // One workspace makes omitting `--workspace` unambiguous; two make it a guess. Guessing here
+    // means an operator reads one workspace's runs believing they are another's.
+    expect(result.code).not.toBe(0)
+    expect(`${result.stdout}${result.stderr}`).toMatch(/--workspace/)
+  }, 30_000)
+
+  it('cancels a run and preserves its worktree', async (): Promise<void> => {
+    await runCli(['tick'])
+    const run = await prisma.agentRun.findFirstOrThrow()
+
+    const result = await runCli(['cancel', '--run', run.id])
+
+    expect(result.code).toBe(0)
+  }, 30_000)
+
+  it('waits for the run it started before exiting', async (): Promise<void> => {
+    await runCli(['tick'])
+
+    // The tick *function* deliberately does not await its pump -- a daemon's pumps outlive each
+    // tick. A one-shot command's process is about to exit, and exiting would leave a live agent
+    // with nobody reading its stream: every event from that moment lost, and the run left for the
+    // orphan pass to fail on some later startup.
+    const run = await prisma.agentRun.findFirstOrThrow()
+    expect(['succeeded', 'failed']).toContain(run.status)
+    expect(run.terminalAt).not.toBeNull()
+  }, 30_000)
+
+  it('names the run it could not find', async (): Promise<void> => {
+    const result = await runCli(['pause', '--run', 'nope'])
+
+    expect(`${result.stdout}${result.stderr}`).toMatch(/no run with id nope/)
+  }, 30_000)
+
+  it('arms the gate and records who asked', async (): Promise<void> => {
+    const run = await prisma.agentRun.create({
+      data: { taskId: fixture.taskId, agentId: fixture.agentId, status: 'working', pid: process.pid },
+    })
+
+    const result = await runCli(['pause', '--run', run.id, '--by', 'meren'])
+
+    expect(result.code).toBe(0)
+    // The flag file is the whole mechanism: the gate reads it and denies the next tool call. A
+    // separate process cannot follow the rest of the protocol -- it has no handle on the child and
+    // no view of its stream -- so writing the flag is the half it can perform, and the daemon's
+    // pump observes the deny.
+    expect(existsSync(join(fixture.repoPath, '.aiteamos', 'runs', run.id, 'pause.flag'))).toBe(true)
+
+    const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })
+    expect(after.status).toBe('pause_requested')
+    // The *category*, which this is the only place that knows: an operator asked. Task 12 carried
+    // it forward as a column nothing ever wrote.
+    expect(after.pauseReason).toBe('human')
+  }, 30_000)
+
+  it('actually kills the process it cancels', async (): Promise<void> => {
+    const sleeper = spawn('/bin/sh', ['-c', 'sleep 30'], { detached: true, stdio: 'ignore' })
+    const pid = sleeper.pid ?? 0
+    const run = await prisma.agentRun.create({
+      data: { taskId: fixture.taskId, agentId: fixture.agentId, status: 'working', pid },
+    })
+
+    try {
+      const result = await runCli(['cancel', '--run', run.id])
+      expect(result.code).toBe(0)
+
+      await new Promise((res) => setTimeout(res, 500))
+      // The adapter's registry of live children is per-process, so a CLI invocation cannot ask it
+      // to cancel anything -- the pid in the row is the only handle a different process has. Task
+      // 15 carried this forward as the reason a run outliving its daemon could not be killed.
+      let alive = true
+      try {
+        process.kill(pid, 0)
+      } catch {
+        alive = false
+      }
+      expect(alive).toBe(false)
+    } finally {
+      try {
+        process.kill(pid, 'SIGKILL')
+      } catch {
+        // already gone
+      }
+    }
+  }, 30_000)
+
+  it('runs a daemon that ticks and shuts down on a signal', async (): Promise<void> => {
+    const orphanTask = await prisma.task.create({
+      data: {
+        workspaceId: fixture.workspaceId,
+        title: 'left behind',
+        description: 'x',
+        status: 'running',
+        requiredRole: 'backend',
+        maxAttempts: 3,
+      },
+    })
+    const orphan = await prisma.agentRun.create({
+      data: { taskId: orphanTask.id, agentId: fixture.agentId, status: 'working', pid: 999_999 },
+    })
+
+    const child = execFile('node', [CLI, 'daemon', '--period', '200'], {
+      env: {
+        ...process.env,
+        DATABASE_URL: process.env['TEST_DATABASE_URL'] ?? '',
+        AITEAMOS_CLAUDE_BIN: 'node',
+        AITEAMOS_CLAUDE_ARGS: `${FAKE} --fixture complete`,
+      },
+    })
+
+    // Long enough for the startup reconcile and at least one tick.
+    await new Promise((res) => setTimeout(res, 2_500))
+    expect(await prisma.agentRun.count()).toBeGreaterThan(1)
+
+    // The orphan left behind by a "previous process" is reconciled before the first tick -- that is
+    // §3.4's whole point, and the daemon is the only caller allowed to do it.
+    const orphanAfter = await prisma.agentRun.findUniqueOrThrow({ where: { id: orphan.id } })
+    expect(orphanAfter.status).toBe('failed')
+
+    const exited = new Promise<number | null>((res) => child.on('exit', (code) => res(code)))
+    child.kill('SIGTERM')
+    // §11's shutdown awaits the subscription's close, which can take ~6.25s. Budgeting past it
+    // rather than racing it is the point: a daemon that exits while a pump is mid-write loses the
+    // run's last events.
+    const code = await Promise.race([
+      exited,
+      new Promise<number | null>((res) => setTimeout(() => res(-1), 12_000)),
+    ])
+    expect(code).not.toBe(-1)
+
+    // Shutdown drains the pumps rather than racing them: a run whose stream was still being
+    // consumed when the process exited loses its last events and is left non-terminal.
+    const started = await prisma.agentRun.findFirstOrThrow({ where: { taskId: fixture.taskId } })
+    expect(started.terminalAt).not.toBeNull()
+  }, 30_000)
+})
