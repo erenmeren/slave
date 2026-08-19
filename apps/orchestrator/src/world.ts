@@ -8,29 +8,52 @@ import {
   type WorkspaceId,
   type World,
 } from '@ai-team-os/domain'
-import { prisma } from '@ai-team-os/db/client'
+import { prisma, type Prisma } from '@ai-team-os/db/client'
+
+type RunStatusKind = 'non_terminal' | 'concluded' | 'terminal_uncounted'
 
 /**
- * Mirrors the `ACTIVE` list in `packages/domain/src/run/state.ts` -- that list is not exported
- * (it is a private implementation detail of `applyRunEvent`), so it is restated here rather than
- * imported. "Busy" and "non-terminal" are the same question from two different tables, and they
- * must stay the same list: `stopped`, `succeeded`, and `failed` are the only statuses an
- * `AgentRun` cannot leave, so those three -- and only those three -- release the agent that held
- * it.
+ * Every `RunStatus` classified exactly once. The two lists below are *derived* from this map
+ * rather than written out independently, so a tenth `RunStatus` added to `packages/domain` breaks
+ * this build -- `satisfies Record<RunStatus, …>` demands a key per member -- instead of quietly
+ * falling outside both lists, where it would read as "not busy" to `decide()` (handing the agent
+ * a second concurrent run on top of the one it is already holding) and stay invisible to the
+ * failure breaker.
+ *
+ * `non_terminal` mirrors the `ACTIVE` list in `packages/domain/src/run/state.ts` -- that list is
+ * not exported (it is a private implementation detail of `applyRunEvent`), so it is restated here
+ * rather than imported. "Busy" and "non-terminal" are the same question asked of two different
+ * tables, and they must stay the same list.
+ *
+ * `stopped` is deliberately neither kind: it is terminal, so it releases the agent that held it,
+ * but an operator stopping a run is not the run failing. It must not count toward the failure
+ * streak, and it must not break one either -- a single stop should not launder away a real streak.
  */
-const NON_TERMINAL_RUN_STATUSES: readonly RunStatus[] = [
-  'starting',
-  'working',
-  'pause_requested',
-  'paused',
-  'resuming',
-  'stopping',
-]
+const RUN_STATUS_KIND = {
+  starting: 'non_terminal',
+  working: 'non_terminal',
+  pause_requested: 'non_terminal',
+  paused: 'non_terminal',
+  resuming: 'non_terminal',
+  stopping: 'non_terminal',
+  stopped: 'terminal_uncounted',
+  succeeded: 'concluded',
+  failed: 'concluded',
+} satisfies Record<RunStatus, RunStatusKind>
 
-/** Only the statuses a run's `consecutiveFailures` streak can be counted from -- a run still in
+function statusesOfKind(kind: RunStatusKind): readonly RunStatus[] {
+  return (Object.keys(RUN_STATUS_KIND) as RunStatus[]).filter((status) => RUN_STATUS_KIND[status] === kind)
+}
+
+/** The statuses an `AgentRun` can still leave -- an agent holding one of these is busy. */
+const NON_TERMINAL_RUN_STATUSES: readonly RunStatus[] = statusesOfKind('non_terminal')
+
+/**
+ * The only statuses a run's `consecutiveFailures` streak can be counted from -- a run still in
  * progress has not concluded either way, so it contributes nothing to the streak and must not
- * break it either. */
-const CONCLUDED_RUN_STATUSES: readonly RunStatus[] = ['succeeded', 'failed']
+ * break it either.
+ */
+const CONCLUDED_RUN_STATUSES: readonly RunStatus[] = statusesOfKind('concluded')
 
 export interface LoadedWorld {
   readonly world: World
@@ -61,8 +84,11 @@ interface TaskWorldRow {
  * "every dependency done" definition in the one place a query planner can prove it against the
  * data instead of a second, hand-written traversal that could drift from it.
  */
-async function loadTaskRows(workspaceId: WorkspaceId): Promise<readonly TaskWorldRow[]> {
-  return prisma.$queryRaw<TaskWorldRow[]>`
+async function loadTaskRows(
+  tx: Prisma.TransactionClient,
+  workspaceId: WorkspaceId,
+): Promise<readonly TaskWorldRow[]> {
+  return tx.$queryRaw<TaskWorldRow[]>`
     SELECT
       t.id,
       t.status::text AS status,
@@ -90,8 +116,11 @@ interface AgentWorldRow {
  * held one. `take: 1` on the filtered relation is enough to answer "any?" without pulling every
  * run an agent has accumulated over its lifetime.
  */
-async function loadAgentRows(workspaceId: WorkspaceId): Promise<readonly AgentWorldRow[]> {
-  return prisma.agent.findMany({
+async function loadAgentRows(
+  tx: Prisma.TransactionClient,
+  workspaceId: WorkspaceId,
+): Promise<readonly AgentWorldRow[]> {
+  return tx.agent.findMany({
     where: { team: { workspaceId } },
     select: {
       id: true,
@@ -110,26 +139,37 @@ async function loadAgentRows(workspaceId: WorkspaceId): Promise<readonly AgentWo
  * running session total), and a run that already finished still spent real money.
  */
 async function loadRunStats(
+  tx: Prisma.TransactionClient,
   workspaceId: WorkspaceId,
 ): Promise<{ readonly activeRuns: number; readonly spentUsd: number; readonly consecutiveFailures: number }> {
-  const [activeRuns, spend, concludedRuns] = await Promise.all([
-    prisma.agentRun.count({
-      where: { status: { in: [...NON_TERMINAL_RUN_STATUSES] }, task: { workspaceId } },
-    }),
-    prisma.agentRun.aggregate({
-      where: { task: { workspaceId } },
-      _sum: { costUsd: true },
-    }),
-    // Most recently concluded first, so the leading run of the list is the one the streak counts
-    // from. `terminalAt` is the column `packages/db`'s schema added for exactly this kind of
-    // "when did this run actually conclude" ordering; `startedAt` breaks ties for runs that
-    // concluded in the same tick (or, in a fixture, share `terminalAt: null`).
-    prisma.agentRun.findMany({
-      where: { status: { in: [...CONCLUDED_RUN_STATUSES] }, task: { workspaceId } },
-      orderBy: [{ terminalAt: 'desc' }, { startedAt: 'desc' }],
-      select: { status: true },
-    }),
-  ])
+  const activeRuns = await tx.agentRun.count({
+    where: { status: { in: [...NON_TERMINAL_RUN_STATUSES] }, task: { workspaceId } },
+  })
+  const spend = await tx.agentRun.aggregate({
+    where: { task: { workspaceId } },
+    _sum: { costUsd: true },
+  })
+
+  // Most recently concluded first, so the leading run of the list is the one the streak counts
+  // from. Nothing in this repo writes `AgentRun.terminalAt` yet -- the column exists for spec
+  // §7.4's worktree sweep, and today every concluded run carries `null` there. A bare
+  // `ORDER BY "terminalAt" DESC` is therefore not merely imprecise, it is a trap: Postgres sorts
+  // `DESC` as NULLS FIRST, so the moment a later task starts populating the column, every legacy
+  // null row jumps to the front and *inverts* the streak -- three ancient failures ahead of
+  // today's success reads as `consecutiveFailures: 3`, which trips the circuit breaker into a
+  // permanent halt on a workspace that is succeeding. `COALESCE` states what is actually true: a
+  // run's position in the streak is when it concluded, and `startedAt` is the best available
+  // stand-in until `terminalAt` is populated. `startedAt DESC` then breaks ties.
+  //
+  // Raw SQL rather than Prisma's `orderBy`, which cannot express a `COALESCE` sort key.
+  const concludedRuns = await tx.$queryRaw<{ readonly status: RunStatus }[]>`
+    SELECT r.status::text AS status
+    FROM "AgentRun" r
+    JOIN "Task" t ON t.id = r."taskId"
+    WHERE t."workspaceId" = ${workspaceId}
+      AND r.status::text = ANY(${[...CONCLUDED_RUN_STATUSES]}::text[])
+    ORDER BY COALESCE(r."terminalAt", r."startedAt") DESC, r."startedAt" DESC
+  `
 
   let consecutiveFailures = 0
   for (const run of concludedRuns) {
@@ -146,12 +186,28 @@ async function loadRunStats(
  * a named source in spec §4's table rather than an inferred default.
  */
 export async function loadWorld(workspaceId: WorkspaceId): Promise<LoadedWorld> {
-  const [workspace, taskRows, agentRows, runStats] = await Promise.all([
-    prisma.workspace.findUniqueOrThrow({ where: { id: workspaceId } }),
-    loadTaskRows(workspaceId),
-    loadAgentRows(workspaceId),
-    loadRunStats(workspaceId),
-  ])
+  // `isolationLevel: 'RepeatableRead'` is the point of this transaction, not the transaction
+  // wrapper. Postgres defaults to Read Committed, under which each statement inside a transaction
+  // still takes its own fresh snapshot -- a bare `$transaction` would look like a fix and change
+  // nothing. Do not "simplify" the isolation level away.
+  //
+  // Atomicity matters here because `loadWorld`'s whole contract is *the snapshot the scheduler
+  // decides from*. A torn read -- `agents` from one instant, `stats` from another -- lets
+  // `decide()` emit a `start_run` for an agent that became busy between two of the reads, and
+  // that spawns a real `claude` process spending real money.
+  const { workspace, taskRows, agentRows, runStats } = await prisma.$transaction(
+    async (tx) => {
+      // Sequential rather than `Promise.all`: an interactive transaction is pinned to a single
+      // connection, so queries issued concurrently on `tx` serialize anyway, and under
+      // RepeatableRead the order they run in cannot change what they see.
+      const workspace = await tx.workspace.findUniqueOrThrow({ where: { id: workspaceId } })
+      const taskRows = await loadTaskRows(tx, workspaceId)
+      const agentRows = await loadAgentRows(tx, workspaceId)
+      const runStats = await loadRunStats(tx, workspaceId)
+      return { workspace, taskRows, agentRows, runStats }
+    },
+    { isolationLevel: 'RepeatableRead' },
+  )
 
   let skippedNoRole = 0
   const tasks: SchedulableTask[] = []
