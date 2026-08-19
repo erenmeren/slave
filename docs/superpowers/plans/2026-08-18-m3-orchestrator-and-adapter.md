@@ -1263,7 +1263,7 @@ Spec §8.
 
 **Interfaces:**
 - Produces:
-  - `function runVerify(input: { taskId: TaskId; worktreePath: string; commands: readonly string[]; timeoutMs: number }): Promise<VerifyResult>`
+  - `function runVerify(input: { taskId: TaskId; worktreePath: string; artifactDir: string; commands: readonly string[]; timeoutMs: number }): Promise<VerifyResult>`
   - `interface VerifyResult { readonly passed: boolean; readonly failedCommand: string | null; readonly exitCode: number | null; readonly output: string }`
   - `function advance(input: { taskId: TaskId; result: VerifyResult; branch: string }): Promise<void>`
 
@@ -1314,9 +1314,15 @@ it('moves the task to failed when the attempt cap is reached', async (): Promise
 
 Each command's exit code and captured output is written as an `Artifact` row. Task transitions emit `task.verifying`, then `task.verify_passed` + `task.done`, or `task.verify_failed` + `task.rework`, or `task.failed`.
 
+`artifactDir` is explicit rather than derived from `worktreePath`, because the logs must not be written *inside* the worktree — that is what the agent commits from, and Task 13 already had to move the run's settings file and pause flag out for the same reason. Deriving the path by walking up from the worktree would couple verify to Task 11's layout constant silently.
+
+Run the commands with the shared runner from Task 11's provisioning rather than a second `execFile`: `npm test` is the same class of arbitrary shell as `npm ci`, and every hazard that runner fixed applies here unchanged — a 1 MiB buffer that kills a chatty-but-passing command and reports it as a failure, a timeout that misses a descendant outside the process group, an open stdin that hangs anything reading it, and per-chunk UTF-8 decoding that corrupts multi-byte output.
+
 - [ ] **Step 3: Prove the empty-list refusal bites**
 
 Make an empty list pass — the first test must fail. This is the behaviour spec §8 exists to protect: assuming success.
+
+Seed the attempt-cap test at `maxAttempts - 1`, not at `maxAttempts`: starting at the cap leaves `>=` and `>` indistinguishable once the attempt is incremented, so the test cannot see an off-by-one in the one comparison it exists for. Pair it with a below-cap case, or every task quietly gets one attempt fewer than its workspace configured.
 
 - [ ] **Step 4: Commit**
 
