@@ -1,6 +1,7 @@
 import {
   agentId,
   taskId,
+  NON_TERMINAL_RUN_STATUSES,
   type RunStatus,
   type SchedulableAgent,
   type SchedulableTask,
@@ -10,20 +11,25 @@ import {
 } from '@ai-team-os/domain'
 import { prisma, type Prisma } from '@ai-team-os/db/client'
 
+// Re-exported so `cli.ts` and `sweep.ts` keep importing it from here -- the statuses an
+// `AgentRun` can still leave (an agent holding one of these is busy) now live in
+// `packages/domain/src/run/state.ts`, the one place the web and the orchestrator both read them
+// from, so the two cannot drift onto different definitions of "not finished".
+export { NON_TERMINAL_RUN_STATUSES } from '@ai-team-os/domain'
+
 type RunStatusKind = 'non_terminal' | 'concluded' | 'terminal_uncounted'
 
 /**
- * Every `RunStatus` classified exactly once. The two lists below are *derived* from this map
- * rather than written out independently, so a tenth `RunStatus` added to `packages/domain` breaks
- * this build -- `satisfies Record<RunStatus, …>` demands a key per member -- instead of quietly
- * falling outside both lists, where it would read as "not busy" to `decide()` (handing the agent
- * a second concurrent run on top of the one it is already holding) and stay invisible to the
+ * Every `RunStatus` classified exactly once. `CONCLUDED_RUN_STATUSES` below is *derived* from
+ * this map rather than written out independently, so a tenth `RunStatus` added to
+ * `packages/domain` breaks this build -- `satisfies Record<RunStatus, …>` demands a key per
+ * member -- instead of quietly falling outside every list, where it would stay invisible to the
  * failure breaker.
  *
- * `non_terminal` mirrors the `ACTIVE` list in `packages/domain/src/run/state.ts` -- that list is
- * not exported (it is a private implementation detail of `applyRunEvent`), so it is restated here
- * rather than imported. "Busy" and "non-terminal" are the same question asked of two different
- * tables, and they must stay the same list.
+ * `non_terminal` here must still agree with `NON_TERMINAL_RUN_STATUSES`, imported above from
+ * `packages/domain/src/run/state.ts` -- this map no longer derives that constant (it is the
+ * domain's now), but it still has to classify every `RunStatus` to stay exhaustive, and "busy"
+ * and "non-terminal" are the same question asked of two different tables.
  *
  * `stopped` is deliberately neither kind: it is terminal, so it releases the agent that held it,
  * but an operator stopping a run is not the run failing. It must not count toward the failure
@@ -44,9 +50,6 @@ const RUN_STATUS_KIND = {
 function statusesOfKind(kind: RunStatusKind): readonly RunStatus[] {
   return (Object.keys(RUN_STATUS_KIND) as RunStatus[]).filter((status) => RUN_STATUS_KIND[status] === kind)
 }
-
-/** The statuses an `AgentRun` can still leave -- an agent holding one of these is busy. */
-export const NON_TERMINAL_RUN_STATUSES: readonly RunStatus[] = statusesOfKind('non_terminal')
 
 /**
  * The only statuses a run's `consecutiveFailures` streak can be counted from -- a run still in
