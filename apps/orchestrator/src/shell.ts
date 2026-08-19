@@ -47,14 +47,6 @@ const KILL_GRACE_MS = 2_000
 const DRAIN_GRACE_MS = 200
 
 /**
- * Task keys and slugs both become path segments and part of a branch name. `join()` collapses
- * `..`, so an unchecked key of `../../../../tmp/x` places the worktree outside the repository
- * entirely, and a value starting with `-` reaches git's argv where it parses as an option. Neither
- * is hypothetical: `Task` has no key column, so whatever Task 13 passes is synthesized -- plausibly
- * from a human-written title.
- */
-
-/**
  * Signals the child's whole process group, tolerating a group that has already gone.
  *
  * The group, not the process: `spawn(..., { detached: true })` makes the shell a group leader, and
@@ -183,31 +175,20 @@ export async function runShellCommand(input: {
  * only a plain non-zero exit has a code. Collapsing all three into "exit unknown" throws away the
  * fact the operator needs first.
  */
-export function commandFailure(command: string, timeoutMs: number, outcome: CommandOutcome): Error {
+export function describeOutcome(command: string, timeoutMs: number, outcome: CommandOutcome): string {
   const how = outcome.timedOut
     ? `timed out after ${timeoutMs}ms`
     : outcome.signal !== null
       ? `killed by ${outcome.signal}`
       : `exit ${outcome.code ?? 'unknown'}`
 
-  return new Error(
-    `command ${how}: ${command}` + (outcome.output === '' ? '' : `\n${outcome.output}`),
-  )
+  return `command ${how}: ${command}` + (outcome.output === '' ? '' : `\n${outcome.output}`)
 }
 
 /**
- * Creates the task's worktree on its own branch off `baseBranch`, runs the workspace's setup
- * commands inside it, and reports where it landed (spec §7.1, §7.2).
- *
- * The worktree is **not** cleaned up when a setup command fails. Spec §7.4 preserves worktrees on
- * failure because they are the inspection surface, and a half-provisioned one is the case where
- * that matters most: the operator's question is "how far did setup get", which a removed directory
- * cannot answer. Task 15's sweep owns collection.
- *
- * Leftovers from a previous attempt are refused, not adopted, and refused as a
- * {@link WorktreeExistsError} the caller can branch on -- see that class for why the decision is
- * the caller's. One half-state is deliberately left to git: a `.git/worktrees/` metadata entry
- * whose directory *and* branch are both gone still makes `worktree add` refuse, and it surfaces as
- * git's own error. It is what a `git worktree prune` exists for and is not this function's to
- * silently repair.
+ * The same description as an `Error`, for the callers that throw. Split so the common path -- where
+ * the text is written to a log or a column -- does not allocate a stack trace to format a string.
  */
+export function commandFailure(command: string, timeoutMs: number, outcome: CommandOutcome): Error {
+  return new Error(describeOutcome(command, timeoutMs, outcome))
+}

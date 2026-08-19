@@ -1258,7 +1258,8 @@ git add -A && git commit -m "feat(orchestrator): add the tick loop"
 Spec §8.
 
 **Files:**
-- Create: `apps/orchestrator/src/verify.ts`
+- Create: `apps/orchestrator/src/verify.ts`, `apps/orchestrator/src/shell.ts`
+- Modify: `apps/orchestrator/src/worktree.ts` (its command runner moves into `shell.ts`)
 - Test: `apps/orchestrator/test/integration/verify.test.ts`
 
 **Interfaces:**
@@ -1302,8 +1303,8 @@ it('moves the task to done with its branch when every command passes', async ():
   expect(t.branch).toBe('aiteamos/TASK-001-x')
 })
 
-it('moves the task to failed when the attempt cap is reached', async (): Promise<void> => {
-  await setAttempt(taskId, 5) // seeded maxAttempts is 5
+it('moves the task to failed on the attempt that reaches the cap', async (): Promise<void> => {
+  await setAttempt(taskId, 4) // seeded maxAttempts is 5, so this failure is the fifth attempt
   const result = await runVerify({ ...base, commands: ['false'] })
   await advance({ taskId, result, branch })
   expect((await task()).status).toBe('failed')

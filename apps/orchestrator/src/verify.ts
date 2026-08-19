@@ -3,11 +3,24 @@ import { join } from 'node:path'
 import { prisma } from '@ai-team-os/db/client'
 import type { TaskId } from '@ai-team-os/domain'
 import { appendEvent } from '@ai-team-os/events'
-import { commandFailure, runShellCommand } from './shell.js'
+import { describeOutcome, runShellCommand } from './shell.js'
+
+/**
+ * Four outcomes, named rather than encoded in the nullability of two other fields.
+ *
+ * `not_configured` and `could_not_run` are both "we did not learn anything about the work", but for
+ * opposite reasons and with opposite remedies: the first is the workspace's configuration and
+ * affects every task in it, the second is this task's environment. Neither is the agent's fault,
+ * so neither costs it an attempt. Without a discriminator both would have to overload
+ * `failedCommand === null`, which already means "everything passed".
+ */
+export type VerifyOutcome = 'passed' | 'failed' | 'not_configured' | 'could_not_run'
 
 export interface VerifyResult {
+  readonly kind: VerifyOutcome
+  /** Convenience for the one question most callers ask. Always `kind === 'passed'`. */
   readonly passed: boolean
-  /** `null` when nothing failed — either everything passed, or there was nothing to run. */
+  /** `null` when nothing failed — either everything passed, or nothing ran. */
   readonly failedCommand: string | null
   /** `null` when the command was killed or timed out rather than exiting. */
   readonly exitCode: number | null
@@ -37,8 +50,22 @@ export interface AdvanceInput {
 /** `task.verify_failed` wants an integer; a killed or timed-out command has no exit code at all. */
 const NO_EXIT_CODE = -1
 
-/** One log file per command, named so the order is readable in a directory listing. */
-function logPathFor(artifactDir: string, index: number, command: string): string {
+/**
+ * The statuses a verify result may act on. A task that is `cancelled`, already `done`, or already
+ * `failed` has left this loop, and a result arriving for it is stale by definition.
+ */
+const ADVANCEABLE: readonly string[] = ['running', 'verifying']
+
+/**
+ * One log file per command, per attempt.
+ *
+ * The attempt is in the path because the command list is the *same list* every attempt, so a path
+ * built from the command alone is the same path every attempt — the second run silently overwrites
+ * the first, and the first attempt's `Artifact` row then reports the second attempt's output. That
+ * is worse than losing it: M4/M5 render it as the earlier attempt with nothing to say otherwise.
+ * The index prefix keeps two commands apart when they slugify identically after truncation.
+ */
+function logPathFor(artifactDir: string, attempt: number, index: number, command: string): string {
   const slug =
     command
       .toLowerCase()
@@ -46,7 +73,7 @@ function logPathFor(artifactDir: string, index: number, command: string): string
       .replace(/^-+|-+$/g, '')
       .slice(0, 40)
       .replace(/-+$/, '') || 'command'
-  return join(artifactDir, `${String(index + 1).padStart(2, '0')}-${slug}.log`)
+  return join(artifactDir, `attempt-${String(attempt).padStart(2, '0')}`, `${String(index + 1).padStart(2, '0')}-${slug}.log`)
 }
 
 /**
@@ -77,6 +104,7 @@ export async function runVerify(input: RunVerifyInput): Promise<VerifyResult> {
     // having checked it. Reported with a null `failedCommand`, which is what tells `advance` this
     // is a misconfiguration rather than a failing test.
     return {
+      kind: 'not_configured',
       passed: false,
       failedCommand: null,
       exitCode: null,
@@ -86,29 +114,55 @@ export async function runVerify(input: RunVerifyInput): Promise<VerifyResult> {
     }
   }
 
-  mkdirSync(input.artifactDir, { recursive: true })
+  const attemptDir = join(input.artifactDir, `attempt-${String(task.attempt + 1).padStart(2, '0')}`)
 
-  for (const [index, command] of input.commands.entries()) {
-    const outcome = await runShellCommand({
-      command,
-      cwd: input.worktreePath,
-      timeoutMs: input.timeoutMs,
-    })
-    const failed = outcome.timedOut || outcome.signal !== null || outcome.code !== 0
-    const summary = failed
-      ? commandFailure(command, input.timeoutMs, outcome).message
-      : `command exit 0: ${command}\n${outcome.output}`.trim()
+  try {
+    mkdirSync(attemptDir, { recursive: true })
 
-    const path = logPathFor(input.artifactDir, index, command)
-    writeFileSync(path, `${summary}\n`)
-    await prisma.artifact.create({ data: { taskId: task.id, kind: 'verify', path } })
+    for (const [index, command] of input.commands.entries()) {
+      // No git identity in the environment, deliberately, where provisioning supplies one: setup
+      // is expected to be able to commit (§7.3 layer 1), verify is expected to *check* the work
+      // rather than change it. A verify command that needs to commit is doing something this
+      // milestone has not decided it may do.
+      const outcome = await runShellCommand({
+        command,
+        cwd: input.worktreePath,
+        timeoutMs: input.timeoutMs,
+      })
+      const failed = outcome.timedOut || outcome.signal !== null || outcome.code !== 0
+      const summary = failed
+        ? describeOutcome(command, input.timeoutMs, outcome)
+        : `command exit 0: ${command}\n${outcome.output}`.trim()
 
-    if (failed) {
-      return { passed: false, failedCommand: command, exitCode: outcome.code, output: summary }
+      // The log inherits `COMMAND_OUTPUT_LIMIT`'s tail bound even though a file has no column
+      // constraint. Deliberate: the bound is on the *capture*, not on the write, and lifting it
+      // would put an unbounded stream in memory -- the hazard Task 11's runner exists to avoid.
+      // The tail is the part that carries the error.
+      const path = logPathFor(input.artifactDir, task.attempt + 1, index, command)
+      writeFileSync(path, `${summary}\n`)
+      await prisma.artifact.create({ data: { taskId: task.id, kind: 'verify', path } })
+
+      if (failed) {
+        return { kind: 'failed', passed: false, failedCommand: command, exitCode: outcome.code, output: summary }
+      }
+    }
+  } catch (error) {
+    // A missing worktree, an unwritable artifact directory, no `/bin/sh`. Returned rather than
+    // thrown: `task.verifying` has already been emitted, and throwing from here left the task
+    // `running` with no terminal event and nothing to reconcile it -- silent, which §13 forbids.
+    // Spec §13's taxonomy has no row for this; §8 is amended to name it.
+    return {
+      kind: 'could_not_run',
+      passed: false,
+      failedCommand: null,
+      exitCode: null,
+      output: `verify could not run in ${input.worktreePath}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
     }
   }
 
-  return { passed: true, failedCommand: null, exitCode: null, output: '' }
+  return { kind: 'passed', passed: true, failedCommand: null, exitCode: null, output: '' }
 }
 
 /**
@@ -120,6 +174,16 @@ export async function runVerify(input: RunVerifyInput): Promise<VerifyResult> {
 export async function advance(input: AdvanceInput): Promise<void> {
   const task = await prisma.task.findUniqueOrThrow({ where: { id: input.taskId } })
   const workspaceId = task.workspaceId
+
+  // Only a task that is actually being worked on can be advanced. Two things fall out of one
+  // check: a stale result arriving after an operator cancelled the task cannot resurrect it to
+  // `done` and announce it, and a second call for the same result is a no-op rather than a second
+  // attempt charged and a duplicate terminal event written into an append-only log. "Harmless if
+  // called twice" here is a far cheaper property than "exactly once" at every call site.
+  if (!ADVANCEABLE.includes(task.status)) {
+    console.warn(`[verify] ignoring an advance for task ${task.id}, which is ${task.status}`)
+    return
+  }
 
   // `Task.branch` has two writers: the tick sets it at provisioning, this sets it on `done`. They
   // agree today and nothing enforces it. The branch is what a human merges, so finishing a task
@@ -133,10 +197,12 @@ export async function advance(input: AdvanceInput): Promise<void> {
     )
   }
 
-  if (input.result.passed) {
+  if (input.result.kind === 'passed') {
     await prisma.task.update({
       where: { id: task.id },
-      data: { status: 'done', branch: input.branch, activeRunId: null },
+      // The rejection is cleared: it is the *previous* attempt's, and a `done` task carrying one
+      // reads as a task that failed.
+      data: { status: 'done', branch: input.branch, activeRunId: null, lastRejectionReason: null },
     })
     await appendEvent({
       type: 'task.verify_passed',
@@ -155,47 +221,69 @@ export async function advance(input: AdvanceInput): Promise<void> {
     return
   }
 
-  if (input.result.failedCommand === null) {
-    // No command failed and yet it did not pass: there were none. That is a workspace
-    // misconfiguration, and it must not read as an ordinary failing test -- the operator's fix is
-    // to configure verify, not to look at the agent's work.
+  // Neither of these is the agent's doing, so neither costs it an attempt: charging one spends the
+  // task's budget on the orchestrator's problem, and with `maxAttempts` full agent runs per task it
+  // would spend the workspace's too.
+  if (input.result.kind !== 'failed') {
+    const guardrail = input.result.kind === 'not_configured' ? 'verify_not_configured' : 'verify_could_not_run'
+    await prisma.task.update({
+      where: { id: task.id },
+      data: { status: 'blocked', activeRunId: null },
+    })
+    if (input.result.kind === 'not_configured') {
+      // Workspace-wide: every task here will hit the same wall, and §13.1 already settled what to
+      // do about a misconfiguration that affects every run -- "failing runs one at a time while
+      // continuing to start new ones is the worst available behaviour". Same mechanism, so the
+      // operator's `clear-halt` retracts it the same way. Conditional, so the first reason stands.
+      await prisma.workspace.updateMany({
+        where: { id: workspaceId, haltedReason: null },
+        data: { haltedReason: input.result.output, haltedAt: new Date() },
+      })
+    }
     await appendEvent({
       type: 'guardrail.tripped',
       workspaceId,
       taskId: task.id,
       actor: 'system',
-      payload: { guardrail: 'verify_not_configured', detail: input.result.output },
+      payload: { guardrail, detail: input.result.output },
     })
-  } else {
-    await appendEvent({
-      type: 'task.verify_failed',
-      workspaceId,
-      taskId: task.id,
-      actor: 'system',
-      payload: { command: input.result.failedCommand, exitCode: input.result.exitCode ?? NO_EXIT_CODE },
-    })
+    return
   }
 
-  const counted = await prisma.task.update({
-    where: { id: task.id },
-    data: { attempt: { increment: 1 } },
+  await appendEvent({
+    type: 'task.verify_failed',
+    workspaceId,
+    taskId: task.id,
+    actor: 'system',
+    payload: { command: input.result.failedCommand ?? '', exitCode: input.result.exitCode ?? NO_EXIT_CODE },
   })
-  const exhausted = counted.attempt >= task.maxAttempts
 
-  await prisma.task.update({
-    where: { id: task.id },
-    data: {
-      status: exhausted ? 'failed' : 'rework',
-      activeRunId: null,
-      // The agent-facing channel: `buildPrompt` puts this in front of the next run as the thing to
-      // fix first. Verify output is exactly what it is for -- which is why Task 13 was corrected to
-      // stop writing infrastructure errors into it.
-      lastRejectionReason: input.result.output,
-    },
+  // Both writes in one transaction: a crash between them left the attempt spent, the status still
+  // `running` and `activeRunId` still set -- a task permanently busy with a burnt attempt, and
+  // §3.4's reconciliation looks for runs with dead pids, not for tasks stranded mid-advance.
+  const counted = await prisma.$transaction(async (tx) => {
+    const incremented = await tx.task.update({
+      where: { id: task.id },
+      data: { attempt: { increment: 1 } },
+    })
+    const exhausted = incremented.attempt >= task.maxAttempts
+    await tx.task.update({
+      where: { id: task.id },
+      data: {
+        status: exhausted ? 'failed' : 'rework',
+        activeRunId: null,
+        // The agent-facing channel: `buildPrompt` puts this in front of the next run as the thing
+        // to fix first. Verify output is exactly what it is for -- which is why Task 13 was
+        // corrected to stop writing infrastructure errors into it, and why the two branches above
+        // do not write it at all.
+        lastRejectionReason: input.result.output,
+      },
+    })
+    return { attempt: incremented.attempt, exhausted }
   })
 
   await appendEvent(
-    exhausted
+    counted.exhausted
       ? {
           type: 'task.failed',
           workspaceId,

@@ -43,6 +43,13 @@ const ORCHESTRATOR_GIT_IDENTITY = {
   email: 'orchestrator@aiteamos.local',
 } as const
 
+/**
+ * Task keys and slugs both become path segments and part of a branch name. `join()` collapses
+ * `..`, so an unchecked key of `../../../../tmp/x` places the worktree outside the repository
+ * entirely, and a value starting with `-` reaches git's argv where it parses as an option. Neither
+ * is hypothetical: `Task` has no key column, so whatever Task 13 passes is synthesized -- plausibly
+ * from a human-written title.
+ */
 const SAFE_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
 
 /**
@@ -168,6 +175,22 @@ function setupEnv(): NodeJS.ProcessEnv {
   }
 }
 
+/**
+ * Creates the task's worktree on its own branch off `baseBranch`, runs the workspace's setup
+ * commands inside it, and reports where it landed (spec §7.1, §7.2).
+ *
+ * The worktree is **not** cleaned up when a setup command fails. Spec §7.4 preserves worktrees on
+ * failure because they are the inspection surface, and a half-provisioned one is the case where
+ * that matters most: the operator's question is "how far did setup get", which a removed directory
+ * cannot answer. Task 15's sweep owns collection.
+ *
+ * Leftovers from a previous attempt are refused, not adopted, and refused as a
+ * {@link WorktreeExistsError} the caller can branch on -- see that class for why the decision is
+ * the caller's. One half-state is deliberately left to git: a `.git/worktrees/` metadata entry
+ * whose directory *and* branch are both gone still makes `worktree add` refuse, and it surfaces as
+ * git's own error. It is what a `git worktree prune` exists for and is not this function's to
+ * silently repair.
+ */
 export async function provisionWorktree(input: ProvisionWorktreeInput): Promise<WorktreeHandle> {
   for (const [field, value] of [
     ['taskKey', input.taskKey],

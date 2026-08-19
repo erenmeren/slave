@@ -246,6 +246,175 @@ describe('verify and advance', () => {
     expect((await task()).activeRunId).toBeNull()
   })
 
+  it("keeps each attempt's artifacts instead of overwriting the last one", async (): Promise<void> => {
+    writeFileSync(join(fixture.worktreePath, 'n'), 'ONE\n')
+    await runVerify({ ...base, commands: ['cat n; exit 1'] })
+
+    await prisma.task.update({ where: { id: fixture.taskId }, data: { attempt: 1 } })
+    writeFileSync(join(fixture.worktreePath, 'n'), 'TWO\n')
+    await runVerify({ ...base, commands: ['cat n; exit 1'] })
+
+    // The command list is the same every attempt, so a path built from the command alone is the
+    // same path every attempt. Two rows pointing at one file means the older row reports the newer
+    // attempt's output -- worse than losing it, because M4/M5 render it as the earlier attempt with
+    // nothing to signal otherwise. Spec §8 exists to stop exactly this.
+    const artifacts = await prisma.artifact.findMany({ where: { taskId: fixture.taskId } })
+    expect(artifacts).toHaveLength(2)
+    expect(new Set(artifacts.map((a) => a.path)).size).toBe(2)
+    const contents = artifacts.map((a) => readFileSync(a.path, 'utf8')).join('|')
+    expect(contents).toContain('ONE')
+    expect(contents).toContain('TWO')
+  })
+
+  it('does not tell the next agent to fix the workspace configuration', async (): Promise<void> => {
+    const result = await runVerify({ ...base, commands: [] })
+
+    await advance({ taskId: base.taskId, result, branch: 'aiteamos/TASK-001-x' })
+
+    // `lastRejectionReason` reaches the next run's prompt as the thing to fix first. An unconfigured
+    // verify list is not something an agent caused or can reach, and Task 13 was corrected for
+    // exactly this: nothing but what a verify command actually printed belongs in this field.
+    expect((await task()).lastRejectionReason).toBeNull()
+  })
+
+  it('does not spend an attempt, or keep scheduling, on a workspace that cannot verify', async (): Promise<void> => {
+    const result = await runVerify({ ...base, commands: [] })
+
+    await advance({ taskId: base.taskId, result, branch: 'aiteamos/TASK-001-x' })
+
+    // Every task in this workspace will hit the same wall, so charging each of them maxAttempts
+    // full agent runs before failing is the worst available behaviour -- §13.1 says so in as many
+    // words about the equivalent hook misconfiguration, and the remedy there is the same: stop
+    // scheduling and make a human look.
+    const t = await task()
+    expect(t.attempt).toBe(0)
+    expect(t.status).not.toBe('rework')
+    const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspaceId } })
+    expect(workspace.haltedReason).not.toBeNull()
+  })
+
+  it('is harmless when it runs twice for the same result', async (): Promise<void> => {
+    const result = await runVerify({ ...base, commands: ['false'] })
+
+    await advance({ taskId: base.taskId, result, branch: 'aiteamos/TASK-001-x' })
+    await advance({ taskId: base.taskId, result, branch: 'aiteamos/TASK-001-x' })
+
+    // "Exactly once per terminal run" at the call site is a much harder property than "harmless if
+    // called twice" here, and a second call otherwise double-counts the attempt -- enough to push a
+    // task over its own cap -- and writes a duplicate terminal event into an append-only log.
+    const t = await task()
+    expect(t.attempt).toBe(1)
+    const types = await eventTypesFor(fixture.workspaceId)
+    expect(types.filter((e) => e === 'task.rework')).toHaveLength(1)
+  })
+
+  it('refuses to finish a task that is no longer being worked on', async (): Promise<void> => {
+    const result = await runVerify({ ...base, commands: ['true'] })
+    await prisma.task.update({ where: { id: fixture.taskId }, data: { status: 'cancelled' } })
+
+    await advance({ taskId: base.taskId, result, branch: 'aiteamos/TASK-001-x' })
+
+    // A stale verify result arriving after an operator cancelled the task must not resurrect it to
+    // `done` and announce it -- the same class of thing the branch check exists for, one field over.
+    expect((await task()).status).toBe('cancelled')
+    expect(await eventTypesFor(fixture.workspaceId)).not.toContain('task.done')
+  })
+
+  it('reports a verify that could not run at all, rather than throwing into the caller', async (): Promise<void> => {
+    const result = await runVerify({ ...base, worktreePath: join(fixture.repoPath, 'no-such-dir'), commands: ['true'] })
+
+    // §13's rule is that no failure is silent. An unrunnable verify -- a missing worktree, an
+    // unwritable artifact directory -- previously threw after `task.verifying` had been emitted,
+    // leaving the task `running` with no terminal event and nothing to reconcile it.
+    expect(result.kind).toBe('could_not_run')
+    expect(result.passed).toBe(false)
+    expect(result.output).toMatch(/could not run/i)
+  })
+
+  it('does not charge an attempt for a verify that could not run', async (): Promise<void> => {
+    const result = await runVerify({ ...base, worktreePath: join(fixture.repoPath, 'no-such-dir'), commands: ['true'] })
+
+    await advance({ taskId: base.taskId, result, branch: 'aiteamos/TASK-001-x' })
+
+    // The agent did not cause a missing worktree and cannot fix one. Charging the attempt spends
+    // the task's budget on the orchestrator's own problem.
+    expect((await task()).attempt).toBe(0)
+  })
+
+  it('emits the transition sequence spec §8 names, in order', async (): Promise<void> => {
+    const pass = await runVerify({ ...base, commands: ['true'] })
+    await advance({ taskId: base.taskId, result: pass, branch: 'aiteamos/TASK-001-x' })
+
+    // `toContain` on a single value cannot see a missing event, a reordered one, or a duplicated
+    // one -- the whole catalogue this task produces could be deleted and every other assertion here
+    // would still pass.
+    expect(await eventTypesFor(fixture.workspaceId)).toEqual([
+      'task.verifying',
+      'task.verify_passed',
+      'task.done',
+    ])
+  })
+
+  it('emits the failing transition sequence, with the command and its exit code', async (): Promise<void> => {
+    const result = await runVerify({ ...base, commands: ['exit 3'] })
+    await advance({ taskId: base.taskId, result, branch: 'aiteamos/TASK-001-x' })
+
+    expect(await eventTypesFor(fixture.workspaceId)).toEqual([
+      'task.verifying',
+      'task.verify_failed',
+      'task.rework',
+    ])
+    const failed = await prisma.executionEvent.findFirstOrThrow({
+      where: { workspaceId: fixture.workspaceId, type: 'task_verify_failed' },
+    })
+    expect(failed.payload).toMatchObject({ command: 'exit 3', exitCode: 3 })
+  })
+
+  it('reports a timed-out command with no exit code rather than a made-up one', async (): Promise<void> => {
+    const result = await runVerify({ ...base, commands: ['sleep 30'], timeoutMs: 300 })
+    await advance({ taskId: base.taskId, result, branch: 'aiteamos/TASK-001-x' })
+
+    const failed = await prisma.executionEvent.findFirstOrThrow({
+      where: { workspaceId: fixture.workspaceId, type: 'task_verify_failed' },
+    })
+    // A killed command has no exit code. The sentinel has to be distinguishable from 0, which is
+    // the one value that would read as success.
+    expect((failed.payload as { exitCode: number }).exitCode).toBe(-1)
+  })
+
+  it('writes a log an operator can read: the command, how it ended, and what it printed', async (): Promise<void> => {
+    await runVerify({ ...base, commands: ['echo hello; exit 4'] })
+
+    const artifact = await prisma.artifact.findFirstOrThrow({ where: { taskId: fixture.taskId } })
+    const log = readFileSync(artifact.path, 'utf8')
+    expect(log).toContain('exit 4')
+    expect(log).toContain('echo hello; exit 4')
+    expect(log).toContain('hello')
+    expect(artifact.kind).toBe('verify')
+  })
+
+  it('keeps two commands that read alike in separate logs', async (): Promise<void> => {
+    const shared = 'echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+    await runVerify({ ...base, commands: [`${shared} one`, `${shared} two`] })
+
+    // The slug is truncated, so two long commands sharing a prefix produce the same slug. The index
+    // prefix is what keeps them apart -- untested until now, which is how it would have been
+    // "simplified" away.
+    const artifacts = await prisma.artifact.findMany({ where: { taskId: fixture.taskId } })
+    expect(new Set(artifacts.map((a) => a.path)).size).toBe(2)
+  })
+
+  it('clears the old rejection when the task finally passes', async (): Promise<void> => {
+    const failure = await runVerify({ ...base, commands: ['echo OLDFAILURE; exit 1'] })
+    await advance({ taskId: base.taskId, result: failure, branch: 'aiteamos/TASK-001-x' })
+    await prisma.task.update({ where: { id: fixture.taskId }, data: { status: 'running' } })
+
+    const pass = await runVerify({ ...base, commands: ['true'] })
+    await advance({ taskId: base.taskId, result: pass, branch: 'aiteamos/TASK-001-x' })
+
+    expect((await task()).lastRejectionReason).toBeNull()
+  })
+
   it('refuses to finish a task on a branch that is not the one it was worked on', async (): Promise<void> => {
     const result = await runVerify({ ...base, commands: ['true'] })
 

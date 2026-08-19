@@ -492,11 +492,31 @@ parent spec §10 remains a later sweep function rather than a later migration.
 `Workspace.verifyCommands` is an **ordered list** of shell commands, executed in the worktree after
 the run reaches a terminal state.
 
-- Each command's exit code and captured output is persisted as an `Artifact`. Without it, the
-  reason a task failed is lost, and M4/M5 have nothing to show.
-- Per-command timeout comes from the workspace guardrails.
+- Each command's exit code and captured output is persisted as an `Artifact`, **per attempt**. The
+  command list is the same list every attempt, so an artifact path derived from the command alone
+  is the same path every attempt: the second run overwrites the first, and the first attempt's row
+  then reports the second attempt's output. That is worse than losing it, because M4/M5 render it
+  as the earlier attempt with nothing to say otherwise.
+- Per-command timeout comes from the workspace guardrails. **`Workspace.runTimeoutMs` is reused**
+  for it, rather than adding a column: it is the same operator's answer to the same question ("how
+  long may one piece of work take here"), and a verify command that outlives the run it is checking
+  is already pathological. Revisit if a real workspace needs them decorrelated.
 - Task transitions: `task.verifying` → `task.verify_passed` → `task.done`, or
   `task.verify_failed` → `task.rework`.
+**Two outcomes are not the agent's fault, and neither costs it an attempt.**
+
+- **Verify is not configured** — an empty command list. §8's refusal is that this cannot pass, but
+  the task must not be sent round the rework loop for it either: every task in the workspace will
+  hit the same wall, so charging each of them `maxAttempts` full agent runs first is precisely the
+  "failing runs one at a time while continuing to start new ones" that §13.1 calls the worst
+  available behaviour. The task is `blocked`, and the **workspace halt of §13.1 is raised** using
+  the same `Workspace.haltedReason` mechanism, cleared the same way by the operator's `clear-halt`.
+- **Verify could not run** — a missing worktree, an unwritable artifact directory, no shell. This is
+  a class §13's taxonomy does not otherwise name, and it is the orchestrator's environment rather
+  than the workspace's configuration or the agent's work. It is reported rather than thrown, so
+  `task.verifying` is never left as the last word on a task, and the task is `blocked` for an
+  operator. It does not halt the workspace: the fault is this task's environment, not everyone's.
+
 - On failure, the captured output is **attached as input to the next run** through the existing
   `Task.lastRejectionReason` column — no new field is needed, and M2 already put it there for
   exactly this. A rework that does not tell the agent what broke is a re-roll, not a fix.
