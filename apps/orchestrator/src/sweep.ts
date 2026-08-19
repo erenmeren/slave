@@ -1,18 +1,12 @@
-import { type PrismaClient, prisma as sharedPrisma } from '@ai-team-os/db/client'
+import { prisma as db } from '@ai-team-os/db/client'
 import { runId as brandRunId, type RunId, type RunStatus, type WorkspaceId } from '@ai-team-os/domain'
 import { appendEvent } from '@ai-team-os/events'
+import { NON_TERMINAL_RUN_STATUSES } from './world.js'
 import type { AgentRuntimeAdapter } from '@ai-team-os/providers'
 
 export interface SweepDeps {
   readonly workspaceId: WorkspaceId
   readonly adapter: AgentRuntimeAdapter
-  /**
-   * Row reads and writes go through this; it defaults to the shared client and exists so a caller
-   * can prove a property across a process boundary. Events always go through `appendEvent`
-   * regardless — that is the single write gate (ADR 0003), and it now serialises appends
-   * process-wide (M2's `seq` ordering depends on it), so it is deliberately not parameterised.
-   */
-  readonly prisma?: PrismaClient
 }
 
 export interface SweepReport {
@@ -32,7 +26,7 @@ export interface SweepReport {
  * Excluding it completes §3.4 against Task 8's behaviour rather than contradicting it: the rule's
  * subject is a process that died *unexpectedly*, and a paused run's did not.
  */
-const ORPHANABLE: readonly RunStatus[] = ['starting', 'working', 'pause_requested', 'resuming', 'stopping']
+const ORPHANABLE: readonly RunStatus[] = NON_TERMINAL_RUN_STATUSES.filter((status: RunStatus) => status !== 'paused')
 
 /**
  * The statuses the per-tick sweep may act on. `stopping` is excluded here but not above: a run
@@ -41,7 +35,7 @@ const ORPHANABLE: readonly RunStatus[] = ['starting', 'working', 'pause_requeste
  * §3.2 spends three paragraphs on for the halt command. The orphan pass still fails it if its
  * process is gone, which is how a run that never finished dying is eventually concluded.
  */
-const SWEEPABLE: readonly RunStatus[] = ['starting', 'working', 'pause_requested', 'resuming']
+const SWEEPABLE: readonly RunStatus[] = ORPHANABLE.filter((status: RunStatus) => status !== 'stopping')
 
 /**
  * Whether the process is still there.
@@ -54,13 +48,43 @@ const SWEEPABLE: readonly RunStatus[] = ['starting', 'working', 'pause_requested
  * half catches it eventually — but it means "alive" here is "something with that pid is alive".
  */
 function isAlive(pid: number | null): boolean {
-  if (pid === null) return false
+  // 0 and negatives select a process *group*, not a process: `kill(0, 0)` signals the caller's own
+  // group and always succeeds, so a run recorded with pid 0 would be permanently unreconcilable.
+  if (pid === null || pid <= 0) return false
   try {
     process.kill(pid, 0)
     return true
-  } catch {
-    return false
+  } catch (error) {
+    // `EPERM` is positive evidence of life: POSIX returns it only for a process that *exists* but
+    // is not ours. Reading it as dead is the unsafe direction, and it is reachable the moment the
+    // daemon drops privileges or shares a pid namespace -- it would fail a run whose agent is very
+    // much alive, release its task, and start a second agent into the same worktree.
+    return (error as NodeJS.ErrnoException).code === 'EPERM'
   }
+}
+
+/**
+ * Whether a tick has run in this process.
+ *
+ * `reconcileOrphans` treats a non-terminal run with no pid as an orphan, because nothing will ever
+ * conclude it -- but that same shape exists legitimately for a few milliseconds inside every
+ * `startRun`, between creating the row and recording the pid. Reconciling while a tick is in
+ * flight therefore fails a run seconds from spawning, releases its task to `rework`, and the next
+ * tick adopts the live run's worktree with a second agent: two agents, one branch, which is the
+ * thing Task 13's atomic claim exists to prevent.
+ *
+ * Documented, that constraint was silent when broken. This makes it loud.
+ */
+let ticksHaveRun = false
+
+/** Called by `tick` on entry. Not for callers other than the tick itself. */
+export function noteTickRan(): void {
+  ticksHaveRun = true
+}
+
+/** For tests, which run many independent daemon lifetimes inside one process. */
+export function resetTickObservation(): void {
+  ticksHaveRun = false
 }
 
 /**
@@ -77,7 +101,13 @@ function isAlive(pid: number | null): boolean {
  * an operator most needs to see how far the run got.
  */
 export async function reconcileOrphans(deps: SweepDeps): Promise<number> {
-  const db = deps.prisma ?? sharedPrisma
+  if (ticksHaveRun) {
+    throw new Error(
+      'reconcileOrphans is startup-only: a tick has already run in this process, so a run that is ' +
+        'mid-spawn is indistinguishable from one this pass should fail',
+    )
+  }
+
 
   const runs = await db.agentRun.findMany({
     where: { status: { in: [...ORPHANABLE] }, task: { workspaceId: deps.workspaceId } },
@@ -102,7 +132,8 @@ export async function reconcileOrphans(deps: SweepDeps): Promise<number> {
     // No attempt is counted. A daemon that died is not the agent failing, and counting it would let
     // a crash-looping daemon exhaust every task's attempts and fail the lot — losing real work to
     // an infrastructure problem. Same reasoning as Task 14's non-agent verify outcomes.
-    await db.task.updateMany({
+    const task = await db.task.findUniqueOrThrow({ where: { id: run.taskId } })
+    const released = await db.task.updateMany({
       where: { id: run.taskId, activeRunId: run.id },
       data: { status: 'rework', activeRunId: null },
     })
@@ -121,6 +152,24 @@ export async function reconcileOrphans(deps: SweepDeps): Promise<number> {
             : `the run's process (pid ${run.pid}) is gone but the run never concluded: it was orphaned by a restart`,
       },
     })
+    if (released.count > 0) {
+      // §13: no failure is silent. `failToStart` and `advance` both announce a task they park in
+      // `rework`; a reader would otherwise see a run fail with no record of the task going back
+      // into the queue. Only when this pass is what released it.
+      await appendEvent({
+        type: 'task.rework',
+        workspaceId: deps.workspaceId,
+        taskId: run.taskId,
+        actor: 'system',
+        // `attempt + 1` is the number of the attempt that was interrupted: the counter records
+        // *completed* attempts and this pass deliberately does not increment it, but the run that
+        // died had started. The schema requires a positive number, which is also the honest one.
+        payload: {
+          reason: 'the run working this task was orphaned by a restart',
+          attempt: task.attempt + 1,
+        },
+      })
+    }
     failed += 1
   }
 
@@ -135,7 +184,6 @@ export async function reconcileOrphans(deps: SweepDeps): Promise<number> {
  * what a dead pid means.
  */
 export async function sweep(deps: SweepDeps): Promise<SweepReport> {
-  const db = deps.prisma ?? sharedPrisma
   const workspace = await db.workspace.findUniqueOrThrow({ where: { id: deps.workspaceId } })
   const runs = await db.agentRun.findMany({
     where: { status: { in: [...SWEEPABLE] }, task: { workspaceId: deps.workspaceId } },
@@ -146,34 +194,52 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
   const deadPids: RunId[] = []
 
   for (const run of runs) {
+    // The pid, not liveness, is what tells a dead run from one that is mid-spawn: Task 13 records
+    // the pid only after the adapter has returned a live handle, so a null pid here is a run about
+    // to start and no other case. Discriminating on it is what makes §3.3's dead-pid rule
+    // implementable from inside a running daemon rather than only at startup.
+    if (run.pid === null) continue
+
     if (!isAlive(run.pid)) {
       deadPids.push(brandRunId(run.id))
+      await concludeDeadRun(deps, run)
       continue
     }
 
+    const timedOutNow = Date.now() - run.startedAt.getTime() > workspace.runTimeoutMs
+    const overCapNow = run.toolCalls > workspace.maxToolCallsPerRun
+    if (!timedOutNow && !overCapNow) continue
+
     const breaches: string[] = []
-    if (Date.now() - run.startedAt.getTime() > workspace.runTimeoutMs) {
-      timedOut.push(brandRunId(run.id))
-      breaches.push(`it has been running longer than the workspace's ${workspace.runTimeoutMs}ms limit`)
-    }
-    if (run.toolCalls > workspace.maxToolCallsPerRun) {
-      overToolCap.push(brandRunId(run.id))
+    if (timedOutNow) breaches.push(`it has been running longer than the workspace's ${workspace.runTimeoutMs}ms limit`)
+    if (overCapNow) {
       breaches.push(`it has made ${run.toolCalls} tool calls, past the ceiling of ${workspace.maxToolCallsPerRun}`)
     }
-    if (breaches.length === 0) continue
 
-    // Cancel first, and let a failure make the event louder rather than swallowing it. A cancel
-    // that throws has silenced everything after it twice in this milestone already.
+    // Claim the run before cancelling it, exactly as the tick claims a task. `cancel` awaits the
+    // child's exit, so by the time it returns the pump has very plausibly written the terminal row
+    // -- and a run at its wall-clock limit is precisely the kind that is about to finish. An
+    // unguarded status write then rewrote `succeeded` back to `stopping`: the agent read busy
+    // forever, the task was never released, the failure streak never saw it, and a
+    // `guardrail.tripped` announced a cancellation of a run that had succeeded. Nothing recovered
+    // it in-process, because `stopping` is not swept.
+    const claimed = await db.agentRun.updateMany({
+      where: { id: run.id, status: { in: [...SWEEPABLE] } },
+      data: { status: 'stopping' },
+    })
+    if (claimed.count === 0) continue
+
+    if (timedOutNow) timedOut.push(brandRunId(run.id))
+    if (overCapNow) overToolCap.push(brandRunId(run.id))
+
+    // A failure here makes the event louder rather than silencing it -- the third time this
+    // milestone has needed saying.
     let cancelError: unknown = null
     try {
       await deps.adapter.cancel(brandRunId(run.id))
     } catch (error) {
       cancelError = error
     }
-
-    // `stopping` is what stops the next tick doing this again. The run is still non-terminal, so
-    // the agent stays busy while it dies -- which is correct: it has not released anything yet.
-    await db.agentRun.update({ where: { id: run.id }, data: { status: 'stopping' } })
 
     await appendEvent({
       type: 'guardrail.tripped',
@@ -183,7 +249,7 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
       runId: run.id,
       actor: 'system',
       payload: {
-        guardrail: timedOut.includes(brandRunId(run.id)) ? 'run_timeout' : 'tool_call_ceiling',
+        guardrail: timedOutNow ? 'run_timeout' : 'tool_call_ceiling',
         detail:
           `cancelling this run: ${breaches.join('; ')}` +
           (cancelError === null
@@ -194,4 +260,36 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
   }
 
   return { timedOut, overToolCap, deadPids }
+}
+
+/**
+ * Concludes a run whose process is gone, from inside a running daemon (spec §3.3).
+ *
+ * Guarded the same way the cancel path is: if the pump got there first, its terminal row stands.
+ */
+async function concludeDeadRun(
+  deps: SweepDeps,
+  run: { readonly id: string; readonly taskId: string; readonly agentId: string; readonly pid: number | null },
+): Promise<void> {
+  const now = new Date()
+  const concluded = await db.agentRun.updateMany({
+    where: { id: run.id, status: { in: [...SWEEPABLE] } },
+    data: { status: 'failed', terminalAt: now, endedAt: now },
+  })
+  if (concluded.count === 0) return
+
+  await db.task.updateMany({
+    where: { id: run.taskId, activeRunId: run.id },
+    data: { status: 'rework', activeRunId: null },
+  })
+
+  await appendEvent({
+    type: 'run.failed',
+    workspaceId: deps.workspaceId,
+    taskId: run.taskId,
+    agentId: run.agentId,
+    runId: run.id,
+    actor: 'system',
+    payload: { reason: `the run's process (pid ${run.pid}) is gone but the run never concluded` },
+  })
 }

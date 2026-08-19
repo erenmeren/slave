@@ -46,7 +46,7 @@ function statusesOfKind(kind: RunStatusKind): readonly RunStatus[] {
 }
 
 /** The statuses an `AgentRun` can still leave -- an agent holding one of these is busy. */
-const NON_TERMINAL_RUN_STATUSES: readonly RunStatus[] = statusesOfKind('non_terminal')
+export const NON_TERMINAL_RUN_STATUSES: readonly RunStatus[] = statusesOfKind('non_terminal')
 
 /**
  * The only statuses a run's `consecutiveFailures` streak can be counted from -- a run still in

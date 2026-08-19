@@ -14,6 +14,7 @@ import {
 import { appendEvent } from '@ai-team-os/events'
 import { type AgentRuntimeAdapter, writeSettingsFile } from '@ai-team-os/providers'
 import { pumpRun } from './pump.js'
+import { noteTickRan } from './sweep.js'
 import { loadWorld } from './world.js'
 import { WorktreeExistsError, adoptWorktree, provisionWorktree, type WorktreeHandle } from './worktree.js'
 
@@ -168,6 +169,11 @@ async function acquireWorktree(input: {
  * not ask for even by accident.
  */
 export async function tick(deps: TickDeps): Promise<TickReport> {
+  // Tells `reconcileOrphans` that its startup-only window has closed. A run that is mid-spawn --
+  // row created, pid not yet recorded -- is indistinguishable from one the orphan pass should fail,
+  // so a reconcile racing a tick fails a live run and hands its task to a second agent.
+  noteTickRan()
+
   const { world, skippedNoRole } = await loadWorld(deps.workspaceId)
   const commands = decide(world)
 
