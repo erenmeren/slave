@@ -82,6 +82,15 @@ function slugify(title: string): string {
 }
 
 /**
+ * An agent's git email local part. Falls back to the id rather than to `slugify`'s generic default,
+ * which would put the same address on commits by two different agents whose names carry no ASCII.
+ */
+function emailLocalPart(agent: { readonly id: string; readonly name: string }): string {
+  const slug = slugify(agent.name)
+  return slug === 'task' ? `agent-${agent.id.slice(0, 8)}` : slug
+}
+
+/**
  * The prompt a run starts from. On a rework this carries the previous attempt's rejection, which
  * is the whole point of spec §8's loop: the next run is supposed to act on why the last one failed,
  * and a rework that arrives without it is just a retry.
@@ -145,6 +154,7 @@ async function acquireWorktree(input: {
       repoPath: input.repoPath,
       taskKey: input.taskKey,
       branch: input.branch,
+      setupCommands: input.setupCommands,
     })
   }
 }
@@ -217,10 +227,26 @@ async function startRun(deps: TickDeps, taskId: TaskId, agentId: AgentId): Promi
   // The task leaves the startable set now, not after the run finishes: `decide()` treats `ready`
   // and `rework` as startable, so a task left in either would be handed to a second idle agent on
   // the very next tick, a second later.
-  await prisma.task.update({
-    where: { id: task.id },
+  //
+  // And it is *claimed*, not merely written: the status filter makes this the atomic step that
+  // decides which of two overlapping ticks owns the task. Provisioning is awaited inline and a
+  // setup command may run for minutes while the timer fires every second (spec §3.1), so two ticks
+  // loading the same world is the ordinary case rather than an exotic one -- and both are handed
+  // the same `start_run`, because neither's `AgentRun` row exists when the other loads. A blind
+  // write let both proceed, which put two live agents in one worktree on one branch. Done in the
+  // database rather than with an in-process lock because the CLI's `tick` (Task 16) can run against
+  // a live daemon, and a mutex in one process says nothing about the other.
+  const claimed = await prisma.task.updateMany({
+    where: { id: task.id, status: { in: ['ready', 'rework'] } },
     data: { status: 'running', activeRunId: run.id, branch },
   })
+  if (claimed.count === 0) {
+    // Lost the race. This is not a failed run -- nothing was attempted -- so it must not leave a
+    // `failed` row that reads as an attempt against the task, and must not touch the winner's task.
+    await prisma.agentRun.delete({ where: { id: run.id } })
+    return null
+  }
+
   await appendEvent({
     type: 'task.started',
     workspaceId: workspace.id,
@@ -230,6 +256,12 @@ async function startRun(deps: TickDeps, taskId: TaskId, agentId: AgentId): Promi
     actor: 'system',
     payload: { title: task.title },
   })
+
+  // Declared outside the `try` so the catch can tell "never spawned" from "spawned, then something
+  // else failed". Without that distinction a failure after the spawn abandons a live agent: the run
+  // row goes terminal with no pid, and §3.4's startup sweep only looks at *non-terminal* runs with
+  // dead pids, so nothing in the system can ever find that process again.
+  let handle: { readonly pid: number } | null = null
 
   try {
     const worktree = await acquireWorktree({
@@ -245,14 +277,14 @@ async function startRun(deps: TickDeps, taskId: TaskId, agentId: AgentId): Promi
     const { settingsPath, pauseFlagPath } = runFilePaths(workspace.repoPath, runId)
     writeSettingsFile({ settingsPath, hookPath: deps.hookPath })
 
-    const handle = await deps.adapter.start({
+    handle = await deps.adapter.start({
       runId,
       prompt: buildPrompt(task),
       worktreePath: worktree.path,
       pauseFlagPath,
       settingsPath,
       hookPath: deps.hookPath,
-      gitIdentity: { name: agent.name, email: `${slugify(agent.name)}@aiteamos.local` },
+      gitIdentity: { name: agent.name, email: `${emailLocalPart(agent)}@aiteamos.local` },
     })
 
     await prisma.agentRun.update({
@@ -260,6 +292,10 @@ async function startRun(deps: TickDeps, taskId: TaskId, agentId: AgentId): Promi
       data: { pid: handle.pid, worktreePath: worktree.path },
     })
 
+    // Only ever a *first* pump for this run: the tick never resumes anything, so the second
+    // `run.started` a resumed run would produce (T12's carry, spec §5.7 wants `run.resumed`) is
+    // not reachable from here. It becomes Task 16's when `resume` gains a caller.
+    //
     // Started, not awaited: the pump outlives this tick by design (spec §5.6), and awaiting it
     // would make one tick as long as one run -- the sweep, the reconcile pass and every other
     // workspace would queue behind a single agent thinking. The rejection handler is not optional:
@@ -283,7 +319,17 @@ async function startRun(deps: TickDeps, taskId: TaskId, agentId: AgentId): Promi
 
     return runId
   } catch (error) {
-    await failToStart(workspace.id, task, run.id, agent.id, error)
+    // Kill what was spawned before recording anything. An agent nobody can find is worse than a
+    // failed run, and this is the only moment its pid is still known.
+    let cancelError: unknown = null
+    if (handle !== null) {
+      try {
+        await deps.adapter.cancel(runId)
+      } catch (failure) {
+        cancelError = failure
+      }
+    }
+    await failToStart(workspace.id, task, run.id, agent.id, error, cancelError)
     return null
   }
 }
@@ -298,28 +344,48 @@ async function startRun(deps: TickDeps, taskId: TaskId, agentId: AgentId): Promi
  */
 async function failToStart(
   workspaceId: string,
-  task: { readonly id: string; readonly attempt: number; readonly maxAttempts: number },
+  task: { readonly id: string; readonly maxAttempts: number },
   runId: string,
   agentId: string,
   error: unknown,
+  cancelError: unknown = null,
 ): Promise<void> {
-  const reason = error instanceof Error ? error.message : String(error)
+  const reason =
+    (error instanceof Error ? error.message : String(error)) +
+    (cancelError === null
+      ? ''
+      : ` -- AND THE CANCEL FAILED (${String(cancelError)}): the process may still be running.`)
   const now = new Date()
-  const attempt = task.attempt + 1
-  const exhausted = attempt >= task.maxAttempts
 
   await prisma.agentRun.update({
     where: { id: runId },
     data: { status: 'failed', terminalAt: now, endedAt: now },
   })
-  await prisma.task.update({
-    where: { id: task.id },
-    data: {
-      status: exhausted ? 'failed' : 'rework',
-      attempt,
-      activeRunId: null,
-      lastRejectionReason: reason,
-    },
+
+  // Leftovers get `blocked`, not `rework`. `rework` is the exact precondition `acquireWorktree`
+  // tests for before it adopts, so parking the task there hands the *next* tick the tree this one
+  // just refused as unaccounted-for state -- the guard would hold for one tick and then invert
+  // itself. `blocked` is not startable, which is what "an operator has to look at this" means in a
+  // status.
+  const parked = error instanceof WorktreeExistsError ? 'blocked' : 'rework'
+
+  // Conditional on still owning the task, and incremented rather than assigned: a tick that lost
+  // the claim race must not roll back the winner's task row or burn an attempt against a run that
+  // is very much alive.
+  await prisma.task.updateMany({
+    where: { id: task.id, activeRunId: runId },
+    data: { attempt: { increment: 1 } },
+  })
+  const after = await prisma.task.findUniqueOrThrow({ where: { id: task.id } })
+  const exhausted = after.attempt >= task.maxAttempts
+  await prisma.task.updateMany({
+    where: { id: task.id, activeRunId: runId },
+    // `lastRejectionReason` is deliberately NOT written here. It is the agent-facing channel --
+    // `buildPrompt` puts it in front of the next run as the thing to fix first -- so an
+    // orchestrator-side failure landing in it both destroys the verify feedback §8 requires and
+    // instructs the next agent to go and fix a setup command it cannot see. The reason lives on the
+    // `AgentRun` row and in `run.failed`, which is where an operator looks for it.
+    data: { status: exhausted ? 'failed' : parked, activeRunId: null },
   })
 
   await appendEvent({
@@ -337,7 +403,17 @@ async function failToStart(
       workspaceId,
       taskId: task.id,
       actor: 'system',
-      payload: { reason: `could not start after ${attempt} attempts: ${reason}` },
+      payload: { reason: `could not start after ${after.attempt} attempts: ${reason}` },
+    })
+  } else if (parked === 'rework') {
+    // The task's own state change, not just the run's. Without it the log records that a run failed
+    // and says nothing about the task going back into the queue.
+    await appendEvent({
+      type: 'task.rework',
+      workspaceId,
+      taskId: task.id,
+      actor: 'system',
+      payload: { reason, attempt: after.attempt },
     })
   }
 }

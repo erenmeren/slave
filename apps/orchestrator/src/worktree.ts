@@ -1,5 +1,5 @@
 import { execFile, spawn } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import { promisify } from 'node:util'
@@ -73,6 +73,25 @@ const DRAIN_GRACE_MS = 200
  * from a human-written title.
  */
 const SAFE_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
+
+/**
+ * Makes `.aiteamos/` ignore itself inside the operator's repository.
+ *
+ * The orchestrator writes worktrees, settings files and pause flags into the workspace's own repo,
+ * and nothing in that repo asks for them. Without this, `git status` there shows the orchestrator's
+ * bookkeeping as untracked content forever, and a `git clean -fdx` -- a routine operator action --
+ * deletes every worktree directory while `.git/worktrees/` metadata survives, leaving
+ * `git worktree list` describing directories that no longer exist.
+ *
+ * A `.gitignore` *inside* the directory rather than a line appended to the repo's own: it needs no
+ * permission to edit a file the operator maintains, and it disappears with the directory.
+ */
+function ensureIgnored(repoPath: string): void {
+  const root = join(repoPath, '.aiteamos')
+  mkdirSync(root, { recursive: true })
+  const marker = join(root, '.gitignore')
+  if (!existsSync(marker)) writeFileSync(marker, '*\n')
+}
 
 export interface ProvisionWorktreeInput {
   readonly repoPath: string
@@ -344,6 +363,7 @@ export async function provisionWorktree(input: ProvisionWorktreeInput): Promise<
   // Absolute, because `path` becomes `AgentRun.worktreePath` and spec §5.7 respawns a resumed run
   // there -- from a process that may have restarted into a different working directory.
   const repoPath = resolve(input.repoPath)
+  ensureIgnored(repoPath)
   const path = join(repoPath, WORKTREE_ROOT, input.taskKey)
   const branch = `aiteamos/${input.taskKey}-${input.slug}`
 
@@ -388,6 +408,16 @@ export interface AdoptWorktreeInput {
   readonly repoPath: string
   readonly taskKey: string
   readonly branch: string
+  /**
+   * Re-run on adoption, not skipped. The commonest route to an adoptable worktree is a setup
+   * command that *failed* -- that is exactly what leaves a half-provisioned tree behind for §7.4 to
+   * preserve -- so adopting without re-running setup starts an agent in a tree with no
+   * `node_modules`, which then fails verify for reasons that have nothing to do with its work.
+   * Setup lists are expected to be idempotent (`npm ci` is), which is what makes re-running safe.
+   */
+  readonly setupCommands: readonly string[]
+  /** Per command, as in {@link ProvisionWorktreeInput}. */
+  readonly setupTimeoutMs?: number
 }
 
 /**
@@ -420,11 +450,23 @@ export async function adoptWorktree(input: AdoptWorktreeInput): Promise<Worktree
   if (registered === undefined) {
     throw new Error(`refusing to adopt ${path}: it is not a registered worktree of ${repoPath}`)
   }
-  if (!registered.includes(`\nbranch refs/heads/${input.branch}`)) {
+  // Line equality, not `includes`: `branch refs/heads/x-extra` contains `branch refs/heads/x`, so
+  // a substring test adopts a worktree checked out on a *longer-named* branch and then returns a
+  // handle asserting the branch it was asked about -- which the caller writes onto the task. That
+  // is precisely the confusion this function exists to prevent.
+  if (!registered.split('\n').includes(`branch refs/heads/${input.branch}`)) {
     throw new Error(
       `refusing to adopt ${path}: it is registered, but not on ${input.branch} -- ` +
         'adopting it would hand the run a branch that belongs to something else',
     )
+  }
+
+  const timeoutMs = input.setupTimeoutMs ?? DEFAULT_SETUP_TIMEOUT_MS
+  for (const command of input.setupCommands) {
+    const outcome = await runSetupCommand(command, path, timeoutMs)
+    if (outcome.timedOut || outcome.signal !== null || outcome.code !== 0) {
+      throw setupFailure(command, timeoutMs, outcome)
+    }
   }
 
   return { path, branch: input.branch, headCommit: await git(path, 'rev-parse', 'HEAD') }

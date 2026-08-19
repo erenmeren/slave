@@ -1,12 +1,12 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@ai-team-os/db'
 import { prisma } from '@ai-team-os/db/client'
 import { workspaceId as brandWorkspaceId } from '@ai-team-os/domain'
-import { ClaudeCodeAdapter } from '@ai-team-os/providers'
+import { ClaudeCodeAdapter, type AgentRuntimeAdapter, type StartRunInput } from '@ai-team-os/providers'
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { drainPumps, tick, type TickDeps } from '../../src/tick.js'
 
@@ -71,6 +71,41 @@ async function eventTypesFor(workspaceId: string): Promise<readonly DomainEventT
 }
 
 const keyOf = (taskId: string): string => `T-${taskId.slice(0, 8)}`
+
+interface Recorder {
+  readonly adapter: AgentRuntimeAdapter
+  readonly starts: StartRunInput[]
+  readonly cancelled: string[]
+}
+
+/**
+ * The real adapter with the three methods the tick uses observed, and `events()` optionally made to
+ * throw -- which is the cheapest way to reach the "something failed after the process was already
+ * spawned" path deterministically. Only those methods are implemented because only those are
+ * called; the cast is what says so out loud rather than stubbing four more to satisfy a type.
+ */
+function recordingAdapter(options: { readonly failEvents?: boolean } = {}): Recorder {
+  const inner = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'complete'] })
+  const starts: StartRunInput[] = []
+  const cancelled: string[] = []
+  const adapter = {
+    id: inner.id,
+    getCapabilities: () => inner.getCapabilities(),
+    start: async (input: StartRunInput) => {
+      starts.push(input)
+      return inner.start(input)
+    },
+    events: (runId: string) => {
+      if (options.failEvents === true) throw new Error('events exploded after the child was spawned')
+      return inner.events(runId as never)
+    },
+    cancel: async (runId: string) => {
+      cancelled.push(runId)
+      return inner.cancel(runId as never)
+    },
+  } as unknown as AgentRuntimeAdapter
+  return { adapter, starts, cancelled }
+}
 
 describe('tick', () => {
   let fixture: Fixture
@@ -345,6 +380,204 @@ describe('tick', () => {
 
     expect(second.started).toEqual([])
     expect(await prisma.agentRun.count()).toBe(1)
+  })
+
+  it('kills the agent it just spawned when the start fails after the spawn', async (): Promise<void> => {
+    const recorder = recordingAdapter({ failEvents: true })
+
+    const report = await tick({ ...deps, adapter: recorder.adapter })
+
+    // The window between `adapter.start()` returning and the row being updated is the one place a
+    // live child can be orphaned: the run row goes terminal with no pid, and §3.4's startup sweep
+    // only looks at NON-terminal runs with dead pids, so nothing in the system can ever find it
+    // again. Meanwhile the task goes back to the startable set and the next agent joins it in the
+    // same worktree.
+    expect(report.started).toEqual([])
+    expect(recorder.starts).toHaveLength(1)
+    expect(recorder.cancelled).toEqual([recorder.starts[0]?.runId])
+
+    const run = await prisma.agentRun.findFirstOrThrow()
+    expect(run.status).toBe('failed')
+  })
+
+  it('starts one run, not two, when two ticks overlap', async (): Promise<void> => {
+    await prisma.workspace.update({
+      where: { id: fixture.workspaceId },
+      data: { setupCommands: ['sleep 1'] },
+    })
+    const team = await prisma.team.findFirstOrThrow()
+    await prisma.agent.create({ data: { teamId: team.id, name: 'Blair', role: 'backend' } })
+
+    // Spec §3.1 runs this on a 1000ms timer while provisioning is awaited inline and a setup
+    // command may take minutes -- so overlapping ticks are the normal case on the first real
+    // workspace, not an edge one. Both load the same world and `decide()` hands both the same
+    // `start_run`.
+    const [first, second] = await Promise.all([tick(deps), tick(deps)])
+
+    expect([...first.started, ...second.started]).toHaveLength(1)
+    const runs = await prisma.agentRun.findMany()
+    expect(runs.filter((r) => r.status !== 'failed')).toHaveLength(1)
+
+    // And the loser must not rewrite the winner's task: an attempt burned, `activeRunId` cleared
+    // and the status back in the startable set is an invitation for a third tick to start a second
+    // agent in the same worktree on the same branch.
+    const task = await prisma.task.findFirstOrThrow()
+    expect(task.status).toBe('running')
+    expect(task.attempt).toBe(0)
+    expect(task.activeRunId).not.toBeNull()
+  })
+
+  it('does not turn the leftovers it refused into leftovers it will adopt', async (): Promise<void> => {
+    await tick(deps)
+    await drainPumps()
+    await prisma.agentRun.deleteMany({})
+    await prisma.task.update({
+      where: { id: fixture.taskId },
+      data: { status: 'ready', activeRunId: null },
+    })
+
+    await tick(deps) // refuses: a `ready` task's worktree is unaccounted-for state
+
+    // ...but if the refusal parks the task in `rework`, the next tick meets the guard's own
+    // precondition and adopts the very tree it just called wreckage. The property has to survive
+    // more than one tick to be a property at all.
+    const report = await tick(deps)
+
+    expect(report.started).toEqual([])
+  })
+
+  it('re-runs the setup commands when it adopts a worktree', async (): Promise<void> => {
+    const log = join(fixture.repoPath, 'setup-log')
+    await prisma.workspace.update({
+      where: { id: fixture.workspaceId },
+      data: { setupCommands: [`echo ran >> ${log}`] },
+    })
+
+    await tick(deps)
+    await drainPumps()
+    await prisma.agentRun.deleteMany({})
+    await prisma.task.update({
+      where: { id: fixture.taskId },
+      data: { status: 'rework', attempt: 1, activeRunId: null },
+    })
+
+    await tick(deps)
+
+    // The commonest route to adopt is a setup command that failed, because that is exactly what
+    // leaves a half-provisioned worktree behind (§7.4). Adopting without re-running setup starts an
+    // agent in a tree with no node_modules, which then fails verify for reasons that have nothing
+    // to do with its work.
+    expect(readFileSync(log, 'utf8').trim().split('\n')).toHaveLength(2)
+  })
+
+  it('keeps the verify feedback when an infrastructure failure interrupts a rework', async (): Promise<void> => {
+    await prisma.task.update({
+      where: { id: fixture.taskId },
+      data: { status: 'rework', attempt: 1, lastRejectionReason: 'verify failed: 3 assertions in cart.spec.ts' },
+    })
+    await prisma.workspace.update({
+      where: { id: fixture.workspaceId },
+      data: { setupCommands: ['exit 3'] },
+    })
+
+    await tick(deps)
+
+    // `lastRejectionReason` is the agent-facing channel: `buildPrompt` puts it in front of the next
+    // run as the thing to fix first. An orchestrator-side failure overwriting it both destroys the
+    // real feedback §8 requires and instructs the next agent to go and fix a setup command.
+    const task = await prisma.task.findFirstOrThrow()
+    expect(task.lastRejectionReason).toContain('cart.spec.ts')
+  })
+
+  it('puts the previous rejection in front of the next run', async (): Promise<void> => {
+    const recorder = recordingAdapter()
+    await prisma.task.update({
+      where: { id: fixture.taskId },
+      data: { status: 'rework', attempt: 1, lastRejectionReason: 'verify failed: cart totals are wrong' },
+    })
+
+    await tick({ ...deps, adapter: recorder.adapter })
+
+    // Spec §8's loop is the reason `lastRejectionReason` exists: a rework that does not tell the
+    // agent what broke is a re-roll, not a fix.
+    expect(recorder.starts[0]?.prompt).toContain('cart totals are wrong')
+  })
+
+  it('announces a halt again after the first one was cleared', async (): Promise<void> => {
+    const exhaust = async (): Promise<void> => {
+      await prisma.agentRun.create({
+        data: {
+          taskId: fixture.taskId,
+          agentId: fixture.agentId,
+          status: 'succeeded',
+          costUsd: 999,
+          terminalAt: new Date(),
+        },
+      })
+    }
+
+    await exhaust()
+    await tick(deps)
+    const afterFirst = (await eventTypesFor(fixture.workspaceId)).filter((t) => t === 'guardrail.tripped').length
+
+    // The operator raises the budget -- the §11 `clear-halt` shape of the same thing -- and the
+    // workspace halts again later. Tracking only the `false -> true` edge without ever re-arming
+    // means the second halt is never announced at all.
+    await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { budgetUsd: 100_000 } })
+    await tick(deps)
+    await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { budgetUsd: 1 } })
+    await tick(deps)
+
+    const afterThird = (await eventTypesFor(fixture.workspaceId)).filter((t) => t === 'guardrail.tripped').length
+    expect(afterThird).toBe(afterFirst + 1)
+  })
+
+  it('fails a task that has used its last attempt, and says so', async (): Promise<void> => {
+    await prisma.workspace.update({
+      where: { id: fixture.workspaceId },
+      data: { setupCommands: ['exit 3'] },
+    })
+    await prisma.task.update({
+      where: { id: fixture.taskId },
+      data: { attempt: 2, maxAttempts: 3 },
+    })
+
+    await tick(deps)
+
+    // The attempt cap is what stops a permanently unprovisionable task being handed to an agent
+    // every second forever. Off by one here gives every task one extra start and nothing notices.
+    const task = await prisma.task.findFirstOrThrow()
+    expect(task.attempt).toBe(3)
+    expect(task.status).toBe('failed')
+    expect(await eventTypesFor(fixture.workspaceId)).toContain('task.failed')
+  })
+
+  it("leaves the operator's own repository clean", async (): Promise<void> => {
+    await tick(deps)
+
+    // Everything the orchestrator writes lands under `.aiteamos/` in the workspace's repo -- the
+    // worktrees, the per-run settings file, the pause flag -- and none of it belongs to the
+    // operator. Left untracked it shows in every `git status` they run, and a routine
+    // `git clean -fdx` deletes the worktree directories while `.git/worktrees/` metadata survives.
+    expect(git(['status', '--porcelain'], fixture.repoPath)).toBe('')
+  })
+
+  it('records that the task started', async (): Promise<void> => {
+    await tick(deps)
+
+    // This is the only producer of `task.started` in the product, and M4 reads it.
+    expect(await eventTypesFor(fixture.workspaceId)).toContain('task.started')
+  })
+
+  it('drainPumps waits for the run it started', async (): Promise<void> => {
+    await tick(deps)
+    await drainPumps()
+
+    // The drain is the daemon's shutdown join point and the tests' guard against truncating a
+    // table under a live write. A drain that returns immediately is worse than none, because
+    // everything downstream believes it.
+    const run = await prisma.agentRun.findFirstOrThrow()
+    expect(['succeeded', 'failed']).toContain(run.status)
   })
 
   it('counts a roleless task instead of dropping it, and still starts the rest', async (): Promise<void> => {

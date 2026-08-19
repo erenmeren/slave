@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { isAbsolute, join, relative } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { SETUP_OUTPUT_LIMIT, WorktreeExistsError, provisionWorktree } from '../../src/worktree.js'
+import { SETUP_OUTPUT_LIMIT, WorktreeExistsError, adoptWorktree, provisionWorktree } from '../../src/worktree.js'
 
 function run(command: string, args: readonly string[], cwd: string): string {
   return execFileSync(command, [...args], { cwd, encoding: 'utf8' }).trim()
@@ -394,6 +394,40 @@ describe('provisionWorktree', () => {
     // `both` case above, which is the one the caller is most likely to adopt.
     expect(error).toBeInstanceOf(WorktreeExistsError)
     expect((error as WorktreeExistsError).reason).toBe('directory')
+  })
+
+  it('refuses to adopt a worktree checked out on a longer-named branch', async (): Promise<void> => {
+    await provisionWorktree({ ...base, slug: 'add-thing-extra' })
+
+    // `branch refs/heads/aiteamos/TASK-001-add-thing-extra` *contains*
+    // `branch refs/heads/aiteamos/TASK-001-add-thing`, so a substring test adopts the wrong branch
+    // and then returns a handle asserting the branch it was asked about -- which the caller writes
+    // onto the task. Reachable whenever the shorter branch exists (satisfying `both`) while the
+    // directory is registered on the longer one.
+    await expect(
+      adoptWorktree({
+        repoPath,
+        taskKey: 'TASK-001',
+        branch: 'aiteamos/TASK-001-add-thing',
+        setupCommands: [],
+      }),
+    ).rejects.toThrow(/not on aiteamos\/TASK-001-add-thing/)
+  })
+
+  it('adopts a worktree it really owns, and re-runs its setup', async (): Promise<void> => {
+    const wt = await provisionWorktree(base)
+
+    const adopted = await adoptWorktree({
+      repoPath,
+      taskKey: 'TASK-001',
+      branch: 'aiteamos/TASK-001-add-thing',
+      setupCommands: ['touch SETUP_RAN_AGAIN'],
+    })
+
+    expect(adopted.path).toBe(wt.path)
+    expect(adopted.branch).toBe(wt.branch)
+    // The commonest route to adopt is a setup command that failed, leaving a half-provisioned tree.
+    expect(existsSync(join(adopted.path, 'SETUP_RAN_AGAIN'))).toBe(true)
   })
 
   it('refuses a task key that would place the worktree outside the repository', async (): Promise<void> => {
