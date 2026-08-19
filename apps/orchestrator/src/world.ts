@@ -151,15 +151,16 @@ async function loadRunStats(
   })
 
   // Most recently concluded first, so the leading run of the list is the one the streak counts
-  // from. Nothing in this repo writes `AgentRun.terminalAt` yet -- the column exists for spec
-  // §7.4's worktree sweep, and today every concluded run carries `null` there. A bare
+  // from. `AgentRun.terminalAt` is written by the event pump as of Task 12 -- when this was first
+  // written nothing populated it, and the COALESCE below was defensive; it is now load-bearing for
+  // every run the pump concludes, while rows written before it still carry `null`. A bare
   // `ORDER BY "terminalAt" DESC` is therefore not merely imprecise, it is a trap: Postgres sorts
   // `DESC` as NULLS FIRST, so the moment a later task starts populating the column, every legacy
   // null row jumps to the front and *inverts* the streak -- three ancient failures ahead of
   // today's success reads as `consecutiveFailures: 3`, which trips the circuit breaker into a
   // permanent halt on a workspace that is succeeding. `COALESCE` states what is actually true: a
-  // run's position in the streak is when it concluded, and `startedAt` is the best available
-  // stand-in until `terminalAt` is populated. `startedAt DESC` then breaks ties.
+  // run's position in the streak is when it concluded, and `startedAt` is the stand-in for rows
+  // that predate the pump writing the column. `startedAt DESC` then breaks ties.
   //
   // Raw SQL rather than Prisma's `orderBy`, which cannot express a `COALESCE` sort key.
   //

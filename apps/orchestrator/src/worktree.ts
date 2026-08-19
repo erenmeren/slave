@@ -383,3 +383,49 @@ export async function provisionWorktree(input: ProvisionWorktreeInput): Promise<
 
   return { path, branch, headCommit }
 }
+
+export interface AdoptWorktreeInput {
+  readonly repoPath: string
+  readonly taskKey: string
+  readonly branch: string
+}
+
+/**
+ * Takes over a worktree a previous attempt of the same task left behind, after **verifying** that
+ * it is what it claims to be.
+ *
+ * This is the other half of {@link WorktreeExistsError}: `provisionWorktree` refuses leftovers
+ * because it cannot know why they exist, and the caller — which does — comes back here when the
+ * answer is "the previous run of this task". A task that fails verify moves to `rework`, and the
+ * branch is where that attempt's work lives, so continuing on it is the point rather than a
+ * concession.
+ *
+ * The verification is the reason this function exists at all rather than the caller simply reusing
+ * the path. `existsSync` matches any directory; only `git worktree list` can say that *this* path
+ * is a registered worktree checked out on *that* branch. Adopting an unverified directory would
+ * hand the agent a tree with someone else's contents and no branch behind it.
+ *
+ * It lives here rather than at the call site because it needs {@link WORKTREE_ROOT}, the branch
+ * naming rule and the identity-scoped `git` wrapper — re-deriving those one module over is how a
+ * second source of truth for a path starts.
+ */
+export async function adoptWorktree(input: AdoptWorktreeInput): Promise<WorktreeHandle> {
+  const repoPath = resolve(input.repoPath)
+  const path = join(repoPath, WORKTREE_ROOT, input.taskKey)
+
+  // `--porcelain` emits one blank-line-separated record per worktree, each a set of `key value`
+  // lines: `worktree <path>`, `HEAD <sha>`, and `branch refs/heads/<name>` (absent when detached).
+  const records = (await git(repoPath, 'worktree', 'list', '--porcelain')).split('\n\n')
+  const registered = records.find((record) => record.startsWith(`worktree ${path}\n`))
+  if (registered === undefined) {
+    throw new Error(`refusing to adopt ${path}: it is not a registered worktree of ${repoPath}`)
+  }
+  if (!registered.includes(`\nbranch refs/heads/${input.branch}`)) {
+    throw new Error(
+      `refusing to adopt ${path}: it is registered, but not on ${input.branch} -- ` +
+        'adopting it would hand the run a branch that belongs to something else',
+    )
+  }
+
+  return { path, branch: input.branch, headCommit: await git(path, 'rev-parse', 'HEAD') }
+}
