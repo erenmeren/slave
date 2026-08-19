@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { prisma } from '@ai-team-os/db/client'
-import type { TaskId } from '@ai-team-os/domain'
+import { taskId as brandTaskId, type RunId, type TaskId } from '@ai-team-os/domain'
 import { appendEvent } from '@ai-team-os/events'
 import { describeOutcome, runShellCommand } from './shell.js'
 
@@ -163,6 +163,49 @@ export async function runVerify(input: RunVerifyInput): Promise<VerifyResult> {
   }
 
   return { kind: 'passed', passed: true, failedCommand: null, exitCode: null, output: '' }
+}
+
+/**
+ * The reaction spec §3.2 leaves outside `decide()`: a run that concluded `succeeded` has work to
+ * judge, so verify runs on it and the task advances. Called by whoever awaited the run's pump —
+ * the tick's per-run chain for fresh runs, `resume` for continuations — because the pump owns the
+ * *run* row and this owns what happens to the *task* once the run is done with it.
+ *
+ * Only a `succeeded` run verifies. A `failed` run's own path already announced it and verify would
+ * judge a tree nobody claims is finished; a `stopped` run was concluded by an operator whose
+ * decision stands; a `paused` run is not terminal at all. The guard reads the row rather than
+ * trusting the caller's outcome, because the pump hands back its outcome even when something else
+ * — a cancel, the sweep — concluded the run first, and their decision is the one that counts.
+ */
+export async function verifyConcludedRun(runId: RunId): Promise<void> {
+  const run = await prisma.agentRun.findUnique({
+    where: { id: runId },
+    include: { task: { include: { workspace: true } } },
+  })
+  if (run === null || run.status !== 'succeeded') return
+
+  const { task } = run
+  if (run.worktreePath === null || task.branch === null) {
+    // Unreachable from the tick, which writes both before the pump ever starts. Warned rather than
+    // silent (§13), and deliberately not advanced: there is no worktree to judge, and advancing a
+    // task whose work nothing looked at is the exact failure §8 exists to prevent.
+    console.warn(
+      `[verify] run ${run.id} succeeded but has no ${run.worktreePath === null ? 'worktree' : 'branch'} recorded: not verifying`,
+    )
+    return
+  }
+
+  const result = await runVerify({
+    taskId: brandTaskId(task.id),
+    worktreePath: run.worktreePath,
+    // Outside the worktree — that is what the agent commits from — and per task, the same layout
+    // verify's own tests pin.
+    artifactDir: join(task.workspace.repoPath, '.aiteamos', 'artifacts', task.id),
+    commands: task.workspace.verifyCommands,
+    // Spec §8 reuses the run's ceiling: the same operator's answer to the same question.
+    timeoutMs: task.workspace.runTimeoutMs,
+  })
+  await advance({ taskId: brandTaskId(task.id), result, branch: task.branch })
 }
 
 /**

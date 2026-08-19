@@ -418,13 +418,17 @@ describe('tick', () => {
     const runs = await prisma.agentRun.findMany()
     expect(runs.filter((r) => r.status !== 'failed')).toHaveLength(1)
 
-    // And the loser must not rewrite the winner's task: an attempt burned, `activeRunId` cleared
-    // and the status back in the startable set is an invitation for a third tick to start a second
-    // agent in the same worktree on the same branch.
+    // And the loser must not rewrite the winner's task. Asserted after the drain rather than at
+    // the moment the ticks return, because the winner's pump may legitimately conclude and verify
+    // at any point after -- `running` here would be a race, not a property. Every shape the loser
+    // could leave is still visible in the final state: a rewrite to `ready`/`rework` makes
+    // `advance` refuse and the task never reaches `done`, a burned attempt shows in the counter,
+    // and a lingering `activeRunId` shows as the run `advance` would have cleared.
+    await drainPumps()
     const task = await prisma.task.findFirstOrThrow()
-    expect(task.status).toBe('running')
+    expect(task.status).toBe('done')
     expect(task.attempt).toBe(0)
-    expect(task.activeRunId).not.toBeNull()
+    expect(task.activeRunId).toBeNull()
   })
 
   it('does not turn the leftovers it refused into leftovers it will adopt', async (): Promise<void> => {

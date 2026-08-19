@@ -15,6 +15,7 @@ import { runDaemon } from './daemon.js'
 import { NON_TERMINAL_RUN_STATUSES } from './world.js'
 import { pumpRun } from './pump.js'
 import { drainPumps, runFilePaths, tick } from './tick.js'
+import { verifyConcludedRun } from './verify.js'
 
 const USAGE = `usage: orchestrator <command> [options]
 
@@ -386,6 +387,11 @@ export async function main(argv: readonly string[]): Promise<number> {
       })
       process.stdout.write(`resumed ${run.id} as pid ${handle.pid}\n`)
       await pumped
+      // The same reaction the tick chains onto its pumps: a resumed run's completion is a
+      // completion like any other, and a success that left the task `running` forever would make
+      // pause/resume a trap rather than a control. This process awaited the stream, so it is the
+      // one that knows the run concluded.
+      await verifyConcludedRun(brandRunId(run.id))
       return 0
     }
 

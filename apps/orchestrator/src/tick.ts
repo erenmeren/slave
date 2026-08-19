@@ -15,6 +15,7 @@ import { appendEvent } from '@ai-team-os/events'
 import { type AgentRuntimeAdapter, writeSettingsFile } from '@ai-team-os/providers'
 import { pumpRun } from './pump.js'
 import { noteTickRan } from './sweep.js'
+import { verifyConcludedRun } from './verify.js'
 import { loadWorld } from './world.js'
 import { WorktreeExistsError, adoptWorktree, provisionWorktree, type WorktreeHandle } from './worktree.js'
 
@@ -324,6 +325,12 @@ async function startRun(deps: TickDeps, taskId: TaskId, agentId: AgentId): Promi
         gitIdentity: { name: agent.name, email: `${emailLocalPart(agent)}@aiteamos.local` },
       },
     })
+      // Verify is chained onto the pump rather than put inside it: the pump owns the *run* row, and
+      // what happens to the *task* after a run succeeds (spec §8) is its caller's reaction — the
+      // same §3.2 boundary that keeps all of this out of `decide()`. Being part of the chain means
+      // `drainPumps` waits for the verdict too, so a one-shot `tick` cannot exit between a run
+      // succeeding and its task advancing.
+      .then(() => verifyConcludedRun(runId))
       .catch((error: unknown): void => {
         console.error(`[tick] pump for run ${runId} failed:`, error)
       })
