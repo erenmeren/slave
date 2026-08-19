@@ -1,9 +1,10 @@
 import { spawn, type ChildProcess } from 'node:child_process'
-import { rm, writeFile } from 'node:fs/promises'
+import { rm, stat, writeFile } from 'node:fs/promises'
 import { isAbsolute } from 'node:path'
 import { createInterface } from 'node:readline'
 import type { RunId } from '@ai-team-os/domain'
 import type { RunOutcome, RuntimeEvent } from '../types.js'
+import type { Checkpoint } from './checkpoint.js'
 import { claudeFlags, preflightGate } from './flags.js'
 import { isPreToolUseHookResponseLine, parseStreamLine } from './stream.js'
 
@@ -118,6 +119,41 @@ export interface AgentRuntimeAdapter {
    * milestone's measurements exist to prevent.
    */
   awaitPause(runId: RunId, options: { readonly deadlineMs: number }): Promise<PauseOutcome>
+}
+
+/**
+ * `resume` (Task 9), declared here as a third declaration-merged block for the same reason the
+ * pause block above is separate from Task 6's -- so the diff that added it stays legible against
+ * this interface's own history.
+ */
+export interface AgentRuntimeAdapter {
+  /**
+   * Clears `checkpoint.pauseFlagPath`, **verifies it is actually absent**, then spawns
+   * `claude -p "<prompt>" --resume <checkpoint.sessionId>` in `checkpoint.worktreePath`, with the
+   * same `--settings` and permission posture the paused run used (ADR 0001 §5.7/§6). The
+   * verification is the point of the step, not ceremony: a flag file that survives the clear
+   * attempt makes the hook deny the resumed run's first tool call, and every one after it -- a
+   * resumed run that looks, from the outside, exactly like a run stuck in a pause loop, with no
+   * error anywhere to say why. `resume` never rewrites `checkpoint.sessionId` (ADR 0001 §5: a
+   * plain `--resume` reports the same UUID) and never passes `--fork-session`, which would mint a
+   * new one.
+   *
+   * `queuedInstruction` becomes the resume prompt verbatim when supplied. The CLI has no notion
+   * that a resume follows a pause -- it treats the prompt as an ordinary next turn (ADR 0001 §6).
+   * When `null` (no instruction queued), a generic continuation prompt is substituted: `-p` still
+   * needs *some* text in headless mode, and there is no queued operator instruction to supply it.
+   *
+   * Requires the same adapter instance to have already `start()`-ed `runId` at some point in its
+   * lifetime: `resume` reuses that run's original `settingsPath`, `hookPath`, and `gitIdentity`
+   * (untouched by `queuedInstruction`) rather than re-deriving them from `checkpoint`, which does
+   * not carry them -- deliberately, since they are workspace-provisioning constants, not run
+   * state that changes across a pause. Rejects for an unknown `runId` rather than silently
+   * starting an untracked process (matching `cancel`/`requestPause`'s existing behaviour for the
+   * same case), the same way `canResumeSession: false` on a degraded provider means `resume`
+   * itself must reject rather than silently starting a fresh session (ADR 0001, "Degradation path
+   * if a provider lacks hooks").
+   */
+  resume(runId: RunId, checkpoint: Checkpoint, queuedInstruction: string | null): Promise<RunHandle>
 }
 
 export interface ClaudeCodeAdapterOptions {
@@ -262,6 +298,16 @@ interface RunState {
    * (see `rawTerminalPayload`); it is not part of `AgentRuntimeAdapter`.
    */
   rawResultPayload: Record<string, unknown> | undefined
+  /**
+   * The `StartRunInput` this run's current process was actually spawned with -- from `start()`
+   * the first time, or from the `StartRunInput`-shaped object `resume()` builds each time after.
+   * `resume()` reads `settingsPath`, `hookPath`, and `gitIdentity` back off this the same way
+   * `rawTerminalPayload` reads the raw result payload back off `RunState`: workspace-provisioning
+   * constants that do not change across a pause, and that `Checkpoint` deliberately does not
+   * carry (see the `resume` docstring above), so the only place left to recover them from is the
+   * adapter's own memory of the run it already started.
+   */
+  readonly startInput: StartRunInput
 }
 
 /**
@@ -307,6 +353,46 @@ function buildChildEnv(input: StartRunInput): NodeJS.ProcessEnv {
     GIT_COMMITTER_EMAIL: input.gitIdentity.email,
     AITEAMOS_PAUSE_FLAG: input.pauseFlagPath,
   }
+}
+
+/**
+ * Substituted for `resume()`'s `-p` prompt when `queuedInstruction` is `null` -- headless mode
+ * still needs *some* prompt text, and there is no queued operator instruction to supply it. Its
+ * exact wording is not part of the resume contract (ADR 0001 does not specify one; only that a
+ * queued instruction, when present, becomes the prompt verbatim), only that resuming without a
+ * queued instruction does not crash or silently pass an empty string.
+ */
+const DEFAULT_RESUME_PROMPT = 'Continue the paused run.'
+
+/**
+ * Clears `flagPath` and verifies it is actually gone -- the load-bearing half of `resume()`'s
+ * contract (ADR 0001 §5/§6, findings 3.10, 4.2). A plain `rm` succeeding is not itself proof the
+ * flag is absent: `rm(path, { force: true })` without `recursive: true` throws rather than
+ * removing a directory sitting at `flagPath` (an anomalous but real way a "flag file" can fail to
+ * be a plain file), and `force` only ever suppresses the file-already-missing case. Swallowing
+ * whatever `rm` throws here and treating the following `stat` as the single source of truth is
+ * simpler than trying to classify every way removal can fail, and just as safe: either the flag
+ * is gone, in which case nothing above needed to distinguish *why* `rm` succeeded or failed to
+ * matter, or it is still there, in which case this throws regardless of that reason.
+ */
+async function clearAndVerifyPauseFlagAbsent(flagPath: string, runId: RunId): Promise<void> {
+  try {
+    await rm(flagPath, { force: true })
+  } catch {
+    // Deliberately swallowed -- see the function comment. The `stat` below decides.
+  }
+  try {
+    await stat(flagPath)
+  } catch (error) {
+    if (isRecord(error) && error['code'] === 'ENOENT') return // confirmed absent -- safe to resume
+    throw error
+  }
+  throw new Error(
+    `ClaudeCodeAdapter: refusing to resume run ${runId} -- its pause flag at ${flagPath} still exists ` +
+      'after an attempt to clear it. Resuming with the flag present would have the hook deny every ' +
+      'tool call the resumed run attempts, producing a run that looks like a pause loop rather than ' +
+      'a resumed one.',
+  )
 }
 
 /** ADR 0001's measured `ProviderCapabilities` for the Claude Code adapter, verbatim. */
@@ -363,11 +449,38 @@ export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
 
   private spawnRun(input: StartRunInput): Promise<RunHandle> {
     const args = [...this.extraArgs, ...claudeFlags({ settingsPath: input.settingsPath }), '-p', input.prompt]
+    return this.spawnChild({
+      runId: input.runId,
+      args,
+      cwd: input.worktreePath,
+      env: buildChildEnv(input),
+      pauseFlagPath: input.pauseFlagPath,
+      startInput: input,
+    })
+  }
 
+  /**
+   * The child-process bootstrapping both `start()` (via `spawnRun` above) and `resume()` share --
+   * spawn, wire up a fresh `RunState` (fresh `PauseState` included: a resumed run is pausable
+   * again, independently of whatever pause already happened to reach it), and pump stdout into
+   * `events()`. Parameterized on `args`/`cwd`/`env` rather than on `StartRunInput` directly so
+   * `resume()` can supply its own (same worktree, same settings and posture, plus
+   * `--resume <sessionId>`) without duplicating everything below it. `spec.startInput` is
+   * recorded on the resulting `RunState` regardless of which caller this is -- see that field's
+   * own docstring for why a future `resume()` call needs it.
+   */
+  private spawnChild(spec: {
+    readonly runId: RunId
+    readonly args: readonly string[]
+    readonly cwd: string
+    readonly env: NodeJS.ProcessEnv
+    readonly pauseFlagPath: string
+    readonly startInput: StartRunInput
+  }): Promise<RunHandle> {
     return new Promise<RunHandle>((resolve, reject) => {
-      const child = spawn(this.command, args, {
-        cwd: input.worktreePath,
-        env: buildChildEnv(input),
+      const child = spawn(this.command, spec.args, {
+        cwd: spec.cwd,
+        env: spec.env,
         stdio: ['ignore', 'pipe', 'pipe'],
       })
 
@@ -376,7 +489,7 @@ export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
         child,
         queue,
         pause: {
-          flagPath: input.pauseFlagPath,
+          flagPath: spec.pauseFlagPath,
           requestedAt: undefined,
           killTriggered: false,
           sawToolCallSincePause: false,
@@ -385,6 +498,7 @@ export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
         },
         runEnded: false,
         rawResultPayload: undefined,
+        startInput: spec.startInput,
       }
       let settled = false
 
@@ -404,7 +518,7 @@ export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
         if (!settled) {
           settled = true
           reject(
-            new Error(`ClaudeCodeAdapter: failed to spawn "${this.command}" for run ${input.runId}: ${error.message}`),
+            new Error(`ClaudeCodeAdapter: failed to spawn "${this.command}" for run ${spec.runId}: ${error.message}`),
           )
           return
         }
@@ -420,7 +534,7 @@ export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
         // platform where `pid` is unset with no 'error' event forthcoming.
         if (!settled) {
           settled = true
-          reject(new Error(`ClaudeCodeAdapter: failed to spawn "${this.command}" for run ${input.runId}`))
+          reject(new Error(`ClaudeCodeAdapter: failed to spawn "${this.command}" for run ${spec.runId}`))
         }
         return
       }
@@ -431,11 +545,11 @@ export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
         // here instead of readline receiving a value it was never typed
         // to accept.
         settled = true
-        reject(new Error(`ClaudeCodeAdapter: run ${input.runId} has no stdout pipe`))
+        reject(new Error(`ClaudeCodeAdapter: run ${spec.runId} has no stdout pipe`))
         return
       }
 
-      this.runs.set(input.runId, state)
+      this.runs.set(spec.runId, state)
 
       // stderr is drained, not surfaced as a RuntimeEvent: the normalized
       // vocabulary comes entirely from stdout's NDJSON stream (spec §5.4).
@@ -475,7 +589,7 @@ export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
       lines.once('close', () => queue.close())
 
       settled = true
-      resolve({ runId: input.runId, pid: child.pid })
+      resolve({ runId: spec.runId, pid: child.pid })
     })
   }
 
@@ -504,12 +618,26 @@ export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
    * ADR 0001 calls "pause requested, run finished anyway" a normal outcome
    * regardless of which side of the request the finish landed on, so this
    * resolves the same way the in-flight case does: `finished_first`.
+   *
+   * Guarded by `!state.pause.killTriggered`, the same property
+   * `handlePauseTracking` enforces structurally with its own early return
+   * (see that method's comment): once the kill has fired, `paused` is the
+   * outcome, full stop, and no later resolve site -- inside that handler or,
+   * as this one is, outside it -- may override it. This site is latent, not
+   * live: `handlePauseTracking`'s kill branch resolves `'paused'` only after
+   * `terminateChild`'s `child.once('exit', ...)` fires, on a later
+   * macrotask than this synchronous call, so by the time `state.runEnded`
+   * could even be observed true here the kill's own resolution has already
+   * always won the race in every case exercised so far. That is exactly
+   * what makes it a hole rather than a bug already caught by a test --
+   * closed on the same reasoning as the guarded branches, not because it
+   * was ever seen to fire.
    */
   async requestPause(runId: RunId, reason: string): Promise<void> {
     const state = this.mustGetRun(runId)
     await writeFile(state.pause.flagPath, reason, 'utf8')
     state.pause.requestedAt = Date.now()
-    if (state.runEnded) {
+    if (state.runEnded && !state.pause.killTriggered) {
       state.pause.outcome.resolve('finished_first')
     }
   }
@@ -532,6 +660,56 @@ export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
     } finally {
       await rm(state.pause.flagPath, { force: true })
     }
+  }
+
+  /**
+   * See the `AgentRuntimeAdapter.resume` docstring for the contract. This implementation:
+   *
+   * 1. Clears and verifies `checkpoint.pauseFlagPath` (`clearAndVerifyPauseFlagAbsent` below) --
+   *    the load-bearing step, first, before anything else is even looked up.
+   * 2. Looks up this run's `startInput` (from the last `start()` or `resume()` against this
+   *    `runId`) for `settingsPath`, `hookPath`, and `gitIdentity` -- rejecting here, via
+   *    `mustGetRun`, for an unknown `runId` rather than silently starting an untracked process.
+   * 3. Builds a fresh `StartRunInput`-shaped object: the checkpoint's worktree and pause-flag
+   *    path (its authoritative view of "where this run currently lives"), the resume prompt in
+   *    place of the original one, and everything else carried forward unchanged -- then spawns it
+   *    through the exact same `spawnChild` pipeline `start()` uses, with `--resume <sessionId>`
+   *    appended.
+   */
+  async resume(runId: RunId, checkpoint: Checkpoint, queuedInstruction: string | null): Promise<RunHandle> {
+    await clearAndVerifyPauseFlagAbsent(checkpoint.pauseFlagPath, runId)
+
+    const priorStartInput = this.mustGetRun(runId).startInput
+    const resumedInput: StartRunInput = {
+      runId,
+      prompt: queuedInstruction ?? DEFAULT_RESUME_PROMPT,
+      worktreePath: checkpoint.worktreePath,
+      pauseFlagPath: checkpoint.pauseFlagPath,
+      settingsPath: priorStartInput.settingsPath,
+      hookPath: priorStartInput.hookPath,
+      gitIdentity: priorStartInput.gitIdentity,
+    }
+
+    const args = [
+      ...this.extraArgs,
+      ...claudeFlags({ settingsPath: resumedInput.settingsPath }),
+      '-p',
+      resumedInput.prompt,
+      // Never `--fork-session`: that would mint a new session id on resume
+      // (ADR 0001 §3, §5, findings 2.3). `--resume` alone reports the same
+      // one `checkpoint.sessionId` already carries.
+      '--resume',
+      checkpoint.sessionId,
+    ]
+
+    return this.spawnChild({
+      runId,
+      args,
+      cwd: resumedInput.worktreePath,
+      env: buildChildEnv(resumedInput),
+      pauseFlagPath: resumedInput.pauseFlagPath,
+      startInput: resumedInput,
+    })
   }
 
   /**

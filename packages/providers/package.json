@@ -8,5 +8,8 @@
   "dependencies": {
     "@ai-team-os/domain": "*",
     "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@ai-team-os/db": "*"
   }
 }
