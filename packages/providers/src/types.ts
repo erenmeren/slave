@@ -24,7 +24,7 @@ export interface RunOutcome {
  */
 export type RuntimeEvent =
   | { readonly kind: 'session_started'; readonly sessionId: string }
-  | { readonly kind: 'tool_call'; readonly toolUseId: string; readonly toolName: string }
+  | { readonly kind: 'tool_call'; readonly toolUseId: string; readonly toolName: string; readonly summary: string }
   | { readonly kind: 'text'; readonly text: string }
   | { readonly kind: 'hook_denied'; readonly hookName: string; readonly reason: string }
   | {

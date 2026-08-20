@@ -216,8 +216,8 @@ describe('pumpRun', () => {
       ...ids,
       events: fromArray([
         { kind: 'session_started', sessionId: 's-1' },
-        { kind: 'tool_call', toolUseId: 'tu_1', toolName: 'Bash' },
-        { kind: 'tool_call', toolUseId: 'tu_2', toolName: 'Edit' },
+        { kind: 'tool_call', toolUseId: 'tu_1', toolName: 'Bash', summary: 'Bash echo hi' },
+        { kind: 'tool_call', toolUseId: 'tu_2', toolName: 'Edit', summary: 'Edit /tmp/notes.txt' },
         { kind: 'terminated', outcome: okOutcome },
       ]),
     })
@@ -229,6 +229,24 @@ describe('pumpRun', () => {
     expect(types.filter((t) => t === 'run.tool_call')).toHaveLength(2)
     const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
     expect(run.toolCalls).toBe(2)
+  })
+
+  it('forwards the parser-derived readable summary on run.tool_call, not the opaque toolUseId (M4 spec §1)', async (): Promise<void> => {
+    await pumpRun({
+      ...ids,
+      events: fromArray([
+        { kind: 'session_started', sessionId: 's-1' },
+        { kind: 'tool_call', toolUseId: 'toolu_01UCoRZm85rNxfupNQPToZXL', toolName: 'Write', summary: 'Write note3.txt' },
+        { kind: 'terminated', outcome: okOutcome },
+      ]),
+    })
+
+    const toolCallEvent = await prisma.executionEvent.findFirstOrThrow({
+      where: { runId: ids.runId, type: 'run_tool_call' },
+    })
+    const payload = toolCallEvent.payload as { name: string; summary: string }
+    expect(payload).toEqual({ name: 'Write', summary: 'Write note3.txt' })
+    expect(payload.summary).not.toBe('toolu_01UCoRZm85rNxfupNQPToZXL')
   })
 
   it('carries the agent text through to run.output, truncated rather than dropped', async (): Promise<void> => {
@@ -419,8 +437,8 @@ describe('pumpRun', () => {
       events: fromArray([
         { kind: 'session_started', sessionId: 's-1' },
         { kind: 'hook_failed_open', hookName: 'PreToolUse:Write', exitCode: 127, stderr: 'gone' },
-        { kind: 'tool_call', toolUseId: 'tu_1', toolName: 'Bash' },
-        { kind: 'tool_call', toolUseId: 'tu_2', toolName: 'Write' },
+        { kind: 'tool_call', toolUseId: 'tu_1', toolName: 'Bash', summary: 'Bash echo hi' },
+        { kind: 'tool_call', toolUseId: 'tu_2', toolName: 'Write', summary: 'Write /tmp/beta.txt' },
         { kind: 'text', text: 'and then I did this' },
       ]),
     })
@@ -443,7 +461,7 @@ describe('pumpRun', () => {
       ...ids,
       events: fromArray([
         { kind: 'session_started', sessionId: 's-1' },
-        { kind: 'tool_call', toolUseId: 'tu_1', toolName: 'Bash' },
+        { kind: 'tool_call', toolUseId: 'tu_1', toolName: 'Bash', summary: 'Bash echo hi' },
         { kind: 'hook_denied', hookName: 'PreToolUse', reason: 'operator asked to pause' },
       ]),
     })
@@ -475,7 +493,7 @@ describe('pumpRun', () => {
       },
       events: fromArray([
         { kind: 'session_started', sessionId: 's-1' },
-        { kind: 'tool_call', toolUseId: 'tu_1', toolName: 'Bash' },
+        { kind: 'tool_call', toolUseId: 'tu_1', toolName: 'Bash', summary: 'Bash echo hi' },
         { kind: 'hook_denied', hookName: 'PreToolUse', reason: 'operator asked to pause' },
       ]),
     })
@@ -639,9 +657,9 @@ describe('pumpRun', () => {
       ...ids,
       events: fromArray([
         { kind: 'session_started', sessionId: 's-1' },
-        { kind: 'tool_call', toolUseId: 'tu_1', toolName: 'Bash' },
-        { kind: 'tool_call', toolUseId: 'tu_2', toolName: 'Edit' },
-        { kind: 'tool_call', toolUseId: 'tu_3', toolName: 'Bash' },
+        { kind: 'tool_call', toolUseId: 'tu_1', toolName: 'Bash', summary: 'Bash echo hi' },
+        { kind: 'tool_call', toolUseId: 'tu_2', toolName: 'Edit', summary: 'Edit /tmp/notes.txt' },
+        { kind: 'tool_call', toolUseId: 'tu_3', toolName: 'Bash', summary: 'Bash echo hi' },
         { kind: 'hook_denied', hookName: 'PreToolUse', reason: 'pause' },
       ]),
     })
@@ -654,7 +672,7 @@ describe('pumpRun', () => {
       ...ids,
       events: fromArray([
         { kind: 'session_started', sessionId: 's-2' },
-        { kind: 'tool_call', toolUseId: 'tu_4', toolName: 'Bash' },
+        { kind: 'tool_call', toolUseId: 'tu_4', toolName: 'Bash', summary: 'Bash echo hi' },
         { kind: 'terminated', outcome: okOutcome },
       ]),
     })

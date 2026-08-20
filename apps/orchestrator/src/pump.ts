@@ -281,10 +281,10 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
         lastToolUseId = event.toolUseId
         lastToolName = event.toolName
         await prisma.agentRun.updateMany({ where: { id: runId, endedAt: null }, data: { toolCalls: { increment: 1 } } })
-        // `summary` carries the tool use id rather than the call's arguments: `RuntimeEvent` never
-        // carries the input (Task 4), and widening the parser for a richer summary belongs to M4,
-        // where the consumer is. The id at least ties the event back to one stream line.
-        await emit('run.tool_call', 'agent', { name: event.toolName, summary: event.toolUseId })
+        // `summary` is the readable form the parser derives from the tool_use block's `input`
+        // (M4 spec §1) -- e.g. `Write note3.txt` rather than the opaque `toolUseId`. It falls
+        // back to the bare tool name when no known argument key is present.
+        await emit('run.tool_call', 'agent', { name: event.toolName, summary: event.summary })
         break
       }
 

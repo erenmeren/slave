@@ -158,6 +158,91 @@ describe('parseStreamLine', () => {
       kind: 'tool_call',
       toolUseId: 'toolu_01RpRJ7bNVesaAwUAuf2UvxJ',
       toolName: 'Bash',
+      summary: 'Bash echo hi',
+    })
+  })
+
+  // --- M4: a readable `summary`, derived from the tool_use block's `input` (spec §1) ---
+
+  it('derives the summary from file_path for a Write tool_use', () => {
+    const line = JSON.stringify({
+      type: 'assistant',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'toolu_write1', name: 'Write', input: { file_path: '/abs/note3.txt', content: 'hi' } }],
+      },
+    })
+    expect(parseStreamLine(line)).toEqual({
+      kind: 'tool_call',
+      toolUseId: 'toolu_write1',
+      toolName: 'Write',
+      summary: 'Write /abs/note3.txt',
+    })
+  })
+
+  it('collapses whitespace in a multiline command and truncates it at 80 chars with an ellipsis', () => {
+    const command = `ls -la\t\t\n\n${'x'.repeat(90)}`
+    const line = JSON.stringify({
+      type: 'assistant',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'toolu_bash_long', name: 'Bash', input: { command } }],
+      },
+    })
+    const expectedArg = `ls -la ${'x'.repeat(73)}…`
+    expect(expectedArg.length).toBe(81) // 80 chars of arg + the appended ellipsis
+    expect(parseStreamLine(line)).toEqual({
+      kind: 'tool_call',
+      toolUseId: 'toolu_bash_long',
+      toolName: 'Bash',
+      summary: `Bash ${expectedArg}`,
+    })
+  })
+
+  it('returns the bare tool name when a tool_use block carries no input', () => {
+    const line = JSON.stringify({
+      type: 'assistant',
+      message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_no_input', name: 'TodoWrite' }] },
+    })
+    expect(parseStreamLine(line)).toEqual({
+      kind: 'tool_call',
+      toolUseId: 'toolu_no_input',
+      toolName: 'TodoWrite',
+      summary: 'TodoWrite',
+    })
+  })
+
+  it('returns the bare tool name when the known argument keys hold only non-string values', () => {
+    const line = JSON.stringify({
+      type: 'assistant',
+      message: {
+        role: 'assistant',
+        content: [
+          { type: 'tool_use', id: 'toolu_bad_input', name: 'Read', input: { file_path: 42, path: null, command: ['echo'] } },
+        ],
+      },
+    })
+    expect(parseStreamLine(line)).toEqual({
+      kind: 'tool_call',
+      toolUseId: 'toolu_bad_input',
+      toolName: 'Read',
+      summary: 'Read',
+    })
+  })
+
+  it('tolerates a malformed (non-object) input rather than treating the line as unparsable', () => {
+    const line = JSON.stringify({
+      type: 'assistant',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'toolu_malformed', name: 'Grep', input: 'not-an-object' }],
+      },
+    })
+    expect(parseStreamLine(line)).toEqual({
+      kind: 'tool_call',
+      toolUseId: 'toolu_malformed',
+      toolName: 'Grep',
+      summary: 'Grep',
     })
   })
 
@@ -192,7 +277,12 @@ describe('parseStreamLine', () => {
         ],
       },
     })
-    expect(parseStreamLine(line)).toEqual({ kind: 'tool_call', toolUseId: 'toolu_multiblock1', toolName: 'Bash' })
+    expect(parseStreamLine(line)).toEqual({
+      kind: 'tool_call',
+      toolUseId: 'toolu_multiblock1',
+      toolName: 'Bash',
+      summary: 'Bash echo hi',
+    })
   })
 
   it('ignores hook_started, hook_progress and thinking_tokens system lines', () => {

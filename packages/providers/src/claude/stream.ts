@@ -301,7 +301,57 @@ const toolUseContentSchema = z.object({
   type: z.literal('tool_use'),
   id: z.string(),
   name: z.string(),
+  // `z.unknown()` rather than `z.record(...)`, and deliberately so: `input` feeds only the
+  // best-effort `summary` derived by `summaryFor` below, and a missing or malformed `input` (the
+  // real CLI is not contractually bound to any particular shape here) must never fail the parse
+  // of an otherwise-valid tool_call. Shape-checking happens downstream, where it can fall back
+  // to the bare tool name instead of rejecting the whole line.
+  input: z.unknown().optional(),
 })
+
+/**
+ * The `input` keys `summaryFor` looks under, in priority order, for the one readable argument
+ * that turns a bare tool name into an action line a human can read at a glance (M4 spec §1) --
+ * e.g. `Write /abs/note3.txt` rather than `Write toolu_01UCoRZm85rNxfupNQPToZXL`. First string
+ * match wins; a value present but not a string (or no known key present at all) falls through to
+ * the bare tool name, same as `input` being absent entirely.
+ */
+const SUMMARY_ARG_KEYS = [
+  'file_path',
+  'path',
+  'notebook_path',
+  'command',
+  'pattern',
+  'url',
+  'query',
+  'description',
+  'prompt',
+] as const
+
+const SUMMARY_ARG_MAX_LENGTH = 80
+
+function firstStringArg(input: unknown): string | null {
+  if (!isRecord(input)) return null
+  for (const key of SUMMARY_ARG_KEYS) {
+    const value = input[key]
+    if (typeof value === 'string') return value
+  }
+  return null
+}
+
+function summaryFor(toolName: string, input: unknown): string {
+  const raw = firstStringArg(input)
+  if (raw === null) return toolName
+
+  // Collapse newlines/tabs/runs of spaces to one space, so a multiline Bash command reads as one
+  // line rather than blowing up the action line's height.
+  const normalized = raw.replace(/\s+/g, ' ').trim()
+  if (normalized.length === 0) return toolName
+
+  const trimmedArg =
+    normalized.length > SUMMARY_ARG_MAX_LENGTH ? `${normalized.slice(0, SUMMARY_ARG_MAX_LENGTH)}…` : normalized
+  return `${toolName} ${trimmedArg}`
+}
 
 const textContentSchema = z.object({
   type: z.literal('text'),
@@ -326,7 +376,12 @@ function parseAssistantLine(raw: unknown, line: string): RuntimeEvent {
   if (toolUseBlock !== undefined) {
     const result = toolUseContentSchema.safeParse(toolUseBlock)
     if (!result.success) return { kind: 'unparsable', line }
-    return { kind: 'tool_call', toolUseId: result.data.id, toolName: result.data.name }
+    return {
+      kind: 'tool_call',
+      toolUseId: result.data.id,
+      toolName: result.data.name,
+      summary: summaryFor(result.data.name, result.data.input),
+    }
   }
 
   // No tool_use block: every real capture carries exactly one content block
