@@ -219,24 +219,29 @@ model TaskDependency {
 }
 
 model AgentRun {
-  id           String       @id @default(uuid())
-  taskId       String
-  agentId      String
-  kind         RunKind      @default(implementation)
-  status       RunStatus    @default(starting)
-  sessionId    String?
-  toolCalls    Int          @default(0)
-  pausedAtStep Int?
+  id                String       @id @default(uuid())
+  taskId            String
+  agentId           String
+  kind              RunKind      @default(implementation)
+  status            RunStatus    @default(starting)
+  sessionId         String?
+  toolCalls         Int          @default(0)
+  pausedAtStep      Int?
   /// The pause's category (human / guardrail / emergency_stop). Contrast with
   /// Checkpoint.pauseReason, which is the operator-facing free text of *why* — the string that
   /// went into the hook's deny message. This field is the enum; that one never is.
-  pauseReason  PauseReason?
-  costUsd      Float        @default(0)
-  pid          Int?
-  worktreePath String?
-  startedAt    DateTime     @default(now())
-  terminalAt   DateTime?
-  endedAt      DateTime?
+  pauseReason       PauseReason?
+  /// Resume intent (spec M5 §3.3): set by the web/control layer while the run stays `paused`;
+  /// the daemon's tick claims paused→resuming and clears both in the same update. The run must
+  /// never sit in `resuming` without a process — the orphan sweep would destroy it.
+  resumeRequestedAt DateTime?
+  queuedMessage     String?
+  costUsd           Float        @default(0)
+  pid               Int?
+  worktreePath      String?
+  startedAt         DateTime     @default(now())
+  terminalAt        DateTime?
+  endedAt           DateTime?
 
   task       Task        @relation(fields: [taskId], references: [id], onDelete: Cascade)
   agent      Agent       @relation(fields: [agentId], references: [id], onDelete: Cascade)
@@ -322,25 +327,26 @@ model Approval {
 }
 
 enum EventType {
-  task_created        @map("task.created")
-  task_started        @map("task.started")
-  task_done           @map("task.done")
-  task_rework         @map("task.rework")
-  run_started         @map("run.started")
-  run_tool_call       @map("run.tool_call")
-  run_paused          @map("run.paused")
-  run_resumed         @map("run.resumed")
-  agent_message_sent  @map("agent.message_sent")
-  guardrail_tripped   @map("guardrail.tripped")
-  task_verifying      @map("task.verifying")
-  task_verify_passed  @map("task.verify_passed")
-  task_verify_failed  @map("task.verify_failed")
-  task_failed         @map("task.failed")
-  run_output          @map("run.output")
-  run_pause_requested @map("run.pause_requested")
-  run_stopped         @map("run.stopped")
-  run_succeeded       @map("run.succeeded")
-  run_failed          @map("run.failed")
+  task_created         @map("task.created")
+  task_started         @map("task.started")
+  task_done            @map("task.done")
+  task_rework          @map("task.rework")
+  run_started          @map("run.started")
+  run_tool_call        @map("run.tool_call")
+  run_paused           @map("run.paused")
+  run_resumed          @map("run.resumed")
+  run_resume_requested @map("run.resume_requested")
+  agent_message_sent   @map("agent.message_sent")
+  guardrail_tripped    @map("guardrail.tripped")
+  task_verifying       @map("task.verifying")
+  task_verify_passed   @map("task.verify_passed")
+  task_verify_failed   @map("task.verify_failed")
+  task_failed          @map("task.failed")
+  run_output           @map("run.output")
+  run_pause_requested  @map("run.pause_requested")
+  run_stopped          @map("run.stopped")
+  run_succeeded        @map("run.succeeded")
+  run_failed           @map("run.failed")
 }
 
 model ExecutionEvent {

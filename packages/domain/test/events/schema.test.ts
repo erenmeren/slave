@@ -129,6 +129,28 @@ describe('parseExecutionEvent', () => {
     }
   })
 
+  it('accepts run.resume_requested with an optional message', () => {
+    const result = parseExecutionEvent({
+      ...BASE,
+      type: 'run.resume_requested',
+      runId: 'run-1',
+      payload: { requestedBy: 'operator', message: 'also create EXTRA.md' },
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.value.type).toBe('run.resume_requested')
+  })
+
+  it('accepts run.resume_requested with a null message', () => {
+    const result = parseExecutionEvent({
+      ...BASE,
+      type: 'run.resume_requested',
+      runId: 'run-1',
+      payload: { requestedBy: 'operator', message: null },
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.value.payload).toEqual({ requestedBy: 'operator', message: null })
+  })
+
   it('rejects an empty workspaceId', () => {
     const result = parseExecutionEvent({
       ...BASE,

@@ -52,6 +52,11 @@ export const executionEventSchema = z.discriminatedUnion('type', [
   z.object({ ...envelope, type: z.literal('task.failed'), payload: z.object({ reason: z.string() }) }),
   z.object({ ...envelope, type: z.literal('run.output'), payload: z.object({ text: z.string() }) }),
   z.object({ ...envelope, type: z.literal('run.pause_requested'), payload: z.object({ requestedBy: z.string() }) }),
+  z.object({
+    ...envelope,
+    type: z.literal('run.resume_requested'),
+    payload: z.object({ requestedBy: z.string(), message: z.string().nullable() }),
+  }),
   z.object({ ...envelope, type: z.literal('run.stopped'), payload: z.object({ reason: z.string() }) }),
   z.object({
     ...envelope,

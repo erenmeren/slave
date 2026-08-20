@@ -23,6 +23,7 @@ export const EVENT_TYPE_BY_DOMAIN_TYPE = {
   'task.failed': 'task_failed',
   'run.output': 'run_output',
   'run.pause_requested': 'run_pause_requested',
+  'run.resume_requested': 'run_resume_requested',
   'run.stopped': 'run_stopped',
   'run.succeeded': 'run_succeeded',
   'run.failed': 'run_failed',
