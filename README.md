@@ -11,6 +11,8 @@ real git repositories, with a human supervising rather than prompting.
 - **M2** — persistence and event log. See `docs/event-model.md`.
 - **M3** — orchestrator and the Claude Code adapter: real processes, real worktrees, real verify
   commands, driven from a CLI. See the orchestrator section below and `docs/architecture.md`.
+- **M4** — the web app: a read-only Overview page showing every agent's live status, streamed over
+  SSE. See the Web UI section below and `docs/architecture.md`.
 
 ## Setup
 
@@ -152,3 +154,46 @@ same worktree and session.
 `clear-halt --workspace <id>` is **not** a variant of `resume`. It retracts a workspace-wide safety
 halt — raised when a pause gate fails or a workspace cannot verify — and it starts nothing by
 itself: it removes the reason nothing was starting.
+
+## Web UI
+
+```bash
+npm run web
+```
+
+Serves the Next.js app at `http://localhost:3000` (or the next free port — Next prints which one
+it picked if 3000 is taken). `npm run web` loads the root `.env` itself (`--env-file=.env`), the
+same file the orchestrator and the seed script use, so it needs no separate configuration: point it
+at a workspace with `http://localhost:3000/w/<workspaceId>` and it reads that workspace straight
+out of the development database.
+
+The **Overview** page (`/w/<workspaceId>`) is the only page M4 ships. It shows one card per agent —
+status, current task, live action line, provider, budget — a top strip with task counts and spend
+against the workspace budget, and a halt banner when the workspace is stopped. It is **read-only**:
+the pause/stop buttons on each card are visibly present but disabled, labelled "arrives in M5". The
+page updates itself: the initial render is a server-side snapshot, and an SSE connection
+(`/api/w/<workspaceId>/events`) wakes the client to refetch that snapshot on every event rather than
+streaming state piecemeal — see `docs/architecture.md` for why. The one exception is each card's
+action line, which updates live and directly from the event payload, because it is display-only and
+never confused for state.
+
+```bash
+npm run demo
+```
+
+The one-command live demo (spec §8): resets `~/.aiteamos/demo-repo` to a fresh git repository,
+seeds a new workspace, team, agent and task into the *development* database, and starts the
+orchestrator daemon against it, printing the workspace id and its Overview URL. Run `npm run web`
+in a second terminal and open the printed URL to watch it live. It spends real money against the
+real `claude` CLI by default; to rehearse it for free, point it at the fake adapter the same way the
+orchestrator tests do:
+
+```bash
+AITEAMOS_CLAUDE_BIN=node \
+AITEAMOS_CLAUDE_ARGS="$(pwd)/packages/providers/test/fake-claude.mjs --fixture complete" \
+npm run demo
+```
+
+`AITEAMOS_CLAUDE_ARGS` must be an absolute path here: the adapter spawns the child in the run's
+worktree, not the repo root, so a relative path to the fixture script resolves against the wrong
+directory and the child dies before writing anything.

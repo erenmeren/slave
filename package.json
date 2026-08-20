@@ -19,7 +19,7 @@
     "db:seed": "tsc --build && node --env-file=.env packages/db/dist/seed.js",
     "db:seed:test": "tsc --build && node scripts/seed-test.mjs",
     "orchestrator": "tsc --build && node --env-file=.env apps/orchestrator/dist/cli.js",
-    "web": "next dev apps/web",
+    "web": "node --env-file=.env node_modules/next/dist/bin/next dev apps/web",
     "web:build": "next build apps/web",
     "demo": "tsc --build && node --env-file=.env scripts/demo-live.mjs"
   },
