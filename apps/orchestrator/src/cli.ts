@@ -1,6 +1,7 @@
 import { realpathSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { killWithEscalation, runFilePaths } from '@ai-team-os/control'
 import { prisma } from '@ai-team-os/db/client'
 import {
   agentId as brandAgentId,
@@ -14,7 +15,7 @@ import { ClaudeCodeAdapter } from '@ai-team-os/providers'
 import { runDaemon } from './daemon.js'
 import { NON_TERMINAL_RUN_STATUSES } from './world.js'
 import { pumpRun } from './pump.js'
-import { drainPumps, runFilePaths, tick } from './tick.js'
+import { drainPumps, tick } from './tick.js'
 import { verifyConcludedRun } from './verify.js'
 
 const USAGE = `usage: orchestrator <command> [options]
@@ -133,38 +134,6 @@ function requireFlag(flags: Flags, name: string): string {
   const value = flags[name]
   if (value === undefined) throw new Error(`--${name} is required`)
   return value
-}
-
-/**
- * Signals a run's process directly, by pid.
- *
- * The adapter cannot do this from here: its registry of live children is per-process, and a CLI
- * invocation is a *different* process from the daemon that spawned the run — so `adapter.cancel`
- * would throw "no run found" for every run there is. Task 15 carried this forward as the reason a
- * run whose process outlives its daemon had no path to being killed. The pid is in the row; that is
- * what it is for.
- */
-/** How long a cancelled process gets to exit on its own before it is killed outright. */
-const KILL_GRACE_MS = 2_000
-
-function isAlive(pid: number | null): boolean {
-  if (pid === null || pid <= 0) return false
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'EPERM'
-  }
-}
-
-function signalRun(pid: number | null, signal: NodeJS.Signals): boolean {
-  if (pid === null || pid <= 0) return false
-  try {
-    process.kill(pid, signal)
-    return true
-  } catch {
-    return false
-  }
 }
 
 async function mustGetRun(runId: string) {
@@ -397,14 +366,10 @@ export async function main(argv: readonly string[]): Promise<number> {
 
     case 'cancel': {
       const run = await mustGetRun(requireFlag(flags, 'run'))
-      const signalled = signalRun(run.pid, 'SIGTERM')
-      if (signalled) {
-        // The adapter's own kill escalates; a CLI cancel that only asks politely is strictly
-        // weaker than the thing it replaces, which reopens a thinner version of the Task 15 carry
-        // it was written to close.
-        await new Promise((res) => setTimeout(res, KILL_GRACE_MS))
-        if (isAlive(run.pid)) signalRun(run.pid, 'SIGKILL')
-      }
+      // The adapter's own kill escalates; a CLI cancel that only asks politely is strictly
+      // weaker than the thing it replaces, which reopens a thinner version of the Task 15 carry
+      // it was written to close.
+      const signalled = await killWithEscalation(run.pid)
       const now = new Date()
       await prisma.agentRun.updateMany({
         where: { id: run.id, endedAt: null },

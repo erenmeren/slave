@@ -1,13 +1,13 @@
 {
-  "name": "@ai-team-os/orchestrator",
+  "name": "@ai-team-os/control",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "dependencies": {
-    "@ai-team-os/control": "*",
     "@ai-team-os/db": "*",
-    "@ai-team-os/domain": "*"
+    "@ai-team-os/domain": "*",
+    "@ai-team-os/events": "*"
   }
 }
