@@ -1,7 +1,7 @@
-import { realpathSync, writeFileSync } from 'node:fs'
+import { realpathSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { killWithEscalation, runFilePaths } from '@ai-team-os/control'
+import { refusalText, requestPause, requestStop } from '@ai-team-os/control'
 import { prisma } from '@ai-team-os/db/client'
 import {
   agentId as brandAgentId,
@@ -213,45 +213,9 @@ export async function main(argv: readonly string[]): Promise<number> {
     }
 
     case 'pause': {
-      const run = await mustGetRun(requireFlag(flags, 'run'))
-      const requestedBy = flags['by'] ?? 'operator'
-
-      // Write the flag; the gate denies the next tool call and the *stream owner* follows the rest
-      // of the protocol. A CLI invocation has no handle on the child and no view of its stream, so
-      // it cannot await the outcome -- the daemon's pump is what observes the deny and records
-      // `run.paused`. Spec §11 says "write the flag, follow the protocol"; this is the half a
-      // separate process can perform.
-
-      // Claimed, not written. `pause_requested` is a non-terminal status, so pausing a run that
-      // already finished puts a *concluded* run back into `activeRuns`, makes its agent look busy,
-      // and leaves it for the next restart's orphan sweep to flip to `failed` -- corrupting the
-      // record of a run that actually succeeded.
-      const claimed = await prisma.agentRun.updateMany({
-        where: { id: run.id, status: { in: ['starting', 'working', 'resuming'] } },
-        // `pauseReason` is the *category*, and this is the one place that knows it: an operator
-        // asked. Task 12 carried it forward as a column nothing wrote.
-        data: { status: 'pause_requested', pauseReason: 'human' },
-      })
-      if (claimed.count === 0) {
-        throw new Error(`run ${run.id} cannot be paused: it is ${run.status}`)
-      }
-
-      // The same derivation the tick used to tell the child where its flag is -- re-deriving it as
-      // a second literal is how the two come to disagree, and a gate reading a path nobody writes
-      // means an operator watches a "pausing" run keep working (spec §5.5's named failure).
-      const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: run.task.workspaceId } })
-      const { pauseFlagPath } = runFilePaths(workspace.repoPath, brandRunId(run.id))
-      writeFileSync(pauseFlagPath, `${requestedBy}\n`)
-      await appendEvent({
-        type: 'run.pause_requested',
-        workspaceId: run.task.workspaceId,
-        taskId: run.taskId,
-        agentId: run.agentId,
-        runId: run.id,
-        actor: 'human',
-        payload: { requestedBy },
-      })
-      process.stdout.write(`pause_requested: the gate will deny ${run.id}'s next tool call\n`)
+      const result = await requestPause(requireFlag(flags, 'run'), flags['by'] ?? 'operator')
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(`pause_requested: the gate will deny ${requireFlag(flags, 'run')}'s next tool call\n`)
       return 0
     }
 
@@ -365,40 +329,11 @@ export async function main(argv: readonly string[]): Promise<number> {
     }
 
     case 'cancel': {
-      const run = await mustGetRun(requireFlag(flags, 'run'))
-      // The adapter's own kill escalates; a CLI cancel that only asks politely is strictly
-      // weaker than the thing it replaces, which reopens a thinner version of the Task 15 carry
-      // it was written to close.
-      const signalled = await killWithEscalation(run.pid)
-      const now = new Date()
-      await prisma.agentRun.updateMany({
-        where: { id: run.id, endedAt: null },
-        data: { status: 'stopped', terminalAt: now, endedAt: now },
-      })
-      // `blocked`, not `rework`: the help and the README both say cancel stops a run for good, and
-      // `rework` is startable -- the next tick would hand the task to a fresh agent on the same
-      // worktree, with `attempt` never incremented so repeated cancels never reach the cap. The
-      // spec does not decide this (§11 says only "kill and preserve the worktree"); shipping a
-      // command that says one thing and does another is the part that is not a judgement call.
-      await prisma.task.updateMany({
-        where: { id: run.taskId, activeRunId: run.id },
-        data: { status: 'blocked', activeRunId: null },
-      })
-      await appendEvent({
-        type: 'run.stopped',
-        workspaceId: run.task.workspaceId,
-        taskId: run.taskId,
-        agentId: run.agentId,
-        runId: run.id,
-        actor: 'human',
-        payload: {
-          reason: signalled
-            ? 'cancelled by the operator'
-            : `cancelled by the operator; no live process to signal (pid ${String(run.pid)})`,
-        },
-      })
+      const runIdFlag = requireFlag(flags, 'run')
+      const result = await requestStop(runIdFlag, 'the operator')
+      if (!result.ok) throw new Error(refusalText(result.error))
       // §7.4: the worktree is the inspection surface and is deliberately left in place.
-      process.stdout.write(`stopped ${run.id}; its worktree is preserved\n`)
+      process.stdout.write(`stopped ${runIdFlag}; its worktree is preserved\n`)
       return 0
     }
 
