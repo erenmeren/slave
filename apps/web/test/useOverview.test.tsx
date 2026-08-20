@@ -102,6 +102,57 @@ describe('useOverview', () => {
     expect(result.current.snapshot).toEqual(SNAPSHOT)
   })
 
+  it('ignores a bare JSON primitive payload without crashing', (): void => {
+    const { result } = renderHook(() => useOverview('w1', SNAPSHOT))
+
+    // `JSON.parse('null')` and `JSON.parse('42')` both succeed, so the handler cannot rely on the
+    // parse's try/catch alone — it must also reject a parsed value that is not an object (spec §9).
+    expect(() => push(null)).not.toThrow()
+    expect(() => push(42)).not.toThrow()
+
+    expect(result.current.actionLines).toEqual({})
+    expect(result.current.snapshot).toEqual(SNAPSHOT)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('drops a stale refetch response that resolves after a newer one already landed', async (): Promise<void> => {
+    const older: OverviewSnapshot = { ...SNAPSHOT, workspace: { ...SNAPSHOT.workspace, spentUsd: 1 } }
+    const newer: OverviewSnapshot = { ...SNAPSHOT, workspace: { ...SNAPSHOT.workspace, spentUsd: 2 } }
+
+    // The first refetch's fetch() call hangs until the test resolves it by hand; the second
+    // resolves immediately — so the second (newer) response lands first, exactly the race the
+    // sequence guard exists for.
+    let resolveOlder!: (response: Response) => void
+    const olderResponse = new Promise<Response>((resolve): void => {
+      resolveOlder = resolve
+    })
+    fetchMock.mockImplementationOnce(() => olderResponse)
+    fetchMock.mockImplementationOnce(async () => new Response(JSON.stringify(newer), { status: 200 }))
+
+    const { result } = renderHook(() => useOverview('w1', SNAPSHOT))
+
+    push({ seq: 1, ts: new Date(0).toISOString(), workspaceId: 'w1', actor: 'system', type: 'task.started', payload: { title: 'x' } })
+    await act(async (): Promise<void> => {
+      await vi.advanceTimersByTimeAsync(300) // fires the first (older) refetch; its fetch() is still pending
+    })
+
+    push({ seq: 2, ts: new Date(0).toISOString(), workspaceId: 'w1', actor: 'system', type: 'task.started', payload: { title: 'x' } })
+    await act(async (): Promise<void> => {
+      await vi.advanceTimersByTimeAsync(300) // fires the second (newer) refetch, which resolves right away
+    })
+
+    expect(result.current.snapshot).toEqual(newer)
+
+    // Now let the older, slower fetch resolve. Being older, it must not clobber the newer state.
+    await act(async (): Promise<void> => {
+      resolveOlder(new Response(JSON.stringify(older), { status: 200 }))
+      await vi.advanceTimersByTimeAsync(0)
+    })
+
+    expect(result.current.snapshot).toEqual(newer)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
   it('reports reconnecting on stream error and connected on open', (): void => {
     const { result } = renderHook(() => useOverview('w1', SNAPSHOT))
 
