@@ -36,8 +36,6 @@ export interface IllegalRunTransition {
   readonly event: RunEvent['type']
 }
 
-const ACTIVE: readonly RunStatus[] = ['starting', 'working', 'pause_requested', 'paused', 'resuming', 'stopping']
-
 /** Every status that means "this run is not finished". The web and the orchestrator must agree. */
 export const NON_TERMINAL_RUN_STATUSES = [
   'starting',
@@ -46,7 +44,9 @@ export const NON_TERMINAL_RUN_STATUSES = [
   'paused',
   'resuming',
   'stopping',
-] as const
+] as const satisfies readonly RunStatus[]
+
+const ACTIVE: readonly RunStatus[] = NON_TERMINAL_RUN_STATUSES
 
 export function initialRunState(): RunState {
   return { status: 'starting', toolCalls: 0, sessionId: null, pausedAtStep: null }

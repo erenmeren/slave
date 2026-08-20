@@ -48,7 +48,7 @@ await prisma.$disconnect()
 // 3. The daemon, inheriting AITEAMOS_CLAUDE_BIN/ARGS so the same script smoke-tests against the
 // fake for free (spec §8).
 console.log(`workspace: ${workspace.id}`)
-console.log(`overview:  http://localhost:3000/w/${workspace.id}`)
+console.log(`overview:  http://localhost:${process.env.PORT ?? '3000'}/w/${workspace.id}`)
 console.log('starting the daemon (Ctrl-C stops it); run `npm run web` in another terminal')
 const daemon = spawn('node', ['apps/orchestrator/dist/cli.js', 'daemon', '--workspace', workspace.id], {
   stdio: 'inherit',

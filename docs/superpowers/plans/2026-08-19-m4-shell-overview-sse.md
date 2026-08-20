@@ -2009,3 +2009,33 @@ app). (2) `ReadableStream.cancel()` under `next dev` — the leak behaviour is p
 `createEventSse` level; the route-level fallback is written into Task 4 Step 3's note. (3) Prisma
 in Next dev's hot reload can multiply clients — `@ai-team-os/db/client` exports a shared instance,
 which is exactly the guard.
+
+---
+
+## Final Branch Review (2026-08-20)
+
+Independent full-branch review (7846533..d714dff) before merge. Verdict: ready with fixes; the
+fix wave landed on top of the reviewed range.
+
+**Fixed on review:**
+- Refetch on SSE open — events landing between the server-rendered snapshot and the stream's
+  "from now" watermark were in neither; the hook now schedules a refetch on every open
+  (first connect and reconnects). Spec §6 gap, not an implementation deviation.
+- Live action lines now expire: a refetched snapshot evicts lines whose run it no longer shows
+  (run ended, or a new run took over). Lines remember their `runId` for this.
+- `Number('') === 0` — an empty `?from=` or `Last-Event-ID` replayed the whole event log;
+  parsing extracted to `parseFromSeq` (non-negative integers only) with unit tests.
+- `NON_TERMINAL_RUN_STATUSES` is now the single source for the domain's internal `ACTIVE` list,
+  with `satisfies readonly RunStatus[]` membership checking.
+- `<OverviewClient>` keyed by `workspaceId` so client-side workspace navigation remounts.
+- Demo script prints the overview URL with `PORT` honoured.
+
+**Deferred (recorded, not fixed):**
+- Trailing debounce can starve a refetch under a sustained <250ms event cadence; a max-wait
+  cap would bound it. Theoretical at real-CLI tool-call cadence (the live gate saw refetches land).
+- Spec §7 motion: action-line cross-fade and status-coloured card border were dropped silently
+  between spec and plan; only the status-dot pulse shipped. Revisit in M5's UI pass.
+- `buildOverviewSnapshot` issues one `findFirst` per live run for initial action lines — fine at
+  seed scale (spec §12.4), first place to look when agent count grows.
+- The SSE replay integration test proves no-loss but only weakly proves no-duplication; the live
+  gate covered duplication by hand.

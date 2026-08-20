@@ -13,5 +13,7 @@ export default async function OverviewPage({
   if (snapshot === null) {
     return <main className="p-6 text-status-danger">no workspace with id {workspaceId}</main>
   }
-  return <OverviewClient workspaceId={workspaceId} initial={snapshot} />
+  // Keyed so a client-side workspace-to-workspace navigation remounts the client instead of
+  // rendering the old workspace's state under the new URL.
+  return <OverviewClient key={workspaceId} workspaceId={workspaceId} initial={snapshot} />
 }

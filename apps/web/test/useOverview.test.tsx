@@ -73,6 +73,77 @@ describe('useOverview', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
+  it('schedules a refetch when the stream opens, closing the snapshot-to-stream gap', async (): Promise<void> => {
+    renderHook(() => useOverview('w1', SNAPSHOT))
+
+    act((): void => {
+      FakeEventSource.instances[0]?.onopen?.()
+    })
+    await act(async (): Promise<void> => {
+      await vi.advanceTimersByTimeAsync(300)
+    })
+
+    // The snapshot is rendered server-side; the stream starts "from now" at connect time, which is
+    // later. An event landing between the two is in neither — only a refetch on open covers it.
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('drops a live action line once the snapshot shows that run is over', async (): Promise<void> => {
+    const idle: OverviewSnapshot = {
+      ...SNAPSHOT,
+      agents: [{ ...SNAPSHOT.agents[0]!, status: 'idle', taskTitle: null, actionLine: null, runId: null }],
+    }
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify(idle), { status: 200 }))
+    const { result } = renderHook(() => useOverview('w1', SNAPSHOT))
+
+    push({
+      seq: 1,
+      ts: new Date(0).toISOString(),
+      workspaceId: 'w1',
+      agentId: 'a1',
+      runId: 'r1',
+      actor: 'agent',
+      type: 'run.tool_call',
+      payload: { name: 'Write', summary: 'Write note3.txt' },
+    })
+    expect(result.current.actionLines['a1']).toBe('Write note3.txt')
+
+    await act(async (): Promise<void> => {
+      await vi.advanceTimersByTimeAsync(300)
+    })
+
+    // The live overlay always beats the snapshot's line, so the refetch cannot "overwrite" it —
+    // it has to evict it. Otherwise an idle agent keeps showing its last tool call forever.
+    expect(result.current.actionLines['a1']).toBeUndefined()
+  })
+
+  it('drops a live action line from a previous run when a new run takes over', async (): Promise<void> => {
+    const newRun: OverviewSnapshot = {
+      ...SNAPSHOT,
+      agents: [{ ...SNAPSHOT.agents[0]!, runId: 'r2' }],
+    }
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify(newRun), { status: 200 }))
+    const { result } = renderHook(() => useOverview('w1', SNAPSHOT))
+
+    push({
+      seq: 1,
+      ts: new Date(0).toISOString(),
+      workspaceId: 'w1',
+      agentId: 'a1',
+      runId: 'r1',
+      actor: 'agent',
+      type: 'run.tool_call',
+      payload: { name: 'Write', summary: 'Write note3.txt' },
+    })
+
+    await act(async (): Promise<void> => {
+      await vi.advanceTimersByTimeAsync(300)
+    })
+
+    // r1's line under r2's card would attribute the old run's work to the new one.
+    expect(result.current.actionLines['a1']).toBeUndefined()
+  })
+
   it('updates the action line immediately from run.tool_call, before any refetch', (): void => {
     const { result } = renderHook(() => useOverview('w1', SNAPSHOT))
 

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { OverviewSnapshot } from '../server/overview.js'
 
 export const REFETCH_DEBOUNCE_MS = 250
@@ -14,9 +14,26 @@ export interface OverviewState {
   readonly error: string | null
 }
 
+/** A live line remembers which run produced it so a refetch can tell "still current" from "over". */
+interface LiveLine {
+  readonly runId: string | null
+  readonly summary: string
+}
+
+/** Keep a line only while the snapshot still shows the run that produced it. */
+function pruneLines(lines: Record<string, LiveLine>, agents: OverviewSnapshot['agents']): Record<string, LiveLine> {
+  const runByAgent = new Map(agents.map((agent) => [agent.id, agent.runId]))
+  const next: Record<string, LiveLine> = {}
+  for (const [agentId, line] of Object.entries(lines)) {
+    const runId = runByAgent.get(agentId) ?? null
+    if (runId !== null && (line.runId === null || line.runId === runId)) next[agentId] = line
+  }
+  return next
+}
+
 export function useOverview(workspaceId: string, initial: OverviewSnapshot): OverviewState {
   const [snapshot, setSnapshot] = useState<OverviewSnapshot | null>(initial)
-  const [actionLines, setActionLines] = useState<Record<string, string>>({})
+  const [lines, setLines] = useState<Record<string, LiveLine>>({})
   const [connection, setConnection] = useState<'connected' | 'reconnecting'>('connected')
   const [error, setError] = useState<string | null>(null)
   const debounce = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -34,6 +51,9 @@ export function useOverview(workspaceId: string, initial: OverviewSnapshot): Ove
         const parsed = (await response.json()) as OverviewSnapshot
         if (seq !== refetchSeq.current) return
         setSnapshot(parsed)
+        // The live overlay always beats the snapshot's line (spec §6), so a refetch cannot
+        // overwrite a stale one — it has to evict lines whose run the snapshot no longer shows.
+        setLines((current) => pruneLines(current, parsed.agents))
         setError(null)
       } catch (cause) {
         if (seq !== refetchSeq.current) return
@@ -50,10 +70,16 @@ export function useOverview(workspaceId: string, initial: OverviewSnapshot): Ove
     }
 
     const source = new EventSource(`/api/w/${workspaceId}/events`)
-    source.onopen = (): void => setConnection('connected')
+    source.onopen = (): void => {
+      setConnection('connected')
+      // The snapshot was rendered before the stream's "from now" watermark was taken; an event
+      // landing between the two is in neither. Refetching on open closes that gap — for the
+      // first connect and every reconnect alike.
+      scheduleRefetch()
+    }
     source.onerror = (): void => setConnection('reconnecting') // EventSource auto-reconnects
     source.onmessage = (message: { data: string }): void => {
-      let event: { type?: string; agentId?: string; payload?: { summary?: string } }
+      let event: { type?: string; agentId?: string; runId?: string; payload?: { summary?: string } }
       try {
         event = JSON.parse(message.data) as typeof event
       } catch {
@@ -69,7 +95,8 @@ export function useOverview(workspaceId: string, initial: OverviewSnapshot): Ove
       if (event.type === 'run.tool_call' && typeof event.agentId === 'string') {
         const summary = event.payload?.summary
         if (typeof summary === 'string') {
-          setActionLines((lines) => ({ ...lines, [event.agentId as string]: summary }))
+          const runId = typeof event.runId === 'string' ? event.runId : null
+          setLines((current) => ({ ...current, [event.agentId as string]: { runId, summary } }))
         }
       }
 
@@ -82,6 +109,11 @@ export function useOverview(workspaceId: string, initial: OverviewSnapshot): Ove
       if (debounce.current !== null) clearTimeout(debounce.current)
     }
   }, [workspaceId])
+
+  const actionLines = useMemo(
+    () => Object.fromEntries(Object.entries(lines).map(([agentId, line]) => [agentId, line.summary])),
+    [lines],
+  )
 
   return { snapshot, actionLines, connection, error }
 }
