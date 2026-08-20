@@ -25,9 +25,15 @@ export async function createEventSse(options: EventSseOptions): Promise<Response
   let heartbeat: ReturnType<typeof setInterval> | null = null
   const encoder = new TextEncoder()
 
+  let closed = false
+  // Set the instant cancel() runs, independent of `closed`: `start()` is still parked on
+  // `await createEventStream(...)` at that point (see below), so `close()` — which reads
+  // `handle` — has not run yet and `closed` is still false. `canceled` is the signal `start()`
+  // checks once that await resolves, to catch a cancel that raced its own setup.
+  let canceled = false
+
   const stream = new ReadableStream<Uint8Array>({
     async start(controller): Promise<void> {
-      let closed = false
       const close = (): void => {
         if (closed) return
         closed = true
@@ -62,6 +68,22 @@ export async function createEventSse(options: EventSseOptions): Promise<Response
         },
       })
 
+      // `handle` was null for the whole `await` above, so both `cancel()` (its `handle?.close()`
+      // was a no-op) and a failed initial-replay enqueue (`close()` set `closed` but had nothing
+      // to close) could have missed the LISTEN entirely. Catch up on whichever happened before
+      // installing the heartbeat — otherwise nothing ever clears the interval or closes `handle`,
+      // and the subscription outlives a consumer that is already gone.
+      if (closed || canceled) {
+        closed = true
+        void handle.close()
+        try {
+          controller.close()
+        } catch {
+          // already closed by the consumer
+        }
+        return
+      }
+
       // Id-only frame: updates the client's Last-Event-ID without dispatching an event, which is
       // what advances the watermark across filtered spans AND keeps proxies from reaping the
       // idle connection (spec §4).
@@ -75,6 +97,7 @@ export async function createEventSse(options: EventSseOptions): Promise<Response
       heartbeat.unref?.()
     },
     cancel(): void {
+      canceled = true
       if (heartbeat !== null) clearInterval(heartbeat)
       void handle?.close()
     },
