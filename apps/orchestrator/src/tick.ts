@@ -206,15 +206,17 @@ export async function tick(deps: TickDeps): Promise<TickReport> {
  * waiting for the operator who clears the halt -- rather than refused, because the request was
  * legitimate when it was made.
  *
- * A resume that throws leaves the run `resuming` with a dead pid, which the per-tick sweep concludes
- * as a failed run on its next pass. That is the same answer the system already gives a spawn that
- * dies, and it is why this must not be silent: the error is logged for the operator who will
- * otherwise only see the run fail.
+ * A resume that throws leaves the run `resuming` with a dead pid -- and nothing in a long-lived
+ * daemon ever revisits that on its own. `sweep()` is the only thing that would notice, and it has no
+ * production caller (`daemon.ts` wires up `reconcileOrphans`, not `sweep`); `reconcileOrphans` itself
+ * runs once before the first tick and refuses ever after (`noteTickRan`/`ticksHaveRun` above). So the
+ * catch below concludes the run itself -- mirroring `sweep.ts`'s `concludeDeadRun` -- rather than
+ * leaving a `resuming` row with a dead pid, a held task and a busy-looking agent until a restart.
  */
 async function resumeRequestedRuns(deps: TickDeps): Promise<void> {
   const intents = await prisma.agentRun.findMany({
     where: { status: 'paused', resumeRequestedAt: { not: null }, task: { workspaceId: deps.workspaceId } },
-    select: { id: true },
+    select: { id: true, taskId: true, agentId: true },
   })
 
   for (const intent of intents) {
@@ -228,14 +230,56 @@ async function resumeRequestedRuns(deps: TickDeps): Promise<void> {
     // unhandled rejection would take the daemon down, and a shutdown -- or a one-shot `tick` -- has
     // to be able to wait for it.
     const resumed = executeResume({ runId: intent.id, adapter: deps.adapter, message: queuedMessage })
-      .catch((error: unknown): void => {
+      .catch(async (error: unknown): Promise<void> => {
         console.error(`[tick] resume for run ${intent.id} failed:`, error)
+        await concludeFailedResume(deps, intent, error)
       })
       .finally((): void => {
         pumps.delete(resumed)
       })
     pumps.add(resumed)
   }
+}
+
+/**
+ * Concludes a resume that failed to spawn, from inside the tick that claimed it.
+ *
+ * Mirrors `sweep.ts`'s `concludeDeadRun`: a status-conditioned `updateMany` so a run something else
+ * already concluded is never clobbered, the same task release, the same `run.failed` event. This is
+ * the only place a failed resume spawn is ever concluded -- see the doc comment above
+ * `resumeRequestedRuns` for why nothing else in a running daemon would ever get to it.
+ */
+async function concludeFailedResume(
+  deps: TickDeps,
+  run: { readonly id: string; readonly taskId: string; readonly agentId: string },
+  error: unknown,
+): Promise<void> {
+  const now = new Date()
+  // Conditioned on `resuming`: if `executeResume` threw after already moving the run past that
+  // status (e.g. inside `verifyConcludedRun`, once the pump had already written a terminal row),
+  // that row's status is the true outcome and must not be overwritten with `failed`.
+  const concluded = await prisma.agentRun.updateMany({
+    where: { id: run.id, status: 'resuming' },
+    data: { status: 'failed', terminalAt: now, endedAt: now },
+  })
+  if (concluded.count === 0) return
+
+  // Release the task the run was holding, exactly as `concludeDeadRun` does -- a failed resume
+  // that leaves `activeRunId` pointing at a dead run strands the task `running` forever.
+  await prisma.task.updateMany({
+    where: { id: run.taskId, activeRunId: run.id },
+    data: { status: 'rework', activeRunId: null },
+  })
+
+  await appendEvent({
+    type: 'run.failed',
+    workspaceId: deps.workspaceId,
+    taskId: run.taskId,
+    agentId: run.agentId,
+    runId: run.id,
+    actor: 'system',
+    payload: { reason: `resume failed to spawn: ${error instanceof Error ? error.message : String(error)}` },
+  })
 }
 
 /**

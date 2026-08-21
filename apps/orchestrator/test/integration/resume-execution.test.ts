@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -190,6 +190,49 @@ describe('executing a resume intent from the daemon', () => {
     expect(after.resumeRequestedAt).not.toBeNull() // still visible, still waiting
     expect(after.queuedMessage).toBe(MARKER) // and the instruction is not consumed either
     expect(await prisma.executionEvent.count({ where: { runId, type: 'run_resumed' } })).toBe(0)
+  }, 60_000)
+
+  it('concludes a resumed run whose spawn rejects, instead of stranding it in resuming', async (): Promise<void> => {
+    const runId = await pauseARun()
+    expect((await requestResume(runId, MARKER, 'web')).ok).toBe(true)
+
+    // Force `adapter.resume()` to reject: swap the real pause flag file for a directory at the
+    // same path, tripping the exact EISDIR refusal `adapter-resume.test.ts` pins directly against
+    // the adapter ("refuses to resume while the pause flag still exists"). This is the least
+    // contrived seam available -- a real checkpoint, written by a real pause, whose spawn genuinely
+    // fails -- rather than an invented throw.
+    const checkpoint = await prisma.checkpoint.findUniqueOrThrow({ where: { runId } })
+    rmSync(checkpoint.pauseFlagPath, { force: true })
+    mkdirSync(checkpoint.pauseFlagPath)
+
+    const loggedErrors: unknown[][] = []
+    const originalConsoleError = console.error
+    console.error = (...args: unknown[]): void => {
+      loggedErrors.push(args)
+    }
+    try {
+      await tick({ workspaceId: brandWorkspaceId(fixture.workspaceId), adapter: fakeAdapter('env-echo'), hookPath: REAL_GATE })
+      await drainPumps()
+    } finally {
+      console.error = originalConsoleError
+    }
+
+    // Logged for the operator, not silent.
+    expect(loggedErrors.length).toBeGreaterThan(0)
+
+    // Concluded, not stranded: `resuming` with a dead pid would otherwise hold the task and make
+    // the agent look busy until the daemon restarts.
+    const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: runId } })
+    expect(after.status).toBe('failed')
+    expect(after.terminalAt).not.toBeNull()
+
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+    expect(task.status).toBe('rework')
+    expect(task.activeRunId).toBeNull()
+
+    expect(await prisma.executionEvent.count({ where: { runId, type: 'run_resumed' } })).toBe(0)
+    const failedEvent = await prisma.executionEvent.findFirst({ where: { runId, type: 'run_failed' } })
+    expect(failedEvent).not.toBeNull()
   }, 60_000)
 
   it('a paused run with an intent survives an orphan sweep untouched', async (): Promise<void> => {
