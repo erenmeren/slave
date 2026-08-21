@@ -15,6 +15,9 @@ const agent = (over: Partial<AgentCardData>): AgentCardData => ({
   runId: 'r1',
   queuedMessage: null,
   recentEvents: [],
+  costUsd: 0,
+  toolCalls: 0,
+  pausedAtStep: null,
   ...over,
 })
 
@@ -104,6 +107,86 @@ describe('AgentPanel', () => {
       expect(screen.getByTestId('resume-button').getAttribute('disabled')).not.toBeNull()
       expect(screen.getByTestId('stop-button').getAttribute('disabled')).not.toBeNull()
       expect(screen.queryByTestId('message-box')).toBeNull()
+    })
+  })
+
+  describe('current run block', () => {
+    it('shows cost so far and tool calls', () => {
+      render(
+        <AgentPanel
+          agent={agent({ status: 'working', costUsd: 1.25, toolCalls: 7 })}
+          liveEvents={[]}
+          workspaceId="w1"
+          haltedReason={null}
+          onClose={() => {}}
+        />,
+      )
+      expect(screen.getByTestId('run-cost').textContent).toContain('1.25')
+      expect(screen.getByTestId('run-tool-calls').textContent).toContain('7')
+    })
+
+    it('shows paused-at step when paused', () => {
+      render(
+        <AgentPanel
+          agent={agent({ status: 'paused', pausedAtStep: 4 })}
+          liveEvents={[]}
+          workspaceId="w1"
+          haltedReason={null}
+          onClose={() => {}}
+        />,
+      )
+      expect(screen.getByTestId('run-paused-step').textContent).toContain('4')
+    })
+
+    it('does not show paused-at step outside paused, even if the field happens to be set', () => {
+      render(
+        <AgentPanel
+          agent={agent({ status: 'working', pausedAtStep: 4 })}
+          liveEvents={[]}
+          workspaceId="w1"
+          haltedReason={null}
+          onClose={() => {}}
+        />,
+      )
+      expect(screen.queryByTestId('run-paused-step')).toBeNull()
+    })
+  })
+
+  describe('per-agent isolation (no state bleed across a panel switch)', () => {
+    it("clears agent A's error band once the panel switches to agent B", async () => {
+      fetchMock.mockImplementationOnce(
+        async () => new Response(JSON.stringify({ error: 'workspace is halted' }), { status: 409 }),
+      )
+      const { rerender } = render(
+        <AgentPanel agent={agent({ id: 'a1', status: 'working' })} liveEvents={[]} workspaceId="w1" haltedReason={null} onClose={() => {}} />,
+      )
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('pause-button'))
+      })
+      expect(screen.getByRole('alert').textContent).toContain('workspace is halted')
+
+      rerender(
+        <AgentPanel agent={agent({ id: 'a2', status: 'working' })} liveEvents={[]} workspaceId="w1" haltedReason={null} onClose={() => {}} />,
+      )
+
+      expect(screen.queryByRole('alert')).toBeNull()
+    })
+
+    it("does not carry agent A's in-flight pause-button disabled state onto agent B", () => {
+      fetchMock.mockImplementationOnce(() => new Promise<Response>(() => {})) // never resolves
+      const { rerender } = render(
+        <AgentPanel agent={agent({ id: 'a1', status: 'working' })} liveEvents={[]} workspaceId="w1" haltedReason={null} onClose={() => {}} />,
+      )
+
+      fireEvent.click(screen.getByTestId('pause-button'))
+      expect(screen.getByTestId('pause-button').getAttribute('disabled')).not.toBeNull()
+
+      rerender(
+        <AgentPanel agent={agent({ id: 'a2', status: 'working' })} liveEvents={[]} workspaceId="w1" haltedReason={null} onClose={() => {}} />,
+      )
+
+      expect(screen.getByTestId('pause-button').getAttribute('disabled')).toBeNull()
     })
   })
 

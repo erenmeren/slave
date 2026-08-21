@@ -26,6 +26,12 @@ export interface AgentCardData {
   readonly queuedMessage: string | null
   /** Last 20 execution events for this agent, oldest first — seeds the panel's live feed. */
   readonly recentEvents: readonly AgentFeedEvent[]
+  /** The live run's spend so far; 0 with no live run. Panel's current-run block (spec §6). */
+  readonly costUsd: number
+  /** The live run's tool call count so far; 0 with no live run. */
+  readonly toolCalls: number
+  /** Set only while a checkpoint exists to resume from — null outside `paused`. */
+  readonly pausedAtStep: number | null
 }
 
 export interface OverviewSnapshot {
@@ -139,6 +145,9 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
         runId: run?.id ?? null,
         queuedMessage: run?.queuedMessage ?? null,
         recentEvents: recentEventsByAgent.get(agent.id) ?? [],
+        costUsd: run?.costUsd ?? 0,
+        toolCalls: run?.toolCalls ?? 0,
+        pausedAtStep: run?.pausedAtStep ?? null,
       }
     }),
     tasks: {

@@ -17,6 +17,9 @@ const agent = (over: Partial<AgentCardData>): AgentCardData => ({
   runId: null,
   queuedMessage: null,
   recentEvents: [],
+  costUsd: 0,
+  toolCalls: 0,
+  pausedAtStep: null,
   ...over,
 })
 

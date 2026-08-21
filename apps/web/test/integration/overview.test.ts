@@ -213,6 +213,33 @@ describe('buildOverviewSnapshot', () => {
     expect(snapshot?.agents[0]?.queuedMessage).toBe('also update the README')
   })
 
+  it("exposes cost so far, tool calls, and paused-at step from the agent's live run", async (): Promise<void> => {
+    await prisma.agentRun.create({
+      data: {
+        taskId: fixture.taskId,
+        agentId: fixture.agentId,
+        status: 'paused',
+        costUsd: 1.25,
+        toolCalls: 7,
+        pausedAtStep: 4,
+      },
+    })
+
+    const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
+
+    expect(snapshot?.agents[0]?.costUsd).toBe(1.25)
+    expect(snapshot?.agents[0]?.toolCalls).toBe(7)
+    expect(snapshot?.agents[0]?.pausedAtStep).toBe(4)
+  })
+
+  it('reports zero cost, zero tool calls, and no paused-at step for an idle agent with no live run', async (): Promise<void> => {
+    const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
+
+    expect(snapshot?.agents[0]?.costUsd).toBe(0)
+    expect(snapshot?.agents[0]?.toolCalls).toBe(0)
+    expect(snapshot?.agents[0]?.pausedAtStep).toBeNull()
+  })
+
   it('does not leak another workspace\'s agents or tasks', async (): Promise<void> => {
     const other = await prisma.workspace.create({
       data: { name: 'Other', repoPath: '/tmp/other', verifyCommands: ['true'], setupCommands: [] },

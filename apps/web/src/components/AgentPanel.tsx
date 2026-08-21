@@ -70,6 +70,17 @@ export function AgentPanel({
     setDraft(agent.queuedMessage ?? '')
   }, [agent.id, agent.queuedMessage])
 
+  // `OverviewClient` renders one `AgentPanel` element with no `key`, so switching `?agent=` from
+  // one agent to another re-renders this same component instance with a new `agent` prop rather
+  // than mounting a fresh one. Without this, agent A's error band and in-flight pending state
+  // would still be painted over agent B's panel (fix round 1, Finding 2). Scoped to `agent.id`
+  // alone, not `agent.queuedMessage` too — a snapshot refresh for the *same* agent must not wipe
+  // an error the user hasn't dismissed yet.
+  useEffect((): void => {
+    setErrorText(null)
+    setPending(new Set())
+  }, [agent.id])
+
   const runId = agent.runId
   const status = agent.status
   const pauseEnabled = runId !== null && (status === 'starting' || status === 'working' || status === 'resuming')
@@ -125,6 +136,14 @@ export function AgentPanel({
       </header>
 
       <div className="text-sm text-text-1">{agent.taskTitle ?? <span className="text-text-3">idle</span>}</div>
+
+      <div className="flex items-center gap-3 font-mono text-xs text-text-2">
+        <span data-testid="run-cost">${agent.costUsd.toFixed(2)}</span>
+        <span data-testid="run-tool-calls">{agent.toolCalls} calls</span>
+        {status === 'paused' && agent.pausedAtStep !== null && (
+          <span data-testid="run-paused-step">paused at step {agent.pausedAtStep}</span>
+        )}
+      </div>
 
       {errorText !== null && (
         <div role="alert" data-testid="panel-error" className="rounded border border-status-danger/40 bg-status-danger/10 px-2 py-1.5 text-xs text-status-danger">
