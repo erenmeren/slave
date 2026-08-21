@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TaskCard } from '../src/components/TaskCard.js'
 import { TaskColumn } from '../src/components/TaskColumn.js'
@@ -63,6 +63,11 @@ describe('TaskCard', () => {
   it('omits the assignee when there is none', () => {
     render(<TaskCard task={task({ assigneeName: null })} onSelect={() => {}} />)
     expect(screen.queryByTestId('assignee')).toBeNull()
+  })
+
+  it("shows the task's priority", () => {
+    render(<TaskCard task={task({ priority: 7 })} onSelect={() => {}} />)
+    expect(screen.getByTestId('priority').textContent).toContain('7')
   })
 
   it('calls onSelect with the task id when clicked', () => {
@@ -170,5 +175,12 @@ describe('TasksClient', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /close/i }))
     expect(screen.queryByText('The full description')).toBeNull()
+  })
+
+  it('buckets an off-column status (rework) into its board column while the card still reads the true status', () => {
+    render(<TasksClient workspaceId="w1" initial={snapshot([task({ id: 't1', status: 'rework' })])} />)
+    const readyColumn = screen.getByTestId('column-ready')
+    expect(within(readyColumn).getByText('Add the thing')).toBeTruthy()
+    expect(within(readyColumn).getByTestId('status-label').textContent).toBe('rework')
   })
 })

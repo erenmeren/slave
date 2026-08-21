@@ -52,8 +52,14 @@ export function TaskCard({
         <span className="text-sm text-text-1">{task.title}</span>
       </div>
       <div className="flex items-center gap-2 text-xs text-text-2">
+        <span data-testid="status-label" className={TASK_STATUS_TEXT[task.status]}>
+          {task.status}
+        </span>
         <span data-testid="attempt" className="font-mono">
           {task.attempt}/{task.maxAttempts}
+        </span>
+        <span data-testid="priority" className="font-mono">
+          p{task.priority}
         </span>
         {task.assigneeName !== null && <span data-testid="assignee">{task.assigneeName}</span>}
       </div>

@@ -9,10 +9,14 @@ import { TaskColumn } from './TaskColumn.js'
 import { TaskDetailPanel } from './TaskDetailPanel.js'
 import { TopBar } from './TopBar.js'
 
-// The board's fixed column order (design doc §5). `@ai-team-os/domain` exports the wider
-// 12-value `TaskStatus` type (it also covers `assigned`, `merging`, `rework`, `cancelled`) but no
-// ordered constant matching this narrower 8-column board, so the order is a literal here.
-const BOARD_COLUMNS: readonly TaskStatus[] = [
+/** The board's eight columns, in the spec's exact order (design doc §5 — "Columns exactly the
+ * eight task statuses", no ninth). */
+type BoardColumnStatus = 'backlog' | 'ready' | 'running' | 'verifying' | 'reviewing' | 'blocked' | 'done' | 'failed'
+
+// `@ai-team-os/domain` exports the wider 12-value `TaskStatus` type (it also covers `assigned`,
+// `merging`, `rework`, `cancelled`) but no ordered constant matching this narrower 8-column
+// board, so the order is a literal here.
+const BOARD_COLUMNS: readonly BoardColumnStatus[] = [
   'backlog',
   'ready',
   'running',
@@ -22,6 +26,28 @@ const BOARD_COLUMNS: readonly TaskStatus[] = [
   'done',
   'failed',
 ]
+
+// The four statuses outside the eight columns are live states, not dead ones (rework: a verify
+// failure with attempts remaining, or a provisioning/resume failure — orchestrator's verify.ts
+// and tick.ts). Every `TaskStatus` is bucketed onto a column here so such a task is still
+// reachable on the board; `Record<TaskStatus, BoardColumnStatus>` makes the mapping exhaustive —
+// a future `TaskStatus` addition is a compile error, not a silently-invisible task. The card
+// itself still shows the task's true status (TaskCard's own status label), so a rework task
+// visibly reads "rework" while sitting in the ready column.
+const BOARD_COLUMN_FOR_STATUS: Record<TaskStatus, BoardColumnStatus> = {
+  backlog: 'backlog',
+  ready: 'ready',
+  rework: 'ready',
+  blocked: 'blocked',
+  assigned: 'running',
+  running: 'running',
+  verifying: 'verifying',
+  reviewing: 'reviewing',
+  merging: 'reviewing',
+  done: 'done',
+  failed: 'failed',
+  cancelled: 'failed',
+}
 
 export function TasksClient({
   workspaceId,
@@ -50,7 +76,7 @@ export function TasksClient({
             <TaskColumn
               key={status}
               status={status}
-              tasks={view.tasks.filter((task) => task.status === status)}
+              tasks={view.tasks.filter((task) => BOARD_COLUMN_FOR_STATUS[task.status] === status)}
               onSelect={setSelectedId}
             />
           ))}
