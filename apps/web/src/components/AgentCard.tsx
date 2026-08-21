@@ -1,6 +1,6 @@
 import type { AgentCardData } from '../server/overview'
 
-const DOT: Record<AgentCardData['status'], string> = {
+export const DOT: Record<AgentCardData['status'], string> = {
   working: 'bg-status-working',
   starting: 'bg-status-starting',
   resuming: 'bg-status-starting',
@@ -13,14 +13,22 @@ const DOT: Record<AgentCardData['status'], string> = {
 export function AgentCard({
   agent,
   liveActionLine,
+  onOpen,
 }: {
   readonly agent: AgentCardData
   readonly liveActionLine: string | null
+  /** Opens the detail panel (spec §6) — the M4 card's disabled pause/stop buttons moved there. */
+  readonly onOpen: (id: string) => void
 }): React.JSX.Element {
   const line = liveActionLine ?? agent.actionLine
   return (
     <article className="flex flex-col gap-2 rounded border border-line bg-bg-1 p-4">
-      <header className="flex items-center gap-2">
+      <button
+        type="button"
+        onClick={() => onOpen(agent.id)}
+        aria-label={`Open ${agent.name}'s detail panel`}
+        className="flex items-center gap-2 text-left"
+      >
         <span
           data-testid="status-dot"
           className={`inline-block h-2 w-2 rounded-full ${DOT[agent.status]} ${agent.status === 'working' ? 'animate-pulse' : ''}`}
@@ -30,7 +38,7 @@ export function AgentCard({
         <span data-testid="status-label" className="ml-auto text-xs text-text-2">
           {agent.status}
         </span>
-      </header>
+      </button>
       <div className="text-sm text-text-1">{agent.taskTitle ?? <span className="text-text-3">idle</span>}</div>
       <div data-testid="action-line" className="h-5 truncate font-mono text-xs text-text-2">
         {line}
@@ -38,14 +46,6 @@ export function AgentCard({
       <footer className="flex items-center gap-2">
         <span className="rounded border border-line px-1.5 py-0.5 font-mono text-[10px] text-text-3">
           {agent.provider}
-        </span>
-        <span className="ml-auto flex gap-1">
-          <button disabled title="arrives in M5" className="rounded border border-line px-2 py-0.5 text-xs text-text-3">
-            pause
-          </button>
-          <button disabled title="stop arrives in M5" className="rounded border border-line px-2 py-0.5 text-xs text-text-3">
-            stop
-          </button>
         </span>
       </footer>
     </article>

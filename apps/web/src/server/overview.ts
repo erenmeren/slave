@@ -1,6 +1,17 @@
 import { prisma } from '@ai-team-os/db/client'
-import { toRunState } from '@ai-team-os/db'
+import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, toRunState } from '@ai-team-os/db'
 import { deriveAgentStatus, NON_TERMINAL_RUN_STATUSES, type AgentStatus } from '@ai-team-os/domain'
+import { feedSummary, type AgentFeedEvent } from '../lib/feedSummary.js'
+
+// Re-exported so callers that already import from `server/overview.ts` keep working; the
+// definition itself lives in the pure `lib/feedSummary.ts` module (controller ruling R3) so the
+// client-side hook can import `feedSummary` without pulling `@ai-team-os/db`'s `prisma` client
+// into the browser bundle. Types are erased at build, so re-exporting the interface here costs
+// nothing at runtime.
+export type { AgentFeedEvent }
+
+/** How many of an agent's most recent events seed the panel's live feed (spec §6). */
+const RECENT_EVENTS_LIMIT = 20
 
 export interface AgentCardData {
   readonly id: string
@@ -11,6 +22,10 @@ export interface AgentCardData {
   readonly taskTitle: string | null
   readonly actionLine: string | null
   readonly runId: string | null
+  /** The instruction queued for this agent's live run, consumed on resume (Checkpoint semantics). */
+  readonly queuedMessage: string | null
+  /** Last 20 execution events for this agent, oldest first — seeds the panel's live feed. */
+  readonly recentEvents: readonly AgentFeedEvent[]
 }
 
 export interface OverviewSnapshot {
@@ -66,6 +81,34 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
     }
   }
 
+  // One query for every agent's recent events, not one per agent (the M4 review flagged
+  // per-run queries as the first scaling cliff). `take` is generous enough that an even spread of
+  // activity across agents leaves each with its own last 20; a single very chatty agent can still
+  // crowd out a quiet one within this bound — accepted for M5, the brief's own reference query.
+  const recentEventRows = await prisma.executionEvent.findMany({
+    where: { agentId: { in: agents.map((a) => a.id) } },
+    orderBy: { seq: 'desc' },
+    take: RECENT_EVENTS_LIMIT * agents.length,
+  })
+  const recentEventsByAgent = new Map<string, AgentFeedEvent[]>()
+  for (const row of recentEventRows) {
+    if (row.agentId === null) continue
+    const forAgent = recentEventsByAgent.get(row.agentId)
+    if (forAgent !== undefined && forAgent.length >= RECENT_EVENTS_LIMIT) continue
+    const domainType = DOMAIN_EVENT_TYPE_BY_DB_VALUE[row.type] ?? row.type
+    const feedEvent: AgentFeedEvent = {
+      seq: Number(row.seq),
+      ts: row.ts.toISOString(),
+      type: domainType,
+      summary: feedSummary(domainType, row.payload as Record<string, unknown>),
+    }
+    if (forAgent === undefined) recentEventsByAgent.set(row.agentId, [feedEvent])
+    else forAgent.push(feedEvent)
+  }
+  // Rows arrived newest-first (capped per agent while iterating that order); the panel wants
+  // oldest-first, newest at the bottom.
+  for (const events of recentEventsByAgent.values()) events.reverse()
+
   const [spent, taskGroups] = await Promise.all([
     prisma.agentRun.aggregate({ where: { task: { workspaceId } }, _sum: { costUsd: true } }),
     prisma.task.groupBy({ by: ['status'], where: { workspaceId }, _count: { _all: true } }),
@@ -94,6 +137,8 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
         taskTitle: run?.task.title ?? null,
         actionLine: lines.get(agent.id) ?? null,
         runId: run?.id ?? null,
+        queuedMessage: run?.queuedMessage ?? null,
+        recentEvents: recentEventsByAgent.get(agent.id) ?? [],
       }
     }),
     tasks: {

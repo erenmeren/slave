@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { render, screen } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { fireEvent, render, screen } from '@testing-library/react'
+import { describe, expect, it, vi } from 'vitest'
 import { AgentCard } from '../src/components/AgentCard.js'
 import { HaltBanner } from '../src/components/HaltBanner.js'
 import { TopStrip } from '../src/components/TopStrip.js'
@@ -15,6 +15,8 @@ const agent = (over: Partial<AgentCardData>): AgentCardData => ({
   taskTitle: null,
   actionLine: null,
   runId: null,
+  queuedMessage: null,
+  recentEvents: [],
   ...over,
 })
 
@@ -50,6 +52,7 @@ describe('AgentCard', () => {
       <AgentCard
         agent={agent({ status: 'working', taskTitle: 'Add the thing', actionLine: 'Read a.ts' })}
         liveActionLine="Write note3.txt"
+        onOpen={() => {}}
       />,
     )
     // The live line wins over the snapshot's (spec §6) — the stream is fresher by construction.
@@ -59,22 +62,26 @@ describe('AgentCard', () => {
   })
 
   it('falls back to the snapshot action line when no live one has arrived', () => {
-    render(<AgentCard agent={agent({ status: 'working', actionLine: 'Read a.ts' })} liveActionLine={null} />)
+    render(<AgentCard agent={agent({ status: 'working', actionLine: 'Read a.ts' })} liveActionLine={null} onOpen={() => {}} />)
     expect(screen.getByTestId('action-line').textContent).toBe('Read a.ts')
   })
 
   it('pulses only while working', () => {
-    const { rerender } = render(<AgentCard agent={agent({ status: 'working' })} liveActionLine={null} />)
+    const { rerender } = render(<AgentCard agent={agent({ status: 'working' })} liveActionLine={null} onOpen={() => {}} />)
     expect(screen.getByTestId('status-dot').className).toContain('animate-pulse')
-    rerender(<AgentCard agent={agent({ status: 'paused' })} liveActionLine={null} />)
+    rerender(<AgentCard agent={agent({ status: 'paused' })} liveActionLine={null} onOpen={() => {}} />)
     // Motion carries information (spec §7): a pulsing paused agent is a lie on screen.
     expect(screen.getByTestId('status-dot').className).not.toContain('animate-pulse')
   })
 
-  it('renders the actions disabled, labeled for M5', () => {
-    render(<AgentCard agent={agent({ status: 'working' })} liveActionLine={null} />)
-    const pause = screen.getByTitle('arrives in M5')
-    expect(pause.getAttribute('disabled')).not.toBeNull()
+  it('opens the detail panel via onOpen when the header is clicked — no more disabled M4 buttons', () => {
+    const onOpen = vi.fn()
+    render(<AgentCard agent={agent({ id: 'a9', status: 'working' })} liveActionLine={null} onOpen={onOpen} />)
+    fireEvent.click(screen.getByRole('button', { name: /open alex's detail panel/i }))
+    expect(onOpen).toHaveBeenCalledWith('a9')
+    // The M5 controls live in the panel now (spec §6) — the card carries no pause/stop of its own.
+    expect(screen.queryByTitle('arrives in M5')).toBeNull()
+    expect(screen.queryByTitle('stop arrives in M5')).toBeNull()
   })
 })
 

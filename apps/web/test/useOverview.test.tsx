@@ -16,6 +16,8 @@ const SNAPSHOT: OverviewSnapshot = {
       taskTitle: 'Add the thing',
       actionLine: null,
       runId: 'r1',
+      queuedMessage: null,
+      recentEvents: [],
     },
   ],
   tasks: { active: 1, blocked: 0, done: 0, failed: 0 },
@@ -262,5 +264,84 @@ describe('useOverview', () => {
     unmount()
 
     expect(FakeEventSource.instances[0]?.closed).toBe(true)
+  })
+
+  // Additive from here down — Task 9's per-agent live feed (spec §6). The 11 tests above are M4's
+  // and stay untouched.
+  describe('liveEvents', () => {
+    it('appends a pushed run.tool_call with its seq and derived summary', (): void => {
+      const { result } = renderHook(() => useOverview('w1', SNAPSHOT))
+
+      push({
+        seq: 7,
+        ts: new Date(0).toISOString(),
+        workspaceId: 'w1',
+        agentId: 'a1',
+        runId: 'r1',
+        actor: 'agent',
+        type: 'run.tool_call',
+        payload: { name: 'Write', summary: 'Write note3.txt' },
+      })
+
+      expect(result.current.liveEvents['a1']).toEqual([
+        { seq: 7, ts: new Date(0).toISOString(), type: 'run.tool_call', summary: 'Write note3.txt' },
+      ])
+    })
+
+    it('appends a pushed run.failed event with a non-empty summary', (): void => {
+      const { result } = renderHook(() => useOverview('w1', SNAPSHOT))
+
+      push({
+        seq: 8,
+        ts: new Date(0).toISOString(),
+        workspaceId: 'w1',
+        agentId: 'a1',
+        runId: 'r1',
+        actor: 'system',
+        type: 'run.failed',
+        payload: { reason: 'timed out' },
+      })
+
+      expect(result.current.liveEvents['a1']).toEqual([
+        { seq: 8, ts: new Date(0).toISOString(), type: 'run.failed', summary: 'run.failed' },
+      ])
+    })
+
+    it('caps the per-agent buffer at 50 events, dropping the oldest', (): void => {
+      const { result } = renderHook(() => useOverview('w1', SNAPSHOT))
+
+      for (let i = 1; i <= 55; i += 1) {
+        push({
+          seq: i,
+          ts: new Date(0).toISOString(),
+          workspaceId: 'w1',
+          agentId: 'a1',
+          runId: 'r1',
+          actor: 'agent',
+          type: 'run.tool_call',
+          payload: { name: 'Write', summary: `Write note${i}.txt` },
+        })
+      }
+
+      const events = result.current.liveEvents['a1'] ?? []
+      expect(events).toHaveLength(50)
+      expect(events[0]?.seq).toBe(6)
+      expect(events.at(-1)?.seq).toBe(55)
+    })
+
+    it('ignores an event without an agentId', (): void => {
+      const { result } = renderHook(() => useOverview('w1', SNAPSHOT))
+
+      push({
+        seq: 1,
+        ts: new Date(0).toISOString(),
+        workspaceId: 'w1',
+        actor: 'system',
+        type: 'task.started',
+        payload: { title: 'x' },
+      })
+
+      expect(result.current.liveEvents).toEqual({})
+    })
   })
 })

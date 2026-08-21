@@ -1,0 +1,217 @@
+'use client'
+
+import { useEffect, useMemo, useState } from 'react'
+import type { AgentFeedEvent } from '../lib/feedSummary.js'
+import type { AgentCardData } from '../server/overview.js'
+import { DOT } from './AgentCard.js'
+
+type ControlAction = 'pause' | 'resume' | 'stop' | 'message'
+
+/** Pulls a 409 refusal's `{ error }` text, falling back to something nameable for any other
+ *  non-2xx or malformed body — the panel's error band must never render blank (spec §9). */
+function errorMessage(data: unknown, status: number): string {
+  if (data !== null && typeof data === 'object') {
+    const value = (data as { error?: unknown }).error
+    if (typeof value === 'string') return value
+  }
+  return `request failed (${status})`
+}
+
+/** Bare `fetch(url, { method: 'POST', ... })` — the constraint every control POST here follows.
+ *  No state is written from the response beyond the error band; the event-driven refetch loop
+ *  (`useOverview`) owns truth. */
+async function postControl(url: string, body?: Record<string, unknown>): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    const response =
+      body === undefined
+        ? await fetch(url, { method: 'POST' })
+        : await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    if (response.ok) return { ok: true }
+    const data: unknown = await response.json().catch(() => null)
+    return { ok: false, error: errorMessage(data, response.status) }
+  } catch (cause) {
+    return { ok: false, error: cause instanceof Error ? cause.message : String(cause) }
+  }
+}
+
+/** Seed (`agent.recentEvents`, last 20 from the DB) merged with the live buffer
+ *  (`liveEvents[agent.id]`), deduplicated by seq, ascending — newest at the bottom. */
+function mergeFeed(seed: readonly AgentFeedEvent[], live: readonly AgentFeedEvent[]): readonly AgentFeedEvent[] {
+  const bySeq = new Map<number, AgentFeedEvent>()
+  for (const event of seed) bySeq.set(event.seq, event)
+  for (const event of live) bySeq.set(event.seq, event)
+  return [...bySeq.values()].sort((a, b) => a.seq - b.seq)
+}
+
+export function AgentPanel({
+  agent,
+  liveEvents,
+  workspaceId,
+  haltedReason,
+  onClose,
+}: {
+  readonly agent: AgentCardData
+  readonly liveEvents: readonly AgentFeedEvent[]
+  readonly workspaceId: string
+  /** The workspace's current halt reason, if any — drives the "resume disabled + halt reason"
+   *  cell of the enable/disable matrix (spec §6). */
+  readonly haltedReason: string | null
+  readonly onClose: () => void
+}): React.JSX.Element {
+  const [pending, setPending] = useState<ReadonlySet<ControlAction>>(new Set())
+  const [errorText, setErrorText] = useState<string | null>(null)
+  const [draft, setDraft] = useState(agent.queuedMessage ?? '')
+
+  // Resync the draft from the snapshot's queued message whenever it changes underneath us — a
+  // resume consuming it, another client overwriting it, or switching to a different agent. Not
+  // optimistic UI: this reads what the snapshot already carried in, it never reads a POST's
+  // response body.
+  useEffect((): void => {
+    setDraft(agent.queuedMessage ?? '')
+  }, [agent.id, agent.queuedMessage])
+
+  const runId = agent.runId
+  const status = agent.status
+  const pauseEnabled = runId !== null && (status === 'starting' || status === 'working' || status === 'resuming')
+  const stopEnabled = runId !== null && status !== 'idle'
+  const workspaceHalted = haltedReason !== null
+  const resumeEnabled = runId !== null && status === 'paused' && !workspaceHalted
+  const showMessageBox = status !== 'idle'
+  const messageWritable = status === 'paused'
+
+  const feed = useMemo(() => mergeFeed(agent.recentEvents, liveEvents), [agent.recentEvents, liveEvents])
+
+  const run = async (action: ControlAction, path: string, body?: Record<string, unknown>): Promise<void> => {
+    if (runId === null) return
+    setPending((current) => new Set(current).add(action))
+    setErrorText(null)
+    const result = await postControl(`/api/w/${workspaceId}/runs/${runId}/${path}`, body)
+    if (!result.ok) setErrorText(result.error)
+    setPending((current) => {
+      const next = new Set(current)
+      next.delete(action)
+      return next
+    })
+  }
+
+  return (
+    <aside
+      aria-label="Agent detail"
+      className="fixed inset-y-0 right-0 z-10 flex w-96 flex-col gap-4 overflow-y-auto border-l border-line bg-bg-1 p-4"
+    >
+      <header className="flex items-start justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span
+            data-testid="status-dot"
+            className={`inline-block h-2 w-2 shrink-0 rounded-full ${DOT[agent.status]} ${agent.status === 'working' ? 'animate-pulse' : ''}`}
+          />
+          <div>
+            <h2 className="text-sm font-medium text-text-1">{agent.name}</h2>
+            <span className="text-xs text-text-3">{agent.role}</span>
+          </div>
+          <span data-testid="status-label" className="ml-1 text-xs text-text-2">
+            {agent.status}
+          </span>
+          <span className="rounded border border-line px-1.5 py-0.5 font-mono text-[10px] text-text-3">{agent.provider}</span>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close agent detail"
+          className="rounded border border-line px-2 py-1 text-xs text-text-2"
+        >
+          close
+        </button>
+      </header>
+
+      <div className="text-sm text-text-1">{agent.taskTitle ?? <span className="text-text-3">idle</span>}</div>
+
+      {errorText !== null && (
+        <div role="alert" data-testid="panel-error" className="rounded border border-status-danger/40 bg-status-danger/10 px-2 py-1.5 text-xs text-status-danger">
+          {errorText}
+        </div>
+      )}
+
+      <section className="flex gap-2">
+        <button
+          type="button"
+          data-testid="pause-button"
+          disabled={!pauseEnabled || pending.has('pause')}
+          onClick={() => void run('pause', 'pause')}
+          className="rounded border border-line px-2 py-1 text-xs text-text-1 disabled:text-text-3"
+        >
+          pause
+        </button>
+        <button
+          type="button"
+          data-testid="resume-button"
+          disabled={!resumeEnabled || pending.has('resume')}
+          onClick={() => void run('resume', 'resume')}
+          className="rounded border border-line px-2 py-1 text-xs text-text-1 disabled:text-text-3"
+        >
+          resume
+        </button>
+        <button
+          type="button"
+          data-testid="stop-button"
+          disabled={!stopEnabled || pending.has('stop')}
+          onClick={() => void run('stop', 'stop')}
+          className="rounded border border-line px-2 py-1 text-xs text-text-1 disabled:text-text-3"
+        >
+          stop
+        </button>
+      </section>
+
+      {status === 'paused' && workspaceHalted && (
+        <p data-testid="resume-halt-reason" className="text-xs text-status-danger">
+          workspace halted: {haltedReason}
+        </p>
+      )}
+
+      {showMessageBox && (
+        <section data-testid="message-box" className="flex flex-col gap-1">
+          <h3 className="text-xs uppercase tracking-wide text-text-3">Message</h3>
+          {messageWritable ? (
+            <>
+              <textarea
+                data-testid="message-input"
+                value={draft}
+                onChange={(event) => setDraft(event.target.value)}
+                className="rounded border border-line bg-bg-0 p-2 text-xs text-text-1"
+                rows={3}
+              />
+              <button
+                type="button"
+                data-testid="message-save"
+                disabled={pending.has('message')}
+                onClick={() => void run('message', 'message', { message: draft })}
+                className="self-end rounded border border-line px-2 py-1 text-xs text-text-1 disabled:text-text-3"
+              >
+                save
+              </button>
+            </>
+          ) : (
+            <p data-testid="message-hint" className="text-xs text-text-3">
+              pause to send an instruction
+            </p>
+          )}
+        </section>
+      )}
+
+      <section className="flex flex-1 flex-col gap-1 overflow-y-auto">
+        <h3 className="text-xs uppercase tracking-wide text-text-3">Live feed</h3>
+        {feed.length === 0 ? (
+          <p className="text-xs text-text-3">no events yet</p>
+        ) : (
+          <ul className="flex flex-col gap-1">
+            {feed.map((event) => (
+              <li key={event.seq} data-testid="feed-event" className="font-mono text-xs text-text-2">
+                {event.summary}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+    </aside>
+  )
+}

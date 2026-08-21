@@ -166,6 +166,53 @@ describe('buildOverviewSnapshot', () => {
     expect(snapshot?.workspace.haltedAt).not.toBeNull()
   })
 
+  it('caps recentEvents at the last 20, oldest first, each with a non-empty summary', async (): Promise<void> => {
+    const run = await prisma.agentRun.create({
+      data: { taskId: fixture.taskId, agentId: fixture.agentId, status: 'working' },
+    })
+    for (let i = 0; i < 25; i += 1) {
+      await appendEvent({
+        type: 'run.tool_call',
+        workspaceId: fixture.workspaceId,
+        taskId: fixture.taskId,
+        agentId: fixture.agentId,
+        runId: run.id,
+        actor: 'agent',
+        payload: { name: 'Write', summary: `Write note${i}.txt` },
+      })
+    }
+
+    const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
+    const recentEvents = snapshot?.agents[0]?.recentEvents ?? []
+
+    // The oldest of the last 20 is event #5 (0-indexed: 25 events, keep the newest 20 -> #5..#24);
+    // the newest is #24, and the list must already be oldest-first for the feed to render top-down.
+    expect(recentEvents).toHaveLength(20)
+    expect(recentEvents[0]?.summary).toBe('Write note5.txt')
+    expect(recentEvents.at(-1)?.summary).toBe('Write note24.txt')
+    expect(recentEvents.every((event) => event.summary.length > 0)).toBe(true)
+    expect(recentEvents.every((event) => event.type === 'run.tool_call')).toBe(true)
+    // Ascending by seq (oldest first): each event's seq strictly greater than the previous.
+    for (let i = 1; i < recentEvents.length; i += 1) {
+      expect(recentEvents[i]!.seq).toBeGreaterThan(recentEvents[i - 1]!.seq)
+    }
+  })
+
+  it('exposes the queued message from the agent\'s live run', async (): Promise<void> => {
+    await prisma.agentRun.create({
+      data: {
+        taskId: fixture.taskId,
+        agentId: fixture.agentId,
+        status: 'paused',
+        queuedMessage: 'also update the README',
+      },
+    })
+
+    const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
+
+    expect(snapshot?.agents[0]?.queuedMessage).toBe('also update the README')
+  })
+
   it('does not leak another workspace\'s agents or tasks', async (): Promise<void> => {
     const other = await prisma.workspace.create({
       data: { name: 'Other', repoPath: '/tmp/other', verifyCommands: ['true'], setupCommands: [] },
