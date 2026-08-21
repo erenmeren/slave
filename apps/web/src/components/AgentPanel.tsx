@@ -78,7 +78,11 @@ export function AgentPanel({
   const pauseEnabled = runId !== null && (status === 'starting' || status === 'working' || status === 'resuming')
   const stopEnabled = runId !== null && status !== 'idle'
   const workspaceHalted = haltedReason !== null
-  const resumeEnabled = runId !== null && status === 'paused' && !workspaceHalted
+  // While a recorded intent is still waiting for the daemon/CLI to claim it, another click would
+  // just record a second intent on top of the first (`requestResume` has no idempotency beyond
+  // the single `resumeRequestedAt` column) — disabled here keeps that double-click a no-op.
+  const resumeRequestedWhilePaused = status === 'paused' && agent.resumeRequestedAt !== null
+  const resumeEnabled = runId !== null && status === 'paused' && !workspaceHalted && !resumeRequestedWhilePaused
   const showMessageBox = status !== 'idle'
   const messageWritable = status === 'paused'
 
@@ -174,6 +178,12 @@ export function AgentPanel({
           stop
         </button>
       </section>
+
+      {resumeRequestedWhilePaused && (
+        <p data-testid="resume-requested" className="text-xs text-text-3">
+          resume requested — waiting for the daemon
+        </p>
+      )}
 
       {status === 'paused' && workspaceHalted && (
         <p data-testid="resume-halt-reason" className="text-xs text-status-danger">

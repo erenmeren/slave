@@ -1,4 +1,5 @@
 import { prisma } from '@ai-team-os/db/client'
+import { requestResume } from '@ai-team-os/control'
 import { appendEvent } from '@ai-team-os/events'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { buildOverviewSnapshot } from '../../src/server/overview.js'
@@ -211,6 +212,34 @@ describe('buildOverviewSnapshot', () => {
     const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
 
     expect(snapshot?.agents[0]?.queuedMessage).toBe('also update the README')
+  })
+
+  it('carries resumeRequestedAt once a resume intent is recorded, and null before/after', async (): Promise<void> => {
+    const run = await prisma.agentRun.create({
+      data: { taskId: fixture.taskId, agentId: fixture.agentId, status: 'paused' },
+    })
+    await prisma.checkpoint.create({
+      data: {
+        runId: run.id,
+        sessionId: 'session-123',
+        worktreePath: '/tmp/overview-fixture/.aiteamos/worktrees/T-abcdef12',
+        pauseFlagPath: '/tmp/overview-fixture/.aiteamos/runs/pause.flag',
+        settingsPath: '/tmp/overview-fixture/.aiteamos/runs/settings.json',
+        hookPath: '/tmp/overview-fixture/scripts/pause-gate.sh',
+        gitAuthorName: 'Alex',
+        gitAuthorEmail: 'alex@aiteamos.local',
+        headCommit: 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678',
+      },
+    })
+
+    const before = await buildOverviewSnapshot(fixture.workspaceId)
+    expect(before?.agents[0]?.resumeRequestedAt).toBeNull()
+
+    const requested = await requestResume(run.id, null, 'meren')
+    expect(requested.ok).toBe(true)
+
+    const after = await buildOverviewSnapshot(fixture.workspaceId)
+    expect(after?.agents[0]?.resumeRequestedAt).not.toBeNull()
   })
 
   it("exposes cost so far, tool calls, and paused-at step from the agent's live run", async (): Promise<void> => {

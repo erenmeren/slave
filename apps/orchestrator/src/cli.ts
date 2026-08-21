@@ -250,7 +250,10 @@ export async function main(argv: readonly string[]): Promise<number> {
       if (!intent.claimed) {
         const claimed = await prisma.agentRun.updateMany({
           where: { id: run.id, status: 'paused' },
-          data: { status: 'resuming' },
+          // Clears any intent columns too, closing the window where a web `requestResume` lands
+          // between `claimResume`'s check and this fallback write: without this, that intent would
+          // survive into `resuming` and later spontaneously resume the run on its own.
+          data: { status: 'resuming', resumeRequestedAt: null, queuedMessage: null },
         })
         if (claimed.count === 0) {
           throw new Error(`run ${run.id} is not paused (it is ${run.status}): there is nothing to resume`)

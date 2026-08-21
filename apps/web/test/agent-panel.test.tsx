@@ -14,6 +14,7 @@ const agent = (over: Partial<AgentCardData>): AgentCardData => ({
   actionLine: null,
   runId: 'r1',
   queuedMessage: null,
+  resumeRequestedAt: null,
   recentEvents: [],
   costUsd: 0,
   toolCalls: 0,
@@ -77,6 +78,35 @@ describe('AgentPanel', () => {
       expect(screen.getByTestId('stop-button').getAttribute('disabled')).toBeNull()
       expect(screen.getByTestId('message-input')).toBeTruthy()
       expect(screen.queryByTestId('message-hint')).toBeNull()
+    })
+
+    it('while paused with a resume intent recorded: resume is disabled and shows the waiting line', () => {
+      render(
+        <AgentPanel
+          agent={agent({ status: 'paused', resumeRequestedAt: '2026-08-21T00:00:00.000Z' })}
+          liveEvents={[]}
+          workspaceId="w1"
+          haltedReason={null}
+          onClose={() => {}}
+        />,
+      )
+      expect(screen.getByTestId('resume-button').getAttribute('disabled')).not.toBeNull()
+      expect(screen.getByTestId('resume-requested')).toBeTruthy()
+      expect(screen.getByTestId('resume-requested').textContent).toMatch(/resume requested/i)
+    })
+
+    it('while paused with no resume intent recorded: resume is enabled and the waiting line is absent', () => {
+      render(
+        <AgentPanel
+          agent={agent({ status: 'paused', resumeRequestedAt: null })}
+          liveEvents={[]}
+          workspaceId="w1"
+          haltedReason={null}
+          onClose={() => {}}
+        />,
+      )
+      expect(screen.getByTestId('resume-button').getAttribute('disabled')).toBeNull()
+      expect(screen.queryByTestId('resume-requested')).toBeNull()
     })
 
     it('while paused and the workspace is halted: resume is disabled and shows the halt reason', () => {

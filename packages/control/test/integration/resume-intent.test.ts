@@ -186,4 +186,31 @@ describe('the resume intent', () => {
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.error.kind).toBe('run_not_found')
   })
+
+  it('updateQueuedMessage normalizes an empty or whitespace-only save to clearing the slot', async (): Promise<void> => {
+    const { run } = fixture
+    await updateQueuedMessage(run.id, 'first instruction')
+
+    const cleared = await updateQueuedMessage(run.id, '')
+    expect(cleared.ok).toBe(true)
+    expect((await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })).queuedMessage).toBeNull()
+
+    await updateQueuedMessage(run.id, 'second instruction')
+    const clearedByWhitespace = await updateQueuedMessage(run.id, '   \n\t ')
+    expect(clearedByWhitespace.ok).toBe(true)
+    expect((await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })).queuedMessage).toBeNull()
+  })
+
+  it('requestResume normalizes an empty message to null rather than queuing an empty prompt', async (): Promise<void> => {
+    const { run } = fixture
+    const result = await requestResume(run.id, '', 'meren')
+    expect(result.ok).toBe(true)
+
+    const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })
+    expect(after.resumeRequestedAt).not.toBeNull()
+    expect(after.queuedMessage).toBeNull()
+
+    const event = await prisma.executionEvent.findFirst({ where: { runId: run.id, type: 'run_resume_requested' } })
+    expect(event?.payload).toEqual({ requestedBy: 'meren', message: null })
+  })
 })

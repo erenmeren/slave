@@ -62,7 +62,7 @@ testing-library, zod.
   - `killWithEscalation(pid: number | null, graceMs?: number): Promise<boolean>` — SIGTERM,
     wait `graceMs` (default 2000), SIGKILL if still alive; returns whether anything was signalled.
 
-- [ ] **Step 1: Scaffold the package**
+- [x] **Step 1: Scaffold the package**
 
 `packages/control/package.json` (the `events` package is the template):
 
@@ -88,7 +88,7 @@ edit. Root `tsconfig.json`: add `{ "path": "packages/control" }` after `packages
 `package.json` `typecheck` script: add `tsc -p packages/control/tsconfig.test.json` after the
 events entry. Run `npm install` to link the workspace.
 
-- [ ] **Step 2: Write the failing unit test for the moved path derivation**
+- [x] **Step 2: Write the failing unit test for the moved path derivation**
 
 `packages/control/test/paths.test.ts`:
 
@@ -109,7 +109,7 @@ describe('runFilePaths', () => {
 
 Run: `npx vitest run packages/control/test/paths.test.ts` — FAIL (module not found).
 
-- [ ] **Step 3: Move `runFilePaths`**
+- [x] **Step 3: Move `runFilePaths`**
 
 Cut the function (with its doc comment) from `apps/orchestrator/src/tick.ts:119` into
 `packages/control/src/paths.ts` unchanged; export it from `src/index.ts`. In `tick.ts` add
@@ -120,7 +120,7 @@ Cut the function (with its doc comment) from `apps/orchestrator/src/tick.ts:119`
 Add `"@ai-team-os/control": "*"` to `apps/orchestrator/package.json` dependencies and the
 project reference to `apps/orchestrator/tsconfig.json`.
 
-- [ ] **Step 4: Move the kill helpers**
+- [x] **Step 4: Move the kill helpers**
 
 `packages/control/src/kill.ts` — move `isAlive`, `signalRun`, and the grace constant from
 `apps/orchestrator/src/cli.ts:148-168` verbatim, then add:
@@ -143,7 +143,7 @@ Export all from `src/index.ts`. In `cli.ts`, replace the local definitions and t
 SIGTERM/grace/SIGKILL sequence in `case 'cancel'` with `const signalled = await
 killWithEscalation(run.pid)`.
 
-- [ ] **Step 5: Write the failing integration test for escalation**
+- [x] **Step 5: Write the failing integration test for escalation**
 
 `packages/control/test/integration/kill.test.ts`:
 
@@ -168,12 +168,12 @@ describe('killWithEscalation', () => {
 })
 ```
 
-- [ ] **Step 6: Build and verify**
+- [x] **Step 6: Build and verify**
 
 Run: `npm test` (the CLI integration suite is the equivalence bar — `cancel` and `pause` tests
 must pass unchanged) and `npm run typecheck`. Expected: all green.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add -A && git commit -m "feat(control): extract runFilePaths and the kill escalation into packages/control"
@@ -197,7 +197,7 @@ git add -A && git commit -m "feat(control): extract runFilePaths and the kill es
   `{ requestedBy: string; message: string | null }`; `AgentRun.resumeRequestedAt: DateTime?` and
   `AgentRun.queuedMessage: String?` columns.
 
-- [ ] **Step 1: Write the failing domain test**
+- [x] **Step 1: Write the failing domain test**
 
 Add to `packages/domain/test/events/schema.test.ts` (match the file's existing envelope fixture —
 reuse its helper for the envelope fields):
@@ -224,7 +224,7 @@ it('accepts run.resume_requested with a null message', () => {
 
 Run: `npx vitest run packages/domain/test/events/schema.test.ts` — FAIL (invalid discriminator).
 
-- [ ] **Step 2: Add the union member**
+- [x] **Step 2: Add the union member**
 
 In `packages/domain/src/events/schema.ts`, next to `run.pause_requested` (line ~54):
 
@@ -236,13 +236,13 @@ z.object({
 }),
 ```
 
-- [ ] **Step 3: Map it in the DB enum layer**
+- [x] **Step 3: Map it in the DB enum layer**
 
 `packages/db/src/enums.ts` — add `'run.resume_requested': 'run_resume_requested',` to
 `EVENT_TYPE_BY_DOMAIN_TYPE` (the `satisfies` clause forces this; the build fails until it's
 there). If the file has a reverse map, extend it the same way.
 
-- [ ] **Step 4: Schema + migration**
+- [x] **Step 4: Schema + migration**
 
 `packages/db/prisma/schema.prisma`:
 - `EventType` enum: add `run_resume_requested @map("run.resume_requested")` next to
@@ -259,12 +259,12 @@ there). If the file has a reverse map, extend it the same way.
 
 Generate the migration, then `npm run db:generate`.
 
-- [ ] **Step 5: Verify**
+- [x] **Step 5: Verify**
 
 Run: `npm test && npm run typecheck`. The enum-parity integration test proves the DB enum and the
 domain union still match; everything else proves nothing broke.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add -A && git commit -m "feat(domain,db): add the resume intent columns and run.resume_requested event"
@@ -302,7 +302,7 @@ export async function requestPause(runId: string, requestedBy: string): Promise<
 export async function requestStop(runId: string, requestedBy: string): Promise<Result<void, ControlRefusal>>
 ```
 
-- [ ] **Step 1: Write the failing pause integration tests**
+- [x] **Step 1: Write the failing pause integration tests**
 
 `packages/control/test/integration/pause.test.ts` — follow the DB fixture conventions of
 `packages/db/test/integration/work.test.ts` (its helpers seed workspace/team/agent/task/run rows;
@@ -356,7 +356,7 @@ describe('requestPause', () => {
 
 Run — FAIL (module not found).
 
-- [ ] **Step 2: Implement `refusal.ts` and `pause.ts`**
+- [x] **Step 2: Implement `refusal.ts` and `pause.ts`**
 
 `requestPause` is the CLI `case 'pause'` body (cli.ts:246-285) verbatim, reshaped: `findUnique`
 (with task) → `run_not_found`; `updateMany` claim on `{starting, working, resuming}` →
@@ -375,7 +375,7 @@ export function refusalText(refusal: ControlRefusal): string {
 }
 ```
 
-- [ ] **Step 3: Write the failing stop integration tests**
+- [x] **Step 3: Write the failing stop integration tests**
 
 `packages/control/test/integration/stop.test.ts` — same fixtures, plus a real child process:
 
@@ -407,7 +407,7 @@ it('still concludes a run whose process is already gone', async () => {
 })
 ```
 
-- [ ] **Step 4: Implement `stop.ts`**
+- [x] **Step 4: Implement `stop.ts`**
 
 The CLI `case 'cancel'` body (cli.ts:398-437), reshaped: `run_not_found` on missing run;
 `killWithEscalation(run.pid)`; the `updateMany` on `endedAt: null` (keep — it is the idempotence
@@ -417,7 +417,7 @@ guard); the task `updateMany` to `blocked` conditioned on `activeRunId: run.id`;
 never did; the `endedAt: null` guard makes the second call a no-op that still reports ok. Keep
 that contract and say so in a comment.
 
-- [ ] **Step 5: Rewire the CLI**
+- [x] **Step 5: Rewire the CLI**
 
 `case 'pause'`: body becomes
 
@@ -431,12 +431,12 @@ return 0
 `case 'cancel'` likewise over `requestStop` (keep the CLI's closing
 `stopped …; its worktree is preserved` line). Delete the now-dead local code.
 
-- [ ] **Step 6: Verify equivalence**
+- [x] **Step 6: Verify equivalence**
 
 Run: `npm test && npm run typecheck`. The CLI integration tests (`cli.test.ts` pause/cancel
 cases) are the bar: same observable transcript, zero test edits.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add -A && git commit -m "feat(control): extract pause and stop into shared control operations"
@@ -468,7 +468,7 @@ export async function claimResume(runId: string): Promise<{ claimed: boolean; qu
 export async function executeResume(options: { runId: string; adapter: AgentRuntimeAdapter; message: string | null }): Promise<void>
 ```
 
-- [ ] **Step 1: Write the failing intent tests**
+- [x] **Step 1: Write the failing intent tests**
 
 `packages/control/test/integration/resume-intent.test.ts` (fixtures as in Task 3, run seeded
 `paused` with a full checkpoint row — copy the checkpoint fixture from
@@ -525,7 +525,7 @@ it('updateQueuedMessage refuses when the run is not paused', async () => {
 })
 ```
 
-- [ ] **Step 2: Implement `packages/control/src/resume.ts`**
+- [x] **Step 2: Implement `packages/control/src/resume.ts`**
 
 `requestResume`: `findUnique` run (include task) → `run_not_found`; workspace halted →
 `workspace_halted` (same lookup the CLI does); `checkpoint.findUnique` → `no_checkpoint`;
@@ -557,7 +557,7 @@ prior intent must still work, so the CLI path first calls
 exactly as today when `claimResume` reports unclaimed. Keep both paths in the CLI case; see
 Step 4.)
 
-- [ ] **Step 3: Extract `executeResume`**
+- [x] **Step 3: Extract `executeResume`**
 
 `apps/orchestrator/src/resume.ts`: the CLI resume body from `const checkpoint = …` **after** the
 claim (cli.ts:302 onward) moves here verbatim — checkpoint load (throw if missing: by the time
@@ -567,7 +567,7 @@ pauseReason/pausedAtStep), the `run.resumed` event, `pumpRun({ …, resumed: tru
 `await pumped`, `verifyConcludedRun`. Signature as in Interfaces; the CLI case and the tick both
 call it.
 
-- [ ] **Step 4: Rewire the CLI resume case**
+- [x] **Step 4: Rewire the CLI resume case**
 
 Order: halt check (now via the loaded workspace, same wording — or just call `requestResume`?
 No: the CLI is synchronous and should not leave an intent behind on the failure paths), then
@@ -577,7 +577,7 @@ unclaimed, error if that claims zero. Message precedence: an explicit `--message
 queued one. Then `executeResume({ runId, adapter: buildAdapter(), message })` and the existing
 stdout lines.
 
-- [ ] **Step 5: Write the failing daemon-execution tests**
+- [x] **Step 5: Write the failing daemon-execution tests**
 
 `apps/orchestrator/test/integration/resume-execution.test.ts` — model on the existing
 `cli.test.ts`/`tick.test.ts` fixtures (fake adapter via `AITEAMOS_CLAUDE_BIN`; those tests show
@@ -612,7 +612,7 @@ it('a paused run with an intent survives an orphan sweep untouched', async () =>
 })
 ```
 
-- [ ] **Step 6: Implement the tick resume pass**
+- [x] **Step 6: Implement the tick resume pass**
 
 In `apps/orchestrator/src/tick.ts`, after the existing start pass and inside the same
 halted-workspace guard the start path honours (if `tick` bails early on a halt, the resume pass
@@ -638,12 +638,12 @@ for (const intent of intents) {
 (Match the file's real pump-tracking idiom — copy how the start pass registers into `pumps`,
 including its error logging, rather than inventing a second pattern.)
 
-- [ ] **Step 7: Verify**
+- [x] **Step 7: Verify**
 
 Run: `npm test && npm run typecheck`. The existing CLI resume tests
 (`resumes a paused run in its own worktree, session and identity`) are the equivalence bar.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add -A && git commit -m "feat(control,orchestrator): resume as a web intent the daemon executes"
@@ -667,7 +667,7 @@ git add -A && git commit -m "feat(control,orchestrator): resume as a web intent 
 - Produces: the four POST endpoints of spec §4. Success: `{ ok: true }` (200). Refusal: 409,
   body `{ error: refusalText }`. Wrong workspace or unknown run: 404.
 
-- [ ] **Step 1: Write the failing route tests**
+- [x] **Step 1: Write the failing route tests**
 
 `apps/web/test/integration/control-routes.test.ts` — follow
 `apps/web/test/integration/routes.test.ts`'s pattern (it imports route handlers directly and
@@ -735,7 +735,7 @@ it('stop concludes the run and blocks the task through the route', async () => {
 })
 ```
 
-- [ ] **Step 2: Implement the shared shell**
+- [x] **Step 2: Implement the shared shell**
 
 `apps/web/src/server/controlRoute.ts`:
 
@@ -782,9 +782,9 @@ export async function POST(
 message, not a 500 — same not-ours-to-crash-over rule); `message/route.ts` 400s on a missing
 `message` string. Count the `../` segments carefully — the route sits two dynamic segments deep.
 
-- [ ] **Step 3: Verify** — run the new test file, then `npm test && npm run typecheck`.
+- [x] **Step 3: Verify** — run the new test file, then `npm test && npm run typecheck`.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add -A && git commit -m "feat(web): POST routes for pause, resume, stop and message over packages/control"
@@ -832,7 +832,7 @@ export interface TasksSnapshot {
 export async function buildTasksSnapshot(workspaceId: string): Promise<TasksSnapshot | null>
 ```
 
-- [ ] **Step 1: Write the failing integration tests** (fixtures as in
+- [x] **Step 1: Write the failing integration tests** (fixtures as in
   `apps/web/test/integration/overview.test.ts`, which this file mirrors):
 
 ```ts
@@ -863,13 +863,13 @@ it('the route serves the snapshot and 404s an unknown workspace', async () => {
 })
 ```
 
-- [ ] **Step 2: Implement** — one `prisma.task.findMany({ where: { workspaceId }, orderBy:
+- [x] **Step 2: Implement** — one `prisma.task.findMany({ where: { workspaceId }, orderBy:
   [{ priority: 'desc' }, { createdAt: 'asc' }], include: { runs: { orderBy: { startedAt: 'desc' },
   include: { checkpoint: true, agent: true } } } })`; assignee = the agent of the run whose status
   is in `NON_TERMINAL_RUN_STATUSES`; map dates to ISO strings; `dirtyFileCount =
   checkpoint.dirtyFiles.length`. The route follows `overview/route.ts` verbatim.
 
-- [ ] **Step 3: Verify + commit**
+- [x] **Step 3: Verify + commit**
 
 ```bash
 git add -A && git commit -m "feat(web): tasks board snapshot read model and route"
@@ -911,7 +911,7 @@ export function useTasks(workspaceId: string, initial: TasksSnapshot): {
 }
 ```
 
-- [ ] **Step 1: Move the core.** `useWorkspaceStream` is today's `useOverview` effect minus the
+- [x] **Step 1: Move the core.** `useWorkspaceStream` is today's `useOverview` effect minus the
   action-line block: EventSource, onopen → connected + `scheduleRefetch()`, onerror →
   reconnecting, 250ms trailing debounce, monotonic `refetchSeq` guard, JSON-primitive rejection,
   every-event wake-up, unmount close. `onEvent` is called with each parsed object event;
@@ -919,21 +919,21 @@ export function useTasks(workspaceId: string, initial: TasksSnapshot): {
   render) so the effect never re-subscribes on identity churn — the effect's dependency stays
   `[workspaceId, endpoint]`.
 
-- [ ] **Step 2: Reimplement `useOverview` on it** — same exported signature and behaviour:
+- [x] **Step 2: Reimplement `useOverview` on it** — same exported signature and behaviour:
   `lines` state and `pruneLines` stay in `useOverview`; `onEvent` handles `run.tool_call` exactly
   as the current code (runId capture included); `onSnapshot` prunes. The derived `actionLines`
   memo stays.
 
-- [ ] **Step 3: Run the untouched M4 tests.** `npx vitest run apps/web/test/useOverview.test.tsx`
+- [x] **Step 3: Run the untouched M4 tests.** `npx vitest run apps/web/test/useOverview.test.tsx`
   — all 11 green with zero edits is this task's acceptance bar.
 
-- [ ] **Step 4: `useTasks`** — trivial composition over
+- [x] **Step 4: `useTasks`** — trivial composition over
   `endpoint: /api/w/${workspaceId}/tasks`. Tests: one refetch per event burst; snapshot updates
   after an event; error band on failed refetch (copy the shapes from the useOverview tests, typed
   against `TasksSnapshot`). `useWorkspaceStream.test.tsx` pins the extraction's own seams: both
   callbacks fire, and neither firing schedules a second EventSource.
 
-- [ ] **Step 5: Full verify + commit**
+- [x] **Step 5: Full verify + commit**
 
 ```bash
 git add -A && git commit -m "refactor(web): extract useWorkspaceStream and add useTasks on top"
@@ -955,14 +955,14 @@ git add -A && git commit -m "refactor(web): extract useWorkspaceStream and add u
 - Consumes: Task 6's `TasksSnapshot`/`TaskBoardItem`, Task 7's `useTasks`.
 - Produces: `/w/[workspaceId]/tasks`, `?task=<id>` opens the detail panel.
 
-- [ ] **Step 1: Failing component tests** (jsdom, as `overview-components.test.tsx`):
+- [x] **Step 1: Failing component tests** (jsdom, as `overview-components.test.tsx`):
   all eight columns render in order
   `backlog, ready, running, verifying, reviewing, blocked, done, failed` (empty ones included);
   a card shows title, `attempt/maxAttempts`, assignee when present; clicking a card shows the
   detail panel with description, branch, rejection reason and run rows; a paused run's row shows
   `paused at step N`; the panel closes back to the board.
 
-- [ ] **Step 2: Implement.** `page.tsx` mirrors the overview page (server snapshot via
+- [x] **Step 2: Implement.** `page.tsx` mirrors the overview page (server snapshot via
   `buildTasksSnapshot`, 404 copy for unknown workspace, `key={workspaceId}` on the client).
   `TasksClient` composes Sidebar/TopBar (workspace name + connection from `useTasks`), maps
   `TASK_STATUSES`-ordered columns, tracks the selected task id with `useSearchParams` +
@@ -971,7 +971,7 @@ git add -A && git commit -m "refactor(web): extract useWorkspaceStream and add u
   `TaskDetailPanel` is a right-side overlay `<aside>` with the board still mounted beneath.
   Status colours reuse the existing `bg-status-*` / `text-status-*` tokens.
 
-- [ ] **Step 3: Verify + commit**
+- [x] **Step 3: Verify + commit**
 
 ```bash
 git add -A && git commit -m "feat(web): the tasks board and task detail panel"
@@ -1007,20 +1007,20 @@ summary; `run.output` → first 80 chars of text; anything else → the bare typ
 exported function `feedSummary(type: string, payload: Record<string, unknown>): string` in
 `apps/web/src/server/overview.ts`, imported by the hook too (it is pure).
 
-- [ ] **Step 1: Failing snapshot test** — seed 25 events for an agent; `recentEvents` has the
+- [x] **Step 1: Failing snapshot test** — seed 25 events for an agent; `recentEvents` has the
   last 20 oldest-first, each with a non-empty summary.
-- [ ] **Step 2: Implement snapshot side** — one query per workspace (not per agent):
+- [x] **Step 2: Implement snapshot side** — one query per workspace (not per agent):
   `prisma.executionEvent.findMany({ where: { agentId: { in: ids } }, orderBy: { seq: 'desc' }, take: 20 * ids.length })`
   then group/cap in JS. (The M4 review flagged per-run queries as the first scaling cliff — do
   not add another N+1.)
-- [ ] **Step 3: Failing hook tests (additive)** — a pushed `run.tool_call` and `run.failed`
+- [x] **Step 3: Failing hook tests (additive)** — a pushed `run.tool_call` and `run.failed`
   appear in `liveEvents[agentId]` with seq and summary; the buffer caps at 50; events without an
   `agentId` are ignored.
-- [ ] **Step 4: Implement hook side** — in `useOverview`'s `onEvent`, when
+- [x] **Step 4: Implement hook side** — in `useOverview`'s `onEvent`, when
   `typeof event.agentId === 'string' && typeof event.type === 'string' && typeof event.seq === 'number'`,
   append `{ seq, ts, type, summary: feedSummary(...) }` to that agent's array, slicing to the
   last 50.
-- [ ] **Step 5: Failing panel component tests** — the enable/disable matrix drives this file:
+- [x] **Step 5: Failing panel component tests** — the enable/disable matrix drives this file:
 
 | status | pause | resume | stop | message box |
 |---|---|---|---|---|
@@ -1032,14 +1032,14 @@ exported function `feedSummary(type: string, payload: Record<string, unknown>): 
   disables the button while in flight; a 409 body renders in the panel's error band; the feed
   renders seed + live merged by seq, deduplicated, newest at the bottom; the queued message
   renders and saving POSTs to `/message`.
-- [ ] **Step 6: Implement the panel + wiring.** `AgentPanel` receives the agent's
+- [x] **Step 6: Implement the panel + wiring.** `AgentPanel` receives the agent's
   `AgentCardData`, `liveEvents[agent.id] ?? []`, the workspaceId, and a close callback.
   `OverviewClient` reads `?agent=` (the shared `useSelectedId` helper), renders the panel as an
   overlay `<aside>`, passes everything through. `AgentCard`'s two buttons become one "open"
   affordance (the whole card header is clickable) — the panel is where controls live (spec §6).
   POSTs are bare `fetch(url, { method: 'POST', … })`; no state is written from the response
   beyond the error band — the refetch loop owns truth.
-- [ ] **Step 7: Full verify + commit**
+- [x] **Step 7: Full verify + commit**
 
 ```bash
 git add -A && git commit -m "feat(web): the agent detail panel — controls, message box, live feed"
@@ -1056,12 +1056,12 @@ git add -A && git commit -m "feat(web): the agent detail panel — controls, mes
 
 **Interfaces:** none new — this closes spec §8 and the M4 deferral record.
 
-- [ ] **Step 1: Failing tests** — jsdom can't assert visual motion, so pin the mechanism: the
+- [x] **Step 1: Failing tests** — jsdom can't assert visual motion, so pin the mechanism: the
   action line's wrapper carries a key that changes with the text (remount = the CSS animation
   runs); the card carries `data-status` and a `transition-colors` class on the border; both
   panels carry the slide-in animation class; every animation class sits behind the
   `motion-safe:` Tailwind variant (assert `motion-safe:` appears in the className).
-- [ ] **Step 2: Implement.** `globals.css` gains two keyframe blocks:
+- [x] **Step 2: Implement.** `globals.css` gains two keyframe blocks:
 
 ```css
 @keyframes action-line-in { from { opacity: 0 } to { opacity: 1 } }
@@ -1079,7 +1079,7 @@ Border: a `useEffect` watching `agent.status` sets a transient `flashing` state 
 `prefers-reduced-motion: reduce`, `motion-safe:` disables all three — state changes render
 instantly.
 
-- [ ] **Step 3: Verify + commit**
+- [x] **Step 3: Verify + commit**
 
 ```bash
 git add -A && git commit -m "feat(web): the M5 motion pass — cross-fade, border flash, panel slide"

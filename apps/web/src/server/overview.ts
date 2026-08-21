@@ -24,6 +24,10 @@ export interface AgentCardData {
   readonly runId: string | null
   /** The instruction queued for this agent's live run, consumed on resume (Checkpoint semantics). */
   readonly queuedMessage: string | null
+  /** Set once a resume intent has been recorded for this run (`requestResume`), cleared the moment
+   *  the daemon or CLI claims it (`claimResume`) — the panel's own visible record that the click
+   *  landed while the run is still `paused` (spec §3.3). */
+  readonly resumeRequestedAt: string | null
   /** Last 20 execution events for this agent, oldest first — seeds the panel's live feed. */
   readonly recentEvents: readonly AgentFeedEvent[]
   /** The live run's spend so far; 0 with no live run. Panel's current-run block (spec §6). */
@@ -144,6 +148,7 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
         actionLine: lines.get(agent.id) ?? null,
         runId: run?.id ?? null,
         queuedMessage: run?.queuedMessage ?? null,
+        resumeRequestedAt: run?.resumeRequestedAt?.toISOString() ?? null,
         recentEvents: recentEventsByAgent.get(agent.id) ?? [],
         costUsd: run?.costUsd ?? 0,
         toolCalls: run?.toolCalls ?? 0,

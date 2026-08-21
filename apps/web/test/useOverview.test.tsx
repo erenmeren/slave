@@ -17,6 +17,7 @@ const SNAPSHOT: OverviewSnapshot = {
       actionLine: null,
       runId: 'r1',
       queuedMessage: null,
+      resumeRequestedAt: null,
       recentEvents: [],
       costUsd: 0,
       toolCalls: 0,

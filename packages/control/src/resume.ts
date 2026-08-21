@@ -23,9 +23,13 @@ const RESUMABLE_STATUSES = ['paused'] as const
  */
 export async function requestResume(
   runId: string,
-  message: string | null,
+  rawMessage: string | null,
   requestedBy: string,
 ): Promise<Result<void, ControlRefusal>> {
+  // An empty or whitespace-only message is the "say nothing" case, not a literal instruction: the
+  // adapter would otherwise spawn the child with `-p ''` (see `updateQueuedMessage`'s doc comment
+  // for the same normalization on the panel's save path).
+  const message = rawMessage === null || rawMessage.trim() === '' ? null : rawMessage
   const run = await prisma.agentRun.findUnique({ where: { id: runId }, include: { task: true } })
   if (run === null) return err({ kind: 'run_not_found', runId })
 
@@ -86,8 +90,13 @@ export async function requestResume(
  * while `paused` for the same reason the intent is: a message queued against a run that is already
  * working would be consumed by whatever resumes it *next*, arriving in a context nobody wrote it
  * for.
+ *
+ * An empty or whitespace-only save clears the slot (stores `null`) rather than storing `''`: an
+ * empty string must never be silently passed to the adapter as a literal resume prompt, and
+ * clearing the textarea before saving is the natural "unqueue this instruction" gesture.
  */
-export async function updateQueuedMessage(runId: string, message: string): Promise<Result<void, ControlRefusal>> {
+export async function updateQueuedMessage(runId: string, rawMessage: string): Promise<Result<void, ControlRefusal>> {
+  const message = rawMessage.trim() === '' ? null : rawMessage
   const run = await prisma.agentRun.findUnique({ where: { id: runId }, select: { id: true, status: true } })
   if (run === null) return err({ kind: 'run_not_found', runId })
 
