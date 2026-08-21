@@ -339,4 +339,12 @@ describe('AgentPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: /close/i }))
     expect(onClose).toHaveBeenCalled()
   })
+
+  // Motion pass (spec §8 / M4 deferral). `OverviewClient` keys this panel by agent id, so every
+  // mount (including a switch between agents) is a fresh instance — the slide-in class replays
+  // on every open by construction, no extra state needed here.
+  it('carries the motion-safe panel slide-in animation class on its root', () => {
+    const { container } = render(<AgentPanel agent={agent({})} liveEvents={[]} workspaceId="w1" haltedReason={null} onClose={() => {}} />)
+    expect(container.querySelector('aside')?.className).toContain('motion-safe:animate-[panel-in_160ms_ease-out]')
+  })
 })

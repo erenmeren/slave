@@ -100,7 +100,9 @@ export function AgentPanel({
   return (
     <aside
       aria-label="Agent detail"
-      className="fixed inset-y-0 right-0 z-10 flex w-96 flex-col gap-4 overflow-y-auto border-l border-line bg-bg-1 p-4"
+      // Slide-in (spec §8): this panel is mounted fresh per agent (`OverviewClient` keys it by
+      // agent id), so the animation replays on every open/switch by construction.
+      className="fixed inset-y-0 right-0 z-10 flex w-96 flex-col gap-4 overflow-y-auto border-l border-line bg-bg-1 p-4 motion-safe:animate-[panel-in_160ms_ease-out]"
     >
       <header className="flex items-start justify-between gap-2">
         <div className="flex items-center gap-2">

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { AgentCard } from '../src/components/AgentCard.js'
 import { HaltBanner } from '../src/components/HaltBanner.js'
@@ -85,6 +85,56 @@ describe('AgentCard', () => {
     // The M5 controls live in the panel now (spec §6) — the card carries no pause/stop of its own.
     expect(screen.queryByTitle('arrives in M5')).toBeNull()
     expect(screen.queryByTitle('stop arrives in M5')).toBeNull()
+  })
+
+  // Motion pass (spec §8 / M4 deferral). jsdom can't see the animation itself, so these pin the
+  // mechanism the CSS relies on: a key that remounts on text change (fresh DOM node → the
+  // cross-fade keyframe replays), a status-flash trigger with its motion-safe class and timed
+  // decay, and the `motion-safe:` variant gating every animation class for reduced-motion.
+  describe('motion (spec §8)', () => {
+    it("cross-fades the action line via a key that remounts when the line's text changes", () => {
+      const { container, rerender } = render(
+        <AgentCard agent={agent({ status: 'working', actionLine: 'Read a.ts' })} liveActionLine={null} onOpen={() => {}} />,
+      )
+      const first = container.querySelector('[data-testid="action-line"] > span')
+      expect(first).toBeTruthy()
+      expect(first?.className).toContain('motion-safe:animate-[action-line-in_120ms_ease-out]')
+
+      rerender(<AgentCard agent={agent({ status: 'working', actionLine: 'Write b.ts' })} liveActionLine={null} onOpen={() => {}} />)
+      const second = container.querySelector('[data-testid="action-line"] > span')
+      // A different key means React unmounts the old span and mounts a new DOM node — that
+      // remount is what makes the cross-fade keyframe run again on every text change.
+      expect(second).not.toBe(first)
+      expect(second?.textContent).toBe('Write b.ts')
+    })
+
+    it('carries data-status and a transition-colors border, ready for the flash to animate against', () => {
+      const { container } = render(<AgentCard agent={agent({ status: 'working' })} liveActionLine={null} onOpen={() => {}} />)
+      const card = container.querySelector('article')
+      expect(card?.getAttribute('data-status')).toBe('working')
+      expect(card?.className).toContain('transition-colors')
+    })
+
+    it('flashes the border motion-safe class on a status change and clears it after 800ms', () => {
+      vi.useFakeTimers()
+      try {
+        const { container, rerender } = render(<AgentCard agent={agent({ status: 'working' })} liveActionLine={null} onOpen={() => {}} />)
+        const card = () => container.querySelector('article')!
+        // No status change yet (this is the initial mount) — no flash.
+        expect(card().className).not.toContain('motion-safe:animate-[border-flash_800ms_ease-out]')
+
+        rerender(<AgentCard agent={agent({ status: 'paused' })} liveActionLine={null} onOpen={() => {}} />)
+        expect(card().className).toContain('motion-safe:animate-[border-flash_800ms_ease-out]')
+        expect(card().getAttribute('style') ?? '').toContain('--flash-color')
+
+        act(() => {
+          vi.advanceTimersByTime(800)
+        })
+        expect(card().className).not.toContain('motion-safe:animate-[border-flash_800ms_ease-out]')
+      } finally {
+        vi.useRealTimers()
+      }
+    })
   })
 })
 

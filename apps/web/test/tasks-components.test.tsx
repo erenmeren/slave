@@ -135,6 +135,13 @@ describe('TaskDetailPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: /close/i }))
     expect(onClose).toHaveBeenCalled()
   })
+
+  // Motion pass (spec §8 / M4 deferral). `TasksClient` mounts this panel fresh on card select, so
+  // the slide-in class replays on every open by construction.
+  it('carries the motion-safe panel slide-in animation class on its root', () => {
+    const { container } = render(<TaskDetailPanel task={task({})} onClose={() => {}} />)
+    expect(container.querySelector('aside')?.className).toContain('motion-safe:animate-[panel-in_160ms_ease-out]')
+  })
 })
 
 describe('TasksClient', () => {

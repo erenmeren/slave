@@ -11,7 +11,9 @@ export function TaskDetailPanel({
   return (
     <aside
       aria-label="Task detail"
-      className="fixed inset-y-0 right-0 z-10 flex w-96 flex-col gap-4 overflow-y-auto border-l border-line bg-bg-1 p-4"
+      // Slide-in (spec §8): `TasksClient` mounts this panel fresh on card select, so the
+      // animation replays on every open by construction.
+      className="fixed inset-y-0 right-0 z-10 flex w-96 flex-col gap-4 overflow-y-auto border-l border-line bg-bg-1 p-4 motion-safe:animate-[panel-in_160ms_ease-out]"
     >
       <header className="flex items-start justify-between gap-2">
         <div>

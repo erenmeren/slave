@@ -47,3 +47,42 @@ body {
   color: var(--text-1);
   font-family: var(--font-sans);
 }
+
+/* Motion pass (spec §8 / M4 deferral). Every consumer gates these behind Tailwind's
+ * `motion-safe:` variant, so `prefers-reduced-motion: reduce` drops the utility class entirely
+ * and the corresponding state change renders instantly with no animation. */
+
+/* Action line cross-fade: ~120ms opacity swap, no layout shift (the wrapper's height is fixed by
+ * its own `h-5`, not by this keyframe). */
+@keyframes action-line-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Card border flash: takes the status colour on a status change, decays back to the line colour
+ * over ~800ms. `--flash-color` is set inline per-status from the existing status tokens — no new
+ * colour tokens. */
+@keyframes border-flash {
+  0% {
+    border-color: var(--flash-color, currentColor);
+  }
+  100% {
+    border-color: var(--color-line);
+  }
+}
+
+/* Panel slide-in: a short transform, CSS animation only (no springs library). */
+@keyframes panel-in {
+  from {
+    transform: translateX(16px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}

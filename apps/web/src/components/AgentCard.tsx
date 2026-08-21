@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from 'react'
 import type { AgentCardData } from '../server/overview'
 
 export const DOT: Record<AgentCardData['status'], string> = {
@@ -10,6 +11,21 @@ export const DOT: Record<AgentCardData['status'], string> = {
   idle: 'bg-status-idle',
 }
 
+/** The border-flash's `--flash-color` source per status (spec §8) — no new colour tokens, just
+ *  the existing status vocabulary referenced through the `@theme inline` names in globals.css. */
+const FLASH_COLOR: Record<AgentCardData['status'], string> = {
+  working: 'var(--color-status-working)',
+  starting: 'var(--color-status-starting)',
+  resuming: 'var(--color-status-starting)',
+  pausing: 'var(--color-status-paused)',
+  paused: 'var(--color-status-paused)',
+  stopping: 'var(--color-status-stopping)',
+  idle: 'var(--color-status-idle)',
+}
+
+/** 800ms border-flash decay window (spec §8) — the peripheral-vision cue that a status changed. */
+const BORDER_FLASH_MS = 800
+
 export function AgentCard({
   agent,
   liveActionLine,
@@ -21,8 +37,30 @@ export function AgentCard({
   readonly onOpen: (id: string) => void
 }): React.JSX.Element {
   const line = liveActionLine ?? agent.actionLine
+
+  // Border flash (spec §8): the card's border takes the status colour on a status change and
+  // decays back to the line colour over ~800ms. Only a *change* flashes — the ref holds the
+  // status this instance last rendered, so the initial mount (ref seeded to the same value) never
+  // flashes, and the timeout is cleared on unmount/next-change so a rapid double-change doesn't
+  // leave a stale timer clearing a newer flash.
+  const previousStatus = useRef(agent.status)
+  const [flashing, setFlashing] = useState(false)
+  useEffect((): (() => void) | void => {
+    if (previousStatus.current === agent.status) return
+    previousStatus.current = agent.status
+    setFlashing(true)
+    const timer = setTimeout(() => setFlashing(false), BORDER_FLASH_MS)
+    return () => clearTimeout(timer)
+  }, [agent.status])
+
   return (
-    <article className="flex flex-col gap-2 rounded border border-line bg-bg-1 p-4">
+    <article
+      data-status={agent.status}
+      className={`flex flex-col gap-2 rounded border border-line bg-bg-1 p-4 transition-colors ${
+        flashing ? 'motion-safe:animate-[border-flash_800ms_ease-out]' : ''
+      }`}
+      style={flashing ? ({ '--flash-color': FLASH_COLOR[agent.status] } as React.CSSProperties) : undefined}
+    >
       <button
         type="button"
         onClick={() => onOpen(agent.id)}
@@ -41,7 +79,11 @@ export function AgentCard({
       </button>
       <div className="text-sm text-text-1">{agent.taskTitle ?? <span className="text-text-3">idle</span>}</div>
       <div data-testid="action-line" className="h-5 truncate font-mono text-xs text-text-2">
-        {line}
+        {/* Cross-fade (spec §8): a key tied to the text remounts the span on every change, which
+         *  is what makes the `action-line-in` keyframe replay each time. */}
+        <span key={line ?? 'idle'} className="motion-safe:animate-[action-line-in_120ms_ease-out]">
+          {line}
+        </span>
       </div>
       <footer className="flex items-center gap-2">
         <span className="rounded border border-line px-1.5 py-0.5 font-mono text-[10px] text-text-3">
