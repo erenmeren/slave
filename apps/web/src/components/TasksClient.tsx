@@ -1,13 +1,13 @@
 'use client'
 
 import type { TaskStatus } from '@ai-team-os/domain'
-import { useSelectedId } from '../hooks/useSelectedId.js'
-import { useTasks } from '../hooks/useTasks.js'
-import type { TasksSnapshot } from '../server/tasks.js'
-import { Sidebar } from './Sidebar.js'
-import { TaskColumn } from './TaskColumn.js'
-import { TaskDetailPanel } from './TaskDetailPanel.js'
-import { TopBar } from './TopBar.js'
+import { useSelectedId } from '../hooks/useSelectedId'
+import { useTasks } from '../hooks/useTasks'
+import type { TasksSnapshot } from '../server/tasks'
+import { Sidebar } from './Sidebar'
+import { TaskColumn } from './TaskColumn'
+import { TaskDetailPanel } from './TaskDetailPanel'
+import { TopBar } from './TopBar'
 
 /** The board's eight columns, in the spec's exact order (design doc §5 — "Columns exactly the
  * eight task statuses", no ninth). */

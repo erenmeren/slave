@@ -1,7 +1,7 @@
 'use client'
 
-import type { TasksSnapshot } from '../server/tasks.js'
-import { useWorkspaceStream, type WorkspaceStreamState } from './useWorkspaceStream.js'
+import type { TasksSnapshot } from '../server/tasks'
+import { useWorkspaceStream, type WorkspaceStreamState } from './useWorkspaceStream'
 
 export function useTasks(workspaceId: string, initial: TasksSnapshot): WorkspaceStreamState<TasksSnapshot> {
   return useWorkspaceStream<TasksSnapshot>({

@@ -1,9 +1,9 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import type { AgentFeedEvent } from '../lib/feedSummary.js'
-import type { AgentCardData } from '../server/overview.js'
-import { DOT } from './AgentCard.js'
+import type { AgentFeedEvent } from '../lib/feedSummary'
+import type { AgentCardData } from '../server/overview'
+import { DOT } from './AgentCard'
 
 type ControlAction = 'pause' | 'resume' | 'stop' | 'message'
 

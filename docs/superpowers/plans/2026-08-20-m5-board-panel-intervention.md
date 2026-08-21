@@ -1098,19 +1098,19 @@ git add -A && git commit -m "feat(web): the M5 motion pass — cross-fade, borde
 
 **Interfaces:** none.
 
-- [ ] **Step 1: Update `docs/architecture.md`** — the M4 sentence "until M5 gives the web app
+- [x] **Step 1: Update `docs/architecture.md`** — the M4 sentence "until M5 gives the web app
   buttons that are more than disabled chrome" is now due: replace it with the control-plane rule
   (web mutates only through `packages/control`; direct Prisma writes remain forbidden; resume is
   an intent the daemon executes) and add `packages/control` to the diagram between the packages
   and both apps.
-- [ ] **Step 2: Update `README.md`** — document the panel controls, the board URL, and extend
+- [x] **Step 2: Update `README.md`** — document the panel controls, the board URL, and extend
   the demo section: under the fake adapter the task ends `failed` because the fixture writes no
   real files for verify — expected, not broken (this exact confusion happened; write it down).
-- [ ] **Step 3: Smoke rehearsal with the fake adapter** — `npm run demo` (fake env) +
+- [x] **Step 3: Smoke rehearsal with the fake adapter** — `npm run demo` (fake env) +
   `npm run web`; pause the run from the panel mid-fixture, confirm the 409-vs-200 behaviour,
   resume with a message, stop. Fix what the rehearsal finds before calling the task done.
-- [ ] **Step 4: Full verify** — `npm test && npm run typecheck && npm run web:build`.
-- [ ] **Step 5: Commit**
+- [x] **Step 4: Full verify** — `npm test && npm run typecheck && npm run web:build`.
+- [x] **Step 5: Commit**
 
 ```bash
 git add -A && git commit -m "docs(m5): control-plane dependency rule, README intervention guide"

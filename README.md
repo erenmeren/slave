@@ -13,6 +13,9 @@ real git repositories, with a human supervising rather than prompting.
   commands, driven from a CLI. See the orchestrator section below and `docs/architecture.md`.
 - **M4** — the web app: a read-only Overview page showing every agent's live status, streamed over
   SSE. See the Web UI section below and `docs/architecture.md`.
+- **M5** — the Tasks board, the agent detail panel, and intervention from the browser: pause,
+  message, resume, stop, all routed through `packages/control`. See the Web UI section below and
+  `docs/architecture.md`.
 
 ## Setup
 
@@ -167,15 +170,40 @@ same file the orchestrator and the seed script use, so it needs no separate conf
 at a workspace with `http://localhost:3000/w/<workspaceId>` and it reads that workspace straight
 out of the development database.
 
-The **Overview** page (`/w/<workspaceId>`) is the only page M4 ships. It shows one card per agent —
-status, current task, live action line, provider, budget — a top strip with task counts and spend
-against the workspace budget, and a halt banner when the workspace is stopped. It is **read-only**:
-the pause/stop buttons on each card are visibly present but disabled, labelled "arrives in M5". The
-page updates itself: the initial render is a server-side snapshot, and an SSE connection
-(`/api/w/<workspaceId>/events`) wakes the client to refetch that snapshot on every event rather than
-streaming state piecemeal — see `docs/architecture.md` for why. The one exception is each card's
-action line, which updates live and directly from the event payload, because it is display-only and
-never confused for state.
+The **Overview** page (`/w/<workspaceId>`) shows one card per agent — status, current task, live
+action line, provider, budget — a top strip with task counts and spend against the workspace
+budget, and a halt banner when the workspace is stopped. The page updates itself: the initial
+render is a server-side snapshot, and an SSE connection (`/api/w/<workspaceId>/events`) wakes the
+client to refetch that snapshot on every event rather than streaming state piecemeal — see
+`docs/architecture.md` for why. The one exception is each card's action line, which updates live
+and directly from the event payload, because it is display-only and never confused for state.
+
+The **Tasks board** (`/w/<workspaceId>/tasks`) lays every task out in columns by status — backlog,
+ready, running, verifying, reviewing, blocked, done, failed. Clicking a card opens a detail panel
+with its description, branch, rejection reason and its runs, newest first, each with its status,
+cost, tool calls and (for a paused run) the step it paused at.
+
+Clicking an agent's card on the Overview page opens its **detail panel**: the live event feed, and
+the controls M5 adds — pause, message, resume, stop. What each control does is a claim through
+`packages/control`, not a direct write (`docs/architecture.md`'s dependency rule):
+
+- **Pause** is enabled while a run is `starting`/`working`/`resuming`. It arms the pause gate; the
+  run stops at its next tool call, not immediately, same as the CLI's `pause` (see "Interrupting a
+  run" above).
+- Once the run is `paused`, the **message box** is writable — it POSTs to the run's `message`
+  route and overwrites the one queued instruction (there is only ever one slot).
+- **Resume** POSTs to `resume`, optionally carrying a message in the same request; it is disabled
+  while the workspace is halted, with the halt reason shown next to it. The POST only ever records
+  an intent — the run stays `paused` in the database until the daemon's tick claims it and spawns
+  the continuation, because the web process never owns a child (`docs/architecture.md`).
+- **Stop** is enabled whenever a run exists and hasn't concluded; it kills the process (with a
+  grace period before SIGKILL), concludes the run, and blocks its task. The worktree is preserved,
+  same as the CLI's `cancel`.
+
+Every control POST is fire-and-forget from the UI's point of view: on success it does nothing
+itself and waits for the next SSE-triggered snapshot to show the new state; on a refusal (409) it
+shows the refusal text inline. There is no optimistic UI — the snapshot is always the source of
+truth (spec §4, §7).
 
 ```bash
 npm run demo
@@ -184,9 +212,9 @@ npm run demo
 The one-command live demo (spec §8): resets `~/.aiteamos/demo-repo` to a fresh git repository,
 seeds a new workspace, team, agent and task into the *development* database, and starts the
 orchestrator daemon against it, printing the workspace id and its Overview URL. Run `npm run web`
-in a second terminal and open the printed URL to watch it live. It spends real money against the
-real `claude` CLI by default; to rehearse it for free, point it at the fake adapter the same way the
-orchestrator tests do:
+in a second terminal and open the printed URL (or its `/tasks` board) to watch it live. It spends
+real money against the real `claude` CLI by default; to rehearse it for free, point it at the fake
+adapter the same way the orchestrator tests do:
 
 ```bash
 AITEAMOS_CLAUDE_BIN=node \
@@ -197,3 +225,15 @@ npm run demo
 `AITEAMOS_CLAUDE_ARGS` must be an absolute path here: the adapter spawns the child in the run's
 worktree, not the repo root, so a relative path to the fixture script resolves against the wrong
 directory and the child dies before writing anything.
+
+**Under the fake adapter the task ends `failed`, and that is expected, not broken.** The fake
+CLI replays a canned transcript — it never actually runs the `Write`/`Bash` tool calls the
+transcript narrates, so the worktree ends the run with none of `notes/note1.txt` through
+`note3.txt` on disk. The demo's `verifyCommands` (`test -f notes/note3.txt`) then fails for real,
+and the task exhausts its attempts into `failed` exactly as it would for a real agent that never
+wrote the files. This is not the adapter lying about success — `run.succeeded` and "verify passed"
+are different claims, and the fake only ever earns the first one. Watching this once end to end is
+the point of the exercise: it is what "verify fails by design under the fake" looks like on the
+board, so it doesn't get mistaken for a real defect later. To rehearse the intervention flow
+(pause/message/resume/stop) rather than a full verify pass, that's enough — none of the four
+controls need verify to succeed, only a run to be alive when you reach for them.

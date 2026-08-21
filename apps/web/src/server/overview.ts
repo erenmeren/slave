@@ -1,7 +1,7 @@
 import { prisma } from '@ai-team-os/db/client'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, toRunState } from '@ai-team-os/db'
 import { deriveAgentStatus, NON_TERMINAL_RUN_STATUSES, type AgentStatus } from '@ai-team-os/domain'
-import { feedSummary, type AgentFeedEvent } from '../lib/feedSummary.js'
+import { feedSummary, type AgentFeedEvent } from '../lib/feedSummary'
 
 // Re-exported so callers that already import from `server/overview.ts` keep working; the
 // definition itself lives in the pure `lib/feedSummary.ts` module (controller ruling R3) so the

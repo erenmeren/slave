@@ -1,5 +1,5 @@
-import type { TaskBoardItem } from '../server/tasks.js'
-import { TASK_STATUS_TEXT } from './TaskCard.js'
+import type { TaskBoardItem } from '../server/tasks'
+import { TASK_STATUS_TEXT } from './TaskCard'
 
 export function TaskDetailPanel({
   task,

@@ -1,6 +1,6 @@
 import type { TaskStatus } from '@ai-team-os/domain'
-import type { TaskBoardItem } from '../server/tasks.js'
-import { TaskCard } from './TaskCard.js'
+import type { TaskBoardItem } from '../server/tasks'
+import { TaskCard } from './TaskCard'
 
 export function TaskColumn({
   status,

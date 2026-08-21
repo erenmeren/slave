@@ -7,9 +7,14 @@ packages/domain     pure core: state machines, the event union, decide(). No I/O
 packages/db         Prisma schema, the generated client, and the row <-> domain mappers.
 packages/events     appendEvent (the only write path), the read/stream/subscribe side.
 packages/providers  the runtime adapter: spawns `claude`, parses its stream, pauses and resumes it.
+packages/control    the intervention claim semantics: requestPause, requestStop, requestResume,
+                    updateQueuedMessage, the refusal taxonomy. Sits between the packages and both
+                    apps — the CLI and apps/web both call it; it never imports packages/providers
+                    and never spawns a process itself.
 apps/orchestrator   the part that reacts: loadWorld, tick, pump, worktree, verify, sweep, CLI.
 apps/web            the part that watches: reads Postgres through a snapshot read model, listens
-                    for new events through its own SSE routes, writes nothing.
+                    for new events through its own SSE routes, and mutates only through
+                    packages/control.
 ```
 
 ## The dependency rule that matters
@@ -25,12 +30,20 @@ The consequence is visible in `Checkpoint`: the adapter defines its own interfac
 `packages/db` defines a model with the same fields, because the adapter cannot import the model. The
 duplication is deliberate and recorded in the adapter's own doc comment.
 
-**`apps/web` never imports `apps/orchestrator` or `packages/providers`** (spec §2, extended by M4).
-The web app is a reader: it builds its own snapshot from `packages/db` and `packages/events`, and
-its two route handlers (the Overview page's data and the SSE stream) are the only places that
-touch either. It never spawns a process, never writes a row, and never imports the scheduling or
-adapter code that does — `pause`, `resume`, `cancel` and the rest of the write path stay CLI-only
-until M5 gives the web app buttons that are more than disabled chrome.
+**`apps/web` never imports `apps/orchestrator` or `packages/providers`** (spec §2, extended by
+M4). The web app is a reader for its GET routes: the Overview and Tasks snapshots and the SSE
+stream build straight from `packages/db` and `packages/events`, and it never spawns a process
+itself. For its POST routes (M5), the rule is narrower rather than gone: **`apps/web` mutates
+only through `packages/control`** — direct Prisma writes from `apps/web` remain forbidden, matching
+the CLI equivalence bar the M3/M4 gates already set. `packages/control` holds the intervention
+claim semantics (`requestPause`, `requestStop`, `requestResume`, `updateQueuedMessage`) that both
+the CLI and the web's POST routes call; it is itself bound by the same rule the adapter follows —
+it never imports `packages/providers` and never spawns an agent process. `resume` makes this
+concrete: a web POST only ever records an intent (`AgentRun.resumeRequestedAt`/`queuedMessage`,
+still `paused`) — it is the daemon's tick, in the same process that will own the child, that
+claims `paused → resuming` and spawns. The web is never in the business of holding a claim across
+a request boundary with no process behind it, because that shape is exactly what the orphan sweep
+(§3.4) would fail.
 
 ## Where a run's state actually lives
 

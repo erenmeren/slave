@@ -1,5 +1,5 @@
 import type { TaskStatus } from '@ai-team-os/domain'
-import type { TaskBoardItem } from '../server/tasks.js'
+import type { TaskBoardItem } from '../server/tasks'
 
 // Reuses the M4 status vocabulary (design doc §8: "no new tokens expected") rather than minting
 // task-specific colours. Several statuses share a token deliberately — e.g. both `ready` and

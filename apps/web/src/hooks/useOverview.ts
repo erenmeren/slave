@@ -3,11 +3,11 @@
 import { useMemo, useState } from 'react'
 // Runtime import, not `../server/overview.js`: that module pulls in `@ai-team-os/db`'s prisma
 // client, which must never reach the client bundle (controller ruling R3).
-import { feedSummary, type AgentFeedEvent } from '../lib/feedSummary.js'
-import type { OverviewSnapshot } from '../server/overview.js'
-import { useWorkspaceStream, type StreamEvent } from './useWorkspaceStream.js'
+import { feedSummary, type AgentFeedEvent } from '../lib/feedSummary'
+import type { OverviewSnapshot } from '../server/overview'
+import { useWorkspaceStream, type StreamEvent } from './useWorkspaceStream'
 
-export { REFETCH_DEBOUNCE_MS } from './useWorkspaceStream.js'
+export { REFETCH_DEBOUNCE_MS } from './useWorkspaceStream'
 
 /** The agent detail panel's rolling live feed keeps at most this many events per agent. */
 const LIVE_EVENTS_LIMIT = 50
