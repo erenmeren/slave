@@ -1,4 +1,4 @@
-import { runFilePaths } from '@ai-team-os/control'
+import { claimResume, runFilePaths } from '@ai-team-os/control'
 import { prisma } from '@ai-team-os/db/client'
 import {
   decide,
@@ -13,6 +13,7 @@ import {
 import { appendEvent } from '@ai-team-os/events'
 import { type AgentRuntimeAdapter, writeSettingsFile } from '@ai-team-os/providers'
 import { pumpRun } from './pump.js'
+import { executeResume } from './resume.js'
 import { noteTickRan } from './sweep.js'
 import { verifyConcludedRun } from './verify.js'
 import { loadWorld } from './world.js'
@@ -185,7 +186,56 @@ export async function tick(deps: TickDeps): Promise<TickReport> {
     if (runId !== null) started.push(runId)
   }
 
+  await resumeRequestedRuns(deps)
+
   return { started, halted: null, skippedNoRole }
+}
+
+/**
+ * Executes the resume intents recorded against this workspace's paused runs (spec M5 §3.3).
+ *
+ * The web records an intent and leaves the run `paused`; this process -- the one that can own a
+ * child -- claims and spawns. That split is not ceremony: §3.4's orphan pass fails every
+ * non-terminal, non-`paused` run whose pid is dead, so a row sitting in `resuming` with no process
+ * is exactly the shape it destroys. Claiming and spawning inside one process narrows that window to
+ * the width the CLI's `resume` has always had.
+ *
+ * Deliberately placed *after* the halt bail above rather than beside it: a halt is raised by a gate
+ * failure or an unverifiable workspace, and picking up a queued resume while one stands relaunches
+ * an agent whose gate may still be broken. The intent is left untouched -- visible, unconsumed, and
+ * waiting for the operator who clears the halt -- rather than refused, because the request was
+ * legitimate when it was made.
+ *
+ * A resume that throws leaves the run `resuming` with a dead pid, which the per-tick sweep concludes
+ * as a failed run on its next pass. That is the same answer the system already gives a spawn that
+ * dies, and it is why this must not be silent: the error is logged for the operator who will
+ * otherwise only see the run fail.
+ */
+async function resumeRequestedRuns(deps: TickDeps): Promise<void> {
+  const intents = await prisma.agentRun.findMany({
+    where: { status: 'paused', resumeRequestedAt: { not: null }, task: { workspaceId: deps.workspaceId } },
+    select: { id: true },
+  })
+
+  for (const intent of intents) {
+    // Claimed one at a time, and the claim is what decides ownership: a CLI `resume` racing this
+    // tick, or a second daemon, loses here rather than putting a second agent on the branch.
+    const { claimed, queuedMessage } = await claimResume(intent.id)
+    if (!claimed) continue
+
+    // Registered into `pumps` exactly as the start pass registers its own: `executeResume` owns the
+    // resumed run's stream to the end (verify included), so it outlives this tick by design, an
+    // unhandled rejection would take the daemon down, and a shutdown -- or a one-shot `tick` -- has
+    // to be able to wait for it.
+    const resumed = executeResume({ runId: intent.id, adapter: deps.adapter, message: queuedMessage })
+      .catch((error: unknown): void => {
+        console.error(`[tick] resume for run ${intent.id} failed:`, error)
+      })
+      .finally((): void => {
+        pumps.delete(resumed)
+      })
+    pumps.add(resumed)
+  }
 }
 
 /**

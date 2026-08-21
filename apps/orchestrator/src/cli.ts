@@ -1,22 +1,14 @@
 import { realpathSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { refusalText, requestPause, requestStop } from '@ai-team-os/control'
+import { claimResume, refusalText, requestPause, requestStop } from '@ai-team-os/control'
 import { prisma } from '@ai-team-os/db/client'
-import {
-  agentId as brandAgentId,
-  runId as brandRunId,
-  taskId as brandTaskId,
-  workspaceId as brandWorkspaceId,
-  type WorkspaceId,
-} from '@ai-team-os/domain'
-import { appendEvent } from '@ai-team-os/events'
+import { workspaceId as brandWorkspaceId, type WorkspaceId } from '@ai-team-os/domain'
 import { ClaudeCodeAdapter } from '@ai-team-os/providers'
 import { runDaemon } from './daemon.js'
 import { NON_TERMINAL_RUN_STATUSES } from './world.js'
-import { pumpRun } from './pump.js'
+import { executeResume } from './resume.js'
 import { drainPumps, tick } from './tick.js'
-import { verifyConcludedRun } from './verify.js'
 
 const USAGE = `usage: orchestrator <command> [options]
 
@@ -221,10 +213,15 @@ export async function main(argv: readonly string[]): Promise<number> {
 
     case 'resume': {
       const run = await mustGetRun(requireFlag(flags, 'run'))
-      const message = flags['message']
+      const explicit = flags['message']
       // A halt is raised by a pause-gate failure or an unverifiable workspace (§13.1, §8), so
       // resuming into one relaunches an agent whose gate may still be broken -- the recurrence the
       // halt exists to bound. The help text promises this; it has to be true.
+      //
+      // Checked here rather than by calling `requestResume`: this command is synchronous and
+      // continues the run itself, so recording an intent on the way to a failure would leave a
+      // resume queued for the next daemon tick to execute -- an operator whose command errored out
+      // would find the run resumed anyway, minutes later.
       const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: run.task.workspaceId } })
       if (workspace.haltedReason !== null) {
         throw new Error(
@@ -233,7 +230,7 @@ export async function main(argv: readonly string[]): Promise<number> {
         )
       }
 
-      const checkpoint = await prisma.checkpoint.findUnique({ where: { runId: run.id } })
+      const checkpoint = await prisma.checkpoint.findUnique({ where: { runId: run.id }, select: { id: true } })
       if (checkpoint === null) {
         throw new Error(`run ${run.id} has no checkpoint: there is nothing to resume it from`)
       }
@@ -245,86 +242,36 @@ export async function main(argv: readonly string[]): Promise<number> {
       // agents on one branch while overwriting the pid that could have killed the first. The
       // adapter's live-child guard cannot help: a CLI invocation is always the cross-process case
       // its registry is empty for.
-      const claimed = await prisma.agentRun.updateMany({
-        where: { id: run.id, status: 'paused' },
-        data: { status: 'resuming' },
-      })
-      if (claimed.count === 0) {
-        throw new Error(`run ${run.id} is not paused (it is ${run.status}): there is nothing to resume`)
+      //
+      // `claimResume` first, so an operator resuming a run the web already queued picks up that
+      // instruction rather than silently discarding it. It claims only when an intent is recorded,
+      // so a run nobody asked about falls through to the plain claim this command has always made.
+      const intent = await claimResume(run.id)
+      if (!intent.claimed) {
+        const claimed = await prisma.agentRun.updateMany({
+          where: { id: run.id, status: 'paused' },
+          data: { status: 'resuming' },
+        })
+        if (claimed.count === 0) {
+          throw new Error(`run ${run.id} is not paused (it is ${run.status}): there is nothing to resume`)
+        }
       }
 
-      const adapter = buildAdapter()
-      // The checkpoint is the whole point of `resume`'s signature: this process never called
-      // `start()` for that run, so the settings file, the hook path and the git identity exist
-      // nowhere else. `resume()` clears the pause flag and verifies it is gone before spawning --
-      // otherwise the gate denies every tool call the resumed run attempts.
-      const handle = await adapter.resume(
-        brandRunId(run.id),
-        {
-          sessionId: checkpoint.sessionId,
-          worktreePath: checkpoint.worktreePath,
-          pauseFlagPath: checkpoint.pauseFlagPath,
-          settingsPath: checkpoint.settingsPath,
-          hookPath: checkpoint.hookPath,
-          gitAuthorName: checkpoint.gitAuthorName,
-          gitAuthorEmail: checkpoint.gitAuthorEmail,
-          lastToolUseId: checkpoint.lastToolUseId,
-          lastToolName: checkpoint.lastToolName,
-          numTurns: checkpoint.numTurns,
-          deniedToolUseIds: checkpoint.deniedToolUseIds,
-          headCommit: checkpoint.headCommit,
-          dirtyFiles: checkpoint.dirtyFiles,
-          cumulativeCostUsd: checkpoint.cumulativeCostUsd,
-          cumulativeTokens: checkpoint.cumulativeTokens,
-        },
-        message === undefined || message === 'true' ? null : message,
-      )
+      // An explicit `--message` beats the queued one: the operator typing it now is looking at the
+      // run, and whatever was queued earlier is the older of the two intentions. The queued message
+      // is consumed by the claim above either way -- it is a single slot, delivered once.
+      const message = explicit === undefined || explicit === 'true' ? intent.queuedMessage : explicit
 
-      await prisma.agentRun.update({
-        where: { id: run.id },
-        // `pausedAtStep` is cleared with the pause itself: the domain's `resuming -> working` edge
-        // clears it, and a running run reporting where it once paused reads as still paused.
-        data: { pid: handle.pid, pauseReason: null, pausedAtStep: null },
-      })
-      await appendEvent({
-        type: 'run.resumed',
-        workspaceId: run.task.workspaceId,
-        taskId: run.taskId,
-        agentId: run.agentId,
+      await executeResume({
         runId: run.id,
-        actor: 'human',
-        payload: { sessionId: checkpoint.sessionId },
-      })
-
-      // This process owns the resumed run's stream, so it pumps it and waits -- the same reason
-      // `tick` waits for what it started. `run.resumed` is emitted above rather than left to the
-      // pump, which emits `run.started` from the session line and cannot tell a first spawn from a
-      // continuation (Task 12's carry).
-      const pumped = pumpRun({
-        runId: brandRunId(run.id),
-        taskId: brandTaskId(run.taskId),
-        agentId: brandAgentId(run.agentId),
-        workspaceId: brandWorkspaceId(run.task.workspaceId),
-        events: adapter.events(brandRunId(run.id)),
-        cancel: () => adapter.cancel(brandRunId(run.id)),
-        // The pump cannot tell a continuation from a first spawn -- a resumed process emits
-        // `system/init` just like a fresh one -- so it is told, and `run.resumed` above is the
-        // only announcement. Task 12's carry, closed at the caller that knows.
-        resumed: true,
-        spawn: {
-          settingsPath: checkpoint.settingsPath,
-          pauseFlagPath: checkpoint.pauseFlagPath,
-          hookPath: checkpoint.hookPath,
-          gitIdentity: { name: checkpoint.gitAuthorName, email: checkpoint.gitAuthorEmail },
+        adapter: buildAdapter(),
+        message,
+        // Printed at the spawn, not after the stream ends: `resume` has always acknowledged
+        // immediately and then waited, and a run can think for minutes.
+        onSpawned: (handle) => {
+          process.stdout.write(`resumed ${run.id} as pid ${handle.pid}\n`)
         },
       })
-      process.stdout.write(`resumed ${run.id} as pid ${handle.pid}\n`)
-      await pumped
-      // The same reaction the tick chains onto its pumps: a resumed run's completion is a
-      // completion like any other, and a success that left the task `running` forever would make
-      // pause/resume a trap rather than a control. This process awaited the stream, so it is the
-      // one that knows the run concluded.
-      await verifyConcludedRun(brandRunId(run.id))
       return 0
     }
 
