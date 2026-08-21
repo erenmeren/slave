@@ -8,6 +8,7 @@
     "start": "next start"
   },
   "dependencies": {
+    "@ai-team-os/control": "*",
     "@ai-team-os/db": "*",
     "@ai-team-os/domain": "*",
     "@ai-team-os/events": "*",
