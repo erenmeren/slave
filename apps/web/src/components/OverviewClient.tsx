@@ -19,7 +19,7 @@ export function OverviewClient({
   const view = snapshot ?? initial
   return (
     <div className="flex min-h-screen w-full">
-      <Sidebar />
+      <Sidebar workspaceId={workspaceId} />
       <div className={`flex flex-1 flex-col ${error !== null ? 'opacity-60' : ''}`}>
         <TopBar
           workspaceName={view.workspace.name}

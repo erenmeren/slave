@@ -1,16 +1,21 @@
 // @vitest-environment jsdom
 import { render, screen } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { Sidebar } from '../src/components/Sidebar.js'
 import { TopBar } from '../src/components/TopBar.js'
 
+vi.mock('next/navigation', () => ({
+  usePathname: () => '/w/w1',
+}))
+
 describe('the shell', () => {
-  it('shows Overview as the one enabled destination', () => {
-    render(<Sidebar />)
+  it('shows Overview as the current page and Tasks as a live link', () => {
+    render(<Sidebar workspaceId="w1" />)
     expect(screen.getByText('Overview')).toHaveProperty('ariaCurrent', 'page')
-    // The disabled entries are the roadmap rendered as chrome — present, inert, and honest
+    expect(screen.getByText('Tasks').getAttribute('href')).toBe('/w/w1/tasks')
+    // The still-inert entries are the roadmap rendered as chrome — present, inert, and honest
     // about why (spec §7). Rendering them enabled would invite clicks into nothing.
-    for (const label of ['Tasks', 'Activity', 'Graph']) {
+    for (const label of ['Activity', 'Graph']) {
       expect(screen.getByText(label).getAttribute('aria-disabled')).toBe('true')
     }
   })

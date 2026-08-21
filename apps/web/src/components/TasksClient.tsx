@@ -1,0 +1,62 @@
+'use client'
+
+import type { TaskStatus } from '@ai-team-os/domain'
+import { useSelectedId } from '../hooks/useSelectedId.js'
+import { useTasks } from '../hooks/useTasks.js'
+import type { TasksSnapshot } from '../server/tasks.js'
+import { Sidebar } from './Sidebar.js'
+import { TaskColumn } from './TaskColumn.js'
+import { TaskDetailPanel } from './TaskDetailPanel.js'
+import { TopBar } from './TopBar.js'
+
+// The board's fixed column order (design doc §5). `@ai-team-os/domain` exports the wider
+// 12-value `TaskStatus` type (it also covers `assigned`, `merging`, `rework`, `cancelled`) but no
+// ordered constant matching this narrower 8-column board, so the order is a literal here.
+const BOARD_COLUMNS: readonly TaskStatus[] = [
+  'backlog',
+  'ready',
+  'running',
+  'verifying',
+  'reviewing',
+  'blocked',
+  'done',
+  'failed',
+]
+
+export function TasksClient({
+  workspaceId,
+  initial,
+}: {
+  readonly workspaceId: string
+  readonly initial: TasksSnapshot
+}): React.JSX.Element {
+  const { snapshot, connection, error } = useTasks(workspaceId, initial)
+  const view = snapshot ?? initial
+  const [selectedId, setSelectedId] = useSelectedId('task')
+  const selectedTask = view.tasks.find((task) => task.id === selectedId) ?? null
+
+  return (
+    <div className="flex min-h-screen w-full">
+      <Sidebar workspaceId={workspaceId} />
+      <div className={`flex flex-1 flex-col ${error !== null ? 'opacity-60' : ''}`}>
+        <TopBar workspaceName={view.workspace.name} connection={connection} budget={null} />
+        {error !== null && (
+          <div role="alert" className="border-b border-status-warn/40 bg-status-warn/10 px-4 py-1.5 text-xs text-status-warn">
+            showing stale data: {error}
+          </div>
+        )}
+        <main className="flex flex-1 gap-4 overflow-x-auto p-4">
+          {BOARD_COLUMNS.map((status) => (
+            <TaskColumn
+              key={status}
+              status={status}
+              tasks={view.tasks.filter((task) => task.status === status)}
+              onSelect={setSelectedId}
+            />
+          ))}
+        </main>
+      </div>
+      {selectedTask !== null && <TaskDetailPanel task={selectedTask} onClose={() => setSelectedId(null)} />}
+    </div>
+  )
+}
