@@ -46,6 +46,12 @@ export function OverviewClient({
       </div>
       {selectedAgent !== null && (
         <AgentPanel
+          // Keyed on the agent id so switching `?agent=` unmounts the old panel instance instead
+          // of reusing it with new props: a control POST still in flight for the agent just
+          // switched away from must not paint its late error/pending state onto the next agent's
+          // panel — React drops a state update against an unmounted component instead of
+          // delivering it (fix round 2, Finding 2).
+          key={selectedAgent.id}
           agent={selectedAgent}
           liveEvents={liveEvents[selectedAgent.id] ?? []}
           workspaceId={workspaceId}

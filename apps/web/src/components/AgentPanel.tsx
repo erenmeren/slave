@@ -62,24 +62,16 @@ export function AgentPanel({
   const [errorText, setErrorText] = useState<string | null>(null)
   const [draft, setDraft] = useState(agent.queuedMessage ?? '')
 
-  // Resync the draft from the snapshot's queued message whenever it changes underneath us — a
-  // resume consuming it, another client overwriting it, or switching to a different agent. Not
-  // optimistic UI: this reads what the snapshot already carried in, it never reads a POST's
-  // response body.
+  // Resync the draft from the snapshot's queued message whenever it changes for this agent — a
+  // resume consuming it, or another client overwriting it. Not optimistic UI: this reads what the
+  // snapshot already carried in, it never reads a POST's response body. `agent.id` no longer
+  // needs to be a dependency: `OverviewClient` keys the `<AgentPanel>` element on the agent id
+  // (fix round 2, Finding 2), so switching agents unmounts this instance rather than re-rendering
+  // it with a new `agent` prop — every render of a given instance is the same agent throughout
+  // its lifetime, by construction.
   useEffect((): void => {
     setDraft(agent.queuedMessage ?? '')
-  }, [agent.id, agent.queuedMessage])
-
-  // `OverviewClient` renders one `AgentPanel` element with no `key`, so switching `?agent=` from
-  // one agent to another re-renders this same component instance with a new `agent` prop rather
-  // than mounting a fresh one. Without this, agent A's error band and in-flight pending state
-  // would still be painted over agent B's panel (fix round 1, Finding 2). Scoped to `agent.id`
-  // alone, not `agent.queuedMessage` too — a snapshot refresh for the *same* agent must not wipe
-  // an error the user hasn't dismissed yet.
-  useEffect((): void => {
-    setErrorText(null)
-    setPending(new Set())
-  }, [agent.id])
+  }, [agent.queuedMessage])
 
   const runId = agent.runId
   const status = agent.status

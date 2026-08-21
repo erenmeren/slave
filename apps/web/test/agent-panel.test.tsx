@@ -152,13 +152,17 @@ describe('AgentPanel', () => {
     })
   })
 
-  describe('per-agent isolation (no state bleed across a panel switch)', () => {
+  // `OverviewClient` renders `<AgentPanel key={selectedAgent.id} ... />` — switching `?agent=`
+  // unmounts the old instance rather than re-rendering it with new props. These tests render the
+  // same way (`key` set explicitly, changed across `rerender`) so the remount semantics under
+  // test are the ones production actually gets.
+  describe('per-agent isolation (no state bleed across a keyed panel switch)', () => {
     it("clears agent A's error band once the panel switches to agent B", async () => {
       fetchMock.mockImplementationOnce(
         async () => new Response(JSON.stringify({ error: 'workspace is halted' }), { status: 409 }),
       )
       const { rerender } = render(
-        <AgentPanel agent={agent({ id: 'a1', status: 'working' })} liveEvents={[]} workspaceId="w1" haltedReason={null} onClose={() => {}} />,
+        <AgentPanel key="a1" agent={agent({ id: 'a1', status: 'working' })} liveEvents={[]} workspaceId="w1" haltedReason={null} onClose={() => {}} />,
       )
 
       await act(async () => {
@@ -167,7 +171,7 @@ describe('AgentPanel', () => {
       expect(screen.getByRole('alert').textContent).toContain('workspace is halted')
 
       rerender(
-        <AgentPanel agent={agent({ id: 'a2', status: 'working' })} liveEvents={[]} workspaceId="w1" haltedReason={null} onClose={() => {}} />,
+        <AgentPanel key="a2" agent={agent({ id: 'a2', status: 'working' })} liveEvents={[]} workspaceId="w1" haltedReason={null} onClose={() => {}} />,
       )
 
       expect(screen.queryByRole('alert')).toBeNull()
@@ -176,16 +180,50 @@ describe('AgentPanel', () => {
     it("does not carry agent A's in-flight pause-button disabled state onto agent B", () => {
       fetchMock.mockImplementationOnce(() => new Promise<Response>(() => {})) // never resolves
       const { rerender } = render(
-        <AgentPanel agent={agent({ id: 'a1', status: 'working' })} liveEvents={[]} workspaceId="w1" haltedReason={null} onClose={() => {}} />,
+        <AgentPanel key="a1" agent={agent({ id: 'a1', status: 'working' })} liveEvents={[]} workspaceId="w1" haltedReason={null} onClose={() => {}} />,
       )
 
       fireEvent.click(screen.getByTestId('pause-button'))
       expect(screen.getByTestId('pause-button').getAttribute('disabled')).not.toBeNull()
 
       rerender(
-        <AgentPanel agent={agent({ id: 'a2', status: 'working' })} liveEvents={[]} workspaceId="w1" haltedReason={null} onClose={() => {}} />,
+        <AgentPanel key="a2" agent={agent({ id: 'a2', status: 'working' })} liveEvents={[]} workspaceId="w1" haltedReason={null} onClose={() => {}} />,
       )
 
+      expect(screen.getByTestId('pause-button').getAttribute('disabled')).toBeNull()
+    })
+
+    it("drops agent A's 409 that settles AFTER the switch to agent B — the late-arrival race", async () => {
+      let resolveFetch!: (response: Response) => void
+      fetchMock.mockImplementationOnce(
+        () =>
+          new Promise<Response>((resolve) => {
+            resolveFetch = resolve
+          }),
+      )
+      const { rerender } = render(
+        <AgentPanel key="a1" agent={agent({ id: 'a1', status: 'working' })} liveEvents={[]} workspaceId="w1" haltedReason={null} onClose={() => {}} />,
+      )
+
+      // A's pause POST is in flight, unresolved, when the panel switches to B — the exact
+      // ordering the effect-based clear (fix round 1) could not close: nothing has settled yet,
+      // so there is nothing for an on-switch effect to clear.
+      fireEvent.click(screen.getByTestId('pause-button'))
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+
+      rerender(
+        <AgentPanel key="a2" agent={agent({ id: 'a2', status: 'working' })} liveEvents={[]} workspaceId="w1" haltedReason={null} onClose={() => {}} />,
+      )
+      expect(screen.queryByRole('alert')).toBeNull()
+      expect(screen.getByTestId('pause-button').getAttribute('disabled')).toBeNull()
+
+      // A's request finally settles as a 409, after B is already on screen. A's continuation must
+      // not paint onto B's (unmounted-A's setState is a no-op in React 18).
+      await act(async () => {
+        resolveFetch(new Response(JSON.stringify({ error: 'workspace is halted' }), { status: 409 }))
+      })
+
+      expect(screen.queryByRole('alert')).toBeNull()
       expect(screen.getByTestId('pause-button').getAttribute('disabled')).toBeNull()
     })
   })
