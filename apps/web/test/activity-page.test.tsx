@@ -308,6 +308,56 @@ describe('ActivityClient', () => {
     // alone — no `fireEvent.scroll` occurred anywhere in this test.
     expect(screen.getByTestId('new-events-badge').textContent).toContain('1')
   })
+
+  // ---- fix round 2 ------------------------------------------------------------------------
+
+  it('Fix round 2: disables the library\'s own first-measure scroll compensation (the prepend anchor is the sole writer for that case) while keeping its re-measure default (Important 5)', () => {
+    render(<ActivityClient workspaceId="w1" initial={INITIAL} />)
+
+    const instance = capturedVirtualizerInstance as unknown as {
+      shouldAdjustScrollPositionOnItemSizeChange:
+        | ((
+            item: { start: number; size: number; key: unknown },
+            delta: number,
+            instance: {
+              itemSizeCache: Map<unknown, number>
+              scrollOffset: number | null
+              scrollAdjustments: number
+              scrollDirection: 'forward' | 'backward' | null
+            },
+          ) => boolean)
+        | undefined
+    }
+    expect(typeof instance.shouldAdjustScrollPositionOnItemSizeChange).toBe('function')
+    const predicate = instance.shouldAdjustScrollPositionOnItemSizeChange!
+
+    const instanceStub = {
+      itemSizeCache: new Map<unknown, number>(),
+      scrollOffset: 1000,
+      scrollAdjustments: 0,
+      scrollDirection: null as 'forward' | 'backward' | null,
+    }
+
+    // First measure (key absent from `itemSizeCache`) of a row starting above the current scroll
+    // offset — exactly the shape the library's own default WOULD compensate for. Must say no:
+    // the prepend-anchor effect owns this case, summing every newly prepended row's height
+    // itself, not one row's estimate-vs-measured delta.
+    expect(predicate({ start: 0, size: 96, key: 'new-row' }, 504, instanceStub)).toBe(false)
+
+    // Re-measure (key already cached) of a row entirely above the fold, not scrolling backward —
+    // must match the library's own default: yes, compensate.
+    instanceStub.itemSizeCache.set('existing-row', 96)
+    expect(predicate({ start: 0, size: 96, key: 'existing-row' }, 504, instanceStub)).toBe(true)
+
+    // Same re-measure shape, but scrolling backward — the library's default explicitly skips this.
+    instanceStub.scrollDirection = 'backward'
+    expect(predicate({ start: 0, size: 96, key: 'existing-row' }, 504, instanceStub)).toBe(false)
+
+    // Re-measure of a row that only partly spans the fold (its end is below the scroll offset) —
+    // the library's default only compensates a row ENTIRELY above the fold.
+    instanceStub.scrollDirection = null
+    expect(predicate({ start: 950, size: 96, key: 'existing-row' }, 504, instanceStub)).toBe(false)
+  })
 })
 
 describe('Timeline scroll anchoring', () => {

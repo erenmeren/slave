@@ -86,6 +86,44 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
     },
   })
 
+  // Single-writer scroll compensation for a resized row (review finding, fix round 2). Left
+  // alone, the library's own default `shouldAdjustScrollPositionOnItemSizeChange` heuristic
+  // ALSO compensates a row's FIRST measurement synchronously inside its own `measureElement` ref
+  // callback (during commit — before the prepend-anchor effect below ever runs): a freshly
+  // prepended row's estimate-vs-measured delta puts its start above the current scroll offset,
+  // which is exactly the shape that heuristic compensates for. The anchor effect below then adds
+  // that SAME row's full height again — double-compensating, over-scrolling past the intended
+  // anchor point in a real browser. (jsdom's fix-round-1 test didn't surface this: `scrollTo` was
+  // stubbed to a no-op, and the library's own internal `scrollOffset` never syncs from a raw
+  // `el.scrollTop` property write, so its `defaultShouldAdjust` check never even ran there.)
+  //
+  // One writer per case, chosen explicitly:
+  //  - FIRST measure of a row — its key not yet in `itemSizeCache`, the exact discriminator
+  //    `resizeItem` itself computes at this same synchronous point, before that call inserts the
+  //    key (`virtual-core/dist/esm/index.js`'s `resizeItem`: `isFirstMeasure =
+  //    !this.itemSizeCache.has(key)`, computed before `this.itemSizeCache.set(key, size)`) —
+  //    never let the library compensate. The prepend-anchor effect below is the sole writer for
+  //    this case: it owns the *sum* of every newly prepended row's height, not one row's
+  //    estimate-vs-measured delta.
+  //  - RE-measure of an already-cached row (e.g. a payload `<details>` expanding — fix round 1's
+  //    Important 5): keep the library's own default behavior, replicated here explicitly since
+  //    supplying this callback at all replaces `defaultShouldAdjust` outright, not just extends
+  //    it — an item entirely above the fold gets compensated, unless the viewport is actively
+  //    scrolling backward, exactly the branch `resizeItem` runs internally.
+  //
+  // Assigned directly on the instance during render, not inside an effect: a freshly attached
+  // row's first measurement can run synchronously from a ref callback in the very same commit
+  // that creates the virtualizer, before any effect of this component would get a chance to run.
+  virtualizer.shouldAdjustScrollPositionOnItemSizeChange = (item, _delta, instance): boolean => {
+    const isFirstMeasure = !instance.itemSizeCache.has(item.key)
+    if (isFirstMeasure) return false
+    // `getScrollOffset()` (what `resizeItem` itself calls) is a private method in the published
+    // types; `scrollOffset` is the same value as a public field once the virtualizer has scrolled
+    // at all — true here, since a re-measure by definition means the row was already visible.
+    const scrollOffsetWithAdjustments = (instance.scrollOffset ?? 0) + instance.scrollAdjustments
+    return item.start + item.size <= scrollOffsetWithAdjustments && instance.scrollDirection !== 'backward'
+  }
+
   const scrollToBottom = (): void => {
     if (events.length > 0) virtualizer.scrollToIndex(events.length - 1, { align: 'end' })
   }
