@@ -29,6 +29,14 @@ export interface GraphCanvasProps {
  * `onEdgeDelete` is our own per-edge shape (one id at a time, matching "select an edge, press
  * Delete" -- spec §4.5); it fans out React Flow's own `onEdgesDelete` (plural, one call per
  * batch) so callers don't each re-derive that translation.
+ *
+ * `onNodeContextMenu` is always wired (unlike the other, purely optional passthrough props): a
+ * node with its own menu (`OrgNodes.tsx`'s `AgentNode`/`ActiveTaskNode`, `TaskNodes.tsx`'s
+ * `TaskNode` -- Task 7) opens it from its own `onContextMenu` and stops the event there, so this
+ * only ever fires for a node with no menu of its own (`WorkspaceNode`/`TeamNode`) -- there this
+ * unconditional `preventDefault` is what makes right-clicking one of those a clean no-op instead
+ * of popping the browser's own context menu. A caller-supplied handler (none yet) still runs
+ * after it.
  */
 export function GraphCanvas({ nodes, edges, nodeTypes, onConnect, onEdgeDelete, onNodeContextMenu }: GraphCanvasProps): React.JSX.Element {
   return (
@@ -40,8 +48,11 @@ export function GraphCanvas({ nodes, edges, nodeTypes, onConnect, onEdgeDelete, 
           nodeTypes={nodeTypes}
           fitView
           proOptions={{ hideAttribution: true }}
+          onNodeContextMenu={(event, node) => {
+            event.preventDefault()
+            onNodeContextMenu?.(event, node)
+          }}
           {...(onConnect === undefined ? {} : { onConnect })}
-          {...(onNodeContextMenu === undefined ? {} : { onNodeContextMenu })}
           {...(onEdgeDelete === undefined
             ? {}
             : { onEdgesDelete: (deleted: Edge[]) => deleted.forEach((edge) => onEdgeDelete(edge.id)) })}

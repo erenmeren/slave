@@ -1,11 +1,13 @@
 'use client'
 
+import { useState } from 'react'
 import type React from 'react'
 import { Handle, Position, type Edge, type Node, type NodeProps, type NodeTypes } from 'reactflow'
 import type { AgentStatus, TaskStatus } from '@ai-team-os/domain'
 import type { GraphSnapshot } from '../../server/graph'
 import { DOT } from '../AgentCard'
 import { TASK_STATUS_BORDER, TASK_STATUS_DOT } from '../TaskCard'
+import { NodeMenu } from './NodeMenu'
 
 // ---- node data shapes -----------------------------------------------------------------------
 
@@ -26,6 +28,11 @@ export interface AgentNodeData {
   readonly role: string
   readonly status: AgentStatus
   readonly activeTaskTitle: string | null
+  /** Carried on the node data (rather than threaded through `GraphCanvas`/React Flow itself)
+   *  purely so this renderer can build its `NodeMenu`'s workspace-scoped hrefs -- see the Task 7
+   *  brief's "wire onNodeContextMenu" file list, which names this builder, not `GraphCanvas.tsx`,
+   *  as where the workspace id needs to reach the node. */
+  readonly workspaceId: string
 }
 
 /** The active-task satellite (spec §6's particle track: "along the agent → active-task edge") --
@@ -35,6 +42,7 @@ export interface ActiveTaskNodeData {
   readonly kind: 'activeTask'
   readonly title: string
   readonly status: TaskStatus
+  readonly workspaceId: string
 }
 
 // `GraphAgent.status` is typed `string` (a deliberately widened field -- see `server/graph.ts`'s
@@ -84,9 +92,24 @@ export function TeamNode({ data }: NodeProps<TeamNodeData>): React.JSX.Element {
   )
 }
 
-export function AgentNode({ data }: NodeProps<AgentNodeData>): React.JSX.Element {
+/** `agent:<id>` -> `<id>` -- the inverse of `buildOrgGraph`'s node-id prefix, needed only for the
+ *  `NodeMenu`'s hrefs (the React Flow node id, not the bare domain id). */
+const AGENT_NODE_PREFIX = 'agent:'
+const ACTIVE_TASK_NODE_PREFIX = 'activeTask:'
+
+export function AgentNode({ id, data }: NodeProps<AgentNodeData>): React.JSX.Element {
+  const [menuOpen, setMenuOpen] = useState(false)
+  const agentId = id.startsWith(AGENT_NODE_PREFIX) ? id.slice(AGENT_NODE_PREFIX.length) : id
   return (
-    <div data-testid="agent-node" data-status={data.status} className="rounded border border-line bg-bg-1 px-3 py-2">
+    <div
+      data-testid="agent-node"
+      data-status={data.status}
+      className="group relative rounded border border-line bg-bg-1 px-3 py-2"
+      onContextMenu={(event) => {
+        event.preventDefault()
+        setMenuOpen(true)
+      }}
+    >
       <Handle type="target" position={Position.Top} />
       <div className="flex items-center gap-1.5">
         <span
@@ -98,19 +121,29 @@ export function AgentNode({ data }: NodeProps<AgentNodeData>): React.JSX.Element
       </div>
       <div className="mt-1 truncate text-xs text-text-2">{data.activeTaskTitle ?? 'idle'}</div>
       <Handle type="source" position={Position.Bottom} />
+      <NodeMenu kind="agent" workspaceId={data.workspaceId} id={agentId} open={menuOpen} onOpenChange={setMenuOpen} />
     </div>
   )
 }
 
-export function ActiveTaskNode({ data }: NodeProps<ActiveTaskNodeData>): React.JSX.Element {
+export function ActiveTaskNode({ id, data }: NodeProps<ActiveTaskNodeData>): React.JSX.Element {
+  const [menuOpen, setMenuOpen] = useState(false)
+  const taskId = id.startsWith(ACTIVE_TASK_NODE_PREFIX) ? id.slice(ACTIVE_TASK_NODE_PREFIX.length) : id
   return (
     <div
       data-testid="active-task-node"
-      className={`rounded border bg-bg-1 px-2 py-1 text-xs text-text-2 ${taskBorder(data.status)}`}
+      className={`group relative rounded border bg-bg-1 px-2 py-1 text-xs text-text-2 ${taskBorder(data.status)}`}
+      onContextMenu={(event) => {
+        event.preventDefault()
+        setMenuOpen(true)
+      }}
     >
       <Handle type="target" position={Position.Top} />
       <span className={`mr-1 inline-block h-1.5 w-1.5 rounded-full ${taskDot(data.status)}`} />
       {data.title}
+      {/* Same target surface as a deps-mode `TaskNode` (Task 7 brief) -- `kind="task"`, keyed by
+       *  the underlying task id, not the org-mode-only `activeTask:` node-id prefix. */}
+      <NodeMenu kind="task" workspaceId={data.workspaceId} id={taskId} open={menuOpen} onOpenChange={setMenuOpen} />
     </div>
   )
 }
@@ -169,6 +202,7 @@ export function buildOrgGraph(snapshot: GraphSnapshot): { readonly nodes: Node[]
         role: agent.role,
         status: agent.status as AgentStatus,
         activeTaskTitle: agent.activeTaskTitle,
+        workspaceId: snapshot.workspace.id,
       } satisfies AgentNodeData,
     })
     edges.push({ id: `${teamNodeId}->${agentNodeId}`, source: teamNodeId, target: agentNodeId })
@@ -183,6 +217,7 @@ export function buildOrgGraph(snapshot: GraphSnapshot): { readonly nodes: Node[]
           kind: 'activeTask',
           title: agent.activeTaskTitle ?? '',
           status: taskStatusById.get(agent.activeTaskId) ?? 'running',
+          workspaceId: snapshot.workspace.id,
         } satisfies ActiveTaskNodeData,
       })
       edges.push({ id: `${agentNodeId}->${taskNodeId}`, source: agentNodeId, target: taskNodeId })

@@ -1,10 +1,12 @@
 'use client'
 
+import { useState } from 'react'
 import type React from 'react'
 import { Handle, Position, type Edge, type Node, type NodeProps, type NodeTypes } from 'reactflow'
 import type { TaskStatus } from '@ai-team-os/domain'
 import type { GraphSnapshot } from '../../server/graph'
 import { TASK_STATUS_BORDER, TASK_STATUS_DOT } from '../TaskCard'
+import { NodeMenu } from './NodeMenu'
 
 // ---- node data shape -------------------------------------------------------------------------
 
@@ -19,6 +21,9 @@ export interface TaskNodeData {
    *  unmet prerequisite, not every task with a dependency). `null` for every other status,
    *  including `ready` tasks whose dependencies are already all done. */
   readonly waitingOn: number | null
+  /** Same "carried on node data" reasoning as `OrgNodes.tsx`'s `AgentNodeData.workspaceId` --
+   *  needed for this node's `NodeMenu` hrefs. */
+  readonly workspaceId: string
 }
 
 // Same guarded-lookup shape as `OrgNodes.tsx`'s `taskDot`/`taskBorder` -- `TASK_STATUS_*` are
@@ -33,12 +38,20 @@ function taskDot(status: TaskStatus): string {
 
 // ---- node renderer ------------------------------------------------------------------------
 
-export function TaskNode({ data }: NodeProps<TaskNodeData>): React.JSX.Element {
+const TASK_NODE_PREFIX = 'task:'
+
+export function TaskNode({ id, data }: NodeProps<TaskNodeData>): React.JSX.Element {
+  const [menuOpen, setMenuOpen] = useState(false)
+  const taskId = id.startsWith(TASK_NODE_PREFIX) ? id.slice(TASK_NODE_PREFIX.length) : id
   return (
     <div
       data-testid="task-node"
       data-status={data.status}
-      className={`rounded border bg-bg-1 px-3 py-2 ${taskBorder(data.status)}`}
+      className={`group relative rounded border bg-bg-1 px-3 py-2 ${taskBorder(data.status)}`}
+      onContextMenu={(event) => {
+        event.preventDefault()
+        setMenuOpen(true)
+      }}
     >
       <Handle type="target" position={Position.Left} />
       <div className="flex items-center gap-1.5">
@@ -57,6 +70,7 @@ export function TaskNode({ data }: NodeProps<TaskNodeData>): React.JSX.Element {
         )}
       </div>
       <Handle type="source" position={Position.Right} />
+      <NodeMenu kind="task" workspaceId={data.workspaceId} id={taskId} open={menuOpen} onOpenChange={setMenuOpen} />
     </div>
   )
 }
@@ -108,6 +122,7 @@ export function buildDepsGraph(snapshot: GraphSnapshot): { readonly nodes: Node[
         attempt: task.attempt,
         maxAttempts: task.maxAttempts,
         waitingOn,
+        workspaceId: snapshot.workspace.id,
       } satisfies TaskNodeData,
     }
   })
