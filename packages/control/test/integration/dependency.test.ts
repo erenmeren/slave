@@ -154,6 +154,31 @@ describe('task dependency control operations', () => {
       if (!result.ok) expect(result.error.kind).toBe('dependency_cycle')
     })
 
+    it('serialises concurrent opposite-direction adds so the DAG cannot acquire a cycle', async (): Promise<void> => {
+      const { a, b } = fixture
+
+      // Two operators racing to add A->B and B->A at the same instant. Under READ COMMITTED with
+      // no lock, both transactions' cycle CTEs would run before either's INSERT commits -- neither
+      // sees the other's uncommitted row, both CTEs report "no cycle", and both inserts land: a
+      // live cycle in "TaskDependency" that `dependenciesDone` (apps/orchestrator/src/world.ts)
+      // would then evaluate as permanently false for both tasks, forever, with nothing to explain
+      // why. Exactly one of these two calls must win.
+      const [first, second] = await Promise.all([
+        addTaskDependency(a.id, b.id, 'meren'),
+        addTaskDependency(b.id, a.id, 'meren'),
+      ])
+
+      const results = [first, second]
+      const succeeded = results.filter((r) => r.ok)
+      const refused = results.filter((r) => !r.ok)
+      expect(succeeded).toHaveLength(1)
+      expect(refused).toHaveLength(1)
+      if (!refused[0]!.ok) expect(refused[0]!.error.kind).toBe('dependency_cycle')
+
+      const rows = await prisma.taskDependency.findMany({ where: { OR: [{ taskId: a.id }, { taskId: b.id }] } })
+      expect(rows).toHaveLength(1)
+    })
+
     it('allows depending on a task that is already done', async (): Promise<void> => {
       const { a } = fixture
       const done = await prisma.task.create({
