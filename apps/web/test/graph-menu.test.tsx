@@ -117,6 +117,21 @@ describe('NodeMenu', () => {
 
     expect(onOpenChange).not.toHaveBeenCalled()
   })
+
+  // ---- fix-round-1: focus restoration on Escape ----------------------------------------------
+
+  it('fix-round-1: returns focus to the "..." trigger on Escape, when focus was on a menu item', () => {
+    const onOpenChange = vi.fn()
+    render(<NodeMenu kind="agent" workspaceId="w1" id="a1" open onOpenChange={onOpenChange} />)
+
+    const [firstItem] = screen.getAllByTestId('node-menu-item')
+    firstItem!.focus()
+    expect(document.activeElement).toBe(firstItem)
+
+    fireEvent.keyDown(document, { key: 'Escape' })
+
+    expect(document.activeElement).toBe(screen.getByTestId('node-menu-trigger'))
+  })
 })
 
 // ---- wiring into each node type -------------------------------------------------------------

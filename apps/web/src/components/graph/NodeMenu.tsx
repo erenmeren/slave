@@ -56,12 +56,20 @@ export interface NodeMenuProps {
  */
 export function NodeMenu({ kind, workspaceId, id, open, onOpenChange }: NodeMenuProps): React.JSX.Element {
   const rootRef = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
     if (!open) return
 
     function onKeyDown(event: KeyboardEvent): void {
-      if (event.key === 'Escape') onOpenChange(false)
+      if (event.key !== 'Escape') return
+      // Escape can fire while focus sits on a menu item (tabbed/arrowed in) -- that item is about
+      // to unmount once `onOpenChange(false)` closes the popover, which would otherwise drop
+      // focus to `<body>`. Move it back to the trigger first, synchronously, so a keyboard user
+      // never loses their place. The outside-click path below skips this on purpose: focus is
+      // already wherever the user clicked, and re-stealing it there would be the surprising move.
+      triggerRef.current?.focus()
+      onOpenChange(false)
     }
     function onPointerDown(event: MouseEvent): void {
       if (rootRef.current !== null && !rootRef.current.contains(event.target as Node)) onOpenChange(false)
@@ -80,6 +88,7 @@ export function NodeMenu({ kind, workspaceId, id, open, onOpenChange }: NodeMenu
   return (
     <div ref={rootRef} data-testid="node-menu-root" className="absolute right-1 top-1">
       <button
+        ref={triggerRef}
         type="button"
         data-testid="node-menu-trigger"
         aria-label="Node actions"
