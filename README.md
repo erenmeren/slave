@@ -16,6 +16,8 @@ real git repositories, with a human supervising rather than prompting.
 - **M5** — the Tasks board, the agent detail panel, and intervention from the browser: pause,
   message, resume, stop, all routed through `packages/control`. See the Web UI section below and
   `docs/architecture.md`.
+- **M6** — the Activity page: a live, filterable, infinitely-scrollable timeline of every workspace
+  event, plus tool-call sparklines. See the Web UI section below and `docs/architecture.md`.
 
 ## Setup
 
@@ -182,6 +184,32 @@ The **Tasks board** (`/w/<workspaceId>/tasks`) lays every task out in columns by
 ready, running, verifying, reviewing, blocked, done, failed. Clicking a card opens a detail panel
 with its description, branch, rejection reason and its runs, newest first, each with its status,
 cost, tool calls and (for a paused run) the step it paused at.
+
+The **Activity page** (`/w/<workspaceId>/activity`, in the Sidebar next to Overview and Tasks) is a
+live, filterable, infinitely-scrollable timeline of every `ExecutionEvent` in the workspace — every
+run, tool call, task transition, intervention and guardrail trip, oldest at top, newest at bottom.
+The filter bar's five kind chips (Runs, Tool calls, Tasks, Interventions, Guardrails) group the 20
+underlying event types for everyday use; an "Advanced" popover lists all 20 raw types individually
+for anyone who needs a narrower cut than a kind gives, alongside agent and task roster filters. Every
+dimension round-trips through the URL (`?kinds=`, `?types=`, `?agents=`, `?tasks=`) — refreshing or
+sharing the link restores the same view. The timeline itself is virtualized: scrolling up toward the
+top pages in older history automatically, so deep scrollback stays cheap regardless of how far back
+it goes, while staying pinned to the bottom live-follows new events as they arrive (an unpinned
+timeline instead shows a "N new events" badge that jumps back and re-pins on click). The same
+connection indicator as the Overview page's top bar — `connected` while the SSE stream is open,
+`reconnecting` while `EventSource` is re-establishing it — doubles as the page's liveness signal for
+the one-second delivery bar (spec §6; see `scripts/measure-activity-latency.mjs` below). A header
+sparkline plots the workspace's tool-call rate over the last ten minutes, live-rotated every minute;
+each agent card on the Overview page carries the same sparkline in miniature, scoped to that agent.
+
+```bash
+node --env-file=.env scripts/measure-activity-latency.mjs
+```
+
+The gate's measured half (spec §6, M6): seeds a throwaway workspace, starts the real web server,
+opens the activity stream over plain `fetch`, appends 50 events at 100ms intervals, and reports the
+min/p50/p95/max gap between each event's own `ts` and its frame's arrival — exiting non-zero if p95
+is at or above 1000ms. It cleans up the workspace and the web server it started before exiting.
 
 Clicking an agent's card on the Overview page opens its **detail panel**: the live event feed, and
 the controls M5 adds — pause, message, resume, stop. What each control does is a claim through

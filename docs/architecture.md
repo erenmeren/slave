@@ -115,3 +115,19 @@ This is why M3's measured carry (one `pause` can emit several `run.paused` event
 CLI retries a denied tool call) needed no special handling here: a client whose state is always a
 fresh snapshot absorbs repeats and reordering by construction, the same way a `seq`-tracking reader
 does on the orchestrator side.
+
+## The activity stream is the same transport, filtered
+
+M6's `/api/w/<workspaceId>/activity/stream` is not a second SSE implementation: it calls the same
+`createEventSse` (`packages/events`' `createEventStream` underneath) as `/api/w/<workspaceId>/events`,
+with one addition — an optional per-connection `filter` predicate built from the request's parsed
+`ActivityFilters` (`?kinds=`/`?types=`/`?agents=`/`?tasks=`). A rejected event is simply never
+written to the response body; the watermark (`lastSeen`, the id the next heartbeat and any
+`Last-Event-ID` reconnect carries) still advances past it exactly as it advances past another
+workspace's events on the unfiltered route, so a client that narrows its filters mid-connection
+loses nothing on reconnect — it resumes from the same `seq` a filtered gap would have left it at
+regardless. Unlike the Overview page's SSE connection, the activity stream's frames *are* the
+delivered state (each frame is one `ExecutionEvent`, appended to the client's own buffer) rather
+than a wake-up for a snapshot refetch — the hybrid liveness rule above still holds for structural
+state (task/agent rosters, filter options), which the Activity page still reads from a server-side
+snapshot on load and on history paging, never from the stream.
