@@ -127,7 +127,11 @@ describe('executing a resume intent from the daemon', () => {
     await drainPumps()
 
     const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: runId } })
-    expect(['working', 'succeeded']).toContain(after.status)
+    // Exact, not a union: `env-echo` always succeeds (gate-fix B review round 1, Critical 1) --
+    // a union of `['working', 'succeeded']` passed even while a regression stranded every resumed
+    // run in `resuming` for its entire life, because the pump's terminal-outcome write overwrites
+    // whatever status it finds regardless, and this assertion never looked at the state in between.
+    expect(after.status).toBe('succeeded')
     // Consumed exactly once: the claim clears both columns, so a second tick finds nothing to do.
     expect(after.resumeRequestedAt).toBeNull()
     expect(after.queuedMessage).toBeNull()

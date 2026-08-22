@@ -271,12 +271,19 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
         // `working` by a `session_started` line the dying child still had buffered. `sessionId`
         // itself has no such hazard -- it is written once and never contradicts a later status --
         // so it stays unconditioned beyond `endedAt: null`.
+        //
+        // `{ in: ['starting', 'resuming'] }`, not just `'starting'`: this is the ONLY write of the
+        // domain's `resuming --resumed--> working` edge (tick.ts claims paused->resuming;
+        // resume.ts writes only pid/pauseReason/pausedAtStep, never the status itself). Narrowing
+        // this to `'starting'` alone -- gate-fix B review round 1, Critical 1 -- stranded every
+        // resumed run in `resuming` for its whole remaining life, because a resumed pump's stream
+        // opens with `session_started` exactly like a fresh one's.
         await prisma.agentRun.updateMany({
           where: { id: runId, endedAt: null },
           data: { sessionId: event.sessionId },
         })
         await prisma.agentRun.updateMany({
-          where: { id: runId, endedAt: null, status: 'starting' },
+          where: { id: runId, endedAt: null, status: { in: ['starting', 'resuming'] } },
           data: { status: 'working' },
         })
         sessionId = event.sessionId
@@ -470,21 +477,36 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
 
   if (outcome === null) {
     const now = new Date()
-    // A `stopping` row means `requestStop` claimed this run *before* killing it (M5 live-gate
-    // finding 2) -- the very kill that ended this stream. In the CLI, `requestStop` owns this
-    // pump and always reaches its own `stopped` write first, so this branch never observes
-    // `stopping`; under a daemon, a web stop's kill lands in another process and can wake this
-    // stream before `requestStop`'s own conclusion runs. Either way the row must read `stopped`,
-    // and this is the side that has to write it when it wins the race -- checked first, and
-    // conditioned on `stopping` specifically so an ordinary crash (any other status) still falls
-    // through to the `failed` write below.
+    // `stopping` alone is not enough to conclude `stopped` here (gate-fix B review round 1,
+    // Critical 2): the guardrail sweep (`sweep.ts`) claims the SAME `stopping` status ahead of its
+    // own `adapter.cancel`, for a timed-out or over-the-tool-cap run, and writes no terminal row of
+    // its own -- it relies on this branch, which before this fix always concluded `failed`.
+    // Matching `stopping` alone would silently reclassify every guardrail kill as `stopped`, which
+    // `world.ts` reads as `terminal_uncounted`: those runs would stop counting toward
+    // `consecutiveFailures`, and a workspace whose gate keeps timing out or blowing the tool cap
+    // would never halt.
+    //
+    // `stopRequestedAt` is the discriminator: only `requestStop` (an operator's web/CLI stop)
+    // writes it, in the same conditioned update that claims `stopping`, before its kill (M5
+    // live-gate finding 2). In the CLI, `requestStop` owns this pump and always reaches its own
+    // `stopped` write first, so this branch rarely observes the intent record there either; under
+    // a daemon, a web stop's kill lands in another process and can wake this stream before
+    // `requestStop`'s own conclusion runs. Either way, when the intent record is present the row
+    // must read `stopped`, and this is the side that has to write it when it wins that race.
     const stopClaimed = await prisma.agentRun.updateMany({
-      where: { id: runId, endedAt: null, status: 'stopping' },
+      where: { id: runId, endedAt: null, status: 'stopping', stopRequestedAt: { not: null } },
       data: { status: 'stopped', terminalAt: now, endedAt: now },
     })
     if (stopClaimed.count > 0) {
+      // Read back who asked. Safe after the fact: nothing else can still be writing this row --
+      // every other writer's own update is conditioned on `endedAt: null`, which this call just
+      // set.
+      const stopped = await prisma.agentRun.findUniqueOrThrow({ where: { id: runId } })
       await emit('run.stopped', 'system', {
-        reason: "the run's output stream ended after an operator stop killed the process",
+        reason:
+          stopped.stopRequestedBy === null
+            ? 'cancelled by an operator'
+            : `cancelled by ${stopped.stopRequestedBy}`,
       })
       return null
     }

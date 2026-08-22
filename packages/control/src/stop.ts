@@ -12,13 +12,20 @@ export async function requestStop(runId: string, requestedBy: string): Promise<R
   // process owns the pump it is about to kill, so the two writes below never race one another --
   // but a web stop's kill wakes the *daemon's* pump, in another process, and that pump can
   // observe the dead child and conclude the run before this function reaches its own conclusion.
-  // `stopping` is what lets the pump's stream-ended path (`pump.ts`) recognise an operator stop
-  // and write `stopped` itself rather than reporting a plain crash -- whichever side's conditioned
-  // `updateMany` lands first, the row ends up `stopped` either way. Conditioned like every other
-  // write here: an already-terminal run's claim is a no-op, not a demotion.
+  // `stopping` alone is not a safe enough signal for the pump to act on (gate-fix B review round
+  // 1, Critical 2): the guardrail sweep claims the same status ahead of its own cancel, for a
+  // timed-out or over-the-tool-cap run that must still conclude `failed`. `stopRequestedBy` /
+  // `stopRequestedAt` are the record that distinguishes an *operator's* stop -- only this function
+  // writes them -- and they are what lets the pump's stream-ended path (`pump.ts`) recognise one
+  // and write `stopped` itself, naming the requester, rather than reporting a plain crash.
+  // Whichever side's conditioned `updateMany` lands first, the row ends up `stopped` either way.
+  // Conditioned like every other write here: an already-terminal run's claim is a no-op, not a
+  // demotion. Left set after the run concludes -- historical record of who asked, nothing reads
+  // them as live state, so there is nothing to clear.
+  const stopRequestedAt = new Date()
   await prisma.agentRun.updateMany({
     where: { id: run.id, endedAt: null },
-    data: { status: 'stopping' },
+    data: { status: 'stopping', stopRequestedBy: requestedBy, stopRequestedAt },
   })
 
   // The adapter's own kill escalates; a CLI cancel that only asks politely is strictly

@@ -236,6 +236,15 @@ model AgentRun {
   /// never sit in `resuming` without a process — the orphan sweep would destroy it.
   resumeRequestedAt DateTime?
   queuedMessage     String?
+  /// Stop intent (M5 gate-fix B): `requestStop` writes both columns in the same conditioned
+  /// update that claims `status: stopping`, before it kills the child -- so a run's stream ending
+  /// with no terminal result can tell an operator's stop (this record present) from the guardrail
+  /// sweep's own `stopping` claim (sweep.ts, no intent record, must still conclude `failed` so it
+  /// counts toward the circuit breaker's failure streak). `stopRequestedBy` is who asked, echoed
+  /// into the eventual `run.stopped` reason whichever side concludes the run. Left set after the
+  /// run concludes -- historical record of who asked, not live state to clear.
+  stopRequestedBy   String?
+  stopRequestedAt   DateTime?
   costUsd           Float        @default(0)
   pid               Int?
   worktreePath      String?

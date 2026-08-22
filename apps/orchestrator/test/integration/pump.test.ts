@@ -197,6 +197,36 @@ describe('pumpRun', () => {
     await pumping
   })
 
+  it('moves a resumed run from resuming to working on session_started, not only a fresh run from starting (gate-fix B review round 1, Critical 1)', async (): Promise<void> => {
+    // `resuming` is what the tick's paused->resuming claim leaves the row at (`resume.ts` writes
+    // only pid/pauseReason/pausedAtStep, never the status itself) -- this `session_started` write
+    // is the ONLY place the domain's `resuming --resumed--> working` edge is implemented. A pump
+    // that only recognised `starting` here left every resumed run reading `resuming` for the rest
+    // of its life, because the terminal-outcome write at the end of this file overwrites whatever
+    // status it finds regardless of what happened in between.
+    await prisma.agentRun.update({ where: { id: ids.runId }, data: { status: 'resuming' } })
+
+    let release = (): void => {}
+    const held = new Promise<void>((res) => {
+      release = res
+    })
+
+    async function* stalls(): AsyncIterable<RuntimeEvent> {
+      yield { kind: 'session_started', sessionId: 's-resumed' }
+      await held
+      yield { kind: 'terminated', outcome: okOutcome }
+    }
+
+    const pumping = pumpRun({ ...ids, resumed: true, events: stalls() })
+
+    await new Promise((res) => setTimeout(res, 50))
+    const midRun = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+    expect(midRun.status).toBe('working')
+
+    release()
+    await pumping
+  })
+
   it('maps a permission-mode denial to guardrail.tripped, never to run.paused', async (): Promise<void> => {
     await pumpRun({
       ...ids,
@@ -701,7 +731,14 @@ describe('pumpRun', () => {
     // the child, in another process. The kill wakes this pump's stream first -- the child is dead
     // before `requestStop`'s own conclusion runs -- so this branch, not `requestStop`, is the one
     // that writes the terminal row. It must write what the operator asked for, not a plain crash.
-    await prisma.agentRun.update({ where: { id: ids.runId }, data: { status: 'stopping' } })
+    //
+    // Seeded with both `status: 'stopping'` AND the intent record, mirroring exactly what
+    // `requestStop`'s own claim writes (gate-fix B review round 1, Critical 2): `stopping` alone
+    // is what the guardrail sweep also claims, and is covered by its own, separate test below.
+    await prisma.agentRun.update({
+      where: { id: ids.runId },
+      data: { status: 'stopping', stopRequestedBy: 'meren', stopRequestedAt: new Date() },
+    })
 
     const outcome = await pumpRun({
       ...ids,
@@ -716,6 +753,37 @@ describe('pumpRun', () => {
     const types = await eventTypesFor(ids.runId)
     expect(types).toContain('run.stopped')
     expect(types).not.toContain('run.failed')
+    // Important 3: the requester's name must survive to the event the pump writes, not just the
+    // one `requestStop` writes when it wins the race -- an operator reading the transcript must
+    // see who stopped the run either way.
+    const stoppedEvent = await prisma.executionEvent.findFirstOrThrow({
+      where: { runId: ids.runId, type: 'run_stopped' },
+    })
+    expect((stoppedEvent.payload as { reason: string }).reason).toContain('meren')
+  })
+
+  it('still concludes failed, not stopped, when the guardrail sweep claims stopping with no recorded stop intent', async (): Promise<void> => {
+    // Gate-fix B review round 1, Critical 2: `sweep.ts`'s timeout/tool-cap guardrail claims the
+    // exact same `stopping` status ahead of its own `adapter.cancel`, and writes no terminal row
+    // of its own -- it relies on this branch. Before this test existed, nothing distinguished that
+    // claim from an operator's, and this branch had started concluding it `stopped`: `world.ts`
+    // reads `stopped` as `terminal_uncounted`, so a guardrail kill would silently stop counting
+    // toward `consecutiveFailures` and the circuit breaker could never trip on a gate that keeps
+    // timing out or blowing the tool cap.
+    await prisma.agentRun.update({ where: { id: ids.runId }, data: { status: 'stopping' } })
+
+    const outcome = await pumpRun({
+      ...ids,
+      events: fromArray([{ kind: 'session_started', sessionId: 's-1' }]),
+    })
+
+    expect(outcome).toBeNull()
+    const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+    expect(run.status).toBe('failed')
+    expect(run.terminalAt).not.toBeNull()
+    const types = await eventTypesFor(ids.runId)
+    expect(types).toContain('run.failed')
+    expect(types).not.toContain('run.stopped')
   })
 
   it('does not write half a checkpoint for a run nothing could resume', async (): Promise<void> => {

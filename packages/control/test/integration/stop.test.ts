@@ -58,6 +58,10 @@ describe('requestStop', () => {
     const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })
     expect(after.status).toBe('stopped')
     expect(after.endedAt).not.toBeNull()
+    // The intent record `requestStop` claims before the kill (gate-fix B review round 1): left
+    // set after conclusion, as historical record of who asked.
+    expect(after.stopRequestedBy).toBe('meren')
+    expect(after.stopRequestedAt).not.toBeNull()
     const taskAfter = await prisma.task.findUniqueOrThrow({ where: { id: task.id } })
     expect(taskAfter.status).toBe('blocked')
     expect(taskAfter.activeRunId).toBeNull()
