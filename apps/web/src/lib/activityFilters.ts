@@ -30,6 +30,8 @@ export const TYPES_BY_KIND = {
     'task.verify_passed',
     'task.verify_failed',
     'task.failed',
+    'task.dependency_added',
+    'task.dependency_removed',
   ],
   interventions: ['run.pause_requested', 'run.resume_requested', 'run.stopped', 'agent.message_sent'],
   guardrails: ['guardrail.tripped'],

@@ -151,6 +151,38 @@ describe('parseExecutionEvent', () => {
     if (result.ok) expect(result.value.payload).toEqual({ requestedBy: 'operator', message: null })
   })
 
+  it('accepts a task.dependency_added event', () => {
+    const result = parseExecutionEvent({
+      ...BASE,
+      type: 'task.dependency_added',
+      taskId: 'TASK-1',
+      payload: { dependsOnTaskId: 'TASK-2', dependsOnTitle: 'Build the API', requestedBy: 'human:eren' },
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.value.type).toBe('task.dependency_added')
+  })
+
+  it('accepts a task.dependency_removed event', () => {
+    const result = parseExecutionEvent({
+      ...BASE,
+      type: 'task.dependency_removed',
+      taskId: 'TASK-1',
+      payload: { dependsOnTaskId: 'TASK-2', dependsOnTitle: 'Build the API', requestedBy: 'human:eren' },
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.value.type).toBe('task.dependency_removed')
+  })
+
+  it('rejects a task.dependency_added event missing dependsOnTaskId', () => {
+    const result = parseExecutionEvent({
+      ...BASE,
+      type: 'task.dependency_added',
+      taskId: 'TASK-1',
+      payload: { dependsOnTitle: 'Build the API', requestedBy: 'human:eren' },
+    })
+    expect(result.ok).toBe(false)
+  })
+
   it('rejects an empty workspaceId', () => {
     const result = parseExecutionEvent({
       ...BASE,

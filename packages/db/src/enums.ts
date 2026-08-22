@@ -27,6 +27,8 @@ export const EVENT_TYPE_BY_DOMAIN_TYPE = {
   'run.stopped': 'run_stopped',
   'run.succeeded': 'run_succeeded',
   'run.failed': 'run_failed',
+  'task.dependency_added': 'task_dependency_added',
+  'task.dependency_removed': 'task_dependency_removed',
 } as const satisfies Record<DomainEventType, string>
 
 export type DbEventType = (typeof EVENT_TYPE_BY_DOMAIN_TYPE)[DomainEventType]

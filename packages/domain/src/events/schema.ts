@@ -64,6 +64,16 @@ export const executionEventSchema = z.discriminatedUnion('type', [
     payload: z.object({ numTurns: z.number().int(), costUsd: z.number() }),
   }),
   z.object({ ...envelope, type: z.literal('run.failed'), payload: z.object({ reason: z.string() }) }),
+  z.object({
+    ...envelope,
+    type: z.literal('task.dependency_added'),
+    payload: z.object({ dependsOnTaskId: z.string(), dependsOnTitle: z.string(), requestedBy: z.string() }),
+  }),
+  z.object({
+    ...envelope,
+    type: z.literal('task.dependency_removed'),
+    payload: z.object({ dependsOnTaskId: z.string(), dependsOnTitle: z.string(), requestedBy: z.string() }),
+  }),
 ])
 
 export type ExecutionEvent = z.infer<typeof executionEventSchema>

@@ -43,6 +43,16 @@ const PAYLOAD_BY_TYPE: Record<DomainEventType, Record<string, unknown>> = {
   'run.stopped': { reason: 'operator requested stop' },
   'run.succeeded': { numTurns: 5, costUsd: 1.23 },
   'run.failed': { reason: 'the run crashed' },
+  'task.dependency_added': {
+    dependsOnTaskId: 't2',
+    dependsOnTitle: 'Build the API',
+    requestedBy: 'human:eren',
+  },
+  'task.dependency_removed': {
+    dependsOnTaskId: 't2',
+    dependsOnTitle: 'Build the API',
+    requestedBy: 'human:eren',
+  },
 }
 
 function fixtureFor(type: DomainEventType): ActivityEventRow {
@@ -98,6 +108,13 @@ describe('targeted card bodies', () => {
     render(<Card event={fixtureFor('agent.message_sent')} {...CARD_PROPS} />)
     expect(screen.getByTestId('actor-badge').textContent).toBe('agent')
     expect(screen.getByTestId('message-body').textContent).toBe('Please retry with the other approach.')
+  })
+
+  it('task.dependency_added shows the dependency title and requester', () => {
+    const Card = ACTIVITY_CARDS['task.dependency_added']
+    render(<Card event={fixtureFor('task.dependency_added')} {...CARD_PROPS} />)
+    expect(screen.getByTestId('depends-on-title').textContent).toBe('Build the API')
+    expect(screen.getByTestId('requested-by').textContent).toBe('human:eren')
   })
 
   it('task.rework shows the reason', () => {

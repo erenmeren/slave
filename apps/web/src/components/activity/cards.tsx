@@ -134,6 +134,34 @@ function TaskFailedCard(props: ActivityCardProps): ReactElement {
   )
 }
 
+function TaskDependencyAddedCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as { dependsOnTaskId: string; dependsOnTitle: string; requestedBy: string }
+  return (
+    <ActivityCard {...props}>
+      <Transition tone="idle" label="dependency added">
+        depends on <span data-testid="depends-on-title">{payload.dependsOnTitle}</span>
+      </Transition>
+      <p className="mt-1 text-text-3">
+        requested by <span data-testid="requested-by">{payload.requestedBy}</span>
+      </p>
+    </ActivityCard>
+  )
+}
+
+function TaskDependencyRemovedCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as { dependsOnTaskId: string; dependsOnTitle: string; requestedBy: string }
+  return (
+    <ActivityCard {...props}>
+      <Transition tone="idle" label="dependency removed">
+        no longer depends on <span data-testid="depends-on-title">{payload.dependsOnTitle}</span>
+      </Transition>
+      <p className="mt-1 text-text-3">
+        requested by <span data-testid="requested-by">{payload.requestedBy}</span>
+      </p>
+    </ActivityCard>
+  )
+}
+
 // ---- run.* lifecycle (schema.ts:24, 30-31, 60-66) --------------------------------------------
 
 function RunStartedCard(props: ActivityCardProps): ReactElement {
@@ -328,4 +356,6 @@ export const ACTIVITY_CARDS = {
   'run.stopped': RunStoppedCard,
   'run.succeeded': RunSucceededCard,
   'run.failed': RunFailedCard,
+  'task.dependency_added': TaskDependencyAddedCard,
+  'task.dependency_removed': TaskDependencyRemovedCard,
 } satisfies Record<DomainEventType, (props: ActivityCardProps) => ReactElement>
