@@ -500,6 +500,53 @@ describe('pumpRun', () => {
     expect(await eventTypesFor(ids.runId)).not.toContain('run.succeeded')
   })
 
+  it('reacts to a second hook deny after the pause only once, not with a second checkpoint write, kill and run.paused', async (): Promise<void> => {
+    // Fix round 1: the real CLI does not exit promptly on SIGTERM (M5 live-gate finding 1's own
+    // trace shows a second deny arriving after the first `run.paused` -- another Bash call denied
+    // at atStep 6 following the one at atStep 5), and this pump's own `killWithEscalation` call
+    // leaves a multi-second window open where the still-live child can trip the gate again. A
+    // second `hook_denied` reaching this loop must not repeat the checkpoint write, the kill, or
+    // the `run.paused` emit -- `paused` is already `true`, so the case is a no-op the second time.
+    const pid = await spawnNeverExiting()
+    await prisma.agentRun.update({ where: { id: ids.runId }, data: { pid, worktreePath: '/tmp' } })
+
+    try {
+      const outcome = await pumpRun({
+        ...ids,
+        spawn: {
+          settingsPath: '/tmp/settings.json',
+          pauseFlagPath: '/tmp/pause.flag',
+          hookPath: '/tmp/pause-gate.sh',
+          gitIdentity: { name: 'Alex', email: 'alex@aiteamos.local' },
+        },
+        events: fromArray([
+          { kind: 'session_started', sessionId: 's-1' },
+          { kind: 'tool_call', toolUseId: 'tu_1', toolName: 'Bash', summary: 'Bash echo hi' },
+          { kind: 'hook_denied', hookName: 'PreToolUse', reason: 'operator asked to pause' },
+          { kind: 'tool_call', toolUseId: 'tu_2', toolName: 'Bash', summary: 'Bash echo again' },
+          { kind: 'hook_denied', hookName: 'PreToolUse', reason: 'operator asked to pause' },
+        ]),
+      })
+
+      expect(outcome).toBeNull()
+      const types = await eventTypesFor(ids.runId)
+      expect(types.filter((t) => t === 'run.paused')).toHaveLength(1)
+
+      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      expect(run.status).toBe('paused')
+      // Recorded at the first deny (atStep 1, after `tu_1`), not walked forward by the second.
+      expect(run.pausedAtStep).toBe(1)
+
+      expect(isAlive(pid)).toBe(false)
+    } finally {
+      try {
+        process.kill(pid, 'SIGKILL')
+      } catch {
+        // Already dead -- that is the point of the test.
+      }
+    }
+  })
+
   it('writes a checkpoint a fresh process could resume from', async (): Promise<void> => {
     await prisma.agentRun.update({ where: { id: ids.runId }, data: { worktreePath: '/tmp' } })
 

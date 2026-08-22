@@ -312,6 +312,19 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
       }
 
       case 'hook_denied': {
+        // Once only (fix round 1, M5 gate-fix A review). The real CLI does not exit promptly on
+        // the SIGTERM below -- the live-gate trace that motivated this file's kill call shows a
+        // *second* deny arriving after the first `run.paused` (`run.paused (atStep 5)` -> another
+        // Bash call -> `run.paused (atStep 6)`) -- and that second deny stays reachable for as
+        // long as `killWithEscalation`'s grace window is open. Recording the pause and killing the
+        // child are both idempotent in effect (the row is already `paused`; the pid is already
+        // signalled or dead), so re-running them costs real things for no benefit: a second
+        // checkpoint write, a second multi-second `killWithEscalation` sleep, and a duplicate
+        // `run.paused` in the operator's transcript. The whole case is a no-op on a repeat --
+        // `paused` is exactly the run-level fact that distinguishes "first deny" from "still
+        // gated, denied again" here, matching the sibling `gateFailed` guard just below this case.
+        if (paused) break
+
         // The pause gate doing its job. The adapter kills the process after the deny (Task 8), so
         // the stream ends here -- and recording the pause is what stops Task 15's orphan sweep
         // seeing a `working` run with a dead pid and failing it. The domain's state machine only
