@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { prisma } from '@ai-team-os/db/client'
+import { appendEvent } from '@ai-team-os/events'
 import { isAlive } from '../../src/kill.js'
 import { requestStop } from '../../src/stop.js'
 
@@ -71,5 +72,36 @@ describe('requestStop', () => {
     expect(result.ok).toBe(true)
     const event = await prisma.executionEvent.findFirst({ where: { runId: run.id, type: 'run_stopped' } })
     expect((event?.payload as { reason: string }).reason).toContain('no live process')
+  })
+
+  it('does not double-announce a run the daemon pump already concluded stopped first', async () => {
+    // The M5 live-gate race, from `requestStop`'s side: the kill wakes another process's pump
+    // before this function's own conclusion runs, and the pump's stream-ended path wins the
+    // conditioned `updateMany` and appends `run.stopped` itself. This call must still return ok,
+    // must still block the task, and must not append a second `run.stopped` for the same stop.
+    const { task, run } = fixture
+    await prisma.task.update({ where: { id: task.id }, data: { status: 'running', activeRunId: run.id } })
+    const now = new Date()
+    await prisma.agentRun.update({
+      where: { id: run.id },
+      data: { pid: 999_999_999, status: 'stopped', terminalAt: now, endedAt: now },
+    })
+    await appendEvent({
+      type: 'run.stopped',
+      workspaceId: fixture.workspace.id,
+      taskId: task.id,
+      agentId: (await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })).agentId,
+      runId: run.id,
+      actor: 'system',
+      payload: { reason: 'stream ended after a stop was requested' },
+    })
+
+    const result = await requestStop(run.id, 'meren')
+
+    expect(result.ok).toBe(true)
+    const taskAfter = await prisma.task.findUniqueOrThrow({ where: { id: task.id } })
+    expect(taskAfter.status).toBe('blocked')
+    const events = await prisma.executionEvent.findMany({ where: { runId: run.id, type: 'run_stopped' } })
+    expect(events).toHaveLength(1)
   })
 })

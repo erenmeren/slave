@@ -696,6 +696,28 @@ describe('pumpRun', () => {
     expect(await eventTypesFor(ids.runId)).not.toContain('run.failed')
   })
 
+  it('concludes stopped, not failed, when the stream ends without a terminal result on a run a web stop already claimed', async (): Promise<void> => {
+    // The M5 live-gate race (finding 2): `requestStop` claims the row `stopping` before it kills
+    // the child, in another process. The kill wakes this pump's stream first -- the child is dead
+    // before `requestStop`'s own conclusion runs -- so this branch, not `requestStop`, is the one
+    // that writes the terminal row. It must write what the operator asked for, not a plain crash.
+    await prisma.agentRun.update({ where: { id: ids.runId }, data: { status: 'stopping' } })
+
+    const outcome = await pumpRun({
+      ...ids,
+      events: fromArray([{ kind: 'session_started', sessionId: 's-1' }]),
+    })
+
+    expect(outcome).toBeNull()
+    const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+    expect(run.status).toBe('stopped')
+    expect(run.terminalAt).not.toBeNull()
+    expect(run.endedAt).not.toBeNull()
+    const types = await eventTypesFor(ids.runId)
+    expect(types).toContain('run.stopped')
+    expect(types).not.toContain('run.failed')
+  })
+
   it('does not write half a checkpoint for a run nothing could resume', async (): Promise<void> => {
     await pumpRun({
       ...ids,

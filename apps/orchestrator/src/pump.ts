@@ -264,9 +264,20 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
         // Conditional, like every other write in this file that moves the run: an operator's
         // `cancel` concludes the run and kills the child, and the stream's remaining lines must not
         // walk a terminal run back to `working`.
+        //
+        // The status half is a second, more narrowly conditioned write, split out from the
+        // sessionId write: a stop claimed *before* this event arrives (`requestStop` marks
+        // `stopping` ahead of its kill -- M5 live-gate finding 2) must not be walked back to
+        // `working` by a `session_started` line the dying child still had buffered. `sessionId`
+        // itself has no such hazard -- it is written once and never contradicts a later status --
+        // so it stays unconditioned beyond `endedAt: null`.
         await prisma.agentRun.updateMany({
           where: { id: runId, endedAt: null },
-          data: { sessionId: event.sessionId, status: 'working' },
+          data: { sessionId: event.sessionId },
+        })
+        await prisma.agentRun.updateMany({
+          where: { id: runId, endedAt: null, status: 'starting' },
+          data: { status: 'working' },
         })
         sessionId = event.sessionId
         if (input.resumed !== true) await emit('run.started', 'agent', { sessionId: event.sessionId })
@@ -458,12 +469,31 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
   if (gateFailed || paused) return null
 
   if (outcome === null) {
-    // The stream ended with no terminal event: the child died without reporting. Not a success,
-    // and not silent.
+    const now = new Date()
+    // A `stopping` row means `requestStop` claimed this run *before* killing it (M5 live-gate
+    // finding 2) -- the very kill that ended this stream. In the CLI, `requestStop` owns this
+    // pump and always reaches its own `stopped` write first, so this branch never observes
+    // `stopping`; under a daemon, a web stop's kill lands in another process and can wake this
+    // stream before `requestStop`'s own conclusion runs. Either way the row must read `stopped`,
+    // and this is the side that has to write it when it wins the race -- checked first, and
+    // conditioned on `stopping` specifically so an ordinary crash (any other status) still falls
+    // through to the `failed` write below.
+    const stopClaimed = await prisma.agentRun.updateMany({
+      where: { id: runId, endedAt: null, status: 'stopping' },
+      data: { status: 'stopped', terminalAt: now, endedAt: now },
+    })
+    if (stopClaimed.count > 0) {
+      await emit('run.stopped', 'system', {
+        reason: "the run's output stream ended after an operator stop killed the process",
+      })
+      return null
+    }
+
+    // The stream ended with no terminal event and no recorded stop intent: the child died without
+    // reporting. Not a success, and not silent.
     const reason = `the run's output stream ended without a terminal result${
       unparsableLines > 0 ? ` (${unparsableLines} unparsable line(s) were dropped first)` : ''
     }`
-    const now = new Date()
     // Conditional on the run not already being terminal. An operator's `cancel` writes `stopped`
     // and kills the child; the stream then ends without a terminal event and this branch used to
     // overwrite that with `failed`, emitting a spurious `run.failed` after `run.stopped` -- which

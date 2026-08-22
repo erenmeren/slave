@@ -8,6 +8,19 @@ export async function requestStop(runId: string, requestedBy: string): Promise<R
   const run = await prisma.agentRun.findUnique({ where: { id: runId }, include: { task: true } })
   if (run === null) return err({ kind: 'run_not_found', runId })
 
+  // Claim the stop intent before the kill, not after (M5 live-gate finding 2). In the CLI this
+  // process owns the pump it is about to kill, so the two writes below never race one another --
+  // but a web stop's kill wakes the *daemon's* pump, in another process, and that pump can
+  // observe the dead child and conclude the run before this function reaches its own conclusion.
+  // `stopping` is what lets the pump's stream-ended path (`pump.ts`) recognise an operator stop
+  // and write `stopped` itself rather than reporting a plain crash -- whichever side's conditioned
+  // `updateMany` lands first, the row ends up `stopped` either way. Conditioned like every other
+  // write here: an already-terminal run's claim is a no-op, not a demotion.
+  await prisma.agentRun.updateMany({
+    where: { id: run.id, endedAt: null },
+    data: { status: 'stopping' },
+  })
+
   // The adapter's own kill escalates; a CLI cancel that only asks politely is strictly
   // weaker than the thing it replaces, which reopens a thinner version of the Task 15 carry
   // it was written to close.
@@ -17,7 +30,11 @@ export async function requestStop(runId: string, requestedBy: string): Promise<R
   // `endedAt: null` is the idempotence guard that makes a second call a no-op that still
   // reports ok, rather than a `wrong_status` refusal. Keep that contract: `requestStop` on a
   // run that finished a moment ago is not an error, it is nothing left to do.
-  await prisma.agentRun.updateMany({
+  //
+  // The pump may have already won this race and written `stopped` itself (`concluded.count` is
+  // then 0) -- `run.stopped` is then already in the log, so this function's own emit below stays
+  // conditioned on having actually written the row, or a web stop would double-announce itself.
+  const concluded = await prisma.agentRun.updateMany({
     where: { id: run.id, endedAt: null },
     data: { status: 'stopped', terminalAt: now, endedAt: now },
   })
@@ -30,18 +47,20 @@ export async function requestStop(runId: string, requestedBy: string): Promise<R
     where: { id: run.taskId, activeRunId: run.id },
     data: { status: 'blocked', activeRunId: null },
   })
-  await appendEvent({
-    type: 'run.stopped',
-    workspaceId: run.task.workspaceId,
-    taskId: run.taskId,
-    agentId: run.agentId,
-    runId: run.id,
-    actor: 'human',
-    payload: {
-      reason: signalled
-        ? `cancelled by ${requestedBy}`
-        : `cancelled by ${requestedBy}; no live process to signal (pid ${String(run.pid)})`,
-    },
-  })
+  if (concluded.count > 0) {
+    await appendEvent({
+      type: 'run.stopped',
+      workspaceId: run.task.workspaceId,
+      taskId: run.taskId,
+      agentId: run.agentId,
+      runId: run.id,
+      actor: 'human',
+      payload: {
+        reason: signalled
+          ? `cancelled by ${requestedBy}`
+          : `cancelled by ${requestedBy}; no live process to signal (pid ${String(run.pid)})`,
+      },
+    })
+  }
   return ok(undefined)
 }
