@@ -86,3 +86,52 @@ body {
     opacity: 1;
   }
 }
+
+/* Graph flow visualization (spec §6, M7 task 8). */
+
+/* Tool-call particle: travels its edge's `offset-path` (set inline per-particle, `Particles.tsx`)
+ * over ~600ms, fading in/out at the ends so it never pops in/out mid-edge. `offset-distance` (not
+ * `transform`) is what actually moves the circle along the path. */
+@keyframes particle-travel {
+  0% {
+    offset-distance: 0%;
+    opacity: 0;
+  }
+  15% {
+    opacity: 1;
+  }
+  85% {
+    opacity: 1;
+  }
+  100% {
+    offset-distance: 100%;
+    opacity: 0;
+  }
+}
+
+/* Completion-wave edge flash: "the way is clear" once a task turns `done` (its outgoing edges flash
+ * once). `border-flash` (above) targets the CSS `border-color` property, which does nothing on an
+ * SVG `<path>` -- edges paint via `stroke`, not `border` -- so it cannot serve here, and React
+ * Flow's own edge `className` lands on the wrapping `<g>`, not directly on the `<path>` a
+ * descendant-selector rule needs to reach; that combination is why this is a second keyframe rather
+ * than a `motion-safe:animate-[border-flash_800ms_ease-out]` reuse. Same 800ms decay language, same
+ * "no new colour tokens" rule (reuses `--color-status-working`), and the same reduced-motion
+ * guarantee `motion-safe:` gives everywhere else -- just hand-written as the
+ * `prefers-reduced-motion: no-preference` media query `motion-safe:` itself compiles to, because a
+ * plain literal edge `className` (not a Tailwind utility) is what has to carry it here. */
+@media (prefers-reduced-motion: no-preference) {
+  .edge-flash .react-flow__edge-path {
+    animation: edge-flash 800ms ease-out;
+  }
+}
+
+@keyframes edge-flash {
+  0%,
+  100% {
+    stroke-width: 1;
+  }
+  50% {
+    stroke: var(--color-status-working);
+    stroke-width: 3;
+  }
+}

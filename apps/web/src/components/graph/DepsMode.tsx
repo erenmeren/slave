@@ -1,8 +1,9 @@
 'use client'
 
-import { useMemo, useState } from 'react'
-import type { Connection } from 'reactflow'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import type { Connection, Edge } from 'reactflow'
 import type { GraphSnapshot } from '../../server/graph'
+import { EDGE_FLASH_MS, outgoingEdgeIds, tasksTurnedDone } from './flow'
 import { GraphCanvas } from './GraphCanvas'
 import { useLayoutedGraph } from './layout'
 import { buildDepsGraph, TASK_NODE_TYPES } from './TaskNodes'
@@ -45,6 +46,10 @@ function taskIdFromNodeId(nodeId: string): string | null {
   return nodeId.startsWith(TASK_NODE_PREFIX) ? nodeId.slice(TASK_NODE_PREFIX.length) : null
 }
 
+/** Plain CSS class (not a Tailwind utility) -- see `globals.css`'s `edge-flash` keyframe doc
+ *  comment for why this can't route through `motion-safe:animate-[...]` the way node flashes do. */
+const EDGE_FLASH_CLASS_NAME = 'edge-flash'
+
 /**
  * Dependencies mode (Task 6): the DAG's task nodes plus edge editing. Edges render `dependsOn ->
  * task` (source is the prerequisite, target is the dependent) -- React Flow's `onConnect` hands
@@ -58,6 +63,37 @@ export function DepsMode({ workspaceId, snapshot }: { readonly workspaceId: stri
   const { nodes, edges } = useMemo(() => buildDepsGraph(snapshot), [snapshot])
   const { nodes: positioned, edges: visibleEdges } = useLayoutedGraph(nodes, edges, 'layered')
   const [errorText, setErrorText] = useState<string | null>(null)
+
+  // Completion wave (spec §6): when a task turns `done` between two snapshots, its outgoing edges
+  // (it as the prerequisite) flash once. `previousStatusRef` starts `null` so the very first
+  // snapshot this component ever sees never flashes anything (same "no flash on mount" rule the
+  // node border-flash idiom follows) -- only a *second* snapshot showing a new `done` counts.
+  const previousStatusRef = useRef<ReadonlyMap<string, string> | null>(null)
+  const [flashingEdgeIds, setFlashingEdgeIds] = useState<ReadonlySet<string>>(new Set())
+
+  useEffect(() => {
+    const currentStatusById = new Map(snapshot.tasks.map((task) => [task.id, task.status]))
+    const previous = previousStatusRef.current
+    previousStatusRef.current = currentStatusById
+
+    if (previous === null) return
+    const turnedDone = tasksTurnedDone(previous, snapshot.tasks)
+    if (turnedDone.length === 0) return
+
+    const ids = new Set(turnedDone.flatMap((taskId) => outgoingEdgeIds(edges, taskId)))
+    if (ids.size === 0) return
+    setFlashingEdgeIds(ids)
+    const timer = setTimeout(() => setFlashingEdgeIds(new Set()), EDGE_FLASH_MS)
+    return () => clearTimeout(timer)
+    // `edges` (the pre-layout topology from `buildDepsGraph`) rather than `visibleEdges`: it's
+    // always complete (never filtered on a pending async layout) and is exactly what
+    // `outgoingEdgeIds` needs to match against.
+  }, [snapshot, edges])
+
+  const flashedEdges: Edge[] = useMemo(
+    () => visibleEdges.map((edge) => (flashingEdgeIds.has(edge.id) ? { ...edge, className: EDGE_FLASH_CLASS_NAME } : edge)),
+    [visibleEdges, flashingEdgeIds],
+  )
 
   const onConnect = (connection: Connection): void => {
     setErrorText(null)
@@ -102,7 +138,7 @@ export function DepsMode({ workspaceId, snapshot }: { readonly workspaceId: stri
           no dependencies yet — draw one, or planning arrives in M8
         </div>
       )}
-      <GraphCanvas nodes={positioned} edges={visibleEdges} nodeTypes={TASK_NODE_TYPES} onConnect={onConnect} onEdgeDelete={onEdgeDelete} />
+      <GraphCanvas nodes={positioned} edges={flashedEdges} nodeTypes={TASK_NODE_TYPES} onConnect={onConnect} onEdgeDelete={onEdgeDelete} />
     </div>
   )
 }

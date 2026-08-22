@@ -13,8 +13,10 @@ export const DOT: Record<AgentCardData['status'], string> = {
 }
 
 /** The border-flash's `--flash-color` source per status (spec §8) — no new colour tokens, just
- *  the existing status vocabulary referenced through the `@theme inline` names in globals.css. */
-const FLASH_COLOR: Record<AgentCardData['status'], string> = {
+ *  the existing status vocabulary referenced through the `@theme inline` names in globals.css.
+ *  Exported: `OrgNodes.tsx`'s `AgentNode` (M7 task 8) reuses this same map for its own border
+ *  flash rather than re-deriving the status→colour assignment a second time. */
+export const FLASH_COLOR: Record<AgentCardData['status'], string> = {
   working: 'var(--color-status-working)',
   starting: 'var(--color-status-starting)',
   resuming: 'var(--color-status-starting)',
@@ -24,8 +26,10 @@ const FLASH_COLOR: Record<AgentCardData['status'], string> = {
   idle: 'var(--color-status-idle)',
 }
 
-/** 800ms border-flash decay window (spec §8) — the peripheral-vision cue that a status changed. */
-const BORDER_FLASH_MS = 800
+/** 800ms border-flash decay window (spec §8) — the peripheral-vision cue that a status changed.
+ *  Exported: reused verbatim by the graph's node/edge flashes (M7 task 8) so every flash in the app
+ *  shares one duration. */
+export const BORDER_FLASH_MS = 800
 
 export function AgentCard({
   agent,

@@ -1,12 +1,12 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type React from 'react'
 import { Handle, Position, type Edge, type Node, type NodeProps, type NodeTypes } from 'reactflow'
 import type { AgentStatus, TaskStatus } from '@ai-team-os/domain'
 import type { GraphSnapshot } from '../../server/graph'
-import { DOT } from '../AgentCard'
-import { TASK_STATUS_BORDER, TASK_STATUS_DOT } from '../TaskCard'
+import { BORDER_FLASH_MS, DOT, FLASH_COLOR } from '../AgentCard'
+import { TASK_STATUS_BORDER, TASK_STATUS_DOT, TASK_STATUS_FLASH_COLOR } from '../TaskCard'
 import { NodeMenu } from './NodeMenu'
 
 // ---- node data shapes -----------------------------------------------------------------------
@@ -65,6 +65,36 @@ function taskBorder(status: TaskStatus): string {
   return TASK_STATUS_BORDER[status] ?? TASK_STATUS_BORDER.backlog
 }
 
+function agentFlashColor(status: string): string {
+  return FLASH_COLOR[status as AgentStatus] ?? FLASH_COLOR.idle
+}
+
+function taskFlashColor(status: TaskStatus): string {
+  return TASK_STATUS_FLASH_COLOR[status] ?? TASK_STATUS_FLASH_COLOR.backlog
+}
+
+/**
+ * The M5 border-flash idiom (`AgentCard.tsx`), copied rather than shared as a hook (spec §6: "a
+ * node whose status changes flashes its border in the M5 border-flash language ... and decays back"
+ * -- the brief names this file as the place to copy it into, not to abstract it). `T` is whatever
+ * status type the caller's node data carries (`AgentStatus`-as-`string`, `TaskStatus`); only a
+ * *change* flashes -- the ref seeds to the first-rendered status, so mount never flashes.
+ */
+function useStatusFlash<T>(status: T): boolean {
+  const previous = useRef(status)
+  const [flashing, setFlashing] = useState(false)
+  useEffect((): (() => void) | void => {
+    if (previous.current === status) return
+    previous.current = status
+    setFlashing(true)
+    const timer = setTimeout(() => setFlashing(false), BORDER_FLASH_MS)
+    return () => clearTimeout(timer)
+  }, [status])
+  return flashing
+}
+
+const FLASH_CLASS = 'motion-safe:animate-[border-flash_800ms_ease-out]'
+
 // ---- node renderers ---------------------------------------------------------------------------
 
 export function WorkspaceNode({ data }: NodeProps<WorkspaceNodeData>): React.JSX.Element {
@@ -100,11 +130,13 @@ const ACTIVE_TASK_NODE_PREFIX = 'activeTask:'
 export function AgentNode({ id, data }: NodeProps<AgentNodeData>): React.JSX.Element {
   const [menuOpen, setMenuOpen] = useState(false)
   const agentId = id.startsWith(AGENT_NODE_PREFIX) ? id.slice(AGENT_NODE_PREFIX.length) : id
+  const flashing = useStatusFlash(data.status)
   return (
     <div
       data-testid="agent-node"
       data-status={data.status}
-      className="group relative rounded border border-line bg-bg-1 px-3 py-2"
+      className={`group relative rounded border border-line bg-bg-1 px-3 py-2 ${flashing ? FLASH_CLASS : ''}`}
+      style={flashing ? ({ '--flash-color': agentFlashColor(data.status) } as React.CSSProperties) : undefined}
       onContextMenu={(event) => {
         event.preventDefault()
         setMenuOpen(true)
@@ -129,10 +161,12 @@ export function AgentNode({ id, data }: NodeProps<AgentNodeData>): React.JSX.Ele
 export function ActiveTaskNode({ id, data }: NodeProps<ActiveTaskNodeData>): React.JSX.Element {
   const [menuOpen, setMenuOpen] = useState(false)
   const taskId = id.startsWith(ACTIVE_TASK_NODE_PREFIX) ? id.slice(ACTIVE_TASK_NODE_PREFIX.length) : id
+  const flashing = useStatusFlash(data.status)
   return (
     <div
       data-testid="active-task-node"
-      className={`group relative rounded border bg-bg-1 px-2 py-1 text-xs text-text-2 ${taskBorder(data.status)}`}
+      className={`group relative rounded border bg-bg-1 px-2 py-1 text-xs text-text-2 ${taskBorder(data.status)} ${flashing ? FLASH_CLASS : ''}`}
+      style={flashing ? ({ '--flash-color': taskFlashColor(data.status) } as React.CSSProperties) : undefined}
       onContextMenu={(event) => {
         event.preventDefault()
         setMenuOpen(true)

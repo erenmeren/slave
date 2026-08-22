@@ -1,11 +1,12 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type React from 'react'
 import { Handle, Position, type Edge, type Node, type NodeProps, type NodeTypes } from 'reactflow'
 import type { TaskStatus } from '@ai-team-os/domain'
 import type { GraphSnapshot } from '../../server/graph'
-import { TASK_STATUS_BORDER, TASK_STATUS_DOT } from '../TaskCard'
+import { BORDER_FLASH_MS } from '../AgentCard'
+import { TASK_STATUS_BORDER, TASK_STATUS_DOT, TASK_STATUS_FLASH_COLOR } from '../TaskCard'
 import { NodeMenu } from './NodeMenu'
 
 // ---- node data shape -------------------------------------------------------------------------
@@ -36,6 +37,27 @@ function taskDot(status: TaskStatus): string {
   return TASK_STATUS_DOT[status] ?? TASK_STATUS_DOT.backlog
 }
 
+function taskFlashColor(status: TaskStatus): string {
+  return TASK_STATUS_FLASH_COLOR[status] ?? TASK_STATUS_FLASH_COLOR.backlog
+}
+
+/** The M5 border-flash idiom (`AgentCard.tsx`), copied into this file the same way `OrgNodes.tsx`'s
+ *  own copy is (spec §6) -- only a status *change* flashes, never the initial mount. */
+function useStatusFlash(status: TaskStatus): boolean {
+  const previous = useRef(status)
+  const [flashing, setFlashing] = useState(false)
+  useEffect((): (() => void) | void => {
+    if (previous.current === status) return
+    previous.current = status
+    setFlashing(true)
+    const timer = setTimeout(() => setFlashing(false), BORDER_FLASH_MS)
+    return () => clearTimeout(timer)
+  }, [status])
+  return flashing
+}
+
+const FLASH_CLASS = 'motion-safe:animate-[border-flash_800ms_ease-out]'
+
 // ---- node renderer ------------------------------------------------------------------------
 
 const TASK_NODE_PREFIX = 'task:'
@@ -43,11 +65,13 @@ const TASK_NODE_PREFIX = 'task:'
 export function TaskNode({ id, data }: NodeProps<TaskNodeData>): React.JSX.Element {
   const [menuOpen, setMenuOpen] = useState(false)
   const taskId = id.startsWith(TASK_NODE_PREFIX) ? id.slice(TASK_NODE_PREFIX.length) : id
+  const flashing = useStatusFlash(data.status)
   return (
     <div
       data-testid="task-node"
       data-status={data.status}
-      className={`group relative rounded border bg-bg-1 px-3 py-2 ${taskBorder(data.status)}`}
+      className={`group relative rounded border bg-bg-1 px-3 py-2 ${taskBorder(data.status)} ${flashing ? FLASH_CLASS : ''}`}
+      style={flashing ? ({ '--flash-color': taskFlashColor(data.status) } as React.CSSProperties) : undefined}
       onContextMenu={(event) => {
         event.preventDefault()
         setMenuOpen(true)

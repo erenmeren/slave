@@ -1,16 +1,26 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import type { Edge } from 'reactflow'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { useGraph } from '../../hooks/useGraph'
+import type { StreamEvent } from '../../hooks/useWorkspaceStream'
 import type { GraphSnapshot } from '../../server/graph'
 import { HaltBanner } from '../HaltBanner'
 import { Sidebar } from '../Sidebar'
 import { TopBar } from '../TopBar'
 import { DepsMode } from './DepsMode'
 import { GraphCanvas } from './GraphCanvas'
+import { handleToolCallFrame, sweepExpired, type Particle } from './flow'
 import { useLayoutedGraph } from './layout'
 import { buildOrgGraph, ORG_NODE_TYPES } from './OrgNodes'
+import { Particles } from './Particles'
+
+/** Sweep tick for expired particles (spec §6: "a sweep on each frame/tick removes expired") --
+ *  frequent enough that a particle's ~600ms lifetime never lingers visibly past its expiry, cheap
+ *  enough (a filter over at most `PARTICLE_CAP_PER_EDGE` × edge-count items) to run on a plain
+ *  interval rather than a `requestAnimationFrame` loop. */
+const PARTICLE_SWEEP_INTERVAL_MS = 100
 
 type GraphMode = 'org' | 'deps'
 const DEFAULT_MODE: GraphMode = 'org'
@@ -38,8 +48,32 @@ export function GraphClient({
   readonly workspaceId: string
   readonly initial: GraphSnapshot
 }): React.JSX.Element {
-  const { snapshot, connection, error } = useGraph(workspaceId, initial)
+  // Org mode's particle track (spec §6): the agent -> active-task edge to spawn a `run.tool_call`
+  // particle on. A ref, not `orgEdges` closed over directly -- `onEvent` below is created once per
+  // render and handed straight to `useGraph`'s third argument (a raw-frame pass-through, Task 4's
+  // interface), but the edge list it needs is computed *after* this call in the same render; the
+  // ref (updated in plain assignment further down, same idiom `useWorkspaceStream` itself uses for
+  // its own `onEvent`/`onSnapshot` refs) always reads the latest render's edges by the time a frame
+  // actually arrives asynchronously.
+  const orgEdgesRef = useRef<readonly Edge[]>([])
+  const [particles, setParticles] = useState<readonly Particle[]>([])
+
+  const onGraphEvent = (event: StreamEvent): void => {
+    setParticles((current) => handleToolCallFrame(event, orgEdgesRef.current, current, Date.now()))
+  }
+
+  const { snapshot, connection, error } = useGraph(workspaceId, initial, onGraphEvent)
   const view = snapshot ?? initial
+
+  // Sweeps expired particles on a plain interval (see `PARTICLE_SWEEP_INTERVAL_MS`'s doc comment)
+  // for the component's whole lifetime -- a no-op `setState` is skipped entirely when there is
+  // nothing to sweep, so an idle graph (no particles ever spawned) never re-renders from this.
+  useEffect(() => {
+    const id = setInterval(() => {
+      setParticles((current) => (current.length === 0 ? current : sweepExpired(current, Date.now())))
+    }, PARTICLE_SWEEP_INTERVAL_MS)
+    return () => clearInterval(id)
+  }, [])
 
   const router = useRouter()
   const pathname = usePathname()
@@ -63,6 +97,7 @@ export function GraphClient({
   }
 
   const { nodes: orgNodes, edges: orgEdges } = useMemo(() => buildOrgGraph(view), [view])
+  orgEdgesRef.current = orgEdges
   // The hook's own `edges`, not `orgEdges` directly: it filters out any edge whose endpoint is a
   // node not yet in the positioned set (a newly-appeared active-task satellite, for the one async
   // tick before its layout resolves) -- see `layout.ts`'s doc comment.
@@ -94,7 +129,10 @@ export function GraphClient({
         </nav>
         <div className="relative flex-1">
           {mode === 'org' ? (
-            <GraphCanvas nodes={positionedOrgNodes} edges={visibleOrgEdges} nodeTypes={ORG_NODE_TYPES} />
+            <>
+              <GraphCanvas nodes={positionedOrgNodes} edges={visibleOrgEdges} nodeTypes={ORG_NODE_TYPES} />
+              <Particles particles={particles} />
+            </>
           ) : (
             <DepsMode workspaceId={workspaceId} snapshot={view} />
           )}

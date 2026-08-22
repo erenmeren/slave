@@ -39,6 +39,24 @@ export const TASK_STATUS_BORDER: Record<TaskStatus, string> = {
   cancelled: 'border-status-idle',
 }
 
+// The border-flash's `--flash-color` source per `TaskStatus` (M7 task 8, spec §6's status-flash
+// signal) — same "reuse the existing tokens through their `@theme inline` names" rule
+// `AgentCard.tsx`'s own `FLASH_COLOR` follows, just keyed by the wider status vocabulary tasks use.
+export const TASK_STATUS_FLASH_COLOR: Record<TaskStatus, string> = {
+  backlog: 'var(--color-status-idle)',
+  ready: 'var(--color-status-starting)',
+  blocked: 'var(--color-status-warn)',
+  assigned: 'var(--color-status-starting)',
+  running: 'var(--color-status-working)',
+  verifying: 'var(--color-status-starting)',
+  reviewing: 'var(--color-status-paused)',
+  merging: 'var(--color-status-paused)',
+  rework: 'var(--color-status-warn)',
+  done: 'var(--color-status-working)',
+  failed: 'var(--color-status-danger)',
+  cancelled: 'var(--color-status-idle)',
+}
+
 export const TASK_STATUS_TEXT: Record<TaskStatus, string> = {
   backlog: 'text-status-idle',
   ready: 'text-status-starting',
