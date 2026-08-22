@@ -11,6 +11,7 @@ interface Fixture {
   readonly otherWorkspace: { readonly id: string }
   readonly task: { readonly id: string }
   readonly otherTask: { readonly id: string }
+  readonly otherWorkspaceTask: { readonly id: string }
 }
 
 async function seed(): Promise<Fixture> {
@@ -27,11 +28,15 @@ async function seed(): Promise<Fixture> {
   const otherTask = await prisma.task.create({
     data: { workspaceId: workspace.id, title: 'Add fraud check', description: 'Screen risky orders', maxAttempts: workspace.maxAttempts },
   })
+  const otherWorkspaceTask = await prisma.task.create({
+    data: { workspaceId: otherWorkspace.id, title: 'Unrelated task', description: 'Lives in the other workspace', maxAttempts: otherWorkspace.maxAttempts },
+  })
   return {
     workspace: { id: workspace.id },
     otherWorkspace: { id: otherWorkspace.id },
     task: { id: task.id },
     otherTask: { id: otherTask.id },
+    otherWorkspaceTask: { id: otherWorkspaceTask.id },
   }
 }
 
@@ -96,6 +101,19 @@ describe('the dependency routes', () => {
         { params: Promise.resolve({ workspaceId: fixture.workspace.id, taskId: fixture.task.id }) },
       )
       expect(response.status).toBe(400)
+    })
+
+    it('maps a cross-workspace dependsOnTaskId to 409 with "different workspaces" (task/workspaceId are valid; the shell does not 404)', async (): Promise<void> => {
+      const response = await addDependencyPOST(
+        new Request('http://x', {
+          method: 'POST',
+          body: JSON.stringify({ dependsOnTaskId: fixture.otherWorkspaceTask.id }),
+          headers: { 'content-type': 'application/json' },
+        }),
+        { params: Promise.resolve({ workspaceId: fixture.workspace.id, taskId: fixture.task.id }) },
+      )
+      expect(response.status).toBe(409)
+      expect((await response.json()).error).toContain('different workspaces')
     })
 
     it('404s a task from another workspace', async (): Promise<void> => {
