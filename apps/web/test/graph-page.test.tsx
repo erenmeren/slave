@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
-import type { ReactElement } from 'react'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { StrictMode, type ReactElement } from 'react'
+import { fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { Edge, Node } from 'reactflow'
 import type { GraphAgent, GraphSnapshot } from '../src/server/graph.js'
 
 // ---- jsdom element-size + ResizeObserver mocks -------------------------------------------------
@@ -68,9 +69,13 @@ vi.mock('../src/hooks/useGraph.js', () => ({
 // depending on the real layout algorithm's output. `elkjs`'s plain-build entry point (see the
 // Task 5 report for why `layout.ts` imports this path rather than the bare `elkjs` specifier) —
 // mocking it here at the same specifier keeps `layout.ts`'s own memoization logic real.
+// Offset by a nonzero base so even the first node's computed position (index 0) is
+// distinguishable from the un-positioned `{x: 0, y: 0}` every node starts at — the Strict Mode
+// test below asserts a node actually moved off that origin, which `index * 140` alone could not
+// tell apart from "never positioned" for index 0.
 const elkLayoutSpy = vi.fn(async (graph: { children?: { id: string }[] }) => ({
   ...graph,
-  children: (graph.children ?? []).map((child, index) => ({ ...child, x: index * 140, y: index * 90 })),
+  children: (graph.children ?? []).map((child, index) => ({ ...child, x: 50 + index * 140, y: 30 + index * 90 })),
 }))
 
 vi.mock('elkjs/lib/elk.bundled.js', () => ({
@@ -206,6 +211,18 @@ describe('GraphClient', () => {
     expect(screen.queryAllByTestId('active-task-node')).toHaveLength(0)
   })
 
+  it('fix-round-1 finding 4: colours the satellite border with the literal border-status-working class for a running (non-danger) task', async () => {
+    render(<GraphClient workspaceId="w1" initial={SNAPSHOT} />) // t1's status is 'running'
+    await waitFor(() => expect(elkLayoutSpy).toHaveBeenCalled())
+
+    // Pinned to `TASK_STATUS_BORDER`'s literal string (`TaskCard.tsx`), not a runtime
+    // `.replace('bg-', 'border-')` on the dot colour — Tailwind v4 only generates a utility whose
+    // literal class name appears in source text, so an assembled-at-build string like the old
+    // `.replace()` shape never actually renders (jsdom can't observe that directly; this pins the
+    // fixed source to the literal it must produce).
+    expect(screen.getByTestId('active-task-node').className).toContain('border-status-working')
+  })
+
   // ---- mode tab ↔ URL round trip -----------------------------------------------------------------
 
   it('defaults to the Organization tab, and writes ?mode=deps when Dependencies is clicked', async () => {
@@ -261,6 +278,82 @@ describe('GraphClient', () => {
 
     streamState.snapshot = SNAPSHOT // Sam starts a run — the satellite + edge appear
     rerender(<GraphClient workspaceId="w1" initial={idleOnly} />)
+    await waitFor(() => expect(elkLayoutSpy).toHaveBeenCalledTimes(2))
+  })
+
+  it('fix-round-1 findings 1+2: survives Strict Mode\'s mount → cleanup → remount double-invoke without losing the in-flight layout', async () => {
+    render(
+      <StrictMode>
+        <GraphClient workspaceId="w1" initial={SNAPSHOT} />
+      </StrictMode>,
+    )
+
+    // Under the old `keyRef`-guarded hook, Strict Mode's extra effect run sees the ref already set
+    // (from the run it just cancelled) and returns without starting a replacement — the node sits
+    // at its un-positioned `{x: 0, y: 0}` origin for the rest of the (dev-only) session. Call count
+    // alone can't tell the buggy and fixed versions apart (Strict Mode invokes the adapter either
+    // way); only the position actually landing can. `elkLayoutSpy`'s fixture offsets even index 0
+    // away from the origin for exactly this reason (see its own comment above).
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-workspace:w1').style.transform).toBe('translate(50px,30px)')
+    })
+  })
+
+  it('fix-round-1 finding 3: does not dangle the new agent→task edge while its satellite node\'s layout is still pending', async () => {
+    const idleOnly: GraphSnapshot = { ...SNAPSHOT, agents: [SNAPSHOT.agents[0]!] }
+    const { rerender } = render(<GraphClient workspaceId="w1" initial={idleOnly} />)
+    await waitFor(() => expect(elkLayoutSpy).toHaveBeenCalledTimes(1))
+
+    let resolvePending: (() => void) | undefined
+    elkLayoutSpy.mockImplementationOnce(
+      (graph: { children?: { id: string }[] }) =>
+        new Promise((resolve) => {
+          resolvePending = () =>
+            resolve({
+              ...graph,
+              children: (graph.children ?? []).map((child, index) => ({ ...child, x: 50 + index * 140, y: 30 + index * 90 })),
+            })
+        }),
+    )
+
+    streamState.snapshot = SNAPSHOT // Sam starts a run — the satellite + its agent→task edge appear
+    rerender(<GraphClient workspaceId="w1" initial={idleOnly} />)
+    await waitFor(() => expect(elkLayoutSpy).toHaveBeenCalledTimes(2))
+
+    // Mid-flight: the new nodes (Sam, the satellite) are not yet in the positioned set, so any
+    // edge touching them must not render either — React Flow's error #008 (a dangling endpoint)
+    // otherwise fires on every run start.
+    expect(screen.queryByTestId('rf__edge-agent:a2->activeTask:t1')).toBeNull()
+    expect(screen.queryByTestId('active-task-node')).toBeNull()
+
+    resolvePending?.()
+    await waitFor(() => expect(screen.getByTestId('rf__edge-agent:a2->activeTask:t1')).toBeTruthy())
+    expect(screen.getByTestId('active-task-node')).toBeTruthy()
+  })
+})
+
+describe('useLayoutedGraph', () => {
+  beforeEach(() => {
+    elkLayoutSpy.mockClear()
+  })
+
+  it('fix-round-1 findings 1+2: re-invokes the ELK adapter when only the algorithm changes, even with an unchanged node/edge set', async () => {
+    const { useLayoutedGraph } = await import('../src/components/graph/layout.js')
+    const nodes: Node[] = [
+      { id: 'n1', type: 'workspace', position: { x: 0, y: 0 }, data: {} },
+      { id: 'n2', type: 'team', position: { x: 0, y: 0 }, data: {} },
+    ]
+    const edges: Edge[] = [{ id: 'n1->n2', source: 'n1', target: 'n2' }]
+
+    const { rerender } = renderHook(
+      ({ algorithm }: { algorithm: 'mrtree' | 'layered' }) => useLayoutedGraph(nodes, edges, algorithm),
+      { initialProps: { algorithm: 'mrtree' } as { algorithm: 'mrtree' | 'layered' } },
+    )
+    await waitFor(() => expect(elkLayoutSpy).toHaveBeenCalledTimes(1))
+
+    // Same `layoutKey` (node ids/edge pairs unchanged) — under the old `keyRef` guard this second
+    // call would have been silently swallowed regardless of the algorithm switch.
+    rerender({ algorithm: 'layered' })
     await waitFor(() => expect(elkLayoutSpy).toHaveBeenCalledTimes(2))
   })
 })

@@ -19,6 +19,26 @@ export const TASK_STATUS_DOT: Record<TaskStatus, string> = {
   cancelled: 'bg-status-idle',
 }
 
+// Same status → colour mapping as `TASK_STATUS_DOT`, as literal `border-status-*` strings rather
+// than a runtime `.replace('bg-', 'border-')` on the dot's own class: Tailwind v4 generates
+// utilities by scanning source text for literal class names, so an assembled-at-runtime string
+// (however mechanically derived from a literal) never gets generated — the graph's active-task
+// satellite (`OrgNodes.tsx`) hit exactly this, fix-round-1 finding 4.
+export const TASK_STATUS_BORDER: Record<TaskStatus, string> = {
+  backlog: 'border-status-idle',
+  ready: 'border-status-starting',
+  blocked: 'border-status-warn',
+  assigned: 'border-status-starting',
+  running: 'border-status-working',
+  verifying: 'border-status-starting',
+  reviewing: 'border-status-paused',
+  merging: 'border-status-paused',
+  rework: 'border-status-warn',
+  done: 'border-status-working',
+  failed: 'border-status-danger',
+  cancelled: 'border-status-idle',
+}
+
 export const TASK_STATUS_TEXT: Record<TaskStatus, string> = {
   backlog: 'text-status-idle',
   ready: 'text-status-starting',

@@ -62,7 +62,10 @@ export function GraphClient({
   }
 
   const { nodes: orgNodes, edges: orgEdges } = useMemo(() => buildOrgGraph(view), [view])
-  const positionedOrgNodes = useLayoutedGraph(orgNodes, orgEdges, 'mrtree')
+  // The hook's own `edges`, not `orgEdges` directly: it filters out any edge whose endpoint is a
+  // node not yet in the positioned set (a newly-appeared active-task satellite, for the one async
+  // tick before its layout resolves) -- see `layout.ts`'s doc comment.
+  const { nodes: positionedOrgNodes, edges: visibleOrgEdges } = useLayoutedGraph(orgNodes, orgEdges, 'mrtree')
 
   return (
     <div className="flex min-h-screen w-full">
@@ -90,7 +93,7 @@ export function GraphClient({
         </nav>
         <div className="relative flex-1">
           {mode === 'org' ? (
-            <GraphCanvas nodes={positionedOrgNodes} edges={orgEdges} nodeTypes={ORG_NODE_TYPES} />
+            <GraphCanvas nodes={positionedOrgNodes} edges={visibleOrgEdges} nodeTypes={ORG_NODE_TYPES} />
           ) : (
             <div className="p-6 text-sm text-text-3">the dependency graph arrives in a later task</div>
           )}

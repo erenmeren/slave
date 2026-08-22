@@ -5,7 +5,7 @@ import { Handle, Position, type Edge, type Node, type NodeProps, type NodeTypes 
 import type { AgentStatus, TaskStatus } from '@ai-team-os/domain'
 import type { GraphSnapshot } from '../../server/graph'
 import { DOT } from '../AgentCard'
-import { TASK_STATUS_DOT } from '../TaskCard'
+import { TASK_STATUS_BORDER, TASK_STATUS_DOT } from '../TaskCard'
 
 // ---- node data shapes -----------------------------------------------------------------------
 
@@ -46,11 +46,15 @@ function agentDot(status: string): string {
   return DOT[status as AgentStatus] ?? DOT.idle
 }
 
-// Same shape of guard for `GraphTask.status` reuse -- `TASK_STATUS_DOT` is total over
-// `TaskStatus`, but the satellite's status comes from a `Map` lookup keyed by id (see
+// Same shape of guard for `GraphTask.status` reuse -- `TASK_STATUS_DOT`/`TASK_STATUS_BORDER` are
+// total over `TaskStatus`, but the satellite's status comes from a `Map` lookup keyed by id (see
 // `buildOrgGraph`) that can, in principle, miss.
 function taskDot(status: TaskStatus): string {
   return TASK_STATUS_DOT[status] ?? TASK_STATUS_DOT.backlog
+}
+
+function taskBorder(status: TaskStatus): string {
+  return TASK_STATUS_BORDER[status] ?? TASK_STATUS_BORDER.backlog
 }
 
 // ---- node renderers ---------------------------------------------------------------------------
@@ -102,7 +106,7 @@ export function ActiveTaskNode({ data }: NodeProps<ActiveTaskNodeData>): React.J
   return (
     <div
       data-testid="active-task-node"
-      className={`rounded border bg-bg-1 px-2 py-1 text-xs text-text-2 ${taskDot(data.status).replace('bg-', 'border-')}`}
+      className={`rounded border bg-bg-1 px-2 py-1 text-xs text-text-2 ${taskBorder(data.status)}`}
     >
       <Handle type="target" position={Position.Top} />
       <span className={`mr-1 inline-block h-1.5 w-1.5 rounded-full ${taskDot(data.status)}`} />
