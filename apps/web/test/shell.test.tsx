@@ -15,21 +15,29 @@ describe('the shell', () => {
     pathname = '/w/w1'
   })
 
-  it('shows Overview as the current page and Tasks/Activity as live links', () => {
+  it('shows Overview as the current page and Tasks/Activity/Graph as live links', () => {
     render(<Sidebar workspaceId="w1" />)
     expect(screen.getByText('Overview')).toHaveProperty('ariaCurrent', 'page')
     expect(screen.getByText('Tasks').getAttribute('href')).toBe('/w/w1/tasks')
     expect(screen.getByText('Activity').getAttribute('href')).toBe('/w/w1/activity')
     expect(screen.getByText('Activity').getAttribute('aria-disabled')).toBeNull()
-    // Graph is still the roadmap rendered as chrome — present, inert, and honest about why (spec
-    // §7). Rendering it enabled would invite clicks into nothing.
-    expect(screen.getByText('Graph').getAttribute('aria-disabled')).toBe('true')
+    // Graph went live in M7 (spec §7) — the roadmap's last inert item, now a real link like its
+    // siblings, not the "present but disabled" chrome it used to render as.
+    expect(screen.getByText('Graph').getAttribute('href')).toBe('/w/w1/graph')
+    expect(screen.getByText('Graph').getAttribute('aria-disabled')).toBeNull()
   })
 
   it('marks Activity aria-current on the activity route', () => {
     pathname = '/w/w1/activity'
     render(<Sidebar workspaceId="w1" />)
     expect(screen.getByText('Activity')).toHaveProperty('ariaCurrent', 'page')
+    expect(screen.getByText('Overview')).not.toHaveProperty('ariaCurrent', 'page')
+  })
+
+  it('marks Graph aria-current on the graph route', () => {
+    pathname = '/w/w1/graph'
+    render(<Sidebar workspaceId="w1" />)
+    expect(screen.getByText('Graph')).toHaveProperty('ariaCurrent', 'page')
     expect(screen.getByText('Overview')).not.toHaveProperty('ariaCurrent', 'page')
   })
 

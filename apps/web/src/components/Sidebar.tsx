@@ -8,9 +8,15 @@ const LIVE = [
   { label: 'Overview', path: (workspaceId: string) => `/w/${workspaceId}` },
   { label: 'Tasks', path: (workspaceId: string) => `/w/${workspaceId}/tasks` },
   { label: 'Activity', path: (workspaceId: string) => `/w/${workspaceId}/activity` },
+  { label: 'Graph', path: (workspaceId: string) => `/w/${workspaceId}/graph` },
 ] as const
 
-const INERT = ['Graph'] as const
+// Empty now that Graph (the roadmap's last inert item) has gone live -- kept, not deleted: the
+// `INERT.map(...)` rendering below is the mechanism for "future page, visible but honestly
+// disabled" (spec §7), and M7 was the last milestone with a roadmap item still pending, not
+// necessarily the last milestone ever to add one. An empty array costs nothing to keep; removing
+// the machinery would just mean re-adding it verbatim the next time a page ships behind the rest.
+const INERT: readonly string[] = []
 
 /** The roadmap rendered as chrome: future pages are visible but inert (spec §7). */
 export function Sidebar({ workspaceId }: { readonly workspaceId: string }): React.JSX.Element {
