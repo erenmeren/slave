@@ -119,7 +119,13 @@ export function ActivityClient({
               type="button"
               data-testid="new-events-badge"
               onClick={handleJumpToBottom}
-              className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full border border-line bg-bg-2 px-3 py-1.5 text-xs text-text-1 shadow-lg"
+              // Spec §4.6: the badge fades in on appearance — reuses the M5 `action-line-in`
+              // opacity keyframe (it's conditionally rendered, so each appearance is already a
+              // fresh DOM node; no key trick needed to make the fade replay). It has no explicit
+              // fade-*out*: like `AgentPanel`'s `panel-in`, this codebase's motion pass has no
+              // exit-animation mechanism, so disappearing (pendingCount back to 0) stays an
+              // instant unmount, same as before this change.
+              className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full border border-line bg-bg-2 px-3 py-1.5 text-xs text-text-1 shadow-lg motion-safe:animate-[action-line-in_120ms_ease-out]"
             >
               ↓ {pendingCount} new event{pendingCount === 1 ? '' : 's'}
             </button>

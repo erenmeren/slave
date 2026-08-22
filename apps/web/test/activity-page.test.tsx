@@ -359,6 +359,60 @@ describe('ActivityClient', () => {
     instanceStub.scrollDirection = null
     expect(predicate({ start: 950, size: 96, key: 'existing-row' }, 504, instanceStub)).toBe(false)
   })
+
+  // ---- Task 10: motion pass (spec §4.6) ----------------------------------------------------
+
+  it('a newly arrived row (seq above the live boundary at mount) carries the action-line-in entry class; rows already on screen at mount do not', () => {
+    const { rerender } = render(<ActivityClient workspaceId="w1" initial={INITIAL} />)
+
+    // The three seed rows (seq 1,2,3) were already on screen at mount — none of them is "new".
+    let rows = screen.getAllByTestId('timeline-row')
+    expect(rows).toHaveLength(3)
+    for (const r of rows) expect(r.className).not.toContain('action-line-in')
+
+    // A genuine live arrival lands above the mount-time live boundary (seq 3) — its wrapper is a
+    // fresh DOM node keyed by its own seq, so the entry class is present from its very first
+    // render (a remount is exactly what makes the CSS keyframe replay).
+    streamState.events = [...streamState.events, row(4)]
+    rerender(<ActivityClient workspaceId="w1" initial={INITIAL} />)
+
+    rows = screen.getAllByTestId('timeline-row')
+    expect(rows).toHaveLength(4)
+    expect(rows[3]?.className).toContain('motion-safe:animate-[action-line-in_120ms_ease-out]')
+    // The three previously-mounted rows keep their identity (same key = same DOM node) — they
+    // never gain the class retroactively.
+    expect(rows[0]?.className).not.toContain('action-line-in')
+    expect(rows[1]?.className).not.toContain('action-line-in')
+    expect(rows[2]?.className).not.toContain('action-line-in')
+  })
+
+  it('rows loaded via loadOlder (prepended history) do NOT carry the entry animation class', () => {
+    const { rerender } = render(<ActivityClient workspaceId="w1" initial={INITIAL} />)
+
+    // `loadOlder` prepends older rows (seq -1, 0) — below the live boundary (seq 3) established at
+    // mount — this is history, not a live arrival.
+    streamState.events = [row(-1), row(0), ...streamState.events]
+    rerender(<ActivityClient workspaceId="w1" initial={INITIAL} />)
+
+    const rows = screen.getAllByTestId('timeline-row')
+    expect(rows).toHaveLength(5)
+    expect(rows[0]?.className).not.toContain('action-line-in') // seq -1
+    expect(rows[1]?.className).not.toContain('action-line-in') // seq 0
+  })
+
+  it('the "new events" badge carries a motion-safe fade-in class', () => {
+    const { rerender } = render(<ActivityClient workspaceId="w1" initial={INITIAL} />)
+    const viewport = screen.getByTestId('timeline-viewport')
+
+    act(() => {
+      scrollTo(viewport, { scrollTop: 0, scrollHeight: 4000, clientHeight: 300 })
+    })
+    streamState.events = [...streamState.events, row(4)]
+    rerender(<ActivityClient workspaceId="w1" initial={INITIAL} />)
+
+    const badge = screen.getByTestId('new-events-badge')
+    expect(badge.className).toContain('motion-safe:animate-[action-line-in_120ms_ease-out]')
+  })
 })
 
 describe('Timeline scroll anchoring', () => {

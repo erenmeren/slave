@@ -59,6 +59,18 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
   // could misreport `pinned`/fire `onNearTop` from a position the user never actually saw.
   const mountedRef = useRef(false)
 
+  // Motion pass (spec §4.6): the "live boundary" seq — rows above it are new since mount / since
+  // the last confirmed `loadOlder` prepend and get the entry cross-fade; rows at or below it are
+  // already-seen (whether present at mount or loaded as history) and never animate. Seeded once
+  // from whatever's on screen at mount (a fresh mount's own rows are never "new"); the `seq`
+  // ordering invariant — a prepend only ever adds smaller seqs, a live arrival only ever adds
+  // larger ones — is what keeps a single ref correct for both cases without further updates (the
+  // prepend-anchor effect below reaffirms it anyway, at the one place a prepend is confirmed).
+  // A ref, not state: each row is a stable DOM node keyed by its own seq (`getItemKey` above), so
+  // its entry class is decided once, at that node's own first render — no re-render is needed to
+  // pick up a later ref update, and using state here would only risk a spurious extra re-render.
+  const liveBoundarySeqRef = useRef<number>(events.at(-1)?.seq ?? -Infinity)
+
   const derivePinned = (el: HTMLElement): boolean => {
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
     return distanceFromBottom <= ESTIMATED_ROW_HEIGHT
@@ -164,6 +176,13 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
     const oldFirstIndexInNew = events.findIndex((event) => event.seq === prevFirstSeq)
     if (oldFirstIndexInNew <= 0) return // not a plain prepend (the previous first row is gone, or still first)
 
+    // Motion pass (spec §4.6, Task 10 brief Step 2): reaffirm the live boundary on every confirmed
+    // `loadOlder` prepend. In practice this never changes the value — a prepend only ever adds
+    // OLDER (smaller) seqs than the boundary, so the row-entry gate below stays correct with no
+    // update at all — but tracking it here keeps the rule explicit at the one place a prepend is
+    // actually detected, rather than relying solely on the seq-ordering invariant to hold forever.
+    liveBoundarySeqRef.current = events[events.length - 1]?.seq ?? liveBoundarySeqRef.current
+
     let addedHeight = 0
     for (let i = 0; i < oldFirstIndexInNew; i += 1) {
       const key = events[i]?.seq
@@ -204,13 +223,19 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
           const event = events[virtualItem.index]
           if (event === undefined) return null
           const Card = ACTIVITY_CARDS[event.type]
+          // Spec §4.6: only a row that arrived after the live boundary was established cross-fades
+          // in — reuses the M5 `action-line-in` opacity keyframe (no layout shift: this row's box
+          // is already sized by `measureElement`/the estimate before the animation starts, and the
+          // keyframe never touches anything but `opacity`).
+          const isLive = event.seq > liveBoundarySeqRef.current
           return (
             <div
               key={event.seq}
               data-index={virtualItem.index}
+              data-testid="timeline-row"
               ref={virtualizer.measureElement}
               style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${virtualItem.start}px)` }}
-              className="pb-2"
+              className={`pb-2 ${isLive ? 'motion-safe:animate-[action-line-in_120ms_ease-out]' : ''}`}
             >
               <Card
                 event={event}
