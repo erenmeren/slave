@@ -269,6 +269,36 @@ describe('buildOverviewSnapshot', () => {
     expect(snapshot?.agents[0]?.pausedAtStep).toBeNull()
   })
 
+  it('gives each agent its own 10-minute tool-call sparkline from a single grouped query, zero-filled for an idle agent', async (): Promise<void> => {
+    const team = await prisma.team.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })
+    const agent2 = await prisma.agent.create({ data: { teamId: team.id, name: 'Bianca', role: 'frontend' } })
+    const agent3 = await prisma.agent.create({ data: { teamId: team.id, name: 'Cy', role: 'qa' } })
+
+    const now = new Date()
+    const at = (minutesAgo: number): Date => new Date(now.getTime() - minutesAgo * 60_000)
+    await prisma.executionEvent.createMany({
+      data: [
+        // fixture.agentId: two tool calls in the current minute.
+        { type: 'run_tool_call', workspaceId: fixture.workspaceId, taskId: fixture.taskId, agentId: fixture.agentId, actor: 'agent', payload: {}, ts: at(0) },
+        { type: 'run_tool_call', workspaceId: fixture.workspaceId, taskId: fixture.taskId, agentId: fixture.agentId, actor: 'agent', payload: {}, ts: at(0) },
+        // agent2: one tool call, 5 minutes ago.
+        { type: 'run_tool_call', workspaceId: fixture.workspaceId, taskId: fixture.taskId, agentId: agent2.id, actor: 'agent', payload: {}, ts: at(5) },
+        // Non-tool-call event on fixture.agentId in the current minute — must not count.
+        { type: 'task_created', workspaceId: fixture.workspaceId, taskId: fixture.taskId, agentId: fixture.agentId, actor: 'human', payload: {}, ts: at(0) },
+      ],
+    })
+
+    const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
+    const byName = new Map(snapshot?.agents.map((a) => [a.name, a] as const))
+
+    expect(byName.get('Alex')?.sparkline).toHaveLength(10)
+    expect(byName.get('Alex')?.sparkline[9]).toBe(2)
+    expect(byName.get('Alex')?.sparkline.reduce((a, b) => a + b, 0)).toBe(2)
+    expect(byName.get('Bianca')?.sparkline[4]).toBe(1) // 5 minutes ago -> index 9 - 5
+    expect(byName.get('Bianca')?.sparkline.reduce((a, b) => a + b, 0)).toBe(1)
+    expect(byName.get('Cy')?.sparkline).toEqual(new Array(10).fill(0))
+  })
+
   it('does not leak another workspace\'s agents or tasks', async (): Promise<void> => {
     const other = await prisma.workspace.create({
       data: { name: 'Other', repoPath: '/tmp/other', verifyCommands: ['true'], setupCommands: [] },

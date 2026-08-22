@@ -2,6 +2,7 @@ import { prisma } from '@ai-team-os/db/client'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, toRunState } from '@ai-team-os/db'
 import { deriveAgentStatus, NON_TERMINAL_RUN_STATUSES, type AgentStatus } from '@ai-team-os/domain'
 import { feedSummary, type AgentFeedEvent } from '../lib/feedSummary'
+import { bucketSparkline } from './activity'
 
 // Re-exported so callers that already import from `server/overview.ts` keep working; the
 // definition itself lives in the pure `lib/feedSummary.ts` module (controller ruling R3) so the
@@ -30,6 +31,9 @@ export interface AgentCardData {
   readonly resumeRequestedAt: string | null
   /** Last 20 execution events for this agent, oldest first — seeds the panel's live feed. */
   readonly recentEvents: readonly AgentFeedEvent[]
+  /** This agent's `run.tool_call` counts for the last 10 minutes, one bucket per minute, oldest
+   *  minute first, zero-filled. */
+  readonly sparkline: readonly number[]
   /** The live run's spend so far; 0 with no live run. Panel's current-run block (spec §6). */
   readonly costUsd: number
   /** The live run's tool call count so far; 0 with no live run. */
@@ -119,6 +123,24 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
   // oldest-first, newest at the bottom.
   for (const events of recentEventsByAgent.values()) events.reverse()
 
+  // One grouped query for every agent's sparkline, not one per agent. The DB enum's stored value
+  // is dotted (`'run.tool_call'`, confirmed against the schema and the test database — see
+  // `toolCallSparkline` in `server/activity.ts`), not the Prisma member name `run_tool_call`.
+  const sparklineNow = new Date()
+  const sparklineRows = await prisma.$queryRaw<Array<{ agent_id: string | null; minute: Date; n: bigint }>>`
+    SELECT "agentId" as agent_id, date_trunc('minute', ts) as minute, count(*) as n
+    FROM "ExecutionEvent"
+    WHERE "workspaceId" = ${workspaceId} AND type = 'run.tool_call'::"EventType"
+      AND ts >= now() - interval '10 minutes'
+    GROUP BY 1, 2`
+  const sparklineRowsByAgent = new Map<string, Array<{ minute: Date; n: bigint }>>()
+  for (const row of sparklineRows) {
+    if (row.agent_id === null) continue
+    const forAgent = sparklineRowsByAgent.get(row.agent_id)
+    if (forAgent === undefined) sparklineRowsByAgent.set(row.agent_id, [row])
+    else forAgent.push(row)
+  }
+
   const [spent, taskGroups] = await Promise.all([
     prisma.agentRun.aggregate({ where: { task: { workspaceId } }, _sum: { costUsd: true } }),
     prisma.task.groupBy({ by: ['status'], where: { workspaceId }, _count: { _all: true } }),
@@ -150,6 +172,7 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
         queuedMessage: run?.queuedMessage ?? null,
         resumeRequestedAt: run?.resumeRequestedAt?.toISOString() ?? null,
         recentEvents: recentEventsByAgent.get(agent.id) ?? [],
+        sparkline: bucketSparkline(sparklineRowsByAgent.get(agent.id) ?? [], sparklineNow),
         costUsd: run?.costUsd ?? 0,
         toolCalls: run?.toolCalls ?? 0,
         pausedAtStep: run?.pausedAtStep ?? null,

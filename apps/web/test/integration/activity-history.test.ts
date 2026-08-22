@@ -1,7 +1,7 @@
 import { prisma } from '@ai-team-os/db/client'
 import { appendEvent } from '@ai-team-os/events'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
-import { buildActivityHistory } from '../../src/server/activity.js'
+import { buildActivityHistory, buildActivityPage } from '../../src/server/activity.js'
 import { EMPTY_ACTIVITY_FILTERS, type ActivityFilters } from '../../src/lib/activityFilters.js'
 import { GET as getActivity } from '../../src/app/api/w/[workspaceId]/activity/route.js'
 
@@ -207,6 +207,64 @@ describe('buildActivityHistory', () => {
     expect(page?.events[0]?.type).toContain('.')
     expect(page?.events[0]?.summary).toBe('Write note.txt')
     expect(page?.events[0]?.summary).not.toHaveLength(0)
+  })
+
+  describe('sparkline', () => {
+    it('buckets run.tool_call counts into 10 one-minute buckets, oldest first, zero-filled, non-tool-call types excluded', async (): Promise<void> => {
+      const now = new Date()
+      const at = (minutesAgo: number): Date => new Date(now.getTime() - minutesAgo * 60_000)
+      await prisma.executionEvent.createMany({
+        data: [
+          // Current minute: two tool calls.
+          { type: 'run_tool_call', workspaceId: fixture.workspaceId, taskId: fixture.taskId1, agentId: fixture.agentId1, actor: 'agent', payload: {}, ts: at(0) },
+          { type: 'run_tool_call', workspaceId: fixture.workspaceId, taskId: fixture.taskId1, agentId: fixture.agentId1, actor: 'agent', payload: {}, ts: at(0) },
+          // 3 minutes ago: one tool call.
+          { type: 'run_tool_call', workspaceId: fixture.workspaceId, taskId: fixture.taskId1, agentId: fixture.agentId1, actor: 'agent', payload: {}, ts: at(3) },
+          // 9 minutes ago: still inside the 10-minute window, one tool call.
+          { type: 'run_tool_call', workspaceId: fixture.workspaceId, taskId: fixture.taskId1, agentId: fixture.agentId1, actor: 'agent', payload: {}, ts: at(9) },
+          // 11 minutes ago: outside the window, must not count.
+          { type: 'run_tool_call', workspaceId: fixture.workspaceId, taskId: fixture.taskId1, agentId: fixture.agentId1, actor: 'agent', payload: {}, ts: at(11) },
+          // Same minute as the current bucket, but not a tool call — must not count.
+          { type: 'task_created', workspaceId: fixture.workspaceId, taskId: fixture.taskId1, agentId: fixture.agentId1, actor: 'human', payload: {}, ts: at(0) },
+        ],
+      })
+
+      const page = await buildActivityPage(fixture.workspaceId)
+
+      expect(page?.sparkline).toHaveLength(10)
+      expect(page?.sparkline[9]).toBe(2) // current minute
+      expect(page?.sparkline[6]).toBe(1) // 3 minutes ago -> index 9 - 3
+      expect(page?.sparkline[0]).toBe(1) // 9 minutes ago -> index 9 - 9
+      expect(page?.sparkline.reduce((a, b) => a + b, 0)).toBe(4) // the 11-min-ago row and the task.created row excluded
+    })
+
+    it('composes the workspace snapshot with the unfiltered first history page and an all-zero sparkline when there are no tool calls', async (): Promise<void> => {
+      await appendEvent({
+        type: 'task.created',
+        workspaceId: fixture.workspaceId,
+        taskId: fixture.taskId1,
+        agentId: fixture.agentId1,
+        actor: 'human',
+        payload: { title: 'Add the thing' },
+      })
+      await prisma.workspace.update({
+        where: { id: fixture.workspaceId },
+        data: { haltedReason: 'budget exhausted', haltedAt: new Date() },
+      })
+
+      const page = await buildActivityPage(fixture.workspaceId)
+
+      expect(page?.workspace.id).toBe(fixture.workspaceId)
+      expect(page?.workspace.name).toBe('Checkout Platform')
+      expect(page?.workspace.haltedReason).toBe('budget exhausted')
+      expect(page?.events).toHaveLength(1)
+      expect(page?.nextBefore).toBeNull()
+      expect(page?.sparkline).toEqual(new Array(10).fill(0))
+    })
+
+    it('returns null for an unknown workspace', async (): Promise<void> => {
+      expect(await buildActivityPage('00000000-0000-4000-8000-000000000000')).toBeNull()
+    })
   })
 
   it('the route 400s malformed filters and 404s an unknown workspace', async (): Promise<void> => {
