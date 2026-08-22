@@ -15,6 +15,12 @@ export type ControlRefusal =
     }
   | { readonly kind: 'workspace_halted'; readonly workspaceId: string; readonly reason: string }
   | { readonly kind: 'no_checkpoint'; readonly runId: string }
+  | { readonly kind: 'task_not_found'; readonly taskId: string }
+  | { readonly kind: 'self_dependency'; readonly taskId: string }
+  | { readonly kind: 'duplicate_dependency'; readonly taskId: string; readonly dependsOnTaskId: string }
+  | { readonly kind: 'cross_workspace'; readonly taskId: string; readonly dependsOnTaskId: string }
+  | { readonly kind: 'dependency_not_found'; readonly taskId: string; readonly dependsOnTaskId: string }
+  | { readonly kind: 'dependency_cycle'; readonly taskId: string; readonly dependsOnTaskId: string }
 
 export function refusalText(refusal: ControlRefusal): string {
   switch (refusal.kind) {
@@ -29,5 +35,17 @@ export function refusalText(refusal: ControlRefusal): string {
       )
     case 'no_checkpoint':
       return `run ${refusal.runId} has no checkpoint: there is nothing to resume it from`
+    case 'task_not_found':
+      return `no task with id ${refusal.taskId}`
+    case 'self_dependency':
+      return `task ${refusal.taskId} cannot depend on itself`
+    case 'duplicate_dependency':
+      return `task ${refusal.taskId} already depends on ${refusal.dependsOnTaskId}`
+    case 'cross_workspace':
+      return `task ${refusal.taskId} and ${refusal.dependsOnTaskId} are in different workspaces`
+    case 'dependency_not_found':
+      return `task ${refusal.taskId} does not depend on ${refusal.dependsOnTaskId}`
+    case 'dependency_cycle':
+      return `adding this dependency would create a cycle: ${refusal.dependsOnTaskId} already depends on ${refusal.taskId}`
   }
 }
