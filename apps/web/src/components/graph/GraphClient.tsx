@@ -7,6 +7,7 @@ import type { GraphSnapshot } from '../../server/graph'
 import { HaltBanner } from '../HaltBanner'
 import { Sidebar } from '../Sidebar'
 import { TopBar } from '../TopBar'
+import { DepsMode } from './DepsMode'
 import { GraphCanvas } from './GraphCanvas'
 import { useLayoutedGraph } from './layout'
 import { buildOrgGraph, ORG_NODE_TYPES } from './OrgNodes'
@@ -25,10 +26,10 @@ const MODE_TABS: readonly { readonly mode: GraphMode; readonly label: string }[]
 
 /**
  * `/w/[workspaceId]/graph`'s client shell: Sidebar + TopBar, same house composition as
- * `ActivityClient`/`TasksClient`, plus the mode-tab strip and one `GraphCanvas`. Only
- * Organization mode renders a canvas here -- Dependencies is Task 6's; the tab already exists
- * (and the URL round-trip already works) so a direct link to `?mode=deps` degrades to an honest
- * "arrives later" placeholder rather than a 404 or a silent fallback to org.
+ * `ActivityClient`/`TasksClient`, plus the mode-tab strip. Organization mode's graph is built and
+ * positioned right here (`buildOrgGraph` + `useLayoutedGraph`); Dependencies mode is a
+ * self-contained component (`DepsMode`, Task 6) that owns its own graph-building, layout, and
+ * edge-editing wiring -- this component only switches between the two on the `mode` tab.
  */
 export function GraphClient({
   workspaceId,
@@ -95,7 +96,7 @@ export function GraphClient({
           {mode === 'org' ? (
             <GraphCanvas nodes={positionedOrgNodes} edges={visibleOrgEdges} nodeTypes={ORG_NODE_TYPES} />
           ) : (
-            <div className="p-6 text-sm text-text-3">the dependency graph arrives in a later task</div>
+            <DepsMode workspaceId={workspaceId} snapshot={view} />
           )}
         </div>
       </div>
