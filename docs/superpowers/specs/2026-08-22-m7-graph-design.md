@@ -185,8 +185,10 @@ Three signals, each fired by a real event (§12.1's rule — no decorative loops
    "the way is clear" — and the dependents' "waiting on N" badges drop on the same refetch.
 
 All of it behind `motion-safe:`. Under `prefers-reduced-motion`: no particles at all (the same
-information lives in status colours and the Activity page), flashes collapse to instant colour
-swaps. No springs, no new colour tokens.
+information lives in status colours and the Activity page), and [erratum: flashes do not render
+either, not "collapse to instant colour swaps" as an earlier draft said — reusing M5's
+`border-flash` keyframe idiom verbatim (as instructed above) means `motion-safe:` gates the whole
+animation, so there is no swap to fall back to]. No springs, no new colour tokens.
 
 ## 7. Testing
 

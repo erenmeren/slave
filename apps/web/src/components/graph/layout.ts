@@ -28,7 +28,17 @@ export type LayoutAlgorithm = 'mrtree' | 'layered'
 let elkPromise: Promise<ElkInstance> | null = null
 function getElk(): Promise<ElkInstance> {
   if (elkPromise === null) {
-    elkPromise = import('elkjs/lib/elk.bundled.js').then((module) => new module.default())
+    // A transient failure (a dropped chunk fetch, most commonly) must not wedge every later
+    // layout for the rest of the session -- without the `.catch` here, a rejected `elkPromise`
+    // stays cached forever, so every subsequent `getElk()` call returns that same rejected
+    // promise and nodes sit stacked at the origin with no explanation. Resetting `elkPromise` to
+    // `null` before rethrowing lets the *next* call retry the import from scratch.
+    elkPromise = import('elkjs/lib/elk.bundled.js')
+      .then((module) => new module.default())
+      .catch((cause) => {
+        elkPromise = null
+        throw cause
+      })
   }
   return elkPromise
 }
