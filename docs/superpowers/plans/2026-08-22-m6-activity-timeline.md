@@ -690,3 +690,9 @@ page level if the build complains. (3) jsdom + `@tanstack/react-virtual` needs m
 mocks; if `measureElement` proves untestable, assert through the item renderer instead and say
 so. (4) Copy real fixture helpers from the named neighbouring test files — never invent new
 seeding shapes.
+
+**Plan-vs-spec fidelity lesson (final review):** Task 5's behaviour contract dropped spec §4.1's
+parenthetical — "the client applies URL filters on mount by refetching page one when filters are
+present" — so the hook's mount branch always seeded from the unfiltered `initial` page regardless
+of the URL's filters; the gap wasn't caught until the whole-branch final review, not by any task
+gate along the way.

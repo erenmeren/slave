@@ -52,7 +52,12 @@ describe('useActivityStream', () => {
     vi.useFakeTimers()
     FakeEventSource.instances = []
     vi.stubGlobal('EventSource', FakeEventSource as unknown as typeof EventSource)
-    fetchMock = vi.fn(async () => new Response(JSON.stringify({ events: [], nextBefore: null }), { status: 200 }))
+    fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ events: [], nextBefore: null, sparkline: new Array(10).fill(0) }), {
+          status: 200,
+        }),
+    )
     vi.stubGlobal('fetch', fetchMock)
   })
 
@@ -75,20 +80,45 @@ describe('useActivityStream', () => {
     expect(result.current.events.map((e) => e.seq)).toEqual([1, 2, 3])
   })
 
-  it('opens the EventSource at the stream route with the filter query and the newest seq', () => {
+  it('opens the EventSource at the stream route with the filter query and the newest seq (unfiltered mount)', () => {
     renderHook(() =>
-      useActivityStream({
-        workspaceId: 'w1',
-        filters: { agents: ['a1'], tasks: [], types: [] },
-        initial: INITIAL,
-      }),
+      useActivityStream({ workspaceId: 'w1', filters: EMPTY_ACTIVITY_FILTERS, initial: INITIAL }),
     )
 
     const url = FakeEventSource.instances[0]?.url ?? ''
     expect(url.startsWith('/api/w/w1/activity/stream?')).toBe(true)
     const params = new URLSearchParams(url.split('?')[1])
-    expect(params.get('agents')).toBe('a1')
     expect(params.get('from')).toBe('3')
+  })
+
+  it('Finding 1: a filtered mount refetches page 1 through the history route instead of seeding the unfiltered `initial` page, then opens the stream from the refetched page', async () => {
+    const filteredPage = { events: [row(9), row(7)], nextBefore: null, sparkline: new Array(10).fill(0) }
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify(filteredPage), { status: 200 }))
+
+    const { result } = renderHook(() =>
+      useActivityStream({
+        workspaceId: 'w1',
+        filters: { agents: ['a1'], tasks: [], types: [] },
+        initial: INITIAL, // unfiltered — must NOT be what lands in the buffer
+      }),
+    )
+
+    // Nothing opens synchronously: the refetch must land first.
+    expect(FakeEventSource.instances).toHaveLength(0)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/api/w/w1/activity?agents=a1'))
+    // The buffer is the filtered page (7, 9), not INITIAL's unfiltered (1, 2, 3).
+    expect(result.current.events.map((e) => e.seq)).toEqual([7, 9])
+
+    const url = FakeEventSource.instances[0]?.url ?? ''
+    expect(url.startsWith('/api/w/w1/activity/stream?')).toBe(true)
+    const params = new URLSearchParams(url.split('?')[1])
+    expect(params.get('agents')).toBe('a1')
+    expect(params.get('from')).toBe('9')
   })
 
   it('appends arriving events in seq order', () => {
@@ -135,9 +165,10 @@ describe('useActivityStream', () => {
   })
 
   it('closes the source and refetches page 1 when filters change (deep inequality)', async () => {
-    const page1: { events: ActivityEventRow[]; nextBefore: number | null } = {
+    const page1: { events: ActivityEventRow[]; nextBefore: number | null; sparkline: number[] } = {
       events: [row(9), row(8)],
       nextBefore: 8,
+      sparkline: new Array(10).fill(0),
     }
     fetchMock.mockImplementation(async () => new Response(JSON.stringify(page1), { status: 200 }))
 
@@ -164,11 +195,17 @@ describe('useActivityStream', () => {
     expect(new URLSearchParams(secondUrl.split('?')[1]).get('from')).toBe('9')
   })
 
-  it('does not tear down the stream when the same filter set arrives in a different order', () => {
+  it('does not tear down the stream when the same filter set arrives in a different order', async () => {
     const { rerender } = renderHook(
       ({ filters }: { filters: ActivityFilters }) => useActivityStream({ workspaceId: 'w1', filters, initial: INITIAL }),
       { initialProps: { filters: { agents: ['a1', 'a2'], tasks: [], types: [] } } },
     )
+
+    // A non-empty filter set is present at mount, so this takes the refetch branch (Finding 1)
+    // and the stream doesn't open until that refetch resolves.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
 
     expect(FakeEventSource.instances).toHaveLength(1)
 
@@ -268,7 +305,10 @@ describe('useActivityStream', () => {
     // the rerender that follows.
     fetchMock.mockImplementationOnce(() => oldFetch)
     fetchMock.mockImplementationOnce(
-      async () => new Response(JSON.stringify({ events: [row(20)], nextBefore: null }), { status: 200 }),
+      async () =>
+        new Response(JSON.stringify({ events: [row(20)], nextBefore: null, sparkline: new Array(10).fill(0) }), {
+          status: 200,
+        }),
     )
 
     const { result, rerender } = renderHook(
@@ -363,5 +403,85 @@ describe('useActivityStream', () => {
 
     expect(FakeEventSource.instances[0]?.closed).toBe(true)
     expect(clearIntervalSpy).toHaveBeenCalled()
+  })
+
+  it('Finding 2: an empty filtered page 1 omits `from` on the stream URL instead of sending from=0', async () => {
+    fetchMock.mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ events: [], nextBefore: null, sparkline: new Array(10).fill(0) }), {
+          status: 200,
+        }),
+    )
+
+    renderHook(() =>
+      useActivityStream({
+        workspaceId: 'w1',
+        filters: { agents: ['a1'], tasks: [], types: [] },
+        initial: INITIAL,
+      }),
+    )
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+
+    const url = FakeEventSource.instances[0]?.url ?? ''
+    const params = new URLSearchParams(url.split('?')[1])
+    expect(params.has('from')).toBe(false)
+  })
+
+  it('Finding 3: a filter switch re-seeds the sparkline from the history response, not just the live stream', async () => {
+    const freshSparkline = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    fetchMock.mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ events: [row(9)], nextBefore: null, sparkline: freshSparkline }), {
+          status: 200,
+        }),
+    )
+
+    const { result, rerender } = renderHook(
+      ({ filters }: { filters: ActivityFilters }) => useActivityStream({ workspaceId: 'w1', filters, initial: INITIAL }),
+      { initialProps: { filters: EMPTY_ACTIVITY_FILTERS } },
+    )
+
+    // Seeded from `initial.sparkline` at mount (unfiltered — no refetch involved).
+    expect(result.current.sparkline).toEqual(INITIAL.sparkline)
+
+    rerender({ filters: { agents: ['a1'], tasks: [], types: [] } })
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+
+    // Re-seeded from the history route's response, not merely rotated/incremented client-side.
+    expect(result.current.sparkline).toEqual(freshSparkline)
+  })
+
+  it('Finding 4: a rejected page-1 refetch still opens the stream (from the last known watermark) instead of leaving a dead page reporting stale state', async () => {
+    fetchMock.mockImplementation(async () => {
+      throw new Error('network down')
+    })
+
+    const { result, rerender } = renderHook(
+      ({ filters }: { filters: ActivityFilters }) => useActivityStream({ workspaceId: 'w1', filters, initial: INITIAL }),
+      { initialProps: { filters: EMPTY_ACTIVITY_FILTERS } },
+    )
+
+    expect(FakeEventSource.instances).toHaveLength(1) // unfiltered mount: no fetch involved yet
+
+    rerender({ filters: { agents: ['a1'], tasks: [], types: [] } })
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+
+    // The failure surfaces...
+    expect(result.current.error).toBeTruthy()
+    // ...but the stream reopened anyway, from the last watermark this instance actually held
+    // (INITIAL's newest seq, 3) — the live tail survives the failed history fetch instead of
+    // `sourceRef` staying null with the page still looking connected.
+    expect(FakeEventSource.instances).toHaveLength(2)
+    const url = FakeEventSource.instances[1]?.url ?? ''
+    expect(new URLSearchParams(url.split('?')[1]).get('from')).toBe('3')
   })
 })

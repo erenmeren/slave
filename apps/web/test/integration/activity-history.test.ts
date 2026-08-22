@@ -280,6 +280,33 @@ describe('buildActivityHistory', () => {
     })
   })
 
+  it('Finding 3: the history route response carries the workspace-wide 10-bucket sparkline, unaffected by an active filter', async (): Promise<void> => {
+    await appendEvent({
+      type: 'run.tool_call',
+      workspaceId: fixture.workspaceId,
+      taskId: fixture.taskId1,
+      agentId: fixture.agentId1,
+      actor: 'agent',
+      payload: { name: 'Write', summary: 'call' },
+    })
+
+    const unfiltered = await getActivity(new Request('http://test/api'), {
+      params: Promise.resolve({ workspaceId: fixture.workspaceId }),
+    })
+    const unfilteredBody = (await unfiltered.json()) as { sparkline: number[] }
+    expect(unfilteredBody.sparkline).toHaveLength(10)
+    expect(unfilteredBody.sparkline.at(-1)).toBe(1)
+
+    // A filter that excludes every event in the log still reports the true workspace-wide rate —
+    // the sparkline is never filtered, only `events` is (review finding 3).
+    const filtered = await getActivity(new Request('http://test/api?agents=' + fixture.agentId2), {
+      params: Promise.resolve({ workspaceId: fixture.workspaceId }),
+    })
+    const filteredBody = (await filtered.json()) as { events: unknown[]; sparkline: number[] }
+    expect(filteredBody.events).toHaveLength(0)
+    expect(filteredBody.sparkline).toEqual(unfilteredBody.sparkline)
+  })
+
   it('the route 400s malformed filters and 404s an unknown workspace', async (): Promise<void> => {
     const badFilters = await getActivity(new Request('http://test/api?kinds=bogus'), {
       params: Promise.resolve({ workspaceId: fixture.workspaceId }),

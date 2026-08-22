@@ -43,9 +43,16 @@ function appendRow(events: readonly ActivityEventRow[], row: ActivityEventRow): 
   return [...events, row]
 }
 
-function streamUrl(workspaceId: string, filters: ActivityFilters, fromSeq: number): string {
+/**
+ * `fromSeq: null` means "from now" — omit `?from` entirely rather than sending `from=0`.
+ * `parseFromSeq` (server/fromSeq.ts) treats `"0"` as a real watermark, not as "no watermark", so
+ * a literal 0 here would replay the *entire* event log through the route's filter predicate
+ * (review finding 2) — the situation an empty page 1 (a quiet agent, no tripped guardrails) hits
+ * on every filtered mount/switch if this falls back to 0 instead of omitting the param.
+ */
+function streamUrl(workspaceId: string, filters: ActivityFilters, fromSeq: number | null): string {
   const params = new URLSearchParams(filtersToQuery(filters))
-  params.set('from', String(fromSeq))
+  if (fromSeq !== null) params.set('from', String(fromSeq))
   return `/api/w/${workspaceId}/activity/stream?${params.toString()}`
 }
 
@@ -121,6 +128,12 @@ export function useActivityStream(options: {
 
         const row = rowFromEnvelope(event)
         setEvents((current) => appendRow(current, row))
+        // The stream route already applies the active filter server-side (`eventMatchesFilters`
+        // in the stream route) — a filtered-out `run.tool_call` is never delivered here at all —
+        // so this increment already only ever counts frames that pass the *current* filter, even
+        // though `sparkline` itself stays workspace-scoped (review finding 3). Between re-seeds
+        // (mount / filter switch, below) that undercounts the true workspace rate for anything the
+        // active filter excludes; it is bounded because the next re-seed/refetch corrects it back.
         if (event.type === 'run.tool_call') {
           setSparkline((current) => {
             if (current.length === 0) return current
@@ -132,21 +145,33 @@ export function useActivityStream(options: {
       }
     }
 
-    const openStream = (fromSeq: number): void => {
+    const openStream = (fromSeq: number | null): void => {
       const source = new EventSource(streamUrl(workspaceId, filtersRef.current, fromSeq))
       wireSource(source)
       sourceRef.current = source
     }
 
-    if (!hasMountedRef.current) {
+    // Unfiltered mount only: seed synchronously from the server-rendered `initial` page instead
+    // of refetching page 1 over the network for data the server already sent. Every other case —
+    // a filtered mount (bookmark/share/F5 landing on `?kinds=...`) or any later filter switch —
+    // takes the refetch branch below, because `initial` is always the *unfiltered* first page
+    // (review finding 1: a filtered link must never render it under a lit filter bar).
+    if (!hasMountedRef.current && filterKey === '') {
       hasMountedRef.current = true
       const ascending = [...initialRef.current.events].reverse()
       setEvents(ascending)
       setExhausted(false)
       nextBeforeRef.current = initialRef.current.nextBefore
-      const newestSeq = ascending.at(-1)?.seq ?? 0
+      // `?? null`, not `?? 0`: an empty (but still unfiltered) initial page has no watermark to
+      // resume from, so the stream opens "from now" rather than replaying the log (finding 2).
+      const newestSeq = ascending.at(-1)?.seq ?? null
       openStream(newestSeq)
     } else {
+      hasMountedRef.current = true
+      // Captured before the buffer is cleared below: if the refetch that follows fails, this is
+      // the newest watermark this hook instance actually held under the *previous* filters/page —
+      // used only to keep the live tail open rather than leaving `sourceRef` null (finding 4).
+      const lastKnownSeq = eventsRef.current.at(-1)?.seq ?? null
       setEvents([])
       setExhausted(false)
       setError(null)
@@ -160,11 +185,22 @@ export function useActivityStream(options: {
           setEvents(ascending)
           setExhausted(page.nextBefore === null)
           nextBeforeRef.current = page.nextBefore
-          const newestSeq = ascending.at(-1)?.seq ?? 0
+          // Re-seed the sparkline from this response on every filtered mount and every filter
+          // switch — it is workspace-scoped, so a fresh server read is the only thing that can
+          // correct the between-reseed undercount noted above (finding 3).
+          setSparkline(page.sparkline)
+          // `?? null`, not `?? 0`: an empty filtered page 1 already carries all matching history,
+          // so the stream opens "from now" instead of replaying the whole log (finding 2).
+          const newestSeq = ascending.at(-1)?.seq ?? null
           openStream(newestSeq)
         } catch (cause) {
           if (cancelled) return
           setError(cause instanceof Error ? cause.message : String(cause))
+          // Reviewer-preferred fix over merely flagging `reconnecting` (finding 4): open the
+          // stream anyway, from the last watermark this instance actually held, so a broken
+          // history fetch doesn't also kill the live tail and leave the page looking "connected"
+          // while silently showing nothing new.
+          openStream(lastKnownSeq)
         }
       })()
     }

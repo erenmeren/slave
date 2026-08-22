@@ -18,11 +18,16 @@ export interface ActivityEventRow {
 export interface ActivityHistoryPage {
   readonly events: readonly ActivityEventRow[]
   readonly nextBefore: number | null
+  /** The workspace-wide tool-call sparkline (spec §4.2/§4.5: "the workspace's tool-call rate"),
+   *  carried on every history page — not just the unfiltered `ActivityPage` — regardless of the
+   *  filters that shaped `events`. The client re-seeds its live sparkline from this field on
+   *  every mount and filter switch (review finding 3): the sparkline stays workspace-scoped, so
+   *  the *only* thing that can drift it back to true is a fresh read from here. */
+  readonly sparkline: readonly number[]
 }
 
 export interface ActivityPage extends ActivityHistoryPage {
   readonly workspace: { readonly id: string; readonly name: string; readonly haltedReason: string | null }
-  readonly sparkline: readonly number[]
   /** The workspace's agent/task rosters, `{id, name|title}[]` only — everything the page needs
    *  for the FilterBar's two multi-selects and for resolving a card's `agentName`/`taskTitle`
    *  from an event's bare `agentId`/`taskId`. Two lightweight selects (no `include`, no run/task
@@ -97,19 +102,26 @@ export async function buildActivityHistory(
 
   const take = Math.min(options?.limit ?? ACTIVITY_PAGE_LIMIT_DEFAULT, ACTIVITY_PAGE_LIMIT_MAX)
 
-  const rows = await prisma.executionEvent.findMany({
-    where: {
-      workspaceId,
-      ...(filters.agents.length > 0 ? { agentId: { in: [...filters.agents] } } : {}),
-      ...(filters.tasks.length > 0 ? { taskId: { in: [...filters.tasks] } } : {}),
-      ...(filters.types.length > 0
-        ? { type: { in: filters.types.map((type) => EVENT_TYPE_BY_DOMAIN_TYPE[type]) } }
-        : {}),
-      ...(options?.before !== undefined ? { seq: { lt: options.before } } : {}),
-    },
-    orderBy: { seq: 'desc' },
-    take,
-  })
+  // The sparkline is workspace-wide (never filtered — see `ActivityHistoryPage.sparkline`), so
+  // it runs alongside the paged `findMany` rather than depending on its result; one extra grouped
+  // query per history page, same cost the unfiltered `buildActivityPage` already paid before this
+  // page carried its own sparkline too.
+  const [rows, sparkline] = await Promise.all([
+    prisma.executionEvent.findMany({
+      where: {
+        workspaceId,
+        ...(filters.agents.length > 0 ? { agentId: { in: [...filters.agents] } } : {}),
+        ...(filters.tasks.length > 0 ? { taskId: { in: [...filters.tasks] } } : {}),
+        ...(filters.types.length > 0
+          ? { type: { in: filters.types.map((type) => EVENT_TYPE_BY_DOMAIN_TYPE[type]) } }
+          : {}),
+        ...(options?.before !== undefined ? { seq: { lt: options.before } } : {}),
+      },
+      orderBy: { seq: 'desc' },
+      take,
+    }),
+    toolCallSparkline(workspaceId),
+  ])
 
   const events: ActivityEventRow[] = rows.map((row) => {
     const domainType = DOMAIN_EVENT_TYPE_BY_DB_VALUE[row.type] ?? (row.type as DomainEventType)
@@ -130,21 +142,20 @@ export async function buildActivityHistory(
   const lastRow = events.at(-1)
   const nextBefore = events.length < take || lastRow === undefined ? null : lastRow.seq
 
-  return { events, nextBefore }
+  return { events, nextBefore, sparkline }
 }
 
 /**
- * The activity page's initial load: workspace identity, the unfiltered first history page, and
- * the workspace-wide tool-call sparkline — composed from `buildActivityHistory` and
- * `toolCallSparkline` (one grouped query each) rather than a third query.
+ * The activity page's initial load: workspace identity, the unfiltered first history page (which
+ * now carries its own workspace-wide sparkline — see `buildActivityHistory`), and the workspace's
+ * agent/task rosters. Composed from `buildActivityHistory` rather than a duplicate sparkline query.
  */
 export async function buildActivityPage(workspaceId: string): Promise<ActivityPage | null> {
   const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId } })
   if (workspace === null) return null
 
-  const [history, sparkline, agents, tasks] = await Promise.all([
+  const [history, agents, tasks] = await Promise.all([
     buildActivityHistory(workspaceId, EMPTY_ACTIVITY_FILTERS, {}),
-    toolCallSparkline(workspaceId),
     prisma.agent.findMany({ where: { team: { workspaceId } }, select: { id: true, name: true }, orderBy: { name: 'asc' } }),
     prisma.task.findMany({ where: { workspaceId }, select: { id: true, title: true }, orderBy: { title: 'asc' } }),
   ])
@@ -154,7 +165,7 @@ export async function buildActivityPage(workspaceId: string): Promise<ActivityPa
     // `history` cannot be null here: the same workspace lookup above already confirmed it exists.
     events: history!.events,
     nextBefore: history!.nextBefore,
-    sparkline,
+    sparkline: history!.sparkline,
     agents,
     tasks,
   }
