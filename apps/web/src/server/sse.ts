@@ -1,5 +1,6 @@
 import { prisma } from '@ai-team-os/db/client'
 import { createEventStream, type EventStreamHandle } from '@ai-team-os/events'
+import type { ExecutionEvent } from '@ai-team-os/domain'
 
 export const DEFAULT_HEARTBEAT_MS = 15_000
 
@@ -10,6 +11,12 @@ export interface EventSseOptions {
   readonly connectionString: string
   /** For tests; default 15_000. */
   readonly heartbeatMs?: number
+  /**
+   * Optional server-side predicate, applied after the workspace check. A rejected event is not
+   * written, but `lastSeen` has already advanced past it (see `onEvent` below) — the watermark
+   * moves across filtered spans exactly as it does across other-workspace spans.
+   */
+  readonly filter?: (event: ExecutionEvent) => boolean
 }
 
 /** SSE response whose body streams this workspace's events. Closing the body releases the LISTEN. */
@@ -57,6 +64,7 @@ export async function createEventSse(options: EventSseOptions): Promise<Response
         onEvent: (event): void => {
           lastSeen = Math.max(lastSeen, event.seq)
           if (event.workspaceId !== options.workspaceId) return
+          if (options.filter !== undefined && !options.filter(event)) return
           try {
             controller.enqueue(encoder.encode(`id: ${event.seq}\ndata: ${JSON.stringify(event)}\n\n`))
           } catch {
