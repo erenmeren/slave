@@ -5,15 +5,15 @@ import { useActivityStream } from '../../hooks/useActivityStream'
 import { useUrlFilters } from '../../hooks/useUrlFilters'
 import type { ActivityPage } from '../../server/activity'
 import { Sidebar } from '../Sidebar'
+import { Sparkline } from '../Sparkline'
 import { TopBar } from '../TopBar'
 import { FilterBar } from './FilterBar'
 import { Timeline, type TimelineHandle } from './Timeline'
 
 /**
  * The activity page's client shell: Sidebar + TopBar (workspace name is static from the initial
- * server snapshot — only `connection` is live, same as `TasksClient`) + `FilterBar` + a sparkline
- * slot (Task 9 fills the SVG; this renders the container and the raw numbers so the layout and
- * data plumbing are already correct) + the virtualized `Timeline`.
+ * server snapshot — only `connection` is live, same as `TasksClient`) + `FilterBar` + a header
+ * `Sparkline` (Task 9) fed the hook's live-rotated `sparkline` + the virtualized `Timeline`.
  *
  * Live-follow etiquette: `pinned` starts `true` (a freshly loaded page is scrolled to the newest
  * event) and flips on `Timeline`'s `onPinnedChange` report of the viewport's own scroll position.
@@ -101,8 +101,8 @@ export function ActivityClient({
           setAgents={setAgents}
           setTasks={setTasks}
         />
-        <div data-testid="sparkline-slot" className="border-b border-line px-3 py-2 text-xs text-text-3">
-          {sparkline.join(' ')}
+        <div data-testid="sparkline-slot" className="border-b border-line px-3 py-2 text-text-3">
+          <Sparkline buckets={sparkline} width={160} height={24} label="tool calls, last 10 minutes" />
         </div>
         <div className="relative flex flex-1 flex-col overflow-hidden">
           <Timeline

@@ -89,6 +89,20 @@ describe('AgentCard', () => {
     expect(screen.queryByTitle('stop arrives in M5')).toBeNull()
   })
 
+  it('renders the mini sparkline svg from agent.sparkline when data is present (Task 9)', () => {
+    const { container } = render(
+      <AgentCard
+        agent={agent({ status: 'working', sparkline: [0, 0, 1, 0, 2, 0, 0, 3, 0, 1] })}
+        liveActionLine={null}
+        onOpen={() => {}}
+      />,
+    )
+    const svg = container.querySelector('svg[role="img"]')
+    expect(svg).toBeTruthy()
+    expect(svg?.getAttribute('width')).toBe('60')
+    expect(svg?.getAttribute('height')).toBe('16')
+  })
+
   // Motion pass (spec §8 / M4 deferral). jsdom can't see the animation itself, so these pin the
   // mechanism the CSS relies on: a key that remounts on text change (fresh DOM node → the
   // cross-fade keyframe replays), a status-flash trigger with its motion-safe class and timed

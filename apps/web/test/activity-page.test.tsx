@@ -165,7 +165,8 @@ describe('ActivityClient', () => {
     expect(screen.getByText('Checkout Platform')).toBeTruthy()
     expect(screen.getByTestId('connection').textContent).toContain('reconnecting')
     expect(screen.getByTestId('filter-bar')).toBeTruthy()
-    expect(screen.getByTestId('sparkline-slot').textContent).toContain('3')
+    // Task 9: the slot now mounts the Sparkline SVG rather than the raw bucket numbers as text.
+    expect(screen.getByTestId('sparkline-slot').querySelector('svg[role="img"]')).toBeTruthy()
   })
 
   it('stays pinned at the bottom by default — the "new events" badge never appears as events arrive', () => {

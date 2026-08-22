@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { AgentCardData } from '../server/overview'
+import { Sparkline } from './Sparkline'
 
 export const DOT: Record<AgentCardData['status'], string> = {
   working: 'bg-status-working',
@@ -88,6 +89,9 @@ export function AgentCard({
       <footer className="flex items-center gap-2">
         <span className="rounded border border-line px-1.5 py-0.5 font-mono text-[10px] text-text-3">
           {agent.provider}
+        </span>
+        <span className="ml-auto text-text-3">
+          <Sparkline buckets={agent.sparkline} width={60} height={16} label={`${agent.name}'s tool calls, last 10 minutes`} />
         </span>
       </footer>
     </article>
