@@ -413,6 +413,37 @@ describe('ActivityClient', () => {
     const badge = screen.getByTestId('new-events-badge')
     expect(badge.className).toContain('motion-safe:animate-[action-line-in_120ms_ease-out]')
   })
+
+  // ---- Fix round 1: reset the live boundary across a filter/workspace switch ---------------
+
+  it('Fix round 1: resets the live boundary across a filter/workspace switch — reloaded rows above the stale boundary do not animate, but a later live arrival still does', () => {
+    const { rerender } = render(<ActivityClient workspaceId="w1" initial={INITIAL} />)
+
+    // A filter/workspace switch: the buffer passes through empty, then repopulates with an
+    // unrelated (higher) seq range — `useActivityStream`'s contract for a filter change, the same
+    // shape `ActivityClient`'s own badge-suppression reset (`lastAccountedSeqRef`) already
+    // special-cases.
+    streamState.events = []
+    rerender(<ActivityClient workspaceId="w1" initial={INITIAL} />)
+    streamState.events = [row(10), row(11), row(12)]
+    rerender(<ActivityClient workspaceId="w1" initial={INITIAL} />)
+
+    // Every reloaded row's seq (10, 11, 12) sits ABOVE the stale mount-time boundary (3) — without
+    // a reset, `isLive` reads true for every one of them: a full-page animation flash on a routine
+    // filter change, not a stray replay. None should animate: this reload reads as mount-equivalent.
+    let rows = screen.getAllByTestId('timeline-row')
+    expect(rows).toHaveLength(3)
+    for (const r of rows) expect(r.className).not.toContain('action-line-in')
+
+    // A genuine live arrival AFTER the switch must still animate — the boundary must have been
+    // reseeded to the reloaded page's own newest seq (12), not left unset/stuck at its old value.
+    streamState.events = [...streamState.events, row(13)]
+    rerender(<ActivityClient workspaceId="w1" initial={INITIAL} />)
+    rows = screen.getAllByTestId('timeline-row')
+    expect(rows).toHaveLength(4)
+    expect(rows[3]?.className).toContain('motion-safe:animate-[action-line-in_120ms_ease-out]')
+    expect(rows[0]?.className).not.toContain('action-line-in')
+  })
 })
 
 describe('Timeline scroll anchoring', () => {

@@ -70,6 +70,25 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
   // its entry class is decided once, at that node's own first render — no re-render is needed to
   // pick up a later ref update, and using state here would only risk a spurious extra re-render.
   const liveBoundarySeqRef = useRef<number>(events.at(-1)?.seq ?? -Infinity)
+  // Marks "the events buffer was empty as of the last render" — the reset signal for a
+  // filter/workspace switch reload (mirrors `ActivityClient`'s own `lastAccountedSeqRef` reset,
+  // one file over: "the buffer passing through empty... re-seeds the baseline instead of scoring
+  // the reload as arrivals"). Without this, a reload's seqs sitting ABOVE the stale boundary reads
+  // as EVERY row being "new" — not a stray replay but a full-page animation flash on a routine
+  // filter change (fix round 1 review finding).
+  //
+  // Read/written synchronously in the render body itself, not an effect: the `isLive` check below
+  // runs in this SAME render, so a reseed landing only after commit (an effect) would be one
+  // commit too late — this render's rows would already have painted against the stale boundary.
+  const boundaryUnsetRef = useRef<boolean>(events.length === 0)
+  if (events.length === 0) {
+    boundaryUnsetRef.current = true
+  } else if (boundaryUnsetRef.current) {
+    // The buffer just repopulated after passing through empty — this whole page is a fresh
+    // baseline, not live arrivals: reseed from ITS OWN newest row, same as a genuine mount.
+    liveBoundarySeqRef.current = events.at(-1)?.seq ?? liveBoundarySeqRef.current
+    boundaryUnsetRef.current = false
+  }
 
   const derivePinned = (el: HTMLElement): boolean => {
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
@@ -171,7 +190,16 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
     const newFirstSeq = events[0]?.seq
     prevFirstSeqRef.current = newFirstSeq
 
-    if (prevFirstSeq === undefined || newFirstSeq === undefined || newFirstSeq === prevFirstSeq) return // mount, reset, or no prepend
+    // Nothing to anchor: `prevFirstSeq === undefined` means the buffer was empty last render (no
+    // previous head to compare against — a reset in progress, or the ref's own mount-time
+    // initializer if `events` was empty at mount); `newFirstSeq === undefined` means it's empty
+    // THIS render; `newFirstSeq === prevFirstSeq` means the head is unchanged — which is also what
+    // this effect's very first run after a genuine mount lands in, since `prevFirstSeqRef` is
+    // pre-seeded from that same initial render's `events[0]?.seq`. (Fix round 1: this comment
+    // previously read "mount, reset, or no prepend", implying each disjunct maps to one of those
+    // three scenarios one-to-one — it doesn't; only the "mount, first effect run" case is cleanly
+    // one of the three named disjuncts on its own, as described here.)
+    if (prevFirstSeq === undefined || newFirstSeq === undefined || newFirstSeq === prevFirstSeq) return
 
     const oldFirstIndexInNew = events.findIndex((event) => event.seq === prevFirstSeq)
     if (oldFirstIndexInNew <= 0) return // not a plain prepend (the previous first row is gone, or still first)
