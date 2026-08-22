@@ -1,0 +1,225 @@
+import { prisma } from '@ai-team-os/db/client'
+import { appendEvent } from '@ai-team-os/events'
+import { afterAll, beforeEach, describe, expect, it } from 'vitest'
+import { buildActivityHistory } from '../../src/server/activity.js'
+import { EMPTY_ACTIVITY_FILTERS, type ActivityFilters } from '../../src/lib/activityFilters.js'
+import { GET as getActivity } from '../../src/app/api/w/[workspaceId]/activity/route.js'
+
+interface Fixture {
+  readonly workspaceId: string
+  readonly agentId1: string
+  readonly agentId2: string
+  readonly taskId1: string
+  readonly taskId2: string
+}
+
+async function seed(): Promise<Fixture> {
+  const workspace = await prisma.workspace.create({
+    data: {
+      name: 'Checkout Platform',
+      repoPath: '/tmp/activity-fixture',
+      verifyCommands: ['true'],
+      setupCommands: [],
+      budgetUsd: 100,
+    },
+  })
+  const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
+  const agent1 = await prisma.agent.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
+  const agent2 = await prisma.agent.create({ data: { teamId: team.id, name: 'Bianca', role: 'frontend' } })
+  const task1 = await prisma.task.create({
+    data: {
+      workspaceId: workspace.id,
+      title: 'Add the thing',
+      description: 'x',
+      status: 'running',
+      requiredRole: 'backend',
+      maxAttempts: 3,
+    },
+  })
+  const task2 = await prisma.task.create({
+    data: {
+      workspaceId: workspace.id,
+      title: 'Fix the other thing',
+      description: 'y',
+      status: 'running',
+      requiredRole: 'frontend',
+      maxAttempts: 3,
+    },
+  })
+  return { workspaceId: workspace.id, agentId1: agent1.id, agentId2: agent2.id, taskId1: task1.id, taskId2: task2.id }
+}
+
+describe('buildActivityHistory', () => {
+  let fixture: Fixture
+
+  beforeEach(async (): Promise<void> => {
+    await prisma.$executeRawUnsafe(
+      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
+    )
+    fixture = await seed()
+  })
+
+  afterAll(async (): Promise<void> => {
+    await prisma.$disconnect()
+  })
+
+  it('pages newest-first by seq cursor and reports nextBefore', async (): Promise<void> => {
+    for (let i = 0; i < 20; i += 1) {
+      await appendEvent({
+        type: 'run.tool_call',
+        workspaceId: fixture.workspaceId,
+        taskId: fixture.taskId1,
+        agentId: fixture.agentId1,
+        actor: 'agent',
+        payload: { name: 'Write', summary: `call ${i}` },
+      })
+    }
+
+    const page1 = await buildActivityHistory(fixture.workspaceId, EMPTY_ACTIVITY_FILTERS, { limit: 10 })
+    expect(page1?.events).toHaveLength(10)
+    expect(page1!.events[0]!.seq).toBeGreaterThan(page1!.events[9]!.seq)
+
+    const page2 = await buildActivityHistory(fixture.workspaceId, EMPTY_ACTIVITY_FILTERS, {
+      before: page1!.nextBefore!,
+      limit: 10,
+    })
+    expect(page2!.events[0]!.seq).toBeLessThan(page1!.events[9]!.seq)
+  })
+
+  it('reaches exhaustion with nextBefore null', async (): Promise<void> => {
+    for (let i = 0; i < 12; i += 1) {
+      await appendEvent({
+        type: 'run.tool_call',
+        workspaceId: fixture.workspaceId,
+        taskId: fixture.taskId1,
+        agentId: fixture.agentId1,
+        actor: 'agent',
+        payload: { name: 'Write', summary: `call ${i}` },
+      })
+    }
+
+    const page1 = await buildActivityHistory(fixture.workspaceId, EMPTY_ACTIVITY_FILTERS, { limit: 10 })
+    expect(page1?.events).toHaveLength(10)
+    expect(page1?.nextBefore).not.toBeNull()
+
+    const page2 = await buildActivityHistory(fixture.workspaceId, EMPTY_ACTIVITY_FILTERS, {
+      before: page1!.nextBefore!,
+      limit: 10,
+    })
+    expect(page2?.events).toHaveLength(2)
+    expect(page2?.nextBefore).toBeNull()
+
+    // Page past the oldest row: nothing left, but still a clean exhaustion signal.
+    const page3 = await buildActivityHistory(fixture.workspaceId, EMPTY_ACTIVITY_FILTERS, {
+      before: page2!.events.at(-1)!.seq,
+      limit: 10,
+    })
+    expect(page3?.events).toHaveLength(0)
+    expect(page3?.nextBefore).toBeNull()
+  })
+
+  it('applies the filter union — agent AND (types ∪ kinds)', async (): Promise<void> => {
+    await appendEvent({
+      type: 'task.created',
+      workspaceId: fixture.workspaceId,
+      taskId: fixture.taskId1,
+      agentId: fixture.agentId1,
+      actor: 'human',
+      payload: { title: 'Add the thing' },
+    })
+    await appendEvent({
+      type: 'run.started',
+      workspaceId: fixture.workspaceId,
+      taskId: fixture.taskId1,
+      agentId: fixture.agentId1,
+      actor: 'agent',
+      payload: { sessionId: 'sess-1' },
+    })
+    // Wrong agent — excluded even though the type matches.
+    await appendEvent({
+      type: 'task.created',
+      workspaceId: fixture.workspaceId,
+      taskId: fixture.taskId1,
+      agentId: fixture.agentId2,
+      actor: 'human',
+      payload: { title: 'Wrong agent' },
+    })
+    // Right agent, wrong type — excluded even though the agent matches.
+    await appendEvent({
+      type: 'guardrail.tripped',
+      workspaceId: fixture.workspaceId,
+      taskId: fixture.taskId2,
+      agentId: fixture.agentId1,
+      actor: 'system',
+      payload: { guardrail: 'budget', detail: 'over budget' },
+    })
+
+    const filters: ActivityFilters = {
+      agents: [fixture.agentId1],
+      tasks: [],
+      types: ['task.created', 'run.started'],
+    }
+    const page = await buildActivityHistory(fixture.workspaceId, filters, { limit: 100 })
+
+    expect(page?.events).toHaveLength(2)
+    expect(page?.events.every((e) => e.agentId === fixture.agentId1)).toBe(true)
+    expect(page?.events.map((e) => e.type).sort()).toEqual(['run.started', 'task.created'])
+  })
+
+  it('caps limit at 200 and defaults to 100', async (): Promise<void> => {
+    await Promise.all(
+      Array.from({ length: 205 }, (_, i) =>
+        appendEvent({
+          type: 'run.tool_call',
+          workspaceId: fixture.workspaceId,
+          taskId: fixture.taskId1,
+          agentId: fixture.agentId1,
+          actor: 'agent',
+          payload: { name: 'Write', summary: `call ${i}` },
+        }),
+      ),
+    )
+
+    const capped = await buildActivityHistory(fixture.workspaceId, EMPTY_ACTIVITY_FILTERS, { limit: 999 })
+    expect(capped?.events).toHaveLength(200)
+
+    const defaulted = await buildActivityHistory(fixture.workspaceId, EMPTY_ACTIVITY_FILTERS, {})
+    expect(defaulted?.events).toHaveLength(100)
+  })
+
+  it('returns null for an unknown workspace', async (): Promise<void> => {
+    expect(await buildActivityHistory('00000000-0000-4000-8000-000000000000', EMPTY_ACTIVITY_FILTERS)).toBeNull()
+  })
+
+  it('every row carries a non-empty summary and dotted type', async (): Promise<void> => {
+    await appendEvent({
+      type: 'run.tool_call',
+      workspaceId: fixture.workspaceId,
+      taskId: fixture.taskId1,
+      agentId: fixture.agentId1,
+      actor: 'agent',
+      payload: { name: 'Write', summary: 'Write note.txt' },
+    })
+
+    const page = await buildActivityHistory(fixture.workspaceId, EMPTY_ACTIVITY_FILTERS, { limit: 10 })
+
+    expect(page?.events).toHaveLength(1)
+    expect(page?.events[0]?.type).toContain('.')
+    expect(page?.events[0]?.summary).toBe('Write note.txt')
+    expect(page?.events[0]?.summary).not.toHaveLength(0)
+  })
+
+  it('the route 400s malformed filters and 404s an unknown workspace', async (): Promise<void> => {
+    const badFilters = await getActivity(new Request('http://test/api?kinds=bogus'), {
+      params: Promise.resolve({ workspaceId: fixture.workspaceId }),
+    })
+    expect(badFilters.status).toBe(400)
+    expect((await badFilters.json()).error).toBeTruthy()
+
+    const unknownWorkspace = await getActivity(new Request('http://test/api'), {
+      params: Promise.resolve({ workspaceId: 'nope' }),
+    })
+    expect(unknownWorkspace.status).toBe(404)
+    expect(await unknownWorkspace.text()).toContain('nope')
+  })
+})

@@ -370,4 +370,6 @@ model ExecutionEvent {
   payload     Json
 
   @@index([workspaceId, seq])
+  @@index([workspaceId, agentId, seq])
+  @@index([workspaceId, taskId, seq])
 }
