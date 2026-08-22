@@ -31,8 +31,8 @@ The consequence is visible in `Checkpoint`: the adapter defines its own interfac
 duplication is deliberate and recorded in the adapter's own doc comment.
 
 **`apps/web` never imports `apps/orchestrator` or `packages/providers`** (spec §2, extended by
-M4). The web app is a reader for its GET routes: the Overview and Tasks snapshots and the SSE
-stream build straight from `packages/db` and `packages/events`, and it never spawns a process
+M4). The web app is a reader for its GET routes: the Overview, Tasks and Graph snapshots and the
+SSE stream build straight from `packages/db` and `packages/events`, and it never spawns a process
 itself. For its POST routes (M5), the rule is narrower rather than gone: **`apps/web` mutates
 only through `packages/control`** — direct Prisma writes from `apps/web` remain forbidden, matching
 the CLI equivalence bar the M3/M4 gates already set. `packages/control` holds the intervention
@@ -43,7 +43,13 @@ concrete: a web POST only ever records an intent (`AgentRun.resumeRequestedAt`/`
 still `paused`) — it is the daemon's tick, in the same process that will own the child, that
 claims `paused → resuming` and spawns. The web is never in the business of holding a claim across
 a request boundary with no process behind it, because that shape is exactly what the orphan sweep
-(§3.4) would fail.
+(§3.4) would fail. M7's `addTaskDependency`/`removeTaskDependency` join the same package and the
+same rule — the Graph page's edge editing is a control claim like any other, not a Prisma write
+from a route handler — and they are the one pair of operations here with no process on the other
+end to race: adding an edge takes out a `SELECT ... FOR UPDATE` on the workspace row for the width
+of its own transaction, so two operators drawing edges that would each complete a cycle in the
+other's presence serialise on that lock rather than each observing a graph the other's uncommitted
+row hasn't touched yet.
 
 ## Where a run's state actually lives
 

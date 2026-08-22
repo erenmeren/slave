@@ -18,6 +18,9 @@ real git repositories, with a human supervising rather than prompting.
   `docs/architecture.md`.
 - **M6** — the Activity page: a live, filterable, infinitely-scrollable timeline of every workspace
   event, plus tool-call sparklines. See the Web UI section below and `docs/architecture.md`.
+- **M7** — the Graph page: the organization hierarchy and the task dependency DAG, live status,
+  edge editing, node context menus and an event-driven flow visualization. See the Web UI section
+  below and `docs/architecture.md`.
 
 ## Setup
 
@@ -210,6 +213,50 @@ The gate's measured half (spec §6, M6): seeds a throwaway workspace, starts the
 opens the activity stream over plain `fetch`, appends 50 events at 100ms intervals, and reports the
 min/p50/p95/max gap between each event's own `ts` and its frame's arrival — exiting non-zero if p95
 is at or above 1000ms. It cleans up the workspace and the web server it started before exiting.
+
+The **Graph page** (`/w/<workspaceId>/graph`, in the Sidebar next to Activity) draws the workspace
+as a React Flow canvas, laid out client-side by `elkjs`, with two mode tabs carried in the URL
+(`?mode=org` | `?mode=deps`, default Organization):
+
+- **Organization mode** lays out workspace → team → agent as a tree (ELK's `mrtree` algorithm).
+  Agent cards carry the same mini language as the Overview page's cards — name, role, a
+  `bg-status-*` status dot, the M4 pulse while working — with a one-line active-task satellite node
+  on an edge out of the agent while it has a live run.
+- **Dependencies mode** lays out the task DAG left to right (ELK's `layered` algorithm, edges drawn
+  `dependsOn → task` so "this finishes first" reads in reading order). Each task node shows its
+  status-coloured border, `attempt/maxAttempts`, and a "waiting on N" badge when it's `ready` but
+  blocked on unmet dependencies — the visual answer to "why is nothing progressing?". This is the
+  one mode where the graph is writable: dragging a connection between two task nodes POSTs a new
+  dependency, and selecting an edge and pressing Delete removes one. There is no optimistic edit —
+  the drawn or deleted edge only sticks once the next event-driven snapshot refetch confirms it,
+  and a refusal (most notably `dependency_cycle`: the write path walks the DAG in the same
+  transaction as the insert, so it can never acquire a cycle) renders verbatim in an error band
+  instead.
+- Right-clicking an agent or task node (or its keyboard-accessible `⋯` trigger) opens a
+  **navigation-only context menu** — open the agent's panel or the task's board card, or show
+  either filtered in Activity (M6's deep-link filters). No interventions live here; those stay in
+  the panel, M5's "one place to watch the outcome" decision.
+- A **flow visualization** turns live events into motion, each fired by something real rather than
+  a decorative loop: in Organization mode, every `run.tool_call` frame spawns one particle
+  travelling the agent → active-task edge (capped at five concurrent per edge — density under load
+  is the information); any node whose status changes flashes its border in the M5 `border-flash`
+  language; in Dependencies mode, a task turning `done` flashes its outgoing edges once — "the way
+  is clear" — the same moment the dependents' "waiting on N" badges drop. All of it respects
+  `prefers-reduced-motion` (no particles, flashes collapse to instant colour swaps) and production
+  particle spawning pauses while the tab isn't visible.
+
+```bash
+node --env-file=.env scripts/measure-graph-status-latency.mjs
+```
+
+The gate's measured half (spec §8, M7): seeds a throwaway workspace and a real git repository,
+starts the real web server, drives one real run through `starting → working → paused` — spawned
+via the orchestrator's own `tick` against the fake `claude` CLI's `hook-deny` fixture, the same
+protocol `apps/orchestrator`'s milestone-gate test uses to produce a real pause — and after each
+transition's underlying event, polls `GET /api/w/<workspaceId>/graph` until the agent node's status
+reflects it, reporting the latency from the event's own `ts` to the moment it's reflected — exiting
+non-zero if either exceeds 1000ms. It cleans up the workspace, its git repository, and the web
+server it started before exiting.
 
 Clicking an agent's card on the Overview page opens its **detail panel**: the live event feed, and
 the controls M5 adds — pause, message, resume, stop. What each control does is a claim through
