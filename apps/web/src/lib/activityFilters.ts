@@ -102,12 +102,19 @@ export function parseActivityFilters(
  * Inverse of `parseActivityFilters`: serializes only the non-empty dimensions, `types` as
  * dotted domain names comma-joined (already the expanded union — `kinds` never round-trips,
  * only its expansion does). `filtersToQuery(EMPTY_ACTIVITY_FILTERS)` is `''`.
+ *
+ * Each dimension is sorted before joining. This is the one canonical serialization of a filter
+ * *set* — sorting here, rather than only where a caller derives a stable key from this string
+ * (`useActivityStream`'s `filterKey`), keeps that guarantee on the single code path instead of
+ * requiring every caller to remember it, and is harmless on the wire: the server reads each
+ * dimension as a `{ in: [...] }` set (`buildActivityHistory`, `eventMatchesFilters`), never as an
+ * ordered list.
  */
 export function filtersToQuery(filters: ActivityFilters): string {
   const params = new URLSearchParams()
-  if (filters.agents.length > 0) params.set('agents', filters.agents.join(','))
-  if (filters.tasks.length > 0) params.set('tasks', filters.tasks.join(','))
-  if (filters.types.length > 0) params.set('types', filters.types.join(','))
+  if (filters.agents.length > 0) params.set('agents', [...filters.agents].sort().join(','))
+  if (filters.tasks.length > 0) params.set('tasks', [...filters.tasks].sort().join(','))
+  if (filters.types.length > 0) params.set('types', [...filters.types].sort().join(','))
   return params.toString()
 }
 

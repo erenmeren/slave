@@ -162,6 +162,20 @@ describe('useActivityStream', () => {
     expect(new URLSearchParams(secondUrl.split('?')[1]).get('from')).toBe('9')
   })
 
+  it('does not tear down the stream when the same filter set arrives in a different order', () => {
+    const { rerender } = renderHook(
+      ({ filters }: { filters: ActivityFilters }) => useActivityStream({ workspaceId: 'w1', filters, initial: INITIAL }),
+      { initialProps: { filters: { agents: ['a1', 'a2'], tasks: [], types: [] } } },
+    )
+
+    expect(FakeEventSource.instances).toHaveLength(1)
+
+    rerender({ filters: { agents: ['a2', 'a1'], tasks: [], types: [] } })
+
+    expect(FakeEventSource.instances).toHaveLength(1)
+    expect(FakeEventSource.instances[0]?.closed).toBe(false)
+  })
+
   it('does not refetch when the filters rerender with a new but deeply-equal object', () => {
     const { rerender } = renderHook(
       ({ filters }: { filters: ActivityFilters }) => useActivityStream({ workspaceId: 'w1', filters, initial: INITIAL }),
@@ -239,6 +253,51 @@ describe('useActivityStream', () => {
       await vi.advanceTimersByTimeAsync(0)
     })
 
+    expect(result.current.loadingOlder).toBe(false)
+  })
+
+  it('discards a stale loadOlder completion after the filters change mid-flight', async () => {
+    let resolveOld!: (response: Response) => void
+    const oldFetch = new Promise<Response>((resolve) => {
+      resolveOld = resolve
+    })
+    // Call order is deterministic: (1) loadOlder's `before=1` fetch under the OLD filters,
+    // dispatched synchronously below; (2) the filter-switch's own page-1 refetch, dispatched by
+    // the rerender that follows.
+    fetchMock.mockImplementationOnce(() => oldFetch)
+    fetchMock.mockImplementationOnce(
+      async () => new Response(JSON.stringify({ events: [row(20)], nextBefore: null }), { status: 200 }),
+    )
+
+    const { result, rerender } = renderHook(
+      ({ filters }: { filters: ActivityFilters }) => useActivityStream({ workspaceId: 'w1', filters, initial: INITIAL }),
+      { initialProps: { filters: EMPTY_ACTIVITY_FILTERS } },
+    )
+
+    act(() => {
+      result.current.loadOlder()
+    })
+    expect(result.current.loadingOlder).toBe(true)
+
+    rerender({ filters: { agents: ['a1'], tasks: [], types: [] } })
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+
+    // The new filter's page 1 landed: buffer and cursor reflect it.
+    expect(result.current.events.map((e) => e.seq)).toEqual([20])
+    expect(result.current.exhausted).toBe(true)
+
+    await act(async () => {
+      resolveOld(new Response(JSON.stringify({ events: [row(0)], nextBefore: 0 }), { status: 200 }))
+      await vi.advanceTimersByTimeAsync(0)
+    })
+
+    // The stale old-filter completion must not splice into the new buffer or reopen the cursor —
+    // and must still clear the loading flag it set, so a real loadOlder click isn't stuck forever.
+    expect(result.current.events.map((e) => e.seq)).toEqual([20])
+    expect(result.current.exhausted).toBe(true)
     expect(result.current.loadingOlder).toBe(false)
   })
 

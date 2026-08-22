@@ -94,7 +94,17 @@ export function useActivityStream(options: {
   const loadingOlderRef = useRef(false)
   const sourceRef = useRef<EventSource | null>(null)
 
+  // Bumped once per main-effect run (mount, then every workspace/filter switch). `loadOlder`
+  // captures the value at dispatch and checks it before committing its completion — a filter
+  // switch mid-flight bumps this, so a `loadOlder` started under the old filters can no longer
+  // land in the new filters' buffer or cursor. A ref rather than an `AbortController` because the
+  // races here are entirely in-process (state commits, not the network call itself): mirrors
+  // `useWorkspaceStream`'s `refetchSeq` guard against the identical shape of race (a slow refetch
+  // resolving after a newer one already landed).
+  const generationRef = useRef(0)
+
   useEffect((): (() => void) => {
+    generationRef.current += 1
     let cancelled = false
 
     const wireSource = (source: EventSource): void => {
@@ -179,6 +189,10 @@ export function useActivityStream(options: {
     const oldestSeq = eventsRef.current[0]?.seq
     if (oldestSeq === undefined) return
 
+    // Captured now: a filter/workspace switch that lands before this fetch resolves bumps
+    // `generationRef.current` past this value, and the completion below must not commit stale
+    // (old-filter) data over whatever the switch already loaded.
+    const generation = generationRef.current
     loadingOlderRef.current = true
     setLoadingOlder(true)
     void (async (): Promise<void> => {
@@ -186,14 +200,18 @@ export function useActivityStream(options: {
         const response = await fetch(historyUrl(workspaceId, filtersRef.current, { before: String(oldestSeq) }))
         if (!response.ok) throw new Error(`activity history failed: ${response.status} ${await response.text()}`)
         const page = (await response.json()) as ActivityHistoryPage
+        if (generation !== generationRef.current) return // stale: filters/workspace changed mid-flight
         const ascendingOlder = [...page.events].reverse()
         setEvents((current) => [...ascendingOlder, ...current])
         setExhausted(page.nextBefore === null)
         nextBeforeRef.current = page.nextBefore
         setError(null)
       } catch (cause) {
+        if (generation !== generationRef.current) return
         setError(cause instanceof Error ? cause.message : String(cause))
       } finally {
+        // Always clears, even for a stale generation: this dispatch's own loading flag must not
+        // outlive it, or a real subsequent `loadOlder()` call stays blocked forever.
         loadingOlderRef.current = false
         setLoadingOlder(false)
       }
