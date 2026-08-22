@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { EVENT_TYPE_BY_DOMAIN_TYPE } from '@ai-team-os/db'
 import {
   ACTIVITY_KINDS, EMPTY_ACTIVITY_FILTERS, TYPES_BY_KIND,
-  eventMatchesFilters, parseActivityFilters,
+  eventMatchesFilters, filtersToQuery, parseActivityFilters,
+  type ActivityFilters,
 } from '../src/lib/activityFilters'
 
 describe('TYPES_BY_KIND', () => {
@@ -28,6 +29,26 @@ describe('parseActivityFilters', () => {
   it('rejects an unknown kind and an unknown type', () => {
     expect(parseActivityFilters(new URLSearchParams('kinds=nonsense')).ok).toBe(false)
     expect(parseActivityFilters(new URLSearchParams('types=run.exploded')).ok).toBe(false)
+  })
+})
+
+describe('filtersToQuery', () => {
+  it('emits only non-empty dimensions, types as dotted names comma-joined', () => {
+    const filters: ActivityFilters = { agents: ['a1', 'a2'], tasks: [], types: ['run.tool_call', 'run.output'] }
+    const query = filtersToQuery(filters)
+    const params = new URLSearchParams(query)
+    expect(params.get('agents')).toBe('a1,a2')
+    expect(params.has('tasks')).toBe(false)
+    expect(params.get('types')).toBe('run.tool_call,run.output')
+  })
+  it('emits an empty string for EMPTY_ACTIVITY_FILTERS', () => {
+    expect(filtersToQuery(EMPTY_ACTIVITY_FILTERS)).toBe('')
+  })
+  it('round-trips through parseActivityFilters', () => {
+    const filters: ActivityFilters = { agents: ['a1'], tasks: ['t1', 't2'], types: ['run.tool_call', 'guardrail.tripped'] }
+    const result = parseActivityFilters(new URLSearchParams(filtersToQuery(filters)))
+    if (!result.ok) throw new Error(result.error)
+    expect(result.filters).toEqual(filters)
   })
 })
 

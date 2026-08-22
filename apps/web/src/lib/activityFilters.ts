@@ -98,6 +98,19 @@ export function parseActivityFilters(
   return { ok: true, filters: result.data }
 }
 
+/**
+ * Inverse of `parseActivityFilters`: serializes only the non-empty dimensions, `types` as
+ * dotted domain names comma-joined (already the expanded union — `kinds` never round-trips,
+ * only its expansion does). `filtersToQuery(EMPTY_ACTIVITY_FILTERS)` is `''`.
+ */
+export function filtersToQuery(filters: ActivityFilters): string {
+  const params = new URLSearchParams()
+  if (filters.agents.length > 0) params.set('agents', filters.agents.join(','))
+  if (filters.tasks.length > 0) params.set('tasks', filters.tasks.join(','))
+  if (filters.types.length > 0) params.set('types', filters.types.join(','))
+  return params.toString()
+}
+
 export function eventMatchesFilters(
   event: { readonly agentId: string | null; readonly taskId: string | null; readonly type: string },
   filters: ActivityFilters,
