@@ -9,10 +9,13 @@ import type { ActivityEventRow, ActivityPage } from '../src/server/activity.js'
 // `@tanstack/react-virtual` measures the scroll viewport and each item via `offsetWidth`/
 // `offsetHeight` (its own `getRect`/`measureElement` fallback, used whenever no `ResizeObserver`
 // is present — jsdom has none by default, so this is the only measurement path exercised here).
-// Kept local to this file per the Task 8 brief's jsdom note.
+// Kept local to this file per the Task 8 brief's jsdom note. `scrollTo` is stubbed too: jsdom
+// doesn't implement `Element.prototype.scrollTo` at all, and the fix-round-1 mount-scroll
+// (Critical 2) is observed by asserting this stub gets called.
 function mockElementSizes(): void {
   Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, value: 800 })
   Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, value: 600 })
+  HTMLElement.prototype.scrollTo = vi.fn()
 }
 
 let pathname = '/w/w1/activity'
@@ -23,6 +26,33 @@ vi.mock('next/navigation', () => ({
   useRouter: () => ({ replace: routerReplace }),
   useSearchParams: () => new URLSearchParams(),
 }))
+
+// Captures the exact options object (and spies on the returned instance's `scrollToIndex`)
+// `Timeline` hands to/gets from `useVirtualizer`, while still delegating to the real
+// implementation underneath. Lets tests inspect `getItemKey`/`onChange` directly (fix-round-1
+// Important 4 and 5), and confirm the mount-time scroll-to-bottom call itself (Critical 2)
+// without going through `Element.scrollTo` — jsdom's `scrollHeight`/`clientHeight` never reflect
+// rendered content (no layout engine), and `scrollToIndex(lastIndex, { align: 'end' })` resolves
+// its offset via exactly those two real-DOM properties, so the *outcome* of that call is not
+// jsdom-observable even though the call itself, and its arguments, are.
+let capturedVirtualizerOptions: Record<string, unknown> | null = null
+let capturedVirtualizerInstance: { scrollToIndex: (...args: unknown[]) => void } | null = null
+
+vi.mock('@tanstack/react-virtual', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@tanstack/react-virtual')>()
+  return {
+    ...actual,
+    useVirtualizer: (options: Parameters<typeof actual.useVirtualizer>[0]) => {
+      capturedVirtualizerOptions = options as unknown as Record<string, unknown>
+      const instance = actual.useVirtualizer(options)
+      if (capturedVirtualizerInstance !== instance) {
+        vi.spyOn(instance, 'scrollToIndex')
+      }
+      capturedVirtualizerInstance = instance as unknown as { scrollToIndex: (...args: unknown[]) => void }
+      return instance
+    },
+  }
+})
 
 interface StreamState {
   events: ActivityEventRow[]
@@ -79,9 +109,11 @@ const INITIAL: ActivityPage = {
 }
 
 /** Sets scroll geometry on an already-rendered element and fires a `scroll` event, the same
- *  "drive the container's scrollTop" technique the brief calls out. */
+ *  "drive the container's scrollTop" technique the brief calls out. `writable: true` matters
+ *  here (unlike the other two): real DOM `scrollTop` stays assignable after being set, and the
+ *  fix-round-1 scroll-anchor correction (Important 3) does `el.scrollTop += delta`. */
 function scrollTo(element: HTMLElement, state: { scrollTop: number; scrollHeight: number; clientHeight: number }): void {
-  Object.defineProperty(element, 'scrollTop', { configurable: true, value: state.scrollTop })
+  Object.defineProperty(element, 'scrollTop', { configurable: true, writable: true, value: state.scrollTop })
   Object.defineProperty(element, 'scrollHeight', { configurable: true, value: state.scrollHeight })
   Object.defineProperty(element, 'clientHeight', { configurable: true, value: state.clientHeight })
   fireEvent.scroll(element)
@@ -94,6 +126,8 @@ describe('ActivityClient', () => {
     mockElementSizes()
     pathname = '/w/w1/activity'
     routerReplace.mockClear()
+    capturedVirtualizerOptions = null
+    capturedVirtualizerInstance = null
     streamState.events = [...INITIAL.events].reverse() // ascending, oldest first — matches useActivityStream's contract
     streamState.connection = 'connected'
     streamState.loadOlder = vi.fn()
@@ -194,6 +228,124 @@ describe('ActivityClient', () => {
       scrollTo(viewport, { scrollTop: 5, scrollHeight: 4000, clientHeight: 300 })
     })
     expect(streamState.loadOlder).toHaveBeenCalledTimes(2)
+  })
+
+  // ---- fix round 1 ------------------------------------------------------------------------
+
+  it('Critical 2: positions the viewport at the newest row on mount, and mounting alone does not fire onNearTop or unpin', () => {
+    render(<ActivityClient workspaceId="w1" initial={INITIAL} />)
+
+    // The mount-time scroll-to-bottom the doc comment already claimed happens, but nothing
+    // previously triggered — `INITIAL` carries 3 events (indices 0-2), so the newest is index 2.
+    expect(capturedVirtualizerInstance?.scrollToIndex).toHaveBeenCalledWith(2, { align: 'end' })
+    // Nothing about mounting itself should read as "near the top" or "scrolled away" — no scroll
+    // event has fired yet.
+    expect(streamState.loadOlder).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('new-events-badge')).toBeNull()
+  })
+
+  it('Critical 1: a loadOlder prepend does not inflate the "new events" badge', () => {
+    const { rerender } = render(<ActivityClient workspaceId="w1" initial={INITIAL} />)
+    const viewport = screen.getByTestId('timeline-viewport')
+
+    act(() => {
+      scrollTo(viewport, { scrollTop: 0, scrollHeight: 4000, clientHeight: 300 })
+    })
+    expect(screen.queryByTestId('new-events-badge')).toBeNull()
+
+    // `loadOlder` landing a history page: older rows PREPENDED, the newest (tail) event unchanged.
+    streamState.events = [row(-1), row(0), ...streamState.events]
+    rerender(<ActivityClient workspaceId="w1" initial={INITIAL} />)
+
+    expect(screen.queryByTestId('new-events-badge')).toBeNull()
+  })
+
+  it('Critical 1: a filter-change reset + reload does not inflate the "new events" badge', () => {
+    const { rerender } = render(<ActivityClient workspaceId="w1" initial={INITIAL} />)
+    const viewport = screen.getByTestId('timeline-viewport')
+
+    act(() => {
+      scrollTo(viewport, { scrollTop: 0, scrollHeight: 4000, clientHeight: 300 })
+    })
+    expect(screen.queryByTestId('new-events-badge')).toBeNull()
+
+    // useActivityStream's filter-change handling: the buffer empties, then repopulates with a
+    // fresh (unrelated-seq) filtered page — none of it is a live arrival.
+    streamState.events = []
+    rerender(<ActivityClient workspaceId="w1" initial={INITIAL} />)
+    streamState.events = [row(10), row(11), row(12)]
+    rerender(<ActivityClient workspaceId="w1" initial={INITIAL} />)
+
+    expect(screen.queryByTestId('new-events-badge')).toBeNull()
+  })
+
+  it('Important 4: the virtualizer is keyed by event seq, not array index', () => {
+    streamState.events = [row(1), row(2), row(3)]
+    render(<ActivityClient workspaceId="w1" initial={INITIAL} />)
+
+    expect(typeof capturedVirtualizerOptions?.['getItemKey']).toBe('function')
+    const getItemKey = capturedVirtualizerOptions?.['getItemKey'] as (index: number) => unknown
+    expect([getItemKey(0), getItemKey(1), getItemKey(2)]).toEqual([1, 2, 3])
+  })
+
+  it('Important 5: pinned re-derives from a virtualizer resize notification, not only from a scroll event', () => {
+    const { rerender } = render(<ActivityClient workspaceId="w1" initial={INITIAL} />)
+    const viewport = screen.getByTestId('timeline-viewport')
+
+    // Geometry moves to "far from the bottom" WITHOUT a scroll event — the shape of a payload
+    // `<details>` expanding below the fold and growing the true bottom.
+    Object.defineProperty(viewport, 'scrollTop', { configurable: true, writable: true, value: 0 })
+    Object.defineProperty(viewport, 'scrollHeight', { configurable: true, value: 4000 })
+    Object.defineProperty(viewport, 'clientHeight', { configurable: true, value: 300 })
+    act(() => {
+      ;(capturedVirtualizerOptions?.['onChange'] as (() => void) | undefined)?.()
+    })
+
+    streamState.events = [...streamState.events, row(4)]
+    rerender(<ActivityClient workspaceId="w1" initial={INITIAL} />)
+
+    // Only observable if `pinned` actually flipped false from the resize-driven notification
+    // alone — no `fireEvent.scroll` occurred anywhere in this test.
+    expect(screen.getByTestId('new-events-badge').textContent).toContain('1')
+  })
+})
+
+describe('Timeline scroll anchoring', () => {
+  it('Important 3: a loadOlder prepend adjusts scrollTop by the grown total size, keeping the reading position stable', async () => {
+    mockElementSizes()
+    const { Timeline } = await import('../src/components/activity/Timeline.js')
+    const initialEvents = [row(1), row(2), row(3)]
+
+    const { rerender } = render(
+      <Timeline
+        events={initialEvents}
+        workspaceId="w1"
+        agentNameById={new Map()}
+        taskTitleById={new Map()}
+        onPinnedChange={vi.fn()}
+        onNearTop={vi.fn()}
+      />,
+    )
+    const viewport = screen.getByTestId('timeline-viewport')
+    viewport.scrollTop = 500 // an arbitrary, scrolled-up-from-the-bottom baseline
+
+    // `loadOlder` prepends two older rows; the tail (newest) event is unchanged.
+    act(() => {
+      rerender(
+        <Timeline
+          events={[row(-1), row(0), ...initialEvents]}
+          workspaceId="w1"
+          agentNameById={new Map()}
+          taskTitleById={new Map()}
+          onPinnedChange={vi.fn()}
+          onNearTop={vi.fn()}
+        />,
+      )
+    })
+
+    // Every row measures uniformly at the mocked 600px `offsetHeight`, so the total grows by
+    // exactly 2 rows' worth (1200px) — the expected `scrollTop` is deterministic.
+    expect(viewport.scrollTop).toBe(500 + 1200)
   })
 })
 

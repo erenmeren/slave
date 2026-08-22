@@ -37,20 +37,42 @@ export function ActivityClient({
   const [pinned, setPinned] = useState(true)
   const [pendingCount, setPendingCount] = useState(0)
   const timelineRef = useRef<TimelineHandle>(null)
-  // Seeded from the initial event count (not 0): the mount render must not itself read as "N new
-  // events arrived".
-  const previousCountRef = useRef(events.length)
+  // The newest `seq` already accounted for by the follow logic below — seeded from the initial
+  // page so the mount render itself never reads as "new events arrived". A raw event-count delta
+  // (the previous approach) double-counts two things that grow `events.length` without anything
+  // new having arrived: `loadOlder`'s prepended history (older rows land at the FRONT) and a
+  // filter/workspace switch's freshly reloaded page (the buffer empties, then repopulates with a
+  // page that isn't itself new either) — review finding Critical 1. Comparing by `seq` instead of
+  // by length sidesteps both: a prepend never raises the newest `seq`, and the reset is detected
+  // by the buffer passing through empty, which re-seeds the baseline instead of scoring the
+  // reload as arrivals.
+  const lastAccountedSeqRef = useRef<number | null>(events.at(-1)?.seq ?? null)
 
   useEffect((): void => {
-    const added = events.length - previousCountRef.current
-    previousCountRef.current = events.length
-    if (added <= 0) return
+    const newestSeq = events.at(-1)?.seq ?? null
+
+    if (newestSeq === null) {
+      // The buffer is momentarily empty — either nothing has arrived yet, or a filter/workspace
+      // switch just cleared it mid-reload. Either way there is nothing to compare against, so the
+      // baseline clears too: the page this reload lands is a fresh baseline next, not "new
+      // events".
+      lastAccountedSeqRef.current = null
+      return
+    }
+
+    const baseline = lastAccountedSeqRef.current
+    lastAccountedSeqRef.current = newestSeq
+    if (baseline === null || newestSeq <= baseline) return // first load, a post-reset reload, or a `loadOlder` prepend
+
+    let addedCount = 0
+    for (let i = events.length - 1; i >= 0 && (events[i]?.seq ?? -Infinity) > baseline; i -= 1) addedCount += 1
+
     if (pinned) {
       timelineRef.current?.scrollToBottom()
     } else {
-      setPendingCount((count) => count + added)
+      setPendingCount((count) => count + addedCount)
     }
-  }, [events.length, pinned])
+  }, [events, pinned])
 
   const handlePinnedChange = (next: boolean): void => {
     setPinned(next)

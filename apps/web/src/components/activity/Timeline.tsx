@@ -1,6 +1,6 @@
 'use client'
 
-import { forwardRef, useImperativeHandle, useRef } from 'react'
+import { forwardRef, useImperativeHandle, useLayoutEffect, useRef } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { ACTIVITY_CARDS } from './cards'
 import type { ActivityEventRow } from '../../server/activity'
@@ -22,8 +22,10 @@ export interface TimelineProps {
   readonly workspaceId: string
   readonly agentNameById: ReadonlyMap<string, string>
   readonly taskTitleById: ReadonlyMap<string, string>
-  /** Fires whenever the viewport's distance from the bottom crosses the "pinned" threshold
-   *  (within one estimated row height) — not just on the same value repeated. */
+  /** Fires whenever the viewport's distance from the bottom crosses the "pinned" threshold —
+   *  both from an actual scroll and from a row's measured height changing (e.g. a payload
+   *  `<details>` expanding), since the latter moves the true bottom with no scroll event of its
+   *  own to report it. */
   readonly onPinnedChange: (pinned: boolean) => void
   /** Fires once per approach to the top of the viewport (within one estimated row height) — not
    *  once per scroll event while already near the top. */
@@ -33,9 +35,12 @@ export interface TimelineProps {
 /**
  * The activity timeline's virtualized row list: `ACTIVITY_CARDS[event.type]` rendered inside a
  * `useVirtualizer` viewport with `measureElement` dynamic heights, oldest event first (newest at
- * the bottom, matching a chat/log reading order). Live-follow (pinned/loadOlder) state is owned
- * by the caller (`ActivityClient`) — this component only reports the two scroll thresholds that
- * state needs and exposes `scrollToBottom` for it to act on.
+ * the bottom, matching a chat/log reading order). Live-follow (pinned/loadOlder) *state* is owned
+ * by the caller (`ActivityClient`) — this component reports the scroll/resize thresholds that
+ * state needs and exposes `scrollToBottom` for it to act on; it also owns the two purely
+ * geometric corrections a virtualized, absolutely-positioned list needs on its own account: an
+ * explicit mount-time scroll to the bottom, and a scroll-anchor correction across a `loadOlder`
+ * prepend.
  */
 export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timeline(
   { events, workspaceId, agentNameById, taskTitleById, onPinnedChange, onNearTop },
@@ -47,30 +52,95 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
   // `loadOlder` prepends rows) only calls `onNearTop` once — it resets the moment the viewport
   // moves back away from the top.
   const nearTopFiredRef = useRef(false)
+  // Gates both `handleScroll` and the virtualizer's resize-driven `onChange` until the mount
+  // layout effect below has positioned the viewport at the bottom. Without this, a notification
+  // landing before that positioning (the initial per-row `measureElement` pass fires several,
+  // synchronously, before any effect runs) would read pre-scroll, oldest-row-first geometry and
+  // could misreport `pinned`/fire `onNearTop` from a position the user never actually saw.
+  const mountedRef = useRef(false)
+
+  const derivePinned = (el: HTMLElement): boolean => {
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+    return distanceFromBottom <= ESTIMATED_ROW_HEIGHT
+  }
 
   const virtualizer = useVirtualizer({
     count: events.length,
     getScrollElement: () => scrollRef.current,
     estimateSize: () => ESTIMATED_ROW_HEIGHT,
     overscan: 8,
+    // The virtualizer's own measurement cache is keyed by this, not by array index — without it,
+    // a `loadOlder` prepend (which reassigns every existing row's index) hands a stale
+    // measurement, cached for whatever event used to sit at that index, to the event that sits
+    // there now (review finding: Important 4). `seq` is the one stable identity a row has.
+    getItemKey: (index) => events[index]?.seq ?? index,
+    // Fires on every scroll AND on every measured-size change (e.g. a payload `<details>`
+    // expanding) — the second case moves the true bottom with no DOM scroll event of its own, so
+    // `pinned` would otherwise go stale the moment a row's height changes without the viewport
+    // itself moving (review finding: Important 5).
+    onChange: (): void => {
+      if (!mountedRef.current) return
+      const el = scrollRef.current
+      if (el === null) return
+      onPinnedChange(derivePinned(el))
+    },
   })
 
-  useImperativeHandle(
-    ref,
-    (): TimelineHandle => ({
-      scrollToBottom: (): void => {
-        if (events.length > 0) virtualizer.scrollToIndex(events.length - 1, { align: 'end' })
-      },
-    }),
-    [virtualizer, events.length],
-  )
+  const scrollToBottom = (): void => {
+    if (events.length > 0) virtualizer.scrollToIndex(events.length - 1, { align: 'end' })
+  }
+
+  useImperativeHandle(ref, (): TimelineHandle => ({ scrollToBottom }), [virtualizer, events.length])
+
+  // Mount-only: position the viewport at the newest (bottom) row before the user ever sees the
+  // oldest-first initial layout (review finding: Critical 2 — a freshly loaded page must open
+  // already pinned to the bottom, not at the top; nothing previously scrolled it there).
+  useLayoutEffect((): void => {
+    scrollToBottom()
+    mountedRef.current = true
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only by design
+  }, [])
+
+  // Scroll anchoring across a `loadOlder` prepend (review finding: Important 3): older rows land
+  // above the current viewport, which grows the timeline's total height without moving
+  // `scrollTop` — left alone, every already-visible row silently shifts down and the reading
+  // position jumps. Compensated by adding exactly the newly prepended rows' own height (each
+  // looked up in the virtualizer's measurement cache — Important 4's `getItemKey` is what keeps
+  // that cache correctly attributed by `seq` through the reindex a prepend causes — falling back
+  // to the same estimate the virtualizer itself would use for a row it hasn't measured yet).
+  //
+  // Deliberately NOT `getTotalSize()` before/after: the virtualizer needs its own extra settle
+  // pass after the very first commit (the scroll viewport's own rect, and therefore which rows
+  // even count as "in range" to measure, isn't known until that commit's layout effects run), so
+  // a `getTotalSize()` read from this same mount-adjacent effect can still reflect an
+  // under-measured, estimate-only total — usable as neither an old nor a new snapshot. Reading
+  // only the handful of genuinely new rows' own sizes sidesteps that entirely.
+  const prevFirstSeqRef = useRef<number | undefined>(events[0]?.seq)
+  useLayoutEffect((): void => {
+    const prevFirstSeq = prevFirstSeqRef.current
+    const newFirstSeq = events[0]?.seq
+    prevFirstSeqRef.current = newFirstSeq
+
+    if (prevFirstSeq === undefined || newFirstSeq === undefined || newFirstSeq === prevFirstSeq) return // mount, reset, or no prepend
+
+    const oldFirstIndexInNew = events.findIndex((event) => event.seq === prevFirstSeq)
+    if (oldFirstIndexInNew <= 0) return // not a plain prepend (the previous first row is gone, or still first)
+
+    let addedHeight = 0
+    for (let i = 0; i < oldFirstIndexInNew; i += 1) {
+      const key = events[i]?.seq
+      addedHeight += (key !== undefined ? virtualizer.itemSizeCache.get(key) : undefined) ?? ESTIMATED_ROW_HEIGHT
+    }
+    const el = scrollRef.current
+    if (el !== null) el.scrollTop += addedHeight
+  }, [events, virtualizer])
 
   const handleScroll = (): void => {
+    if (!mountedRef.current) return
     const el = scrollRef.current
     if (el === null) return
 
-    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
-    onPinnedChange(distanceFromBottom <= ESTIMATED_ROW_HEIGHT)
+    onPinnedChange(derivePinned(el))
 
     if (el.scrollTop <= ESTIMATED_ROW_HEIGHT) {
       if (!nearTopFiredRef.current) {
