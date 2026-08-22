@@ -240,42 +240,45 @@ describe('flow.ts', () => {
 
 // ==================================================================================================
 // Particles -- the SVG overlay, mechanism only (Known Risk 1: rendered in isolation here, with no
-// real React Flow tree mounted, every particle takes the documented "no portal target yet" fallback
-// path -- exactly the mechanism, element count + `motion-safe:` class, Known Risk 1 says to assert
-// when the real portal path can't be proven in jsdom. The GraphClient block further down mounts a
-// real tree and *does* prove the portal path -- see its last test.)
+// real React Flow tree mounted, every particle's edge-lookup retries exhaust and it renders NOTHING
+// (fix-round-1, Important 3 -- an unresolved particle used to render a stray, unpositioned dot here;
+// it no longer renders at all until it finds a real edge). Proving "one motion-safe: particle
+// element per spawned particle" therefore needs a real edge to portal into -- that's the
+// `GraphClient` block further down, which mounts a real tree and proves the element mechanism and
+// the real `offset-path` value together.)
 // ==================================================================================================
 
 describe('Particles', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
+    vi.useRealTimers()
   })
 
-  it('renders one motion-safe:-classed particle element per particle', () => {
+  it('renders the particle-layer shell once mounted (no particles is a valid, empty steady state)', () => {
     stubMatchMedia(false)
-    const particles: Particle[] = [{ id: 'p1', edgeId: 'e1', expiresAt: 2_000 }]
-    render(<Particles particles={particles} />)
+    render(<Particles particles={[]} />)
 
-    const element = screen.getByTestId('particle')
-    expect(element.getAttribute('class')).toContain('motion-safe:animate-[particle-travel_600ms_linear]')
+    expect(screen.getByTestId('particle-layer')).toBeTruthy()
   })
 
-  it('renders one element per particle in the list', () => {
+  it('fix-round-1, Important 3: renders nothing for a particle whose edge never resolves -- no stray, unpositioned dot once retries exhaust', () => {
     stubMatchMedia(false)
-    const particles: Particle[] = [
-      { id: 'p1', edgeId: 'e1', expiresAt: 2_000 },
-      { id: 'p2', edgeId: 'e1', expiresAt: 2_000 },
-      { id: 'p3', edgeId: 'e2', expiresAt: 2_000 },
-    ]
-    render(<Particles particles={particles} />)
+    vi.useFakeTimers()
+    render(<Particles particles={[{ id: 'p1', edgeId: 'does-not-exist', expiresAt: 2_000 }]} />)
 
-    expect(screen.getAllByTestId('particle')).toHaveLength(3)
+    act(() => {
+      vi.advanceTimersByTime(200) // past the 5×20ms retry budget
+    })
+
+    expect(screen.queryByTestId('particle')).toBeNull()
+    // Only the unresolved particle's own dot is suppressed -- the layer itself (an empty overlay)
+    // still renders normally.
+    expect(screen.getByTestId('particle-layer')).toBeTruthy()
   })
 
-  it('under prefers-reduced-motion, the particle layer renders empty even with particles present', () => {
+  it('under prefers-reduced-motion, renders nothing at all once mounted -- not even the shell', () => {
     stubMatchMedia(true)
-    const particles: Particle[] = [{ id: 'p1', edgeId: 'e1', expiresAt: 2_000 }]
-    render(<Particles particles={particles} />)
+    render(<Particles particles={[{ id: 'p1', edgeId: 'e1', expiresAt: 2_000 }]} />)
 
     expect(screen.queryByTestId('particle-layer')).toBeNull()
     expect(screen.queryByTestId('particle')).toBeNull()
@@ -411,6 +414,59 @@ describe('DepsMode: completion wave', () => {
 
     await waitFor(() => expect(screen.getByTestId('rf__edge-task:t1->task:t2')).toBeTruthy())
     expect(screen.getByTestId('rf__edge-task:t1->task:t2').getAttribute('class')).not.toContain('edge-flash')
+  })
+
+  it('fix-round-1 Critical: an unrelated snapshot refetch mid-window does not suppress the clear, and a later remount does not replay it', async () => {
+    const before: GraphSnapshot = {
+      workspace: { id: 'w1', name: 'W', haltedReason: null },
+      teams: [],
+      agents: [],
+      tasks: [task({ id: 't1', status: 'running' }), task({ id: 't2', status: 'ready', dependenciesDone: false })],
+      dependencies: [{ taskId: 't2', dependsOnTaskId: 't1' }],
+    }
+    const afterDone: GraphSnapshot = { ...before, tasks: [{ ...before.tasks[0]!, status: 'done' }, before.tasks[1]!] }
+    // A refetch landing mid-window with no NEW completion (same statuses as `afterDone`, just an
+    // unrelated field change) -- exactly the shape the spec's 250ms debounce plus the completion
+    // burst itself (task.done, run.succeeded, the dependent's start events) makes near-certain
+    // inside the flash's own 800ms window.
+    const afterUnrelated: GraphSnapshot = { ...afterDone, tasks: [afterDone.tasks[0]!, { ...afterDone.tasks[1]!, priority: 2 }] }
+    // A later, genuinely different node/edge SET (a new task, forcing `useLayoutedGraph` to re-lay-
+    // out and React Flow to re-render its edges) -- t1->t2 must not carry a replayed flash on this
+    // remount even though nothing about t1 changed again.
+    const afterGrown: GraphSnapshot = {
+      ...afterUnrelated,
+      tasks: [...afterUnrelated.tasks, task({ id: 't3', status: 'ready', dependenciesDone: false })],
+      dependencies: [...afterUnrelated.dependencies, { taskId: 't3', dependsOnTaskId: 't2' }],
+    }
+
+    vi.useFakeTimers()
+    const { rerender } = render(<DepsMode workspaceId="w1" snapshot={before} />)
+    await vi.waitFor(() => expect(screen.getByTestId('rf__edge-task:t1->task:t2')).toBeTruthy())
+
+    rerender(<DepsMode workspaceId="w1" snapshot={afterDone} />)
+    await vi.waitFor(() => expect(screen.getByTestId('rf__edge-task:t1->task:t2').getAttribute('class')).toContain('edge-flash'))
+
+    // Mid-window (well before the 800ms clear), the unrelated refetch lands. Before the fix, this
+    // re-ran the effect, hit `turnedDone.length === 0`, and returned WITHOUT re-arming a clear --
+    // the timer that would have cleared the flash was cancelled as this same effect's own cleanup on
+    // that re-run, and nothing replaced it, so `flashingEdgeIds` stayed stuck forever.
+    act(() => {
+      vi.advanceTimersByTime(300)
+    })
+    rerender(<DepsMode workspaceId="w1" snapshot={afterUnrelated} />)
+
+    act(() => {
+      vi.advanceTimersByTime(600) // total 900ms since the flash started -- past its own 800ms window
+    })
+    await vi.waitFor(() => expect(screen.getByTestId('rf__edge-task:t1->task:t2').getAttribute('class')).not.toContain('edge-flash'))
+
+    // A later remount (new node/edge set -> a fresh ELK layout -> React Flow re-renders its edges)
+    // must not replay the now-cleared flash.
+    rerender(<DepsMode workspaceId="w1" snapshot={afterGrown} />)
+    await vi.waitFor(() => expect(screen.getByTestId('rf__edge-task:t2->task:t3')).toBeTruthy())
+    expect(screen.getByTestId('rf__edge-task:t1->task:t2').getAttribute('class')).not.toContain('edge-flash')
+
+    vi.useRealTimers()
   })
 })
 

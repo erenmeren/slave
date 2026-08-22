@@ -70,6 +70,20 @@ export function DepsMode({ workspaceId, snapshot }: { readonly workspaceId: stri
   // node border-flash idiom follows) -- only a *second* snapshot showing a new `done` counts.
   const previousStatusRef = useRef<ReadonlyMap<string, string> | null>(null)
   const [flashingEdgeIds, setFlashingEdgeIds] = useState<ReadonlySet<string>>(new Set())
+  // fix-round-1, Critical: held in a ref, not this effect's own cleanup return. A snapshot refetch
+  // (the 250ms debounce plus the completion burst itself -- task.done, run.succeeded, the
+  // dependent's start events -- makes one near-certain inside the flash's own 800ms window) re-runs
+  // this effect; if that refetch carries no NEW completion, the body returns above before ever
+  // touching a clear timer. When the timer WAS this effect's own cleanup, React cancelled it on that
+  // re-run and nothing replaced it -- `flashingEdgeIds` got stuck forever, and because
+  // `useLayoutedGraph` remounts edges on a node/edge SET change, a later remount replayed the stuck
+  // flash on an edge whose task hadn't just completed at all. `useStatusFlash` (`OrgNodes.tsx`/
+  // `TaskNodes.tsx`) never had this bug because its dependency is the primitive status itself, which
+  // only actually changes when there's something new to flash -- this effect's dependency is the
+  // whole `snapshot`, which changes on every refetch regardless. Keeping the timer in a ref removes
+  // the coupling: only a genuinely new completion ever touches it, and it fires on its own schedule
+  // no matter how many unrelated re-runs of this effect happen in between.
+  const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     const currentStatusById = new Map(snapshot.tasks.map((task) => [task.id, task.status]))
@@ -82,13 +96,27 @@ export function DepsMode({ workspaceId, snapshot }: { readonly workspaceId: stri
 
     const ids = new Set(turnedDone.flatMap((taskId) => outgoingEdgeIds(edges, taskId)))
     if (ids.size === 0) return
-    setFlashingEdgeIds(ids)
-    const timer = setTimeout(() => setFlashingEdgeIds(new Set()), EDGE_FLASH_MS)
-    return () => clearTimeout(timer)
+
+    // Union with whatever's already flashing (a second wave landing before the first one's 800ms
+    // elapsed extends rather than replaces it) and restart the single clear timer from here.
+    setFlashingEdgeIds((current) => new Set([...current, ...ids]))
+    if (flashTimerRef.current !== null) clearTimeout(flashTimerRef.current)
+    flashTimerRef.current = setTimeout(() => {
+      setFlashingEdgeIds(new Set())
+      flashTimerRef.current = null
+    }, EDGE_FLASH_MS)
     // `edges` (the pre-layout topology from `buildDepsGraph`) rather than `visibleEdges`: it's
     // always complete (never filtered on a pending async layout) and is exactly what
     // `outgoingEdgeIds` needs to match against.
   }, [snapshot, edges])
+
+  // The only other place the timer is ever cancelled: unmount. A component swap (org <-> deps mode)
+  // must not leave a stray `setState` call scheduled against an unmounted `DepsMode`.
+  useEffect(() => {
+    return () => {
+      if (flashTimerRef.current !== null) clearTimeout(flashTimerRef.current)
+    }
+  }, [])
 
   const flashedEdges: Edge[] = useMemo(
     () => visibleEdges.map((edge) => (flashingEdgeIds.has(edge.id) ? { ...edge, className: EDGE_FLASH_CLASS_NAME } : edge)),

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { prefersReducedMotion, type Particle } from './flow'
 
@@ -17,55 +17,68 @@ import { prefersReducedMotion, type Particle } from './flow'
  * itself renders for that edge, right alongside its `<path class="react-flow__edge-path">`. A
  * portaled node lives in that `<g>`'s DOM subtree, so it inherits the exact same pan/zoom transform
  * as the edge it's traveling along, for free, with no coordinate math of our own. The circle's own
- * `offset-path` is set (an effect keyed on the resolved target) to the *same* `d` string read
- * straight off that sibling `<path>` -- no separate path data, no drift between what the edge draws
- * and what the particle rides.
+ * `offset-path` is read straight off that sibling `<path>`'s `d` string at the moment the portal
+ * target resolves -- no separate path data, no drift between what the edge draws and what the
+ * particle rides.
  *
- * `ParticleDot` always renders via `createPortal` -- even before a real edge target is found, it
- * portals into `Particles`' own `<svg>` layer (the `fallback` prop) rather than switching between
- * "portal" and "plain inline child" across renders. Portaling into a *different* container on a
- * later render is a container-only change for React's reconciler (the same portal fiber, same
- * `<circle>` child type/key -- it moves the existing DOM node); switching between a portal and a
- * plain child is a fiber-type change, which unmounts and remounts the DOM node instead -- discarding
- * the very `ref` an earlier attempt (see git history) mutated directly, so the offset-path it set
- * never survived onto the node that actually ends up inside the edge.
+ * **Unresolved particles render nothing** (fix-round-1, Important 3): an earlier version portaled
+ * into a fallback layer while the real edge target was still being looked up, which meant a
+ * particle whose retry budget exhausted (edge never found) rendered as a static, unpositioned dot
+ * sitting at the canvas origin -- a stray blob conveying nothing, the opposite of spec §6's "density
+ * under load is the information" point. `ParticleDot` now returns `null` until (and unless) it finds
+ * its edge, and renders the circle -- with its `offset-path` already known, so no imperative DOM
+ * mutation or second render is needed -- only once a real target exists.
  *
  * Known Risk 1 (task-8 brief): the portal target (`[data-testid="rf__edge-<id>"] path...`) does not
  * exist in jsdom for a component test that renders `<Particles>` in isolation (no real React Flow
- * tree mounted) -- every particle in that case just portals into the `fallback` layer forever
- * (retried a few times, then gives up), which is exactly the mechanism -- element count,
- * `motion-safe:` class -- Known Risk 1 says to assert when the real portal target can't be proven in
- * jsdom. The *portal into a real edge* / *offset-path visually follows the curve* half of this is
- * proven concretely by `graph-flow.test.tsx`'s `GraphClient` integration block (a real React Flow
- * tree, real edge DOM) and left to the milestone gate's by-eyes pass for final visual confirmation.
+ * tree mounted) -- every particle in that case renders nothing at all once its retries exhaust
+ * (`graph-flow.test.tsx`'s `Particles` describe block pins exactly this). Proving "one motion-safe:
+ * particle element per spawned particle" therefore now requires a real edge to portal into --
+ * `graph-flow.test.tsx`'s `GraphClient` integration block mounts a real React Flow tree and proves
+ * both the element mechanism and the real `offset-path` value together. The *portal into a real
+ * edge visually follows the curve* half of that (as opposed to merely having the right `d` string)
+ * is left to the milestone gate's by-eyes pass for final visual confirmation.
  */
 export function Particles({ particles }: { readonly particles: readonly Particle[] }): React.JSX.Element | null {
-  // A callback ref (not `useRef` read in an effect): fires synchronously during commit, so the very
-  // first render that has ANY particle to place also already has a valid fallback portal target --
-  // no "first paint has nowhere to portal into yet" gap for `ParticleDot` to special-case.
-  const [layer, setLayer] = useState<SVGSVGElement | null>(null)
+  // fix-round-1, Important 2: `prefersReducedMotion()` reads `window.matchMedia`, which is `false`
+  // during SSR (no `window`) regardless of the real client's preference -- calling it directly in
+  // the render body meant the server always emitted the `<svg>` shell, and a reduced-motion client's
+  // very first (hydration) render would call the real `matchMedia` and return `null` instead: a
+  // hydration mismatch on exactly the a11y path. `mounted` starts `false` identically on the server
+  // and the client's first render (neither ever calls `prefersReducedMotion()` before it flips), so
+  // that first render can never diverge; only the *second*, effect-driven render -- client-only,
+  // strictly after hydration has already reconciled -- is allowed to consult the real preference.
+  //
+  // This reads the preference once, on mount, not via a `matchMedia` change-event listener -- a
+  // user who toggles their OS-level reduced-motion setting while this page stays open on screen
+  // will not see this layer react until something else re-renders it (a new particle spawning) or
+  // the page is revisited. A live listener would close that gap; not added here to keep this fix
+  // scoped to the hydration bug it was asked to fix, noted for a future pass if that gap matters.
+  const [mounted, setMounted] = useState(false)
+  useEffect(() => {
+    setMounted(true)
+  }, [])
 
-  // Spec §6: "under prefers-reduced-motion: no particles at all" -- checked here too (not only at
-  // the spawn site in `GraphClient.tsx`) so the layer renders nothing even if a particle is somehow
-  // already in state when the preference is read (e.g. it changed mid-session).
+  if (!mounted) return null
+  // Spec §6: "under prefers-reduced-motion: no particles at all."
   if (prefersReducedMotion()) return null
 
   return (
     // `pointer-events-none`: this layer must never intercept a click/drag meant for the canvas
     // underneath. Positioned `absolute inset-0` over `GraphCanvas`'s own wrapper (its sibling in
-    // `GraphClient.tsx`) purely so a particle whose portal target hasn't resolved yet (see
-    // `ParticleDot`) has a valid `<svg>` parent to portal into, rather than sitting in plain HTML --
-    // every particle that *does* find its edge moves away from here entirely, into that edge's own
-    // `<g>`, so this element is otherwise empty in the steady state.
-    <svg ref={setLayer} data-testid="particle-layer" aria-hidden="true" className="pointer-events-none absolute inset-0 h-full w-full overflow-visible">
-      {layer !== null && particles.map((particle) => <ParticleDot key={particle.id} particle={particle} fallback={layer} />)}
+    // `GraphClient.tsx`) -- every particle that resolves its edge portals away from here entirely,
+    // so this element is otherwise empty in the steady state.
+    <svg data-testid="particle-layer" aria-hidden="true" className="pointer-events-none absolute inset-0 h-full w-full overflow-visible">
+      {particles.map((particle) => (
+        <ParticleDot key={particle.id} particle={particle} />
+      ))}
     </svg>
   )
 }
 
 /** How many times, and how far apart, `ParticleDot` retries finding its portal target before
- *  giving up and staying on the fallback layer for its whole lifetime. Needed because React Flow
- *  measures each edge's handle bounds asynchronously (a `ResizeObserver` callback, at least one
+ *  giving up (rendering nothing for that particle's whole remaining lifetime). Needed because React
+ *  Flow measures each edge's handle bounds asynchronously (a `ResizeObserver` callback, at least one
  *  tick after the node/edge first mounts or re-renders -- the exact same "not measured yet" window
  *  the Task 5 report documents for *nodes*) -- a particle spawned in the same tick as its edge
  *  (re-)appearing can lose a one-shot lookup to that window. 5 × 20ms = 100ms of budget, comfortably
@@ -74,13 +87,13 @@ export function Particles({ particles }: { readonly particles: readonly Particle
 const PORTAL_LOOKUP_ATTEMPTS = 5
 const PORTAL_LOOKUP_RETRY_MS = 20
 
-function ParticleDot({ particle, fallback }: { readonly particle: Particle; readonly fallback: Element }): React.JSX.Element {
-  const circleRef = useRef<SVGCircleElement>(null)
-  const [target, setTarget] = useState<Element | null>(null)
+function ParticleDot({ particle }: { readonly particle: Particle }): React.JSX.Element | null {
+  // Both the DOM node AND its `d` string are captured together, at the moment the lookup succeeds
+  // -- the circle's `offset-path` is then known before it's ever rendered, so there's no separate
+  // "mount unpositioned, then mutate" step (and nothing for a portal/reconciliation timing quirk to
+  // discard -- see the file's own doc comment on the fiber-type-change bug an earlier version hit).
+  const [target, setTarget] = useState<{ readonly element: Element; readonly d: string } | null>(null)
 
-  // Retry-find the edge's own DOM group (see `PORTAL_LOOKUP_ATTEMPTS`'s doc comment). Only sets
-  // `target`; the actual `offset-path` write happens in the effect below, keyed on `target`, so it
-  // always runs against whichever DOM node the `ref` is *currently* attached to.
   useEffect(() => {
     let cancelled = false
     let attempt = 0
@@ -88,8 +101,10 @@ function ParticleDot({ particle, fallback }: { readonly particle: Particle; read
     const tryFind = (): void => {
       if (cancelled) return
       const edgeGroup = document.querySelector(`[data-testid="rf__edge-${particle.edgeId}"]`)
-      if (edgeGroup !== null) {
-        setTarget(edgeGroup)
+      const path = edgeGroup?.querySelector('path.react-flow__edge-path')
+      const d = path?.getAttribute('d')
+      if (edgeGroup !== null && edgeGroup !== undefined && typeof d === 'string') {
+        setTarget({ element: edgeGroup, d })
         return
       }
       attempt += 1
@@ -102,20 +117,19 @@ function ParticleDot({ particle, fallback }: { readonly particle: Particle; read
     }
   }, [particle.edgeId])
 
-  // Applies `offset-path` once the real edge target resolves, reading its `d` fresh off the
-  // sibling `<path>` at that moment -- runs *after* the portal has already moved the circle into
-  // `target` (this effect's own dependency, `target`, changing is what schedules that render), so
-  // `circleRef.current` is guaranteed to be the node that's actually inside the edge by the time
-  // this runs.
-  useEffect(() => {
-    if (target === null || circleRef.current === null) return
-    const path = target.querySelector('path.react-flow__edge-path')
-    const d = path?.getAttribute('d')
-    if (typeof d === 'string') circleRef.current.style.setProperty('offset-path', `path('${d}')`)
-  }, [target])
+  // Unresolved (still retrying, or retries exhausted): render nothing rather than a meaningless,
+  // unpositioned dot at the canvas origin (fix-round-1, Important 3) -- a stray static blob would
+  // read as ambient motion happening nowhere in particular, which is worse than the particle simply
+  // not appearing for its (rare, ~100ms-budget) unresolved window.
+  if (target === null) return null
 
-  const circle = (
-    <circle ref={circleRef} data-testid="particle" r={3} className="fill-status-working motion-safe:animate-[particle-travel_600ms_linear]" />
+  return createPortal(
+    <circle
+      data-testid="particle"
+      r={3}
+      className="fill-status-working motion-safe:animate-[particle-travel_600ms_linear]"
+      style={{ offsetPath: `path('${target.d}')` }}
+    />,
+    target.element,
   )
-  return createPortal(circle, target ?? fallback)
 }
