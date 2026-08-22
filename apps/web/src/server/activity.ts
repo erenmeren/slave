@@ -23,6 +23,14 @@ export interface ActivityHistoryPage {
 export interface ActivityPage extends ActivityHistoryPage {
   readonly workspace: { readonly id: string; readonly name: string; readonly haltedReason: string | null }
   readonly sparkline: readonly number[]
+  /** The workspace's agent/task rosters, `{id, name|title}[]` only — everything the page needs
+   *  for the FilterBar's two multi-selects and for resolving a card's `agentName`/`taskTitle`
+   *  from an event's bare `agentId`/`taskId`. Two lightweight selects (no `include`, no run/task
+   *  rows) alongside the existing history + sparkline queries, so the page still costs one server
+   *  round-trip; deliberately not a third snapshot builder (`buildOverviewSnapshot` and
+   *  `buildTasksSnapshot` already own the *full* agent/task shapes their own pages need). */
+  readonly agents: readonly { readonly id: string; readonly name: string }[]
+  readonly tasks: readonly { readonly id: string; readonly title: string }[]
 }
 
 export const ACTIVITY_PAGE_LIMIT_DEFAULT = 100
@@ -134,9 +142,11 @@ export async function buildActivityPage(workspaceId: string): Promise<ActivityPa
   const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId } })
   if (workspace === null) return null
 
-  const [history, sparkline] = await Promise.all([
+  const [history, sparkline, agents, tasks] = await Promise.all([
     buildActivityHistory(workspaceId, EMPTY_ACTIVITY_FILTERS, {}),
     toolCallSparkline(workspaceId),
+    prisma.agent.findMany({ where: { team: { workspaceId } }, select: { id: true, name: true }, orderBy: { name: 'asc' } }),
+    prisma.task.findMany({ where: { workspaceId }, select: { id: true, title: true }, orderBy: { title: 'asc' } }),
   ])
 
   return {
@@ -145,5 +155,7 @@ export async function buildActivityPage(workspaceId: string): Promise<ActivityPa
     events: history!.events,
     nextBefore: history!.nextBefore,
     sparkline,
+    agents,
+    tasks,
   }
 }

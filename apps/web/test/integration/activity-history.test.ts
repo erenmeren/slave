@@ -265,6 +265,19 @@ describe('buildActivityHistory', () => {
     it('returns null for an unknown workspace', async (): Promise<void> => {
       expect(await buildActivityPage('00000000-0000-4000-8000-000000000000')).toBeNull()
     })
+
+    it('carries the workspace agent/task rosters for the FilterBar and card name resolution', async (): Promise<void> => {
+      const page = await buildActivityPage(fixture.workspaceId)
+
+      expect(page?.agents).toEqual([
+        { id: fixture.agentId1, name: 'Alex' },
+        { id: fixture.agentId2, name: 'Bianca' },
+      ])
+      expect(page?.tasks).toEqual([
+        { id: fixture.taskId1, title: 'Add the thing' },
+        { id: fixture.taskId2, title: 'Fix the other thing' },
+      ])
+    })
   })
 
   it('the route 400s malformed filters and 404s an unknown workspace', async (): Promise<void> => {

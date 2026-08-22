@@ -1,0 +1,109 @@
+'use client'
+
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useActivityStream } from '../../hooks/useActivityStream'
+import { useUrlFilters } from '../../hooks/useUrlFilters'
+import type { ActivityPage } from '../../server/activity'
+import { Sidebar } from '../Sidebar'
+import { TopBar } from '../TopBar'
+import { FilterBar } from './FilterBar'
+import { Timeline, type TimelineHandle } from './Timeline'
+
+/**
+ * The activity page's client shell: Sidebar + TopBar (workspace name is static from the initial
+ * server snapshot — only `connection` is live, same as `TasksClient`) + `FilterBar` + a sparkline
+ * slot (Task 9 fills the SVG; this renders the container and the raw numbers so the layout and
+ * data plumbing are already correct) + the virtualized `Timeline`.
+ *
+ * Live-follow etiquette: `pinned` starts `true` (a freshly loaded page is scrolled to the newest
+ * event) and flips on `Timeline`'s `onPinnedChange` report of the viewport's own scroll position.
+ * While pinned, every newly arrived event scrolls the viewport to the bottom, so the "N new
+ * events" badge never has anything to accumulate. Once unpinned, arriving events instead bump
+ * `pendingCount`; clicking the badge scrolls to the bottom, clears the count, and re-pins.
+ */
+export function ActivityClient({
+  workspaceId,
+  initial,
+}: {
+  readonly workspaceId: string
+  readonly initial: ActivityPage
+}): React.JSX.Element {
+  const { filters, kinds, rawTypes, setKinds, setRawTypes, setAgents, setTasks } = useUrlFilters()
+  const { events, connection, loadOlder, sparkline } = useActivityStream({ workspaceId, filters, initial })
+
+  const agentNameById = useMemo(() => new Map(initial.agents.map((agent) => [agent.id, agent.name])), [initial.agents])
+  const taskTitleById = useMemo(() => new Map(initial.tasks.map((task) => [task.id, task.title])), [initial.tasks])
+
+  const [pinned, setPinned] = useState(true)
+  const [pendingCount, setPendingCount] = useState(0)
+  const timelineRef = useRef<TimelineHandle>(null)
+  // Seeded from the initial event count (not 0): the mount render must not itself read as "N new
+  // events arrived".
+  const previousCountRef = useRef(events.length)
+
+  useEffect((): void => {
+    const added = events.length - previousCountRef.current
+    previousCountRef.current = events.length
+    if (added <= 0) return
+    if (pinned) {
+      timelineRef.current?.scrollToBottom()
+    } else {
+      setPendingCount((count) => count + added)
+    }
+  }, [events.length, pinned])
+
+  const handlePinnedChange = (next: boolean): void => {
+    setPinned(next)
+    if (next) setPendingCount(0)
+  }
+
+  const handleJumpToBottom = (): void => {
+    timelineRef.current?.scrollToBottom()
+    setPinned(true)
+    setPendingCount(0)
+  }
+
+  return (
+    <div className="flex min-h-screen w-full">
+      <Sidebar workspaceId={workspaceId} />
+      <div className="flex flex-1 flex-col">
+        <TopBar workspaceName={initial.workspace.name} connection={connection} budget={null} />
+        <FilterBar
+          agents={initial.agents}
+          tasks={initial.tasks}
+          filters={filters}
+          kinds={kinds}
+          rawTypes={rawTypes}
+          setKinds={setKinds}
+          setRawTypes={setRawTypes}
+          setAgents={setAgents}
+          setTasks={setTasks}
+        />
+        <div data-testid="sparkline-slot" className="border-b border-line px-3 py-2 text-xs text-text-3">
+          {sparkline.join(' ')}
+        </div>
+        <div className="relative flex flex-1 flex-col overflow-hidden">
+          <Timeline
+            ref={timelineRef}
+            events={events}
+            workspaceId={workspaceId}
+            agentNameById={agentNameById}
+            taskTitleById={taskTitleById}
+            onPinnedChange={handlePinnedChange}
+            onNearTop={loadOlder}
+          />
+          {pendingCount > 0 && (
+            <button
+              type="button"
+              data-testid="new-events-badge"
+              onClick={handleJumpToBottom}
+              className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full border border-line bg-bg-2 px-3 py-1.5 text-xs text-text-1 shadow-lg"
+            >
+              ↓ {pendingCount} new event{pendingCount === 1 ? '' : 's'}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}

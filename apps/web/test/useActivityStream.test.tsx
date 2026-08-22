@@ -41,6 +41,8 @@ const INITIAL: ActivityPage = {
   events: [row(3), row(2), row(1)],
   nextBefore: 1,
   sparkline: [0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+  agents: [],
+  tasks: [],
 }
 
 describe('useActivityStream', () => {

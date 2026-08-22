@@ -1,23 +1,36 @@
 // @vitest-environment jsdom
 import { render, screen } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Sidebar } from '../src/components/Sidebar.js'
 import { TopBar } from '../src/components/TopBar.js'
 
+let pathname = '/w/w1'
+
 vi.mock('next/navigation', () => ({
-  usePathname: () => '/w/w1',
+  usePathname: () => pathname,
 }))
 
 describe('the shell', () => {
-  it('shows Overview as the current page and Tasks as a live link', () => {
+  afterEach(() => {
+    pathname = '/w/w1'
+  })
+
+  it('shows Overview as the current page and Tasks/Activity as live links', () => {
     render(<Sidebar workspaceId="w1" />)
     expect(screen.getByText('Overview')).toHaveProperty('ariaCurrent', 'page')
     expect(screen.getByText('Tasks').getAttribute('href')).toBe('/w/w1/tasks')
-    // The still-inert entries are the roadmap rendered as chrome — present, inert, and honest
-    // about why (spec §7). Rendering them enabled would invite clicks into nothing.
-    for (const label of ['Activity', 'Graph']) {
-      expect(screen.getByText(label).getAttribute('aria-disabled')).toBe('true')
-    }
+    expect(screen.getByText('Activity').getAttribute('href')).toBe('/w/w1/activity')
+    expect(screen.getByText('Activity').getAttribute('aria-disabled')).toBeNull()
+    // Graph is still the roadmap rendered as chrome — present, inert, and honest about why (spec
+    // §7). Rendering it enabled would invite clicks into nothing.
+    expect(screen.getByText('Graph').getAttribute('aria-disabled')).toBe('true')
+  })
+
+  it('marks Activity aria-current on the activity route', () => {
+    pathname = '/w/w1/activity'
+    render(<Sidebar workspaceId="w1" />)
+    expect(screen.getByText('Activity')).toHaveProperty('ariaCurrent', 'page')
+    expect(screen.getByText('Overview')).not.toHaveProperty('ariaCurrent', 'page')
   })
 
   it('turns the budget bar amber past 80% and red past 100%', () => {

@@ -7,9 +7,10 @@ import { usePathname } from 'next/navigation'
 const LIVE = [
   { label: 'Overview', path: (workspaceId: string) => `/w/${workspaceId}` },
   { label: 'Tasks', path: (workspaceId: string) => `/w/${workspaceId}/tasks` },
+  { label: 'Activity', path: (workspaceId: string) => `/w/${workspaceId}/activity` },
 ] as const
 
-const INERT = ['Activity', 'Graph'] as const
+const INERT = ['Graph'] as const
 
 /** The roadmap rendered as chrome: future pages are visible but inert (spec §7). */
 export function Sidebar({ workspaceId }: { readonly workspaceId: string }): React.JSX.Element {
