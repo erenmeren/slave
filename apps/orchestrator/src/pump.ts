@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { promisify } from 'node:util'
+import { killWithEscalation } from '@ai-team-os/control'
 import { prisma } from '@ai-team-os/db/client'
 import type { AgentId, RunId, TaskId, WorkspaceId } from '@ai-team-os/domain'
 import { appendEvent } from '@ai-team-os/events'
@@ -334,6 +335,24 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
           // Who asked, when the flag file says. §6 lists it as provenance and nothing wrote it.
           requestedBy: readPauseRequester(input.spawn?.pauseFlagPath),
         })
+
+        // The real CLI does not exit on a hook deny (M5 live-gate finding 1): it treats the deny
+        // as an ordinary tool error and keeps working -- retrying the denied write, reaching for
+        // an un-gated tool like Read, arguing in its own transcript that the block "may be
+        // transient". Nothing else in this process's path kills it: the daemon's `pause.ts`
+        // writes the pause flag straight to disk rather than through the adapter's own
+        // `requestPause`, so the adapter's built-in kill-on-deny never arms for a daemon-driven
+        // pause -- this is the only place left that observes the deny and can act on it. Kill
+        // only now, after the checkpoint write above has landed (or declined to, just below):
+        // killing first would risk losing the resume point if the checkpoint write itself failed
+        // partway through.
+        //
+        // Unconditional on whether a checkpoint actually got written. A run with no spawn facts
+        // or no session id cannot be resumed by anyone (`writeCheckpoint`'s own early return) --
+        // but that is a reason to kill, not a reason not to: a run nobody can resume is a run an
+        // operator can only wait out or kill by hand, and a live, ungated child left running
+        // under it is strictly worse than a dead one, resumable or not.
+        await killWithEscalation(startingRow.pid)
         await emit('run.paused', 'system', { atStep: toolCalls })
         break
       }

@@ -1,9 +1,29 @@
+import { spawn } from 'node:child_process'
+import { isAlive } from '@ai-team-os/control'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@ai-team-os/db'
 import { prisma } from '@ai-team-os/db/client'
 import { agentId, runId, taskId, workspaceId } from '@ai-team-os/domain'
 import type { RunOutcome, RuntimeEvent } from '@ai-team-os/providers'
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { OUTPUT_CAP, pumpRun } from '../../src/pump.js'
+
+/**
+ * A real, never-exiting child standing in for the real CLI after a hook deny (M5 live-gate
+ * finding 1): the real `claude` process does not exit on a deny -- it treats it as an ordinary
+ * tool error and keeps working. `fromArray`'s synthetic stream already matches that shape (it
+ * sends no `terminated` event after `hook_denied`); what it cannot exercise on its own is whether
+ * something actually kills the process the pid names. This spawns one so that part can be
+ * asserted on directly, the same way `adapter-resume.test.ts`'s live-pid tests do.
+ */
+async function spawnNeverExiting(): Promise<number> {
+  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 60_000)'], { stdio: 'ignore' })
+  await new Promise<void>((resolve, reject) => {
+    child.once('spawn', () => resolve())
+    child.once('error', reject)
+  })
+  if (child.pid === undefined) throw new Error('spawnNeverExiting: child did not receive a pid')
+  return child.pid
+}
 
 afterAll(async (): Promise<void> => {
   await prisma.$disconnect()
@@ -541,6 +561,76 @@ describe('pumpRun', () => {
     // operator's view of what the agent was about to do.
     const checkpoint = await prisma.checkpoint.findUniqueOrThrow({ where: { runId: ids.runId } })
     expect(checkpoint.deniedToolUseIds).toEqual(['tu_denied'])
+  })
+
+  it('kills the run process once the checkpoint lands, so a real CLI that keeps working after a hook deny does not stay alive', async (): Promise<void> => {
+    const pid = await spawnNeverExiting()
+    await prisma.agentRun.update({ where: { id: ids.runId }, data: { pid, worktreePath: '/tmp' } })
+
+    try {
+      const outcome = await pumpRun({
+        ...ids,
+        spawn: {
+          settingsPath: '/tmp/settings.json',
+          pauseFlagPath: '/tmp/pause.flag',
+          hookPath: '/tmp/pause-gate.sh',
+          gitIdentity: { name: 'Alex', email: 'alex@aiteamos.local' },
+        },
+        events: fromArray([
+          { kind: 'session_started', sessionId: 's-1' },
+          { kind: 'tool_call', toolUseId: 'tu_1', toolName: 'Bash', summary: 'Bash echo hi' },
+          { kind: 'hook_denied', hookName: 'PreToolUse', reason: 'operator asked to pause' },
+        ]),
+      })
+
+      expect(outcome).toBeNull()
+      expect(isAlive(pid)).toBe(false)
+
+      // The checkpoint must have landed before the process was killed -- this only proves it
+      // exists, `writeCheckpoint`'s own test proves its contents.
+      await expect(prisma.checkpoint.findUniqueOrThrow({ where: { runId: ids.runId } })).resolves.toBeTruthy()
+
+      // Recorded as a pause, not laundered into a failure by the stream ending with no
+      // `terminated` event -- the same shape the fake CLI already produces after a deny, now true
+      // of the real CLI too because the pump is what kills it.
+      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      expect(run.status).toBe('paused')
+      const types = await eventTypesFor(ids.runId)
+      expect(types).toContain('run.paused')
+      expect(types).not.toContain('run.failed')
+    } finally {
+      try {
+        process.kill(pid, 'SIGKILL')
+      } catch {
+        // Already dead -- that is the point of the test.
+      }
+    }
+  })
+
+  it('still kills the run process on a hook deny when no checkpoint could be written', async (): Promise<void> => {
+    // No `spawn` facts and no prior `session_started` event: `writeCheckpoint` bails out with
+    // "nothing could resume it" rather than writing a half checkpoint. The run cannot be resumed
+    // by anyone either way, so the decision here is that killing still happens -- a run nobody
+    // can resume is not an excuse to leave a live, ungated child behind; it is the opposite case,
+    // since the checkpoint that would have let a careful operator watch for this can never exist.
+    const pid = await spawnNeverExiting()
+    await prisma.agentRun.update({ where: { id: ids.runId }, data: { pid } })
+
+    try {
+      await pumpRun({
+        ...ids,
+        events: fromArray([{ kind: 'hook_denied', hookName: 'PreToolUse', reason: 'operator asked to pause' }]),
+      })
+
+      expect(isAlive(pid)).toBe(false)
+      await expect(prisma.checkpoint.findUnique({ where: { runId: ids.runId } })).resolves.toBeNull()
+    } finally {
+      try {
+        process.kill(pid, 'SIGKILL')
+      } catch {
+        // Already dead -- that is the point of the test.
+      }
+    }
   })
 
   it('does not overwrite a run an operator already stopped', async (): Promise<void> => {

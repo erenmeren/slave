@@ -292,13 +292,15 @@ describe('ClaudeCodeAdapter.resume', () => {
     ).rejects.toThrow()
   })
 
-  it('surfaces the pause-flag error before the hookPath error when both are wrong, pinning clearAndVerifyPauseFlagAbsent before runPreflightGate', async (): Promise<void> => {
-    // Pins the order the coordinator ruled load-bearing (fix round 3): clearAndVerifyPauseFlagAbsent
-    // must run before runPreflightGate -- not just for finding A's liveness-check timing (see the
+  it('surfaces the hookPath error before the pause-flag error when both are wrong, pinning runPreflightGate before clearAndVerifyPauseFlagAbsent', async (): Promise<void> => {
+    // Pins the order the M5 live-gate fix put in place: runPreflightGate must run before
+    // clearAndVerifyPauseFlagAbsent -- not just for finding A's liveness-check timing (see the
     // comment at resume()'s own ordering site), but as its own, separately-swappable pair of lines.
     // No other test in this file gives both checks something to fail on at the same time, so
     // swapping these two lines would stay green everywhere else; this one deliberately hands both
-    // a reason to fail and asserts on which error actually surfaces.
+    // a reason to fail and asserts on which error actually surfaces. (Before the M5 fix this order
+    // was reversed -- the pause-flag error surfaced first -- because clearAndVerifyPauseFlagAbsent
+    // ran first; it was moved after the live-pid check, which itself sits after runPreflightGate.)
     const blockedFlagPath = path.join(worktreePath, 'stuck-pause-order.flag')
     mkdirSync(blockedFlagPath)
 
@@ -308,7 +310,7 @@ describe('ClaudeCodeAdapter.resume', () => {
         { ...checkpoint, pauseFlagPath: blockedFlagPath, hookPath: 'relative/pause-gate.sh' },
         null,
       ),
-    ).rejects.toThrow(/pause flag/)
+    ).rejects.toThrow(/absolute/)
   })
 
   it('refuses to resume a runId whose previous process is still running, and does not kill it', async (): Promise<void> => {
@@ -370,6 +372,62 @@ describe('ClaudeCodeAdapter.resume', () => {
       // pid tracking is what makes cleanup independent of the very bookkeeping under test. No
       // assertion in this block, deliberately: a failed cleanup must never mask an earlier
       // assertion failure by throwing over it in `finally`.
+      for (const pid of pids) {
+        try {
+          process.kill(pid, 'SIGKILL')
+        } catch {
+          // already gone
+        }
+      }
+    }
+  })
+
+  it('leaves the pause flag in place when a resume is refused for a live pid', async (): Promise<void> => {
+    // M5 live-gate finding 1: clearing the flag before the live-pid refusal opens the gate for a
+    // still-live child the refusal just declined to adopt -- a refused resume must not un-gate
+    // anything. Same live-child setup as the test above, but this one writes a real pause flag
+    // file first and asserts on *its* survival, not just the process's.
+    const liveRunId = makeRunId('run-resume-live-child-flag')
+    const liveFlagPath = path.join(worktreePath, 'live-pause-flag-order.flag')
+    const liveInput: StartRunInput = {
+      ...input,
+      runId: liveRunId,
+      pauseFlagPath: liveFlagPath,
+    }
+    const liveAdapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'hang'] })
+    const pids: number[] = []
+
+    try {
+      const handle = await liveAdapter.start(liveInput)
+      pids.push(handle.pid)
+      expect(isAlive(handle.pid)).toBe(true)
+
+      writeFileSync(liveFlagPath, 'operator pause\n')
+      expect(existsSync(liveFlagPath)).toBe(true)
+
+      const liveCheckpoint: Checkpoint = {
+        ...checkpoint,
+        worktreePath: liveInput.worktreePath,
+        pauseFlagPath: liveInput.pauseFlagPath,
+        settingsPath: liveInput.settingsPath,
+        hookPath: liveInput.hookPath,
+      }
+
+      let rejection: unknown
+      try {
+        const resumedHandle = await liveAdapter.resume(liveRunId, liveCheckpoint, null)
+        pids.push(resumedHandle.pid)
+      } catch (error) {
+        rejection = error
+      }
+
+      expect(rejection).toBeInstanceOf(Error)
+      expect((rejection as Error).message).toMatch(/still running/)
+
+      // The point of this test: a refused resume must not have cleared the flag on its way to
+      // refusing. The still-live child's next tool call must still see it and stay gated.
+      expect(existsSync(liveFlagPath)).toBe(true)
+    } finally {
       for (const pid of pids) {
         try {
           process.kill(pid, 'SIGKILL')

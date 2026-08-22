@@ -678,15 +678,15 @@ export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
 
   /**
    * See the `AgentRuntimeAdapter.resume` docstring for the contract. This implementation, in
-   * order (fix round 2 added steps 2 and 3; the order itself is deliberate, not incidental):
+   * order (fix round 2 added steps 1 and 2; the M5 live-gate fix reordered step 3 below step 2;
+   * the order itself is deliberate, not incidental):
    *
-   * 1. Clears and verifies `checkpoint.pauseFlagPath` (`clearAndVerifyPauseFlagAbsent` below) --
-   *    the load-bearing step, first, before anything else.
-   * 2. Re-arms the pause gate at `checkpoint.hookPath` (`runPreflightGate`, shared with `start()`)
+   * 1. Re-arms the pause gate at `checkpoint.hookPath` (`runPreflightGate`, shared with `start()`)
    *    -- finding B: without this, `hookPath` travels in the checkpoint and is read by nothing,
    *    and a hook that lost its exec bit or was pruned between pause and resume spawns silently
-   *    instead of failing loudly here.
-   * 3. Refuses to clobber a still-live process already registered under `runId` -- finding A:
+   *    instead of failing loudly here. First, so its delay (it spawns the hook script twice) has
+   *    already run by the time step 2 below reads the child's liveness.
+   * 2. Refuses to clobber a still-live process already registered under `runId` -- finding A:
    *    `spawnChild`'s `this.runs.set` is unconditional, and `resume()` makes an already-registered
    *    `runId` the *expected* input rather than a caller error, so a live entry left behind by an
    *    earlier `awaitPause` timeout or `gate_failed` (neither of which kills the child) would
@@ -695,34 +695,43 @@ export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
    *    `spawnChild` replaces the map entry, so a consumer still `for await`-ing the old queue (the
    *    orchestrator's pump) is woken with `done: true` instead of hanging on an object `events()`
    *    will never hand out again.
+   * 3. Clears and verifies `checkpoint.pauseFlagPath` (`clearAndVerifyPauseFlagAbsent` below) --
+   *    moved here, *after* step 2, by the M5 live-gate fix (finding 1): a refused resume must not
+   *    open the gate for the live child it just declined to adopt. Before this change the flag was
+   *    cleared first, unconditionally, so a resume refused for a live pid still un-gated it --
+   *    live in production, the refused resume let a still-running real CLI keep writing under a
+   *    run already marked `failed`. Defence in depth: the pump now kills the child before a
+   *    checkpoint's pause is ever recorded (see `apps/orchestrator/src/pump.ts`'s `hook_denied`
+   *    handling), so by the time any resume reaches here the pid should already be dead and step 2
+   *    should never throw in practice -- this ordering is what keeps the guarantee true regardless.
    * 4. Builds a fresh `StartRunInput`-shaped object entirely from `checkpoint` and the arguments
    *    given -- `settingsPath`, `hookPath` and `gitIdentity` (the latter reassembled from
-   *    `checkpoint.gitAuthorName`/`gitAuthorEmail`) come from the checkpoint itself (fix round 1),
-   *    not from any prior in-memory record of `runId`, which is what makes resuming a `runId` this
-   *    adapter instance never `start()`-ed work. The checkpoint's worktree and pause-flag path are
-   *    its authoritative view of "where this run currently lives"; the resume prompt replaces the
-   *    original one; everything else carries forward -- then spawns it through the exact same
-   *    `spawnChild` pipeline `start()` uses, with `--resume <sessionId>` appended.
+   *    `checkpoint.gitAuthorName`/`checkpoint.gitAuthorEmail`) come from the checkpoint itself
+   *    (fix round 1), not from any prior in-memory record of `runId`, which is what makes resuming
+   *    a `runId` this adapter instance never `start()`-ed work. The checkpoint's worktree and
+   *    pause-flag path are its authoritative view of "where this run currently lives"; the resume
+   *    prompt replaces the original one; everything else carries forward -- then spawns it through
+   *    the exact same `spawnChild` pipeline `start()` uses, with `--resume <sessionId>` appended.
    */
   async resume(runId: RunId, checkpoint: Checkpoint, queuedInstruction: string | null): Promise<RunHandle> {
-    await clearAndVerifyPauseFlagAbsent(checkpoint.pauseFlagPath, runId)
     await this.runPreflightGate(checkpoint.hookPath, runId)
 
-    // Fix round 3, the coordinator's ruling: this order is load-bearing for the live-child check
-    // just below, not merely convenient. Probed 200 times against a real child process: readline's
-    // `'close'` on `child.stdout` fires *before* the child's own `'exit'` event in 200/200 runs,
-    // and at that exact instant `child.exitCode === null && child.signalCode === null` still holds
-    // -- meaning the liveness predicate below does not mean "the process is dead", it means "Node
-    // has observed the stream end", and a caller that drains `events()` to completion and calls
-    // `resume()` immediately afterward is inside a real, measured false-positive window where the
-    // predicate would wrongly read "still alive". `clearAndVerifyPauseFlagAbsent` (two async fs
-    // calls) and `runPreflightGate` (spawns the hook script twice, tens of milliseconds) above are
-    // what close that window before the check below ever runs -- by the time control reaches here,
-    // enough real wall-clock time has elapsed that the false positive has already resolved itself.
-    // Finding B's preflight fix is thus load-bearing for finding A's correctness, not just its own
-    // concern: moving the check below ahead of `runPreflightGate` (or dropping the preflight
-    // entirely) would reopen a real spurious "still running" throw against a run that has, in
-    // fact, already finished. Do not reorder these three steps without re-measuring this.
+    // Fix round 3, the coordinator's ruling, still true after the M5 reorder above: this order is
+    // load-bearing for the live-child check just below, not merely convenient. Probed 200 times
+    // against a real child process: readline's `'close'` on `child.stdout` fires *before* the
+    // child's own `'exit'` event in 200/200 runs, and at that exact instant
+    // `child.exitCode === null && child.signalCode === null` still holds -- meaning the liveness
+    // predicate below does not mean "the process is dead", it means "Node has observed the stream
+    // end", and a caller that drains `events()` to completion and calls `resume()` immediately
+    // afterward is inside a real, measured false-positive window where the predicate would wrongly
+    // read "still alive". `runPreflightGate` above (spawns the hook script twice, tens of
+    // milliseconds) is what closes that window before the check below ever runs -- by the time
+    // control reaches here, enough real wall-clock time has elapsed that the false positive has
+    // already resolved itself. Finding B's preflight fix is thus load-bearing for finding A's
+    // correctness, not just its own concern: moving the check below ahead of `runPreflightGate`
+    // (or dropping the preflight entirely) would reopen a real spurious "still running" throw
+    // against a run that has, in fact, already finished. Do not reorder these two steps without
+    // re-measuring this.
     const existing = this.runs.get(runId)
     if (existing !== undefined) {
       if (existing.child.exitCode === null && existing.child.signalCode === null) {
@@ -744,6 +753,10 @@ export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
       // woken by anything that happens to the new one.
       existing.queue.close()
     }
+
+    // M5 live-gate finding 1: after the live-pid check above, never before it -- see the docstring
+    // above `resume()` for why this ordering itself is the fix.
+    await clearAndVerifyPauseFlagAbsent(checkpoint.pauseFlagPath, runId)
 
     const resumedInput: StartRunInput = {
       runId,
