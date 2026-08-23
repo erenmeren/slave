@@ -113,7 +113,15 @@ export async function concludeReview(runId: RunId): Promise<void> {
     return
   }
 
-  // Reject: the same rework machinery a failed verify uses, shared via `rejectTask`.
+  // Reject: the same rework machinery a failed verify uses, shared via `rejectTask`. Guarded the
+  // way `advance()` guards on ADVANCEABLE, and for the same two reasons: a reject landing after an
+  // operator cancelled the task must not resurrect it, and a replayed conclusion for the same run
+  // (whose row legitimately stays `succeeded`) must not charge a second attempt. The approve and
+  // invalid branches get this from their conditioned updates; a bare `rejectTask` would not.
+  if (task.status !== 'reviewing') {
+    console.warn(`[review] ignoring a reject verdict for task ${task.id}, which is ${task.status}`)
+    return
+  }
   const counted = await rejectTask(brandTaskId(task.id), parsed.value.reason)
   await appendEvent({
     type: 'task.review_rejected',

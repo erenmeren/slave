@@ -5,10 +5,10 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@ai-team-os/db'
 import { prisma } from '@ai-team-os/db/client'
-import { workspaceId as brandWorkspaceId } from '@ai-team-os/domain'
+import { runId as brandRunId, workspaceId as brandWorkspaceId } from '@ai-team-os/domain'
 import { ClaudeCodeAdapter } from '@ai-team-os/providers'
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { buildReviewPrompt, dispatchReviews } from '../../src/review.js'
+import { buildReviewPrompt, concludeReview, dispatchReviews } from '../../src/review.js'
 import { drainPumps, tick, type TickDeps } from '../../src/tick.js'
 
 const repoRoot = fileURLToPath(new URL('../../../../', import.meta.url))
@@ -283,6 +283,25 @@ describe('dispatchReviews', () => {
       reason: 'The diff does not handle the empty-input case the task requires.',
       attempt: 1,
     })
+  })
+
+  it('ignores a replayed reject conclusion: no second attempt charged, no duplicate event', async (): Promise<void> => {
+    const reviewDeps = await seedReviewingTask(fixture, 'review-reject')
+    await addReviewer()
+
+    const started = await dispatchReviews(reviewDeps)
+    expect(started).toHaveLength(1)
+    await drainPumps()
+
+    // The run row stays `succeeded` after a reject, so a crashed-and-restarted daemon (or any
+    // duplicate pump settlement) can legally call the conclusion again for the same run.
+    const run = await prisma.agentRun.findFirstOrThrow({ where: { kind: 'review' } })
+    await concludeReview(brandRunId(run.id))
+
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+    expect(task.status).toBe('rework')
+    expect(task.attempt).toBe(1)
+    expect(await eventsOf(fixture.workspaceId, 'task_review_rejected')).toHaveLength(1)
   })
 
   it('rejects at the attempt cap: fails the task instead of sending it back', async (): Promise<void> => {
