@@ -7,8 +7,7 @@ import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@ai-team-os
 import { prisma } from '@ai-team-os/db/client'
 import { workspaceId as brandWorkspaceId } from '@ai-team-os/domain'
 import { ClaudeCodeAdapter, type AgentRuntimeAdapter, type StartRunInput } from '@ai-team-os/providers'
-import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { resetTickObservation } from '../../src/sweep.js'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { drainPumps, tick, type TickDeps } from '../../src/tick.js'
 
 const repoRoot = fileURLToPath(new URL('../../../../', import.meta.url))
@@ -258,10 +257,16 @@ describe('tick', () => {
     await tick(deps)
     expect(await warningEvents()).toBe(1)
 
-    // Restart semantics (spec §5): the one-shot must be a durable existence check, not the
-    // in-memory `haltAnnounced` map, or a daemon restart would re-announce the same warning.
-    resetTickObservation()
-    await tick(deps)
+    // Restart semantics (spec §5): the one-shot must be a durable existence check, not ANY
+    // in-memory latch. A real restart is simulated by discarding every module-level state:
+    // `vi.resetModules()` plus a fresh import re-evaluates tick.ts and everything it pulls in,
+    // so a Map-based latch would come back empty, re-announce, and fail the count below --
+    // `resetTickObservation()` alone cannot falsify that implementation. The drain first: the
+    // fresh module has its own pumps set, invisible to the static `drainPumps` in afterEach.
+    await drainPumps()
+    vi.resetModules()
+    const fresh = await import('../../src/tick.js')
+    await fresh.tick(deps)
     expect(await warningEvents()).toBe(1)
   })
 
