@@ -4,6 +4,7 @@ import type { TaskStatus } from '@ai-team-os/domain'
 import { useSelectedId } from '../hooks/useSelectedId'
 import { useTasks } from '../hooks/useTasks'
 import type { TasksSnapshot } from '../server/tasks'
+import { HaltBanner } from './HaltBanner'
 import { Sidebar } from './Sidebar'
 import { TaskColumn } from './TaskColumn'
 import { TaskDetailPanel } from './TaskDetailPanel'
@@ -65,7 +66,14 @@ export function TasksClient({
     <div className="flex min-h-screen w-full">
       <Sidebar workspaceId={workspaceId} />
       <div className={`flex flex-1 flex-col ${error !== null ? 'opacity-60' : ''}`}>
-        <TopBar workspaceName={view.workspace.name} connection={connection} budget={null} />
+        <TopBar
+          workspaceId={workspaceId}
+          workspaceName={view.workspace.name}
+          connection={connection}
+          budget={null}
+          halted={view.workspace.haltedReason !== null}
+        />
+        {view.workspace.haltedReason !== null && <HaltBanner reason={view.workspace.haltedReason} />}
         {error !== null && (
           <div role="alert" className="border-b border-status-warn/40 bg-status-warn/10 px-4 py-1.5 text-xs text-status-warn">
             showing stale data: {error}

@@ -1,12 +1,15 @@
 import type React from 'react'
+import { EmergencyStopButton } from './EmergencyStopButton'
 
 export interface TopBarProps {
+  readonly workspaceId: string
   readonly workspaceName: string
   readonly connection: 'connected' | 'reconnecting'
   readonly budget: { readonly spentUsd: number; readonly budgetUsd: number } | null
+  readonly halted: boolean
 }
 
-export function TopBar({ workspaceName, connection, budget }: TopBarProps): React.JSX.Element {
+export function TopBar({ workspaceId, workspaceName, connection, budget, halted }: TopBarProps): React.JSX.Element {
   const ratio = budget === null || budget.budgetUsd <= 0 ? 0 : budget.spentUsd / budget.budgetUsd
   const barColor = ratio >= 1 ? 'bg-status-danger' : ratio >= 0.8 ? 'bg-status-warn' : 'bg-status-working'
   return (
@@ -18,16 +21,19 @@ export function TopBar({ workspaceName, connection, budget }: TopBarProps): Reac
         />
         {connection}
       </span>
-      {budget !== null && (
-        <span data-testid="budget" className="ml-auto flex items-center gap-2 text-xs text-text-2">
-          <span className="font-mono">
-            ${budget.spentUsd.toFixed(2)} / ${budget.budgetUsd.toFixed(2)}
+      <span className="ml-auto flex items-center gap-3">
+        {budget !== null && (
+          <span data-testid="budget" className="flex items-center gap-2 text-xs text-text-2">
+            <span className="font-mono">
+              ${budget.spentUsd.toFixed(2)} / ${budget.budgetUsd.toFixed(2)}
+            </span>
+            <span className="h-1.5 w-24 overflow-hidden rounded bg-bg-2">
+              <span className={`block h-full ${barColor}`} style={{ width: `${Math.min(100, ratio * 100)}%` }} />
+            </span>
           </span>
-          <span className="h-1.5 w-24 overflow-hidden rounded bg-bg-2">
-            <span className={`block h-full ${barColor}`} style={{ width: `${Math.min(100, ratio * 100)}%` }} />
-          </span>
-        </span>
-      )}
+        )}
+        <EmergencyStopButton workspaceId={workspaceId} halted={halted} />
+      </span>
     </header>
   )
 }

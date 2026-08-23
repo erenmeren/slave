@@ -155,6 +155,27 @@ describe('buildOverviewSnapshot', () => {
     expect(snapshot?.tasks).toEqual({ active: 3, blocked: 1, done: 1, failed: 1 })
   })
 
+  it('counts a task under review and one in the merge queue as active, not vanished (M8a Task 12)', async () => {
+    for (const status of ['reviewing', 'merging'] as const) {
+      await prisma.task.create({
+        data: {
+          workspaceId: fixture.workspaceId,
+          title: status,
+          description: 'x',
+          status,
+          requiredRole: 'backend',
+          maxAttempts: 3,
+        },
+      })
+    }
+
+    const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
+
+    // The seeded fixture task is `running`, plus the two just created: 3 active, none blocked/
+    // done/failed.
+    expect(snapshot?.tasks).toEqual({ active: 3, blocked: 0, done: 0, failed: 0 })
+  })
+
   it('carries the halt verbatim', async (): Promise<void> => {
     await prisma.workspace.update({
       where: { id: fixture.workspaceId },

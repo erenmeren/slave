@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useActivityStream } from '../../hooks/useActivityStream'
 import { useUrlFilters } from '../../hooks/useUrlFilters'
 import type { ActivityPage } from '../../server/activity'
+import { HaltBanner } from '../HaltBanner'
 import { Sidebar } from '../Sidebar'
 import { Sparkline } from '../Sparkline'
 import { TopBar } from '../TopBar'
@@ -89,7 +90,14 @@ export function ActivityClient({
     <div className="flex min-h-screen w-full">
       <Sidebar workspaceId={workspaceId} />
       <div className="flex flex-1 flex-col">
-        <TopBar workspaceName={initial.workspace.name} connection={connection} budget={null} />
+        <TopBar
+          workspaceId={workspaceId}
+          workspaceName={initial.workspace.name}
+          connection={connection}
+          budget={null}
+          halted={initial.workspace.haltedReason !== null}
+        />
+        {initial.workspace.haltedReason !== null && <HaltBanner reason={initial.workspace.haltedReason} />}
         <FilterBar
           agents={initial.agents}
           tasks={initial.tasks}

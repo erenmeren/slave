@@ -27,9 +27,11 @@ export function OverviewClient({
       <Sidebar workspaceId={workspaceId} />
       <div className={`flex flex-1 flex-col ${error !== null ? 'opacity-60' : ''}`}>
         <TopBar
+          workspaceId={workspaceId}
           workspaceName={view.workspace.name}
           connection={connection}
           budget={{ spentUsd: view.workspace.spentUsd, budgetUsd: view.workspace.budgetUsd }}
+          halted={view.workspace.haltedReason !== null}
         />
         {view.workspace.haltedReason !== null && <HaltBanner reason={view.workspace.haltedReason} />}
         {error !== null && (

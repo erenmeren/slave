@@ -55,7 +55,10 @@ export interface OverviewSnapshot {
   readonly tasks: { readonly active: number; readonly blocked: number; readonly done: number; readonly failed: number }
 }
 
-const ACTIVE_TASK_STATUSES = ['ready', 'running', 'verifying', 'rework'] as const
+// A task under review or in the merge queue is still active work, not a vanished one — widened
+// (M8a Task 12) from the M5-era four to also cover `reviewing`/`merging`, the two verify-passed
+// states that sit between a run finishing and the task landing on `main`.
+const ACTIVE_TASK_STATUSES = ['ready', 'running', 'verifying', 'reviewing', 'merging', 'rework'] as const
 
 export async function buildOverviewSnapshot(workspaceId: string): Promise<OverviewSnapshot | null> {
   const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId } })
