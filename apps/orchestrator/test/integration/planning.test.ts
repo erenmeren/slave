@@ -1,0 +1,243 @@
+import { execFileSync } from 'node:child_process'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { DOMAIN_EVENT_TYPE_BY_DB_VALUE } from '@ai-team-os/db'
+import { prisma } from '@ai-team-os/db/client'
+import { workspaceId as brandWorkspaceId } from '@ai-team-os/domain'
+import { ClaudeCodeAdapter } from '@ai-team-os/providers'
+import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { buildPlanningPrompt, dispatchPlanning } from '../../src/planning.js'
+import { drainPumps, type TickDeps } from '../../src/tick.js'
+
+const repoRoot = fileURLToPath(new URL('../../../../', import.meta.url))
+const FAKE = join(repoRoot, 'packages/providers/test/fake-claude.mjs')
+const REAL_GATE = join(repoRoot, 'scripts/pause-gate.sh')
+
+function git(args: readonly string[], cwd: string): string {
+  return execFileSync('git', [...args], { cwd, encoding: 'utf8' }).trim()
+}
+
+/** A real repository: the planning run's `worktreePath` is the primary checkout itself. */
+function makeRepo(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'aiteamos-planning-'))
+  git(['init', '-q', '-b', 'main'], dir)
+  git(['config', 'user.name', 'Fixture'], dir)
+  git(['config', 'user.email', 'fixture@example.com'], dir)
+  writeFileSync(join(dir, 'README.md'), '# fixture\n')
+  git(['add', '-A'], dir)
+  git(['commit', '-q', '-m', 'initial'], dir)
+  return dir
+}
+
+interface Fixture {
+  readonly workspaceId: string
+  readonly teamId: string
+  readonly repoPath: string
+}
+
+async function seed(goal: string | null): Promise<Fixture> {
+  const repoPath = makeRepo()
+  const workspace = await prisma.workspace.create({
+    data: {
+      name: 'Checkout Platform',
+      repoPath,
+      baseBranch: 'main',
+      verifyCommands: ['true'],
+      setupCommands: [],
+      goal,
+    },
+  })
+  const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
+  return { workspaceId: workspace.id, teamId: team.id, repoPath }
+}
+
+async function addManager(teamId: string, name = 'Atlas'): Promise<string> {
+  const agent = await prisma.agent.create({ data: { teamId, name, role: 'manager' } })
+  return agent.id
+}
+
+function depsFor(workspaceId: string, fixture = 'm8-flow', hookPath = REAL_GATE): TickDeps {
+  return {
+    workspaceId: brandWorkspaceId(workspaceId),
+    adapter: new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', fixture] }),
+    hookPath,
+  }
+}
+
+describe('dispatchPlanning', () => {
+  const repos: string[] = []
+
+  beforeEach(async (): Promise<void> => {
+    await prisma.$executeRawUnsafe(
+      'TRUNCATE TABLE "ExecutionEvent", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
+    )
+  })
+
+  afterEach(async (): Promise<void> => {
+    await drainPumps()
+  })
+
+  afterAll(async (): Promise<void> => {
+    for (const repo of repos) rmSync(repo, { recursive: true, force: true })
+    await prisma.$disconnect()
+  })
+
+  it('(a) starts a planning run when the goal is set, the board is empty and a manager is idle', async (): Promise<void> => {
+    const fixture = await seed('Ship the checkout redesign')
+    repos.push(fixture.repoPath)
+    await addManager(fixture.teamId)
+
+    const runId = await dispatchPlanning(depsFor(fixture.workspaceId))
+
+    expect(runId).not.toBeNull()
+    const run = await prisma.agentRun.findFirstOrThrow({ where: { kind: 'planning' } })
+    expect(run.kind).toBe('planning')
+    expect(run.taskId).toBeNull()
+
+    await drainPumps()
+    const events = await prisma.executionEvent.findMany({ where: { runId: run.id }, orderBy: { seq: 'asc' } })
+    const outputEvents = events.filter(
+      (event) => DOMAIN_EVENT_TYPE_BY_DB_VALUE[event.type] === 'run.output',
+    )
+    expect(outputEvents.length).toBeGreaterThan(0)
+    for (const event of outputEvents) expect(event.taskId).toBeNull()
+  })
+
+  it('(b) starts nothing when a task already exists, regardless of status', async (): Promise<void> => {
+    const fixture = await seed('Ship the checkout redesign')
+    repos.push(fixture.repoPath)
+    await addManager(fixture.teamId)
+    await prisma.task.create({
+      data: {
+        workspaceId: fixture.workspaceId,
+        title: 'Pre-existing task',
+        description: 'already on the board',
+        status: 'backlog',
+        maxAttempts: 3,
+      },
+    })
+
+    const runId = await dispatchPlanning(depsFor(fixture.workspaceId))
+
+    expect(runId).toBeNull()
+    expect(await prisma.agentRun.count({ where: { kind: 'planning' } })).toBe(0)
+  })
+
+  it('(c) starts nothing with no goal set', async (): Promise<void> => {
+    const fixture = await seed(null)
+    repos.push(fixture.repoPath)
+    await addManager(fixture.teamId)
+
+    const runId = await dispatchPlanning(depsFor(fixture.workspaceId))
+
+    expect(runId).toBeNull()
+    expect(await prisma.agentRun.count({ where: { kind: 'planning' } })).toBe(0)
+  })
+
+  it('(d) starts nothing a second time while the planning run it started is still live', async (): Promise<void> => {
+    const fixture = await seed('Ship the checkout redesign')
+    repos.push(fixture.repoPath)
+    await addManager(fixture.teamId)
+    const deps = depsFor(fixture.workspaceId)
+
+    // Not awaited beyond the dispatch itself -- the pump outlives this call by design, exactly as
+    // `dispatchReview`'s own precedent (review.test.ts) relies on: the fake CLI's spawn and its
+    // first line both take real time, so the run is still non-terminal when the second call reads
+    // it a moment later.
+    const first = await dispatchPlanning(deps)
+    expect(first).not.toBeNull()
+
+    const second = await dispatchPlanning(deps)
+
+    expect(second).toBeNull()
+    expect(await prisma.agentRun.count({ where: { kind: 'planning' } })).toBe(1)
+  })
+
+  it('(e) escalates once with no manager-role agent in the workspace, and starts nothing', async (): Promise<void> => {
+    const fixture = await seed('Ship the checkout redesign')
+    repos.push(fixture.repoPath)
+    // No manager-role agent exists.
+
+    const first = await dispatchPlanning(depsFor(fixture.workspaceId))
+    expect(first).toBeNull()
+
+    const second = await dispatchPlanning(depsFor(fixture.workspaceId))
+    expect(second).toBeNull()
+
+    expect(await prisma.agentRun.count({ where: { kind: 'planning' } })).toBe(0)
+    const guardrails = await prisma.executionEvent.findMany({
+      where: { workspaceId: fixture.workspaceId, type: 'guardrail_tripped' },
+    })
+    const noPlannerEvents = guardrails.filter(
+      (event) => (event.payload as { guardrail?: string }).guardrail === 'no_planner',
+    )
+    expect(noPlannerEvents).toHaveLength(1)
+    expect(noPlannerEvents[0]?.taskId).toBeNull()
+  })
+
+  it('(f) starts nothing once two planning runs newer than the goal have failed', async (): Promise<void> => {
+    const fixture = await seed('Ship the checkout redesign')
+    repos.push(fixture.repoPath)
+    const managerId = await addManager(fixture.teamId)
+
+    const now = new Date()
+    await prisma.agentRun.create({
+      data: {
+        agentId: managerId,
+        kind: 'planning',
+        status: 'failed',
+        startedAt: now,
+        terminalAt: now,
+        endedAt: now,
+      },
+    })
+    await prisma.agentRun.create({
+      data: {
+        agentId: managerId,
+        kind: 'planning',
+        status: 'failed',
+        startedAt: now,
+        terminalAt: now,
+        endedAt: now,
+      },
+    })
+
+    const runId = await dispatchPlanning(depsFor(fixture.workspaceId))
+
+    expect(runId).toBeNull()
+    expect(await prisma.agentRun.count({ where: { kind: 'planning' } })).toBe(2)
+  })
+
+  it('(h) records a real run.failed with no taskId when the spawn itself fails', async (): Promise<void> => {
+    const fixture = await seed('Ship the checkout redesign')
+    repos.push(fixture.repoPath)
+    await addManager(fixture.teamId)
+    // A relative hookPath makes `ClaudeCodeAdapter.start`'s pre-flight gate throw before a
+    // process is ever spawned -- the spawn-failure branch, exercised for real rather than by
+    // hand-inserting a row.
+    const deps = depsFor(fixture.workspaceId, 'm8-flow', 'relative/pause-gate.sh')
+
+    const runId = await dispatchPlanning(deps)
+
+    expect(runId).toBeNull()
+    const run = await prisma.agentRun.findFirstOrThrow({ where: { kind: 'planning' } })
+    expect(run.status).toBe('failed')
+    expect(run.taskId).toBeNull()
+
+    const failures = await prisma.executionEvent.findMany({ where: { runId: run.id, type: 'run_failed' } })
+    expect(failures).toHaveLength(1)
+    expect(failures[0]?.taskId).toBeNull()
+  })
+})
+
+describe('buildPlanningPrompt', () => {
+  it('(g) contains the task-graph marker and the goal text', () => {
+    const prompt = buildPlanningPrompt('Ship the checkout redesign')
+
+    expect(prompt).toContain('"task graph"')
+    expect(prompt).not.toContain('"verdict"')
+    expect(prompt).toContain('Ship the checkout redesign')
+  })
+})

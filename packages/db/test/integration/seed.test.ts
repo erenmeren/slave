@@ -26,6 +26,11 @@ describe('seed data', () => {
       'Riley',
       'Sarah',
     ])
+
+    // Lowercase, matching the M8b planning dispatch's exact-match `role === 'manager'` -- the
+    // same convention `role === 'reviewer'` (M8a) already follows.
+    const atlas = agents.find((agent) => agent.name === 'Atlas')
+    expect(atlas?.role).toBe('manager')
   })
 
   it('creates one task in every task status', async () => {

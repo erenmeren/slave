@@ -6,7 +6,9 @@ const WORKSPACE_ID = '00000000-0000-4000-8000-000000000001'
 const TEAMS = ['Management', 'Engineering', 'Security', 'Product', 'Marketing'] as const
 
 const AGENTS: readonly { name: string; role: string; team: (typeof TEAMS)[number] }[] = [
-  { name: 'Atlas', role: 'AI Manager', team: 'Management' },
+  // Lowercase, matching the M8b planning dispatch's exact-match `role === 'manager'` -- the same
+  // convention `dispatchReview` uses for `role === 'reviewer'`.
+  { name: 'Atlas', role: 'manager', team: 'Management' },
   { name: 'Alex', role: 'Backend', team: 'Engineering' },
   { name: 'Emma', role: 'Frontend', team: 'Engineering' },
   { name: 'Daniel', role: 'DevOps', team: 'Engineering' },

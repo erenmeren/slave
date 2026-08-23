@@ -83,7 +83,12 @@ export async function runDaemon(deps: DaemonDeps): Promise<void> {
   const coalescer = createCoalescer(async (): Promise<void> => {
     try {
       const report = await tick(deps)
-      if (report.started.length > 0 || report.halted !== null || report.reviewsStarted.length > 0) {
+      if (
+        report.started.length > 0 ||
+        report.halted !== null ||
+        report.planningStarted !== null ||
+        report.reviewsStarted.length > 0
+      ) {
         process.stdout.write(`${JSON.stringify(report)}\n`)
       }
     } catch (error) {

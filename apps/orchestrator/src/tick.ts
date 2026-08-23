@@ -14,6 +14,7 @@ import {
 import { appendEvent } from '@ai-team-os/events'
 import { type AgentRuntimeAdapter, writeSettingsFile } from '@ai-team-os/providers'
 import { runMergePass } from './merge.js'
+import { dispatchPlanning } from './planning.js'
 import { pumpRun } from './pump.js'
 import { executeResume } from './resume.js'
 import { dispatchReviews } from './review.js'
@@ -37,6 +38,8 @@ export interface TickReport {
   readonly started: readonly RunId[]
   readonly halted: string | null
   readonly skippedNoRole: number
+  /** The planning run this tick started, or `null` when none did (M8b). */
+  readonly planningStarted: RunId | null
   readonly reviewsStarted: readonly RunId[]
 }
 
@@ -195,7 +198,7 @@ export async function tick(deps: TickDeps): Promise<TickReport> {
         await pauseActiveRuns(deps.workspaceId, 'budget guardrail', 'guardrail')
       }
     }
-    return { started: [], halted: halt.reason, skippedNoRole, reviewsStarted: [] }
+    return { started: [], halted: halt.reason, skippedNoRole, planningStarted: null, reviewsStarted: [] }
   }
   haltAnnounced.set(deps.workspaceId, false)
 
@@ -239,6 +242,12 @@ export async function tick(deps: TickDeps): Promise<TickReport> {
 
   await resumeRequestedRuns(deps)
 
+  // Before the review pass, not after: a planning run works toward an empty board, which
+  // `dispatchReviews` (task-scoped) has nothing to do with either way -- the order only matters
+  // for `TickReport`'s own field order (spec: planning, then reviews) and for reading one tick's
+  // JSON line top to bottom the way the pipeline actually runs.
+  const planningStarted = await dispatchPlanning(deps)
+
   const reviewsStarted = await dispatchReviews(deps)
 
   // After the review pass, not before: a task cannot reach `merging` until a review approves it,
@@ -247,7 +256,7 @@ export async function tick(deps: TickDeps): Promise<TickReport> {
   // `runMergePass` itself.
   await runMergePass(deps.workspaceId)
 
-  return { started, halted: null, skippedNoRole, reviewsStarted }
+  return { started, halted: null, skippedNoRole, planningStarted, reviewsStarted }
 }
 
 /**

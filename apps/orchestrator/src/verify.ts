@@ -185,6 +185,13 @@ export async function verifyConcludedRun(runId: RunId): Promise<void> {
   })
   if (run === null || run.status !== 'succeeded') return
 
+  // Temporary (Task 6): a succeeded `planning` run has no task and no tree to verify -- it
+  // produced a task graph, not a diff. Task 7 replaces this guard with `concludePlanning`, which
+  // parses that graph and creates the tasks it describes. Without this, the non-review branch
+  // below's `task === null` check would throw into this pump's `.catch`, surfacing a concluded
+  // planning run as noise rather than the planning conclusion Task 7 gives it.
+  if (run.kind === 'planning') return
+
   if (run.kind === 'review') {
     // A review run's succeeded process has produced text, not a tree to check out -- `concludeReview`
     // judges that text (spec §3.2) rather than running the workspace's verify commands against it.
