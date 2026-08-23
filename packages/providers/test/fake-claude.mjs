@@ -20,11 +20,20 @@
 //                  terminal `result` line whose payload carries this
 //                  process's own `process.env`, so a later task can prove
 //                  git identity and the pause-flag path reach the child.
+//   m8a-flow       synthetic, selected by prompt content rather than a fixed
+//                  fixture name: makes the unattended M8a gate real end to
+//                  end. A review prompt (containing `"verdict"`, the literal
+//                  substring the review prompt always carries) replays the
+//                  `review-approve` fixture with no side effect; any other
+//                  prompt is treated as a work run, which leaves a real
+//                  commit in the worktree (cwd) before replaying `complete`,
+//                  so the merge pass downstream has something to merge.
 //   anything else  replays `fixtures/<name>.ndjson` verbatim, exit 0 -- real
 //                  captures show process exit code 0 even for hook-crash,
 //                  hook-deny, and permission-denied runs, so the fake matches
 //                  that rather than inventing a nonzero exit for them.
-import { readFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
@@ -63,6 +72,14 @@ async function writeLines(lines) {
     process.stdout.write(`${line}\n`)
     if (lineDelayMs > 0) await sleep(lineDelayMs)
   }
+}
+
+/** Replays `fixtures/<name>.ndjson` verbatim and exits 0 -- the default-branch body, factored out
+ * so the `m8a-flow` synthetic mode can delegate to it after doing its own side effect. */
+async function replayFixture(name) {
+  const lines = readFixtureLines(name)
+  await writeLines(lines)
+  process.exit(0)
 }
 
 async function main() {
@@ -122,9 +139,22 @@ async function main() {
     process.exit(0)
   }
 
-  const lines = readFixtureLines(fixtureName)
-  await writeLines(lines)
-  process.exit(0)
+  if (fixtureName === 'm8a-flow') {
+    const promptIndex = args.indexOf('-p')
+    const prompt = promptIndex === -1 ? '' : (args[promptIndex + 1] ?? '')
+    if (prompt.includes('"verdict"')) {
+      await replayFixture('review-approve')
+      return
+    }
+    // A work run: leave a real commit in the worktree (cwd), then replay success.
+    writeFileSync(path.join(process.cwd(), 'm8a-work.txt'), `${prompt.slice(0, 80)}\n`)
+    execFileSync('git', ['-c', 'user.name=Fake Claude', '-c', 'user.email=fake@aiteamos.local', 'add', '-A'], { cwd: process.cwd() })
+    execFileSync('git', ['-c', 'user.name=Fake Claude', '-c', 'user.email=fake@aiteamos.local', 'commit', '-q', '-m', 'fake work'], { cwd: process.cwd() })
+    await replayFixture('complete')
+    return
+  }
+
+  await replayFixture(fixtureName)
 }
 
 main()

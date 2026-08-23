@@ -1,8 +1,10 @@
-import { execFile } from 'node:child_process'
+import { execFile, execFileSync } from 'node:child_process'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { promisify } from 'node:util'
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 const run = promisify(execFile)
 
@@ -146,5 +148,58 @@ describe('fake-claude', () => {
     await new Promise((resolve) => setTimeout(resolve, 200))
     expect(sawExit).toBe(false)
     child.kill('SIGKILL')
+  })
+
+  it('review-approve replays a fixture whose text carries an approve verdict', async (): Promise<void> => {
+    const { stdout } = await run('node', [FAKE, '--fixture', 'review-approve'])
+    const result = parseLines(stdout).find((l) => l.type === 'result') as { result?: string } | undefined
+    expect(result?.result).toContain('"verdict":"approve"')
+  })
+
+  describe('m8a-flow', () => {
+    let repoDir: string
+
+    beforeEach(() => {
+      repoDir = mkdtempSync(path.join(tmpdir(), 'fake-claude-m8a-flow-'))
+      execFileSync('git', ['init', '-q'], { cwd: repoDir })
+      execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q', '--allow-empty', '-m', 'initial commit'], {
+        cwd: repoDir,
+      })
+    })
+
+    afterEach(() => {
+      rmSync(repoDir, { recursive: true, force: true })
+    })
+
+    it('a work run leaves a real commit in the worktree and replays the complete fixture', async (): Promise<void> => {
+      const before = execFileSync('git', ['log', '--oneline'], { cwd: repoDir }).toString().trim().split('\n')
+      expect(before.length).toBe(1)
+
+      const { stdout } = await run('node', [FAKE, '--fixture', 'm8a-flow', '-p', 'work on it'], { cwd: repoDir })
+
+      const after = execFileSync('git', ['log', '--oneline'], { cwd: repoDir }).toString().trim().split('\n')
+      expect(after.length).toBe(2)
+
+      const completeFixture = await import('node:fs/promises').then((fs) =>
+        fs.readFile(path.join(FIXTURES_DIR, 'complete.ndjson'), 'utf8'),
+      )
+      const expectedResultLine = completeFixture.trim().split('\n').find((l) => JSON.parse(l).type === 'result')
+      expect(expectedResultLine).toBeDefined()
+      expect(stdout).toContain(expectedResultLine as string)
+    })
+
+    it('a review run (prompt containing "verdict") replays the approval fixture and makes no commit', async (): Promise<void> => {
+      const before = execFileSync('git', ['log', '--oneline'], { cwd: repoDir }).toString().trim().split('\n')
+      expect(before.length).toBe(1)
+
+      const { stdout } = await run('node', [FAKE, '--fixture', 'm8a-flow', '-p', 'respond with "verdict" json'], {
+        cwd: repoDir,
+      })
+
+      const after = execFileSync('git', ['log', '--oneline'], { cwd: repoDir }).toString().trim().split('\n')
+      expect(after.length).toBe(1)
+      const result = parseLines(stdout).find((l) => l.type === 'result') as { result?: string } | undefined
+      expect(result?.result).toContain('"verdict":"approve"')
+    })
   })
 })
