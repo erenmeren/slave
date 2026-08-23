@@ -1,7 +1,7 @@
 import { realpathSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { claimResume, refusalText, requestPause, requestStop } from '@ai-team-os/control'
+import { claimResume, emergencyStop, refusalText, requestPause, requestStop } from '@ai-team-os/control'
 import { prisma } from '@ai-team-os/db/client'
 import { workspaceId as brandWorkspaceId, type WorkspaceId } from '@ai-team-os/domain'
 import { ClaudeCodeAdapter } from '@ai-team-os/providers'
@@ -21,6 +21,9 @@ const USAGE = `usage: orchestrator <command> [options]
   resume --run <id> [--message <text>] continue a paused run, with an optional instruction
   cancel --run <id>                    stop a run for good; its worktree is preserved
   clear-halt --workspace <id>          retract a WORKSPACE-WIDE safety halt
+  emergency-stop --workspace <id> [--by <name>]
+                                       halt scheduling on the WHOLE workspace AND pause every
+                                       active run in it -- the operator's stop-everything button
 
   clear-halt and resume are different actions and it matters which you reach for.
   resume --run continues ONE paused run that is waiting to be continued.
@@ -296,6 +299,19 @@ export async function main(argv: readonly string[]): Promise<number> {
       process.stdout.write(
         `cleared the safety halt on ${workspaceId}. This starts nothing by itself: it removes the ` +
           `reason nothing was starting.\n`,
+      )
+      return 0
+    }
+
+    case 'emergency-stop': {
+      const workspaceId = await resolveWorkspace({ ...flags, workspace: requireFlag(flags, 'workspace') })
+      const result = await emergencyStop(workspaceId, flags['by'] ?? 'operator')
+      if (!result.ok) throw new Error(refusalText(result.error))
+      const { engaged, requested, refused } = result.value
+      process.stdout.write(
+        `${engaged ? 'emergency stop engaged' : 'workspace was already halted'} on ${workspaceId}: ` +
+          `pause requested on ${requested.length} run(s), ${refused.length} already concluding. ` +
+          `Retract with: clear-halt --workspace ${workspaceId}\n`,
       )
       return 0
     }

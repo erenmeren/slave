@@ -172,6 +172,25 @@ describe('the orchestrator CLI', () => {
     expect(ws.haltedAt).toBeNull()
   })
 
+  it('engages an emergency stop that halts the workspace', async (): Promise<void> => {
+    const result = await runCli(['emergency-stop', '--workspace', fixture.workspaceId])
+
+    expect(result.code).toBe(0)
+    const ws = await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspaceId } })
+    expect(ws.haltedReason).not.toBeNull()
+  }, 30_000)
+
+  it('refuses emergency-stop with no --workspace given, even with exactly one workspace', async (): Promise<void> => {
+    // Unlike `resolveWorkspace` alone, `emergency-stop` follows `clear-halt`'s mandatory-flag idiom:
+    // `--workspace` is required even when the database holds exactly one workspace, because
+    // emergency-stopping the wrong one by omission is the kind of mistake this command exists to
+    // prevent an operator from making silently.
+    const result = await runCli(['emergency-stop'])
+
+    expect(result.code).not.toBe(0)
+    expect(`${result.stdout}${result.stderr}`).toMatch(/--workspace is required/)
+  }, 30_000)
+
   it('tells an operator that clear-halt is not resume', async (): Promise<void> => {
     const result = await runCli(['help'])
     const help = `${result.stdout}${result.stderr}`
