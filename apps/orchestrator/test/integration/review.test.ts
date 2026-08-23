@@ -78,7 +78,7 @@ async function eventTypesFor(workspaceId: string): Promise<readonly DomainEventT
  * worktree and forging an `AgentRun` row: this is the exact shape `dispatchReviews` will actually
  * see in production.
  */
-async function seedReviewingTask(fixture: Fixture): Promise<TickDeps> {
+async function seedReviewingTask(fixture: Fixture, reviewFixture = 'review-approve'): Promise<TickDeps> {
   const implDeps: TickDeps = {
     workspaceId: brandWorkspaceId(fixture.workspaceId),
     adapter: new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'complete'] }),
@@ -94,9 +94,22 @@ async function seedReviewingTask(fixture: Fixture): Promise<TickDeps> {
 
   return {
     workspaceId: brandWorkspaceId(fixture.workspaceId),
-    adapter: new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'review-approve'] }),
+    adapter: new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', reviewFixture] }),
     hookPath: REAL_GATE,
   }
+}
+
+/** Adds a `reviewer`-role agent to the fixture's one team, idle and ready to be picked up. */
+async function addReviewer(): Promise<void> {
+  const team = await prisma.team.findFirstOrThrow()
+  await prisma.agent.create({ data: { teamId: team.id, name: 'Riley', role: 'reviewer' } })
+}
+
+async function eventsOf(
+  workspaceId: string,
+  dbType: 'task_review_approved' | 'task_review_rejected',
+): Promise<readonly { payload: unknown }[]> {
+  return prisma.executionEvent.findMany({ where: { workspaceId, type: dbType }, orderBy: { seq: 'asc' } })
 }
 
 describe('dispatchReviews', () => {
@@ -228,6 +241,124 @@ describe('dispatchReviews', () => {
     expect(failures).toHaveLength(1)
     const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
     expect(task.status).toBe('reviewing')
+  })
+
+  it('approves: moves the task to merging and records the reason', async (): Promise<void> => {
+    const reviewDeps = await seedReviewingTask(fixture, 'review-approve')
+    await addReviewer()
+
+    const started = await dispatchReviews(reviewDeps)
+    expect(started).toHaveLength(1)
+    await drainPumps()
+
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+    expect(task.status).toBe('merging')
+
+    const run = await prisma.agentRun.findFirstOrThrow({ where: { kind: 'review' } })
+    expect(run.status).toBe('succeeded')
+
+    const approved = await eventsOf(fixture.workspaceId, 'task_review_approved')
+    expect(approved).toHaveLength(1)
+    expect((approved[0]?.payload as { reason: string }).reason).toBe(
+      'The diff implements the task as described and the tests cover it.',
+    )
+  })
+
+  it('rejects: sends the task back to rework with the reason and increments attempt', async (): Promise<void> => {
+    const reviewDeps = await seedReviewingTask(fixture, 'review-reject')
+    await addReviewer()
+
+    const started = await dispatchReviews(reviewDeps)
+    expect(started).toHaveLength(1)
+    await drainPumps()
+
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+    expect(task.status).toBe('rework')
+    expect(task.attempt).toBe(1)
+    expect(task.lastRejectionReason).toBe('The diff does not handle the empty-input case the task requires.')
+
+    const rejected = await eventsOf(fixture.workspaceId, 'task_review_rejected')
+    expect(rejected).toHaveLength(1)
+    expect(rejected[0]?.payload).toEqual({
+      reason: 'The diff does not handle the empty-input case the task requires.',
+      attempt: 1,
+    })
+  })
+
+  it('rejects at the attempt cap: fails the task instead of sending it back', async (): Promise<void> => {
+    const reviewDeps = await seedReviewingTask(fixture, 'review-reject')
+    await addReviewer()
+    const before = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+    await prisma.task.update({ where: { id: fixture.taskId }, data: { attempt: before.maxAttempts - 1 } })
+
+    const started = await dispatchReviews(reviewDeps)
+    expect(started).toHaveLength(1)
+    await drainPumps()
+
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+    expect(task.status).toBe('failed')
+    expect(task.attempt).toBe(before.maxAttempts)
+
+    expect(await eventTypesFor(fixture.workspaceId)).toContain('task.failed')
+    const rejected = await eventsOf(fixture.workspaceId, 'task_review_rejected')
+    expect(rejected).toHaveLength(1)
+  })
+
+  it('invalid verdict: fails the run, leaves the task in reviewing, and the cap stops a third dispatch', async (): Promise<void> => {
+    const reviewDeps = await seedReviewingTask(fixture, 'review-invalid')
+    await addReviewer()
+
+    const first = await dispatchReviews(reviewDeps)
+    expect(first).toHaveLength(1)
+    await drainPumps()
+
+    const firstRun = await prisma.agentRun.findFirstOrThrow({ where: { kind: 'review' } })
+    expect(firstRun.status).toBe('failed')
+    const afterFirst = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+    expect(afterFirst.status).toBe('reviewing')
+
+    const firstFailure = await prisma.executionEvent.findMany({ where: { runId: firstRun.id, type: 'run_failed' } })
+    expect(firstFailure).toHaveLength(1)
+    expect((firstFailure[0]?.payload as { reason: string }).reason).toContain('no valid verdict')
+
+    // Second dispatch+conclusion with the same invalid fixture: reaches the cap (Task 5), still reviewing.
+    const second = await dispatchReviews(reviewDeps)
+    expect(second).toHaveLength(1)
+    await drainPumps()
+
+    const afterSecond = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+    expect(afterSecond.status).toBe('reviewing')
+    expect(await prisma.agentRun.count({ where: { kind: 'review' } })).toBe(2)
+    expect(await prisma.agentRun.count({ where: { kind: 'review', status: 'failed' } })).toBe(2)
+
+    // No third dispatch: the retry cap bounds it.
+    const third = await dispatchReviews(reviewDeps)
+    expect(third).toEqual([])
+    expect(await prisma.agentRun.count({ where: { kind: 'review' } })).toBe(2)
+  })
+
+  it('recovers after one invalid verdict when the next review approves', async (): Promise<void> => {
+    const reviewDeps = await seedReviewingTask(fixture, 'review-invalid')
+    await addReviewer()
+
+    const first = await dispatchReviews(reviewDeps)
+    expect(first).toHaveLength(1)
+    await drainPumps()
+
+    const midTask = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+    expect(midTask.status).toBe('reviewing')
+
+    const approveDeps: TickDeps = {
+      workspaceId: reviewDeps.workspaceId,
+      adapter: new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'review-approve'] }),
+      hookPath: REAL_GATE,
+    }
+    const second = await dispatchReviews(approveDeps)
+    expect(second).toHaveLength(1)
+    await drainPumps()
+
+    const finalTask = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+    expect(finalTask.status).toBe('merging')
   })
 })
 

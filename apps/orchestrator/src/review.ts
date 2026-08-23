@@ -3,6 +3,7 @@ import {
   agentId as brandAgentId,
   runId as brandRunId,
   taskId as brandTaskId,
+  parseReviewVerdict,
   type RunId,
 } from '@ai-team-os/domain'
 import { runFilePaths } from '@ai-team-os/control'
@@ -11,7 +12,7 @@ import { appendEvent } from '@ai-team-os/events'
 import { writeSettingsFile } from '@ai-team-os/providers'
 import { pumpRun } from './pump.js'
 import { emailLocalPart, pumps, type TickDeps } from './tick.js'
-import { verifyConcludedRun } from './verify.js'
+import { rejectTask, verifyConcludedRun } from './verify.js'
 import { gitIn } from './worktree.js'
 
 /** A single unified diff capped this many characters, past which it is truncated with a marker. */
@@ -47,6 +48,90 @@ export function buildReviewPrompt(
     'Your final message must contain exactly one JSON object and nothing else on its line:',
     '{"verdict":"approve","reason":"one paragraph"} or {"verdict":"reject","reason":"one paragraph"}',
   ].join('\n')
+}
+
+/**
+ * Conclude a succeeded review run: parse the verdict and move the task.
+ *
+ * Called only for a `succeeded` run -- `verifyConcludedRun` branches here before its own
+ * worktree/branch checks, which a review has no use for, because judging text is not judging a
+ * tree.
+ *
+ * A run that produced no valid verdict is treated as a failed review, not an infrastructure
+ * problem: it still feeds `dispatchReview`'s retry cap (Erratum 2), deliberately -- "the process
+ * exited zero" is not "the reviewer judged the diff", and a reviewer that keeps saying nothing
+ * parseable must not be retried forever.
+ */
+export async function concludeReview(runId: RunId): Promise<void> {
+  const run = await prisma.agentRun.findUniqueOrThrow({
+    where: { id: runId },
+    include: { task: { include: { workspace: true } } },
+  })
+  const { task } = run
+
+  const rows = await prisma.executionEvent.findMany({
+    where: { runId, type: 'run_output' },
+    orderBy: { seq: 'asc' },
+  })
+  const text = rows.map((row) => (row.payload as { text: string }).text).join('\n')
+  const parsed = parseReviewVerdict(text)
+
+  if (!parsed.ok) {
+    await prisma.agentRun.updateMany({
+      where: { id: runId, status: 'succeeded' },
+      data: { status: 'failed' },
+    })
+    await appendEvent({
+      type: 'run.failed',
+      workspaceId: task.workspaceId,
+      taskId: task.id,
+      agentId: run.agentId,
+      runId: run.id,
+      actor: 'system',
+      payload: { reason: `review run produced no valid verdict: ${parsed.error}` },
+    })
+    return
+  }
+
+  if (parsed.value.verdict === 'approve') {
+    // `autoMerge` is NOT consulted here (spec Decision 5) -- the merge pass, not this conclusion,
+    // owns whether an approved task merges itself or waits for a human.
+    const updated = await prisma.task.updateMany({
+      where: { id: task.id, status: 'reviewing' },
+      data: { status: 'merging' },
+    })
+    if (updated.count === 1) {
+      await appendEvent({
+        type: 'task.review_approved',
+        workspaceId: task.workspaceId,
+        taskId: task.id,
+        runId: run.id,
+        actor: 'system',
+        payload: { reason: parsed.value.reason },
+      })
+    }
+    return
+  }
+
+  // Reject: the same rework machinery a failed verify uses, shared via `rejectTask`.
+  const counted = await rejectTask(brandTaskId(task.id), parsed.value.reason)
+  await appendEvent({
+    type: 'task.review_rejected',
+    workspaceId: task.workspaceId,
+    taskId: task.id,
+    runId: run.id,
+    actor: 'system',
+    payload: { reason: parsed.value.reason, attempt: counted.attempt },
+  })
+  if (counted.exhausted) {
+    await appendEvent({
+      type: 'task.failed',
+      workspaceId: task.workspaceId,
+      taskId: task.id,
+      actor: 'system',
+      payload: { reason: `review rejected after ${counted.attempt} attempts: ${parsed.value.reason}` },
+    })
+  }
 }
 
 /**

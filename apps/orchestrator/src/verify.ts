@@ -1,8 +1,9 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { prisma } from '@ai-team-os/db/client'
-import { taskId as brandTaskId, type RunId, type TaskId } from '@ai-team-os/domain'
+import { runId as brandRunId, taskId as brandTaskId, type RunId, type TaskId } from '@ai-team-os/domain'
 import { appendEvent } from '@ai-team-os/events'
+import { concludeReview } from './review.js'
 import { describeOutcome, runShellCommand } from './shell.js'
 
 /**
@@ -184,6 +185,13 @@ export async function verifyConcludedRun(runId: RunId): Promise<void> {
   })
   if (run === null || run.status !== 'succeeded') return
 
+  if (run.kind === 'review') {
+    // A review run's succeeded process has produced text, not a tree to check out -- `concludeReview`
+    // judges that text (spec §3.2) rather than running the workspace's verify commands against it.
+    await concludeReview(brandRunId(run.id))
+    return
+  }
+
   const { task } = run
   if (run.worktreePath === null || task.branch === null) {
     // Unreachable from the tick, which writes both before the pump ever starts. Warned rather than
@@ -206,6 +214,47 @@ export async function verifyConcludedRun(runId: RunId): Promise<void> {
     timeoutMs: task.workspace.runTimeoutMs,
   })
   await advance({ taskId: brandTaskId(task.id), result, branch: task.branch })
+}
+
+export interface RejectOutcome {
+  readonly attempt: number
+  readonly exhausted: boolean
+}
+
+/**
+ * Sends a task back for rework, or to `failed` at the cap: increments `attempt`, then compares it
+ * against `maxAttempts`.
+ *
+ * Shared by `advance`'s verify-failed path and `concludeReview`'s review-rejected path (Task 6) —
+ * both mean "another rework cycle, unless the budget is spent" — and by Task 7's merge-conflict
+ * path. Extracted rather than left duplicated: two call sites counting attempts differently is a
+ * bug waiting for whichever one is read second, the same reasoning `failToStart` in Task 13 was
+ * built on.
+ *
+ * Both writes are one transaction: a crash between them would leave the attempt spent, the status
+ * unchanged, and `activeRunId` still set -- a task permanently busy with a burnt attempt, and
+ * §3.4's reconciliation looks for runs with dead pids, not for tasks stranded mid-reject.
+ */
+export async function rejectTask(taskId: TaskId, reason: string): Promise<RejectOutcome> {
+  const task = await prisma.task.findUniqueOrThrow({ where: { id: taskId } })
+  return prisma.$transaction(async (tx) => {
+    const incremented = await tx.task.update({
+      where: { id: task.id },
+      data: { attempt: { increment: 1 } },
+    })
+    const exhausted = incremented.attempt >= task.maxAttempts
+    await tx.task.update({
+      where: { id: task.id },
+      data: {
+        status: exhausted ? 'failed' : 'rework',
+        activeRunId: null,
+        // The agent-facing channel: `buildPrompt` puts this in front of the next run as the thing
+        // to fix first.
+        lastRejectionReason: reason,
+      },
+    })
+    return { attempt: incremented.attempt, exhausted }
+  })
 }
 
 /**
@@ -301,29 +350,10 @@ export async function advance(input: AdvanceInput): Promise<void> {
     payload: { command: input.result.failedCommand ?? '', exitCode: input.result.exitCode ?? NO_EXIT_CODE },
   })
 
-  // Both writes in one transaction: a crash between them left the attempt spent, the status still
-  // `running` and `activeRunId` still set -- a task permanently busy with a burnt attempt, and
-  // §3.4's reconciliation looks for runs with dead pids, not for tasks stranded mid-advance.
-  const counted = await prisma.$transaction(async (tx) => {
-    const incremented = await tx.task.update({
-      where: { id: task.id },
-      data: { attempt: { increment: 1 } },
-    })
-    const exhausted = incremented.attempt >= task.maxAttempts
-    await tx.task.update({
-      where: { id: task.id },
-      data: {
-        status: exhausted ? 'failed' : 'rework',
-        activeRunId: null,
-        // The agent-facing channel: `buildPrompt` puts this in front of the next run as the thing
-        // to fix first. Verify output is exactly what it is for -- which is why Task 13 was
-        // corrected to stop writing infrastructure errors into it, and why the two branches above
-        // do not write it at all.
-        lastRejectionReason: input.result.output,
-      },
-    })
-    return { attempt: incremented.attempt, exhausted }
-  })
+  // Verify output is exactly what `lastRejectionReason` is for -- which is why Task 13 was
+  // corrected to stop writing infrastructure errors into it, and why the two branches above do not
+  // write it at all.
+  const counted = await rejectTask(brandTaskId(task.id), input.result.output)
 
   await appendEvent(
     counted.exhausted
