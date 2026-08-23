@@ -156,6 +156,63 @@ describe('fake-claude', () => {
     expect(result?.result).toContain('"verdict":"approve"')
   })
 
+  it('plan-graph replays a fixture whose result carries a task graph', async (): Promise<void> => {
+    const { stdout } = await run('node', [FAKE, '--fixture', 'plan-graph'])
+    const result = parseLines(stdout).find((l) => l.type === 'result') as { result?: string } | undefined
+    expect(result?.result).toContain('"key":"core"')
+  })
+
+  describe('m8-flow', () => {
+    let repoDir: string
+
+    beforeEach(() => {
+      repoDir = mkdtempSync(path.join(tmpdir(), 'fake-claude-m8-flow-'))
+      execFileSync('git', ['init', '-q'], { cwd: repoDir })
+      execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q', '--allow-empty', '-m', 'initial commit'], {
+        cwd: repoDir,
+      })
+    })
+
+    afterEach(() => {
+      rmSync(repoDir, { recursive: true, force: true })
+    })
+
+    it('a planning run (prompt containing "task graph") replays plan-graph, makes no commit, and writes no file', async (): Promise<void> => {
+      const before = execFileSync('git', ['log', '--oneline'], { cwd: repoDir }).toString().trim().split('\n')
+      expect(before.length).toBe(1)
+
+      const { stdout } = await run('node', [FAKE, '--fixture', 'm8-flow', '-p', 'produce the "task graph" now'], {
+        cwd: repoDir,
+      })
+
+      const after = execFileSync('git', ['log', '--oneline'], { cwd: repoDir }).toString().trim().split('\n')
+      expect(after.length).toBe(1)
+      const status = execFileSync('git', ['status', '--porcelain'], { cwd: repoDir }).toString().trim()
+      expect(status).toBe('')
+
+      const result = parseLines(stdout).find((l) => l.type === 'result') as { result?: string } | undefined
+      expect(result?.result).toContain('"key":"core"')
+    })
+
+    it('a review run (prompt containing "verdict") replays the approval fixture', async (): Promise<void> => {
+      const { stdout } = await run('node', [FAKE, '--fixture', 'm8-flow', '-p', 'respond with "verdict" json'], {
+        cwd: repoDir,
+      })
+      const result = parseLines(stdout).find((l) => l.type === 'result') as { result?: string } | undefined
+      expect(result?.result).toContain('"verdict":"approve"')
+    })
+
+    it('a work run leaves a real commit in the worktree and replays the complete fixture', async (): Promise<void> => {
+      const before = execFileSync('git', ['log', '--oneline'], { cwd: repoDir }).toString().trim().split('\n')
+      expect(before.length).toBe(1)
+
+      await run('node', [FAKE, '--fixture', 'm8-flow', '-p', 'work on it'], { cwd: repoDir })
+
+      const after = execFileSync('git', ['log', '--oneline'], { cwd: repoDir }).toString().trim().split('\n')
+      expect(after.length).toBe(2)
+    })
+  })
+
   describe('m8a-flow', () => {
     let repoDir: string
 

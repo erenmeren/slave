@@ -28,6 +28,14 @@
 //                  prompt is treated as a work run, which leaves a real
 //                  commit in the worktree (cwd) before replaying `complete`,
 //                  so the merge pass downstream has something to merge.
+//   m8-flow        synthetic, extends m8a-flow's selection with a planning
+//                  arm for the M8b gate. A planning prompt (containing
+//                  `"task graph"`, the literal substring the planning prompt
+//                  always carries) replays the `plan-graph` fixture with no
+//                  side effect -- no commit, no file written. A review
+//                  prompt (containing `"verdict"`) replays `review-approve`,
+//                  same as m8a-flow. Any other prompt is a work run and
+//                  reuses the m8a-flow work body verbatim.
 //   anything else  replays `fixtures/<name>.ndjson` verbatim, exit 0 -- real
 //                  captures show process exit code 0 even for hook-crash,
 //                  hook-deny, and permission-denied runs, so the fake matches
@@ -137,6 +145,26 @@ async function main() {
     })
     await writeLines([resultLine, stopHookLine])
     process.exit(0)
+  }
+
+  if (fixtureName === 'm8-flow') {
+    const promptIndex = args.indexOf('-p')
+    const prompt = promptIndex === -1 ? '' : (args[promptIndex + 1] ?? '')
+    if (prompt.includes('"task graph"')) {
+      await replayFixture('plan-graph')
+      return
+    }
+    if (prompt.includes('"verdict"')) {
+      await replayFixture('review-approve')
+      return
+    }
+    // A work run: the m8a-flow work body verbatim -- leave a real commit in the worktree
+    // (cwd), then replay success.
+    writeFileSync(path.join(process.cwd(), 'm8a-work.txt'), `${prompt.slice(0, 80)}\n`)
+    execFileSync('git', ['-c', 'user.name=Fake Claude', '-c', 'user.email=fake@aiteamos.local', 'add', '-A'], { cwd: process.cwd() })
+    execFileSync('git', ['-c', 'user.name=Fake Claude', '-c', 'user.email=fake@aiteamos.local', 'commit', '-q', '-m', 'fake work'], { cwd: process.cwd() })
+    await replayFixture('complete')
+    return
   }
 
   if (fixtureName === 'm8a-flow') {
