@@ -175,6 +175,9 @@ describe('the M3/M8a milestone gate', () => {
     // approval -- the whole pipeline this milestone exists to prove reaches unattended.
     const types = await eventTypesFor(fixture.workspaceId)
     expectOrdered(types, 'task.started', 'task.verifying')
+    // The first `run.succeeded` is the implementation run's: verify must come strictly after the
+    // run concluded, not race it -- the pre-flip gate pinned this and the flip must not lose it.
+    expectOrdered(types, 'run.succeeded', 'task.verifying')
     expectOrdered(types, 'task.verifying', 'task.verify_passed')
     expectOrdered(types, 'task.verify_passed', 'task.review_started')
     expectOrdered(types, 'task.review_started', 'task.review_approved')
