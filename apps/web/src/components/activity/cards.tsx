@@ -315,10 +315,11 @@ function GuardrailTrippedCard(props: ActivityCardProps): ReactElement {
   )
 }
 
-// ---- workspace.* (schema.ts:97-108) -------------------------------------------------------------
-// Workspace-scoped, task-less events (M8b): the planning run sets the workspace's goal, then
-// produces the task plan for it. Grouped with `guardrail.tripped` in `TYPES_BY_KIND` — none of
-// the three carry a `taskId`.
+// ---- workspace.* (schema.ts:97-119) ----------------------------------------------------------
+// Workspace-scoped, task-less events: the planning run sets the workspace's goal (M8b), produces
+// the task plan for it (M8b), and the org model (M10) later assigns a company to run it. These
+// three share their own `workspace` kind in `TYPES_BY_KIND` (activityFilters.ts) — none of them
+// carry a `taskId`.
 
 function WorkspaceGoalSetCard(props: ActivityCardProps): ReactElement {
   const payload = props.event.payload as { goal: string }
@@ -348,6 +349,35 @@ function WorkspacePlanCreatedCard(props: ActivityCardProps): ReactElement {
           </li>
         ))}
       </ul>
+    </ActivityCard>
+  )
+}
+
+// `workers` deliberately has NO `.min(1)` on the wire (schema.ts) — a pure re-sync that added
+// nobody still emits with an empty array (M10 spec §5 step 4), hence the "no new workers" line.
+function WorkspaceCompanyAssignedCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as {
+    company: string
+    workers: ReadonlyArray<{ name: string; role: string }>
+  }
+  return (
+    <ActivityCard {...props}>
+      <Transition tone="idle" label="company assigned">
+        <span data-testid="company-name">{payload.company}</span>
+      </Transition>
+      {payload.workers.length > 0 ? (
+        <ul className="mt-1 space-y-0.5 text-text-3">
+          {payload.workers.map((worker) => (
+            <li key={worker.name} data-testid="company-worker-item">
+              {worker.name} <span className="text-text-3">({worker.role})</span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p data-testid="company-no-workers" className="mt-1 text-text-3">
+          no new workers
+        </p>
+      )}
     </ActivityCard>
   )
 }
@@ -450,4 +480,5 @@ export const ACTIVITY_CARDS = {
   'task.merge_failed': TaskMergeFailedCard,
   'workspace.goal_set': WorkspaceGoalSetCard,
   'workspace.plan_created': WorkspacePlanCreatedCard,
+  'workspace.company_assigned': WorkspaceCompanyAssignedCard,
 } satisfies Record<DomainEventType, (props: ActivityCardProps) => ReactElement>

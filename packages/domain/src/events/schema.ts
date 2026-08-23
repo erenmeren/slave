@@ -109,6 +109,15 @@ export const executionEventSchema = z.discriminatedUnion('type', [
         .min(1),
     }),
   }),
+  z.object({
+    ...envelope,
+    type: z.literal('workspace.company_assigned'),
+    payload: z.object({
+      company: z.string().min(1),
+      // Deliberately NO .min(1): a pure re-sync that added nobody still emits with an empty array.
+      workers: z.array(z.object({ name: z.string().min(1), role: z.string().min(1) })),
+    }),
+  }),
 ])
 
 export type ExecutionEvent = z.infer<typeof executionEventSchema>

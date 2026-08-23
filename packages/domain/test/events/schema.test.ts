@@ -290,6 +290,38 @@ describe('parseExecutionEvent', () => {
     expect(result.ok).toBe(false)
   })
 
+  it('accepts a workspace.company_assigned event with workers', () => {
+    const result = parseExecutionEvent({
+      ...BASE,
+      type: 'workspace.company_assigned',
+      payload: {
+        company: 'Acme Corp',
+        workers: [{ name: 'Alex', role: 'backend' }],
+      },
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.value.type).toBe('workspace.company_assigned')
+  })
+
+  it('accepts a workspace.company_assigned event with an EMPTY workers array', () => {
+    const result = parseExecutionEvent({
+      ...BASE,
+      type: 'workspace.company_assigned',
+      payload: { company: 'Acme Corp', workers: [] },
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.value.type).toBe('workspace.company_assigned')
+  })
+
+  it('rejects a workspace.company_assigned event with an empty company', () => {
+    const result = parseExecutionEvent({
+      ...BASE,
+      type: 'workspace.company_assigned',
+      payload: { company: '', workers: [] },
+    })
+    expect(result.ok).toBe(false)
+  })
+
   it('rejects an empty workspaceId', () => {
     const result = parseExecutionEvent({
       ...BASE,

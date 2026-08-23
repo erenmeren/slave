@@ -65,6 +65,13 @@ const PAYLOAD_BY_TYPE: Record<DomainEventType, Record<string, unknown>> = {
       { id: 'TASK-2', title: 'Wire up the form', role: 'frontend' },
     ],
   },
+  'workspace.company_assigned': {
+    company: 'Acme Corp',
+    workers: [
+      { name: 'Alex', role: 'backend' },
+      { name: 'Sam', role: 'frontend' },
+    ],
+  },
 }
 
 function fixtureFor(type: DomainEventType): ActivityEventRow {
@@ -164,6 +171,35 @@ describe('targeted card bodies', () => {
     expect(items[0]?.textContent).toContain('backend')
     expect(items[1]?.textContent).toContain('Wire up the form')
     expect(items[1]?.textContent).toContain('frontend')
+  })
+
+  it('workspace.company_assigned shows the company and the new workers name+role list', () => {
+    const Card = ACTIVITY_CARDS['workspace.company_assigned']
+    render(<Card event={fixtureFor('workspace.company_assigned')} {...CARD_PROPS} />)
+    expect(screen.getByTestId('transition-label').textContent).toBe('company assigned')
+    expect(screen.getByTestId('company-name').textContent).toBe('Acme Corp')
+    const items = screen.getAllByTestId('company-worker-item')
+    expect(items).toHaveLength(2)
+    expect(items[0]?.textContent).toContain('Alex')
+    expect(items[0]?.textContent).toContain('backend')
+    expect(items[1]?.textContent).toContain('Sam')
+    expect(items[1]?.textContent).toContain('frontend')
+  })
+
+  it('workspace.company_assigned shows a no-new-workers line when workers is empty', () => {
+    const Card = ACTIVITY_CARDS['workspace.company_assigned']
+    render(
+      <Card
+        event={{
+          ...fixtureFor('workspace.company_assigned'),
+          payload: { company: 'Acme Corp', workers: [] },
+        }}
+        {...CARD_PROPS}
+      />,
+    )
+    expect(screen.getByTestId('company-name').textContent).toBe('Acme Corp')
+    expect(screen.queryAllByTestId('company-worker-item')).toHaveLength(0)
+    expect(screen.getByTestId('company-no-workers').textContent).toBe('no new workers')
   })
 
   it('falls back to the bare id when agentName/taskTitle are null', () => {
