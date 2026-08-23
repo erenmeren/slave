@@ -596,4 +596,42 @@ describe('the orchestrator CLI', () => {
     const started = await prisma.agentRun.findFirstOrThrow({ where: { taskId: fixture.taskId } })
     expect(started.terminalAt).not.toBeNull()
   }, 30_000)
+
+  it('the daemon enforces the run-timeout guardrail on a hung run', async (): Promise<void> => {
+    // Any run is instantly over a 1ms wall-clock limit; the `hang` fixture never exits on its
+    // own, so only the daemon's guardrail sweep can end this run.
+    await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { runTimeoutMs: 1 } })
+
+    const child = execFile('node', [CLI, 'daemon', '--period', '200'], {
+      env: {
+        ...process.env,
+        DATABASE_URL: process.env['TEST_DATABASE_URL'] ?? '',
+        AITEAMOS_CLAUDE_BIN: 'node',
+        AITEAMOS_CLAUDE_ARGS: `${FAKE} --fixture hang`,
+      },
+    })
+    try {
+      const deadline = Date.now() + 15_000
+      let run = null
+      for (;;) {
+        run = await prisma.agentRun.findFirst({ where: { taskId: fixture.taskId } })
+        if (run !== null && run.status === 'failed') break
+        if (Date.now() > deadline) break
+        await new Promise((res) => setTimeout(res, 100))
+      }
+      expect(run?.status).toBe('failed')
+
+      const guardrails = await prisma.executionEvent.findMany({
+        where: { workspaceId: fixture.workspaceId, type: 'guardrail_tripped' },
+      })
+      const timeouts = guardrails.filter(
+        (event) => (event.payload as { guardrail?: string }).guardrail === 'run_timeout',
+      )
+      expect(timeouts.length).toBeGreaterThan(0)
+    } finally {
+      const exited = new Promise((res) => child.on('exit', res))
+      child.kill('SIGTERM')
+      await Promise.race([exited, new Promise((res) => setTimeout(res, 12_000))])
+    }
+  }, 40_000)
 })

@@ -10,7 +10,7 @@ import { prisma } from '@ai-team-os/db/client'
 import { appendEvent } from '@ai-team-os/events'
 import { writeSettingsFile } from '@ai-team-os/providers'
 import { pumpRun } from './pump.js'
-import { emailLocalPart, pumps, type TickDeps } from './tick.js'
+import { activePumpRunIds, emailLocalPart, pumps, type TickDeps } from './tick.js'
 import { verifyConcludedRun } from './verify.js'
 
 /** How many planning runs may fail against the current goal before dispatch stops trying (spec Decision 8). */
@@ -311,9 +311,11 @@ export async function dispatchPlanning(deps: TickDeps): Promise<RunId | null> {
         console.error(`[planning] pump for run ${runId} failed:`, error)
       })
       .finally((): void => {
+        activePumpRunIds.delete(run.id)
         pumps.delete(pump)
       })
     pumps.add(pump)
+    activePumpRunIds.add(run.id)
 
     return runId
   } catch (error) {

@@ -295,6 +295,20 @@ describe('sweep and reconcileOrphans', () => {
     expect(await eventTypesFor(fixture.workspaceId)).toEqual(['run.failed'])
   })
 
+  it('leaves a dead-pid run alone while its pump is live in this process', async (): Promise<void> => {
+    // A dead pid is the ordinary end of every run -- the child exits, then the pump writes the
+    // terminal row a stream-drain later. Concluding the run in that window races the pump (the
+    // M9 gate failure that forced this guard). Only a run NO live pump owns is an orphan.
+    const run = await givenRun({ status: 'working' })
+
+    const report = await sweep({ ...deps, livePumpRunIds: new Set([run.id]) })
+
+    expect(report.deadPids).toEqual([])
+    const row = await prisma.agentRun.findFirstOrThrow()
+    expect(row.status).toBe('working')
+    expect(await eventTypesFor(fixture.workspaceId)).toEqual([])
+  })
+
   it('leaves a run that has not yet recorded its pid alone', async (): Promise<void> => {
     await givenRun({ status: 'starting', pid: null })
 

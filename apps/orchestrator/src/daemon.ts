@@ -2,8 +2,8 @@ import { prisma } from '@ai-team-os/db/client'
 import type { WorkspaceId } from '@ai-team-os/domain'
 import { subscribeEvents, type EventSubscription } from '@ai-team-os/events'
 import type { AgentRuntimeAdapter } from '@ai-team-os/providers'
-import { reconcileOrphans } from './sweep.js'
-import { drainPumps, tick } from './tick.js'
+import { reconcileOrphans, sweep } from './sweep.js'
+import { activePumpRunIds, drainPumps, tick } from './tick.js'
 
 export interface DaemonDeps {
   readonly workspaceId: WorkspaceId
@@ -90,6 +90,15 @@ export async function runDaemon(deps: DaemonDeps): Promise<void> {
         report.reviewsStarted.length > 0
       ) {
         process.stdout.write(`${JSON.stringify(report)}\n`)
+      }
+      // The guardrail sweep -- run timeout, tool-call ceiling, dead pids -- lives with the daemon,
+      // not inside `tick()`: it kills processes, which is a lifecycle concern like the startup
+      // reconcile above, and a one-shot CLI `tick` cancelling runs it did not start would be a
+      // surprise. Until M9 wired this line, `sweep()` had no production caller at all and the
+      // runTimeoutMs / maxToolCallsPerRun limits were enforced by nothing.
+      const swept = await sweep({ workspaceId: deps.workspaceId, adapter: deps.adapter, livePumpRunIds: activePumpRunIds })
+      if (swept.timedOut.length > 0 || swept.overToolCap.length > 0 || swept.deadPids.length > 0) {
+        process.stdout.write(`${JSON.stringify({ sweep: swept })}\n`)
       }
     } catch (error) {
       // A failed tick must not take the daemon down: the next one reloads the world from scratch.

@@ -67,6 +67,17 @@ const haltAnnounced = new Map<string, boolean>()
  */
 export const pumps = new Set<Promise<unknown>>()
 
+/**
+ * The run ids whose pumps are live IN THIS PROCESS. The daemon's guardrail sweep consults this
+ * before treating a dead pid as an orphan: a process being gone is the ordinary end of every run,
+ * and the pump trailing it by a stream-drain is not abandonment -- concluding such a run "dead"
+ * races the pump's own terminal write (the failure the M9 sweep wiring surfaced in the measured
+ * gates). A run leaves this set when its pump settles: normally after the terminal row is written
+ * (the run is no longer sweepable), and on a pump crash without one -- exactly the case the
+ * sweep's dead-pid arm exists to recover.
+ */
+export const activePumpRunIds = new Set<string>()
+
 /** Waits for every in-flight pump. For a graceful shutdown, and for tests that truncate tables. */
 export async function drainPumps(): Promise<void> {
   await Promise.allSettled([...pumps])
@@ -303,12 +314,14 @@ async function resumeRequestedRuns(deps: TickDeps): Promise<void> {
     // resumed run's stream to the end (verify included), so it outlives this tick by design, an
     // unhandled rejection would take the daemon down, and a shutdown -- or a one-shot `tick` -- has
     // to be able to wait for it.
+    activePumpRunIds.add(intent.id)
     const resumed = executeResume({ runId: intent.id, adapter: deps.adapter, message: queuedMessage })
       .catch(async (error: unknown): Promise<void> => {
         console.error(`[tick] resume for run ${intent.id} failed:`, error)
         await concludeFailedResume(deps, intent, error)
       })
       .finally((): void => {
+        activePumpRunIds.delete(intent.id)
         pumps.delete(resumed)
       })
     pumps.add(resumed)
@@ -491,9 +504,11 @@ async function startRun(deps: TickDeps, taskId: TaskId, agentId: AgentId): Promi
         console.error(`[tick] pump for run ${runId} failed:`, error)
       })
       .finally((): void => {
+        activePumpRunIds.delete(runId)
         pumps.delete(pump)
       })
     pumps.add(pump)
+    activePumpRunIds.add(runId)
 
     return runId
   } catch (error) {

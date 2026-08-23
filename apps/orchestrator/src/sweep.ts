@@ -7,6 +7,13 @@ import type { AgentRuntimeAdapter } from '@ai-team-os/providers'
 export interface SweepDeps {
   readonly workspaceId: WorkspaceId
   readonly adapter: AgentRuntimeAdapter
+  /**
+   * Run ids whose pumps are live in THIS process (`tick.ts`'s `activePumpRunIds`). The dead-pid
+   * arm skips these: a dead pid under a live pump is the ordinary end of a run with its terminal
+   * write still in flight, not an orphan -- concluding it here races the pump (the M9 gate
+   * failure). Optional so direct callers (tests, a future one-shot) can sweep unfiltered.
+   */
+  readonly livePumpRunIds?: ReadonlySet<string>
 }
 
 export interface SweepReport {
@@ -233,6 +240,8 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
     if (run.pid === null) continue
 
     if (!isAlive(run.pid)) {
+      // A live pump owns this run's conclusion; the dead pid just means the child finished.
+      if (deps.livePumpRunIds?.has(run.id) === true) continue
       deadPids.push(brandRunId(run.id))
       await concludeDeadRun(deps, run)
       continue

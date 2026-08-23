@@ -11,7 +11,7 @@ import { prisma } from '@ai-team-os/db/client'
 import { appendEvent } from '@ai-team-os/events'
 import { writeSettingsFile } from '@ai-team-os/providers'
 import { pumpRun } from './pump.js'
-import { emailLocalPart, pumps, type TickDeps } from './tick.js'
+import { activePumpRunIds, emailLocalPart, pumps, type TickDeps } from './tick.js'
 import { rejectTask, verifyConcludedRun } from './verify.js'
 import { gitIn } from './worktree.js'
 
@@ -339,9 +339,11 @@ async function dispatchReview(deps: TickDeps, task: ReviewableTask): Promise<Run
         console.error(`[review] pump for run ${runId} failed:`, error)
       })
       .finally((): void => {
+        activePumpRunIds.delete(run.id)
         pumps.delete(pump)
       })
     pumps.add(pump)
+    activePumpRunIds.add(run.id)
 
     return runId
   } catch (error) {
