@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { prisma } from '@ai-team-os/db/client'
 import { runId } from '@ai-team-os/domain'
 import { runFilePaths } from '../../src/paths.js'
-import { requestPause } from '../../src/pause.js'
+import { pauseActiveRuns, requestPause } from '../../src/pause.js'
 
 interface Fixture {
   readonly workspace: { readonly id: string; readonly repoPath: string }
@@ -80,5 +80,42 @@ describe('requestPause', () => {
     const result = await requestPause('00000000-0000-4000-8000-000000000000', 'meren')
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.error.kind).toBe('run_not_found')
+  })
+
+  it('writes the given category as the pause reason, not the human default', async () => {
+    const { run } = fixture
+    const result = await requestPause(run.id, 'budget guardrail', 'emergency_stop')
+    expect(result.ok).toBe(true)
+
+    const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })
+    expect(after.pauseReason).toBe('emergency_stop')
+  })
+})
+
+describe('pauseActiveRuns', () => {
+  let fixture: Fixture
+
+  beforeEach(async (): Promise<void> => {
+    await prisma.$executeRawUnsafe(
+      'TRUNCATE TABLE "ExecutionEvent", "Approval", "AgentMessage", "Artifact", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
+    )
+    fixture = await seed()
+  })
+
+  it('requests pause on every active run and buckets refusals without throwing', async () => {
+    const { workspace, task, run } = fixture
+    const { agentId } = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id }, select: { agentId: true } })
+    const alreadyPaused = await prisma.agentRun.create({
+      data: { taskId: task.id, agentId, status: 'paused' },
+    })
+
+    const report = await pauseActiveRuns(workspace.id, 'budget guardrail', 'guardrail')
+
+    expect(report.requested).toEqual([run.id])
+    expect(report.refused).toEqual([alreadyPaused.id])
+
+    const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })
+    expect(after.status).toBe('pause_requested')
+    expect(after.pauseReason).toBe('guardrail')
   })
 })

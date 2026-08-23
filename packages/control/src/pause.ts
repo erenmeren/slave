@@ -1,13 +1,20 @@
 import { writeFileSync } from 'node:fs'
 import { prisma } from '@ai-team-os/db/client'
-import { type Result, err, ok, runId as brandRunId } from '@ai-team-os/domain'
+import { NON_TERMINAL_RUN_STATUSES, type Result, err, ok, runId as brandRunId } from '@ai-team-os/domain'
 import { appendEvent } from '@ai-team-os/events'
 import { runFilePaths } from './paths.js'
 import type { ControlRefusal } from './refusal.js'
 
 const PAUSABLE_STATUSES = ['starting', 'working', 'resuming'] as const
 
-export async function requestPause(runId: string, requestedBy: string): Promise<Result<void, ControlRefusal>> {
+/** `AgentRun.pauseReason`'s categories (spec §6): who -- or what -- asked for the pause. */
+export type PauseCategory = 'human' | 'guardrail' | 'emergency_stop'
+
+export async function requestPause(
+  runId: string,
+  requestedBy: string,
+  category: PauseCategory = 'human',
+): Promise<Result<void, ControlRefusal>> {
   const run = await prisma.agentRun.findUnique({ where: { id: runId }, include: { task: true } })
   if (run === null) return err({ kind: 'run_not_found', runId })
 
@@ -23,9 +30,10 @@ export async function requestPause(runId: string, requestedBy: string): Promise<
   // record of a run that actually succeeded.
   const claimed = await prisma.agentRun.updateMany({
     where: { id: run.id, status: { in: [...PAUSABLE_STATUSES] } },
-    // `pauseReason` is the *category*, and this is the one place that knows it: an operator
-    // asked. Task 12 carried it forward as a column nothing wrote.
-    data: { status: 'pause_requested', pauseReason: 'human' },
+    // `pauseReason` is the *category*: an operator asked, a guardrail tripped, or an emergency
+    // stop engaged. Task 12 carried the column forward as one nothing wrote; Task 9 is the first
+    // caller to pass anything but the human default.
+    data: { status: 'pause_requested', pauseReason: category },
   })
   if (claimed.count === 0) {
     return err({ kind: 'wrong_status', runId: run.id, status: run.status, needed: PAUSABLE_STATUSES })
@@ -47,4 +55,41 @@ export async function requestPause(runId: string, requestedBy: string): Promise<
     payload: { requestedBy },
   })
   return ok(undefined)
+}
+
+export interface PauseFanoutReport {
+  readonly requested: readonly string[]
+  readonly refused: readonly string[]
+}
+
+/**
+ * Request pause on every active run in the workspace; refusals are expected noise (spec §6).
+ *
+ * A run that lost a race in between `loadWorld`'s snapshot and this call -- concluded, or already
+ * `pause_requested` by an operator -- is exactly the ordinary case a guardrail breach's fan-out
+ * runs into, not a bug: `requestPause` itself is what tells the two apart, and its refusal is what
+ * belongs in `refused` rather than an exception unwinding the whole fan-out over one run that
+ * finished a moment early.
+ */
+export async function pauseActiveRuns(
+  workspaceId: string,
+  requestedBy: string,
+  category: PauseCategory,
+): Promise<PauseFanoutReport> {
+  const runs = await prisma.agentRun.findMany({
+    where: { status: { in: [...NON_TERMINAL_RUN_STATUSES] }, task: { workspaceId } },
+    select: { id: true },
+  })
+
+  const requested: string[] = []
+  const refused: string[] = []
+  for (const run of runs) {
+    const result = await requestPause(run.id, requestedBy, category)
+    if (result.ok) {
+      requested.push(run.id)
+    } else {
+      refused.push(run.id)
+    }
+  }
+  return { requested, refused }
 }

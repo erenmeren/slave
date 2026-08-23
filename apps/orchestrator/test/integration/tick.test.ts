@@ -8,6 +8,7 @@ import { prisma } from '@ai-team-os/db/client'
 import { workspaceId as brandWorkspaceId } from '@ai-team-os/domain'
 import { ClaudeCodeAdapter, type AgentRuntimeAdapter, type StartRunInput } from '@ai-team-os/providers'
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { resetTickObservation } from '../../src/sweep.js'
 import { drainPumps, tick, type TickDeps } from '../../src/tick.js'
 
 const repoRoot = fileURLToPath(new URL('../../../../', import.meta.url))
@@ -213,6 +214,55 @@ describe('tick', () => {
     // transition. At the default 1000ms period a halt waiting for an operator would otherwise
     // write one event per second, forever, into an append-only log.
     expect(afterSecond).toBe(afterFirst)
+  })
+
+  it('pauses every active run once the budget is exhausted, and does not re-pause on the next tick', async (): Promise<void> => {
+    const activeRun = await prisma.agentRun.create({
+      data: { taskId: fixture.taskId, agentId: fixture.agentId, status: 'working', costUsd: 999 },
+    })
+
+    await tick(deps)
+
+    const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: activeRun.id } })
+    expect(after.status).toBe('pause_requested')
+    expect(after.pauseReason).toBe('guardrail')
+
+    // The fan-out lives inside the halt's one-shot -- a second tick observing the same halt must
+    // not try to pause an already-`pause_requested` run again.
+    await tick(deps)
+    const stillOnce = await prisma.agentRun.findUniqueOrThrow({ where: { id: activeRun.id } })
+    expect(stillOnce.status).toBe('pause_requested')
+  })
+
+  it('announces the budget warning exactly once, and the durable check survives a restart', async (): Promise<void> => {
+    // 85% of the default $20 budget: past BUDGET_WARNING_RATIO (0.8) but short of exhausted, so
+    // this must not halt scheduling.
+    await prisma.agentRun.create({
+      data: {
+        taskId: fixture.taskId,
+        agentId: fixture.agentId,
+        status: 'succeeded',
+        costUsd: 17,
+        terminalAt: new Date(),
+      },
+    })
+
+    const warningEvents = async (): Promise<number> => {
+      const rows = await prisma.executionEvent.findMany({
+        where: { workspaceId: fixture.workspaceId, type: 'guardrail_tripped' },
+      })
+      return rows.filter((event) => (event.payload as { guardrail?: string }).guardrail === 'budget_warning').length
+    }
+
+    await tick(deps)
+    await tick(deps)
+    expect(await warningEvents()).toBe(1)
+
+    // Restart semantics (spec §5): the one-shot must be a durable existence check, not the
+    // in-memory `haltAnnounced` map, or a daemon restart would re-announce the same warning.
+    resetTickObservation()
+    await tick(deps)
+    expect(await warningEvents()).toBe(1)
   })
 
   it('records a provisioning failure as a failed run that counts as an attempt', async (): Promise<void> => {

@@ -1,7 +1,8 @@
-import { claimResume, runFilePaths } from '@ai-team-os/control'
+import { claimResume, pauseActiveRuns, runFilePaths } from '@ai-team-os/control'
 import { prisma } from '@ai-team-os/db/client'
 import {
   decide,
+  evaluateGuardrails,
   runId as brandRunId,
   taskId as brandTaskId,
   agentId as brandAgentId,
@@ -185,10 +186,49 @@ export async function tick(deps: TickDeps): Promise<TickReport> {
         actor: 'system',
         payload: { guardrail: halt.reason, detail: 'scheduling halted for this workspace' },
       })
+      // The fan-out lives inside the same one-shot as the announcement above: `decide()` returns
+      // `halt` on every tick the condition holds, and a run this pauses moves to
+      // `pause_requested` -- a status the *next* tick's `pauseActiveRuns` would no longer find,
+      // so re-running it costs nothing but re-running it every second is still noise nobody asked
+      // for.
+      if (halt.reason === 'budget_exhausted') {
+        await pauseActiveRuns(deps.workspaceId, 'budget guardrail', 'guardrail')
+      }
     }
     return { started: [], halted: halt.reason, skippedNoRole, reviewsStarted: [] }
   }
   haltAnnounced.set(deps.workspaceId, false)
+
+  // The budget warning (spec §5): unlike the halt above, this never stops scheduling, so it is
+  // checked and (at most once) announced on every tick that is not already halted. Mutually
+  // exclusive with `budget_exhausted` by the domain's `else if` -- the halt branch's early return
+  // is what keeps this from running the tick a real halt is announced, not a check here.
+  //
+  // The one-shot is a durable existence query against the event log, not an in-memory latch like
+  // `haltAnnounced`: spec §5 wants the warning to survive a daemon restart, and an in-memory map
+  // starts empty on every restart. `evaluateGuardrails` is pure and cheap, so calling it again
+  // here -- after `decide()` already called it once inside this same tick -- is not worth avoiding.
+  const warning = evaluateGuardrails(world.limits, world.stats).find(
+    (breach) => breach.guardrail === 'budget_warning',
+  )
+  if (warning !== undefined) {
+    const announced = await prisma.executionEvent.findFirst({
+      where: {
+        workspaceId: deps.workspaceId,
+        type: 'guardrail_tripped',
+        payload: { path: ['guardrail'], equals: 'budget_warning' },
+      },
+      select: { seq: true },
+    })
+    if (announced === null) {
+      await appendEvent({
+        type: 'guardrail.tripped',
+        workspaceId: deps.workspaceId,
+        actor: 'system',
+        payload: { guardrail: 'budget_warning', detail: warning.detail },
+      })
+    }
+  }
 
   const started: RunId[] = []
   for (const command of commands) {
