@@ -61,6 +61,7 @@ Ubuntu, `apt-get install docker-compose-plugin`) before continuing.
 | `npm run db:migrate:test` | Applies migrations to the test database |
 | `npm run db:seed` | Truncates and reseeds the development database |
 | `npm run gate:m8a-merge` / `npm run gate:m8a-estop` | The M8a gate (spec §8): a task → merged branch, unattended; emergency stop pauses everything and clears clean |
+| `npm run gate:m8-plan` | The M8b gate: a goal → task graph → merged branches, unattended |
 
 Integration tests require Postgres to be running. They **fail** rather than skip when it is not:
 a suite that skips reports success for work it did not do.
@@ -154,6 +155,7 @@ npm run orchestrator -- pause  --run <id> --by <name>
 npm run orchestrator -- resume --run <id> --message "try the other approach"
 npm run orchestrator -- cancel --run <id>
 npm run orchestrator -- emergency-stop --workspace <id> --by <name>
+npm run orchestrator -- set-goal --workspace <id> --goal "<text>"
 ```
 
 `pause` arms the hook; the agent stops at its **next tool call**, not immediately — a hook deny
@@ -172,6 +174,12 @@ every active run in it, one call. Pressing it twice is not an error — a worksp
 halted is engaged again, in case a run started or lost a race since the first press. Retract it the
 same way as any other halt: `clear-halt --workspace <id>`, then `resume --run <id>` for whichever
 runs it paused.
+
+`set-goal --workspace <id> --goal "<text>"` (M8b) sets the operator's standing instruction for what
+the workspace's agents are working toward. It is the human's path onto the planning pipeline: it
+writes `Workspace.goal` and emits the `workspace.goal_set` event that `dispatchPlanning`'s retry cap
+counts from. A workspace with a goal and an empty board gets a planning run at the next tick — see
+`gate:m8-plan` below for the whole pipeline end to end.
 
 ## Web UI
 
@@ -292,6 +300,21 @@ in the workspace settles on `paused` or a terminal status, at least one is `paus
 while the workspace stays halted (a stable run count across a further three-second window). Finally
 it retracts the halt with `clear-halt` and calls `resume --run <id>`, and confirms `run.resumed`
 landed in that run's event log — the recovery half, proving the halt clears clean.
+
+```bash
+npm run gate:m8-plan
+```
+
+M8b's own gate, run against the *development* database the same way as M8a's pair: a workspace
+with `autoMerge: true`, a manager, a backend worker, a reviewer, and ZERO tasks — no work handed to
+it beyond a goal. It sets `Workspace.goal` via the real CLI's `set-goal` (the `workspace.goal_set`
+event the planning retry cap keys on), starts the real `daemon` against the fake `claude` CLI's
+`m8-flow` fixture, and polls — no writes of its own — first until the board goes from empty to
+non-empty (the plan landed, recording how many tasks it produced) and then until every one of those
+tasks reaches `done`. A green run asserts the plan produced at least two tasks, a
+`workspace.plan_created` event exists (a manager actually decomposed the goal), a
+`task.review_approved` event exists (the same review gate M8a proves, not a shortcut), and at least
+one `merge(T-<id>)` commit landed on `main` — *a goal → task graph → merged branches, unattended.*
 
 Clicking an agent's card on the Overview page opens its **detail panel**: the live event feed, and
 the controls M5 adds — pause, message, resume, stop. What each control does is a claim through

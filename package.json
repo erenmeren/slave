@@ -23,7 +23,8 @@
     "web:build": "next build apps/web",
     "demo": "tsc --build && node --env-file=.env scripts/demo-live.mjs",
     "gate:m8a-merge": "tsc --build && node --env-file=.env scripts/gate-m8a-merge.mjs",
-    "gate:m8a-estop": "tsc --build && node --env-file=.env scripts/gate-m8a-estop.mjs"
+    "gate:m8a-estop": "tsc --build && node --env-file=.env scripts/gate-m8a-estop.mjs",
+    "gate:m8-plan": "tsc --build && node --env-file=.env scripts/gate-m8-plan.mjs"
   },
   "devDependencies": {
     "@testing-library/react": "^16.0.0",
