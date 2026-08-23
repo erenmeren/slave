@@ -51,7 +51,10 @@ export function decide(world: World): readonly Command[] {
     world.agents.filter((a) => !a.busy).map((a) => [a.id, a]),
   )
 
-  let slots = world.limits.maxConcurrentRuns - world.stats.activeRuns
+  let slots = Math.min(
+    world.limits.maxConcurrentRuns - world.stats.activeRuns,
+    world.limits.maxGlobalConcurrentRuns - world.stats.globalActiveRuns,
+  )
   const commands: Command[] = []
 
   for (const candidate of candidates) {

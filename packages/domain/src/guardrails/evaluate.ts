@@ -5,10 +5,12 @@ export interface GuardrailLimits {
   readonly maxToolCallsPerRun: number
   readonly maxAttempts: number
   readonly consecutiveFailureLimit: number
+  readonly maxGlobalConcurrentRuns: number
 }
 
 export interface WorkspaceStats {
   readonly activeRuns: number
+  readonly globalActiveRuns: number
   readonly spentUsd: number
   readonly consecutiveFailures: number
   readonly emergencyStopped: boolean
@@ -28,6 +30,7 @@ export const DEFAULT_GUARDRAIL_LIMITS: GuardrailLimits = {
   maxToolCallsPerRun: 200,
   maxAttempts: 3,
   consecutiveFailureLimit: 3,
+  maxGlobalConcurrentRuns: 6,
 }
 
 const BUDGET_WARNING_RATIO = 0.8
@@ -50,6 +53,14 @@ export function evaluateGuardrails(
     breaches.push({
       guardrail: 'concurrency',
       detail: `${stats.activeRuns} active runs at limit ${limits.maxConcurrentRuns}.`,
+      haltsScheduling: true,
+    })
+  }
+
+  if (stats.globalActiveRuns >= limits.maxGlobalConcurrentRuns) {
+    breaches.push({
+      guardrail: 'global_concurrency',
+      detail: `${stats.globalActiveRuns} active runs across all workspaces at the global limit ${limits.maxGlobalConcurrentRuns}.`,
       haltsScheduling: true,
     })
   }

@@ -196,6 +196,7 @@ model Task {
   createdBy           Actor      @default(human)
   createdAt           DateTime   @default(now())
   enqueuedAt          DateTime?
+  mergeClaimedAt      DateTime?
 
   workspace    Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   runs         AgentRun[]

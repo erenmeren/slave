@@ -33,7 +33,13 @@ function world(overrides: Partial<World> = {}): World {
     tasks: [],
     agents: [alex, emma],
     limits: DEFAULT_GUARDRAIL_LIMITS,
-    stats: { activeRuns: 0, spentUsd: 0, consecutiveFailures: 0, emergencyStopped: false },
+    stats: {
+      activeRuns: 0,
+      globalActiveRuns: 0,
+      spentUsd: 0,
+      consecutiveFailures: 0,
+      emergencyStopped: false,
+    },
     ...overrides,
   }
 }
@@ -88,7 +94,13 @@ describe('decide', () => {
     const commands = decide(
       world({
         tasks: [task('TASK-1'), task('TASK-2', { requiredRole: 'frontend' })],
-        stats: { activeRuns: 2, spentUsd: 0, consecutiveFailures: 0, emergencyStopped: false },
+        stats: {
+          activeRuns: 2,
+          globalActiveRuns: 2,
+          spentUsd: 0,
+          consecutiveFailures: 0,
+          emergencyStopped: false,
+        },
       }),
     )
     expect(commands).toHaveLength(1)
@@ -98,10 +110,33 @@ describe('decide', () => {
     const commands = decide(
       world({
         tasks: [task('TASK-1')],
-        stats: { activeRuns: 0, spentUsd: 20, consecutiveFailures: 0, emergencyStopped: false },
+        stats: {
+          activeRuns: 0,
+          globalActiveRuns: 0,
+          spentUsd: 20,
+          consecutiveFailures: 0,
+          emergencyStopped: false,
+        },
       }),
     )
     expect(commands).toEqual([{ kind: 'halt', reason: 'budget_exhausted' }])
+  })
+
+  it('clamps the slot budget to the global remainder even with per-workspace room to spare', () => {
+    const commands = decide(
+      world({
+        tasks: [task('TASK-1'), task('TASK-2', { requiredRole: 'frontend' })],
+        limits: { ...DEFAULT_GUARDRAIL_LIMITS, maxConcurrentRuns: 3 },
+        stats: {
+          activeRuns: 0,
+          globalActiveRuns: 5,
+          spentUsd: 0,
+          consecutiveFailures: 0,
+          emergencyStopped: false,
+        },
+      }),
+    )
+    expect(commands).toHaveLength(1)
   })
 
   it('skips busy agents', () => {
@@ -131,7 +166,13 @@ describe('decide', () => {
       tasks: taskArray,
       agents: agentArray,
       limits: DEFAULT_GUARDRAIL_LIMITS,
-      stats: { activeRuns: 0, spentUsd: 0, consecutiveFailures: 0, emergencyStopped: false },
+      stats: {
+        activeRuns: 0,
+        globalActiveRuns: 0,
+        spentUsd: 0,
+        consecutiveFailures: 0,
+        emergencyStopped: false,
+      },
     } as const)
 
     // Should not throw when called with frozen arrays; implementation must not mutate.

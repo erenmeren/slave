@@ -144,9 +144,17 @@ async function loadAgentRows(
 async function loadRunStats(
   tx: Prisma.TransactionClient,
   workspaceId: WorkspaceId,
-): Promise<{ readonly activeRuns: number; readonly spentUsd: number; readonly consecutiveFailures: number }> {
+): Promise<{
+  readonly activeRuns: number
+  readonly globalActiveRuns: number
+  readonly spentUsd: number
+  readonly consecutiveFailures: number
+}> {
   const activeRuns = await tx.agentRun.count({
     where: { status: { in: [...NON_TERMINAL_RUN_STATUSES] }, task: { workspaceId } },
+  })
+  const globalActiveRuns = await tx.agentRun.count({
+    where: { status: { in: [...NON_TERMINAL_RUN_STATUSES] } },
   })
   const spend = await tx.agentRun.aggregate({
     where: { task: { workspaceId } },
@@ -190,7 +198,7 @@ async function loadRunStats(
     consecutiveFailures += 1
   }
 
-  return { activeRuns, spentUsd: spend._sum.costUsd ?? 0, consecutiveFailures }
+  return { activeRuns, globalActiveRuns, spentUsd: spend._sum.costUsd ?? 0, consecutiveFailures }
 }
 
 /**
@@ -209,6 +217,14 @@ async function loadRunStats(
  */
 const LOAD_WORLD_TIMEOUT_MS = 15_000
 const LOAD_WORLD_MAX_WAIT_MS = 5_000
+
+/**
+ * Spec §5: a hard cap on non-terminal `AgentRun`s across every workspace at once, not per
+ * workspace. A `Workspace` column would let N workspaces each configure their own limit and
+ * collectively blow the machine's real capacity for concurrent `claude` processes -- the whole
+ * point is a ceiling nothing on a per-workspace path can raise.
+ */
+const MAX_GLOBAL_CONCURRENT_RUNS = 6
 
 /**
  * Maps the database onto the domain's `World` (spec §4). This is the only place that translation
@@ -280,9 +296,11 @@ export async function loadWorld(workspaceId: WorkspaceId): Promise<LoadedWorld> 
       maxToolCallsPerRun: workspace.maxToolCallsPerRun,
       maxAttempts: workspace.maxAttempts,
       consecutiveFailureLimit: workspace.consecutiveFailureLimit,
+      maxGlobalConcurrentRuns: MAX_GLOBAL_CONCURRENT_RUNS,
     },
     stats: {
       activeRuns: runStats.activeRuns,
+      globalActiveRuns: runStats.globalActiveRuns,
       spentUsd: runStats.spentUsd,
       consecutiveFailures: runStats.consecutiveFailures,
       // Not hardcoded: a pause gate failure sets `Workspace.haltedReason` (spec §13.1), and M8's

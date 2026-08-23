@@ -404,3 +404,63 @@ describe('loadWorld stats.activeRuns and stats.spentUsd', () => {
     expect(world.stats.spentUsd).toBe(0)
   })
 })
+
+/**
+ * `stats.globalActiveRuns` (spec §5) counts non-terminal `AgentRun`s across every workspace, not
+ * just the one `loadWorld` was asked about -- it feeds a cross-workspace guardrail, so a second
+ * workspace's runs must be visible here even though nothing else this file loads ever crosses a
+ * workspace boundary.
+ */
+describe('loadWorld stats.globalActiveRuns', () => {
+  beforeEach(async (): Promise<void> => {
+    await prisma.$executeRawUnsafe(
+      'TRUNCATE TABLE "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
+    )
+  })
+
+  it('counts non-terminal runs across all workspaces while activeRuns stays scoped to one', async (): Promise<void> => {
+    const fixture = await seedFixture()
+
+    const otherWorkspace = await prisma.workspace.create({
+      data: {
+        name: 'Other Workspace',
+        repoPath: '/tmp/other',
+        verifyCommands: ['npm test'],
+        setupCommands: ['npm ci'],
+      },
+    })
+    const otherTeam = await prisma.team.create({
+      data: { workspaceId: otherWorkspace.id, name: 'Other Team' },
+    })
+    const otherAgent = await prisma.agent.create({
+      data: { teamId: otherTeam.id, name: 'Other Agent', role: 'backend' },
+    })
+    const otherTask = await prisma.task.create({
+      data: {
+        workspaceId: otherWorkspace.id,
+        title: 'otherTask',
+        description: 'hosts a run in a different workspace',
+        status: 'running',
+        requiredRole: 'backend',
+        maxAttempts: otherWorkspace.maxAttempts,
+      },
+    })
+    await prisma.agentRun.create({
+      data: { taskId: otherTask.id, agentId: otherAgent.id, status: 'working' },
+    })
+
+    const { world } = await loadWorld(workspaceId(fixture.workspaceId))
+
+    // The fixture workspace's own non-terminal run plus the other workspace's: both count toward
+    // the global figure, but only the fixture's own counts toward the scoped one.
+    expect(world.stats.activeRuns).toBe(1)
+    expect(world.stats.globalActiveRuns).toBe(2)
+  })
+
+  it('exposes the global concurrency limit as a fixed constant, not a Workspace column', async (): Promise<void> => {
+    const fixture = await seedFixture()
+
+    const { world } = await loadWorld(workspaceId(fixture.workspaceId))
+    expect(world.limits.maxGlobalConcurrentRuns).toBe(6)
+  })
+})

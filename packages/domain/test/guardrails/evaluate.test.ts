@@ -7,6 +7,7 @@ import {
 
 const CALM: WorkspaceStats = {
   activeRuns: 1,
+  globalActiveRuns: 1,
   spentUsd: 2,
   consecutiveFailures: 0,
   emergencyStopped: false,
@@ -58,6 +59,7 @@ describe('evaluateGuardrails', () => {
   it('reports every simultaneous breach', () => {
     const breaches = evaluateGuardrails(DEFAULT_GUARDRAIL_LIMITS, {
       activeRuns: 5,
+      globalActiveRuns: 0,
       spentUsd: 25,
       consecutiveFailures: 4,
       emergencyStopped: true,
@@ -73,6 +75,7 @@ describe('evaluateGuardrails', () => {
     // order is itself part of the contract, not an implementation detail.
     const breaches = evaluateGuardrails(DEFAULT_GUARDRAIL_LIMITS, {
       activeRuns: 5,
+      globalActiveRuns: 6,
       spentUsd: 25,
       consecutiveFailures: 4,
       emergencyStopped: true,
@@ -80,9 +83,22 @@ describe('evaluateGuardrails', () => {
     expect(breaches.map((b) => b.guardrail)).toEqual([
       'emergency_stop',
       'concurrency',
+      'global_concurrency',
       'budget_exhausted',
       'circuit_breaker',
     ])
+  })
+
+  it('halts scheduling when the global concurrency limit is reached', () => {
+    const breaches = evaluateGuardrails(DEFAULT_GUARDRAIL_LIMITS, { ...CALM, globalActiveRuns: 6 })
+    expect(breaches).toHaveLength(1)
+    expect(breaches[0]?.guardrail).toBe('global_concurrency')
+    expect(breaches[0]?.haltsScheduling).toBe(true)
+  })
+
+  it('does not breach global concurrency just below the limit', () => {
+    const breaches = evaluateGuardrails(DEFAULT_GUARDRAIL_LIMITS, { ...CALM, globalActiveRuns: 5 })
+    expect(breaches).toHaveLength(0)
   })
 
   it('does not breach on concurrency just below the limit', () => {
