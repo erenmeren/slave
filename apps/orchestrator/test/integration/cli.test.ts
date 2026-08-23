@@ -191,6 +191,21 @@ describe('the orchestrator CLI', () => {
     expect(`${result.stdout}${result.stderr}`).toMatch(/--workspace is required/)
   }, 30_000)
 
+  it('sets a workspace goal', async (): Promise<void> => {
+    const result = await runCli(['set-goal', '--workspace', fixture.workspaceId, '--goal', 'x'])
+
+    expect(result.code).toBe(0)
+    const ws = await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspaceId } })
+    expect(ws.goal).toBe('x')
+  })
+
+  it('exits non-zero for set-goal with no --goal given', async (): Promise<void> => {
+    const result = await runCli(['set-goal', '--workspace', fixture.workspaceId])
+
+    expect(result.code).not.toBe(0)
+    expect(`${result.stdout}${result.stderr}`).toMatch(/--goal is required/)
+  })
+
   it('tells an operator that clear-halt is not resume', async (): Promise<void> => {
     const result = await runCli(['help'])
     const help = `${result.stdout}${result.stderr}`

@@ -1,7 +1,7 @@
 import { realpathSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { claimResume, emergencyStop, refusalText, requestPause, requestStop } from '@ai-team-os/control'
+import { claimResume, emergencyStop, refusalText, requestPause, requestStop, setGoal } from '@ai-team-os/control'
 import { prisma } from '@ai-team-os/db/client'
 import { workspaceId as brandWorkspaceId, type WorkspaceId } from '@ai-team-os/domain'
 import { ClaudeCodeAdapter } from '@ai-team-os/providers'
@@ -24,6 +24,9 @@ const USAGE = `usage: orchestrator <command> [options]
   emergency-stop --workspace <id> [--by <name>]
                                        halt scheduling on the WHOLE workspace AND pause every
                                        active run in it -- the operator's stop-everything button
+  set-goal --workspace <id> --goal "<text>"
+                                       set the operator's standing instruction for what this
+                                       workspace's agents are working toward
 
   clear-halt and resume are different actions and it matters which you reach for.
   resume --run continues ONE paused run that is waiting to be continued.
@@ -320,6 +323,15 @@ export async function main(argv: readonly string[]): Promise<number> {
           `pause requested on ${requested.length} run(s), ${refused.length} already concluding. ` +
           `Retract with: clear-halt --workspace ${workspaceId}\n`,
       )
+      return 0
+    }
+
+    case 'set-goal': {
+      const workspaceId = await resolveWorkspace({ ...flags, workspace: requireFlag(flags, 'workspace') })
+      const goal = requireFlag(flags, 'goal')
+      const result = await setGoal(workspaceId, goal)
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(`goal set on ${workspaceId}\n`)
       return 0
     }
 

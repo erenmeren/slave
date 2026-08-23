@@ -22,6 +22,7 @@ export type ControlRefusal =
   | { readonly kind: 'dependency_not_found'; readonly taskId: string; readonly dependsOnTaskId: string }
   | { readonly kind: 'dependency_cycle'; readonly taskId: string; readonly dependsOnTaskId: string }
   | { readonly kind: 'workspace_not_found'; readonly workspaceId: string }
+  | { readonly kind: 'invalid_goal' }
 
 export function refusalText(refusal: ControlRefusal): string {
   switch (refusal.kind) {
@@ -50,5 +51,7 @@ export function refusalText(refusal: ControlRefusal): string {
       return `adding this dependency would create a cycle: ${refusal.dependsOnTaskId} already depends on ${refusal.taskId}`
     case 'workspace_not_found':
       return `no workspace with id ${refusal.workspaceId}`
+    case 'invalid_goal':
+      return 'a goal must be a non-empty text'
   }
 }
