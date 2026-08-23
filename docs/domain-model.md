@@ -1,11 +1,11 @@
 # Domain Model — `packages/domain`
 
-This document describes what exists in `@ai-team-os/domain` at the end of Milestone 1 (Tasks
-8-17): the Agent/Task/AgentRun split, both state machines, the guardrail and scheduler decision
-functions, the merge queue, and the event envelope. `packages/domain` is pure — it has no
-runtime side effects, no persistence, and no framework dependency. It defines the contract that
-M2 (Prisma, events, `LISTEN/NOTIFY`) and M3 (the Claude Code adapter) build on without changing
-its exported shapes.
+This document describes what exists in `@ai-team-os/domain` (kept current through M8): the
+Agent/Task/AgentRun split, both state machines, the guardrail and scheduler decision functions,
+the merge queue, the review-verdict and plan-graph contracts, and the event envelope.
+`packages/domain` is pure — it has no runtime side effects, no persistence, and no framework
+dependency. It defines the contract the persistence, adapter, orchestrator, and web layers
+build on without changing its exported shapes.
 
 All names below are read directly from `packages/domain/src`; every function, type, and file
 path referenced here exists in the code as written.
@@ -292,7 +292,7 @@ to get wrong by habit: **a run's workspace must be derived through `agent.team.w
 through `task.workspaceId`.** A query scoped through `task` silently drops every planning run —
 exactly the run an emergency stop, the global concurrency count, or the budget guardrail most
 needs to reach, since it is still spending money and still occupying a concurrency slot. M8b's own
-implementation carries this through nine call sites across `apps/orchestrator` and
+implementation carries this through fifteen call sites (nine plan-named, six compile-driven) across `apps/orchestrator` and
 `packages/control` (the orphan sweep, the per-tick sweep, `loadWorld`'s active-run and spend
 counts, the resume-intent scan, `pauseActiveRuns`, the planning dispatch's own live-run and
 retry-cap queries, and the CLI `status` command's active-run listing) — every one of them
@@ -307,9 +307,10 @@ a new guardrail kind to do it:
 - **Review retry cap:** at most 2 review runs per implementation attempt (`review.ts`'s
   `REVIEW_RETRY_CAP`). Counted from the task's latest implementation run's `startedAt` forward, so
   a rework's fresh implementation attempt gets its own fresh count.
-- **Planning retry cap:** at most 2 planning runs per goal-set (`planning.ts`'s
-  `PLANNING_RETRY_CAP`). Counted since the workspace's latest `workspace.goal_set` event, so
-  re-setting the goal resets the count.
+- **Planning retry cap:** at most 2 FAILED planning runs per goal-set (`planning.ts`'s
+  `PLANNING_RETRY_CAP` — the count filters `status: 'failed'`; a succeeded run whose graph was
+  dropped by the ANY-task guard does not count). Counted since the workspace's latest
+  `workspace.goal_set` event, so re-setting the goal resets the count.
 
 At the cap, dispatch goes silent rather than emitting a third escalation event: the two
 `run.failed` events each failed attempt already wrote **are** the escalation an operator sees, the

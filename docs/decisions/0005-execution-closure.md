@@ -12,7 +12,9 @@ Four things, closing M8a's half of the M8 gate ("a task → merged branch, unatt
 
 1. **Definition of Done is verify green AND independent QA approval, not verify green alone.**
    A task that passes its own verify commands moves to `reviewing`, not `done`. A dedicated
-   `reviewer`-role agent — never the task's own author, by construction (roles differ) — judges
+   `reviewer`-role agent — a different agent than the author in the seeded org by role
+   convention, though nothing in `review.ts` structurally excludes an agent who also implements
+   (free-form roles, ADR 0006, make that combination expressible) — judges
    the diff and returns a Zod-validated `{ verdict: "approve" | "reject", reason }`. Only
    `approve` moves the task toward merge; `reject` re-enters the ordinary rework path with the
    reviewer's reason as the next run's input, the same channel a failed verify already uses.
@@ -24,10 +26,12 @@ Four things, closing M8a's half of the M8 gate ("a task → merged branch, unatt
 3. **`autoMerge` is consulted by the merge pass, not by review conclusion.** An approved task
    always moves to `merging`; whether that pass actually merges is a separate question answered
    at merge time, not baked into the state machine as a second edge.
-4. **Retry caps escalate by counting `run.failed` events, not by inventing a new guardrail type.**
-   The review pass caps itself at 2 review runs per implementation attempt. At the cap, dispatch
-   goes silent rather than emitting a third event — the two `run.failed` rows already on the
-   record are the escalation an operator reads.
+4. **Retry caps escalate by the `run.failed` rows already on the record, not by inventing a new
+   guardrail type.** The review pass caps itself at 2 review runs per implementation attempt
+   (counted by review runs — any status — newer than the latest implementation run's
+   `startedAt`); the planning pass at 2 FAILED runs per goal-set. At either cap, dispatch goes
+   silent rather than emitting a third event — the failed rows are the escalation an operator
+   reads.
 
 ## Rationale
 

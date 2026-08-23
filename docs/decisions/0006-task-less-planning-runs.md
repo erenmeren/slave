@@ -13,7 +13,9 @@ not a task, so there is nothing yet to attach one to.
 
 That one column change forces a scoping rule everywhere a run is looked up by workspace:
 **a run's workspace must be derived through `agent.team.workspaceId`, never through
-`task.workspaceId`.** `docs/domain-model.md` documents the nine call sites this was carried
+`task.workspaceId`.** `docs/domain-model.md` documents the nine sites the plan named — plus six
+more compile-driven siblings the implementation surfaced (single-run lookups in
+pause/resume/stop, the CLI's `mustGetRun`, the web control route), fifteen in all — carried
 through (the orphan sweep, the per-tick sweep, `loadWorld`'s active-run and spend counts, the
 resume-intent scan, `pauseActiveRuns`, the planning dispatch's own live-run and retry-cap queries,
 and the CLI `status` command). Every one of them scoped through `Task` before this change, and
@@ -34,7 +36,8 @@ Three further decisions of record, all from the M8b design's user-decision table
   practice — visibility is the safeguard, not a gate.
 - **Task roles are free-form text**, not restricted to a role some agent in the workspace actually
   has. This overrode the design's own recommendation, on the user's explicit call. The mitigation
-  is the same visibility principle: `decide()` already reports `skippedNoRole` every tick for a
+  is the same visibility principle: `loadWorld` already computes, and the tick report already
+  carries, `skippedNoRole` every tick for a
   task no agent can pick up, and the board shows an unstarted task sitting there rather than the
   system silently discarding or rewriting a role the planner chose.
 
@@ -52,8 +55,8 @@ are about a task, and one new kind is not.
 ### Why the scoping invariant is the real cost of this decision, not a detail
 
 The nullable column is one line in a Prisma schema. The invariant it forces is the actual
-engineering cost, and it is the kind of cost that does not announce itself: every one of the nine
-sites compiled and passed its existing tests before the fix, because `task: { workspaceId }` and
+engineering cost, and it is the kind of cost that does not announce itself: every one of the
+fifteen sites compiled and passed its existing tests before the fix, because `task: { workspaceId }` and
 `agent: { team: { workspaceId } }` return identical results for every run that has a task. The gap
 is invisible until the first task-less run exists, at which point every un-migrated site silently
 loses it — no type error, no failing assertion, just a query that returns one fewer row than it
@@ -112,7 +115,7 @@ with.
 
 - **A placeholder/synthetic task for the planning run.** Rejected above — manufactures a
   non-task to satisfy a schema constraint, pushing a special case onto every `Task` consumer
-  instead of onto the nine run-scoping sites that actually needed it.
+  instead of onto the fifteen run-scoping sites that actually needed it.
 - **A dispatch-side gate against the self-race**, closing the window between "is the board empty"
   and "start the run." Rejected: as detailed above, it does not eliminate the need for
   `concludePlanning`'s own guard, and the version of the fix that looks complete — marking a
@@ -128,8 +131,8 @@ with.
 
 ## Consequences
 
-- Every future task-less run kind must re-run the nine-site scoping audit this decision
-  established, not assume the invariant holds by default.
+- Every future task-less run kind must re-run the run-scoping audit this decision established
+  (the plan's nine named sites plus every compile-flagged sibling — fifteen the first time), not assume the invariant holds by default.
 - `apps/orchestrator` and `packages/control` code that queries `AgentRun` by workspace now carries
   a standing convention — `agent: { team: { workspaceId } }` — that a reviewer must check by name,
   since `task: { workspaceId }` still compiles and still passes tests against task-bearing runs.

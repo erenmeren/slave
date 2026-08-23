@@ -78,20 +78,21 @@ the concurrency limit, the budget and the failure breaker hold: they are enforce
 function with its own tests, and the tick cannot start a run the scheduler did not ask for.
 
 Past `decide()`'s own `start_run`/`halt` commands, `tick()` (`tick.ts`) runs a fixed sequence of
-passes every call, each reacting to state `decide()` never sees:
+passes every call, each reacting to state `decide()` never sees. Execution order within one tick
+is schedule first, then resume, then plan, review, merge (tick.ts:239-257):
 
-1. **Reconcile/resume** (`resumeRequestedRuns`) — claims and spawns any run a control-layer
+1. **Schedule** (`decide()`'s `start_run` commands, executed by `startRun`) — provisions a
+   worktree, spawns the implementation run, unchanged since M3/M7.
+2. **Reconcile/resume** (`resumeRequestedRuns`) — claims and spawns any run a control-layer
    `resume` left as an intent (`paused`, `resumeRequestedAt` set), the same claim-then-spawn split
    §3.4's orphan pass depends on.
-2. **Plan** (`dispatchPlanning`, `planning.ts`) — when the workspace has a `goal` and an empty
+3. **Plan** (`dispatchPlanning`, `planning.ts`) — when the workspace has a `goal` and an empty
    board, starts a planning run for the `manager`-role agent **in the primary checkout**
    (`workspace.repoPath`), not a worktree: there is no task yet, so there is nothing to provision.
    The run has no `Task` row at all (M8b's task-less run, `AgentRun.taskId: null`); its prompt asks
    for a JSON task graph, and a valid one becomes tasks + dependencies in one transaction
-   (`concludePlanning`). Bounded by a 2-failures-per-goal-set retry cap; a goal with no `manager`
+   (`concludePlanning`). Bounded by a 2-failed-runs-per-goal-set retry cap; a goal with no `manager`
    agent escalates once via `guardrail.tripped` (`no_planner`).
-3. **Schedule** (`decide()`'s `start_run` commands, executed by `startRun`) — provisions a
-   worktree, spawns the implementation run, unchanged since M3/M7.
 4. **Verify** — chained onto each run's pump (`verifyConcludedRun`, not a separate tick pass): on
    green, the task moves to `reviewing` and stops there; it no longer advances straight to `done`.
 5. **Review** (`dispatchReviews`, `review.ts`) — starts a QA review run for every `reviewing` task
@@ -104,11 +105,12 @@ passes every call, each reacting to state `decide()` never sees:
 6. **Merge** (`runMergePass`, `merge.ts`) — serialized: claims at most one `merging` task per tick
    via a conditioned `updateMany` on a claim column (`Task.mergeClaimedAt`, null → set), so
    overlapping ticks cannot double-execute. FIFO by the task's latest `task.review_approved` event.
-   Rebases the task's branch onto `main` in its preserved worktree, **re-verifies the rebased
-   result** (the real gate — two independently green branches can still break `main` together),
-   then merges with a task-keyed `--no-ff` commit. Conflict or a red re-verify releases the claim
-   and returns the task to `rework` with the detail; a second failure on the same task escalates to
-   a workspace halt. This is where `Workspace.autoMerge` is actually read (Decision 5 of the M8a
+   Rebases the task's branch onto the workspace's `baseBranch` in its preserved worktree,
+   **re-verifies the rebased result** (the real gate — two independently green branches can still
+   break the base together), then merges with a task-keyed `--no-ff` commit. Conflict or a red
+   re-verify releases the claim and sends the task back through `rejectTask` — `rework`, or
+   `failed` when the attempt cap is exhausted; a second failure on the same task escalates to a
+   workspace halt. This is where `Workspace.autoMerge` is actually read (Decision 5 of the M8a
    design): when it is `false`, an approved task is marked `done` here without merging, its branch
    left for a human. A claim left behind by a crashed process is released back to `rework` by the
    startup reconcile pass, exactly like the orphan-run pattern it mirrors.
@@ -131,8 +133,8 @@ They compose without either changing: while the column is set, every `loadWorld`
 `stats.emergencyStopped: true`, so `decide()` returns the command every tick. The scheduling stop
 persists because its *input* persists, not because the command does.
 
-**Emergency stop** (M8a) is a third way the workspace-halt column gets set, alongside a pause-gate
-failure and an unverifiable workspace: `packages/control`'s `emergencyStop(workspaceId,
+**Emergency stop** (M8a) is a fourth way the workspace-halt column gets set, alongside a
+pause-gate failure, an unverifiable workspace, and a repeated merge failure (`merge.ts`): `packages/control`'s `emergencyStop(workspaceId,
 requestedBy)` sets `haltedReason` first-writer-wins, then fans `requestPause` out to every active
 run in the workspace (scoped through `agent -> team`, so a task-less planning run is reached too;
 partial refusal is tolerated, the halt stands regardless). It is reachable from two callers over

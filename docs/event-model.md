@@ -26,13 +26,13 @@ Design context: `packages/domain/src/docs/superpowers/specs/2026-08-18-m2-persis
 one member per event type, each with its own `payload` shape. Every member shares an envelope of
 `seq`, `ts`, `workspaceId`, optional `taskId` / `agentId` / `runId`, and `actor`.
 
-`taskId` was optional in the schema from the start, but until M8b nothing actually omitted it in
-practice — every event the orchestrator wrote described a task. M8b's planning run changed that:
-it has no `Task` row (`AgentRun.taskId: null`, see `docs/domain-model.md`'s scoping-invariant
-section), so its events — `run.started`, `run.output`, `run.failed`, `workspace.plan_created`, and
-so on — genuinely carry no `taskId`, `workspaceId`/`agentId`/`runId` only. A consumer that assumed
-`taskId` was always present because it always had been would break on the first planning run it
-observed.
+`taskId` was optional in the schema from the start, and workspace-scoped events have always
+omitted it — the halt announcement's and budget warning's `guardrail.tripped`, M8a's emergency
+stop. What M8b's planning run changed is that a whole RUN's event stream now carries no `taskId`:
+the run has no `Task` row (`AgentRun.taskId: null`, see `docs/domain-model.md`'s
+scoping-invariant section), so its `run.started`, `run.output`, `run.failed`,
+`workspace.plan_created` and so on carry `workspaceId`/`agentId`/`runId` only. A consumer that
+assumed run-scoped events always name a task would break on the first planning run it observed.
 
 At write time the fields come from two different places:
 
@@ -178,10 +178,10 @@ Six of the 28 are M8's additions: `task.review_started`, `task.review_approved`,
 `task.review_rejected` (the review pass, §3 of the M8a design), `task.merge_failed` (the merge
 queue), and `workspace.goal_set`, `workspace.plan_created` (the planning run, M8b). Each landed
 through the same three-part change the next paragraph describes, and each extends the M6/M7
-exhaustive maps (`TYPES_BY_KIND` and the activity-card registry in `apps/web`, the latter a
-`satisfies Record<DomainEventType, ...>` rather than a type annotation) that fail the TypeScript
-build on a missing arm — the same enforcement mechanism, applied to six more members rather than a
-new one.
+maps in `apps/web`: the activity-card registry (a `satisfies Record<DomainEventType, ...>`) fails
+the TypeScript build on a missing arm, while `TYPES_BY_KIND` groups types into arrays the
+compiler cannot prove complete — its exhaustiveness is enforced by the runtime completeness test
+its own comment points at, not by the build.
 
 The log is append-only: a row, once written, cannot be deleted. If the database enum contained a
 member the Zod union did not recognize, a row with that `type` could be inserted (nothing at the
