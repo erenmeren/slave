@@ -209,6 +209,26 @@ describe('dispatchReviews', () => {
     expect(started).toEqual([])
     expect(await prisma.agentRun.count({ where: { kind: 'review' } })).toBe(2)
   })
+
+  it('concludes the run failed instead of throwing when the diff itself cannot be produced', async (): Promise<void> => {
+    const reviewDeps = await seedReviewingTask(fixture)
+    const team = await prisma.team.findFirstOrThrow()
+    await prisma.agent.create({ data: { teamId: team.id, name: 'Riley', role: 'reviewer' } })
+    // A branch recorded on the task but gone from git itself -- the step-2 null check cannot catch
+    // it, so the dispatch reaches `git diff` and the diff fails.
+    await prisma.task.update({ where: { id: fixture.taskId }, data: { branch: 'no-such-branch' } })
+
+    const started = await dispatchReviews(reviewDeps)
+
+    expect(started).toEqual([])
+    const run = await prisma.agentRun.findFirstOrThrow({ where: { kind: 'review' } })
+    expect(run.status).toBe('failed')
+    expect(run.terminalAt).not.toBeNull()
+    const failures = await prisma.executionEvent.findMany({ where: { runId: run.id, type: 'run_failed' } })
+    expect(failures).toHaveLength(1)
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+    expect(task.status).toBe('reviewing')
+  })
 })
 
 describe('buildReviewPrompt', () => {

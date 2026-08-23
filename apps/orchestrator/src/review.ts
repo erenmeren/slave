@@ -180,24 +180,28 @@ async function dispatchReview(deps: TickDeps, task: ReviewableTask): Promise<Run
   })
   const runId = brandRunId(run.id)
 
-  const rawDiff = await gitIn(workspace.repoPath, 'diff', `${workspace.baseBranch}...${task.branch}`)
-  const diff = rawDiff.length > DIFF_CHAR_LIMIT ? `${rawDiff.slice(0, DIFF_CHAR_LIMIT)}\n[diff truncated]` : rawDiff
-
-  await appendEvent({
-    type: 'task.review_started',
-    workspaceId: task.workspaceId,
-    taskId: task.id,
-    agentId: reviewer.id,
-    runId: run.id,
-    actor: 'system',
-    payload: { title: task.title },
-  })
-
   // Declared outside the `try` for the same reason `startRun` does: the catch below needs to tell
   // "never spawned" from "spawned, then something else failed" so it never abandons a live agent.
   let handle: { readonly pid: number } | null = null
 
   try {
+    // Inside the `try`, not before it: a branch recorded on the task can be gone from git itself
+    // (the step-2 null check cannot see that), and a diff failure outside this handler would leave
+    // the run wedged non-terminal in `starting` -- counted as live by step 1 on every later tick --
+    // while the thrown error aborts the rest of the pass.
+    const rawDiff = await gitIn(workspace.repoPath, 'diff', `${workspace.baseBranch}...${task.branch}`)
+    const diff = rawDiff.length > DIFF_CHAR_LIMIT ? `${rawDiff.slice(0, DIFF_CHAR_LIMIT)}\n[diff truncated]` : rawDiff
+
+    await appendEvent({
+      type: 'task.review_started',
+      workspaceId: task.workspaceId,
+      taskId: task.id,
+      agentId: reviewer.id,
+      runId: run.id,
+      actor: 'system',
+      payload: { title: task.title },
+    })
+
     const { settingsPath, pauseFlagPath } = runFilePaths(workspace.repoPath, runId)
     writeSettingsFile({ settingsPath, hookPath: deps.hookPath })
 
