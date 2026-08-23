@@ -23,6 +23,9 @@ packages/domain/src/
                            DEFAULT_GUARDRAIL_LIMITS
   scheduler/decide.ts      SchedulableTask, SchedulableAgent, World, Command, decide
   merge/queue.ts           MergeCandidate, nextMergeCandidate
+  review/verdict.ts        ReviewVerdict, reviewVerdictSchema, parseReviewVerdict
+  planning/graph.ts        PlanTask, PlanGraph, planGraphSchema, parsePlanGraph
+  json/last-object.ts      jsonObjectsLastToFirst — the last-JSON-object scan shared by both parsers above
   events/schema.ts         executionEventSchema, ExecutionEvent, parseExecutionEvent
   index.ts                DOMAIN_VERSION, re-exports everything above
 ```
@@ -194,6 +197,34 @@ together, so the short-circuit exists to make that impossible at the domain-func
 merely unlikely. When no merge is in progress, eligible candidates (`!blockedUntilRebase`) are
 sorted by `enqueuedAt`, with `taskId` as a deterministic tiebreaker, and the earliest is returned.
 
+The orchestrator's own `mergeInProgress` (M8a) is not a flag in memory — it is `Task.mergeClaimedAt`,
+a nullable timestamp set by a conditioned `updateMany` (`status: 'merging', mergeClaimedAt: null`
+→ set) the same first-writer-wins claim shape M5's resume intent uses. A non-null claim with no
+live daemon behind it — the process crashed mid-merge — is released back to `rework` by the
+startup reconcile pass, not by the merge pass itself, exactly the way an orphaned run is
+reconciled only at startup (§3.4 in `docs/architecture.md`).
+
+## The review verdict and the planning graph contract
+
+Two parsers, both Zod-validated and both built on one shared scan:
+
+- `review/verdict.ts`'s `parseReviewVerdict(text): Result<ReviewVerdict, string>` recovers
+  `{ verdict: 'approve' | 'reject', reason: string }` from a review run's accumulated output.
+- `planning/graph.ts`'s `parsePlanGraph(text): Result<PlanGraph, string>` recovers
+  `{ tasks: PlanTask[] }`, `PlanTask` being `{ key, title, description, role, dependsOn }`, from a
+  planning run's output. Beyond the Zod shape (1–20 tasks), `parsePlanGraph` checks structure a
+  schema alone cannot: unique keys, every `dependsOn` naming a key that exists, no
+  self-dependency, and no cycle (Kahn's algorithm over the plan-local keys). `role` is free-form
+  text — the schema does not restrict it to a role any agent in the workspace actually has.
+
+Both scan `jsonObjectsLastToFirst` (`json/last-object.ts`) — a shared helper extracted from the
+verdict parser's original last-object-wins scan — for the **last** JSON object in the text that
+satisfies the relevant schema, because agents wrap their JSON answer in prose and code fences.
+Once a candidate passes the shape check it is taken as final: a structural violation (e.g. a
+graph's dangling dependency) rejects that candidate outright rather than falling back to an
+earlier one, since silently executing an earlier draft nobody signed off on would be worse than
+failing loudly.
+
 ## Event envelope
 
 `events/schema.ts` defines a shared envelope (`seq`, `ts`, `workspaceId`, optional `taskId` /
@@ -247,6 +278,43 @@ The event log itself — its envelope, the single write gate, the single-writer 
 path depends on, and the notification model — is documented separately in
 `docs/event-model.md`, since it is a system in its own right rather than a straightforward table
 mapping.
+
+### M8 schema additions, and the scoping invariant they force
+
+- **`Workspace.goal String?`** — the operator's standing instruction a planning run decomposes
+  (M8b). An unset goal is ordinary, not an error state; the planning pass simply never fires.
+- **`Task.mergeClaimedAt DateTime?`** — the merge queue's claim column, described above.
+- **`AgentRun.taskId` is now nullable** (`String?`). A `kind: 'planning'` run has no `Task` row at
+  all: it works toward `Workspace.goal`, not a task, so there is nothing to attach one to.
+
+That nullability is a one-way door with a binding consequence, stated plainly because it is easy
+to get wrong by habit: **a run's workspace must be derived through `agent.team.workspaceId`, never
+through `task.workspaceId`.** A query scoped through `task` silently drops every planning run —
+exactly the run an emergency stop, the global concurrency count, or the budget guardrail most
+needs to reach, since it is still spending money and still occupying a concurrency slot. M8b's own
+implementation carries this through nine call sites across `apps/orchestrator` and
+`packages/control` (the orphan sweep, the per-tick sweep, `loadWorld`'s active-run and spend
+counts, the resume-intent scan, `pauseActiveRuns`, the planning dispatch's own live-run and
+retry-cap queries, and the CLI `status` command's active-run listing) — every one of them
+re-scoped from `task: { workspaceId }` to `agent: { team: { workspaceId } }` in the same change
+that made `taskId` nullable.
+
+### The retry-cap convention: escalation by `run.failed`, not a new guardrail type
+
+Both the review pass and the planning pass bound their own retries the same way, and neither adds
+a new guardrail kind to do it:
+
+- **Review retry cap:** at most 2 review runs per implementation attempt (`review.ts`'s
+  `REVIEW_RETRY_CAP`). Counted from the task's latest implementation run's `startedAt` forward, so
+  a rework's fresh implementation attempt gets its own fresh count.
+- **Planning retry cap:** at most 2 planning runs per goal-set (`planning.ts`'s
+  `PLANNING_RETRY_CAP`). Counted since the workspace's latest `workspace.goal_set` event, so
+  re-setting the goal resets the count.
+
+At the cap, dispatch goes silent rather than emitting a third escalation event: the two
+`run.failed` events each failed attempt already wrote **are** the escalation an operator sees, the
+same way a task's ordinary `attempt`/`maxAttempts` exhaustion is read from the run history rather
+than from a dedicated "gave up" event.
 
 ## Environment note: `npm test` / `npm run typecheck` and `allow-scripts`
 
