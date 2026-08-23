@@ -11,6 +11,7 @@ const KIND_LABEL: Record<ActivityKind, string> = {
   tasks: 'Tasks',
   interventions: 'Interventions',
   guardrails: 'Guardrails',
+  workspace: 'Workspace',
 }
 
 // The 20 domain event types the "Advanced" popover lists — every key of `EVENT_TYPE_BY_DOMAIN_TYPE`

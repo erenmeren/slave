@@ -19,12 +19,12 @@ describe('parseActivityFilters', () => {
     const result = parseActivityFilters(new URLSearchParams('agents=a1,a2&kinds=guardrails&types=run.output'))
     if (!result.ok) throw new Error(result.error)
     expect(result.filters.agents).toEqual(['a1', 'a2'])
-    expect([...result.filters.types].sort()).toEqual([
-      'guardrail.tripped',
-      'run.output',
-      'workspace.goal_set',
-      'workspace.plan_created',
-    ])
+    expect([...result.filters.types].sort()).toEqual(['guardrail.tripped', 'run.output'])
+  })
+  it('expands kinds=workspace to the goal and plan event types', () => {
+    const result = parseActivityFilters(new URLSearchParams('kinds=workspace'))
+    if (!result.ok) throw new Error(result.error)
+    expect([...result.filters.types].sort()).toEqual(['workspace.goal_set', 'workspace.plan_created'])
   })
   it('returns EMPTY-shaped filters for no params', () => {
     const result = parseActivityFilters(new URLSearchParams())

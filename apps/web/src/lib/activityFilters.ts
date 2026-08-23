@@ -1,5 +1,5 @@
 /**
- * The activity timeline's filter vocabulary: the five user-facing "kinds" that group the 28
+ * The activity timeline's filter vocabulary: the six user-facing "kinds" that group the 28
  * `DomainEventType`s, the `ActivityFilters` shape parsed from a URL's query params, and the
  * predicate that decides whether one event matches those filters. Pure — no `prisma`, no React —
  * so it is importable from both server routes (`?agents=`, `?tasks=`, `?types=`, `?kinds=` parsing)
@@ -9,7 +9,7 @@
 import { z } from 'zod'
 import { EVENT_TYPE_BY_DOMAIN_TYPE, type DomainEventType } from '@ai-team-os/db'
 
-export const ACTIVITY_KINDS = ['runs', 'tool_calls', 'tasks', 'interventions', 'guardrails'] as const
+export const ACTIVITY_KINDS = ['runs', 'tool_calls', 'tasks', 'interventions', 'guardrails', 'workspace'] as const
 
 export type ActivityKind = (typeof ACTIVITY_KINDS)[number]
 
@@ -38,7 +38,11 @@ export const TYPES_BY_KIND = {
     'task.merge_failed',
   ],
   interventions: ['run.pause_requested', 'run.resume_requested', 'run.stopped', 'agent.message_sent'],
-  guardrails: ['guardrail.tripped', 'workspace.goal_set', 'workspace.plan_created'],
+  guardrails: ['guardrail.tripped'],
+  // The workspace's own lifecycle -- the goal and the plan it became. Not under `guardrails`:
+  // the kinds are user vocabulary (FilterBar chips), and a user filtering to guardrail trips
+  // must not receive planning events, nor lose the only chip that can filter to them.
+  workspace: ['workspace.goal_set', 'workspace.plan_created'],
 } as const satisfies Record<ActivityKind, readonly DomainEventType[]>
 
 export interface ActivityFilters {
