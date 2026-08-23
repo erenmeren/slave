@@ -173,6 +173,28 @@ export async function reconcileOrphans(deps: SweepDeps): Promise<number> {
     failed += 1
   }
 
+  // Crash recovery for the merge pass (spec §4): a claimed merge whose process died mid-way is the
+  // same shape a run orphan is -- a claim nothing will ever release -- so it gets the same M5
+  // resume-claim treatment applied to tasks instead of runs. No attempt is counted, for the same
+  // reason a dead daemon does not count against a run's orphan: a crashed process is not the agent
+  // failing.
+  const interrupted = await db.task.findMany({
+    where: { workspaceId: deps.workspaceId, status: 'merging', mergeClaimedAt: { not: null } },
+  })
+  for (const task of interrupted) {
+    await db.task.update({
+      where: { id: task.id },
+      data: { status: 'rework', mergeClaimedAt: null, lastRejectionReason: 'merge interrupted' },
+    })
+    await appendEvent({
+      type: 'task.merge_failed',
+      workspaceId: deps.workspaceId,
+      taskId: task.id,
+      actor: 'system',
+      payload: { reason: 'merge interrupted' },
+    })
+  }
+
   return failed
 }
 

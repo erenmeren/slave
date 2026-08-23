@@ -504,4 +504,37 @@ describe('sweep and reconcileOrphans', () => {
     await expect(reconcileOrphans(deps)).rejects.toThrow(/startup/i)
   })
 
+  it('recovers a task whose merge was interrupted by a crash mid-claim', async (): Promise<void> => {
+    // Same shape as a run orphan -- a claim nothing will ever release -- but for a task's merge
+    // claim rather than a run's pid, since the merge pass claims and processes in one call with no
+    // row of its own to be seen mid-spawn.
+    await prisma.task.update({
+      where: { id: fixture.taskId },
+      data: { status: 'merging', mergeClaimedAt: new Date() },
+    })
+
+    await reconcileOrphans(deps)
+
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+    expect(task.status).toBe('rework')
+    expect(task.mergeClaimedAt).toBeNull()
+    expect(task.lastRejectionReason).toBe('merge interrupted')
+    // No attempt increment: a dead daemon is not the agent failing.
+    expect(task.attempt).toBe(0)
+    expect(await eventTypesFor(fixture.workspaceId)).toEqual(['task.merge_failed'])
+  })
+
+  it('leaves a merging task with no claim alone', async (): Promise<void> => {
+    await prisma.task.update({
+      where: { id: fixture.taskId },
+      data: { status: 'merging', mergeClaimedAt: null },
+    })
+
+    await reconcileOrphans(deps)
+
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+    expect(task.status).toBe('merging')
+    expect(task.mergeClaimedAt).toBeNull()
+    expect(await eventTypesFor(fixture.workspaceId)).toEqual([])
+  })
 })

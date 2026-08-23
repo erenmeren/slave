@@ -12,6 +12,7 @@ import {
 } from '@ai-team-os/domain'
 import { appendEvent } from '@ai-team-os/events'
 import { type AgentRuntimeAdapter, writeSettingsFile } from '@ai-team-os/providers'
+import { runMergePass } from './merge.js'
 import { pumpRun } from './pump.js'
 import { executeResume } from './resume.js'
 import { dispatchReviews } from './review.js'
@@ -199,6 +200,12 @@ export async function tick(deps: TickDeps): Promise<TickReport> {
   await resumeRequestedRuns(deps)
 
   const reviewsStarted = await dispatchReviews(deps)
+
+  // After the review pass, not before: a task cannot reach `merging` until a review approves it,
+  // so nothing this call would find can exist before `dispatchReviews` has had its chance to
+  // produce one this same tick. Serialized to at most one merge per tick (spec §4) inside
+  // `runMergePass` itself.
+  await runMergePass(deps.workspaceId)
 
   return { started, halted: null, skippedNoRole, reviewsStarted }
 }
