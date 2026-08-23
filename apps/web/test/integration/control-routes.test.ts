@@ -7,6 +7,7 @@ import { POST as pausePOST } from '../../src/app/api/w/[workspaceId]/runs/[runId
 import { POST as resumePOST } from '../../src/app/api/w/[workspaceId]/runs/[runId]/resume/route.js'
 import { POST as stopPOST } from '../../src/app/api/w/[workspaceId]/runs/[runId]/stop/route.js'
 import { POST as messagePOST } from '../../src/app/api/w/[workspaceId]/runs/[runId]/message/route.js'
+import { POST as emergencyStopPOST } from '../../src/app/api/w/[workspaceId]/emergency-stop/route.js'
 
 interface Fixture {
   readonly workspace: { readonly id: string; readonly repoPath: string }
@@ -218,6 +219,41 @@ describe('the control routes', () => {
         params: Promise.resolve({ workspaceId: fixture.otherWorkspace.id, runId: fixture.run.id }),
       })
       expect(response.status).toBe(404)
+    })
+  })
+
+  describe('emergency-stop', () => {
+    it('halts the workspace and pause-requests its working run, returning 200', async (): Promise<void> => {
+      const response = await emergencyStopPOST(new Request('http://x', { method: 'POST' }), {
+        params: Promise.resolve({ workspaceId: fixture.workspace.id }),
+      })
+      expect(response.status).toBe(200)
+      expect(await response.json()).toEqual({ ok: true })
+      const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspace.id } })
+      expect(workspace.haltedReason).not.toBeNull()
+      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: fixture.run.id } })
+      expect(run.status).toBe('pause_requested')
+    })
+
+    it('404s JSON { error } on an unknown workspace id', async (): Promise<void> => {
+      const response = await emergencyStopPOST(new Request('http://x', { method: 'POST' }), {
+        params: Promise.resolve({ workspaceId: '00000000-0000-4000-8000-000000000000' }),
+      })
+      expect(response.status).toBe(404)
+      expect(await response.json()).toEqual({ error: expect.any(String) })
+    })
+
+    it('posting twice still returns 200 (already halted is not an error)', async (): Promise<void> => {
+      const first = await emergencyStopPOST(new Request('http://x', { method: 'POST' }), {
+        params: Promise.resolve({ workspaceId: fixture.workspace.id }),
+      })
+      expect(first.status).toBe(200)
+
+      const second = await emergencyStopPOST(new Request('http://x', { method: 'POST' }), {
+        params: Promise.resolve({ workspaceId: fixture.workspace.id }),
+      })
+      expect(second.status).toBe(200)
+      expect(await second.json()).toEqual({ ok: true })
     })
   })
 })
