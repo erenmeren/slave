@@ -50,6 +50,7 @@ export interface OverviewSnapshot {
     readonly haltedAt: string | null
     readonly budgetUsd: number
     readonly spentUsd: number
+    readonly goal: string | null
   }
   readonly agents: readonly AgentCardData[]
   readonly tasks: { readonly active: number; readonly blocked: number; readonly done: number; readonly failed: number }
@@ -161,6 +162,7 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
       haltedAt: workspace.haltedAt?.toISOString() ?? null,
       budgetUsd: workspace.budgetUsd,
       spentUsd: spent._sum.costUsd ?? 0,
+      goal: workspace.goal,
     },
     agents: agents.map((agent) => {
       const run = liveRunByAgent.get(agent.id) ?? null

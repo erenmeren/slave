@@ -26,7 +26,7 @@ const agent = (over: Partial<AgentCardData>): AgentCardData => ({
 })
 
 const snapshot = (agents: readonly AgentCardData[]): OverviewSnapshot => ({
-  workspace: { id: 'w1', name: 'W', haltedReason: null, haltedAt: null, budgetUsd: 100, spentUsd: 3 },
+  workspace: { id: 'w1', name: 'W', haltedReason: null, haltedAt: null, budgetUsd: 100, spentUsd: 3, goal: null },
   agents,
   tasks: { active: 2, blocked: 1, done: 4, failed: 0 },
 })

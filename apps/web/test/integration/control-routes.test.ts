@@ -8,6 +8,7 @@ import { POST as resumePOST } from '../../src/app/api/w/[workspaceId]/runs/[runI
 import { POST as stopPOST } from '../../src/app/api/w/[workspaceId]/runs/[runId]/stop/route.js'
 import { POST as messagePOST } from '../../src/app/api/w/[workspaceId]/runs/[runId]/message/route.js'
 import { POST as emergencyStopPOST } from '../../src/app/api/w/[workspaceId]/emergency-stop/route.js'
+import { POST as goalPOST } from '../../src/app/api/w/[workspaceId]/goal/route.js'
 
 interface Fixture {
   readonly workspace: { readonly id: string; readonly repoPath: string }
@@ -254,6 +255,50 @@ describe('the control routes', () => {
       })
       expect(second.status).toBe(200)
       expect(await second.json()).toEqual({ ok: true })
+    })
+  })
+
+  describe('goal', () => {
+    const post = (workspaceId: string, body: unknown): Promise<Response> =>
+      goalPOST(
+        new Request('http://x', { method: 'POST', body: JSON.stringify(body), headers: { 'content-type': 'application/json' } }),
+        { params: Promise.resolve({ workspaceId }) },
+      )
+
+    it('(a) sets the column and records one workspace.goal_set event, returning 200', async (): Promise<void> => {
+      const response = await post(fixture.workspace.id, { goal: 'ship the checkout redesign' })
+      expect(response.status).toBe(200)
+      expect(await response.json()).toEqual({ ok: true })
+
+      const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspace.id } })
+      expect(workspace.goal).toBe('ship the checkout redesign')
+
+      const events = await prisma.executionEvent.findMany({
+        where: { workspaceId: fixture.workspace.id, type: 'workspace_goal_set' },
+      })
+      expect(events).toHaveLength(1)
+    })
+
+    it('(b) 400s on a non-string goal and on an unparseable body', async (): Promise<void> => {
+      const nonString = await post(fixture.workspace.id, { goal: 5 })
+      expect(nonString.status).toBe(400)
+
+      const malformed = await goalPOST(
+        new Request('http://x', { method: 'POST', body: 'not json', headers: { 'content-type': 'application/json' } }),
+        { params: Promise.resolve({ workspaceId: fixture.workspace.id }) },
+      )
+      expect(malformed.status).toBe(400)
+    })
+
+    it('(c) 409s with the invalid_goal text on a blank goal', async (): Promise<void> => {
+      const response = await post(fixture.workspace.id, { goal: '  ' })
+      expect(response.status).toBe(409)
+      expect((await response.json()).error).toBe('a goal must be a non-empty text')
+    })
+
+    it('(d) 404s an unknown workspace', async (): Promise<void> => {
+      const response = await post('00000000-0000-4000-8000-000000000000', { goal: 'ship it' })
+      expect(response.status).toBe(404)
     })
   })
 })

@@ -5,7 +5,7 @@ import { useOverview } from '../src/hooks/useOverview.js'
 import type { OverviewSnapshot } from '../src/server/overview.js'
 
 const SNAPSHOT: OverviewSnapshot = {
-  workspace: { id: 'w1', name: 'W', haltedReason: null, haltedAt: null, budgetUsd: 100, spentUsd: 0 },
+  workspace: { id: 'w1', name: 'W', haltedReason: null, haltedAt: null, budgetUsd: 100, spentUsd: 0, goal: null },
   agents: [
     {
       id: 'a1',

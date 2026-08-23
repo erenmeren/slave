@@ -5,6 +5,7 @@ import { useOverview } from '../hooks/useOverview'
 import type { OverviewSnapshot } from '../server/overview'
 import { AgentCard } from './AgentCard'
 import { AgentPanel } from './AgentPanel'
+import { GoalCard } from './GoalCard'
 import { HaltBanner } from './HaltBanner'
 import { Sidebar } from './Sidebar'
 import { TopBar } from './TopBar'
@@ -40,6 +41,9 @@ export function OverviewClient({
           </div>
         )}
         <TopStrip snapshot={view} />
+        <div className="px-4 pt-4">
+          <GoalCard workspaceId={workspaceId} goal={view.workspace.goal} />
+        </div>
         <main className="grid grid-cols-1 gap-4 p-4 md:grid-cols-2 xl:grid-cols-3">
           {view.agents.map((agent) => (
             <AgentCard key={agent.id} agent={agent} liveActionLine={actionLines[agent.id] ?? null} onOpen={selectAgent} />
