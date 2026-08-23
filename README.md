@@ -60,6 +60,7 @@ Ubuntu, `apt-get install docker-compose-plugin`) before continuing.
 | `npm run db:migrate` | Applies migrations to the development database |
 | `npm run db:migrate:test` | Applies migrations to the test database |
 | `npm run db:seed` | Truncates and reseeds the development database |
+| `npm run gate:m8a-merge` / `npm run gate:m8a-estop` | The M8a gate (spec §8): a task → merged branch, unattended; emergency stop pauses everything and clears clean |
 
 Integration tests require Postgres to be running. They **fail** rather than skip when it is not:
 a suite that skips reports success for work it did not do.
@@ -152,6 +153,7 @@ question after a failed run is "how far did it get", and a removed directory can
 npm run orchestrator -- pause  --run <id> --by <name>
 npm run orchestrator -- resume --run <id> --message "try the other approach"
 npm run orchestrator -- cancel --run <id>
+npm run orchestrator -- emergency-stop --workspace <id> --by <name>
 ```
 
 `pause` arms the hook; the agent stops at its **next tool call**, not immediately — a hook deny
@@ -162,6 +164,14 @@ same worktree and session.
 `clear-halt --workspace <id>` is **not** a variant of `resume`. It retracts a workspace-wide safety
 halt — raised when a pause gate fails or a workspace cannot verify — and it starts nothing by
 itself: it removes the reason nothing was starting.
+
+`emergency-stop --workspace <id>` (M8a, spec §6) is the operator's stop-everything button: it halts
+scheduling on the **whole workspace** (the same `haltedReason` a pause-gate failure or an
+unverifiable workspace would set, now reading `emergency stop by <name>`) and requests a pause on
+every active run in it, one call. Pressing it twice is not an error — a workspace that is already
+halted is engaged again, in case a run started or lost a race since the first press. Retract it the
+same way as any other halt: `clear-halt --workspace <id>`, then `resume --run <id>` for whichever
+runs it paused.
 
 ## Web UI
 
@@ -257,6 +267,31 @@ transition's underlying event, polls `GET /api/w/<workspaceId>/graph` until the 
 reflects it, reporting the latency from the event's own `ts` to the moment it's reflected — exiting
 non-zero if either exceeds 1000ms. It cleans up the workspace, its git repository, and the web
 server it started before exiting.
+
+```bash
+npm run gate:m8a-merge
+npm run gate:m8a-estop
+```
+
+M8a's own pair (spec §8), run against the *development* database: no web server, because both
+drive the orchestrator directly rather than a page that reads it.
+
+`gate:m8a-merge` is the milestone's own sentence made literal: *a task → merged branch,
+unattended.* It seeds a workspace with `autoMerge: true`, a backend worker, a reviewer and one
+ready task, starts the real `daemon` against the fake `claude` CLI's `m8a-flow` fixture, and polls
+— no writes of its own — until the task reaches `done`. It then asserts a `merge(T-<id>)` commit
+really landed on `main` and that `task.review_approved` is in the event log, so a green run proves
+a review actually gated the merge rather than the state machine reaching `done` some other way.
+
+`gate:m8a-estop` proves the operator's stop-everything button under a genuinely live run. It seeds
+a single-worker workspace and the same fixture's `hook-deny` mode, but slowed
+(`FAKE_CLAUDE_LINE_DELAY_MS=150`) so the run is still `starting`/`working` — not yet paused on its
+own — when the script calls `emergency-stop --workspace <id>` mid-flight. It then asserts every run
+in the workspace settles on `paused` or a terminal status, at least one is `paused` with
+`pauseReason: 'emergency_stop'`, `Workspace.haltedReason` names the operator, and no new run starts
+while the workspace stays halted (a stable run count across a further three-second window). Finally
+it retracts the halt with `clear-halt` and calls `resume --run <id>`, and confirms `run.resumed`
+landed in that run's event log — the recovery half, proving the halt clears clean.
 
 Clicking an agent's card on the Overview page opens its **detail panel**: the live event feed, and
 the controls M5 adds — pause, message, resume, stop. What each control does is a claim through
