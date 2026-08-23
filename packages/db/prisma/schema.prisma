@@ -61,6 +61,11 @@ model Workspace {
   /// unlike `verifyCommands`/`setupCommands` above, an unset goal is a perfectly ordinary state
   /// (no planning run has run yet), so this stays on Prisma's conventional nullable-String DDL.
   goal           String?
+  /// The company assigned to run this project (M10 §5), nullable: the engine never required a
+  /// company, and existing seeded workspaces keep their hand-made teams/agents untouched
+  /// (Decision 7). Assignment is one-way in M10 -- no un-assignment or re-assignment to a
+  /// different company (Decision 2) -- so this column only ever moves from null to set.
+  companyId      String?
 
   maxConcurrentRuns       Int   @default(3)
   budgetUsd               Float @default(20)
@@ -70,6 +75,11 @@ model Workspace {
   consecutiveFailureLimit Int   @default(3)
 
   createdAt DateTime @default(now())
+
+  // No explicit onDelete: company deletion is out of scope for M10 (the design spec never
+  // addresses it), so this optional relation keeps Prisma's Postgres default for an optional
+  // FK -- SetNull -- rather than a Cascade that would destroy a project's history.
+  company Company? @relation(fields: [companyId], references: [id])
 
   teams                  Team[]
   providerConfigurations ProviderConfiguration[]
@@ -88,13 +98,24 @@ model Team {
 }
 
 model Agent {
-  id           String  @id @default(uuid())
-  teamId       String
-  name         String
-  role         String
-  requiredRole String?
+  id             String  @id @default(uuid())
+  teamId         String
+  name           String
+  role           String
+  requiredRole   String?
+  /// The roster link (M10): null for legacy hand-made agents created before the organization
+  /// model, or for a worker whose roster row has since been deleted. `onDelete: SetNull` (not
+  /// Cascade) on the relation below is a binding ruling, not an oversight -- a worker with run
+  /// history must survive its roster row's deletion; deleting a company must never cascade into
+  /// deleting the runs it produced.
+  companyAgentId String?
+  /// The worker-level model override (M10 §6): first non-null wins in
+  /// `worker.model ?? companyAgent.model ?? template.defaultModel ?? null`. Legacy agents with no
+  /// roster link resolve through this column alone.
+  model          String?
 
-  team Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  team         Team          @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  companyAgent CompanyAgent? @relation(fields: [companyAgentId], references: [id], onDelete: SetNull)
 
   permissions AgentPermission[]
   skills      AgentSkill[]
@@ -102,6 +123,65 @@ model Agent {
   messages    AgentMessage[]
 
   @@index([teamId])
+}
+
+/// The global catalog (M10 §3): role-shaped cookie cutters a company's roster is instantiated
+/// from. `role` is the SAME exact-match string the scheduler, review pass and planning pass
+/// already key on -- a template whose role is `reviewer` produces workers the review pass can
+/// staff. No new role machinery. Template deletion is out of scope in M10 (Decision 9,
+/// referential simplicity); templates are append-only.
+model AgentTemplate {
+  id            String         @id @default(uuid())
+  name          String         @unique
+  role          String
+  description   String         @default("")
+  defaultModel  String?
+  createdAt     DateTime       @default(now())
+  companyAgents CompanyAgent[]
+}
+
+/// A persistent roster (M10 §4) -- the durable identity ("Atlas") statistics accrue to, distinct
+/// from the project-local `Agent` workers that get materialized from it. One company can serve
+/// many projects (M10 Decision 2).
+model Company {
+  id        String        @id @default(uuid())
+  name      String        @unique
+  createdAt DateTime      @default(now())
+  teams     CompanyTeam[]
+
+  workspaces Workspace[]
+}
+
+model CompanyTeam {
+  id        String @id @default(uuid())
+  companyId String
+  name      String
+
+  company Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  agents  CompanyAgent[]
+
+  @@unique([companyId, name])
+}
+
+model CompanyAgent {
+  id            String  @id @default(uuid())
+  companyTeamId String
+  templateId    String
+  /// The durable identity -- "Atlas" -- statistics and history accrue to this name across every
+  /// project the company is assigned to, even though each project gets its own materialized
+  /// worker `Agent` row.
+  name          String
+  /// Roster-level override of the template default (M10 §6): sits between
+  /// `AgentTemplate.defaultModel` and the worker's own `Agent.model` in the resolution chain.
+  model         String?
+
+  companyTeam CompanyTeam   @relation(fields: [companyTeamId], references: [id], onDelete: Cascade)
+  /// Deliberately NOT cascading: templates are append-only (Decision 9), so a roster member never
+  /// loses its template out from under it via deletion -- there is nothing to delete.
+  template    AgentTemplate @relation(fields: [templateId], references: [id])
+  workers     Agent[]
+
+  @@unique([companyTeamId, name])
 }
 
 enum PermissionMode {
@@ -302,6 +382,10 @@ model Checkpoint {
   pauseReason       String?
   requestedBy       String?
   ts                DateTime @default(now())
+  /// M10 §6: the model the run started with, written at start and replayed by `adapter.resume` --
+  /// resume must continue with the SAME model, never whatever `setAgentModel` set most recently.
+  /// A mid-run model change therefore affects only the NEXT run. Consumed starting Task 5.
+  model             String?
 
   run AgentRun @relation(fields: [runId], references: [id], onDelete: Cascade)
 }
