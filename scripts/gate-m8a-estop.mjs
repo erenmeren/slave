@@ -80,6 +80,10 @@ try {
   workspaceId = workspace.id
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Gate Team' } })
   await prisma.agent.create({ data: { teamId: team.id, name: 'Worker', role: 'backend' } })
+  // A second, idle worker: step 6 seeds a fresh ready task AFTER the halt engages, and this agent
+  // is who a broken halt would hand it to. With one worker (busy, paused) the no-new-run check
+  // could never fail -- there would be nobody to start work for even with scheduling wide open.
+  await prisma.agent.create({ data: { teamId: team.id, name: 'Idle Worker', role: 'backend' } })
   const task = await prisma.task.create({
     data: {
       workspaceId: workspace.id,
@@ -154,8 +158,21 @@ try {
   }
   console.log(`emergency stop settled: run ${pausedRun.id} paused with pauseReason=emergency_stop`)
 
-  // 6. No NEW run starts while halted -- the run count for this workspace stays stable across a
-  // further window.
+  // 6. No NEW run starts while halted. The check has to be discriminating, not vacuous: with only
+  // the original (now paused) task there is nothing a tick could start even with the halt broken.
+  // So bait it -- a fresh ready task and an idle worker to take it, created only now, AFTER the
+  // halt engaged, so the daemon cannot have started it before the stop. If scheduling were still
+  // live, the 500ms-period daemon would start this task well inside the window below.
+  const baitTask = await prisma.task.create({
+    data: {
+      workspaceId: workspace.id,
+      title: 'Bait task: must not start while halted',
+      description: 'Created after the emergency stop engaged by scripts/gate-m8a-estop.mjs.',
+      status: 'ready',
+      requiredRole: 'backend',
+      maxAttempts: workspace.maxAttempts,
+    },
+  })
   {
     const before = await prisma.agentRun.count({ where: { task: { workspaceId: workspace.id } } })
     const deadline = Date.now() + STABLE_WINDOW_MS
@@ -167,7 +184,10 @@ try {
       }
     }
   }
-  console.log('run count held steady while halted')
+  // Park the bait before retracting the halt -- the resume phase below is about the paused run,
+  // and a bait run starting after clear-halt would only add noise to it.
+  await prisma.task.update({ where: { id: baitTask.id }, data: { status: 'backlog' } })
+  console.log('run count held steady while halted (with a startable bait task waiting)')
 
   // 7. Retract the halt, then resume the paused run -- `clear-halt` first: `resume` refuses
   // outright while the workspace is still halted.
