@@ -210,6 +210,35 @@ describe('dispatchPlanning', () => {
     expect(await prisma.agentRun.count({ where: { kind: 'planning' } })).toBe(2)
   })
 
+  it('grants fresh attempts when the goal is re-set after two failures', async (): Promise<void> => {
+    const fixture = await seed('Ship the checkout redesign')
+    repos.push(fixture.repoPath)
+    const managerId = await addManager(fixture.teamId)
+
+    // Two failures from the PREVIOUS goal, stamped before the goal_set event below: the retry
+    // cap counts only failures newer than the latest goal_set, so re-setting the goal is what
+    // buys the workspace a fresh plan instead of silence forever.
+    const past = new Date(Date.now() - 60_000)
+    for (let i = 0; i < 2; i += 1) {
+      await prisma.agentRun.create({
+        data: { agentId: managerId, kind: 'planning', status: 'failed', startedAt: past, terminalAt: past, endedAt: past },
+      })
+    }
+    await prisma.executionEvent.create({
+      data: {
+        type: 'workspace_goal_set',
+        workspaceId: fixture.workspaceId,
+        actor: 'human',
+        payload: { goal: 'Ship the checkout redesign' },
+      },
+    })
+
+    const runId = await dispatchPlanning(depsFor(fixture.workspaceId))
+
+    expect(runId).not.toBeNull()
+    expect(await prisma.agentRun.count({ where: { kind: 'planning' } })).toBe(3)
+  })
+
   it('(h) records a real run.failed with no taskId when the spawn itself fails', async (): Promise<void> => {
     const fixture = await seed('Ship the checkout redesign')
     repos.push(fixture.repoPath)

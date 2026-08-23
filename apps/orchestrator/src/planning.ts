@@ -100,8 +100,9 @@ export async function dispatchPlanning(deps: TickDeps): Promise<RunId | null> {
   if (managers.length === 0) {
     // The one-shot escalation (`dispatchReview`'s `no_reviewer` precedent): a workspace with no
     // manager at all will never staff this, so this is worth an operator's attention exactly once
-    // per goal, not once per tick forever. Scoped by workspaceId with no taskId -- this guardrail
-    // is never about one task.
+    // per WORKSPACE, not once per tick forever -- the dedup below has no goal_set bound, so even
+    // a re-set goal does not re-escalate (hiring a manager is a one-time fix, unlike a plan).
+    // Scoped by workspaceId with no taskId -- this guardrail is never about one task.
     const alreadyEscalated = await prisma.executionEvent.findFirst({
       where: {
         workspaceId: deps.workspaceId,
