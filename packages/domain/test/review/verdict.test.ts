@@ -72,4 +72,14 @@ Thanks for reviewing!`
       expect(result.value.reason).toBe('The code has logic like { x: 1 } which is good')
     }
   })
+
+  it('(h) backtracks past a schema-invalid last object to an earlier valid one, even at index 0', () => {
+    const text = '{"verdict": "approve", "reason": "Earlier"} then {"verdict": "maybe", "reason": "Later"}'
+    const result = parseReviewVerdict(text)
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.value.verdict).toBe('approve')
+      expect(result.value.reason).toBe('Earlier')
+    }
+  })
 })

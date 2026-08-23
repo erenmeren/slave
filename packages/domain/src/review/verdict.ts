@@ -18,7 +18,9 @@ export const reviewVerdictSchema = z.object({
  * the database — only the validated object does).
  */
 export function parseReviewVerdict(text: string): Result<ReviewVerdict, string> {
-  for (let start = text.lastIndexOf('{'); start !== -1; start = text.lastIndexOf('{', start - 1)) {
+  // `start > 0` guard: lastIndexOf clamps a negative fromIndex to 0, so stepping back from a
+  // rejected candidate at index 0 would find index 0 again and never terminate.
+  for (let start = text.lastIndexOf('{'); start !== -1; start = start > 0 ? text.lastIndexOf('{', start - 1) : -1) {
     const candidate = extractObject(text, start)
     if (candidate === null) continue
     const parsed = reviewVerdictSchema.safeParse(candidate)
