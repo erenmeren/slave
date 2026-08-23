@@ -5,7 +5,12 @@ import { killWithEscalation } from './kill.js'
 import type { ControlRefusal } from './refusal.js'
 
 export async function requestStop(runId: string, requestedBy: string): Promise<Result<void, ControlRefusal>> {
-  const run = await prisma.agentRun.findUnique({ where: { id: runId }, include: { task: true } })
+  // Scoped through `agent -> team`, not `task`: a `planning` run (M8b) has no `Task` row, and
+  // `agent -> team -> workspace` is the only linkage such a run has to a workspace.
+  const run = await prisma.agentRun.findUnique({
+    where: { id: runId },
+    include: { agent: { include: { team: true } } },
+  })
   if (run === null) return err({ kind: 'run_not_found', runId })
 
   // Claim the stop intent before the kill, not after (M5 live-gate finding 2). In the CLI this
@@ -50,14 +55,17 @@ export async function requestStop(runId: string, requestedBy: string): Promise<R
   // worktree, with `attempt` never incremented so repeated cancels never reach the cap. The
   // spec does not decide this (§11 says only "kill and preserve the worktree"); shipping a
   // command that says one thing and does another is the part that is not a judgement call.
-  await prisma.task.updateMany({
-    where: { id: run.taskId, activeRunId: run.id },
-    data: { status: 'blocked', activeRunId: null },
-  })
+  // A `planning` run (M8b) has no task to release -- nothing else here needs to change for it.
+  if (run.taskId !== null) {
+    await prisma.task.updateMany({
+      where: { id: run.taskId, activeRunId: run.id },
+      data: { status: 'blocked', activeRunId: null },
+    })
+  }
   if (concluded.count > 0) {
     await appendEvent({
       type: 'run.stopped',
-      workspaceId: run.task.workspaceId,
+      workspaceId: run.agent.team.workspaceId,
       taskId: run.taskId,
       agentId: run.agentId,
       runId: run.id,

@@ -109,8 +109,10 @@ export async function reconcileOrphans(deps: SweepDeps): Promise<number> {
   }
 
 
+  // `agent: { team: { workspaceId } }`, not `task: { workspaceId }`: a `planning` run (M8b) has no
+  // `Task` row, and this pass exists precisely to fail an orphan whichever kind it is.
   const runs = await db.agentRun.findMany({
-    where: { status: { in: [...ORPHANABLE] }, task: { workspaceId: deps.workspaceId } },
+    where: { status: { in: [...ORPHANABLE] }, agent: { team: { workspaceId: deps.workspaceId } } },
   })
 
   let failed = 0
@@ -132,11 +134,17 @@ export async function reconcileOrphans(deps: SweepDeps): Promise<number> {
     // No attempt is counted. A daemon that died is not the agent failing, and counting it would let
     // a crash-looping daemon exhaust every task's attempts and fail the lot — losing real work to
     // an infrastructure problem. Same reasoning as Task 14's non-agent verify outcomes.
-    const task = await db.task.findUniqueOrThrow({ where: { id: run.taskId } })
-    const released = await db.task.updateMany({
-      where: { id: run.taskId, activeRunId: run.id },
-      data: { status: 'rework', activeRunId: null },
-    })
+    //
+    // A `planning` run (M8b) has no task to release -- `taskId` is `null` and there is nothing
+    // else in this block for it.
+    const task = run.taskId === null ? null : await db.task.findUniqueOrThrow({ where: { id: run.taskId } })
+    const released =
+      run.taskId === null
+        ? { count: 0 }
+        : await db.task.updateMany({
+            where: { id: run.taskId, activeRunId: run.id },
+            data: { status: 'rework', activeRunId: null },
+          })
 
     await appendEvent({
       type: 'run.failed',
@@ -152,14 +160,14 @@ export async function reconcileOrphans(deps: SweepDeps): Promise<number> {
             : `the run's process (pid ${run.pid}) is gone but the run never concluded: it was orphaned by a restart`,
       },
     })
-    if (released.count > 0) {
+    if (released.count > 0 && task !== null) {
       // §13: no failure is silent. `failToStart` and `advance` both announce a task they park in
       // `rework`; a reader would otherwise see a run fail with no record of the task going back
       // into the queue. Only when this pass is what released it.
       await appendEvent({
         type: 'task.rework',
         workspaceId: deps.workspaceId,
-        taskId: run.taskId,
+        taskId: task.id,
         actor: 'system',
         // `attempt + 1` is the number of the attempt that was interrupted: the counter records
         // *completed* attempts and this pass deliberately does not increment it, but the run that
@@ -207,8 +215,10 @@ export async function reconcileOrphans(deps: SweepDeps): Promise<number> {
  */
 export async function sweep(deps: SweepDeps): Promise<SweepReport> {
   const workspace = await db.workspace.findUniqueOrThrow({ where: { id: deps.workspaceId } })
+  // `agent: { team: { workspaceId } }`, not `task: { workspaceId }`: a `planning` run (M8b) has no
+  // `Task` row, and the timeout/tool-cap guardrails below must still reach it.
   const runs = await db.agentRun.findMany({
-    where: { status: { in: [...SWEEPABLE] }, task: { workspaceId: deps.workspaceId } },
+    where: { status: { in: [...SWEEPABLE] }, agent: { team: { workspaceId: deps.workspaceId } } },
   })
 
   const timedOut: RunId[] = []
@@ -291,7 +301,7 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
  */
 async function concludeDeadRun(
   deps: SweepDeps,
-  run: { readonly id: string; readonly taskId: string; readonly agentId: string; readonly pid: number | null },
+  run: { readonly id: string; readonly taskId: string | null; readonly agentId: string; readonly pid: number | null },
 ): Promise<void> {
   const now = new Date()
   const concluded = await db.agentRun.updateMany({
@@ -300,10 +310,13 @@ async function concludeDeadRun(
   })
   if (concluded.count === 0) return
 
-  await db.task.updateMany({
-    where: { id: run.taskId, activeRunId: run.id },
-    data: { status: 'rework', activeRunId: null },
-  })
+  // A `planning` run (M8b) has no task to release.
+  if (run.taskId !== null) {
+    await db.task.updateMany({
+      where: { id: run.taskId, activeRunId: run.id },
+      data: { status: 'rework', activeRunId: null },
+    })
+  }
 
   await appendEvent({
     type: 'run.failed',

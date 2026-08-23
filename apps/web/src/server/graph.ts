@@ -116,7 +116,7 @@ export async function buildGraphSnapshot(workspaceId: string): Promise<GraphSnap
         // The one translator (ADR 0002): never re-derive the run→agent status mapping here.
         status: deriveAgentStatus(run === null ? null : toRunState(run)),
         activeTaskId: run?.taskId ?? null,
-        activeTaskTitle: run?.task.title ?? null,
+        activeTaskTitle: run?.task?.title ?? null,
         activeRunId: run?.id ?? null,
         costUsd: run?.costUsd ?? 0,
       }

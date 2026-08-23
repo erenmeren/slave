@@ -150,14 +150,17 @@ async function loadRunStats(
   readonly spentUsd: number
   readonly consecutiveFailures: number
 }> {
+  // `agent: { team: { workspaceId } }`, not `task: { workspaceId }`: a `planning` run (M8b) has no
+  // `Task` row, and it still occupies a concurrency slot and spends real money -- scoping through
+  // `Task` would silently drop it from both figures below.
   const activeRuns = await tx.agentRun.count({
-    where: { status: { in: [...NON_TERMINAL_RUN_STATUSES] }, task: { workspaceId } },
+    where: { status: { in: [...NON_TERMINAL_RUN_STATUSES] }, agent: { team: { workspaceId } } },
   })
   const globalActiveRuns = await tx.agentRun.count({
     where: { status: { in: [...NON_TERMINAL_RUN_STATUSES] } },
   })
   const spend = await tx.agentRun.aggregate({
-    where: { task: { workspaceId } },
+    where: { agent: { team: { workspaceId } } },
     _sum: { costUsd: true },
   })
 
@@ -183,11 +186,15 @@ async function loadRunStats(
   // would not notice, but a later consumer reading the figure as a count would. One status column
   // per concluded run is cheap enough that the trade is not worth making blind; revisit it against
   // a workspace with a real run history rather than a fixture.
+  // Joined through `Agent`/`Team`, not `Task`: a `planning` run (M8b) has no `Task` row, and a
+  // garbage planner must still feed the circuit breaker like any other agent (the M8a review-run
+  // precedent) -- a join through `Task` alone would let it fail forever with no streak to halt it.
   const concludedRuns = await tx.$queryRaw<{ readonly status: RunStatus }[]>`
     SELECT r.status::text AS status
     FROM "AgentRun" r
-    JOIN "Task" t ON t.id = r."taskId"
-    WHERE t."workspaceId" = ${workspaceId}
+    JOIN "Agent" a ON a.id = r."agentId"
+    JOIN "Team" tm ON tm.id = a."teamId"
+    WHERE tm."workspaceId" = ${workspaceId}
       AND r.status::text = ANY(${[...CONCLUDED_RUN_STATUSES]}::text[])
     ORDER BY COALESCE(r."terminalAt", r."startedAt") DESC, r."startedAt" DESC
   `

@@ -42,9 +42,11 @@ export interface ExecuteResumeOptions {
  */
 export async function executeResume(options: ExecuteResumeOptions): Promise<void> {
   const { adapter, message } = options
+  // `agent -> team`, not `task`: a `planning` run (M8b) has no `Task` row, and `agent -> team ->
+  // workspace` is the only linkage such a run has to a workspace.
   const run = await prisma.agentRun.findUniqueOrThrow({
     where: { id: options.runId },
-    include: { task: true },
+    include: { agent: { include: { team: true } } },
   })
 
   // Thrown, not refused: by the time this runs the claim has already flipped the run to `resuming`,
@@ -89,7 +91,7 @@ export async function executeResume(options: ExecuteResumeOptions): Promise<void
   })
   await appendEvent({
     type: 'run.resumed',
-    workspaceId: run.task.workspaceId,
+    workspaceId: run.agent.team.workspaceId,
     taskId: run.taskId,
     agentId: run.agentId,
     runId: run.id,
@@ -103,9 +105,9 @@ export async function executeResume(options: ExecuteResumeOptions): Promise<void
   // continuation (Task 12's carry).
   const pumped = pumpRun({
     runId: brandRunId(run.id),
-    taskId: brandTaskId(run.taskId),
+    taskId: run.taskId === null ? null : brandTaskId(run.taskId),
     agentId: brandAgentId(run.agentId),
-    workspaceId: brandWorkspaceId(run.task.workspaceId),
+    workspaceId: brandWorkspaceId(run.agent.team.workspaceId),
     events: adapter.events(brandRunId(run.id)),
     cancel: () => adapter.cancel(brandRunId(run.id)),
     // The pump cannot tell a continuation from a first spawn -- a resumed process emits

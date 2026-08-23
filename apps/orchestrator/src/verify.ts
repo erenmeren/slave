@@ -193,6 +193,13 @@ export async function verifyConcludedRun(runId: RunId): Promise<void> {
   }
 
   const { task } = run
+  // Every non-review run this milestone verifies is `implementation`, which always has a task --
+  // M8b's task-less run is `planning`, which is routed away by the `review` branch's sibling kind
+  // check having no equivalent here yet. A null task on this path is data corruption worth
+  // failing loudly on, not a case to route around silently.
+  if (task === null) {
+    throw new Error(`run ${run.id} of kind ${run.kind} has no task`)
+  }
   if (run.worktreePath === null || task.branch === null) {
     // Unreachable from the tick, which writes both before the pump ever starts. Warned rather than
     // silent (§13), and deliberately not advanced: there is no worktree to judge, and advancing a

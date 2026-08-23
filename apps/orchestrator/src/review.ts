@@ -68,6 +68,11 @@ export async function concludeReview(runId: RunId): Promise<void> {
     include: { task: { include: { workspace: true } } },
   })
   const { task } = run
+  // A review run always has a task (M8b only makes `planning` runs task-less) -- a null one here
+  // is data corruption worth failing loudly on, not a case to route around.
+  if (task === null) {
+    throw new Error(`run ${run.id} of kind ${run.kind} has no task`)
+  }
 
   const rows = await prisma.executionEvent.findMany({
     where: { runId, type: 'run_output' },

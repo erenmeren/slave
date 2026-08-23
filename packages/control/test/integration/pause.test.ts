@@ -118,4 +118,25 @@ describe('pauseActiveRuns', () => {
     expect(after.status).toBe('pause_requested')
     expect(after.pauseReason).toBe('guardrail')
   })
+
+  /**
+   * A planning run (Task 6) has no `Task` row -- its only linkage to a workspace is
+   * `agent -> team -> workspace`. Emergency stop fans out through `pauseActiveRuns`, so a
+   * task-less run scoped out of its query would keep running through a halt an operator believes
+   * paused everything.
+   */
+  it('requests pause on a task-less planning run', async () => {
+    const { workspace, run } = fixture
+    const { agentId } = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id }, select: { agentId: true } })
+    const planningRun = await prisma.agentRun.create({
+      data: { agentId, kind: 'planning', status: 'working' },
+    })
+
+    const report = await pauseActiveRuns(workspace.id, 'budget guardrail', 'guardrail')
+
+    expect(report.requested).toContain(planningRun.id)
+    const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: planningRun.id } })
+    expect(after.status).toBe('pause_requested')
+    expect(after.pauseReason).toBe('guardrail')
+  })
 })

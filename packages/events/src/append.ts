@@ -5,7 +5,11 @@ import type { ExecutionEvent } from '@ai-team-os/domain'
 export interface AppendableEvent {
   readonly type: DomainEventType
   readonly workspaceId: string
-  readonly taskId?: string
+  /**
+   * `null` for a task-less (`planning`) run's own events (M8b) -- distinct from `undefined`,
+   * which means "this event has no task at all" for callers that never had one to omit.
+   */
+  readonly taskId?: string | null
   readonly agentId?: string
   readonly runId?: string
   readonly actor: 'human' | 'agent' | 'system'

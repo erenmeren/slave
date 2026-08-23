@@ -15,7 +15,13 @@ export async function requestPause(
   requestedBy: string,
   category: PauseCategory = 'human',
 ): Promise<Result<void, ControlRefusal>> {
-  const run = await prisma.agentRun.findUnique({ where: { id: runId }, include: { task: true } })
+  // Scoped through `agent -> team`, not `task`: a `planning` run (M8b) has no `Task` row, and
+  // `agent -> team -> workspace` is the only linkage such a run has to a workspace -- the same
+  // derivation `pauseActiveRuns` below uses to find it in the first place.
+  const run = await prisma.agentRun.findUnique({
+    where: { id: runId },
+    include: { agent: { include: { team: true } } },
+  })
   if (run === null) return err({ kind: 'run_not_found', runId })
 
   // Write the flag; the gate denies the next tool call and the *stream owner* follows the rest
@@ -42,12 +48,12 @@ export async function requestPause(
   // The same derivation the tick used to tell the child where its flag is -- re-deriving it as
   // a second literal is how the two come to disagree, and a gate reading a path nobody writes
   // means an operator watches a "pausing" run keep working (spec §5.5's named failure).
-  const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: run.task.workspaceId } })
+  const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: run.agent.team.workspaceId } })
   const { pauseFlagPath } = runFilePaths(workspace.repoPath, brandRunId(run.id))
   writeFileSync(pauseFlagPath, `${requestedBy}\n`)
   await appendEvent({
     type: 'run.pause_requested',
-    workspaceId: run.task.workspaceId,
+    workspaceId: run.agent.team.workspaceId,
     taskId: run.taskId,
     agentId: run.agentId,
     runId: run.id,
@@ -76,8 +82,11 @@ export async function pauseActiveRuns(
   requestedBy: string,
   category: PauseCategory,
 ): Promise<PauseFanoutReport> {
+  // `agent: { team: { workspaceId } }`, not `task: { workspaceId }`: a `planning` run (M8b) has no
+  // `Task` row, and scoping through `Task` would silently drop it from an emergency stop's
+  // fan-out -- exactly the run a halt most needs to reach, since it is still spending money.
   const runs = await prisma.agentRun.findMany({
-    where: { status: { in: [...NON_TERMINAL_RUN_STATUSES] }, task: { workspaceId } },
+    where: { status: { in: [...NON_TERMINAL_RUN_STATUSES] }, agent: { team: { workspaceId } } },
     select: { id: true },
   })
 

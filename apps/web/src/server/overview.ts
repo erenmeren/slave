@@ -144,8 +144,10 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
     else forAgent.push(row)
   }
 
+  // `agent: { team: { workspaceId } }`, not `task: { workspaceId }`: a `planning` run (M8b) has no
+  // `Task` row, and its cost still counts toward the budget shown here.
   const [spent, taskGroups] = await Promise.all([
-    prisma.agentRun.aggregate({ where: { task: { workspaceId } }, _sum: { costUsd: true } }),
+    prisma.agentRun.aggregate({ where: { agent: { team: { workspaceId } } }, _sum: { costUsd: true } }),
     prisma.task.groupBy({ by: ['status'], where: { workspaceId }, _count: { _all: true } }),
   ])
   const countOf = (statuses: readonly string[]): number =>
@@ -169,7 +171,7 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
         // The single registered adapter (M3 §17.5). A column arrives with a second provider.
         provider: 'claude-code' as const,
         status: deriveAgentStatus(run === null ? null : toRunState(run)),
-        taskTitle: run?.task.title ?? null,
+        taskTitle: run?.task?.title ?? null,
         actionLine: lines.get(agent.id) ?? null,
         runId: run?.id ?? null,
         queuedMessage: run?.queuedMessage ?? null,

@@ -273,8 +273,14 @@ export async function tick(deps: TickDeps): Promise<TickReport> {
  * leaving a `resuming` row with a dead pid, a held task and a busy-looking agent until a restart.
  */
 async function resumeRequestedRuns(deps: TickDeps): Promise<void> {
+  // `agent: { team: { workspaceId } }`, not `task: { workspaceId }`: a `planning` run (M8b) has no
+  // `Task` row, and a paused planning run must resume like any other.
   const intents = await prisma.agentRun.findMany({
-    where: { status: 'paused', resumeRequestedAt: { not: null }, task: { workspaceId: deps.workspaceId } },
+    where: {
+      status: 'paused',
+      resumeRequestedAt: { not: null },
+      agent: { team: { workspaceId: deps.workspaceId } },
+    },
     select: { id: true, taskId: true, agentId: true },
   })
 
@@ -310,7 +316,7 @@ async function resumeRequestedRuns(deps: TickDeps): Promise<void> {
  */
 async function concludeFailedResume(
   deps: TickDeps,
-  run: { readonly id: string; readonly taskId: string; readonly agentId: string },
+  run: { readonly id: string; readonly taskId: string | null; readonly agentId: string },
   error: unknown,
 ): Promise<void> {
   const now = new Date()
@@ -324,11 +330,14 @@ async function concludeFailedResume(
   if (concluded.count === 0) return
 
   // Release the task the run was holding, exactly as `concludeDeadRun` does -- a failed resume
-  // that leaves `activeRunId` pointing at a dead run strands the task `running` forever.
-  await prisma.task.updateMany({
-    where: { id: run.taskId, activeRunId: run.id },
-    data: { status: 'rework', activeRunId: null },
-  })
+  // that leaves `activeRunId` pointing at a dead run strands the task `running` forever. A
+  // `planning` run (M8b) has no task to release.
+  if (run.taskId !== null) {
+    await prisma.task.updateMany({
+      where: { id: run.taskId, activeRunId: run.id },
+      data: { status: 'rework', activeRunId: null },
+    })
+  }
 
   await appendEvent({
     type: 'run.failed',

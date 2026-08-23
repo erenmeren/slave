@@ -56,6 +56,11 @@ model Workspace {
   autoMerge      Boolean   @default(false)
   haltedReason   String?
   haltedAt       DateTime?
+  /// The operator's standing instruction for what this workspace's agents are working toward
+  /// (M8b). Read by the planner (Task 4) and written by the workspace settings UI (Task 6) --
+  /// unlike `verifyCommands`/`setupCommands` above, an unset goal is a perfectly ordinary state
+  /// (no planning run has run yet), so this stays on Prisma's conventional nullable-String DDL.
+  goal           String?
 
   maxConcurrentRuns       Int   @default(3)
   budgetUsd               Float @default(20)
@@ -221,7 +226,11 @@ model TaskDependency {
 
 model AgentRun {
   id                String       @id @default(uuid())
-  taskId            String
+  /// Nullable as of M8b: a `planning` run (Task 6) has no `Task` row to attach to -- it works
+  /// toward `Workspace.goal`, not a task. `agent -> team -> workspace` is then the only linkage a
+  /// task-less run has to a workspace, which every run-scoping query in the codebase must join
+  /// through instead of `Task` (see the audit landed alongside this column).
+  taskId            String?
   agentId           String
   kind              RunKind      @default(implementation)
   status            RunStatus    @default(starting)
@@ -253,7 +262,7 @@ model AgentRun {
   terminalAt        DateTime?
   endedAt           DateTime?
 
-  task       Task        @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  task       Task?       @relation(fields: [taskId], references: [id], onDelete: Cascade)
   agent      Agent       @relation(fields: [agentId], references: [id], onDelete: Cascade)
   checkpoint Checkpoint?
 

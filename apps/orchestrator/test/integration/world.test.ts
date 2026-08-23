@@ -403,6 +403,34 @@ describe('loadWorld stats.activeRuns and stats.spentUsd', () => {
     expect(world.stats.activeRuns).toBe(0)
     expect(world.stats.spentUsd).toBe(0)
   })
+
+  /**
+   * A planning run (Task 6) has no `Task` row -- `taskId` is `null` -- so its only linkage to a
+   * workspace is `agent -> team -> workspace`. Every query this file exercises above joins through
+   * `Task` instead, and a task-less run would silently vanish from both a workspace's concurrency
+   * slot count and its spend total: it looks idle and free while a real process burns real money.
+   * Seeded directly (no factory creates a task-less run yet) because nothing else in this
+   * milestone does either.
+   */
+  it('counts a task-less planning run in activeRuns and its cost in spentUsd', async (): Promise<void> => {
+    const workspace = await prisma.workspace.create({
+      data: {
+        name: 'Planning Workspace',
+        repoPath: '/tmp/planning',
+        verifyCommands: ['npm test'],
+        setupCommands: ['npm ci'],
+      },
+    })
+    const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
+    const agent = await prisma.agent.create({ data: { teamId: team.id, name: 'Planner', role: 'planner' } })
+    await prisma.agentRun.create({
+      data: { agentId: agent.id, kind: 'planning', status: 'working', costUsd: 2.5 },
+    })
+
+    const { world } = await loadWorld(workspaceId(workspace.id))
+    expect(world.stats.activeRuns).toBe(1)
+    expect(world.stats.spentUsd).toBe(2.5)
+  })
 })
 
 /**

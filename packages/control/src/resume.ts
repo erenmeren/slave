@@ -30,7 +30,12 @@ export async function requestResume(
   // adapter would otherwise spawn the child with `-p ''` (see `updateQueuedMessage`'s doc comment
   // for the same normalization on the panel's save path).
   const message = rawMessage === null || rawMessage.trim() === '' ? null : rawMessage
-  const run = await prisma.agentRun.findUnique({ where: { id: runId }, include: { task: true } })
+  // Scoped through `agent -> team`, not `task`: a `planning` run (M8b) has no `Task` row, and
+  // `agent -> team -> workspace` is the only linkage such a run has to a workspace.
+  const run = await prisma.agentRun.findUnique({
+    where: { id: runId },
+    include: { agent: { include: { team: true } } },
+  })
   if (run === null) return err({ kind: 'run_not_found', runId })
 
   // A halt is raised by a pause-gate failure or an unverifiable workspace (spec §13.1, §8), so
@@ -38,7 +43,7 @@ export async function requestResume(
   // exists to bound. Refused here rather than only at the daemon, because an intent recorded now
   // would be picked up the instant an operator cleared the halt, by which time nobody remembers
   // this request was made against a halted workspace.
-  const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: run.task.workspaceId } })
+  const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: run.agent.team.workspaceId } })
   if (workspace.haltedReason !== null) {
     return err({ kind: 'workspace_halted', workspaceId: workspace.id, reason: workspace.haltedReason })
   }
@@ -72,7 +77,7 @@ export async function requestResume(
 
   await appendEvent({
     type: 'run.resume_requested',
-    workspaceId: run.task.workspaceId,
+    workspaceId: run.agent.team.workspaceId,
     taskId: run.taskId,
     agentId: run.agentId,
     runId: run.id,

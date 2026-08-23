@@ -132,7 +132,13 @@ function requireFlag(flags: Flags, name: string): string {
 }
 
 async function mustGetRun(runId: string) {
-  const run = await prisma.agentRun.findUnique({ where: { id: runId }, include: { task: true } })
+  // `agent -> team`, not `task`: a `planning` run (M8b) has no `Task` row, and `agent -> team ->
+  // workspace` is the only linkage such a run has to a workspace -- the only thing this helper's
+  // callers read off the include.
+  const run = await prisma.agentRun.findUnique({
+    where: { id: runId },
+    include: { agent: { include: { team: true } } },
+  })
   if (run === null) throw new Error(`no run with id ${runId}`)
   return run
 }
@@ -179,7 +185,8 @@ export async function main(argv: readonly string[]): Promise<number> {
       const runs = await prisma.agentRun.findMany({
         // On the status column, not on `endedAt`: the two can disagree, and everything else in the
         // system -- `loadWorld`'s busy check, the sweep, the orphan pass -- asks the status.
-        where: { task: { workspaceId }, status: { in: [...NON_TERMINAL_RUN_STATUSES] } },
+        // Scoped through `agent -> team`, not `task`: a `planning` run (M8b) has no `Task` row.
+        where: { agent: { team: { workspaceId } }, status: { in: [...NON_TERMINAL_RUN_STATUSES] } },
         orderBy: { startedAt: 'desc' },
       })
       process.stdout.write(
@@ -225,7 +232,7 @@ export async function main(argv: readonly string[]): Promise<number> {
       // continues the run itself, so recording an intent on the way to a failure would leave a
       // resume queued for the next daemon tick to execute -- an operator whose command errored out
       // would find the run resumed anyway, minutes later.
-      const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: run.task.workspaceId } })
+      const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: run.agent.team.workspaceId } })
       if (workspace.haltedReason !== null) {
         throw new Error(
           `this workspace is halted (${workspace.haltedReason}). ` +

@@ -18,7 +18,8 @@ export const OUTPUT_CAP = 4_000
 
 export interface PumpRunInput {
   readonly runId: RunId
-  readonly taskId: TaskId
+  /** `null` for a task-less `planning` run (M8b) -- it has no `attempt` counter to increment. */
+  readonly taskId: TaskId | null
   readonly agentId: AgentId
   readonly workspaceId: WorkspaceId
   readonly events: AsyncIterable<RuntimeEvent>
@@ -441,8 +442,11 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
           where: { id: runId, endedAt: null },
           data: { status: 'failed', terminalAt: now, endedAt: now },
         })
-        // The attempt counts, so a task cannot loop forever against a gate that stays broken.
-        await prisma.task.update({ where: { id: taskId }, data: { attempt: { increment: 1 } } })
+        // The attempt counts, so a task cannot loop forever against a gate that stays broken. A
+        // task-less `planning` run (M8b) has no attempt counter to increment.
+        if (taskId !== null) {
+          await prisma.task.update({ where: { id: taskId }, data: { attempt: { increment: 1 } } })
+        }
 
         // Two events, because the run failed *and* a guardrail is what failed it (§13.1).
         await emit('run.failed', 'system', { reason })
