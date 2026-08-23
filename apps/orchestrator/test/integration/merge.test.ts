@@ -196,6 +196,34 @@ describe('runMergePass', () => {
     expect(mainAfterDiverge).not.toBe(mainBefore)
   })
 
+  it('sends the task back to rework when the merge command itself fails, checkout left clean', async (): Promise<void> => {
+    const workspace = await seedWorkspace({ autoMerge: true })
+    const { taskId } = await seedMergingTask(workspace)
+    const mainBefore = git(['rev-parse', 'main'], workspace.repoPath)
+
+    // A held index lock in the primary checkout: the rebase (in the worktree, with its own index)
+    // and the checkout guard (reads only) both pass, so the failure lands on `git merge` itself --
+    // the same shape as `main` moving between the rebase and the merge, or a lock collision with a
+    // concurrent provisioning, but deterministic.
+    const lockPath = join(workspace.repoPath, '.git', 'index.lock')
+    writeFileSync(lockPath, '')
+    try {
+      await runMergePass(brandWorkspaceId(workspace.id))
+    } finally {
+      rmSync(lockPath, { force: true })
+    }
+
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: taskId } })
+    expect(task.status).toBe('rework')
+    expect(task.mergeClaimedAt).toBeNull()
+    const failures = await prisma.executionEvent.findMany({ where: { taskId, type: 'task_merge_failed' } })
+    expect(failures).toHaveLength(1)
+
+    // `main` never moved and the primary checkout is not left mid-merge.
+    expect(git(['rev-parse', 'main'], workspace.repoPath)).toBe(mainBefore)
+    expect(git(['status', '--porcelain'], workspace.repoPath)).toBe('')
+  })
+
   it('(d) sends a task with a post-rebase red verify back to rework', async (): Promise<void> => {
     const workspace = await seedWorkspace({ autoMerge: true, verifyCommands: ['false'] })
     const { taskId } = await seedMergingTask(workspace)

@@ -220,8 +220,23 @@ export async function runMergePass(workspaceId: WorkspaceId): Promise<void> {
 
   // `--no-ff`: the merge commit is what a `git revert -m 1` undoes as one unit, and what makes this
   // task's contribution visible in `git log` as one entry rather than disappearing into a
-  // fast-forward.
-  await gitIn(workspace.repoPath, 'merge', '--no-ff', branch, '-m', `merge(${taskKey}): ${task.title}`)
+  // fast-forward. Wrapped like the rebase above: a merge can still fail here -- `main` moved
+  // between the rebase and this command, or a lock collision with concurrent provisioning -- and
+  // an uncaught throw would wedge the primary checkout mid-merge and stall the whole workspace's
+  // merge queue (the stuck claim silences every later pass) until a restart.
+  try {
+    await gitIn(workspace.repoPath, 'merge', '--no-ff', branch, '-m', `merge(${taskKey}): ${task.title}`)
+  } catch (error) {
+    await gitIn(workspace.repoPath, 'merge', '--abort').catch(() => {})
+    const message = (error instanceof Error ? error.message : String(error)).slice(0, 2000)
+    await failMerge({
+      taskId: task.id,
+      workspaceId,
+      taskKey,
+      reason: `merge of ${branch} onto ${workspace.baseBranch} failed: ${message}`,
+    })
+    return
+  }
 
   await prisma.task.update({
     where: { id: task.id },
