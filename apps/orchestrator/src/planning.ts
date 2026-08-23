@@ -2,6 +2,7 @@ import {
   NON_TERMINAL_RUN_STATUSES,
   agentId as brandAgentId,
   runId as brandRunId,
+  parsePlanGraph,
   type RunId,
 } from '@ai-team-os/domain'
 import { runFilePaths } from '@ai-team-os/control'
@@ -36,6 +37,125 @@ export function buildPlanningPrompt(goal: string): string {
     '{"tasks":[{"key":"short-unique-key","title":"...","description":"...","role":"backend","dependsOn":["other-key"]}]}',
     'Between 1 and 20 tasks. Keys are plan-local. dependsOn lists keys, no cycles.',
   ].join('\n')
+}
+
+/**
+ * Conclude a succeeded planning run: parse the task graph and turn it into the board.
+ *
+ * Called only for a `succeeded` run -- `verifyConcludedRun` branches here before its own
+ * worktree/branch checks, which a planning run has no use for, because a task graph is not a diff.
+ *
+ * A run that produced no valid graph is treated as a failed planning attempt, not an
+ * infrastructure problem: it still feeds `dispatchPlanning`'s retry cap (spec Decision 8),
+ * deliberately -- "the process exited zero" is not "the manager decomposed the goal", and a
+ * planner that keeps saying nothing parseable must not be retried forever. The goal itself is left
+ * untouched; the cap, not a cleared goal, is what eventually stops redispatch.
+ */
+export async function concludePlanning(runId: RunId): Promise<void> {
+  const run = await prisma.agentRun.findUniqueOrThrow({
+    where: { id: runId },
+    include: { agent: { include: { team: true } } },
+  })
+  // A planning run has no task (M8b's task-less run) -- the workspace is only reachable through
+  // `agent -> team`, never through `run.task`, which is always null here.
+  const workspaceId = run.agent.team.workspaceId
+
+  const rows = await prisma.executionEvent.findMany({
+    where: { runId, type: 'run_output' },
+    orderBy: { seq: 'asc' },
+  })
+  const text = rows.map((row) => (row.payload as { text: string }).text).join('\n')
+  const parsed = parsePlanGraph(text)
+
+  if (!parsed.ok) {
+    await prisma.agentRun.updateMany({
+      where: { id: runId, status: 'succeeded' },
+      data: { status: 'failed' },
+    })
+    await appendEvent({
+      type: 'run.failed',
+      workspaceId,
+      agentId: run.agentId,
+      runId: run.id,
+      actor: 'system',
+      payload: { reason: `planning run produced no valid task graph: ${parsed.error}` },
+    })
+    return
+  }
+
+  // An operator (or a hand-seeded fixture) raced the plan: the board is no longer empty by the
+  // time this graph is ready to become one. Warned and dropped, the same `advance()` stale-result
+  // discipline `concludeReview`'s conditioned updates give the review path -- creating a second
+  // board on top of the first would be worse than losing a graph nobody signed off on landing.
+  const existingTaskCount = await prisma.task.count({ where: { workspaceId } })
+  if (existingTaskCount > 0) {
+    console.warn(
+      `[planning] ignoring a valid task graph for workspace ${workspaceId}: the board already has ${existingTaskCount} task(s)`,
+    )
+    return
+  }
+
+  const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: workspaceId } })
+  if (workspace.goal === null) {
+    // Unreachable in practice: `dispatchPlanning` never starts a planning run without a goal, and
+    // nothing in this milestone clears one once set. Thrown rather than routed around -- a
+    // succeeded planning run against a goal-less workspace is data corruption, not a case this
+    // function has an answer for.
+    throw new Error(`workspace ${workspaceId} has no goal, but ran planning run ${run.id}`)
+  }
+
+  const created = await prisma.$transaction(async (tx) => {
+    const idByKey = new Map<string, string>()
+    const rows: Array<{ readonly id: string; readonly title: string; readonly role: string }> = []
+    for (const planTask of parsed.value.tasks) {
+      const task = await tx.task.create({
+        data: {
+          workspaceId,
+          title: planTask.title,
+          description: planTask.description,
+          status: 'ready',
+          requiredRole: planTask.role,
+          createdBy: 'agent',
+          maxAttempts: workspace.maxAttempts,
+        },
+      })
+      idByKey.set(planTask.key, task.id)
+      rows.push({ id: task.id, title: task.title, role: planTask.role })
+    }
+    for (const planTask of parsed.value.tasks) {
+      const taskId = idByKey.get(planTask.key) as string
+      for (const dep of planTask.dependsOn) {
+        await tx.taskDependency.create({
+          data: { taskId, dependsOnTaskId: idByKey.get(dep) as string },
+        })
+      }
+    }
+    return rows
+  })
+
+  // Written after the transaction commits, exactly as `concludeReview`'s events follow its own
+  // task update: an event describing a task that a rolled-back transaction never created would be
+  // a lie in an append-only log.
+  for (const task of created) {
+    await appendEvent({
+      type: 'task.created',
+      workspaceId,
+      taskId: task.id,
+      actor: 'agent',
+      payload: { title: task.title },
+    })
+  }
+
+  await appendEvent({
+    type: 'workspace.plan_created',
+    workspaceId,
+    runId: run.id,
+    actor: 'agent',
+    payload: {
+      goal: workspace.goal,
+      tasks: created.map((task) => ({ id: task.id, title: task.title, role: task.role })),
+    },
+  })
 }
 
 /**

@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { prisma } from '@ai-team-os/db/client'
 import { runId as brandRunId, taskId as brandTaskId, type RunId, type TaskId } from '@ai-team-os/domain'
 import { appendEvent } from '@ai-team-os/events'
+import { concludePlanning } from './planning.js'
 import { concludeReview } from './review.js'
 import { describeOutcome, runShellCommand } from './shell.js'
 
@@ -185,12 +186,15 @@ export async function verifyConcludedRun(runId: RunId): Promise<void> {
   })
   if (run === null || run.status !== 'succeeded') return
 
-  // Temporary (Task 6): a succeeded `planning` run has no task and no tree to verify -- it
-  // produced a task graph, not a diff. Task 7 replaces this guard with `concludePlanning`, which
-  // parses that graph and creates the tasks it describes. Without this, the non-review branch
-  // below's `task === null` check would throw into this pump's `.catch`, surfacing a concluded
-  // planning run as noise rather than the planning conclusion Task 7 gives it.
-  if (run.kind === 'planning') return
+  if (run.kind === 'planning') {
+    // A planning run's succeeded process has produced a task graph, not a tree to check out --
+    // `concludePlanning` parses that graph and turns it into the board (spec Decision) rather than
+    // running the workspace's verify commands against it. Before the `task === null` check below:
+    // a planning run has no task by construction (M8b), and that check exists for `implementation`
+    // runs, not this one.
+    await concludePlanning(brandRunId(run.id))
+    return
+  }
 
   if (run.kind === 'review') {
     // A review run's succeeded process has produced text, not a tree to check out -- `concludeReview`
@@ -200,10 +204,9 @@ export async function verifyConcludedRun(runId: RunId): Promise<void> {
   }
 
   const { task } = run
-  // Every non-review run this milestone verifies is `implementation`, which always has a task --
-  // M8b's task-less run is `planning`, which is routed away by the `review` branch's sibling kind
-  // check having no equivalent here yet. A null task on this path is data corruption worth
-  // failing loudly on, not a case to route around silently.
+  // Every run that reaches here is `implementation`, which always has a task -- M8b's task-less
+  // run is `planning`, already routed away above, alongside `review`. A null task on this path is
+  // data corruption worth failing loudly on, not a case to route around silently.
   if (task === null) {
     throw new Error(`run ${run.id} of kind ${run.kind} has no task`)
   }

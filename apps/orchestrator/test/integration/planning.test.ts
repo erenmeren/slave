@@ -5,11 +5,11 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE } from '@ai-team-os/db'
 import { prisma } from '@ai-team-os/db/client'
-import { workspaceId as brandWorkspaceId } from '@ai-team-os/domain'
+import { runId as brandRunId, workspaceId as brandWorkspaceId } from '@ai-team-os/domain'
 import { ClaudeCodeAdapter } from '@ai-team-os/providers'
-import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { buildPlanningPrompt, dispatchPlanning } from '../../src/planning.js'
-import { drainPumps, type TickDeps } from '../../src/tick.js'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { buildPlanningPrompt, concludePlanning, dispatchPlanning } from '../../src/planning.js'
+import { drainPumps, tick, type TickDeps } from '../../src/tick.js'
 
 const repoRoot = fileURLToPath(new URL('../../../../', import.meta.url))
 const FAKE = join(repoRoot, 'packages/providers/test/fake-claude.mjs')
@@ -55,6 +55,12 @@ async function seed(goal: string | null): Promise<Fixture> {
 
 async function addManager(teamId: string, name = 'Atlas'): Promise<string> {
   const agent = await prisma.agent.create({ data: { teamId, name, role: 'manager' } })
+  return agent.id
+}
+
+/** A `backend` agent -- the role every task the `plan-graph` fixture describes requires. */
+async function addBackendAgent(teamId: string, name = 'Beryl'): Promise<string> {
+  const agent = await prisma.agent.create({ data: { teamId, name, role: 'backend' } })
   return agent.id
 }
 
@@ -258,6 +264,195 @@ describe('dispatchPlanning', () => {
     const failures = await prisma.executionEvent.findMany({ where: { runId: run.id, type: 'run_failed' } })
     expect(failures).toHaveLength(1)
     expect(failures[0]?.taskId).toBeNull()
+  })
+})
+
+describe('concludePlanning', () => {
+  const repos: string[] = []
+
+  beforeEach(async (): Promise<void> => {
+    await prisma.$executeRawUnsafe(
+      'TRUNCATE TABLE "ExecutionEvent", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
+    )
+  })
+
+  afterEach(async (): Promise<void> => {
+    await drainPumps()
+  })
+
+  afterAll(async (): Promise<void> => {
+    for (const repo of repos) rmSync(repo, { recursive: true, force: true })
+  })
+
+  it('(a) turns a valid task graph into the board, in one pass', async (): Promise<void> => {
+    const fixture = await seed('Ship the checkout redesign')
+    repos.push(fixture.repoPath)
+    await addManager(fixture.teamId)
+
+    const runId = await dispatchPlanning(depsFor(fixture.workspaceId))
+    expect(runId).not.toBeNull()
+    await drainPumps()
+
+    const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: runId as string } })
+    expect(run.status).toBe('succeeded')
+
+    const tasks = await prisma.task.findMany({ where: { workspaceId: fixture.workspaceId } })
+    expect(tasks).toHaveLength(3)
+    for (const task of tasks) {
+      expect(task.requiredRole).toBe('backend')
+      expect(task.createdBy).toBe('agent')
+      expect(task.status).toBe('ready')
+    }
+
+    const core = await prisma.task.findFirstOrThrow({
+      where: { workspaceId: fixture.workspaceId, title: 'Write the feature core' },
+    })
+    const api = await prisma.task.findFirstOrThrow({
+      where: { workspaceId: fixture.workspaceId, title: 'Expose the API' },
+    })
+    const polish = await prisma.task.findFirstOrThrow({
+      where: { workspaceId: fixture.workspaceId, title: 'Document and polish' },
+    })
+
+    const deps = await prisma.taskDependency.findMany({
+      where: { taskId: { in: [core.id, api.id, polish.id] } },
+    })
+    expect(deps).toHaveLength(2)
+    expect(deps).toEqual(
+      expect.arrayContaining([
+        { taskId: api.id, dependsOnTaskId: core.id },
+        { taskId: polish.id, dependsOnTaskId: api.id },
+      ]),
+    )
+
+    const events = await prisma.executionEvent.findMany({
+      where: { workspaceId: fixture.workspaceId },
+      orderBy: { seq: 'asc' },
+    })
+    const taskCreated = events.filter((event) => DOMAIN_EVENT_TYPE_BY_DB_VALUE[event.type] === 'task.created')
+    expect(taskCreated).toHaveLength(3)
+
+    const planCreated = events.filter(
+      (event) => DOMAIN_EVENT_TYPE_BY_DB_VALUE[event.type] === 'workspace.plan_created',
+    )
+    expect(planCreated).toHaveLength(1)
+    const payload = planCreated[0]?.payload as unknown as { goal: string; tasks: readonly { title: string }[] }
+    expect(payload.goal).toBe('Ship the checkout redesign')
+    expect(payload.tasks.map((task) => task.title).sort()).toEqual(
+      ['Document and polish', 'Expose the API', 'Write the feature core'].sort(),
+    )
+  })
+
+  it('(b) a subsequent dispatchPlanning starts nothing once the graph became the board', async (): Promise<void> => {
+    const fixture = await seed('Ship the checkout redesign')
+    repos.push(fixture.repoPath)
+    await addManager(fixture.teamId)
+
+    const first = await dispatchPlanning(depsFor(fixture.workspaceId))
+    expect(first).not.toBeNull()
+    await drainPumps()
+    expect(await prisma.task.count({ where: { workspaceId: fixture.workspaceId } })).toBe(3)
+
+    const second = await dispatchPlanning(depsFor(fixture.workspaceId))
+
+    expect(second).toBeNull()
+    expect(await prisma.agentRun.count({ where: { kind: 'planning' } })).toBe(1)
+    expect(await prisma.task.count({ where: { workspaceId: fixture.workspaceId } })).toBe(3)
+  })
+
+  it('(c) fails the run and creates no tasks when the planning output carries no valid graph', async (): Promise<void> => {
+    const fixture = await seed('Ship the checkout redesign')
+    repos.push(fixture.repoPath)
+    await addManager(fixture.teamId)
+
+    const runId = await dispatchPlanning(depsFor(fixture.workspaceId, 'review-invalid'))
+    expect(runId).not.toBeNull()
+    await drainPumps()
+
+    const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: runId as string } })
+    expect(run.status).toBe('failed')
+
+    const failures = await prisma.executionEvent.findMany({ where: { runId: run.id, type: 'run_failed' } })
+    expect(failures).toHaveLength(1)
+    expect((failures[0]?.payload as { reason: string }).reason).toContain(
+      'planning run produced no valid task graph',
+    )
+
+    expect(await prisma.task.count({ where: { workspaceId: fixture.workspaceId } })).toBe(0)
+  })
+
+  it('(d) warns and creates no NEW tasks when the board grew a task before conclusion', async (): Promise<void> => {
+    const fixture = await seed('Ship the checkout redesign')
+    repos.push(fixture.repoPath)
+    const managerId = await addManager(fixture.teamId)
+
+    const now = new Date()
+    const run = await prisma.agentRun.create({
+      data: { agentId: managerId, kind: 'planning', status: 'succeeded', startedAt: now, terminalAt: now, endedAt: now },
+    })
+    await prisma.executionEvent.create({
+      data: {
+        type: 'run_output',
+        workspaceId: fixture.workspaceId,
+        agentId: managerId,
+        runId: run.id,
+        actor: 'agent',
+        payload: {
+          text: '{"tasks":[{"key":"core","title":"Write the feature core","description":"Implement the core module.","role":"backend","dependsOn":[]}]}',
+        },
+      },
+    })
+
+    // An operator (or here, the test) races the plan: a task lands on the board between the
+    // run's success and its conclusion.
+    const seeded = await prisma.task.create({
+      data: {
+        workspaceId: fixture.workspaceId,
+        title: 'Operator-seeded task',
+        description: 'already on the board',
+        status: 'backlog',
+        maxAttempts: 3,
+      },
+    })
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation((): void => {})
+    try {
+      await concludePlanning(brandRunId(run.id))
+      expect(warn).toHaveBeenCalled()
+    } finally {
+      warn.mockRestore()
+    }
+
+    const tasks = await prisma.task.findMany({ where: { workspaceId: fixture.workspaceId } })
+    expect(tasks).toHaveLength(1)
+    expect(tasks[0]?.id).toBe(seeded.id)
+
+    const planCreated = await prisma.executionEvent.findMany({
+      where: { workspaceId: fixture.workspaceId, type: 'workspace_plan_created' },
+    })
+    expect(planCreated).toHaveLength(0)
+  })
+
+  it('(e) the daemon-shape follow-through: a further tick starts an implementation run for the root task', async (): Promise<void> => {
+    const fixture = await seed('Ship the checkout redesign')
+    repos.push(fixture.repoPath)
+    await addManager(fixture.teamId)
+    await addBackendAgent(fixture.teamId)
+    const deps = depsFor(fixture.workspaceId)
+
+    const runId = await dispatchPlanning(deps)
+    expect(runId).not.toBeNull()
+    await drainPumps()
+    expect(await prisma.task.count({ where: { workspaceId: fixture.workspaceId } })).toBe(3)
+
+    const report = await tick(deps)
+
+    expect(report.started).toHaveLength(1)
+    const core = await prisma.task.findFirstOrThrow({
+      where: { workspaceId: fixture.workspaceId, title: 'Write the feature core' },
+    })
+    expect(core.status).toBe('running')
+    expect(core.activeRunId).not.toBeNull()
   })
 })
 
