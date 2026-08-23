@@ -183,6 +183,60 @@ describe('parseExecutionEvent', () => {
     expect(result.ok).toBe(false)
   })
 
+  it('accepts a task.review_started event', () => {
+    const result = parseExecutionEvent({
+      ...BASE,
+      type: 'task.review_started',
+      taskId: 'TASK-1',
+      payload: { title: 'Add the thing' },
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.value.type).toBe('task.review_started')
+  })
+
+  it('accepts a task.review_approved event', () => {
+    const result = parseExecutionEvent({
+      ...BASE,
+      type: 'task.review_approved',
+      taskId: 'TASK-1',
+      payload: { reason: 'diff matches the task' },
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.value.type).toBe('task.review_approved')
+  })
+
+  it('accepts a task.review_rejected event', () => {
+    const result = parseExecutionEvent({
+      ...BASE,
+      type: 'task.review_rejected',
+      taskId: 'TASK-1',
+      payload: { reason: 'edge case unhandled', attempt: 2 },
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.value.type).toBe('task.review_rejected')
+  })
+
+  it('rejects a task.review_rejected event with attempt 0', () => {
+    const result = parseExecutionEvent({
+      ...BASE,
+      type: 'task.review_rejected',
+      taskId: 'TASK-1',
+      payload: { reason: 'edge case unhandled', attempt: 0 },
+    })
+    expect(result.ok).toBe(false)
+  })
+
+  it('accepts a task.merge_failed event', () => {
+    const result = parseExecutionEvent({
+      ...BASE,
+      type: 'task.merge_failed',
+      taskId: 'TASK-1',
+      payload: { reason: 'conflict in package.json' },
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.value.type).toBe('task.merge_failed')
+  })
+
   it('rejects an empty workspaceId', () => {
     const result = parseExecutionEvent({
       ...BASE,

@@ -74,6 +74,26 @@ export const executionEventSchema = z.discriminatedUnion('type', [
     type: z.literal('task.dependency_removed'),
     payload: z.object({ dependsOnTaskId: z.string(), dependsOnTitle: z.string(), requestedBy: z.string() }),
   }),
+  z.object({
+    ...envelope,
+    type: z.literal('task.review_started'),
+    payload: z.object({ title: z.string() }),
+  }),
+  z.object({
+    ...envelope,
+    type: z.literal('task.review_approved'),
+    payload: z.object({ reason: z.string() }),
+  }),
+  z.object({
+    ...envelope,
+    type: z.literal('task.review_rejected'),
+    payload: z.object({ reason: z.string(), attempt: z.number().int().positive() }),
+  }),
+  z.object({
+    ...envelope,
+    type: z.literal('task.merge_failed'),
+    payload: z.object({ reason: z.string() }),
+  }),
 ])
 
 export type ExecutionEvent = z.infer<typeof executionEventSchema>

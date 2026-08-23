@@ -162,6 +162,55 @@ function TaskDependencyRemovedCard(props: ActivityCardProps): ReactElement {
   )
 }
 
+// ---- task.review_* / task.merge_failed (schema.ts:78-96) ---------------------------------------
+// The QA review stage and merge queue (M8a): a task's diff is reviewed, then either merges or
+// gets sent back — parallel to task.rework/verify_failed above but for the review/merge step.
+
+function TaskReviewStartedCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as { title: string }
+  return (
+    <ActivityCard {...props}>
+      <Transition tone="paused" label="QA review started">
+        <span data-testid="review-title">{payload.title}</span>
+      </Transition>
+    </ActivityCard>
+  )
+}
+
+function TaskReviewApprovedCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as { reason: string }
+  return (
+    <ActivityCard {...props}>
+      <Transition tone="working" label="review approved">
+        <span data-testid="review-approved-reason">{payload.reason}</span>
+      </Transition>
+    </ActivityCard>
+  )
+}
+
+function TaskReviewRejectedCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as { reason: string; attempt: number }
+  return (
+    <ActivityCard {...props}>
+      <Transition tone="warn" label="review rejected">
+        <span data-testid="review-rejected-reason">{payload.reason}</span>{' '}
+        <span className="text-text-3">(attempt {payload.attempt})</span>
+      </Transition>
+    </ActivityCard>
+  )
+}
+
+function TaskMergeFailedCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as { reason: string }
+  return (
+    <ActivityCard {...props}>
+      <Transition tone="danger" label="merge failed">
+        <span data-testid="merge-failed-reason">{payload.reason}</span>
+      </Transition>
+    </ActivityCard>
+  )
+}
+
 // ---- run.* lifecycle (schema.ts:24, 30-31, 60-66) --------------------------------------------
 
 function RunStartedCard(props: ActivityCardProps): ReactElement {
@@ -358,4 +407,8 @@ export const ACTIVITY_CARDS = {
   'run.failed': RunFailedCard,
   'task.dependency_added': TaskDependencyAddedCard,
   'task.dependency_removed': TaskDependencyRemovedCard,
+  'task.review_started': TaskReviewStartedCard,
+  'task.review_approved': TaskReviewApprovedCard,
+  'task.review_rejected': TaskReviewRejectedCard,
+  'task.merge_failed': TaskMergeFailedCard,
 } satisfies Record<DomainEventType, (props: ActivityCardProps) => ReactElement>

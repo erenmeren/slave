@@ -358,6 +358,10 @@ enum EventType {
   run_failed              @map("run.failed")
   task_dependency_added   @map("task.dependency_added")
   task_dependency_removed @map("task.dependency_removed")
+  task_review_started     @map("task.review_started")
+  task_review_approved    @map("task.review_approved")
+  task_review_rejected    @map("task.review_rejected")
+  task_merge_failed       @map("task.merge_failed")
 }
 
 model ExecutionEvent {

@@ -53,6 +53,10 @@ const PAYLOAD_BY_TYPE: Record<DomainEventType, Record<string, unknown>> = {
     dependsOnTitle: 'Build the API',
     requestedBy: 'human:eren',
   },
+  'task.review_started': { title: 'Add the thing' },
+  'task.review_approved': { reason: 'diff matches the task' },
+  'task.review_rejected': { reason: 'edge case unhandled', attempt: 2 },
+  'task.merge_failed': { reason: 'conflict in package.json' },
 }
 
 function fixtureFor(type: DomainEventType): ActivityEventRow {
@@ -121,6 +125,19 @@ describe('targeted card bodies', () => {
     const Card = ACTIVITY_CARDS['task.rework']
     render(<Card event={fixtureFor('task.rework')} {...CARD_PROPS} />)
     expect(screen.getByTestId('rework-reason').textContent).toBe('tests failed on attempt 1')
+  })
+
+  it('task.review_rejected shows the reason and the attempt number', () => {
+    const Card = ACTIVITY_CARDS['task.review_rejected']
+    render(<Card event={fixtureFor('task.review_rejected')} {...CARD_PROPS} />)
+    expect(screen.getByTestId('review-rejected-reason').textContent).toBe('edge case unhandled')
+    expect(screen.getByTestId('review-rejected-reason').parentElement?.textContent).toContain('(attempt 2)')
+  })
+
+  it('task.merge_failed shows the reason', () => {
+    const Card = ACTIVITY_CARDS['task.merge_failed']
+    render(<Card event={fixtureFor('task.merge_failed')} {...CARD_PROPS} />)
+    expect(screen.getByTestId('merge-failed-reason').textContent).toBe('conflict in package.json')
   })
 
   it('falls back to the bare id when agentName/taskTitle are null', () => {
