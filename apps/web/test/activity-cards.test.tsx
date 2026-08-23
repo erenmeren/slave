@@ -57,6 +57,14 @@ const PAYLOAD_BY_TYPE: Record<DomainEventType, Record<string, unknown>> = {
   'task.review_approved': { reason: 'diff matches the task' },
   'task.review_rejected': { reason: 'edge case unhandled', attempt: 2 },
   'task.merge_failed': { reason: 'conflict in package.json' },
+  'workspace.goal_set': { goal: 'Ship the checkout flow' },
+  'workspace.plan_created': {
+    goal: 'Ship the checkout flow',
+    tasks: [
+      { id: 'TASK-1', title: 'Build the API', role: 'backend' },
+      { id: 'TASK-2', title: 'Wire up the form', role: 'frontend' },
+    ],
+  },
 }
 
 function fixtureFor(type: DomainEventType): ActivityEventRow {
@@ -138,6 +146,24 @@ describe('targeted card bodies', () => {
     const Card = ACTIVITY_CARDS['task.merge_failed']
     render(<Card event={fixtureFor('task.merge_failed')} {...CARD_PROPS} />)
     expect(screen.getByTestId('merge-failed-reason').textContent).toBe('conflict in package.json')
+  })
+
+  it('workspace.goal_set shows the goal text', () => {
+    const Card = ACTIVITY_CARDS['workspace.goal_set']
+    render(<Card event={fixtureFor('workspace.goal_set')} {...CARD_PROPS} />)
+    expect(screen.getByTestId('goal-text').textContent).toBe('Ship the checkout flow')
+  })
+
+  it('workspace.plan_created shows the task count and the title+role list', () => {
+    const Card = ACTIVITY_CARDS['workspace.plan_created']
+    render(<Card event={fixtureFor('workspace.plan_created')} {...CARD_PROPS} />)
+    expect(screen.getByTestId('transition-label').textContent).toBe('planned 2 tasks')
+    const items = screen.getAllByTestId('plan-task-item')
+    expect(items).toHaveLength(2)
+    expect(items[0]?.textContent).toContain('Build the API')
+    expect(items[0]?.textContent).toContain('backend')
+    expect(items[1]?.textContent).toContain('Wire up the form')
+    expect(items[1]?.textContent).toContain('frontend')
   })
 
   it('falls back to the bare id when agentName/taskTitle are null', () => {

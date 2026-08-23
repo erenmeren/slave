@@ -237,6 +237,59 @@ describe('parseExecutionEvent', () => {
     if (result.ok) expect(result.value.type).toBe('task.merge_failed')
   })
 
+  it('accepts a workspace.goal_set event', () => {
+    const result = parseExecutionEvent({
+      ...BASE,
+      type: 'workspace.goal_set',
+      payload: { goal: 'Ship the checkout flow' },
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.value.type).toBe('workspace.goal_set')
+  })
+
+  it('rejects a workspace.goal_set event with an empty goal', () => {
+    const result = parseExecutionEvent({
+      ...BASE,
+      type: 'workspace.goal_set',
+      payload: { goal: '' },
+    })
+    expect(result.ok).toBe(false)
+  })
+
+  it('accepts a workspace.plan_created event', () => {
+    const result = parseExecutionEvent({
+      ...BASE,
+      type: 'workspace.plan_created',
+      payload: {
+        goal: 'Ship the checkout flow',
+        tasks: [{ id: 'TASK-1', title: 'Build the API', role: 'backend' }],
+      },
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.value.type).toBe('workspace.plan_created')
+  })
+
+  it('rejects a workspace.plan_created event with an empty goal', () => {
+    const result = parseExecutionEvent({
+      ...BASE,
+      type: 'workspace.plan_created',
+      payload: {
+        goal: '',
+        tasks: [{ id: 'TASK-1', title: 'Build the API', role: 'backend' }],
+      },
+    })
+    expect(result.ok).toBe(false)
+  })
+
+  it('rejects a workspace.plan_created event with an empty tasks array', () => {
+    const result = parseExecutionEvent({
+      ...BASE,
+      type: 'workspace.plan_created',
+      payload: { goal: 'Ship the checkout flow', tasks: [] },
+    })
+    expect(result.ok).toBe(false)
+  })
+
   it('rejects an empty workspaceId', () => {
     const result = parseExecutionEvent({
       ...BASE,

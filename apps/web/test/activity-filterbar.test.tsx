@@ -25,7 +25,12 @@ describe('useUrlFilters', () => {
     params = new URLSearchParams('agents=a1,a2&kinds=guardrails&types=run.output')
     const { result } = renderHook(() => useUrlFilters())
     expect(result.current.filters.agents).toEqual(['a1', 'a2'])
-    expect([...result.current.filters.types].sort()).toEqual(['guardrail.tripped', 'run.output'])
+    expect([...result.current.filters.types].sort()).toEqual([
+      'guardrail.tripped',
+      'run.output',
+      'workspace.goal_set',
+      'workspace.plan_created',
+    ])
   })
 
   it('exposes the raw ?kinds= and ?types= selections for chip/popover state', () => {
@@ -41,7 +46,12 @@ describe('useUrlFilters', () => {
     expect(result.current.kinds).toEqual(['guardrails'])
     expect(result.current.rawTypes).toEqual(['run.output'])
     // the surviving, known tokens still reach `filters` — an unknown token doesn't blank the rest
-    expect([...result.current.filters.types].sort()).toEqual(['guardrail.tripped', 'run.output'])
+    expect([...result.current.filters.types].sort()).toEqual([
+      'guardrail.tripped',
+      'run.output',
+      'workspace.goal_set',
+      'workspace.plan_created',
+    ])
   })
 
   it('setKinds writes the sorted kinds to the URL via a shallow router.replace', () => {

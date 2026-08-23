@@ -33,6 +33,8 @@ export const EVENT_TYPE_BY_DOMAIN_TYPE = {
   'task.review_approved': 'task_review_approved',
   'task.review_rejected': 'task_review_rejected',
   'task.merge_failed': 'task_merge_failed',
+  'workspace.goal_set': 'workspace_goal_set',
+  'workspace.plan_created': 'workspace_plan_created',
 } as const satisfies Record<DomainEventType, string>
 
 export type DbEventType = (typeof EVENT_TYPE_BY_DOMAIN_TYPE)[DomainEventType]

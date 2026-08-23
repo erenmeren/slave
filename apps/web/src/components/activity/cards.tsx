@@ -315,6 +315,43 @@ function GuardrailTrippedCard(props: ActivityCardProps): ReactElement {
   )
 }
 
+// ---- workspace.* (schema.ts:97-108) -------------------------------------------------------------
+// Workspace-scoped, task-less events (M8b): the planning run sets the workspace's goal, then
+// produces the task plan for it. Grouped with `guardrail.tripped` in `TYPES_BY_KIND` — none of
+// the three carry a `taskId`.
+
+function WorkspaceGoalSetCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as { goal: string }
+  return (
+    <ActivityCard {...props}>
+      <Transition tone="idle" label="goal set">
+        <span data-testid="goal-text">{payload.goal}</span>
+      </Transition>
+    </ActivityCard>
+  )
+}
+
+function WorkspacePlanCreatedCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as {
+    goal: string
+    tasks: ReadonlyArray<{ id: string; title: string; role: string }>
+  }
+  return (
+    <ActivityCard {...props}>
+      <Transition tone="idle" label={`planned ${payload.tasks.length} tasks`}>
+        <span data-testid="plan-goal">{payload.goal}</span>
+      </Transition>
+      <ul className="mt-1 space-y-0.5 text-text-3">
+        {payload.tasks.map((task) => (
+          <li key={task.id} data-testid="plan-task-item">
+            {task.title} <span className="text-text-3">({task.role})</span>
+          </li>
+        ))}
+      </ul>
+    </ActivityCard>
+  )
+}
+
 // ---- interventions (schema.ts:32-39, 54-59) ----------------------------------------------------
 // `event.actor` (human/agent/system) is already on the shared shell's actor badge; these bodies
 // add the payload's own record of *who* intervened (`requestedBy`) and *what* they said
@@ -411,4 +448,6 @@ export const ACTIVITY_CARDS = {
   'task.review_approved': TaskReviewApprovedCard,
   'task.review_rejected': TaskReviewRejectedCard,
   'task.merge_failed': TaskMergeFailedCard,
+  'workspace.goal_set': WorkspaceGoalSetCard,
+  'workspace.plan_created': WorkspacePlanCreatedCard,
 } satisfies Record<DomainEventType, (props: ActivityCardProps) => ReactElement>

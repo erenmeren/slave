@@ -94,6 +94,21 @@ export const executionEventSchema = z.discriminatedUnion('type', [
     type: z.literal('task.merge_failed'),
     payload: z.object({ reason: z.string() }),
   }),
+  z.object({
+    ...envelope,
+    type: z.literal('workspace.goal_set'),
+    payload: z.object({ goal: z.string().min(1) }),
+  }),
+  z.object({
+    ...envelope,
+    type: z.literal('workspace.plan_created'),
+    payload: z.object({
+      goal: z.string().min(1),
+      tasks: z
+        .array(z.object({ id: z.string().min(1), title: z.string().min(1), role: z.string().min(1) }))
+        .min(1),
+    }),
+  }),
 ])
 
 export type ExecutionEvent = z.infer<typeof executionEventSchema>
