@@ -343,15 +343,17 @@ npm run demo
 ```
 
 The one-command live demo (spec §8): resets `~/.aiteamos/demo-repo` to a fresh git repository,
-seeds a new workspace, team, agent and task into the *development* database, and starts the
-orchestrator daemon against it, printing the workspace id and its Overview URL. Run `npm run web`
-in a second terminal and open the printed URL (or its `/tasks` board) to watch it live. It spends
-real money against the real `claude` CLI by default; to rehearse it for free, point it at the fake
-adapter the same way the orchestrator tests do:
+seeds a new workspace and team (a `manager`, a `backend` worker, a `reviewer` — and deliberately
+NO tasks and NO goal), and starts the orchestrator daemon against the *development* database,
+printing the workspace id and its Overview URL. Run `npm run web` in a second terminal, open the
+printed URL, and type a goal into the Overview's goal form — the demo IS the M8 pipeline: the
+goal becomes a plan, the plan becomes the board, and the board flows through review and merge to
+`main`, unattended. It spends real money against the real `claude` CLI by default; to rehearse
+it for free, point it at the fake adapter the same way the orchestrator tests do:
 
 ```bash
 AITEAMOS_CLAUDE_BIN=node \
-AITEAMOS_CLAUDE_ARGS="$(pwd)/packages/providers/test/fake-claude.mjs --fixture complete" \
+AITEAMOS_CLAUDE_ARGS="$(pwd)/packages/providers/test/fake-claude.mjs --fixture m8-flow" \
 npm run demo
 ```
 
