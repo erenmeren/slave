@@ -190,7 +190,12 @@ export async function runMergePass(workspaceId: WorkspaceId): Promise<void> {
   const result = await runVerify({
     taskId: brandTaskId(task.id),
     worktreePath,
-    artifactDir: join(workspace.repoPath, '.aiteamos', 'artifacts', task.id),
+    // A sibling namespace under the task's artifact dir, never `.../artifacts/task.id` itself:
+    // that is where `verifyConcludedRun` already writes the implementation attempt's own
+    // `attempt-NN` logs (verify.ts), and this pass's post-rebase re-verify reuses the same
+    // attempt number. Without the `merge` segment the two writers collide on the same paths and
+    // this pass's log silently overwrites the implementation attempt's.
+    artifactDir: join(workspace.repoPath, '.aiteamos', 'artifacts', task.id, 'merge'),
     commands: workspace.verifyCommands,
     timeoutMs: workspace.runTimeoutMs,
   })

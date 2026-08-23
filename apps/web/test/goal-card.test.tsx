@@ -17,7 +17,7 @@ describe('GoalCard', () => {
 
   it('renders the form when goal is null', () => {
     render(<GoalCard workspaceId="w1" goal={null} />)
-    expect(screen.getByTestId('goal-input')).toBeTruthy()
+    expect(screen.getByRole('textbox', { name: 'workspace goal' })).toBeTruthy()
     expect(screen.getByTestId('goal-submit')).toBeTruthy()
     expect(screen.queryByTestId('workspace-goal')).toBeNull()
   })

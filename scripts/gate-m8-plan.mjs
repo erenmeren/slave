@@ -118,7 +118,24 @@ try {
     }
   }
   if (planTaskCount === null) {
-    throw new Error(`no task appeared within ${STAGE_TIMEOUT_MS}ms -- the plan never landed`)
+    // m8a-estop-style diagnostic: dump exactly what happened instead of a bare timeout message --
+    // the planning run(s) this workspace actually produced (id, status, pauseReason) and every
+    // event type recorded so far, so a real failure here (vs. this gate's own flakiness) is
+    // diagnosable from the log alone.
+    const planningRuns = await prisma.agentRun.findMany({
+      where: { agent: { team: { workspaceId: workspace.id } }, kind: 'planning' },
+    })
+    const eventRowsSoFar = await prisma.executionEvent.findMany({
+      where: { workspaceId: workspace.id },
+      orderBy: { seq: 'asc' },
+    })
+    const eventTypesSoFar = eventRowsSoFar.map((row) => DOMAIN_EVENT_TYPE_BY_DB_VALUE[row.type])
+    throw new Error(
+      `no task appeared within ${STAGE_TIMEOUT_MS}ms -- the plan never landed: ` +
+        `planningRuns=${JSON.stringify(
+          planningRuns.map((run) => ({ id: run.id, status: run.status, pauseReason: run.pauseReason })),
+        )} eventTypes=${JSON.stringify(eventTypesSoFar)}`,
+    )
   }
   console.log(`plan landed: ${planTaskCount} task(s)`)
 

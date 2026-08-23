@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@ai-team-os/db'
@@ -141,6 +141,19 @@ describe('runMergePass', () => {
     const workspace = await seedWorkspace({ autoMerge: true })
     const { taskId, taskKey } = await seedMergingTask(workspace)
 
+    // The implementation attempt's own verify artifacts, laid down exactly as `verify.ts`'s
+    // `runVerify` would have left them for the task's first (and only, here) attempt: one log
+    // per verify command, under `attempt-01` directly beneath the task's artifact dir -- the same
+    // layout `verifyConcludedRun` points at. Written by hand rather than by calling `runVerify`
+    // itself: this test is about the merge pass's own artifact routing, not re-driving the
+    // implementation phase.
+    const implArtifactDir = join(workspace.repoPath, '.aiteamos', 'artifacts', taskId)
+    const implAttemptDir = join(implArtifactDir, 'attempt-01')
+    mkdirSync(implAttemptDir, { recursive: true })
+    const implLogPath = join(implAttemptDir, '01-true.log')
+    const implLogContent = 'command exit 0: true\n(the implementation attempt wrote this)\n'
+    writeFileSync(implLogPath, implLogContent)
+
     await runMergePass(brandWorkspaceId(workspace.id))
 
     const task = await prisma.task.findUniqueOrThrow({ where: { id: taskId } })
@@ -151,6 +164,20 @@ describe('runMergePass', () => {
     expect(subjects.some((subject) => subject.includes(taskKey))).toBe(true)
     // The merged file exists on `main` in the primary checkout.
     expect(() => git(['cat-file', '-e', 'HEAD:feature.txt'], workspace.repoPath)).not.toThrow()
+
+    // The implementation attempt's artifact survives the merge pass byte-identical: the merge
+    // pass's own re-verify must not have clobbered it.
+    expect(readFileSync(implLogPath, 'utf8')).toBe(implLogContent)
+
+    // The merge pass's own re-verify artifacts land in a sibling `merge/` namespace, never inside
+    // the implementation attempt's `attempt-NN` dirs.
+    const mergeLogPath = join(implArtifactDir, 'merge', 'attempt-01', '01-true.log')
+    expect(existsSync(mergeLogPath)).toBe(true)
+    const mergeArtifacts = await prisma.artifact.findMany({ where: { taskId } })
+    expect(mergeArtifacts.length).toBeGreaterThan(0)
+    for (const artifact of mergeArtifacts) {
+      expect(artifact.path).toContain(join(implArtifactDir, 'merge'))
+    }
   })
 
   it('(b) concludes done without merging when autoMerge is false', async (): Promise<void> => {

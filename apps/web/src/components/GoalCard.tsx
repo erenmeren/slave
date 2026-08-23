@@ -77,6 +77,7 @@ export function GoalCard({
       >
         <input
           data-testid="goal-input"
+          aria-label="workspace goal"
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
           disabled={pending}
