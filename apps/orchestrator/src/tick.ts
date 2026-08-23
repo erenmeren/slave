@@ -14,6 +14,7 @@ import { appendEvent } from '@ai-team-os/events'
 import { type AgentRuntimeAdapter, writeSettingsFile } from '@ai-team-os/providers'
 import { pumpRun } from './pump.js'
 import { executeResume } from './resume.js'
+import { dispatchReviews } from './review.js'
 import { noteTickRan } from './sweep.js'
 import { verifyConcludedRun } from './verify.js'
 import { loadWorld } from './world.js'
@@ -34,6 +35,7 @@ export interface TickReport {
   readonly started: readonly RunId[]
   readonly halted: string | null
   readonly skippedNoRole: number
+  readonly reviewsStarted: readonly RunId[]
 }
 
 /**
@@ -53,8 +55,12 @@ const haltAnnounced = new Map<string, boolean>()
  * Pumps in flight. They outlive the tick that started them by design (spec §5.6), so something has
  * to hold them: an unawaited promise that rejects takes the process down, and a daemon shutting
  * down needs to know when the last one has finished writing.
+ *
+ * Exported so `dispatchReviews` (`review.ts`) can register its own runs' pumps here rather than in
+ * a set of its own -- `drainPumps` below only ever waits on this one, and a review pump living
+ * anywhere else would be invisible to it, exactly the failure mode the doc comment above describes.
  */
-const pumps = new Set<Promise<unknown>>()
+export const pumps = new Set<Promise<unknown>>()
 
 /** Waits for every in-flight pump. For a graceful shutdown, and for tests that truncate tables. */
 export async function drainPumps(): Promise<void> {
@@ -86,8 +92,12 @@ function slugify(title: string): string {
 /**
  * An agent's git email local part. Falls back to the id rather than to `slugify`'s generic default,
  * which would put the same address on commits by two different agents whose names carry no ASCII.
+ *
+ * Exported for Task 5's review dispatch, which gives a reviewer agent the same git identity
+ * convention a run's implementation agent gets -- duplicating this would be a second place the
+ * convention could drift from this one.
  */
-function emailLocalPart(agent: { readonly id: string; readonly name: string }): string {
+export function emailLocalPart(agent: { readonly id: string; readonly name: string }): string {
   const slug = slugify(agent.name)
   return slug === 'task' ? `agent-${agent.id.slice(0, 8)}` : slug
 }
@@ -175,7 +185,7 @@ export async function tick(deps: TickDeps): Promise<TickReport> {
         payload: { guardrail: halt.reason, detail: 'scheduling halted for this workspace' },
       })
     }
-    return { started: [], halted: halt.reason, skippedNoRole }
+    return { started: [], halted: halt.reason, skippedNoRole, reviewsStarted: [] }
   }
   haltAnnounced.set(deps.workspaceId, false)
 
@@ -188,7 +198,9 @@ export async function tick(deps: TickDeps): Promise<TickReport> {
 
   await resumeRequestedRuns(deps)
 
-  return { started, halted: null, skippedNoRole }
+  const reviewsStarted = await dispatchReviews(deps)
+
+  return { started, halted: null, skippedNoRole, reviewsStarted }
 }
 
 /**

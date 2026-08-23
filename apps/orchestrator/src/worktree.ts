@@ -132,8 +132,12 @@ export class WorktreeExistsError extends Error {
 /**
  * Runs git with the orchestrator's identity supplied per-command. The `-c` pairs must precede the
  * subcommand, which is why this wrapper exists rather than each call site assembling its own argv.
+ *
+ * Exported as `gitIn` for Task 5's review dispatch, which needs the identical identity-scoped `git
+ * diff` this module already runs every other git subcommand through -- a second wrapper would be a
+ * second place the `-c user.name=…`/`-c user.email=…` pair could drift from this one.
  */
-async function git(cwd: string, ...args: readonly string[]): Promise<string> {
+export async function gitIn(cwd: string, ...args: readonly string[]): Promise<string> {
   const { stdout } = await execFileAsync(
     'git',
     [
@@ -151,7 +155,7 @@ async function git(cwd: string, ...args: readonly string[]): Promise<string> {
 /** True when the ref exists. `show-ref --verify` exits non-zero rather than printing when it does not. */
 async function branchExists(repoPath: string, branch: string): Promise<boolean> {
   try {
-    await git(repoPath, 'show-ref', '--verify', '--quiet', `refs/heads/${branch}`)
+    await gitIn(repoPath, 'show-ref', '--verify', '--quiet', `refs/heads/${branch}`)
     return true
   } catch {
     return false
@@ -224,7 +228,7 @@ export async function provisionWorktree(input: ProvisionWorktreeInput): Promise<
   }
 
   // `worktree add -b` creates the branch and the leading directories in one step.
-  await git(repoPath, 'worktree', 'add', '-b', branch, path, input.baseBranch)
+  await gitIn(repoPath, 'worktree', 'add', '-b', branch, path, input.baseBranch)
 
   // Sequential, and aborting on the first failure: setup commands are an ordered list whose later
   // entries routinely depend on earlier ones (`npm ci` then `npm run build`), so running on after
@@ -242,7 +246,7 @@ export async function provisionWorktree(input: ProvisionWorktreeInput): Promise<
     }
   }
 
-  const headCommit = await git(path, 'rev-parse', 'HEAD')
+  const headCommit = await gitIn(path, 'rev-parse', 'HEAD')
 
   return { path, branch, headCommit }
 }
@@ -288,7 +292,7 @@ export async function adoptWorktree(input: AdoptWorktreeInput): Promise<Worktree
 
   // `--porcelain` emits one blank-line-separated record per worktree, each a set of `key value`
   // lines: `worktree <path>`, `HEAD <sha>`, and `branch refs/heads/<name>` (absent when detached).
-  const records = (await git(repoPath, 'worktree', 'list', '--porcelain')).split('\n\n')
+  const records = (await gitIn(repoPath, 'worktree', 'list', '--porcelain')).split('\n\n')
   const registered = records.find((record) => record.startsWith(`worktree ${path}\n`))
   if (registered === undefined) {
     throw new Error(`refusing to adopt ${path}: it is not a registered worktree of ${repoPath}`)
@@ -312,5 +316,5 @@ export async function adoptWorktree(input: AdoptWorktreeInput): Promise<Worktree
     }
   }
 
-  return { path, branch: input.branch, headCommit: await git(path, 'rev-parse', 'HEAD') }
+  return { path, branch: input.branch, headCommit: await gitIn(path, 'rev-parse', 'HEAD') }
 }
