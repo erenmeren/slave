@@ -11,6 +11,9 @@ const AGENTS: readonly { name: string; role: string; team: (typeof TEAMS)[number
   { name: 'Emma', role: 'Frontend', team: 'Engineering' },
   { name: 'Daniel', role: 'DevOps', team: 'Engineering' },
   { name: 'Maya', role: 'QA', team: 'Engineering' },
+  // Lowercase, unlike the other roles here: Task 5's review dispatch matches `role === 'reviewer'`
+  // exactly, the same convention `decide()` uses for `requiredRole`.
+  { name: 'Riley', role: 'reviewer', team: 'Engineering' },
   { name: 'Sarah', role: 'Security', team: 'Security' },
   { name: 'John', role: 'Business Analyst', team: 'Product' },
   { name: 'Oliver', role: 'SEO', team: 'Marketing' },

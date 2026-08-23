@@ -426,9 +426,23 @@ describe('tick', () => {
     // and a lingering `activeRunId` shows as the run `advance` would have cleared.
     await drainPumps()
     const task = await prisma.task.findFirstOrThrow()
-    expect(task.status).toBe('done')
+    // The pipeline flip (M8a): a green verify hands the task to review, not to `done` -- so the
+    // race's winner is visible here as `reviewing`, not `done`.
+    expect(task.status).toBe('reviewing')
     expect(task.attempt).toBe(0)
     expect(task.activeRunId).toBeNull()
+
+    // No reviewer-role agent exists in this fixture. `dispatchReviews` runs on every tick (it is
+    // part of `tick()` itself, spec §3.2/Task 5) and escalates that once rather than trying forever
+    // -- proving the task is not just parked in `reviewing` but visibly stuck for an operator.
+    await tick(deps)
+    const guardrails = await prisma.executionEvent.findMany({
+      where: { workspaceId: fixture.workspaceId, type: 'guardrail_tripped' },
+    })
+    const noReviewerEvents = guardrails.filter(
+      (event) => (event.payload as { guardrail?: string }).guardrail === 'no_reviewer',
+    )
+    expect(noReviewerEvents).toHaveLength(1)
   })
 
   it('does not turn the leftovers it refused into leftovers it will adopt', async (): Promise<void> => {

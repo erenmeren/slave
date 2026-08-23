@@ -73,10 +73,10 @@ async function eventTypesFor(workspaceId: string): Promise<readonly DomainEventT
 
 /**
  * Drives a real `tick` with the `complete` fixture to give the seeded task a real worktree, branch
- * and a `succeeded` implementation run -- then parks it in `reviewing` by hand, the way a real merge
- * of Task 8's `advance` extension eventually would. Cheaper and more real than hand-provisioning a
- * worktree and forging an `AgentRun` row: this is the exact shape `dispatchReviews` will actually
- * see in production.
+ * and a `succeeded` implementation run -- landing it in `reviewing` the way production does since
+ * Task 8's flip (verify green enters review directly; nothing here parks it there by hand anymore).
+ * Cheaper and more real than hand-provisioning a worktree and forging an `AgentRun` row: this is the
+ * exact shape `dispatchReviews` will actually see in production.
  */
 async function seedReviewingTask(fixture: Fixture, reviewFixture = 'review-approve'): Promise<TickDeps> {
   const implDeps: TickDeps = {
@@ -89,8 +89,9 @@ async function seedReviewingTask(fixture: Fixture, reviewFixture = 'review-appro
   await drainPumps()
 
   const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
-  expect(task.status).toBe('done') // sanity: the seeding tick actually landed a real branch + worktree
-  await prisma.task.update({ where: { id: fixture.taskId }, data: { status: 'reviewing' } })
+  // Sanity: the seeding tick actually landed a real branch + worktree, and verify's green branch
+  // (Task 8) put it exactly where `dispatchReviews` looks.
+  expect(task.status).toBe('reviewing')
 
   return {
     workspaceId: brandWorkspaceId(fixture.workspaceId),

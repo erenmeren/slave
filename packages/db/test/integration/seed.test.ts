@@ -23,6 +23,7 @@ describe('seed data', () => {
       'John',
       'Maya',
       'Oliver',
+      'Riley',
       'Sarah',
     ])
   })

@@ -31,6 +31,9 @@ const workspace = await prisma.workspace.create({
 })
 const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Demo Team' } })
 await prisma.agent.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
+// Lowercase, matching Task 5's exact-match `role === 'reviewer'`: without this agent the demo's
+// task would reach `reviewing` and stall there rather than reaching the review and merge passes.
+await prisma.agent.create({ data: { teamId: team.id, name: 'Riley', role: 'reviewer' } })
 await prisma.task.create({
   data: {
     workspaceId: workspace.id,

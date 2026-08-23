@@ -290,21 +290,18 @@ export async function advance(input: AdvanceInput): Promise<void> {
   }
 
   if (input.result.kind === 'passed') {
+    // The pipeline flip (M8a): a green verify no longer finishes the task itself -- it hands the
+    // task to review (Task 5), whose approval hands it to the merge pass (Task 7), which is the
+    // only place `task.done` is emitted now. `ADVANCEABLE` stays `['running', 'verifying']`: review
+    // conclusion has its own path back to `rework`/`failed`/`merging`, not through here.
     await prisma.task.update({
       where: { id: task.id },
-      // The rejection is cleared: it is the *previous* attempt's, and a `done` task carrying one
-      // reads as a task that failed.
-      data: { status: 'done', branch: input.branch, activeRunId: null, lastRejectionReason: null },
+      // The rejection is cleared: it is the *previous* attempt's, and a task entering review
+      // carrying one reads as a task that failed.
+      data: { status: 'reviewing', branch: input.branch, activeRunId: null, lastRejectionReason: null },
     })
     await appendEvent({
       type: 'task.verify_passed',
-      workspaceId,
-      taskId: task.id,
-      actor: 'system',
-      payload: { branch: input.branch },
-    })
-    await appendEvent({
-      type: 'task.done',
       workspaceId,
       taskId: task.id,
       actor: 'system',

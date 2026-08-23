@@ -152,15 +152,19 @@ describe('verify and advance', () => {
     expect(t.lastRejectionReason).toContain('BOOM')
   })
 
-  it('moves the task to done with its branch when every command passes', async (): Promise<void> => {
+  it('moves the task to reviewing with its branch when every command passes', async (): Promise<void> => {
     const result = await runVerify({ ...base, commands: ['true'] })
 
     await advance({ taskId: base.taskId, result, branch: 'aiteamos/TASK-001-x' })
 
+    // The pipeline flip (M8a): a green verify no longer finishes the task on its own -- it hands
+    // the task to review (Task 5), which is the only path left to `done` (Task 7's merge pass).
     const t = await task()
-    expect(t.status).toBe('done')
+    expect(t.status).toBe('reviewing')
     expect(t.branch).toBe('aiteamos/TASK-001-x')
-    expect(await eventTypesFor(fixture.workspaceId)).toContain('task.done')
+    const types = await eventTypesFor(fixture.workspaceId)
+    expect(types).toContain('task.verify_passed')
+    expect(types).not.toContain('task.done')
   })
 
   it('moves the task to failed on the attempt that reaches the cap, not one after', async (): Promise<void> => {
@@ -347,12 +351,9 @@ describe('verify and advance', () => {
 
     // `toContain` on a single value cannot see a missing event, a reordered one, or a duplicated
     // one -- the whole catalogue this task produces could be deleted and every other assertion here
-    // would still pass.
-    expect(await eventTypesFor(fixture.workspaceId)).toEqual([
-      'task.verifying',
-      'task.verify_passed',
-      'task.done',
-    ])
+    // would still pass. `task.done` no longer belongs to this sequence (M8a): it moves to the merge
+    // pass, which this call never reaches.
+    expect(await eventTypesFor(fixture.workspaceId)).toEqual(['task.verifying', 'task.verify_passed'])
   })
 
   it('emits the failing transition sequence, with the command and its exit code', async (): Promise<void> => {

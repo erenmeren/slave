@@ -19,6 +19,12 @@ const FAKE = join(repoRoot, 'packages/providers/test/fake-claude.mjs')
  * the CLI" is the sentence the gate opens with -- an in-process shortcut would prove a different
  * product than the one an operator runs. Against the fake `claude` here; §16 additionally requires
  * steps 3-4 once by hand against the real CLI, recorded under docs/superpowers/spikes/.
+ *
+ * Extended for M8a (Task 8's flip): the same CLI-driven discipline now has to prove the pipeline
+ * past its old M3 finish line -- `verifying -> reviewing -> merging -> done`, unattended, driven by
+ * nothing but repeated `tick`s. Task 4's `m8a-flow` fake-CLI mode is what makes that real end to
+ * end: a work run leaves a real commit for the merge pass to merge, and a review run is told apart
+ * from a work run by the literal `"verdict"` substring `buildReviewPrompt` always includes.
  */
 async function runCli(args: readonly string[], extraEnv: NodeJS.ProcessEnv = {}): Promise<{
   readonly stdout: string
@@ -67,6 +73,7 @@ const repos: string[] = []
 async function seed(options: {
   readonly verifyCommands: readonly string[]
   readonly setupCommands?: readonly string[]
+  readonly autoMerge?: boolean
 }): Promise<Fixture> {
   const repoPath = makeRepo()
   repos.push(repoPath)
@@ -76,6 +83,7 @@ async function seed(options: {
       repoPath,
       verifyCommands: [...options.verifyCommands],
       setupCommands: [...(options.setupCommands ?? [])],
+      autoMerge: options.autoMerge ?? false,
     },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
@@ -106,7 +114,13 @@ function expectOrdered(types: readonly DomainEventType[], earlier: DomainEventTy
   expect(second, `${later} was never emitted`).toBeGreaterThan(first)
 }
 
-describe('the M3 milestone gate', () => {
+/** Adds a `reviewer`-role agent to the fixture's one team, idle and ready to be picked up. */
+async function addReviewer(): Promise<void> {
+  const team = await prisma.team.findFirstOrThrow()
+  await prisma.agent.create({ data: { teamId: team.id, name: 'Riley', role: 'reviewer' } })
+}
+
+describe('the M3/M8a milestone gate', () => {
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
       'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
@@ -118,50 +132,99 @@ describe('the M3 milestone gate', () => {
     await prisma.$disconnect()
   }, 30_000)
 
-  it('green: a seeded ready task reaches done with a branch — tick, worktree, setup, stream, verify', async (): Promise<void> => {
+  it('green M8a: verify passed enters review, an approval merges the branch — unattended, autoMerge true', async (): Promise<void> => {
     // The verify command doubles as the proof that setup ran *in the worktree*: it can only pass
     // where provisioning ran the setup command first, so a verify green here is steps 2 and 5 of
     // §16 observed through one another rather than asserted separately on trust.
     const fixture = await seed({
       setupCommands: ['echo ran > setup-marker'],
       verifyCommands: ['test -f setup-marker'],
+      autoMerge: true,
     })
+    await addReviewer()
 
-    const result = await runCli(['tick'])
+    // Task 4's synthetic mode: a work run leaves a real commit for the merge pass to merge, and a
+    // review run replays `review-approve`. Selected the same way production would select it.
+    const m8aFlow = { AITEAMOS_CLAUDE_ARGS: `${FAKE} --fixture m8a-flow` }
 
-    expect(result.code).toBe(0)
-    const report = JSON.parse(result.stdout) as { started: readonly string[] }
-    expect(report.started).toHaveLength(1)
+    // Repeated ticks, not the daemon: `dispatchReviews` and `runMergePass` (Tasks 5 and 7) each run
+    // once per tick, after whatever that same tick started -- so a review or a merge only becomes
+    // visible to the *next* tick's pass. One tick starts the work run and lands it in `reviewing`,
+    // one dispatches and concludes the review, one lets `runMergePass` see the now-`merging` task
+    // and merge it. The loop is generous about the count rather than hardcoding three.
+    let task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+    for (let i = 0; i < 6 && task.status !== 'done'; i += 1) {
+      const result = await runCli(['tick'], m8aFlow)
+      expect(result.code).toBe(0)
+      task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+    }
 
     // Step 1-2: picked up by a tick, worktree provisioned, setup ran in it.
-    const run = await prisma.agentRun.findFirstOrThrow()
-    expect(run.status).toBe('succeeded')
-    expect(run.pid).toBeGreaterThan(0)
-    expect(run.worktreePath).toContain(join('.aiteamos', 'worktrees'))
-    expect(existsSync(join(run.worktreePath ?? '', 'setup-marker'))).toBe(true)
+    const implRun = await prisma.agentRun.findFirstOrThrow({ where: { kind: 'implementation' } })
+    expect(implRun.status).toBe('succeeded')
+    expect(implRun.pid).toBeGreaterThan(0)
+    expect(implRun.worktreePath).toContain(join('.aiteamos', 'worktrees'))
+    expect(existsSync(join(implRun.worktreePath ?? '', 'setup-marker'))).toBe(true)
 
-    // Step 3: the run's events landed in the log — the run announced itself and its conclusion.
-    const types = await eventTypesFor(fixture.workspaceId)
-    expect(types).toContain('run.started')
-    expect(types).toContain('run.succeeded')
-
-    // Steps 5-6, green: verify ran on the result and the task reached done, in the §8 order --
-    // verify strictly after the run concluded, done strictly after verify passed.
-    expectOrdered(types, 'run.succeeded', 'task.verifying')
-    expectOrdered(types, 'task.verifying', 'task.verify_passed')
-    expectOrdered(types, 'task.verify_passed', 'task.done')
-
-    const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
     expect(task.status).toBe('done')
     expect(task.branch).toMatch(/^aiteamos\//)
     expect(task.activeRunId).toBeNull()
 
-    // §8: each verify command's outcome is persisted as an Artifact, outside the worktree.
-    const artifacts = await prisma.artifact.findMany({ where: { taskId: fixture.taskId } })
-    expect(artifacts).toHaveLength(1)
-    expect(artifacts[0]?.kind).toBe('verify')
-    expect(artifacts[0]?.path.startsWith(run.worktreePath ?? '!')).toBe(false)
-    expect(existsSync(artifacts[0]?.path ?? '')).toBe(true)
+    // The M8a order (spec §3.2/§8, Tasks 5 and 7): verify strictly after the task started, review
+    // strictly after verify passed, approval strictly after review started, done strictly after
+    // approval -- the whole pipeline this milestone exists to prove reaches unattended.
+    const types = await eventTypesFor(fixture.workspaceId)
+    expectOrdered(types, 'task.started', 'task.verifying')
+    expectOrdered(types, 'task.verifying', 'task.verify_passed')
+    expectOrdered(types, 'task.verify_passed', 'task.review_started')
+    expectOrdered(types, 'task.review_started', 'task.review_approved')
+    expectOrdered(types, 'task.review_approved', 'task.done')
+
+    // The merge pass actually merged, not just marked the task done: a `--no-ff` commit for this
+    // task sits on `main` in the primary checkout.
+    const taskKey = `T-${fixture.taskId.slice(0, 8)}`
+    const mergeSubjects = execFileSync('git', ['log', '--merges', '--format=%s'], {
+      cwd: fixture.repoPath,
+      encoding: 'utf8',
+    })
+    expect(mergeSubjects).toContain(`merge(${taskKey})`)
+  }, 60_000)
+
+  it('autoMerge false: the same unattended flow ends done, branch preserved, no merge commit', async (): Promise<void> => {
+    const fixture = await seed({ verifyCommands: ['true'], autoMerge: false })
+    await addReviewer()
+    const m8aFlow = { AITEAMOS_CLAUDE_ARGS: `${FAKE} --fixture m8a-flow` }
+
+    let task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+    for (let i = 0; i < 6 && task.status !== 'done'; i += 1) {
+      const result = await runCli(['tick'], m8aFlow)
+      expect(result.code).toBe(0)
+      task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+    }
+
+    // spec Decision 5: a workspace that does not trust auto-merge still wants the task marked done
+    // and out of the queue -- but with the branch and worktree left for a human to merge by hand.
+    expect(task.status).toBe('done')
+    expect(task.branch).toMatch(/^aiteamos\//)
+
+    // Still the full M8a pipeline, not verify short-circuiting straight to `done`: a review really
+    // ran and approved it. Without this, `autoMerge: false` landing on `done` says nothing --
+    // that was also true of the pre-Task-8 verify green path this test exists to distinguish from.
+    const types = await eventTypesFor(fixture.workspaceId)
+    expectOrdered(types, 'task.verify_passed', 'task.review_started')
+    expectOrdered(types, 'task.review_started', 'task.review_approved')
+    expectOrdered(types, 'task.review_approved', 'task.done')
+
+    const mergeSubjects = execFileSync('git', ['log', '--merges', '--format=%s'], {
+      cwd: fixture.repoPath,
+      encoding: 'utf8',
+    }).trim()
+    expect(mergeSubjects).toBe('')
+    const branches = execFileSync('git', ['for-each-ref', '--format=%(refname:short)', 'refs/heads'], {
+      cwd: fixture.repoPath,
+      encoding: 'utf8',
+    })
+    expect(branches).toContain(task.branch)
   }, 60_000)
 
   it('red: a failing verify sends the task to rework with the failure attached', async (): Promise<void> => {
@@ -188,7 +251,7 @@ describe('the M3 milestone gate', () => {
     expect(task.lastRejectionReason).toContain('BOOM')
   }, 60_000)
 
-  it('pause: the run pauses on the gate, checkpoints, and resumes to completion', async (): Promise<void> => {
+  it('pause: the run pauses on the gate, checkpoints, and resumes into review', async (): Promise<void> => {
     const fixture = await seed({ verifyCommands: ['true'] })
 
     // A real pause, produced by the gate denying the fake CLI's tool call — the same protocol the
@@ -210,8 +273,8 @@ describe('the M3 milestone gate', () => {
     expect(result.code).toBe(0)
 
     // The resumed run completes — and its completion is a completion like any other: verify runs
-    // on it and the task advances. A resumed run whose success leaves the task `running` forever
-    // would make pause/resume a trap rather than a control.
+    // on it and the task advances into review (M8a). A resumed run whose success leaves the task
+    // `running` forever would make pause/resume a trap rather than a control.
     const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: paused.id } })
     expect(run.status).toBe('succeeded')
     expect(run.terminalAt).not.toBeNull()
@@ -219,9 +282,9 @@ describe('the M3 milestone gate', () => {
     const types = await eventTypesFor(fixture.workspaceId)
     expect(types).toContain('run.paused')
     expect(types).toContain('run.resumed')
-    expectOrdered(types, 'run.resumed', 'task.done')
+    expectOrdered(types, 'run.resumed', 'task.verify_passed')
 
     const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
-    expect(task.status).toBe('done')
+    expect(task.status).toBe('reviewing')
   }, 60_000)
 })
