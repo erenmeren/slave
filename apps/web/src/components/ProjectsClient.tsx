@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import type { ProjectRow } from '../server/org'
 import { AssignCompanyDialog } from './AssignCompanyDialog'
@@ -27,14 +27,24 @@ function statusOf(project: ProjectRow): { readonly tone: StatusTone; readonly la
 
 function ProjectCard({
   project,
+  companies,
+  assigning,
   onAssign,
+  onCloseAssign,
 }: {
   readonly project: ProjectRow
+  readonly companies: readonly CompanyOption[]
+  readonly assigning: boolean
   readonly onAssign: () => void
+  readonly onCloseAssign: () => void
 }): React.JSX.Element {
   const router = useRouter()
   const { tone, label } = statusOf(project)
   const pct = project.taskCounts.total > 0 ? Math.round((project.taskCounts.done / project.taskCounts.total) * 100) : 0
+  // `Button` isn't a `forwardRef` component -- this wraps it so the dialog has an element to
+  // return focus to on Escape (`EmergencyStopButton.tsx`'s trigger-refocus idiom), without
+  // touching the shared `ui/` component to add ref forwarding it doesn't otherwise need.
+  const triggerWrapRef = useRef<HTMLDivElement>(null)
 
   return (
     <div className="flex flex-col gap-2">
@@ -70,16 +80,22 @@ function ProjectCard({
         />
       </Card>
       {project.companyName === null && (
-        <Button
-          variant="ghost"
-          data-testid="assign-company-button"
-          onClick={(event) => {
-            event.stopPropagation()
-            onAssign()
-          }}
-        >
-          Assign company
-        </Button>
+        <div ref={triggerWrapRef} className="w-full">
+          <Button
+            variant="ghost"
+            className="w-full"
+            data-testid="assign-company-button"
+            onClick={(event) => {
+              event.stopPropagation()
+              onAssign()
+            }}
+          >
+            Assign company
+          </Button>
+        </div>
+      )}
+      {assigning && (
+        <AssignCompanyDialog workspaceId={project.id} companies={companies} onClose={onCloseAssign} triggerRef={triggerWrapRef} />
       )}
     </div>
   )
@@ -95,19 +111,17 @@ export function ProjectsClient({
   const [assigningWorkspaceId, setAssigningWorkspaceId] = useState<string | null>(null)
 
   return (
-    <>
-      <div className="grid grid-cols-1 gap-4 p-4 md:grid-cols-2 xl:grid-cols-3">
-        {projects.map((project) => (
-          <ProjectCard key={project.id} project={project} onAssign={() => setAssigningWorkspaceId(project.id)} />
-        ))}
-      </div>
-      {assigningWorkspaceId !== null && (
-        <AssignCompanyDialog
-          workspaceId={assigningWorkspaceId}
+    <div className="grid grid-cols-1 gap-4 p-4 md:grid-cols-2 xl:grid-cols-3">
+      {projects.map((project) => (
+        <ProjectCard
+          key={project.id}
+          project={project}
           companies={companies}
-          onClose={() => setAssigningWorkspaceId(null)}
+          assigning={assigningWorkspaceId === project.id}
+          onAssign={() => setAssigningWorkspaceId(project.id)}
+          onCloseAssign={() => setAssigningWorkspaceId(null)}
         />
-      )}
-    </>
+      ))}
+    </div>
   )
 }

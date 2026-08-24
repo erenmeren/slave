@@ -129,5 +129,25 @@ describe('ProjectsClient', () => {
       expect(routerRefresh).not.toHaveBeenCalled()
       expect(screen.getByTestId('assign-confirm')).toBeTruthy()
     })
+
+    it('moves focus into the dialog (the first company row) when it opens', () => {
+      render(<ProjectsClient projects={[project({ id: 'w1', companyName: null })]} companies={companies} />)
+      fireEvent.click(screen.getByTestId('assign-company-button'))
+
+      expect(screen.getByTestId('assign-company-dialog').contains(document.activeElement)).toBe(true)
+      expect(document.activeElement).toBe(screen.getAllByTestId('company-option')[0])
+    })
+
+    it('closes on Escape and returns focus to the trigger button', () => {
+      render(<ProjectsClient projects={[project({ id: 'w1', companyName: null })]} companies={companies} />)
+      const trigger = screen.getByTestId('assign-company-button')
+      fireEvent.click(trigger)
+      expect(screen.getByTestId('assign-company-dialog')).toBeTruthy()
+
+      fireEvent.keyDown(document, { key: 'Escape' })
+
+      expect(screen.queryByTestId('assign-company-dialog')).toBeNull()
+      expect(document.activeElement).toBe(trigger)
+    })
   })
 })
