@@ -367,8 +367,8 @@ function WorkspaceCompanyAssignedCard(props: ActivityCardProps): ReactElement {
       </Transition>
       {payload.workers.length > 0 ? (
         <ul className="mt-1 space-y-0.5 text-text-3">
-          {payload.workers.map((worker) => (
-            <li key={worker.name} data-testid="company-worker-item">
+          {payload.workers.map((worker, index) => (
+            <li key={`${worker.name}-${index}`} data-testid="company-worker-item">
               {worker.name} <span className="text-text-3">({worker.role})</span>
             </li>
           ))}
