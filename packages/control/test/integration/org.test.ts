@@ -252,11 +252,12 @@ describe('assignCompany', () => {
     return { id: workspace.id }
   }
 
-  /** Names are made unique across calls via the company id, since template names are unique globally. */
+  /** Template names are made unique across calls via the company id, since they are unique globally. */
   async function seedCompanyWithRoster(
     agentCount: number,
+    companyName = 'Acme Corp',
   ): Promise<{ companyId: string; companyName: string; teamName: string }> {
-    const company = await prisma.company.create({ data: { name: 'Acme Corp' } })
+    const company = await prisma.company.create({ data: { name: companyName } })
     const team = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Engineering' } })
     for (let i = 0; i < agentCount; i += 1) {
       const template = await prisma.agentTemplate.create({
@@ -376,6 +377,38 @@ describe('assignCompany', () => {
     const ws = await prisma.workspace.findUniqueOrThrow({ where: { id: workspace.id } })
     expect(ws.companyId).toBe(firstCompanyId)
     expect(await prisma.team.count()).toBe(1)
+    expect(await prisma.agent.count()).toBe(1)
+  })
+
+  it('serialises two concurrent assigns of different companies so exactly one wins, never a silent overwrite', async (): Promise<void> => {
+    const workspace = await seedWorkspace()
+    const a = await seedCompanyWithRoster(1, 'Acme Corp')
+    const b = await seedCompanyWithRoster(1, 'Globex Corp')
+
+    // Two operators racing to assign two DIFFERENT companies to the same not-yet-assigned
+    // workspace at the same instant. Under READ COMMITTED with no lock, both transactions would
+    // observe companyId === null before either commits, both pass the refusal check, and both
+    // write -- the second silently overwriting the first's companyId with no refusal and nothing
+    // in the event log to explain it. The `SELECT ... FOR UPDATE` re-check inside the transaction
+    // (mirroring `dependency.ts:addTaskDependency`) serialises the two calls instead: exactly one
+    // must win.
+    const [first, second] = await Promise.all([
+      assignCompany(workspace.id, a.companyId),
+      assignCompany(workspace.id, b.companyId),
+    ])
+
+    const results = [first, second]
+    const succeeded = results.filter((r) => r.ok)
+    const refused = results.filter((r) => !r.ok)
+    expect(succeeded).toHaveLength(1)
+    expect(refused).toHaveLength(1)
+    if (!refused[0]!.ok) expect(refused[0]!.error.kind).toBe('company_already_assigned')
+
+    const ws = await prisma.workspace.findUniqueOrThrow({ where: { id: workspace.id } })
+    expect([a.companyId, b.companyId]).toContain(ws.companyId)
+
+    // Exactly the winner's roster materialized -- the loser wrote nothing, not even a team.
+    expect(await prisma.team.count({ where: { workspaceId: workspace.id } })).toBe(1)
     expect(await prisma.agent.count()).toBe(1)
   })
 

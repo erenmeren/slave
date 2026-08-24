@@ -131,8 +131,21 @@ export interface AssignReport {
  * project. Assigning the SAME company again is not a re-assignment at all -- it is the re-sync
  * path above, and always succeeds.
  *
+ * The one-way check is re-run *inside* the transaction, behind a `SELECT ... FOR UPDATE` row lock
+ * on the workspace, rather than trusted from a plain pre-check outside it -- `dependency.ts`'s own
+ * doc comment names exactly why: Read Committed (Postgres's default, and this transaction names no
+ * `isolationLevel`) does not make read-then-decide-then-write atomic against a second transaction
+ * doing the same thing. Two operators racing to assign two *different* companies to the same
+ * not-yet-assigned workspace would otherwise both observe `companyId === null` before either
+ * commits, both pass an outside-only check, and both write -- the second silently overwriting the
+ * first's `companyId`, which is exactly the one-way invariant this function exists to hold. The
+ * lock makes the second transaction block until the first commits; when it resumes, its own
+ * re-read sees the first transaction's now-committed `companyId` and correctly refuses instead of
+ * overwriting it. See `dependency.ts:addTaskDependency` for the same idiom against the same class
+ * of race.
+ *
  * The roster read and every materializing write -- including the `companyId` write -- happen
- * inside ONE transaction, `tx.agentTemplate.findUniqueOrThrow` included: a template is
+ * inside that SAME transaction, `tx.agentTemplate.findUniqueOrThrow` included: a template is
  * append-only in the ordinary path (Decision 9), so its being missing here is always a data
  * integrity failure, and letting that throw is what keeps a torn assignment (companyId written,
  * some workers created, others not) impossible. The event -- ALWAYS emitted, even with zero new
@@ -148,12 +161,19 @@ export async function assignCompany(
   const company = await prisma.company.findUnique({ where: { id: companyId } })
   if (company === null) return err({ kind: 'company_not_found', companyId })
 
-  if (workspace.companyId !== null && workspace.companyId !== companyId) {
-    const current = await prisma.company.findUniqueOrThrow({ where: { id: workspace.companyId } })
-    return err({ kind: 'company_already_assigned', workspaceId, companyName: current.name })
-  }
+  const outcome = await prisma.$transaction(async (tx) => {
+    const locked = await tx.$queryRaw<{ companyId: string | null }[]>`
+      SELECT "companyId" FROM "Workspace" WHERE id = ${workspaceId} FOR UPDATE
+    `
+    const lockedCompanyId = locked[0]?.companyId ?? null
+    if (lockedCompanyId !== null && lockedCompanyId !== companyId) {
+      const current = await tx.company.findUniqueOrThrow({ where: { id: lockedCompanyId } })
+      return {
+        ok: false as const,
+        error: { kind: 'company_already_assigned', workspaceId, companyName: current.name } as ControlRefusal,
+      }
+    }
 
-  const report = await prisma.$transaction(async (tx) => {
     await tx.workspace.update({ where: { id: workspaceId }, data: { companyId } })
 
     const companyTeams = await tx.companyTeam.findMany({ where: { companyId }, include: { agents: true } })
@@ -187,15 +207,17 @@ export async function assignCompany(
       }
     }
 
-    return { createdTeams, createdWorkers }
+    return { ok: true as const, value: { createdTeams, createdWorkers } }
   })
+
+  if (!outcome.ok) return err(outcome.error)
 
   await appendEvent({
     type: 'workspace.company_assigned',
     workspaceId,
     actor: 'human',
-    payload: { company: company.name, workers: report.createdWorkers },
+    payload: { company: company.name, workers: outcome.value.createdWorkers },
   })
 
-  return ok(report)
+  return ok(outcome.value)
 }
