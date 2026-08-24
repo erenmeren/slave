@@ -236,6 +236,27 @@ describe('the orchestrator CLI', () => {
     expect(`${result.stdout}${result.stderr}`).toMatch(/--name is required/)
   })
 
+  it('assigns a company to a workspace and prints the count of new workers', async (): Promise<void> => {
+    const company = await prisma.company.create({ data: { name: 'Acme Corp' } })
+    const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Engineering' } })
+    const template = await prisma.agentTemplate.create({ data: { name: 'Backend Engineer', role: 'backend' } })
+    await prisma.companyAgent.create({ data: { companyTeamId: companyTeam.id, templateId: template.id, name: 'Atlas' } })
+
+    const result = await runCli(['assign-company', '--workspace', fixture.workspaceId, '--company', company.id])
+
+    expect(result.code).toBe(0)
+    expect(result.stdout).toMatch(new RegExp(`^company assigned to ${fixture.workspaceId}: 1 new worker\\(s\\)$`, 'm'))
+    const ws = await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspaceId } })
+    expect(ws.companyId).toBe(company.id)
+  })
+
+  it('exits non-zero for assign-company with no --company given', async (): Promise<void> => {
+    const result = await runCli(['assign-company', '--workspace', fixture.workspaceId])
+
+    expect(result.code).not.toBe(0)
+    expect(`${result.stdout}${result.stderr}`).toMatch(/--company is required/)
+  })
+
   it('tells an operator that clear-halt is not resume', async (): Promise<void> => {
     const result = await runCli(['help'])
     const help = `${result.stdout}${result.stderr}`

@@ -1,6 +1,6 @@
 import { prisma } from '@ai-team-os/db/client'
 import { beforeEach, describe, expect, it } from 'vitest'
-import { addCompanyAgent, addCompanyTeam, createCompany, createTemplate } from '../../src/org.js'
+import { addCompanyAgent, addCompanyTeam, assignCompany, createCompany, createTemplate } from '../../src/org.js'
 
 describe('catalog and company CRUD', () => {
   beforeEach(async (): Promise<void> => {
@@ -230,5 +230,192 @@ describe('catalog and company CRUD', () => {
       if (!result.ok) expect(result.error).toEqual({ kind: 'invalid_name' })
       expect(await prisma.companyAgent.count()).toBe(0)
     })
+  })
+})
+
+describe('assignCompany', () => {
+  beforeEach(async (): Promise<void> => {
+    await prisma.$executeRawUnsafe(
+      'TRUNCATE TABLE "ExecutionEvent", "Agent", "Team", "Workspace", "CompanyAgent", "CompanyTeam", "Company", "AgentTemplate" RESTART IDENTITY CASCADE',
+    )
+  })
+
+  async function seedWorkspace(): Promise<{ id: string }> {
+    const workspace = await prisma.workspace.create({
+      data: {
+        name: 'Checkout Platform',
+        repoPath: '/tmp/does-not-matter',
+        verifyCommands: ['npm test'],
+        setupCommands: ['npm ci'],
+      },
+    })
+    return { id: workspace.id }
+  }
+
+  /** Names are made unique across calls via the company id, since template names are unique globally. */
+  async function seedCompanyWithRoster(
+    agentCount: number,
+  ): Promise<{ companyId: string; companyName: string; teamName: string }> {
+    const company = await prisma.company.create({ data: { name: 'Acme Corp' } })
+    const team = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Engineering' } })
+    for (let i = 0; i < agentCount; i += 1) {
+      const template = await prisma.agentTemplate.create({
+        data: { name: `Role ${i}-${company.id}`, role: `role-${i}` },
+      })
+      await prisma.companyAgent.create({
+        data: { companyTeamId: team.id, templateId: template.id, name: `Worker ${i}` },
+      })
+    }
+    return { companyId: company.id, companyName: company.name, teamName: team.name }
+  }
+
+  it('materializes a team and workers from the roster, linking companyAgentId and emitting one event', async (): Promise<void> => {
+    const workspace = await seedWorkspace()
+    const { companyId, companyName, teamName } = await seedCompanyWithRoster(3)
+
+    const result = await assignCompany(workspace.id, companyId)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.createdTeams).toEqual([teamName])
+    expect(result.value.createdWorkers).toHaveLength(3)
+
+    const ws = await prisma.workspace.findUniqueOrThrow({ where: { id: workspace.id } })
+    expect(ws.companyId).toBe(companyId)
+
+    expect(await prisma.team.count({ where: { workspaceId: workspace.id } })).toBe(1)
+    const team = await prisma.team.findFirstOrThrow({ where: { workspaceId: workspace.id } })
+    expect(team.name).toBe(teamName)
+
+    const agents = await prisma.agent.findMany({ where: { teamId: team.id } })
+    expect(agents).toHaveLength(3)
+    for (const agent of agents) {
+      expect(agent.companyAgentId).not.toBeNull()
+      expect(agent.role).toMatch(/^role-\d$/)
+    }
+
+    const events = await prisma.executionEvent.findMany({
+      where: { workspaceId: workspace.id, type: 'workspace_company_assigned' },
+    })
+    expect(events).toHaveLength(1)
+    expect(events[0]?.actor).toBe('human')
+    const payload = events[0]?.payload as unknown as {
+      company: string
+      workers: readonly { name: string; role: string }[]
+    }
+    expect(payload.company).toBe(companyName)
+    expect(payload.workers).toHaveLength(3)
+  })
+
+  it('re-running immediately creates nothing new but still emits an event with an empty workers array', async (): Promise<void> => {
+    const workspace = await seedWorkspace()
+    const { companyId } = await seedCompanyWithRoster(3)
+    await assignCompany(workspace.id, companyId)
+
+    const result = await assignCompany(workspace.id, companyId)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.createdTeams).toEqual([])
+    expect(result.value.createdWorkers).toEqual([])
+
+    expect(await prisma.agent.count()).toBe(3)
+
+    const events = await prisma.executionEvent.findMany({
+      where: { workspaceId: workspace.id, type: 'workspace_company_assigned' },
+      orderBy: { seq: 'asc' },
+    })
+    expect(events).toHaveLength(2)
+    expect(events[1]?.payload).toMatchObject({ workers: [] })
+  })
+
+  it('grows by exactly one worker when the roster gains a member, leaving existing rows untouched', async (): Promise<void> => {
+    const workspace = await seedWorkspace()
+    const { companyId } = await seedCompanyWithRoster(3)
+    await assignCompany(workspace.id, companyId)
+    const before = await prisma.agent.findMany({ orderBy: { name: 'asc' } })
+
+    const team = await prisma.companyTeam.findFirstOrThrow({ where: { companyId } })
+    const template = await prisma.agentTemplate.create({ data: { name: `Role extra-${companyId}`, role: 'role-extra' } })
+    await prisma.companyAgent.create({
+      data: { companyTeamId: team.id, templateId: template.id, name: 'Worker extra' },
+    })
+
+    const result = await assignCompany(workspace.id, companyId)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.createdWorkers).toHaveLength(1)
+    expect(result.value.createdWorkers[0]?.name).toBe('Worker extra')
+
+    const after = await prisma.agent.findMany({ orderBy: { name: 'asc' } })
+    expect(after).toHaveLength(4)
+    for (const row of before) {
+      expect(after.find((a) => a.id === row.id)).toEqual(row)
+    }
+  })
+
+  it('refuses when the workspace is already assigned to a different company, changing nothing', async (): Promise<void> => {
+    const workspace = await seedWorkspace()
+    const { companyId: firstCompanyId } = await seedCompanyWithRoster(1)
+    await assignCompany(workspace.id, firstCompanyId)
+
+    const other = await prisma.company.create({ data: { name: 'Globex Corp' } })
+
+    const result = await assignCompany(workspace.id, other.id)
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.error).toEqual({
+        kind: 'company_already_assigned',
+        workspaceId: workspace.id,
+        companyName: 'Acme Corp',
+      })
+    }
+
+    const ws = await prisma.workspace.findUniqueOrThrow({ where: { id: workspace.id } })
+    expect(ws.companyId).toBe(firstCompanyId)
+    expect(await prisma.team.count()).toBe(1)
+    expect(await prisma.agent.count()).toBe(1)
+  })
+
+  it('keeps a pre-existing hand-made team and agent, materializing alongside them', async (): Promise<void> => {
+    const workspace = await seedWorkspace()
+    const legacyTeam = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Legacy Ops' } })
+    const legacyAgent = await prisma.agent.create({ data: { teamId: legacyTeam.id, name: 'OldHand', role: 'legacy' } })
+    const { companyId, teamName } = await seedCompanyWithRoster(2)
+
+    const result = await assignCompany(workspace.id, companyId)
+
+    expect(result.ok).toBe(true)
+
+    const stillThere = await prisma.agent.findUniqueOrThrow({ where: { id: legacyAgent.id } })
+    expect(stillThere.name).toBe('OldHand')
+    expect(stillThere.role).toBe('legacy')
+
+    const teams = await prisma.team.findMany({ where: { workspaceId: workspace.id } })
+    expect(teams.map((t) => t.name).sort()).toEqual(['Legacy Ops', teamName].sort())
+  })
+
+  it('rolls back the whole assignment when a roster template has gone dangling mid-transaction', async (): Promise<void> => {
+    const workspace = await seedWorkspace()
+    const { companyId } = await seedCompanyWithRoster(1)
+    const companyAgent = await prisma.companyAgent.findFirstOrThrow({ where: { companyTeam: { companyId } } })
+
+    // Force the FK target to go missing out from under the seeded CompanyAgent -- a state a plain
+    // RESTRICT-backed delete can never produce, so the trigger-based FK check is disabled for the
+    // width of one transaction (`SET LOCAL` unwinds automatically at commit; nothing else in the
+    // process is affected) and the template is deleted while still referenced.
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe(`SET LOCAL session_replication_role = 'replica'`)
+      await tx.$executeRawUnsafe('DELETE FROM "AgentTemplate" WHERE id = $1', companyAgent.templateId)
+    })
+
+    await expect(assignCompany(workspace.id, companyId)).rejects.toThrow()
+
+    expect(await prisma.agent.count()).toBe(0)
+    expect(await prisma.team.count()).toBe(0)
+    const ws = await prisma.workspace.findUniqueOrThrow({ where: { id: workspace.id } })
+    expect(ws.companyId).toBeNull()
   })
 })

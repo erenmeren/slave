@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 import {
   addCompanyAgent,
   addCompanyTeam,
+  assignCompany,
   claimResume,
   createCompany,
   createTemplate,
@@ -45,6 +46,10 @@ const USAGE = `usage: orchestrator <command> [options]
   add-agent --team <companyTeamId> --template <id> --name <n> [--model <m>]
                                        add a roster member to a company team, instantiated from a
                                        template
+  assign-company --workspace <id> --company <id>
+                                       assign a company's roster to a workspace, materializing a
+                                       project team/worker for every roster member with no
+                                       matching row there yet
 
   clear-halt and resume are different actions and it matters which you reach for.
   resume --run continues ONE paused run that is waiting to be continued.
@@ -394,6 +399,15 @@ export async function main(argv: readonly string[]): Promise<number> {
       })
       if (!result.ok) throw new Error(refusalText(result.error))
       process.stdout.write(`agent ${result.value.id} created\n`)
+      return 0
+    }
+
+    case 'assign-company': {
+      const workspaceId = await resolveWorkspace({ ...flags, workspace: requireFlag(flags, 'workspace') })
+      const companyId = requireFlag(flags, 'company')
+      const result = await assignCompany(workspaceId, companyId)
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(`company assigned to ${workspaceId}: ${result.value.createdWorkers.length} new worker(s)\n`)
       return 0
     }
 

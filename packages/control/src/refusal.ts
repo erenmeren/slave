@@ -28,6 +28,7 @@ export type ControlRefusal =
   | { readonly kind: 'company_not_found'; readonly companyId: string }
   | { readonly kind: 'company_team_not_found'; readonly companyTeamId: string }
   | { readonly kind: 'invalid_name' }
+  | { readonly kind: 'company_already_assigned'; readonly workspaceId: string; readonly companyName: string }
 
 export function refusalText(refusal: ControlRefusal): string {
   switch (refusal.kind) {
@@ -68,5 +69,7 @@ export function refusalText(refusal: ControlRefusal): string {
       return `no company team with id ${refusal.companyTeamId}`
     case 'invalid_name':
       return 'a name must be a non-empty text'
+    case 'company_already_assigned':
+      return `this workspace is already run by ${refusal.companyName}`
   }
 }
