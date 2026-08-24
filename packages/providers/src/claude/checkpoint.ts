@@ -89,4 +89,14 @@ export interface Checkpoint {
    */
   readonly gitAuthorName: string
   readonly gitAuthorEmail: string
+  /**
+   * The model the run started with (M10 §6), resolved once at spawn time by
+   * `apps/orchestrator/src/model.ts`'s `resolveModel` and never re-resolved on resume -- a resumed
+   * run must continue with the SAME model it started with, never whatever an operator's
+   * `setAgentModel` set most recently, so a mid-run model change affects only the run's NEXT
+   * dispatch. Optional, not `string | null`: a legacy checkpoint written before this field existed
+   * carries no value at all rather than an explicit null, and `resume()` treats both the same way
+   * -- no `--model` flag is appended.
+   */
+  readonly model?: string
 }

@@ -221,3 +221,20 @@ export async function assignCompany(
 
   return ok(outcome.value)
 }
+
+/**
+ * Sets or clears a worker's model override (M10 §6) -- the top of `resolveModel`'s chain, above
+ * its roster row's override and its template's default. `model: null` clears the column back to
+ * "defer to the roster/template", not a refusal: an operator undoing an override is as ordinary as
+ * setting one.
+ *
+ * A single-row `updateMany` conditioned on `id`, not a `findUnique`-then-`update` pair: there is
+ * nothing here for a second writer to race (unlike `assignCompany`'s multi-row materialization),
+ * so the row lock ceremony that guards that transaction has no work to do in a one-column write --
+ * the conditioned update's own count is already the atomic existence check.
+ */
+export async function setAgentModel(agentId: string, model: string | null): Promise<Result<void, ControlRefusal>> {
+  const updated = await prisma.agent.updateMany({ where: { id: agentId }, data: { model } })
+  if (updated.count === 0) return err({ kind: 'agent_not_found', agentId })
+  return ok(undefined)
+}

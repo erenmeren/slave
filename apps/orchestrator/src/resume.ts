@@ -79,6 +79,11 @@ export async function executeResume(options: ExecuteResumeOptions): Promise<void
       dirtyFiles: checkpoint.dirtyFiles,
       cumulativeCostUsd: checkpoint.cumulativeCostUsd,
       cumulativeTokens: checkpoint.cumulativeTokens,
+      // Replayed verbatim, never re-resolved: the run must continue with the SAME model it started
+      // with (M10 §6), independently of whatever `setAgentModel` has set on the worker since the
+      // pause. `null` on the row (legacy or never set) omits the key entirely, matching how every
+      // other optional field on `Checkpoint` behaves under `exactOptionalPropertyTypes`.
+      ...(checkpoint.model !== null ? { model: checkpoint.model } : {}),
     },
     message,
   )
@@ -119,6 +124,9 @@ export async function executeResume(options: ExecuteResumeOptions): Promise<void
       pauseFlagPath: checkpoint.pauseFlagPath,
       hookPath: checkpoint.hookPath,
       gitIdentity: { name: checkpoint.gitAuthorName, email: checkpoint.gitAuthorEmail },
+      // Carried forward so a SECOND pause of this same resumed run checkpoints the same model
+      // again, rather than losing it -- see `PumpRunInput.spawn.model`'s own docstring.
+      ...(checkpoint.model !== null ? { model: checkpoint.model } : {}),
     },
   })
   options.onSpawned?.({ pid: handle.pid })

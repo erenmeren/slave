@@ -57,6 +57,15 @@ describe('fake-claude', () => {
     expect(lines[0]?.type).toBe('system')
   })
 
+  it('tolerates an unknown --model flag: still replays the requested fixture', async (): Promise<void> => {
+    const { stdout } = await run('node', [FAKE, '--model', 'whatever', '--fixture', 'complete'])
+    const lines = parseLines(stdout)
+    expect(lines[0]?.type).toBe('system')
+    const last = lines.at(-1) as Line
+    expect(last.subtype).toBe('hook_response')
+    expect(last.hook_event).toBe('Stop')
+  })
+
   it('produces every mode named in the brief plus hook-crash, hook-fail-open, and env-echo', async (): Promise<void> => {
     for (const mode of ['complete', 'hook-deny', 'hook-crash', 'hook-fail-open', 'permission-denied', 'malformed']) {
       const { stdout } = await run('node', [FAKE, '--fixture', mode])

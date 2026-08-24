@@ -91,6 +91,31 @@ describe('ClaudeCodeAdapter', () => {
     expect(env['AITEAMOS_PAUSE_FLAG']).toBe(input.pauseFlagPath)
   })
 
+  it('appends --model to the spawned args when input.model is set', async (): Promise<void> => {
+    // fixture 'env-echo' also carries the child's own process.argv in its terminal result payload.
+    const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'env-echo'] })
+    await adapter.start({ ...input, model: 'test-model-a' })
+    for await (const _event of adapter.events(input.runId)) {
+      void _event // drain to completion
+    }
+    const payload = adapter.rawTerminalPayload(input.runId)
+    const argv = z.array(z.string()).parse(payload?.['argv'])
+    const modelIndex = argv.indexOf('--model')
+    expect(modelIndex).toBeGreaterThanOrEqual(0)
+    expect(argv[modelIndex + 1]).toBe('test-model-a')
+  })
+
+  it('omits --model entirely when input.model is not set (the legacy no-override path)', async (): Promise<void> => {
+    const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'env-echo'] })
+    await adapter.start(input) // `input` carries no `model` field
+    for await (const _event of adapter.events(input.runId)) {
+      void _event // drain to completion
+    }
+    const payload = adapter.rawTerminalPayload(input.runId)
+    const argv = z.array(z.string()).parse(payload?.['argv'])
+    expect(argv).not.toContain('--model')
+  })
+
   it('reports the ADR 0001 capability profile verbatim', () => {
     const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'complete'] })
     expect(adapter.getCapabilities()).toEqual({

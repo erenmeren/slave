@@ -251,6 +251,24 @@ describe('ClaudeCodeAdapter.resume', () => {
     expect(env['GIT_AUTHOR_EMAIL']).not.toBe(input.gitIdentity.email)
   })
 
+  it('appends --model to the resumed spawn when checkpoint.model is set', async (): Promise<void> => {
+    const handle = await adapter.resume(input.runId, { ...checkpoint, model: 'test-model-a' }, 'do the other thing')
+    const args = await spawnedArgsFor(handle)
+
+    const modelIndex = args.indexOf('--model')
+    expect(modelIndex).toBeGreaterThanOrEqual(0)
+    expect(args[modelIndex + 1]).toBe('test-model-a')
+  })
+
+  it('omits --model on resume when checkpoint.model is unset (a legacy checkpoint)', async (): Promise<void> => {
+    // `checkpoint` (beforeEach) carries no `model` field at all -- exactly what a checkpoint
+    // written before this column existed looks like.
+    const handle = await adapter.resume(input.runId, checkpoint, 'do the other thing')
+    const args = await spawnedArgsFor(handle)
+
+    expect(args).not.toContain('--model')
+  })
+
   it('falls back to a default continuation prompt when no instruction is queued', async (): Promise<void> => {
     const handle = await adapter.resume(input.runId, checkpoint, null)
     const args = await spawnedArgsFor(handle)

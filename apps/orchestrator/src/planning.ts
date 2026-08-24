@@ -9,6 +9,7 @@ import { runFilePaths } from '@ai-team-os/control'
 import { prisma } from '@ai-team-os/db/client'
 import { appendEvent } from '@ai-team-os/events'
 import { writeSettingsFile } from '@ai-team-os/providers'
+import { resolveModel } from './model.js'
 import { pumpRun } from './pump.js'
 import { activePumpRunIds, emailLocalPart, pumps, type TickDeps } from './tick.js'
 import { verifyConcludedRun } from './verify.js'
@@ -212,9 +213,12 @@ export async function dispatchPlanning(deps: TickDeps): Promise<RunId | null> {
 
   // 5. Staffing. `role === 'manager'` is an exact match -- the same convention `dispatchReview`
   // uses for `role === 'reviewer'`.
+  // `companyAgent -> template` included so `resolveModel` (M10 §6) can walk the whole override
+  // chain for whichever manager is actually picked below.
   const managers = await prisma.agent.findMany({
     where: { role: 'manager', team: { workspaceId: deps.workspaceId } },
     orderBy: { id: 'asc' },
+    include: { companyAgent: { include: { template: true } } },
   })
 
   if (managers.length === 0) {
@@ -277,6 +281,7 @@ export async function dispatchPlanning(deps: TickDeps): Promise<RunId | null> {
     writeSettingsFile({ settingsPath, hookPath: deps.hookPath })
 
     const gitIdentity = { name: manager.name, email: `${emailLocalPart(manager)}@aiteamos.local` }
+    const model = resolveModel(manager)
 
     handle = await deps.adapter.start({
       runId,
@@ -288,6 +293,7 @@ export async function dispatchPlanning(deps: TickDeps): Promise<RunId | null> {
       settingsPath,
       hookPath: deps.hookPath,
       gitIdentity,
+      ...(model !== undefined ? { model } : {}),
     })
 
     await prisma.agentRun.update({
@@ -304,7 +310,7 @@ export async function dispatchPlanning(deps: TickDeps): Promise<RunId | null> {
       workspaceId: deps.workspaceId,
       events: deps.adapter.events(runId),
       cancel: () => deps.adapter.cancel(runId),
-      spawn: { settingsPath, pauseFlagPath, hookPath: deps.hookPath, gitIdentity },
+      spawn: { settingsPath, pauseFlagPath, hookPath: deps.hookPath, gitIdentity, ...(model !== undefined ? { model } : {}) },
     })
       .then(() => verifyConcludedRun(runId))
       .catch((error: unknown): void => {

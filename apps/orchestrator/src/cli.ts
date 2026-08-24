@@ -12,6 +12,7 @@ import {
   refusalText,
   requestPause,
   requestStop,
+  setAgentModel,
   setGoal,
 } from '@ai-team-os/control'
 import { prisma } from '@ai-team-os/db/client'
@@ -50,6 +51,11 @@ const USAGE = `usage: orchestrator <command> [options]
                                        assign a company's roster to a workspace, materializing a
                                        project team/worker for every roster member with no
                                        matching row there yet
+  set-model --agent <workerId> --model <m>
+  set-model --agent <workerId> --clear
+                                       set or clear a worker's own model override -- the top of
+                                       the resolution chain, above its roster row and its
+                                       template's default
 
   clear-halt and resume are different actions and it matters which you reach for.
   resume --run continues ONE paused run that is waiting to be continued.
@@ -408,6 +414,20 @@ export async function main(argv: readonly string[]): Promise<number> {
       const result = await assignCompany(workspaceId, companyId)
       if (!result.ok) throw new Error(refusalText(result.error))
       process.stdout.write(`company assigned to ${workspaceId}: ${result.value.createdWorkers.length} new worker(s)\n`)
+      return 0
+    }
+
+    case 'set-model': {
+      const agentId = requireFlag(flags, 'agent')
+      // `'clear' in flags`, not `flags['clear'] !== undefined`: a bare `--clear` (no value
+      // following it) is exactly how `parseArgs` records a flag with no argument -- it sets the
+      // key to `undefined` rather than leaving it absent, so `!== undefined` can never see it.
+      const clear = 'clear' in flags
+      const model = flags['model']
+      if (!clear && model === undefined) throw new Error('--model or --clear is required')
+      const result = await setAgentModel(agentId, clear ? null : (model as string))
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(clear ? `model cleared on ${agentId}\n` : `model set to ${model} on ${agentId}\n`)
       return 0
     }
 

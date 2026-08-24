@@ -48,6 +48,14 @@ export interface StartRunInput {
     readonly name: string
     readonly email: string
   }
+  /**
+   * The resolved model override (M10 §6), already the caller's chosen value -- this adapter does
+   * not itself consult a worker/roster/template chain, `resolveModel` (`apps/orchestrator/src/
+   * model.ts`) does that before calling `start()`. `undefined` means "no override": `--model` is
+   * omitted entirely rather than passed with some sentinel, so a legacy run with no override
+   * behaves exactly as it did before this field existed.
+   */
+  readonly model?: string
 }
 
 /** What `start()` reports back: enough to find and signal the process later. */
@@ -462,7 +470,15 @@ export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
   }
 
   private spawnRun(input: StartRunInput): Promise<RunHandle> {
-    const args = [...this.extraArgs, ...claudeFlags({ settingsPath: input.settingsPath }), '-p', input.prompt]
+    const args = [
+      ...this.extraArgs,
+      ...claudeFlags({ settingsPath: input.settingsPath }),
+      '-p',
+      input.prompt,
+      // Omitted entirely, not passed with a sentinel, when unset -- a legacy run with no override
+      // anywhere in the chain must spawn with exactly the args it always has.
+      ...(input.model !== undefined ? ['--model', input.model] : []),
+    ]
     return this.spawnChild({
       runId: input.runId,
       args,
@@ -766,6 +782,11 @@ export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
       settingsPath: checkpoint.settingsPath,
       hookPath: checkpoint.hookPath,
       gitIdentity: { name: checkpoint.gitAuthorName, email: checkpoint.gitAuthorEmail },
+      // Carried forward from the checkpoint, never re-resolved: the run must continue with the SAME
+      // model it started with (M10 §6, the `Checkpoint.model` docstring), independently of whatever
+      // an operator's `setAgentModel` has set since. `undefined` on a legacy checkpoint behaves
+      // exactly as no override ever did.
+      ...(checkpoint.model !== undefined ? { model: checkpoint.model } : {}),
     }
 
     const args = [
@@ -778,6 +799,7 @@ export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
       // one `checkpoint.sessionId` already carries.
       '--resume',
       checkpoint.sessionId,
+      ...(resumedInput.model !== undefined ? ['--model', resumedInput.model] : []),
     ]
 
     return this.spawnChild({

@@ -257,6 +257,36 @@ describe('the orchestrator CLI', () => {
     expect(`${result.stdout}${result.stderr}`).toMatch(/--company is required/)
   })
 
+  it('sets a worker model override, then clears it -- a set/clear round trip', async (): Promise<void> => {
+    const setResult = await runCli(['set-model', '--agent', fixture.agentId, '--model', 'claude-opus'])
+
+    expect(setResult.code).toBe(0)
+    expect(setResult.stdout).toMatch(new RegExp(`^model set to claude-opus on ${fixture.agentId}$`, 'm'))
+    const afterSet = await prisma.agent.findUniqueOrThrow({ where: { id: fixture.agentId } })
+    expect(afterSet.model).toBe('claude-opus')
+
+    const clearResult = await runCli(['set-model', '--agent', fixture.agentId, '--clear'])
+
+    expect(clearResult.code).toBe(0)
+    expect(clearResult.stdout).toMatch(new RegExp(`^model cleared on ${fixture.agentId}$`, 'm'))
+    const afterClear = await prisma.agent.findUniqueOrThrow({ where: { id: fixture.agentId } })
+    expect(afterClear.model).toBeNull()
+  })
+
+  it('exits non-zero for set-model with neither --model nor --clear given', async (): Promise<void> => {
+    const result = await runCli(['set-model', '--agent', fixture.agentId])
+
+    expect(result.code).not.toBe(0)
+    expect(`${result.stdout}${result.stderr}`).toMatch(/--model or --clear is required/)
+  })
+
+  it('exits non-zero for set-model against an unknown agent', async (): Promise<void> => {
+    const result = await runCli(['set-model', '--agent', 'nope', '--model', 'claude-opus'])
+
+    expect(result.code).not.toBe(0)
+    expect(`${result.stdout}${result.stderr}`).toMatch(/no agent with id nope/)
+  })
+
   it('tells an operator that clear-halt is not resume', async (): Promise<void> => {
     const result = await runCli(['help'])
     const help = `${result.stdout}${result.stderr}`

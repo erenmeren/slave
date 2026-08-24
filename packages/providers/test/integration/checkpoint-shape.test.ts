@@ -82,6 +82,12 @@ function checkpointCreateFields(checkpoint: Checkpoint) {
     hookPath: checkpoint.hookPath,
     gitAuthorName: checkpoint.gitAuthorName,
     gitAuthorEmail: checkpoint.gitAuthorEmail,
+    // M10 §6's model field, added after this file's own docstring was written -- the `satisfies`
+    // clause below is exactly what caught its absence here: a field added to `Checkpoint` and not
+    // listed in this function is a missing-property error, by design. `?? null`, not the bare
+    // property, because the Prisma column is `string | null` (no `undefined` in its type) while
+    // `Checkpoint.model` is optional -- matching `pump.ts`'s own `spawn.model ?? null` convention.
+    model: checkpoint.model ?? null,
   } satisfies Record<keyof Checkpoint, unknown>
 }
 
@@ -122,6 +128,9 @@ describe('Checkpoint shape pinning (providers interface <-> db model)', () => {
       hookPath: '/tmp/worktrees/pin-run-1/.claude/pause-gate.sh',
       gitAuthorName: 'Pin Author',
       gitAuthorEmail: 'pin-author@example.com',
+      // M10 §6. Set here so this test also proves the non-null case round-trips; the second test
+      // below leaves it unset entirely, proving the legacy/never-set case.
+      model: 'claude-pin-model',
     }
 
     const created = await prisma.checkpoint.create({
@@ -148,6 +157,7 @@ describe('Checkpoint shape pinning (providers interface <-> db model)', () => {
     expect(found.hookPath).toBe(checkpoint.hookPath)
     expect(found.gitAuthorName).toBe(checkpoint.gitAuthorName)
     expect(found.gitAuthorEmail).toBe(checkpoint.gitAuthorEmail)
+    expect(found.model).toBe(checkpoint.model)
   })
 
   it('round-trips the nullable fields and empty arrays a Checkpoint with no denials yet actually has', async (): Promise<void> => {
@@ -173,6 +183,8 @@ describe('Checkpoint shape pinning (providers interface <-> db model)', () => {
       hookPath: '/tmp/worktrees/pin-run-2/.claude/pause-gate.sh',
       gitAuthorName: 'Second Pin Author',
       gitAuthorEmail: 'second-pin-author@example.com',
+      // `model` deliberately omitted -- the legacy/never-set case; `undefined` here must round-trip
+      // as a `null` column, not a write failure.
     }
 
     const created = await prisma.checkpoint.create({
@@ -192,5 +204,6 @@ describe('Checkpoint shape pinning (providers interface <-> db model)', () => {
     expect(found.hookPath).toBe(checkpoint.hookPath)
     expect(found.gitAuthorName).toBe(checkpoint.gitAuthorName)
     expect(found.gitAuthorEmail).toBe(checkpoint.gitAuthorEmail)
+    expect(found.model).toBeNull()
   })
 })

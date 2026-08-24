@@ -14,6 +14,7 @@ import {
 import { appendEvent } from '@ai-team-os/events'
 import { type AgentRuntimeAdapter, writeSettingsFile } from '@ai-team-os/providers'
 import { runMergePass } from './merge.js'
+import { resolveModel } from './model.js'
 import { dispatchPlanning } from './planning.js'
 import { pumpRun } from './pump.js'
 import { executeResume } from './resume.js'
@@ -382,7 +383,13 @@ async function concludeFailedResume(
  */
 async function startRun(deps: TickDeps, taskId: TaskId, agentId: AgentId): Promise<RunId | null> {
   const task = await prisma.task.findUniqueOrThrow({ where: { id: taskId } })
-  const agent = await prisma.agent.findUniqueOrThrow({ where: { id: agentId } })
+  // `companyAgent -> template` included so `resolveModel` (M10 §6) can walk the whole override
+  // chain -- a legacy agent with no roster link carries `companyAgent: null` and resolves through
+  // its own column alone.
+  const agent = await prisma.agent.findUniqueOrThrow({
+    where: { id: agentId },
+    include: { companyAgent: { include: { template: true } } },
+  })
   const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: task.workspaceId } })
 
   const taskKey = taskKeyFor(task.id)
@@ -453,6 +460,8 @@ async function startRun(deps: TickDeps, taskId: TaskId, agentId: AgentId): Promi
     const { settingsPath, pauseFlagPath } = runFilePaths(workspace.repoPath, runId)
     writeSettingsFile({ settingsPath, hookPath: deps.hookPath })
 
+    const model = resolveModel(agent)
+
     handle = await deps.adapter.start({
       runId,
       prompt: buildPrompt(task),
@@ -461,6 +470,9 @@ async function startRun(deps: TickDeps, taskId: TaskId, agentId: AgentId): Promi
       settingsPath,
       hookPath: deps.hookPath,
       gitIdentity: { name: agent.name, email: `${emailLocalPart(agent)}@aiteamos.local` },
+      // Conditional spread, not `model`, because `exactOptionalPropertyTypes` treats an explicit
+      // `model: undefined` as a different (and disallowed) thing from the key being absent.
+      ...(model !== undefined ? { model } : {}),
     })
 
     await prisma.agentRun.update({
@@ -492,6 +504,7 @@ async function startRun(deps: TickDeps, taskId: TaskId, agentId: AgentId): Promi
         pauseFlagPath,
         hookPath: deps.hookPath,
         gitIdentity: { name: agent.name, email: `${emailLocalPart(agent)}@aiteamos.local` },
+        ...(model !== undefined ? { model } : {}),
       },
     })
       // Verify is chained onto the pump rather than put inside it: the pump owns the *run* row, and

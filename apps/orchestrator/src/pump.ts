@@ -54,6 +54,13 @@ export interface PumpRunInput {
     readonly pauseFlagPath: string
     readonly hookPath: string
     readonly gitIdentity: { readonly name: string; readonly email: string }
+    /**
+     * The model this run was actually spawned with (M10 §6), resolved once at spawn time by
+     * `resolveModel` -- recorded into the checkpoint verbatim so `resume()` replays the SAME model
+     * rather than re-resolving the chain, which could have moved since (a `setAgentModel` call
+     * between pause and resume affects only the run's NEXT dispatch, never this one).
+     */
+    readonly model?: string
   }
 }
 
@@ -155,6 +162,7 @@ async function writeCheckpoint(input: {
       hookPath: input.spawn.hookPath,
       gitAuthorName: input.spawn.gitIdentity.name,
       gitAuthorEmail: input.spawn.gitIdentity.email,
+      model: input.spawn.model ?? null,
       lastToolUseId: input.lastToolUseId,
       lastToolName: input.lastToolName,
       numTurns: input.toolCalls,

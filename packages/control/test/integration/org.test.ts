@@ -1,6 +1,6 @@
 import { prisma } from '@ai-team-os/db/client'
 import { beforeEach, describe, expect, it } from 'vitest'
-import { addCompanyAgent, addCompanyTeam, assignCompany, createCompany, createTemplate } from '../../src/org.js'
+import { addCompanyAgent, addCompanyTeam, assignCompany, createCompany, createTemplate, setAgentModel } from '../../src/org.js'
 
 describe('catalog and company CRUD', () => {
   beforeEach(async (): Promise<void> => {
@@ -450,5 +450,52 @@ describe('assignCompany', () => {
     expect(await prisma.team.count()).toBe(0)
     const ws = await prisma.workspace.findUniqueOrThrow({ where: { id: workspace.id } })
     expect(ws.companyId).toBeNull()
+  })
+})
+
+describe('setAgentModel', () => {
+  beforeEach(async (): Promise<void> => {
+    await prisma.$executeRawUnsafe(
+      'TRUNCATE TABLE "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
+    )
+  })
+
+  async function seedAgent(): Promise<{ id: string }> {
+    const workspace = await prisma.workspace.create({
+      data: { name: 'Checkout Platform', repoPath: '/tmp/does-not-matter', verifyCommands: ['true'], setupCommands: [] },
+    })
+    const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
+    const agent = await prisma.agent.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
+    return { id: agent.id }
+  }
+
+  it('writes the model column', async (): Promise<void> => {
+    const { id } = await seedAgent()
+
+    const result = await setAgentModel(id, 'claude-opus')
+
+    expect(result.ok).toBe(true)
+    const row = await prisma.agent.findUniqueOrThrow({ where: { id } })
+    expect(row.model).toBe('claude-opus')
+  })
+
+  it('clears the model column with null, without refusing', async (): Promise<void> => {
+    const { id } = await seedAgent()
+    await setAgentModel(id, 'claude-opus')
+
+    const result = await setAgentModel(id, null)
+
+    expect(result.ok).toBe(true)
+    const row = await prisma.agent.findUniqueOrThrow({ where: { id } })
+    expect(row.model).toBeNull()
+  })
+
+  it('refuses an unknown agent', async (): Promise<void> => {
+    const unknown = '00000000-0000-4000-8000-000000000000'
+
+    const result = await setAgentModel(unknown, 'claude-opus')
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error).toEqual({ kind: 'agent_not_found', agentId: unknown })
   })
 })
