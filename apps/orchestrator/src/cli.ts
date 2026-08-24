@@ -1,7 +1,18 @@
 import { realpathSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { claimResume, emergencyStop, refusalText, requestPause, requestStop, setGoal } from '@ai-team-os/control'
+import {
+  addCompanyAgent,
+  addCompanyTeam,
+  claimResume,
+  createCompany,
+  createTemplate,
+  emergencyStop,
+  refusalText,
+  requestPause,
+  requestStop,
+  setGoal,
+} from '@ai-team-os/control'
 import { prisma } from '@ai-team-os/db/client'
 import { workspaceId as brandWorkspaceId, type WorkspaceId } from '@ai-team-os/domain'
 import { ClaudeCodeAdapter } from '@ai-team-os/providers'
@@ -27,6 +38,13 @@ const USAGE = `usage: orchestrator <command> [options]
   set-goal --workspace <id> --goal "<text>"
                                        set the operator's standing instruction for what this
                                        workspace's agents are working toward
+  create-template --name <n> --role <r> [--model <m>] [--description <d>]
+                                       add a reusable agent template to the catalog
+  create-company --name <n>            add a company (a persistent roster) to the catalog
+  add-team --company <id> --name <n>   add a team to a company's roster
+  add-agent --team <companyTeamId> --template <id> --name <n> [--model <m>]
+                                       add a roster member to a company team, instantiated from a
+                                       template
 
   clear-halt and resume are different actions and it matters which you reach for.
   resume --run continues ONE paused run that is waiting to be continued.
@@ -332,6 +350,50 @@ export async function main(argv: readonly string[]): Promise<number> {
       const result = await setGoal(workspaceId, goal)
       if (!result.ok) throw new Error(refusalText(result.error))
       process.stdout.write(`goal set on ${workspaceId}\n`)
+      return 0
+    }
+
+    case 'create-template': {
+      const name = requireFlag(flags, 'name')
+      const role = requireFlag(flags, 'role')
+      const description = flags['description']
+      const model = flags['model']
+      const result = await createTemplate(name, role, {
+        ...(description !== undefined ? { description } : {}),
+        ...(model !== undefined ? { defaultModel: model } : {}),
+      })
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(`template ${result.value.id} created\n`)
+      return 0
+    }
+
+    case 'create-company': {
+      const name = requireFlag(flags, 'name')
+      const result = await createCompany(name)
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(`company ${result.value.id} created\n`)
+      return 0
+    }
+
+    case 'add-team': {
+      const companyId = requireFlag(flags, 'company')
+      const name = requireFlag(flags, 'name')
+      const result = await addCompanyTeam(companyId, name)
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(`team ${result.value.id} created\n`)
+      return 0
+    }
+
+    case 'add-agent': {
+      const companyTeamId = requireFlag(flags, 'team')
+      const templateId = requireFlag(flags, 'template')
+      const name = requireFlag(flags, 'name')
+      const model = flags['model']
+      const result = await addCompanyAgent(companyTeamId, templateId, name, {
+        ...(model !== undefined ? { model } : {}),
+      })
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(`agent ${result.value.id} created\n`)
       return 0
     }
 

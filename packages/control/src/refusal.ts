@@ -23,6 +23,11 @@ export type ControlRefusal =
   | { readonly kind: 'dependency_cycle'; readonly taskId: string; readonly dependsOnTaskId: string }
   | { readonly kind: 'workspace_not_found'; readonly workspaceId: string }
   | { readonly kind: 'invalid_goal' }
+  | { readonly kind: 'duplicate_name'; readonly name: string }
+  | { readonly kind: 'template_not_found'; readonly templateId: string }
+  | { readonly kind: 'company_not_found'; readonly companyId: string }
+  | { readonly kind: 'company_team_not_found'; readonly companyTeamId: string }
+  | { readonly kind: 'invalid_name' }
 
 export function refusalText(refusal: ControlRefusal): string {
   switch (refusal.kind) {
@@ -53,5 +58,15 @@ export function refusalText(refusal: ControlRefusal): string {
       return `no workspace with id ${refusal.workspaceId}`
     case 'invalid_goal':
       return 'a goal must be a non-empty text'
+    case 'duplicate_name':
+      return `the name "${refusal.name}" is already taken`
+    case 'template_not_found':
+      return `no template with id ${refusal.templateId}`
+    case 'company_not_found':
+      return `no company with id ${refusal.companyId}`
+    case 'company_team_not_found':
+      return `no company team with id ${refusal.companyTeamId}`
+    case 'invalid_name':
+      return 'a name must be a non-empty text'
   }
 }

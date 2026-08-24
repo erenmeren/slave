@@ -96,7 +96,7 @@ describe('the orchestrator CLI', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace", "CompanyAgent", "CompanyTeam", "Company", "AgentTemplate" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
   })
@@ -204,6 +204,36 @@ describe('the orchestrator CLI', () => {
 
     expect(result.code).not.toBe(0)
     expect(`${result.stdout}${result.stderr}`).toMatch(/--goal is required/)
+  })
+
+  it('creates a template', async (): Promise<void> => {
+    const result = await runCli(['create-template', '--name', 'Backend Engineer', '--role', 'backend'])
+
+    expect(result.code).toBe(0)
+    expect(result.stdout).toMatch(/^template .+ created$/m)
+    expect(await prisma.agentTemplate.count()).toBe(1)
+  })
+
+  it('exits non-zero for create-template with no --name given', async (): Promise<void> => {
+    const result = await runCli(['create-template', '--role', 'backend'])
+
+    expect(result.code).not.toBe(0)
+    expect(`${result.stdout}${result.stderr}`).toMatch(/--name is required/)
+  })
+
+  it('creates a company', async (): Promise<void> => {
+    const result = await runCli(['create-company', '--name', 'Acme Corp'])
+
+    expect(result.code).toBe(0)
+    expect(result.stdout).toMatch(/^company .+ created$/m)
+    expect(await prisma.company.count()).toBe(1)
+  })
+
+  it('exits non-zero for create-company with no --name given', async (): Promise<void> => {
+    const result = await runCli(['create-company'])
+
+    expect(result.code).not.toBe(0)
+    expect(`${result.stdout}${result.stderr}`).toMatch(/--name is required/)
   })
 
   it('tells an operator that clear-halt is not resume', async (): Promise<void> => {
