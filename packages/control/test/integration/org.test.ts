@@ -295,6 +295,12 @@ describe('assignCompany', () => {
       expect(agent.role).toMatch(/^role-\d$/)
     }
 
+    for (const worker of result.value.createdWorkers) {
+      expect(worker.companyAgentId).not.toBe('')
+      const agent = agents.find((a) => a.name === worker.name)
+      expect(agent?.companyAgentId).toBe(worker.companyAgentId)
+    }
+
     const events = await prisma.executionEvent.findMany({
       where: { workspaceId: workspace.id, type: 'workspace_company_assigned' },
     })
@@ -302,10 +308,14 @@ describe('assignCompany', () => {
     expect(events[0]?.actor).toBe('human')
     const payload = events[0]?.payload as unknown as {
       company: string
-      workers: readonly { name: string; role: string }[]
+      workers: readonly { companyAgentId: string; name: string; role: string }[]
     }
     expect(payload.company).toBe(companyName)
     expect(payload.workers).toHaveLength(3)
+    for (const worker of payload.workers) {
+      const agent = agents.find((a) => a.name === worker.name)
+      expect(agent?.companyAgentId).toBe(worker.companyAgentId)
+    }
   })
 
   it('re-running immediately creates nothing new but still emits an event with an empty workers array', async (): Promise<void> => {

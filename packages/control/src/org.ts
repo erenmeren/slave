@@ -113,7 +113,7 @@ export async function addCompanyAgent(
 /** What {@link assignCompany} created -- the gate and M11's UI report this back to an operator. */
 export interface AssignReport {
   readonly createdTeams: readonly string[]
-  readonly createdWorkers: readonly { readonly name: string; readonly role: string }[]
+  readonly createdWorkers: readonly { readonly companyAgentId: string; readonly name: string; readonly role: string }[]
 }
 
 /**
@@ -179,7 +179,7 @@ export async function assignCompany(
     const companyTeams = await tx.companyTeam.findMany({ where: { companyId }, include: { agents: true } })
 
     const createdTeams: string[] = []
-    const createdWorkers: { name: string; role: string }[] = []
+    const createdWorkers: { companyAgentId: string; name: string; role: string }[] = []
 
     for (const companyTeam of companyTeams) {
       let team = await tx.team.findFirst({ where: { workspaceId, name: companyTeam.name } })
@@ -203,7 +203,7 @@ export async function assignCompany(
             companyAgentId: companyAgent.id,
           },
         })
-        createdWorkers.push({ name: worker.name, role: worker.role })
+        createdWorkers.push({ companyAgentId: companyAgent.id, name: worker.name, role: worker.role })
       }
     }
 

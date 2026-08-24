@@ -358,7 +358,11 @@ function WorkspacePlanCreatedCard(props: ActivityCardProps): ReactElement {
 function WorkspaceCompanyAssignedCard(props: ActivityCardProps): ReactElement {
   const payload = props.event.payload as {
     company: string
-    workers: ReadonlyArray<{ name: string; role: string }>
+    // `companyAgentId` is optional here even though the write path (schema.ts) always emits it:
+    // pre-M11 rows already stored in the DB have workers without it, and this read path does not
+    // schema-validate stored payloads, so the fallback below keeps those legacy rows rendering
+    // without duplicate-key warnings.
+    workers: ReadonlyArray<{ companyAgentId?: string; name: string; role: string }>
   }
   return (
     <ActivityCard {...props}>
@@ -368,7 +372,7 @@ function WorkspaceCompanyAssignedCard(props: ActivityCardProps): ReactElement {
       {payload.workers.length > 0 ? (
         <ul className="mt-1 space-y-0.5 text-text-3">
           {payload.workers.map((worker, index) => (
-            <li key={`${worker.name}-${index}`} data-testid="company-worker-item">
+            <li key={worker.companyAgentId ?? `${worker.name}-${index}`} data-testid="company-worker-item">
               {worker.name} <span className="text-text-3">({worker.role})</span>
             </li>
           ))}

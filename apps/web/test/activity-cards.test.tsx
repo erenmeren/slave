@@ -68,8 +68,8 @@ const PAYLOAD_BY_TYPE: Record<DomainEventType, Record<string, unknown>> = {
   'workspace.company_assigned': {
     company: 'Acme Corp',
     workers: [
-      { name: 'Alex', role: 'backend' },
-      { name: 'Sam', role: 'frontend' },
+      { companyAgentId: 'ca-1', name: 'Alex', role: 'backend' },
+      { companyAgentId: 'ca-2', name: 'Sam', role: 'frontend' },
     ],
   },
 }
@@ -178,6 +178,31 @@ describe('targeted card bodies', () => {
     render(<Card event={fixtureFor('workspace.company_assigned')} {...CARD_PROPS} />)
     expect(screen.getByTestId('transition-label').textContent).toBe('company assigned')
     expect(screen.getByTestId('company-name').textContent).toBe('Acme Corp')
+    const items = screen.getAllByTestId('company-worker-item')
+    expect(items).toHaveLength(2)
+    expect(items[0]?.textContent).toContain('Alex')
+    expect(items[0]?.textContent).toContain('backend')
+    expect(items[1]?.textContent).toContain('Sam')
+    expect(items[1]?.textContent).toContain('frontend')
+  })
+
+  it('workspace.company_assigned renders legacy workers missing companyAgentId without duplicate-key warnings', () => {
+    const Card = ACTIVITY_CARDS['workspace.company_assigned']
+    render(
+      <Card
+        event={{
+          ...fixtureFor('workspace.company_assigned'),
+          payload: {
+            company: 'Acme Corp',
+            workers: [
+              { name: 'Alex', role: 'backend' },
+              { name: 'Sam', role: 'frontend' },
+            ],
+          },
+        }}
+        {...CARD_PROPS}
+      />,
+    )
     const items = screen.getAllByTestId('company-worker-item')
     expect(items).toHaveLength(2)
     expect(items[0]?.textContent).toContain('Alex')

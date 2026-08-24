@@ -296,11 +296,23 @@ describe('parseExecutionEvent', () => {
       type: 'workspace.company_assigned',
       payload: {
         company: 'Acme Corp',
-        workers: [{ name: 'Alex', role: 'backend' }],
+        workers: [{ companyAgentId: 'ca-1', name: 'Alex', role: 'backend' }],
       },
     })
     expect(result.ok).toBe(true)
     if (result.ok) expect(result.value.type).toBe('workspace.company_assigned')
+  })
+
+  it('rejects a workspace.company_assigned event whose worker is missing companyAgentId', () => {
+    const result = parseExecutionEvent({
+      ...BASE,
+      type: 'workspace.company_assigned',
+      payload: {
+        company: 'Acme Corp',
+        workers: [{ name: 'Alex', role: 'backend' }],
+      },
+    })
+    expect(result.ok).toBe(false)
   })
 
   it('accepts a workspace.company_assigned event with an EMPTY workers array', () => {
