@@ -1,26 +1,53 @@
 @import 'tailwindcss';
 
 :root {
-  /* Layered neutral backgrounds — dark only (spec §7). */
-  --bg-0: #0a0c10;
-  --bg-1: #10141b;
-  --bg-2: #171c26;
-  --line: #232a37;
-  --text-1: #e6e9ef;
-  --text-2: #8b93a3;
-  --text-3: #5c6474;
+  /* Layered neutral backgrounds — dark only (handoff spec §3 / design_handoff README "Design
+   * Tokens": page/panel/card surfaces). Existing variable NAMES kept; values shift to the
+   * handoff palette. */
+  --bg-0: #0a0c0f; /* page */
+  --bg-1: #0c0f13; /* panel */
+  --bg-2: #0f1217; /* card */
+  --line: rgba(255, 255, 255, 0.07); /* structural hairline */
+  --text-1: #e7eaf0; /* primary */
+  --text-2: #8a929e; /* muted */
+  --text-3: #5b6472; /* label */
 
-  /* Status colours: the ONLY saturation on screen. */
-  --status-working: #34d399;
-  --status-starting: #22d3ee; /* also resuming */
-  --status-paused: #60a5fa;   /* also pausing */
-  --status-stopping: #fb923c;
-  --status-idle: #5c6474;
+  /* Status colours (existing M4 vocabulary): remapped onto the handoff palette below rather
+   * than renamed — every existing `--status-*`/`bg-status-*`/etc. utility keeps compiling.
+   * `resuming`/`pausing` still ride `starting`/`paused` respectively, as before. */
+  --status-working: #2ee6cf;
+  --status-starting: #7b8cff; /* also resuming — spinning up reads as the handoff's "planning" tone */
+  --status-paused: #8a929e;   /* also pausing */
+  --status-stopping: #f5b34a; /* transitional/uncertain — the handoff's "waiting" amber */
+  --status-idle: #5b6472;
   --status-danger: #f87171;   /* halt, failed, over budget */
-  --status-warn: #fbbf24;     /* budget past 80% */
+  --status-warn: #f5b34a;     /* budget past 80% — same amber family as `stopping` */
 
-  --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
-  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  /* Handoff status tones (new vocabulary, spec §3): the eight `StatusTone` values the
+   * `ui/` component library renders — its own names, independent of the M4 vocabulary above. */
+  --tone-working: #2ee6cf;
+  --tone-planning: #7b8cff;
+  --tone-review: #c084fc;
+  --tone-waiting: #f5b34a;
+  --tone-blocked: #f87171;
+  --tone-done: #4ade80;
+  --tone-paused: #8a929e;
+  --tone-idle: #5b6472;
+
+  /* Radii (spec §3): 5 chip/button · 6 nav/small · 7 input/tile · 8 card · 9–10 panel · 20 pill. */
+  --radius-chip: 5px;
+  --radius-nav: 6px;
+  --radius-tile: 7px;
+  --radius-card: 8px;
+  --radius-panel: 9px;
+  --radius-pill: 20px;
+
+  /* Shadows (spec §3 / design_handoff README "Design Tokens"). */
+  --shadow-resting: 0 4px 16px rgba(0, 0, 0, 0.35);
+  --shadow-floor: 0 40px 90px rgba(0, 0, 0, 0.7);
+
+  --font-sans: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
 }
 
 @theme inline {
@@ -38,6 +65,22 @@
   --color-status-idle: var(--status-idle);
   --color-status-danger: var(--status-danger);
   --color-status-warn: var(--status-warn);
+  --color-tone-working: var(--tone-working);
+  --color-tone-planning: var(--tone-planning);
+  --color-tone-review: var(--tone-review);
+  --color-tone-waiting: var(--tone-waiting);
+  --color-tone-blocked: var(--tone-blocked);
+  --color-tone-done: var(--tone-done);
+  --color-tone-paused: var(--tone-paused);
+  --color-tone-idle: var(--tone-idle);
+  --radius-chip: var(--radius-chip);
+  --radius-nav: var(--radius-nav);
+  --radius-tile: var(--radius-tile);
+  --radius-card: var(--radius-card);
+  --radius-panel: var(--radius-panel);
+  --radius-pill: var(--radius-pill);
+  --shadow-resting: var(--shadow-resting);
+  --shadow-floor: var(--shadow-floor);
   --font-sans: var(--font-sans);
   --font-mono: var(--font-mono);
 }
