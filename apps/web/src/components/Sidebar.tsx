@@ -4,12 +4,15 @@ import type React from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 
-/** The shell's global section (M11 spec §4): always visible, on every page. `Projects` is this
- *  milestone's own page (Task 7); `Agents`/`Settings` ship in Tasks 8/9 -- rendered inert in the
- *  meantime rather than as dead links, the same "future page, visible but honestly disabled"
- *  idiom the old single-section Sidebar used for Graph before M7 (spec §7). */
-const GLOBAL_LIVE = [{ label: 'Projects', href: '/' }] as const
-const GLOBAL_INERT: readonly string[] = ['Agents', 'Settings']
+/** The shell's global section (M11 spec §4): always visible, on every page. `Projects` (Task 7)
+ *  and `Agents` (Task 8) are this milestone's own pages; `Settings` ships in Task 9 -- rendered
+ *  inert in the meantime rather than as a dead link, the same "future page, visible but honestly
+ *  disabled" idiom the old single-section Sidebar used for Graph before M7 (spec §7). */
+const GLOBAL_LIVE = [
+  { label: 'Projects', href: '/' },
+  { label: 'Agents', href: '/agents' },
+] as const
+const GLOBAL_INERT: readonly string[] = ['Settings']
 
 const PROJECT_LIVE = [
   { label: 'Overview', path: (workspaceId: string) => `/w/${workspaceId}` },

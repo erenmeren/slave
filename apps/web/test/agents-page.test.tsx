@@ -1,0 +1,300 @@
+// @vitest-environment jsdom
+import { act, fireEvent, render, screen } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { AgentsClient, toneForStatus } from '../src/components/AgentsClient.js'
+import { ModelOverrideEditor } from '../src/components/ModelOverrideEditor.js'
+import { RosterTable } from '../src/components/RosterTable.js'
+import { WorkersTable } from '../src/components/WorkersTable.js'
+import type { RosterCompany, RosterMemberRow, WorkerRow } from '../src/server/org.js'
+
+const routerRefresh = vi.fn()
+
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ refresh: routerRefresh }),
+}))
+
+function member(over: Partial<RosterMemberRow>): RosterMemberRow {
+  return {
+    companyAgentId: 'ca1',
+    name: 'Alex',
+    role: 'backend',
+    templateName: 'Backend Engineer',
+    effectiveModel: 'claude-sonnet-4',
+    modelSource: 'template',
+    rosterModel: null,
+    templateDefaultModel: 'claude-sonnet-4',
+    workers: [],
+    ...over,
+  }
+}
+
+function company(over: Partial<RosterCompany>): RosterCompany {
+  return {
+    companyId: 'c1',
+    companyName: 'Acme Robotics',
+    teams: [{ companyTeamId: 't1', teamName: 'Platform', members: [member({})] }],
+    ...over,
+  }
+}
+
+function rosterWithMember(m: RosterMemberRow): readonly RosterCompany[] {
+  return [company({ teams: [{ companyTeamId: 't1', teamName: 'Platform', members: [m] }] })]
+}
+
+function workerRow(over: Partial<WorkerRow>): WorkerRow {
+  return {
+    agentId: 'a1',
+    name: 'Alex',
+    role: 'backend',
+    workspaceId: 'w1',
+    projectName: 'Checkout',
+    status: 'working',
+    currentTask: { title: 'Add the thing', pct: 40 },
+    ...over,
+  }
+}
+
+afterEach(() => {
+  routerRefresh.mockClear()
+})
+
+describe('toneForStatus', () => {
+  it('maps every AgentStatus to a StatusTone', () => {
+    expect(toneForStatus('working')).toBe('working')
+    expect(toneForStatus('starting')).toBe('planning')
+    expect(toneForStatus('resuming')).toBe('planning')
+    expect(toneForStatus('paused')).toBe('paused')
+    expect(toneForStatus('pausing')).toBe('paused')
+    expect(toneForStatus('stopping')).toBe('waiting')
+    expect(toneForStatus('idle')).toBe('idle')
+  })
+})
+
+describe('AgentsClient tabs', () => {
+  it('renders the roster tab by default and switches to the workers tab on click', () => {
+    render(<AgentsClient roster={[company({})]} workers={[workerRow({})]} />)
+    expect(screen.getByTestId('roster-company')).toBeTruthy()
+
+    fireEvent.click(screen.getByTestId('agents-tab-workers'))
+
+    expect(screen.queryByTestId('roster-company')).toBeNull()
+    expect(screen.getByTestId('data-table')).toBeTruthy()
+    expect(screen.getByText('Checkout')).toBeTruthy()
+  })
+})
+
+describe('RosterTable', () => {
+  it('renders company -> team groups with member rows', () => {
+    render(<RosterTable roster={[company({})]} />)
+    expect(screen.getByText('Acme Robotics')).toBeTruthy()
+    expect(screen.getByText('Platform')).toBeTruthy()
+    expect(screen.getByText('Alex')).toBeTruthy()
+    expect(screen.getByText('backend')).toBeTruthy()
+    expect(screen.getByText('Backend Engineer')).toBeTruthy()
+  })
+
+  describe('the model chain chip for each modelSource case', () => {
+    it('worker-varies', () => {
+      const m = member({ name: 'A', modelSource: 'worker-varies', effectiveModel: 'claude-sonnet-4' })
+      render(<RosterTable roster={rosterWithMember(m)} />)
+      expect(screen.getByText('claude-sonnet-4')).toBeTruthy()
+      expect(screen.getByText('worker-varies')).toBeTruthy()
+    })
+
+    it('roster', () => {
+      const m = member({ name: 'B', modelSource: 'roster', effectiveModel: 'claude-opus-4', rosterModel: 'claude-opus-4' })
+      render(<RosterTable roster={rosterWithMember(m)} />)
+      expect(screen.getByText('claude-opus-4')).toBeTruthy()
+      expect(screen.getByText('roster')).toBeTruthy()
+    })
+
+    it('template', () => {
+      const m = member({ name: 'C', modelSource: 'template', effectiveModel: 'claude-sonnet-4', rosterModel: null })
+      render(<RosterTable roster={rosterWithMember(m)} />)
+      expect(screen.getByText('claude-sonnet-4')).toBeTruthy()
+      expect(screen.getByText('template')).toBeTruthy()
+    })
+
+    it('none -- "—" for the effective model', () => {
+      const m = member({ name: 'D', modelSource: 'none', effectiveModel: null, rosterModel: null, templateDefaultModel: null })
+      render(<RosterTable roster={rosterWithMember(m)} />)
+      expect(screen.getByText('—')).toBeTruthy()
+      expect(screen.getByText('none')).toBeTruthy()
+    })
+  })
+
+  describe('expanding a member', () => {
+    it('reveals its workers (project, status, current task + progress, model, override editor) and hides them collapsed', () => {
+      const worker = {
+        agentId: 'wk1',
+        workspaceId: 'w1',
+        projectName: 'Checkout',
+        status: 'working',
+        model: 'claude-sonnet-4',
+        currentTask: { title: 'Add the thing', pct: 40 },
+      }
+      const m = member({ name: 'Alex', workers: [worker] })
+      render(<RosterTable roster={rosterWithMember(m)} />)
+
+      expect(screen.queryByTestId('roster-worker-row')).toBeNull()
+
+      fireEvent.click(screen.getByTestId('roster-member-toggle'))
+
+      const row = screen.getByTestId('roster-worker-row')
+      expect(row).toBeTruthy()
+      expect(screen.getByText('Checkout')).toBeTruthy()
+      expect(screen.getByText('Add the thing')).toBeTruthy()
+      expect(screen.getByTestId('progress-bar-fill').style.width).toBe('40%')
+      expect(screen.getByTestId('status-pill').getAttribute('data-tone')).toBe('working')
+      expect(screen.getByTestId('model-override-editor')).toBeTruthy()
+
+      fireEvent.click(screen.getByTestId('roster-member-toggle'))
+      expect(screen.queryByTestId('roster-worker-row')).toBeNull()
+    })
+  })
+})
+
+describe('ModelOverrideEditor', () => {
+  let fetchMock: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('posts the typed value on Set and refreshes on 200', async () => {
+    render(<ModelOverrideEditor agentId="wk1" model={null} />)
+    fireEvent.change(screen.getByTestId('model-override-input'), { target: { value: 'claude-opus-4' } })
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('model-override-set'))
+    })
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/agents/wk1/model',
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({ model: 'claude-opus-4' }) }),
+    )
+    expect(routerRefresh).toHaveBeenCalled()
+  })
+
+  it('posts null on Clear and refreshes on 200', async () => {
+    render(<ModelOverrideEditor agentId="wk1" model="claude-opus-4" />)
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('model-override-clear'))
+    })
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/agents/wk1/model',
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({ model: null }) }),
+    )
+    expect(routerRefresh).toHaveBeenCalled()
+  })
+
+  it('shows a 409 refusal inline without refreshing', async () => {
+    fetchMock.mockImplementationOnce(
+      async () => new Response(JSON.stringify({ error: 'a model must be a non-empty text' }), { status: 409 }),
+    )
+    render(<ModelOverrideEditor agentId="wk1" model={null} />)
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('model-override-set'))
+    })
+
+    expect(screen.getByRole('alert').textContent).toContain('a model must be a non-empty text')
+    expect(routerRefresh).not.toHaveBeenCalled()
+  })
+
+  it('resyncs the input from a new model prop -- the post-refresh snapshot, not a stray edit', () => {
+    const { rerender } = render(<ModelOverrideEditor agentId="wk1" model="claude-opus-4" />)
+    // A stray edit the caller never submitted (e.g. typed then navigated away without clicking
+    // Set/Clear) must not survive the next snapshot arriving as a new `model` prop.
+    fireEvent.change(screen.getByTestId('model-override-input'), { target: { value: 'not submitted' } })
+    expect((screen.getByTestId('model-override-input') as HTMLInputElement).value).toBe('not submitted')
+
+    // Same instance (same agentId/key) re-rendered with a changed model, as router.refresh()
+    // would do after a successful clear elsewhere.
+    rerender(<ModelOverrideEditor agentId="wk1" model={null} />)
+
+    expect((screen.getByTestId('model-override-input') as HTMLInputElement).value).toBe('')
+  })
+})
+
+describe('WorkersTable', () => {
+  it('renders a flat row per worker with role, project, status, and task progress', () => {
+    render(
+      <WorkersTable
+        initial={[
+          workerRow({ name: 'Alex', role: 'backend', projectName: 'Checkout', status: 'working', currentTask: { title: 'Ship it', pct: 60 } }),
+        ]}
+      />,
+    )
+    expect(screen.getByText('Alex')).toBeTruthy()
+    expect(screen.getByText('backend')).toBeTruthy()
+    expect(screen.getByText('Checkout')).toBeTruthy()
+    expect(screen.getByTestId('status-pill').getAttribute('data-tone')).toBe('working')
+    expect(screen.getByText('Ship it')).toBeTruthy()
+    expect(screen.getByTestId('progress-bar-fill').style.width).toBe('60%')
+  })
+
+  describe('polling', () => {
+    let fetchMock: ReturnType<typeof vi.fn>
+
+    beforeEach(() => {
+      vi.useFakeTimers()
+      fetchMock = vi.fn(
+        async () => new Response(JSON.stringify({ workers: [workerRow({ agentId: 'a2', name: 'Blair' })] }), { status: 200 }),
+      )
+      vi.stubGlobal('fetch', fetchMock)
+    })
+
+    afterEach(() => {
+      vi.useRealTimers()
+      vi.unstubAllGlobals()
+    })
+
+    it('re-fetches GET /api/org/workers every 5s and replaces the rows', async () => {
+      render(<WorkersTable initial={[workerRow({ agentId: 'a1', name: 'Alex' })]} />)
+      expect(screen.getByText('Alex')).toBeTruthy()
+      expect(fetchMock).not.toHaveBeenCalled()
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000)
+      })
+
+      expect(fetchMock).toHaveBeenCalledWith('/api/org/workers')
+      expect(screen.getByText('Blair')).toBeTruthy()
+    })
+
+    it('clears the interval on unmount (no further fetch after unmounting)', async () => {
+      const { unmount } = render(<WorkersTable initial={[workerRow({ agentId: 'a1', name: 'Alex' })]} />)
+      unmount()
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10000)
+      })
+
+      expect(fetchMock).not.toHaveBeenCalled()
+    })
+
+    it('pauses polling while document.visibilityState is hidden, resumes once visible again', async () => {
+      render(<WorkersTable initial={[workerRow({ agentId: 'a1', name: 'Alex' })]} />)
+      Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true })
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000)
+      })
+      expect(fetchMock).not.toHaveBeenCalled()
+
+      Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000)
+      })
+      expect(fetchMock).toHaveBeenCalledWith('/api/org/workers')
+    })
+  })
+})
