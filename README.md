@@ -156,6 +156,12 @@ npm run orchestrator -- resume --run <id> --message "try the other approach"
 npm run orchestrator -- cancel --run <id>
 npm run orchestrator -- emergency-stop --workspace <id> --by <name>
 npm run orchestrator -- set-goal --workspace <id> --goal "<text>"
+npm run orchestrator -- create-template --name "<n>" --role <r> [--model <m>]
+npm run orchestrator -- create-company --name "<n>"
+npm run orchestrator -- add-team --company <id> --name "<n>"
+npm run orchestrator -- add-agent --team <companyTeamId> --template <id> --name "<n>"
+npm run orchestrator -- assign-company --workspace <id> --company <id>
+npm run orchestrator -- set-model --agent <workerId> --model <m>
 ```
 
 `pause` arms the hook; the agent stops at its **next tool call**, not immediately — a hook deny
@@ -180,6 +186,16 @@ the workspace's agents are working toward. It is the human's path onto the plann
 writes `Workspace.goal` and emits the `workspace.goal_set` event that `dispatchPlanning`'s retry cap
 counts from. A workspace with a goal and an empty board gets a planning run at the next tick — see
 `gate:m8-plan` below for the whole pipeline end to end.
+
+The six verbs below (M10 §4-6) build and staff a company's persistent roster, separate from any one
+project workspace: `create-template` adds a reusable agent template (name, role, an optional
+default model) to the catalog. `create-company` adds a company — a persistent roster — to the
+catalog. `add-team` adds a team to a company's roster. `add-agent` adds a roster member, instantiated
+from a template, to a company team. `assign-company` links a company's roster to a project workspace
+and materializes a project team/worker for every roster member with no matching row there yet,
+additive only and one-way (an already-assigned workspace refuses a *different* company). `set-model`
+sets or clears a worker's own model override, the top of the `worker.model ?? companyAgent.model ??
+template.defaultModel` resolution chain.
 
 ## Web UI
 

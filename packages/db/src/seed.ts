@@ -5,6 +5,32 @@ const WORKSPACE_ID = '00000000-0000-4000-8000-000000000001'
 
 const TEAMS = ['Management', 'Engineering', 'Security', 'Product', 'Marketing'] as const
 
+/**
+ * The reusable agent templates (M10 §4) a company's roster instantiates from. `defaultModel` is
+ * `null` for every one -- a model choice is an operator decision (set later via `set-model` /
+ * `assignCompany`'s roster override), never a seed opinion. Java Developer and Backend Developer
+ * deliberately share a `role`: the canonical example of two templates being distinct catalog
+ * entries even when their underlying worker role is the same.
+ */
+const TEMPLATES: readonly { name: string; role: string }[] = [
+  { name: 'Engineering Manager', role: 'manager' },
+  { name: 'Backend Developer', role: 'backend' },
+  { name: 'Frontend Developer', role: 'frontend' },
+  { name: 'QA Reviewer', role: 'reviewer' },
+  { name: 'Java Developer', role: 'backend' },
+]
+
+const COMPANY_NAME = 'Atlas Software'
+const COMPANY_TEAM_NAME = 'Engineering'
+
+/** Atlas Software's Engineering roster -- mirrors today's seeded crew, one member per template. */
+const ROSTER: readonly { name: string; template: string }[] = [
+  { name: 'Atlas', template: 'Engineering Manager' },
+  { name: 'Alex', template: 'Backend Developer' },
+  { name: 'Emma', template: 'Frontend Developer' },
+  { name: 'Riley', template: 'QA Reviewer' },
+]
+
 const AGENTS: readonly { name: string; role: string; team: (typeof TEAMS)[number] }[] = [
   // Lowercase, matching the M8b planning dispatch's exact-match `role === 'manager'` -- the same
   // convention `dispatchReview` uses for `role === 'reviewer'`.
@@ -27,7 +53,7 @@ const AGENTS: readonly { name: string; role: string; team: (typeof TEAMS)[number
  */
 export async function seed(): Promise<void> {
   await prisma.$executeRawUnsafe(
-    'TRUNCATE TABLE "ExecutionEvent", "Approval", "AgentMessage", "Artifact", "Checkpoint", "AgentRun", "TaskDependency", "Task", "AgentSkill", "Skill", "SkillProvider", "AgentPermission", "ProviderConfiguration", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
+    'TRUNCATE TABLE "ExecutionEvent", "Approval", "AgentMessage", "Artifact", "Checkpoint", "AgentRun", "TaskDependency", "Task", "AgentSkill", "Skill", "SkillProvider", "AgentPermission", "ProviderConfiguration", "Agent", "Team", "Workspace", "CompanyAgent", "CompanyTeam", "Company", "AgentTemplate" RESTART IDENTITY CASCADE',
   )
 
   const workspace = await prisma.workspace.create({
@@ -59,6 +85,34 @@ export async function seed(): Promise<void> {
       throw new Error(`seed is inconsistent: no team named ${agent.team}`)
     }
     await prisma.agent.create({ data: { teamId, name: agent.name, role: agent.role } })
+  }
+
+  // The reusable template catalog and Atlas Software's roster (M10 §4-5) -- written directly with
+  // prisma, the same style as the legacy workspace above, not through the `packages/control`
+  // verbs. The legacy workspace's hand-made teams/agents above are left untouched and the
+  // workspace is never assigned to Atlas Software (spec Decision 7 -- legacy stays legacy;
+  // assignment is the operator's first act).
+  for (const template of TEMPLATES) {
+    await prisma.agentTemplate.create({ data: { name: template.name, role: template.role, defaultModel: null } })
+  }
+
+  const templatesByName = new Map(
+    (await prisma.agentTemplate.findMany()).map((template) => [template.name, template.id] as const),
+  )
+
+  const company = await prisma.company.create({ data: { name: COMPANY_NAME } })
+  const companyTeam = await prisma.companyTeam.create({
+    data: { companyId: company.id, name: COMPANY_TEAM_NAME },
+  })
+
+  for (const member of ROSTER) {
+    const templateId = templatesByName.get(member.template)
+    if (templateId === undefined) {
+      throw new Error(`seed is inconsistent: no template named ${member.template}`)
+    }
+    await prisma.companyAgent.create({
+      data: { companyTeamId: companyTeam.id, templateId, name: member.name },
+    })
   }
 
   // One task per status, so every state has a real example on screen when M4 arrives.
