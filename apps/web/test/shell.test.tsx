@@ -67,6 +67,29 @@ describe('the shell', () => {
     expect(screen.getByText('Overview')).not.toHaveProperty('ariaCurrent', 'page')
   })
 
+  it('always shows the global section (Projects/Agents/Settings)', () => {
+    render(<Sidebar workspaceId="w1" />)
+    expect(screen.getByText('Projects').getAttribute('href')).toBe('/')
+    expect(screen.getByText('Agents')).toBeTruthy()
+    expect(screen.getByText('Settings')).toBeTruthy()
+  })
+
+  it('renders only the global section when the pathname carries no workspaceId', () => {
+    pathname = '/agents'
+    render(<Sidebar />)
+    expect(screen.getByText('Projects')).toBeTruthy()
+    expect(screen.queryByTestId('project-section')).toBeNull()
+  })
+
+  it('renders both sections, deriving the workspaceId from the pathname, when one is present', () => {
+    pathname = '/w/w1/tasks'
+    render(<Sidebar />)
+    expect(screen.getByText('Projects')).toBeTruthy()
+    expect(screen.getByTestId('project-section')).toBeTruthy()
+    expect(screen.getByText('Overview').getAttribute('href')).toBe('/w/w1')
+    expect(screen.getByText('Tasks')).toHaveProperty('ariaCurrent', 'page')
+  })
+
   it('turns the budget bar amber past 80% and red past 100%', () => {
     const { rerender } = render(
       <TopBar workspaceId="w1" workspaceName="W" connection="connected" budget={{ spentUsd: 85, budgetUsd: 100 }} halted={false} />,

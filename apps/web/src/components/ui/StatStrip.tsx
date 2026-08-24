@@ -1,4 +1,4 @@
-import { TONE_TEXT, type StatusTone } from './StatusPill.js'
+import { TONE_TEXT, type StatusTone } from './StatusPill'
 
 export interface StatStripItem {
   readonly label: string

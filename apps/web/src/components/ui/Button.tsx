@@ -1,4 +1,4 @@
-import { TONE_BORDER, TONE_FILL, TONE_TEXT } from './StatusPill.js'
+import { TONE_BORDER, TONE_FILL, TONE_TEXT } from './StatusPill'
 
 export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   readonly variant: 'ghost' | 'primary'

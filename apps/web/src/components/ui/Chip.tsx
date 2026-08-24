@@ -1,4 +1,4 @@
-import { TONE_BORDER, TONE_FILL, TONE_TEXT, type StatusTone } from './StatusPill.js'
+import { TONE_BORDER, TONE_FILL, TONE_TEXT, type StatusTone } from './StatusPill'
 
 /** The handoff chip (spec §3): a small labelled pill, neutral by default or tinted to a
  *  `StatusTone` using the same `1a`-alpha fill / `3d`-alpha border pattern as `StatusPill`. */

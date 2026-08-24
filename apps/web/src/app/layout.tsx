@@ -1,6 +1,7 @@
 import type React from 'react'
 import { IBM_Plex_Mono, IBM_Plex_Sans } from 'next/font/google'
 import './globals.css'
+import { Sidebar } from '../components/Sidebar'
 
 // The handoff typography (spec §3): IBM Plex Sans for UI, IBM Plex Mono for data/labels/section
 // labels. `variable` wires each loaded font's stack into the `--font-sans`/`--font-mono` custom
@@ -23,10 +24,19 @@ const plexMono = IBM_Plex_Mono({
 
 export const metadata = { title: 'AI Team OS' }
 
+// The M11 global shell (spec §4): every page renders inside sidebar + content area. The sidebar
+// itself decides which sections to show (global always; project section on a `w/[workspaceId]`
+// route) by reading the pathname -- this root layout has no per-route params of its own to hand
+// it. Existing `w/[workspaceId]` pages still mount their own internal `<Sidebar>` too (untouched,
+// Task 7 scope); that duplication is known and left for the Task 10-12 migrations to remove as
+// each page adopts the shell directly.
 export default function RootLayout({ children }: { children: React.ReactNode }): React.JSX.Element {
   return (
     <html lang="en" className={`${plexSans.variable} ${plexMono.variable}`}>
-      <body className="flex min-h-screen">{children}</body>
+      <body className="flex min-h-screen">
+        <Sidebar />
+        <div className="flex min-w-0 flex-1 flex-col">{children}</div>
+      </body>
     </html>
   )
 }

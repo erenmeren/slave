@@ -1,4 +1,4 @@
-import { TONE_DOT, TONE_GLOW, type StatusTone } from './StatusPill.js'
+import { TONE_DOT, TONE_GLOW, type StatusTone } from './StatusPill'
 
 /**
  * The handoff progress bar (spec §3): `width` transitions `.5s ease`, with the tone's "0 0 8px"
