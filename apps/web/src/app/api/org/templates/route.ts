@@ -1,0 +1,32 @@
+import { createTemplate } from '@ai-team-os/control'
+import { orgControlResponse } from '../../../../server/orgControlRoute'
+
+export const dynamic = 'force-dynamic'
+
+export async function POST(request: Request): Promise<Response> {
+  const body: unknown = await request.json().catch(() => null)
+  if (body === null || typeof body !== 'object') {
+    return Response.json({ error: 'the body must be { "name": string, "role": string }' }, { status: 400 })
+  }
+  const { name, role, description, defaultModel } = body as {
+    name?: unknown
+    role?: unknown
+    description?: unknown
+    defaultModel?: unknown
+  }
+  if (typeof name !== 'string' || typeof role !== 'string') {
+    return Response.json({ error: 'the body must be { "name": string, "role": string }' }, { status: 400 })
+  }
+  if (description !== undefined && typeof description !== 'string') {
+    return Response.json({ error: 'description must be a string' }, { status: 400 })
+  }
+  if (defaultModel !== undefined && typeof defaultModel !== 'string') {
+    return Response.json({ error: 'defaultModel must be a string' }, { status: 400 })
+  }
+  return orgControlResponse(() =>
+    createTemplate(name, role, {
+      ...(description !== undefined ? { description } : {}),
+      ...(defaultModel !== undefined ? { defaultModel } : {}),
+    }),
+  )
+}
