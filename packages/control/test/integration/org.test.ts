@@ -458,6 +458,62 @@ describe('assignCompany', () => {
     expect(teams.map((t) => t.name).sort()).toEqual(['Legacy Ops', teamName].sort())
   })
 
+  it('stamps companyTeamId on a freshly created team', async (): Promise<void> => {
+    const workspace = await seedWorkspace()
+    const { companyId, teamName } = await seedCompanyWithRoster(1)
+    const companyTeam = await prisma.companyTeam.findFirstOrThrow({ where: { companyId } })
+
+    await assignCompany(workspace.id, companyId)
+
+    const team = await prisma.team.findFirstOrThrow({ where: { workspaceId: workspace.id, name: teamName } })
+    expect(team.companyTeamId).toBe(companyTeam.id)
+  })
+
+  it('re-assigning after the CompanyTeam is renamed matches by id, creating no duplicate team and no new workers', async (): Promise<void> => {
+    const workspace = await seedWorkspace()
+    const { companyId } = await seedCompanyWithRoster(2)
+    await assignCompany(workspace.id, companyId)
+    const before = await prisma.team.findMany({ where: { workspaceId: workspace.id } })
+    expect(before).toHaveLength(1)
+
+    const companyTeam = await prisma.companyTeam.findFirstOrThrow({ where: { companyId } })
+    await prisma.$executeRawUnsafe('UPDATE "CompanyTeam" SET name = $1 WHERE id = $2', 'Renamed Team', companyTeam.id)
+
+    const result = await assignCompany(workspace.id, companyId)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.createdTeams).toEqual([])
+    expect(result.value.createdWorkers).toEqual([])
+
+    const teams = await prisma.team.findMany({ where: { workspaceId: workspace.id } })
+    expect(teams).toHaveLength(1)
+    expect(teams[0]?.id).toBe(before[0]?.id)
+    // The materialized team's own name is NOT retroactively renamed -- only newly created teams
+    // pick up the roster's current name (Decision 6, additive-only).
+    expect(await prisma.agent.count({ where: { team: { workspaceId: workspace.id } } })).toBe(2)
+  })
+
+  it('adopts a pre-existing hand-made team with the same name on first assign, stamping it rather than duplicating', async (): Promise<void> => {
+    const workspace = await seedWorkspace()
+    const { companyId, teamName } = await seedCompanyWithRoster(1)
+    const legacyTeam = await prisma.team.create({ data: { workspaceId: workspace.id, name: teamName } })
+
+    const result = await assignCompany(workspace.id, companyId)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.createdTeams).toEqual([])
+
+    const teams = await prisma.team.findMany({ where: { workspaceId: workspace.id } })
+    expect(teams).toHaveLength(1)
+    expect(teams[0]?.id).toBe(legacyTeam.id)
+    const companyTeam = await prisma.companyTeam.findFirstOrThrow({ where: { companyId } })
+    expect(teams[0]?.companyTeamId).toBe(companyTeam.id)
+
+    expect(await prisma.agent.count({ where: { teamId: legacyTeam.id } })).toBe(1)
+  })
+
   it('rolls back the whole assignment when a roster template has gone dangling mid-transaction', async (): Promise<void> => {
     const workspace = await seedWorkspace()
     const { companyId } = await seedCompanyWithRoster(1)

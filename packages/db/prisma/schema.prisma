@@ -87,12 +87,19 @@ model Workspace {
 }
 
 model Team {
-  id          String @id @default(uuid())
-  workspaceId String
-  name        String
+  id            String  @id @default(uuid())
+  workspaceId   String
+  name          String
+  /// The roster link (M11): null for legacy hand-made teams created before the organization
+  /// model, or for a team whose roster row has since been deleted. `assignCompany` matches
+  /// project teams by this id first, adopting (stamping) a legacy same-named team on first
+  /// assign rather than duplicating it. `onDelete: SetNull` (not Cascade), mirroring
+  /// `Agent.companyAgentId`: a team with run history must survive its roster row's deletion.
+  companyTeamId String?
 
-  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  agents    Agent[]
+  workspace   Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  companyTeam CompanyTeam? @relation(fields: [companyTeamId], references: [id], onDelete: SetNull)
+  agents      Agent[]
 
   @@index([workspaceId])
 }
@@ -157,8 +164,11 @@ model CompanyTeam {
   companyId String
   name      String
 
-  company Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  agents  CompanyAgent[]
+  company      Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  agents       CompanyAgent[]
+  /// The project `Team` rows materialized/adopted from this roster team across every workspace
+  /// it has been assigned to (M11).
+  projectTeams Team[]
 
   @@unique([companyId, name])
 }

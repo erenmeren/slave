@@ -160,4 +160,18 @@ describe('the organization schema', () => {
     })
     expect(checkpoint.model).toBe('claude-sonnet-5')
   })
+
+  it('links a project Team to its roster CompanyTeam by id, and SetNulls that link on company deletion while the team row survives', async () => {
+    const chain = await seedChain()
+
+    const team = await prisma.team.findUniqueOrThrow({ where: { id: (await prisma.agent.findUniqueOrThrow({ where: { id: chain.workerId } })).teamId } })
+    await prisma.team.update({ where: { id: team.id }, data: { companyTeamId: chain.companyTeamId } })
+    const linked = await prisma.team.findUniqueOrThrow({ where: { id: team.id } })
+    expect(linked.companyTeamId).toBe(chain.companyTeamId)
+
+    await prisma.company.delete({ where: { id: chain.companyId } })
+
+    const survivor = await prisma.team.findUniqueOrThrow({ where: { id: team.id } })
+    expect(survivor.companyTeamId).toBeNull()
+  })
 })

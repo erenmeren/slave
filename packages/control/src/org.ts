@@ -126,9 +126,13 @@ export interface AssignReport {
  * matching row there yet.
  *
  * Additive only (Decision 6): an existing project team or worker is never renamed, re-rowed, or
- * removed -- find-or-create by name (teams) and by `companyAgentId` (workers) is the whole
- * mechanism, so a hand-made legacy team/agent from before M10 is left exactly as it was, and a
- * re-run against the same company is a no-op re-sync rather than a second copy.
+ * removed -- find-or-create by `companyTeamId` (teams, M11) and by `companyAgentId` (workers) is
+ * the whole mechanism, so a re-run against the same company is a no-op re-sync rather than a
+ * second copy. A team match falls back to name once, ONLY against a legacy row with no
+ * `companyTeamId` of its own: that row is adopted (stamped with the id, not renamed or re-rowed)
+ * rather than duplicated, so a hand-made team from before M10 is linked exactly once and a
+ * `CompanyTeam` rename afterward no longer produces a duplicate (M11) -- id, once stamped, always
+ * wins over name.
  *
  * Assignment is one-way (Decision 2): once a workspace is linked to a company, assigning a
  * *different* company is refused rather than silently switching rosters out from under a running
@@ -186,10 +190,15 @@ export async function assignCompany(
     const createdWorkers: { companyAgentId: string; name: string; role: string }[] = []
 
     for (const companyTeam of companyTeams) {
-      let team = await tx.team.findFirst({ where: { workspaceId, name: companyTeam.name } })
+      let team = await tx.team.findFirst({ where: { workspaceId, companyTeamId: companyTeam.id } })
       if (team === null) {
-        team = await tx.team.create({ data: { workspaceId, name: companyTeam.name } })
-        createdTeams.push(team.name)
+        const legacy = await tx.team.findFirst({
+          where: { workspaceId, name: companyTeam.name, companyTeamId: null },
+        })
+        team = legacy !== null
+          ? await tx.team.update({ where: { id: legacy.id }, data: { companyTeamId: companyTeam.id } })
+          : await tx.team.create({ data: { workspaceId, name: companyTeam.name, companyTeamId: companyTeam.id } })
+        if (legacy === null) createdTeams.push(team.name)
       }
 
       for (const companyAgent of companyTeam.agents) {
