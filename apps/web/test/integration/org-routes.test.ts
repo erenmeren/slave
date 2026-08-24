@@ -143,6 +143,28 @@ describe('the org routes', () => {
       expect((await response.json()).error).toBe('no template with id 00000000-0000-4000-8000-000000000000')
     })
 
+    it('409s with the company-team-not-found refusal text on an unknown companyTeamId', async (): Promise<void> => {
+      const template = await prisma.agentTemplate.create({ data: { name: 'Backend Engineer', role: 'backend' } })
+
+      const response = await agentsPOST(
+        jsonRequest({ companyTeamId: '00000000-0000-4000-8000-000000000000', templateId: template.id, name: 'Atlas' }),
+      )
+      expect(response.status).toBe(409)
+      expect((await response.json()).error).toBe('no company team with id 00000000-0000-4000-8000-000000000000')
+    })
+
+    it('409s with the invalid-model refusal text on a whitespace-only model', async (): Promise<void> => {
+      const company = await prisma.company.create({ data: { name: 'Acme Robotics' } })
+      const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Engineering' } })
+      const template = await prisma.agentTemplate.create({ data: { name: 'Backend Engineer', role: 'backend' } })
+
+      const response = await agentsPOST(
+        jsonRequest({ companyTeamId: companyTeam.id, templateId: template.id, name: 'Atlas', model: '   ' }),
+      )
+      expect(response.status).toBe(409)
+      expect((await response.json()).error).toBe('a model must be a non-empty text')
+    })
+
     it('400s on a malformed body', async (): Promise<void> => {
       const response = await agentsPOST(malformedRequest())
       expect(response.status).toBe(400)
@@ -216,6 +238,13 @@ describe('the org routes', () => {
       })
       expect(response.status).toBe(409)
       expect((await response.json()).error).toBe('no agent with id 00000000-0000-4000-8000-000000000000')
+    })
+
+    it('409s with the invalid-model refusal text on an empty-string model', async (): Promise<void> => {
+      const { agentId } = await seedWorker()
+      const response = await modelPOST(jsonRequest({ model: '' }), { params: Promise.resolve({ agentId }) })
+      expect(response.status).toBe(409)
+      expect((await response.json()).error).toBe('a model must be a non-empty text')
     })
 
     it('400s on a malformed body and on a missing model key', async (): Promise<void> => {
