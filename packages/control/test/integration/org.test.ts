@@ -59,6 +59,14 @@ describe('catalog and company CRUD', () => {
       if (!result.ok) expect(result.error).toEqual({ kind: 'invalid_name' })
       expect(await prisma.agentTemplate.count()).toBe(0)
     })
+
+    it('refuses a whitespace-only defaultModel, creating nothing', async (): Promise<void> => {
+      const result = await createTemplate('Backend Engineer', 'backend', { defaultModel: '  ' })
+
+      expect(result.ok).toBe(false)
+      if (!result.ok) expect(result.error).toEqual({ kind: 'invalid_model' })
+      expect(await prisma.agentTemplate.count()).toBe(0)
+    })
   })
 
   describe('createCompany', () => {
@@ -228,6 +236,16 @@ describe('catalog and company CRUD', () => {
 
       expect(result.ok).toBe(false)
       if (!result.ok) expect(result.error).toEqual({ kind: 'invalid_name' })
+      expect(await prisma.companyAgent.count()).toBe(0)
+    })
+
+    it('refuses a whitespace-only model, creating nothing', async (): Promise<void> => {
+      const { companyTeamId, templateId } = await seedTeamAndTemplate()
+
+      const result = await addCompanyAgent(companyTeamId, templateId, 'Atlas', { model: '  ' })
+
+      expect(result.ok).toBe(false)
+      if (!result.ok) expect(result.error).toEqual({ kind: 'invalid_model' })
       expect(await prisma.companyAgent.count()).toBe(0)
     })
   })
@@ -507,5 +525,17 @@ describe('setAgentModel', () => {
 
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.error).toEqual({ kind: 'agent_not_found', agentId: unknown })
+  })
+
+  it('refuses an empty-string model, leaving the column unchanged', async (): Promise<void> => {
+    const { id } = await seedAgent()
+    await setAgentModel(id, 'claude-opus')
+
+    const result = await setAgentModel(id, '')
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error).toEqual({ kind: 'invalid_model' })
+    const row = await prisma.agent.findUniqueOrThrow({ where: { id } })
+    expect(row.model).toBe('claude-opus')
   })
 })

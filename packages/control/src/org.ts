@@ -26,6 +26,9 @@ export async function createTemplate(
   options?: { readonly description?: string; readonly defaultModel?: string },
 ): Promise<Result<{ readonly id: string }, ControlRefusal>> {
   if (name.trim() === '' || role.trim() === '') return err({ kind: 'invalid_name' })
+  if (options?.defaultModel !== undefined && options.defaultModel.trim() === '') {
+    return err({ kind: 'invalid_model' })
+  }
 
   try {
     const template = await prisma.agentTemplate.create({
@@ -87,6 +90,7 @@ export async function addCompanyAgent(
   options?: { readonly model?: string },
 ): Promise<Result<{ readonly id: string }, ControlRefusal>> {
   if (name.trim() === '') return err({ kind: 'invalid_name' })
+  if (options?.model !== undefined && options.model.trim() === '') return err({ kind: 'invalid_model' })
 
   const team = await prisma.companyTeam.findUnique({ where: { id: companyTeamId }, select: { id: true } })
   if (team === null) return err({ kind: 'company_team_not_found', companyTeamId })
@@ -234,6 +238,8 @@ export async function assignCompany(
  * the conditioned update's own count is already the atomic existence check.
  */
 export async function setAgentModel(agentId: string, model: string | null): Promise<Result<void, ControlRefusal>> {
+  if (model !== null && model.trim() === '') return err({ kind: 'invalid_model' })
+
   const updated = await prisma.agent.updateMany({ where: { id: agentId }, data: { model } })
   if (updated.count === 0) return err({ kind: 'agent_not_found', agentId })
   return ok(undefined)

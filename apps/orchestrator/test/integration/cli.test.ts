@@ -287,6 +287,13 @@ describe('the orchestrator CLI', () => {
     expect(`${result.stdout}${result.stderr}`).toMatch(/no agent with id nope/)
   })
 
+  it('exits non-zero for set-model with an empty --model', async (): Promise<void> => {
+    const result = await runCli(['set-model', '--agent', fixture.agentId, '--model', ''])
+
+    expect(result.code).not.toBe(0)
+    expect(`${result.stdout}${result.stderr}`).toMatch(/a model must be a non-empty text/)
+  })
+
   it('tells an operator that clear-halt is not resume', async (): Promise<void> => {
     const result = await runCli(['help'])
     const help = `${result.stdout}${result.stderr}`
