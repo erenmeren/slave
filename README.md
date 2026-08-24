@@ -62,6 +62,7 @@ Ubuntu, `apt-get install docker-compose-plugin`) before continuing.
 | `npm run db:seed` | Truncates and reseeds the development database |
 | `npm run gate:m8a-merge` / `npm run gate:m8a-estop` | The M8a gate (spec §8): a task → merged branch, unattended; emergency stop pauses everything and clears clean |
 | `npm run gate:m8-plan` | The M8b gate: a goal → task graph → merged branches, unattended |
+| `npm run gate:m10-org` | The M10 gate: a company staffed a project from templates and shipped its goal, unattended — twice, in parallel |
 
 Integration tests require Postgres to be running. They **fail** rather than skip when it is not:
 a suite that skips reports success for work it did not do.
@@ -331,6 +332,25 @@ tasks reaches `done`. A green run asserts the plan produced at least two tasks, 
 `workspace.plan_created` event exists (a manager actually decomposed the goal), a
 `task.review_approved` event exists (the same review gate M8a proves, not a shortcut), and at least
 one `merge(T-<id>)` commit landed on `main` — *a goal → task graph → merged branches, unattended.*
+
+```bash
+npm run gate:m10-org
+```
+
+The M10 gate (design spec §9), run against the *development* database the same way as the M8 gates:
+the organization model's catalog/company/assign-company verbs, driven entirely through the real
+CLI. It creates three templates (manager, backend, reviewer), one company, one company team, and
+three roster members instantiated from those templates, then assigns that SAME company to TWO
+fresh project workspaces (`autoMerge: true`, no hand-made staff, no tasks) — one company serving two
+projects at once. It asserts the materialization before doing anything else: each workspace ends up
+with 3 `companyAgentId`-linked workers, and the two worker sets are DISTINCT rows (different
+`Agent.id`) sharing the SAME roster identities (same names, same `companyAgentId`s). It then sets
+each workspace's goal via `set-goal` and starts TWO real `daemon` subprocesses, one per project,
+both against the fake `claude` CLI's `m8-flow` fixture, and polls — no writes of its own — until
+every task in BOTH workspaces reaches `done`. A green run asserts every implementation run in either
+workspace traces back to a worker with a non-null `companyAgentId` (the roster actually did the
+work, not a shortcut), and that each project's own `main` has its own `merge(T-<id>)` commit(s) —
+*a company staffed a project from templates and shipped its goal, unattended — twice, in parallel.*
 
 Clicking an agent's card on the Overview page opens its **detail panel**: the live event feed, and
 the controls M5 adds — pause, message, resume, stop. What each control does is a claim through
