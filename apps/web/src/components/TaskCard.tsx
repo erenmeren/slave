@@ -1,5 +1,6 @@
 import type { TaskStatus } from '@ai-team-os/domain'
 import type { TaskBoardItem } from '../server/tasks'
+import { Card } from './ui/Card'
 
 // Reuses the M4 status vocabulary (design doc §8: "no new tokens expected") rather than minting
 // task-specific colours. Several statuses share a token deliberately — e.g. both `ready` and
@@ -72,6 +73,13 @@ export const TASK_STATUS_TEXT: Record<TaskStatus, string> = {
   cancelled: 'text-status-idle',
 }
 
+// Chip's visual recipe (`ui/Chip.tsx`: `inline-flex items-center rounded-chip border px-2 py-0.5
+// text-xs`, neutral surface `border-line bg-bg-2 text-text-2`), not the literal component — `Chip`
+// takes only `tone`/`children`, no `data-testid` passthrough, and this card's priority/assignee
+// chips must keep the `priority`/`assignee` test-ids `tasks-components.test.tsx` asserts on
+// unmodified. Same judgment Task 10 applied to `AgentCard.tsx`'s provider badge.
+const CHIP_CLASS = 'inline-flex items-center rounded-chip border border-line bg-bg-2 px-2 py-0.5 text-xs text-text-2'
+
 export function TaskCard({
   task,
   onSelect,
@@ -80,11 +88,17 @@ export function TaskCard({
   readonly onSelect: (id: string) => void
 }): React.JSX.Element {
   return (
-    <button
-      type="button"
-      onClick={() => onSelect(task.id)}
-      className="flex w-full flex-col gap-1.5 rounded border border-line bg-bg-1 p-3 text-left hover:border-text-3"
-    >
+    // `Card` (spec §3a compact card): outer surface only. Its own `data-testid="card"` /
+    // `data-selected` attributes are additive and asserted by no test here.
+    <Card onClick={() => onSelect(task.id)}>
+      <div className="flex items-center justify-between gap-2">
+        <span data-testid="task-id" className="font-mono text-[10px] text-text-3">
+          {task.id}
+        </span>
+        <span data-testid="priority" className={`${CHIP_CLASS} font-mono`}>
+          p{task.priority}
+        </span>
+      </div>
       <div className="flex items-center gap-2">
         <span data-testid="status-dot" className={`inline-block h-2 w-2 shrink-0 rounded-full ${TASK_STATUS_DOT[task.status]}`} />
         <span className="text-sm text-text-1">{task.title}</span>
@@ -96,11 +110,12 @@ export function TaskCard({
         <span data-testid="attempt" className="font-mono">
           {task.attempt}/{task.maxAttempts}
         </span>
-        <span data-testid="priority" className="font-mono">
-          p{task.priority}
-        </span>
-        {task.assigneeName !== null && <span data-testid="assignee">{task.assigneeName}</span>}
+        {task.assigneeName !== null && (
+          <span data-testid="assignee" className={`${CHIP_CLASS} ml-auto`}>
+            {task.assigneeName}
+          </span>
+        )}
       </div>
-    </button>
+    </Card>
   )
 }

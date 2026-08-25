@@ -1,11 +1,12 @@
 'use client'
 
+import { useEffect } from 'react'
 import type { TaskStatus } from '@ai-team-os/domain'
 import { useSelectedId } from '../hooks/useSelectedId'
 import { useTasks } from '../hooks/useTasks'
+import { announceProjectName } from '../hooks/useProjectName'
 import type { TasksSnapshot } from '../server/tasks'
 import { HaltBanner } from './HaltBanner'
-import { Sidebar } from './Sidebar'
 import { TaskColumn } from './TaskColumn'
 import { TaskDetailPanel } from './TaskDetailPanel'
 import { TopBar } from './TopBar'
@@ -62,9 +63,15 @@ export function TasksClient({
   const [selectedId, setSelectedId] = useSelectedId('task')
   const selectedTask = view.tasks.find((task) => task.id === selectedId) ?? null
 
+  // Fills the global shell's Sidebar project-section header with this workspace's real name
+  // (M11 Task 10 ruling 2) — the root layout mounts one <Sidebar> with no per-route params of its
+  // own, so this is how it learns the name rather than showing the bare workspaceId forever.
+  useEffect((): void => {
+    announceProjectName(workspaceId, view.workspace.name)
+  }, [workspaceId, view.workspace.name])
+
   return (
-    <div className="flex min-h-screen w-full">
-      <Sidebar workspaceId={workspaceId} />
+    <>
       <div className={`flex flex-1 flex-col ${error !== null ? 'opacity-60' : ''}`}>
         <TopBar
           workspaceId={workspaceId}
@@ -91,6 +98,6 @@ export function TasksClient({
         </main>
       </div>
       {selectedTask !== null && <TaskDetailPanel task={selectedTask} onClose={() => setSelectedId(null)} />}
-    </div>
+    </>
   )
 }
