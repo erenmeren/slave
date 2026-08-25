@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { AgentCardData } from '../server/overview'
 import { Sparkline } from './Sparkline'
+import { Chip } from './ui/Chip'
 
 export const DOT: Record<AgentCardData['status'], string> = {
   working: 'bg-status-working',
@@ -61,7 +62,13 @@ export function AgentCard({
   return (
     <article
       data-status={agent.status}
-      className={`flex flex-col gap-2 rounded border border-line bg-bg-1 p-4 transition-colors ${
+      // Card's surface tokens (`ui/Card.tsx`, spec §3 -- `bg-bg-2` #0f1217, `rounded-card` 8px):
+      // this stays its own `<article>` rather than `<Card>` itself. `Card` renders a plain
+      // `<div>`/`<button>` with no `className`, `style`, or `data-status` passthrough, and this
+      // card's border-flash (`--flash-color`, the `border-flash` keyframe below) and its own
+      // `data-status` need exactly those extension points, plus the tests assert an `<article>`
+      // element directly (`overview-components.test.tsx`).
+      className={`flex flex-col gap-2 rounded-card border border-line bg-bg-2 p-3 transition-colors ${
         flashing ? 'motion-safe:animate-[border-flash_800ms_ease-out]' : ''
       }`}
       style={flashing ? ({ '--flash-color': FLASH_COLOR[agent.status] } as React.CSSProperties) : undefined}
@@ -91,9 +98,7 @@ export function AgentCard({
         </span>
       </div>
       <footer className="flex items-center gap-2">
-        <span className="rounded border border-line px-1.5 py-0.5 font-mono text-[10px] text-text-3">
-          {agent.provider}
-        </span>
+        <Chip>{agent.provider}</Chip>
         <span className="ml-auto text-text-3">
           <Sparkline buckets={agent.sparkline} width={60} height={16} label={`${agent.name}'s tool calls, last 10 minutes`} />
         </span>

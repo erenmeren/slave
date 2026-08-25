@@ -1,6 +1,8 @@
 'use client'
 
 import { useState } from 'react'
+import { Button } from './ui/Button'
+import { Panel } from './ui/Panel'
 
 /** Pulls a 409 refusal's `{ error }` text, falling back to something nameable for any other
  *  non-2xx or malformed body — same helper as `AgentPanel.tsx`'s `errorMessage`, copied rather
@@ -56,18 +58,16 @@ export function GoalCard({
 
   if (goal !== null) {
     return (
-      <section className="flex flex-col gap-1 rounded border border-line bg-bg-1 p-3">
-        <h3 className="text-xs uppercase tracking-wide text-text-3">Goal</h3>
+      <Panel title="Goal">
         <p data-testid="workspace-goal" className="text-sm text-text-1">
           {goal}
         </p>
-      </section>
+      </Panel>
     )
   }
 
   return (
-    <section className="flex flex-col gap-2 rounded border border-line bg-bg-1 p-3">
-      <h3 className="text-xs uppercase tracking-wide text-text-3">Goal</h3>
+    <Panel title="Goal">
       <form
         className="flex items-center gap-2"
         onSubmit={(event) => {
@@ -83,20 +83,15 @@ export function GoalCard({
           disabled={pending}
           className="flex-1 rounded border border-line bg-bg-0 px-2 py-1 text-sm text-text-1"
         />
-        <button
-          type="submit"
-          data-testid="goal-submit"
-          disabled={pending}
-          className="rounded border border-line px-2 py-1 text-xs text-text-1 disabled:text-text-3"
-        >
+        <Button type="submit" variant="primary" data-testid="goal-submit" disabled={pending}>
           set goal
-        </button>
+        </Button>
       </form>
       {errorText !== null && (
         <span role="alert" data-testid="goal-error" className="text-xs text-status-danger">
           {errorText}
         </span>
       )}
-    </section>
+    </Panel>
   )
 }

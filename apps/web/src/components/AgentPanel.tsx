@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from 'react'
 import type { AgentFeedEvent } from '../lib/feedSummary'
 import type { AgentCardData } from '../server/overview'
 import { DOT } from './AgentCard'
+import { Button } from './ui/Button'
+import { Chip } from './ui/Chip'
 
 type ControlAction = 'pause' | 'resume' | 'stop' | 'message'
 
@@ -121,16 +123,11 @@ export function AgentPanel({
           <span data-testid="status-label" className="ml-1 text-xs text-text-2">
             {agent.status}
           </span>
-          <span className="rounded border border-line px-1.5 py-0.5 font-mono text-[10px] text-text-3">{agent.provider}</span>
+          <Chip>{agent.provider}</Chip>
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Close agent detail"
-          className="rounded border border-line px-2 py-1 text-xs text-text-2"
-        >
+        <Button variant="ghost" onClick={onClose} aria-label="Close agent detail">
           close
-        </button>
+        </Button>
       </header>
 
       <div className="text-sm text-text-1">{agent.taskTitle ?? <span className="text-text-3">idle</span>}</div>
@@ -150,33 +147,15 @@ export function AgentPanel({
       )}
 
       <section className="flex gap-2">
-        <button
-          type="button"
-          data-testid="pause-button"
-          disabled={!pauseEnabled || pending.has('pause')}
-          onClick={() => void run('pause', 'pause')}
-          className="rounded border border-line px-2 py-1 text-xs text-text-1 disabled:text-text-3"
-        >
+        <Button variant="ghost" data-testid="pause-button" disabled={!pauseEnabled || pending.has('pause')} onClick={() => void run('pause', 'pause')}>
           pause
-        </button>
-        <button
-          type="button"
-          data-testid="resume-button"
-          disabled={!resumeEnabled || pending.has('resume')}
-          onClick={() => void run('resume', 'resume')}
-          className="rounded border border-line px-2 py-1 text-xs text-text-1 disabled:text-text-3"
-        >
+        </Button>
+        <Button variant="ghost" data-testid="resume-button" disabled={!resumeEnabled || pending.has('resume')} onClick={() => void run('resume', 'resume')}>
           resume
-        </button>
-        <button
-          type="button"
-          data-testid="stop-button"
-          disabled={!stopEnabled || pending.has('stop')}
-          onClick={() => void run('stop', 'stop')}
-          className="rounded border border-line px-2 py-1 text-xs text-text-1 disabled:text-text-3"
-        >
+        </Button>
+        <Button variant="ghost" data-testid="stop-button" disabled={!stopEnabled || pending.has('stop')} onClick={() => void run('stop', 'stop')}>
           stop
-        </button>
+        </Button>
       </section>
 
       {resumeRequestedWhilePaused && (
@@ -203,15 +182,15 @@ export function AgentPanel({
                 className="rounded border border-line bg-bg-0 p-2 text-xs text-text-1"
                 rows={3}
               />
-              <button
-                type="button"
+              <Button
+                variant="ghost"
                 data-testid="message-save"
                 disabled={pending.has('message')}
                 onClick={() => void run('message', 'message', { message: draft })}
-                className="self-end rounded border border-line px-2 py-1 text-xs text-text-1 disabled:text-text-3"
+                className="self-end"
               >
                 save
-              </button>
+              </Button>
             </>
           ) : (
             <p data-testid="message-hint" className="text-xs text-text-3">

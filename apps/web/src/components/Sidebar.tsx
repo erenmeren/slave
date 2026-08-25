@@ -3,6 +3,7 @@
 import type React from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
+import { useProjectName } from '../hooks/useProjectName'
 
 /** The shell's global section (M11 spec §4): always visible, on every page. `Projects` (Task 7),
  *  `Agents` (Task 8), and `Settings` (Task 9) are this milestone's own pages -- all three now
@@ -40,9 +41,9 @@ export interface SidebarProps {
    *  pathname instead (the global shell mount's path). */
   readonly workspaceId?: string
   /** The open project's display name, headline for the project section. The global shell mount
-   *  has no cheap way to resolve this today (a root layout gets no per-route data) and omits it
-   *  -- the header falls back to the bare workspace id until a later migration wires the name
-   *  through. */
+   *  has no cheap way to resolve this today (a root layout gets no per-route data) and omits it,
+   *  so the header falls back to a route-announced name (`useProjectName`, M11 Task 10 ruling 2)
+   *  and, failing that, the bare workspace id. */
   readonly projectName?: string
 }
 
@@ -51,6 +52,7 @@ export interface SidebarProps {
 export function Sidebar({ workspaceId: workspaceIdProp, projectName }: SidebarProps = {}): React.JSX.Element {
   const pathname = usePathname()
   const workspaceId = workspaceIdProp ?? workspaceIdFromPathname(pathname)
+  const announcedName = useProjectName(workspaceId)
 
   return (
     <nav aria-label="Primary" className="flex w-44 shrink-0 flex-col gap-4 border-r border-line bg-bg-1 p-3">
@@ -78,7 +80,7 @@ export function Sidebar({ workspaceId: workspaceIdProp, projectName }: SidebarPr
       {workspaceId !== null && (
         <div data-testid="project-section" className="flex flex-col gap-1">
           <div className="truncate px-2 py-1 font-mono text-[9px] uppercase tracking-[.09em] text-text-3">
-            {projectName ?? workspaceId}
+            {projectName ?? announcedName ?? workspaceId}
           </div>
           {PROJECT_LIVE.map((item) => {
             const href = item.path(workspaceId)
