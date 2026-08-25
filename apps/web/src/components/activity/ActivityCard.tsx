@@ -2,6 +2,14 @@ import type { ReactElement, ReactNode } from 'react'
 import Link from 'next/link'
 import type { ActivityEventRow } from '../../server/activity'
 
+// `ui/Chip.tsx`'s exact recipe (`inline-flex items-center rounded-chip border px-2 py-0.5
+// text-xs`, neutral surface `border-line bg-bg-2 text-text-2`), not the literal component --
+// `Chip` takes only `tone`/`children`, no `data-testid` passthrough, and this badge's own
+// `actor-badge` test-id (`activity-cards.test.tsx`) must stay put. Same judgment `TaskCard.tsx`'s
+// `CHIP_CLASS` documents; kept at the row rhythm's existing compact `text-[10px]` size (spec 1c)
+// rather than Chip's own `text-xs`.
+const ACTOR_CHIP_CLASS = 'inline-flex items-center rounded-chip border border-line bg-bg-2 px-1.5 py-0.5 font-mono text-[10px] text-text-3'
+
 /**
  * The one prop shape every card in `ACTIVITY_CARDS` (`cards.tsx`) takes. `agentName`/`taskTitle`
  * are resolved by the page from its roster — `null` means "not found" (or the event carries no
@@ -29,10 +37,7 @@ function EventTime({ ts }: { readonly ts: string }): ReactElement {
  *  `requestedBy`/`category`, which some intervention cards show in the body alongside this. */
 function ActorBadge({ actor }: { readonly actor: string }): ReactElement {
   return (
-    <span
-      data-testid="actor-badge"
-      className="rounded border border-line px-1.5 py-0.5 font-mono text-[10px] text-text-3"
-    >
+    <span data-testid="actor-badge" className={ACTOR_CHIP_CLASS}>
       {actor}
     </span>
   )
@@ -118,10 +123,15 @@ export function ActivityCard({
   children,
 }: ActivityCardProps & { readonly children: ReactNode }): ReactElement {
   return (
+    // `ui/Card.tsx`'s surface tokens (`bg-bg-2`, `rounded-card`), not the literal component: `Card`
+    // renders its own `<div>`/`<button>` with a fixed `data-testid="card"` and no `data-event-type`
+    // passthrough, and `activity-page.test.tsx` asserts both this row's `activity-card` test-id and
+    // its `data-event-type` directly on the element. Same judgment `AgentCard.tsx` documents for
+    // its own `<article>`.
     <article
       data-testid="activity-card"
       data-event-type={event.type}
-      className="flex flex-col gap-1.5 rounded border border-line bg-bg-1 p-3"
+      className="flex flex-col gap-1.5 rounded-card border border-line bg-bg-2 p-3"
     >
       <header className="flex flex-wrap items-center gap-2">
         <EventTime ts={event.ts} />

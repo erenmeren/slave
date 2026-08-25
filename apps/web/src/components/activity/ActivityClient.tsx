@@ -2,18 +2,18 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useActivityStream } from '../../hooks/useActivityStream'
+import { announceProjectName } from '../../hooks/useProjectName'
 import { useUrlFilters } from '../../hooks/useUrlFilters'
 import type { ActivityPage } from '../../server/activity'
 import { HaltBanner } from '../HaltBanner'
-import { Sidebar } from '../Sidebar'
 import { Sparkline } from '../Sparkline'
 import { TopBar } from '../TopBar'
 import { FilterBar } from './FilterBar'
 import { Timeline, type TimelineHandle } from './Timeline'
 
 /**
- * The activity page's client shell: Sidebar + TopBar (workspace name is static from the initial
- * server snapshot — only `connection` is live, same as `TasksClient`) + `FilterBar` + a header
+ * The activity page's client shell: TopBar (workspace name is static from the initial server
+ * snapshot — only `connection` is live, same as `TasksClient`) + `FilterBar` + a header
  * `Sparkline` (Task 9) fed the hook's live-rotated `sparkline` + the virtualized `Timeline`.
  *
  * Live-follow etiquette: `pinned` starts `true` (a freshly loaded page is scrolled to the newest
@@ -31,6 +31,13 @@ export function ActivityClient({
 }): React.JSX.Element {
   const { filters, kinds, rawTypes, setKinds, setRawTypes, setAgents, setTasks } = useUrlFilters()
   const { events, connection, loadOlder, sparkline } = useActivityStream({ workspaceId, filters, initial })
+
+  // Fills the global shell's Sidebar project-section header with this workspace's real name
+  // (M11 Task 10 ruling 2) — the root layout mounts one <Sidebar> with no per-route params of its
+  // own, so this is how it learns the name rather than showing the bare workspaceId forever.
+  useEffect((): void => {
+    announceProjectName(workspaceId, initial.workspace.name)
+  }, [workspaceId, initial.workspace.name])
 
   const agentNameById = useMemo(() => new Map(initial.agents.map((agent) => [agent.id, agent.name])), [initial.agents])
   const taskTitleById = useMemo(() => new Map(initial.tasks.map((task) => [task.id, task.title])), [initial.tasks])
@@ -87,58 +94,55 @@ export function ActivityClient({
   }
 
   return (
-    <div className="flex min-h-screen w-full">
-      <Sidebar workspaceId={workspaceId} />
-      <div className="flex flex-1 flex-col">
-        <TopBar
+    <div className="flex flex-1 flex-col">
+      <TopBar
+        workspaceId={workspaceId}
+        workspaceName={initial.workspace.name}
+        connection={connection}
+        budget={null}
+        halted={initial.workspace.haltedReason !== null}
+      />
+      {initial.workspace.haltedReason !== null && <HaltBanner reason={initial.workspace.haltedReason} />}
+      <FilterBar
+        agents={initial.agents}
+        tasks={initial.tasks}
+        filters={filters}
+        kinds={kinds}
+        rawTypes={rawTypes}
+        setKinds={setKinds}
+        setRawTypes={setRawTypes}
+        setAgents={setAgents}
+        setTasks={setTasks}
+      />
+      <div data-testid="sparkline-slot" className="border-b border-line px-3 py-2 text-text-3">
+        <Sparkline buckets={sparkline} width={160} height={24} label="tool calls, last 10 minutes" />
+      </div>
+      <div className="relative flex flex-1 flex-col overflow-hidden">
+        <Timeline
+          ref={timelineRef}
+          events={events}
           workspaceId={workspaceId}
-          workspaceName={initial.workspace.name}
-          connection={connection}
-          budget={null}
-          halted={initial.workspace.haltedReason !== null}
+          agentNameById={agentNameById}
+          taskTitleById={taskTitleById}
+          onPinnedChange={handlePinnedChange}
+          onNearTop={loadOlder}
         />
-        {initial.workspace.haltedReason !== null && <HaltBanner reason={initial.workspace.haltedReason} />}
-        <FilterBar
-          agents={initial.agents}
-          tasks={initial.tasks}
-          filters={filters}
-          kinds={kinds}
-          rawTypes={rawTypes}
-          setKinds={setKinds}
-          setRawTypes={setRawTypes}
-          setAgents={setAgents}
-          setTasks={setTasks}
-        />
-        <div data-testid="sparkline-slot" className="border-b border-line px-3 py-2 text-text-3">
-          <Sparkline buckets={sparkline} width={160} height={24} label="tool calls, last 10 minutes" />
-        </div>
-        <div className="relative flex flex-1 flex-col overflow-hidden">
-          <Timeline
-            ref={timelineRef}
-            events={events}
-            workspaceId={workspaceId}
-            agentNameById={agentNameById}
-            taskTitleById={taskTitleById}
-            onPinnedChange={handlePinnedChange}
-            onNearTop={loadOlder}
-          />
-          {pendingCount > 0 && (
-            <button
-              type="button"
-              data-testid="new-events-badge"
-              onClick={handleJumpToBottom}
-              // Spec §4.6: the badge fades in on appearance — reuses the M5 `action-line-in`
-              // opacity keyframe (it's conditionally rendered, so each appearance is already a
-              // fresh DOM node; no key trick needed to make the fade replay). It has no explicit
-              // fade-*out*: like `AgentPanel`'s `panel-in`, this codebase's motion pass has no
-              // exit-animation mechanism, so disappearing (pendingCount back to 0) stays an
-              // instant unmount, same as before this change.
-              className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full border border-line bg-bg-2 px-3 py-1.5 text-xs text-text-1 shadow-lg motion-safe:animate-[action-line-in_120ms_ease-out]"
-            >
-              ↓ {pendingCount} new event{pendingCount === 1 ? '' : 's'}
-            </button>
-          )}
-        </div>
+        {pendingCount > 0 && (
+          <button
+            type="button"
+            data-testid="new-events-badge"
+            onClick={handleJumpToBottom}
+            // Spec §4.6: the badge fades in on appearance — reuses the M5 `action-line-in`
+            // opacity keyframe (it's conditionally rendered, so each appearance is already a
+            // fresh DOM node; no key trick needed to make the fade replay). It has no explicit
+            // fade-*out*: like `AgentPanel`'s `panel-in`, this codebase's motion pass has no
+            // exit-animation mechanism, so disappearing (pendingCount back to 0) stays an
+            // instant unmount, same as before this change.
+            className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full border border-line bg-bg-2 px-3 py-1.5 text-xs text-text-1 shadow-lg motion-safe:animate-[action-line-in_120ms_ease-out]"
+          >
+            ↓ {pendingCount} new event{pendingCount === 1 ? '' : 's'}
+          </button>
+        )}
       </div>
     </div>
   )

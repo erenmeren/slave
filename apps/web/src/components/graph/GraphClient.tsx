@@ -4,10 +4,10 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Edge } from 'reactflow'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { useGraph } from '../../hooks/useGraph'
+import { announceProjectName } from '../../hooks/useProjectName'
 import type { StreamEvent } from '../../hooks/useWorkspaceStream'
 import type { GraphSnapshot } from '../../server/graph'
 import { HaltBanner } from '../HaltBanner'
-import { Sidebar } from '../Sidebar'
 import { TopBar } from '../TopBar'
 import { DepsMode } from './DepsMode'
 import { GraphCanvas } from './GraphCanvas'
@@ -35,11 +35,13 @@ const MODE_TABS: readonly { readonly mode: GraphMode; readonly label: string }[]
 ]
 
 /**
- * `/w/[workspaceId]/graph`'s client shell: Sidebar + TopBar, same house composition as
- * `ActivityClient`/`TasksClient`, plus the mode-tab strip. Organization mode's graph is built and
- * positioned right here (`buildOrgGraph` + `useLayoutedGraph`); Dependencies mode is a
- * self-contained component (`DepsMode`, Task 6) that owns its own graph-building, layout, and
- * edge-editing wiring -- this component only switches between the two on the `mode` tab.
+ * `/w/[workspaceId]/graph`'s client shell: TopBar plus the mode-tab strip, same house composition
+ * as `ActivityClient`/`TasksClient` (M11 Task 10/11) -- the global shell's `<Sidebar>` mounts once
+ * in the root layout, not here (M11 Task 10 ruling 2; `announceProjectName` below is how this
+ * route hands it the workspace's display name). Organization mode's graph is built and positioned
+ * right here (`buildOrgGraph` + `useLayoutedGraph`); Dependencies mode is a self-contained
+ * component (`DepsMode`, Task 6) that owns its own graph-building, layout, and edge-editing
+ * wiring -- this component only switches between the two on the `mode` tab.
  */
 export function GraphClient({
   workspaceId,
@@ -64,6 +66,13 @@ export function GraphClient({
 
   const { snapshot, connection, error } = useGraph(workspaceId, initial, onGraphEvent)
   const view = snapshot ?? initial
+
+  // Fills the global shell's Sidebar project-section header with this workspace's real name
+  // (M11 Task 10 ruling 2) — the root layout mounts one <Sidebar> with no per-route params of its
+  // own, so this is how it learns the name rather than showing the bare workspaceId forever.
+  useEffect((): void => {
+    announceProjectName(workspaceId, view.workspace.name)
+  }, [workspaceId, view.workspace.name])
 
   // Sweeps expired particles on a plain interval (see `PARTICLE_SWEEP_INTERVAL_MS`'s doc comment)
   // for the component's whole lifetime -- a no-op `setState` is skipped entirely when there is
@@ -104,45 +113,47 @@ export function GraphClient({
   const { nodes: positionedOrgNodes, edges: visibleOrgEdges } = useLayoutedGraph(orgNodes, orgEdges, 'mrtree')
 
   return (
-    <div className="flex min-h-screen w-full">
-      <Sidebar workspaceId={workspaceId} />
-      <div className={`flex flex-1 flex-col ${error !== null ? 'opacity-60' : ''}`}>
-        <TopBar
-          workspaceId={workspaceId}
-          workspaceName={view.workspace.name}
-          connection={connection}
-          budget={null}
-          halted={view.workspace.haltedReason !== null}
-        />
-        {view.workspace.haltedReason !== null && <HaltBanner reason={view.workspace.haltedReason} />}
-        {error !== null && (
-          <div role="alert" className="border-b border-status-warn/40 bg-status-warn/10 px-4 py-1.5 text-xs text-status-warn">
-            showing stale data: {error}
-          </div>
-        )}
-        <nav aria-label="Graph mode" className="flex gap-1 border-b border-line px-3 py-2">
-          {MODE_TABS.map((tab) => (
-            <button
-              key={tab.mode}
-              type="button"
-              aria-current={mode === tab.mode ? 'page' : undefined}
-              onClick={() => setMode(tab.mode)}
-              className={`rounded px-2 py-1 text-xs ${mode === tab.mode ? 'bg-bg-2 text-text-1' : 'text-text-2 hover:text-text-1'}`}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </nav>
-        <div className="relative flex-1">
-          {mode === 'org' ? (
-            <>
-              <GraphCanvas nodes={positionedOrgNodes} edges={visibleOrgEdges} nodeTypes={ORG_NODE_TYPES} />
-              <Particles particles={particles} />
-            </>
-          ) : (
-            <DepsMode workspaceId={workspaceId} snapshot={view} />
-          )}
+    <div className={`flex flex-1 flex-col ${error !== null ? 'opacity-60' : ''}`}>
+      <TopBar
+        workspaceId={workspaceId}
+        workspaceName={view.workspace.name}
+        connection={connection}
+        budget={null}
+        halted={view.workspace.haltedReason !== null}
+      />
+      {view.workspace.haltedReason !== null && <HaltBanner reason={view.workspace.haltedReason} />}
+      {error !== null && (
+        <div role="alert" className="border-b border-status-warn/40 bg-status-warn/10 px-4 py-1.5 text-xs text-status-warn">
+          showing stale data: {error}
         </div>
+      )}
+      {/* No `ui/` component covers a two-way segmented mode toggle with an `aria-current`
+       *  "current tab" state -- `Button`'s bordered-pill affordance (spec §3, meant for standalone
+       *  actions) would visually redesign this into something the handoff never asked for here.
+       *  Left on its existing token-based recipe, same as the "stale data" banner just above (no
+       *  `ui/` alert/banner component exists either) -- both predate this task and stay as-is. */}
+      <nav aria-label="Graph mode" className="flex gap-1 border-b border-line px-3 py-2">
+        {MODE_TABS.map((tab) => (
+          <button
+            key={tab.mode}
+            type="button"
+            aria-current={mode === tab.mode ? 'page' : undefined}
+            onClick={() => setMode(tab.mode)}
+            className={`rounded px-2 py-1 text-xs ${mode === tab.mode ? 'bg-bg-2 text-text-1' : 'text-text-2 hover:text-text-1'}`}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </nav>
+      <div className="relative flex-1">
+        {mode === 'org' ? (
+          <>
+            <GraphCanvas nodes={positionedOrgNodes} edges={visibleOrgEdges} nodeTypes={ORG_NODE_TYPES} />
+            <Particles particles={particles} />
+          </>
+        ) : (
+          <DepsMode workspaceId={workspaceId} snapshot={view} />
+        )}
       </div>
     </div>
   )
