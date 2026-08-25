@@ -327,8 +327,17 @@ export type GateOutcome =
 export function classifyGateEvent(event: RuntimeEvent): GateOutcome | null
 ```
 
-`classifyGateEvent` maps `hook_denied` and `permission_denied` to `stopped_by_gate`, and
-`hook_crashed` and `hook_failed_open` to `gate_failed`. Everything else returns `null`.
+`classifyGateEvent` maps `hook_denied` to `stopped_by_gate`, and `hook_crashed` and
+`hook_failed_open` to `gate_failed`. Everything else returns `null`.
+
+**`permission_denied` is deliberately NOT a gate outcome** and keeps its existing handling in
+`pump.ts`. It stops nothing and halts nothing — `pump.ts`'s own comment marks it "not a pause"
+citing ADR 0001 — and it carries no `reason` to source one from. The defect this seam fixes is
+narrower than "pump reads event variants": `RuntimeEvent` is already the provider-neutral
+vocabulary, and any adapter may emit any variant. What must not stay Claude-shaped is the
+*pause protocol* and the *workspace-halting circuit breaker*, which today are written in terms
+of specific hook variants and so fall silently inert for a runtime whose gate differs. Say this
+in the docstring, or the next reader will "fix" the omission.
 
 - [ ] **Step 1: Write the failing test**
 
