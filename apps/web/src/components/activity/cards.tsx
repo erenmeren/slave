@@ -244,6 +244,7 @@ function RunSucceededCard(props: ActivityCardProps): ReactElement {
   // costUsd is nullable (M12 Task 6): a provider that does not report cost emits null here, not
   // a false zero. Displayed as $0.00, matching the same convention the server DTOs use for this
   // exact column (graph.ts, overview.ts, tasks.ts) rather than adding a tri-state display here.
+  // TASK 9: unknown cost must render as "—", not $0.00 (spec Decision 6)
   const payload = props.event.payload as { numTurns: number; costUsd: number | null }
   return (
     <ActivityCard {...props}>

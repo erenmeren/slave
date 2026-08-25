@@ -34,6 +34,7 @@ export async function listProjects(): Promise<readonly ProjectRow[]> {
     // costUsd is nullable (M12 Task 6): a run whose cost is not yet known contributes nothing to
     // the running total, the same as Prisma's own `_sum` treats a null column -- see world.ts's
     // and overview.ts's `_sum.costUsd ?? 0` for the aggregate form of the same convention.
+    // TASK 9: unknown cost must render as "—", not $0.00 (spec Decision 6)
     spendByWorkspace.set(workspaceId, (spendByWorkspace.get(workspaceId) ?? 0) + (run.costUsd ?? 0))
   }
 

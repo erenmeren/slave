@@ -145,6 +145,8 @@ async function writeCheckpoint(input: {
       // 0` here targets Checkpoint.cumulativeCostUsd specifically, a column this task's migration
       // does not touch and which stays NOT NULL @default(0) -- unlike AgentRun.costUsd, it was
       // never meant to distinguish "zero" from "not yet known".
+      // TASK 9: Checkpoint.cumulativeCostUsd is still NOT NULL -- decide there whether an
+      // unmeasured run's cumulative cost should be nullable too
       cumulativeCostUsd: run.costUsd ?? 0,
       pauseReason: input.pauseReason,
       requestedBy: input.requestedBy,
@@ -159,6 +161,8 @@ async function writeCheckpoint(input: {
       deniedToolUseIds: [...input.denied],
       headCommit,
       dirtyFiles,
+      // TASK 9: Checkpoint.cumulativeCostUsd is still NOT NULL -- decide there whether an
+      // unmeasured run's cumulative cost should be nullable too
       cumulativeCostUsd: run.costUsd ?? 0,
       pauseReason: input.pauseReason,
       requestedBy: input.requestedBy,

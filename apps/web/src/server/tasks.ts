@@ -61,6 +61,7 @@ export async function buildTasksSnapshot(workspaceId: string): Promise<TasksSnap
           // costUsd is nullable (M12 Task 6): a run whose cost is not yet known displays as $0.00
           // here rather than widening this DTO/the panel to a tri-state, matching the same `?? 0`
           // convention graph.ts/overview.ts already use for this exact column.
+          // TASK 9: unknown cost must render as "—", not $0.00 (spec Decision 6)
           costUsd: run.costUsd ?? 0,
           toolCalls: run.toolCalls,
           startedAt: run.startedAt.toISOString(),
