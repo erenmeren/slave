@@ -921,13 +921,30 @@ git commit -m "feat(providers): the Cursor stream parser"
 
 **Interfaces:**
 - Produces: `cursorFlags(input): string[]` — mirrors `claudeFlags` at
-  `packages/providers/src/claude/flags.ts:27-43`. `--output-format stream-json`, `--model`
-  when a model is resolved, `--resume <sessionId>` on resume.
+  `packages/providers/src/claude/flags.ts:27-43`.
 
-The gate script is a `beforeShellExecution` hook: it reads the pause flag path from its
-environment, and when the flag exists prints `{"permission":"deny","userMessage":"paused"}`
-on stdout and exits 0. Its deny/allow contract is documented in a header comment the way
-`scripts/pause-gate.sh:1-24` documents Claude's.
+**These flags are verified against the installed binary** (`cursor-agent --help`, 2026-08-25),
+not taken from vendor docs:
+
+- `--print` — **mandatory**. `--output-format` "only works with --print"; without it the
+  agent runs interactively and the stream parser receives nothing it can read.
+- `--output-format stream-json` — the NDJSON Task 10 parses.
+- `--force` — Cursor's equivalent of Claude's `--permission-mode bypassPermissions`: "Force
+  allow commands unless explicitly denied". The trailing clause is load-bearing — it is what
+  keeps the hook's `permission: "deny"` effective, so the write gate survives this flag.
+- `--model <model>` only when a model resolved; omitted entirely otherwise, no sentinel.
+- `--resume <sessionId>` on resume.
+- **Never `-w`/`--worktree`.** Cursor has its own worktree feature; this system already
+  manages worktrees and a second one under `~/.cursor/worktrees/` would split the run.
+
+The gate is a `beforeShellExecution` hook. **Cursor has no `--settings`-style flag**: unlike
+Claude, which takes a per-run absolute settings path, Cursor reads `.cursor/hooks.json` from
+the workspace. Per-run isolation therefore comes from the run's own worktree — the adapter
+writes `.cursor/hooks.json` into `worktreePath` (Task 12) and passes the pause-flag path to
+the hook process by environment variable. The script reads that variable, and when the flag
+file exists prints `{"permission":"deny","userMessage":"paused"}` on stdout and exits 0. Its
+deny/allow contract is documented in a header comment the way `scripts/pause-gate.sh:1-24`
+documents Claude's.
 
 - [ ] **Step 1: Write the failing tests**
 
