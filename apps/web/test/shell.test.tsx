@@ -74,17 +74,24 @@ describe('the shell', () => {
     expect(screen.getByText('Settings')).toBeTruthy()
   })
 
-  it('renders Agents as a live link (M11 Task 8) while Settings stays inert until Task 9', () => {
+  it('renders Agents (M11 Task 8) and Settings (Task 9) as live links', () => {
     render(<Sidebar workspaceId="w1" />)
     expect(screen.getByText('Agents').getAttribute('href')).toBe('/agents')
     expect(screen.getByText('Agents').getAttribute('aria-disabled')).toBeNull()
-    expect(screen.getByText('Settings').getAttribute('aria-disabled')).toBe('true')
+    expect(screen.getByText('Settings').getAttribute('href')).toBe('/settings')
+    expect(screen.getByText('Settings').getAttribute('aria-disabled')).toBeNull()
   })
 
   it('marks Agents aria-current on the agents route', () => {
     pathname = '/agents'
     render(<Sidebar />)
     expect(screen.getByText('Agents')).toHaveProperty('ariaCurrent', 'page')
+  })
+
+  it('marks Settings aria-current on the settings route', () => {
+    pathname = '/settings'
+    render(<Sidebar />)
+    expect(screen.getByText('Settings')).toHaveProperty('ariaCurrent', 'page')
   })
 
   it('renders only the global section when the pathname carries no workspaceId', () => {

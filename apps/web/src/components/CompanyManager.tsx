@@ -1,0 +1,358 @@
+'use client'
+
+import { useRef, useState } from 'react'
+import { useRouter } from 'next/navigation'
+import type { RosterCompany, RosterMemberRow } from '../server/org'
+import type { TemplateRow } from './TemplateCatalog'
+import { Button } from './ui/Button'
+import { DataTable, Row } from './ui/DataTable'
+import { EmptyTile } from './ui/EmptyTile'
+import { SectionLabel } from './ui/SectionLabel'
+
+/** A row from `listCompanies` (`server/org.ts`) -- no exported type there, so this is the one
+ *  place that names the shape. */
+export interface CompanyRow {
+  readonly id: string
+  readonly name: string
+}
+
+const MEMBER_COLUMNS = '1fr 110px 160px 140px'
+const MEMBER_HEADER = ['Name', 'Role', 'Template', 'Model'] as const
+
+/** Pulls a 409 refusal's `{ error }` text, falling back to something nameable for any other
+ *  non-2xx or malformed body -- the `errorMessage` idiom this page's other forms already use. */
+function errorMessage(data: unknown, status: number): string {
+  if (data !== null && typeof data === 'object') {
+    const value = (data as { error?: unknown }).error
+    if (typeof value === 'string') return value
+  }
+  return `request failed (${status})`
+}
+
+function MemberRow({ member }: { readonly member: RosterMemberRow }): React.JSX.Element {
+  return (
+    <Row columns={MEMBER_COLUMNS}>
+      <span className="truncate text-sm text-text-1">{member.name}</span>
+      <span className="truncate text-text-2">{member.role}</span>
+      <span className="truncate text-text-2">{member.templateName}</span>
+      <span className="font-mono text-xs text-text-2">{member.effectiveModel ?? '—'}</span>
+    </Row>
+  )
+}
+
+/** One team's members plus its own "add member" form (template `<select>`, name, optional
+ *  model) -- its own pending/error state so a refusal on one team never touches another. */
+function TeamBlock({
+  companyTeamId,
+  teamName,
+  members,
+  templates,
+}: {
+  readonly companyTeamId: string
+  readonly teamName: string
+  readonly members: readonly RosterMemberRow[]
+  readonly templates: readonly TemplateRow[]
+}): React.JSX.Element {
+  const router = useRouter()
+  const [templateId, setTemplateId] = useState('')
+  const [name, setName] = useState('')
+  const [model, setModel] = useState('')
+  const [pending, setPending] = useState(false)
+  const [errorText, setErrorText] = useState<string | null>(null)
+
+  const submit = async (): Promise<void> => {
+    setPending(true)
+    setErrorText(null)
+    try {
+      const response = await fetch('/api/org/agents', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          companyTeamId,
+          templateId,
+          name,
+          ...(model !== '' ? { model } : {}),
+        }),
+      })
+      if (response.ok) {
+        router.refresh()
+        setTemplateId('')
+        setName('')
+        setModel('')
+        return
+      }
+      const data: unknown = await response.json().catch(() => null)
+      setErrorText(errorMessage(data, response.status))
+    } catch (cause) {
+      setErrorText(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setPending(false)
+    }
+  }
+
+  return (
+    <div data-testid="team-block" className="flex flex-col gap-2">
+      <SectionLabel>{teamName}</SectionLabel>
+      {members.length === 0 ? (
+        <p className="text-xs text-text-3">no members yet.</p>
+      ) : (
+        <DataTable columns={MEMBER_COLUMNS} header={[...MEMBER_HEADER]}>
+          {members.map((member) => (
+            <MemberRow key={member.companyAgentId} member={member} />
+          ))}
+        </DataTable>
+      )}
+      <form
+        data-testid="add-member-form"
+        className="flex flex-wrap items-end gap-2"
+        onSubmit={(event) => {
+          event.preventDefault()
+          void submit()
+        }}
+      >
+        <label className="flex flex-col gap-1 text-xs text-text-3">
+          Template
+          <select
+            aria-label="member template"
+            data-testid="member-template-select"
+            value={templateId}
+            onChange={(event) => setTemplateId(event.target.value)}
+            disabled={pending}
+            className="w-40 rounded border border-line bg-bg-2 px-2 py-1 text-sm text-text-1"
+          >
+            <option value="">select a template</option>
+            {templates.map((template) => (
+              <option key={template.id} value={template.id}>
+                {template.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="flex flex-col gap-1 text-xs text-text-3">
+          Name
+          <input
+            aria-label="member name"
+            data-testid="member-name-input"
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            disabled={pending}
+            className="w-36 rounded border border-line bg-bg-2 px-2 py-1 text-sm text-text-1"
+          />
+        </label>
+        <label className="flex flex-col gap-1 text-xs text-text-3">
+          Model
+          <input
+            aria-label="member model"
+            data-testid="member-model-input"
+            value={model}
+            onChange={(event) => setModel(event.target.value)}
+            disabled={pending}
+            className="w-28 rounded border border-line bg-bg-2 px-2 py-1 font-mono text-sm text-text-1"
+          />
+        </label>
+        <Button
+          variant="ghost"
+          type="submit"
+          data-testid="member-submit"
+          disabled={pending || templateId === '' || name === ''}
+        >
+          Add member
+        </Button>
+        {errorText !== null && (
+          <span role="alert" data-testid="member-error" className="text-xs text-status-danger">
+            {errorText}
+          </span>
+        )}
+      </form>
+    </div>
+  )
+}
+
+/** An expanded company's teams (each with its members and add-member form) plus the company's own
+ *  "add team" form (name only). */
+function CompanyDetail({
+  companyId,
+  teams,
+  templates,
+}: {
+  readonly companyId: string
+  readonly teams: RosterCompany['teams']
+  readonly templates: readonly TemplateRow[]
+}): React.JSX.Element {
+  const router = useRouter()
+  const [teamName, setTeamName] = useState('')
+  const [pending, setPending] = useState(false)
+  const [errorText, setErrorText] = useState<string | null>(null)
+
+  const submit = async (): Promise<void> => {
+    setPending(true)
+    setErrorText(null)
+    try {
+      const response = await fetch('/api/org/teams', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ companyId, name: teamName }),
+      })
+      if (response.ok) {
+        router.refresh()
+        setTeamName('')
+        return
+      }
+      const data: unknown = await response.json().catch(() => null)
+      setErrorText(errorMessage(data, response.status))
+    } catch (cause) {
+      setErrorText(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setPending(false)
+    }
+  }
+
+  return (
+    <div data-testid="company-detail" className="flex flex-col gap-3 border-t border-white/[0.05] pt-3">
+      {teams.length === 0 ? (
+        <p className="text-xs text-text-3">no teams yet.</p>
+      ) : (
+        teams.map((team) => (
+          <TeamBlock key={team.companyTeamId} companyTeamId={team.companyTeamId} teamName={team.teamName} members={team.members} templates={templates} />
+        ))
+      )}
+      <form
+        data-testid="add-team-form"
+        className="flex flex-wrap items-end gap-2"
+        onSubmit={(event) => {
+          event.preventDefault()
+          void submit()
+        }}
+      >
+        <label className="flex flex-col gap-1 text-xs text-text-3">
+          Team name
+          <input
+            aria-label="team name"
+            data-testid="team-name-input"
+            value={teamName}
+            onChange={(event) => setTeamName(event.target.value)}
+            disabled={pending}
+            className="w-40 rounded border border-line bg-bg-2 px-2 py-1 text-sm text-text-1"
+          />
+        </label>
+        <Button variant="ghost" type="submit" data-testid="team-submit" disabled={pending || teamName === ''}>
+          Add team
+        </Button>
+        {errorText !== null && (
+          <span role="alert" data-testid="team-error" className="text-xs text-status-danger">
+            {errorText}
+          </span>
+        )}
+      </form>
+    </div>
+  )
+}
+
+/**
+ * Settings' company manager (M11 Task 9 brief): the company list plus its own creation form;
+ * expanding a company (its own toggle, one open at a time) shows `CompanyDetail` -- its teams and
+ * members from `listRoster`, an add-team form, and each team's add-member form. `EmptyTile` is the
+ * "add company" affordance when the list is empty (per brief); the creation form itself stays
+ * visible either way, so `EmptyTile`'s click just moves focus into it rather than duplicating it.
+ */
+export function CompanyManager({
+  companies,
+  roster,
+  templates,
+}: {
+  readonly companies: readonly CompanyRow[]
+  readonly roster: readonly RosterCompany[]
+  readonly templates: readonly TemplateRow[]
+}): React.JSX.Element {
+  const router = useRouter()
+  const [expandedId, setExpandedId] = useState<string | null>(null)
+  const [name, setName] = useState('')
+  const [pending, setPending] = useState(false)
+  const [errorText, setErrorText] = useState<string | null>(null)
+  const nameInputRef = useRef<HTMLInputElement>(null)
+
+  const submit = async (): Promise<void> => {
+    setPending(true)
+    setErrorText(null)
+    try {
+      const response = await fetch('/api/org/companies', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      })
+      if (response.ok) {
+        router.refresh()
+        setName('')
+        return
+      }
+      const data: unknown = await response.json().catch(() => null)
+      setErrorText(errorMessage(data, response.status))
+    } catch (cause) {
+      setErrorText(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setPending(false)
+    }
+  }
+
+  const teamsFor = (companyId: string): RosterCompany['teams'] => roster.find((c) => c.companyId === companyId)?.teams ?? []
+
+  return (
+    <div className="flex flex-col gap-3">
+      {companies.length === 0 ? (
+        <EmptyTile label="Add a company" onClick={() => nameInputRef.current?.focus()} />
+      ) : (
+        <ul className="flex flex-col gap-2">
+          {companies.map((company) => {
+            const expanded = expandedId === company.id
+            return (
+              <li key={company.id} data-testid="company-row" className="flex flex-col gap-2 rounded-card border border-line bg-bg-2 p-3">
+                <button
+                  type="button"
+                  data-testid="company-toggle"
+                  aria-expanded={expanded}
+                  onClick={() => setExpandedId(expanded ? null : company.id)}
+                  className="flex items-center justify-between text-left text-sm text-text-1"
+                >
+                  {company.name}
+                  <span aria-hidden className="text-text-3">
+                    {expanded ? '▾' : '▸'}
+                  </span>
+                </button>
+                {expanded && <CompanyDetail companyId={company.id} teams={teamsFor(company.id)} templates={templates} />}
+              </li>
+            )
+          })}
+        </ul>
+      )}
+      <form
+        data-testid="company-form"
+        className="flex flex-wrap items-end gap-2"
+        onSubmit={(event) => {
+          event.preventDefault()
+          void submit()
+        }}
+      >
+        <label className="flex flex-col gap-1 text-xs text-text-3">
+          Name
+          <input
+            ref={nameInputRef}
+            aria-label="company name"
+            data-testid="company-name-input"
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            disabled={pending}
+            className="w-48 rounded border border-line bg-bg-2 px-2 py-1 text-sm text-text-1"
+          />
+        </label>
+        <Button variant="primary" type="submit" data-testid="company-submit" disabled={pending || name === ''}>
+          Add company
+        </Button>
+        {errorText !== null && (
+          <span role="alert" data-testid="company-error" className="text-xs text-status-danger">
+            {errorText}
+          </span>
+        )}
+      </form>
+    </div>
+  )
+}
