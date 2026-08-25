@@ -47,7 +47,7 @@ function ProjectCard({
   const triggerWrapRef = useRef<HTMLDivElement>(null)
 
   return (
-    <div className="flex flex-col gap-2">
+    <div data-testid="project-card" className="flex flex-col gap-2">
       <Card onClick={() => router.push(`/w/${project.id}`)}>
         <div className="flex items-center justify-between gap-2">
           <span className="truncate text-sm font-medium text-text-1">{project.name}</span>

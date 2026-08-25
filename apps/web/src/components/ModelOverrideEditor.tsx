@@ -68,6 +68,7 @@ export function ModelOverrideEditor({
     <div data-testid="model-override-editor" className="flex flex-wrap items-center gap-1">
       <input
         data-testid="model-override-input"
+        aria-label="model override"
         value={value}
         onChange={(event) => setValue(event.target.value)}
         placeholder="model"

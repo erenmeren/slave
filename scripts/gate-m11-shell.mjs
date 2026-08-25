@@ -187,11 +187,12 @@ async function selectReliably(locator, expectedValue, selectOptions, description
  *  that lands before React's own handler is attached is a silent no-op at the DOM level, not an
  *  error Playwright can see, so a plain single `.click()` + wait can hang on nothing having
  *  happened. Deliberately does NOT re-click on every poll tick -- ordinary request latency (a cold
- *  route compile, a slow POST) is not a hydration race, and a button with no `disabled` condition
- *  tied to its own success (the model-override editor's "Set") would otherwise take a second real
- *  click, and so a second real POST, while the first one is still in flight. A single retry click
- *  fires only once the FULL first wait has been exhausted -- by then a genuine no-op click is the
- *  only remaining explanation -- followed by one more, shorter wait. */
+ *  route compile, a slow POST) is not a hydration race, and re-clicking on every tick would send a
+ *  second real click (and so a second real POST) to a button like the model-override editor's
+ *  "Set" while its own request is still in flight -- its `disabled={pending}` narrows that window
+ *  but does not close it, since the click can still land before `pending` has re-rendered the DOM.
+ *  A single retry click fires only once the FULL first wait has been exhausted -- by then a
+ *  genuine no-op click is the only remaining explanation -- followed by one more, shorter wait. */
 async function clickUntil(locator, predicate, description) {
   for (const waitBudgetMs of [ACTION_TIMEOUT_MS, 5_000]) {
     let clickError = null
@@ -252,6 +253,9 @@ try {
   workspaceIdB = workspaceB.id
   const workspaceNameA = workspaceA.name
   const workspaceNameB = workspaceB.name
+  // The PASS line's `${n} projects` below reads this, not a hardcoded count -- adding a third
+  // workspace to this stage keeps the message accurate on its own.
+  const projectNames = [workspaceNameA, workspaceNameB]
   console.log(`workspace A: ${workspaceIdA} (${workspaceNameA})`)
   console.log(`workspace B: ${workspaceIdB} (${workspaceNameB})`)
 
@@ -352,7 +356,7 @@ try {
   await page.goto(`${baseUrl}/`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
 
   function projectWrapper(name) {
-    return page.locator('div.flex.flex-col.gap-2').filter({ hasText: name })
+    return page.getByTestId('project-card').filter({ hasText: name })
   }
   async function assertCardBadge(name, expectedBadgeText) {
     const chip = projectWrapper(name).getByTestId('chip').filter({ hasText: expectedBadgeText })
@@ -392,8 +396,19 @@ try {
   // ---- Scenario stage 3: /agents -- Workers tab lists Gate Worker twice; Roster shows "none".
   await page.goto(`${baseUrl}/agents`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
 
+  // The Roster tab (the default on load) also renders a `data-table-row` for this member --
+  // `AgentsClient` mounts exactly one of `RosterTable`/`WorkersTable` at a time, so a bare
+  // `hasText: MEMBER_NAME` row locator is already satisfied before the click below ever fires,
+  // and `clickUntil`'s predicate could pass on a no-op click. Requiring the Workers tab's own
+  // `aria-selected="true"` closes that gap: that attribute only flips once the click's React
+  // handler has actually run.
+  const workersTab = page.getByTestId('agents-tab-workers')
   const workerRows = page.getByTestId('data-table-row').filter({ hasText: MEMBER_NAME })
-  await clickUntil(page.getByTestId('agents-tab-workers'), async () => workerRows.first().isVisible(), 'the Workers tab')
+  await clickUntil(
+    workersTab,
+    async () => (await workersTab.getAttribute('aria-selected')) === 'true' && (await workerRows.first().isVisible()),
+    'the Workers tab',
+  )
   await waitVisible(workerRows, `a "${MEMBER_NAME}" row in the Workers tab`)
   const workerRowCount = await workerRows.count()
   if (workerRowCount !== 2) {
@@ -457,7 +472,7 @@ try {
   console.log(`the DB confirms model ${JSON.stringify(MODEL_OVERRIDE)} landed on exactly the "${workspaceNameA}" worker`)
   console.log('stage 4 complete: a worker model override, set through the Roster editor, verified against prisma.agent')
 
-  console.log('PASS: the shell staffed and steered 2 projects from the browser')
+  console.log(`PASS: the shell staffed and steered ${projectNames.length} projects from the browser`)
   exitCode = 0
 } finally {
   if (browser !== null) {

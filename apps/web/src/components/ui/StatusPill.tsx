@@ -73,16 +73,22 @@ export const TONE_GLOW: Record<StatusTone, string> = {
   idle: 'shadow-[0_0_8px_var(--color-tone-idle)]',
 }
 
+/** In-flight tones (spec §3 / handoff "Motion": "status dots pulse 1.5s ease-in-out (only for
+ *  in-flight states)") — the pipeline's active-class states. `blocked`/`done`/`paused`/`idle`
+ *  are at-rest states and stay static. */
+const IN_FLIGHT_TONES: ReadonlySet<StatusTone> = new Set(['working', 'planning', 'review', 'waiting'])
+
 /** The `1a`-alpha fill / `3d`-alpha border pill (spec §3). Presentational only — callers own
  *  what `tone` means for their domain object. */
 export function StatusPill({ tone, label }: { readonly tone: StatusTone; readonly label: string }): React.JSX.Element {
+  const pulse = IN_FLIGHT_TONES.has(tone) ? 'motion-safe:animate-[status-pulse_1.5s_ease-in-out_infinite]' : ''
   return (
     <span
       data-testid="status-pill"
       data-tone={tone}
       className={`inline-flex items-center gap-1.5 rounded-pill border px-2 py-0.5 font-mono text-[10px] uppercase tracking-wide ${TONE_FILL[tone]} ${TONE_BORDER[tone]} ${TONE_TEXT[tone]}`}
     >
-      <span aria-hidden className={`h-1.5 w-1.5 rounded-full ${TONE_DOT[tone]}`} />
+      <span aria-hidden className={`h-1.5 w-1.5 rounded-full ${TONE_DOT[tone]} ${pulse}`} />
       {label}
     </span>
   )

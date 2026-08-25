@@ -14,8 +14,10 @@ const COLUMNS = '1fr 120px 160px 1fr 28px'
 const HEADER = ['Agent', 'Role', 'Template', 'Model', ''] as const
 
 /** The effective-model + `modelSource` chip pair (brief: "effective model + `modelSource` chip
- *  (mono; \"—\" when none)"). `effectiveModel` is only ever `null` when `modelSource` is `'none'`
- *  (`listRoster`'s derivation) -- the "—" fallback covers that case, not a defensive guess. */
+ *  (mono; \"—\" when none)"). `effectiveModel` (`listRoster`'s derivation) is the roster/template
+ *  chain ignoring worker overrides, so it can be `null` under `modelSource: 'worker-varies'` too --
+ *  a worker overrides its own model while the roster has neither its own model nor a template
+ *  default. The "—" fallback below covers every `null` case, not just `'none'`. */
 function ModelChain({ member }: { readonly member: RosterMemberRow }): React.JSX.Element {
   return (
     <div className="flex flex-wrap items-center gap-2">

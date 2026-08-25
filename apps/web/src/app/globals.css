@@ -118,6 +118,20 @@ body {
   }
 }
 
+/* Status-dot pulse (spec §3 / handoff "Motion"): in-flight tones only (`working`, `planning`,
+ * `review`, `waiting` — the pipeline's active-class states, as opposed to the at-rest
+ * `blocked`/`done`/`paused`/`idle` tones), a 1.5s ease-in-out opacity breathe. `StatusPill`
+ * applies this via `motion-safe:animate-[status-pulse_1.5s_ease-in-out_infinite]` per tone. */
+@keyframes status-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
 /* Panel slide-in: a short transform, CSS animation only (no springs library). */
 @keyframes panel-in {
   from {
