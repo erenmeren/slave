@@ -161,6 +161,7 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
       haltedReason: workspace.haltedReason,
       haltedAt: workspace.haltedAt?.toISOString() ?? null,
       budgetUsd: workspace.budgetUsd,
+      // TASK 9: unknown cost must render as "—", not $0.00 (spec Decision 6)
       spentUsd: spent._sum.costUsd ?? 0,
       goal: workspace.goal,
     },
@@ -180,6 +181,7 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
         resumeRequestedAt: run?.resumeRequestedAt?.toISOString() ?? null,
         recentEvents: recentEventsByAgent.get(agent.id) ?? [],
         sparkline: bucketSparkline(sparklineRowsByAgent.get(agent.id) ?? [], sparklineNow),
+        // TASK 9: unknown cost must render as "—", not $0.00 (spec Decision 6)
         costUsd: run?.costUsd ?? 0,
         toolCalls: run?.toolCalls ?? 0,
         pausedAtStep: run?.pausedAtStep ?? null,

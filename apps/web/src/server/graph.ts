@@ -118,6 +118,7 @@ export async function buildGraphSnapshot(workspaceId: string): Promise<GraphSnap
         activeTaskId: run?.taskId ?? null,
         activeTaskTitle: run?.task?.title ?? null,
         activeRunId: run?.id ?? null,
+        // TASK 9: unknown cost must render as "—", not $0.00 (spec Decision 6)
         costUsd: run?.costUsd ?? 0,
       }
     }),

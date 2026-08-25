@@ -205,6 +205,8 @@ async function loadRunStats(
     consecutiveFailures += 1
   }
 
+  // TASK 9: this feeds the budget-halt guardrail (evaluate.ts) -- an unmeasured run must not
+  // fold into spend as 0. Needs sumSpend's known/unknownRuns split, not a coalesce.
   return { activeRuns, globalActiveRuns, spentUsd: spend._sum.costUsd ?? 0, consecutiveFailures }
 }
 
