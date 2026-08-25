@@ -241,12 +241,15 @@ function RunResumedCard(props: ActivityCardProps): ReactElement {
 }
 
 function RunSucceededCard(props: ActivityCardProps): ReactElement {
-  const payload = props.event.payload as { numTurns: number; costUsd: number }
+  // costUsd is nullable (M12 Task 6): a provider that does not report cost emits null here, not
+  // a false zero. Displayed as $0.00, matching the same convention the server DTOs use for this
+  // exact column (graph.ts, overview.ts, tasks.ts) rather than adding a tri-state display here.
+  const payload = props.event.payload as { numTurns: number; costUsd: number | null }
   return (
     <ActivityCard {...props}>
       <Transition tone="working" label="run succeeded">
         <span data-testid="run-succeeded-stats">
-          {payload.numTurns} turns · ${payload.costUsd.toFixed(2)}
+          {payload.numTurns} turns · ${(payload.costUsd ?? 0).toFixed(2)}
         </span>
       </Transition>
     </ActivityCard>

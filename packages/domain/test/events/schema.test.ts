@@ -129,6 +129,19 @@ describe('parseExecutionEvent', () => {
     }
   })
 
+  it('accepts a run.succeeded event with a null cost — an unmeasured run is not a free one', () => {
+    const result = parseExecutionEvent({
+      ...BASE,
+      type: 'run.succeeded',
+      runId: 'run-1',
+      payload: { numTurns: 4, costUsd: null },
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok && result.value.type === 'run.succeeded') {
+      expect(result.value.payload.costUsd).toBeNull()
+    }
+  })
+
   it('accepts run.resume_requested with an optional message', () => {
     const result = parseExecutionEvent({
       ...BASE,

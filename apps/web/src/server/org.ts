@@ -31,7 +31,10 @@ export async function listProjects(): Promise<readonly ProjectRow[]> {
   const spendByWorkspace = new Map<string, number>()
   for (const run of spendRows) {
     const workspaceId = run.agent.team.workspaceId
-    spendByWorkspace.set(workspaceId, (spendByWorkspace.get(workspaceId) ?? 0) + run.costUsd)
+    // costUsd is nullable (M12 Task 6): a run whose cost is not yet known contributes nothing to
+    // the running total, the same as Prisma's own `_sum` treats a null column -- see world.ts's
+    // and overview.ts's `_sum.costUsd ?? 0` for the aggregate form of the same convention.
+    spendByWorkspace.set(workspaceId, (spendByWorkspace.get(workspaceId) ?? 0) + (run.costUsd ?? 0))
   }
 
   const workerCountByWorkspace = new Map<string, number>()

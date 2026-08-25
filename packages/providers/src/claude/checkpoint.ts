@@ -1,3 +1,5 @@
+import type { ProviderKind } from '../types.js'
+
 /**
  * The provider-neutral checkpoint shape `resume()` accepts (ADR 0001 §5, M3 design spec §6, plus
  * `settingsPath`/`hookPath`/`gitAuthorName`/`gitAuthorEmail` -- fix round 1's ruling below).
@@ -99,4 +101,11 @@ export interface Checkpoint {
    * -- no `--model` flag is appended.
    */
   readonly model?: string
+  /**
+   * The provider the run started with (M12 Task 6), beside `model` for the same reason --
+   * mirrored on `packages/db`'s `Checkpoint` model rather than imported, per this docstring's
+   * duplication ruling above. Optional, not `ProviderKind | null`, for the same reason `model` is:
+   * a checkpoint written before this field existed carries no value at all.
+   */
+  readonly provider?: ProviderKind
 }

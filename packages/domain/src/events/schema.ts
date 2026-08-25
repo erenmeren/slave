@@ -61,7 +61,10 @@ export const executionEventSchema = z.discriminatedUnion('type', [
   z.object({
     ...envelope,
     type: z.literal('run.succeeded'),
-    payload: z.object({ numTurns: z.number().int(), costUsd: z.number() }),
+    // costUsd is nullable (M12 Task 6): AgentRun.costUsd dropped its NOT NULL/DEFAULT(0) so an
+    // unmeasured run's true cost -- unknown -- can be recorded honestly instead of as a false
+    // zero. A provider that does not report cost produces a `null` here, not a `0`.
+    payload: z.object({ numTurns: z.number().int(), costUsd: z.number().nullable() }),
   }),
   z.object({ ...envelope, type: z.literal('run.failed'), payload: z.object({ reason: z.string() }) }),
   z.object({

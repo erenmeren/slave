@@ -58,7 +58,10 @@ export async function buildTasksSnapshot(workspaceId: string): Promise<TasksSnap
         runs: task.runs.map((run) => ({
           id: run.id,
           status: run.status,
-          costUsd: run.costUsd,
+          // costUsd is nullable (M12 Task 6): a run whose cost is not yet known displays as $0.00
+          // here rather than widening this DTO/the panel to a tri-state, matching the same `?? 0`
+          // convention graph.ts/overview.ts already use for this exact column.
+          costUsd: run.costUsd ?? 0,
           toolCalls: run.toolCalls,
           startedAt: run.startedAt.toISOString(),
           endedAt: run.endedAt?.toISOString() ?? null,

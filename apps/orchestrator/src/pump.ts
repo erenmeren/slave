@@ -139,7 +139,13 @@ async function writeCheckpoint(input: {
       deniedToolUseIds: [...input.denied],
       headCommit,
       dirtyFiles,
-      cumulativeCostUsd: run.costUsd,
+      // AgentRun.costUsd (M12 Task 6) is written only once, at the run's terminal conclusion --
+      // mid-run, before that write happens, it is null, not the run's true accrued cost. A
+      // checkpoint is written mid-run (on pause), so this is always the null case in practice; `??
+      // 0` here targets Checkpoint.cumulativeCostUsd specifically, a column this task's migration
+      // does not touch and which stays NOT NULL @default(0) -- unlike AgentRun.costUsd, it was
+      // never meant to distinguish "zero" from "not yet known".
+      cumulativeCostUsd: run.costUsd ?? 0,
       pauseReason: input.pauseReason,
       requestedBy: input.requestedBy,
     },
@@ -153,7 +159,7 @@ async function writeCheckpoint(input: {
       deniedToolUseIds: [...input.denied],
       headCommit,
       dirtyFiles,
-      cumulativeCostUsd: run.costUsd,
+      cumulativeCostUsd: run.costUsd ?? 0,
       pauseReason: input.pauseReason,
       requestedBy: input.requestedBy,
     },
@@ -550,7 +556,7 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
     where: { id: runId, endedAt: null },
     data: {
       status: failed ? 'failed' : 'succeeded',
-      costUsd: outcome.costUsd ?? 0, // TASK 6: drops when the column goes nullable
+      costUsd: outcome.costUsd,
       terminalAt: terminalNow,
       endedAt: terminalNow,
     },

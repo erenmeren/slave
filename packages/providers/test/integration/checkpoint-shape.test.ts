@@ -88,6 +88,9 @@ function checkpointCreateFields(checkpoint: Checkpoint) {
     // property, because the Prisma column is `string | null` (no `undefined` in its type) while
     // `Checkpoint.model` is optional -- matching `pump.ts`'s own `spawn.model ?? null` convention.
     model: checkpoint.model ?? null,
+    // M12 Task 6's provider field, added the same way `model` was and caught here the same way --
+    // same `?? null` convention, same reason.
+    provider: checkpoint.provider ?? null,
   } satisfies Record<keyof Checkpoint, unknown>
 }
 
@@ -131,6 +134,8 @@ describe('Checkpoint shape pinning (providers interface <-> db model)', () => {
       // M10 §6. Set here so this test also proves the non-null case round-trips; the second test
       // below leaves it unset entirely, proving the legacy/never-set case.
       model: 'claude-pin-model',
+      // M12 Task 6, same reasoning as `model` immediately above.
+      provider: 'claude_code',
     }
 
     const created = await prisma.checkpoint.create({
@@ -158,6 +163,7 @@ describe('Checkpoint shape pinning (providers interface <-> db model)', () => {
     expect(found.gitAuthorName).toBe(checkpoint.gitAuthorName)
     expect(found.gitAuthorEmail).toBe(checkpoint.gitAuthorEmail)
     expect(found.model).toBe(checkpoint.model)
+    expect(found.provider).toBe(checkpoint.provider)
   })
 
   it('round-trips the nullable fields and empty arrays a Checkpoint with no denials yet actually has', async (): Promise<void> => {
@@ -185,6 +191,7 @@ describe('Checkpoint shape pinning (providers interface <-> db model)', () => {
       gitAuthorEmail: 'second-pin-author@example.com',
       // `model` deliberately omitted -- the legacy/never-set case; `undefined` here must round-trip
       // as a `null` column, not a write failure.
+      // `provider` likewise omitted, same reasoning.
     }
 
     const created = await prisma.checkpoint.create({
@@ -205,5 +212,6 @@ describe('Checkpoint shape pinning (providers interface <-> db model)', () => {
     expect(found.gitAuthorName).toBe(checkpoint.gitAuthorName)
     expect(found.gitAuthorEmail).toBe(checkpoint.gitAuthorEmail)
     expect(found.model).toBeNull()
+    expect(found.provider).toBeNull()
   })
 })

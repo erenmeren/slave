@@ -120,6 +120,10 @@ model Agent {
   /// `worker.model ?? companyAgent.model ?? template.defaultModel ?? null`. Legacy agents with no
   /// roster link resolve through this column alone.
   model          String?
+  /// The worker-level provider override (M12 Task 6), mirroring `model`'s resolution chain.
+  /// Nullable: this task only adds the column -- Task 7/8 write and resolve it, and every
+  /// existing row reads back null until then.
+  provider       ProviderKind?
 
   team         Team          @relation(fields: [teamId], references: [id], onDelete: Cascade)
   companyAgent CompanyAgent? @relation(fields: [companyAgentId], references: [id], onDelete: SetNull)
@@ -143,6 +147,11 @@ model AgentTemplate {
   role          String
   description   String         @default("")
   defaultModel  String?
+  /// The catalog-level provider default (M12 Task 6), sitting at the far end of the same
+  /// resolution chain `defaultModel` anchors -- named `provider`, not `defaultProvider`, to match
+  /// this task's migration SQL, which stamps every table's new column with the same name. Task
+  /// 7/8 write and resolve it; every existing row reads back null until then.
+  provider      ProviderKind?
   createdAt     DateTime       @default(now())
   companyAgents CompanyAgent[]
 }
@@ -184,6 +193,9 @@ model CompanyAgent {
   /// Roster-level override of the template default (M10 §6): sits between
   /// `AgentTemplate.defaultModel` and the worker's own `Agent.model` in the resolution chain.
   model         String?
+  /// Roster-level provider override (M12 Task 6), mirroring `model`'s position in the chain.
+  /// Nullable: this task only adds the column, Task 7/8 write and resolve it.
+  provider      ProviderKind?
 
   companyTeam CompanyTeam   @relation(fields: [companyTeamId], references: [id], onDelete: Cascade)
   /// Deliberately NOT cascading: templates are append-only (Decision 9), so a roster member never
@@ -345,7 +357,14 @@ model AgentRun {
   /// run concludes -- historical record of who asked, not live state to clear.
   stopRequestedBy   String?
   stopRequestedAt   DateTime?
-  costUsd           Float        @default(0)
+  /// Nullable as of M12 Task 6, and its `@default(0)` is gone -- not just widened. A `0` used to
+  /// mean "actually free"; now it would also mean "we never measured this," and this column must
+  /// not let those two facts collide. Unknown cost is `null`; a future insert that forgets to
+  /// pass one now gets `null` at the database level instead of a silently wrong `0`.
+  costUsd           Float?
+  /// Which runtime produced this run (M12 Task 6). Nullable: this task only adds the column --
+  /// Tasks 7/8 resolve and write it, so every run recorded before them reads back null.
+  provider          ProviderKind?
   pid               Int?
   worktreePath      String?
   startedAt         DateTime     @default(now())
@@ -396,6 +415,9 @@ model Checkpoint {
   /// resume must continue with the SAME model, never whatever `setAgentModel` set most recently.
   /// A mid-run model change therefore affects only the NEXT run. Consumed starting Task 5.
   model             String?
+  /// The provider the run started with (M12 Task 6), beside `model` for the same reason. Nullable
+  /// -- this task only adds the column, Task 7/8 write and resolve it.
+  provider          ProviderKind?
 
   run AgentRun @relation(fields: [runId], references: [id], onDelete: Cascade)
 }
