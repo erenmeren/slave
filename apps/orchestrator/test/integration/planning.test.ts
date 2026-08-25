@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE } from '@ai-team-os/db'
 import { prisma } from '@ai-team-os/db/client'
 import { runId as brandRunId, workspaceId as brandWorkspaceId } from '@ai-team-os/domain'
-import { ClaudeCodeAdapter } from '@ai-team-os/providers'
+import { ClaudeCodeAdapter, type AdapterRegistry } from '@ai-team-os/providers'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { buildPlanningPrompt, concludePlanning, dispatchPlanning } from '../../src/planning.js'
 import { drainPumps, tick, type TickDeps } from '../../src/tick.js'
@@ -64,10 +64,20 @@ async function addBackendAgent(teamId: string, name = 'Beryl'): Promise<string> 
   return agent.id
 }
 
+/**
+ * `deps.registry` for a test that only ever runs against one adapter instance (the ordinary case
+ * pre-Task-8, when every run resolves to `'claude_code'` regardless of what `kind` is asked for).
+ */
+function singleAdapterRegistry(adapter: ClaudeCodeAdapter): AdapterRegistry {
+  return { resolve: () => adapter }
+}
+
 function depsFor(workspaceId: string, fixture = 'm8-flow', hookPath = REAL_GATE): TickDeps {
   return {
     workspaceId: brandWorkspaceId(workspaceId),
-    adapter: new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', fixture], hookPath }),
+    registry: singleAdapterRegistry(
+      new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', fixture], hookPath }),
+    ),
   }
 }
 

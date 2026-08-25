@@ -11,6 +11,7 @@ import { prisma } from '@ai-team-os/db/client'
 import { appendEvent } from '@ai-team-os/events'
 import type { RunHandle } from '@ai-team-os/providers'
 import { resolveModel } from './model.js'
+import { resolveAdapter } from './provider.js'
 import { pumpRun } from './pump.js'
 import { activePumpRunIds, emailLocalPart, pumps, type TickDeps } from './tick.js'
 import { rejectTask, verifyConcludedRun } from './verify.js'
@@ -286,6 +287,11 @@ async function dispatchReview(deps: TickDeps, task: ReviewableTask): Promise<Run
   // "never spawned" from "spawned, then something else failed" so it never abandons a live agent.
   let handle: RunHandle | null = null
 
+  // Resolved once, before the `try`, so the catch below reaches the same instance -- the
+  // `startRun` precedent (M12 Task 5; `resolveAdapter` is the single place `'claude_code'` is
+  // named).
+  const adapter = resolveAdapter(deps.registry)
+
   try {
     // Inside the `try`, not before it: a branch recorded on the task can be gone from git itself
     // (the step-2 null check cannot see that), and a diff failure outside this handler would leave
@@ -312,7 +318,7 @@ async function dispatchReview(deps: TickDeps, task: ReviewableTask): Promise<Run
     const gitIdentity = { name: reviewer.name, email: `${emailLocalPart(reviewer)}@aiteamos.local` }
     const model = resolveModel(reviewer)
 
-    handle = await deps.adapter.start({
+    handle = await adapter.start({
       runId,
       prompt: buildReviewPrompt(task, diff),
       // The preserved implementation worktree, not a fresh provision: the review judges what is
@@ -337,8 +343,8 @@ async function dispatchReview(deps: TickDeps, task: ReviewableTask): Promise<Run
       taskId: brandTaskId(task.id),
       agentId: brandAgentId(reviewer.id),
       workspaceId: deps.workspaceId,
-      events: deps.adapter.events(runId),
-      cancel: () => deps.adapter.cancel(runId),
+      events: adapter.events(runId),
+      cancel: () => adapter.cancel(runId),
       // `settingsPath`/`hookPath` come from the adapter's own report, not from anything
       // dispatched here (M12 Task 2).
       spawn: { ...handle.runFiles, pauseFlagPath, gitIdentity, ...(model !== undefined ? { model } : {}) },
@@ -361,7 +367,7 @@ async function dispatchReview(deps: TickDeps, task: ReviewableTask): Promise<Run
     let cancelError: unknown = null
     if (handle !== null) {
       try {
-        await deps.adapter.cancel(runId)
+        await adapter.cancel(runId)
       } catch (failure) {
         cancelError = failure
       }

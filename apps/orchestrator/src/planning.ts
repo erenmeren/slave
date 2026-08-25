@@ -10,6 +10,7 @@ import { prisma } from '@ai-team-os/db/client'
 import { appendEvent } from '@ai-team-os/events'
 import type { RunHandle } from '@ai-team-os/providers'
 import { resolveModel } from './model.js'
+import { resolveAdapter } from './provider.js'
 import { pumpRun } from './pump.js'
 import { activePumpRunIds, emailLocalPart, pumps, type TickDeps } from './tick.js'
 import { verifyConcludedRun } from './verify.js'
@@ -276,6 +277,11 @@ export async function dispatchPlanning(deps: TickDeps): Promise<RunId | null> {
   // agent.
   let handle: RunHandle | null = null
 
+  // Resolved once, before the `try`, so the catch below reaches the same instance -- the
+  // `startRun` precedent (M12 Task 5; `resolveAdapter` is the single place `'claude_code'` is
+  // named).
+  const adapter = resolveAdapter(deps.registry)
+
   try {
     // No `settingsPath` here any more (M12 Task 2): `runFilePaths` hands back the run's own
     // scratch directory, and what the adapter keeps inside it is that adapter's business, reported
@@ -285,7 +291,7 @@ export async function dispatchPlanning(deps: TickDeps): Promise<RunId | null> {
     const gitIdentity = { name: manager.name, email: `${emailLocalPart(manager)}@aiteamos.local` }
     const model = resolveModel(manager)
 
-    handle = await deps.adapter.start({
+    handle = await adapter.start({
       runId,
       prompt: buildPlanningPrompt(workspace.goal),
       // The primary checkout itself, not a fresh worktree (spec Decision 5): the planner reads
@@ -309,8 +315,8 @@ export async function dispatchPlanning(deps: TickDeps): Promise<RunId | null> {
       taskId: null,
       agentId: brandAgentId(manager.id),
       workspaceId: deps.workspaceId,
-      events: deps.adapter.events(runId),
-      cancel: () => deps.adapter.cancel(runId),
+      events: adapter.events(runId),
+      cancel: () => adapter.cancel(runId),
       // `settingsPath`/`hookPath` come from the adapter's own report, not from anything dispatched
       // here (M12 Task 2).
       spawn: { ...handle.runFiles, pauseFlagPath, gitIdentity, ...(model !== undefined ? { model } : {}) },
@@ -333,7 +339,7 @@ export async function dispatchPlanning(deps: TickDeps): Promise<RunId | null> {
     let cancelError: unknown = null
     if (handle !== null) {
       try {
-        await deps.adapter.cancel(runId)
+        await adapter.cancel(runId)
       } catch (failure) {
         cancelError = failure
       }

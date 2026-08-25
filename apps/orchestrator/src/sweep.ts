@@ -2,11 +2,13 @@ import { prisma as db } from '@ai-team-os/db/client'
 import { runId as brandRunId, type RunId, type RunStatus, type WorkspaceId } from '@ai-team-os/domain'
 import { appendEvent } from '@ai-team-os/events'
 import { NON_TERMINAL_RUN_STATUSES } from './world.js'
-import type { AgentRuntimeAdapter } from '@ai-team-os/providers'
+import type { AdapterRegistry } from '@ai-team-os/providers'
+import { resolveAdapter } from './provider.js'
 
 export interface SweepDeps {
   readonly workspaceId: WorkspaceId
-  readonly adapter: AgentRuntimeAdapter
+  /** M12 Task 5: a registry, not a single adapter -- see `TickDeps.registry`'s own docstring. */
+  readonly registry: AdapterRegistry
   /**
    * Run ids whose pumps are live in THIS process (`tick.ts`'s `activePumpRunIds`). The dead-pid
    * arm skips these: a dead pid under a live pump is the ordinary end of a run with its terminal
@@ -221,6 +223,10 @@ export async function reconcileOrphans(deps: SweepDeps): Promise<number> {
  * what a dead pid means.
  */
 export async function sweep(deps: SweepDeps): Promise<SweepReport> {
+  // Resolved once for the whole pass -- `resolveAdapter` is the single place `'claude_code'` is
+  // named (M12 Task 5). `reconcileOrphans` above never needs this: it only ever writes rows, it
+  // never calls the adapter.
+  const adapter = resolveAdapter(deps.registry)
   const workspace = await db.workspace.findUniqueOrThrow({ where: { id: deps.workspaceId } })
   // `agent: { team: { workspaceId } }`, not `task: { workspaceId }`: a `planning` run (M8b) has no
   // `Task` row, and the timeout/tool-cap guardrails below must still reach it.
@@ -277,7 +283,7 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
     // milestone has needed saying.
     let cancelError: unknown = null
     try {
-      await deps.adapter.cancel(brandRunId(run.id))
+      await adapter.cancel(brandRunId(run.id))
     } catch (error) {
       cancelError = error
     }

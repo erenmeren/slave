@@ -12,10 +12,11 @@ import {
   type WorkspaceId,
 } from '@ai-team-os/domain'
 import { appendEvent } from '@ai-team-os/events'
-import type { AgentRuntimeAdapter, RunHandle } from '@ai-team-os/providers'
+import type { AdapterRegistry, RunHandle } from '@ai-team-os/providers'
 import { runMergePass } from './merge.js'
 import { resolveModel } from './model.js'
 import { dispatchPlanning } from './planning.js'
+import { resolveAdapter } from './provider.js'
 import { pumpRun } from './pump.js'
 import { executeResume } from './resume.js'
 import { dispatchReviews } from './review.js'
@@ -29,11 +30,16 @@ export interface TickDeps {
   /**
    * M12 Task 2: the hook path (the orchestrator's own `scripts/pause-gate.sh`, not the workspace
    * repo's) no longer travels here -- it is a `ClaudeCodeAdapterOptions` constructor option now
-   * (`cli.ts`'s `buildAdapter()`), a fact about the adapter instance, not a per-tick dependency.
-   * Decision of Record #1 (M12): no caller outside `packages/providers` may know a provider keeps
-   * a hook script at all.
+   * (`cli.ts`'s `buildAdapterRegistry()`), a fact about the adapter instance, not a per-tick
+   * dependency. Decision of Record #1 (M12): no caller outside `packages/providers` may know a
+   * provider keeps a hook script at all.
+   *
+   * M12 Task 5: a registry, not a single `AgentRuntimeAdapter`, now that a run's provider is
+   * (nominally) a choice rather than a hardcoded fact -- every lookup against it still resolves
+   * to `'claude_code'` (`resolveAdapter`, `provider.ts`) until Task 8 makes that a real per-run
+   * decision.
    */
-  readonly adapter: AgentRuntimeAdapter
+  readonly registry: AdapterRegistry
 }
 
 export interface TickReport {
@@ -317,7 +323,7 @@ async function resumeRequestedRuns(deps: TickDeps): Promise<void> {
     // unhandled rejection would take the daemon down, and a shutdown -- or a one-shot `tick` -- has
     // to be able to wait for it.
     activePumpRunIds.add(intent.id)
-    const resumed = executeResume({ runId: intent.id, adapter: deps.adapter, message: queuedMessage })
+    const resumed = executeResume({ runId: intent.id, registry: deps.registry, message: queuedMessage })
       .catch(async (error: unknown): Promise<void> => {
         console.error(`[tick] resume for run ${intent.id} failed:`, error)
         await concludeFailedResume(deps, intent, error)
@@ -447,6 +453,11 @@ async function startRun(deps: TickDeps, taskId: TaskId, agentId: AgentId): Promi
   // dead pids, so nothing in the system can ever find that process again.
   let handle: RunHandle | null = null
 
+  // Resolved once, outside the `try`, so the catch below can reach the same instance to cancel
+  // whatever the try block spawned -- one lookup for the whole call, not one per `deps.adapter.x`
+  // site (M12 Task 5; `resolveAdapter` is the single place `'claude_code'` is named).
+  const adapter = resolveAdapter(deps.registry)
+
   try {
     const worktree = await acquireWorktree({
       repoPath: workspace.repoPath,
@@ -465,7 +476,7 @@ async function startRun(deps: TickDeps, taskId: TaskId, agentId: AgentId): Promi
 
     const model = resolveModel(agent)
 
-    handle = await deps.adapter.start({
+    handle = await adapter.start({
       runId,
       prompt: buildPrompt(task),
       worktreePath: worktree.path,
@@ -496,8 +507,8 @@ async function startRun(deps: TickDeps, taskId: TaskId, agentId: AgentId): Promi
       taskId: brandTaskId(task.id),
       agentId: brandAgentId(agent.id),
       workspaceId: deps.workspaceId,
-      events: deps.adapter.events(runId),
-      cancel: () => deps.adapter.cancel(runId),
+      events: adapter.events(runId),
+      cancel: () => adapter.cancel(runId),
       // The facts a fresh process cannot rediscover, handed to the component that knows when the
       // run pauses. Identity is supplied per-process by design, so there is nowhere else to
       // recover it from once this process is gone. `settingsPath`/`hookPath` come from the
@@ -533,7 +544,7 @@ async function startRun(deps: TickDeps, taskId: TaskId, agentId: AgentId): Promi
     let cancelError: unknown = null
     if (handle !== null) {
       try {
-        await deps.adapter.cancel(runId)
+        await adapter.cancel(runId)
       } catch (failure) {
         cancelError = failure
       }

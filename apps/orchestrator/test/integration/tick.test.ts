@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@ai-team-os/db'
 import { prisma } from '@ai-team-os/db/client'
 import { workspaceId as brandWorkspaceId } from '@ai-team-os/domain'
-import { ClaudeCodeAdapter, type AgentRuntimeAdapter, type StartRunInput } from '@ai-team-os/providers'
+import { ClaudeCodeAdapter, type AdapterRegistry, type AgentRuntimeAdapter, type StartRunInput } from '@ai-team-os/providers'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { drainPumps, tick, type TickDeps } from '../../src/tick.js'
 
@@ -72,6 +72,14 @@ async function eventTypesFor(workspaceId: string): Promise<readonly DomainEventT
 
 const keyOf = (taskId: string): string => `T-${taskId.slice(0, 8)}`
 
+/**
+ * `deps.registry` for a test that only ever runs against one adapter instance (the ordinary case
+ * pre-Task-8, when every run resolves to `'claude_code'` regardless of what `kind` is asked for).
+ */
+function singleAdapterRegistry(adapter: AgentRuntimeAdapter): AdapterRegistry {
+  return { resolve: () => adapter }
+}
+
 interface Recorder {
   readonly adapter: AgentRuntimeAdapter
   readonly starts: StartRunInput[]
@@ -120,7 +128,9 @@ describe('tick', () => {
     repos.push(fixture.repoPath)
     deps = {
       workspaceId: brandWorkspaceId(fixture.workspaceId),
-      adapter: new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'complete'], hookPath: REAL_GATE }),
+      registry: singleAdapterRegistry(
+        new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'complete'], hookPath: REAL_GATE }),
+      ),
     }
   })
 
@@ -439,7 +449,7 @@ describe('tick', () => {
   it('kills the agent it just spawned when the start fails after the spawn', async (): Promise<void> => {
     const recorder = recordingAdapter({ failEvents: true })
 
-    const report = await tick({ ...deps, adapter: recorder.adapter })
+    const report = await tick({ ...deps, registry: singleAdapterRegistry(recorder.adapter) })
 
     // The window between `adapter.start()` returning and the row being updated is the one place a
     // live child can be orphaned: the run row goes terminal with no pid, and §3.4's startup sweep
@@ -568,7 +578,7 @@ describe('tick', () => {
       data: { status: 'rework', attempt: 1, lastRejectionReason: 'verify failed: cart totals are wrong' },
     })
 
-    await tick({ ...deps, adapter: recorder.adapter })
+    await tick({ ...deps, registry: singleAdapterRegistry(recorder.adapter) })
 
     // Spec §8's loop is the reason `lastRejectionReason` exists: a rework that does not tell the
     // agent what broke is a re-roll, not a fix.

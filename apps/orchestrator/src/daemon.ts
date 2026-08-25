@@ -1,13 +1,14 @@
 import { prisma } from '@ai-team-os/db/client'
 import type { WorkspaceId } from '@ai-team-os/domain'
 import { subscribeEvents, type EventSubscription } from '@ai-team-os/events'
-import type { AgentRuntimeAdapter } from '@ai-team-os/providers'
+import type { AdapterRegistry } from '@ai-team-os/providers'
 import { reconcileOrphans, sweep } from './sweep.js'
 import { activePumpRunIds, drainPumps, tick } from './tick.js'
 
 export interface DaemonDeps {
   readonly workspaceId: WorkspaceId
-  readonly adapter: AgentRuntimeAdapter
+  /** M12 Task 5: a registry, not a single adapter -- see `TickDeps.registry`'s own docstring. */
+  readonly registry: AdapterRegistry
   readonly periodMs: number
 }
 
@@ -74,7 +75,7 @@ export async function runDaemon(deps: DaemonDeps): Promise<void> {
   // Before the first tick, and never again. Task 15's pass treats a run with no pid as an orphan,
   // which is exactly what a run that is mid-spawn looks like -- so it is only sound while nothing
   // is spawning. `tick()` closes that window itself, and reconcileOrphans refuses afterwards.
-  const reconciled = await reconcileOrphans({ workspaceId: deps.workspaceId, adapter: deps.adapter })
+  const reconciled = await reconcileOrphans({ workspaceId: deps.workspaceId, registry: deps.registry })
   if (reconciled > 0) {
     process.stdout.write(`reconciled ${reconciled} run(s) left behind by a previous process\n`)
   }
@@ -95,7 +96,7 @@ export async function runDaemon(deps: DaemonDeps): Promise<void> {
       // reconcile above, and a one-shot CLI `tick` cancelling runs it did not start would be a
       // surprise. Until M9 wired this line, `sweep()` had no production caller at all and the
       // runTimeoutMs / maxToolCallsPerRun limits were enforced by nothing.
-      const swept = await sweep({ workspaceId: deps.workspaceId, adapter: deps.adapter, livePumpRunIds: activePumpRunIds })
+      const swept = await sweep({ workspaceId: deps.workspaceId, registry: deps.registry, livePumpRunIds: activePumpRunIds })
       if (swept.timedOut.length > 0 || swept.overToolCap.length > 0 || swept.deadPids.length > 0) {
         process.stdout.write(`${JSON.stringify({ sweep: swept })}\n`)
       }

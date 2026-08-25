@@ -13,7 +13,7 @@ import {
 } from '@ai-team-os/control'
 import { prisma } from '@ai-team-os/db/client'
 import { workspaceId as brandWorkspaceId } from '@ai-team-os/domain'
-import { ClaudeCodeAdapter, type AgentRuntimeAdapter, type StartRunInput } from '@ai-team-os/providers'
+import { ClaudeCodeAdapter, type AdapterRegistry, type AgentRuntimeAdapter, type StartRunInput } from '@ai-team-os/providers'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { resolveModel } from '../../src/model.js'
 import { drainPumps, tick, type TickDeps } from '../../src/tick.js'
@@ -80,6 +80,14 @@ function makeRepo(): string {
 interface Recorder {
   readonly adapter: AgentRuntimeAdapter
   readonly starts: StartRunInput[]
+}
+
+/**
+ * `deps.registry` for a test that only ever runs against one adapter instance (the ordinary case
+ * pre-Task-8, when every run resolves to `'claude_code'` regardless of what `kind` is asked for).
+ */
+function singleAdapterRegistry(adapter: AgentRuntimeAdapter): AdapterRegistry {
+  return { resolve: () => adapter }
 }
 
 /** The `tick.test.ts` `recordingAdapter` precedent: the real adapter with `start()` observed. */
@@ -149,7 +157,7 @@ describe('the model chain reaches a dispatched run, and setAgentModel changes th
     const recorder = recordingAdapter()
     const deps: TickDeps = {
       workspaceId: brandWorkspaceId(workspace.id),
-      adapter: recorder.adapter,
+      registry: singleAdapterRegistry(recorder.adapter),
     }
 
     const first = await tick(deps)

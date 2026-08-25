@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { requestResume } from '@ai-team-os/control'
 import { prisma } from '@ai-team-os/db/client'
 import { runId as brandRunId, workspaceId as brandWorkspaceId } from '@ai-team-os/domain'
-import { ClaudeCodeAdapter } from '@ai-team-os/providers'
+import { ClaudeCodeAdapter, type AdapterRegistry } from '@ai-team-os/providers'
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import { reconcileOrphans, resetTickObservation } from '../../src/sweep.js'
@@ -72,6 +72,14 @@ function fakeAdapter(fixture: string): ClaudeCodeAdapter {
   return new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', fixture], hookPath: REAL_GATE })
 }
 
+/**
+ * `deps.registry` for a test that only ever runs against one adapter instance (the ordinary case
+ * pre-Task-8, when every run resolves to `'claude_code'` regardless of what `kind` is asked for).
+ */
+function singleAdapterRegistry(adapter: ClaudeCodeAdapter): AdapterRegistry {
+  return { resolve: () => adapter }
+}
+
 describe('executing a resume intent from the daemon', () => {
   let fixture: Fixture
   const repos: string[] = []
@@ -86,7 +94,7 @@ describe('executing a resume intent from the daemon', () => {
   async function pauseARun(): Promise<string> {
     await tick({
       workspaceId: brandWorkspaceId(fixture.workspaceId),
-      adapter: fakeAdapter('hook-deny'),
+      registry: singleAdapterRegistry(fakeAdapter('hook-deny')),
     })
     await drainPumps()
     const run = await prisma.agentRun.findFirstOrThrow()
@@ -122,7 +130,7 @@ describe('executing a resume intent from the daemon', () => {
     // raw-payload seam, which is how `adapter-resume.test.ts` proves an injected message reached
     // the spawned process. Ground truth is the child, not this test's memory of what it asked for.
     const adapter = fakeAdapter('env-echo')
-    await tick({ workspaceId: brandWorkspaceId(fixture.workspaceId), adapter })
+    await tick({ workspaceId: brandWorkspaceId(fixture.workspaceId), registry: singleAdapterRegistry(adapter) })
     await drainPumps()
 
     const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: runId } })
@@ -155,12 +163,12 @@ describe('executing a resume intent from the daemon', () => {
 
     await tick({
       workspaceId: brandWorkspaceId(fixture.workspaceId),
-      adapter: fakeAdapter('env-echo'),
+      registry: singleAdapterRegistry(fakeAdapter('env-echo')),
     })
     await drainPumps()
     await tick({
       workspaceId: brandWorkspaceId(fixture.workspaceId),
-      adapter: fakeAdapter('env-echo'),
+      registry: singleAdapterRegistry(fakeAdapter('env-echo')),
     })
     await drainPumps()
 
@@ -179,7 +187,7 @@ describe('executing a resume intent from the daemon', () => {
 
     await tick({
       workspaceId: brandWorkspaceId(fixture.workspaceId),
-      adapter: fakeAdapter('env-echo'),
+      registry: singleAdapterRegistry(fakeAdapter('env-echo')),
     })
     await drainPumps()
 
@@ -211,7 +219,7 @@ describe('executing a resume intent from the daemon', () => {
       loggedErrors.push(args)
     }
     try {
-      await tick({ workspaceId: brandWorkspaceId(fixture.workspaceId), adapter: fakeAdapter('env-echo') })
+      await tick({ workspaceId: brandWorkspaceId(fixture.workspaceId), registry: singleAdapterRegistry(fakeAdapter('env-echo')) })
       await drainPumps()
     } finally {
       console.error = originalConsoleError
@@ -244,7 +252,7 @@ describe('executing a resume intent from the daemon', () => {
     resetTickObservation()
     await reconcileOrphans({
       workspaceId: brandWorkspaceId(fixture.workspaceId),
-      adapter: fakeAdapter('env-echo'),
+      registry: singleAdapterRegistry(fakeAdapter('env-echo')),
     })
 
     const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: runId } })

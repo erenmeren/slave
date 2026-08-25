@@ -17,7 +17,7 @@ import {
 } from '@ai-team-os/control'
 import { prisma } from '@ai-team-os/db/client'
 import { workspaceId as brandWorkspaceId, type WorkspaceId } from '@ai-team-os/domain'
-import { ClaudeCodeAdapter } from '@ai-team-os/providers'
+import { buildRegistry, type AdapterRegistry } from '@ai-team-os/providers'
 import { runDaemon } from './daemon.js'
 import { NON_TERMINAL_RUN_STATUSES } from './world.js'
 import { executeResume } from './resume.js'
@@ -122,22 +122,30 @@ function hookPath(): string {
 }
 
 /**
- * The binary to spawn for a run.
+ * The registry every command resolves its adapter from.
  *
- * Injectable through the environment rather than through a flag, because Task 17's gate has to
- * drive the fake CLI and the real one down the *same* code path — and a flag only tests pass is a
- * flag nobody runs.
+ * The binary to spawn for a run is injectable through the environment rather than through a flag,
+ * because Task 17's gate has to drive the fake CLI and the real one down the *same* code path —
+ * and a flag only tests pass is a flag nobody runs.
+ *
+ * M12 Task 5: this used to build one `ClaudeCodeAdapter` directly (`buildAdapter`) and hand it to
+ * every caller unconditionally -- the hardcoded selection this milestone exists to remove. It
+ * builds a registry now, with exactly one kind configured (`claudeCode`); every lookup against it
+ * still resolves to that same kind (`apps/orchestrator/src/provider.ts`'s `resolveAdapter`) until
+ * Task 8 makes a run's provider a real per-run choice.
  */
-function buildAdapter(): ClaudeCodeAdapter {
+function buildAdapterRegistry(): AdapterRegistry {
   const command = process.env['AITEAMOS_CLAUDE_BIN'] ?? 'claude'
   const extra = process.env['AITEAMOS_CLAUDE_ARGS']
-  return new ClaudeCodeAdapter({
-    command,
-    ...(extra === undefined || extra === '' ? {} : { extraArgs: extra.split(' ') }),
-    // M12 Task 2: the hook path is a fact about this adapter instance now, not a per-run input --
-    // it used to be threaded through `TickDeps`/`DaemonDeps` and into every `adapter.start()` call;
-    // now it is set once, here.
-    hookPath: hookPath(),
+  return buildRegistry({
+    claudeCode: {
+      command,
+      ...(extra === undefined || extra === '' ? {} : { extraArgs: extra.split(' ') }),
+      // M12 Task 2: the hook path is a fact about this adapter instance now, not a per-run input --
+      // it used to be threaded through `TickDeps`/`DaemonDeps` and into every `adapter.start()`
+      // call; now it is set once, here.
+      hookPath: hookPath(),
+    },
   })
 }
 
@@ -189,7 +197,7 @@ export async function main(argv: readonly string[]): Promise<number> {
       // indistinguishable from one it should fail.
       const report = await tick({
         workspaceId: await resolveWorkspace(flags),
-        adapter: buildAdapter(),
+        registry: buildAdapterRegistry(),
       })
       process.stdout.write(`${JSON.stringify(report, null, 2)}\n`)
 
@@ -207,7 +215,7 @@ export async function main(argv: readonly string[]): Promise<number> {
       const period = Number(flags['period'] ?? '1000')
       await runDaemon({
         workspaceId: await resolveWorkspace(flags),
-        adapter: buildAdapter(),
+        registry: buildAdapterRegistry(),
         periodMs: Number.isFinite(period) && period > 0 ? period : 1000,
       })
       return 0
@@ -311,7 +319,7 @@ export async function main(argv: readonly string[]): Promise<number> {
 
       await executeResume({
         runId: run.id,
-        adapter: buildAdapter(),
+        registry: buildAdapterRegistry(),
         message,
         // Printed at the spawn, not after the stream ends: `resume` has always acknowledged
         // immediately and then waited, and a run can think for minutes.

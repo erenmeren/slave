@@ -6,13 +6,15 @@ import {
   workspaceId as brandWorkspaceId,
 } from '@ai-team-os/domain'
 import { appendEvent } from '@ai-team-os/events'
-import type { AgentRuntimeAdapter } from '@ai-team-os/providers'
+import type { AdapterRegistry } from '@ai-team-os/providers'
+import { resolveAdapter } from './provider.js'
 import { pumpRun } from './pump.js'
 import { verifyConcludedRun } from './verify.js'
 
 export interface ExecuteResumeOptions {
   readonly runId: string
-  readonly adapter: AgentRuntimeAdapter
+  /** M12 Task 5: a registry, not a single adapter -- see `TickDeps.registry`'s own docstring. */
+  readonly registry: AdapterRegistry
   /** The instruction to hand the agent, or `null` for the adapter's default continuation prompt. */
   readonly message: string | null
   /**
@@ -41,7 +43,10 @@ export interface ExecuteResumeOptions {
  * `resumed: true` flag wrong, and only one of them would have the CLI's tests.
  */
 export async function executeResume(options: ExecuteResumeOptions): Promise<void> {
-  const { adapter, message } = options
+  const { message } = options
+  // Resolved once for the whole call -- `resolveAdapter` is the single place `'claude_code'` is
+  // named (M12 Task 5).
+  const adapter = resolveAdapter(options.registry)
   // `agent -> team`, not `task`: a `planning` run (M8b) has no `Task` row, and `agent -> team ->
   // workspace` is the only linkage such a run has to a workspace.
   const run = await prisma.agentRun.findUniqueOrThrow({

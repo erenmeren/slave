@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@ai-team-os/db'
 import { prisma } from '@ai-team-os/db/client'
 import { runId as brandRunId, workspaceId as brandWorkspaceId } from '@ai-team-os/domain'
-import { ClaudeCodeAdapter } from '@ai-team-os/providers'
+import { ClaudeCodeAdapter, type AdapterRegistry } from '@ai-team-os/providers'
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { buildReviewPrompt, concludeReview, dispatchReviews } from '../../src/review.js'
 import { drainPumps, tick, type TickDeps } from '../../src/tick.js'
@@ -72,6 +72,14 @@ async function eventTypesFor(workspaceId: string): Promise<readonly DomainEventT
 }
 
 /**
+ * `deps.registry` for a test that only ever runs against one adapter instance (the ordinary case
+ * pre-Task-8, when every run resolves to `'claude_code'` regardless of what `kind` is asked for).
+ */
+function singleAdapterRegistry(adapter: ClaudeCodeAdapter): AdapterRegistry {
+  return { resolve: () => adapter }
+}
+
+/**
  * Drives a real `tick` with the `complete` fixture to give the seeded task a real worktree, branch
  * and a `succeeded` implementation run -- landing it in `reviewing` the way production does since
  * Task 8's flip (verify green enters review directly; nothing here parks it there by hand anymore).
@@ -81,7 +89,9 @@ async function eventTypesFor(workspaceId: string): Promise<readonly DomainEventT
 async function seedReviewingTask(fixture: Fixture, reviewFixture = 'review-approve'): Promise<TickDeps> {
   const implDeps: TickDeps = {
     workspaceId: brandWorkspaceId(fixture.workspaceId),
-    adapter: new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'complete'], hookPath: REAL_GATE }),
+    registry: singleAdapterRegistry(
+      new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'complete'], hookPath: REAL_GATE }),
+    ),
   }
   const report = await tick(implDeps)
   expect(report.started).toHaveLength(1)
@@ -94,7 +104,9 @@ async function seedReviewingTask(fixture: Fixture, reviewFixture = 'review-appro
 
   return {
     workspaceId: brandWorkspaceId(fixture.workspaceId),
-    adapter: new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', reviewFixture], hookPath: REAL_GATE }),
+    registry: singleAdapterRegistry(
+      new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', reviewFixture], hookPath: REAL_GATE }),
+    ),
   }
 }
 
@@ -368,7 +380,9 @@ describe('dispatchReviews', () => {
 
     const approveDeps: TickDeps = {
       workspaceId: reviewDeps.workspaceId,
-      adapter: new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'review-approve'], hookPath: REAL_GATE }),
+      registry: singleAdapterRegistry(
+        new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'review-approve'], hookPath: REAL_GATE }),
+      ),
     }
     const second = await dispatchReviews(approveDeps)
     expect(second).toHaveLength(1)

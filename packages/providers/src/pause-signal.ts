@@ -15,11 +15,11 @@ export interface PausableRunState {
  *
  * Pausing is a cross-process control signal (spec §11): the caller here is usually not the
  * process that spawned the run's child and holds its live `AgentRuntimeAdapter` state -- an
- * operator's CLI invocation, or a web request, are both new processes with no such state, and
- * `AgentRuntimeAdapter.requestPause` (which needs exactly that state -- see its own docstring)
- * cannot serve them. So this function deliberately takes no adapter instance, no constructor
- * options, and touches no in-memory run registry -- only `kind` and the two columns already on
- * the row.
+ * operator's CLI invocation, or a web request, are both new processes with no such state, and no
+ * adapter-instance method could ever serve them (M12 Task 4 retired the one that tried,
+ * `AgentRuntimeAdapter.requestPause`, for exactly this reason). So this function deliberately
+ * takes no adapter instance, no constructor options, and touches no in-memory run registry --
+ * only `kind` and the two columns already on the row.
  *
  * What the signal actually IS remains the provider's own knowledge, which is why this dispatches
  * on `kind` rather than living in `packages/control`: Claude denies the run's next tool call

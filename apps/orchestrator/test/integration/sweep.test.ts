@@ -101,23 +101,26 @@ describe('sweep and reconcileOrphans', () => {
     cancelThrows = false
     concludeDuringCancel = false
     resetTickObservation()
+    const adapter = {
+      cancel: async (runId: string): Promise<void> => {
+        cancelled.push(runId)
+        // The real `cancel` awaits the child's exit, which is exactly the window in which the
+        // pump writes the terminal row. Modelling that here is what makes the lost-update
+        // observable from a test.
+        if (concludeDuringCancel) {
+          await prisma.agentRun.update({
+            where: { id: runId },
+            data: { status: 'succeeded', terminalAt: new Date(), costUsd: 1.5 },
+          })
+        }
+        if (cancelThrows) throw new Error('SIGTERM failed: process not registered')
+      },
+    } as unknown as AgentRuntimeAdapter
     deps = {
       workspaceId: brandWorkspaceId(fixture.workspaceId),
-      adapter: {
-        cancel: async (runId: string): Promise<void> => {
-          cancelled.push(runId)
-          // The real `cancel` awaits the child's exit, which is exactly the window in which the
-          // pump writes the terminal row. Modelling that here is what makes the lost-update
-          // observable from a test.
-          if (concludeDuringCancel) {
-            await prisma.agentRun.update({
-              where: { id: runId },
-              data: { status: 'succeeded', terminalAt: new Date(), costUsd: 1.5 },
-            })
-          }
-          if (cancelThrows) throw new Error('SIGTERM failed: process not registered')
-        },
-      } as unknown as AgentRuntimeAdapter,
+      // `resolve` ignores `kind` and always hands back the one adapter this test configured --
+      // the ordinary shape pre-Task-8, when every run resolves to `'claude_code'` regardless.
+      registry: { resolve: () => adapter },
     }
   })
 
