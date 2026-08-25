@@ -549,7 +549,7 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
     where: { id: runId, endedAt: null },
     data: {
       status: failed ? 'failed' : 'succeeded',
-      costUsd: outcome.costUsd,
+      costUsd: outcome.costUsd ?? 0, // TASK 6: drops when the column goes nullable
       terminalAt: terminalNow,
       endedAt: terminalNow,
     },

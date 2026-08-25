@@ -8,7 +8,11 @@ export interface RunOutcome {
   readonly terminalReason: string
   readonly stopReason: string | null
   readonly numTurns: number
-  readonly costUsd: number
+  /**
+   * USD, or `null` when the runtime does not report spend. Never `0` for an unmeasured
+   * run -- zero is a figure the budget guardrail believes.
+   */
+  readonly costUsd: number | null
   readonly deniedToolUseIds: readonly string[]
 }
 

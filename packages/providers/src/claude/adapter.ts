@@ -9,18 +9,18 @@ import { claudeFlags, preflightGate } from './flags.js'
 import { isPreToolUseHookResponseLine, parseStreamLine } from './stream.js'
 
 /**
- * The provider-neutral capability profile a runtime adapter reports (spec
- * §7). Queried, never assumed -- the orchestrator degrades per-field
- * rather than assuming uniform capability across providers.
+ * What a runtime can promise. Every member has exactly one consumer in the system --
+ * a capability nothing reads is a claim nothing checks, so it does not exist here.
  */
 export interface ProviderCapabilities {
+  /** Consumed by the pause strategy: can this runtime stop between tool calls? */
   readonly canPauseMidRun: boolean
+  /** Consumed by the pause strategy: can a stopped session be continued? */
   readonly canResumeSession: boolean
-  readonly supportsHooks: boolean
-  readonly streamsToolCalls: boolean
-  readonly reportsTokenUsage: boolean
-  readonly supportsCustomSystemPrompt: boolean
-  readonly enforcesToolPermissions: boolean
+  /** Consumed by gate semantics and the roster's provider mark. */
+  readonly gate: 'all-tools' | 'shell-only' | 'none'
+  /** Consumed by budget admission: does this runtime report spend in USD? */
+  readonly reportsCost: boolean
 }
 
 /**
@@ -406,11 +406,8 @@ async function clearAndVerifyPauseFlagAbsent(flagPath: string, runId: RunId): Pr
 const CLAUDE_CODE_CAPABILITIES: ProviderCapabilities = {
   canPauseMidRun: true,
   canResumeSession: true,
-  supportsHooks: true,
-  streamsToolCalls: true,
-  reportsTokenUsage: true,
-  supportsCustomSystemPrompt: false,
-  enforcesToolPermissions: true,
+  gate: 'all-tools',
+  reportsCost: true,
 }
 
 const DEFAULT_KILL_GRACE_MS = 5_000

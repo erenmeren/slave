@@ -121,11 +121,8 @@ describe('ClaudeCodeAdapter', () => {
     expect(adapter.getCapabilities()).toEqual({
       canPauseMidRun: true,
       canResumeSession: true,
-      supportsHooks: true,
-      streamsToolCalls: true,
-      reportsTokenUsage: true,
-      supportsCustomSystemPrompt: false,
-      enforcesToolPermissions: true,
+      gate: 'all-tools',
+      reportsCost: true,
     })
   })
 
