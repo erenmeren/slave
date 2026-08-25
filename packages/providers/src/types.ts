@@ -1,4 +1,14 @@
 /**
+ * Which runtime a run is on. A plain string union, not a re-export of the Postgres enum
+ * (`packages/db`'s generated `ProviderKind`) -- `packages/providers` does not depend on
+ * `@ai-team-os/db` at runtime (it is a devDependency only, for test fixtures), and this type is
+ * the package's own vocabulary for it, kept in sync with the Prisma enum's literal spellings by
+ * hand. `'cursor'` has no adapter yet (M12 Series D); it exists here because `signalPause`
+ * (`pause-signal.ts`) already dispatches on it.
+ */
+export type ProviderKind = 'claude_code' | 'cursor'
+
+/**
  * `RunOutcome` is the normalized shape of the CLI's terminal `result` event.
  * Field names follow the domain's camelCase convention; the raw stream uses
  * snake_case (`is_error`, `total_cost_usd`, ...).

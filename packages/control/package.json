@@ -8,6 +8,7 @@
   "dependencies": {
     "@ai-team-os/db": "*",
     "@ai-team-os/domain": "*",
-    "@ai-team-os/events": "*"
+    "@ai-team-os/events": "*",
+    "@ai-team-os/providers": "*"
   }
 }

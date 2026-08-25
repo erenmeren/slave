@@ -1,11 +1,18 @@
-import { writeFileSync } from 'node:fs'
 import { prisma } from '@ai-team-os/db/client'
 import { NON_TERMINAL_RUN_STATUSES, type Result, err, ok, runId as brandRunId } from '@ai-team-os/domain'
 import { appendEvent } from '@ai-team-os/events'
+import { type ProviderKind, signalPause } from '@ai-team-os/providers'
 import { runFilePaths } from './paths.js'
 import type { ControlRefusal } from './refusal.js'
 
 const PAUSABLE_STATUSES = ['starting', 'working', 'resuming'] as const
+
+/**
+ * The provider every run uses today. M12 Task 8 replaces this with a lookup against the run's
+ * own provider once a second runtime is real dispatch, not a stub -- this is the one line that
+ * names it until then (M12 controller ruling, Task 3 fix round).
+ */
+const CURRENT_PROVIDER_KIND: ProviderKind = 'claude_code'
 
 /** `AgentRun.pauseReason`'s categories (spec §6): who -- or what -- asked for the pause. */
 export type PauseCategory = 'human' | 'guardrail' | 'emergency_stop'
@@ -24,11 +31,18 @@ export async function requestPause(
   })
   if (run === null) return err({ kind: 'run_not_found', runId })
 
-  // Write the flag; the gate denies the next tool call and the *stream owner* follows the rest
+  // Signal the pause; the gate denies the next tool call and the *stream owner* follows the rest
   // of the protocol. A CLI invocation has no handle on the child and no view of its stream, so
   // it cannot await the outcome -- the daemon's pump is what observes the deny and records
   // `run.paused`. Spec §11 says "write the flag, follow the protocol"; this is the half a
   // separate process can perform.
+  //
+  // Signaled through `packages/providers`' `signalPause`, not written here directly: pausing is
+  // a cross-process control signal (this function runs in the CLI, in a web request, and in the
+  // daemon alike), so there is no live `AgentRuntimeAdapter` instance available to call --
+  // `signalPause` is the stateless half of the provider seam that exists for exactly that
+  // reason (M12 Task 3's fix round; see its report for why the adapter-instance route the task
+  // was originally specified with does not work).
 
   // Claimed, not written. `pause_requested` is a non-terminal status, so pausing a run that
   // already finished puts a *concluded* run back into `activeRuns`, makes its agent look busy,
@@ -50,7 +64,7 @@ export async function requestPause(
   // means an operator watches a "pausing" run keep working (spec §5.5's named failure).
   const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: run.agent.team.workspaceId } })
   const { pauseFlagPath } = runFilePaths(workspace.repoPath, brandRunId(run.id))
-  writeFileSync(pauseFlagPath, `${requestedBy}\n`)
+  await signalPause(CURRENT_PROVIDER_KIND, { pauseFlagPath, pid: run.pid }, requestedBy)
   await appendEvent({
     type: 'run.pause_requested',
     workspaceId: run.agent.team.workspaceId,
