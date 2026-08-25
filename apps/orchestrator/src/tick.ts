@@ -12,7 +12,7 @@ import {
   type WorkspaceId,
 } from '@ai-team-os/domain'
 import { appendEvent } from '@ai-team-os/events'
-import { type AgentRuntimeAdapter, writeSettingsFile } from '@ai-team-os/providers'
+import type { AgentRuntimeAdapter, RunHandle } from '@ai-team-os/providers'
 import { runMergePass } from './merge.js'
 import { resolveModel } from './model.js'
 import { dispatchPlanning } from './planning.js'
@@ -26,13 +26,14 @@ import { WorktreeExistsError, adoptWorktree, provisionWorktree, type WorktreeHan
 
 export interface TickDeps {
   readonly workspaceId: WorkspaceId
-  readonly adapter: AgentRuntimeAdapter
   /**
-   * Absolute path to the **orchestrator's** `scripts/pause-gate.sh`, not the workspace repo's.
-   * Injected rather than resolved from this module's own location because a daemon does not
-   * reliably know its install path, and a test needs to point at a real script.
+   * M12 Task 2: the hook path (the orchestrator's own `scripts/pause-gate.sh`, not the workspace
+   * repo's) no longer travels here -- it is a `ClaudeCodeAdapterOptions` constructor option now
+   * (`cli.ts`'s `buildAdapter()`), a fact about the adapter instance, not a per-tick dependency.
+   * Decision of Record #1 (M12): no caller outside `packages/providers` may know a provider keeps
+   * a hook script at all.
    */
-  readonly hookPath: string
+  readonly adapter: AgentRuntimeAdapter
 }
 
 export interface TickReport {
@@ -444,7 +445,7 @@ async function startRun(deps: TickDeps, taskId: TaskId, agentId: AgentId): Promi
   // else failed". Without that distinction a failure after the spawn abandons a live agent: the run
   // row goes terminal with no pid, and §3.4's startup sweep only looks at *non-terminal* runs with
   // dead pids, so nothing in the system can ever find that process again.
-  let handle: { readonly pid: number } | null = null
+  let handle: RunHandle | null = null
 
   try {
     const worktree = await acquireWorktree({
@@ -457,8 +458,10 @@ async function startRun(deps: TickDeps, taskId: TaskId, agentId: AgentId): Promi
       isRework: task.status === 'rework',
     })
 
-    const { settingsPath, pauseFlagPath } = runFilePaths(workspace.repoPath, runId)
-    writeSettingsFile({ settingsPath, hookPath: deps.hookPath })
+    // No `settingsPath` here any more (M12 Task 2): `runFilePaths` hands back the run's own scratch
+    // directory, and what the adapter keeps inside it -- a settings file, a hook script, anything
+    // else -- is that adapter's business, reported back opaquely on `handle.runFiles` below.
+    const { runDir, pauseFlagPath } = runFilePaths(workspace.repoPath, runId)
 
     const model = resolveModel(agent)
 
@@ -467,8 +470,7 @@ async function startRun(deps: TickDeps, taskId: TaskId, agentId: AgentId): Promi
       prompt: buildPrompt(task),
       worktreePath: worktree.path,
       pauseFlagPath,
-      settingsPath,
-      hookPath: deps.hookPath,
+      runDir,
       gitIdentity: { name: agent.name, email: `${emailLocalPart(agent)}@aiteamos.local` },
       // Conditional spread, not `model`, because `exactOptionalPropertyTypes` treats an explicit
       // `model: undefined` as a different (and disallowed) thing from the key being absent.
@@ -498,11 +500,12 @@ async function startRun(deps: TickDeps, taskId: TaskId, agentId: AgentId): Promi
       cancel: () => deps.adapter.cancel(runId),
       // The facts a fresh process cannot rediscover, handed to the component that knows when the
       // run pauses. Identity is supplied per-process by design, so there is nowhere else to
-      // recover it from once this process is gone.
+      // recover it from once this process is gone. `settingsPath`/`hookPath` come from the
+      // adapter's own report (`handle.runFiles`), not from anything this tick derived or wrote
+      // itself (M12 Task 2) -- relayed into the checkpoint verbatim, never interpreted here.
       spawn: {
-        settingsPath,
+        ...handle.runFiles,
         pauseFlagPath,
-        hookPath: deps.hookPath,
         gitIdentity: { name: agent.name, email: `${emailLocalPart(agent)}@aiteamos.local` },
         ...(model !== undefined ? { model } : {}),
       },

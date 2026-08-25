@@ -41,12 +41,13 @@ export function buildSettings(input: { readonly hookPath: string }): ClaudeSetti
 
 /**
  * Writes the per-run settings file at `settingsPath`, registering
- * `hookPath` as the `PreToolUse` hook. Intended to be called once per run,
- * before the process is spawned, by whatever provisions the run's worktree
- * -- **no call site exists in this codebase yet**; `ClaudeCodeAdapter.start()`
- * (this task) takes an already-written `settingsPath` as given and does not
- * call this. `claudeFlags` then points `--settings` at the same path. Both
- * paths must be absolute for the same reason `claudeFlags` enforces it on
+ * `hookPath` as the `PreToolUse` hook. Called by `ClaudeCodeAdapter.start()`
+ * and `.resume()` (M12 Task 2), once per spawn, into the run's own scratch
+ * directory (`StartRunInput.runDir` / `Checkpoint.settingsPath`) before the
+ * process itself is spawned -- provisioning the run's files is this
+ * adapter's own concern (M12's Decision of Record #1), not its caller's.
+ * `claudeFlags` then points `--settings` at the same path. Both paths must
+ * be absolute for the same reason `claudeFlags` enforces it on
  * `settingsPath`: a path the CLI cannot resolve means the hook never runs,
  * silently.
  */

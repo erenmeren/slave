@@ -1,11 +1,12 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { rm, stat, writeFile } from 'node:fs/promises'
-import { isAbsolute } from 'node:path'
+import { dirname, isAbsolute, join } from 'node:path'
 import { createInterface } from 'node:readline'
 import type { RunId } from '@ai-team-os/domain'
 import type { RunOutcome, RuntimeEvent } from '../types.js'
 import type { Checkpoint } from './checkpoint.js'
 import { claudeFlags, preflightGate } from './flags.js'
+import { writeSettingsFile } from './settings.js'
 import { isPreToolUseHookResponseLine, parseStreamLine } from './stream.js'
 
 /**
@@ -24,26 +25,25 @@ export interface ProviderCapabilities {
 }
 
 /**
- * Everything the adapter needs to spawn one run (spec §7, ADR 0001 §3/§5.5).
- * `settingsPath` and `pauseFlagPath` are supplied by the caller, already
- * absolute -- the adapter refuses to spawn with a relative `settingsPath`
- * (see `claudeFlags`) but does not itself derive either path.
+ * Everything the adapter needs to spawn one run (spec §7, ADR 0001 §3/§5.5). `worktreePath` and
+ * `pauseFlagPath` are supplied by the caller, already absolute.
+ *
+ * M12 Decision of Record #1: no caller outside `packages/providers` may know that this runtime
+ * keeps a settings file, a hook script, or where either lives -- `settingsPath` and `hookPath` used
+ * to live here for exactly that reason, and both are gone now. `runDir` is the one opaque handle
+ * the orchestrator still supplies (`packages/control`'s `runFilePaths`, an already-created, empty
+ * per-run scratch directory); everything this adapter keeps inside it -- today just the settings
+ * file this adapter writes and registers `hookPath` (a `ClaudeCodeAdapterOptions` constructor
+ * option now, not a per-run input) into -- is this adapter's own business, reported back to the
+ * caller opaquely on `RunHandle.runFiles` for the one thing a caller genuinely needs it for: a
+ * resumed run finding the same files.
  */
 export interface StartRunInput {
   readonly runId: RunId
   readonly prompt: string
   readonly worktreePath: string
   readonly pauseFlagPath: string
-  readonly settingsPath: string
-  /**
-   * The `PreToolUse` hook script `settingsPath` registers, already
-   * absolute -- `start()` (Task 8) spawns this directly, once, via
-   * `preflightGate` before the run is considered pausable. Writing the
-   * settings file itself remains a provisioning-time concern outside this
-   * adapter (Task 6 report, concern 5); this is only what `start()` needs
-   * to check that whatever was registered actually discriminates.
-   */
-  readonly hookPath: string
+  readonly runDir: string
   readonly gitIdentity: {
     readonly name: string
     readonly email: string
@@ -62,6 +62,16 @@ export interface StartRunInput {
 export interface RunHandle {
   readonly runId: RunId
   readonly pid: number
+  /**
+   * The provider-private files this run needs in order to be resumed later, exactly as this
+   * adapter actually wrote them. The orchestrator relays these into the checkpoint verbatim and
+   * never interprets them -- only the adapter that produced them reads them back (`resume`, off
+   * `Checkpoint.settingsPath`/`Checkpoint.hookPath`). Named `settingsPath`/`hookPath` rather than
+   * something provider-neutral on purpose: the Postgres `Checkpoint` columns are frozen under
+   * those exact names for this milestone, and a second runtime whose run files do not fit this pair
+   * generalizes it in its own task, at the cost of one interface field.
+   */
+  readonly runFiles: { readonly settingsPath: string; readonly hookPath: string }
 }
 
 /**
@@ -174,6 +184,15 @@ export interface ClaudeCodeAdapterOptions {
   readonly extraArgs?: readonly string[]
   /** Grace period between `SIGTERM` and the `SIGKILL` escalation in `cancel()`. Default 5000ms. */
   readonly killGraceMs?: number
+  /**
+   * The `PreToolUse` hook script this adapter registers in every settings file it writes
+   * (`start`/`resume`), and spawns directly for the Task 6 preflight gate on every `start()` call.
+   * One adapter instance, one hook script -- moved here from a per-run `StartRunInput` field (M12
+   * Task 2): the hook is a fact about this *runtime*, the orchestrator's own copy of
+   * `scripts/pause-gate.sh`, never something that varies run to run. Must be absolute; enforced by
+   * `runPreflightGate` before anything is spawned.
+   */
+  readonly hookPath: string
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -418,12 +437,14 @@ export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
   private readonly command: string
   private readonly extraArgs: readonly string[]
   private readonly killGraceMs: number
+  private readonly hookPath: string
   private readonly runs = new Map<RunId, RunState>()
 
   constructor(options: ClaudeCodeAdapterOptions) {
     this.command = options.command
     this.extraArgs = options.extraArgs ?? []
     this.killGraceMs = options.killGraceMs ?? DEFAULT_KILL_GRACE_MS
+    this.hookPath = options.hookPath
   }
 
   getCapabilities(): ProviderCapabilities {
@@ -431,18 +452,25 @@ export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
   }
 
   /**
-   * Runs the Task 6 pre-flight gate against `input.hookPath` before
-   * spawning anything (spec §5.5: "a written settings file is not an armed
-   * gate"). A run whose hook does not discriminate never gets a `RunHandle`
-   * or a registered `RunState` at all -- `requestPause` against its
-   * `runId` then fails loudly with "no run found" instead of silently
-   * writing a flag file nothing will ever read. `runPreflightGate` below is
-   * shared with `resume()` (fix round 2, finding B): the gate must be
-   * re-armed on every spawn, not just the first one.
+   * Runs the Task 6 pre-flight gate against `this.hookPath` before spawning anything (spec §5.5:
+   * "a written settings file is not an armed gate"). A run whose hook does not discriminate never
+   * gets a `RunHandle` or a registered `RunState` at all -- `requestPause` against its `runId` then
+   * fails loudly with "no run found" instead of silently writing a flag file nothing will ever
+   * read. `runPreflightGate` below is shared with `resume()` (fix round 2, finding B): the gate
+   * must be re-armed on every spawn, not just the first one.
+   *
+   * M12 Task 2: this is also where the settings file itself gets written now, into
+   * `input.runDir` -- a provisioning-time concern that used to live outside this adapter (Task 6
+   * report, concern 5; M12's Decision of Record #1 is what closes it). `runPreflightGate` runs
+   * first regardless: it validates `this.hookPath`, not anything derived from `input`, so there is
+   * nothing to gain by writing the settings file before knowing the hook it points at actually
+   * works.
    */
   async start(input: StartRunInput): Promise<RunHandle> {
-    await this.runPreflightGate(input.hookPath, input.runId)
-    return this.spawnRun(input)
+    await this.runPreflightGate(this.hookPath, input.runId)
+    const settingsPath = join(input.runDir, 'settings.json')
+    writeSettingsFile({ settingsPath, hookPath: this.hookPath })
+    return this.spawnRun(input, settingsPath)
   }
 
   /**
@@ -466,10 +494,10 @@ export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
     }
   }
 
-  private spawnRun(input: StartRunInput): Promise<RunHandle> {
+  private spawnRun(input: StartRunInput, settingsPath: string): Promise<RunHandle> {
     const args = [
       ...this.extraArgs,
-      ...claudeFlags({ settingsPath: input.settingsPath }),
+      ...claudeFlags({ settingsPath }),
       '-p',
       input.prompt,
       // Omitted entirely, not passed with a sentinel, when unset -- a legacy run with no override
@@ -483,6 +511,7 @@ export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
       env: buildChildEnv(input),
       pauseFlagPath: input.pauseFlagPath,
       startInput: input,
+      runFiles: { settingsPath, hookPath: this.hookPath },
     })
   }
 
@@ -503,6 +532,7 @@ export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
     readonly env: NodeJS.ProcessEnv
     readonly pauseFlagPath: string
     readonly startInput: StartRunInput
+    readonly runFiles: RunHandle['runFiles']
   }): Promise<RunHandle> {
     return new Promise<RunHandle>((resolve, reject) => {
       const child = spawn(this.command, spec.args, {
@@ -616,7 +646,7 @@ export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
       lines.once('close', () => queue.close())
 
       settled = true
-      resolve({ runId: spec.runId, pid: child.pid })
+      resolve({ runId: spec.runId, pid: child.pid, runFiles: spec.runFiles })
     })
   }
 
@@ -718,16 +748,24 @@ export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
    *    handling), so by the time any resume reaches here the pid should already be dead and step 2
    *    should never throw in practice -- this ordering is what keeps the guarantee true regardless.
    * 4. Builds a fresh `StartRunInput`-shaped object entirely from `checkpoint` and the arguments
-   *    given -- `settingsPath`, `hookPath` and `gitIdentity` (the latter reassembled from
-   *    `checkpoint.gitAuthorName`/`checkpoint.gitAuthorEmail`) come from the checkpoint itself
-   *    (fix round 1), not from any prior in-memory record of `runId`, which is what makes resuming
-   *    a `runId` this adapter instance never `start()`-ed work. The checkpoint's worktree and
-   *    pause-flag path are its authoritative view of "where this run currently lives"; the resume
-   *    prompt replaces the original one; everything else carries forward -- then spawns it through
-   *    the exact same `spawnChild` pipeline `start()` uses, with `--resume <sessionId>` appended.
+   *    given -- `gitIdentity` (reassembled from `checkpoint.gitAuthorName`/
+   *    `checkpoint.gitAuthorEmail`) comes from the checkpoint itself (fix round 1), not from any
+   *    prior in-memory record of `runId`, which is what makes resuming a `runId` this adapter
+   *    instance never `start()`-ed work. The checkpoint's worktree and pause-flag path are its
+   *    authoritative view of "where this run currently lives"; the resume prompt replaces the
+   *    original one; everything else carries forward -- then spawns it through the exact same
+   *    `spawnChild` pipeline `start()` uses, with `--resume <sessionId>` appended.
+   *
+   * M12 Task 2: the settings file is rewritten here too (`writeSettingsFile`, straight after the
+   * preflight gate below), at `checkpoint.settingsPath`, registering `checkpoint.hookPath` -- the
+   * exact pair `start()` originally wrote. This is not "the file might be missing" defensiveness so
+   * much as symmetry: `start()` writes on every spawn, and `resume()` is a spawn. The content is
+   * unchanged from what was already there (a paused run's `runDir` still holds the original file),
+   * so this never changes what a resumed run sees, only who last touched it.
    */
   async resume(runId: RunId, checkpoint: Checkpoint, queuedInstruction: string | null): Promise<RunHandle> {
     await this.runPreflightGate(checkpoint.hookPath, runId)
+    writeSettingsFile({ settingsPath: checkpoint.settingsPath, hookPath: checkpoint.hookPath })
 
     // Fix round 3, the coordinator's ruling, still true after the M5 reorder above: this order is
     // load-bearing for the live-child check just below, not merely convenient. Probed 200 times
@@ -776,8 +814,14 @@ export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
       prompt: queuedInstruction ?? DEFAULT_RESUME_PROMPT,
       worktreePath: checkpoint.worktreePath,
       pauseFlagPath: checkpoint.pauseFlagPath,
-      settingsPath: checkpoint.settingsPath,
-      hookPath: checkpoint.hookPath,
+      // Not a fresh `runFilePaths()` call -- the checkpoint's `settingsPath` already names the
+      // run's own scratch directory (`start()` wrote it as `join(runDir, 'settings.json')`), and
+      // this is that same directory recovered from it, purely to keep `resumedInput` a genuine
+      // `StartRunInput` for `RunState.startInput`'s record-keeping. Nothing below reads it back:
+      // the settings file itself was already (re)written above, at `checkpoint.settingsPath`
+      // directly, and `args` below points `--settings` at that same path, not at anything derived
+      // from `runDir` a second time.
+      runDir: dirname(checkpoint.settingsPath),
       gitIdentity: { name: checkpoint.gitAuthorName, email: checkpoint.gitAuthorEmail },
       // Carried forward from the checkpoint, never re-resolved: the run must continue with the SAME
       // model it started with (M10 §6, the `Checkpoint.model` docstring), independently of whatever
@@ -788,7 +832,7 @@ export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
 
     const args = [
       ...this.extraArgs,
-      ...claudeFlags({ settingsPath: resumedInput.settingsPath }),
+      ...claudeFlags({ settingsPath: checkpoint.settingsPath }),
       '-p',
       resumedInput.prompt,
       // Never `--fork-session`: that would mint a new session id on resume
@@ -806,6 +850,7 @@ export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
       env: buildChildEnv(resumedInput),
       pauseFlagPath: resumedInput.pauseFlagPath,
       startInput: resumedInput,
+      runFiles: { settingsPath: checkpoint.settingsPath, hookPath: checkpoint.hookPath },
     })
   }
 

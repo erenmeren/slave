@@ -8,7 +8,7 @@ import {
 import { runFilePaths } from '@ai-team-os/control'
 import { prisma } from '@ai-team-os/db/client'
 import { appendEvent } from '@ai-team-os/events'
-import { writeSettingsFile } from '@ai-team-os/providers'
+import type { RunHandle } from '@ai-team-os/providers'
 import { resolveModel } from './model.js'
 import { pumpRun } from './pump.js'
 import { activePumpRunIds, emailLocalPart, pumps, type TickDeps } from './tick.js'
@@ -274,11 +274,13 @@ export async function dispatchPlanning(deps: TickDeps): Promise<RunId | null> {
   // Declared outside the `try` for the same reason `dispatchReview` does: the catch below needs to
   // tell "never spawned" from "spawned, then something else failed" so it never abandons a live
   // agent.
-  let handle: { readonly pid: number } | null = null
+  let handle: RunHandle | null = null
 
   try {
-    const { settingsPath, pauseFlagPath } = runFilePaths(workspace.repoPath, runId)
-    writeSettingsFile({ settingsPath, hookPath: deps.hookPath })
+    // No `settingsPath` here any more (M12 Task 2): `runFilePaths` hands back the run's own
+    // scratch directory, and what the adapter keeps inside it is that adapter's business, reported
+    // back opaquely on `handle.runFiles` below.
+    const { runDir, pauseFlagPath } = runFilePaths(workspace.repoPath, runId)
 
     const gitIdentity = { name: manager.name, email: `${emailLocalPart(manager)}@aiteamos.local` }
     const model = resolveModel(manager)
@@ -290,8 +292,7 @@ export async function dispatchPlanning(deps: TickDeps): Promise<RunId | null> {
       // the repository for context but never commits, so there is nothing to provision.
       worktreePath: workspace.repoPath,
       pauseFlagPath,
-      settingsPath,
-      hookPath: deps.hookPath,
+      runDir,
       gitIdentity,
       ...(model !== undefined ? { model } : {}),
     })
@@ -310,7 +311,9 @@ export async function dispatchPlanning(deps: TickDeps): Promise<RunId | null> {
       workspaceId: deps.workspaceId,
       events: deps.adapter.events(runId),
       cancel: () => deps.adapter.cancel(runId),
-      spawn: { settingsPath, pauseFlagPath, hookPath: deps.hookPath, gitIdentity, ...(model !== undefined ? { model } : {}) },
+      // `settingsPath`/`hookPath` come from the adapter's own report, not from anything dispatched
+      // here (M12 Task 2).
+      spawn: { ...handle.runFiles, pauseFlagPath, gitIdentity, ...(model !== undefined ? { model } : {}) },
     })
       .then(() => verifyConcludedRun(runId))
       .catch((error: unknown): void => {

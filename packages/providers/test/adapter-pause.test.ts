@@ -66,8 +66,8 @@ describe('ClaudeCodeAdapter pause protocol', () => {
       prompt: 'do the thing',
       worktreePath,
       pauseFlagPath: path.join(worktreePath, 'pause.flag'),
-      settingsPath: path.join(worktreePath, 'settings.json'),
-      hookPath,
+      // M12 Task 2: the adapter derives and writes settings.json inside this directory itself.
+      runDir: worktreePath,
       gitIdentity: { name: 'Test Agent', email: 'agent@example.com' },
     }
   })
@@ -81,6 +81,7 @@ describe('ClaudeCodeAdapter pause protocol', () => {
       command: 'node',
       extraArgs: [FAKE, '--fixture', 'hook-deny'],
       killGraceMs: 300,
+      hookPath,
     })
     const handle = await adapter.start(input)
     await adapter.requestPause(input.runId, 'operator pause')
@@ -118,6 +119,7 @@ describe('ClaudeCodeAdapter pause protocol', () => {
       command: 'node',
       extraArgs: [FAKE, '--fixture', 'hook-deny'],
       killGraceMs: 300,
+      hookPath,
     })
     const handle = await adapter.start(input)
     await adapter.requestPause(input.runId, 'operator pause')
@@ -143,7 +145,7 @@ describe('ClaudeCodeAdapter pause protocol', () => {
     // already sitting in the stdout pipe and gets delivered in one burst,
     // in the same turn as the `hook_denied` that triggers the kill, before
     // the async SIGTERM-then-resolve('paused') below ever gets a turn.
-    const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'hook-deny'] })
+    const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'hook-deny'], hookPath })
     await adapter.start(input)
     await adapter.requestPause(input.runId, 'operator pause')
 
@@ -170,7 +172,7 @@ describe('ClaudeCodeAdapter pause protocol', () => {
   })
 
   it('treats "pause requested, run finished anyway" as a normal outcome', async (): Promise<void> => {
-    const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'complete'] })
+    const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'complete'], hookPath })
     await adapter.start(input)
     await adapter.requestPause(input.runId, 'operator pause')
 
@@ -192,7 +194,7 @@ describe('ClaudeCodeAdapter pause protocol', () => {
     const fixtureRaw = readFileSync(path.join(FIXTURES_DIR, 'hook-fail-open.ndjson'), 'utf8')
     expect(fixtureRaw).toContain('"hook_event":"PostToolUse"')
 
-    const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'hook-fail-open'] })
+    const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'hook-fail-open'], hookPath })
     await adapter.start(input)
     await adapter.requestPause(input.runId, 'operator pause')
 
@@ -216,7 +218,7 @@ describe('ClaudeCodeAdapter pause protocol', () => {
     expect(fixtureRaw).not.toContain('"hook_event":"PreToolUse"')
     expect(fixtureRaw).toContain('"type":"tool_use"')
 
-    const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'hook-never-invoked'] })
+    const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'hook-never-invoked'], hookPath })
     await adapter.start(input)
     await adapter.requestPause(input.runId, 'operator pause')
 
@@ -235,7 +237,7 @@ describe('ClaudeCodeAdapter pause protocol', () => {
     const fixtureRaw = readFileSync(path.join(FIXTURES_DIR, 'complete.ndjson'), 'utf8')
     expect(fixtureRaw).toContain('"hook_event":"PreToolUse"')
 
-    const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'complete'] })
+    const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'complete'], hookPath })
     await adapter.start(input)
     await adapter.requestPause(input.runId, 'operator pause')
 
@@ -245,7 +247,7 @@ describe('ClaudeCodeAdapter pause protocol', () => {
   })
 
   it('resolves finished_first, not a deadline rejection, when requestPause is called after the run already ended (fix round 1, finding 4)', async (): Promise<void> => {
-    const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'complete'] })
+    const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'complete'], hookPath })
     await adapter.start(input)
 
     // Drain events() to completion first: the run's own terminal line has
@@ -274,7 +276,7 @@ describe('ClaudeCodeAdapter pause protocol', () => {
     // and must genuinely reject at the deadline -- the flag file removal
     // still has to happen on that path too, not only on the ones that
     // resolve.
-    const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'hang'], killGraceMs: 300 })
+    const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'hang'], killGraceMs: 300, hookPath })
     await adapter.start(input)
     await adapter.requestPause(input.runId, 'operator pause')
     expect(existsSync(input.pauseFlagPath)).toBe(true)
@@ -291,7 +293,7 @@ describe('ClaudeCodeAdapter pause protocol', () => {
   })
 
   it('uses a per-run flag path so pausing one run cannot freeze another', async (): Promise<void> => {
-    const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'hang'] })
+    const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'hang'], hookPath })
 
     const worktreeB = mkdtempSync(path.join(tmpdir(), 'aiteamos-adapter-pause-b-'))
     try {
@@ -303,7 +305,7 @@ describe('ClaudeCodeAdapter pause protocol', () => {
         runId: runIdB,
         worktreePath: worktreeB,
         pauseFlagPath: path.join(worktreeB, 'pause.flag'),
-        settingsPath: path.join(worktreeB, 'settings.json'),
+        runDir: worktreeB,
       }
 
       const handleA = await adapter.start(inputA)
@@ -342,12 +344,18 @@ describe('ClaudeCodeAdapter pause protocol', () => {
     )
     chmodSync(alwaysDenyHookPath, 0o755)
 
-    const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'complete'] })
-    const badInput: StartRunInput = { ...input, hookPath: alwaysDenyHookPath }
+    // M12 Task 2: the hook is a fact about the adapter instance now, not the per-run input -- this
+    // adapter is deliberately configured with the non-discriminating hook, rather than overriding
+    // it on `input`.
+    const adapter = new ClaudeCodeAdapter({
+      command: 'node',
+      extraArgs: [FAKE, '--fixture', 'complete'],
+      hookPath: alwaysDenyHookPath,
+    })
 
-    await expect(adapter.start(badInput)).rejects.toThrow(/preflight/i)
+    await expect(adapter.start(input)).rejects.toThrow(/preflight/i)
     // No run was ever registered: requestPause against it must fail loudly
     // rather than silently look armed.
-    await expect(adapter.requestPause(badInput.runId, 'operator pause')).rejects.toThrow()
+    await expect(adapter.requestPause(input.runId, 'operator pause')).rejects.toThrow()
   })
 })

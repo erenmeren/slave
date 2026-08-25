@@ -84,7 +84,7 @@ interface Recorder {
 
 /** The `tick.test.ts` `recordingAdapter` precedent: the real adapter with `start()` observed. */
 function recordingAdapter(): Recorder {
-  const inner = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'complete'] })
+  const inner = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'complete'], hookPath: REAL_GATE })
   const starts: StartRunInput[] = []
   const adapter = {
     id: inner.id,
@@ -150,7 +150,6 @@ describe('the model chain reaches a dispatched run, and setAgentModel changes th
     const deps: TickDeps = {
       workspaceId: brandWorkspaceId(workspace.id),
       adapter: recorder.adapter,
-      hookPath: REAL_GATE,
     }
 
     const first = await tick(deps)

@@ -63,6 +63,10 @@ describe('ClaudeCodeAdapter.resume', () => {
   let input: StartRunInput
   let adapter: ClaudeCodeAdapter
   let checkpoint: Checkpoint
+  /** The handle `beforeEach`'s own `start()` call returned -- its `runFiles` are what `checkpoint`
+   * (below) is seeded from, and what tests that assert against "the same settings file" compare
+   * against, now that `StartRunInput` no longer carries `settingsPath`/`hookPath` itself. */
+  let startHandle: RunHandle
 
   /**
    * Drains this run's event stream (so its process's terminal `result` line -- the fake CLI's
@@ -113,15 +117,15 @@ describe('ClaudeCodeAdapter.resume', () => {
       prompt: 'do the thing',
       worktreePath,
       pauseFlagPath: path.join(worktreePath, 'pause.flag'),
-      settingsPath: path.join(worktreePath, 'settings.json'),
-      hookPath,
+      // M12 Task 2: the adapter derives and writes settings.json inside this directory itself.
+      runDir: worktreePath,
       gitIdentity: { name: 'Test Agent', email: 'agent@example.com' },
     }
 
     // env-echo both completes immediately (nothing lingers for afterEach to clean up) and, after
     // this change, echoes the spawned argv -- exactly what resume()'s own spawn needs proven too.
-    adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'env-echo'] })
-    await adapter.start(input)
+    adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'env-echo'], hookPath })
+    startHandle = await adapter.start(input)
     // Drain the initial run so its process has fully exited before any test below calls
     // resume() against the same runId. Not load-bearing for resume() itself (fix round 1: it no
     // longer reads anything back off this adapter's memory of `start()`), only so a run's own
@@ -142,12 +146,12 @@ describe('ClaudeCodeAdapter.resume', () => {
       dirtyFiles: ['src/index.ts'],
       cumulativeCostUsd: 0.42,
       cumulativeTokens: 1234,
-      // Equal to `input`'s own values here, deliberately -- these tests exercise other parts of
-      // the contract. The divergence test below ("resumes using the checkpoint's own spawn
-      // fields...") is the one that sets these to something different from `input` and proves
-      // which source actually reached the spawned process.
-      settingsPath: input.settingsPath,
-      hookPath: input.hookPath,
+      // Equal to `startHandle.runFiles`'s own values here, deliberately -- these tests exercise
+      // other parts of the contract. The divergence test below ("resumes using the checkpoint's
+      // own spawn fields...") is the one that sets these to something different and proves which
+      // source actually reached the spawned process.
+      settingsPath: startHandle.runFiles.settingsPath,
+      hookPath: startHandle.runFiles.hookPath,
       gitAuthorName: input.gitIdentity.name,
       gitAuthorEmail: input.gitIdentity.email,
     }
@@ -213,19 +217,19 @@ describe('ClaudeCodeAdapter.resume', () => {
     expect(args).toContain('--permission-mode')
     expect(args).toContain('bypassPermissions')
     expect(args).toContain('--settings')
-    expect(args).toContain(input.settingsPath)
+    expect(args).toContain(startHandle.runFiles.settingsPath)
     // Same worktree: cwd, echoed by the fake CLI's env-echo fixture.
     expect(payload?.['cwd']).toBe(checkpoint.worktreePath)
   })
 
   it("resumes using the checkpoint's own spawn fields, not the adapter's memory of the original start()", async (): Promise<void> => {
-    // Deliberately different from `input`'s own settingsPath/gitIdentity, and absolute (required
-    // by `claudeFlags`) -- if `resume()` still read `settingsPath`/`gitAuthorName`/
+    // Deliberately different from `startHandle.runFiles`/`input.gitIdentity`, and absolute
+    // (required by `claudeFlags`) -- if `resume()` still read `settingsPath`/`gitAuthorName`/
     // `gitAuthorEmail` off `mustGetRun(runId).startInput` the way it did before fix round 1, the
-    // spawned process would show `input`'s values here instead, and this test would fail. Every
-    // other test in this file leaves the checkpoint's four fields equal to `input`'s own (set in
-    // `beforeEach`), which is exactly why none of them can tell the two sources apart -- only
-    // this divergence proves which one `resume()` actually used.
+    // spawned process would show the original start()'s values here instead, and this test would
+    // fail. Every other test in this file leaves the checkpoint's four fields equal to the
+    // original start()'s own (set in `beforeEach`), which is exactly why none of them can tell the
+    // two sources apart -- only this divergence proves which one `resume()` actually used.
     const divergentCheckpoint: Checkpoint = {
       ...checkpoint,
       settingsPath: path.join(worktreePath, 'divergent-settings.json'),
@@ -241,7 +245,7 @@ describe('ClaudeCodeAdapter.resume', () => {
     const settingsIndex = args.indexOf('--settings')
     expect(settingsIndex).toBeGreaterThanOrEqual(0)
     expect(args[settingsIndex + 1]).toBe(divergentCheckpoint.settingsPath)
-    expect(args[settingsIndex + 1]).not.toBe(input.settingsPath)
+    expect(args[settingsIndex + 1]).not.toBe(startHandle.runFiles.settingsPath)
 
     expect(env['GIT_AUTHOR_NAME']).toBe('Divergent Author')
     expect(env['GIT_AUTHOR_EMAIL']).toBe('divergent@example.com')
@@ -341,7 +345,7 @@ describe('ClaudeCodeAdapter.resume', () => {
       runId: liveRunId,
       pauseFlagPath: path.join(worktreePath, 'live-pause.flag'),
     }
-    const liveAdapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'hang'] })
+    const liveAdapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'hang'], hookPath })
     // Every pid this test's adapter spawns, tracked the moment it exists -- not only the pid the
     // passing behaviour expects. Fix round 3, finding 1: under a regression, `resume()` below
     // resolves instead of rejecting, spawning a *second* real process for `liveRunId`; the
@@ -360,8 +364,8 @@ describe('ClaudeCodeAdapter.resume', () => {
         ...checkpoint,
         worktreePath: liveInput.worktreePath,
         pauseFlagPath: liveInput.pauseFlagPath,
-        settingsPath: liveInput.settingsPath,
-        hookPath: liveInput.hookPath,
+        settingsPath: handle.runFiles.settingsPath,
+        hookPath: handle.runFiles.hookPath,
       }
 
       // A plain try/catch, not `await expect(...).rejects.toThrow(...)`: the latter's whole
@@ -412,7 +416,7 @@ describe('ClaudeCodeAdapter.resume', () => {
       runId: liveRunId,
       pauseFlagPath: liveFlagPath,
     }
-    const liveAdapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'hang'] })
+    const liveAdapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'hang'], hookPath })
     const pids: number[] = []
 
     try {
@@ -427,8 +431,8 @@ describe('ClaudeCodeAdapter.resume', () => {
         ...checkpoint,
         worktreePath: liveInput.worktreePath,
         pauseFlagPath: liveInput.pauseFlagPath,
-        settingsPath: liveInput.settingsPath,
-        hookPath: liveInput.hookPath,
+        settingsPath: handle.runFiles.settingsPath,
+        hookPath: handle.runFiles.hookPath,
       }
 
       let rejection: unknown
@@ -493,7 +497,7 @@ describe('ClaudeCodeAdapter.resume', () => {
       runId: orphanRunId,
       pauseFlagPath: path.join(worktreePath, 'orphan-pause.flag'),
     }
-    const orphanAdapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [orphanScript] })
+    const orphanAdapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [orphanScript], hookPath })
     const startPidFile = path.join(worktreePath, 'start-grandchild.pid')
     const resumePidFile = path.join(worktreePath, 'resume-grandchild.pid')
     const grandchildPids: number[] = []
@@ -527,8 +531,8 @@ describe('ClaudeCodeAdapter.resume', () => {
         ...checkpoint,
         worktreePath: orphanInput.worktreePath,
         pauseFlagPath: orphanInput.pauseFlagPath,
-        settingsPath: orphanInput.settingsPath,
-        hookPath: orphanInput.hookPath,
+        settingsPath: handle.runFiles.settingsPath,
+        hookPath: handle.runFiles.hookPath,
       }
       process.env['AITEAMOS_TEST_ORPHAN_PID_FILE'] = resumePidFile
       const resumedHandle = await orphanAdapter.resume(orphanRunId, orphanCheckpoint, null)
@@ -612,7 +616,9 @@ describe('ClaudeCodeAdapter.resume against a runId this adapter instance never s
 
       // A fresh adapter instance, deliberately -- never handed this runId to `start()`, matching
       // what a daemon restart actually looks like: a new process with no memory of prior runs.
-      const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'env-echo'] })
+      // `resume()` never reads `this.hookPath` (only `checkpoint.hookPath`, below), so this value
+      // is only here to satisfy the now-mandatory constructor option.
+      const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'env-echo'], hookPath })
       const runId = neverStartedRunId()
       const checkpoint: Checkpoint = {
         sessionId: 'fake-session-orphan',

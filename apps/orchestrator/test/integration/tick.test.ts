@@ -85,7 +85,7 @@ interface Recorder {
  * called; the cast is what says so out loud rather than stubbing four more to satisfy a type.
  */
 function recordingAdapter(options: { readonly failEvents?: boolean } = {}): Recorder {
-  const inner = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'complete'] })
+  const inner = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'complete'], hookPath: REAL_GATE })
   const starts: StartRunInput[] = []
   const cancelled: string[] = []
   const adapter = {
@@ -120,8 +120,7 @@ describe('tick', () => {
     repos.push(fixture.repoPath)
     deps = {
       workspaceId: brandWorkspaceId(fixture.workspaceId),
-      adapter: new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'complete'] }),
-      hookPath: REAL_GATE,
+      adapter: new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'complete'], hookPath: REAL_GATE }),
     }
   })
 

@@ -67,8 +67,7 @@ async function addBackendAgent(teamId: string, name = 'Beryl'): Promise<string> 
 function depsFor(workspaceId: string, fixture = 'm8-flow', hookPath = REAL_GATE): TickDeps {
   return {
     workspaceId: brandWorkspaceId(workspaceId),
-    adapter: new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', fixture] }),
-    hookPath,
+    adapter: new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', fixture], hookPath }),
   }
 }
 

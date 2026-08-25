@@ -81,8 +81,7 @@ async function eventTypesFor(workspaceId: string): Promise<readonly DomainEventT
 async function seedReviewingTask(fixture: Fixture, reviewFixture = 'review-approve'): Promise<TickDeps> {
   const implDeps: TickDeps = {
     workspaceId: brandWorkspaceId(fixture.workspaceId),
-    adapter: new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'complete'] }),
-    hookPath: REAL_GATE,
+    adapter: new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'complete'], hookPath: REAL_GATE }),
   }
   const report = await tick(implDeps)
   expect(report.started).toHaveLength(1)
@@ -95,8 +94,7 @@ async function seedReviewingTask(fixture: Fixture, reviewFixture = 'review-appro
 
   return {
     workspaceId: brandWorkspaceId(fixture.workspaceId),
-    adapter: new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', reviewFixture] }),
-    hookPath: REAL_GATE,
+    adapter: new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', reviewFixture], hookPath: REAL_GATE }),
   }
 }
 
@@ -370,8 +368,7 @@ describe('dispatchReviews', () => {
 
     const approveDeps: TickDeps = {
       workspaceId: reviewDeps.workspaceId,
-      adapter: new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'review-approve'] }),
-      hookPath: REAL_GATE,
+      adapter: new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'review-approve'], hookPath: REAL_GATE }),
     }
     const second = await dispatchReviews(approveDeps)
     expect(second).toHaveLength(1)

@@ -69,7 +69,7 @@ async function seed(): Promise<Fixture> {
 
 /** An adapter over the fake CLI, one fixture per spawn behaviour. */
 function fakeAdapter(fixture: string): ClaudeCodeAdapter {
-  return new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', fixture] })
+  return new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', fixture], hookPath: REAL_GATE })
 }
 
 describe('executing a resume intent from the daemon', () => {
@@ -87,7 +87,6 @@ describe('executing a resume intent from the daemon', () => {
     await tick({
       workspaceId: brandWorkspaceId(fixture.workspaceId),
       adapter: fakeAdapter('hook-deny'),
-      hookPath: REAL_GATE,
     })
     await drainPumps()
     const run = await prisma.agentRun.findFirstOrThrow()
@@ -123,7 +122,7 @@ describe('executing a resume intent from the daemon', () => {
     // raw-payload seam, which is how `adapter-resume.test.ts` proves an injected message reached
     // the spawned process. Ground truth is the child, not this test's memory of what it asked for.
     const adapter = fakeAdapter('env-echo')
-    await tick({ workspaceId: brandWorkspaceId(fixture.workspaceId), adapter, hookPath: REAL_GATE })
+    await tick({ workspaceId: brandWorkspaceId(fixture.workspaceId), adapter })
     await drainPumps()
 
     const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: runId } })
@@ -157,13 +156,11 @@ describe('executing a resume intent from the daemon', () => {
     await tick({
       workspaceId: brandWorkspaceId(fixture.workspaceId),
       adapter: fakeAdapter('env-echo'),
-      hookPath: REAL_GATE,
     })
     await drainPumps()
     await tick({
       workspaceId: brandWorkspaceId(fixture.workspaceId),
       adapter: fakeAdapter('env-echo'),
-      hookPath: REAL_GATE,
     })
     await drainPumps()
 
@@ -183,7 +180,6 @@ describe('executing a resume intent from the daemon', () => {
     await tick({
       workspaceId: brandWorkspaceId(fixture.workspaceId),
       adapter: fakeAdapter('env-echo'),
-      hookPath: REAL_GATE,
     })
     await drainPumps()
 
@@ -215,7 +211,7 @@ describe('executing a resume intent from the daemon', () => {
       loggedErrors.push(args)
     }
     try {
-      await tick({ workspaceId: brandWorkspaceId(fixture.workspaceId), adapter: fakeAdapter('env-echo'), hookPath: REAL_GATE })
+      await tick({ workspaceId: brandWorkspaceId(fixture.workspaceId), adapter: fakeAdapter('env-echo') })
       await drainPumps()
     } finally {
       console.error = originalConsoleError

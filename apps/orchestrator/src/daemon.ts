@@ -8,7 +8,6 @@ import { activePumpRunIds, drainPumps, tick } from './tick.js'
 export interface DaemonDeps {
   readonly workspaceId: WorkspaceId
   readonly adapter: AgentRuntimeAdapter
-  readonly hookPath: string
   readonly periodMs: number
 }
 

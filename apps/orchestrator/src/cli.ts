@@ -134,6 +134,10 @@ function buildAdapter(): ClaudeCodeAdapter {
   return new ClaudeCodeAdapter({
     command,
     ...(extra === undefined || extra === '' ? {} : { extraArgs: extra.split(' ') }),
+    // M12 Task 2: the hook path is a fact about this adapter instance now, not a per-run input --
+    // it used to be threaded through `TickDeps`/`DaemonDeps` and into every `adapter.start()` call;
+    // now it is set once, here.
+    hookPath: hookPath(),
   })
 }
 
@@ -186,7 +190,6 @@ export async function main(argv: readonly string[]): Promise<number> {
       const report = await tick({
         workspaceId: await resolveWorkspace(flags),
         adapter: buildAdapter(),
-        hookPath: hookPath(),
       })
       process.stdout.write(`${JSON.stringify(report, null, 2)}\n`)
 
@@ -205,7 +208,6 @@ export async function main(argv: readonly string[]): Promise<number> {
       await runDaemon({
         workspaceId: await resolveWorkspace(flags),
         adapter: buildAdapter(),
-        hookPath: hookPath(),
         periodMs: Number.isFinite(period) && period > 0 ? period : 1000,
       })
       return 0

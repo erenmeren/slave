@@ -33,6 +33,7 @@ async function collectEnvFrom(adapter: ClaudeCodeAdapter, id: RunId): Promise<Re
 describe('ClaudeCodeAdapter', () => {
   let worktreePath: string
   let input: StartRunInput
+  let hookPath: string
 
   beforeEach(() => {
     worktreePath = mkdtempSync(path.join(tmpdir(), 'aiteamos-adapter-'))
@@ -41,7 +42,7 @@ describe('ClaudeCodeAdapter', () => {
     // discriminating hook script even though most of them never touch
     // pause behavior directly. A fresh copy per test, not the repo's own
     // file, since nothing here has any business mutating that.
-    const hookPath = path.join(worktreePath, 'pause-gate.sh')
+    hookPath = path.join(worktreePath, 'pause-gate.sh')
     writeFileSync(hookPath, readFileSync(realGate))
     chmodSync(hookPath, 0o755)
     input = {
@@ -49,8 +50,10 @@ describe('ClaudeCodeAdapter', () => {
       prompt: 'do the thing',
       worktreePath,
       pauseFlagPath: path.join(worktreePath, 'pause.flag'),
-      settingsPath: path.join(worktreePath, 'settings.json'),
-      hookPath,
+      // M12 Task 2: the run's own scratch directory, not a settings path -- the adapter derives
+      // and writes `settings.json` inside it. Reusing `worktreePath` here (rather than a separate
+      // directory) keeps this file's assertions unchanged from before the refactor.
+      runDir: worktreePath,
       gitIdentity: { name: 'Test Agent', email: 'agent@example.com' },
     }
   })
@@ -60,7 +63,7 @@ describe('ClaudeCodeAdapter', () => {
   })
 
   it('streams normalized events and reports the pid', async (): Promise<void> => {
-    const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'complete'] })
+    const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'complete'], hookPath })
     const handle = await adapter.start(input)
     expect(handle.pid).toBeGreaterThan(0)
 
@@ -81,7 +84,7 @@ describe('ClaudeCodeAdapter', () => {
 
   it('sets git identity in the child environment and never writes git config', async (): Promise<void> => {
     // fixture 'env-echo' prints process.env keys as a result payload
-    const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'env-echo'] })
+    const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'env-echo'], hookPath })
     await adapter.start(input)
     const env = await collectEnvFrom(adapter, input.runId)
     expect(env['GIT_AUTHOR_NAME']).toBe(input.gitIdentity.name)
@@ -93,7 +96,7 @@ describe('ClaudeCodeAdapter', () => {
 
   it('appends --model to the spawned args when input.model is set', async (): Promise<void> => {
     // fixture 'env-echo' also carries the child's own process.argv in its terminal result payload.
-    const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'env-echo'] })
+    const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'env-echo'], hookPath })
     await adapter.start({ ...input, model: 'test-model-a' })
     for await (const _event of adapter.events(input.runId)) {
       void _event // drain to completion
@@ -106,7 +109,7 @@ describe('ClaudeCodeAdapter', () => {
   })
 
   it('omits --model entirely when input.model is not set (the legacy no-override path)', async (): Promise<void> => {
-    const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'env-echo'] })
+    const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'env-echo'], hookPath })
     await adapter.start(input) // `input` carries no `model` field
     for await (const _event of adapter.events(input.runId)) {
       void _event // drain to completion
@@ -117,7 +120,7 @@ describe('ClaudeCodeAdapter', () => {
   })
 
   it('reports the ADR 0001 capability profile verbatim', () => {
-    const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'complete'] })
+    const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'complete'], hookPath })
     expect(adapter.getCapabilities()).toEqual({
       canPauseMidRun: true,
       canResumeSession: true,
@@ -127,7 +130,7 @@ describe('ClaudeCodeAdapter', () => {
   })
 
   it('cancels a hung run: the process no longer exists after cancel() resolves', async (): Promise<void> => {
-    const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'hang'], killGraceMs: 500 })
+    const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'hang'], killGraceMs: 500, hookPath })
     const handle = await adapter.start(input)
     expect(isAlive(handle.pid)).toBe(true)
 
@@ -139,7 +142,7 @@ describe('ClaudeCodeAdapter', () => {
   it('spawns the child with cwd set to the worktree path', async (): Promise<void> => {
     // fixture 'env-echo' also carries the child's process.cwd() in its
     // terminal result payload, alongside process.env.
-    const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'env-echo'] })
+    const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'env-echo'], hookPath })
     await adapter.start(input)
     for await (const _event of adapter.events(input.runId)) {
       void _event // drain to completion
@@ -161,7 +164,7 @@ describe('ClaudeCodeAdapter', () => {
     }
     process.once('uncaughtException', onUncaughtException)
     try {
-      const adapter = new ClaudeCodeAdapter({ command: '/nope/does-not-exist-claude-binary' })
+      const adapter = new ClaudeCodeAdapter({ command: '/nope/does-not-exist-claude-binary', hookPath })
       await expect(adapter.start(input)).rejects.toThrow(/failed to spawn/)
       // Give the asynchronous OS-level error room to surface as an
       // uncaught exception if it were going to.
@@ -179,7 +182,7 @@ describe('ClaudeCodeAdapter', () => {
     }
     process.once('uncaughtException', onUncaughtException)
     try {
-      const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'complete'] })
+      const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'complete'], hookPath })
       const badInput: StartRunInput = { ...input, worktreePath: path.join(worktreePath, 'does-not-exist') }
       await expect(adapter.start(badInput)).rejects.toThrow(/failed to spawn/)
       await new Promise((resolve) => setTimeout(resolve, 50))
