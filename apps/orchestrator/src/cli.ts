@@ -17,7 +17,7 @@ import {
 } from '@ai-team-os/control'
 import { prisma } from '@ai-team-os/db/client'
 import { workspaceId as brandWorkspaceId, type WorkspaceId } from '@ai-team-os/domain'
-import { buildRegistry, type AdapterRegistry } from '@ai-team-os/providers'
+import { buildRegistry, type AdapterRegistry, type ProviderKind } from '@ai-team-os/providers'
 import { runDaemon } from './daemon.js'
 import { NON_TERMINAL_RUN_STATUSES } from './world.js'
 import { executeResume } from './resume.js'
@@ -40,22 +40,25 @@ const USAGE = `usage: orchestrator <command> [options]
   set-goal --workspace <id> --goal "<text>"
                                        set the operator's standing instruction for what this
                                        workspace's agents are working toward
-  create-template --name <n> --role <r> [--model <m>] [--description <d>]
-                                       add a reusable agent template to the catalog
+  create-template --name <n> --role <r> [--model <m> --provider <p>] [--description <d>]
+                                       add a reusable agent template to the catalog. --model and
+                                       --provider are a pair: give both or neither.
   create-company --name <n>            add a company (a persistent roster) to the catalog
   add-team --company <id> --name <n>   add a team to a company's roster
-  add-agent --team <companyTeamId> --template <id> --name <n> [--model <m>]
+  add-agent --team <companyTeamId> --template <id> --name <n> [--model <m> --provider <p>]
                                        add a roster member to a company team, instantiated from a
-                                       template
+                                       template. --model and --provider are a pair: give both or
+                                       neither.
   assign-company --workspace <id> --company <id>
                                        assign a company's roster to a workspace, materializing a
                                        project team/worker for every roster member with no
                                        matching row there yet
-  set-model --agent <workerId> --model <m>
+  set-model --agent <workerId> --model <m> --provider <p>
   set-model --agent <workerId> --clear
-                                       set or clear a worker's own model override -- the top of
-                                       the resolution chain, above its roster row and its
-                                       template's default
+                                       set or clear a worker's own model+provider override -- the
+                                       top of the resolution chain, above its roster row and its
+                                       template's default. A model only means something inside the
+                                       provider that runs it, so --model requires --provider.
 
   clear-halt and resume are different actions and it matters which you reach for.
   resume --run continues ONE paused run that is waiting to be continued.
@@ -379,9 +382,11 @@ export async function main(argv: readonly string[]): Promise<number> {
       const role = requireFlag(flags, 'role')
       const description = flags['description']
       const model = flags['model']
+      const provider = flags['provider']
       const result = await createTemplate(name, role, {
         ...(description !== undefined ? { description } : {}),
         ...(model !== undefined ? { defaultModel: model } : {}),
+        ...(provider !== undefined ? { provider: provider as ProviderKind } : {}),
       })
       if (!result.ok) throw new Error(refusalText(result.error))
       process.stdout.write(`template ${result.value.id} created\n`)
@@ -410,8 +415,10 @@ export async function main(argv: readonly string[]): Promise<number> {
       const templateId = requireFlag(flags, 'template')
       const name = requireFlag(flags, 'name')
       const model = flags['model']
+      const provider = flags['provider']
       const result = await addCompanyAgent(companyTeamId, templateId, name, {
         ...(model !== undefined ? { model } : {}),
+        ...(provider !== undefined ? { provider: provider as ProviderKind } : {}),
       })
       if (!result.ok) throw new Error(refusalText(result.error))
       process.stdout.write(`agent ${result.value.id} created\n`)
@@ -434,8 +441,13 @@ export async function main(argv: readonly string[]): Promise<number> {
       // key to `undefined` rather than leaving it absent, so `!== undefined` can never see it.
       const clear = 'clear' in flags
       const model = flags['model']
+      const provider = flags['provider']
       if (!clear && model === undefined) throw new Error('--model or --clear is required')
-      const result = await setAgentModel(agentId, clear ? null : (model as string))
+      const result = await setAgentModel(
+        agentId,
+        clear ? null : (model as string),
+        clear ? null : ((provider as ProviderKind | undefined) ?? null),
+      )
       if (!result.ok) throw new Error(refusalText(result.error))
       process.stdout.write(clear ? `model cleared on ${agentId}\n` : `model set to ${model} on ${agentId}\n`)
       return 0

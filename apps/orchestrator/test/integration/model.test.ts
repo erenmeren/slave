@@ -133,7 +133,10 @@ describe('the model chain reaches a dispatched run, and setAgentModel changes th
     if (!company.ok) throw new Error('setup: createCompany failed')
     const team = await addCompanyTeam(company.value.id, 'Engineering')
     if (!team.ok) throw new Error('setup: addCompanyTeam failed')
-    const template = await createTemplate('Backend Engineer', 'backend', { defaultModel: 'test-model-a' })
+    const template = await createTemplate('Backend Engineer', 'backend', {
+      defaultModel: 'test-model-a',
+      provider: 'claude_code',
+    })
     if (!template.ok) throw new Error('setup: createTemplate failed')
     const rosterAgent = await addCompanyAgent(team.value.id, template.value.id, 'Atlas')
     if (!rosterAgent.ok) throw new Error('setup: addCompanyAgent failed')
@@ -170,7 +173,7 @@ describe('the model chain reaches a dispatched run, and setAgentModel changes th
     const concludedTask = await prisma.task.findUniqueOrThrow({ where: { id: firstTask.id } })
     expect(concludedTask.activeRunId).toBeNull()
 
-    const override = await setAgentModel(worker.id, 'test-model-b')
+    const override = await setAgentModel(worker.id, 'test-model-b', 'claude_code')
     expect(override.ok).toBe(true)
 
     await prisma.task.create({

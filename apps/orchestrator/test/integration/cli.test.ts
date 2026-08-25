@@ -257,13 +257,22 @@ describe('the orchestrator CLI', () => {
     expect(`${result.stdout}${result.stderr}`).toMatch(/--company is required/)
   })
 
-  it('sets a worker model override, then clears it -- a set/clear round trip', async (): Promise<void> => {
-    const setResult = await runCli(['set-model', '--agent', fixture.agentId, '--model', 'claude-opus'])
+  it('sets a worker model+provider override, then clears both -- a set/clear round trip', async (): Promise<void> => {
+    const setResult = await runCli([
+      'set-model',
+      '--agent',
+      fixture.agentId,
+      '--model',
+      'claude-opus',
+      '--provider',
+      'claude_code',
+    ])
 
     expect(setResult.code).toBe(0)
     expect(setResult.stdout).toMatch(new RegExp(`^model set to claude-opus on ${fixture.agentId}$`, 'm'))
     const afterSet = await prisma.agent.findUniqueOrThrow({ where: { id: fixture.agentId } })
     expect(afterSet.model).toBe('claude-opus')
+    expect(afterSet.provider).toBe('claude_code')
 
     const clearResult = await runCli(['set-model', '--agent', fixture.agentId, '--clear'])
 
@@ -271,6 +280,7 @@ describe('the orchestrator CLI', () => {
     expect(clearResult.stdout).toMatch(new RegExp(`^model cleared on ${fixture.agentId}$`, 'm'))
     const afterClear = await prisma.agent.findUniqueOrThrow({ where: { id: fixture.agentId } })
     expect(afterClear.model).toBeNull()
+    expect(afterClear.provider).toBeNull()
   })
 
   it('exits non-zero for set-model with neither --model nor --clear given', async (): Promise<void> => {
@@ -280,15 +290,40 @@ describe('the orchestrator CLI', () => {
     expect(`${result.stdout}${result.stderr}`).toMatch(/--model or --clear is required/)
   })
 
+  it('exits non-zero for set-model with --model and no --provider', async (): Promise<void> => {
+    const result = await runCli(['set-model', '--agent', fixture.agentId, '--model', 'claude-opus'])
+
+    expect(result.code).not.toBe(0)
+    expect(`${result.stdout}${result.stderr}`).toMatch(/a model must name the provider that runs it/)
+    const agent = await prisma.agent.findUniqueOrThrow({ where: { id: fixture.agentId } })
+    expect(agent.model).toBeNull()
+  })
+
   it('exits non-zero for set-model against an unknown agent', async (): Promise<void> => {
-    const result = await runCli(['set-model', '--agent', 'nope', '--model', 'claude-opus'])
+    const result = await runCli([
+      'set-model',
+      '--agent',
+      'nope',
+      '--model',
+      'claude-opus',
+      '--provider',
+      'claude_code',
+    ])
 
     expect(result.code).not.toBe(0)
     expect(`${result.stdout}${result.stderr}`).toMatch(/no agent with id nope/)
   })
 
   it('exits non-zero for set-model with an empty --model', async (): Promise<void> => {
-    const result = await runCli(['set-model', '--agent', fixture.agentId, '--model', ''])
+    const result = await runCli([
+      'set-model',
+      '--agent',
+      fixture.agentId,
+      '--model',
+      '',
+      '--provider',
+      'claude_code',
+    ])
 
     expect(result.code).not.toBe(0)
     expect(`${result.stdout}${result.stderr}`).toMatch(/a model must be a non-empty text/)

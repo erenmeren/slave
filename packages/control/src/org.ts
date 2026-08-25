@@ -1,6 +1,7 @@
 import { prisma } from '@ai-team-os/db/client'
 import { type Result, err, ok } from '@ai-team-os/domain'
 import { appendEvent } from '@ai-team-os/events'
+import type { ProviderKind } from '@ai-team-os/providers'
 import type { ControlRefusal } from './refusal.js'
 
 /**
@@ -16,6 +17,46 @@ function isUniqueConstraintViolation(error: unknown): boolean {
 }
 
 /**
+ * Every member of `ProviderKind` (M12 Task 7), as data. `@ai-team-os/providers` types the kind as
+ * a plain string union -- see that package's `types.ts` docstring for why it does not import the
+ * generated Prisma enum -- so there is no runtime value to check an untrusted string against
+ * without this list living somewhere. It lives here rather than in `@ai-team-os/providers`
+ * because the only caller that needs to validate an UNTRUSTED provider string (a CLI flag, a web
+ * request body) is this module's own write surface; nothing downstream resolves or dispatches on
+ * it (Task 8's job).
+ */
+const PROVIDER_KINDS = ['claude_code', 'cursor'] as const satisfies readonly ProviderKind[]
+
+// Compile-time completeness check, mirroring `packages/db/src/enums.ts`'s own `AssertNever`
+// idiom: `satisfies` above proves every element of `PROVIDER_KINDS` is a `ProviderKind`
+// (soundness); this proves the reverse -- every `ProviderKind` is in `PROVIDER_KINDS`
+// (completeness) -- so a third provider kind added to the type without a matching entry here
+// fails the build instead of silently validating as "unknown".
+type _AssertNever<T extends never> = T
+type _ProviderKindsComplete = _AssertNever<Exclude<ProviderKind, (typeof PROVIDER_KINDS)[number]>>
+
+function isProviderKind(value: string): value is ProviderKind {
+  return (PROVIDER_KINDS as readonly string[]).includes(value)
+}
+
+/**
+ * The pair rule (M12 Task 7): a model only means something inside a provider, so the two columns
+ * always move together -- both set, or both `null`. `undefined` reads as "this half was not
+ * supplied" for both, so an options bag that omits both is the ordinary "leave unset" case, not a
+ * violation; supplying exactly one of the two is what this catches. Returns the `model_without_
+ * provider` refusal object -- the same kind covers "provider with no model" too (the brief's own
+ * wording: "setting one without the other").
+ */
+function pairRefusal(
+  model: string | null | undefined,
+  provider: string | null | undefined,
+): { readonly kind: 'model_without_provider' } | null {
+  const hasModel = model !== null && model !== undefined
+  const hasProvider = provider !== null && provider !== undefined
+  return hasModel !== hasProvider ? { kind: 'model_without_provider' } : null
+}
+
+/**
  * Adds a reusable agent template to the catalog (M10 §4) -- the definition `addCompanyAgent`
  * below instantiates onto a company's roster. Templates are append-only (Decision 9): there is no
  * update or delete here, only creation.
@@ -23,12 +64,17 @@ function isUniqueConstraintViolation(error: unknown): boolean {
 export async function createTemplate(
   name: string,
   role: string,
-  options?: { readonly description?: string; readonly defaultModel?: string },
+  options?: { readonly description?: string; readonly defaultModel?: string; readonly provider?: ProviderKind },
 ): Promise<Result<{ readonly id: string }, ControlRefusal>> {
   if (name.trim() === '' || role.trim() === '') return err({ kind: 'invalid_name' })
   if (options?.defaultModel !== undefined && options.defaultModel.trim() === '') {
     return err({ kind: 'invalid_model' })
   }
+  if (options?.provider !== undefined && !isProviderKind(options.provider)) {
+    return err({ kind: 'invalid_provider', provider: options.provider })
+  }
+  const pairErr = pairRefusal(options?.defaultModel, options?.provider)
+  if (pairErr !== null) return err(pairErr)
 
   try {
     const template = await prisma.agentTemplate.create({
@@ -37,6 +83,7 @@ export async function createTemplate(
         role,
         ...(options?.description !== undefined ? { description: options.description } : {}),
         ...(options?.defaultModel !== undefined ? { defaultModel: options.defaultModel } : {}),
+        ...(options?.provider !== undefined ? { provider: options.provider } : {}),
       },
     })
     return ok({ id: template.id })
@@ -87,10 +134,15 @@ export async function addCompanyAgent(
   companyTeamId: string,
   templateId: string,
   name: string,
-  options?: { readonly model?: string },
+  options?: { readonly model?: string; readonly provider?: ProviderKind },
 ): Promise<Result<{ readonly id: string }, ControlRefusal>> {
   if (name.trim() === '') return err({ kind: 'invalid_name' })
   if (options?.model !== undefined && options.model.trim() === '') return err({ kind: 'invalid_model' })
+  if (options?.provider !== undefined && !isProviderKind(options.provider)) {
+    return err({ kind: 'invalid_provider', provider: options.provider })
+  }
+  const pairErr = pairRefusal(options?.model, options?.provider)
+  if (pairErr !== null) return err(pairErr)
 
   const team = await prisma.companyTeam.findUnique({ where: { id: companyTeamId }, select: { id: true } })
   if (team === null) return err({ kind: 'company_team_not_found', companyTeamId })
@@ -105,6 +157,7 @@ export async function addCompanyAgent(
         templateId,
         name,
         ...(options?.model !== undefined ? { model: options.model } : {}),
+        ...(options?.provider !== undefined ? { provider: options.provider } : {}),
       },
     })
     return ok({ id: agent.id })
@@ -236,20 +289,31 @@ export async function assignCompany(
 }
 
 /**
- * Sets or clears a worker's model override (M10 §6) -- the top of `resolveModel`'s chain, above
- * its roster row's override and its template's default. `model: null` clears the column back to
- * "defer to the roster/template", not a refusal: an operator undoing an override is as ordinary as
- * setting one.
+ * Sets or clears a worker's model+provider override (M10 §6, paired as of M12 Task 7) -- the top
+ * of the resolution chain, above its roster row's override and its template's default. `model:
+ * null, provider: null` clears both columns back to "defer to the roster/template", not a
+ * refusal: an operator undoing an override is as ordinary as setting one. Setting only one half
+ * of the pair is a refusal (`model_without_provider`) -- a model string means nothing without the
+ * provider that runs it, and there is no such thing as "defer only the model, but pin the
+ * provider" or vice versa.
  *
  * A single-row `updateMany` conditioned on `id`, not a `findUnique`-then-`update` pair: there is
  * nothing here for a second writer to race (unlike `assignCompany`'s multi-row materialization),
- * so the row lock ceremony that guards that transaction has no work to do in a one-column write --
- * the conditioned update's own count is already the atomic existence check.
+ * so the row lock ceremony that guards that transaction has no work to do in a two-column write --
+ * the conditioned update's own count is already the atomic existence check, and both columns land
+ * in the SAME statement so there is no window where one is written without the other.
  */
-export async function setAgentModel(agentId: string, model: string | null): Promise<Result<void, ControlRefusal>> {
+export async function setAgentModel(
+  agentId: string,
+  model: string | null,
+  provider: ProviderKind | null,
+): Promise<Result<void, ControlRefusal>> {
   if (model !== null && model.trim() === '') return err({ kind: 'invalid_model' })
+  if (provider !== null && !isProviderKind(provider)) return err({ kind: 'invalid_provider', provider })
+  const pairErr = pairRefusal(model, provider)
+  if (pairErr !== null) return err(pairErr)
 
-  const updated = await prisma.agent.updateMany({ where: { id: agentId }, data: { model } })
+  const updated = await prisma.agent.updateMany({ where: { id: agentId }, data: { model, provider } })
   if (updated.count === 0) return err({ kind: 'agent_not_found', agentId })
   return ok(undefined)
 }

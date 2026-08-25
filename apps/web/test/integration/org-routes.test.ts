@@ -51,14 +51,27 @@ describe('the org routes', () => {
       expect(template.role).toBe('backend')
     })
 
-    it('accepts optional description and defaultModel', async (): Promise<void> => {
+    it('accepts an optional description with no model', async (): Promise<void> => {
       const response = await templatesPOST(
-        jsonRequest({ name: 'Frontend Engineer', role: 'frontend', description: 'ships UI', defaultModel: 'sonnet' }),
+        jsonRequest({ name: 'Frontend Engineer', role: 'frontend', description: 'ships UI' }),
       )
       expect(response.status).toBe(200)
       const template = await prisma.agentTemplate.findFirstOrThrow({ where: { name: 'Frontend Engineer' } })
       expect(template.description).toBe('ships UI')
-      expect(template.defaultModel).toBe('sonnet')
+      expect(template.defaultModel).toBeNull()
+    })
+
+    // M12 Task 7: `createTemplate` now writes `defaultModel` and `provider` as one pair, and this
+    // route does not carry a provider in its body yet (Task 13 owns widening it) -- so a
+    // `defaultModel` given through this route always refuses. This test used to assert a
+    // successful create with a defaultModel; it now asserts that refusal.
+    it('409s with the model-without-provider refusal on a defaultModel given with no provider', async (): Promise<void> => {
+      const response = await templatesPOST(
+        jsonRequest({ name: 'Frontend Engineer', role: 'frontend', description: 'ships UI', defaultModel: 'sonnet' }),
+      )
+      expect(response.status).toBe(409)
+      expect((await response.json()).error).toBe('a model must name the provider that runs it')
+      expect(await prisma.agentTemplate.findFirst({ where: { name: 'Frontend Engineer' } })).toBeNull()
     })
 
     it('409s with the duplicate-name refusal text on a repeated name', async (): Promise<void> => {
@@ -119,7 +132,24 @@ describe('the org routes', () => {
   })
 
   describe('POST /api/org/agents', () => {
-    it('creates an agent and returns 200', async (): Promise<void> => {
+    it('creates an agent with no model and returns 200', async (): Promise<void> => {
+      const company = await prisma.company.create({ data: { name: 'Acme Robotics' } })
+      const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Engineering' } })
+      const template = await prisma.agentTemplate.create({ data: { name: 'Backend Engineer', role: 'backend' } })
+
+      const response = await agentsPOST(
+        jsonRequest({ companyTeamId: companyTeam.id, templateId: template.id, name: 'Atlas' }),
+      )
+      expect(response.status).toBe(200)
+      const agent = await prisma.companyAgent.findFirstOrThrow({ where: { companyTeamId: companyTeam.id, name: 'Atlas' } })
+      expect(agent.model).toBeNull()
+    })
+
+    // M12 Task 7: `addCompanyAgent` now writes `model` and `provider` as one pair, and this route
+    // does not carry a provider in its body yet (Task 13 owns widening it) -- so a `model` given
+    // through this route always refuses. This test used to assert a successful create with a
+    // model; it now asserts that refusal.
+    it('409s with the model-without-provider refusal on a model given with no provider', async (): Promise<void> => {
       const company = await prisma.company.create({ data: { name: 'Acme Robotics' } })
       const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Engineering' } })
       const template = await prisma.agentTemplate.create({ data: { name: 'Backend Engineer', role: 'backend' } })
@@ -127,9 +157,11 @@ describe('the org routes', () => {
       const response = await agentsPOST(
         jsonRequest({ companyTeamId: companyTeam.id, templateId: template.id, name: 'Atlas', model: 'opus' }),
       )
-      expect(response.status).toBe(200)
-      const agent = await prisma.companyAgent.findFirstOrThrow({ where: { companyTeamId: companyTeam.id, name: 'Atlas' } })
-      expect(agent.model).toBe('opus')
+      expect(response.status).toBe(409)
+      expect((await response.json()).error).toBe('a model must name the provider that runs it')
+      expect(
+        await prisma.companyAgent.findFirst({ where: { companyTeamId: companyTeam.id, name: 'Atlas' } }),
+      ).toBeNull()
     })
 
     it('409s with the template-not-found refusal text on an unknown templateId', async (): Promise<void> => {
@@ -215,25 +247,35 @@ describe('the org routes', () => {
       return { agentId: agent.id }
     }
 
-    it('sets the model override and returns 200', async (): Promise<void> => {
+    // M12 Task 7: `setAgentModel` now writes a model and its provider as one pair, and this route
+    // does not carry a provider in its body yet (Task 13 owns widening it) -- so it can only ever
+    // clear the pair, never set a real model, until that lands. This test used to assert a
+    // successful set; it now asserts the refusal that guards against half a pair.
+    it('409s with the model-without-provider refusal, since this route has no provider to pair it with', async (): Promise<void> => {
       const { agentId } = await seedWorker()
       const response = await modelPOST(jsonRequest({ model: 'opus' }), { params: Promise.resolve({ agentId }) })
-      expect(response.status).toBe(200)
-      const agent = await prisma.agent.findUniqueOrThrow({ where: { id: agentId } })
-      expect(agent.model).toBe('opus')
-    })
-
-    it('clears the model override with model: null', async (): Promise<void> => {
-      const { agentId } = await seedWorker()
-      await prisma.agent.update({ where: { id: agentId }, data: { model: 'opus' } })
-      const response = await modelPOST(jsonRequest({ model: null }), { params: Promise.resolve({ agentId }) })
-      expect(response.status).toBe(200)
+      expect(response.status).toBe(409)
+      expect((await response.json()).error).toBe('a model must name the provider that runs it')
       const agent = await prisma.agent.findUniqueOrThrow({ where: { id: agentId } })
       expect(agent.model).toBeNull()
     })
 
+    it('clears the model override with model: null', async (): Promise<void> => {
+      const { agentId } = await seedWorker()
+      await prisma.agent.update({ where: { id: agentId }, data: { model: 'opus', provider: 'claude_code' } })
+      const response = await modelPOST(jsonRequest({ model: null }), { params: Promise.resolve({ agentId }) })
+      expect(response.status).toBe(200)
+      const agent = await prisma.agent.findUniqueOrThrow({ where: { id: agentId } })
+      expect(agent.model).toBeNull()
+      expect(agent.provider).toBeNull()
+    })
+
+    // `model: null` (not `'opus'`): a non-null model against this route always refuses
+    // model-without-provider before it ever reaches the agent lookup (M12 Task 7's guard order),
+    // so this exercises the not-found path the same way `setAgentModel`'s own tests do -- via a
+    // clear, the one shape this route can still send all the way to the DB write.
     it('409s with the agent-not-found refusal text on an unknown agentId', async (): Promise<void> => {
-      const response = await modelPOST(jsonRequest({ model: 'opus' }), {
+      const response = await modelPOST(jsonRequest({ model: null }), {
         params: Promise.resolve({ agentId: '00000000-0000-4000-8000-000000000000' }),
       })
       expect(response.status).toBe(409)

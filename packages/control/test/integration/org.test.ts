@@ -14,6 +14,7 @@ describe('catalog and company CRUD', () => {
       const result = await createTemplate('Backend Engineer', 'backend', {
         description: 'ships backend features',
         defaultModel: 'claude-opus',
+        provider: 'claude_code',
       })
 
       expect(result.ok).toBe(true)
@@ -23,9 +24,10 @@ describe('catalog and company CRUD', () => {
       expect(row.role).toBe('backend')
       expect(row.description).toBe('ships backend features')
       expect(row.defaultModel).toBe('claude-opus')
+      expect(row.provider).toBe('claude_code')
     })
 
-    it('defaults description to an empty string and defaultModel to null when omitted', async (): Promise<void> => {
+    it('defaults description to an empty string and defaultModel/provider to null when omitted', async (): Promise<void> => {
       const result = await createTemplate('Frontend Engineer', 'frontend')
 
       expect(result.ok).toBe(true)
@@ -33,6 +35,34 @@ describe('catalog and company CRUD', () => {
       const row = await prisma.agentTemplate.findUniqueOrThrow({ where: { id: result.value.id } })
       expect(row.description).toBe('')
       expect(row.defaultModel).toBeNull()
+      expect(row.provider).toBeNull()
+    })
+
+    it('refuses a defaultModel with no provider, creating nothing', async (): Promise<void> => {
+      const result = await createTemplate('Backend Engineer', 'backend', { defaultModel: 'claude-opus' })
+
+      expect(result.ok).toBe(false)
+      if (!result.ok) expect(result.error).toEqual({ kind: 'model_without_provider' })
+      expect(await prisma.agentTemplate.count()).toBe(0)
+    })
+
+    it('refuses a provider with no defaultModel, creating nothing', async (): Promise<void> => {
+      const result = await createTemplate('Backend Engineer', 'backend', { provider: 'claude_code' })
+
+      expect(result.ok).toBe(false)
+      if (!result.ok) expect(result.error).toEqual({ kind: 'model_without_provider' })
+      expect(await prisma.agentTemplate.count()).toBe(0)
+    })
+
+    it('refuses a provider kind nothing is configured for, creating nothing', async (): Promise<void> => {
+      const result = await createTemplate('Backend Engineer', 'backend', {
+        defaultModel: 'claude-opus',
+        provider: 'nope' as never,
+      })
+
+      expect(result.ok).toBe(false)
+      if (!result.ok) expect(result.error).toEqual({ kind: 'invalid_provider', provider: 'nope' })
+      expect(await prisma.agentTemplate.count()).toBe(0)
     })
 
     it('refuses a duplicate template name', async (): Promise<void> => {
@@ -160,10 +190,13 @@ describe('catalog and company CRUD', () => {
       return { companyTeamId: team.id, templateId: template.id }
     }
 
-    it('creates the row under the given team and template, with an optional model override', async (): Promise<void> => {
+    it('creates the row under the given team and template, with an optional model+provider override', async (): Promise<void> => {
       const { companyTeamId, templateId } = await seedTeamAndTemplate()
 
-      const result = await addCompanyAgent(companyTeamId, templateId, 'Atlas', { model: 'claude-haiku' })
+      const result = await addCompanyAgent(companyTeamId, templateId, 'Atlas', {
+        model: 'claude-haiku',
+        provider: 'claude_code',
+      })
 
       expect(result.ok).toBe(true)
       if (!result.ok) return
@@ -172,9 +205,10 @@ describe('catalog and company CRUD', () => {
       expect(row.templateId).toBe(templateId)
       expect(row.name).toBe('Atlas')
       expect(row.model).toBe('claude-haiku')
+      expect(row.provider).toBe('claude_code')
     })
 
-    it('defaults model to null when omitted', async (): Promise<void> => {
+    it('defaults model and provider to null when omitted', async (): Promise<void> => {
       const { companyTeamId, templateId } = await seedTeamAndTemplate()
 
       const result = await addCompanyAgent(companyTeamId, templateId, 'Atlas')
@@ -183,6 +217,30 @@ describe('catalog and company CRUD', () => {
       if (!result.ok) return
       const row = await prisma.companyAgent.findUniqueOrThrow({ where: { id: result.value.id } })
       expect(row.model).toBeNull()
+      expect(row.provider).toBeNull()
+    })
+
+    it('refuses a model with no provider, creating nothing', async (): Promise<void> => {
+      const { companyTeamId, templateId } = await seedTeamAndTemplate()
+
+      const result = await addCompanyAgent(companyTeamId, templateId, 'Atlas', { model: 'claude-haiku' })
+
+      expect(result.ok).toBe(false)
+      if (!result.ok) expect(result.error).toEqual({ kind: 'model_without_provider' })
+      expect(await prisma.companyAgent.count()).toBe(0)
+    })
+
+    it('refuses a provider kind nothing is configured for, creating nothing', async (): Promise<void> => {
+      const { companyTeamId, templateId } = await seedTeamAndTemplate()
+
+      const result = await addCompanyAgent(companyTeamId, templateId, 'Atlas', {
+        model: 'claude-haiku',
+        provider: 'nope' as never,
+      })
+
+      expect(result.ok).toBe(false)
+      if (!result.ok) expect(result.error).toEqual({ kind: 'invalid_provider', provider: 'nope' })
+      expect(await prisma.companyAgent.count()).toBe(0)
     })
 
     it('refuses an unknown company team', async (): Promise<void> => {
@@ -553,45 +611,82 @@ describe('setAgentModel', () => {
     return { id: agent.id }
   }
 
-  it('writes the model column', async (): Promise<void> => {
+  it('writes the model and provider columns together', async (): Promise<void> => {
     const { id } = await seedAgent()
 
-    const result = await setAgentModel(id, 'claude-opus')
+    const result = await setAgentModel(id, 'claude-opus', 'claude_code')
 
     expect(result.ok).toBe(true)
     const row = await prisma.agent.findUniqueOrThrow({ where: { id } })
     expect(row.model).toBe('claude-opus')
-  })
-
-  it('clears the model column with null, without refusing', async (): Promise<void> => {
-    const { id } = await seedAgent()
-    await setAgentModel(id, 'claude-opus')
-
-    const result = await setAgentModel(id, null)
-
-    expect(result.ok).toBe(true)
-    const row = await prisma.agent.findUniqueOrThrow({ where: { id } })
-    expect(row.model).toBeNull()
+    expect(row.provider).toBe('claude_code')
   })
 
   it('refuses an unknown agent', async (): Promise<void> => {
     const unknown = '00000000-0000-4000-8000-000000000000'
 
-    const result = await setAgentModel(unknown, 'claude-opus')
+    const result = await setAgentModel(unknown, 'claude-opus', 'claude_code')
 
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.error).toEqual({ kind: 'agent_not_found', agentId: unknown })
   })
 
-  it('refuses an empty-string model, leaving the column unchanged', async (): Promise<void> => {
+  it('refuses an empty-string model, leaving the columns unchanged', async (): Promise<void> => {
     const { id } = await seedAgent()
-    await setAgentModel(id, 'claude-opus')
+    await setAgentModel(id, 'claude-opus', 'claude_code')
 
-    const result = await setAgentModel(id, '')
+    const result = await setAgentModel(id, '', 'claude_code')
 
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.error).toEqual({ kind: 'invalid_model' })
     const row = await prisma.agent.findUniqueOrThrow({ where: { id } })
     expect(row.model).toBe('claude-opus')
+  })
+
+  it('refuses a model with no provider to run it', async (): Promise<void> => {
+    const { id } = await seedAgent()
+
+    const result = await setAgentModel(id, 'some-model', null)
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error).toEqual({ kind: 'model_without_provider' })
+    const row = await prisma.agent.findUniqueOrThrow({ where: { id } })
+    expect(row.model).toBeNull()
+    expect(row.provider).toBeNull()
+  })
+
+  it('refuses a provider with no model, the same way', async (): Promise<void> => {
+    const { id } = await seedAgent()
+
+    const result = await setAgentModel(id, null, 'claude_code')
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error).toEqual({ kind: 'model_without_provider' })
+    const row = await prisma.agent.findUniqueOrThrow({ where: { id } })
+    expect(row.model).toBeNull()
+    expect(row.provider).toBeNull()
+  })
+
+  it('refuses a provider kind nothing is configured for', async (): Promise<void> => {
+    const { id } = await seedAgent()
+
+    const result = await setAgentModel(id, 'm', 'nope' as never)
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error).toEqual({ kind: 'invalid_provider', provider: 'nope' })
+    const row = await prisma.agent.findUniqueOrThrow({ where: { id } })
+    expect(row.model).toBeNull()
+  })
+
+  it('clears both halves of the pair together', async (): Promise<void> => {
+    const { id } = await seedAgent()
+    await setAgentModel(id, 'claude-opus', 'claude_code')
+
+    const result = await setAgentModel(id, null, null)
+
+    expect(result.ok).toBe(true)
+    const agent = await prisma.agent.findUniqueOrThrow({ where: { id } })
+    expect(agent.model).toBeNull()
+    expect(agent.provider).toBeNull()
   })
 })

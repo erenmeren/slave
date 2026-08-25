@@ -16,5 +16,9 @@ export async function POST(
   if (model !== null && typeof model !== 'string') {
     return Response.json({ error: 'the body must be { "model": string | null }' }, { status: 400 })
   }
-  return orgControlResponse(() => setAgentModel(agentId, model))
+  // M12 Task 7: `setAgentModel` now writes a model and its provider as one pair -- this route
+  // does not take a provider in its body yet (Task 13 owns that UI surface), so it can only ever
+  // clear the pair, never set a real model. Passing `null` here (rather than widening this
+  // route's contract) is deliberate: growing this endpoint's body is Task 13's call to make.
+  return orgControlResponse(() => setAgentModel(agentId, model, null))
 }

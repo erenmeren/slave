@@ -3,7 +3,9 @@
  *
  * `workspace_halted` and `no_checkpoint` are defined here now, ahead of Task 4's resume logic that
  * will produce them, so the taxonomy is whole from the start rather than grown one refusal at a
- * time across tasks that each own a slice of it.
+ * time across tasks that each own a slice of it. `unmeasurable_budget` follows the same
+ * convention: it is defined here (M12 Task 7) ahead of the budget admission logic (Task 9) that
+ * will actually raise it.
  */
 export type ControlRefusal =
   | { readonly kind: 'run_not_found'; readonly runId: string }
@@ -29,6 +31,15 @@ export type ControlRefusal =
   | { readonly kind: 'company_team_not_found'; readonly companyTeamId: string }
   | { readonly kind: 'invalid_name' }
   | { readonly kind: 'invalid_model' }
+  /** A model was set (or cleared) with no provider to match it, or vice versa (M12 Task 7). */
+  | { readonly kind: 'model_without_provider' }
+  /** `provider` named a string that is not a member of `ProviderKind` (M12 Task 7). */
+  | { readonly kind: 'invalid_provider'; readonly provider: string }
+  /**
+   * A workspace budget was set on a provider that never reports cost (M12 Task 9, not raised
+   * yet -- see the header comment above).
+   */
+  | { readonly kind: 'unmeasurable_budget'; readonly workspaceId: string; readonly provider: string }
   | { readonly kind: 'company_already_assigned'; readonly workspaceId: string; readonly companyName: string }
   | { readonly kind: 'agent_not_found'; readonly agentId: string }
 
@@ -73,6 +84,12 @@ export function refusalText(refusal: ControlRefusal): string {
       return 'a name must be a non-empty text'
     case 'invalid_model':
       return 'a model must be a non-empty text'
+    case 'model_without_provider':
+      return 'a model must name the provider that runs it'
+    case 'invalid_provider':
+      return 'a provider must be a configured kind'
+    case 'unmeasurable_budget':
+      return 'a budget needs a provider that reports cost'
     case 'company_already_assigned':
       return `this workspace is already run by ${refusal.companyName}`
     case 'agent_not_found':
