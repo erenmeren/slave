@@ -5,7 +5,7 @@ import { killWithEscalation } from '@ai-team-os/control'
 import { prisma } from '@ai-team-os/db/client'
 import type { AgentId, RunId, TaskId, WorkspaceId } from '@ai-team-os/domain'
 import { appendEvent } from '@ai-team-os/events'
-import type { RunOutcome, RuntimeEvent } from '@ai-team-os/providers'
+import { classifyGateEvent, type RunOutcome, type RuntimeEvent } from '@ai-team-os/providers'
 
 /**
  * The cap on a single `run.output` payload (spec §9: the agent's text output "with a truncation
@@ -71,36 +71,6 @@ export interface PumpRunInput {
  * without the second.
  */
 type Actor = 'agent' | 'system'
-
-/**
- * The hook's own output, bounded. This file caps `run.output` at {@link OUTPUT_CAP} to protect an
- * append-only log; a hook that dies mid-write can put just as much into a failure reason, and it
- * lands in the same table.
- */
-const STDERR_CAP = 1_000
-
-/**
- * Spec §13.1's two shapes, kept apart all the way to the operator's screen.
- *
- * After a **blocking crash** the run stopped and nothing landed beyond the crash: the damage is
- * bounded. After a **fail-open** failure the run kept acting with no gate at all, so everything it
- * did between the gate breaking and the cancel landing is work nobody could have stopped. Wording
- * these the same way is the conflation ADR 0001 and §13.1 warn about, and it is dangerous in one
- * direction specifically: it reports an uncontrolled run as a controlled one.
- */
-function gateFailureReason(event: {
-  readonly kind: 'hook_crashed' | 'hook_failed_open'
-  readonly hookName: string
-  readonly exitCode: number
-  readonly stderr: string
-}): string {
-  const where = `${event.hookName} exited ${event.exitCode}`
-  const stderr = event.stderr.slice(0, STDERR_CAP)
-  return event.kind === 'hook_crashed'
-    ? `the pause gate crashed (${where}) and the run was stopped; nothing landed beyond the crash: ${stderr}`
-    : `the pause gate failed open (${where}): the run kept acting ungated from the moment the gate ` +
-        `broke until the cancel landed, and nothing could have stopped it in that window: ${stderr}`
-}
 
 /** The name `pause` wrote into the flag file, if it is still there. Provenance, never required. */
 function readPauseRequester(pauseFlagPath: string | undefined): string | null {
@@ -338,127 +308,158 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
         break
       }
 
-      case 'hook_denied': {
-        // Once only (fix round 1, M5 gate-fix A review). The real CLI does not exit promptly on
-        // the SIGTERM below -- the live-gate trace that motivated this file's kill call shows a
-        // *second* deny arriving after the first `run.paused` (`run.paused (atStep 5)` -> another
-        // Bash call -> `run.paused (atStep 6)`) -- and that second deny stays reachable for as
-        // long as `killWithEscalation`'s grace window is open. Recording the pause and killing the
-        // child are both idempotent in effect (the row is already `paused`; the pid is already
-        // signalled or dead), so re-running them costs real things for no benefit: a second
-        // checkpoint write, a second multi-second `killWithEscalation` sleep, and a duplicate
-        // `run.paused` in the operator's transcript. The whole case is a no-op on a repeat --
-        // `paused` is exactly the run-level fact that distinguishes "first deny" from "still
-        // gated, denied again" here, matching the sibling `gateFailed` guard just below this case.
-        if (paused) break
-
-        // The pause gate doing its job. The adapter kills the process after the deny (Task 8), so
-        // the stream ends here -- and recording the pause is what stops Task 15's orphan sweep
-        // seeing a `working` run with a dead pid and failing it. The domain's state machine only
-        // admits `paused` from `pause_requested`; the pump reports what the runtime did rather
-        // than adjudicating that, because the alternative to an unexpected `paused` row is a
-        // killed process still recorded as working.
-        paused = true
-        await prisma.agentRun.updateMany({
-          where: { id: runId, endedAt: null },
-          data: { status: 'paused', pausedAtStep: toolCalls },
-        })
-        await writeCheckpoint({
-          runId,
-          sessionId,
-          toolCalls,
-          lastToolUseId,
-          lastToolName,
-          denied,
-          spawn: input.spawn,
-          pauseReason: event.reason,
-          // Who asked, when the flag file says. §6 lists it as provenance and nothing wrote it.
-          requestedBy: readPauseRequester(input.spawn?.pauseFlagPath),
-        })
-
-        // The real CLI does not exit on a hook deny (M5 live-gate finding 1): it treats the deny
-        // as an ordinary tool error and keeps working -- retrying the denied write, reaching for
-        // an un-gated tool like Read, arguing in its own transcript that the block "may be
-        // transient". Nothing else in this process's path kills it: the daemon's `pause.ts`
-        // writes the pause flag straight to disk rather than through the adapter's own
-        // `requestPause`, so the adapter's built-in kill-on-deny never arms for a daemon-driven
-        // pause -- this is the only place left that observes the deny and can act on it. Kill
-        // only now, after the checkpoint write above has landed (or declined to, just below):
-        // killing first would risk losing the resume point if the checkpoint write itself failed
-        // partway through.
-        //
-        // Unconditional on whether a checkpoint actually got written. A run with no spawn facts
-        // or no session id cannot be resumed by anyone (`writeCheckpoint`'s own early return) --
-        // but that is a reason to kill, not a reason not to: a run nobody can resume is a run an
-        // operator can only wait out or kill by hand, and a live, ungated child left running
-        // under it is strictly worse than a dead one, resumable or not.
-        await killWithEscalation(startingRow.pid)
-        await emit('run.paused', 'system', { atStep: toolCalls })
-        break
-      }
-
+      case 'hook_denied':
       case 'hook_crashed':
       case 'hook_failed_open': {
-        // Once only. The stream keeps being read after this (see the end of the loop), so a second
-        // gate event must not cancel twice or count a second attempt against the task.
-        if (gateFailed) break
-        gateFailed = true
-
-        // Cancel first, and do not wait for the stream to end. A gate failure that waits for
-        // `terminated` is a gate failure that never fires, because the run whose gate has failed
-        // is precisely the run that may never stop on its own (spec §13.1, behaviour 1).
+        // The pause protocol and the workspace-halting circuit breaker, both driven from here --
+        // but by the outcome the write gate actually produced, never by which of these three
+        // Claude-shaped `RuntimeEvent` variants arrived. `classifyGateEvent`
+        // (`@ai-team-os/providers`) is the one place left that still knows that mapping; everything
+        // below asks only `gateOutcome.kind`. This is the seam M12 Task 4 exists for: a runtime
+        // whose gate produces differently-shaped events still drives both mechanisms below, as long
+        // as its adapter's own `classifyGateEvent`-equivalent maps them the same way.
         //
-        // A cancel that *rejects* must make this louder, never quieter. Letting it propagate --
-        // which it did until this was measured -- skipped behaviours 2 to 4 entirely: no halt, no
-        // events, an attempt uncounted and the row still reading `working`. That is an agent
-        // running with no gate, a kill that did not land, and a scheduler still free to start more
-        // of them; the one case where the halt matters most was the one case it did not happen.
-        let cancelError: unknown = null
-        try {
-          await input.cancel()
-        } catch (error) {
-          cancelError = error
+        // `permission_denied` is deliberately not one of this case's labels -- see its own case
+        // above and `classifyGateEvent`'s docstring (controller ruling, M12 Task 4) for why: it is
+        // a guardrail observation, not a pause-protocol signal, and has no `reason` to source
+        // `stopped_by_gate` from.
+        const gateOutcome = classifyGateEvent(event)
+        // Unreachable in practice -- `classifyGateEvent` maps exactly these three `RuntimeEvent`
+        // kinds to a non-null `GateOutcome`. Guarded rather than asserted so a future change to
+        // that mapping fails here, loudly, instead of silently doing nothing.
+        if (gateOutcome === null) {
+          console.warn(`[pump] ${event.kind} produced no GateOutcome on run ${runId}; ignoring`)
+          break
         }
 
-        const reason =
-          gateFailureReason(event) +
-          (cancelError === null
-            ? ''
-            : ` -- AND THE CANCEL FAILED (${String(cancelError)}): the process may still be running.`)
+        switch (gateOutcome.kind) {
+          case 'stopped_by_gate': {
+            // Once only (fix round 1, M5 gate-fix A review). The real CLI does not exit promptly
+            // on the SIGTERM below -- the live-gate trace that motivated this file's kill call
+            // shows a *second* deny arriving after the first `run.paused` (`run.paused (atStep 5)`
+            // -> another Bash call -> `run.paused (atStep 6)`) -- and that second deny stays
+            // reachable for as long as `killWithEscalation`'s grace window is open. Recording the
+            // pause and killing the child are both idempotent in effect (the row is already
+            // `paused`; the pid is already signalled or dead), so re-running them costs real
+            // things for no benefit: a second checkpoint write, a second multi-second
+            // `killWithEscalation` sleep, and a duplicate `run.paused` in the operator's
+            // transcript. The whole branch is a no-op on a repeat -- `paused` is exactly the
+            // run-level fact that distinguishes "first deny" from "still gated, denied again"
+            // here, matching the sibling `gateFailed` guard in the `gate_failed` branch below.
+            if (paused) break
 
-        // The halt goes first among the writes. Each of these is its own transaction, so their
-        // order is the only lever there is, and a crash between them has to leave the recoverable
-        // things undone rather than this one: a missing run row or attempt is Task 15's sweep to
-        // repair, while a missing halt means the scheduler keeps starting runs against a hook that
-        // is still broken -- the exact recurrence §13.1 exists to bound. §13.1 lists the halt
-        // fourth, but that list is the operator's narrative, not a durability order.
-        //
-        // Conditional on `haltedReason` still being null: the *earliest* gate failure is the one
-        // that explains the workspace's state, and `haltedAt` is the moment of the transition.
-        // Overwriting would walk that timestamp forward for as long as runs keep failing, so a
-        // halt an operator has been ignoring for an hour would read as one second old.
-        // `updateMany` because a conditional update needs a filter on a non-unique column; under
-        // read committed a concurrent pump blocks on the row and then re-checks the predicate, so
-        // two simultaneous gate failures cannot both write.
-        await prisma.workspace.updateMany({
-          where: { id: workspaceId, haltedReason: null },
-          data: { haltedReason: reason, haltedAt: new Date() },
-        })
+            // The pause gate doing its job. The adapter kills the process after the deny (Task 8),
+            // so the stream ends here -- and recording the pause is what stops Task 15's orphan
+            // sweep seeing a `working` run with a dead pid and failing it. The domain's state
+            // machine only admits `paused` from `pause_requested`; the pump reports what the
+            // runtime did rather than adjudicating that, because the alternative to an unexpected
+            // `paused` row is a killed process still recorded as working.
+            paused = true
+            await prisma.agentRun.updateMany({
+              where: { id: runId, endedAt: null },
+              data: { status: 'paused', pausedAtStep: toolCalls },
+            })
+            await writeCheckpoint({
+              runId,
+              sessionId,
+              toolCalls,
+              lastToolUseId,
+              lastToolName,
+              denied,
+              spawn: input.spawn,
+              pauseReason: gateOutcome.reason,
+              // Who asked, when the flag file says. §6 lists it as provenance and nothing wrote it.
+              requestedBy: readPauseRequester(input.spawn?.pauseFlagPath),
+            })
 
-        const now = new Date()
-        await prisma.agentRun.updateMany({
-          where: { id: runId, endedAt: null },
-          data: { status: 'failed', terminalAt: now, endedAt: now },
-        })
-        // The attempt counts, so a task cannot loop forever against a gate that stays broken. A
-        // task-less `planning` run (M8b) has no attempt counter to increment.
-        if (taskId !== null) {
-          await prisma.task.update({ where: { id: taskId }, data: { attempt: { increment: 1 } } })
+            // The real CLI does not exit on a hook deny (M5 live-gate finding 1): it treats the
+            // deny as an ordinary tool error and keeps working -- retrying the denied write,
+            // reaching for an un-gated tool like Read, arguing in its own transcript that the
+            // block "may be transient". Nothing else in this process's path kills it: pause is a
+            // stateless flag-file write (`packages/providers`'s `signalPause`, M12 Task 3), not a
+            // call into an adapter instance -- the adapter's own former kill-on-deny path required
+            // its now-retired `requestPause` to arm it (M12 Task 4) and never armed for a
+            // daemon-driven pause even before that. This is the only place left that observes the
+            // deny and can act on it. Kill only now, after the checkpoint write above has landed
+            // (or declined to, just below): killing first would risk losing the resume point if
+            // the checkpoint write itself failed partway through.
+            //
+            // Unconditional on whether a checkpoint actually got written. A run with no spawn facts
+            // or no session id cannot be resumed by anyone (`writeCheckpoint`'s own early return) --
+            // but that is a reason to kill, not a reason not to: a run nobody can resume is a run an
+            // operator can only wait out or kill by hand, and a live, ungated child left running
+            // under it is strictly worse than a dead one, resumable or not.
+            await killWithEscalation(startingRow.pid)
+            await emit('run.paused', 'system', { atStep: toolCalls })
+            break
+          }
+
+          case 'gate_failed': {
+            // Once only. The stream keeps being read after this (see the end of the loop), so a
+            // second gate event must not cancel twice or count a second attempt against the task.
+            if (gateFailed) break
+            gateFailed = true
+
+            // Cancel first, and do not wait for the stream to end. A gate failure that waits for
+            // `terminated` is a gate failure that never fires, because the run whose gate has
+            // failed is precisely the run that may never stop on its own (spec §13.1, behaviour 1).
+            //
+            // A cancel that *rejects* must make this louder, never quieter. Letting it propagate --
+            // which it did until this was measured -- skipped behaviours 2 to 4 entirely: no halt,
+            // no events, an attempt uncounted and the row still reading `working`. That is an agent
+            // running with no gate, a kill that did not land, and a scheduler still free to start
+            // more of them; the one case where the halt matters most was the one case it did not
+            // happen.
+            let cancelError: unknown = null
+            try {
+              await input.cancel()
+            } catch (error) {
+              cancelError = error
+            }
+
+            const reason =
+              gateOutcome.detail +
+              (cancelError === null
+                ? ''
+                : ` -- AND THE CANCEL FAILED (${String(cancelError)}): the process may still be running.`)
+
+            // The halt goes first among the writes. Each of these is its own transaction, so their
+            // order is the only lever there is, and a crash between them has to leave the
+            // recoverable things undone rather than this one: a missing run row or attempt is Task
+            // 15's sweep to repair, while a missing halt means the scheduler keeps starting runs
+            // against a hook that is still broken -- the exact recurrence §13.1 exists to bound.
+            // §13.1 lists the halt fourth, but that list is the operator's narrative, not a
+            // durability order.
+            //
+            // Conditional on `haltedReason` still being null: the *earliest* gate failure is the
+            // one that explains the workspace's state, and `haltedAt` is the moment of the
+            // transition. Overwriting would walk that timestamp forward for as long as runs keep
+            // failing, so a halt an operator has been ignoring for an hour would read as one
+            // second old. `updateMany` because a conditional update needs a filter on a non-unique
+            // column; under read committed a concurrent pump blocks on the row and then re-checks
+            // the predicate, so two simultaneous gate failures cannot both write.
+            await prisma.workspace.updateMany({
+              where: { id: workspaceId, haltedReason: null },
+              data: { haltedReason: reason, haltedAt: new Date() },
+            })
+
+            const now = new Date()
+            await prisma.agentRun.updateMany({
+              where: { id: runId, endedAt: null },
+              data: { status: 'failed', terminalAt: now, endedAt: now },
+            })
+            // The attempt counts, so a task cannot loop forever against a gate that stays broken.
+            // A task-less `planning` run (M8b) has no attempt counter to increment.
+            if (taskId !== null) {
+              await prisma.task.update({ where: { id: taskId }, data: { attempt: { increment: 1 } } })
+            }
+
+            // Two events, because the run failed *and* a guardrail is what failed it (§13.1).
+            await emit('run.failed', 'system', { reason })
+            await emit('guardrail.tripped', 'system', { guardrail: 'pause_gate', detail: reason })
+            break
+          }
         }
-
-        // Two events, because the run failed *and* a guardrail is what failed it (§13.1).
-        await emit('run.failed', 'system', { reason })
-        await emit('guardrail.tripped', 'system', { guardrail: 'pause_gate', detail: reason })
         break
       }
 

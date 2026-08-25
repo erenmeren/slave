@@ -1,4 +1,5 @@
 export * from './types.js'
+export * from './gate.js'
 export * from './pause-signal.js'
 export * from './claude/stream.js'
 export * from './claude/flags.js'
