@@ -223,10 +223,6 @@ export async function reconcileOrphans(deps: SweepDeps): Promise<number> {
  * what a dead pid means.
  */
 export async function sweep(deps: SweepDeps): Promise<SweepReport> {
-  // Resolved once for the whole pass -- `resolveAdapter` is the single place `'claude_code'` is
-  // named (M12 Task 5). `reconcileOrphans` above never needs this: it only ever writes rows, it
-  // never calls the adapter.
-  const adapter = resolveAdapter(deps.registry)
   const workspace = await db.workspace.findUniqueOrThrow({ where: { id: deps.workspaceId } })
   // `agent: { team: { workspaceId } }`, not `task: { workspaceId }`: a `planning` run (M8b) has no
   // `Task` row, and the timeout/tool-cap guardrails below must still reach it.
@@ -278,6 +274,16 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
 
     if (timedOutNow) timedOut.push(brandRunId(run.id))
     if (overCapNow) overToolCap.push(brandRunId(run.id))
+
+    // Resolved per run, not once for the whole pass (M12 Task 8; the pass-wide `resolveAdapter`
+    // call this replaced predates a second provider being real dispatch): once Task 12 lands
+    // Cursor, two runs in the same pass can be on different runtimes, and one adapter resolved up
+    // front would call the WRONG one's `cancel` for the other. `?? 'claude_code'` is not a choice
+    // among live options -- every run in this table was recorded before `AgentRun.provider`
+    // existed to be written, or (post-Task-8) was written by a dispatch that already refused an
+    // unconfigured kind, so a `null` here is a historical fact (there was only ever the one kind
+    // of run that could have produced it), never a guess.
+    const adapter = resolveAdapter(deps.registry, run.provider ?? 'claude_code')
 
     // A failure here makes the event louder rather than silencing it -- the third time this
     // milestone has needed saying.

@@ -6,7 +6,13 @@ import { fileURLToPath } from 'node:url'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@ai-team-os/db'
 import { prisma } from '@ai-team-os/db/client'
 import { workspaceId as brandWorkspaceId } from '@ai-team-os/domain'
-import { ClaudeCodeAdapter, type AdapterRegistry, type AgentRuntimeAdapter, type StartRunInput } from '@ai-team-os/providers'
+import {
+  ClaudeCodeAdapter,
+  buildRegistry,
+  type AdapterRegistry,
+  type AgentRuntimeAdapter,
+  type StartRunInput,
+} from '@ai-team-os/providers'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { drainPumps, tick, type TickDeps } from '../../src/tick.js'
 
@@ -48,6 +54,11 @@ async function seed(options: { readonly setupCommands?: readonly string[] } = {}
       setupCommands: [...(options.setupCommands ?? [])],
     },
   })
+  // M12 Task 8: this fixture's agent names no model anywhere in the chain, so `resolveRuntime`
+  // falls all the way to the workspace default -- which does not exist unless a
+  // `ProviderConfiguration` row does. Without this, every dispatch in this file refuses
+  // (`workspaceDefaultProvider` returns `null`) instead of starting the run under test.
+  await prisma.providerConfiguration.create({ data: { workspaceId: workspace.id, kind: 'claude_code', settings: {} } })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
   const agent = await prisma.agent.create({
     data: { teamId: team.id, name: 'Alex', role: 'backend' },
@@ -444,6 +455,42 @@ describe('tick', () => {
 
     expect(second.started).toEqual([])
     expect(await prisma.agentRun.count()).toBe(1)
+  })
+
+  it('refuses -- as an attempted run that failed, not a silent skip -- when the workspace has no configured default provider', async (): Promise<void> => {
+    // `seed()` gives this workspace a `ProviderConfiguration` row; removing it reproduces a
+    // workspace nothing has configured at all, and the fixture agent names no model/provider
+    // anywhere in its own chain either -- so `resolveRuntime` has nothing to fall back to.
+    await prisma.providerConfiguration.deleteMany({ where: { workspaceId: fixture.workspaceId } })
+
+    const report = await tick(deps)
+
+    expect(report.started).toEqual([])
+    const run = await prisma.agentRun.findFirstOrThrow()
+    // An ATTEMPTED run that failed (spec §13), exactly like a worktree that could not be
+    // provisioned -- not the silent "nothing to attempt" `decide()` produces for an all-busy
+    // roster, because unlike busyness this will not resolve itself on the next tick.
+    expect(run.status).toBe('failed')
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+    expect(task.attempt).toBe(1)
+  })
+
+  it('refuses with the spec-verbatim invalid_provider text when the chain names a provider this process has no adapter for', async (): Promise<void> => {
+    // A `ProviderKind` the type system accepts but this registry was never given an adapter for --
+    // exactly Task 7's ledger gap: `isProviderKind` (write time) only checks union membership, so
+    // writing this pair succeeds, and dispatch (this task) is the first thing that can tell the
+    // difference between "known kind" and "configured kind".
+    await prisma.agent.update({ where: { id: fixture.agentId }, data: { model: 'whatever', provider: 'cursor' } })
+    // The REAL registry, not the test's own `singleAdapterRegistry` stub (which ignores `kind`
+    // entirely and would silently paper over exactly the bug under test here) -- built with only
+    // `claude_code` configured, matching production today (Cursor is Task 12's).
+    const realRegistry = buildRegistry({ claudeCode: { command: 'node', extraArgs: [FAKE, '--fixture', 'complete'], hookPath: REAL_GATE } })
+
+    const report = await tick({ ...deps, registry: realRegistry })
+
+    expect(report.started).toEqual([])
+    const run = await prisma.agentRun.findFirstOrThrow()
+    expect(run.status).toBe('failed')
   })
 
   it('kills the agent it just spawned when the start fails after the spawn', async (): Promise<void> => {

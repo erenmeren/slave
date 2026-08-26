@@ -15,45 +15,46 @@ import { prisma } from '@ai-team-os/db/client'
 import { workspaceId as brandWorkspaceId } from '@ai-team-os/domain'
 import { ClaudeCodeAdapter, type AdapterRegistry, type AgentRuntimeAdapter, type StartRunInput } from '@ai-team-os/providers'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
-import { resolveModel } from '../../src/model.js'
+import { workspaceDefaultProvider } from '../../src/model.js'
 import { drainPumps, tick, type TickDeps } from '../../src/tick.js'
 
-describe('resolveModel', () => {
-  it('a worker override wins over its roster row and its template default', (): void => {
-    const model = resolveModel({
-      model: 'worker-model',
-      companyAgent: { model: 'roster-model', template: { defaultModel: 'template-model' } },
-    })
-    expect(model).toBe('worker-model')
+// `resolveRuntime`'s own pure-function matrix (the worker/roster/template chain, and the
+// half-pair refusal, M12 §5 and Task 7's ledger) lives in `test/resolve-runtime.test.ts` --
+// `resolveModel`'s old describe block here is what that file replaces (M12 Task 8: "`resolveRuntime`
+// replaces `resolveModel`").
+
+describe('workspaceDefaultProvider', () => {
+  beforeEach(async (): Promise<void> => {
+    await prisma.$executeRawUnsafe(
+      'TRUNCATE TABLE "ProviderConfiguration", "Workspace" RESTART IDENTITY CASCADE',
+    )
   })
 
-  it('a roster override wins over the template default when the worker has none', (): void => {
-    const model = resolveModel({
-      model: null,
-      companyAgent: { model: 'roster-model', template: { defaultModel: 'template-model' } },
+  it('resolves to the one configured kind', async (): Promise<void> => {
+    const workspace = await prisma.workspace.create({
+      data: { name: 'Checkout Platform', repoPath: '/tmp/checkout', verifyCommands: ['true'], setupCommands: [] },
     })
-    expect(model).toBe('roster-model')
+    await prisma.providerConfiguration.create({ data: { workspaceId: workspace.id, kind: 'claude_code', settings: {} } })
+
+    expect(await workspaceDefaultProvider(workspace.id)).toBe('claude_code')
   })
 
-  it('falls back to the template default when neither the worker nor the roster row overrides it', (): void => {
-    const model = resolveModel({
-      model: null,
-      companyAgent: { model: null, template: { defaultModel: 'template-model' } },
+  it('yields null -- a refusal, not an assumed Claude -- for a workspace with no configuration row', async (): Promise<void> => {
+    const workspace = await prisma.workspace.create({
+      data: { name: 'Checkout Platform', repoPath: '/tmp/checkout', verifyCommands: ['true'], setupCommands: [] },
     })
-    expect(model).toBe('template-model')
+
+    expect(await workspaceDefaultProvider(workspace.id)).toBeNull()
   })
 
-  it('resolves to undefined (the adapter default) when every link in the chain is null', (): void => {
-    const model = resolveModel({
-      model: null,
-      companyAgent: { model: null, template: { defaultModel: null } },
+  it('yields null for a workspace with more than one configured kind -- there is no "the default" column to pick one by', async (): Promise<void> => {
+    const workspace = await prisma.workspace.create({
+      data: { name: 'Checkout Platform', repoPath: '/tmp/checkout', verifyCommands: ['true'], setupCommands: [] },
     })
-    expect(model).toBeUndefined()
-  })
+    await prisma.providerConfiguration.create({ data: { workspaceId: workspace.id, kind: 'claude_code', settings: {} } })
+    await prisma.providerConfiguration.create({ data: { workspaceId: workspace.id, kind: 'cursor', settings: {} } })
 
-  it('a legacy agent with no roster link (companyAgent: null) resolves through its own column alone', (): void => {
-    expect(resolveModel({ model: 'legacy-model', companyAgent: null })).toBe('legacy-model')
-    expect(resolveModel({ model: null, companyAgent: null })).toBeUndefined()
+    expect(await workspaceDefaultProvider(workspace.id)).toBeNull()
   })
 })
 
@@ -166,6 +167,13 @@ describe('the model chain reaches a dispatched run, and setAgentModel changes th
     const first = await tick(deps)
     expect(first.started).toHaveLength(1)
     expect(recorder.starts[0]?.model).toBe('test-model-a')
+    // M12 Task 8: the resolved provider is written onto the run row itself, not just handed to
+    // the adapter's `start()` -- `AgentRun.provider`'s own schema comment names this the task
+    // that finally writes it.
+    const firstRunId = first.started[0]
+    if (firstRunId === undefined) throw new Error('setup: expected a started run id')
+    const firstRun = await prisma.agentRun.findFirstOrThrow({ where: { id: firstRunId } })
+    expect(firstRun.provider).toBe('claude_code')
 
     // Let the first run conclude (fixture `complete`) so the worker frees up, then override the
     // worker's own model -- the top of the chain, above the roster row and the template default.

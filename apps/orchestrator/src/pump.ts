@@ -5,7 +5,7 @@ import { killWithEscalation } from '@ai-team-os/control'
 import { prisma } from '@ai-team-os/db/client'
 import type { AgentId, RunId, TaskId, WorkspaceId } from '@ai-team-os/domain'
 import { appendEvent } from '@ai-team-os/events'
-import { classifyGateEvent, type RunOutcome, type RuntimeEvent } from '@ai-team-os/providers'
+import { classifyGateEvent, type ProviderKind, type RunOutcome, type RuntimeEvent } from '@ai-team-os/providers'
 
 /**
  * The cap on a single `run.output` payload (spec §9: the agent's text output "with a truncation
@@ -56,11 +56,19 @@ export interface PumpRunInput {
     readonly gitIdentity: { readonly name: string; readonly email: string }
     /**
      * The model this run was actually spawned with (M10 §6), resolved once at spawn time by
-     * `resolveModel` -- recorded into the checkpoint verbatim so `resume()` replays the SAME model
+     * `resolveRuntime` -- recorded into the checkpoint verbatim so `resume()` replays the SAME model
      * rather than re-resolving the chain, which could have moved since (a `setAgentModel` call
      * between pause and resume affects only the run's NEXT dispatch, never this one).
      */
     readonly model?: string
+    /**
+     * The provider this run was actually spawned with (M12 Task 6/8), beside `model` for the same
+     * reason -- recorded into the checkpoint verbatim so a resumed run continues with the pair it
+     * started with (spec §4), never re-resolved. Optional for the same reason `model` is: a test
+     * fixture that never pauses need not invent one, and `writeCheckpoint`'s own early return
+     * already refuses to record half a checkpoint when `spawn` is absent at all.
+     */
+    readonly provider?: ProviderKind
   }
 }
 
@@ -133,6 +141,11 @@ async function writeCheckpoint(input: {
       gitAuthorName: input.spawn.gitIdentity.name,
       gitAuthorEmail: input.spawn.gitIdentity.email,
       model: input.spawn.model ?? null,
+      // M12 Task 8: written only in `create`, mirroring `model` immediately above -- a checkpoint
+      // written on a SECOND pause of an already-resumed run is fed the same `spawn.provider` it
+      // was started (or resumed) with, so leaving `update` untouched records the identical value
+      // rather than a redundant rewrite of it.
+      provider: input.spawn.provider ?? null,
       lastToolUseId: input.lastToolUseId,
       lastToolName: input.lastToolName,
       numTurns: input.toolCalls,

@@ -49,6 +49,10 @@ async function seed(goal: string | null): Promise<Fixture> {
       goal,
     },
   })
+  // M12 Task 8: no agent in this file names a model anywhere in the chain, so `resolveRuntime`
+  // falls all the way to the workspace default -- which needs a `ProviderConfiguration` row to
+  // exist at all, or every dispatch here refuses instead of starting the run under test.
+  await prisma.providerConfiguration.create({ data: { workspaceId: workspace.id, kind: 'claude_code', settings: {} } })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
   return { workspaceId: workspace.id, teamId: team.id, repoPath }
 }

@@ -8,8 +8,8 @@ import {
 import { runFilePaths } from '@ai-team-os/control'
 import { prisma } from '@ai-team-os/db/client'
 import { appendEvent } from '@ai-team-os/events'
-import type { RunHandle } from '@ai-team-os/providers'
-import { resolveModel } from './model.js'
+import type { AgentRuntimeAdapter, RunHandle } from '@ai-team-os/providers'
+import { resolveRuntime, workspaceDefaultProvider } from './model.js'
 import { resolveAdapter } from './provider.js'
 import { pumpRun } from './pump.js'
 import { activePumpRunIds, emailLocalPart, pumps, type TickDeps } from './tick.js'
@@ -277,21 +277,36 @@ export async function dispatchPlanning(deps: TickDeps): Promise<RunId | null> {
   // agent.
   let handle: RunHandle | null = null
 
-  // Resolved once, before the `try`, so the catch below reaches the same instance -- the
-  // `startRun` precedent (M12 Task 5; `resolveAdapter` is the single place `'claude_code'` is
-  // named).
-  const adapter = resolveAdapter(deps.registry)
+  // Nullable now that resolving it can itself fail (M12 Task 8: an unconfigured provider) -- the
+  // catch below needs to tell "no adapter to cancel with" apart from "spawned, then something
+  // else failed" just as it already does for `handle`.
+  let adapter: AgentRuntimeAdapter | null = null
 
   try {
+    // M12 Task 8: resolved first, inside the `try` -- see `tick.ts`'s `startRun` for the full
+    // reasoning (a misconfigured provider is an attempted run that failed, `failToStart`'s spec
+    // §13 category, not a "nothing to attempt" that would retry silently forever).
+    const workspaceDefault = await workspaceDefaultProvider(workspace.id)
+    const resolved = resolveRuntime(manager, workspaceDefault)
+    if (resolved.provider === null) {
+      throw new Error(
+        'no runtime could be resolved for this run: either this workspace has no configured ' +
+          'default provider (ProviderConfiguration), or a level of the model override chain names ' +
+          'a model with no provider recorded for it',
+      )
+    }
+    adapter = resolveAdapter(deps.registry, resolved.provider)
+    const runAdapter = adapter
+    const model = resolved.model
+
     // No `settingsPath` here any more (M12 Task 2): `runFilePaths` hands back the run's own
     // scratch directory, and what the adapter keeps inside it is that adapter's business, reported
     // back opaquely on `handle.runFiles` below.
     const { runDir, pauseFlagPath } = runFilePaths(workspace.repoPath, runId)
 
     const gitIdentity = { name: manager.name, email: `${emailLocalPart(manager)}@aiteamos.local` }
-    const model = resolveModel(manager)
 
-    handle = await adapter.start({
+    handle = await runAdapter.start({
       runId,
       prompt: buildPlanningPrompt(workspace.goal),
       // The primary checkout itself, not a fresh worktree (spec Decision 5): the planner reads
@@ -305,7 +320,9 @@ export async function dispatchPlanning(deps: TickDeps): Promise<RunId | null> {
 
     await prisma.agentRun.update({
       where: { id: run.id },
-      data: { pid: handle.pid, worktreePath: workspace.repoPath },
+      // `provider` (M12 Task 8) -- see `tick.ts`'s own `startRun` for why it is written here,
+      // alongside `pid`, rather than at creation.
+      data: { pid: handle.pid, worktreePath: workspace.repoPath, provider: resolved.provider },
     })
 
     // Chained into `tick.ts`'s own `pumps` set, exactly as `dispatchReview` chains its own pump --
@@ -315,11 +332,18 @@ export async function dispatchPlanning(deps: TickDeps): Promise<RunId | null> {
       taskId: null,
       agentId: brandAgentId(manager.id),
       workspaceId: deps.workspaceId,
-      events: adapter.events(runId),
-      cancel: () => adapter.cancel(runId),
+      events: runAdapter.events(runId),
+      cancel: () => runAdapter.cancel(runId),
       // `settingsPath`/`hookPath` come from the adapter's own report, not from anything dispatched
       // here (M12 Task 2).
-      spawn: { ...handle.runFiles, pauseFlagPath, gitIdentity, ...(model !== undefined ? { model } : {}) },
+      spawn: {
+        ...handle.runFiles,
+        pauseFlagPath,
+        gitIdentity,
+        // M12 Task 6/8: the provider this run actually started with, replayed verbatim on resume.
+        provider: resolved.provider,
+        ...(model !== undefined ? { model } : {}),
+      },
     })
       .then(() => verifyConcludedRun(runId))
       .catch((error: unknown): void => {
@@ -337,7 +361,9 @@ export async function dispatchPlanning(deps: TickDeps): Promise<RunId | null> {
     // Kill what was spawned before recording anything -- the same discipline `dispatchReview`
     // applies, for the same reason: an agent nobody can find is worse than a failed run.
     let cancelError: unknown = null
-    if (handle !== null) {
+    // `adapter !== null` is implied by `handle !== null`, but a resolution failure (a
+    // misconfigured provider, above) is precisely the case where `adapter` is still `null` here.
+    if (handle !== null && adapter !== null) {
       try {
         await adapter.cancel(runId)
       } catch (failure) {

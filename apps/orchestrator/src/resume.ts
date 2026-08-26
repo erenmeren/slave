@@ -44,9 +44,6 @@ export interface ExecuteResumeOptions {
  */
 export async function executeResume(options: ExecuteResumeOptions): Promise<void> {
   const { message } = options
-  // Resolved once for the whole call -- `resolveAdapter` is the single place `'claude_code'` is
-  // named (M12 Task 5).
-  const adapter = resolveAdapter(options.registry)
   // `agent -> team`, not `task`: a `planning` run (M8b) has no `Task` row, and `agent -> team ->
   // workspace` is the only linkage such a run has to a workspace.
   const run = await prisma.agentRun.findUniqueOrThrow({
@@ -61,6 +58,14 @@ export async function executeResume(options: ExecuteResumeOptions): Promise<void
   if (checkpoint === null) {
     throw new Error(`run ${run.id} has no checkpoint: there is nothing to resume it from`)
   }
+
+  // Resolved from the CHECKPOINT's own recorded provider (M12 Task 8), never re-resolved from the
+  // worker's current assignment -- spec §4: "a resumed run continues with the pair it started
+  // with," matching how `checkpoint.model` is already replayed verbatim below. `?? 'claude_code'`
+  // is the same historical-fact default `sweep.ts` uses: every checkpoint written before this
+  // column existed was necessarily a Claude Code run (there was no other adapter that could have
+  // produced it), so this backfills a known fact rather than guessing among live alternatives.
+  const adapter = resolveAdapter(options.registry, checkpoint.provider ?? 'claude_code')
 
   // The checkpoint is the whole point of `resume`'s signature: this process may never have called
   // `start()` for that run, so the settings file, the hook path and the git identity exist nowhere
@@ -129,6 +134,10 @@ export async function executeResume(options: ExecuteResumeOptions): Promise<void
       pauseFlagPath: checkpoint.pauseFlagPath,
       hookPath: checkpoint.hookPath,
       gitIdentity: { name: checkpoint.gitAuthorName, email: checkpoint.gitAuthorEmail },
+      // The same historical-fact default used to resolve `adapter` above, carried forward so a
+      // SECOND pause of this same resumed run checkpoints the identical provider rather than
+      // losing it -- see `PumpRunInput.spawn.provider`'s own docstring.
+      provider: checkpoint.provider ?? 'claude_code',
       // Carried forward so a SECOND pause of this same resumed run checkpoints the same model
       // again, rather than losing it -- see `PumpRunInput.spawn.model`'s own docstring.
       ...(checkpoint.model !== null ? { model: checkpoint.model } : {}),

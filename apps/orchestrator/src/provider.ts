@@ -1,22 +1,41 @@
-import type { AdapterRegistry, AgentRuntimeAdapter, ProviderKind } from '@ai-team-os/providers'
+import { refusalText } from '@ai-team-os/control'
+import {
+  UnknownProviderError,
+  type AdapterRegistry,
+  type AgentRuntimeAdapter,
+  type ProviderKind,
+} from '@ai-team-os/providers'
 
 /**
- * The provider every run resolves to today. M12 Task 8 replaces this with a lookup against the
- * run's own persisted provider once a second runtime is real dispatch, not a stub -- until then
- * this is the one line every `AdapterRegistry.resolve` call in the orchestrator goes through, so
- * Task 8 has exactly one line to change.
+ * The single place every `deps.adapter.x(...)` call site in the orchestrator resolves a live
+ * `AgentRuntimeAdapter` out of an `AdapterRegistry`.
  *
- * A separate constant from `packages/control/src/pause.ts`'s own `CURRENT_PROVIDER_KIND`, not a
- * shared one, though it follows the same M12 controller ruling and names the same fact: that
- * function's `signalPause` is a stateless cross-process dispatch on `kind` with no adapter
- * instance involved, while this one resolves a live `AgentRuntimeAdapter` out of an
- * `AdapterRegistry` -- different call shapes, in different packages (`packages/control` does not
- * depend on `apps/orchestrator`, nor should it), that happen to need the same single literal
- * until Task 8 makes both real lookups.
+ * M12 Task 5 through 7 left this function resolving a hardcoded `CURRENT_PROVIDER_KIND` constant
+ * (`'claude_code'`) regardless of what any caller actually wanted -- that constant's own docstring
+ * named this file as the one line Task 8 would change. `kind` is now the caller's own resolved
+ * value: `resolveRuntime`'s output for a fresh dispatch (`tick.ts`, `planning.ts`, `review.ts`), or
+ * a checkpoint's/run's own recorded provider for a continuation (`resume.ts`, `sweep.ts`) -- never
+ * a constant, because there is no longer one runtime every RUN goes through.
+ *
+ * `UnknownProviderError` -- a `ProviderKind` this process has no adapter for, `'cursor'` until
+ * Task 12 -- is translated into the milestone's own `invalid_provider` wording (spec-verbatim,
+ * `packages/control`'s `refusal.ts`) rather than left as the registry's own message. Task 7's
+ * ledger named the gap this closes: `packages/control/src/org.ts`'s `isProviderKind` can only
+ * check that a string is a MEMBER of the `ProviderKind` union (it has no registry to check against
+ * -- the registry is an orchestrator-process concept, built per deployment from whichever adapters
+ * that process was given, not something a pure Prisma-backed control function can see), so writing
+ * `provider: 'cursor'` today succeeds and mints a row nothing can actually run. This function is
+ * the first place that CAN tell "known kind" from "configured kind" apart, because it is the first
+ * place holding both the value and the registry -- so refusing here, with the same text the write
+ * path already promises, is where the check finally meets it.
  */
-const CURRENT_PROVIDER_KIND: ProviderKind = 'claude_code'
-
-/** The one place every `deps.adapter.x(...)` call site in the orchestrator resolves its adapter. */
-export function resolveAdapter(registry: AdapterRegistry): AgentRuntimeAdapter {
-  return registry.resolve(CURRENT_PROVIDER_KIND)
+export function resolveAdapter(registry: AdapterRegistry, kind: ProviderKind): AgentRuntimeAdapter {
+  try {
+    return registry.resolve(kind)
+  } catch (error) {
+    if (error instanceof UnknownProviderError) {
+      throw new Error(refusalText({ kind: 'invalid_provider', provider: kind }))
+    }
+    throw error
+  }
 }

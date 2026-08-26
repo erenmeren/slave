@@ -12,9 +12,9 @@ import {
   type WorkspaceId,
 } from '@ai-team-os/domain'
 import { appendEvent } from '@ai-team-os/events'
-import type { AdapterRegistry, RunHandle } from '@ai-team-os/providers'
+import type { AdapterRegistry, AgentRuntimeAdapter, RunHandle } from '@ai-team-os/providers'
 import { runMergePass } from './merge.js'
-import { resolveModel } from './model.js'
+import { resolveRuntime, workspaceDefaultProvider } from './model.js'
 import { dispatchPlanning } from './planning.js'
 import { resolveAdapter } from './provider.js'
 import { pumpRun } from './pump.js'
@@ -34,10 +34,9 @@ export interface TickDeps {
    * dependency. Decision of Record #1 (M12): no caller outside `packages/providers` may know a
    * provider keeps a hook script at all.
    *
-   * M12 Task 5: a registry, not a single `AgentRuntimeAdapter`, now that a run's provider is
-   * (nominally) a choice rather than a hardcoded fact -- every lookup against it still resolves
-   * to `'claude_code'` (`resolveAdapter`, `provider.ts`) until Task 8 makes that a real per-run
-   * decision.
+   * M12 Task 5: a registry, not a single `AgentRuntimeAdapter`, now that a run's provider is a
+   * real choice rather than a hardcoded fact -- M12 Task 8 makes each lookup against it resolve
+   * to whatever `resolveRuntime` (`model.ts`) actually decided for that run.
    */
   readonly registry: AdapterRegistry
 }
@@ -453,12 +452,38 @@ async function startRun(deps: TickDeps, taskId: TaskId, agentId: AgentId): Promi
   // dead pids, so nothing in the system can ever find that process again.
   let handle: RunHandle | null = null
 
-  // Resolved once, outside the `try`, so the catch below can reach the same instance to cancel
-  // whatever the try block spawned -- one lookup for the whole call, not one per `deps.adapter.x`
-  // site (M12 Task 5; `resolveAdapter` is the single place `'claude_code'` is named).
-  const adapter = resolveAdapter(deps.registry)
+  // Both declared outside the `try`, `adapter` nullable now that resolving it can itself fail
+  // (M12 Task 8: an unconfigured provider, below) -- the catch needs to tell "no adapter to
+  // cancel with" from "spawned, then something else failed" just as it already tells that apart
+  // for `handle`.
+  let adapter: AgentRuntimeAdapter | null = null
 
   try {
+    // M12 Task 8: resolved first, inside the `try`, so a misconfigured provider -- an unresolvable
+    // chain (a legacy half-pair, or no workspace default) or a `ProviderKind` this process has no
+    // adapter for -- is recorded as an attempted run that failed to start (`failToStart`, spec
+    // §13), exactly like a worktree that could not be provisioned. It must not be treated as
+    // "nothing to attempt" (the way an all-busy roster is): unlike busyness, a misconfiguration
+    // does not resolve itself on the next tick, so the operator needs to see it as a failure,
+    // counted against the task's attempt cap, not silently retried forever.
+    const workspaceDefault = await workspaceDefaultProvider(workspace.id)
+    const resolved = resolveRuntime(agent, workspaceDefault)
+    if (resolved.provider === null) {
+      throw new Error(
+        'no runtime could be resolved for this run: either this workspace has no configured ' +
+          'default provider (ProviderConfiguration), or a level of the model override chain names ' +
+          'a model with no provider recorded for it',
+      )
+    }
+    // May itself throw (an `invalid_provider` refusal) for a `ProviderKind` this process has no
+    // adapter registered for -- M12 Task 8 closes the gap Task 7's ledger named: `isProviderKind`
+    // can only check union membership, not configuredness, so this is the first place that can.
+    adapter = resolveAdapter(deps.registry, resolved.provider)
+    // A local, non-null binding: `adapter` itself stays nullable so the `catch` below can tell
+    // whether resolving it succeeded, but everything past this point already knows it did.
+    const runAdapter = adapter
+    const model = resolved.model
+
     const worktree = await acquireWorktree({
       repoPath: workspace.repoPath,
       baseBranch: workspace.baseBranch,
@@ -474,9 +499,7 @@ async function startRun(deps: TickDeps, taskId: TaskId, agentId: AgentId): Promi
     // else -- is that adapter's business, reported back opaquely on `handle.runFiles` below.
     const { runDir, pauseFlagPath } = runFilePaths(workspace.repoPath, runId)
 
-    const model = resolveModel(agent)
-
-    handle = await adapter.start({
+    handle = await runAdapter.start({
       runId,
       prompt: buildPrompt(task),
       worktreePath: worktree.path,
@@ -490,7 +513,11 @@ async function startRun(deps: TickDeps, taskId: TaskId, agentId: AgentId): Promi
 
     await prisma.agentRun.update({
       where: { id: run.id },
-      data: { pid: handle.pid, worktreePath: worktree.path },
+      // `provider` (M12 Task 8): the schema comment on `AgentRun.provider` names Tasks 7/8 as the
+      // ones that resolve and write it -- Task 7 covered the org-level pair; this is the run-level
+      // write. Written here, alongside `pid`, rather than at `agentRun.create` above, because
+      // `resolved` is not known until the chain (and the registry) have both been consulted.
+      data: { pid: handle.pid, worktreePath: worktree.path, provider: resolved.provider },
     })
 
     // Only ever a *first* pump for this run: the tick never resumes anything, so the second
@@ -507,8 +534,8 @@ async function startRun(deps: TickDeps, taskId: TaskId, agentId: AgentId): Promi
       taskId: brandTaskId(task.id),
       agentId: brandAgentId(agent.id),
       workspaceId: deps.workspaceId,
-      events: adapter.events(runId),
-      cancel: () => adapter.cancel(runId),
+      events: runAdapter.events(runId),
+      cancel: () => runAdapter.cancel(runId),
       // The facts a fresh process cannot rediscover, handed to the component that knows when the
       // run pauses. Identity is supplied per-process by design, so there is nowhere else to
       // recover it from once this process is gone. `settingsPath`/`hookPath` come from the
@@ -518,6 +545,9 @@ async function startRun(deps: TickDeps, taskId: TaskId, agentId: AgentId): Promi
         ...handle.runFiles,
         pauseFlagPath,
         gitIdentity: { name: agent.name, email: `${emailLocalPart(agent)}@aiteamos.local` },
+        // Recorded so a pause's checkpoint carries the provider the run actually started with
+        // (M12 Task 6/8; spec §4) -- `resume()` replays it verbatim, never re-resolving.
+        provider: resolved.provider,
         ...(model !== undefined ? { model } : {}),
       },
     })
@@ -542,7 +572,10 @@ async function startRun(deps: TickDeps, taskId: TaskId, agentId: AgentId): Promi
     // Kill what was spawned before recording anything. An agent nobody can find is worse than a
     // failed run, and this is the only moment its pid is still known.
     let cancelError: unknown = null
-    if (handle !== null) {
+    // `adapter !== null` is implied by `handle !== null` (nothing spawns before it resolves), but
+    // TypeScript cannot see that relationship through the `let`, and a resolution failure (a
+    // misconfigured provider, above) is precisely the case where `adapter` is still `null` here.
+    if (handle !== null && adapter !== null) {
       try {
         await adapter.cancel(runId)
       } catch (failure) {
