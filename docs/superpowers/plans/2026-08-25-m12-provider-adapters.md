@@ -870,23 +870,77 @@ git commit -m "feat: an unmeasurable budget is refused and an unknown cost stays
 
 **Files:**
 - Create: `packages/providers/src/cursor/stream.ts`
-- Create: `packages/providers/test/fixtures/cursor-run.ndjson`
+- Create: `packages/providers/test/fixtures/cursor/cursor-run.ndjson` — **AMENDED**: under a
+  per-runtime subdirectory, not beside the Claude fixtures. `fake-claude.test.ts` walks
+  `fixtures/*.ndjson` and asserts every file there ends with Claude's routine `Stop` hook
+  line; a Cursor recording in that directory forces that guard to be weakened, once now and
+  again for every Cursor fixture Tasks 12 and 14 add. `readdir` is not recursive.
 - Test: `packages/providers/test/cursor-stream.test.ts` (create)
 
 **Interfaces:**
 - Produces: `parseCursorLine(line: string): RuntimeEvent` — total, pure, mirroring
   `packages/providers/src/claude/stream.ts:26-59`.
 
-Mapping (spec §7): `system` init → `session_started` (from `session_id`); `assistant` →
-`text`; `tool_call` → `tool_call`; `result` → `terminated`. On the `result` line:
-`isError` from `is_error`, `terminalReason` from `subtype`, `costUsd: null`,
-`stopReason: null`, and `numTurns` **derived** by counting assistant messages seen.
+Mapping — **AMENDED 2026-08-26 against the recorded fixture** (cursor-agent
+2026.08.11-e8db854). The table below is what the binary actually emits; the vendor-doc
+mapping this section previously carried was wrong in five places, listed after it. Where the
+two disagree the fixture wins (task-10-report.md carries the evidence).
+
+| Cursor line | `RuntimeEvent` |
+|---|---|
+| `system` / `init` | `session_started`, from `session_id` |
+| `system` / any other subtype | `ignored` |
+| `user` (the prompt echo) | `ignored` |
+| `thinking` / `delta`, `thinking` / `completed` | `ignored` |
+| `assistant` (one `message.content[]` text block) | `text` |
+| `tool_call` / `started` | `tool_call` |
+| `tool_call` / `completed` | `ignored` — the same call, not a second one |
+| `result` | `terminated` |
+| unrecognized top-level `type` | `ignored` |
+| invalid JSON, or a recognized shape missing a required field | `unparsable` |
+
+On the `result` line: `isError` from `is_error` (defaulting to `true`, with the default named
+in `terminalReason`), `terminalReason` from `subtype`, and `costUsd: null`, `stopReason:
+null`, `numTurns: 0`, `deniedToolUseIds: []` — **unconditionally**, because the real result
+line carries none of `total_cost_usd`, `stop_reason`, `num_turns` or `permission_denials`.
+
+Where this section was previously wrong:
+
+1. **`tool_call` is a top-level line type, not a content block.** Cursor's `assistant` lines
+   carry text only; a Claude-shaped `tool_use` block inside `message.content` never occurs.
+2. **The tool's name is the KEY of the `tool_call` object**, not a `name` field:
+   `{"tool_call": {"readToolCall": {"args": {"path": "..."}}}}`, beside the envelope keys
+   `toolCallId`, `hookAdditionalContexts`, `startedAtMs`, `completedAtMs`. The id is
+   `call_id`, and **it contains a literal newline**.
+3. **Each call emits two lines** (`started`, `completed`) under one `call_id`. Mapping both
+   to `tool_call` doubles every tool call in the feed.
+4. **`numTurns` cannot be "derived by counting assistant messages seen"** inside a per-line
+   pure function, and Cursor reports no turn count either — the result line has no
+   `num_turns` field at all. Ruling R3: purity wins, the parser reports `0` as a documented
+   fidelity gap, and the derivation is **routed to Task 12's adapter**, which already holds
+   the run's state.
+5. **`thinking` lines were not predicted at all** — the recording is 5/13 `thinking`,
+   streamed token by token. They are `ignored`, not `text`.
+
+Also corrected in spec §7's prose, which says Cursor reports "neither cost, tokens, nor a
+stop reason": the result line **does** report tokens (`usage: {inputTokens, outputTokens,
+cacheReadTokens, cacheWriteTokens}`). It reports no price, so `reportsCost: false` and
+`costUsd: null` stand unchanged; only the claim about tokens is false.
 
 - [ ] **Step 1: Record a real fixture**
 
-Run `cursor-agent` once, non-interactively, with `--output-format stream-json` on a trivial
-prompt in a scratch directory, and save the NDJSON verbatim to the fixture path. Record the
-exact command in the task report — the fixture's provenance is what makes the test evidence.
+Run `cursor-agent` once, non-interactively, with `--print --output-format stream-json` on a
+trivial prompt in a scratch directory OUTSIDE this repository, and save the NDJSON verbatim to
+the fixture path. Record the exact command in the task report — the fixture's provenance is
+what makes the test evidence.
+
+**Sixth binary-verified correction, found here:** an untrusted directory makes `cursor-agent`
+exit **1 with an empty stdout**, printing "Workspace Trust Required" to stderr instead of a
+single stream line. `--trust` (or `--force`/`--yolo`, which imply it) is therefore
+**mandatory** for any non-interactive run in a directory the user has not already trusted —
+and every fresh worktree this system creates is exactly such a directory. **Task 11's
+`cursorFlags` must emit it, and Task 12 must treat a zero-line stream as this failure rather
+than as a crash of unknown cause.**
 
 - [ ] **Step 2: Write the failing tests**
 
@@ -896,7 +950,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { parseCursorLine } from '../src/cursor/stream.js'
 
-const lines = readFileSync(new URL('./fixtures/cursor-run.ndjson', import.meta.url), 'utf8')
+const lines = readFileSync(new URL('./fixtures/cursor/cursor-run.ndjson', import.meta.url), 'utf8')
   .split('\n').filter(Boolean)
 
 describe('parseCursorLine', () => {
@@ -940,7 +994,7 @@ Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add packages/providers/src/cursor/stream.ts packages/providers/test/cursor-stream.test.ts packages/providers/test/fixtures/cursor-run.ndjson
+git add packages/providers/src/cursor/stream.ts packages/providers/test/cursor-stream.test.ts packages/providers/test/fixtures/cursor/cursor-run.ndjson packages/providers/src/index.ts
 git commit -m "feat(providers): the Cursor stream parser"
 ```
 
