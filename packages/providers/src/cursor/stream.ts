@@ -152,12 +152,55 @@ function parseAssistantLine(raw: unknown, line: string): RuntimeEvent {
 
   // Unlike Claude's, a Cursor `assistant` line never carries a tool_use
   // block -- tool calls are their own top-level lines -- so there is nothing
-  // to prefer over the text here. Both recorded assistant lines hold exactly
-  // one text block.
+  // to prefer over the text here.
+  //
+  // WHAT IS MEASURED: exactly one `text` block, on both of the recording's
+  // two assistant lines. That is the whole of the evidence.
+  //
+  // WHAT IS NOT: everything else. In particular, how a multi-block assistant
+  // message should be carried -- joined with `\n`, joined with `''`, or
+  // something else entirely -- is UNKNOWABLE from two lines that each carry
+  // one block, and guessing it would be the same error as writing this
+  // parser from vendor docs. So it is not guessed at.
+  //
+  // TASK 12 OWES A RECORDING with a longer, multi-part answer to settle the
+  // faithful mapping BEFORE this becomes load-bearing. Until that recording
+  // exists, the gap is made loud rather than made up.
   const { content } = envelope.data.message
-  if (content.length !== 1) return { kind: 'ignored', line }
+
+  if (content.length > 1) {
+    // `unparsable`, not `ignored`, and the distinction is the whole point of
+    // M12 Task 10's fix round 2. `ignored` means "a well-formed line of a
+    // kind this parser has no decision for". A two-block assistant message is
+    // not that: it is exactly the kind this parser DOES have a decision for,
+    // carrying more than was measured. Folding it into `ignored` made a real
+    // message from the agent vanish from the operator's feed with nothing
+    // counted, nothing warned and nothing in the terminal reason.
+    //
+    // `unparsable` is where that loss becomes attributable and non-fatal:
+    // `pump.ts` counts it, warns to the console with the offending line, and
+    // surfaces `(N unparsable line(s) were dropped first)` in the run's
+    // terminal reason. A counted loss beats a silent one, and neither
+    // requires inventing a join.
+    return { kind: 'unparsable', line }
+  }
+
+  if (content.length === 0) {
+    // Deliberately NOT the branch above. An empty `content` array loses
+    // nothing -- there is no text to carry -- so calling it a defect would be
+    // false, and it would debase the counter that branch depends on: an
+    // operator reading "3 unparsable lines were dropped" must be able to
+    // believe three pieces of the agent's message are missing. Padding that
+    // count with messages that carried nothing is the same class of lie as
+    // reporting an unmeasured cost as `0`.
+    return { kind: 'ignored', line }
+  }
+
   const [block] = content
   if (!isRecord(block)) return { kind: 'unparsable', line }
+  // One block of an unrecognized type IS "a kind this parser has no decision
+  // for" -- nothing was lost that this parser ever knew how to carry -- so it
+  // stays `ignored` and is not swept in with the multi-block case above.
   if (block.type !== 'text') return { kind: 'ignored', line }
 
   const result = textContentSchema.safeParse(block)

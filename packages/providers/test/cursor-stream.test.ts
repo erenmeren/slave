@@ -258,7 +258,59 @@ describe('parseCursorLine, totality', () => {
     expect(parseCursorLine(line)).toEqual({ kind: 'unparsable', line })
   })
 
-  it('returns ignored for an assistant line carrying a content block that is not text', () => {
+  it('returns unparsable for a multi-block assistant line, so a lost message is counted rather than silent', () => {
+    // Fix round 2. MEASURED: both recorded assistant lines carry exactly one
+    // text block. A two-block line is therefore a shape this parser cannot
+    // carry FAITHFULLY -- joining blocks with `\n` versus `''` versus
+    // something else is unknowable from two single-block lines, and guessing
+    // it would be the same sin as writing the parser from vendor docs.
+    //
+    // But it is NOT "a kind we have no decision for", which is what `ignored`
+    // means. It is a real message from the agent, and `ignored` made the
+    // whole thing vanish from the operator's feed with nothing counted,
+    // nothing warned, and nothing in the terminal reason. `unparsable` is
+    // where the loss becomes loud: `pump.ts:507` counts it and warns with the
+    // offending line, and `pump.ts:559` surfaces
+    // `(N unparsable line(s) were dropped first)` in the terminal reason.
+    // Non-fatal, attributable, counted.
+    const line = JSON.stringify({
+      type: 'assistant',
+      message: {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: 'First half.' },
+          { type: 'text', text: 'Second half.' },
+        ],
+      },
+    })
+    expect(parseCursorLine(line)).toEqual({ kind: 'unparsable', line })
+  })
+
+  it('returns ignored for an assistant line with no content blocks at all', () => {
+    // Fix round 2, decided deliberately and NOT swept in with the multi-block
+    // case above. An empty `content` array loses nothing: there is no text to
+    // carry, so calling it a defect would be false.
+    //
+    // The load-bearing reason is what `unparsable` is FOR here. Its whole
+    // value in the branch above is that the count means "real output was
+    // dropped" -- an operator reading `(3 unparsable line(s) were dropped
+    // first)` must be able to believe three pieces of the agent's message are
+    // missing. Padding that counter with messages that carried nothing debases
+    // exactly the signal this round exists to create, in the same way `?? 0`
+    // on an unmeasured cost debased a figure the budget guardrail believed.
+    //
+    // It is also the conservative edit: `content.length !== 1` already sent
+    // this case to `ignored`, so this round changes behaviour ONLY where
+    // something is actually lost.
+    const line = JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [] } })
+    expect(parseCursorLine(line)).toEqual({ kind: 'ignored', line })
+  })
+
+  it('returns ignored for an assistant line carrying a single content block that is not text', () => {
+    // Deliberately NOT swept into the multi-block `unparsable` branch: one
+    // block of an unrecognized type IS "a kind this parser has no decision
+    // for", which is what `ignored` means. Nothing was lost that this parser
+    // ever knew how to carry.
     const line = JSON.stringify({
       type: 'assistant',
       message: { role: 'assistant', content: [{ type: 'image', source: {} }] },

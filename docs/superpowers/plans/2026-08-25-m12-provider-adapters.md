@@ -1131,6 +1131,16 @@ vendor docs — task-10-report.md carries the evidence):
   recognise a terminal exit with zero parsed lines and say *that*, rather than reporting a
   runtime that died for unknown reasons — otherwise a one-flag problem (Task 11's `--trust`)
   costs an operator an hour. Cursor's stderr is worth capturing for exactly this reason.
+- **This task owes a second recording, with a longer multi-part answer.** Both assistant lines
+  in Task 10's fixture carry exactly ONE `text` block, so how a multi-block assistant message
+  should be carried — joined with `\n`, with `''`, or otherwise — is unknowable from the
+  evidence and is deliberately not guessed at. Until that recording exists,
+  `parseCursorLine` returns **`unparsable`** for a multi-block assistant line, so the loss is
+  counted by `pump.ts`, warned with the offending line, and named in the terminal reason
+  rather than vanishing silently. Record the real shape, then settle the mapping. (A
+  zero-block message stays `ignored`: it loses nothing, and padding the unparsable counter
+  with messages that carried nothing debases the one signal that makes the counter worth
+  reading.)
 - **`numTurns` is derived HERE, not in the parser.** Cursor's `result` line carries no turn
   count at all, and `parseCursorLine` is per-line and stateless, so it reports `numTurns: 0`
   as a documented fidelity gap (Task 10 ruling R3). This adapter already tracks the run's
