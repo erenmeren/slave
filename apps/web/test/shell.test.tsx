@@ -112,13 +112,45 @@ describe('the shell', () => {
 
   it('turns the budget bar amber past 80% and red past 100%', () => {
     const { rerender } = render(
-      <TopBar workspaceId="w1" workspaceName="W" connection="connected" budget={{ spentUsd: 85, budgetUsd: 100 }} halted={false} />,
+      <TopBar workspaceId="w1" workspaceName="W" connection="connected" budget={{ spentUsd: 85, budgetUsd: 100, unmeasuredRuns: 0 }} halted={false} />,
     )
     expect(screen.getByTestId('budget').innerHTML).toContain('bg-status-warn')
     rerender(
-      <TopBar workspaceId="w1" workspaceName="W" connection="connected" budget={{ spentUsd: 101, budgetUsd: 100 }} halted={false} />,
+      <TopBar workspaceId="w1" workspaceName="W" connection="connected" budget={{ spentUsd: 101, budgetUsd: 100, unmeasuredRuns: 0 }} halted={false} />,
     )
     expect(screen.getByTestId('budget').innerHTML).toContain('bg-status-danger')
+  })
+
+  it('says how many runs went unmeasured, so known spend is not read as total spend', () => {
+    // M12 Task 9 / ruling R11. `$3.20 / $20.00` on its own claims to be the whole bill. With two
+    // runs nobody could measure, it is only the part of the bill that was measured -- and this is
+    // the highest-visibility surface in the product for that distinction to be missing from.
+    render(
+      <TopBar
+        workspaceId="w1"
+        workspaceName="W"
+        connection="connected"
+        budget={{ spentUsd: 3.2, budgetUsd: 20, unmeasuredRuns: 2 }}
+        halted={false}
+      />,
+    )
+    const budget = screen.getByTestId('budget')
+    expect(budget.textContent).toContain('$3.20')
+    expect(budget.textContent).toContain('$20.00')
+    expect(budget.textContent).toContain('2 unmeasured')
+  })
+
+  it('says nothing about unmeasured runs when there are none', () => {
+    render(
+      <TopBar
+        workspaceId="w1"
+        workspaceName="W"
+        connection="connected"
+        budget={{ spentUsd: 3.2, budgetUsd: 20, unmeasuredRuns: 0 }}
+        halted={false}
+      />,
+    )
+    expect(screen.getByTestId('budget').textContent).not.toContain('unmeasured')
   })
 
   it('shows the known spend with no ratio and no bar when the workspace has no budget', () => {
@@ -132,7 +164,7 @@ describe('the shell', () => {
         workspaceId="w1"
         workspaceName="W"
         connection="connected"
-        budget={{ spentUsd: 3.2, budgetUsd: null }}
+        budget={{ spentUsd: 3.2, budgetUsd: null, unmeasuredRuns: 0 }}
         halted={false}
       />,
     )

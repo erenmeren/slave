@@ -8,7 +8,10 @@ const agent = (over: Partial<AgentCardData>): AgentCardData => ({
   id: 'a1',
   name: 'Alex',
   role: 'backend',
-  provider: 'claude-code',
+  // M12 Task 9 / ruling R10: `'claude_code'` is the `ProviderKind` (the column). The old value
+  // here, `'claude-code'`, was the ADAPTER ID -- a spelling no row ever held, from before
+  // `overview.ts` had a real column to read.
+  provider: 'claude_code',
   status: 'working',
   taskTitle: 'Add the thing',
   actionLine: null,
@@ -154,6 +157,47 @@ describe('AgentPanel', () => {
       )
       expect(screen.getByTestId('run-cost').textContent).toContain('1.25')
       expect(screen.getByTestId('run-tool-calls').textContent).toContain('7')
+    })
+
+    it('shows the unknown mark, not $0.00, when the live run reports no cost', () => {
+      // M12 Task 9 / ruling R3. `—` is the mark `RosterTable`/`CompanyManager` already use for
+      // unknown, so the surfaces agree on what "we do not know" looks like.
+      render(
+        <AgentPanel
+          agent={agent({ status: 'working', costUsd: null, toolCalls: 7 })}
+          liveEvents={[]}
+          workspaceId="w1"
+          haltedReason={null}
+          onClose={() => {}}
+        />,
+      )
+      expect(screen.getByTestId('run-cost').textContent).toBe('—')
+      expect(screen.getByTestId('run-tool-calls').textContent).toContain('7')
+    })
+
+    it('renders the run\'s own provider, and the unknown mark when no run has resolved one', () => {
+      // M12 Task 9 / ruling R10. The bare kind for now: the human-readable label and the
+      // shell-only gate mark are Task 13's, per spec §8.
+      const { rerender } = render(
+        <AgentPanel
+          agent={agent({ provider: 'cursor' })}
+          liveEvents={[]}
+          workspaceId="w1"
+          haltedReason={null}
+          onClose={() => {}}
+        />,
+      )
+      expect(screen.getByTestId('provider-chip').textContent).toBe('cursor')
+      rerender(
+        <AgentPanel
+          agent={agent({ provider: null })}
+          liveEvents={[]}
+          workspaceId="w1"
+          haltedReason={null}
+          onClose={() => {}}
+        />,
+      )
+      expect(screen.getByTestId('provider-chip').textContent).toBe('—')
     })
 
     it('shows paused-at step when paused', () => {

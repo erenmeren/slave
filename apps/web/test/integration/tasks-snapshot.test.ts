@@ -90,6 +90,39 @@ describe('buildTasksSnapshot', () => {
     expect(task?.runs.map((r) => r.id)).toEqual([newerRun.id, olderRun.id])
   })
 
+  it("keeps a run's unknown cost unknown rather than reporting it as $0.00", async (): Promise<void> => {
+    // M12 Task 9 / ruling R3. The comment this replaces said `$0.00` was chosen here "rather than
+    // widening this DTO to a tri-state" -- widening it is exactly what spec Decision 6 asks for,
+    // and the panel now renders the unknown mark the Roster already uses.
+    const seeded = await prisma.task.create({
+      data: {
+        workspaceId: fixture.workspaceId,
+        title: 'Unmeasured work',
+        description: 'x',
+        status: 'done',
+        requiredRole: 'backend',
+        maxAttempts: 3,
+      },
+    })
+    await prisma.agentRun.create({
+      data: { taskId: seeded.id, agentId: fixture.agentId, status: 'succeeded', costUsd: null },
+    })
+    await prisma.agentRun.create({
+      data: {
+        taskId: seeded.id,
+        agentId: fixture.agentId,
+        status: 'succeeded',
+        costUsd: 0.42,
+        startedAt: new Date('2026-08-01T00:00:00.000Z'),
+      },
+    })
+
+    const snapshot = await buildTasksSnapshot(fixture.workspaceId)
+    const task = snapshot?.tasks.find((t) => t.id === seeded.id)
+
+    expect(task?.runs.map((r) => r.costUsd)).toEqual([null, 0.42])
+  })
+
   it('names the live run agent as assignee and leaves finished tasks unassigned', async (): Promise<void> => {
     const runningTask = await prisma.task.create({
       data: {

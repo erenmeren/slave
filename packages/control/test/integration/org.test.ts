@@ -1,6 +1,7 @@
 import { prisma } from '@ai-team-os/db/client'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { addCompanyAgent, addCompanyTeam, assignCompany, createCompany, createTemplate, setAgentModel } from '../../src/org.js'
+import { refusalText } from '../../src/refusal.js'
 
 describe('catalog and company CRUD', () => {
   beforeEach(async (): Promise<void> => {
@@ -690,5 +691,196 @@ describe('setAgentModel', () => {
     const agent = await prisma.agent.findUniqueOrThrow({ where: { id } })
     expect(agent.model).toBeNull()
     expect(agent.provider).toBeNull()
+  })
+})
+
+/**
+ * Spec §6's write-time half (M12 Task 9, controller ruling R6). A mismatch between a budget and a
+ * runtime that cannot report cost is refused at the moment it would be CREATED, so the operator
+ * learns immediately in the UI rather than at the next dispatch -- or worse, never, from a budget
+ * that silently stopped meaning anything.
+ *
+ * There are exactly two reachable sites, and they are the two verbs that can bind a provider to a
+ * workspace: `assignCompany` (materializes a roster into one) and `setAgentModel` (pins a pair on
+ * a worker that is already in one). `createTemplate` and `addCompanyAgent` are deliberately NOT
+ * checked -- see the boundary comment in `org.ts` -- because a company is assignable to any
+ * workspace, so no budget is knowable at their write time.
+ */
+describe('write-time budget admission', () => {
+  beforeEach(async (): Promise<void> => {
+    await prisma.$executeRawUnsafe(
+      'TRUNCATE TABLE "ExecutionEvent", "Agent", "Team", "Workspace", "CompanyAgent", "CompanyTeam", "Company", "AgentTemplate" RESTART IDENTITY CASCADE',
+    )
+  })
+
+  async function workspaceWithBudget(budgetUsd: number | null): Promise<{ id: string }> {
+    const workspace = await prisma.workspace.create({
+      data: {
+        name: 'Checkout Platform',
+        repoPath: '/tmp/does-not-matter',
+        verifyCommands: ['true'],
+        setupCommands: [],
+        budgetUsd,
+      },
+    })
+    return { id: workspace.id }
+  }
+
+  /** A one-member roster whose TEMPLATE names the pair -- the lowest level of the override chain. */
+  async function rosterOn(provider: 'claude_code' | 'cursor' | null): Promise<{ companyId: string }> {
+    const company = await prisma.company.create({ data: { name: 'Acme Corp' } })
+    const team = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Engineering' } })
+    const template = await prisma.agentTemplate.create({
+      data: {
+        name: 'Backend Engineer',
+        role: 'backend',
+        ...(provider === null ? {} : { defaultModel: 'some-model', provider }),
+      },
+    })
+    await prisma.companyAgent.create({ data: { companyTeamId: team.id, templateId: template.id, name: 'Atlas' } })
+    return { companyId: company.id }
+  }
+
+  describe('assignCompany', () => {
+    it('refuses a roster that resolves to a cost-blind runtime into a budgeted workspace, writing nothing', async (): Promise<void> => {
+      const workspace = await workspaceWithBudget(20)
+      const { companyId } = await rosterOn('cursor')
+
+      const result = await assignCompany(workspace.id, companyId)
+
+      expect(result.ok).toBe(false)
+      if (!result.ok) {
+        expect(result.error).toEqual({ kind: 'unmeasurable_budget', workspaceId: workspace.id, provider: 'cursor' })
+        // Spec-verbatim, compared against `refusalText()` imported rather than hand-copied, so a
+        // test that `throw new Error('boom')` would satisfy is impossible here.
+        expect(refusalText(result.error)).toBe('a budget needs a provider that reports cost')
+      }
+
+      // "before the transaction writes anything" is the whole point of checking at write time: a
+      // half-materialized roster would leave the operator with workers they never agreed to.
+      const ws = await prisma.workspace.findUniqueOrThrow({ where: { id: workspace.id } })
+      expect(ws.companyId).toBeNull()
+      expect(await prisma.team.count({ where: { workspaceId: workspace.id } })).toBe(0)
+      expect(await prisma.agent.count()).toBe(0)
+      expect(await prisma.executionEvent.count({ where: { workspaceId: workspace.id } })).toBe(0)
+    })
+
+    it('admits the same roster into a workspace with no budget', async (): Promise<void> => {
+      const workspace = await workspaceWithBudget(null)
+      const { companyId } = await rosterOn('cursor')
+
+      const result = await assignCompany(workspace.id, companyId)
+
+      expect(result.ok).toBe(true)
+      expect(await prisma.agent.count()).toBe(1)
+    })
+
+    it('admits a cost-reporting roster into a budgeted workspace', async (): Promise<void> => {
+      const workspace = await workspaceWithBudget(20)
+      const { companyId } = await rosterOn('claude_code')
+
+      const result = await assignCompany(workspace.id, companyId)
+
+      expect(result.ok).toBe(true)
+      expect(await prisma.agent.count()).toBe(1)
+    })
+
+    it("refuses when the WORKSPACE's own configured default is the cost-blind one", async (): Promise<void> => {
+      // The roster names nothing, so resolution falls all the way through to the workspace
+      // default -- which is still the runtime every one of these workers would run on.
+      const workspace = await workspaceWithBudget(20)
+      await prisma.providerConfiguration.create({
+        data: { workspaceId: workspace.id, kind: 'cursor', settings: {} },
+      })
+      const { companyId } = await rosterOn(null)
+
+      const result = await assignCompany(workspace.id, companyId)
+
+      expect(result.ok).toBe(false)
+      if (!result.ok) expect(result.error).toMatchObject({ kind: 'unmeasurable_budget', provider: 'cursor' })
+      expect(await prisma.agent.count()).toBe(0)
+    })
+
+    it('does not refuse a roster whose runtime resolves to nothing at all', async (): Promise<void> => {
+      // An unresolvable chain (nothing names a pair, and the workspace has no configured default)
+      // is a DIFFERENT failure, refused at dispatch with its own wording. Refusing it here as an
+      // unmeasurable budget would mean every workspace in this codebase that predates M12 -- which
+      // is all of them -- could no longer be assigned a company at all.
+      const workspace = await workspaceWithBudget(20)
+      const { companyId } = await rosterOn(null)
+
+      const result = await assignCompany(workspace.id, companyId)
+
+      expect(result.ok).toBe(true)
+      expect(await prisma.agent.count()).toBe(1)
+    })
+  })
+
+  describe('setAgentModel', () => {
+    async function agentIn(budgetUsd: number | null): Promise<{ id: string }> {
+      const workspace = await workspaceWithBudget(budgetUsd)
+      const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
+      const agent = await prisma.agent.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
+      return { id: agent.id }
+    }
+
+    it('refuses pinning a cost-blind runtime on a worker in a budgeted workspace, changing nothing', async (): Promise<void> => {
+      const { id } = await agentIn(20)
+
+      const result = await setAgentModel(id, 'some-model', 'cursor')
+
+      expect(result.ok).toBe(false)
+      if (!result.ok) {
+        expect(result.error).toMatchObject({ kind: 'unmeasurable_budget', provider: 'cursor' })
+        expect(refusalText(result.error)).toBe('a budget needs a provider that reports cost')
+      }
+      const row = await prisma.agent.findUniqueOrThrow({ where: { id } })
+      expect(row.model).toBeNull()
+      expect(row.provider).toBeNull()
+    })
+
+    it('allows the same pair on a worker whose workspace has no budget', async (): Promise<void> => {
+      const { id } = await agentIn(null)
+
+      const result = await setAgentModel(id, 'some-model', 'cursor')
+
+      expect(result.ok).toBe(true)
+      const row = await prisma.agent.findUniqueOrThrow({ where: { id } })
+      expect(row.model).toBe('some-model')
+      expect(row.provider).toBe('cursor')
+    })
+
+    it('allows a cost-reporting pair in a budgeted workspace', async (): Promise<void> => {
+      const { id } = await agentIn(20)
+
+      const result = await setAgentModel(id, 'claude-opus', 'claude_code')
+
+      expect(result.ok).toBe(true)
+      const row = await prisma.agent.findUniqueOrThrow({ where: { id } })
+      expect(row.provider).toBe('claude_code')
+    })
+
+    it('still lets a budgeted workspace CLEAR an override, which pins no runtime at all', async (): Promise<void> => {
+      const { id } = await agentIn(20)
+      await setAgentModel(id, 'claude-opus', 'claude_code')
+
+      const result = await setAgentModel(id, null, null)
+
+      expect(result.ok).toBe(true)
+      const row = await prisma.agent.findUniqueOrThrow({ where: { id } })
+      expect(row.model).toBeNull()
+      expect(row.provider).toBeNull()
+    })
+
+    it('refuses an unknown agent before it can look up a workspace that is not there', async (): Promise<void> => {
+      // The new read is on the agent's workspace, so a missing agent must still produce
+      // `agent_not_found` and not some downstream failure about a null workspace.
+      const unknown = '00000000-0000-4000-8000-000000000000'
+
+      const result = await setAgentModel(unknown, 'some-model', 'cursor')
+
+      expect(result.ok).toBe(false)
+      if (!result.ok) expect(result.error).toEqual({ kind: 'agent_not_found', agentId: unknown })
+    })
   })
 })

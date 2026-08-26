@@ -1,6 +1,7 @@
 import { prisma } from '@ai-team-os/db/client'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, toRunState } from '@ai-team-os/db'
-import { deriveAgentStatus, NON_TERMINAL_RUN_STATUSES, type AgentStatus } from '@ai-team-os/domain'
+import type { ProviderKind } from '@ai-team-os/control'
+import { deriveAgentStatus, sumSpend, NON_TERMINAL_RUN_STATUSES, type AgentStatus } from '@ai-team-os/domain'
 import { feedSummary, type AgentFeedEvent } from '../lib/feedSummary'
 import { bucketSparkline } from './activity'
 
@@ -18,7 +19,15 @@ export interface AgentCardData {
   readonly id: string
   readonly name: string
   readonly role: string
-  readonly provider: 'claude-code'
+  /**
+   * The runtime this agent's LIVE run resolved (M12 Task 9, ruling R10), replacing a hardcoded
+   * `'claude-code'` from before `AgentRun.provider` existed. `null` with no live run: a worker's
+   * runtime is not decided until a run resolves it -- the override chain crosses four levels and
+   * a workspace default, and naming one here in advance would be a guess the surface presents as
+   * a fact. Note the spelling: `'claude_code'` is the `ProviderKind`, `'claude-code'` was the
+   * ADAPTER ID this field used to carry.
+   */
+  readonly provider: ProviderKind | null
   readonly status: AgentStatus
   readonly taskTitle: string | null
   readonly actionLine: string | null
@@ -34,8 +43,16 @@ export interface AgentCardData {
   /** This agent's `run.tool_call` counts for the last 10 minutes, one bucket per minute, oldest
    *  minute first, zero-filled. */
   readonly sparkline: readonly number[]
-  /** The live run's spend so far; 0 with no live run. Panel's current-run block (spec §6). */
-  readonly costUsd: number
+  /**
+   * The live run's spend so far. Panel's current-run block (spec §6).
+   *
+   * Three distinct states, and the old `number` could only say two of them (M12 Task 9, ruling
+   * R3): a figure is a measured cost; `0` with no live run is "there is no current run to have
+   * spent anything", the same statement `toolCalls: 0` makes beside it; `null` is "there IS a run
+   * and its runtime reports no spend", which spec Decision 6 says must never be shown as `$0.00`.
+   * Rendered as `—`, the mark `RosterTable`/`CompanyManager` already use for unknown.
+   */
+  readonly costUsd: number | null
   /** The live run's tool call count so far; 0 with no live run. */
   readonly toolCalls: number
   /** Set only while a checkpoint exists to resume from — null outside `paused`. */
@@ -54,7 +71,14 @@ export interface OverviewSnapshot {
      * `TopBar` as known spend with no ratio and no bar, never as a budget of zero.
      */
     readonly budgetUsd: number | null
+    /** KNOWN spend: every run that reported a cost, summed. Never includes a guess. */
     readonly spentUsd: number
+    /**
+     * How many of this workspace's runs reported no cost at all (M12 Task 9, ruling R11).
+     * Rendered beside the budget bar, because `spentUsd` alone reads as total spend and is only
+     * the measured part of it whenever this is non-zero.
+     */
+    readonly unmeasuredRuns: number
     readonly goal: string | null
   }
   readonly agents: readonly AgentCardData[]
@@ -152,10 +176,14 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
 
   // `agent: { team: { workspaceId } }`, not `task: { workspaceId }`: a `planning` run (M8b) has no
   // `Task` row, and its cost still counts toward the budget shown here.
-  const [spent, taskGroups] = await Promise.all([
-    prisma.agentRun.aggregate({ where: { agent: { team: { workspaceId } } }, _sum: { costUsd: true } }),
+  // One `costUsd` column per run rather than a `_sum` (M12 Task 9, ruling R3): an aggregate can
+  // only return a number, and a number cannot also say how many of the rows behind it reported
+  // nothing. `world.ts`'s budget guardrail reads the same split from the same function.
+  const [spendRows, taskGroups] = await Promise.all([
+    prisma.agentRun.findMany({ where: { agent: { team: { workspaceId } } }, select: { costUsd: true } }),
     prisma.task.groupBy({ by: ['status'], where: { workspaceId }, _count: { _all: true } }),
   ])
+  const spend = sumSpend(spendRows)
   const countOf = (statuses: readonly string[]): number =>
     taskGroups.filter((g) => statuses.includes(g.status)).reduce((n, g) => n + g._count._all, 0)
 
@@ -166,8 +194,8 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
       haltedReason: workspace.haltedReason,
       haltedAt: workspace.haltedAt?.toISOString() ?? null,
       budgetUsd: workspace.budgetUsd,
-      // TASK 9: unknown cost must render as "—", not $0.00 (spec Decision 6)
-      spentUsd: spent._sum.costUsd ?? 0,
+      spentUsd: spend.known,
+      unmeasuredRuns: spend.unknownRuns,
       goal: workspace.goal,
     },
     agents: agents.map((agent) => {
@@ -176,8 +204,11 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
         id: agent.id,
         name: agent.name,
         role: agent.role,
-        // The single registered adapter (M3 §17.5). A column arrives with a second provider.
-        provider: 'claude-code' as const,
+        // The run's own column, not a constant (M12 Task 9, ruling R10). `AgentRun.provider` has
+        // been written by every dispatch since Task 8, so the surface finally has real data where
+        // it used to have `'claude-code' as const` -- which was not even the `ProviderKind`
+        // spelling, but `ClaudeCodeAdapter.id`.
+        provider: run?.provider ?? null,
         status: deriveAgentStatus(run === null ? null : toRunState(run)),
         taskTitle: run?.task?.title ?? null,
         actionLine: lines.get(agent.id) ?? null,
@@ -186,8 +217,12 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
         resumeRequestedAt: run?.resumeRequestedAt?.toISOString() ?? null,
         recentEvents: recentEventsByAgent.get(agent.id) ?? [],
         sparkline: bucketSparkline(sparklineRowsByAgent.get(agent.id) ?? [], sparklineNow),
-        // TASK 9: unknown cost must render as "—", not $0.00 (spec Decision 6)
-        costUsd: run?.costUsd ?? 0,
+        // `run === null ? 0 : run.costUsd`, not `run?.costUsd ?? 0` (M12 Task 9, ruling R3). The
+        // coalesce collapsed two different facts into one number: "no live run" (nothing has been
+        // spent, a measured zero, the same claim `toolCalls: 0` makes on the next line) and "a
+        // live run whose runtime reports no spend" (unknown, which Decision 6 forbids showing as
+        // $0.00). Only the second becomes null.
+        costUsd: run === null ? 0 : run.costUsd,
         toolCalls: run?.toolCalls ?? 0,
         pausedAtStep: run?.pausedAtStep ?? null,
       }

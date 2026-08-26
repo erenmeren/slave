@@ -10,7 +10,10 @@ const agent = (over: Partial<AgentCardData>): AgentCardData => ({
   id: 'a1',
   name: 'Alex',
   role: 'backend',
-  provider: 'claude-code',
+  // M12 Task 9 / ruling R10: `'claude_code'` is the `ProviderKind` (the column). The old value
+  // here, `'claude-code'`, was the ADAPTER ID -- a spelling no row ever held, from before
+  // `overview.ts` had a real column to read.
+  provider: 'claude_code',
   status: 'idle',
   taskTitle: null,
   actionLine: null,
@@ -26,9 +29,22 @@ const agent = (over: Partial<AgentCardData>): AgentCardData => ({
 })
 
 const snapshot = (agents: readonly AgentCardData[]): OverviewSnapshot => ({
-  workspace: { id: 'w1', name: 'W', haltedReason: null, haltedAt: null, budgetUsd: 100, spentUsd: 3, goal: null },
+  workspace: { id: 'w1', name: 'W', haltedReason: null, haltedAt: null, budgetUsd: 100, spentUsd: 3, unmeasuredRuns: 0, goal: null },
   agents,
   tasks: { active: 2, blocked: 1, done: 4, failed: 0 },
+})
+
+describe('AgentCard provider chip', () => {
+  it("renders the run's own provider kind, and the unknown mark when no run has resolved one", () => {
+    // M12 Task 9 / ruling R10. The bare kind: the human-readable label and the shell-only gate
+    // mark belong to Task 13 (spec §8), and inventing either here would be that task's decision
+    // taken by the wrong task.
+    const { rerender } = render(<AgentCard agent={agent({ provider: 'cursor' })} liveActionLine={null} onOpen={() => {}} />)
+    expect(screen.getByTestId('provider-chip').textContent).toBe('cursor')
+
+    rerender(<AgentCard agent={agent({ provider: null })} liveActionLine={null} onOpen={() => {}} />)
+    expect(screen.getByTestId('provider-chip').textContent).toBe('—')
+  })
 })
 
 describe('TopStrip', () => {

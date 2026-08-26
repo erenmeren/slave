@@ -109,6 +109,35 @@ describe('buildOverviewSnapshot', () => {
     // forgot failed runs would show a workspace under budget while the bank account disagrees.
     expect(snapshot?.workspace.spentUsd).toBeCloseTo(4.0)
     expect(snapshot?.workspace.budgetUsd).toBe(100)
+    expect(snapshot?.workspace.unmeasuredRuns).toBe(0)
+  })
+
+  it('reports known spend and the count of runs nobody could measure, never folding one into the other', async (): Promise<void> => {
+    // M12 Task 9 / ruling R3. `?? 0` on a SUM is right for "no rows at all" and wrong for "rows
+    // whose cost is unknown" -- and the old code could not tell those apart, so a workspace whose
+    // every run went unmeasured looked identical to one that had spent nothing.
+    await prisma.agentRun.create({
+      data: { taskId: fixture.taskId, agentId: fixture.agentId, status: 'succeeded', costUsd: 1.5 },
+    })
+    await prisma.agentRun.create({
+      data: { taskId: fixture.taskId, agentId: fixture.agentId, status: 'succeeded', costUsd: null },
+    })
+    await prisma.agentRun.create({
+      data: { taskId: fixture.taskId, agentId: fixture.agentId, status: 'failed', costUsd: null },
+    })
+
+    const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
+
+    expect(snapshot?.workspace.spentUsd).toBeCloseTo(1.5)
+    expect(snapshot?.workspace.unmeasuredRuns).toBe(2)
+  })
+
+  it('carries a null budget through as null, not as a budget of zero', async (): Promise<void> => {
+    await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { budgetUsd: null } })
+
+    const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
+
+    expect(snapshot?.workspace.budgetUsd).toBeNull()
   })
 
   it('seeds the action line from the latest run.tool_call event', async (): Promise<void> => {
@@ -282,12 +311,40 @@ describe('buildOverviewSnapshot', () => {
     expect(snapshot?.agents[0]?.pausedAtStep).toBe(4)
   })
 
+  it("keeps a live run's unknown cost unknown rather than reporting it as zero", async (): Promise<void> => {
+    // M12 Task 9 / ruling R3, the per-run half. A run on a runtime that reports no spend has a
+    // null `costUsd`, and `$0.00` would be a measurement it never made.
+    await prisma.agentRun.create({
+      data: { taskId: fixture.taskId, agentId: fixture.agentId, status: 'working', costUsd: null, toolCalls: 3 },
+    })
+
+    const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
+
+    expect(snapshot?.agents[0]?.costUsd).toBeNull()
+    expect(snapshot?.agents[0]?.toolCalls).toBe(3)
+  })
+
+  it("reports the live run's OWN provider, not a hardcoded one", async (): Promise<void> => {
+    // M12 Task 9 / ruling R10. This field was `'claude-code' as const` -- the adapter ID, not even
+    // the `ProviderKind` spelling -- from before a run had a provider column to read.
+    await prisma.agentRun.create({
+      data: { taskId: fixture.taskId, agentId: fixture.agentId, status: 'working', provider: 'cursor' },
+    })
+
+    const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
+
+    expect(snapshot?.agents[0]?.provider).toBe('cursor')
+  })
+
   it('reports zero cost, zero tool calls, and no paused-at step for an idle agent with no live run', async (): Promise<void> => {
     const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
 
     expect(snapshot?.agents[0]?.costUsd).toBe(0)
     expect(snapshot?.agents[0]?.toolCalls).toBe(0)
     expect(snapshot?.agents[0]?.pausedAtStep).toBeNull()
+    // No live run means no runtime has been resolved for this agent yet -- we do not know one
+    // until a run resolves it, so `null` rather than a guess (M12 Task 9, ruling R10).
+    expect(snapshot?.agents[0]?.provider).toBeNull()
   })
 
   it('gives each agent its own 10-minute tool-call sparkline from a single grouped query, zero-filled for an idle agent', async (): Promise<void> => {

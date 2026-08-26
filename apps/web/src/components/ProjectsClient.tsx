@@ -76,6 +76,13 @@ function ProjectCard({
             { label: 'Active', value: String(project.taskCounts.active), ...(project.taskCounts.active > 0 ? { tone: 'working' as const } : {}) },
             { label: 'Blocked', value: String(project.taskCounts.blocked), ...(project.taskCounts.blocked > 0 ? { tone: 'blocked' as const } : {}) },
             { label: 'Spend', value: `$${project.spend.toFixed(2)}` },
+            // Its own stat, and only when there is something to say (M12 Task 9, ruling R3):
+            // `Spend` alone reads as this project's whole bill, and is only the measured part of
+            // it whenever a run reported no cost. A count carried to this DTO and rendered nowhere
+            // would be the unread-field defect Task 8's F7 was ordered to fix.
+            ...(project.unmeasuredRuns > 0
+              ? [{ label: 'Unmeasured', value: String(project.unmeasuredRuns), tone: 'blocked' as const }]
+              : []),
           ]}
         />
       </Card>

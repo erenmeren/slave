@@ -38,7 +38,11 @@ export function OverviewClient({
           workspaceId={workspaceId}
           workspaceName={view.workspace.name}
           connection={connection}
-          budget={{ spentUsd: view.workspace.spentUsd, budgetUsd: view.workspace.budgetUsd }}
+          budget={{
+            spentUsd: view.workspace.spentUsd,
+            budgetUsd: view.workspace.budgetUsd,
+            unmeasuredRuns: view.workspace.unmeasuredRuns,
+          }}
           halted={view.workspace.haltedReason !== null}
         />
         {view.workspace.haltedReason !== null && <HaltBanner reason={view.workspace.haltedReason} />}

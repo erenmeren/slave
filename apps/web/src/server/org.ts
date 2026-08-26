@@ -1,11 +1,19 @@
 import { prisma } from '@ai-team-os/db/client'
 import { toRunState } from '@ai-team-os/db'
-import { deriveAgentStatus, NON_TERMINAL_RUN_STATUSES, type AgentStatus } from '@ai-team-os/domain'
+import { deriveAgentStatus, sumSpend, NON_TERMINAL_RUN_STATUSES, type AgentStatus } from '@ai-team-os/domain'
 
 // Mirrors overview.ts's ACTIVE_TASK_STATUSES exactly (the M8a widening: a task under review or in
 // the merge queue is still active work). Not imported from there -- overview.ts does not export
 // it, and this task's scope is one new module, nothing else changes.
 const ACTIVE_TASK_STATUSES = ['ready', 'running', 'verifying', 'reviewing', 'merging', 'rework'] as const
+
+/** `sumSpend`'s pair under this DTO's own field names. */
+function spendOf(
+  runs: readonly { readonly costUsd: number | null }[],
+): { readonly spend: number; readonly unmeasuredRuns: number } {
+  const { known, unknownRuns } = sumSpend(runs)
+  return { spend: known, unmeasuredRuns: unknownRuns }
+}
 
 export interface ProjectRow {
   readonly id: string
@@ -14,7 +22,14 @@ export interface ProjectRow {
   readonly halted: boolean
   readonly taskCounts: { readonly done: number; readonly total: number; readonly active: number; readonly blocked: number }
   readonly workerCount: number
+  /** KNOWN spend: every run of this project that reported a cost, summed. */
   readonly spend: number
+  /**
+   * How many of this project's runs reported no cost at all (M12 Task 9, ruling R3). Rendered as
+   * its own stat rather than folded into `spend`, because a total that silently absorbs unmeasured
+   * runs as zeros presents the measured part of a bill as the whole of it.
+   */
+  readonly unmeasuredRuns: number
 }
 
 export async function listProjects(): Promise<readonly ProjectRow[]> {
@@ -28,14 +43,17 @@ export async function listProjects(): Promise<readonly ProjectRow[]> {
     prisma.agent.findMany({ where: { companyAgentId: { not: null } }, select: { team: { select: { workspaceId: true } } } }),
   ])
 
-  const spendByWorkspace = new Map<string, number>()
+  // Grouped first, then summed through `sumSpend` (M12 Task 9, ruling R3). The old running total
+  // added `(run.costUsd ?? 0)` per row, which is the array form of the same defect the `_sum` sites
+  // had: a run nobody measured contributed a zero and then vanished from the figure entirely.
+  // `sumSpend` is the same function `world.ts` and `overview.ts` use, so the three surfaces cannot
+  // come to disagree about what an unmeasured run does to a total.
+  const rowsByWorkspace = new Map<string, { costUsd: number | null }[]>()
   for (const run of spendRows) {
     const workspaceId = run.agent.team.workspaceId
-    // costUsd is nullable (M12 Task 6): a run whose cost is not yet known contributes nothing to
-    // the running total, the same as Prisma's own `_sum` treats a null column -- see world.ts's
-    // and overview.ts's `_sum.costUsd ?? 0` for the aggregate form of the same convention.
-    // TASK 9: unknown cost must render as "—", not $0.00 (spec Decision 6)
-    spendByWorkspace.set(workspaceId, (spendByWorkspace.get(workspaceId) ?? 0) + (run.costUsd ?? 0))
+    const forWorkspace = rowsByWorkspace.get(workspaceId)
+    if (forWorkspace === undefined) rowsByWorkspace.set(workspaceId, [{ costUsd: run.costUsd }])
+    else forWorkspace.push({ costUsd: run.costUsd })
   }
 
   const workerCountByWorkspace = new Map<string, number>()
@@ -63,7 +81,9 @@ export async function listProjects(): Promise<readonly ProjectRow[]> {
       blocked: countOf(workspace.id, ['blocked']),
     },
     workerCount: workerCountByWorkspace.get(workspace.id) ?? 0,
-    spend: spendByWorkspace.get(workspace.id) ?? 0,
+    // `?? []` here is the case `?? 0` was always right about: a workspace with no runs at all has
+    // spent nothing and has nothing unmeasured -- `sumSpend([])` says exactly that.
+    ...spendOf(rowsByWorkspace.get(workspace.id) ?? []),
   }))
 }
 

@@ -508,6 +508,55 @@ describe('tick', () => {
     )
   })
 
+  it('refuses with the spec-verbatim unmeasurable_budget text when a budgeted workspace resolves a cost-blind runtime', async (): Promise<void> => {
+    // Spec §6's dispatch-time half (M12 Task 9, ruling R9). The re-check exists because resolution
+    // crosses four levels: a template edit can turn a workspace that was valid when it was
+    // configured into one whose workers run on a runtime that reports no spend, and the write-time
+    // refusal cannot see an edit made after it ran.
+    //
+    // The registry here DOES resolve `cursor`, unlike the `invalid_provider` test above -- with
+    // no adapter registered for it, dispatch would refuse for that other reason first and this
+    // check would never be reached, so a registry that stops at `invalid_provider` would prove
+    // nothing about this one.
+    await prisma.agent.update({ where: { id: fixture.agentId }, data: { model: 'whatever', provider: 'cursor' } })
+    await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { budgetUsd: 20 } })
+    const recorder = recordingAdapter()
+    const costBlindRegistry: AdapterRegistry = { resolve: () => recorder.adapter }
+
+    const report = await tick({ ...deps, registry: costBlindRegistry })
+
+    expect(report.started).toEqual([])
+    // Never spawned: the refusal has to land before the process, or the money is already spent.
+    expect(recorder.starts).toEqual([])
+    const run = await prisma.agentRun.findFirstOrThrow()
+    expect(run.status).toBe('failed')
+    const failures = await prisma.executionEvent.findMany({
+      where: { workspaceId: fixture.workspaceId, runId: run.id, type: 'run_failed' },
+    })
+    expect(failures).toHaveLength(1)
+    // Compared against `refusalText()` IMPORTED, never hand-copied, and asserted on the TEXT
+    // rather than only on `status === 'failed'` -- a test that `throw new Error('boom')` would
+    // pass is not a test (Task 8's fix round F3).
+    expect((failures[0]?.payload as { reason: string }).reason).toBe(
+      refusalText({ kind: 'unmeasurable_budget', workspaceId: fixture.workspaceId, provider: 'cursor' }),
+    )
+  })
+
+  it('dispatches that same cost-blind runtime freely once the workspace has no budget', async (): Promise<void> => {
+    // The other half of the ruling, and the half that makes §10's milestone gate buildable at all:
+    // an unbudgeted workspace runs a cost-blind provider without complaint.
+    await prisma.agent.update({ where: { id: fixture.agentId }, data: { model: 'whatever', provider: 'cursor' } })
+    await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { budgetUsd: null } })
+    const recorder = recordingAdapter()
+    const costBlindRegistry: AdapterRegistry = { resolve: () => recorder.adapter }
+
+    const report = await tick({ ...deps, registry: costBlindRegistry })
+
+    expect(report.started).toHaveLength(1)
+    const run = await prisma.agentRun.findFirstOrThrow()
+    expect(run.provider).toBe('cursor')
+  })
+
   it('kills the agent it just spawned when the start fails after the spawn', async (): Promise<void> => {
     const recorder = recordingAdapter({ failEvents: true })
 

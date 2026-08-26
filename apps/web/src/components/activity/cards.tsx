@@ -241,16 +241,16 @@ function RunResumedCard(props: ActivityCardProps): ReactElement {
 }
 
 function RunSucceededCard(props: ActivityCardProps): ReactElement {
-  // costUsd is nullable (M12 Task 6): a provider that does not report cost emits null here, not
-  // a false zero. Displayed as $0.00, matching the same convention the server DTOs use for this
-  // exact column (graph.ts, overview.ts, tasks.ts) rather than adding a tri-state display here.
-  // TASK 9: unknown cost must render as "—", not $0.00 (spec Decision 6)
+  // costUsd is nullable (M12 Task 6): a runtime that does not report cost emits null here, not a
+  // false zero -- and as of M12 Task 9 (ruling R3) it is DISPLAYED as unknown rather than folded
+  // into `$0.00`. A timeline is a record of what happened; a zero nobody measured belongs on it
+  // even less than it belongs in a total.
   const payload = props.event.payload as { numTurns: number; costUsd: number | null }
   return (
     <ActivityCard {...props}>
       <Transition tone="working" label="run succeeded">
         <span data-testid="run-succeeded-stats">
-          {payload.numTurns} turns · ${(payload.costUsd ?? 0).toFixed(2)}
+          {payload.numTurns} turns · {payload.costUsd === null ? '—' : `$${payload.costUsd.toFixed(2)}`}
         </span>
       </Transition>
     </ActivityCard>

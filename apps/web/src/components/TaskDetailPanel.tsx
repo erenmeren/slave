@@ -63,7 +63,8 @@ export function TaskDetailPanel({
                 <div className="flex items-center justify-between">
                   <span>{run.status}</span>
                   <span className="font-mono">
-                    ${run.costUsd.toFixed(2)} · {run.toolCalls} calls
+                    {/* `—` for a run whose runtime reported no spend (spec Decision 6). */}
+                    {run.costUsd === null ? '—' : `$${run.costUsd.toFixed(2)}`} · {run.toolCalls} calls
                   </span>
                 </div>
                 {run.checkpoint !== null && run.checkpoint.pausedAtStep !== null && (

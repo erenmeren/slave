@@ -5,7 +5,7 @@ import {
   parsePlanGraph,
   type RunId,
 } from '@ai-team-os/domain'
-import { runFilePaths } from '@ai-team-os/control'
+import { admitProvider, refusalText, runFilePaths } from '@ai-team-os/control'
 import { prisma } from '@ai-team-os/db/client'
 import { appendEvent } from '@ai-team-os/events'
 import type { AgentRuntimeAdapter, RunHandle } from '@ai-team-os/providers'
@@ -296,6 +296,23 @@ export async function dispatchPlanning(deps: TickDeps): Promise<RunId | null> {
       )
     }
     adapter = resolveAdapter(deps.registry, resolved.provider)
+    // Spec §6's dispatch-time re-check (M12 Task 9, ruling R9), after the adapter resolves and
+    // before anything is spawned. It is a RE-check, not the only one: `packages/control`'s
+    // `assignCompany`/`setAgentModel` already refuse this pairing at write time. It exists anyway
+    // because resolution crosses four levels, and a template edit -- or a new
+    // `ProviderConfiguration` row -- can change the pair under a workspace that was perfectly
+    // valid when it was configured, with no write to this workspace at all for the write-time
+    // check to have fired on.
+    //
+    // Thrown, not returned, so it takes the SAME path the `invalid_provider` refusal above already
+    // takes: the existing `catch` records an attempted run that failed (`failToStart`, spec §13).
+    // `refusalText` is imported from `@ai-team-os/control` rather than hand-copied, so the wording
+    // an operator sees here and the wording the write surface promises cannot drift apart.
+    //
+    // AFTER `resolveAdapter`, deliberately: a kind this process has no adapter for is refused as
+    // `invalid_provider` first, which is the more specific truth about it today.
+    const admission = admitProvider(workspace, resolved.provider)
+    if (!admission.ok) throw new Error(refusalText(admission.refusal))
     const runAdapter = adapter
     const model = resolved.model
 

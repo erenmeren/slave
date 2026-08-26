@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { refusalText } from '@ai-team-os/control'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE } from '@ai-team-os/db'
 import { prisma } from '@ai-team-os/db/client'
 import { runId as brandRunId, workspaceId as brandWorkspaceId } from '@ai-team-os/domain'
@@ -122,6 +123,32 @@ describe('dispatchPlanning', () => {
     )
     expect(outputEvents.length).toBeGreaterThan(0)
     for (const event of outputEvents) expect(event.taskId).toBeNull()
+  })
+
+  it('refuses with the spec-verbatim unmeasurable_budget text when a budgeted workspace resolves a cost-blind runtime', async (): Promise<void> => {
+    // Spec §6's dispatch-time re-check reaches every dispatch site, not just `tick.ts` (M12 Task 9,
+    // ruling R9). A planning run spends real money and counts toward the same budget, so a
+    // workspace that cannot measure it must refuse it here too.
+    const fixture = await seed('Ship the checkout redesign')
+    repos.push(fixture.repoPath)
+    const managerId = await addManager(fixture.teamId)
+    await prisma.agent.update({ where: { id: managerId }, data: { model: 'whatever', provider: 'cursor' } })
+    await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { budgetUsd: 20 } })
+
+    const runId = await dispatchPlanning(depsFor(fixture.workspaceId))
+
+    expect(runId).toBeNull()
+    const run = await prisma.agentRun.findFirstOrThrow({ where: { kind: 'planning' } })
+    expect(run.status).toBe('failed')
+    const failures = await prisma.executionEvent.findMany({
+      where: { workspaceId: fixture.workspaceId, runId: run.id, type: 'run_failed' },
+    })
+    expect(failures).toHaveLength(1)
+    // `refusalText()` IMPORTED, not hand-copied: an implementation that threw `new Error('boom')`
+    // fails this test, which is the whole standard Task 8's F3 established.
+    expect((failures[0]?.payload as { reason: string }).reason).toBe(
+      refusalText({ kind: 'unmeasurable_budget', workspaceId: fixture.workspaceId, provider: 'cursor' }),
+    )
   })
 
   it('(b) starts nothing when a task already exists, regardless of status', async (): Promise<void> => {

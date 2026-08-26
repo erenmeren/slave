@@ -74,6 +74,25 @@ describe('org query module', () => {
       expect(project?.taskCounts).toEqual({ done: 1, total: 2, active: 1, blocked: 0 })
       expect(project?.workerCount).toBe(0)
       expect(project?.spend).toBeCloseTo(3.5)
+      expect(project?.unmeasuredRuns).toBe(0)
+    })
+
+    it('never folds an unknown cost into a project\'s spend, and counts it instead', async (): Promise<void> => {
+      // M12 Task 9 / ruling R3. This loop's `(run.costUsd ?? 0)` was the array form of the same
+      // defect the `_sum` sites had: a run whose cost nobody measured silently contributed a zero,
+      // so `$3.50` read as the whole story when it was only the measured part of it.
+      await prisma.agentRun.create({
+        data: { taskId: fixture.taskId, agentId: fixture.agentId, status: 'succeeded', costUsd: 3.5 },
+      })
+      await prisma.agentRun.create({
+        data: { taskId: fixture.taskId, agentId: fixture.agentId, status: 'succeeded', costUsd: null },
+      })
+
+      const projects = await listProjects()
+      const project = projects.find((p) => p.id === fixture.workspaceId)
+
+      expect(project?.spend).toBeCloseTo(3.5)
+      expect(project?.unmeasuredRuns).toBe(1)
     })
 
     it('reports the company name and halted flag once assigned/halted', async (): Promise<void> => {

@@ -4,7 +4,8 @@ import { NON_TERMINAL_RUN_STATUSES, type RunStatus, type TaskStatus } from '@ai-
 export interface TaskRunSummary {
   readonly id: string
   readonly status: RunStatus
-  readonly costUsd: number
+  /** USD, or `null` when this run's runtime reported no spend (M12 Task 9 -- spec Decision 6). */
+  readonly costUsd: number | null
   readonly toolCalls: number
   readonly startedAt: string
   readonly endedAt: string | null
@@ -58,11 +59,10 @@ export async function buildTasksSnapshot(workspaceId: string): Promise<TasksSnap
         runs: task.runs.map((run) => ({
           id: run.id,
           status: run.status,
-          // costUsd is nullable (M12 Task 6): a run whose cost is not yet known displays as $0.00
-          // here rather than widening this DTO/the panel to a tri-state, matching the same `?? 0`
-          // convention graph.ts/overview.ts already use for this exact column.
-          // TASK 9: unknown cost must render as "—", not $0.00 (spec Decision 6)
-          costUsd: run.costUsd ?? 0,
+          // Passed through as `number | null` (M12 Task 9, ruling R3). The comment this replaces
+          // chose `$0.00` to avoid "widening this DTO to a tri-state" -- widening it is exactly
+          // what spec Decision 6 asks for, and `TaskDetailPanel` renders `—` for the null.
+          costUsd: run.costUsd,
           toolCalls: run.toolCalls,
           startedAt: run.startedAt.toISOString(),
           endedAt: run.endedAt?.toISOString() ?? null,

@@ -11,7 +11,11 @@ export interface GraphAgent {
   readonly activeTaskId: string | null
   readonly activeTaskTitle: string | null
   readonly activeRunId: string | null
-  readonly costUsd: number
+  /**
+   * The live run's spend: `0` with no live run, a figure when it reported one, `null` when its
+   * runtime reports no spend at all (M12 Task 9, ruling R3 -- spec Decision 6).
+   */
+  readonly costUsd: number | null
 }
 
 export interface GraphTask {
@@ -118,8 +122,9 @@ export async function buildGraphSnapshot(workspaceId: string): Promise<GraphSnap
         activeTaskId: run?.taskId ?? null,
         activeTaskTitle: run?.task?.title ?? null,
         activeRunId: run?.id ?? null,
-        // TASK 9: unknown cost must render as "—", not $0.00 (spec Decision 6)
-        costUsd: run?.costUsd ?? 0,
+        // Same three-state split as `overview.ts` (M12 Task 9, ruling R3): `0` for no live run at
+        // all, the figure when one reported it, `null` when a live run's runtime reports no spend.
+        costUsd: run === null ? 0 : run.costUsd,
       }
     }),
     tasks: taskRows.map((row) => ({

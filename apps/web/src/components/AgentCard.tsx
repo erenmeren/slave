@@ -98,7 +98,13 @@ export function AgentCard({
         </span>
       </div>
       <footer className="flex items-center gap-2">
-        <Chip>{agent.provider}</Chip>
+        {/* TASK 13: the human-readable provider label and the shell-only gate mark (spec §8) are
+          *  that task's, per its Settings/Roster surface work. This renders the bare `ProviderKind`
+          *  and `—` when no run has resolved one -- real data, unlabelled, rather than a label
+          *  invented by the wrong task (M12 Task 9, ruling R10). */}
+        <Chip>
+          <span data-testid="provider-chip">{agent.provider ?? '—'}</span>
+        </Chip>
         <span className="ml-auto text-text-3">
           <Sparkline buckets={agent.sparkline} width={60} height={16} label={`${agent.name}'s tool calls, last 10 minutes`} />
         </span>

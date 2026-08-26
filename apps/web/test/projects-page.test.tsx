@@ -20,6 +20,7 @@ function project(over: Partial<ProjectRow>): ProjectRow {
     taskCounts: { done: 2, total: 5, active: 1, blocked: 0 },
     workerCount: 3,
     spend: 12.5,
+    unmeasuredRuns: 0,
     ...over,
   }
 }
@@ -45,6 +46,22 @@ describe('ProjectsClient', () => {
     expect(screen.getByText('Checkout Platform')).toBeTruthy()
     expect(screen.getByText('Acme Robotics')).toBeTruthy()
     expect(screen.getAllByTestId('stat-strip-item')).toHaveLength(4)
+  })
+
+  it('adds an Unmeasured stat only when some of the project\'s runs reported no cost', () => {
+    // M12 Task 9 / ruling R3, applied to the sibling of the budget bar: `$12.50` presented alone
+    // reads as this project's whole spend. It is only the measured part of it whenever any run
+    // reported nothing, and a count carried to this seam and rendered nowhere would be exactly the
+    // unread-field defect Task 8's F7 was ordered to fix.
+    const { rerender } = render(
+      <ProjectsClient projects={[project({ id: 'w1', unmeasuredRuns: 2 })]} companies={companies} />,
+    )
+    expect(screen.getAllByTestId('stat-strip-item')).toHaveLength(5)
+    expect(screen.getByText('Unmeasured')).toBeTruthy()
+
+    rerender(<ProjectsClient projects={[project({ id: 'w1', unmeasuredRuns: 0 })]} companies={companies} />)
+    expect(screen.getAllByTestId('stat-strip-item')).toHaveLength(4)
+    expect(screen.queryByText('Unmeasured')).toBeNull()
   })
 
   it('shows a dim "no company" badge and an assign button when unassigned', () => {

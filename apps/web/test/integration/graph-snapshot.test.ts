@@ -78,6 +78,19 @@ describe('buildGraphSnapshot', () => {
     expect(agent?.costUsd).toBe(2.5)
   })
 
+  it("leaves a live run's unknown cost unknown rather than reporting it as zero", async (): Promise<void> => {
+    // M12 Task 9 / ruling R3. Distinct from the idle case below: there IS a run here, and what is
+    // absent is the measurement, not the run.
+    const run = await prisma.agentRun.create({
+      data: { taskId: fixture.taskId, agentId: fixture.agentId, status: 'working', costUsd: null },
+    })
+    await prisma.task.update({ where: { id: fixture.taskId }, data: { activeRunId: run.id } })
+
+    const snapshot = await buildGraphSnapshot(fixture.workspaceId)
+
+    expect(snapshot?.agents[0]?.costUsd).toBeNull()
+  })
+
   it('reports an idle agent with no live run as null-wired and zero cost', async (): Promise<void> => {
     const snapshot = await buildGraphSnapshot(fixture.workspaceId)
     const agent = snapshot?.agents[0]

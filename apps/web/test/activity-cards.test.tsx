@@ -257,3 +257,25 @@ describe('payload expansion', () => {
     expect(payloadJson.textContent).toBe(JSON.stringify(PAYLOAD_BY_TYPE['run.tool_call'], null, 2))
   })
 })
+
+describe('RunSucceededCard', () => {
+  it('shows the unknown mark, not $0.00, when the run reported no cost', () => {
+    // M12 Task 9 / ruling R3. The payload's `costUsd` is nullable because a runtime that reports
+    // no spend emits null -- rendering `$0.00` here would put a figure on the timeline that no
+    // runtime ever produced.
+    const Card = ACTIVITY_CARDS['run.succeeded']
+    render(<Card event={baseEvent('run.succeeded', { numTurns: 5, costUsd: null })} {...CARD_PROPS} />)
+
+    const stats = screen.getByTestId('run-succeeded-stats').textContent
+    expect(stats).toContain('5 turns')
+    expect(stats).toContain('—')
+    expect(stats).not.toContain('$0.00')
+  })
+
+  it('still shows a real figure when the run did report one', () => {
+    const Card = ACTIVITY_CARDS['run.succeeded']
+    render(<Card event={baseEvent('run.succeeded', { numTurns: 5, costUsd: 1.23 })} {...CARD_PROPS} />)
+
+    expect(screen.getByTestId('run-succeeded-stats').textContent).toContain('$1.23')
+  })
+})

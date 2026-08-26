@@ -2,7 +2,9 @@ import { prisma } from '@ai-team-os/db/client'
 import { type Result, err, ok } from '@ai-team-os/domain'
 import { appendEvent } from '@ai-team-os/events'
 import type { ProviderKind } from '@ai-team-os/providers'
+import { admitProvider } from './budget.js'
 import type { ControlRefusal } from './refusal.js'
+import { resolveRuntime, workspaceDefaultProvider } from './runtime.js'
 
 /**
  * `true` for Prisma's unique-constraint violation (P2002), the error every `create` below can
@@ -61,6 +63,15 @@ function pairRefusal(
  * Adds a reusable agent template to the catalog (M10 §4) -- the definition `addCompanyAgent`
  * below instantiates onto a company's roster. Templates are append-only (Decision 9): there is no
  * update or delete here, only creation.
+ *
+ * NO budget admission here, and the absence is deliberate rather than an oversight (M12 Task 9,
+ * spec §6). A template belongs to the catalog, not to a workspace: the same template is
+ * instantiated onto rosters that are assignable to ANY workspace, so at this moment there is no
+ * `budgetUsd` in existence to check a `reportsCost: false` provider against. The same is true of
+ * `addCompanyAgent` below. Adding a check here would either have to invent a workspace or refuse
+ * a cost-blind provider globally -- which would make the second runtime uncatalogable and this
+ * milestone pointless. The mismatch is caught at the two places it can actually be CREATED,
+ * `assignCompany` and `setAgentModel`, and again at dispatch.
  */
 export async function createTemplate(
   name: string,
@@ -130,6 +141,9 @@ export async function addCompanyTeam(
  * Adds a roster member -- a durable identity such as "Atlas" -- to a company team, instantiated
  * from a template. Agent names are unique per team, not globally: the same name in two different
  * teams (even in the same company) is unrelated identities and is allowed.
+ *
+ * Workspace-independent, like `createTemplate` above, and so deliberately carries no budget
+ * admission -- see that function's comment for the reasoning.
  */
 export async function addCompanyAgent(
   companyTeamId: string,
@@ -166,6 +180,58 @@ export async function addCompanyAgent(
     if (isUniqueConstraintViolation(error)) return err({ kind: 'duplicate_name', name })
     throw error
   }
+}
+
+/**
+ * Spec §6's write-time admission for `assignCompany` (M12 Task 9, controller ruling R6): a
+ * budgeted workspace will not accept a roster whose members would run on a runtime that cannot
+ * report what it spends. Returns the refusal, or `null` to proceed.
+ *
+ * Run BEFORE the transaction, not inside it, and that ordering is the point: the refusal must
+ * leave the workspace exactly as it was. A check inside the transaction would work too, but
+ * `assignCompany`'s transaction writes `companyId` first and materializes afterwards, so a
+ * mid-transaction refusal would depend on the rollback for correctness where nothing needs to be
+ * written in the first place. Nothing here can go stale between the check and the write in a way
+ * that matters: the one-way `companyId` lock inside the transaction still guards the assignment
+ * itself, and a roster edit racing this check is caught again at dispatch (spec §6's second half,
+ * which exists precisely because resolution crosses four levels).
+ *
+ * Every roster member is examined, not only the ones this call will newly materialize. A re-sync
+ * that skips an already-materialized worker still leaves that worker running in this workspace,
+ * and "the budget is enforceable here" has to be true of the workspace, not of one call's delta.
+ *
+ * A member whose chain resolves to NOTHING (`provider: null`) is not refused here. That is an
+ * unresolvable configuration, a different failure with its own wording at dispatch -- and since
+ * no workspace that predates M12 has a `ProviderConfiguration` row, refusing it here would make
+ * every such workspace unassignable.
+ */
+async function admitRoster(
+  workspace: { readonly id: string; readonly budgetUsd: number | null },
+  companyId: string,
+): Promise<ControlRefusal | null> {
+  if (workspace.budgetUsd === null) return null
+
+  const workspaceDefault = await workspaceDefaultProvider(workspace.id)
+  const members = await prisma.companyAgent.findMany({
+    where: { companyTeam: { companyId } },
+    include: { template: true },
+  })
+
+  for (const member of members) {
+    // A materialized worker starts with no override of its own, so the chain it resolves through
+    // is its roster row, then its template, then the workspace default -- exactly what
+    // `resolveRuntime` walks, called here rather than reimplemented so the write surface can
+    // never admit a pair that dispatch would resolve differently.
+    const resolved = resolveRuntime(
+      { model: null, provider: null, companyAgent: { model: member.model, provider: member.provider, template: member.template } },
+      workspaceDefault,
+    )
+    if (resolved.provider === null) continue
+    const verdict = admitProvider(workspace, resolved.provider)
+    if (!verdict.ok) return verdict.refusal
+  }
+
+  return null
 }
 
 /** What {@link assignCompany} created -- the gate and M11's UI report this back to an operator. */
@@ -222,6 +288,9 @@ export async function assignCompany(
 
   const company = await prisma.company.findUnique({ where: { id: companyId } })
   if (company === null) return err({ kind: 'company_not_found', companyId })
+
+  const admission = await admitRoster(workspace, companyId)
+  if (admission !== null) return err(admission)
 
   const outcome = await prisma.$transaction(async (tx) => {
     const locked = await tx.$queryRaw<{ companyId: string | null }[]>`
@@ -303,6 +372,24 @@ export async function assignCompany(
  * so the row lock ceremony that guards that transaction has no work to do in a two-column write --
  * the conditioned update's own count is already the atomic existence check, and both columns land
  * in the SAME statement so there is no window where one is written without the other.
+ *
+ * A READ now precedes that write, which the paragraph above deliberately said this function did
+ * not need, so the reason is recorded rather than left as a contradiction. M12 Task 9 (spec §6,
+ * ruling R6) makes this one of the two moments a provider can be bound to a budgeted workspace,
+ * and the check needs the AGENT'S WORKSPACE -- a fact `updateMany`'s `where: { id }` never had to
+ * fetch. The read is unavoidable; what the earlier reasoning protects is the WRITE, and that is
+ * unchanged: still one conditioned `updateMany`, still both columns in the same statement, still
+ * no window in which a model exists without its provider. The read adds a check-then-write gap,
+ * but nothing races it -- a budget cannot be changed by any verb in this codebase (see the
+ * routing note below), and the same mismatch is re-checked at dispatch anyway.
+ *
+ * Spec §6 also names a second write-time direction -- "setting a `budgetUsd` on a workspace
+ * already resolved to one is refused". It has NO SITE: no verb in `packages/control`, no CLI
+ * command and no route writes `Workspace.budgetUsd` anywhere in this tree; the column is set by
+ * the schema default, by `packages/db`'s seed, and by test fixtures. Rather than invent a
+ * `setBudget` verb nothing calls, that direction is routed forward with the create-workspace verb
+ * the ledger already routed to Task 13/14, and this note is here so the gap is named rather than
+ * silently missing.
  */
 export async function setAgentModel(
   agentId: string,
@@ -313,6 +400,20 @@ export async function setAgentModel(
   if (provider !== null && !isProviderKind(provider)) return err({ kind: 'invalid_provider', provider })
   const pairErr = pairRefusal(model, provider)
   if (pairErr !== null) return err(pairErr)
+
+  if (provider !== null) {
+    // Only when a provider is actually being PINNED. Clearing the pair (`null, null`) pins no
+    // runtime at all -- it hands the choice back to the roster, the template and the workspace
+    // default below it -- so there is nothing here to admit or refuse, and refusing an operator's
+    // undo would trap them in the very override they are trying to remove.
+    const agent = await prisma.agent.findUnique({
+      where: { id: agentId },
+      select: { team: { select: { workspace: { select: { id: true, budgetUsd: true } } } } },
+    })
+    if (agent === null) return err({ kind: 'agent_not_found', agentId })
+    const verdict = admitProvider(agent.team.workspace, provider)
+    if (!verdict.ok) return err(verdict.refusal)
+  }
 
   const updated = await prisma.agent.updateMany({ where: { id: agentId }, data: { model, provider } })
   if (updated.count === 0) return err({ kind: 'agent_not_found', agentId })

@@ -20,7 +20,17 @@ export interface TopBarProps {
    * which a runtime that cannot report its own spend may run there. Spend is still known and
    * still shown; what is absent is the ceiling, so there is no ratio to draw and no bar to fill.
    */
-  readonly budget: { readonly spentUsd: number; readonly budgetUsd: number | null } | null
+  readonly budget: {
+    readonly spentUsd: number
+    readonly budgetUsd: number | null
+    /**
+     * How many of this workspace's runs reported no cost (M12 Task 9, ruling R11). Shown beside
+     * the figures, because `spentUsd` on its own reads as TOTAL spend and is only the measured
+     * part of it whenever this is non-zero -- Decision 6's lie at the highest-visibility surface
+     * in the product.
+     */
+    readonly unmeasuredRuns: number
+  } | null
   readonly halted: boolean
 }
 
@@ -44,6 +54,11 @@ export function TopBar({ workspaceId, workspaceName, connection, budget, halted 
               ${budget.spentUsd.toFixed(2)}
               {budgetUsd !== null && ` / $${budgetUsd.toFixed(2)}`}
             </span>
+            {budget.unmeasuredRuns > 0 && (
+              <span data-testid="budget-unmeasured" className="text-text-3">
+                · {budget.unmeasuredRuns} unmeasured
+              </span>
+            )}
             {/* `ui/ProgressBar.tsx`'s exact recipe (rounded-full track, `motion-safe:` width
              *  transition -- spec §3's `.5s ease`) satisfies this migration's "motion behind
              *  prefers-reduced-motion" rule, not the literal component: `ProgressBar` colours its

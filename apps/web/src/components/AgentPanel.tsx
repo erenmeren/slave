@@ -123,7 +123,11 @@ export function AgentPanel({
           <span data-testid="status-label" className="ml-1 text-xs text-text-2">
             {agent.status}
           </span>
-          <Chip>{agent.provider}</Chip>
+          {/* TASK 13: the human-readable provider label and the shell-only gate mark (spec §8)
+            *  are that task's. The bare kind here, `—` when no run has resolved one. */}
+          <Chip>
+            <span data-testid="provider-chip">{agent.provider ?? '—'}</span>
+          </Chip>
         </div>
         <Button variant="ghost" onClick={onClose} aria-label="Close agent detail">
           close
@@ -133,7 +137,9 @@ export function AgentPanel({
       <div className="text-sm text-text-1">{agent.taskTitle ?? <span className="text-text-3">idle</span>}</div>
 
       <div className="flex items-center gap-3 font-mono text-xs text-text-2">
-        <span data-testid="run-cost">${agent.costUsd.toFixed(2)}</span>
+        {/* `—`, the mark the Roster already uses for unknown -- never `$0.00`, which claims a
+          *  measurement this run never made (spec Decision 6; M12 Task 9, ruling R3). */}
+        <span data-testid="run-cost">{agent.costUsd === null ? '—' : `$${agent.costUsd.toFixed(2)}`}</span>
         <span data-testid="run-tool-calls">{agent.toolCalls} calls</span>
         {status === 'paused' && agent.pausedAtStep !== null && (
           <span data-testid="run-paused-step">paused at step {agent.pausedAtStep}</span>

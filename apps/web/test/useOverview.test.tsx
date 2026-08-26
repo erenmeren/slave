@@ -5,13 +5,13 @@ import { useOverview } from '../src/hooks/useOverview.js'
 import type { OverviewSnapshot } from '../src/server/overview.js'
 
 const SNAPSHOT: OverviewSnapshot = {
-  workspace: { id: 'w1', name: 'W', haltedReason: null, haltedAt: null, budgetUsd: 100, spentUsd: 0, goal: null },
+  workspace: { id: 'w1', name: 'W', haltedReason: null, haltedAt: null, budgetUsd: 100, spentUsd: 0, unmeasuredRuns: 0, goal: null },
   agents: [
     {
       id: 'a1',
       name: 'Alex',
       role: 'backend',
-      provider: 'claude-code',
+      provider: 'claude_code',
       status: 'working',
       taskTitle: 'Add the thing',
       actionLine: null,

@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { refusalText } from '@ai-team-os/control'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@ai-team-os/db'
 import { prisma } from '@ai-team-os/db/client'
 import { runId as brandRunId, workspaceId as brandWorkspaceId } from '@ai-team-os/domain'
@@ -165,6 +166,34 @@ describe('dispatchReviews', () => {
     await drainPumps()
     const events = await prisma.executionEvent.findMany({ where: { runId: run.id }, orderBy: { seq: 'asc' } })
     expect(events.map((event) => DOMAIN_EVENT_TYPE_BY_DB_VALUE[event.type])).toContain('run.output')
+  })
+
+  it('refuses with the spec-verbatim unmeasurable_budget text when a budgeted workspace resolves a cost-blind runtime', async (): Promise<void> => {
+    // The third dispatch site (M12 Task 9, ruling R9). The budget is a property of the WORKSPACE,
+    // so it governs a review run exactly as it governs an implementation or a planning one --
+    // leaving one site unchecked would leave a way to spend unmeasured money inside a budget.
+    //
+    // Seeded first, then made cost-blind: the implementation run that puts the task in `reviewing`
+    // has to succeed under the ordinary configuration, or this would be testing that a task never
+    // reached review rather than that the review itself was refused.
+    const reviewDeps = await seedReviewingTask(fixture)
+    const team = await prisma.team.findFirstOrThrow()
+    const reviewer = await prisma.agent.create({ data: { teamId: team.id, name: 'Riley', role: 'reviewer' } })
+    await prisma.agent.update({ where: { id: reviewer.id }, data: { model: 'whatever', provider: 'cursor' } })
+    await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { budgetUsd: 20 } })
+
+    const started = await dispatchReviews(reviewDeps)
+
+    expect(started).toEqual([])
+    const run = await prisma.agentRun.findFirstOrThrow({ where: { kind: 'review' } })
+    expect(run.status).toBe('failed')
+    const failures = await prisma.executionEvent.findMany({
+      where: { workspaceId: fixture.workspaceId, runId: run.id, type: 'run_failed' },
+    })
+    expect(failures).toHaveLength(1)
+    expect((failures[0]?.payload as { reason: string }).reason).toBe(
+      refusalText({ kind: 'unmeasurable_budget', workspaceId: fixture.workspaceId, provider: 'cursor' }),
+    )
   })
 
   it('starts nothing a second time while the review run it started is still live', async (): Promise<void> => {

@@ -1,5 +1,6 @@
 import {
   agentId,
+  sumSpend,
   taskId,
   NON_TERMINAL_RUN_STATUSES,
   type RunStatus,
@@ -159,9 +160,15 @@ async function loadRunStats(
   const globalActiveRuns = await tx.agentRun.count({
     where: { status: { in: [...NON_TERMINAL_RUN_STATUSES] } },
   })
-  const spend = await tx.agentRun.aggregate({
+  // One `costUsd` column per run, not a `_sum` aggregate (M12 Task 9, ruling R3). The aggregate
+  // could only hand back a number, and a number cannot say "and four of these runs reported
+  // nothing" -- `?? 0` on it was right about "no rows at all" and silently wrong about "rows whose
+  // cost is unknown". `sumSpend` returns both halves. The extra transfer is one float per run,
+  // alongside the one status column per concluded run the query below already accepts unbounded,
+  // and Postgres was reading the same rows either way.
+  const spendRows = await tx.agentRun.findMany({
     where: { agent: { team: { workspaceId } } },
-    _sum: { costUsd: true },
+    select: { costUsd: true },
   })
 
   // Most recently concluded first, so the leading run of the list is the one the streak counts
@@ -205,9 +212,13 @@ async function loadRunStats(
     consecutiveFailures += 1
   }
 
-  // TASK 9: this feeds the budget-halt guardrail (evaluate.ts) -- an unmeasured run must not
-  // fold into spend as 0. Needs sumSpend's known/unknownRuns split, not a coalesce.
-  return { activeRuns, globalActiveRuns, spentUsd: spend._sum.costUsd ?? 0, consecutiveFailures }
+  // `known` only. `unknownRuns` is deliberately NOT carried into `WorkspaceStats` (M12 Task 9,
+  // ruling R8): admission already keeps a cost-blind runtime out of a budgeted workspace, and
+  // every LIVE run has a null cost until it concludes -- so a guardrail keyed on unmeasured runs
+  // would trip on every healthy tick of every healthy workspace. The figure belongs on the
+  // surfaces, where `apps/web`'s own `sumSpend` call puts it in front of an operator.
+  const spend = sumSpend(spendRows)
+  return { activeRuns, globalActiveRuns, spentUsd: spend.known, consecutiveFailures }
 }
 
 /**

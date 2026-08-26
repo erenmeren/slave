@@ -158,8 +158,14 @@ async function writeCheckpoint(input: {
       // 0` here targets Checkpoint.cumulativeCostUsd specifically, a column this task's migration
       // does not touch and which stays NOT NULL @default(0) -- unlike AgentRun.costUsd, it was
       // never meant to distinguish "zero" from "not yet known".
-      // TASK 9: Checkpoint.cumulativeCostUsd is still NOT NULL -- decide there whether an
-      // unmeasured run's cumulative cost should be nullable too
+      // SETTLED (M12 Task 9, ruling R4): `Checkpoint.cumulativeCostUsd` STAYS NOT NULL, and no
+      // migration touches it. The question routed here from Task 6 was whether it needed to
+      // distinguish unknown from zero the way `AgentRun.costUsd` now does, and the answer is that
+      // nothing reads it for a money decision: its only reader is `resume.ts`, which carries it
+      // into the resumed run's checkpoint shape -- no sum, no comparison, no guardrail. It is
+      // checkpoint bookkeeping, not spend the budget believes, so `?? 0` here is not the lie
+      // Decision 6 is about. The cost if this is wrong is that a paused unmeasured run's
+      // bookkeeping figure reads 0 instead of unknown, and no decision anywhere consumes it.
       cumulativeCostUsd: run.costUsd ?? 0,
       pauseReason: input.pauseReason,
       requestedBy: input.requestedBy,
@@ -174,8 +180,8 @@ async function writeCheckpoint(input: {
       deniedToolUseIds: [...input.denied],
       headCommit,
       dirtyFiles,
-      // TASK 9: Checkpoint.cumulativeCostUsd is still NOT NULL -- decide there whether an
-      // unmeasured run's cumulative cost should be nullable too
+      // Settled with the `create` branch above (M12 Task 9, ruling R4): NOT NULL stays, because
+      // nothing consumes this figure for a money decision.
       cumulativeCostUsd: run.costUsd ?? 0,
       pauseReason: input.pauseReason,
       requestedBy: input.requestedBy,
