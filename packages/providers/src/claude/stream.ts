@@ -284,7 +284,14 @@ function parseResultLine(raw: unknown, line: string): RuntimeEvent {
       terminalReason,
       stopReason: data.stop_reason ?? null,
       numTurns: data.num_turns ?? 0,
-      costUsd: data.total_cost_usd ?? 0,
+      // `null`, never `0` (spec Decision 6, applied at the parse site by M12 Task 9 / ruling R5).
+      // A degraded `result` line that carries no `total_cost_usd` describes a run whose cost is
+      // UNKNOWN, and `RunOutcome.costUsd` has been `number | null` since Task 1 precisely so this
+      // can be said. Writing `0` here was a choice, not a necessity, and it was the lie the budget
+      // guardrail would have believed: an unmeasured run recorded as having spent nothing. The
+      // degradation is already named in `terminalReason` above, so telling the truth here loses
+      // nothing.
+      costUsd: data.total_cost_usd ?? null,
       deniedToolUseIds: (data.permission_denials ?? []).map((denial) => denial.tool_use_id),
     },
   }

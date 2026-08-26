@@ -3,6 +3,7 @@ import { rm, stat } from 'node:fs/promises'
 import { dirname, isAbsolute, join } from 'node:path'
 import { createInterface } from 'node:readline'
 import type { RunId } from '@ai-team-os/domain'
+import { capabilitiesOf } from '../capabilities.js'
 import type { RunOutcome, RuntimeEvent } from '../types.js'
 import type { Checkpoint } from './checkpoint.js'
 import { claudeFlags, preflightGate } from './flags.js'
@@ -293,14 +294,6 @@ async function clearAndVerifyPauseFlagAbsent(flagPath: string, runId: RunId): Pr
   )
 }
 
-/** ADR 0001's measured `ProviderCapabilities` for the Claude Code adapter, verbatim. */
-const CLAUDE_CODE_CAPABILITIES: ProviderCapabilities = {
-  canPauseMidRun: true,
-  canResumeSession: true,
-  gate: 'all-tools',
-  reportsCost: true,
-}
-
 const DEFAULT_KILL_GRACE_MS = 5_000
 
 export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
@@ -319,8 +312,15 @@ export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
     this.hookPath = options.hookPath
   }
 
+  /**
+   * Delegated to `capabilitiesOf`, the one capability table (M12 Task 9): a capability is a fact
+   * about a KIND, and both budget-admission points have to read it without an adapter instance to
+   * read it from. ADR 0001's measured values for this adapter live there now, unchanged -- what
+   * moved is where they are written down, not what they say. Keeping a second copy here would
+   * mean the pause strategy and the budget check could silently come to disagree.
+   */
   getCapabilities(): ProviderCapabilities {
-    return CLAUDE_CODE_CAPABILITIES
+    return capabilitiesOf('claude_code')
   }
 
   /**

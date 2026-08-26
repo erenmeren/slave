@@ -1,4 +1,5 @@
 export * from './types.js'
+export * from './capabilities.js'
 export * from './gate.js'
 export * from './pause-signal.js'
 export * from './registry.js'

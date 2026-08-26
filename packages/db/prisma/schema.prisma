@@ -68,7 +68,15 @@ model Workspace {
   companyId      String?
 
   maxConcurrentRuns       Int   @default(3)
-  budgetUsd               Float @default(20)
+  /// The spend ceiling this workspace's budget guardrail enforces (spec §9.2). Nullable as of
+  /// M12 Task 9, and the `@default(20)` deliberately STAYS: a workspace is budgeted unless an
+  /// operator deliberately clears it, so no existing row moves and every new one is guarded
+  /// exactly as it is today. `null` means "this workspace is not budgeted", which spec §6 makes
+  /// the ONLY state in which a cost-blind runtime (`ProviderCapabilities.reportsCost === false`)
+  /// may run: the guardrail is real or it is absent, never silently inert. Dropping the default
+  /// instead would leave every newly created workspace unguarded -- strictly worse than the bug
+  /// this column's nullability exists to fix.
+  budgetUsd               Float? @default(20)
   runTimeoutMs            Int   @default(1800000)
   maxToolCallsPerRun      Int   @default(200)
   maxAttempts             Int   @default(3)

@@ -121,6 +121,29 @@ describe('the shell', () => {
     expect(screen.getByTestId('budget').innerHTML).toContain('bg-status-danger')
   })
 
+  it('shows the known spend with no ratio and no bar when the workspace has no budget', () => {
+    // M12 Task 9 / ruling R11. `budget={null}` means "this page does not show a budget" (the
+    // Tasks/Activity/Graph shells pass it); `budgetUsd: null` INSIDE a budget means something
+    // else entirely -- this workspace is not budgeted, the state spec §6 requires before a
+    // cost-blind runtime may run there. There is no ceiling to draw a ratio against, so showing
+    // one would be inventing a limit nobody set.
+    render(
+      <TopBar
+        workspaceId="w1"
+        workspaceName="W"
+        connection="connected"
+        budget={{ spentUsd: 3.2, budgetUsd: null }}
+        halted={false}
+      />,
+    )
+    const budget = screen.getByTestId('budget')
+    expect(budget.textContent).toContain('$3.20')
+    expect(budget.textContent).not.toContain('/')
+    expect(budget.innerHTML).not.toContain('bg-status-working')
+    expect(budget.innerHTML).not.toContain('bg-status-warn')
+    expect(budget.innerHTML).not.toContain('bg-status-danger')
+  })
+
   it('reports the connection state it was given', () => {
     render(<TopBar workspaceId="w1" workspaceName="W" connection="reconnecting" budget={null} halted={false} />)
     expect(screen.getByTestId('connection').textContent).toContain('reconnecting')

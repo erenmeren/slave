@@ -38,6 +38,31 @@ describe('evaluateGuardrails', () => {
     expect(budget?.haltsScheduling).toBe(true)
   })
 
+  it('a workspace with no budget never breaches the budget guardrail, however much it has spent', () => {
+    // M12 Task 9 / ruling R8. `budgetUsd: null` means "this workspace is not budgeted" -- the ONLY
+    // state in which spec §6 lets a cost-blind runtime run at all. There is no ceiling to compare
+    // spend against, so neither `budget_exhausted` nor `budget_warning` can be true; producing
+    // either would be inventing a limit nobody set.
+    const breaches = evaluateGuardrails({ ...DEFAULT_GUARDRAIL_LIMITS, budgetUsd: null }, { ...CALM, spentUsd: 10_000 })
+    expect(breaches.some((b) => b.guardrail === 'budget_exhausted')).toBe(false)
+    expect(breaches.some((b) => b.guardrail === 'budget_warning')).toBe(false)
+    expect(breaches).toEqual([])
+  })
+
+  it('leaves every OTHER guardrail live on an unbudgeted workspace', () => {
+    // An absent budget removes the budget guardrail and nothing else: an unbudgeted workspace is
+    // not an ungoverned one.
+    const breaches = evaluateGuardrails(
+      { ...DEFAULT_GUARDRAIL_LIMITS, budgetUsd: null },
+      { ...CALM, spentUsd: 10_000, consecutiveFailures: 3 },
+    )
+    expect(breaches.map((b) => b.guardrail)).toEqual(['circuit_breaker'])
+  })
+
+  it('keeps the seeded default budget at 20 -- nullability did not make new workspaces unguarded', () => {
+    expect(DEFAULT_GUARDRAIL_LIMITS.budgetUsd).toBe(20)
+  })
+
   it('does not emit budget_warning when budget is exhausted (mutual exclusivity)', () => {
     const breaches = evaluateGuardrails(DEFAULT_GUARDRAIL_LIMITS, { ...CALM, spentUsd: 20 })
     expect(breaches).toHaveLength(1)

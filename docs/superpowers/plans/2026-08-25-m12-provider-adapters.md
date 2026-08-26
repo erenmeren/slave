@@ -755,6 +755,31 @@ git commit -m "feat(orchestrator): a run resolves a provider and a model togethe
 
 ### Task 9: An unmeasurable budget is refused, and unknown is not zero
 
+> **AMENDED at dispatch** (controller rulings R1-R11, `.superpowers/sdd/2026-08-25-m12-provider-
+> adapters/task-9-brief.md`), in the same commit as the work, the way Task 2's plan-error
+> correction was. As written below this task could not be implemented, so the two corrections that
+> change its *interface* are recorded here rather than left to be rediscovered:
+>
+> - **R1.** The `admitRun` signature below takes `workspace: { budgetUsd: number | null }`, but
+>   `schema.prisma` declared `budgetUsd Float @default(20)` -- NOT NULL. Every workspace was
+>   budgeted, always, so implemented literally this task would have made every `reportsCost: false`
+>   runtime undispatchable everywhere and §10's milestone gate unbuildable, while the unit test
+>   below still passed because it hands a `null` to a pure function no real row could produce.
+>   Task 9 therefore also ships a migration dropping the column's NOT NULL and **keeping** its
+>   `@default(20)`: a workspace stays budgeted unless an operator deliberately clears it. Files
+>   below gain `packages/db/prisma/schema.prisma` + one migration, and
+>   `packages/domain/src/guardrails/evaluate.ts` (`GuardrailLimits.budgetUsd` widens to
+>   `number | null`; a null budget produces no breach, and no new breach kind is added).
+> - **R2.** `capabilitiesOf(kind)` -- a pure `ProviderKind -> ProviderCapabilities` lookup -- lands
+>   in Task 9, not Task 12, in `packages/providers/src/capabilities.ts`. Both admission points need
+>   "does kind K report cost?" and neither can construct an adapter: `packages/control` has no
+>   registry and write time has no run. `ClaudeCodeAdapter.getCapabilities()` delegates to it so
+>   there is one table, not two. Cursor's row is declared at spec §7's conservative values now;
+>   Task 12 may only ever widen it. This discharges the pre-flight Ruling routed 12 -> 13 early.
+> - **R7.** Step 3's "refuses setting a `budgetUsd` on a workspace already resolved to one" has no
+>   site: no verb anywhere in the tree writes `budgetUsd`. It is ROUTED to Task 13/14 with the
+>   create-workspace verb already routed there, not faked with an unreachable half-implementation.
+
 **Files:**
 - Modify: `apps/orchestrator/src/world.ts:164,208` (the budget sum and guardrail)
 - Modify: `packages/control/src/org.ts` (`assignCompany` and the budget write)

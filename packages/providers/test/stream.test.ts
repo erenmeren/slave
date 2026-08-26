@@ -375,7 +375,8 @@ describe('parseStreamLine', () => {
     // success cannot be established is not a success); every defaulted field -- is_error
     // included -- is named in terminalReason rather than silently applied, since
     // total_cost_usd feeds the budget guardrail and is_error feeds the pump's
-    // succeeded/failed split downstream.
+    // succeeded/failed split downstream -- and it is defaulted to `null`, not `0`, precisely
+    // BECAUSE the guardrail believes it (M12 Task 9 / spec Decision 6).
     const line = JSON.stringify({ type: 'result', subtype: 'error_max_turns' })
     expect(parseStreamLine(line)).toEqual({
       kind: 'terminated',
@@ -384,7 +385,14 @@ describe('parseStreamLine', () => {
         terminalReason: 'error_max_turns (degraded result line, missing: is_error, num_turns, total_cost_usd)',
         stopReason: null,
         numTurns: 0,
-        costUsd: 0,
+        // `null`, not `0` (M12 Task 9, controller ruling R5): a result line that never reported
+        // `total_cost_usd` describes a run whose cost is UNKNOWN, and spec Decision 6 says
+        // unknown cost is null because zero is a figure the budget guardrail believes. The
+        // degradation is already named in `terminalReason` above, so nothing is lost by saying
+        // so here too. `numTurns: 0` stays 0 deliberately -- a turn count the parser could not
+        // read is not money, nothing sums it against a limit, and `RunOutcome.numTurns` is not
+        // nullable.
+        costUsd: null,
         deniedToolUseIds: [],
       },
     })
