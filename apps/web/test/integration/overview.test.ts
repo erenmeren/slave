@@ -119,17 +119,74 @@ describe('buildOverviewSnapshot', () => {
     await prisma.agentRun.create({
       data: { taskId: fixture.taskId, agentId: fixture.agentId, status: 'succeeded', costUsd: 1.5 },
     })
+    // `provider` set on both, because that column is what proves a runtime actually ran this row
+    // -- see the three F1 tests below for the cases it excludes.
     await prisma.agentRun.create({
-      data: { taskId: fixture.taskId, agentId: fixture.agentId, status: 'succeeded', costUsd: null },
+      data: { taskId: fixture.taskId, agentId: fixture.agentId, status: 'succeeded', costUsd: null, provider: 'cursor' },
     })
     await prisma.agentRun.create({
-      data: { taskId: fixture.taskId, agentId: fixture.agentId, status: 'failed', costUsd: null },
+      data: { taskId: fixture.taskId, agentId: fixture.agentId, status: 'failed', costUsd: null, provider: 'cursor' },
     })
 
     const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
 
     expect(snapshot?.workspace.spentUsd).toBeCloseTo(1.5)
     expect(snapshot?.workspace.unmeasuredRuns).toBe(2)
+  })
+
+  it('does not count a run that is merely in flight as unmeasured -- unfinished is not unmeasured', async (): Promise<void> => {
+    // Fix round F1. `pump.ts` writes `costUsd` only at terminal conclusion, so a `working` run
+    // ALWAYS has a null cost. Counting it made a healthy workspace with three agents working read
+    // `$0.00 · 3 unmeasured` -- Decision 6's lie in a new hat, at the surface R11 exists to make
+    // honest.
+    await prisma.agentRun.create({
+      data: { taskId: fixture.taskId, agentId: fixture.agentId, status: 'working', provider: 'claude_code' },
+    })
+
+    const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
+
+    expect(snapshot?.workspace.unmeasuredRuns).toBe(0)
+  })
+
+  it('does not count a run that never spawned -- it spent nothing, and it never comes back down', async (): Promise<void> => {
+    // `failToStart`'s exact signature: terminal, no `costUsd`, and no `provider` -- because
+    // `provider` is written in the same statement as `pid`, after the spawn. This is what an
+    // `unmeasurable_budget` or `invalid_provider` refusal leaves behind, and it is permanent.
+    await prisma.agentRun.create({
+      data: {
+        taskId: fixture.taskId,
+        agentId: fixture.agentId,
+        status: 'failed',
+        provider: null,
+        terminalAt: new Date(),
+        endedAt: new Date(),
+      },
+    })
+
+    const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
+
+    expect(snapshot?.workspace.unmeasuredRuns).toBe(0)
+  })
+
+  it('DOES count a run that spawned and was killed -- real money nobody can name', async (): Promise<void> => {
+    // The case the figure exists for. A process ran under a real runtime and reached a terminal
+    // status with no cost recorded: an operator stop, the sweep, or a runtime that reports no
+    // spend. Whatever it spent is unrecoverable, and the operator must be told the total has a
+    // hole in it.
+    await prisma.agentRun.create({
+      data: {
+        taskId: fixture.taskId,
+        agentId: fixture.agentId,
+        status: 'stopped',
+        provider: 'claude_code',
+        terminalAt: new Date(),
+        endedAt: new Date(),
+      },
+    })
+
+    const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
+
+    expect(snapshot?.workspace.unmeasuredRuns).toBe(1)
   })
 
   it('carries a null budget through as null, not as a budget of zero', async (): Promise<void> => {
@@ -322,6 +379,10 @@ describe('buildOverviewSnapshot', () => {
 
     expect(snapshot?.agents[0]?.costUsd).toBeNull()
     expect(snapshot?.agents[0]?.toolCalls).toBe(3)
+    // Asserted here too, because this exact fixture read `unmeasuredRuns: 1` when the field
+    // shipped and no test looked. A per-run null and a hole in the workspace's total are
+    // different claims; this row makes only the first.
+    expect(snapshot?.workspace.unmeasuredRuns).toBe(0)
   })
 
   it("reports the live run's OWN provider, not a hardcoded one", async (): Promise<void> => {

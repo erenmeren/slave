@@ -24,10 +24,13 @@ export interface TopBarProps {
     readonly spentUsd: number
     readonly budgetUsd: number | null
     /**
-     * How many of this workspace's runs reported no cost (M12 Task 9, ruling R11). Shown beside
-     * the figures, because `spentUsd` on its own reads as TOTAL spend and is only the measured
-     * part of it whenever this is non-zero -- Decision 6's lie at the highest-visibility surface
-     * in the product.
+     * How many of this workspace's runs actually ran, finished, and left no cost figure behind
+     * (M12 Task 9, ruling R11; corrected in fix round F1). Shown beside the figures, because
+     * `spentUsd` on its own reads as TOTAL spend and is only the measured part of it whenever this
+     * is non-zero -- Decision 6's lie at the highest-visibility surface in the product.
+     *
+     * A run in flight does NOT count here: it is unfinished, not unmeasured, and counting it would
+     * have put "3 unmeasured" on a workspace where three agents were simply working.
      */
     readonly unmeasuredRuns: number
   } | null

@@ -12,8 +12,17 @@ export interface GraphAgent {
   readonly activeTaskTitle: string | null
   readonly activeRunId: string | null
   /**
-   * The live run's spend: `0` with no live run, a figure when it reported one, `null` when its
-   * runtime reports no spend at all (M12 Task 9, ruling R3 -- spec Decision 6).
+   * The live run's spend: `0` with no live run, `null` when a live run has no cost recorded.
+   * (A positive figure is not reachable here for the same reason it is not on
+   * `AgentCardData.costUsd` -- `pump.ts` writes `AgentRun.costUsd` only in the statement that
+   * makes a run terminal, and `run` here is non-terminal.)
+   *
+   * TASK 13: this field reaches no renderer. `grep -rn cost apps/web/src/components/graph/`
+   * returns nothing, and that was already true before M12 -- widening the type to `number | null`
+   * (ruling R3) discharged Decision 6 at the DTO and could not discharge "renders `—`", because
+   * there is nothing on the graph surface that shows cost at all. The graph's node design belongs
+   * to Task 13 (spec §8), so Task 9 routed the gap here rather than inventing a renderer for it or
+   * carrying it silently. Task 13 either renders this -- as `—` when null -- or deletes the field.
    */
   readonly costUsd: number | null
 }

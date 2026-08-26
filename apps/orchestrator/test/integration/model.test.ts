@@ -15,48 +15,15 @@ import { prisma } from '@ai-team-os/db/client'
 import { workspaceId as brandWorkspaceId } from '@ai-team-os/domain'
 import { ClaudeCodeAdapter, type AdapterRegistry, type AgentRuntimeAdapter, type StartRunInput } from '@ai-team-os/providers'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
-import { workspaceDefaultProvider } from '../../src/model.js'
 import { drainPumps, tick, type TickDeps } from '../../src/tick.js'
 
-// `resolveRuntime`'s own pure-function matrix (the worker/roster/template chain, and the
-// half-pair refusal, M12 §5 and Task 7's ledger) lives in `test/resolve-runtime.test.ts` --
-// `resolveModel`'s old describe block here is what that file replaces (M12 Task 8: "`resolveRuntime`
-// replaces `resolveModel`").
-
-describe('workspaceDefaultProvider', () => {
-  beforeEach(async (): Promise<void> => {
-    await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ProviderConfiguration", "Workspace" RESTART IDENTITY CASCADE',
-    )
-  })
-
-  it('resolves to the one configured kind', async (): Promise<void> => {
-    const workspace = await prisma.workspace.create({
-      data: { name: 'Checkout Platform', repoPath: '/tmp/checkout', verifyCommands: ['true'], setupCommands: [] },
-    })
-    await prisma.providerConfiguration.create({ data: { workspaceId: workspace.id, kind: 'claude_code', settings: {} } })
-
-    expect(await workspaceDefaultProvider(workspace.id)).toBe('claude_code')
-  })
-
-  it('yields null -- a refusal, not an assumed Claude -- for a workspace with no configuration row', async (): Promise<void> => {
-    const workspace = await prisma.workspace.create({
-      data: { name: 'Checkout Platform', repoPath: '/tmp/checkout', verifyCommands: ['true'], setupCommands: [] },
-    })
-
-    expect(await workspaceDefaultProvider(workspace.id)).toBeNull()
-  })
-
-  it('yields null for a workspace with more than one configured kind -- there is no "the default" column to pick one by', async (): Promise<void> => {
-    const workspace = await prisma.workspace.create({
-      data: { name: 'Checkout Platform', repoPath: '/tmp/checkout', verifyCommands: ['true'], setupCommands: [] },
-    })
-    await prisma.providerConfiguration.create({ data: { workspaceId: workspace.id, kind: 'claude_code', settings: {} } })
-    await prisma.providerConfiguration.create({ data: { workspaceId: workspace.id, kind: 'cursor', settings: {} } })
-
-    expect(await workspaceDefaultProvider(workspace.id)).toBeNull()
-  })
-})
+// The runtime-resolution chain itself is no longer tested from here. `resolveRuntime`'s pure
+// matrix (worker/roster/template, and the half-pair refusal -- M12 §5 and Task 7's ledger) lives
+// in `packages/control/test/runtime.test.ts`, and `workspaceDefaultProvider`'s integration tests
+// in `packages/control/test/integration/runtime.test.ts`: M12 Task 9 moved both functions into
+// `packages/control`, and fix round F2 moved their tests after them so they keep running against
+// SOURCE rather than that package's compiled `dist/`. What stays here is the orchestrator's own
+// concern -- that the chain actually reaches a dispatched run.
 
 const repoRoot = fileURLToPath(new URL('../../../../', import.meta.url))
 const FAKE = join(repoRoot, 'packages/providers/test/fake-claude.mjs')

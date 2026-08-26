@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { resolveRuntime } from '../src/model.js'
+import { resolveRuntime } from '../src/runtime.js'
 
 const template = (defaultModel: string | null, provider: 'claude_code' | 'cursor' | null) =>
   ({ defaultModel, provider })

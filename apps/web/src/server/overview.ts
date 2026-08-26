@@ -46,11 +46,20 @@ export interface AgentCardData {
   /**
    * The live run's spend so far. Panel's current-run block (spec §6).
    *
-   * Three distinct states, and the old `number` could only say two of them (M12 Task 9, ruling
-   * R3): a figure is a measured cost; `0` with no live run is "there is no current run to have
-   * spent anything", the same statement `toolCalls: 0` makes beside it; `null` is "there IS a run
-   * and its runtime reports no spend", which spec Decision 6 says must never be shown as `$0.00`.
-   * Rendered as `—`, the mark `RosterTable`/`CompanyManager` already use for unknown.
+   * Two reachable states, and `number` could only say one of them (M12 Task 9, ruling R3):
+   *
+   * - `0` -- there is no live run. An absent run has spent nothing; this is the same statement
+   *   `toolCalls: 0` makes beside it about the same absent object, and Decision 6 governs
+   *   unmeasured RUNS, of which there is none here.
+   * - `null` -- there is a live run and no cost is recorded for it. Rendered as `—`, the mark
+   *   `RosterTable`/`CompanyManager` already use, never `$0.00`.
+   *
+   * A positive figure is NOT reachable on this field, and saying so is the point of this
+   * paragraph: `run` here is a NON-TERMINAL run, and `pump.ts` writes `AgentRun.costUsd` only in
+   * the same statement that makes a run terminal. So a live run's cost is always null today. The
+   * field is nullable because that is what it means, not because a figure is expected -- and if a
+   * later task starts writing cost mid-run, this comment is what tells the next reader that the
+   * third state has become reachable rather than leaving them to wonder why it never fires.
    */
   readonly costUsd: number | null
   /** The live run's tool call count so far; 0 with no live run. */
@@ -74,9 +83,14 @@ export interface OverviewSnapshot {
     /** KNOWN spend: every run that reported a cost, summed. Never includes a guess. */
     readonly spentUsd: number
     /**
-     * How many of this workspace's runs reported no cost at all (M12 Task 9, ruling R11).
-     * Rendered beside the budget bar, because `spentUsd` alone reads as total spend and is only
-     * the measured part of it whenever this is non-zero.
+     * How many of this workspace's runs actually ran, finished, and left no cost figure behind
+     * (M12 Task 9, ruling R11; corrected in fix round F1). Rendered beside the budget bar, because
+     * `spentUsd` alone reads as total spend and is only the measured part of it whenever this is
+     * non-zero.
+     *
+     * NOT the count of null `costUsd` columns: a run in flight is unfinished rather than
+     * unmeasured, and a run that never spawned spent nothing. `sumSpend` holds the rule and the
+     * column facts behind it.
      */
     readonly unmeasuredRuns: number
     readonly goal: string | null
@@ -176,11 +190,21 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
 
   // `agent: { team: { workspaceId } }`, not `task: { workspaceId }`: a `planning` run (M8b) has no
   // `Task` row, and its cost still counts toward the budget shown here.
-  // One `costUsd` column per run rather than a `_sum` (M12 Task 9, ruling R3): an aggregate can
-  // only return a number, and a number cannot also say how many of the rows behind it reported
-  // nothing. `world.ts`'s budget guardrail reads the same split from the same function.
+  // Rows rather than a `_sum` (M12 Task 9, ruling R3): an aggregate can only return a number, and
+  // a number cannot also say how many of the rows behind it reported nothing. `world.ts`'s budget
+  // guardrail keeps its `_sum`, because ruling R8 keeps the count out of the guardrail and it
+  // would pay for the transfer to discard it (fix round F3).
+  //
+  // `provider` and `status` are selected because they are what tells an unmeasured run from a null
+  // cost -- `sumSpend`'s docstring carries the full reasoning and the column facts behind it.
+  // Selected rather than filtered in SQL, deliberately: a pre-M12 row has a real recorded cost and
+  // a null `provider`, so a `WHERE` would take its money out of `spentUsd` in order to fix the
+  // count beside it.
   const [spendRows, taskGroups] = await Promise.all([
-    prisma.agentRun.findMany({ where: { agent: { team: { workspaceId } } }, select: { costUsd: true } }),
+    prisma.agentRun.findMany({
+      where: { agent: { team: { workspaceId } } },
+      select: { costUsd: true, provider: true, status: true },
+    }),
     prisma.task.groupBy({ by: ['status'], where: { workspaceId }, _count: { _all: true } }),
   ])
   const spend = sumSpend(spendRows)

@@ -1,6 +1,5 @@
 import {
   agentId,
-  sumSpend,
   taskId,
   NON_TERMINAL_RUN_STATUSES,
   type RunStatus,
@@ -160,15 +159,27 @@ async function loadRunStats(
   const globalActiveRuns = await tx.agentRun.count({
     where: { status: { in: [...NON_TERMINAL_RUN_STATUSES] } },
   })
-  // One `costUsd` column per run, not a `_sum` aggregate (M12 Task 9, ruling R3). The aggregate
-  // could only hand back a number, and a number cannot say "and four of these runs reported
-  // nothing" -- `?? 0` on it was right about "no rows at all" and silently wrong about "rows whose
-  // cost is unknown". `sumSpend` returns both halves. The extra transfer is one float per run,
-  // alongside the one status column per concluded run the query below already accepts unbounded,
-  // and Postgres was reading the same rows either way.
-  const spendRows = await tx.agentRun.findMany({
+  // A `_sum` aggregate, and it stays one -- unlike `overview.ts` and `org.ts`, which read the same
+  // spend through `sumSpend` (M12 Task 9, ruling R3, corrected in fix round F3). The difference is
+  // the CONSUMER, not the arithmetic:
+  //
+  // This figure feeds `evaluateGuardrails`, and ruling R8 keeps `unknownRuns` out of the guardrail
+  // deliberately -- a breach keyed on unmeasured runs would fire on every healthy tick. So the
+  // second half of `sumSpend`'s pair would be computed and thrown away here, while the first half
+  // is numerically identical to what `_sum` already returns: Postgres' `sum()` skips NULLs, which
+  // is the same rule `sumSpend.known` applies. Paying for it would mean transferring one float per
+  // run of the workspace's ENTIRE history, inside `loadWorld`'s five-statement transaction with a
+  // cumulative 15 s budget, on the tick's hot path, to compute a number that does not change.
+  //
+  // `?? 0` here is the case a coalesce is right about and the one the marker this replaces was
+  // never aimed at: `_sum` returns `null` only when the aggregate matched NO ROWS AT ALL, which is
+  // a workspace that has genuinely spent nothing. It cannot return `null` because some row's cost
+  // was unknown -- those rows are already excluded from the sum, not folded into it as zeros. The
+  // count of them is what was invisible, and it is now visible on the two surfaces that display
+  // spend to an operator.
+  const spend = await tx.agentRun.aggregate({
     where: { agent: { team: { workspaceId } } },
-    select: { costUsd: true },
+    _sum: { costUsd: true },
   })
 
   // Most recently concluded first, so the leading run of the list is the one the streak counts
@@ -212,13 +223,12 @@ async function loadRunStats(
     consecutiveFailures += 1
   }
 
-  // `known` only. `unknownRuns` is deliberately NOT carried into `WorkspaceStats` (M12 Task 9,
-  // ruling R8): admission already keeps a cost-blind runtime out of a budgeted workspace, and
-  // every LIVE run has a null cost until it concludes -- so a guardrail keyed on unmeasured runs
-  // would trip on every healthy tick of every healthy workspace. The figure belongs on the
-  // surfaces, where `apps/web`'s own `sumSpend` call puts it in front of an operator.
-  const spend = sumSpend(spendRows)
-  return { activeRuns, globalActiveRuns, spentUsd: spend.known, consecutiveFailures }
+  // No unmeasured-run count in `WorkspaceStats`, deliberately (M12 Task 9, ruling R8): admission
+  // already keeps a cost-blind runtime out of a budgeted workspace, and every LIVE run has a null
+  // cost until it concludes -- so a guardrail keyed on unmeasured runs would trip on every healthy
+  // tick of every healthy workspace. The figure belongs on the surfaces, where `apps/web`'s
+  // `sumSpend` calls put it in front of an operator.
+  return { activeRuns, globalActiveRuns, spentUsd: spend._sum.costUsd ?? 0, consecutiveFailures }
 }
 
 /**

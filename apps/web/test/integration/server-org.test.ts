@@ -82,16 +82,50 @@ describe('org query module', () => {
       // defect the `_sum` sites had: a run whose cost nobody measured silently contributed a zero,
       // so `$3.50` read as the whole story when it was only the measured part of it.
       await prisma.agentRun.create({
-        data: { taskId: fixture.taskId, agentId: fixture.agentId, status: 'succeeded', costUsd: 3.5 },
+        data: { taskId: fixture.taskId, agentId: fixture.agentId, status: 'succeeded', costUsd: 3.5, provider: 'claude_code' },
       })
       await prisma.agentRun.create({
-        data: { taskId: fixture.taskId, agentId: fixture.agentId, status: 'succeeded', costUsd: null },
+        data: { taskId: fixture.taskId, agentId: fixture.agentId, status: 'succeeded', costUsd: null, provider: 'cursor' },
       })
 
       const projects = await listProjects()
       const project = projects.find((p) => p.id === fixture.workspaceId)
 
       expect(project?.spend).toBeCloseTo(3.5)
+      expect(project?.unmeasuredRuns).toBe(1)
+    })
+
+    it('counts neither a run in flight nor a run that never spawned (fix round F1)', async (): Promise<void> => {
+      // Same rule as the budget bar, from the same function -- the Projects page inherited the
+      // same defect and must inherit the same correction.
+      await prisma.agentRun.create({
+        data: { taskId: fixture.taskId, agentId: fixture.agentId, status: 'working', provider: 'claude_code' },
+      })
+      await prisma.agentRun.create({
+        data: {
+          taskId: fixture.taskId,
+          agentId: fixture.agentId,
+          status: 'failed',
+          provider: null,
+          terminalAt: new Date(),
+          endedAt: new Date(),
+        },
+      })
+      await prisma.agentRun.create({
+        data: {
+          taskId: fixture.taskId,
+          agentId: fixture.agentId,
+          status: 'stopped',
+          provider: 'claude_code',
+          terminalAt: new Date(),
+          endedAt: new Date(),
+        },
+      })
+
+      const projects = await listProjects()
+      const project = projects.find((p) => p.id === fixture.workspaceId)
+
+      expect(project?.spend).toBeCloseTo(0)
       expect(project?.unmeasuredRuns).toBe(1)
     })
 

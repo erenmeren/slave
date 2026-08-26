@@ -1,6 +1,6 @@
 import { prisma } from '@ai-team-os/db/client'
 import { toRunState } from '@ai-team-os/db'
-import { deriveAgentStatus, sumSpend, NON_TERMINAL_RUN_STATUSES, type AgentStatus } from '@ai-team-os/domain'
+import { deriveAgentStatus, sumSpend, NON_TERMINAL_RUN_STATUSES, type AgentStatus, type SpendRow } from '@ai-team-os/domain'
 
 // Mirrors overview.ts's ACTIVE_TASK_STATUSES exactly (the M8a widening: a task under review or in
 // the merge queue is still active work). Not imported from there -- overview.ts does not export
@@ -8,9 +8,7 @@ import { deriveAgentStatus, sumSpend, NON_TERMINAL_RUN_STATUSES, type AgentStatu
 const ACTIVE_TASK_STATUSES = ['ready', 'running', 'verifying', 'reviewing', 'merging', 'rework'] as const
 
 /** `sumSpend`'s pair under this DTO's own field names. */
-function spendOf(
-  runs: readonly { readonly costUsd: number | null }[],
-): { readonly spend: number; readonly unmeasuredRuns: number } {
+function spendOf(runs: readonly SpendRow[]): { readonly spend: number; readonly unmeasuredRuns: number } {
   const { known, unknownRuns } = sumSpend(runs)
   return { spend: known, unmeasuredRuns: unknownRuns }
 }
@@ -25,9 +23,11 @@ export interface ProjectRow {
   /** KNOWN spend: every run of this project that reported a cost, summed. */
   readonly spend: number
   /**
-   * How many of this project's runs reported no cost at all (M12 Task 9, ruling R3). Rendered as
-   * its own stat rather than folded into `spend`, because a total that silently absorbs unmeasured
-   * runs as zeros presents the measured part of a bill as the whole of it.
+   * How many of this project's runs actually ran, finished, and left no cost figure behind (M12
+   * Task 9, ruling R3; corrected in fix round F1). Rendered as its own stat rather than folded
+   * into `spend`, because a total that silently absorbs unmeasured runs as zeros presents the
+   * measured part of a bill as the whole of it. NOT the count of null `costUsd` columns --
+   * `sumSpend` holds the rule.
    */
   readonly unmeasuredRuns: number
 }
@@ -39,7 +39,18 @@ export async function listProjects(): Promise<readonly ProjectRow[]> {
     prisma.task.groupBy({ by: ['workspaceId', 'status'], _count: { _all: true } }),
     // `agent -> team -> workspaceId`, matching overview.ts's budget-bar spend source exactly: a
     // `planning` run (no Task row) still counts toward the workspace it ran under.
-    prisma.agentRun.findMany({ select: { costUsd: true, agent: { select: { team: { select: { workspaceId: true } } } } } }),
+    // `provider` and `status` alongside the cost: those two are what tell an unmeasured run from a
+    // null cost (`sumSpend` carries the rule and the column facts). Not filtered in SQL -- a
+    // pre-M12 row has a real cost and a null `provider`, so a `WHERE` would drop its money out of
+    // `spend` in order to fix `unmeasuredRuns` beside it.
+    prisma.agentRun.findMany({
+      select: {
+        costUsd: true,
+        provider: true,
+        status: true,
+        agent: { select: { team: { select: { workspaceId: true } } } },
+      },
+    }),
     prisma.agent.findMany({ where: { companyAgentId: { not: null } }, select: { team: { select: { workspaceId: true } } } }),
   ])
 
@@ -48,12 +59,13 @@ export async function listProjects(): Promise<readonly ProjectRow[]> {
   // had: a run nobody measured contributed a zero and then vanished from the figure entirely.
   // `sumSpend` is the same function `world.ts` and `overview.ts` use, so the three surfaces cannot
   // come to disagree about what an unmeasured run does to a total.
-  const rowsByWorkspace = new Map<string, { costUsd: number | null }[]>()
+  const rowsByWorkspace = new Map<string, SpendRow[]>()
   for (const run of spendRows) {
     const workspaceId = run.agent.team.workspaceId
+    const row: SpendRow = { costUsd: run.costUsd, provider: run.provider, status: run.status }
     const forWorkspace = rowsByWorkspace.get(workspaceId)
-    if (forWorkspace === undefined) rowsByWorkspace.set(workspaceId, [{ costUsd: run.costUsd }])
-    else forWorkspace.push({ costUsd: run.costUsd })
+    if (forWorkspace === undefined) rowsByWorkspace.set(workspaceId, [row])
+    else forWorkspace.push(row)
   }
 
   const workerCountByWorkspace = new Map<string, number>()
