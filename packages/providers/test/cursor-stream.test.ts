@@ -268,11 +268,16 @@ describe('parseCursorLine, totality', () => {
     // But it is NOT "a kind we have no decision for", which is what `ignored`
     // means. It is a real message from the agent, and `ignored` made the
     // whole thing vanish from the operator's feed with nothing counted,
-    // nothing warned, and nothing in the terminal reason. `unparsable` is
-    // where the loss becomes loud: `pump.ts:507` counts it and warns with the
-    // offending line, and `pump.ts:559` surfaces
-    // `(N unparsable line(s) were dropped first)` in the terminal reason.
-    // Non-fatal, attributable, counted.
+    // nothing warned, nothing anywhere. `unparsable` is
+    // where the loss becomes loud: `pump.ts:507-508` counts it and warns WITH
+    // THE WHOLE OFFENDING LINE, so the dropped message lands in the
+    // orchestrator log and can be read back. Non-fatal and attributable.
+    //
+    // The count itself surfaces nowhere on this path: `unparsableLines` is
+    // interpolated only at `pump.ts:559`, in the branch for a stream that
+    // ended with NO terminal event, and a Cursor run that drops a multi-block
+    // message ends normally on a `result` line. An earlier version of this
+    // comment claimed the terminal reason carries it; it does not.
     const line = JSON.stringify({
       type: 'assistant',
       message: {

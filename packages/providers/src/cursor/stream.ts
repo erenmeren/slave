@@ -6,10 +6,17 @@ import type { RuntimeEvent } from '../types.js'
  * `cursor-agent --print --output-format stream-json` in, one `RuntimeEvent`
  * out. It never throws, for any input, including the empty string. It mirrors
  * `packages/providers/src/claude/stream.ts`'s discipline exactly, including
- * the distinction that matters most: invalid JSON, or a recognized shape with
- * a required field missing, is `unparsable` (a defect); a well-formed line of
- * a kind this parser has no decision for is `ignored` (merely uninteresting).
- * Getting those backwards is how a malformed line stops being visible.
+ * the distinction that matters most: invalid JSON, or a recognized shape this
+ * parser cannot carry faithfully -- a required field missing, or (fix round 2)
+ * real content it would have to invent a shape to represent -- is `unparsable`
+ * (a defect); a well-formed line of a kind this parser has no decision for is
+ * `ignored` (merely uninteresting). Getting those backwards is how a malformed
+ * line stops being visible.
+ *
+ * Note the widening: Claude's parser reaches `unparsable` only through missing
+ * fields, because every shape it meets is one it can carry. This one also
+ * reaches it through a shape that is COMPLETE and unrepresentable, which is a
+ * different road to the same honest destination.
  *
  * EVERY mapping below was read off a verbatim recording of the installed
  * binary (`packages/providers/test/fixtures/cursor/cursor-run.ndjson`,
@@ -178,10 +185,21 @@ function parseAssistantLine(raw: unknown, line: string): RuntimeEvent {
     // counted, nothing warned and nothing in the terminal reason.
     //
     // `unparsable` is where that loss becomes attributable and non-fatal:
-    // `pump.ts` counts it, warns to the console with the offending line, and
-    // surfaces `(N unparsable line(s) were dropped first)` in the run's
-    // terminal reason. A counted loss beats a silent one, and neither
-    // requires inventing a join.
+    // `pump.ts:507-508` counts it and warns to the console WITH THE WHOLE
+    // OFFENDING LINE, so the dropped message itself lands in the orchestrator
+    // log and can be read back.
+    //
+    // PRECISELY, because the first version of this comment overstated it (the
+    // claim was the controller's and the fix-round re-review caught it):
+    // `unparsableLines` is interpolated ONLY at `pump.ts:559`, inside the
+    // branch for a stream that ended with NO terminal event. A run that ends
+    // normally on a `result` line -- which is exactly when a dropped
+    // multi-block message happens -- never reaches it, so the COUNT surfaces
+    // nowhere and only the warning does. That is still strictly better than
+    // `ignored`, which produced neither; but "it shows up in the terminal
+    // reason" is false for this case and must not be repeated.
+    // Routed: a normally-terminating run has no durable record of dropped
+    // lines at all. Pre-existing, and it affects Claude runs identically.
     return { kind: 'unparsable', line }
   }
 
