@@ -54,7 +54,14 @@ export interface SpendRow {
  * - `AgentRun.provider` is written in the same statement as `pid` -- `tick.ts`, `planning.ts` and
  *   `review.ts` each do one `agentRun.update` STRICTLY AFTER `await adapter.start(...)` has
  *   returned a handle. There is no path that writes `provider` without a live process behind it,
- *   which is what makes it an exact discriminator for "a runtime actually ran this".
+ *   which is what makes it an exact discriminator for "a runtime actually ran this" -- with one
+ *   hole, named here rather than left in a task report: if `adapter.start()` succeeds and the
+ *   `agentRun.update` on the next line throws, a live process exists behind a null `provider`
+ *   and that run is UNDER-counted here. No better discriminator exists without a schema change
+ *   (`pid` and `worktreePath` are written by that same statement; `sessionId` shares the window
+ *   AND misses a runtime that dies before init), and in that window `failToStart`'s own writes
+ *   are likely failing too. Under-counting is also the safer direction: it understates a hole
+ *   rather than inventing one.
  * - `tick.ts`'s `failToStart` writes `status`/`terminalAt`/`endedAt` and NEITHER of the above. So
  *   a refusal (`unmeasurable_budget`, `invalid_provider`), a worktree failure, or an adapter that
  *   threw before spawning leaves a terminal row with a null cost that spent exactly nothing.

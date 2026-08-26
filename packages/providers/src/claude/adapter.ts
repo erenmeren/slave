@@ -51,8 +51,9 @@ export interface StartRunInput {
   }
   /**
    * The resolved model override (M10 §6), already the caller's chosen value -- this adapter does
-   * not itself consult a worker/roster/template chain, `resolveRuntime` (`apps/orchestrator/src/
-   * model.ts`, M12 Task 8) does that before calling `start()`. `undefined` means "no override": `--model` is
+   * not itself consult a worker/roster/template chain, `resolveRuntime` (M12 Task 8; defined in
+   * `packages/control/src/runtime.ts` since Task 9, re-exported from
+   * `apps/orchestrator/src/model.ts`) does that before calling `start()`. `undefined` means "no override": `--model` is
    * omitted entirely rather than passed with some sentinel, so a legacy run with no override
    * behaves exactly as it did before this field existed.
    */

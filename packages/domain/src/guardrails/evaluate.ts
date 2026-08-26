@@ -88,8 +88,11 @@ export function evaluateGuardrails(
   // time and dispatch, so a budgeted workspace can only host cost-reporting runtimes; and every
   // LIVE run carries a null cost until it concludes, so a breach keyed on unmeasured runs would
   // fire on every healthy tick of every healthy workspace. The count of unmeasured runs is
-  // carried to the SURFACES (`world.ts`'s `sumSpend`, the budget bar) where it informs an
-  // operator, not to the guardrail, where it would only halt work that is going fine.
+  // carried to the SURFACES (`overview.ts` and `org.ts` call `sumSpend`; the budget bar shows
+  // the count) where it informs an operator, not to the guardrail, where it would only halt
+  // work that is going fine. `world.ts` -- this function's own caller -- deliberately does NOT
+  // call `sumSpend`: with no consumer for `unknownRuns` here, the split would be computed and
+  // discarded, so it stays on a Prisma `_sum` (M12 Task 9 fix round F3).
   const budgetUsd = limits.budgetUsd
   if (budgetUsd !== null) {
     if (stats.spentUsd >= budgetUsd) {

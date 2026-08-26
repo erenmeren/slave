@@ -57,8 +57,13 @@ export async function listProjects(): Promise<readonly ProjectRow[]> {
   // Grouped first, then summed through `sumSpend` (M12 Task 9, ruling R3). The old running total
   // added `(run.costUsd ?? 0)` per row, which is the array form of the same defect the `_sum` sites
   // had: a run nobody measured contributed a zero and then vanished from the figure entirely.
-  // `sumSpend` is the same function `world.ts` and `overview.ts` use, so the three surfaces cannot
-  // come to disagree about what an unmeasured run does to a total.
+  // `sumSpend` is the same function `overview.ts` uses, so the two surfaces that show an operator
+  // a spend figure cannot come to disagree about what an unmeasured run does to a total.
+  // `world.ts`'s guardrail is deliberately NOT the third (fix round F3): its consumer is
+  // forbidden to read `unknownRuns` (ruling R8), so the pair's second half would be discarded --
+  // and its query runs inside `loadWorld`'s cumulative-15s transaction on the tick's hot path,
+  // where `_sum` transfers one row instead of one float per run of the workspace's history. The
+  // difference between these sites is the CONSUMER, not the arithmetic.
   const rowsByWorkspace = new Map<string, SpendRow[]>()
   for (const run of spendRows) {
     const workspaceId = run.agent.team.workspaceId
