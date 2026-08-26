@@ -133,9 +133,12 @@ function hookPath(): string {
  *
  * M12 Task 5: this used to build one `ClaudeCodeAdapter` directly (`buildAdapter`) and hand it to
  * every caller unconditionally -- the hardcoded selection this milestone exists to remove. It
- * builds a registry now, with exactly one kind configured (`claudeCode`); every lookup against it
- * still resolves to that same kind (`apps/orchestrator/src/provider.ts`'s `resolveAdapter`) until
- * Task 8 makes a run's provider a real per-run choice.
+ * builds a registry now. Task 8 made a run's provider a real per-run choice: every dispatch
+ * resolves its OWN `ProviderKind` and looks it up here (`apps/orchestrator/src/provider.ts`'s
+ * `resolveAdapter`), rather than every caller being handed the same adapter regardless of what it
+ * asked for. This registry still has exactly one kind configured (`claudeCode`) -- not because the
+ * selection is hardcoded any more, but because Task 12 (Cursor) has not registered a second one
+ * yet, so any run resolved to a kind other than `claude_code` refuses with `invalid_provider` here.
  */
 function buildAdapterRegistry(): AdapterRegistry {
   const command = process.env['AITEAMOS_CLAUDE_BIN'] ?? 'claude'

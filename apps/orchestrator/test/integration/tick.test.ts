@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSyn
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { refusalText } from '@ai-team-os/control'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@ai-team-os/db'
 import { prisma } from '@ai-team-os/db/client'
 import { workspaceId as brandWorkspaceId } from '@ai-team-os/domain'
@@ -473,6 +474,13 @@ describe('tick', () => {
     expect(run.status).toBe('failed')
     const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
     expect(task.attempt).toBe(1)
+    const failures = await prisma.executionEvent.findMany({
+      where: { workspaceId: fixture.workspaceId, runId: run.id, type: 'run_failed' },
+    })
+    expect(failures).toHaveLength(1)
+    expect((failures[0]?.payload as { reason: string }).reason).toContain(
+      'no configured default provider',
+    )
   })
 
   it('refuses with the spec-verbatim invalid_provider text when the chain names a provider this process has no adapter for', async (): Promise<void> => {
@@ -491,6 +499,13 @@ describe('tick', () => {
     expect(report.started).toEqual([])
     const run = await prisma.agentRun.findFirstOrThrow()
     expect(run.status).toBe('failed')
+    const failures = await prisma.executionEvent.findMany({
+      where: { workspaceId: fixture.workspaceId, runId: run.id, type: 'run_failed' },
+    })
+    expect(failures).toHaveLength(1)
+    expect((failures[0]?.payload as { reason: string }).reason).toBe(
+      refusalText({ kind: 'invalid_provider', provider: 'cursor' }),
+    )
   })
 
   it('kills the agent it just spawned when the start fails after the spawn', async (): Promise<void> => {

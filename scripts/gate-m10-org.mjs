@@ -98,6 +98,13 @@ try {
       setupCommands: [],
     },
   })
+  // Without these rows, dispatch refuses with `invalid_provider` (M12 Task 8) and nothing ever runs.
+  await prisma.providerConfiguration.create({
+    data: { workspaceId: workspaceA.id, kind: 'claude_code', settings: {} },
+  })
+  await prisma.providerConfiguration.create({
+    data: { workspaceId: workspaceB.id, kind: 'claude_code', settings: {} },
+  })
   workspaceIdA = workspaceA.id
   workspaceIdB = workspaceB.id
   console.log(`workspace A: ${workspaceA.id}`)

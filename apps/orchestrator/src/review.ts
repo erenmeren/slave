@@ -224,7 +224,7 @@ async function dispatchReview(deps: TickDeps, task: ReviewableTask): Promise<Run
 
   // 3. Reviewer staffing. `role === 'reviewer'` is an exact match -- the same convention
   // `decide()` uses for `requiredRole`, and Task 8's seed data uses the same spelling.
-  // `companyAgent -> template` included so `resolveModel` (M10 §6) can walk the whole override
+  // `companyAgent -> template` included so `resolveRuntime` (M12 Task 8) can walk the whole override
   // chain for whichever reviewer is actually picked below.
   const reviewers = await prisma.agent.findMany({
     where: { role: 'reviewer', team: { workspaceId: task.workspaceId } },

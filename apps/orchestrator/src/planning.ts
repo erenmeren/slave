@@ -214,7 +214,7 @@ export async function dispatchPlanning(deps: TickDeps): Promise<RunId | null> {
 
   // 5. Staffing. `role === 'manager'` is an exact match -- the same convention `dispatchReview`
   // uses for `role === 'reviewer'`.
-  // `companyAgent -> template` included so `resolveModel` (M10 §6) can walk the whole override
+  // `companyAgent -> template` included so `resolveRuntime` (M12 Task 8) can walk the whole override
   // chain for whichever manager is actually picked below.
   const managers = await prisma.agent.findMany({
     where: { role: 'manager', team: { workspaceId: deps.workspaceId } },

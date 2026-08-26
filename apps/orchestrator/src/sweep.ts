@@ -275,20 +275,26 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
     if (timedOutNow) timedOut.push(brandRunId(run.id))
     if (overCapNow) overToolCap.push(brandRunId(run.id))
 
-    // Resolved per run, not once for the whole pass (M12 Task 8; the pass-wide `resolveAdapter`
-    // call this replaced predates a second provider being real dispatch): once Task 12 lands
-    // Cursor, two runs in the same pass can be on different runtimes, and one adapter resolved up
-    // front would call the WRONG one's `cancel` for the other. `?? 'claude_code'` is not a choice
-    // among live options -- every run in this table was recorded before `AgentRun.provider`
-    // existed to be written, or (post-Task-8) was written by a dispatch that already refused an
-    // unconfigured kind, so a `null` here is a historical fact (there was only ever the one kind
-    // of run that could have produced it), never a guess.
-    const adapter = resolveAdapter(deps.registry, run.provider ?? 'claude_code')
-
     // A failure here makes the event louder rather than silencing it -- the third time this
     // milestone has needed saying.
     let cancelError: unknown = null
     try {
+      // Resolved per run, not once for the whole pass (M12 Task 8; the pass-wide `resolveAdapter`
+      // call this replaced predates a second provider being real dispatch): once Task 12 lands
+      // Cursor, two runs in the same pass can be on different runtimes, and one adapter resolved
+      // up front would call the WRONG one's `cancel` for the other. `?? 'claude_code'` is not a
+      // choice among live options -- every run in this table was recorded before
+      // `AgentRun.provider` existed to be written, or (post-Task-8) was written by a dispatch that
+      // already refused an unconfigured kind, so a `null` here is a historical fact (there was
+      // only ever the one kind of run that could have produced it), never a guess.
+      //
+      // Resolved INSIDE this `try`, not before it: `resolveAdapter` can itself throw
+      // `invalid_provider` for a kind this process no longer (or never did) have an adapter for.
+      // A throw here must become `cancelError` like any other cancel failure, not escape the loop
+      // -- an uncaught throw here would abort the whole sweep pass after the run above was already
+      // claimed into `stopping`, wedging it there forever, since nothing else in this file sweeps
+      // that status (see the comment above the claim, a few lines up).
+      const adapter = resolveAdapter(deps.registry, run.provider ?? 'claude_code')
       await adapter.cancel(brandRunId(run.id))
     } catch (error) {
       cancelError = error

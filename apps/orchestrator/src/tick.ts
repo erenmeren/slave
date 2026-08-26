@@ -389,7 +389,7 @@ async function concludeFailedResume(
  */
 async function startRun(deps: TickDeps, taskId: TaskId, agentId: AgentId): Promise<RunId | null> {
   const task = await prisma.task.findUniqueOrThrow({ where: { id: taskId } })
-  // `companyAgent -> template` included so `resolveModel` (M10 §6) can walk the whole override
+  // `companyAgent -> template` included so `resolveRuntime` (M12 Task 8) can walk the whole override
   // chain -- a legacy agent with no roster link carries `companyAgent: null` and resolves through
   // its own column alone.
   const agent = await prisma.agent.findUniqueOrThrow({

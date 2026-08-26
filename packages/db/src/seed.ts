@@ -71,6 +71,13 @@ export async function seed(): Promise<void> {
     },
   })
 
+  // Without a ProviderConfiguration row, `workspaceDefaultProvider` (M12 Task 8) returns null,
+  // `resolveRuntime` refuses every dispatch with `invalid_provider`, and the seeded workspace
+  // cannot run a single task -- do not drop this when editing seed data.
+  await prisma.providerConfiguration.create({
+    data: { workspaceId: workspace.id, kind: 'claude_code', settings: {} },
+  })
+
   for (const team of TEAMS) {
     await prisma.team.create({ data: { workspaceId: workspace.id, name: team } })
   }

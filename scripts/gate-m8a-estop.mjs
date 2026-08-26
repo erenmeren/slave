@@ -78,6 +78,10 @@ try {
     },
   })
   workspaceId = workspace.id
+  // Without this row, dispatch refuses with `invalid_provider` (M12 Task 8) and nothing ever runs.
+  await prisma.providerConfiguration.create({
+    data: { workspaceId: workspace.id, kind: 'claude_code', settings: {} },
+  })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Gate Team' } })
   await prisma.agent.create({ data: { teamId: team.id, name: 'Worker', role: 'backend' } })
   // A second, idle worker: step 6 seeds a fresh ready task AFTER the halt engages, and this agent

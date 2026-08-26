@@ -1,18 +1,11 @@
 import { prisma } from '@ai-team-os/db/client'
 import { NON_TERMINAL_RUN_STATUSES, type Result, err, ok, runId as brandRunId } from '@ai-team-os/domain'
 import { appendEvent } from '@ai-team-os/events'
-import { type ProviderKind, signalPause } from '@ai-team-os/providers'
+import { signalPause } from '@ai-team-os/providers'
 import { runFilePaths } from './paths.js'
 import type { ControlRefusal } from './refusal.js'
 
 const PAUSABLE_STATUSES = ['starting', 'working', 'resuming'] as const
-
-/**
- * The provider every run uses today. M12 Task 8 replaces this with a lookup against the run's
- * own provider once a second runtime is real dispatch, not a stub -- this is the one line that
- * names it until then (M12 controller ruling, Task 3 fix round).
- */
-const CURRENT_PROVIDER_KIND: ProviderKind = 'claude_code'
 
 /** `AgentRun.pauseReason`'s categories (spec §6): who -- or what -- asked for the pause. */
 export type PauseCategory = 'human' | 'guardrail' | 'emergency_stop'
@@ -64,7 +57,13 @@ export async function requestPause(
   // means an operator watches a "pausing" run keep working (spec §5.5's named failure).
   const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: run.agent.team.workspaceId } })
   const { pauseFlagPath } = runFilePaths(workspace.repoPath, brandRunId(run.id))
-  await signalPause(CURRENT_PROVIDER_KIND, { pauseFlagPath, pid: run.pid }, requestedBy)
+  // The run's OWN provider (M12 Task 8), not a process-wide constant: `run` is already loaded
+  // above, so this is a lookup, not a new query. `?? 'claude_code'` is a historical-fact backfill
+  // for runs recorded before `AgentRun.provider` existed to be written, not a guess among live
+  // options -- the same discipline `resume.ts`/`sweep.ts` apply to their own `run.provider ??
+  // 'claude_code'`. Signaling the wrong provider's flag file would pause nothing for a real run on
+  // a second runtime.
+  await signalPause(run.provider ?? 'claude_code', { pauseFlagPath, pid: run.pid }, requestedBy)
   await appendEvent({
     type: 'run.pause_requested',
     workspaceId: run.agent.team.workspaceId,

@@ -94,6 +94,11 @@ export async function executeResume(options: ExecuteResumeOptions): Promise<void
       // pause. `null` on the row (legacy or never set) omits the key entirely, matching how every
       // other optional field on `Checkpoint` behaves under `exactOptionalPropertyTypes`.
       ...(checkpoint.model !== null ? { model: checkpoint.model } : {}),
+      // Same replay-verbatim discipline as `model`, for the same reason -- `checkpoint.provider`
+      // (M12 Task 6) declared this field on `packages/providers`' `Checkpoint` interface with
+      // nothing ever writing it until now; an unread field crossing this seam is exactly what
+      // Decision 2 exists to prevent.
+      ...(checkpoint.provider !== null ? { provider: checkpoint.provider } : {}),
     },
     message,
   )
@@ -136,7 +141,16 @@ export async function executeResume(options: ExecuteResumeOptions): Promise<void
       gitIdentity: { name: checkpoint.gitAuthorName, email: checkpoint.gitAuthorEmail },
       // The same historical-fact default used to resolve `adapter` above, carried forward so a
       // SECOND pause of this same resumed run checkpoints the identical provider rather than
-      // losing it -- see `PumpRunInput.spawn.provider`'s own docstring.
+      // losing it -- see `PumpRunInput.spawn.provider`'s own docstring. Naming this explicitly:
+      // this is the one place in this file where a `??` turns a null into data that can reach a
+      // NEW `Checkpoint` row's `create` clause (`pump.ts`'s `writeCheckpoint`) as a real, persisted
+      // `provider` value -- the same shape Task 6 spent a whole task removing for `costUsd`.
+      // Accepted here (only `claude_code` has ever produced a checkpoint with `provider: null`,
+      // so this backfills a known fact, not a guess), and inert in practice today besides: a
+      // checkpoint must already exist for `resume` to run at all, so `writeCheckpoint`'s `update`
+      // branch is what actually fires here, and it deliberately never rewrites `provider` once
+      // set (see that function's own comment) -- this value only would have mattered had `create`
+      // fired again for the same run, which today's upsert never does.
       provider: checkpoint.provider ?? 'claude_code',
       // Carried forward so a SECOND pause of this same resumed run checkpoints the same model
       // again, rather than losing it -- see `PumpRunInput.spawn.model`'s own docstring.

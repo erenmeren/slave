@@ -36,6 +36,10 @@ const workspace = await prisma.workspace.create({
     autoMerge: true,
   },
 })
+// Without this row, dispatch refuses with `invalid_provider` (M12 Task 8) and nothing ever runs.
+await prisma.providerConfiguration.create({
+  data: { workspaceId: workspace.id, kind: 'claude_code', settings: {} },
+})
 const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Demo Team' } })
 // Lowercase roles, matching the exact-match conventions: `manager` plans the goal (M8b),
 // `backend` implements the planned tasks, `reviewer` keeps them from stalling in `reviewing`.
