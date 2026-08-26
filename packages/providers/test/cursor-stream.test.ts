@@ -116,9 +116,13 @@ describe('parseCursorLine, against the recorded fixture', () => {
   it('carries the embedded newline in call_id through verbatim rather than repairing it', () => {
     // MEASURED TRAP: Cursor's `call_id` contains a literal newline joining
     // two ids. A parser that "cleaned" it would produce an identifier that
-    // matches nothing the runtime ever said. Task 12/14: this id reaches the
-    // DB and the event log, neither of which is line-oriented, but any
-    // NDJSON-ish log format that prints it raw will break.
+    // matches nothing the runtime ever said, so it is carried verbatim.
+    // TRACED (task-10 review §4): today it reaches only
+    // `Checkpoint.lastToolUseId`, a nullable Postgres text column read back
+    // into a checkpoint object no adapter reads. It is NOT in the
+    // `run.tool_call` payload (`{name, summary}` only), and the one site
+    // that logs a raw stream line logs escaped JSON. There is no
+    // line-oriented consumer today; whoever adds one inherits this decision.
     const event = parseCursorLine(lines[6]!)
     if (event.kind !== 'tool_call') throw new Error('expected tool_call')
     expect(event.toolUseId).toContain('\n')
@@ -405,7 +409,40 @@ describe('parseCursorLine, the tool_call summary', () => {
     }
   })
 
+  it('prefers the key that names a tool over an unknown bookkeeping key beside it', () => {
+    // REGRESSION GUARD (task-10 review, finding 2). The envelope-key denylist
+    // is PROVEN to go stale by the fixture itself: `completedAtMs` is on the
+    // `completed` half and not the `started` half, so the bookkeeping keys
+    // already differ between two lines about one call. Selecting the first
+    // key the denylist does not recognize therefore fabricates a tool name
+    // -- and a fabricated action line in the operator's feed -- the moment
+    // cursor-agent adds a `status`/`error`/`durationMs` key ahead of the
+    // tool. The `*ToolCall` convention is the primary rule for exactly this
+    // reason. Iteration order is JSON key order, so the unknown key is put
+    // FIRST here deliberately: under the old rule this test reads `status`.
+    const line = JSON.stringify({
+      type: 'tool_call',
+      subtype: 'started',
+      call_id: 'c6',
+      tool_call: {
+        status: 'running',
+        durationMs: 12,
+        readToolCall: { args: { path: '/abs/x' } },
+        hookAdditionalContexts: [],
+        toolCallId: 'c6',
+      },
+    })
+    expect(parseCursorLine(line)).toEqual({
+      kind: 'tool_call',
+      toolUseId: 'c6',
+      toolName: 'read',
+      summary: 'read /abs/x',
+    })
+  })
+
   it('reports a tool key that does not follow the ToolCall convention under its own name', () => {
+    // The FALLBACK branch of the two-branch rule: no key follows the
+    // `*ToolCall` convention, so the first non-bookkeeping key is taken.
     // Rather than dropping the call: an unnamed action in the feed is worse
     // than an oddly-named one.
     const line = JSON.stringify({

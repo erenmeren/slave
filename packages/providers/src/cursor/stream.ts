@@ -12,7 +12,7 @@ import type { RuntimeEvent } from '../types.js'
  * Getting those backwards is how a malformed line stops being visible.
  *
  * EVERY mapping below was read off a verbatim recording of the installed
- * binary (`packages/providers/test/fixtures/cursor-run.ndjson`,
+ * binary (`packages/providers/test/fixtures/cursor/cursor-run.ndjson`,
  * cursor-agent 2026.08.11-e8db854, 2026-08-26), NOT off the vendor-doc
  * mapping table in the plan, which the recording falsified in five places.
  * The traps the fixture actually carries:
@@ -179,11 +179,45 @@ const toolCallEnvelopeSchema = z.object({
 
 /**
  * Keys of the `tool_call` object that are envelope bookkeeping rather than
- * the tool itself. Everything else is the tool: the recording's shape is
- * `{"readToolCall": {...}, "hookAdditionalContexts": [], "toolCallId": ...,
- * "startedAtMs": ...}`, with `completedAtMs` added on the completed half.
+ * the tool itself. The recording's shape is `{"readToolCall": {...},
+ * "hookAdditionalContexts": [], "toolCallId": ..., "startedAtMs": ...}`,
+ * with `completedAtMs` added on the completed half.
+ *
+ * This list is a DENYLIST and denylists go stale, which the fixture itself
+ * demonstrates: `completedAtMs` is present on the `completed` half and
+ * absent from the `started` half, so the set of bookkeeping keys already
+ * varies between two lines about ONE call. A future `status`, `error` or
+ * `durationMs` key is therefore to be expected, not guarded against -- hence
+ * `toolKeyOf` below does not trust this list alone to identify the tool.
  */
 const TOOL_CALL_ENVELOPE_KEYS = new Set(['toolCallId', 'hookAdditionalContexts', 'startedAtMs', 'completedAtMs'])
+
+/**
+ * Which key of the `tool_call` object names the tool, or `undefined` when
+ * none does.
+ *
+ * MEASURED (the recording): Cursor's tool key follows a `<name>ToolCall`
+ * convention -- `readToolCall`. That convention is the primary rule, and it
+ * is what makes an unknown bookkeeping key harmless: a key the denylist has
+ * never heard of loses to a key that actually looks like a tool, wherever
+ * the two sit in iteration order.
+ *
+ * INFERENCE (the fallback): if no key follows the convention, the first key
+ * that is not known bookkeeping is taken as the tool. That covers a Cursor
+ * that renames its convention, at the price of naming a new bookkeeping key
+ * as a tool in the one case where BOTH the convention is gone AND the
+ * denylist is stale. Reporting an oddly-named action beats dropping a call
+ * that really happened, and the alternative -- trusting the denylist alone,
+ * as this function's first version did -- fabricates a tool name from the
+ * first unrecognized key on every stream that grows one.
+ *
+ * `toolCallId` ends in `Id`, not `ToolCall`, so the convention clause cannot
+ * catch it even if it were dropped from the denylist.
+ */
+function toolKeyOf(toolCall: Record<string, unknown>): string | undefined {
+  const candidates = Object.keys(toolCall).filter((key) => !TOOL_CALL_ENVELOPE_KEYS.has(key))
+  return candidates.find((key) => key.endsWith('ToolCall')) ?? candidates[0]
+}
 
 /**
  * The `args` keys `summaryFor` looks under, in priority order, for the one
@@ -247,7 +281,7 @@ function parseToolCallLine(raw: unknown, line: string): RuntimeEvent {
     return { kind: 'ignored', line }
   }
 
-  const toolKey = Object.keys(data.tool_call).find((key) => !TOOL_CALL_ENVELOPE_KEYS.has(key))
+  const toolKey = toolKeyOf(data.tool_call)
   if (toolKey === undefined) {
     // A recognized shape whose one un-defaultable field is missing: there is
     // no honest tool name to report, and an empty one would put a nameless
@@ -255,10 +289,9 @@ function parseToolCallLine(raw: unknown, line: string): RuntimeEvent {
     return { kind: 'unparsable', line }
   }
 
-  // `readToolCall` -> `read`. The suffix is Cursor's convention across every
-  // key of this object; a key that does not follow it is reported under its
-  // own name rather than dropped, because an oddly-named action in the feed
-  // beats a missing one.
+  // `readToolCall` -> `read`. A key that does not follow the convention is
+  // reported under its own name rather than dropped, because an oddly-named
+  // action in the feed beats a missing one.
   const toolName = toolKey.endsWith('ToolCall') ? toolKey.slice(0, -'ToolCall'.length) : toolKey
 
   const payload = data.tool_call[toolKey]

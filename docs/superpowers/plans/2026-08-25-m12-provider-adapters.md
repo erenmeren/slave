@@ -919,7 +919,7 @@ Where this section was previously wrong:
    `num_turns` field at all. Ruling R3: purity wins, the parser reports `0` as a documented
    fidelity gap, and the derivation is **routed to Task 12's adapter**, which already holds
    the run's state.
-5. **`thinking` lines were not predicted at all** — the recording is 5/13 `thinking`,
+5. **`thinking` lines were not predicted at all** — the recording is 6/13 `thinking`,
    streamed token by token. They are `ignored`, not `text`.
 
 Also corrected in spec §7's prose, which says Cursor reports "neither cost, tokens, nor a
@@ -936,8 +936,10 @@ what makes the test evidence.
 
 **Sixth binary-verified correction, found here:** an untrusted directory makes `cursor-agent`
 exit **1 with an empty stdout**, printing "Workspace Trust Required" to stderr instead of a
-single stream line. `--trust` (or `--force`/`--yolo`, which imply it) is therefore
-**mandatory** for any non-interactive run in a directory the user has not already trusted —
+single stream line. `--trust` is therefore **mandatory** for any non-interactive run in a
+directory the user has not already trusted — the binary's message also names `--yolo` and
+`-f`, but that is the binary asserting it and not something measured here, so it is carried
+into Task 11's flag list as `--trust` explicitly —
 and every fresh worktree this system creates is exactly such a directory. **Task 11's
 `cursorFlags` must emit it, and Task 12 must treat a zero-line stream as this failure rather
 than as a crash of unknown cause.**
@@ -1011,11 +1013,20 @@ git commit -m "feat(providers): the Cursor stream parser"
 - Produces: `cursorFlags(input): string[]` — mirrors `claudeFlags` at
   `packages/providers/src/claude/flags.ts:27-43`.
 
-**These flags are verified against the installed binary** (`cursor-agent --help`, 2026-08-25),
-not taken from vendor docs:
+**These flags are verified against the installed binary** (`cursor-agent --help`, 2026-08-25;
+the `--trust` entry measured by running it, 2026-08-26), not taken from vendor docs:
 
 - `--print` — **mandatory**. `--output-format` "only works with --print"; without it the
   agent runs interactively and the stream parser receives nothing it can read.
+- `--trust` — **mandatory, and its absence is invisible.** MEASURED while recording Task 10's
+  fixture: in a directory the user has not already trusted, `cursor-agent` exits **1 with a
+  completely empty stdout** — no `system`/`init` line, no `result` line, nothing — and prints
+  "⚠ Workspace Trust Required" to **stderr only**. **Every fresh worktree this system creates
+  is exactly such a directory**, so without this flag *every* Cursor run fails, and it fails
+  looking like a runtime that produced no output rather than like a missing flag. The binary's
+  own message says `--yolo` and `-f` also satisfy the trust prompt; that is the binary
+  asserting it, **not something this milestone has observed**, so pass `--trust` explicitly
+  rather than relying on `--force` to imply it.
 - `--output-format stream-json` — the NDJSON Task 10 parses.
 - `--force` — Cursor's equivalent of Claude's `--permission-mode bypassPermissions`: "Force
   allow commands unless explicitly denied". The trailing clause is load-bearing — it is what
@@ -1110,6 +1121,23 @@ Pause strategy: `requestPause` cancels the process and lets `pump.ts` write the 
 carrying `sessionId` and `provider`; `awaitPause` resolves `'paused'` once the process is
 gone, `'finished_first'` if it terminated on its own. `resume` starts a new process with
 `--resume <sessionId>`.
+
+**Two things Task 10 measured that this task inherits** (from the recorded fixture, not from
+vendor docs — task-10-report.md carries the evidence):
+
+- **A zero-line stream is the workspace-trust refusal, not an unknown crash.** An untrusted
+  directory makes `cursor-agent` exit 1 having written **nothing at all** to stdout, with the
+  explanation on stderr. A pump that reads stdout only sees silence. This adapter must
+  recognise a terminal exit with zero parsed lines and say *that*, rather than reporting a
+  runtime that died for unknown reasons — otherwise a one-flag problem (Task 11's `--trust`)
+  costs an operator an hour. Cursor's stderr is worth capturing for exactly this reason.
+- **`numTurns` is derived HERE, not in the parser.** Cursor's `result` line carries no turn
+  count at all, and `parseCursorLine` is per-line and stateless, so it reports `numTurns: 0`
+  as a documented fidelity gap (Task 10 ruling R3). This adapter already tracks the run's
+  lifetime while consuming the stream: it counts `assistant` lines — the exact equivalent of
+  "assistant messages", and available to the adapter even though the parser folds some of them
+  into events — and fills the figure before returning `RunOutcome`. The parser's `0` must
+  never be presented as a figure Cursor reported.
 
 - [ ] **Step 1: Write the failing tests**
 
