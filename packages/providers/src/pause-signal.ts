@@ -36,6 +36,17 @@ export async function signalPause(kind: ProviderKind, state: PausableRunState, r
       // M12 Series D lands Cursor's adapter; its pause signal (cancellation, not a mid-run gate
       // -- `progress.md`'s 4→12 ruling) is that task's to write, not this one's to guess at.
       throw new Error('signalPause: provider kind "cursor" has no pause signal implemented yet')
+    default: {
+      // The Task 3 -> Task 8 ruling, discharged here: this switch was exhaustive only by
+      // INSPECTION. `tsconfig.base` sets `strict` but not `noImplicitReturns`, so adding a third
+      // `ProviderKind` would have fallen out of the switch and returned `undefined` -- a provider
+      // that silently no-ops its own pause, which is a hole in the strongest guarantee this system
+      // makes. Binding `kind` to `never` makes that a BUILD failure naming the unhandled member.
+      // This grew teeth at Task 8's fix round: `kind` used to arrive as a compile-time constant
+      // and now arrives as a run's own DB column, so inspection no longer sees every caller.
+      const unhandled: never = kind
+      throw new Error(`signalPause: unhandled provider kind ${JSON.stringify(unhandled)}`)
+    }
   }
 }
 

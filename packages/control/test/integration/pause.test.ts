@@ -82,6 +82,30 @@ describe('requestPause', () => {
     if (!result.ok) expect(result.error.kind).toBe('run_not_found')
   })
 
+  /**
+   * The discriminating test for M12 Task 8's fix round: `requestPause` signals the RUN'S OWN
+   * provider, not a constant. Every other test here leaves `provider` null and so exercises only
+   * the `?? 'claude_code'` fallback -- which is byte-identical to the deleted `CURRENT_PROVIDER_KIND`
+   * and would keep passing if the change were reverted. This one would not.
+   *
+   * It asserts today's behavior HONESTLY rather than the behavior we want: `signalPause` has no
+   * Cursor branch yet (Series D), so the request throws AFTER the run was already claimed into
+   * `pause_requested`. That claim-before-signal ordering is a real forward hazard -- an operator
+   * would see a run marked pausing that nothing ever paused, and `controlRoute` has no catch, so
+   * the request surfaces as a 500 rather than a refusal. Task 12 owns fixing it; this test is the
+   * tripwire that will fail loudly the moment it does, forcing this expectation to be rewritten
+   * deliberately instead of quietly.
+   */
+  it("signals the run's own provider, not a constant -- so an unimplemented one surfaces", async () => {
+    const { run } = fixture
+    await prisma.agentRun.update({ where: { id: run.id }, data: { provider: 'cursor' } })
+
+    await expect(requestPause(run.id, 'meren')).rejects.toThrow(/cursor/)
+
+    const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })
+    expect(after.status).toBe('pause_requested')
+  })
+
   it('writes the given category as the pause reason, not the human default', async () => {
     const { run } = fixture
     const result = await requestPause(run.id, 'budget guardrail', 'emergency_stop')

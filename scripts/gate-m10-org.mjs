@@ -98,6 +98,11 @@ try {
       setupCommands: [],
     },
   })
+  // Claim both workspaces for the `finally` cleanup BEFORE anything else can throw: that block
+  // only deletes an id it was handed, so an await between the create and the assignment orphans
+  // the row in the dev DB. The provider-configuration creates below sit in exactly that window.
+  workspaceIdA = workspaceA.id
+  workspaceIdB = workspaceB.id
   // Without these rows, dispatch refuses with `invalid_provider` (M12 Task 8) and nothing ever runs.
   await prisma.providerConfiguration.create({
     data: { workspaceId: workspaceA.id, kind: 'claude_code', settings: {} },
@@ -105,8 +110,6 @@ try {
   await prisma.providerConfiguration.create({
     data: { workspaceId: workspaceB.id, kind: 'claude_code', settings: {} },
   })
-  workspaceIdA = workspaceA.id
-  workspaceIdB = workspaceB.id
   console.log(`workspace A: ${workspaceA.id}`)
   console.log(`workspace B: ${workspaceB.id}`)
 

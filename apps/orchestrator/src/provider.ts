@@ -10,9 +10,9 @@ import {
  * The single place every `deps.adapter.x(...)` call site in the orchestrator resolves a live
  * `AgentRuntimeAdapter` out of an `AdapterRegistry`.
  *
- * M12 Task 5 through 7 left this function resolving a hardcoded `CURRENT_PROVIDER_KIND` constant
- * (`'claude_code'`) regardless of what any caller actually wanted -- that constant's own docstring
- * named this file as the one line Task 8 would change. `kind` is now the caller's own resolved
+ * M12 Task 5 through 7 left this function resolving a hardcoded `'claude_code'` constant that
+ * lived in `packages/control/src/pause.ts` (`CURRENT_PROVIDER_KIND`, deleted at Task 8's fix
+ * round -- do not go looking for it), regardless of what any caller actually wanted. `kind` is now the caller's own resolved
  * value: `resolveRuntime`'s output for a fresh dispatch (`tick.ts`, `planning.ts`, `review.ts`), or
  * a checkpoint's/run's own recorded provider for a continuation (`resume.ts`, `sweep.ts`) -- never
  * a constant, because there is no longer one runtime every RUN goes through.
