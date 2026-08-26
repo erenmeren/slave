@@ -23,7 +23,8 @@ function isUniqueConstraintViolation(error: unknown): boolean {
  * without this list living somewhere. It lives here rather than in `@ai-team-os/providers`
  * because the only caller that needs to validate an UNTRUSTED provider string (a CLI flag, a web
  * request body) is this module's own write surface; nothing downstream resolves or dispatches on
- * it (Task 8's job).
+ * it TODAY -- that stops being true the moment Task 8's resolveRuntime reads the column, and this
+ * paragraph must be re-read then rather than trusted.
  */
 const PROVIDER_KINDS = ['claude_code', 'cursor'] as const satisfies readonly ProviderKind[]
 

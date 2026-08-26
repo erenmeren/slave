@@ -1101,14 +1101,27 @@ git commit -m "feat(providers): the Cursor adapter — cancel-based pause, sessi
 - Modify: `apps/web/src/components/TemplateCatalog.tsx` (provider beside `defaultModel`)
 - Modify: `apps/web/src/components/ModelOverrideEditor.tsx` (a pair editor)
 - Modify: `apps/web/src/components/RosterTable.tsx` (provider and its gate mark)
+- Modify: `apps/web/src/components/CompanyManager.tsx` (provider beside the member `model`)
 - Modify: `apps/web/src/app/api/org/templates/route.ts`,
-  `apps/web/src/app/api/agents/[agentId]/model/route.ts`
+  `apps/web/src/app/api/agents/[agentId]/model/route.ts`,
+  `apps/web/src/app/api/org/agents/route.ts`
+- Modify: `scripts/gate-m11-shell.mjs` (stage 4 sets a model through the Roster editor and has
+  been RED since Task 7 -- send the provider with it and delete the KNOWN RED comment there)
 - Test: `apps/web/test/settings-page.test.tsx`, `apps/web/test/agents-page.test.tsx` (extend)
 
 **Interfaces:**
 - Consumes: Task 7's route bodies and refusal texts, Task 9's nullable cost.
-- Produces: both routes accept `{ model, provider }` and reject one without the other with
+- Produces: all THREE routes accept `{ model, provider }` and reject one without the other with
   the verbatim refusal text.
+
+**Why the list grew (M12 Task 7 review, blocking findings 1 and 2):** Task 7 made a bare model
+unwritable, which dead-ends three shipped UI flows at a 409 until this task lands -- the Roster
+model override, the template `defaultModel`, and *adding a roster member with a model*
+(`CompanyManager.tsx` -> `POST /api/org/agents`). The third was missing from this list, so that
+flow would have stayed broken after Task 13 shipped. `scripts/gate-m11-shell.mjs` was missing for
+the same reason: it drives the Roster editor in a real browser and asserts the DB column, so
+`npm run gate:m11-shell` is red until this task repairs it. Neither is optional cleanup; both are
+this task finishing the rollout Task 7 started.
 
 - [ ] **Step 1: Write the failing tests**
 

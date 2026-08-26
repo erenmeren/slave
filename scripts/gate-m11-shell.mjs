@@ -446,6 +446,12 @@ try {
   const targetWorkerRow = expandedWorkerRows.filter({ hasText: workspaceNameA })
   await waitVisible(targetWorkerRow, `the "${workspaceNameA}" worker row under "${MEMBER_NAME}"`)
 
+  // KNOWN RED between M12 Task 7 and M12 Task 13: this stage is expected to FAIL right now, and
+  // the failure is not a shell regression. Task 7 made a model and its provider one write, and the
+  // POST /api/agents/[agentId]/model body carries no provider field yet, so the Set button below
+  // now returns a 409 `model_without_provider` refusal and `clickUntil` will exhaust its wait.
+  // Task 13 adds the provider selector and threads it through that route body; this stage goes
+  // green again with it, and this comment comes out.
   await fillReliably(targetWorkerRow.getByTestId('model-override-input'), MODEL_OVERRIDE, `the "${workspaceNameA}" worker's model override input`)
   const updatedModelText = targetWorkerRow.locator('span.font-mono.text-text-3').filter({ hasText: MODEL_OVERRIDE })
   await clickUntil(

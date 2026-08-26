@@ -641,6 +641,7 @@ describe('setAgentModel', () => {
     if (!result.ok) expect(result.error).toEqual({ kind: 'invalid_model' })
     const row = await prisma.agent.findUniqueOrThrow({ where: { id } })
     expect(row.model).toBe('claude-opus')
+    expect(row.provider).toBe('claude_code')
   })
 
   it('refuses a model with no provider to run it', async (): Promise<void> => {
@@ -676,6 +677,7 @@ describe('setAgentModel', () => {
     if (!result.ok) expect(result.error).toEqual({ kind: 'invalid_provider', provider: 'nope' })
     const row = await prisma.agent.findUniqueOrThrow({ where: { id } })
     expect(row.model).toBeNull()
+    expect(row.provider).toBeNull()
   })
 
   it('clears both halves of the pair together', async (): Promise<void> => {
