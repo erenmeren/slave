@@ -89,8 +89,20 @@ set -uo pipefail
 # that `failClosed` would convert into a block; it can just as easily produce a
 # well-formed object that is missing the `permission` key, which reads as an
 # allow.
+#
+# The string is passed on stdin, not as a `node` argv word: an operator-chosen reason beginning
+# with `-` (say, `--version` or `-e x`) would otherwise be parsed by `node` itself as an option
+# rather than reaching `process.argv`. Measured against the committed argv form: `--version`
+# printed node's own version string with exit 0 -- a MALFORMED DENY indistinguishable from a
+# well-formed one at the exit-code/stdout-shape level -- and `-e x` failed with `bad option`.
+# Piping instead of a `node -- "$1"` end-of-options separator also means this never depends on
+# every future encoder invocation remembering to add one.
 json_string() {
-  node -e 'process.stdout.write(JSON.stringify(process.argv[1]))' "$1"
+  printf '%s' "$1" | node -e '
+    let s = "";
+    process.stdin.on("data", (c) => { s += c; });
+    process.stdin.on("end", () => { process.stdout.write(JSON.stringify(s)); });
+  '
 }
 
 # Fails loudly on stderr and exits 2 -- Cursor's blocking exit code. Used for
@@ -109,7 +121,11 @@ deny() {
   local encoded_reason
   encoded_reason=$(json_string "$reason")
   local encode_status=$?
-  if [[ $encode_status -ne 0 || -z "$encoded_reason" ]]; then
+  # A well-formed `JSON.stringify` of a string always starts with `"` -- checking that, not just
+  # "nonempty", is what catches a future encoder regression (an argv/option misparse, a stray
+  # diagnostic on stdout) that produces innocuous-looking but non-JSON text with node's own exit 0,
+  # the same shape the leading-`-` hole above had before this fix.
+  if [[ $encode_status -ne 0 || -z "$encoded_reason" || "${encoded_reason:0:1}" != '"' ]]; then
     fail_closed "failed to JSON-encode the deny reason (node exit ${encode_status}; reason was: ${reason})"
   fi
 

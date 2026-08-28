@@ -101,6 +101,13 @@ describe('cursor-shell-gate.sh', () => {
     'has\nnewline',
     'has\ttab',
     'unicode ünïcödé and emoji 🚀',
+    // A reason beginning with `-` is eaten as a `node` option if the encoder ever passes the
+    // operator's text as a bare argv word: `--version` prints node's own version string and exits
+    // 0 (a MALFORMED DENY that looks like a well-formed one), and `-e ...` is parsed as inline
+    // source and fails with `bad option`. Neither is hypothetical -- both were reproduced against
+    // the committed script before this fix.
+    '--version',
+    '-e x',
   ]
 
   it.each(REASONS)('produces valid deny JSON for reason %j', async (reason): Promise<void> => {
