@@ -1007,17 +1007,22 @@ git commit -m "feat(providers): the Cursor stream parser"
 **Files:**
 - Create: `packages/providers/src/cursor/flags.ts`
 - Create: `scripts/cursor-shell-gate.sh`
-- Test: `packages/providers/test/cursor-flags.test.ts` (create)
+- Modify: `packages/providers/src/index.ts` (export)
+- Test: `packages/providers/test/cursor-flags.test.ts` (create),
+  `packages/providers/test/cursor-shell-gate.test.ts` (create — mirrors `pause-gate.test.ts`)
 
 **Interfaces:**
-- Produces: `cursorFlags(input): string[]` — mirrors `claudeFlags` at
-  `packages/providers/src/claude/flags.ts:27-43`.
+- Produces: `cursorFlags(input): readonly string[]` — mirrors `claudeFlags` at
+  `packages/providers/src/claude/flags.ts:27-43`, and like it returns **flags only**. The
+  prompt is a POSITIONAL argument and belongs to the caller that assembles argv.
 
-**These flags are verified against the installed binary** (`cursor-agent --help`, 2026-08-25;
-the `--trust` entry measured by running it, 2026-08-26), not taken from vendor docs:
+**Every flag below is verified against the installed binary** (`cursor-agent --help`, binary
+`2026.08.11-e8db854`, re-read 2026-08-26 during Task 11), not taken from vendor docs. The
+help text's own words are quoted in task-11-report.md §2.
 
 - `--print` — **mandatory**. `--output-format` "only works with --print"; without it the
-  agent runs interactively and the stream parser receives nothing it can read.
+  agent runs interactively and the stream parser receives nothing it can read. Its own help
+  line also says it "Has access to all tools, including write and shell."
 - `--trust` — **mandatory, and its absence is invisible.** MEASURED while recording Task 10's
   fixture: in a directory the user has not already trusted, `cursor-agent` exits **1 with a
   completely empty stdout** — no `system`/`init` line, no `result` line, nothing — and prints
@@ -1027,22 +1032,78 @@ the `--trust` entry measured by running it, 2026-08-26), not taken from vendor d
   own message says `--yolo` and `-f` also satisfy the trust prompt; that is the binary
   asserting it, **not something this milestone has observed**, so pass `--trust` explicitly
   rather than relying on `--force` to imply it.
-- `--output-format stream-json` — the NDJSON Task 10 parses.
+- `--output-format stream-json` — the NDJSON Task 10 parses. Help: "Output format (only works
+  with --print): text | json | stream-json (default: "text")".
 - `--force` — Cursor's equivalent of Claude's `--permission-mode bypassPermissions`: "Force
   allow commands unless explicitly denied". The trailing clause is load-bearing — it is what
-  keeps the hook's `permission: "deny"` effective, so the write gate survives this flag.
+  keeps the hook's `permission: "deny"` effective, and Task 11 MEASURED that it survives:
+  both R5 runs passed `--force` and the hook's deny still stopped the command.
 - `--model <model>` only when a model resolved; omitted entirely otherwise, no sentinel.
-- `--resume <sessionId>` on resume.
-- **Never `-w`/`--worktree`.** Cursor has its own worktree feature; this system already
-  manages worktrees and a second one under `~/.cursor/worktrees/` would split the run.
+- `--resume <sessionId>` on resume. **The argument is OPTIONAL in the binary
+  (`--resume [chatId]  Select a session to resume (default: false)`) and that is a trap:**
+  the prompt is a positional argument, so `cursor-agent --print --resume "do the thing"` does
+  not resume anything — it takes the prompt as a chat id and leaves the run with no prompt.
+  `cursorFlags` therefore never emits `--resume` without an id (they are pushed together, in
+  one statement) and rejects an empty or whitespace-only session id before a process exists,
+  the way `claudeFlags` rejects a relative `settingsPath` and for the same reason: the failure
+  it prevents is silent.
 
-The gate is a `beforeShellExecution` hook. **Cursor has no `--settings`-style flag**: unlike
-Claude, which takes a per-run absolute settings path, Cursor reads `.cursor/hooks.json` from
-the workspace. Per-run isolation therefore comes from the run's own worktree — the adapter
-writes `.cursor/hooks.json` into `worktreePath` (Task 12) and passes the pause-flag path to
-the hook process by environment variable. The script reads that variable, and when the flag
-file exists prints `{"permission":"deny","userMessage":"paused"}` on stdout and exits 0. Its
-deny/allow contract is documented in a header comment the way `scripts/pause-gate.sh:1-24`
+**NEVER-PASS list** — real flags of the binary that this adapter must never emit. One test
+assertion per flag, so a future edit adding any of them fails on its own named line.
+
+- **`-w` / `--worktree [name]`.** Cursor has its own worktree feature; this system already
+  manages worktrees and a second one under `~/.cursor/worktrees/` would split the run. The
+  argument is optional, so a bare `-w` silently relocates the whole run.
+- **`--stream-partial-output`.** "Stream partial output as individual text deltas (only works
+  with --print and stream-json format)". Task 10's parser assumes one `assistant` line is one
+  whole message — the fixture's two assistant lines each carry exactly one complete `text`
+  block, and that is the whole of the evidence. This flag would fragment every message into
+  deltas and turn the operator's feed into token soup, and the parser would be "correct" the
+  entire time.
+- **`--yolo`.** "Alias for --force (Run Everything)" — passing both is noise.
+- **`--plan` and `--mode`.** Read-only execution modes ("plan: read-only/planning … no
+  edits", "ask: Q&A style … (read-only)"). A worker that cannot edit is not a worker.
+
+**The gate is a `beforeShellExecution` hook, and Task 11 MEASURED the protocol** with two
+scratch runs against the real binary rather than taking it from vendor docs. Evidence,
+commands and saved artifacts are in task-11-report.md §3; the findings that bind this task and
+Task 12 are:
+
+- **`cursor-agent` reads `.cursor/hooks.json` from the WORKSPACE** (`projectConfigPath`), so
+  per-run isolation via the run's own worktree works. There is **no `--settings`-style flag**;
+  the adapter writes the file into `worktreePath` (Task 12).
+- **The hooks.json shape is** `{"version":1,"hooks":{"beforeShellExecution":[{"command":"…",
+  "failClosed":true}]}}`. `command` is a **shell command line**, not an argv array.
+- **The payload arrives as one JSON object on STDIN**, not in argv and not in the
+  environment. For `beforeShellExecution` it carries `command`, `cwd`, `sandbox`,
+  `session_id`, `conversation_id`, `generation_id`, `model`, `hook_event_name`,
+  `cursor_version`, `workspace_roots`, `user_email`, `transcript_path`. **`cwd` came back as
+  the empty string in one of the two runs**, so nothing may depend on it.
+- **The hook process inherits `cursor-agent`'s own environment** (Cursor merges `process.env`
+  and adds `CURSOR_PROJECT_DIR`, `CURSOR_VERSION`, `CLAUDE_PROJECT_DIR`, …), so passing the
+  pause-flag path by environment variable works — measured, `AITEAMOS_PAUSE_FLAG` arrived
+  intact.
+- **The pause-flag variable is `AITEAMOS_PAUSE_FLAG`** — `scripts/pause-gate.sh:91` reads that
+  name, and one concept gets one name across both runtimes. (An earlier draft of this section
+  said `PAUSE_FLAG`; that was a plan error.)
+- **The operator-message key is `user_message`, snake_case** — the binary reads
+  `response.user_message` and its validator accepts exactly `permission` / `user_message` /
+  `agent_message`. A camelCase `userMessage` still denies but drops the message in silence.
+- **An allow must be spoken, not implied.** Unlike Claude's hook, Cursor classifies exit 0
+  with empty stdout as a hook FAILURE (`empty_stdout`), so the gate prints
+  `{"permission":"allow"}`.
+- **`failClosed: true` on the hooks.json entry is mandatory, and Task 11 measured why.**
+  Without it a hook that exits non-zero, times out, prints nothing or prints unparseable
+  output **FAILS OPEN** — the command runs as if no gate existed. With it, each of those
+  becomes a block. Measured both directions in one pair of runs: an exit-1 hook let its
+  command through without the flag, and blocked its tool call with it.
+- **Exit code 2 blocks unconditionally**, `failClosed` or not — Cursor's blocking exit code,
+  the same discipline `pause-gate.sh` follows for Claude. Every failure path in
+  `cursor-shell-gate.sh` therefore exits exactly 2 and never 1, and writes its reason to
+  stderr (Cursor builds the operator-facing block reason from the hook's stdout if any, and
+  from stderr otherwise).
+
+Its deny/allow contract is documented in a header comment the way `scripts/pause-gate.sh:1-24`
 documents Claude's.
 
 - [ ] **Step 1: Write the failing tests**
@@ -1054,20 +1115,24 @@ import { cursorFlags } from '../src/cursor/flags.js'
 
 describe('cursorFlags', () => {
   it('always streams structured output', () => {
-    expect(cursorFlags({ prompt: 'x' })).toContain('--output-format')
-    expect(cursorFlags({ prompt: 'x' })).toContain('stream-json')
+    expect(cursorFlags()).toContain('--output-format')
+    expect(cursorFlags()).toContain('stream-json')
   })
 
   it('passes a resolved model and omits the flag entirely when there is none', () => {
-    expect(cursorFlags({ prompt: 'x', model: 'm' })).toContain('--model')
-    expect(cursorFlags({ prompt: 'x' })).not.toContain('--model')
+    expect(cursorFlags({ model: 'm' })).toContain('--model')
+    expect(cursorFlags()).not.toContain('--model')
   })
 
   it('continues a session by id on resume', () => {
-    expect(cursorFlags({ prompt: 'x', resumeSessionId: 's-1' }).join(' ')).toContain('--resume s-1')
+    expect(cursorFlags({ resume: { sessionId: 's-1' } }).join(' ')).toContain('--resume s-1')
   })
 })
 ```
+
+Plus: `--print` and `--trust` always present; one assertion per never-pass flag; `--resume`
+never emitted without a usable id. And `packages/providers/test/cursor-shell-gate.test.ts`,
+mirroring `packages/providers/test/pause-gate.test.ts` rather than inventing a second style.
 
 - [ ] **Step 2: Run them and watch them fail**
 
@@ -1078,14 +1143,19 @@ Expected: FAIL — `cursorFlags` does not exist.
 
 - [ ] **Step 4: Prove the gate script denies and allows**
 
-Run it directly, twice, the way `preflightGate` proves Claude's:
+Run it directly, the way `preflightGate` proves Claude's. Note the variable name — it is
+`AITEAMOS_PAUSE_FLAG`, the same one `scripts/pause-gate.sh` reads:
 
 ```bash
-PAUSE_FLAG=/tmp/absent  bash scripts/cursor-shell-gate.sh   # expect: no deny
-touch /tmp/present && PAUSE_FLAG=/tmp/present bash scripts/cursor-shell-gate.sh   # expect: {"permission":"deny",...}
+AITEAMOS_PAUSE_FLAG=/tmp/absent bash scripts/cursor-shell-gate.sh < /dev/null
+# expect: {"permission":"allow"}   -- explicit, never silence
+: > /tmp/present && AITEAMOS_PAUSE_FLAG=/tmp/present bash scripts/cursor-shell-gate.sh < /dev/null
+# expect: {"permission":"deny","user_message":"…"}
+env -u AITEAMOS_PAUSE_FLAG bash scripts/cursor-shell-gate.sh < /dev/null
+# expect: a loud deny naming the misconfiguration
 ```
 
-Record both outputs in the task report.
+Record every output in the task report.
 
 - [ ] **Step 5: Run the tests**
 
@@ -1095,7 +1165,10 @@ Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add packages/providers/src/cursor/flags.ts scripts/cursor-shell-gate.sh packages/providers/test/cursor-flags.test.ts
+git add packages/providers/src/cursor/flags.ts scripts/cursor-shell-gate.sh \
+        packages/providers/test/cursor-flags.test.ts \
+        packages/providers/test/cursor-shell-gate.test.ts \
+        packages/providers/src/index.ts
 git commit -m "feat(providers): Cursor's flags and its shell-scoped write gate"
 ```
 
@@ -1116,6 +1189,17 @@ git commit -m "feat(providers): Cursor's flags and its shell-scoped write gate"
 
 Capabilities — each **verified against the installed binary**, conservative when unproven:
 `{ canPauseMidRun: false, canResumeSession: true, gate: 'shell-only', reportsCost: false }`.
+
+**`gate: 'shell-only'` is now KNOWN TO UNDERSTATE what Cursor can gate, and this task must
+settle it.** Spec §7's premise — "Cursor fires only the shell hooks" — is FALSE. Task 11's R5
+runs measured `cursor-agent` firing a `preToolUse` hook with `tool_name` of `Read`, `Write`
+AND `Shell`, ahead of `beforeShellExecution`, and measured a block at that step actually
+stopping both a shell command and a file write. So a `preToolUse` hook (optionally scoped with
+`"matcher": "^Write$"`, a regex tested against `tool_name`) would gate edits as well as shell
+commands. Task 11 deliberately did not widen its scope on that finding; **this task decides.**
+Either register the gate at `preToolUse` too and raise the capability with the evidence
+recorded, or keep it shell-scoped and say in the report why. What must not happen is the value
+staying `'shell-only'` because nobody re-read the premise it rests on.
 
 Pause strategy: `requestPause` cancels the process and lets `pump.ts` write the checkpoint
 carrying `sessionId` and `provider`; `awaitPause` resolves `'paused'` once the process is
@@ -1148,6 +1232,39 @@ vendor docs — task-10-report.md carries the evidence):
   "assistant messages", and available to the adapter even though the parser folds some of them
   into events — and fills the figure before returning `RunOutcome`. The parser's `0` must
   never be presented as a figure Cursor reported.
+
+**Four things Task 11 MEASURED that this task inherits** (task-11-report.md §3 carries the
+saved artifacts and the exact commands):
+
+- **This task writes `.cursor/hooks.json` into `worktreePath`, and it MUST carry
+  `failClosed: true`.** The file's measured shape is
+  `{"version":1,"hooks":{"beforeShellExecution":[{"command":"<abs path to
+  scripts/cursor-shell-gate.sh>","failClosed":true}]}}` — `command` is a shell command line,
+  not an argv array, and `cursor-agent` reads the file from the workspace, which is what makes
+  per-run isolation work without a `--settings`-style flag. **Omitting `failClosed` leaves a
+  gate that fails OPEN** on a crashed, timed-out, silent or unparseable hook: the command runs
+  and nothing anywhere says the gate did not answer. Measured both ways.
+- **The pause-flag path reaches the hook by environment variable, and the variable is
+  `AITEAMOS_PAUSE_FLAG`** — the same one `scripts/pause-gate.sh` reads. Cursor merges its own
+  `process.env` into the hook's environment, so setting it on the `cursor-agent` child is
+  enough; measured arriving intact.
+- **A hook denial DOES appear on the stream, and Task 10's R4 premise was wrong.** The
+  pre-flight ruling behind R4 was that Cursor's gate decisions never surface as stream lines.
+  They do: the deny comes back on the **`tool_call` / `completed`** line as
+  `tool_call.<name>ToolCall.result.rejected.reason`, reading
+  `"Command execution was blocked by a hook: <user_message>…"` (and, for a `failClosed` block,
+  as `result.error.error` / `result.error.modelVisibleError`). `hookAdditionalContexts` stayed
+  `[]` throughout, so Task 10 §5(f)'s guess about where a hook would become visible was also
+  wrong. **R4's implementation is unaffected** — `parseCursorLine` still emits no hook variant,
+  and the `completed` half is still `ignored` per W3 — but this task now has a real place to
+  read a deny from, and `deniedToolUseIds` is currently hardcoded `[]`. Decide deliberately
+  whether to populate it from the rejected result, and record the decision.
+- **A gate that is registered but never fires still looks green.** Claude's answer to that is
+  `preflightGate` in `claude/flags.ts`, which spawns the hook directly and asserts BOTH
+  directions. Task 11 wrote no Cursor equivalent (its brief scoped it out); if this adapter
+  wants the same cheap necessary condition, it is a small function and the contract to assert
+  is `{"permission":"allow"}` with the flag absent and `permission: "deny"` with it present —
+  note that an ALLOW is an explicit payload here, never silence.
 
 - [ ] **Step 1: Write the failing tests**
 
