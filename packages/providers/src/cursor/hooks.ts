@@ -55,19 +55,25 @@ export interface CursorHooksConfig {
      * and `Shell` all measured (Task 11 §3, W6), and a block here measured stopping a file write,
      * not only a shell command.
      *
-     * **Registered even though `capabilitiesOf('cursor').gate` still reads `'shell-only'`, and
-     * that asymmetry is deliberate.** Task 12's two live runs could not produce a measured block
-     * (see the task report: the workspace they ran in was a plain subdirectory of a git
-     * repository, and `cursor-agent` keys its worker -- and therefore its project hook config --
-     * to the git root, so the hooks file this adapter wrote was never the one loaded). A
-     * capability may only ever be widened by proof, so the claim stays narrow while the
-     * registration stays broad: understating what is armed is safe in the one direction that
-     * matters, and the reverse is not.
+     * **M13 Task 9 measured this registration blocking a file write, not only a shell command.**
+     * With the pause flag present, a run that attempted a shell command and a file write had BOTH
+     * refused, `result.rejected` on each, `reason` the gate's `user_message` verbatim; the control
+     * run (flag absent) shows both succeeding. Evidence:
+     * `packages/providers/test/fixtures/cursor/gate/` (README, `hooks.json`,
+     * `run-2-flag-present.ndjson` lines 10 and 12, `run-2-hook.log`). `capabilitiesOf('cursor').gate`
+     * now reads `'all-tools'` on the strength of this recording (`packages/providers/src/capabilities.ts`).
+     * Measured on `cursor-agent 2026.08.25-3e8eec8` only -- the binary self-updates, and the
+     * fixture README records the version per payload -- and only for a shell call and an edit
+     * call; no MCP or subagent tool call has been exercised.
      *
-     * Deliberately registered with NO `matcher`. A `matcher` is a regex tested against
-     * `tool_name`, so scoping this to (say) `^(Write|Shell)$` would depend on knowing Cursor's
-     * complete tool-name vocabulary, and the three names above are the only ones anyone has
-     * measured. A matcher that misses a tool name is a silent hole in the gate, and the cost of
+     * Deliberately registered with NO `matcher`, and this is LOAD-BEARING, not merely cautious: in
+     * the same recording, the file write was stopped at a `preToolUse` invocation whose
+     * `tool_name` was `"Read"` -- Cursor's edit tool reads its target before writing it, and both
+     * steps are gated under the edit call's own id, so the write never reached a `tool_name:
+     * "Write"` invocation at all. A `matcher` is a regex tested against `tool_name`, so scoping
+     * this to (say) `^(Write|Shell)$` -- which reads as an obviously safe narrowing -- would have
+     * let this exact write through. `Read`, `Write` and `Shell` are the only `tool_name` values
+     * anyone has measured, a matcher that misses one is a silent hole in the gate, and the cost of
      * having none is one extra hook invocation per tool call.
      */
     readonly preToolUse: readonly CursorHookEntry[]

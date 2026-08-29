@@ -47,23 +47,27 @@ const CLAUDE_CODE_CAPABILITIES: ProviderCapabilities = {
   reportsCost: true,
 }
 
-// TASK 12: verified against the installed cursor-agent, not assumed
 /**
- * Cursor's row, declared here at spec §7's own CONSERVATIVE values ahead of the adapter that will
- * prove them (M12 Task 12 / Series D). Spec §7's rule is explicit: a capability that cannot be
- * proven takes its conservative value -- `false` for a boolean, `'none'` for a gate -- and is
- * never assumed true because a vendor's documentation says so. `gate: 'shell-only'` is the value
- * the spec itself states for Cursor rather than a proven one; it is strictly narrower than
- * `'all-tools'` and is not read by any admission check in this task.
+ * Cursor's row, PROVEN against the installed binary in M13 Task 9 and no longer conservative.
  *
- * Declaring these EARLY is safe in exactly one direction. Task 12 may flip a `false` to `true`
- * after proving it against the binary, and every such flip only ever WIDENS what is admitted --
- * so nothing that passes today can start failing later. It may never narrow a value, because that
- * would retroactively invalidate a configuration an operator was already told was acceptable.
+ * `gate: 'all-tools'` because the recorded run at
+ * `packages/providers/test/fixtures/cursor/gate/run-2-flag-present.ndjson` shows BOTH a shell
+ * command and a file write refused through the `preToolUse` registration while the pause flag was
+ * present, with the control run (flag absent) showing both succeeding. M12 spec §7's premise --
+ * "Cursor fires only the shell hooks" -- is superseded and false; `preToolUse` fires for `Read`,
+ * `Write` and `Shell` alike.
+ *
+ * `canPauseMidRun` stays `false`: there is still no mechanism that stops the agent between tool
+ * calls and leaves it resumable in place. The gate refuses calls; it does not suspend the run.
+ * `reportsCost` stays `false`: the `result` line carries no cost figure at all.
+ *
+ * Measured on `cursor-agent 2026.08.25-3e8eec8` only -- the binary self-updates, and the fixture
+ * README under `packages/providers/test/fixtures/cursor/gate/` records the version per payload.
+ * Only a shell call and an edit call were measured; no MCP or subagent tool call was exercised.
  */
 const CURSOR_CAPABILITIES: ProviderCapabilities = {
   canPauseMidRun: false,
   canResumeSession: true,
-  gate: 'shell-only',
+  gate: 'all-tools',
   reportsCost: false,
 }

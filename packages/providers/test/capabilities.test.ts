@@ -39,14 +39,11 @@ describe('capabilitiesOf', () => {
     expect(adapter.getCapabilities()).toBe(capabilitiesOf('claude_code'))
   })
 
-  it("declares cursor at spec §7's conservative values, ahead of Task 12 proving them", () => {
-    // Declared early on purpose, and safe in one direction only: Task 12 may flip a `false` to
-    // `true` once it has proof from the installed binary, which only ever WIDENS admission, so
-    // nothing that passes today can start failing later.
+  it('describes the Cursor runtime: no mid-run pause, resumable, gates every tool, cost-blind', () => {
     expect(capabilitiesOf('cursor')).toEqual({
       canPauseMidRun: false,
       canResumeSession: true,
-      gate: 'shell-only',
+      gate: 'all-tools',
       reportsCost: false,
     })
   })

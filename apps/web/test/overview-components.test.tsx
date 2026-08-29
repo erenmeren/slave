@@ -43,7 +43,7 @@ describe('AgentCard provider chip', () => {
     // M12 Task 9 / ruling R10. The bare kind: the human-readable label and the shell-only gate
     // mark belong to Task 13 (spec §8), and inventing either here would be that task's decision
     // taken by the wrong task.
-    const { rerender } = render(<AgentCard agent={agent({ provider: 'cursor', gate: 'shell-only' })} liveActionLine={null} onOpen={() => {}} />)
+    const { rerender } = render(<AgentCard agent={agent({ provider: 'cursor', gate: 'all-tools' })} liveActionLine={null} onOpen={() => {}} />)
     expect(screen.getByTestId('provider-chip').textContent).toBe('cursor')
 
     rerender(<AgentCard agent={agent({ provider: null, gate: null })} liveActionLine={null} onOpen={() => {}} />)
@@ -53,11 +53,15 @@ describe('AgentCard provider chip', () => {
   // M12 Task 13 fix round 1, spec §8 / finding 4a: "wherever a worker's runtime is shown, a
   // provider whose gate is shell-only is marked as such". `gate` is server-derived
   // (`overview.ts`, via `capabilitiesOf`), never recomputed here.
-  it('marks a shell-only gate, and shows no mark for an all-tools gate', () => {
+  it('marks a shell-only gate, and shows no mark for a runtime that gates every tool', () => {
+    // `gate` is server-derived (`overview.ts`, via `capabilitiesOf`). As of M13 Task 10 no shipped
+    // provider reports `shell-only` -- Cursor's gate was proven to cover writes too -- so this
+    // fixture is hand-written: the MARK is still part of the contract, and a third runtime that
+    // gates only shells must light it up on day one.
     const { rerender } = render(<AgentCard agent={agent({ provider: 'cursor', gate: 'shell-only' })} liveActionLine={null} onOpen={() => {}} />)
     expect(screen.getByText(/shell only/i)).toBeTruthy()
 
-    rerender(<AgentCard agent={agent({ provider: 'claude_code', gate: 'all-tools' })} liveActionLine={null} onOpen={() => {}} />)
+    rerender(<AgentCard agent={agent({ provider: 'cursor', gate: 'all-tools' })} liveActionLine={null} onOpen={() => {}} />)
     expect(screen.queryByText(/shell only/i)).toBeNull()
   })
 })
