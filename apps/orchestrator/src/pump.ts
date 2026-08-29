@@ -226,6 +226,19 @@ const CURSOR_PAUSE_REASON =
  * through to the terminal path below and is recorded as the success it was. A run that produced no
  * terminal result, or an errored one, is the genuine pause: the kill is exactly what caused it.
  *
+ * **...unless the clean result was only reached because the pause gate denied a call** (final
+ * review I2). `deniedToolUseIds` is populated from `tool_call/completed` lines whose result is
+ * `rejected`, and on a Cursor run the ONLY thing that produces a rejection is this system's own
+ * `beforeShellExecution` hook -- which denies only while the pause flag exists. So a non-empty
+ * `deniedToolUseIds` is not incidental to the pause: it is evidence the pause was in flight and
+ * working. The sequence is `signalPause` writes the flag, SIGTERMs with a 2 s grace, the agent
+ * starts one more shell command inside that window, the gate denies it (the entire purpose of
+ * writing the flag before the kill), and `cursor-agent` treats the denial as an ordinary tool error
+ * and still reaches `result` with `is_error: false`. Letting that "success" win recorded a pause
+ * that worked exactly as designed as a FAILURE -- no checkpoint, no `run.paused`, nothing to
+ * resume, and (via `verifyConcludedRun`) an attempt burned. Hence the early return needs all three:
+ * a terminal result, not an error, AND nothing denied.
+ *
  * **No kill here**, unlike the gate path's `killWithEscalation`. The process is already gone; that
  * is why this code is running.
  */
@@ -246,9 +259,11 @@ async function recordCursorPauseIfRequested(input: {
   ) => Promise<void>
 }): Promise<boolean> {
   if (input.spawn?.provider !== 'cursor') return false
-  // A run that reported a clean terminal result finished; the pause request lost the race and does
-  // not get to reclassify it. Only "no terminal result" or "an errored one" reach the pause below.
-  if (input.outcome !== null && !input.outcome.isError) return false
+  // A run that reported a clean terminal result AND had nothing denied finished; the pause request
+  // lost the race and does not get to reclassify it. Everything else -- no terminal result, an
+  // errored one, or a clean one whose calls this system's own pause gate blocked -- reaches the
+  // pause below. See the docstring's two "clean terminal" paragraphs.
+  if (input.outcome !== null && !input.outcome.isError && input.outcome.deniedToolUseIds.length === 0) return false
 
   // Claimed, not written, and the claim is what makes this idempotent: `pause_requested` is the
   // one status that means "an operator asked and the signal was sent". A run that reached here in

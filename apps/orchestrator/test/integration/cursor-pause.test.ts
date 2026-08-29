@@ -209,6 +209,87 @@ describe('pumpRun, when a paused Cursor run ends', () => {
     expect(await prisma.checkpoint.findUnique({ where: { runId: ids.runId } })).toBeNull()
   })
 
+  it('records the pause when the clean terminal line was reached only because the gate denied a call', async (): Promise<void> => {
+    // THE CASE THE GATE EXISTS FOR (final review I2). `signalPause('cursor')` writes the flag and
+    // then SIGTERMs with a 2 s grace; in that window the agent can still start one more shell
+    // command, and `cursor-shell-gate.sh` -- armed by the flag this system just wrote -- denies it.
+    // `cursor-agent` reads that denial as an ordinary tool error and can still reach its `result`
+    // line with `is_error: false`. A denial on a Cursor run is only ever produced by THIS system's
+    // own hook, and that hook only denies while the pause flag exists, so a non-empty
+    // `deniedToolUseIds` means a pause was in flight: the clean terminal must not win the race.
+    const ids = await seed('pause_requested')
+
+    await pumpRun({
+      ...ids,
+      spawn: spawnFacts,
+      events: fromArray([
+        { kind: 'session_started', sessionId: 's-cursor-1' },
+        {
+          kind: 'terminated',
+          outcome: {
+            isError: false,
+            terminalReason: 'success',
+            stopReason: null,
+            numTurns: 3,
+            costUsd: null,
+            deniedToolUseIds: ['call-9'],
+          },
+        },
+      ]),
+    })
+
+    const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+    expect(run.status).toBe('paused')
+    expect(run.endedAt).toBeNull()
+    const types = await eventTypesFor(ids.runId)
+    expect(types).toContain('run.paused')
+    expect(types).not.toContain('run.failed')
+    // Without this the pause has nothing to continue from, which is what made the old behaviour
+    // cost a run rather than merely mislabel one.
+    const checkpoint = await prisma.checkpoint.findUniqueOrThrow({ where: { runId: ids.runId } })
+    expect(checkpoint.sessionId).toBe('s-cursor-1')
+    expect(checkpoint.provider).toBe('cursor')
+    // `checkpoint.deniedToolUseIds` stays empty here on purpose, and it is not the same list: the
+    // pump's own `denied` accumulator collects mid-stream `permission_denied`/`hook_denied` events,
+    // which Cursor never emits (`gate: 'shell-only'`, and its denials arrive folded into the
+    // terminal `result` line instead). The denial that reclassified this run rides in `outcome`.
+    expect(checkpoint.deniedToolUseIds).toEqual([])
+  })
+
+  it('still fails a Cursor run whose calls were denied with no pause requested', async (): Promise<void> => {
+    // The inverse guard. The denial widens WHICH outcomes reach the pause path, not WHETHER the
+    // pause was requested: a `working` run keeps the existing "clean completion with denials is a
+    // failure" conclusion (ADR 0001 measured a run reporting `is_error: false` while landing
+    // nothing), and only the claimed `pause_requested` status can reclassify it.
+    const ids = await seed('working')
+
+    await pumpRun({
+      ...ids,
+      spawn: spawnFacts,
+      events: fromArray([
+        { kind: 'session_started', sessionId: 's-cursor-1' },
+        {
+          kind: 'terminated',
+          outcome: {
+            isError: false,
+            terminalReason: 'success',
+            stopReason: null,
+            numTurns: 3,
+            costUsd: null,
+            deniedToolUseIds: ['call-9'],
+          },
+        },
+      ]),
+    })
+
+    const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+    expect(run.status).toBe('failed')
+    expect(run.endedAt).not.toBeNull()
+    const types = await eventTypesFor(ids.runId)
+    expect(types).toContain('run.failed')
+    expect(types).not.toContain('run.paused')
+  })
+
   it('still fails a Cursor run that ended without anyone asking for a pause', async (): Promise<void> => {
     // The discriminator is the requested pause, not the provider. A Cursor run whose child simply
     // died is a failure and must stay one.
