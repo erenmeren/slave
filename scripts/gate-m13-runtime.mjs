@@ -38,7 +38,8 @@
 //     line says "4, 1, 3, 2, 5" while its own justification in the very next sentence says stage 2
 //     must run before stage 3; the numbers are M12's (where stage 3 drove and stage 2 read) and
 //     the sentence is M13's. The sentence is the part that can be executed, so it is what this
-//     script does. Recorded here rather than silently, because the discrepancy is in the plan.
+//     script does. Recorded here rather than silently, because the discrepancy was in the plan --
+//     which the final review's erratum E5 has since corrected to 4, 1, 2, 3, 5, the order below.
 //
 // WHAT THIS GATE COSTS. One execution spawns four vendor children, every one of them tiny:
 //   1. stage 4b -- one `cursor-agent`, stopped the instant its pid and provider are on the row;

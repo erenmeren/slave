@@ -3663,10 +3663,12 @@ FK-ordered cleanup in `finally`; `process.exit(exitCode)` as the last line.
    a resume on a task with `maxAttempts: 1`, and assert `Task.attempt` became 1, the task is
    `failed`, and the next tick starts no run.
 
-**Stage order: 4, 1, 3, 2, 5 — not 1..5**, for M12's reason. Stage 4's refusal happens at dispatch
+**Stage order: 4, 1, 2, 3, 5 — not 1..5**, for M12's reason. Stage 4's refusal happens at dispatch
 before any child exists, so running it first finds a broken admission guard in seconds rather than
 after two paid runs; and stage 3's evidence is written by the pause stage 2 drives, so stage 2 must
-run before stage 3 reads what it left behind. Say this in the script's header comment, as
+run before stage 3 reads what it left behind. *(Corrected 2026-08-29, spec erratum E5: this line
+read "4, 1, 3, 2, 5", which contradicted the very sentence after it. The executed order — and the
+one the gate script's own header derives — is 4, 1, 2, 3, 5.)* Say this in the script's header comment, as
 `gate-m12-providers.mjs` does.
 
 - [ ] **Step 1: Write the script complete** (no RED phase — the script is the assertion)

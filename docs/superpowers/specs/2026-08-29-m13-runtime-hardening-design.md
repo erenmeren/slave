@@ -146,10 +146,10 @@ gains it, named `pause_unsignalled`.
 | File | Contents | Replaces copies in |
 |---|---|---|
 | `event-queue.ts` | `AsyncEventQueue` | `claude/adapter.ts`, `cursor/adapter.ts` |
-| `process.ts` | `killWithEscalation`, `terminateChild` (child-object wrapper), `buildChildEnv` | `control/src/kill.ts`, `pause-signal.ts`, both adapters |
+| `process.ts` | `killWithEscalation`, `terminateChild` (child-object wrapper), `buildChildEnv`, `isAlive`, `signalRun`, `KILL_GRACE_MS` | `control/src/kill.ts`, `pause-signal.ts`, both adapters |
 | `pause-flag.ts` | `clearAndVerifyPauseFlagAbsent` | both adapters |
 | `gate-preflight.ts` | `runGateScript` + `preflightGate({ hookPath, expectAllow: 'silent' \| 'explicit' })` | `claude/flags.ts`, `cursor/flags.ts` |
-| `summary.ts` | `summaryFor`, `SUMMARY_ARG_KEYS`, `isRecord` | both adapters |
+| `summary.ts` | `summaryFor`, `CLAUDE_SUMMARY_ARG_KEYS`, `CURSOR_SUMMARY_ARG_KEYS`, `isRecord` (the two key lists deliberately stay separate: merging them would change which argument each runtime's action line shows, and Series B is the one series that may not have a behaviour change) | both adapters |
 
 `control/src/kill.ts` becomes a re-export so its importers do not move. Grace timing stays
 2 000 ms in the one remaining copy. `terminateChild` and `killWithEscalation` share the
@@ -165,7 +165,9 @@ Sourced by `scripts/pause-gate.sh` and `scripts/cursor-shell-gate.sh`. Provides:
   unset/empty → the deny payload each gate emits today (exit 0, fail-closed, operator-readable —
   unchanged); path absent → "no pause"; path present but not a
   regular file or unreadable → exit 2. (M12 deferred "a directory is an allow"; this closes
-  it for both gates.)
+  it for both gates.) Any other status → the caller fails closed. A library that is present and
+  parses but defines nothing sources cleanly, so `read_pause_reason` returns 127 and both gates
+  must treat an unenumerated status as a deny, never as an allow.
 
 Each gate keeps its own output contract in its own file: Claude's allow is silence, Cursor's
 is `{"permission":"allow"}`; Cursor's deny key is `user_message`. Both gate tests gain the
@@ -267,8 +269,12 @@ on a missing `cursor-agent`, `claude`, `.env`, or DB. Stages, each asserted agai
 1. Through the Runtime card in a real browser, the workspace's provider becomes `cursor` and
    its budget `null`; the `ProviderConfiguration` row and `budgetUsd` column agree.
 2. On both runtimes: pause requested while `working`; an immediate `requestResume` (issued
-   on seeing `run.pause_requested`) returns `run_still_stopping`; after `run.paused` a resume
-   is accepted and the run reaches `succeeded`; `Task.attempt` is unchanged.
+   on seeing `run.pause_requested`) is **refused — by status while the run is still stopping,
+   since Decision 2 leaves the row reading `pause_requested` for the whole of the kill's grace
+   window, and by liveness (`run_still_stopping`) as the second lock, which is proved separately
+   against a run that reads `paused` with a live pid**; after `run.paused` a resume is accepted
+   and the run reaches `succeeded`; `Task.attempt` is unchanged. *(Corrected 2026-08-29 — see
+   §10, E1.)*
 3. On Cursor, while paused, a shell command is refused (`rejected.reason` on the stream).
 4. A budgeted workspace refuses `cursor` with `a budget needs a provider that reports cost`;
    after the card sets the budget to `null`, the same task dispatches.
@@ -296,3 +302,31 @@ two-runtime executions, preceded by zero-spend rehearsals against fake CLIs.
 `npm run gate:m13-runtime` (§7.2), plus `npm test && npm run typecheck && npm run
 web:build` on every task, one vitest run at a time, named files staged only. The gate
 requires `cursor-agent` and `claude` installed and authenticated; it never skips.
+
+## 10. Errata (post-execution)
+
+Recorded 2026-08-29, after the milestone's execution and its final whole-branch review. Each
+line below is a **correction to this document**, not a change of intent: the shipped code is
+the behaviour that was reviewed and accepted, and the sentences these errata replace described
+something else. They are listed rather than silently overwritten so a reader who quoted the
+original wording can see what moved.
+
+- **E1 — §7.2, stage 2.** The stage said an immediate `requestResume` "returns
+  `run_still_stopping`". It does not, and should not: `requestResume` checks status → checkpoint
+  → liveness in that order (§3.2), and Decision 2 leaves the row reading `pause_requested` for
+  the whole grace window, so the *status* check refuses first with `wrong_status`.
+  `run_still_stopping` needs a row reading `paused` with a live pid, which Task 1's ordering
+  makes unreachable in a correct system — it is a regression detector (Decision 3), proved
+  directly by the gate's `proveLockTwo` rather than by the window probe. The sentence was
+  written against M12's ordering and never re-derived after Decision 2 was adopted.
+- **E2 — §4.1, the `summary.ts` row.** The table named one `SUMMARY_ARG_KEYS`; the shipped
+  module exports `CLAUDE_SUMMARY_ARG_KEYS` and `CURSOR_SUMMARY_ARG_KEYS` as two lists. That is a
+  deliberate deviation, now recorded in the row itself.
+- **E3 — §4.1, the `process.ts` row.** The row named three exports; the shipped module also
+  exports `isAlive`, `signalRun` and `KILL_GRACE_MS`, all three of which `control/src/kill.ts`'s
+  re-export needs in order to keep its importers unmoved. The plan's File Structure table already
+  listed all six.
+- **E4 — §4.2, `read_pause_reason`'s contract.** The unenumerated-status arm the Task 8 fix
+  round introduced was missing. It is part of the shared contract: an empty-but-parsing library
+  sources cleanly, `read_pause_reason` is then an unknown command returning 127, and both gates
+  fell through to their allow before the `*)` arm closed it.
