@@ -197,6 +197,21 @@ describe('buildOverviewSnapshot', () => {
     expect(snapshot?.workspace.budgetUsd).toBeNull()
   })
 
+  it('carries the workspace default provider and the cost-blind warning as a plain boolean', async (): Promise<void> => {
+    await prisma.providerConfiguration.create({
+      data: { workspaceId: fixture.workspaceId, kind: 'cursor', settings: {} },
+    })
+    const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
+    expect(snapshot?.workspace.provider).toBe('cursor')
+    // `budgetUsd` is 100 in this file's fixture, and `capabilitiesOf('cursor').reportsCost` is
+    // false -- the exact pair `admitRun` refuses at dispatch.
+    expect(snapshot?.workspace.costBlindBudgeted).toBe(true)
+
+    await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { budgetUsd: null } })
+    const unbudgeted = await buildOverviewSnapshot(fixture.workspaceId)
+    expect(unbudgeted?.workspace.costBlindBudgeted).toBe(false)
+  })
+
   it('seeds the action line from the latest run.tool_call event', async (): Promise<void> => {
     const run = await prisma.agentRun.create({
       data: { taskId: fixture.taskId, agentId: fixture.agentId, status: 'working' },

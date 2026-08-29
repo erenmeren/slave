@@ -8,6 +8,7 @@ import type { OverviewSnapshot } from '../server/overview'
 import { AgentCard } from './AgentCard'
 import { AgentPanel } from './AgentPanel'
 import { GoalCard } from './GoalCard'
+import { RuntimeCard } from './RuntimeCard'
 import { HaltBanner } from './HaltBanner'
 import { TopBar } from './TopBar'
 import { TopStrip } from './TopStrip'
@@ -52,8 +53,14 @@ export function OverviewClient({
           </div>
         )}
         <TopStrip snapshot={view} />
-        <div className="px-4 pt-4">
+        <div className="grid grid-cols-1 gap-4 px-4 pt-4 md:grid-cols-2">
           <GoalCard workspaceId={workspaceId} goal={view.workspace.goal} />
+          <RuntimeCard
+            workspaceId={workspaceId}
+            provider={view.workspace.provider}
+            budgetUsd={view.workspace.budgetUsd}
+            costBlindBudgeted={view.workspace.costBlindBudgeted}
+          />
         </div>
         <main className="grid grid-cols-1 gap-4 p-4 md:grid-cols-2 xl:grid-cols-3">
           {view.agents.map((agent) => (

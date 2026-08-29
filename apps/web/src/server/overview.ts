@@ -101,6 +101,15 @@ export interface OverviewSnapshot {
      */
     readonly unmeasuredRuns: number
     readonly goal: string | null
+    /** The workspace's configured default runtime, or `null` for "nothing configured" (M13 §6.3). */
+    readonly provider: ProviderKind | null
+    /**
+     * `true` when the configured provider cannot report cost AND a budget is set -- the
+     * combination `admitRun` refuses at dispatch with `a budget needs a provider that reports
+     * cost`. Derived HERE with `capabilitiesOf` and shipped as a plain boolean, so the client
+     * never needs the capability table (spec §6.3).
+     */
+    readonly costBlindBudgeted: boolean
   }
   readonly agents: readonly AgentCardData[]
   readonly tasks: { readonly active: number; readonly blocked: number; readonly done: number; readonly failed: number }
@@ -114,6 +123,17 @@ const ACTIVE_TASK_STATUSES = ['ready', 'running', 'verifying', 'reviewing', 'mer
 export async function buildOverviewSnapshot(workspaceId: string): Promise<OverviewSnapshot | null> {
   const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId } })
   if (workspace === null) return null
+
+  // Exactly the rule `workspaceDefaultProvider` (packages/control/src/runtime.ts) applies: ONE
+  // row is a default, none is "nothing configured", and more than one is ALSO null -- the table
+  // has no "this one is the default" column, so picking one would be an arbitrary choice dressed
+  // up as a default. Read here rather than imported because this function is already inside a
+  // batch of prisma reads and `workspaceDefaultProvider` would be a second round trip.
+  const providerRows = await prisma.providerConfiguration.findMany({
+    where: { workspaceId },
+    select: { kind: true },
+  })
+  const provider = providerRows.length === 1 ? providerRows[0]!.kind : null
 
   const agents = await prisma.agent.findMany({
     where: { team: { workspaceId } },
@@ -228,6 +248,13 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
       spentUsd: spend.known,
       unmeasuredRuns: spend.unknownRuns,
       goal: workspace.goal,
+      provider,
+      // The warning the Runtime card shows, derived SERVER-side (spec §6.3): `capabilitiesOf` is
+      // safe here and unsafe in a client component -- `@ai-team-os/providers`'s barrel imports
+      // `node:child_process` at module scope, which is why `ProviderSelect.tsx` carries its own
+      // compiler-guarded mirror of `PROVIDER_KINDS` rather than importing the list. The client gets
+      // a boolean and needs no table at all.
+      costBlindBudgeted: provider !== null && workspace.budgetUsd !== null && !capabilitiesOf(provider).reportsCost,
     },
     agents: agents.map((agent) => {
       const run = liveRunByAgent.get(agent.id) ?? null
