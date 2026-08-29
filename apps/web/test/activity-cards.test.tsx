@@ -72,6 +72,7 @@ const PAYLOAD_BY_TYPE: Record<DomainEventType, Record<string, unknown>> = {
       { companyAgentId: 'ca-2', name: 'Sam', role: 'frontend' },
     ],
   },
+  'workspace.settings_changed': { field: 'provider', from: null, to: 'cursor' },
 }
 
 function fixtureFor(type: DomainEventType): ActivityEventRow {

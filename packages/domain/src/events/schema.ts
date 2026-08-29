@@ -123,6 +123,21 @@ export const executionEventSchema = z.discriminatedUnion('type', [
       ),
     }),
   }),
+  z.object({
+    ...envelope,
+    type: z.literal('workspace.settings_changed'),
+    /**
+     * Which setting moved, and both ends of the move (M13 §6.1). `from`/`to` are a union rather
+     * than two typed members because the two fields carry different shapes -- a `ProviderKind`
+     * string or a USD number -- and `null` is a real value on both: "no provider configured" and
+     * "this workspace is not budgeted".
+     */
+    payload: z.object({
+      field: z.enum(['provider', 'budgetUsd']),
+      from: z.union([z.string(), z.number(), z.null()]),
+      to: z.union([z.string(), z.number(), z.null()]),
+    }),
+  }),
 ])
 
 export type ExecutionEvent = z.infer<typeof executionEventSchema>

@@ -499,6 +499,7 @@ enum EventType {
   workspace_goal_set         @map("workspace.goal_set")
   workspace_plan_created     @map("workspace.plan_created")
   workspace_company_assigned @map("workspace.company_assigned")
+  workspace_settings_changed @map("workspace.settings_changed")
 }
 
 model ExecutionEvent {

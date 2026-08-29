@@ -39,11 +39,19 @@ export const TYPES_BY_KIND = {
   ],
   interventions: ['run.pause_requested', 'run.resume_requested', 'run.stopped', 'agent.message_sent'],
   guardrails: ['guardrail.tripped'],
-  // The workspace's own lifecycle -- the goal, the plan it became, and the company later
-  // assigned to run it (M10). Not under `guardrails`: the kinds are user vocabulary (FilterBar
-  // chips), and a user filtering to guardrail trips must not receive planning/assignment
-  // events, nor lose the only chip that can filter to them.
-  workspace: ['workspace.goal_set', 'workspace.plan_created', 'workspace.company_assigned'],
+  // The workspace's own lifecycle -- the goal, the plan it became, the company later assigned to
+  // run it (M10), and a change to its runtime or budget (M13). Not under `guardrails`: the kinds
+  // are user vocabulary (FilterBar chips), and a user filtering to guardrail trips must not
+  // receive planning/assignment events, nor lose the only chip that can filter to them.
+  // `workspace.settings_changed` belongs here even though the budget it can move is what
+  // `guardrail.tripped` later enforces: this chip answers "what did an operator change about this
+  // workspace", which is where an operator looks when a dispatch starts refusing.
+  workspace: [
+    'workspace.goal_set',
+    'workspace.plan_created',
+    'workspace.company_assigned',
+    'workspace.settings_changed',
+  ],
 } as const satisfies Record<ActivityKind, readonly DomainEventType[]>
 
 export interface ActivityFilters {

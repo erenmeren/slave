@@ -390,6 +390,34 @@ function WorkspaceCompanyAssignedCard(props: ActivityCardProps): ReactElement {
   )
 }
 
+// M13 §6.1. `from`/`to` are a `string | number | null` union on the wire because the two fields
+// this event covers carry different shapes, and `null` is a REAL value on both -- "no provider
+// configured" and "this workspace is not budgeted" -- so it is rendered as a word rather than
+// hidden behind a falsy check that would also swallow a budget of `0`.
+function WorkspaceSettingsChangedCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as {
+    field: 'provider' | 'budgetUsd'
+    from: string | number | null
+    to: string | number | null
+  }
+  const label = payload.field === 'provider' ? 'provider changed' : 'budget changed'
+  return (
+    <ActivityCard {...props}>
+      <Transition tone="idle" label={label}>
+        <span data-testid="settings-from">{settingValue(payload.field, payload.from)}</span>
+        {' \u2192 '}
+        <span data-testid="settings-to">{settingValue(payload.field, payload.to)}</span>
+      </Transition>
+    </ActivityCard>
+  )
+}
+
+/** `null` is a state an operator chose, not a missing field, so it gets a name of its own. */
+function settingValue(field: 'provider' | 'budgetUsd', value: string | number | null): string {
+  if (value === null) return field === 'provider' ? 'none' : 'no budget'
+  return field === 'budgetUsd' ? `$${value}` : String(value)
+}
+
 // ---- interventions (schema.ts:32-39, 54-59) ----------------------------------------------------
 // `event.actor` (human/agent/system) is already on the shared shell's actor badge; these bodies
 // add the payload's own record of *who* intervened (`requestedBy`) and *what* they said
@@ -489,4 +517,5 @@ export const ACTIVITY_CARDS = {
   'workspace.goal_set': WorkspaceGoalSetCard,
   'workspace.plan_created': WorkspacePlanCreatedCard,
   'workspace.company_assigned': WorkspaceCompanyAssignedCard,
+  'workspace.settings_changed': WorkspaceSettingsChangedCard,
 } satisfies Record<DomainEventType, (props: ActivityCardProps) => ReactElement>

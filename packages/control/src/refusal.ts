@@ -45,6 +45,8 @@ export type ControlRefusal =
   | { readonly kind: 'company_team_not_found'; readonly companyTeamId: string }
   | { readonly kind: 'invalid_name' }
   | { readonly kind: 'invalid_model' }
+  /** A budget was set to something that is neither a non-negative number nor `null` (M13 §6.1). */
+  | { readonly kind: 'invalid_budget' }
   /** A model was set (or cleared) with no provider to match it, or vice versa (M12 Task 7). */
   | { readonly kind: 'model_without_provider' }
   /** `provider` named a string that is not a member of `ProviderKind` (M12 Task 7). */
@@ -104,6 +106,8 @@ export function refusalText(refusal: ControlRefusal): string {
       return 'a name must be a non-empty text'
     case 'invalid_model':
       return 'a model must be a non-empty text'
+    case 'invalid_budget':
+      return 'a budget must be a non-negative amount or absent'
     case 'model_without_provider':
       return 'a model must name the provider that runs it'
     case 'invalid_provider':
