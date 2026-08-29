@@ -1,4 +1,5 @@
-import { mkdirSync, statSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join } from 'node:path'
 
 /**
@@ -111,6 +112,13 @@ export function buildCursorHooks(input: { readonly gatePath: string }): CursorHo
 }
 
 /**
+ * The `.git/info/exclude` line that keeps this adapter's own file out of the run's git status.
+ * Anchored with a leading `/` so it matches the workspace root's `.cursor/hooks.json` and not some
+ * nested one a project might legitimately track.
+ */
+const EXCLUDE_LINE = '/.cursor/hooks.json'
+
+/**
  * Writes the run's hooks file, creating the `.cursor` directory if the worktree does not have one.
  * Called on every spawn (`start` and `resume`), for the same reason `writeSettingsFile` is: a
  * resume is a spawn, and the file the resumed process reads must be the file this adapter
@@ -121,6 +129,21 @@ export function buildCursorHooks(input: { readonly gatePath: string }): CursorHo
  * between pause and resume would get a brand-new empty directory instead of an error -- and then
  * spawn cleanly in it, because the cwd now exists. The run would report a healthy start and do its
  * work against nothing. Failing here names the missing worktree instead.
+ *
+ * **Two things this does that `writeSettingsFile` does not have to.** Claude's settings file lives
+ * in `runDir`, outside the worktree entirely; Cursor's has to live INSIDE the run's checkout,
+ * because that is the only place `cursor-agent` reads it from. So this file lands in a directory
+ * that is also the agent's working tree -- somebody else's source repository -- and both of the
+ * consequences are handled here rather than left for an operator to discover:
+ *
+ * 1. **It refuses to clobber a hooks file the project brought with it.** A checked-out project may
+ *    legitimately ship its own `.cursor/hooks.json`; overwriting it would disarm whatever the user
+ *    configured, silently. Only a file byte-identical to what this adapter would write is treated
+ *    as its own and rewritten -- which is exactly the `resume()` case, and why this is not simply
+ *    "refuse if the path exists".
+ * 2. **It excludes itself from git.** Otherwise the run's own `git status` shows `?? .cursor/`, the
+ *    agent sees a stray file containing an absolute local path to a gate script, and may well
+ *    commit it. `writeCheckpoint`'s `dirtyFiles` would carry it too.
  */
 export function writeCursorHooksFile(input: { readonly hooksPath: string; readonly gatePath: string }): void {
   if (!isAbsolute(input.hooksPath)) {
@@ -140,6 +163,73 @@ export function writeCursorHooksFile(input: { readonly hooksPath: string; readon
         'not be silently replaced by an empty one the run then works in.',
     )
   }
+
+  const desired = JSON.stringify(buildCursorHooks({ gatePath: input.gatePath }), null, 2)
+  const existing = readFileIfPresent(input.hooksPath)
+  if (existing !== null && existing !== desired) {
+    throw new Error(
+      `writeCursorHooksFile: ${JSON.stringify(workspacePath)} already has a .cursor/hooks.json that ` +
+        'this adapter did not write. Refusing to overwrite it: a project that ships its own Cursor ' +
+        'hooks has configured something deliberate, and replacing it would disarm that silently and ' +
+        "leave a modified tracked file in the agent's working tree. Move or remove it, or run this " +
+        'provider against a worktree that does not carry one.',
+    )
+  }
+
+  // Excluded BEFORE the file exists, so there is no window in which a `git status` -- the agent's
+  // own, or `writeCheckpoint`'s `dirtyFiles` -- can see it.
+  excludeFromGit(workspacePath)
   mkdirSync(dirname(input.hooksPath), { recursive: true })
-  writeFileSync(input.hooksPath, JSON.stringify(buildCursorHooks({ gatePath: input.gatePath }), null, 2))
+  writeFileSync(input.hooksPath, desired)
+}
+
+function readFileIfPresent(filePath: string): string | null {
+  try {
+    return readFileSync(filePath, 'utf8')
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Appends `EXCLUDE_LINE` to the exclude file governing `workspacePath`, once.
+ *
+ * **The path is asked of git, not derived, and that is a correction rather than a preference.**
+ * The obvious implementation -- read `<workspace>/.git`, which `git worktree add` writes as a FILE
+ * containing `gitdir: <repo>/.git/worktrees/<name>`, and append to `<that dir>/info/exclude` --
+ * produces a file **git never reads**. Measured directly on a real `git init` + `git worktree add`
+ * pair: with the line in the per-worktree gitdir, `git status --porcelain` still reported
+ * `?? .cursor/`; with it in the common dir it reported nothing. `git rev-parse --git-path
+ * info/exclude` inside a linked worktree answers `<repo>/.git/info/exclude`, because `info/` is one
+ * of the paths git redirects to the common directory. Asking git is also the only version that
+ * stays correct for layouts nobody here has tried -- submodules, a `GIT_DIR` in the environment,
+ * `--separate-git-dir`.
+ *
+ * A directory that is not a git repository at all is not an error: there is simply nothing to
+ * exclude from. Every unit test in `cursor-adapter.test.ts` runs in exactly such a directory, and
+ * so would an operator pointing a run at one.
+ */
+function excludeFromGit(workspacePath: string): void {
+  let excludePath: string
+  try {
+    excludePath = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-path', 'info/exclude'], {
+      cwd: workspacePath,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim()
+  } catch {
+    // Not a repository, or no git on PATH. Nothing to exclude from; the hooks file is still
+    // written, because the gate matters more than the tidiness.
+    return
+  }
+  if (excludePath === '') return
+
+  const current = readFileIfPresent(excludePath) ?? ''
+  // Idempotent: every spawn of every run rewrites the hooks file, and an exclude file that grew a
+  // duplicate line per resume would be its own kind of pollution.
+  if (current.split('\n').some((line) => line.trim() === EXCLUDE_LINE)) return
+
+  mkdirSync(dirname(excludePath), { recursive: true })
+  const prefix = current === '' || current.endsWith('\n') ? current : `${current}\n`
+  writeFileSync(excludePath, `${prefix}${EXCLUDE_LINE}\n`)
 }
