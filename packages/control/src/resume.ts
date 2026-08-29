@@ -1,9 +1,29 @@
 import { prisma } from '@ai-team-os/db/client'
 import { type Result, err, ok } from '@ai-team-os/domain'
 import { appendEvent } from '@ai-team-os/events'
+import { capabilitiesOf, type ProviderKind } from '@ai-team-os/providers'
 import type { ControlRefusal } from './refusal.js'
 
 const RESUMABLE_STATUSES = ['paused'] as const
+
+/**
+ * Whether this run's runtime can be resumed at all -- the refusal, or `null` for "carry on".
+ *
+ * `canResumeSession` is one of the two capabilities spec §4 makes the pause protocol turn on, and
+ * before the final review it had no reader anywhere: a provider could declare that a stopped
+ * session cannot be continued and this function would still record the intent, hand it to a tick,
+ * and let the adapter discover the truth with a run already claimed and an operator already told
+ * the resume was accepted. Reading the capability here is what makes the declaration mean
+ * something.
+ *
+ * Pure, and separate from `requestResume`, because it is the only part of that check that can be
+ * tested honestly: both shipped providers declare `canResumeSession: true`, so no database state
+ * produces this refusal today, and the alternative to a pure predicate is mocking `capabilitiesOf`
+ * -- which would test the mock. See `test/resume-refusal.test.ts`.
+ */
+export function resumeRefusal(runId: string, provider: ProviderKind): ControlRefusal | null {
+  return capabilitiesOf(provider).canResumeSession ? null : { kind: 'provider_cannot_resume', runId, provider }
+}
 
 /**
  * Records that someone wants this run continued — and nothing else.
@@ -47,6 +67,15 @@ export async function requestResume(
   if (workspace.haltedReason !== null) {
     return err({ kind: 'workspace_halted', workspaceId: workspace.id, reason: workspace.haltedReason })
   }
+
+  // Ahead of the status and checkpoint checks on purpose: those two ask whether THIS run is in a
+  // shape that can be resumed, and there is no point answering that for a runtime on which no run
+  // ever can be. `?? 'claude_code'` is the same historical-fact backfill the branch applies at
+  // `apps/orchestrator/src/resume.ts`, `sweep.ts` and `pause.ts` -- a null here means the row
+  // predates `AgentRun.provider` existing to be written, and before M12 there was no second
+  // adapter that could have produced it.
+  const cannotResume = resumeRefusal(run.id, run.provider ?? 'claude_code')
+  if (cannotResume !== null) return err(cannotResume)
 
   if (run.status !== 'paused') {
     return err({ kind: 'wrong_status', runId: run.id, status: run.status, needed: RESUMABLE_STATUSES })

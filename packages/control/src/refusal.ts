@@ -17,6 +17,12 @@ export type ControlRefusal =
     }
   | { readonly kind: 'workspace_halted'; readonly workspaceId: string; readonly reason: string }
   | { readonly kind: 'no_checkpoint'; readonly runId: string }
+  /**
+   * The run's provider cannot continue a session it stopped (`canResumeSession: false`), so there
+   * is no resume to record (M12 final review I1, spec §4). Unreachable for both shipped providers,
+   * which is why it is defined with the rest of the taxonomy rather than at its one raise site.
+   */
+  | { readonly kind: 'provider_cannot_resume'; readonly runId: string; readonly provider: string }
   | { readonly kind: 'task_not_found'; readonly taskId: string }
   | { readonly kind: 'self_dependency'; readonly taskId: string }
   | { readonly kind: 'duplicate_dependency'; readonly taskId: string; readonly dependsOnTaskId: string }
@@ -56,6 +62,8 @@ export function refusalText(refusal: ControlRefusal): string {
       )
     case 'no_checkpoint':
       return `run ${refusal.runId} has no checkpoint: there is nothing to resume it from`
+    case 'provider_cannot_resume':
+      return `run ${refusal.runId} is on ${refusal.provider}, which cannot continue a stopped session`
     case 'task_not_found':
       return `no task with id ${refusal.taskId}`
     case 'self_dependency':

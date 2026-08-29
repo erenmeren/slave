@@ -1,4 +1,5 @@
 import { writeFile } from 'node:fs/promises'
+import { capabilitiesOf } from './capabilities.js'
 import type { ProviderKind } from './types.js'
 
 /**
@@ -21,40 +22,39 @@ export interface PausableRunState {
  * takes no adapter instance, no constructor options, and touches no in-memory run registry --
  * only `kind` and the two columns already on the row.
  *
- * What the signal actually IS remains the provider's own knowledge, which is why this dispatches
- * on `kind` rather than living in `packages/control`: Claude denies the run's next tool call
- * through its hook, by reading the flag this writes back (`scripts/pause-gate.sh`); a runtime
- * with no mid-run gate (`ProviderCapabilities.canPauseMidRun === false`) would stop some other
- * way entirely, using `pid` instead of a flag file, without `packages/control` ever having to
- * know the difference.
+ * What the signal actually IS remains the provider's own knowledge, which is why this lives here
+ * rather than in `packages/control`: Claude denies the run's next tool call through its hook, by
+ * reading the flag this writes back (`scripts/pause-gate.sh`); a runtime with no mid-run gate stops
+ * some other way entirely, using `pid` instead of a flag file, without `packages/control` ever
+ * having to know the difference.
+ *
+ * **The strategy is chosen by `canPauseMidRun`, not by the kind** (spec §4, "pause dispatches on
+ * capability"; final review I1). This used to be a `switch (kind)` with one case per vendor, which
+ * made the capability table a claim nothing checked: a provider could declare `canPauseMidRun:
+ * true` and be killed anyway, and nothing would fail. Reading the boolean is what makes the
+ * declaration load-bearing -- the two are now the same fact, asserted by
+ * `pause-signal-capability.test.ts` over every member of `PROVIDER_KINDS`.
+ *
+ * The `never` exhaustiveness guard that used to live in this switch is not lost, it moved down one
+ * level: `capabilitiesOf` carries it (`capabilities.ts`), so a third `ProviderKind` with no
+ * capability row is still a BUILD failure naming the unhandled member, and one WITH a row gets the
+ * strategy its row declares rather than falling out of a switch nobody remembered to widen.
  */
 export async function signalPause(kind: ProviderKind, state: PausableRunState, reason: string): Promise<void> {
-  switch (kind) {
-    case 'claude_code':
-      return signalClaudeCodePause(state, reason)
-    case 'cursor':
-      return signalCursorPause(state, reason)
-    default: {
-      // The Task 3 -> Task 8 ruling, discharged here: this switch was exhaustive only by
-      // INSPECTION. `tsconfig.base` sets `strict` but not `noImplicitReturns`, so adding a third
-      // `ProviderKind` would have fallen out of the switch and returned `undefined` -- a provider
-      // that silently no-ops its own pause, which is a hole in the strongest guarantee this system
-      // makes. Binding `kind` to `never` makes that a BUILD failure naming the unhandled member.
-      // This grew teeth at Task 8's fix round: `kind` used to arrive as a compile-time constant
-      // and now arrives as a run's own DB column, so inspection no longer sees every caller.
-      const unhandled: never = kind
-      throw new Error(`signalPause: unhandled provider kind ${JSON.stringify(unhandled)}`)
-    }
-  }
+  return capabilitiesOf(kind).canPauseMidRun
+    ? signalGatedPause(state, reason)
+    : signalTerminatingPause(kind, state, reason)
 }
 
 /**
- * Writes `reason` into the run's pause flag file, byte for byte identical to what
- * `packages/control/src/pause.ts` wrote directly before this function existed --
- * `scripts/pause-gate.sh` reads it back the same way. Only `pauseFlagPath` is used; `pid` is part
- * of `PausableRunState` for a provider that needs it (none does yet), not because this one does.
+ * The strategy for a runtime that CAN stop between tool calls (`canPauseMidRun: true`): write
+ * `reason` into the run's pause flag file and let the runtime's own gate deny the next call.
+ *
+ * Byte for byte identical to what `packages/control/src/pause.ts` wrote directly before this
+ * function existed -- `scripts/pause-gate.sh` reads it back the same way. Only `pauseFlagPath` is
+ * used; `pid` is part of `PausableRunState` for the other strategy, not because this one needs it.
  */
-async function signalClaudeCodePause(state: PausableRunState, reason: string): Promise<void> {
+async function signalGatedPause(state: PausableRunState, reason: string): Promise<void> {
   await writeFile(state.pauseFlagPath, `${reason}\n`, 'utf8')
 }
 
@@ -65,7 +65,10 @@ const CURSOR_KILL_GRACE_MS = 2_000
 const DEATH_POLL_MS = 25
 
 /**
- * Pauses a Cursor run by ENDING ITS PROCESS, which for this runtime is what a pause is.
+ * The strategy for a runtime that CANNOT stop between tool calls (`canPauseMidRun: false`): end
+ * the process, which for such a runtime is what a pause is. Cursor is the only member today;
+ * `kind` is a parameter rather than a constant so the refusal below names whichever runtime
+ * actually declared the capability, not a vendor this branch happened to be written for.
  *
  * `ProviderCapabilities.canPauseMidRun` is `false` for Cursor: there is no mechanism that stops the
  * agent between tool calls and leaves it resumable in place, so the pause protocol is cancel now
@@ -92,7 +95,11 @@ const DEATH_POLL_MS = 25
  * A pid that has ALREADY exited is not an error: losing that race is the ordinary case a guardrail
  * fan-out runs into, exactly as `requestPause`'s own status race is.
  */
-async function signalCursorPause(state: PausableRunState, reason: string): Promise<void> {
+async function signalTerminatingPause(
+  kind: ProviderKind,
+  state: PausableRunState,
+  reason: string,
+): Promise<void> {
   // The pid is checked BEFORE anything is written, and the order was chosen by a failing test
   // rather than by taste: with the flag write first, a filesystem error on the flag path (the
   // existing `pause-signal.test.ts` case hits a real `EISDIR`) surfaced instead of the pid
@@ -100,7 +107,7 @@ async function signalCursorPause(state: PausableRunState, reason: string): Promi
   // arguments before performing a side effect is also simply the right way round.
   if (state.pid === null) {
     throw new Error(
-      'signalPause: cannot pause a cursor run with no recorded pid. Cursor has no mid-run gate ' +
+      `signalPause: cannot pause a ${kind} run with no recorded pid. ${kind} has no mid-run gate ` +
         '(canPauseMidRun: false), so ending the process IS the pause -- with no pid there is ' +
         'nothing to signal, and reporting success here would claim a pause that never happened.',
     )

@@ -21,6 +21,46 @@ export class UnknownProviderError extends Error {
 }
 
 /**
+ * Thrown by `admitAdapter` for an adapter that promises neither pause capability.
+ *
+ * Its own class for the same reason `UnknownProviderError` is: "this adapter may not be
+ * registered" is a different fact from "this kind was never wired up", and a caller assembling a
+ * registry from configuration needs to be able to tell them apart.
+ */
+export class UnregistrableProviderError extends Error {
+  constructor(public readonly kind: ProviderKind) {
+    super(
+      `provider kind ${JSON.stringify(kind)} declares neither canPauseMidRun nor canResumeSession, ` +
+        'so a run on it could be started and never paused, cancelled-and-continued, or recovered. ' +
+        'Spec §4: a provider with neither capability cannot be registered.',
+    )
+    this.name = 'UnregistrableProviderError'
+  }
+}
+
+/**
+ * Spec §4's registration rule, enforced rather than described (final review I1): **a provider with
+ * neither capability cannot be registered.**
+ *
+ * The two capabilities are the two ways a run can be stopped and picked up again -- a gate that
+ * denies the next tool call (`canPauseMidRun`), or a cancel-and-`--resume` cycle
+ * (`canResumeSession`). An adapter with neither can start work that no operator, guardrail or
+ * emergency stop can ever suspend and resume: every pause on it becomes a kill with nothing to
+ * continue from. Refusing it at BUILD time is the only place the refusal is cheap; by dispatch
+ * time there is already a run.
+ *
+ * Exported (rather than folded into `buildRegistry`) so it can be tested with an adapter that
+ * actually has neither capability. Both shipped adapters declare `canResumeSession: true`, so the
+ * rule is unreachable through `buildRegistry`'s option shape today -- and an untested rule that
+ * first runs on the day a third provider arrives is the rule most likely to be wrong then.
+ */
+export function admitAdapter(kind: ProviderKind, adapter: AgentRuntimeAdapter): AgentRuntimeAdapter {
+  const capabilities = adapter.getCapabilities()
+  if (!capabilities.canPauseMidRun && !capabilities.canResumeSession) throw new UnregistrableProviderError(kind)
+  return adapter
+}
+
+/**
  * Hands out the one long-lived `AgentRuntimeAdapter` instance for each provider kind
  * `buildRegistry` was actually given options for.
  *
@@ -52,10 +92,10 @@ export function buildRegistry(options: {
 }): AdapterRegistry {
   const adapters = new Map<ProviderKind, AgentRuntimeAdapter>()
   if (options.claudeCode !== undefined) {
-    adapters.set('claude_code', new ClaudeCodeAdapter(options.claudeCode))
+    adapters.set('claude_code', admitAdapter('claude_code', new ClaudeCodeAdapter(options.claudeCode)))
   }
   if (options.cursor !== undefined) {
-    adapters.set('cursor', new CursorAdapter(options.cursor))
+    adapters.set('cursor', admitAdapter('cursor', new CursorAdapter(options.cursor)))
   }
 
   return {
