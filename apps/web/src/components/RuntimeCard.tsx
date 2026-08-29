@@ -36,9 +36,17 @@ async function putControl(url: string, body: Record<string, unknown>): Promise<{
  * The workspace's runtime and its spend ceiling, beside `GoalCard` on `/w/[workspaceId]`.
  *
  * No optimistic state: every control on this page follows M11's rule that the server's next
- * snapshot is what changes what is rendered. `router.refresh()` after each mutation is what asks
- * for that snapshot; a 409 keeps whatever the operator typed, so a refused write is correctable
- * rather than lost.
+ * snapshot is what changes what is rendered. What actually delivers that snapshot here is the SSE
+ * stream, not the router (fix round 1, Important finding 2): `setWorkspaceProvider`/`setWorkspaceBudget`
+ * append `workspace.settings_changed`, `useWorkspaceStream` treats every event as a wake-up and
+ * debounces a refetch of `/api/w/[workspaceId]/overview`, and the new props arrive down through
+ * `OverviewClient`. A Next server re-render does NOT repaint this card, because `initial` is only
+ * the `useState` seed of that hook's snapshot (`useWorkspaceStream.ts:36`) and is ignored on every
+ * render after the first. `router.refresh()` is kept after each mutation anyway: it is the house
+ * idiom for a mutation on this page, it costs one server render, and it is the only path left for
+ * a client whose EventSource is down -- but it is not what the operator sees working.
+ *
+ * A 409 keeps whatever the operator typed, so a refused write is correctable rather than lost.
  *
  * `costBlindBudgeted` arrives as a plain boolean because deriving it needs `capabilitiesOf`, which
  * lives behind a package this client bundle must not evaluate. It describes the SAVED pair, not

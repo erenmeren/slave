@@ -1,6 +1,6 @@
 import { prisma } from '@ai-team-os/db/client'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, toRunState } from '@ai-team-os/db'
-import { capabilitiesOf, type ProviderCapabilities, type ProviderKind } from '@ai-team-os/control'
+import { capabilitiesOf, workspaceDefaultProvider, type ProviderCapabilities, type ProviderKind } from '@ai-team-os/control'
 import { deriveAgentStatus, sumSpend, NON_TERMINAL_RUN_STATUSES, type AgentStatus } from '@ai-team-os/domain'
 import { feedSummary, type AgentFeedEvent } from '../lib/feedSummary'
 import { bucketSparkline } from './activity'
@@ -124,16 +124,13 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
   const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId } })
   if (workspace === null) return null
 
-  // Exactly the rule `workspaceDefaultProvider` (packages/control/src/runtime.ts) applies: ONE
-  // row is a default, none is "nothing configured", and more than one is ALSO null -- the table
-  // has no "this one is the default" column, so picking one would be an arbitrary choice dressed
-  // up as a default. Read here rather than imported because this function is already inside a
-  // batch of prisma reads and `workspaceDefaultProvider` would be a second round trip.
-  const providerRows = await prisma.providerConfiguration.findMany({
-    where: { workspaceId },
-    select: { kind: true },
-  })
-  const provider = providerRows.length === 1 ? providerRows[0]!.kind : null
+  // The one tested rule, not a copy of it (fix round 1, Important finding 1): ONE
+  // `ProviderConfiguration` row is a default, none is "nothing configured", and more than one is
+  // ALSO null -- the table has no "this one is the default" column, so picking one would be an
+  // arbitrary choice dressed up as a default. `workspaceDefaultProvider` issues exactly the same
+  // single query this used to inline, so there is nothing to save by restating it here, and a
+  // second copy of the two-row branch is how the surface and dispatch drift apart.
+  const provider = await workspaceDefaultProvider(workspaceId)
 
   const agents = await prisma.agent.findMany({
     where: { team: { workspaceId } },
