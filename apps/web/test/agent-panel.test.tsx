@@ -12,6 +12,10 @@ const agent = (over: Partial<AgentCardData>): AgentCardData => ({
   // here, `'claude-code'`, was the ADAPTER ID -- a spelling no row ever held, from before
   // `overview.ts` had a real column to read.
   provider: 'claude_code',
+  // `capabilitiesOf('claude_code').gate` (M12 Task 13 fix round 1, spec §8 / finding 4a) --
+  // paired with the default `provider` above, server-derived in `overview.ts`, never a second
+  // table.
+  gate: 'all-tools',
   status: 'working',
   taskTitle: 'Add the thing',
   actionLine: null,
@@ -180,7 +184,7 @@ describe('AgentPanel', () => {
       // shell-only gate mark are Task 13's, per spec §8.
       const { rerender } = render(
         <AgentPanel
-          agent={agent({ provider: 'cursor' })}
+          agent={agent({ provider: 'cursor', gate: 'shell-only' })}
           liveEvents={[]}
           workspaceId="w1"
           haltedReason={null}
@@ -190,7 +194,7 @@ describe('AgentPanel', () => {
       expect(screen.getByTestId('provider-chip').textContent).toBe('cursor')
       rerender(
         <AgentPanel
-          agent={agent({ provider: null })}
+          agent={agent({ provider: null, gate: null })}
           liveEvents={[]}
           workspaceId="w1"
           haltedReason={null}
@@ -198,6 +202,31 @@ describe('AgentPanel', () => {
         />,
       )
       expect(screen.getByTestId('provider-chip').textContent).toBe('—')
+    })
+
+    // M12 Task 13 fix round 1, spec §8 / finding 4a: the shell-only gate mark, on the panel too.
+    it('marks a shell-only gate, and shows no mark for an all-tools gate', () => {
+      const { rerender } = render(
+        <AgentPanel
+          agent={agent({ provider: 'cursor', gate: 'shell-only' })}
+          liveEvents={[]}
+          workspaceId="w1"
+          haltedReason={null}
+          onClose={() => {}}
+        />,
+      )
+      expect(screen.getByText(/shell only/i)).toBeTruthy()
+
+      rerender(
+        <AgentPanel
+          agent={agent({ provider: 'claude_code', gate: 'all-tools' })}
+          liveEvents={[]}
+          workspaceId="w1"
+          haltedReason={null}
+          onClose={() => {}}
+        />,
+      )
+      expect(screen.queryByText(/shell only/i)).toBeNull()
     })
 
     it('shows paused-at step when paused', () => {

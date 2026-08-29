@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { AgentCardData } from '../server/overview'
+import { ShellOnlyMark } from './ShellOnlyMark'
 import { Sparkline } from './Sparkline'
 import { Chip } from './ui/Chip'
 
@@ -98,13 +99,14 @@ export function AgentCard({
         </span>
       </div>
       <footer className="flex items-center gap-2">
-        {/* TASK 13: the human-readable provider label and the shell-only gate mark (spec §8) are
-          *  that task's, per its Settings/Roster surface work. This renders the bare `ProviderKind`
-          *  and `—` when no run has resolved one -- real data, unlabelled, rather than a label
-          *  invented by the wrong task (M12 Task 9, ruling R10). */}
+        {/* The bare `ProviderKind` and `—` when no run has resolved one -- real data, unlabelled
+          *  (M12 Task 9, ruling R10). The shell-only gate mark (spec §8) is `ShellOnlyMark`
+          *  (M12 Task 13 fix round 1, finding 4a) -- a human-readable provider LABEL is still
+          *  nobody's brief. */}
         <Chip>
           <span data-testid="provider-chip">{agent.provider ?? '—'}</span>
         </Chip>
+        <ShellOnlyMark gate={agent.gate} />
         <span className="ml-auto text-text-3">
           <Sparkline buckets={agent.sparkline} width={60} height={16} label={`${agent.name}'s tool calls, last 10 minutes`} />
         </span>

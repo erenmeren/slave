@@ -22,15 +22,19 @@ const GATE_LABEL: Record<WorkerGate, string> = {
 }
 
 /** The effective-model + `modelSource` chip pair (brief: "effective model + `modelSource` chip
- *  (mono; \"—\" when none)"). `effectiveModel` (`listRoster`'s derivation) is the roster/template
- *  chain ignoring worker overrides, so it can be `null` under `modelSource: 'worker-varies'` too --
- *  a worker overrides its own model while the roster has neither its own model nor a template
- *  default. The "—" fallback below covers every `null` case, not just `'none'`. */
+ *  (mono; \"—\" when none)"), and now its provider counterpart (M12 Task 13 fix round 1, spec §8:
+ *  "`modelSource` gains a provider counterpart so the resolution chain stays legible").
+ *  `effectiveModel`/`effectiveProvider` (`listRoster`'s derivation) are the roster/template chain
+ *  ignoring worker overrides, so either can be `null` under a `*Source: 'worker-varies'` too -- a
+ *  worker overrides its own value while the roster has neither its own nor a template default. The
+ *  "—" fallback below covers every `null` case, not just `'none'`. */
 function ModelChain({ member }: { readonly member: RosterMemberRow }): React.JSX.Element {
   return (
     <div className="flex flex-wrap items-center gap-2">
       <span className="font-mono text-xs text-text-1">{member.effectiveModel ?? '—'}</span>
       <Chip>{member.modelSource}</Chip>
+      <span className="font-mono text-xs text-text-1">{member.effectiveProvider ?? '—'}</span>
+      <Chip>{member.providerSource}</Chip>
     </div>
   )
 }

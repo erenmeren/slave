@@ -12,6 +12,7 @@ const SNAPSHOT: OverviewSnapshot = {
       name: 'Alex',
       role: 'backend',
       provider: 'claude_code',
+      gate: 'all-tools',
       status: 'working',
       taskTitle: 'Add the thing',
       actionLine: null,

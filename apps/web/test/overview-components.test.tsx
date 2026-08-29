@@ -14,6 +14,10 @@ const agent = (over: Partial<AgentCardData>): AgentCardData => ({
   // here, `'claude-code'`, was the ADAPTER ID -- a spelling no row ever held, from before
   // `overview.ts` had a real column to read.
   provider: 'claude_code',
+  // `capabilitiesOf('claude_code').gate` (M12 Task 13 fix round 1, spec §8 / finding 4a) --
+  // paired with the default `provider` above the same way `AgentCardData.gate` is server-derived
+  // from `AgentCardData.provider`, never a second table.
+  gate: 'all-tools',
   status: 'idle',
   taskTitle: null,
   actionLine: null,
@@ -39,11 +43,22 @@ describe('AgentCard provider chip', () => {
     // M12 Task 9 / ruling R10. The bare kind: the human-readable label and the shell-only gate
     // mark belong to Task 13 (spec §8), and inventing either here would be that task's decision
     // taken by the wrong task.
-    const { rerender } = render(<AgentCard agent={agent({ provider: 'cursor' })} liveActionLine={null} onOpen={() => {}} />)
+    const { rerender } = render(<AgentCard agent={agent({ provider: 'cursor', gate: 'shell-only' })} liveActionLine={null} onOpen={() => {}} />)
     expect(screen.getByTestId('provider-chip').textContent).toBe('cursor')
 
-    rerender(<AgentCard agent={agent({ provider: null })} liveActionLine={null} onOpen={() => {}} />)
+    rerender(<AgentCard agent={agent({ provider: null, gate: null })} liveActionLine={null} onOpen={() => {}} />)
     expect(screen.getByTestId('provider-chip').textContent).toBe('—')
+  })
+
+  // M12 Task 13 fix round 1, spec §8 / finding 4a: "wherever a worker's runtime is shown, a
+  // provider whose gate is shell-only is marked as such". `gate` is server-derived
+  // (`overview.ts`, via `capabilitiesOf`), never recomputed here.
+  it('marks a shell-only gate, and shows no mark for an all-tools gate', () => {
+    const { rerender } = render(<AgentCard agent={agent({ provider: 'cursor', gate: 'shell-only' })} liveActionLine={null} onOpen={() => {}} />)
+    expect(screen.getByText(/shell only/i)).toBeTruthy()
+
+    rerender(<AgentCard agent={agent({ provider: 'claude_code', gate: 'all-tools' })} liveActionLine={null} onOpen={() => {}} />)
+    expect(screen.queryByText(/shell only/i)).toBeNull()
   })
 })
 

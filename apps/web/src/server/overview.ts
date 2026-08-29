@@ -1,6 +1,6 @@
 import { prisma } from '@ai-team-os/db/client'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, toRunState } from '@ai-team-os/db'
-import type { ProviderKind } from '@ai-team-os/control'
+import { capabilitiesOf, type ProviderCapabilities, type ProviderKind } from '@ai-team-os/control'
 import { deriveAgentStatus, sumSpend, NON_TERMINAL_RUN_STATUSES, type AgentStatus } from '@ai-team-os/domain'
 import { feedSummary, type AgentFeedEvent } from '../lib/feedSummary'
 import { bucketSparkline } from './activity'
@@ -28,6 +28,13 @@ export interface AgentCardData {
    * ADAPTER ID this field used to carry.
    */
   readonly provider: ProviderKind | null
+  /**
+   * `capabilitiesOf(provider).gate`, or `null` when `provider` itself is `null` (M12 Task 13 fix
+   * round 1, spec §8 / finding 4a: "wherever a worker's runtime is shown, a provider whose gate
+   * is shell-only is marked as such"). Derived HERE, server-side, the same way `server/org.ts`'s
+   * `listRoster` derives a worker's gate -- one capability table, never recomputed per renderer.
+   */
+  readonly gate: ProviderCapabilities['gate'] | null
   readonly status: AgentStatus
   readonly taskTitle: string | null
   readonly actionLine: string | null
@@ -233,6 +240,7 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
         // it used to have `'claude-code' as const` -- which was not even the `ProviderKind`
         // spelling, but `ClaudeCodeAdapter.id`.
         provider: run?.provider ?? null,
+        gate: run === null || run.provider === null ? null : capabilitiesOf(run.provider).gate,
         status: deriveAgentStatus(run === null ? null : toRunState(run)),
         taskTitle: run?.task?.title ?? null,
         actionLine: lines.get(agent.id) ?? null,

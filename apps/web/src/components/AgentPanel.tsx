@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { AgentFeedEvent } from '../lib/feedSummary'
 import type { AgentCardData } from '../server/overview'
 import { DOT } from './AgentCard'
+import { ShellOnlyMark } from './ShellOnlyMark'
 import { Button } from './ui/Button'
 import { Chip } from './ui/Chip'
 
@@ -123,11 +124,13 @@ export function AgentPanel({
           <span data-testid="status-label" className="ml-1 text-xs text-text-2">
             {agent.status}
           </span>
-          {/* TASK 13: the human-readable provider label and the shell-only gate mark (spec §8)
-            *  are that task's. The bare kind here, `—` when no run has resolved one. */}
+          {/* The bare kind here, `—` when no run has resolved one (M12 Task 9, ruling R10).
+            *  The shell-only gate mark (spec §8) is `ShellOnlyMark` (M12 Task 13 fix round 1,
+            *  finding 4a) -- a human-readable provider LABEL is still nobody's brief. */}
           <Chip>
             <span data-testid="provider-chip">{agent.provider ?? '—'}</span>
           </Chip>
+          <ShellOnlyMark gate={agent.gate} />
         </div>
         <Button variant="ghost" onClick={onClose} aria-label="Close agent detail">
           close
