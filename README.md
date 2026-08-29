@@ -64,6 +64,7 @@ Ubuntu, `apt-get install docker-compose-plugin`) before continuing.
 | `npm run gate:m8-plan` | The M8b gate: a goal → task graph → merged branches, unattended |
 | `npm run gate:m10-org` | The M10 gate: a company staffed a project from templates and shipped its goal, unattended — twice, in parallel |
 | `npm run gate:m11-shell` | The M11 gate: the shell went global — a company was staffed, assigned, and steered entirely from the browser |
+| `npm run gate:m12-providers` | The M12 gate: two runtimes kept one promise — paused, resumed, and budgeted alike |
 
 Integration tests require Postgres to be running. They **fail** rather than skip when it is not:
 a suite that skips reports success for work it did not do.
