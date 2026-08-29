@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { CLAUDE_SUMMARY_ARG_KEYS, isRecord, summaryFor } from '../runtime/summary.js'
 import type { RuntimeEvent } from '../types.js'
 
 /**
@@ -56,10 +57,6 @@ export function parseStreamLine(line: string): RuntimeEvent {
       // malformed line.
       return { kind: 'ignored', line }
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function isToolUseBlock(value: unknown): value is Record<string, unknown> {
@@ -316,50 +313,6 @@ const toolUseContentSchema = z.object({
   input: z.unknown().optional(),
 })
 
-/**
- * The `input` keys `summaryFor` looks under, in priority order, for the one readable argument
- * that turns a bare tool name into an action line a human can read at a glance (M4 spec §1) --
- * e.g. `Write /abs/note3.txt` rather than `Write toolu_01UCoRZm85rNxfupNQPToZXL`. First string
- * match wins; a value present but not a string (or no known key present at all) falls through to
- * the bare tool name, same as `input` being absent entirely.
- */
-const SUMMARY_ARG_KEYS = [
-  'file_path',
-  'path',
-  'notebook_path',
-  'command',
-  'pattern',
-  'url',
-  'query',
-  'description',
-  'prompt',
-] as const
-
-const SUMMARY_ARG_MAX_LENGTH = 80
-
-function firstStringArg(input: unknown): string | null {
-  if (!isRecord(input)) return null
-  for (const key of SUMMARY_ARG_KEYS) {
-    const value = input[key]
-    if (typeof value === 'string') return value
-  }
-  return null
-}
-
-function summaryFor(toolName: string, input: unknown): string {
-  const raw = firstStringArg(input)
-  if (raw === null) return toolName
-
-  // Collapse newlines/tabs/runs of spaces to one space, so a multiline Bash command reads as one
-  // line rather than blowing up the action line's height.
-  const normalized = raw.replace(/\s+/g, ' ').trim()
-  if (normalized.length === 0) return toolName
-
-  const trimmedArg =
-    normalized.length > SUMMARY_ARG_MAX_LENGTH ? `${normalized.slice(0, SUMMARY_ARG_MAX_LENGTH)}…` : normalized
-  return `${toolName} ${trimmedArg}`
-}
-
 const textContentSchema = z.object({
   type: z.literal('text'),
   text: z.string(),
@@ -387,7 +340,7 @@ function parseAssistantLine(raw: unknown, line: string): RuntimeEvent {
       kind: 'tool_call',
       toolUseId: result.data.id,
       toolName: result.data.name,
-      summary: summaryFor(result.data.name, result.data.input),
+      summary: summaryFor(result.data.name, result.data.input, CLAUDE_SUMMARY_ARG_KEYS),
     }
   }
 

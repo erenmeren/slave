@@ -4,6 +4,8 @@ import { isAbsolute } from 'node:path'
 import { createInterface } from 'node:readline'
 import type { RunId } from '@ai-team-os/domain'
 import { capabilitiesOf } from '../capabilities.js'
+import { AsyncEventQueue } from '../runtime/event-queue.js'
+import { isRecord } from '../runtime/summary.js'
 import type { RunOutcome, RuntimeEvent } from '../types.js'
 import type { AgentRuntimeAdapter, ProviderCapabilities, RunHandle, StartRunInput } from '../claude/adapter.js'
 import type { Checkpoint } from '../claude/checkpoint.js'
@@ -91,62 +93,6 @@ const STDERR_CAP = 4_000
  * than the drain itself.
  */
 const STREAM_QUIESCE_MS = 300
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-/**
- * A single-producer, single-consumer async queue backing `events()`. Buffers pushed items until
- * something iterates; never drops one. Closing it ends the iteration for whoever is waiting.
- *
- * DELIBERATELY DUPLICATED from `claude/adapter.ts` rather than shared, and named here so a later
- * task can extract it on purpose instead of finding it by accident: M12 Series A freezes
- * `packages/providers/src/claude/`, and exporting the class from there -- the only way to share
- * the one that already exists -- is an edit to a frozen file. `cursor/stream.ts` carries the same
- * note about `summaryFor`, for the same reason.
- */
-class AsyncEventQueue<T> implements AsyncIterable<T> {
-  private readonly buffered: T[] = []
-  private readonly waiters: Array<(result: IteratorResult<T, undefined>) => void> = []
-  private closed = false
-
-  push(item: T): void {
-    if (this.closed) return
-    const waiter = this.waiters.shift()
-    if (waiter !== undefined) {
-      waiter({ value: item, done: false })
-    } else {
-      this.buffered.push(item)
-    }
-  }
-
-  close(): void {
-    if (this.closed) return
-    this.closed = true
-    while (this.waiters.length > 0) {
-      const waiter = this.waiters.shift()
-      waiter?.({ value: undefined, done: true })
-    }
-  }
-
-  [Symbol.asyncIterator](): AsyncIterator<T, undefined> {
-    return {
-      next: (): Promise<IteratorResult<T, undefined>> => {
-        if (this.buffered.length > 0) {
-          const value = this.buffered.shift() as T
-          return Promise.resolve({ value, done: false })
-        }
-        if (this.closed) {
-          return Promise.resolve({ value: undefined, done: true })
-        }
-        return new Promise((resolve) => {
-          this.waiters.push(resolve)
-        })
-      },
-    }
-  }
-}
 
 interface CursorRunState {
   readonly child: ChildProcess

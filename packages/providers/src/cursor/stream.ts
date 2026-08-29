@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { CURSOR_SUMMARY_ARG_KEYS, isRecord, summaryFor } from '../runtime/summary.js'
 import type { RuntimeEvent } from '../types.js'
 
 /**
@@ -105,10 +106,6 @@ export function parseCursorLine(line: string): RuntimeEvent {
       // malformed line. Same judgement as the unrecognized subtypes below.
       return { kind: 'ignored', line }
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 const envelopeSchema = z.object({ type: z.string() })
@@ -280,53 +277,6 @@ function toolKeyOf(toolCall: Record<string, unknown>): string | undefined {
   return candidates.find((key) => key.endsWith('ToolCall')) ?? candidates[0]
 }
 
-/**
- * The `args` keys `summaryFor` looks under, in priority order, for the one
- * readable argument that turns a bare tool name into an action line a human
- * can read at a glance (M4 spec §1) -- `read /abs/note.txt` rather than a
- * bare `read`.
- *
- * ONLY `path` is measured: the recording's single tool call is a read.
- * `command` is here because the shell tool is the entire subject of Cursor's
- * write gate (spec §7) and a shell action line without its command is
- * useless; the rest are absent deliberately rather than guessed at. An
- * unknown key is not a failure -- the summary falls back to the bare tool
- * name, exactly as it does for absent or malformed args.
- *
- * This deliberately MIRRORS `claude/stream.ts`'s `summaryFor` rather than
- * sharing it: the two runtimes' argument vocabularies differ (`path` here,
- * `file_path` there), and Series A froze the Claude parser's behavior, so
- * extracting a common helper would have meant editing it. The duplication is
- * named here so a later task can extract it on purpose instead of finding it
- * by accident.
- */
-const SUMMARY_ARG_KEYS = ['path', 'command'] as const
-
-const SUMMARY_ARG_MAX_LENGTH = 80
-
-function firstStringArg(args: unknown): string | null {
-  if (!isRecord(args)) return null
-  for (const key of SUMMARY_ARG_KEYS) {
-    const value = args[key]
-    if (typeof value === 'string') return value
-  }
-  return null
-}
-
-function summaryFor(toolName: string, args: unknown): string {
-  const raw = firstStringArg(args)
-  if (raw === null) return toolName
-
-  // Collapse newlines/tabs/runs of spaces to one space, so a multiline shell
-  // command reads as one line rather than blowing up the action line.
-  const normalized = raw.replace(/\s+/g, ' ').trim()
-  if (normalized.length === 0) return toolName
-
-  const trimmedArg =
-    normalized.length > SUMMARY_ARG_MAX_LENGTH ? `${normalized.slice(0, SUMMARY_ARG_MAX_LENGTH)}…` : normalized
-  return `${toolName} ${trimmedArg}`
-}
-
 function parseToolCallLine(raw: unknown, line: string): RuntimeEvent {
   const envelope = toolCallEnvelopeSchema.safeParse(raw)
   if (!envelope.success) return { kind: 'unparsable', line }
@@ -363,7 +313,7 @@ function parseToolCallLine(raw: unknown, line: string): RuntimeEvent {
     // Verbatim, embedded newline and all -- see the trap list at the top.
     toolUseId: data.call_id,
     toolName,
-    summary: summaryFor(toolName, args),
+    summary: summaryFor(toolName, args, CURSOR_SUMMARY_ARG_KEYS),
   }
 }
 
