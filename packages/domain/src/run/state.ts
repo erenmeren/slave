@@ -22,6 +22,12 @@ export type RunEvent =
   | { readonly type: 'started'; readonly sessionId: string }
   | { readonly type: 'tool_call'; readonly name: string }
   | { readonly type: 'pause_requested' }
+  /**
+   * The pause was claimed but could not be signalled, so the claim is given back (M13 Decision 5).
+   * `restoredTo` is the status the run held before the claim -- the machine has no memory of it, so
+   * the writer that made the claim is the only thing that can name it.
+   */
+  | { readonly type: 'pause_unsignalled'; readonly restoredTo: 'starting' | 'working' | 'resuming' }
   | { readonly type: 'paused'; readonly atStep: number }
   | { readonly type: 'resume_requested' }
   | { readonly type: 'resumed'; readonly sessionId: string }
@@ -75,6 +81,12 @@ export function applyRunEvent(state: RunState, event: RunEvent): Result<RunState
       return illegal(state, event)
 
     case 'pause_requested':
+      // The claim, given back (M13 Decision 5). `requestPause` claims `pause_requested` before it
+      // signals, because the claim is what makes the request idempotent; when the signal then
+      // throws, the run is holding a status nothing is coming to resolve, and the machine needs a
+      // legal way out. `restoredTo` is supplied by the writer because this machine keeps no
+      // history -- `RunState` carries a status, not the one before it.
+      if (event.type === 'pause_unsignalled') return ok({ ...state, status: event.restoredTo })
       if (event.type === 'paused') return ok({ ...state, status: 'paused', pausedAtStep: event.atStep })
       if (event.type === 'tool_call') return ok({ ...state, toolCalls: state.toolCalls + 1 })
       if (event.type === 'succeeded') return ok({ ...state, status: 'succeeded' })

@@ -5,11 +5,13 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { prisma } from '@ai-team-os/db/client'
 import { runId } from '@ai-team-os/domain'
 import { runFilePaths } from '../../src/paths.js'
+import { refusalText } from '../../src/refusal.js'
 import { pauseActiveRuns, requestPause } from '../../src/pause.js'
 
 interface Fixture {
   readonly workspace: { readonly id: string; readonly repoPath: string }
   readonly task: { readonly id: string }
+  readonly agent: { readonly id: string }
   readonly run: { readonly id: string }
 }
 
@@ -31,7 +33,7 @@ async function seed(): Promise<Fixture> {
   const run = await prisma.agentRun.create({
     data: { taskId: task.id, agentId: agent.id, status: 'working' },
   })
-  return { workspace: { id: workspace.id, repoPath }, task: { id: task.id }, run: { id: run.id } }
+  return { workspace: { id: workspace.id, repoPath }, task: { id: task.id }, agent: { id: agent.id }, run: { id: run.id } }
 }
 
 describe('requestPause', () => {
@@ -86,24 +88,26 @@ describe('requestPause', () => {
    * The discriminating test for M12 Task 8's fix round: `requestPause` signals the RUN'S OWN
    * provider, not a constant. Every other test here leaves `provider` null and so exercises only
    * the `?? 'claude_code'` fallback -- which is byte-identical to the deleted `CURRENT_PROVIDER_KIND`
-   * and would keep passing if the change were reverted. This one would not.
+   * and would keep passing if the change were reverted. This one would not: the refusal it reads
+   * back names `cursor`, and it can only have come from the Cursor branch of `signalPause`.
    *
-   * It asserts today's behavior HONESTLY rather than the behavior we want: `signalPause` has no
-   * Cursor branch yet (Series D), so the request throws AFTER the run was already claimed into
-   * `pause_requested`. That claim-before-signal ordering is a real forward hazard -- an operator
-   * would see a run marked pausing that nothing ever paused, and `controlRoute` has no catch, so
-   * the request surfaces as a 500 rather than a refusal. Task 12 owns fixing it; this test is the
-   * tripwire that will fail loudly the moment it does, forcing this expectation to be rewritten
-   * deliberately instead of quietly.
+   * What the run's provider being honoured LOOKS like changed in M13 Task 4: the pid-less Cursor
+   * throw is now caught, the claim rolled back, and the failure returned as a refusal rather than
+   * escaping as an exception (Decision 5). The fact under guard here is unchanged -- dispatch by
+   * the row's own provider -- so this test keeps its name and reads the new outcome.
    */
   it("signals the run's own provider, not a constant -- so an unimplemented one surfaces", async () => {
     const { run } = fixture
     await prisma.agentRun.update({ where: { id: run.id }, data: { provider: 'cursor' } })
 
-    await expect(requestPause(run.id, 'meren')).rejects.toThrow(/cursor/)
+    const result = await requestPause(run.id, 'meren')
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.error.kind).toBe('pause_unsignalled')
+    expect(refusalText(result.error)).toMatch(/cursor/)
 
     const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })
-    expect(after.status).toBe('pause_requested')
+    expect(after.status).toBe('working')
   })
 
   it('writes the given category as the pause reason, not the human default', async () => {
@@ -162,5 +166,67 @@ describe('pauseActiveRuns', () => {
     const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: planningRun.id } })
     expect(after.status).toBe('pause_requested')
     expect(after.pauseReason).toBe('guardrail')
+  })
+})
+
+/**
+ * M13 Decision 5. A `cursor` run with no recorded pid. `signalPause` refuses that outright rather
+ * than reporting a pause it did not perform (`canPauseMidRun: false` means ENDING THE PROCESS is
+ * the pause, and with no pid there is nothing to end), so this is the real throw, not a mock.
+ */
+describe('a pause that cannot be signalled', () => {
+  let fixture: Fixture
+
+  beforeEach(async (): Promise<void> => {
+    await prisma.$executeRawUnsafe(
+      'TRUNCATE TABLE "ExecutionEvent", "Approval", "AgentMessage", "Artifact", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
+    )
+    fixture = await seed()
+  })
+
+  async function unsignallableRun(status: 'working' | 'starting' | 'resuming'): Promise<string> {
+    await prisma.agentRun.update({
+      where: { id: fixture.run.id },
+      data: { provider: 'cursor', pid: null, status },
+    })
+    return fixture.run.id
+  }
+
+  it('restores the prior status, refuses, and appends no pause event', async (): Promise<void> => {
+    const runId = await unsignallableRun('working')
+    const result = await requestPause(runId, 'meren')
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.error.kind).toBe('pause_unsignalled')
+
+    const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: runId } })
+    // A run never parks in `pause_requested` with nothing coming (Decision 5).
+    expect(after.status).toBe('working')
+    expect(
+      await prisma.executionEvent.count({ where: { runId, type: 'run_pause_requested' } }),
+    ).toBe(0)
+  })
+
+  it('restores a resuming run to resuming, not to working', async (): Promise<void> => {
+    const runId = await unsignallableRun('resuming')
+    expect((await requestPause(runId, 'meren')).ok).toBe(false)
+    expect((await prisma.agentRun.findUniqueOrThrow({ where: { id: runId } })).status).toBe('resuming')
+  })
+
+  it('lands in pauseActiveRuns refused, and the fan-out keeps going', async (): Promise<void> => {
+    const unsignallable = await unsignallableRun('working')
+    // A second, ordinary run in the same workspace, AFTER the broken one, so a fan-out that
+    // abandoned the loop on the first failure would leave this one unsignalled.
+    const second = await prisma.agentRun.create({
+      data: { taskId: fixture.task.id, agentId: fixture.agent.id, status: 'working' },
+    })
+
+    const report = await pauseActiveRuns(fixture.workspace.id, 'meren', 'emergency_stop')
+
+    expect(report.refused).toContain(unsignallable)
+    expect(report.requested).toContain(second.id)
+    expect((await prisma.agentRun.findUniqueOrThrow({ where: { id: unsignallable } })).status).toBe('working')
+    expect((await prisma.agentRun.findUniqueOrThrow({ where: { id: second.id } })).status).toBe('pause_requested')
   })
 })

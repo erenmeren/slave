@@ -37,6 +37,11 @@ export async function requestPause(
   // reason (M12 Task 3's fix round; see its report for why the adapter-instance route the task
   // was originally specified with does not work).
 
+  // The status the claim interrupted, captured from the row read above -- before the claim
+  // overwrote it. `run.status` is the pre-claim value by construction: the `updateMany` below does
+  // not refresh this object.
+  const priorStatus = run.status
+
   // Claimed, not written. `pause_requested` is a non-terminal status, so pausing a run that
   // already finished puts a *concluded* run back into `activeRuns`, makes its agent look busy,
   // and leaves it for the next restart's orphan sweep to flip to `failed` -- corrupting the
@@ -63,7 +68,31 @@ export async function requestPause(
   // options -- the same discipline `resume.ts`/`sweep.ts` apply to their own `run.provider ??
   // 'claude_code'`. Signaling the wrong provider's flag file would pause nothing for a real run on
   // a second runtime.
-  await signalPause(run.provider ?? 'claude_code', { pauseFlagPath, pid: run.pid }, requestedBy)
+  try {
+    await signalPause(run.provider ?? 'claude_code', { pauseFlagPath, pid: run.pid }, requestedBy)
+  } catch (error) {
+    // A claim that cannot be signalled is released (M13 Decision 5). Without this the run parks in
+    // `pause_requested` -- a non-terminal status meaning "an operator asked and the signal was
+    // sent" -- with nothing coming: it looks paused to the panel, it is excluded from nothing, and
+    // the only thing that will ever touch it again is a restart's orphan sweep.
+    //
+    // Conditional on `pause_requested` so a race that already moved the run past the claim (a
+    // concurrent `requestStop`, the pump concluding it) keeps ITS outcome; this rollback only ever
+    // undoes a claim that is still standing, and only ever to the status it displaced. That is the
+    // `pause_unsignalled` edge in `packages/domain`'s run machine.
+    await prisma.agentRun.updateMany({
+      where: { id: run.id, status: 'pause_requested' },
+      data: { status: priorStatus, pauseReason: run.pauseReason },
+    })
+    return err({
+      kind: 'pause_unsignalled',
+      runId: run.id,
+      reason: error instanceof Error ? error.message : String(error),
+    })
+  }
+
+  // The `appendEvent` stays AFTER the try/catch: a pause that was rolled back must not announce
+  // itself.
   await appendEvent({
     type: 'run.pause_requested',
     workspaceId: run.agent.team.workspaceId,

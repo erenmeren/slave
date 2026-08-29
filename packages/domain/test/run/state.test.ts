@@ -107,4 +107,23 @@ describe('applyRunEvent', () => {
     expect(state.toolCalls).toBe(1)
     expect(state.status).toBe('pause_requested')
   })
+
+  it('gives a claimed pause back to the status it interrupted when the signal could not be sent', () => {
+    const state = drive(initialRunState(), [
+      { type: 'started', sessionId: 'sess-1' },
+      { type: 'tool_call', name: 'Read' },
+      { type: 'pause_requested' },
+      { type: 'pause_unsignalled', restoredTo: 'working' },
+    ])
+    expect(state.status).toBe('working')
+    // The claim's rollback is not a step backwards through the run's history: the work it counted
+    // stays counted.
+    expect(state.toolCalls).toBe(1)
+  })
+
+  it('refuses to un-claim a pause that was never claimed', () => {
+    const working = drive(initialRunState(), [{ type: 'started', sessionId: 'sess-1' }])
+    const result = applyRunEvent(working, { type: 'pause_unsignalled', restoredTo: 'working' })
+    expect(result.ok).toBe(false)
+  })
 })

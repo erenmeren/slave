@@ -23,6 +23,8 @@ export type ControlRefusal =
    * cheap: it turns a future ordering regression into a refusal instead of two agents on one branch.
    */
   | { readonly kind: 'run_still_stopping'; readonly runId: string }
+  /** `requestPause` claimed the run but `signalPause` threw; the claim was rolled back (M13 §3.4). */
+  | { readonly kind: 'pause_unsignalled'; readonly runId: string; readonly reason: string }
   /**
    * The run's provider cannot continue a session it stopped (`canResumeSession: false`), so there
    * is no resume to record (M12 final review I1, spec §4). Unreachable for both shipped providers,
@@ -70,6 +72,8 @@ export function refusalText(refusal: ControlRefusal): string {
       return `run ${refusal.runId} has no checkpoint: there is nothing to resume it from`
     case 'run_still_stopping':
       return 'the run is still stopping; retry in a moment'
+    case 'pause_unsignalled':
+      return `the pause could not be signalled to run ${refusal.runId}: ${refusal.reason}`
     case 'provider_cannot_resume':
       return `run ${refusal.runId} is on ${refusal.provider}, which cannot continue a stopped session`
     case 'task_not_found':
