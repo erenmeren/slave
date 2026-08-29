@@ -81,6 +81,30 @@ describe('the workspace settings verbs', () => {
       })
       expect((await setWorkspaceProvider(fixture.workspace.id, 'cursor')).ok).toBe(true)
     })
+
+    it('leaves exactly one row when two writers with different kinds race', async (): Promise<void> => {
+      // I1. Under READ COMMITTED, `deleteMany` in one transaction cannot see the other's
+      // uncommitted `create`, and `@@unique([workspaceId, kind])` does not collide across DIFFERENT
+      // kinds -- so without a lock on the `Workspace` row both writers delete nothing of the
+      // other's and both insert, leaving TWO rows. Two rows make `workspaceDefaultProvider` return
+      // null, and since Task 3 every dispatch that then throws burns an attempt per task per tick.
+      // The loop is what makes the interleaving likely; the assertion is what makes it a test.
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        await prisma.providerConfiguration.deleteMany({ where: { workspaceId: fixture.workspace.id } })
+
+        const [claudeResult, cursorResult] = await Promise.all([
+          setWorkspaceProvider(fixture.workspace.id, 'claude_code'),
+          setWorkspaceProvider(fixture.workspace.id, 'cursor'),
+        ])
+        expect(claudeResult.ok).toBe(true)
+        expect(cursorResult.ok).toBe(true)
+
+        const rows = await prisma.providerConfiguration.findMany({ where: { workspaceId: fixture.workspace.id } })
+        expect(rows).toHaveLength(1)
+        // Which writer won is genuinely a race; that a default still RESOLVES is not.
+        expect(['claude_code', 'cursor']).toContain(await workspaceDefaultProvider(fixture.workspace.id))
+      }
+    })
   })
 
   describe('setWorkspaceBudget', () => {

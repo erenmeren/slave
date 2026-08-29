@@ -38,7 +38,22 @@ export async function setWorkspaceProvider(
   const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId }, select: { id: true } })
   if (workspace === null) return err({ kind: 'workspace_not_found', workspaceId })
 
-  const from = await prisma.$transaction(async (tx) => {
+  const outcome = await prisma.$transaction(async (tx) => {
+    // ONE WRITER AT A TIME (I1). Delete-then-insert is only "exactly one row or nothing" if nobody
+    // else is between the two statements, and under READ COMMITTED nothing else here serialises
+    // them: neither `deleteMany` sees the other transaction's uncommitted `create`, and
+    // `@@unique([workspaceId, kind])` does not collide when the two writers pick DIFFERENT kinds.
+    // Two concurrent kind changes therefore both delete nothing and both insert, leaving two rows
+    // -- at which point `workspaceDefaultProvider` returns null and every dispatch in the workspace
+    // throws, burning an attempt per task per tick (Task 3's `releaseTaskAfterFailure`). Locking the
+    // `Workspace` row makes the second writer wait for the first to COMMIT, so its `deleteMany`
+    // sees the committed row and replaces it. The lock is taken on the parent row rather than on
+    // `ProviderConfiguration` because the rows being serialised are the ones that may not exist yet.
+    const locked = await tx.$queryRaw<{ id: string }[]>`SELECT id FROM "Workspace" WHERE id = ${workspaceId} FOR UPDATE`
+    // The workspace can be deleted between the read above and this lock; zero locked rows is the
+    // same answer that read gives, spelled the same way.
+    if (locked.length === 0) return { locked: false } as const
+
     const existing = await tx.providerConfiguration.findMany({ where: { workspaceId }, select: { kind: true } })
     await tx.providerConfiguration.deleteMany({ where: { workspaceId } })
     if (kind !== null) {
@@ -49,8 +64,10 @@ export async function setWorkspaceProvider(
     }
     // The same "exactly one row or nothing" rule `workspaceDefaultProvider` reads by: a workspace
     // that somehow held two rows had no resolvable default, so `from` is honestly `null`.
-    return existing.length === 1 ? existing[0]!.kind : null
+    return { locked: true, from: existing.length === 1 ? existing[0]!.kind : null } as const
   })
+  if (!outcome.locked) return err({ kind: 'workspace_not_found', workspaceId })
+  const from = outcome.from
 
   await appendEvent({
     type: 'workspace.settings_changed',
