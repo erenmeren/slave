@@ -1,9 +1,10 @@
 import { spawn } from 'node:child_process'
-import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, existsSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { beforeEach, describe, expect, it } from 'vitest'
+import { copyGateInto } from './helpers/gate-fixture.js'
 
 const repoRoot = fileURLToPath(new URL('../../../', import.meta.url))
 const gatePath = path.join(repoRoot, 'scripts/cursor-shell-gate.sh')
@@ -19,10 +20,14 @@ interface RunHookOptions {
   // `'flagVar' in options`, not via `options.flagVar === undefined`, so the two are
   // distinguishable. Mirrors `pause-gate.test.ts`.
   readonly flagVar?: string | undefined
+  // The script to spawn, when it is deliberately NOT the repo's own copy -- used by the
+  // deployment tests below, which need a gate at a path they control.
+  readonly gateOverride?: string
 }
 
 interface RunHookResult {
   readonly stdout: string
+  readonly stderr: string
   readonly code: number | null
 }
 
@@ -57,9 +62,10 @@ function runHook(options: RunHookOptions = {}): Promise<RunHookResult> {
   }
 
   return new Promise((resolve, reject) => {
-    const child = spawn(gatePath, [], { env, stdio: ['pipe', 'pipe', 'pipe'] })
+    const child = spawn(options.gateOverride ?? gatePath, [], { env, stdio: ['pipe', 'pipe', 'pipe'] })
 
     let stdout = ''
+    let stderr = ''
     let settled = false
 
     const fail = (error: Error): void => {
@@ -72,17 +78,18 @@ function runHook(options: RunHookOptions = {}): Promise<RunHookResult> {
     child.stdout.on('data', (chunk: Buffer) => {
       stdout += chunk.toString('utf8')
     })
-    // Drained, not asserted on -- the exit-2 paths report their reason on stderr, and Cursor
-    // turns that stderr into the operator-facing block reason, but this suite's verdict is
-    // stdout shape + exit code, matching the script's documented contract.
-    child.stderr.resume()
+    // Captured, not discarded, since M13: on exit 2 Cursor builds the operator-facing block reason
+    // from stderr when stdout is empty, and the "deployed without its library" refusal lives there.
+    child.stderr.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString('utf8')
+    })
 
     child.once('error', fail)
     child.once('close', (code: number | null) => {
       if (settled) return
       settled = true
       rmSync(dir, { recursive: true, force: true })
-      resolve({ stdout, code })
+      resolve({ stdout, stderr, code })
     })
 
     child.stdin.end()
@@ -194,16 +201,67 @@ describe('cursor-shell-gate.sh', () => {
     }
   })
 
-  // A directory is not a file, so `-f` is false and this is an ALLOW, not a read failure. Pinned
-  // because the alternative reading -- "something is there, deny" -- is the tempting one.
-  it('allows when the flag path names a directory rather than a file', async (): Promise<void> => {
+  // Was an ALLOW through M12 ("a directory is not a file, so `-f` is false"), pinned because the
+  // alternative reading looked like the tempting one. M13 §4.2 rules the other way for both gates:
+  // present-but-not-a-regular-file is a broken configuration, and exit 2 is Cursor's own blocking
+  // exit code (measured: exit 2 stopped the command outright, while exit 1 with garbage on stdout
+  // let it through).
+  it('exits 2 when the flag path names a directory rather than a file', async (): Promise<void> => {
     const dir = mkdtempSync(path.join(tmpdir(), 'aiteamos-cursor-gate-dir-'))
     try {
       const { stdout, code } = await runHook({ flagVar: dir })
-      expect(code).toBe(0)
-      expect((JSON.parse(stdout) as { permission: string }).permission).toBe('allow')
+      expect(code).toBe(2)
+      expect(stdout).toBe('')
     } finally {
       rmSync(dir, { recursive: true, force: true })
+    }
+  })
+  // M13 §4.2 moved `json_string` and the pause-flag read into `scripts/lib/pause-flag.sh`, which
+  // this gate sources from a `lib/` directory beside its own resolved location. That makes the
+  // script no longer self-contained, and `AITEAMOS_CURSOR_GATE_PATH` lets an operator point this gate at any copy
+  // of it. A copy made without the library must therefore REFUSE, loudly and actionably, rather
+  // than gate nothing: exit 2 (fail-closed on both runtimes), nothing on stdout, and a stderr
+  // message that names the exact path it looked for so the misdeployment is fixable at a glance.
+  it('exits 2 and names the missing library when deployed without lib/pause-flag.sh', async (): Promise<void> => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'aiteamos-cursor-gate-lonely-'))
+    try {
+      const lonely = path.join(dir, 'cursor-shell-gate.sh')
+      copyFileSync(gatePath, lonely)
+      chmodSync(lonely, 0o755)
+      const flagPath = path.join(dir, 'pause.flag')
+      writeFileSync(flagPath, 'should never be read')
+
+      const { stdout, stderr, code } = await runHook({ gateOverride: lonely, flagVar: flagPath })
+      expect(code).toBe(2)
+      expect(stdout).toBe('')
+      expect(stderr).toContain('lib/pause-flag.sh')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  // The library lives beside the REAL script, not beside a symlink to it, so the source path is
+  // resolved with `readlink -f` before its directory is taken. A hook deployed as a symlink (a
+  // `.claude/cursor-shell-gate.sh` link into a checkout, say) must still find its sibling, and
+  // must still deny.
+  it('follows a symlink to the real script and still denies', async (): Promise<void> => {
+    const realDir = mkdtempSync(path.join(tmpdir(), 'aiteamos-cursor-gate-real-'))
+    const linkDir = mkdtempSync(path.join(tmpdir(), 'aiteamos-cursor-gate-link-'))
+    try {
+      const real = copyGateInto(realDir, 'cursor-shell-gate.sh')
+      const link = path.join(linkDir, 'cursor-shell-gate.sh')
+      symlinkSync(real, link)
+      const flagPath = path.join(linkDir, 'pause.flag')
+      writeFileSync(flagPath, 'paused via a symlinked hook')
+
+      const { stdout, code } = await runHook({ gateOverride: link, flagVar: flagPath })
+      expect(code).toBe(0)
+      const parsed = JSON.parse(stdout) as { permission: string; user_message: string }
+      expect(parsed.permission).toBe('deny')
+      expect(parsed.user_message).toBe('paused via a symlinked hook')
+    } finally {
+      rmSync(realDir, { recursive: true, force: true })
+      rmSync(linkDir, { recursive: true, force: true })
     }
   })
 })

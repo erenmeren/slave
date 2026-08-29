@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -7,10 +7,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import { ClaudeCodeAdapter, type StartRunInput } from '../src/claude/adapter.js'
 import type { RuntimeEvent } from '../src/types.js'
+import { copyGateInto } from './helpers/gate-fixture.js'
 
 const FAKE = fileURLToPath(new URL('./fake-claude.mjs', import.meta.url))
-const repoRoot = fileURLToPath(new URL('../../../', import.meta.url))
-const realGate = path.join(repoRoot, 'scripts/pause-gate.sh')
 
 /**
  * Drains the run's normalized event stream (proving `events()` still works
@@ -42,9 +41,9 @@ describe('ClaudeCodeAdapter', () => {
     // discriminating hook script even though most of them never touch
     // pause behavior directly. A fresh copy per test, not the repo's own
     // file, since nothing here has any business mutating that.
-    hookPath = path.join(worktreePath, 'pause-gate.sh')
-    writeFileSync(hookPath, readFileSync(realGate))
-    chmodSync(hookPath, 0o755)
+    // Copies `scripts/lib/pause-flag.sh` alongside as well -- since M13 §4.2 the gate sources it
+    // from a `lib/` directory beside itself, and a lone copy refuses to run.
+    hookPath = copyGateInto(worktreePath, 'pause-gate.sh')
     input = {
       runId: runId('run-1'),
       prompt: 'do the thing',

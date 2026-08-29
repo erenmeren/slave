@@ -1,7 +1,6 @@
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { runId as makeRunId, type RunId } from '@ai-team-os/domain'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { CursorAdapter } from '../src/cursor/adapter.js'
@@ -9,9 +8,7 @@ import type { Checkpoint } from '../src/claude/checkpoint.js'
 import type { StartRunInput } from '../src/claude/adapter.js'
 import { buildRegistry } from '../src/index.js'
 import type { RuntimeEvent } from '../src/types.js'
-
-const repoRoot = fileURLToPath(new URL('../../../', import.meta.url))
-const realGate = path.join(repoRoot, 'scripts/cursor-shell-gate.sh')
+import { copyGateInto } from './helpers/gate-fixture.js'
 
 /**
  * Every process spawned in this file is REAL -- a small shell script written into the test's own
@@ -113,10 +110,10 @@ describe('CursorAdapter', () => {
     runDir = path.join(worktreePath, 'run')
     mkdirSync(runDir)
     // A fresh copy of the real committed gate per test -- the pre-flight spawns it for real, and
-    // nothing here has any business mutating the repository's own file.
-    gatePath = path.join(worktreePath, 'cursor-shell-gate.sh')
-    writeFileSync(gatePath, readFileSync(realGate))
-    chmodSync(gatePath, 0o755)
+    // nothing here has any business mutating the repository's own file. The helper brings
+    // `scripts/lib/pause-flag.sh` into `<dir>/lib/` with it: since M13 §4.2 the gate sources its
+    // encoder from there, and a copy without the library refuses to run.
+    gatePath = copyGateInto(worktreePath, 'cursor-shell-gate.sh')
     input = {
       runId: makeRunId('run-1'),
       prompt: 'do the thing',

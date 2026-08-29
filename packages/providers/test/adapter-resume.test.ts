@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import { ClaudeCodeAdapter, type RunHandle, type StartRunInput } from '../src/claude/adapter.js'
 import type { Checkpoint } from '../src/claude/checkpoint.js'
+import { copyGateInto } from './helpers/gate-fixture.js'
 
 const FAKE = fileURLToPath(new URL('./fake-claude.mjs', import.meta.url))
 const repoRoot = fileURLToPath(new URL('../../../', import.meta.url))
@@ -91,9 +92,9 @@ describe('ClaudeCodeAdapter.resume', () => {
     expect(existsSync(realGate)).toBe(true)
     worktreePath = mkdtempSync(path.join(tmpdir(), 'aiteamos-adapter-resume-'))
 
-    hookPath = path.join(worktreePath, 'pause-gate.sh')
-    writeFileSync(hookPath, readFileSync(realGate))
-    chmodSync(hookPath, 0o755)
+    // Copies `scripts/lib/pause-flag.sh` alongside as well -- since M13 §4.2 the gate sources it
+    // from a `lib/` directory beside itself, and a lone copy refuses to run.
+    hookPath = copyGateInto(worktreePath, 'pause-gate.sh')
 
     // The same non-discriminating-hook fixture `flags.test.ts`'s `preflightGate` tests already
     // use (finding B's ruling: reuse it, do not invent a second one) -- replicated here rather
@@ -610,9 +611,7 @@ describe('ClaudeCodeAdapter.resume against a runId this adapter instance never s
   it('resumes successfully, and afterwards events()/cancel() work against the resumed run', async (): Promise<void> => {
     const worktreePath = mkdtempSync(path.join(tmpdir(), 'aiteamos-adapter-resume-unknown-'))
     try {
-      const hookPath = path.join(worktreePath, 'pause-gate.sh')
-      writeFileSync(hookPath, readFileSync(realGate))
-      chmodSync(hookPath, 0o755)
+      const hookPath = copyGateInto(worktreePath, 'pause-gate.sh')
 
       // A fresh adapter instance, deliberately -- never handed this runId to `start()`, matching
       // what a daemon restart actually looks like: a new process with no memory of prior runs.

@@ -1,9 +1,10 @@
-import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { claudeFlags, preflightGate } from '../src/claude/flags.js'
+import { copyGateInto } from './helpers/gate-fixture.js'
 
 const repoRoot = fileURLToPath(new URL('../../../', import.meta.url))
 const realGate = path.join(repoRoot, 'scripts/pause-gate.sh')
@@ -52,10 +53,10 @@ describe('preflightGate', () => {
 
     // A fresh executable copy of the real gate, per test -- some tests
     // mutate its permissions, and the repo's own copy of the script must
-    // not be touched by that.
-    hookPath = path.join(dir, 'pause-gate.sh')
-    writeFileSync(hookPath, readFileSync(realGate))
-    chmodSync(hookPath, 0o755)
+    // not be touched by that. The helper copies `scripts/lib/pause-flag.sh`
+    // into `<dir>/lib/` too: M13 §4.2 moved the JSON encoder and the pause-flag
+    // read there, and a gate copied without its library refuses to run at all.
+    hookPath = copyGateInto(dir, 'pause-gate.sh')
 
     alwaysDenyHook = path.join(dir, 'always-deny.sh')
     writeFileSync(

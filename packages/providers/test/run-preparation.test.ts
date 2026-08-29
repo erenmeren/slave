@@ -1,13 +1,10 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { runId } from '@ai-team-os/domain'
 import { describe, expect, it } from 'vitest'
 import { ClaudeCodeAdapter } from '../src/index.js'
-
-const repoRoot = fileURLToPath(new URL('../../../', import.meta.url))
-const realGate = join(repoRoot, 'scripts/pause-gate.sh')
+import { copyGateInto } from './helpers/gate-fixture.js'
 
 describe('the Claude adapter prepares its own run files', () => {
   it('writes the settings file itself, registering the hook it was configured with', async () => {
@@ -24,9 +21,9 @@ describe('the Claude adapter prepares its own run files', () => {
     // A real, discriminating hook script, not a bare literal path -- `start()` (Task 6) runs the
     // pre-flight gate against `ClaudeCodeAdapterOptions.hookPath` before writing anything, exactly
     // as every other adapter test in this package sets one up.
-    const hookPath = join(dir, 'pause-gate.sh')
-    writeFileSync(hookPath, readFileSync(realGate))
-    chmodSync(hookPath, 0o755)
+    // The helper copies `scripts/lib/pause-flag.sh` into `<dir>/lib/` too -- since M13 §4.2 the
+    // gate sources its encoder from there, and a copy without the library refuses to run.
+    const hookPath = copyGateInto(dir, 'pause-gate.sh')
 
     const adapter = new ClaudeCodeAdapter({ command: '/bin/true', hookPath })
 

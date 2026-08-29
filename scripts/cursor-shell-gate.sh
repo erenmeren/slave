@@ -72,37 +72,35 @@ set -uo pipefail
 # exit 2. Every exit path below is explicit instead, and every one of them
 # lands on exactly 0 or 2.
 
-# JSON-encodes a single string the way `node`'s `JSON.stringify` does: escapes
-# quotes, backslashes and control characters, passes valid UTF-8 through
-# unchanged, and never emits a raw newline. `node` is a hard runtime
-# requirement of this monorepo (root package.json: "engines": {"node": ">=26"})
-# and is therefore present on any host able to run the orchestrator that spawns
-# this hook, so this adds no dependency the way reaching for `jq` would.
+# The JSON encoder and the pause-flag read live in scripts/lib/pause-flag.sh, shared with
+# scripts/pause-gate.sh: one encoder, one flag contract, two output shapes. Piping the reason
+# through a real encoder, rather than hand-rolling `sed`/`printf` escapes for quotes, backslashes,
+# newlines, tabs and arbitrary control characters, is the whole point: a hand-rolled bash escaper is
+# exactly the kind of code that looks right until the one input nobody tried breaks it, and here a
+# malformed deny is WORSE than in Claude's gate. Cursor's parser is lenient -- it retries a failed
+# parse by scanning backwards for the last `{` that parses -- so a broken escape does not reliably
+# produce a parse error that `failClosed` would convert into a block; it can just as easily produce
+# a well-formed object that is missing the `permission` key, which reads as an allow. The shared
+# encoder also carries M12's fix for the leading-`-` argv hole (the reason goes in on stdin, never
+# as a `node` argv word) and the leading-`"` guard that catches an encoder regression.
 #
-# Piping the reason through a real encoder, rather than hand-rolling
-# `sed`/`printf` escapes for quotes, backslashes, newlines, tabs and arbitrary
-# control characters, is the whole point: a hand-rolled bash escaper is exactly
-# the kind of code that looks right until the one input nobody tried breaks it,
-# and here a malformed deny is WORSE than in Claude's gate. Cursor's parser is
-# lenient -- it retries a failed parse by scanning backwards for the last `{`
-# that parses -- so a broken escape does not reliably produce a parse error
-# that `failClosed` would convert into a block; it can just as easily produce a
-# well-formed object that is missing the `permission` key, which reads as an
-# allow.
-#
-# The string is passed on stdin, not as a `node` argv word: an operator-chosen reason beginning
-# with `-` (say, `--version` or `-e x`) would otherwise be parsed by `node` itself as an option
-# rather than reaching `process.argv`. Measured against the committed argv form: `--version`
-# printed node's own version string with exit 0 -- a MALFORMED DENY indistinguishable from a
-# well-formed one at the exit-code/stdout-shape level -- and `-e x` failed with `bad option`.
-# Piping instead of a `node -- "$1"` end-of-options separator also means this never depends on
-# every future encoder invocation remembering to add one.
-json_string() {
-  printf '%s' "$1" | node -e '
-    let s = "";
-    process.stdin.on("data", (c) => { s += c; });
-    process.stdin.on("end", () => { process.stdout.write(JSON.stringify(s)); });
-  '
+# Sourced by a path derived from this script's own location, symlinks resolved: a hook is invoked
+# by `cursor-agent` with no guarantee about cwd, and a failure to source it is fail-closed like
+# every other failure.
+PAUSE_GATE_NAME='cursor-shell-gate.sh'
+# `readlink -f` first, so a gate DEPLOYED AS A SYMLINK into this repo still finds its sibling: the
+# library lives next to the real script, not next to the link. Linux coreutils is the deployment
+# target, and a `readlink` that fails falls back to the unresolved path rather than to nothing.
+PAUSE_GATE_LIB_DIR="$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}" || printf '%s' "${BASH_SOURCE[0]}")")"
+# shellcheck source=lib/pause-flag.sh
+. "${PAUSE_GATE_LIB_DIR}/lib/pause-flag.sh" || {
+  # A lone copy of this script -- an AITEAMOS_CURSOR_GATE_PATH override pointing at a deployment
+  # that copied the gate without its library -- must refuse loudly and actionably rather than
+  # silently gating nothing. Naming the exact path we looked for is what makes it fixable at a
+  # glance, and stderr is where Cursor reads an exit-2 block reason from.
+  printf 'cursor-shell-gate.sh: deployed without its library -- expected to find it at %s. Copy scripts/lib/pause-flag.sh alongside this script (in a lib/ directory beside it), or point AITEAMOS_CURSOR_GATE_PATH at the repository'"'"'s own scripts/cursor-shell-gate.sh.\n' \
+    "${PAUSE_GATE_LIB_DIR}/lib/pause-flag.sh" >&2
+  exit 2
 }
 
 # Fails loudly on stderr and exits 2 -- Cursor's blocking exit code. Used for
@@ -119,22 +117,12 @@ fail_closed() {
 deny() {
   local reason="$1"
   local encoded_reason
-  encoded_reason=$(json_string "$reason")
-  local encode_status=$?
-  # A well-formed `JSON.stringify` of a string always starts with `"` -- checking that, not just
-  # "nonempty", is what catches a future encoder regression (an argv/option misparse, a stray
-  # diagnostic on stdout) that produces innocuous-looking but non-JSON text with node's own exit 0,
-  # the same shape the leading-`-` hole above had before this fix.
-  if [[ $encode_status -ne 0 || -z "$encoded_reason" || "${encoded_reason:0:1}" != '"' ]]; then
-    fail_closed "failed to JSON-encode the deny reason (node exit ${encode_status}; reason was: ${reason})"
-  fi
+  encoded_reason=$(json_string "$reason") || fail_closed "failed to JSON-encode the deny reason (reason was: ${reason})"
 
   local payload
   payload=$(printf '{"permission":"deny","user_message":%s}' "$encoded_reason")
-  # Single printf call, one line, well under PIPE_BUF (4096 bytes on Linux) --
-  # writes at this size are atomic to a pipe, so this either delivers the
-  # complete deny JSON or none of it. json_string never introduces a raw
-  # newline, so this stays one line regardless of what the reason contains.
+  # Single printf call, one line, well under PIPE_BUF -- atomic to a pipe at this size, and
+  # json_string never introduces a raw newline, so this stays one line whatever the reason holds.
   if printf '%s\n' "$payload"; then
     exit 0
   fi
@@ -152,43 +140,15 @@ allow() {
 
 cat > /dev/null   # drain the hook payload on stdin
 
-# AITEAMOS_PAUSE_FLAG unset or empty is a configuration error, not "no pause
-# requested" -- there is deliberately no shared-default fallback path, exactly
-# as in pause-gate.sh. In an autonomous system running several agents
-# concurrently, pause is the operator's only intervention lever: silently
-# falling back to a single hardcoded path would let pausing one agent
-# inadvertently freeze an unrelated one sharing that default, and silently
-# allowing would disable the intervention lever without anyone noticing.
-# Denying loudly, naming the misconfiguration, is the least harmful of the
-# three -- it surfaces at the first shell command instead of during an incident.
-if [[ -z "${AITEAMOS_PAUSE_FLAG:-}" ]]; then
-  deny "AITEAMOS_PAUSE_FLAG is unset or empty -- refusing to fall back to a shared default path. Set AITEAMOS_PAUSE_FLAG explicitly for this run before retrying."
-fi
+read_pause_reason
+pause_status=$?
+case $pause_status in
+  # An operator asked. The flag file's own contents carry the message.
+  0) deny "$PAUSE_REASON" ;;
+  # Unchanged from M12: no flag path is a deny with a body, at exit 0, not a hook failure.
+  2) deny "$PAUSE_REASON" ;;
+esac
 
-if [[ -f "$AITEAMOS_PAUSE_FLAG" ]]; then
-  # The pause flag's own contents carry the operator-facing deny message, the
-  # same channel pause-gate.sh uses: the flag file already exists per run, is
-  # created at exactly the moment the reason is known (an environment variable
-  # fixed at process spawn time cannot carry a reason chosen later, when the
-  # operator actually pauses), and this hook already stats it. An empty flag
-  # file keeps the static message below.
-  #
-  # Read byte-for-byte, not stripped: a bare `$(cat ...)` would silently drop
-  # every trailing newline, so the operator's message could gain or lose
-  # trailing whitespace depending on how it was written (`printf '%s'` vs
-  # `echo`). The `&& printf x` / `${var%x}` pair is the standard shell sentinel
-  # trick for defeating that stripping -- append one literal byte inside the
-  # same command substitution so the file's own trailing newlines are no longer
-  # trailing, then peel exactly that byte off with a parameter expansion.
-  raw_reason=$(cat "$AITEAMOS_PAUSE_FLAG" && printf x)
-  read_status=$?
-  if [[ $read_status -ne 0 ]]; then
-    # Cannot read the reason, so cannot produce a well-formed deny body -- same
-    # class of failure as a write failure, and it gets the same response.
-    fail_closed "failed to read the pause flag file at ${AITEAMOS_PAUSE_FLAG} (exit ${read_status})"
-  fi
-  raw_reason=${raw_reason%x}
-  deny "${raw_reason:-Paused by AI Team OS. Stop and wait.}"
-fi
-
+# Status 1: no pause requested. Cursor's allow must say so OUT LOUD -- silence here is read as a
+# hook failure, which `failClosed: true` converts into a block on every tool call of every run.
 allow
