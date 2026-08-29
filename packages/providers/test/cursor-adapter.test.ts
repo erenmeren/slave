@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -47,6 +47,13 @@ function writeStreamScript(
     name,
     `#!/bin/sh\ncat ${JSON.stringify(ndjsonPath)}\ncat ${JSON.stringify(stderrPath)} >&2\nexit ${String(spec.exitCode ?? 0)}\n`,
   )
+}
+
+/** The pid the quiescence fixture recorded for the grandchild it backgrounded, or `null`. */
+function grandchildPid(pidFile: string): number | null {
+  if (!existsSync(pidFile)) return null
+  const pid = Number(readFileSync(pidFile, 'utf8').trim())
+  return Number.isInteger(pid) && pid > 0 ? pid : null
 }
 
 function isAlive(pid: number): boolean {
@@ -121,6 +128,16 @@ describe('CursorAdapter', () => {
   })
 
   afterEach(() => {
+    // The quiescence fixture deliberately leaves a 30-second `sleep` alive; nothing else in this
+    // file spawns a grandchild, so a missing pid file is the ordinary case rather than a failure.
+    const pid = grandchildPid(path.join(runDir, 'grandchild.pid'))
+    if (pid !== null) {
+      try {
+        process.kill(pid, 'SIGKILL')
+      } catch {
+        // Already gone -- nothing to clean up.
+      }
+    }
     rmSync(worktreePath, { recursive: true, force: true })
   })
 
@@ -211,6 +228,41 @@ describe('CursorAdapter', () => {
     await drain(adapter, input.runId)
 
     expect(readFileSync(envOut, 'utf8')).toBe(`${input.pauseFlagPath}\nTest Agent\n${worktreePath}\n`)
+  })
+
+  it('ends the stream when the child exits, even while a grandchild holds its stdout open', async () => {
+    // THE ONLY SCENARIO THE QUIESCENCE MECHANISM EXISTS FOR, and until this test nothing exercised
+    // it: every other script here is well-behaved, so `child.once('close', finalize)` always won
+    // and `armQuiesce` was never what ended a stream.
+    //
+    // MEASURED against the real binary (Task 12 §4): `cursor-agent` leaves detached helpers -- a
+    // worker daemon and a typescript-language-server family -- holding an inherited dup of its
+    // stdout write end. A pipe closes when the LAST writer does, so neither readline's 'close' nor
+    // the child's own 'close' ever fires, and a reader waiting on either hangs forever on a run
+    // that has already finished. `sleep 30 &` reproduces exactly that: the backgrounded child
+    // inherits this script's stdout and outlives it.
+    const ndjson = path.join(runDir, 'grandchild.ndjson')
+    writeFileSync(ndjson, `${ASSISTANT_LINE}\n${RESULT_LINE}\n`)
+    const pidFile = path.join(runDir, 'grandchild.pid')
+    const script = writeScript(
+      runDir,
+      'grandchild.sh',
+      `#!/bin/sh\nsleep 30 &\necho $! > ${JSON.stringify(pidFile)}\ncat ${JSON.stringify(ndjson)}\nexit 0\n`,
+    )
+    const adapter = adapterFor(script)
+    await adapter.start(input)
+
+    const startedAt = Date.now()
+    const events = await drain(adapter, input.runId)
+    const elapsedMs = Date.now() - startedAt
+
+    // The stream ended at all -- the assertion that would have failed before the exit-based
+    // finalize, by hanging until vitest's own timeout rather than by reporting anything.
+    expect(terminatedOf(events).outcome.numTurns).toBe(1)
+    // And it ended promptly, on the child's exit plus the quiescence window, rather than waiting
+    // out the grandchild that is still holding the pipe.
+    expect(elapsedMs).toBeLessThan(10_000)
+    expect(grandchildPid(pidFile)).not.toBeNull()
   })
 
   it('derives numTurns by counting assistant lines, overriding the parser documented zero', async () => {
