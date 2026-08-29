@@ -190,6 +190,79 @@ async function writeCheckpoint(input: {
 }
 
 /**
+ * The `Checkpoint.pauseReason` recorded when a Cursor run is paused. Not a gate's deny message --
+ * there is no deny to quote, because there was no gate decision: the process was ended.
+ */
+const CURSOR_PAUSE_REASON =
+  'paused by cancelling the process (cursor has no mid-run gate; canPauseMidRun: false)'
+
+/**
+ * Records the pause of a Cursor run whose stream has just ended, and reports whether it did.
+ *
+ * **Why this branch exists at all.** Claude pauses through its gate: the hook denies a tool call,
+ * the pump sees `hook_denied` -> `stopped_by_gate` mid-stream, and the `paused` row and checkpoint
+ * are written there, long before the stream ends. Cursor has no such mechanism
+ * (`canPauseMidRun: false`) -- `signalPause('cursor', …)` ENDS THE PROCESS, so the only thing the
+ * pump ever observes is the stream stopping. Without this, that ending fell through to the
+ * "died without reporting" path: the operator's deliberate pause was recorded as `failed`, no
+ * checkpoint was written, `run.paused` never fired, and nothing could resume it. The run was
+ * killed exactly as asked and the system reported it as a crash.
+ *
+ * **Why it is scoped to `provider === 'cursor'`, and not to `pause_requested` alone.** For Claude,
+ * a stream that ends with no terminal event genuinely IS a dead run -- its pause would have fired
+ * mid-stream if it were a pause -- so treating a `pause_requested` Claude run's silent ending as a
+ * successful pause would reclassify every Claude crash that happened to race an operator's pause
+ * request. Series A freezes Claude's behaviour and this keeps that promise by construction:
+ * `claude_code` cannot enter this function's body at all.
+ *
+ * **No kill here**, unlike the gate path's `killWithEscalation`. The process is already gone; that
+ * is why this code is running.
+ */
+async function recordCursorPauseIfRequested(input: {
+  readonly runId: RunId
+  readonly sessionId: string | null
+  readonly toolCalls: number
+  readonly lastToolUseId: string | null
+  readonly lastToolName: string | null
+  readonly denied: readonly string[]
+  readonly spawn: PumpRunInput['spawn']
+  readonly emit: (
+    type: Parameters<typeof appendEvent>[0]['type'],
+    actor: Actor,
+    payload: unknown,
+  ) => Promise<void>
+}): Promise<boolean> {
+  if (input.spawn?.provider !== 'cursor') return false
+
+  // Claimed, not written, and the claim is what makes this idempotent: `pause_requested` is the
+  // one status that means "an operator asked and the signal was sent". A run that reached here in
+  // any other state ended for its own reasons and must keep the conclusion that state implies.
+  // `endedAt: null` for the usual reason -- an operator's `cancel` or the sweep may already have
+  // concluded this run, and their decision stands.
+  const claimed = await prisma.agentRun.updateMany({
+    where: { id: input.runId, endedAt: null, status: 'pause_requested' },
+    data: { status: 'paused', pausedAtStep: input.toolCalls },
+  })
+  if (claimed.count === 0) return false
+
+  // Status first, then the checkpoint, then the event -- the same order the gate path uses, so the
+  // two pause routes cannot drift into different crash-window behaviours.
+  await writeCheckpoint({
+    runId: input.runId,
+    sessionId: input.sessionId,
+    toolCalls: input.toolCalls,
+    lastToolUseId: input.lastToolUseId,
+    lastToolName: input.lastToolName,
+    denied: input.denied,
+    spawn: input.spawn,
+    pauseReason: CURSOR_PAUSE_REASON,
+    requestedBy: readPauseRequester(input.spawn.pauseFlagPath),
+  })
+  await input.emit('run.paused', 'system', { atStep: input.toolCalls })
+  return true
+}
+
+/**
  * Git, read-only, in the run's worktree.
  *
  * Asynchronous, and bounded. This is awaited inside the pump's `for await`, so a synchronous call
@@ -516,6 +589,26 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
   }
 
   if (gateFailed || paused) return null
+
+  // The Cursor half of the pause protocol (M12 Task 12 fix round 1). Placed here, after the loop
+  // and ahead of BOTH terminal paths below, because either of them can be how a killed Cursor run
+  // ends: the kill may land before the CLI writes its `result` line (no terminal event) or after
+  // it (a terminated event reporting an error). An operator asked for a pause in both cases, and
+  // `outcome` is deliberately ignored rather than consulted -- see the function's docstring.
+  if (
+    await recordCursorPauseIfRequested({
+      runId,
+      sessionId,
+      toolCalls,
+      lastToolUseId,
+      lastToolName,
+      denied,
+      spawn: input.spawn,
+      emit,
+    })
+  ) {
+    return null
+  }
 
   if (outcome === null) {
     const now = new Date()

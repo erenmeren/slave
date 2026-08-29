@@ -107,14 +107,17 @@ export async function pauseActiveRuns(
   const refused: string[] = []
   for (const run of runs) {
     // Per-run try/catch, not one around the loop (M12 Task 3 review, ruled to Task 12). Until this
-    // task there was no reachable throw: `signalPause` only ever dispatched `'claude_code'`, and
-    // no process had an adapter for anything else. Task 12 registers the Cursor adapter, so a
-    // Cursor run can now be live in a workspace while `signalPause`'s `'cursor'` branch still
-    // throws -- and an exception escaping here would abandon the rest of the fan-out, leaving
-    // every LATER run in the workspace unsignaled by an emergency stop. A run whose pause could
-    // not be signalled belongs in `refused` alongside the ones that lost a race, which is exactly
-    // what the caller already reports; what must never happen is the loop stopping early and
-    // nothing saying it did.
+    // milestone there was no reachable throw at all: `signalPause` only ever dispatched
+    // `'claude_code'`, whose branch just writes a file. A second provider changes that -- Cursor's
+    // pause ENDS A PROCESS, and ending a process can fail in ways writing a file cannot: no pid
+    // was ever recorded (`signalCursorPause` refuses that outright rather than reporting a pause
+    // it did not perform), or the flag write itself fails. An exception escaping here would
+    // abandon the rest of the fan-out, leaving every LATER run in the workspace unsignaled by an
+    // emergency stop -- a silent hole in the strongest guarantee this system makes, and precisely
+    // when it matters most. A run whose pause could not be signalled belongs in `refused`
+    // alongside the ones that lost a benign status race, which is what the caller already reports;
+    // what must never happen is the loop stopping early and nothing saying it did. The console
+    // line is what keeps the two kinds of `refused` distinguishable in the log.
     try {
       const result = await requestPause(run.id, requestedBy, category)
       if (result.ok) {
