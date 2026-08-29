@@ -170,6 +170,45 @@ describe('pumpRun, when a paused Cursor run ends', () => {
     expect(await eventTypesFor(ids.runId)).not.toContain('run.failed')
   })
 
+  it('lets a run that finished cleanly finish, even with a pause request in flight', async (): Promise<void> => {
+    // THE `finished_first` CASE the brief's own pause strategy names. `signalPause('cursor')` kills
+    // by pid, and a child that had already exited makes that a quiet no-op (ESRCH) -- so the row
+    // reads `pause_requested` while the stream carries a perfectly clean `result` line. The run is
+    // DONE. Recording it as `paused` would take a successful run non-terminal forever: the
+    // scheduler would never advance its task, and an operator would be invited to resume a session
+    // that has nothing left to do.
+    const ids = await seed('pause_requested')
+
+    await pumpRun({
+      ...ids,
+      spawn: spawnFacts,
+      events: fromArray([
+        { kind: 'session_started', sessionId: 's-cursor-1' },
+        {
+          kind: 'terminated',
+          outcome: {
+            isError: false,
+            terminalReason: 'success',
+            stopReason: null,
+            numTurns: 3,
+            costUsd: null,
+            deniedToolUseIds: [],
+          },
+        },
+      ]),
+    })
+
+    const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+    expect(run.status).toBe('succeeded')
+    expect(run.terminalAt).not.toBeNull()
+    expect(run.endedAt).not.toBeNull()
+    const types = await eventTypesFor(ids.runId)
+    expect(types).toContain('run.succeeded')
+    expect(types).not.toContain('run.paused')
+    // No resume point, because there is nothing to resume.
+    expect(await prisma.checkpoint.findUnique({ where: { runId: ids.runId } })).toBeNull()
+  })
+
   it('still fails a Cursor run that ended without anyone asking for a pause', async (): Promise<void> => {
     // The discriminator is the requested pause, not the provider. A Cursor run whose child simply
     // died is a failure and must stay one.

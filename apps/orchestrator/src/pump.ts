@@ -215,6 +215,17 @@ const CURSOR_PAUSE_REASON =
  * request. Series A freezes Claude's behaviour and this keeps that promise by construction:
  * `claude_code` cannot enter this function's body at all.
  *
+ * **Why a CLEAN terminal result wins over the pause request** (fix round 2). The row status alone is
+ * not the discriminator: `signalPause('cursor')` kills by pid, and a child that had already exited
+ * makes that a quiet no-op (ESRCH), so a run can finish perfectly while its row still reads
+ * `pause_requested`. That is the `finished_first` case the milestone's pause strategy names, and a
+ * pause that arrives after the work is done is not a pause -- there is nothing left to interrupt
+ * and nothing to resume. Recording it as `paused` would take a SUCCESSFUL run non-terminal forever:
+ * no `terminalAt`, no `endedAt`, a scheduler that never advances the task, and an operator invited
+ * to resume a session with nothing left to do. So a run that produced `isError: false` falls
+ * through to the terminal path below and is recorded as the success it was. A run that produced no
+ * terminal result, or an errored one, is the genuine pause: the kill is exactly what caused it.
+ *
  * **No kill here**, unlike the gate path's `killWithEscalation`. The process is already gone; that
  * is why this code is running.
  */
@@ -225,6 +236,8 @@ async function recordCursorPauseIfRequested(input: {
   readonly lastToolUseId: string | null
   readonly lastToolName: string | null
   readonly denied: readonly string[]
+  /** The run's own terminal result, when it produced one. See the docstring's fix-round-2 note. */
+  readonly outcome: RunOutcome | null
   readonly spawn: PumpRunInput['spawn']
   readonly emit: (
     type: Parameters<typeof appendEvent>[0]['type'],
@@ -233,6 +246,9 @@ async function recordCursorPauseIfRequested(input: {
   ) => Promise<void>
 }): Promise<boolean> {
   if (input.spawn?.provider !== 'cursor') return false
+  // A run that reported a clean terminal result finished; the pause request lost the race and does
+  // not get to reclassify it. Only "no terminal result" or "an errored one" reach the pause below.
+  if (input.outcome !== null && !input.outcome.isError) return false
 
   // Claimed, not written, and the claim is what makes this idempotent: `pause_requested` is the
   // one status that means "an operator asked and the signal was sent". A run that reached here in
@@ -591,10 +607,11 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
   if (gateFailed || paused) return null
 
   // The Cursor half of the pause protocol (M12 Task 12 fix round 1). Placed here, after the loop
-  // and ahead of BOTH terminal paths below, because either of them can be how a killed Cursor run
-  // ends: the kill may land before the CLI writes its `result` line (no terminal event) or after
-  // it (a terminated event reporting an error). An operator asked for a pause in both cases, and
-  // `outcome` is deliberately ignored rather than consulted -- see the function's docstring.
+  // and ahead of BOTH terminal paths below, because either can be how a killed Cursor run ends: the
+  // kill may land before the CLI writes its `result` line (no terminal event) or after it (a
+  // terminated event reporting an error). `outcome` is passed in rather than ignored (fix round 2)
+  // -- a CLEAN terminal result means the run finished before the pause reached it, and that run is
+  // a success, not a pause. See the function's docstring.
   if (
     await recordCursorPauseIfRequested({
       runId,
@@ -603,6 +620,7 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
       lastToolUseId,
       lastToolName,
       denied,
+      outcome,
       spawn: input.spawn,
       emit,
     })
