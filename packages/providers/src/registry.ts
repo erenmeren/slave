@@ -1,4 +1,5 @@
 import { ClaudeCodeAdapter, type AgentRuntimeAdapter, type ClaudeCodeAdapterOptions } from './claude/adapter.js'
+import { CursorAdapter, type CursorAdapterOptions } from './cursor/adapter.js'
 import type { ProviderKind } from './types.js'
 
 /**
@@ -24,10 +25,11 @@ export class UnknownProviderError extends Error {
  * `buildRegistry` was actually given options for.
  *
  * `resolve` is exhaustive over the kinds this particular registry was configured with, not over
- * `ProviderKind` as a whole: a kind with no matching option -- `'cursor'`, until Task 12 lands
- * `CursorAdapterOptions` and a `CursorAdapter` to construct from it -- has no entry at all, and
- * `resolve` refuses it (`UnknownProviderError`) rather than falling back to whichever kind IS
- * configured.
+ * `ProviderKind` as a whole: a kind with no matching option has no entry at all, and `resolve`
+ * refuses it (`UnknownProviderError`) rather than falling back to whichever kind IS configured.
+ * Both kinds can be constructed now (M12 Task 12 landed `CursorAdapter`), but a registry built
+ * without `cursor` options still refuses `'cursor'` -- what a process was CONFIGURED with, not
+ * what the package can build, remains the question `resolve` answers.
  */
 export interface AdapterRegistry {
   resolve(kind: ProviderKind): AgentRuntimeAdapter
@@ -39,16 +41,21 @@ export interface AdapterRegistry {
  * used to make before this task, just handing back something that can hold more than one kind of
  * adapter instead of exactly one.
  *
- * Only `claudeCode` exists today. A `cursor` option is deliberately not part of this signature
- * yet: `CursorAdapterOptions` and the `CursorAdapter` class it would construct are Task 12's to
- * add (M12 Series D), and a field typed against a class that does not exist cannot compile. Task
- * 12 widens this options type when it lands the second kind; a caller that never passes `cursor`
- * keeps building exactly the registry it builds today.
+ * Widened by M12 Task 12 with a second, still OPTIONAL field. Both are optional and neither is
+ * defaulted: a deployment that was never given a Cursor gate script must refuse `'cursor'` rather
+ * than construct an adapter around a path nobody checked, and an existing caller that passes only
+ * `claudeCode` keeps building exactly the registry it built before this field existed.
  */
-export function buildRegistry(options: { readonly claudeCode?: ClaudeCodeAdapterOptions }): AdapterRegistry {
+export function buildRegistry(options: {
+  readonly claudeCode?: ClaudeCodeAdapterOptions
+  readonly cursor?: CursorAdapterOptions
+}): AdapterRegistry {
   const adapters = new Map<ProviderKind, AgentRuntimeAdapter>()
   if (options.claudeCode !== undefined) {
     adapters.set('claude_code', new ClaudeCodeAdapter(options.claudeCode))
+  }
+  if (options.cursor !== undefined) {
+    adapters.set('cursor', new CursorAdapter(options.cursor))
   }
 
   return {

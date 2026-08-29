@@ -106,10 +106,24 @@ export async function pauseActiveRuns(
   const requested: string[] = []
   const refused: string[] = []
   for (const run of runs) {
-    const result = await requestPause(run.id, requestedBy, category)
-    if (result.ok) {
-      requested.push(run.id)
-    } else {
+    // Per-run try/catch, not one around the loop (M12 Task 3 review, ruled to Task 12). Until this
+    // task there was no reachable throw: `signalPause` only ever dispatched `'claude_code'`, and
+    // no process had an adapter for anything else. Task 12 registers the Cursor adapter, so a
+    // Cursor run can now be live in a workspace while `signalPause`'s `'cursor'` branch still
+    // throws -- and an exception escaping here would abandon the rest of the fan-out, leaving
+    // every LATER run in the workspace unsignaled by an emergency stop. A run whose pause could
+    // not be signalled belongs in `refused` alongside the ones that lost a race, which is exactly
+    // what the caller already reports; what must never happen is the loop stopping early and
+    // nothing saying it did.
+    try {
+      const result = await requestPause(run.id, requestedBy, category)
+      if (result.ok) {
+        requested.push(run.id)
+      } else {
+        refused.push(run.id)
+      }
+    } catch (error) {
+      console.error(`[pause] failed to signal pause for run ${run.id}:`, error)
       refused.push(run.id)
     }
   }

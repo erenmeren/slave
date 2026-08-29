@@ -125,6 +125,20 @@ function hookPath(): string {
 }
 
 /**
+ * Cursor's gate script, sourced exactly the way `hookPath()` above sources Claude's and for the
+ * same reasons -- derived from this file's own location so a checkout works with no configuration,
+ * overridable because an installed daemon's layout is not this one. A separate variable rather
+ * than a shared one: the two runtimes' gates answer different protocols (Cursor's allow must be
+ * spoken out loud; Claude's is silence), so pointing one at the other's script would produce a
+ * gate that looks installed and blocks every tool call, or one that never blocks any.
+ */
+function cursorGatePath(): string {
+  const fromEnv = process.env['AITEAMOS_CURSOR_GATE_PATH']
+  if (fromEnv !== undefined && fromEnv !== '') return resolve(fromEnv)
+  return resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'scripts', 'cursor-shell-gate.sh')
+}
+
+/**
  * The registry every command resolves its adapter from.
  *
  * The binary to spawn for a run is injectable through the environment rather than through a flag,
@@ -136,13 +150,18 @@ function hookPath(): string {
  * builds a registry now. Task 8 made a run's provider a real per-run choice: every dispatch
  * resolves its OWN `ProviderKind` and looks it up here (`apps/orchestrator/src/provider.ts`'s
  * `resolveAdapter`), rather than every caller being handed the same adapter regardless of what it
- * asked for. This registry still has exactly one kind configured (`claudeCode`) -- not because the
- * selection is hardcoded any more, but because Task 12 (Cursor) has not registered a second one
- * yet, so any run resolved to a kind other than `claude_code` refuses with `invalid_provider` here.
+ * asked for.
+ *
+ * M12 Task 12 registers the SECOND kind, which is the point at which "the registry picks the
+ * adapter" stops being a claim about one entry. Both are configured unconditionally here: a
+ * deployment that has no `cursor-agent` on its PATH refuses at spawn time with a message naming
+ * the binary, which is a better answer than `invalid_provider` -- that refusal means "this process
+ * was never wired for that provider", and after this task it would be false.
  */
 function buildAdapterRegistry(): AdapterRegistry {
   const command = process.env['AITEAMOS_CLAUDE_BIN'] ?? 'claude'
   const extra = process.env['AITEAMOS_CLAUDE_ARGS']
+  const cursorExtra = process.env['AITEAMOS_CURSOR_ARGS']
   return buildRegistry({
     claudeCode: {
       command,
@@ -151,6 +170,14 @@ function buildAdapterRegistry(): AdapterRegistry {
       // it used to be threaded through `TickDeps`/`DaemonDeps` and into every `adapter.start()`
       // call; now it is set once, here.
       hookPath: hookPath(),
+    },
+    cursor: {
+      // Injectable through the environment for the same reason `AITEAMOS_CLAUDE_BIN` is: the gate
+      // has to drive a fake CLI and the real one down the same code path, and a flag only tests
+      // pass is a flag nobody runs.
+      command: process.env['AITEAMOS_CURSOR_BIN'] ?? 'cursor-agent',
+      ...(cursorExtra === undefined || cursorExtra === '' ? {} : { extraArgs: cursorExtra.split(' ') }),
+      gatePath: cursorGatePath(),
     },
   })
 }

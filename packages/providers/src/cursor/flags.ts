@@ -1,3 +1,9 @@
+import { spawn } from 'node:child_process'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { z } from 'zod'
+
 /**
  * The mandatory CLI flags for every `cursor-agent` run this adapter spawns
  * (spec §7). Pure, like `claudeFlags`: given the same input it always returns
@@ -102,4 +108,137 @@ function requireUsable(field: string, value: string): void {
         'Omit the field entirely rather than passing an empty value.',
     )
   }
+}
+
+/**
+ * The Cursor half of spec §5.5's pre-flight gate check -- "a written hooks file is not an armed
+ * gate". Spawns `gatePath` directly (never through `cursor-agent`), twice, and asserts BOTH
+ * directions:
+ *
+ * - flag file present -> `permission: "deny"` on stdout, exit 0
+ * - flag file absent  -> `{"permission":"allow"}` on stdout, exit 0
+ *
+ * One direction is not enough, for exactly the reason `claude/flags.ts`'s `preflightGate` gives:
+ * `cursor-shell-gate.sh` also denies when `AITEAMOS_PAUSE_FLAG` is unset -- its own deliberate
+ * loud-misconfiguration path -- so a check asserting only "flag present => deny" is satisfied by a
+ * hook that denies unconditionally, which gates nothing while looking armed. The second direction
+ * is what proves the script discriminates.
+ *
+ * **The allow half differs from Claude's and the difference is the whole point of writing this
+ * separately rather than reusing `preflightGate`** (Task 11 §8(d)). Claude's gate allows by
+ * staying SILENT, and `preflightGate` asserts empty stdout for the allow case. Cursor classifies
+ * exit 0 with empty stdout as a hook FAILURE (`empty_stdout`), which `failClosed: true` converts
+ * into a block -- so a Cursor gate must speak its allow out loud, and a pre-flight copied from
+ * Claude's would reject a correct one.
+ *
+ * What this does NOT prove, same as Claude's: that `cursor-agent` will actually invoke the hook. A
+ * correct script named in a hooks file the CLI never reads passes this and gates nothing. It is a
+ * cheap necessary condition on the script, not a sufficient one on the wiring.
+ *
+ * `flagPath` is deliberately not a parameter -- an isolated temporary flag file is minted here and
+ * removed afterwards, so it is impossible to point this probe at a live run's own
+ * `pauseFlagPath` and silently disarm that run's gate mid-flight.
+ */
+export async function cursorPreflightGate(input: { readonly gatePath: string }): Promise<void> {
+  const { gatePath } = input
+  const dir = await mkdtemp(join(tmpdir(), 'aiteamos-cursor-preflight-'))
+  const flagPath = join(dir, 'pause.flag')
+
+  try {
+    const armed = await runGateScript({ gatePath, flagPath, flagPresent: true })
+    if (armed.exitCode !== 0 || permissionOf(armed.stdout) !== 'deny') {
+      throw new Error(
+        `cursorPreflightGate: gate at ${gatePath} did not deny with the pause flag present ` +
+          `(exit code ${String(armed.exitCode)}, stdout ${JSON.stringify(armed.stdout)}). ` +
+          'A working pause gate must deny every tool call while the flag file exists.',
+      )
+    }
+
+    const disarmed = await runGateScript({ gatePath, flagPath, flagPresent: false })
+    if (disarmed.exitCode !== 0 || permissionOf(disarmed.stdout) !== 'allow') {
+      throw new Error(
+        `cursorPreflightGate: gate at ${gatePath} did not allow with the pause flag absent ` +
+          `(exit code ${String(disarmed.exitCode)}, stdout ${JSON.stringify(disarmed.stdout)}). ` +
+          'A hook that denies with the flag both present and absent gates nothing -- it is not an ' +
+          'armed gate, it is a broken run. Note that SILENCE is not an allow here: Cursor reads ' +
+          'exit 0 with empty stdout as a hook failure, which fails closed.',
+      )
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+}
+
+/** The `permission` field of the hook's response, or `undefined` when stdout is not one. */
+function permissionOf(stdout: string): string | undefined {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(stdout)
+  } catch {
+    return undefined
+  }
+  const result = hookResponseSchema.safeParse(parsed)
+  return result.success ? result.data.permission : undefined
+}
+
+// Only `permission` is read. The binary's own response validator accepts `permission`,
+// `user_message` and `agent_message` (Task 11 §3 Q4); the operator message is the gate's business
+// and this probe has no opinion on its wording.
+const hookResponseSchema = z.object({ permission: z.string() })
+
+interface GateRunResult {
+  readonly stdout: string
+  readonly exitCode: number | null
+}
+
+/**
+ * Spawns the gate script with `AITEAMOS_PAUSE_FLAG` pointing at `flagPath`, having first created
+ * or removed the flag file itself.
+ *
+ * `cursor-shell-gate.sh` opens with `cat > /dev/null`, draining what the real CLI would have piped
+ * in as the hook payload. Spawned from Node with piped stdio, nothing ever ends that pipe, so the
+ * drain would block forever and this probe would hang rather than pass or fail -- `stdin.end()`
+ * below is the EOF a real invocation would have supplied.
+ */
+async function runGateScript(input: {
+  readonly gatePath: string
+  readonly flagPath: string
+  readonly flagPresent: boolean
+}): Promise<GateRunResult> {
+  if (input.flagPresent) {
+    await writeFile(input.flagPath, '')
+  } else {
+    await rm(input.flagPath, { force: true })
+  }
+
+  return new Promise<GateRunResult>((resolve, reject) => {
+    const child = spawn(input.gatePath, [], {
+      env: { ...process.env, AITEAMOS_PAUSE_FLAG: input.flagPath },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
+
+    let stdout = ''
+    let settled = false
+    const fail = (error: Error): void => {
+      if (settled) return
+      settled = true
+      reject(error)
+    }
+
+    child.stdout.on('data', (chunk: Buffer) => {
+      stdout += chunk.toString('utf8')
+    })
+    // Drained, not asserted on: the verdict is stdout shape plus exit code, and a real failure
+    // path (exit 2) puts its reason on stderr for Cursor, not for this probe.
+    child.stderr.resume()
+
+    child.once('error', fail)
+    child.once('close', (exitCode: number | null) => {
+      if (settled) return
+      settled = true
+      resolve({ stdout, exitCode })
+    })
+
+    child.stdin.end()
+  })
 }
