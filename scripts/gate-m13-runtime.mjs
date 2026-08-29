@@ -52,13 +52,42 @@
 // A FAIL from any stage dumps every `M13 Gate`-named workspace, run, checkpoint and event still in
 // the DB, plus the daemon's output tail and a full-page screenshot -- the `gate-m8a-estop.mjs`
 // idiom of a thrown error carrying the state that made the call, not just "it timed out".
+//
+// REHEARSING THIS GATE WITHOUT SPENDING ANYTHING. Decision 12 makes "rehearses against fake CLIs
+// before the first paid execution" a standing property of this gate rather than a one-time act by
+// whoever first wrote it, so the harness ships beside it:
+//
+//   AITEAMOS_CLAUDE_BIN="$PWD/scripts/gate-fakes/fake-claude.sh" \
+//   AITEAMOS_CURSOR_BIN="$PWD/scripts/gate-fakes/fake-cursor-agent.sh" \
+//   npm run gate:m13-runtime
+//
+// Every stage runs, every assertion is made and the PASS line is the same one; the only difference
+// is that no vendor account is touched. Debug this script's own plumbing there, never against the
+// real binaries. Note what this does NOT buy: a rehearsal proves the gate's machinery, not the
+// runtimes' behaviour -- see stage 3's own comment, which is explicit about which of its facts a
+// fake CLI can and cannot establish.
+//
+// This file knows nothing about those fakes. They are reached only through the `AITEAMOS_*_BIN`
+// overrides `apps/orchestrator/src/cli.ts` already honours for its own reasons, so there is no
+// fixture mode here, no skip, and no flag that only a rehearsal passes.
 
 import { execFileSync, spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { accessSync, constants, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  accessSync,
+  constants,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  readlinkSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
-import { delimiter, join } from 'node:path'
+import { delimiter, isAbsolute, join, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright-core'
@@ -133,6 +162,9 @@ const TASK_DESCRIPTION = [
 const BUDGET_REFUSAL = 'a budget needs a provider that reports cost'
 /** The exact text Decision 3's second lock promises (`packages/control/src/refusal.ts`). */
 const STILL_STOPPING_REFUSAL = 'the run is still stopping; retry in a moment'
+/** The exact `Checkpoint.pauseReason` a Cursor pause records (`apps/orchestrator/src/pump.ts`'s
+ *  `CURSOR_PAUSE_REASON`) -- ending the process IS the pause for a runtime with no mid-run gate. */
+const CURSOR_PAUSE_REASON = 'paused by cancelling the process (cursor has no mid-run gate; canPauseMidRun: false)'
 
 /** A run row that has stopped moving on its own. */
 const TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'stopped'])
@@ -213,6 +245,78 @@ async function findFreePort() {
       server.close(() => (port !== null ? resolve(port) : reject(new Error('could not determine a free port'))))
     })
   })
+}
+
+/**
+ * SIGKILLs every process still running out of one of this gate's own temporary repositories.
+ *
+ * The record-based kill -- every `AgentRun.pid` -- is the primary one and reaches every vendor child
+ * the orchestrator itself spawned. It cannot reach what those children spawn: `cursor-agent` leaves
+ * a detached per-repository `worker-server` (and a `tsserver` family) behind, documented at
+ * `packages/providers/src/cursor/adapter.ts:355-360`, and none of them is on any row. Nor can it
+ * reach a child whose row was written after the sweep read the rows.
+ *
+ * So the second sweep is by LOCATION, not by record: `/proc/<pid>/cwd` and `/proc/<pid>/cmdline`,
+ * matched against the two `mkdtemp` roots this gate created. Scoped to those two paths on purpose
+ * -- an operator's own editor, daemon or agent working in some other checkout is none of this
+ * gate's business, and a `pkill -f cursor-agent` would take it out.
+ *
+ * `pgrep -f` is the fallback for a platform with no readable `/proc`; it matches the command line
+ * only, so it is strictly weaker and is not the primary path.
+ */
+function sweepStrayChildren(roots) {
+  const scoped = roots.filter((root) => root !== null && root !== '')
+  if (scoped.length === 0) return
+  let entries = null
+  try {
+    entries = readdirSync('/proc').filter((name) => /^\d+$/.test(name))
+  } catch {
+    entries = null
+  }
+  if (entries === null) {
+    for (const root of scoped) {
+      try {
+        const found = execFileSync('pgrep', ['-f', root], { encoding: 'utf8' }).trim()
+        for (const line of found.split('\n').filter((value) => value !== '')) {
+          const pid = Number(line)
+          if (!Number.isInteger(pid) || pid === process.pid) continue
+          console.log(`cleanup: killing stray process ${String(pid)} still running out of ${root} (pgrep fallback)`)
+          try {
+            process.kill(pid, 'SIGKILL')
+          } catch {
+            // Already gone between the match and the signal -- the outcome we wanted anyway.
+          }
+        }
+      } catch {
+        // `pgrep` exits 1 when nothing matches, which is the ordinary case.
+      }
+    }
+    return
+  }
+  for (const entry of entries) {
+    const pid = Number(entry)
+    if (pid === process.pid) continue
+    let haystack = ''
+    try {
+      haystack += readlinkSync(`/proc/${entry}/cwd`)
+    } catch {
+      // A process that ended between the listing and this read, or one this user may not inspect.
+    }
+    try {
+      haystack += `\u0000${readFileSync(`/proc/${entry}/cmdline`, 'utf8')}`
+    } catch {
+      // Same.
+    }
+    if (haystack === '') continue
+    const root = scoped.find((candidate) => haystack.includes(candidate))
+    if (root === undefined) continue
+    console.log(`cleanup: killing stray process ${String(pid)} still running out of ${root}`)
+    try {
+      process.kill(pid, 'SIGKILL')
+    } catch {
+      // Already gone between the match and the signal -- the outcome we wanted anyway.
+    }
+  }
 }
 
 /** Removes any `M13 Gate`-named rows a prior interrupted run left behind, in the same FK order the
@@ -998,6 +1102,13 @@ try {
       return { done: false, detail: `${row.status} toolCalls=${String(row.toolCalls)}` }
     })
 
+    // The run's tool-call count at the last instant before the flag exists. Stage 3 needs it: on a
+    // Cursor run the ENTIRE pause window lies before `run.pause_requested` is appended (that append
+    // is the last thing `requestPause` does, after `killWithEscalation` has already returned), so
+    // the event log cannot bound the window and this counter is what does.
+    const beforePauseRow = await prisma.agentRun.findUniqueOrThrow({ where: { id: runId } })
+    const toolCallsBeforePause = beforePauseRow.toolCalls
+
     const requested = await requestPause(runId, PAUSE_REQUESTER, 'human')
     if (!requested.ok) await fail(`stage 2: ${label}: requestPause refused: ${refusalText(requested.error)}`)
 
@@ -1007,30 +1118,47 @@ try {
     })
 
     // The locks, in their only observable window.
+    //
+    // The row is sampled on BOTH sides of the verb, and the liveness sample is taken BEFORE it
+    // (review round 1, Minor 3 -- which then bit for real). Reading only afterwards is a race the
+    // gate loses on its own: a granted resume is claimed by the daemon's resume pass within
+    // milliseconds, so the post-verb read can already say `resuming`, and an assertion written
+    // against it fails a run that did nothing wrong. The pre-verb sample cannot drift the dangerous
+    // way either -- a pid that was dead before the call cannot be alive during it.
+    const beforeProbe = await prisma.agentRun.findUnique({ where: { id: runId }, include: { checkpoint: true } })
+    if (beforeProbe === null) await fail(`stage 2: ${label}'s run row disappeared before its stopping window was probed`)
+    const beforeProbeAlive = isAlive(beforeProbe.pid)
     const early = await requestResume(runId, null, PAUSE_REQUESTER)
-    const atProbe = await prisma.agentRun.findUnique({ where: { id: runId }, include: { checkpoint: true } })
-    if (atProbe === null) await fail(`stage 2: ${label}'s run row disappeared while its stopping window was probed`)
+    const afterProbe = await prisma.agentRun.findUnique({ where: { id: runId }, include: { checkpoint: true } })
+    if (afterProbe === null) await fail(`stage 2: ${label}'s run row disappeared while its stopping window was probed`)
     if (early.ok) {
-      // The one unrecoverable answer. A resume handed out while the child is ALIVE puts two agents
-      // on one branch; a resume handed out once the pause has genuinely completed is correct, and
-      // this gate must not report the second as the first.
-      if (atProbe.status !== 'paused' || isAlive(atProbe.pid) || atProbe.checkpoint === null) {
+      // The one unrecoverable answer, and it is about the CHILD, not about the status column: a
+      // resume handed out while the paused run's process is still alive puts two agents on one
+      // branch. Asserted against the pre-verb liveness sample, which is the operating system's
+      // answer and not the product's own bookkeeping.
+      if (beforeProbeAlive) {
         await fail(
-          `stage 2: ${label}: a resume issued inside the stopping window was ACCEPTED while the run was ` +
-            `${atProbe.status} with pid ${String(atProbe.pid)} (alive=${String(isAlive(atProbe.pid))}, ` +
-            `checkpoint=${atProbe.checkpoint === null ? 'none' : 'present'}); it must be refused`,
+          `stage 2: ${label}: a resume issued inside the stopping window was ACCEPTED while pid ` +
+            `${String(beforeProbe.pid)} was still ALIVE (row read ${beforeProbe.status}); it must be refused`,
+        )
+      }
+      if (beforeProbe.checkpoint === null && afterProbe.checkpoint === null) {
+        await fail(
+          `stage 2: ${label}: a resume was ACCEPTED for a run with no checkpoint -- there is nothing to continue it ` +
+            'from, and the daemon will claim it and then fail to spawn',
         )
       }
       // ...and it is now the resume this run gets. Asking again would be refused as `wrong_status`
       // the moment the daemon's resume pass claims it -- which is what execution 1 did, and what
-      // this branch exists to not do twice. Nothing else about the pause is weakened: the row was
-      // `paused` with a dead pid and a checkpoint at the instant the verb answered, which is
-      // Decision 1 holding, measured. Only the stopping WINDOW went unobserved on this runtime.
+      // this branch exists to not do twice. Nothing else about the pause is weakened: the child was
+      // dead before the verb was called, which is Decision 1 holding, measured against the OS. Only
+      // the stopping WINDOW went unobserved on this runtime.
       console.warn(
-        `stage 2: ${label}: the pause had already COMPLETED by the time the probe resume was issued (row paused, pid ` +
-          `${String(atProbe.pid)} dead, checkpoint written), so no stopping window was observable on this runtime this ` +
-          'execution. That is Decision 1 holding, not a lock failing -- but it proves nothing about the locks, so it ' +
-          'is not counted, and the probe\'s own resume is the one this run continues on.',
+        `stage 2: ${label}: the pause had already COMPLETED by the time the probe resume was issued (row ` +
+          `${beforeProbe.status} before the call and ${afterProbe.status} after it, pid ${String(beforeProbe.pid)} ` +
+          'already dead), so no stopping window was observable on this runtime this execution. That is Decision 1 ' +
+          'holding, not a lock failing -- but it proves nothing about the locks, so it is not counted, and the ' +
+          "probe's own resume is the one this run continues on.",
       )
     } else if (early.error.kind === 'run_still_stopping') {
       if (refusalText(early.error) !== STILL_STOPPING_REFUSAL) {
@@ -1062,13 +1190,14 @@ try {
       await fail(
         `stage 2: ${label}: a resume issued inside the stopping window was refused as ${early.error.kind} ` +
           `(${refusalText(early.error)}), which is neither of Decision 3's two locks. The row read ` +
-          `${atProbe.status} with pid ${String(atProbe.pid)}.`,
+          `${beforeProbe.status} (pid ${String(beforeProbe.pid)}, alive=${String(beforeProbeAlive)}) before the call ` +
+          `and ${afterProbe.status} after it.`,
       )
     }
     // Whichever lock answered, nothing may have been recorded: a refusal that still arms the intent
     // would be executed by the very next tick.
-    if (!early.ok && atProbe.resumeRequestedAt !== null) {
-      await fail(`stage 2: ${label}: a refused resume still wrote resumeRequestedAt=${String(atProbe.resumeRequestedAt)}`)
+    if (!early.ok && afterProbe.resumeRequestedAt !== null) {
+      await fail(`stage 2: ${label}: a refused resume still wrote resumeRequestedAt=${String(afterProbe.resumeRequestedAt)}`)
     }
 
     // `run.paused` is what the pump announces AFTER the kill, so waiting for it -- not for the row
@@ -1079,7 +1208,18 @@ try {
       return announced > 0 ? { done: true, value: true } : { done: false, detail: 'run.paused not announced yet' }
     })
 
-    let paused = atProbe
+    // The checkpoint is what stage 3 reads, and it outlives the resume -- so on the granted path it
+    // is fetched directly rather than taken from a row snapshot the daemon may already have moved
+    // on. `pid` and `pausedAtStep` are carried from the pre-verb sample, which is the last read
+    // taken while the run was still paused.
+    let paused = beforeProbe
+    if (early.ok) {
+      const checkpoint = await waitUntil(`${label}'s pause checkpoint to be readable`, PAUSE_SETTLE_TIMEOUT_MS, async () => {
+        const row = await prisma.checkpoint.findUnique({ where: { runId } })
+        return row === null ? { done: false, detail: 'no checkpoint written yet' } : { done: true, value: row }
+      })
+      paused = { ...beforeProbe, checkpoint }
+    }
     if (!early.ok) {
       paused = await waitUntil(`${label} to settle on paused with a dead process`, PAUSE_SETTLE_TIMEOUT_MS, async () => {
         const row = await prisma.agentRun.findUnique({ where: { id: runId }, include: { checkpoint: true } })
@@ -1140,7 +1280,7 @@ try {
           'only FAILURES count (Decision 4)',
       )
     }
-    return paused
+    return { ...paused, toolCallsBeforePause }
   }
 
   // Driven CONCURRENTLY, and that is not a speed optimisation: the two runtimes' first turns are
@@ -1174,28 +1314,30 @@ try {
   // ============================================================================================
   // Stage 3: Cursor's gate, proven -- against the gate this run was actually armed with.
   //
-  // Series C settled the capability with COMMITTED evidence (Decision 8): the recorded run at
-  // `packages/providers/test/fixtures/cursor/gate/run-2-flag-present.ndjson` shows BOTH a shell
-  // command and a file write refused while the flag was present, so `capabilitiesOf('cursor').gate`
-  // reads `'all-tools'`. This stage asserts the three facts that capability stands on, live:
+  // WHAT THIS STAGE CAN AND CANNOT ESTABLISH, stated first because the distinction is the whole
+  // design (review round 1, Important 3). The LIVE refusal -- a real `cursor-agent` attempting a
+  // shell command and a file write with the flag present and having both rejected -- is Series C's,
+  // recorded and COMMITTED at `packages/providers/test/fixtures/cursor/gate/`, and Decision 8 makes
+  // committed evidence, not a gate re-measurement, what raises a capability. This stage does not
+  // re-measure the runtime and must not pretend to: Cursor declares `canPauseMidRun: false`, so its
+  // pause is a cancellation and the flag exists only between `signalPause` writing it and
+  // `killWithEscalation` landing -- a sub-second window no prompt can reliably steer a model into.
   //
-  //   1. the table still says `all-tools`;
-  //   2. the `.cursor/hooks.json` THIS run was armed with registers the gate at BOTH
-  //      `beforeShellExecution` AND `preToolUse`, each `failClosed: true`. That second registration
-  //      is what "all-tools" MEANS structurally -- `beforeShellExecution` alone is `shell-only`,
-  //      which is the value the capability used to hold -- and `failClosed` is what keeps a gate
-  //      that crashes from failing OPEN;
-  //   3. the gate script itself answers `deny` while this run's own pause flag exists.
+  // What this stage measures instead is the ARMING, which is live, is about the run that just
+  // happened, and can fail:
   //
-  // Fact 3 is asked twice, with the payloads Cursor sends at each registration. The script drains
-  // its stdin and decides on the flag alone, so both answers are the same by construction -- which
-  // is exactly why fact 2 is the load-bearing one: once both registrations exist, one answer covers
-  // every tool, and that is the whole of the `all-tools` claim.
-  //
-  // The run's own `Checkpoint.deniedToolUseIds` is REPORTED, not required. Whether a real Cursor
-  // agent happened to start another tool call inside the grace window between the flag write and
-  // its own death is a fact about that model's timing, not about the promise this milestone makes;
-  // asserting on it would be asserting that a vendor behaves a certain way on a given afternoon.
+  //   1. the capability table still reads `all-tools`;
+  //   2. the fixture that raised it still contains the refusal it rests on -- so deleting or
+  //      rewriting the evidence fails this gate rather than silently orphaning the capability;
+  //   3. the `.cursor/hooks.json` THIS run was armed with registers a gate at BOTH
+  //      `beforeShellExecution` and `preToolUse`, each `failClosed: true`, and each naming a
+  //      `command` that unquotes to an existing, executable script which really is this
+  //      deployment's `cursor-shell-gate.sh`. A run armed with a stale, moved or wrong path used to
+  //      pass this stage, because the stage ran the repository's own copy regardless of what the
+  //      file said;
+  //   4. THAT path -- the armed one, not the repository's -- answers `deny` to both hook payloads
+  //      while this run's own pause flag exists;
+  //   5. and if the run did attempt tool calls inside its pause window, they were refused.
   // ============================================================================================
   const cursorCapabilities = capabilitiesOf('cursor')
   if (cursorCapabilities.gate !== 'all-tools') {
@@ -1204,7 +1346,51 @@ try {
         'Series C raised it on committed evidence, and a table that no longer says so is a capability that lost its proof',
     )
   }
-  const cursorHooksFile = join(cursorPaused.checkpoint.worktreePath, '.cursor', 'hooks.json')
+  // The evidence itself, still on disk and still saying what the capability claims. Cheap, and it
+  // closes the one way `all-tools` could quietly become an unsupported assertion: the fixture being
+  // deleted or rewritten while the table keeps its value.
+  const gateFixture = join(repoRoot, 'packages/providers/test/fixtures/cursor/gate/run-2-flag-present.ndjson')
+  if (!existsSync(gateFixture)) {
+    await fail(
+      `stage 3: the recording the 'all-tools' capability rests on is gone (${gateFixture}). Decision 8 raises a ` +
+        'capability on committed evidence; evidence that is not there any more raises nothing.',
+    )
+  }
+  {
+    const recorded = readFileSync(gateFixture, 'utf8')
+    if (!recorded.includes('"rejected"')) {
+      await fail(
+        `stage 3: ${gateFixture} no longer contains a rejected tool call. That refusal is the entire basis for ` +
+          "capabilitiesOf('cursor').gate === 'all-tools'.",
+      )
+    }
+  }
+
+  /**
+   * Undoes `buildCursorHooks`'s `shellQuote` (`packages/providers/src/cursor/hooks.ts`), which
+   * writes `'<path>'` with any embedded quote as `'\''`. `command` is a shell COMMAND LINE, not an
+   * argv array, so this is the only correct way to read the path back out of it.
+   */
+  function unquoteHookCommand(command) {
+    if (typeof command !== 'string') return null
+    const trimmed = command.trim()
+    if (trimmed.length < 2 || !trimmed.startsWith("'") || !trimmed.endsWith("'")) return trimmed === '' ? null : trimmed
+    return trimmed.slice(1, -1).replaceAll("'\\''", "'")
+  }
+
+  // The gate script THIS deployment arms runs with, resolved exactly as `apps/orchestrator/src/cli.ts`
+  // resolves it (`cursorGatePath()`): the env override first, the repository's own copy otherwise.
+  // Mirroring that resolution rather than hardcoding the repository path is what keeps an installed
+  // daemon -- whose layout is deliberately not this one -- from failing a stage it is passing.
+  const configuredGatePath = (() => {
+    const fromEnv = process.env['AITEAMOS_CURSOR_GATE_PATH']
+    return fromEnv !== undefined && fromEnv !== '' ? resolve(fromEnv) : join(repoRoot, 'scripts/cursor-shell-gate.sh')
+  })()
+  if (!existsSync(configuredGatePath)) await fail(`stage 3: no cursor gate script at ${configuredGatePath}`)
+  const expectedGateReal = realpathSync(configuredGatePath)
+
+  const cursorWorktree = cursorPaused.checkpoint.worktreePath
+  const cursorHooksFile = join(cursorWorktree, '.cursor', 'hooks.json')
   if (!existsSync(cursorHooksFile)) {
     await fail(
       `stage 3: the Cursor run's worktree has no ${cursorHooksFile} -- \`cursor-agent\` resolves hooks against the GIT ` +
@@ -1217,12 +1403,15 @@ try {
   } catch (cause) {
     await fail(`stage 3: ${cursorHooksFile} is not readable JSON: ${cause instanceof Error ? cause.message : String(cause)}`)
   }
+  /** The gate path each registration actually armed, proven to be the real one. */
+  const armedGatePaths = []
   for (const registration of ['beforeShellExecution', 'preToolUse']) {
     const entries = cursorHooks?.hooks?.[registration]
     if (!Array.isArray(entries) || entries.length === 0) {
       await fail(
         `stage 3: the hooks file this run was armed with registers nothing at ${registration} ` +
-          `(${JSON.stringify(cursorHooks)}). Without ${registration} the gate is not \`all-tools\`.`,
+          `(${JSON.stringify(cursorHooks)}). Without ${registration} the gate is not \`all-tools\` -- ` +
+          '`beforeShellExecution` alone is `shell-only`, which is the value the capability used to hold.',
       )
     }
     for (const entry of entries) {
@@ -1232,15 +1421,41 @@ try {
             'that crashes, times out or writes nothing lets the tool call run as if no gate existed',
         )
       }
+      const armed = unquoteHookCommand(entry.command)
+      if (armed === null || !isAbsolute(armed)) {
+        await fail(
+          `stage 3: the ${registration} registration's command is ${JSON.stringify(entry.command)}, which does not ` +
+            'unquote to an absolute path. Cursor evaluates it with an unreliable cwd, so a relative gate is a gate ' +
+            'that may or may not resolve depending on the run.',
+        )
+      }
+      try {
+        accessSync(armed, constants.X_OK)
+      } catch {
+        await fail(
+          `stage 3: the ${registration} registration arms ${JSON.stringify(armed)}, which does not exist or is not ` +
+            'executable. Under `failClosed: true` that is not a disarmed gate -- it is a gate that blocks every tool ' +
+            'call of every run in this worktree, and nothing in the run says so.',
+        )
+      }
+      const armedReal = realpathSync(armed)
+      if (armedReal !== expectedGateReal) {
+        await fail(
+          `stage 3: the ${registration} registration arms ${JSON.stringify(armedReal)}, but this deployment's cursor ` +
+            `gate is ${JSON.stringify(expectedGateReal)}. The run was armed with something else -- a stale path from ` +
+            'an earlier layout, or another script entirely -- and whatever it answers is not what this gate measures.',
+        )
+      }
+      armedGatePaths.push(armedReal)
     }
   }
-  const cursorGateScript = join(repoRoot, 'scripts/cursor-shell-gate.sh')
-  if (!existsSync(cursorGateScript)) await fail(`stage 3: no cursor gate script at ${cursorGateScript}`)
 
-  /** Runs the REAL gate script the Cursor adapter arms, with the hook payload `cursor-agent` sends
-   *  at one of its two registrations, against a pause flag at this run's own path. */
-  function askCursorGate(payload, pauseFlagPath) {
-    return execFileSync('bash', [cursorGateScript], {
+  /** Runs the gate script the RUN WAS ARMED WITH -- not the repository's copy -- with the hook
+   *  payload `cursor-agent` sends at one of its two registrations, against a pause flag at this
+   *  run's own path. Asking the repository's copy would answer a question about the checkout rather
+   *  than about the run. */
+  function askArmedCursorGate(gatePath, payload, pauseFlagPath) {
+    return execFileSync('bash', [gatePath], {
       cwd: repoRoot,
       input: JSON.stringify(payload),
       encoding: 'utf8',
@@ -1256,8 +1471,13 @@ try {
   let shellVerdict = null
   let writeVerdict = null
   try {
-    shellVerdict = askCursorGate({ hook_event_name: 'beforeShellExecution', command: 'echo there > world.txt' }, cursorFlagPath)
-    writeVerdict = askCursorGate(
+    shellVerdict = askArmedCursorGate(
+      armedGatePaths[0],
+      { hook_event_name: 'beforeShellExecution', command: 'echo there > world.txt' },
+      cursorFlagPath,
+    )
+    writeVerdict = askArmedCursorGate(
+      armedGatePaths[1],
       { hook_event_name: 'preToolUse', tool_name: 'Write', tool_input: { file_path: 'world.txt', content: 'there\n' } },
       cursorFlagPath,
     )
@@ -1270,17 +1490,82 @@ try {
   ]) {
     if (!verdict.includes('"permission":"deny"')) {
       await fail(
-        `stage 3: with the pause flag present, Cursor's gate answered ${JSON.stringify(verdict)} for ${what} -- ` +
-          'a gate declared `all-tools` that lets one of them through is a capability the table is lying about',
+        `stage 3: with the pause flag present, the gate this run was armed with answered ${JSON.stringify(verdict)} ` +
+          `for ${what} -- a gate declared \`all-tools\` that lets one of them through is a capability the table is ` +
+          'lying about',
       )
     }
   }
+
+  // ---- What the run itself did inside its pause window, and what the record can honestly say.
+  //
+  // THE EVENT LOG CANNOT BOUND THIS WINDOW, and the first version of this check was wrong for
+  // exactly that reason. On a Cursor run `requestPause` writes the flag, calls `killWithEscalation`,
+  // waits for the child to be dead, and only THEN appends `run.pause_requested` -- so every call the
+  // agent attempted with the flag in place has a LOWER `seq` than the pause's own announcement, and
+  // a window measured between `run.pause_requested` and `run.paused` is empty by construction. It
+  // reported "nothing landed" on every rehearsal, including ones where a call demonstrably had.
+  //
+  // So the window is bounded by the pump's own COUNTER: `toolCallsBeforePause` is the run's
+  // `toolCalls` read at the last instant before the flag existed, `Checkpoint.numTurns` is the same
+  // counter at the moment the pause was recorded, and their difference is what the agent attempted
+  // in between.
+  //
+  // WHAT `Checkpoint.deniedToolUseIds` IS, AND IS NOT, ON A CURSOR RUN. It is written from the
+  // PUMP's `denied` array, which is fed only by `permission_denied` and `hook_denied` events
+  // (`pump.ts`'s `case 'permission_denied'` and the gate-outcome branch). Cursor's parser emits
+  // neither: a refusal reaches this system as `result.rejected` on a `tool_call`/`completed` line,
+  // which the ADAPTER collects into `RunOutcome.deniedToolUseIds` -- the TERMINAL outcome, which a
+  // run killed mid-stream never produces. So an empty list on a paused Cursor run is not evidence
+  // that nothing was refused; it is the shape of the column. Spec §7.2's "the run's
+  // `Checkpoint.deniedToolUseIds` is non-empty" is not reachable for a paused Cursor run, and this
+  // gate says that rather than asserting it and passing on a tautology or failing on a healthy run.
+  //
+  // What IS asserted here is the one thing the record can be wrong about: a refusal list longer than
+  // the calls that were attempted in the window would mean the list came from somewhere else, and
+  // `pump.ts` reads exactly that list to decide a Cursor run was paused rather than finished.
+  const cursorNumTurns = cursorPaused.checkpoint.numTurns
+  const callsInPauseWindow = Math.max(0, cursorNumTurns - cursorPaused.toolCallsBeforePause)
   const denied = cursorPaused.checkpoint.deniedToolUseIds
+  for (const id of denied) {
+    if (typeof id !== 'string' || id === '') {
+      await fail(`stage 3: the checkpoint records an empty denied call id (${JSON.stringify(denied)})`)
+    }
+  }
+  if (denied.length > callsInPauseWindow) {
+    await fail(
+      `stage 3: the checkpoint records ${String(denied.length)} refused call(s) but only ` +
+        `${String(callsInPauseWindow)} tool call(s) were attempted inside the pause window (tool calls ` +
+        `${String(cursorPaused.toolCallsBeforePause)} -> ${String(cursorNumTurns)}). A refusal with no call behind it ` +
+        'means the list was carried over from somewhere else, and it is what `pump.ts` reads to decide a Cursor run ' +
+        'was paused rather than finished.',
+    )
+  }
+  // And the pause really went down the cancel path this capability describes, rather than some
+  // gate-deny path that would mean `canPauseMidRun` had quietly changed under it. A live fact about
+  // the run that just happened, and one that can fail.
+  if (cursorPaused.checkpoint.pauseReason !== CURSOR_PAUSE_REASON) {
+    await fail(
+      `stage 3: the Cursor run's checkpoint records pauseReason ${JSON.stringify(cursorPaused.checkpoint.pauseReason)}, ` +
+        `expected ${JSON.stringify(CURSOR_PAUSE_REASON)} -- Cursor declares canPauseMidRun: false, so ending the ` +
+        'process IS its pause, and a different reason means it stopped some other way than the one this gate measured',
+    )
+  }
+  const liveObservation =
+    callsInPauseWindow === 0
+      ? "no tool call landed in this run's pause window, so the refusal itself is proven by Series C's committed " +
+        "fixture and by the armed gate's own answer above, not observed live here"
+      : `${String(callsInPauseWindow)} tool call(s) were attempted inside this run's pause window (tool calls ` +
+        `${String(cursorPaused.toolCallsBeforePause)} -> ${String(cursorNumTurns)}); the checkpoint's own refusal list ` +
+        `is ${JSON.stringify(denied)}, which on a Cursor pause is gate-protocol-shaped and cannot carry a ` +
+        '`result.rejected` -- see this stage\'s comment'
+
   console.log(
-    `stage 3 PASSED: capabilitiesOf('cursor').gate is "all-tools"; the hooks file this run was armed with registers the ` +
-      `gate fail-closed at BOTH beforeShellExecution and preToolUse; and with this run's own pause flag present the gate ` +
-      `refused a shell command and a file write alike. The paused run's checkpoint recorded ${String(denied.length)} ` +
-      `denied call id(s)${denied.length === 0 ? ' -- the agent started nothing inside the kill window this execution' : `: ${JSON.stringify(denied)}`}`,
+    `stage 3 PASSED: capabilitiesOf('cursor').gate is "all-tools" and the recording it rests on still carries its ` +
+      `refusal; the hooks file this run was armed with registers ${String(armedGatePaths.length)} fail-closed ` +
+      `entries across beforeShellExecution and preToolUse, every one of them naming ${expectedGateReal}; that armed ` +
+      `script answered deny to a shell command and to a file write with this run's own pause flag present; and ` +
+      `${liveObservation}`,
   )
 
   // ============================================================================================
@@ -1457,9 +1742,29 @@ try {
   console.log(`PASS: ${PASS_LINE}`)
   exitCode = 0
 } finally {
-  // Vendor children FIRST, by pid off the rows, BEFORE the rows are deleted (Decision 12). A gate
-  // that exits leaving a `claude` or `cursor-agent` alive is a gate that keeps spending after it
-  // has reported.
+  // WHATEVER CAN STILL SPAWN A PAID CHILD DIES FIRST, and the order is the whole point (review
+  // round 1, Important 1). The daemon dispatches on a 500ms period and the one-shot tick owns a
+  // pump; either can start a `claude` or a `cursor-agent` at any moment. Sweeping vendor pids while
+  // they are still running -- which is what the brief's `finally` snippet did, and what this script
+  // inherited -- leaves a window in which a child spawned after the sweep survives the gate and has
+  // its row (the only record of its pid) deleted underneath it. So: stop the spawners, THEN sweep,
+  // THEN delete the rows.
+  if (daemon !== null && daemon.exitCode === null) {
+    daemon.kill('SIGTERM')
+    const exitDeadline = Date.now() + PROCESS_EXIT_TIMEOUT_MS
+    while (daemon.exitCode === null && Date.now() < exitDeadline) await delay(50)
+    if (daemon.exitCode === null) daemon.kill('SIGKILL')
+  }
+  if (budgetedTick !== null && budgetedTick.exitCode === null) {
+    budgetedTick.kill('SIGTERM')
+    const exitDeadline = Date.now() + PROCESS_EXIT_TIMEOUT_MS
+    while (budgetedTick.exitCode === null && Date.now() < exitDeadline) await delay(50)
+    if (budgetedTick.exitCode === null) budgetedTick.kill('SIGKILL')
+  }
+
+  // Then the vendor children, by pid off the rows, BEFORE the rows are deleted (Decision 12). A
+  // gate that exits leaving a `claude` or `cursor-agent` alive is a gate that keeps spending after
+  // it has reported.
   for (const workspaceId of [unbudgetedWorkspaceId, budgetedWorkspaceId]) {
     if (workspaceId === null) continue
     const runs = await prisma.agentRun
@@ -1475,6 +1780,8 @@ try {
       }
     }
   }
+  // ...and then whatever those children spawned, which no row records. See `sweepStrayChildren`.
+  sweepStrayChildren([unbudgetedRepo, budgetedRepo])
   // The `/bin/sleep` processes the second-lock probe borrows pids from, if a failure unwound a
   // probe before its own `finally` could reach it.
   for (const pid of liveSleeperPids) {
@@ -1484,19 +1791,14 @@ try {
       // Already gone.
     }
   }
+
+  // Only now the things that cannot spawn a vendor child: the browser and the web shell.
   if (browser !== null) await browser.close().catch(() => {})
-  if (budgetedTick !== null && budgetedTick.exitCode === null) budgetedTick.kill('SIGKILL')
   if (nextServer !== null && nextServer.exitCode === null) {
     nextServer.kill('SIGTERM')
     const exitDeadline = Date.now() + PROCESS_EXIT_TIMEOUT_MS
     while (nextServer.exitCode === null && Date.now() < exitDeadline) await delay(50)
     if (nextServer.exitCode === null) nextServer.kill('SIGKILL')
-  }
-  if (daemon !== null && daemon.exitCode === null) {
-    daemon.kill('SIGTERM')
-    const exitDeadline = Date.now() + PROCESS_EXIT_TIMEOUT_MS
-    while (daemon.exitCode === null && Date.now() < exitDeadline) await delay(50)
-    if (daemon.exitCode === null) daemon.kill('SIGKILL')
   }
   // FK-ordered cleanup, the same order `gate-m12-providers.mjs` uses: `ExecutionEvent` has no FK to
   // `Workspace` (M2's append-only log outlives entity lifecycles by design) so it is deleted
