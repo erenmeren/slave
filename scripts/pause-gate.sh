@@ -89,6 +89,16 @@ case $pause_status in
   # and the reason the shared helper reports this case rather than answering it: only this file
   # knows how Claude spells a deny.
   2) deny "$PAUSE_REASON" ;;
+  # No pause requested. The ONLY status that reaches the allow below, and it says so explicitly
+  # rather than by falling out of the `esac`, so that the catch-all beneath it cannot swallow it.
+  1) ;;
+  # Every other status is a gate that broke in a way this file does not enumerate, and it must fail
+  # closed like every other failure here. The status that makes this arm load-bearing is 127: a
+  # library that is PRESENT and parses but defines nothing (an empty file, a copy truncated at a
+  # function boundary) sources cleanly, so the missing-library refusal above never fires, and
+  # `read_pause_reason` is simply an unknown command. Without this arm that fell through to `exit 0` with empty stdout --
+  # which is exactly how Claude spells an ALLOW -- so a truncated library silently disarmed the run.
+  *) fail_closed "read_pause_reason returned an unexpected status ${pause_status}" ;;
 esac
 
 # Status 1: no pause requested. Claude's allow is silence.

@@ -147,6 +147,16 @@ case $pause_status in
   0) deny "$PAUSE_REASON" ;;
   # Unchanged from M12: no flag path is a deny with a body, at exit 0, not a hook failure.
   2) deny "$PAUSE_REASON" ;;
+  # No pause requested. The ONLY status that reaches the allow below, and it says so explicitly
+  # rather than by falling out of the `esac`, so that the catch-all beneath it cannot swallow it.
+  1) ;;
+  # Every other status is a gate that broke in a way this file does not enumerate, and it must fail
+  # closed like every other failure here. The status that makes this arm load-bearing is 127: a
+  # library that is PRESENT and parses but defines nothing (an empty file, a copy truncated at a
+  # function boundary) sources cleanly, so the missing-library refusal above never fires, and
+  # `read_pause_reason` is simply an unknown command. Without this arm that fell through to `allow`, emitting an explicit
+  # {"permission":"allow"} -- a truncated library silently disarmed the run.
+  *) fail_closed "read_pause_reason returned an unexpected status ${pause_status}" ;;
 esac
 
 # Status 1: no pause requested. Cursor's allow must say so OUT LOUD -- silence here is read as a

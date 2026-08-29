@@ -228,4 +228,31 @@ describe('pause-gate.sh', () => {
       rmSync(linkDir, { recursive: true, force: true })
     }
   })
+  // A library that is PRESENT and parses but defines nothing -- an empty file, or a copy truncated
+  // at a function boundary -- sources cleanly, so the `.` succeeds and the missing-library refusal
+  // never fires. `read_pause_reason` is then an unknown command: bash returns 127, and a `case`
+  // with arms for only 0 and 2 falls straight through to the allow below it. Measured before the
+  // default arm existed, with a POPULATED flag file (an operator actively pausing):
+  // exit 0 with empty stdout, which is precisely how Claude spells an ALLOW.
+  // Every status this gate does not recognise must therefore be a deny, not an allow: the `*)` arm
+  // is what makes "the gate broke in a way we did not enumerate" fail closed like every other
+  // failure here.
+  it('exits 2 when the library defines no read_pause_reason, rather than allowing', async (): Promise<void> => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'aiteamos-pause-gate-emptylib-'))
+    try {
+      const gate = copyGateInto(dir, 'pause-gate.sh')
+      // Sources cleanly, defines nothing.
+      writeFileSync(path.join(dir, 'lib', 'pause-flag.sh'), '')
+      const flagPath = path.join(dir, 'pause.flag')
+      writeFileSync(flagPath, 'an operator is actively pausing this run')
+
+      const { stdout, stderr, code } = await runHook({ gateOverride: gate, flagVar: flagPath })
+      expect(code).toBe(2)
+      expect(stdout).toBe('')
+      expect(stderr).toContain('read_pause_reason')
+      expect(stderr).toContain('unexpected status')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
 })
