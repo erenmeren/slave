@@ -1,8 +1,10 @@
+import { spawn } from 'node:child_process'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { prisma } from '@ai-team-os/db/client'
 import { beforeEach, describe, expect, it } from 'vitest'
+import { refusalText } from '../../src/refusal.js'
 import { claimResume, requestResume, updateQueuedMessage } from '../../src/resume.js'
 
 interface Fixture {
@@ -212,5 +214,88 @@ describe('the resume intent', () => {
 
     const event = await prisma.executionEvent.findFirst({ where: { runId: run.id, type: 'run_resume_requested' } })
     expect(event?.payload).toEqual({ requestedBy: 'meren', message: null })
+  })
+
+  describe('requestResume liveness', () => {
+    async function pausedRunWithCheckpoint(pid: number | null): Promise<string> {
+      await prisma.agentRun.update({ where: { id: fixture.run.id }, data: { status: 'paused', pid } })
+      // `seed()` already writes a Checkpoint for this run (`runId` is `@unique`); replace it rather
+      // than colliding on the constraint. The brief's literal `create` assumed no checkpoint existed
+      // yet -- it does, so this deviates from the brief verbatim in this one line only.
+      await prisma.checkpoint.delete({ where: { runId: fixture.run.id } })
+      await prisma.checkpoint.create({
+        data: {
+          runId: fixture.run.id,
+          sessionId: 's-1',
+          worktreePath: '/tmp',
+          pauseFlagPath: '/tmp/pause.flag',
+          settingsPath: '/tmp/settings.json',
+          hookPath: '/tmp/pause-gate.sh',
+          gitAuthorName: 'Alex',
+          gitAuthorEmail: 'alex@aiteamos.local',
+          headCommit: 'abc123',
+        },
+      })
+      return fixture.run.id
+    }
+
+    /** A real, live pid: `/bin/sleep` for long enough that no test outlives it. */
+    function liveSleeper(): { pid: number; stop: () => void } {
+      const child = spawn('/bin/sleep', ['30'], { stdio: 'ignore' })
+      if (child.pid === undefined) throw new Error('liveSleeper: no pid')
+      return {
+        pid: child.pid,
+        stop: () => {
+          try {
+            process.kill(child.pid as number, 'SIGKILL')
+          } catch {
+            // Already gone.
+          }
+        },
+      }
+    }
+
+    /** A real pid that is definitely gone: spawn `/bin/true` and wait for its exit. */
+    async function deadPid(): Promise<number> {
+      const child = spawn('/bin/true', [], { stdio: 'ignore' })
+      if (child.pid === undefined) throw new Error('deadPid: no pid')
+      await new Promise<void>((resolve) => child.once('exit', () => resolve()))
+      return child.pid
+    }
+
+    it('refuses a paused run whose process is still alive, with the verbatim text', async (): Promise<void> => {
+      const sleeper = liveSleeper()
+      try {
+        const runId = await pausedRunWithCheckpoint(sleeper.pid)
+        const result = await requestResume(runId, null, 'meren')
+
+        expect(result.ok).toBe(false)
+        if (result.ok) return
+        expect(result.error.kind).toBe('run_still_stopping')
+        expect(refusalText(result.error)).toBe('the run is still stopping; retry in a moment')
+
+        // Nothing was recorded: a refused resume must not arm one.
+        const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: runId } })
+        expect(after.resumeRequestedAt).toBeNull()
+        expect(await prisma.executionEvent.count({ where: { runId, type: 'run_resume_requested' } })).toBe(0)
+      } finally {
+        sleeper.stop()
+      }
+    })
+
+    it('proceeds for a paused run whose pid is really gone', async (): Promise<void> => {
+      const runId = await pausedRunWithCheckpoint(await deadPid())
+      const result = await requestResume(runId, null, 'meren')
+
+      expect(result.ok).toBe(true)
+      const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: runId } })
+      expect(after.resumeRequestedAt).not.toBeNull()
+    })
+
+    it('proceeds for a row that never recorded a pid at all', async (): Promise<void> => {
+      // Pre-M12 rows, and rows the pump already cleared. A null pid is not a refusal (spec §3.2).
+      const runId = await pausedRunWithCheckpoint(null)
+      expect((await requestResume(runId, null, 'meren')).ok).toBe(true)
+    })
   })
 })

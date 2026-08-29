@@ -18,6 +18,12 @@ export type ControlRefusal =
   | { readonly kind: 'workspace_halted'; readonly workspaceId: string; readonly reason: string }
   | { readonly kind: 'no_checkpoint'; readonly runId: string }
   /**
+   * The run's row says `paused` but its process is still alive (M13 §3.2). The pump's ordering
+   * (Task 1) is supposed to make this unreachable; this is the SECOND lock (Decision 3), and it is
+   * cheap: it turns a future ordering regression into a refusal instead of two agents on one branch.
+   */
+  | { readonly kind: 'run_still_stopping'; readonly runId: string }
+  /**
    * The run's provider cannot continue a session it stopped (`canResumeSession: false`), so there
    * is no resume to record (M12 final review I1, spec §4). Unreachable for both shipped providers,
    * which is why it is defined with the rest of the taxonomy rather than at its one raise site.
@@ -62,6 +68,8 @@ export function refusalText(refusal: ControlRefusal): string {
       )
     case 'no_checkpoint':
       return `run ${refusal.runId} has no checkpoint: there is nothing to resume it from`
+    case 'run_still_stopping':
+      return 'the run is still stopping; retry in a moment'
     case 'provider_cannot_resume':
       return `run ${refusal.runId} is on ${refusal.provider}, which cannot continue a stopped session`
     case 'task_not_found':

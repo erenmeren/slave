@@ -2,6 +2,7 @@ import { prisma } from '@ai-team-os/db/client'
 import { type Result, err, ok } from '@ai-team-os/domain'
 import { appendEvent } from '@ai-team-os/events'
 import { capabilitiesOf, type ProviderKind } from '@ai-team-os/providers'
+import { isAlive } from './kill.js'
 import type { ControlRefusal } from './refusal.js'
 
 const RESUMABLE_STATUSES = ['paused'] as const
@@ -86,6 +87,19 @@ export async function requestResume(
   // reports success and then does nothing forever.
   const checkpoint = await prisma.checkpoint.findUnique({ where: { runId: run.id }, select: { id: true } })
   if (checkpoint === null) return err({ kind: 'no_checkpoint', runId: run.id })
+
+  // The second lock (M13 Decision 3). Task 1's pump ordering is what makes this unreachable in a
+  // correct system: `paused` is written only once `killWithEscalation` has returned, and it
+  // SIGKILLs at the grace deadline. Checking anyway is cheap and turns a future ordering
+  // regression into a refusal instead of a lost run -- resuming a run whose old process is still
+  // alive puts two agents on one branch, which is the failure this whole milestone is about.
+  //
+  // `isAlive` treats EPERM as alive (the process exists, it is just not ours to inspect) and only
+  // ESRCH as gone, and returns `false` for a null pid -- which is NOT a refusal here: pre-M12 rows
+  // carry no pid, and the pump clears nothing but records one only when it spawned.
+  if (isAlive(run.pid)) {
+    return err({ kind: 'run_still_stopping', runId: run.id })
+  }
 
   // Conditioned on `paused` like every other claim in this package: between the read above and this
   // write the run may have been resumed by a tick, stopped, or concluded, and writing the intent
