@@ -276,8 +276,12 @@ async function recordCursorPauseIfRequested(input: {
   })
   if (claimed.count === 0) return false
 
-  // Status first, then the checkpoint, then the event -- the same order the gate path uses, so the
-  // two pause routes cannot drift into different crash-window behaviours.
+  // Status first, then the checkpoint, then the event -- the two pause routes deliberately DIFFER
+  // in ordering as of M13, and the difference is not drift. The gate path writes the checkpoint,
+  // kills the child, and only then writes `paused` (Decision 1: a run is paused when its process
+  // is dead). This path runs after the stream has already ended, i.e. after the child is already
+  // gone, so the claim IS the moment the run became paused and there is nothing left to kill --
+  // see this function's "No kill here" note above.
   await writeCheckpoint({
     runId: input.runId,
     sessionId: input.sessionId,
@@ -467,31 +471,16 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
 
         switch (gateOutcome.kind) {
           case 'stopped_by_gate': {
-            // Once only (fix round 1, M5 gate-fix A review). The real CLI does not exit promptly
-            // on the SIGTERM below -- the live-gate trace that motivated this file's kill call
-            // shows a *second* deny arriving after the first `run.paused` (`run.paused (atStep 5)`
-            // -> another Bash call -> `run.paused (atStep 6)`) -- and that second deny stays
-            // reachable for as long as `killWithEscalation`'s grace window is open. Recording the
-            // pause and killing the child are both idempotent in effect (the row is already
-            // `paused`; the pid is already signalled or dead), so re-running them costs real
-            // things for no benefit: a second checkpoint write, a second multi-second
-            // `killWithEscalation` sleep, and a duplicate `run.paused` in the operator's
-            // transcript. The whole branch is a no-op on a repeat -- `paused` is exactly the
-            // run-level fact that distinguishes "first deny" from "still gated, denied again"
-            // here, matching the sibling `gateFailed` guard in the `gate_failed` branch below.
+            // Once only, and claimed BEFORE any of the work below (M13 Decision 1). The real CLI does not
+            // exit promptly on the SIGTERM further down -- the live-gate trace that motivated this file's
+            // kill call shows a second deny arriving after the first pause -- and with the status write now
+            // at the END of this branch, `paused` is the only thing standing between that second deny and a
+            // duplicate checkpoint write, a duplicate multi-second kill and a duplicate `run.paused`.
             if (paused) break
-
-            // The pause gate doing its job. The adapter kills the process after the deny (Task 8),
-            // so the stream ends here -- and recording the pause is what stops Task 15's orphan
-            // sweep seeing a `working` run with a dead pid and failing it. The domain's state
-            // machine only admits `paused` from `pause_requested`; the pump reports what the
-            // runtime did rather than adjudicating that, because the alternative to an unexpected
-            // `paused` row is a killed process still recorded as working.
             paused = true
-            await prisma.agentRun.updateMany({
-              where: { id: runId, endedAt: null },
-              data: { status: 'paused', pausedAtStep: toolCalls },
-            })
+
+            // 1. The checkpoint, still before the kill (M13 Decision 2): killing first risks losing the
+            // resume point if the checkpoint write fails partway through.
             await writeCheckpoint({
               runId,
               sessionId,
@@ -505,24 +494,27 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
               requestedBy: readPauseRequester(input.spawn?.pauseFlagPath),
             })
 
-            // The real CLI does not exit on a hook deny (M5 live-gate finding 1): it treats the
-            // deny as an ordinary tool error and keeps working -- retrying the denied write,
-            // reaching for an un-gated tool like Read, arguing in its own transcript that the
-            // block "may be transient". Nothing else in this process's path kills it: pause is a
-            // stateless flag-file write (`packages/providers`'s `signalPause`, M12 Task 3), not a
-            // call into an adapter instance -- the adapter's own former kill-on-deny path required
-            // its now-retired `requestPause` to arm it (M12 Task 4) and never armed for a
-            // daemon-driven pause even before that. This is the only place left that observes the
-            // deny and can act on it. Kill only now, after the checkpoint write above has landed
-            // (or declined to, just below): killing first would risk losing the resume point if
-            // the checkpoint write itself failed partway through.
-            //
-            // Unconditional on whether a checkpoint actually got written. A run with no spawn facts
-            // or no session id cannot be resumed by anyone (`writeCheckpoint`'s own early return) --
-            // but that is a reason to kill, not a reason not to: a run nobody can resume is a run an
-            // operator can only wait out or kill by hand, and a live, ungated child left running
-            // under it is strictly worse than a dead one, resumable or not.
+            // 2. The kill. Unconditional on whether a checkpoint actually got written: a run with no spawn
+            // facts or no session id cannot be resumed by anyone (`writeCheckpoint`'s own early return) --
+            // but that is a reason to kill, not a reason not to. `killWithEscalation` SIGKILLs at the grace
+            // deadline, so on return the pid is gone.
             await killWithEscalation(startingRow.pid)
+
+            // 3. Only now is the run PAUSED (M13 Decision 1). Every consumer of this status -- the orphan
+            // sweep, `requestResume`, the operator's panel -- may rely on the pid being gone. Until this
+            // write lands, the row reads whatever it read before (`pause_requested` when an operator asked),
+            // which is exactly the honest answer during the grace window.
+            //
+            // `endedAt: null`, deliberately NOT narrowed to `status: 'pause_requested'`: a deny that arrives
+            // on a `working` run (no operator asked; the domain machine does not admit it as `paused`) is
+            // still reported as what the runtime did, exactly as before this reordering. Only the ordering
+            // moved.
+            await prisma.agentRun.updateMany({
+              where: { id: runId, endedAt: null },
+              data: { status: 'paused', pausedAtStep: toolCalls },
+            })
+
+            // 4. And only now is it announced.
             await emit('run.paused', 'system', { atStep: toolCalls })
             break
           }

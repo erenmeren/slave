@@ -25,6 +25,35 @@ async function spawnNeverExiting(): Promise<number> {
   return child.pid
 }
 
+/**
+ * A real child that IGNORES SIGTERM for longer than `killWithEscalation`'s 2 000 ms grace, so the
+ * window between "the kill was sent" and "the pid is gone" is long enough to observe from another
+ * task. `spawnNeverExiting` above dies on the first SIGTERM and cannot exercise this.
+ */
+async function spawnSigtermIgnoring(): Promise<number> {
+  const child = spawn(
+    process.execPath,
+    ['-e', "process.on('SIGTERM', () => {}); setInterval(() => {}, 60_000)"],
+    { stdio: 'ignore' },
+  )
+  await new Promise<void>((resolve, reject) => {
+    child.once('spawn', () => resolve())
+    child.once('error', reject)
+  })
+  if (child.pid === undefined) throw new Error('spawnSigtermIgnoring: child did not receive a pid')
+  return child.pid
+}
+
+/** Polls the DB until `probe` is true, or throws naming what it last saw. */
+async function until(what: string, probe: () => Promise<boolean>): Promise<void> {
+  const deadline = Date.now() + 5_000
+  while (Date.now() < deadline) {
+    if (await probe()) return
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  throw new Error(`timed out waiting for ${what}`)
+}
+
 afterAll(async (): Promise<void> => {
   await prisma.$disconnect()
 })
@@ -529,6 +558,59 @@ describe('pumpRun', () => {
     expect(outcome).toBeNull()
     expect(await eventTypesFor(ids.runId)).not.toContain('run.succeeded')
   })
+
+  it('leaves the row pause_requested and run.paused unannounced until the child is actually dead', async (): Promise<void> => {
+    const pid = await spawnSigtermIgnoring()
+    await prisma.agentRun.update({
+      where: { id: ids.runId },
+      // `pause_requested` is what an operator's `requestPause` leaves behind; the deny below is the
+      // gate answering it. This is the state Decision 1 is about.
+      data: { pid, worktreePath: '/tmp', status: 'pause_requested' },
+    })
+
+    try {
+      const pumping = pumpRun({
+        ...ids,
+        spawn: {
+          settingsPath: '/tmp/settings.json',
+          pauseFlagPath: '/tmp/pause.flag',
+          hookPath: '/tmp/pause-gate.sh',
+          gitIdentity: { name: 'Alex', email: 'alex@aiteamos.local' },
+        },
+        events: fromArray([
+          { kind: 'session_started', sessionId: 's-1' },
+          { kind: 'tool_call', toolUseId: 'tu_1', toolName: 'Bash', summary: 'Bash echo hi' },
+          { kind: 'hook_denied', hookName: 'PreToolUse', reason: 'operator asked to pause' },
+        ]),
+      })
+
+      // The checkpoint is written FIRST (Decision 2), so its existence is the proof we are inside
+      // the kill's grace window rather than before the branch ran at all.
+      await until('the checkpoint to be written', async () => {
+        return (await prisma.checkpoint.findUnique({ where: { runId: ids.runId } })) !== null
+      })
+
+      const during = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      expect(during.status).toBe('pause_requested')
+      expect(await eventTypesFor(ids.runId)).not.toContain('run.paused')
+      expect(isAlive(pid)).toBe(true)
+
+      await pumping
+
+      const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      expect(after.status).toBe('paused')
+      expect(after.pausedAtStep).toBe(1)
+      expect(await eventTypesFor(ids.runId)).toContain('run.paused')
+      // The whole point: every consumer of `paused` may rely on the pid being gone.
+      expect(isAlive(pid)).toBe(false)
+    } finally {
+      try {
+        process.kill(pid, 'SIGKILL')
+      } catch {
+        // Already dead -- that is the outcome under test.
+      }
+    }
+  }, 30_000)
 
   it('reacts to a second hook deny after the pause only once, not with a second checkpoint write, kill and run.paused', async (): Promise<void> => {
     // Fix round 1: the real CLI does not exit promptly on SIGTERM (M5 live-gate finding 1's own
