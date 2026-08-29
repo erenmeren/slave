@@ -336,6 +336,52 @@ async function resumeRequestedRuns(deps: TickDeps): Promise<void> {
 }
 
 /**
+ * What {@link releaseTaskAfterFailure} did, so the caller can announce it.
+ */
+interface TaskRelease {
+  /** The task's attempt count AFTER the increment. */
+  readonly attempt: number
+  /** `true` when that count reached `maxAttempts` and the task was parked `failed`. */
+  readonly exhausted: boolean
+}
+
+/**
+ * Counts one failed attempt against a task and puts it somewhere it can be retried -- or stops it.
+ *
+ * Shared by `failToStart` and `concludeFailedResume` (M13 Decision 4). Both are "an attempted run
+ * that failed", and until M13 only the first of them counted: a resume that could not spawn
+ * released the task straight back to `rework`, so a run that failed to resume forever was handed
+ * out forever, each attempt costing real money and none of them costing an attempt.
+ *
+ * Conditional on still owning the task, and incremented rather than assigned: a tick that lost the
+ * claim race must not roll back the winner's task row or burn an attempt against a run that is very
+ * much alive.
+ *
+ * `lastRejectionReason` is deliberately NOT written here. It is the agent-facing channel --
+ * `buildPrompt` puts it in front of the next run as the thing to fix first -- so an
+ * orchestrator-side failure landing in it both destroys the verify feedback §8 requires and
+ * instructs the next agent to go and fix a setup command it cannot see. The reason lives on the
+ * `AgentRun` row and in `run.failed`, which is where an operator looks for it.
+ */
+async function releaseTaskAfterFailure(
+  task: { readonly id: string; readonly maxAttempts: number },
+  runId: string,
+  parked: 'rework' | 'blocked',
+): Promise<TaskRelease> {
+  await prisma.task.updateMany({
+    where: { id: task.id, activeRunId: runId },
+    data: { attempt: { increment: 1 } },
+  })
+  const after = await prisma.task.findUniqueOrThrow({ where: { id: task.id } })
+  const exhausted = after.attempt >= task.maxAttempts
+  await prisma.task.updateMany({
+    where: { id: task.id, activeRunId: runId },
+    data: { status: exhausted ? 'failed' : parked, activeRunId: null },
+  })
+  return { attempt: after.attempt, exhausted }
+}
+
+/**
  * Concludes a resume that failed to spawn, from inside the tick that claimed it.
  *
  * Mirrors `sweep.ts`'s `concludeDeadRun`: a status-conditioned `updateMany` so a run something else
@@ -361,11 +407,13 @@ async function concludeFailedResume(
   // Release the task the run was holding, exactly as `concludeDeadRun` does -- a failed resume
   // that leaves `activeRunId` pointing at a dead run strands the task `running` forever. A
   // `planning` run (M8b) has no task to release.
+  //
+  // As of M13 the release COUNTS (Decision 4): a resume that cannot spawn is an attempted run that
+  // failed, and a task whose resume can never spawn was otherwise re-dispatched every tick forever.
+  let release: TaskRelease | null = null
   if (run.taskId !== null) {
-    await prisma.task.updateMany({
-      where: { id: run.taskId, activeRunId: run.id },
-      data: { status: 'rework', activeRunId: null },
-    })
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: run.taskId } })
+    release = await releaseTaskAfterFailure(task, run.id, 'rework')
   }
 
   await appendEvent({
@@ -377,6 +425,22 @@ async function concludeFailedResume(
     actor: 'system',
     payload: { reason: `resume failed to spawn: ${error instanceof Error ? error.message : String(error)}` },
   })
+
+  // The task's own terminal, not just the run's. Without it an exhausted task drops off the board
+  // with `run.failed` as the only trace, and nothing in the log says why nothing is running.
+  if (run.taskId !== null && release !== null && release.exhausted) {
+    await appendEvent({
+      type: 'task.failed',
+      workspaceId: deps.workspaceId,
+      taskId: run.taskId,
+      actor: 'system',
+      payload: {
+        reason: `could not resume after ${String(release.attempt)} attempts: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      },
+    })
+  }
 }
 
 /**
@@ -639,24 +703,7 @@ async function failToStart(
   // status.
   const parked = error instanceof WorktreeExistsError ? 'blocked' : 'rework'
 
-  // Conditional on still owning the task, and incremented rather than assigned: a tick that lost
-  // the claim race must not roll back the winner's task row or burn an attempt against a run that
-  // is very much alive.
-  await prisma.task.updateMany({
-    where: { id: task.id, activeRunId: runId },
-    data: { attempt: { increment: 1 } },
-  })
-  const after = await prisma.task.findUniqueOrThrow({ where: { id: task.id } })
-  const exhausted = after.attempt >= task.maxAttempts
-  await prisma.task.updateMany({
-    where: { id: task.id, activeRunId: runId },
-    // `lastRejectionReason` is deliberately NOT written here. It is the agent-facing channel --
-    // `buildPrompt` puts it in front of the next run as the thing to fix first -- so an
-    // orchestrator-side failure landing in it both destroys the verify feedback §8 requires and
-    // instructs the next agent to go and fix a setup command it cannot see. The reason lives on the
-    // `AgentRun` row and in `run.failed`, which is where an operator looks for it.
-    data: { status: exhausted ? 'failed' : parked, activeRunId: null },
-  })
+  const { attempt, exhausted } = await releaseTaskAfterFailure(task, runId, parked)
 
   await appendEvent({
     type: 'run.failed',
@@ -673,7 +720,7 @@ async function failToStart(
       workspaceId,
       taskId: task.id,
       actor: 'system',
-      payload: { reason: `could not start after ${after.attempt} attempts: ${reason}` },
+      payload: { reason: `could not start after ${attempt} attempts: ${reason}` },
     })
   } else if (parked === 'rework') {
     // The task's own state change, not just the run's. Without it the log records that a run failed
@@ -683,7 +730,7 @@ async function failToStart(
       workspaceId,
       taskId: task.id,
       actor: 'system',
-      payload: { reason, attempt: after.attempt },
+      payload: { reason, attempt },
     })
   }
 }

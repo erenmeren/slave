@@ -267,4 +267,67 @@ describe('executing a resume intent from the daemon', () => {
     expect(after.resumeRequestedAt).not.toBeNull()
     expect(after.terminalAt).toBeNull()
   }, 60_000)
+
+  describe('a resume that fails to spawn', () => {
+    /** An adapter whose configured command is not on disk, so `resume()` throws at spawn. */
+    function brokenAdapter(): ClaudeCodeAdapter {
+      return new ClaudeCodeAdapter({
+        command: join(tmpdir(), 'aiteamos-no-such-binary-m13'),
+        hookPath: REAL_GATE,
+      })
+    }
+
+    it('counts the attempt, releases the task to rework, and records run.failed', async (): Promise<void> => {
+      const runId = await pauseARun()
+      await prisma.task.update({ where: { id: fixture.taskId }, data: { maxAttempts: 3, attempt: 0 } })
+      expect((await requestResume(runId, null, 'web')).ok).toBe(true)
+
+      await tick({
+        workspaceId: brandWorkspaceId(fixture.workspaceId),
+        registry: singleAdapterRegistry(brokenAdapter()),
+      })
+      await drainPumps()
+
+      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: runId } })
+      expect(run.status).toBe('failed')
+
+      const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+      // The whole point of Decision 4: no path re-dispatches a paid run without counting it.
+      expect(task.attempt).toBe(1)
+      expect(task.status).toBe('rework')
+      expect(task.activeRunId).toBeNull()
+      // The agent-facing channel is untouched -- an orchestrator-side failure is not feedback.
+      expect(task.lastRejectionReason).toBeNull()
+
+      expect(await prisma.executionEvent.count({ where: { runId, type: 'run_failed' } })).toBe(1)
+    }, 60_000)
+
+    it('parks the task failed at maxAttempts and starts no run on the next tick', async (): Promise<void> => {
+      const runId = await pauseARun()
+      await prisma.task.update({ where: { id: fixture.taskId }, data: { maxAttempts: 1, attempt: 0 } })
+      expect((await requestResume(runId, null, 'web')).ok).toBe(true)
+
+      await tick({
+        workspaceId: brandWorkspaceId(fixture.workspaceId),
+        registry: singleAdapterRegistry(brokenAdapter()),
+      })
+      await drainPumps()
+
+      const exhausted = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+      expect(exhausted.attempt).toBe(1)
+      expect(exhausted.status).toBe('failed')
+      expect(
+        await prisma.executionEvent.count({ where: { taskId: fixture.taskId, type: 'task_failed' } }),
+      ).toBe(1)
+
+      const runsBefore = await prisma.agentRun.count({ where: { taskId: fixture.taskId } })
+      await tick({
+        workspaceId: brandWorkspaceId(fixture.workspaceId),
+        registry: singleAdapterRegistry(fakeAdapter('complete')),
+      })
+      await drainPumps()
+      // A `failed` task is not startable: the next tick must not hand it to an agent again.
+      expect(await prisma.agentRun.count({ where: { taskId: fixture.taskId } })).toBe(runsBefore)
+    }, 60_000)
+  })
 })
