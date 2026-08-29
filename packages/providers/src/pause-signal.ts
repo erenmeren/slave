@@ -1,5 +1,6 @@
 import { writeFile } from 'node:fs/promises'
 import { capabilitiesOf } from './capabilities.js'
+import { killWithEscalation } from './runtime/process.js'
 import type { ProviderKind } from './types.js'
 
 /**
@@ -58,12 +59,6 @@ async function signalGatedPause(state: PausableRunState, reason: string): Promis
   await writeFile(state.pauseFlagPath, `${reason}\n`, 'utf8')
 }
 
-/** How long a signalled process gets to exit on its own before it is killed outright. */
-const CURSOR_KILL_GRACE_MS = 2_000
-
-/** How often the grace window is re-checked, so a process that dies at once is not waited out. */
-const DEATH_POLL_MS = 25
-
 /**
  * The strategy for a runtime that CANNOT stop between tool calls (`canPauseMidRun: false`): end
  * the process, which for such a runtime is what a pause is. Cursor is the only member today;
@@ -82,7 +77,10 @@ const DEATH_POLL_MS = 25
  * child actually dies, the agent can still start a shell command or a file write, and
  * `scripts/cursor-shell-gate.sh` -- armed from this very file by `.cursor/hooks.json` -- is the only
  * thing that can stop it. Writing the flag first costs one `write` and closes that window; skipping
- * it would leave the run's last act ungated for the whole of the grace period below. It is also the
+ * it would leave the run's last act ungated for the whole of `killWithEscalation`'s grace window
+ * (`runtime/process.ts`, the one escalation in the tree as of M13 Decision 6 -- this file used to
+ * carry a third copy, because `packages/control`'s was unreachable from here without a cycle; the
+ * primitive moved BELOW `control` instead). It is also the
  * same file, in the same format, that the Claude branch writes: one concept, one path per run,
  * whichever runtime the run is on.
  *
@@ -117,52 +115,5 @@ async function signalTerminatingPause(
   // in the window between this call and its death. Nothing is skipped by the ordering above: with
   // no pid there is no live process for the gate to deny anything to.
   await writeFile(state.pauseFlagPath, `${reason}\n`, 'utf8')
-  await terminatePid(state.pid)
-}
-
-/**
- * SIGTERM, a polled grace window, then SIGKILL. The same discipline as `packages/control`'s
- * `killWithEscalation` and the Cursor adapter's own `terminateChild`, written here a third time
- * because neither is reachable: `packages/control` DEPENDS on this package (importing it back
- * would be a cycle), and the adapter's version acts on a live `ChildProcess` this process spawned,
- * which is precisely what a cross-process pause does not have. Polled rather than sleeping the
- * whole grace period, so the common case -- a process that exits promptly on SIGTERM -- costs
- * milliseconds instead of seconds inside an emergency stop's per-run loop.
- */
-async function terminatePid(pid: number): Promise<void> {
-  // `false` means the process is already gone (ESRCH). Nothing to escalate against.
-  if (!sendSignal(pid, 'SIGTERM')) return
-  if (await waitForExit(pid, CURSOR_KILL_GRACE_MS)) return
-  sendSignal(pid, 'SIGKILL')
-  await waitForExit(pid, CURSOR_KILL_GRACE_MS)
-}
-
-function sendSignal(pid: number, signal: NodeJS.Signals): boolean {
-  if (pid <= 0) return false
-  try {
-    process.kill(pid, signal)
-    return true
-  } catch {
-    return false
-  }
-}
-
-function isAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (error) {
-    // EPERM means the process exists and belongs to someone else -- alive, just not ours to
-    // inspect. Only ESRCH means gone.
-    return (error as NodeJS.ErrnoException).code === 'EPERM'
-  }
-}
-
-async function waitForExit(pid: number, timeoutMs: number): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    if (!isAlive(pid)) return true
-    await new Promise((resolve) => setTimeout(resolve, DEATH_POLL_MS))
-  }
-  return !isAlive(pid)
+  await killWithEscalation(state.pid)
 }

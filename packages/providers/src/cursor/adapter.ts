@@ -5,6 +5,7 @@ import { createInterface } from 'node:readline'
 import type { RunId } from '@ai-team-os/domain'
 import { capabilitiesOf } from '../capabilities.js'
 import { AsyncEventQueue } from '../runtime/event-queue.js'
+import { buildChildEnv, terminateChild } from '../runtime/process.js'
 import { isRecord } from '../runtime/summary.js'
 import type { RunOutcome, RuntimeEvent } from '../types.js'
 import type { AgentRuntimeAdapter, ProviderCapabilities, RunHandle, StartRunInput } from '../claude/adapter.js'
@@ -112,30 +113,6 @@ interface CursorRunState {
 }
 
 /**
- * The environment the child is spawned with. Identical in intent to `ClaudeCodeAdapter`'s: git
- * identity per-process rather than written into a shared `.git/config`, plus the pause-flag path.
- *
- * `AITEAMOS_PAUSE_FLAG` is the ONE channel the gate reads the flag path on, and it was measured
- * arriving intact: Cursor evaluates a hook's command in a shell whose environment is its own
- * `process.env` plus Cursor's additions, so setting it on the `cursor-agent` child is sufficient
- * and no second channel is needed (Task 11 §3 Q3, §8(e)). It is the same variable
- * `scripts/pause-gate.sh` reads -- one concept, one name, whichever runtime the run is on.
- */
-function buildChildEnv(input: {
-  readonly gitIdentity: { readonly name: string; readonly email: string }
-  readonly pauseFlagPath: string
-}): NodeJS.ProcessEnv {
-  return {
-    ...process.env,
-    GIT_AUTHOR_NAME: input.gitIdentity.name,
-    GIT_AUTHOR_EMAIL: input.gitIdentity.email,
-    GIT_COMMITTER_NAME: input.gitIdentity.name,
-    GIT_COMMITTER_EMAIL: input.gitIdentity.email,
-    AITEAMOS_PAUSE_FLAG: input.pauseFlagPath,
-  }
-}
-
-/**
  * Clears `flagPath` and verifies it is actually gone. Byte-for-byte the same contract
  * `ClaudeCodeAdapter` enforces, and load-bearing for the same reason: a flag file that survives the
  * clear makes the gate deny the resumed run's first tool call and every one after it, producing a
@@ -216,7 +193,7 @@ export class CursorAdapter implements AgentRuntimeAdapter {
       runId: input.runId,
       args,
       cwd: input.worktreePath,
-      env: buildChildEnv(input),
+      env: buildChildEnv({ gitIdentity: input.gitIdentity, pauseFlagPath: input.pauseFlagPath }),
       runFiles: { settingsPath: hooksPath, hookPath: this.gatePath },
     })
   }
@@ -294,7 +271,7 @@ export class CursorAdapter implements AgentRuntimeAdapter {
     // Recorded BEFORE the signal, so the terminal diagnosis below can tell an operator's cancel
     // apart from a runtime that died on its own having written nothing.
     state.cancelled = true
-    await this.terminateChild(state.child)
+    await terminateChild(state.child, this.killGraceMs)
   }
 
   /**
@@ -453,28 +430,6 @@ export class CursorAdapter implements AgentRuntimeAdapter {
 
       settled = true
       resolve({ runId: spec.runId, pid: child.pid, runFiles: spec.runFiles })
-    })
-  }
-
-  /** SIGTERM, escalating to SIGKILL after `killGraceMs`. Identical in shape to Claude's. */
-  private terminateChild(child: ChildProcess): Promise<void> {
-    if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve()
-
-    return new Promise<void>((resolve) => {
-      let settled = false
-      const timer = setTimeout(() => {
-        if (settled) return
-        child.kill('SIGKILL')
-      }, this.killGraceMs)
-
-      child.once('exit', () => {
-        if (settled) return
-        settled = true
-        clearTimeout(timer)
-        resolve()
-      })
-
-      child.kill('SIGTERM')
     })
   }
 

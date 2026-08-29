@@ -5,6 +5,7 @@ import { createInterface } from 'node:readline'
 import type { RunId } from '@ai-team-os/domain'
 import { capabilitiesOf } from '../capabilities.js'
 import { AsyncEventQueue } from '../runtime/event-queue.js'
+import { buildChildEnv, terminateChild } from '../runtime/process.js'
 import { isRecord } from '../runtime/summary.js'
 import type { RunOutcome, RuntimeEvent } from '../types.js'
 import type { Checkpoint } from './checkpoint.js'
@@ -184,27 +185,6 @@ interface RunState {
 }
 
 /**
- * Sets the environment the child process is spawned with (ADR 0001,
- * "Concurrency and the git common directory"). Identity is supplied
- * per-process rather than by writing `git config`: two concurrent M0 agents
- * both hit the same missing-identity failure, and the one that recovered
- * with an unscoped `git config user.name/user.email` wrote into the
- * repo-wide `.git/config`, which every worktree shares. Environment
- * variables are per-process, write no file, and cannot leak to a sibling
- * worktree's run.
- */
-function buildChildEnv(input: StartRunInput): NodeJS.ProcessEnv {
-  return {
-    ...process.env,
-    GIT_AUTHOR_NAME: input.gitIdentity.name,
-    GIT_AUTHOR_EMAIL: input.gitIdentity.email,
-    GIT_COMMITTER_NAME: input.gitIdentity.name,
-    GIT_COMMITTER_EMAIL: input.gitIdentity.email,
-    AITEAMOS_PAUSE_FLAG: input.pauseFlagPath,
-  }
-}
-
-/**
  * Substituted for `resume()`'s `-p` prompt when `queuedInstruction` is `null` -- headless mode
  * still needs *some* prompt text, and there is no queued operator instruction to supply it. Its
  * exact wording is not part of the resume contract (ADR 0001 does not specify one; only that a
@@ -330,7 +310,7 @@ export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
       runId: input.runId,
       args,
       cwd: input.worktreePath,
-      env: buildChildEnv(input),
+      env: buildChildEnv({ gitIdentity: input.gitIdentity, pauseFlagPath: input.pauseFlagPath }),
       startInput: input,
       runFiles: { settingsPath, hookPath: this.hookPath },
     })
@@ -446,7 +426,7 @@ export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
 
   async cancel(runId: RunId): Promise<void> {
     const { child } = this.mustGetRun(runId)
-    await this.terminateChild(child)
+    await terminateChild(child, this.killGraceMs)
   }
 
   /**
@@ -577,31 +557,12 @@ export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
       runId,
       args,
       cwd: resumedInput.worktreePath,
-      env: buildChildEnv(resumedInput),
+      env: buildChildEnv({
+        gitIdentity: resumedInput.gitIdentity,
+        pauseFlagPath: resumedInput.pauseFlagPath,
+      }),
       startInput: resumedInput,
       runFiles: { settingsPath: checkpoint.settingsPath, hookPath: checkpoint.hookPath },
-    })
-  }
-
-  /** Shared by `cancel()` and, formerly, the adapter's own deny-triggered kill (retired, M12 Task 4): SIGTERM, escalating to SIGKILL after `killGraceMs`. */
-  private terminateChild(child: ChildProcess): Promise<void> {
-    if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve()
-
-    return new Promise<void>((resolve) => {
-      let settled = false
-      const timer = setTimeout(() => {
-        if (settled) return
-        child.kill('SIGKILL')
-      }, this.killGraceMs)
-
-      child.once('exit', () => {
-        if (settled) return
-        settled = true
-        clearTimeout(timer)
-        resolve()
-      })
-
-      child.kill('SIGTERM')
     })
   }
 
