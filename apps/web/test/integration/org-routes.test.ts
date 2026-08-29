@@ -88,6 +88,26 @@ describe('the org routes', () => {
       const missingRole = await templatesPOST(jsonRequest({ name: 'Backend Engineer' }))
       expect(missingRole.status).toBe(400)
     })
+
+    // M12 Task 13: this route now carries `defaultProvider` beside `defaultModel`, so the pair
+    // that Task 7's guard above always refused can now actually be written.
+    it('creates a template with a paired defaultModel and defaultProvider', async (): Promise<void> => {
+      const response = await templatesPOST(
+        jsonRequest({ name: 'Frontend Engineer', role: 'frontend', defaultModel: 'sonnet', defaultProvider: 'claude_code' }),
+      )
+      expect(response.status).toBe(200)
+      const template = await prisma.agentTemplate.findFirstOrThrow({ where: { name: 'Frontend Engineer' } })
+      expect(template.defaultModel).toBe('sonnet')
+      expect(template.provider).toBe('claude_code')
+    })
+
+    it('409s with the invalid-provider refusal text on an unrecognized provider', async (): Promise<void> => {
+      const response = await templatesPOST(
+        jsonRequest({ name: 'Frontend Engineer', role: 'frontend', defaultModel: 'sonnet', defaultProvider: 'not-a-provider' }),
+      )
+      expect(response.status).toBe(409)
+      expect((await response.json()).error).toBe('a provider must be a configured kind')
+    })
   })
 
   describe('POST /api/org/companies', () => {
@@ -201,6 +221,34 @@ describe('the org routes', () => {
       const response = await agentsPOST(malformedRequest())
       expect(response.status).toBe(400)
     })
+
+    // M12 Task 13: this route now carries `provider` beside `model`, so the pair Task 7's guard
+    // above always refused can now actually be written.
+    it('creates an agent with a paired model and provider', async (): Promise<void> => {
+      const company = await prisma.company.create({ data: { name: 'Acme Robotics' } })
+      const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Engineering' } })
+      const template = await prisma.agentTemplate.create({ data: { name: 'Backend Engineer', role: 'backend' } })
+
+      const response = await agentsPOST(
+        jsonRequest({ companyTeamId: companyTeam.id, templateId: template.id, name: 'Atlas', model: 'opus', provider: 'claude_code' }),
+      )
+      expect(response.status).toBe(200)
+      const agent = await prisma.companyAgent.findFirstOrThrow({ where: { companyTeamId: companyTeam.id, name: 'Atlas' } })
+      expect(agent.model).toBe('opus')
+      expect(agent.provider).toBe('claude_code')
+    })
+
+    it('409s with the invalid-provider refusal text on an unrecognized provider', async (): Promise<void> => {
+      const company = await prisma.company.create({ data: { name: 'Acme Robotics' } })
+      const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Engineering' } })
+      const template = await prisma.agentTemplate.create({ data: { name: 'Backend Engineer', role: 'backend' } })
+
+      const response = await agentsPOST(
+        jsonRequest({ companyTeamId: companyTeam.id, templateId: template.id, name: 'Atlas', model: 'opus', provider: 'not-a-provider' }),
+      )
+      expect(response.status).toBe(409)
+      expect((await response.json()).error).toBe('a provider must be a configured kind')
+    })
   })
 
   describe('POST /api/w/[workspaceId]/company', () => {
@@ -296,6 +344,29 @@ describe('the org routes', () => {
 
       const missingKey = await modelPOST(jsonRequest({}), { params: Promise.resolve({ agentId }) })
       expect(missingKey.status).toBe(400)
+    })
+
+    // M12 Task 13: this route now carries `provider` beside `model`, so the pair Task 7's guard
+    // above always refused can now actually be written. `claude_code`, not `cursor`: `seed()`'s
+    // workspace is budgeted by the schema default, and only `claude_code` reports cost.
+    it('sets a paired model and provider', async (): Promise<void> => {
+      const { agentId } = await seedWorker()
+      const response = await modelPOST(jsonRequest({ model: 'opus', provider: 'claude_code' }), {
+        params: Promise.resolve({ agentId }),
+      })
+      expect(response.status).toBe(200)
+      const agent = await prisma.agent.findUniqueOrThrow({ where: { id: agentId } })
+      expect(agent.model).toBe('opus')
+      expect(agent.provider).toBe('claude_code')
+    })
+
+    it('409s with the invalid-provider refusal text on an unrecognized provider', async (): Promise<void> => {
+      const { agentId } = await seedWorker()
+      const response = await modelPOST(jsonRequest({ model: 'opus', provider: 'not-a-provider' }), {
+        params: Promise.resolve({ agentId }),
+      })
+      expect(response.status).toBe(409)
+      expect((await response.json()).error).toBe('a provider must be a configured kind')
     })
   })
 

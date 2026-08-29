@@ -136,6 +136,65 @@ describe('TemplateCatalog', () => {
       expect(screen.getByRole('alert').textContent).toContain('the name "Backend Engineer" is already taken')
       expect(routerRefresh).not.toHaveBeenCalled()
     })
+
+    // M12 Task 13: `defaultProvider` beside `defaultModel`, the same "never travels alone" idiom
+    // `CompanyManager`'s member form uses.
+    it('includes defaultProvider alongside defaultModel when both are filled in', async () => {
+      render(<TemplateCatalog templates={[]} />)
+      fireEvent.change(screen.getByLabelText('template name'), { target: { value: 'Frontend Engineer' } })
+      fireEvent.change(screen.getByLabelText('template role'), { target: { value: 'frontend' } })
+      fireEvent.change(screen.getByLabelText('template default model'), { target: { value: 'claude-opus-4' } })
+      fireEvent.change(screen.getByLabelText('template default provider'), { target: { value: 'cursor' } })
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('template-submit'))
+      })
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/org/templates',
+        expect.objectContaining({
+          body: JSON.stringify({
+            name: 'Frontend Engineer',
+            role: 'frontend',
+            defaultModel: 'claude-opus-4',
+            defaultProvider: 'cursor',
+          }),
+        }),
+      )
+    })
+
+    it('omits defaultProvider when no defaultModel is given, even if a provider is selected', async () => {
+      render(<TemplateCatalog templates={[]} />)
+      fireEvent.change(screen.getByLabelText('template name'), { target: { value: 'Frontend Engineer' } })
+      fireEvent.change(screen.getByLabelText('template role'), { target: { value: 'frontend' } })
+      fireEvent.change(screen.getByLabelText('template default provider'), { target: { value: 'cursor' } })
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('template-submit'))
+      })
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/org/templates',
+        expect.objectContaining({ body: JSON.stringify({ name: 'Frontend Engineer', role: 'frontend' }) }),
+      )
+    })
+
+    it('shows the model-without-provider refusal text verbatim', async () => {
+      fetchMock.mockImplementationOnce(
+        async () => new Response(JSON.stringify({ error: 'a model must name the provider that runs it' }), { status: 409 }),
+      )
+      render(<TemplateCatalog templates={[]} />)
+      fireEvent.change(screen.getByLabelText('template name'), { target: { value: 'Frontend Engineer' } })
+      fireEvent.change(screen.getByLabelText('template role'), { target: { value: 'frontend' } })
+      fireEvent.change(screen.getByLabelText('template default model'), { target: { value: 'claude-opus-4' } })
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('template-submit'))
+      })
+
+      expect(screen.getByRole('alert').textContent).toContain('a model must name the provider that runs it')
+      expect(routerRefresh).not.toHaveBeenCalled()
+    })
   })
 })
 
@@ -333,6 +392,81 @@ describe('CompanyManager', () => {
       })
 
       expect(screen.getByRole('alert').textContent).toContain('the name "Blair" is already taken')
+      expect(routerRefresh).not.toHaveBeenCalled()
+    })
+
+    // M12 Task 13, controller resolution 2: a provider select beside the model input, same idiom
+    // as `TemplateCatalog`'s `defaultProvider` -- never travels without the model it names.
+    it('includes the provider alongside the model when both are filled in', async () => {
+      render(
+        <CompanyManager
+          companies={[{ id: 'c1', name: 'Acme Robotics' }]}
+          roster={[company({ teams: [{ companyTeamId: 'ct1', teamName: 'Platform', members: [] }] })]}
+          templates={[template({ id: 'tpl1', name: 'Backend Engineer' })]}
+        />,
+      )
+      fireEvent.click(screen.getByTestId('company-toggle'))
+      fireEvent.change(screen.getByLabelText('member template'), { target: { value: 'tpl1' } })
+      fireEvent.change(screen.getByLabelText('member name'), { target: { value: 'Blair' } })
+      fireEvent.change(screen.getByLabelText('member model'), { target: { value: 'claude-opus-4' } })
+      fireEvent.change(screen.getByLabelText('member provider'), { target: { value: 'cursor' } })
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('member-submit'))
+      })
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/org/agents',
+        expect.objectContaining({
+          body: JSON.stringify({ companyTeamId: 'ct1', templateId: 'tpl1', name: 'Blair', model: 'claude-opus-4', provider: 'cursor' }),
+        }),
+      )
+    })
+
+    it('omits the provider when no model is given, even if a provider is selected', async () => {
+      render(
+        <CompanyManager
+          companies={[{ id: 'c1', name: 'Acme Robotics' }]}
+          roster={[company({ teams: [{ companyTeamId: 'ct1', teamName: 'Platform', members: [] }] })]}
+          templates={[template({ id: 'tpl1', name: 'Backend Engineer' })]}
+        />,
+      )
+      fireEvent.click(screen.getByTestId('company-toggle'))
+      fireEvent.change(screen.getByLabelText('member template'), { target: { value: 'tpl1' } })
+      fireEvent.change(screen.getByLabelText('member name'), { target: { value: 'Blair' } })
+      fireEvent.change(screen.getByLabelText('member provider'), { target: { value: 'cursor' } })
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('member-submit'))
+      })
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/org/agents',
+        expect.objectContaining({ body: JSON.stringify({ companyTeamId: 'ct1', templateId: 'tpl1', name: 'Blair' }) }),
+      )
+    })
+
+    it('shows the model-without-provider refusal text verbatim', async () => {
+      fetchMock.mockImplementationOnce(
+        async () => new Response(JSON.stringify({ error: 'a model must name the provider that runs it' }), { status: 409 }),
+      )
+      render(
+        <CompanyManager
+          companies={[{ id: 'c1', name: 'Acme Robotics' }]}
+          roster={[company({ teams: [{ companyTeamId: 'ct1', teamName: 'Platform', members: [] }] })]}
+          templates={[template({ id: 'tpl1', name: 'Backend Engineer' })]}
+        />,
+      )
+      fireEvent.click(screen.getByTestId('company-toggle'))
+      fireEvent.change(screen.getByLabelText('member template'), { target: { value: 'tpl1' } })
+      fireEvent.change(screen.getByLabelText('member name'), { target: { value: 'Blair' } })
+      fireEvent.change(screen.getByLabelText('member model'), { target: { value: 'claude-opus-4' } })
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('member-submit'))
+      })
+
+      expect(screen.getByRole('alert').textContent).toContain('a model must name the provider that runs it')
       expect(routerRefresh).not.toHaveBeenCalled()
     })
   })

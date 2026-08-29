@@ -1,7 +1,9 @@
-import { setAgentModel } from '@ai-team-os/control'
+import { setAgentModel, type ProviderKind } from '@ai-team-os/control'
 import { orgControlResponse } from '../../../../../server/orgControlRoute'
 
 export const dynamic = 'force-dynamic'
+
+const BODY_ERROR = 'the body must be { "model": string | null, "provider"?: string | null }'
 
 export async function POST(
   request: Request,
@@ -10,15 +12,20 @@ export async function POST(
   const { agentId } = await context.params
   const body: unknown = await request.json().catch(() => null)
   if (body === null || typeof body !== 'object' || !('model' in body)) {
-    return Response.json({ error: 'the body must be { "model": string | null }' }, { status: 400 })
+    return Response.json({ error: BODY_ERROR }, { status: 400 })
   }
   const model = (body as { model: unknown }).model
   if (model !== null && typeof model !== 'string') {
-    return Response.json({ error: 'the body must be { "model": string | null }' }, { status: 400 })
+    return Response.json({ error: BODY_ERROR }, { status: 400 })
   }
-  // M12 Task 7: `setAgentModel` now writes a model and its provider as one pair -- this route
-  // does not take a provider in its body yet (Task 13 owns that UI surface), so it can only ever
-  // clear the pair, never set a real model. Passing `null` here (rather than widening this
-  // route's contract) is deliberate: growing this endpoint's body is Task 13's call to make.
-  return orgControlResponse(() => setAgentModel(agentId, model, null))
+  // M12 Task 13: a bare `provider` key with no value in the body reads the same as an omitted
+  // one -- both mean "the operator did not name a provider" -- so `setAgentModel` still gets
+  // `null` and can produce the real `model_without_provider` refusal (controller resolution 1:
+  // this route must not client-side-validate that pairing away). Only a non-string, non-null
+  // `provider` is a malformed request.
+  const provider = 'provider' in body ? (body as { provider: unknown }).provider : null
+  if (provider !== null && typeof provider !== 'string') {
+    return Response.json({ error: BODY_ERROR }, { status: 400 })
+  }
+  return orgControlResponse(() => setAgentModel(agentId, model, provider as ProviderKind | null))
 }

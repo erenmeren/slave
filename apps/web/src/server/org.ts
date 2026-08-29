@@ -1,6 +1,13 @@
 import { prisma } from '@ai-team-os/db/client'
 import { toRunState } from '@ai-team-os/db'
+import { capabilitiesOf, type ProviderCapabilities, type ProviderKind } from '@ai-team-os/control'
 import { deriveAgentStatus, sumSpend, NON_TERMINAL_RUN_STATUSES, type AgentStatus, type SpendRow } from '@ai-team-os/domain'
+
+/** A worker's resolved gate, from `capabilitiesOf(worker.provider).gate` (M12 Task 13) -- `null`
+ *  only when the worker itself has no provider recorded, mirroring `provider: ProviderKind | null`
+ *  beside it. Named off `ProviderCapabilities['gate']` rather than redeclared, so the roster can
+ *  never drift from the one capability table `@ai-team-os/providers` owns. */
+export type WorkerGate = ProviderCapabilities['gate']
 
 // Mirrors overview.ts's ACTIVE_TASK_STATUSES exactly (the M8a widening: a task under review or in
 // the merge queue is still active work). Not imported from there -- overview.ts does not export
@@ -169,6 +176,17 @@ export interface RosterMemberRow {
     readonly projectName: string
     readonly status: string
     readonly model: string | null
+    /**
+     * The worker's OWN provider column (M12 Task 13) -- paired with `model` above the same way
+     * every write site pairs them (`packages/control/src/org.ts`'s `pairRefusal`): set together,
+     * or both `null`. Optional, not required: the M11 fixtures/tests that build a worker row by
+     * hand predate this field and are not this task's to rewrite (Series A freeze) -- `undefined`
+     * reads the same as `null` everywhere this is consumed.
+     */
+    readonly provider?: ProviderKind | null
+    /** `capabilitiesOf(provider).gate`, or `null`/`undefined` when `provider` itself is not set --
+     *  see `WorkerGate`'s own docstring, and `provider`'s above for why this is optional too. */
+    readonly gate?: WorkerGate | null
     readonly currentTask: CurrentTask | null
   }>
 }
@@ -226,6 +244,8 @@ export async function listRoster(): Promise<readonly RosterCompany[]> {
             projectName: worker.team.workspace.name,
             status: info?.status ?? 'idle',
             model: worker.model,
+            provider: worker.provider,
+            gate: worker.provider !== null ? capabilitiesOf(worker.provider).gate : null,
             currentTask: info?.currentTask ?? null,
           }
         })
@@ -296,12 +316,20 @@ export async function listWorkers(): Promise<readonly WorkerRow[]> {
 }
 
 export async function listTemplates(): Promise<
-  readonly { id: string; name: string; role: string; description: string; defaultModel: string | null }[]
+  readonly {
+    id: string
+    name: string
+    role: string
+    description: string
+    defaultModel: string | null
+    defaultProvider: ProviderKind | null
+  }[]
 > {
-  return prisma.agentTemplate.findMany({
-    select: { id: true, name: true, role: true, description: true, defaultModel: true },
+  const templates = await prisma.agentTemplate.findMany({
+    select: { id: true, name: true, role: true, description: true, defaultModel: true, provider: true },
     orderBy: { name: 'asc' },
   })
+  return templates.map(({ provider, ...rest }) => ({ ...rest, defaultProvider: provider }))
 }
 
 export async function listCompanies(): Promise<readonly { id: string; name: string }[]> {

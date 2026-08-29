@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import type { RosterCompany, RosterMemberRow } from '../server/org'
+import type { RosterCompany, RosterMemberRow, WorkerGate } from '../server/org'
 import { toneForStatus } from './AgentsClient'
 import { ModelOverrideEditor } from './ModelOverrideEditor'
 import { Chip } from './ui/Chip'
@@ -12,6 +12,14 @@ import { StatusPill } from './ui/StatusPill'
 
 const COLUMNS = '1fr 120px 160px 1fr 28px'
 const HEADER = ['Agent', 'Role', 'Template', 'Model', ''] as const
+
+/** The human-readable gate mark beside a worker's model override (M12 Task 13, brief: "provider
+ *  and its gate mark"), from `WorkerGate` (`capabilitiesOf(provider).gate`, `listRoster`). */
+const GATE_LABEL: Record<WorkerGate, string> = {
+  'all-tools': 'all tools',
+  'shell-only': 'shell only',
+  none: 'no tools',
+}
 
 /** The effective-model + `modelSource` chip pair (brief: "effective model + `modelSource` chip
  *  (mono; \"—\" when none)"). `effectiveModel` (`listRoster`'s derivation) is the roster/template
@@ -72,7 +80,12 @@ function MemberRow({ member }: { readonly member: RosterMemberRow }): React.JSX.
                   )}
                 </div>
                 <span className="font-mono text-text-3">{worker.model ?? '—'}</span>
-                <ModelOverrideEditor agentId={worker.agentId} model={worker.model} />
+                {/* Truthy, not `!== null`: `gate` is optional (Series A freeze -- see its own
+                 *  docstring in `server/org.ts`), so a plain `!== null` would still let `undefined`
+                 *  through and index `GATE_LABEL` with it. Every real `WorkerGate` value is a
+                 *  non-empty string, so a truthy check excludes exactly `null`/`undefined`. */}
+                {worker.gate ? <Chip>{GATE_LABEL[worker.gate]}</Chip> : null}
+                <ModelOverrideEditor agentId={worker.agentId} model={worker.model} provider={worker.provider} />
               </div>
             ))
           )}

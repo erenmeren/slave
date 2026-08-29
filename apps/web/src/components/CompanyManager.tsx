@@ -2,12 +2,17 @@
 
 import { useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import type { ProviderKind } from '@ai-team-os/control'
 import type { RosterCompany, RosterMemberRow } from '../server/org'
 import type { TemplateRow } from './TemplateCatalog'
 import { Button } from './ui/Button'
 import { DataTable, Row } from './ui/DataTable'
 import { EmptyTile } from './ui/EmptyTile'
 import { SectionLabel } from './ui/SectionLabel'
+
+/** Every `ProviderKind`, as `<option>` values (M12 Task 13) -- the same list
+ *  `ModelOverrideEditor`/`TemplateCatalog` use. */
+const PROVIDER_KINDS: readonly ProviderKind[] = ['claude_code', 'cursor']
 
 /** A row from `listCompanies` (`server/org.ts`) -- no exported type there, so this is the one
  *  place that names the shape. */
@@ -57,6 +62,7 @@ function TeamBlock({
   const [templateId, setTemplateId] = useState('')
   const [name, setName] = useState('')
   const [model, setModel] = useState('')
+  const [provider, setProvider] = useState<ProviderKind | ''>('')
   const [pending, setPending] = useState(false)
   const [errorText, setErrorText] = useState<string | null>(null)
 
@@ -71,7 +77,10 @@ function TeamBlock({
           companyTeamId,
           templateId,
           name,
-          ...(model !== '' ? { model } : {}),
+          // A `provider` never travels without the `model` it names (controller resolution 2):
+          // if the operator left the model blank, nothing here is sent even when a provider is
+          // selected -- that pairing is the server's to refuse, not this form's to invent.
+          ...(model !== '' ? { model, ...(provider !== '' ? { provider } : {}) } : {}),
         }),
       })
       if (response.ok) {
@@ -79,6 +88,7 @@ function TeamBlock({
         setTemplateId('')
         setName('')
         setModel('')
+        setProvider('')
         return
       }
       const data: unknown = await response.json().catch(() => null)
@@ -149,6 +159,24 @@ function TeamBlock({
             disabled={pending}
             className="w-28 rounded border border-line bg-bg-2 px-2 py-1 font-mono text-sm text-text-1"
           />
+        </label>
+        <label className="flex flex-col gap-1 text-xs text-text-3">
+          Provider
+          <select
+            aria-label="member provider"
+            data-testid="member-provider-select"
+            value={provider}
+            onChange={(event) => setProvider(event.target.value as ProviderKind | '')}
+            disabled={pending}
+            className="w-28 rounded border border-line bg-bg-2 px-2 py-1 text-sm text-text-1"
+          >
+            <option value="">select a provider</option>
+            {PROVIDER_KINDS.map((kind) => (
+              <option key={kind} value={kind}>
+                {kind}
+              </option>
+            ))}
+          </select>
         </label>
         <Button
           variant="ghost"

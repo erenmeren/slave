@@ -17,6 +17,16 @@ export * from './runtime.js'
  * (`ClaudeCodeAdapter.id`), which is what `overview.ts` used to hardcode.
  */
 export type { ProviderKind } from '@ai-team-os/providers'
+/**
+ * Re-exported alongside `ProviderKind` for the same reason (M12 Task 13): the roster's data
+ * loader (`apps/web/src/server/org.ts`) needs the shell-only gate mark for a worker's resolved
+ * provider, and `capabilitiesOf` -- the one capability table (see this function's own docstring
+ * in `@ai-team-os/providers`) -- is a pure lookup on a `ProviderKind` alone, not an adapter
+ * construction. Re-exporting it here keeps the web app off the providers package the same way the
+ * type re-export above does, rather than growing a second table of the same facts in `apps/web`.
+ */
+export { capabilitiesOf } from '@ai-team-os/providers'
+export type { ProviderCapabilities } from '@ai-team-os/providers'
 export * from './pause.js'
 export * from './stop.js'
 export * from './emergency.js'

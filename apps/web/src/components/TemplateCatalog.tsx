@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
+import type { ProviderKind } from '@ai-team-os/control'
 import { Button } from './ui/Button'
 import { Chip } from './ui/Chip'
 import { DataTable, Row } from './ui/DataTable'
@@ -15,7 +16,15 @@ export interface TemplateRow {
   readonly role: string
   readonly description: string
   readonly defaultModel: string | null
+  // Optional, not required: the M11 fixtures/tests that build a `TemplateRow` by hand predate
+  // this field (M12 Task 13) and are not this task's to rewrite (Series A freeze) -- `undefined`
+  // reads the same as "no default provider recorded" everywhere this is consumed.
+  readonly defaultProvider?: ProviderKind | null
 }
+
+/** Every `ProviderKind`, as `<option>` values (M12 Task 13) -- the same list `ModelOverrideEditor`
+ *  uses, not derived from anything already on screen. */
+const PROVIDER_KINDS: readonly ProviderKind[] = ['claude_code', 'cursor']
 
 const COLUMNS = '1fr 110px 2fr 140px'
 const HEADER = ['Name', 'Role', 'Description', 'Default model'] as const
@@ -45,6 +54,7 @@ export function TemplateCatalog({ templates }: { readonly templates: readonly Te
   const [role, setRole] = useState('')
   const [description, setDescription] = useState('')
   const [defaultModel, setDefaultModel] = useState('')
+  const [defaultProvider, setDefaultProvider] = useState<ProviderKind | ''>('')
   const [pending, setPending] = useState(false)
   const [errorText, setErrorText] = useState<string | null>(null)
 
@@ -59,7 +69,10 @@ export function TemplateCatalog({ templates }: { readonly templates: readonly Te
           name,
           role,
           ...(description !== '' ? { description } : {}),
-          ...(defaultModel !== '' ? { defaultModel } : {}),
+          // A `defaultProvider` never travels without a `defaultModel` beside it (controller
+          // resolution 3, the `CompanyManager` idiom): if the operator left the model blank,
+          // nothing here is sent even when a provider is selected.
+          ...(defaultModel !== '' ? { defaultModel, ...(defaultProvider !== '' ? { defaultProvider } : {}) } : {}),
         }),
       })
       if (response.ok) {
@@ -68,6 +81,7 @@ export function TemplateCatalog({ templates }: { readonly templates: readonly Te
         setRole('')
         setDescription('')
         setDefaultModel('')
+        setDefaultProvider('')
         return
       }
       const data: unknown = await response.json().catch(() => null)
@@ -146,6 +160,24 @@ export function TemplateCatalog({ templates }: { readonly templates: readonly Te
             disabled={pending}
             className="w-32 rounded border border-line bg-bg-2 px-2 py-1 font-mono text-sm text-text-1"
           />
+        </label>
+        <label className="flex flex-col gap-1 text-xs text-text-3">
+          Default provider
+          <select
+            aria-label="template default provider"
+            data-testid="template-default-provider-select"
+            value={defaultProvider}
+            onChange={(event) => setDefaultProvider(event.target.value as ProviderKind | '')}
+            disabled={pending}
+            className="w-32 rounded border border-line bg-bg-2 px-2 py-1 text-sm text-text-1"
+          >
+            <option value="">select a provider</option>
+            {PROVIDER_KINDS.map((kind) => (
+              <option key={kind} value={kind}>
+                {kind}
+              </option>
+            ))}
+          </select>
         </label>
         <Button
           variant="primary"

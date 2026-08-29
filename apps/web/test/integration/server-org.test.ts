@@ -336,8 +336,18 @@ describe('org query module', () => {
       const templates = await listTemplates()
       const companies = await listCompanies()
 
+      // `defaultProvider: null` (M12 Task 13): `listTemplates` now carries the pair's other half
+      // beside `defaultModel`, `null` here because this fixture's `agentTemplate.create` above
+      // sets no `provider`.
       expect(templates).toEqual([
-        { id: expect.any(String), name: 'Backend Engineer', role: 'backend', description: 'ships backend code', defaultModel: 'sonnet' },
+        {
+          id: expect.any(String),
+          name: 'Backend Engineer',
+          role: 'backend',
+          description: 'ships backend code',
+          defaultModel: 'sonnet',
+          defaultProvider: null,
+        },
       ])
       expect(companies).toEqual([{ id: expect.any(String), name: 'Acme Robotics' }])
     })

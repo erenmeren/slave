@@ -41,6 +41,23 @@ function rosterWithMember(m: RosterMemberRow): readonly RosterCompany[] {
   return [company({ teams: [{ companyTeamId: 't1', teamName: 'Platform', members: [m] }] })]
 }
 
+// M12 Task 13: a worker row from `listRoster`'s `RosterMemberRow.workers`, with its `provider`/
+// `gate` pair -- new fields, so a new helper rather than widening `workerRow` below (that one
+// builds a flat `WorkerRow`, a different type from `listWorkers`, untouched by this task).
+function rosterWorker(over: Partial<RosterMemberRow['workers'][number]> = {}): RosterMemberRow['workers'][number] {
+  return {
+    agentId: 'wk1',
+    workspaceId: 'w1',
+    projectName: 'Checkout',
+    status: 'working',
+    model: null,
+    provider: null,
+    gate: null,
+    currentTask: null,
+    ...over,
+  }
+}
+
 function workerRow(over: Partial<WorkerRow>): WorkerRow {
   return {
     agentId: 'a1',
@@ -150,6 +167,67 @@ describe('RosterTable', () => {
 
       fireEvent.click(screen.getByTestId('roster-member-toggle'))
       expect(screen.queryByTestId('roster-worker-row')).toBeNull()
+    })
+  })
+
+  // M12 Task 13 brief, Step 1 -- adapted to `RosterTable`'s real `roster` prop (the brief's
+  // sketch's `workers` prop is pseudocode; `ModelOverrideEditor`'s pair editor lives one level
+  // down, inside an expanded member's worker row).
+  describe('the model+provider pair on a worker row', () => {
+    let fetchMock: ReturnType<typeof vi.fn>
+
+    beforeEach(() => {
+      fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }))
+      vi.stubGlobal('fetch', fetchMock)
+    })
+
+    afterEach(() => {
+      vi.unstubAllGlobals()
+    })
+
+    it('submits the model and its provider together', async () => {
+      const m = member({ name: 'Alex', workers: [rosterWorker()] })
+      render(<RosterTable roster={rosterWithMember(m)} />)
+      fireEvent.click(screen.getByTestId('roster-member-toggle'))
+
+      fireEvent.change(screen.getByLabelText('provider'), { target: { value: 'cursor' } })
+      fireEvent.change(screen.getByLabelText('model override'), { target: { value: 'some-model' } })
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('model-override-set'))
+      })
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/agents/wk1/model',
+        expect.objectContaining({ body: JSON.stringify({ model: 'some-model', provider: 'cursor' }) }),
+      )
+    })
+
+    it('shows the refusal text verbatim when a model arrives without a provider', async () => {
+      fetchMock.mockImplementationOnce(
+        async () => new Response(JSON.stringify({ error: 'a model must name the provider that runs it' }), { status: 409 }),
+      )
+      const m = member({ name: 'Alex', workers: [rosterWorker()] })
+      render(<RosterTable roster={rosterWithMember(m)} />)
+      fireEvent.click(screen.getByTestId('roster-member-toggle'))
+
+      fireEvent.change(screen.getByLabelText('model override'), { target: { value: 'some-model' } })
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('model-override-set'))
+      })
+
+      expect(await screen.findByText('a model must name the provider that runs it')).toBeTruthy()
+      // M11's idiom: a refused write keeps what the operator typed.
+      expect((screen.getByLabelText('model override') as HTMLInputElement).value).toBe('some-model')
+    })
+
+    it('marks a shell-only gate on the roster row', () => {
+      const m = member({ name: 'Alex', workers: [rosterWorker({ provider: 'cursor', gate: 'shell-only' })] })
+      render(<RosterTable roster={rosterWithMember(m)} />)
+      fireEvent.click(screen.getByTestId('roster-member-toggle'))
+
+      expect(screen.getByText(/shell only/i)).toBeTruthy()
     })
   })
 })

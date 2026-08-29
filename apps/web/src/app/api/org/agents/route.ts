@@ -1,4 +1,4 @@
-import { addCompanyAgent } from '@ai-team-os/control'
+import { addCompanyAgent, type ProviderKind } from '@ai-team-os/control'
 import { orgControlResponse } from '../../../../server/orgControlRoute'
 
 export const dynamic = 'force-dynamic'
@@ -11,11 +11,12 @@ export async function POST(request: Request): Promise<Response> {
       { status: 400 },
     )
   }
-  const { companyTeamId, templateId, name, model } = body as {
+  const { companyTeamId, templateId, name, model, provider } = body as {
     companyTeamId?: unknown
     templateId?: unknown
     name?: unknown
     model?: unknown
+    provider?: unknown
   }
   if (typeof companyTeamId !== 'string' || typeof templateId !== 'string' || typeof name !== 'string') {
     return Response.json(
@@ -26,5 +27,13 @@ export async function POST(request: Request): Promise<Response> {
   if (model !== undefined && typeof model !== 'string') {
     return Response.json({ error: 'model must be a string' }, { status: 400 })
   }
-  return orgControlResponse(() => addCompanyAgent(companyTeamId, templateId, name, model !== undefined ? { model } : {}))
+  if (provider !== undefined && typeof provider !== 'string') {
+    return Response.json({ error: 'provider must be a string' }, { status: 400 })
+  }
+  return orgControlResponse(() =>
+    addCompanyAgent(companyTeamId, templateId, name, {
+      ...(model !== undefined ? { model } : {}),
+      ...(provider !== undefined ? { provider: provider as ProviderKind } : {}),
+    }),
+  )
 }

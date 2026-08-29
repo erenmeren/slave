@@ -48,6 +48,11 @@ const COMPANY_NAME = 'M11 Gate Co'
 const TEAM_NAME = 'Crew'
 const MEMBER_NAME = 'Gate Worker'
 const MODEL_OVERRIDE = 'gate-model-x'
+// `claude_code`, not `cursor`: stage 1's workspaces carry no explicit `budgetUsd`, so they get the
+// schema's `@default(20)` (budgeted), and only `claude_code` reports cost (M12 Task 9's admission
+// guard). This is exercising the Roster editor's pair control, not budget admission -- `cursor`
+// would refuse here for a reason this stage isn't testing.
+const PROVIDER_OVERRIDE = 'claude_code'
 
 /** Same as `gate-m10-org.mjs`'s `makeRepo` -- a real repository, because `Workspace.repoPath`
  *  names a real directory even though this gate never runs the orchestrator against it. */
@@ -446,12 +451,14 @@ try {
   const targetWorkerRow = expandedWorkerRows.filter({ hasText: workspaceNameA })
   await waitVisible(targetWorkerRow, `the "${workspaceNameA}" worker row under "${MEMBER_NAME}"`)
 
-  // KNOWN RED between M12 Task 7 and M12 Task 13: this stage is expected to FAIL right now, and
-  // the failure is not a shell regression. Task 7 made a model and its provider one write, and the
-  // POST /api/agents/[agentId]/model body carries no provider field yet, so the Set button below
-  // now returns a 409 `model_without_provider` refusal and `clickUntil` will exhaust its wait.
-  // Task 13 adds the provider selector and threads it through that route body; this stage goes
-  // green again with it, and this comment comes out.
+  // M12 Task 7 made a model and its provider one write; Task 13 threads the provider through this
+  // route's body and the Roster editor's own `<select>`, so both go into this worker row together.
+  await selectReliably(
+    targetWorkerRow.getByLabel('provider'),
+    PROVIDER_OVERRIDE,
+    { value: PROVIDER_OVERRIDE },
+    `the "${workspaceNameA}" worker's provider select`,
+  )
   await fillReliably(targetWorkerRow.getByTestId('model-override-input'), MODEL_OVERRIDE, `the "${workspaceNameA}" worker's model override input`)
   const updatedModelText = targetWorkerRow.locator('span.font-mono.text-text-3').filter({ hasText: MODEL_OVERRIDE })
   await clickUntil(
@@ -469,14 +476,19 @@ try {
   if (workerAgentA.model !== MODEL_OVERRIDE) {
     await fail(`the "${workspaceNameA}" worker's DB model is ${JSON.stringify(workerAgentA.model)}, expected ${JSON.stringify(MODEL_OVERRIDE)}`)
   }
-  if (workerAgentB.model !== null) {
+  if (workerAgentA.provider !== PROVIDER_OVERRIDE) {
+    await fail(`the "${workspaceNameA}" worker's DB provider is ${JSON.stringify(workerAgentA.provider)}, expected ${JSON.stringify(PROVIDER_OVERRIDE)}`)
+  }
+  if (workerAgentB.model !== null || workerAgentB.provider !== null) {
     await fail(
-      `the "${workspaceNameB}" worker's DB model is ${JSON.stringify(workerAgentB.model)}, expected null -- ` +
-        `only the "${workspaceNameA}" worker's override was set through the editor`,
+      `the "${workspaceNameB}" worker's DB model/provider is ${JSON.stringify(workerAgentB.model)}/${JSON.stringify(workerAgentB.provider)}, ` +
+        `expected null/null -- only the "${workspaceNameA}" worker's override was set through the editor`,
     )
   }
-  console.log(`the DB confirms model ${JSON.stringify(MODEL_OVERRIDE)} landed on exactly the "${workspaceNameA}" worker`)
-  console.log('stage 4 complete: a worker model override, set through the Roster editor, verified against prisma.agent')
+  console.log(
+    `the DB confirms model ${JSON.stringify(MODEL_OVERRIDE)} and provider ${JSON.stringify(PROVIDER_OVERRIDE)} landed on exactly the "${workspaceNameA}" worker`,
+  )
+  console.log('stage 4 complete: a worker model+provider override, set through the Roster editor, verified against prisma.agent')
 
   console.log(`PASS: the shell staffed and steered ${projectNames.length} projects from the browser`)
   exitCode = 0
