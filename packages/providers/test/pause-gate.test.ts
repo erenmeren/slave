@@ -197,6 +197,10 @@ describe('pause-gate.sh', () => {
       const { stdout, stderr, code } = await runHook({ gateOverride: lonely, flagVar: flagPath })
       expect(code).toBe(2)
       expect(stdout).toBe('')
+      // NOT `toContain('lib/pause-flag.sh')`: bash's own `...: No such file or directory` line
+      // already contains that path, so such an assertion stays green even if the gate's whole
+      // actionable message is deleted. This phrase is the gate's OWN words, which bash never emits.
+      expect(stderr).toContain('deployed without its library')
       expect(stderr).toContain('lib/pause-flag.sh')
     } finally {
       rmSync(dir, { recursive: true, force: true })

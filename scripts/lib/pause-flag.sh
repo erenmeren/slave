@@ -3,6 +3,13 @@
 # (Cursor's beforeShellExecution hook). SOURCED, never executed: it defines two functions and sets
 # no traps, no options and no exit status of its own. It is deliberately not chmod +x.
 #
+# SECURITY NOTE, not an issue today: because both gates `source` this file from a path derived
+# from their own resolved location, a gate script's LOCATION now determines what bash code it
+# executes -- so a hook path that resolves inside a run's worktree would let the agent choose this
+# library's contents, and Claude's `hookPath` must stay an absolute path into the daemon's own
+# checkout (Cursor's `.cursor/hooks.json` already lives in the gated worktree, which spec section
+# 7.1 states as the milestone's named limitation).
+#
 # The caller must set PAUSE_GATE_NAME to its own script name before calling read_pause_reason --
 # every message this file writes to stderr is prefixed with it, so an operator reading stderr knows
 # which gate spoke.

@@ -1,8 +1,20 @@
 #!/usr/bin/env bash
-# `beforeShellExecution` hook for `cursor-agent`. Blocks the pending shell
-# command when the pause flag file exists. The orchestrator sets the flag, then
-# terminates the process; this gate is what stops the worker writing in the
-# window between those two moments.
+# `cursor-agent` gate hook, registered under BOTH `beforeShellExecution` and a
+# matcher-less `preToolUse` (see `buildCursorHooks` in
+# `packages/providers/src/cursor/hooks.ts`, which writes both entries pointing
+# at this one script). Blocks the pending call when the pause flag file exists.
+# The orchestrator sets the flag, then terminates the process; this gate is what
+# stops the worker writing in the window between those two moments.
+#
+# THE `preToolUse` HALF IS THE LOAD-BEARING ONE. `beforeShellExecution` sees
+# shell commands only; `preToolUse` fires for EVERY tool, and it is what carries
+# this runtime's `gate: 'all-tools'` capability. Task 9's recording shows a file
+# WRITE stopped at a `preToolUse` invocation arriving with `"tool_name":"Read"`
+# under the edit call's `tool_use_id` -- so a `^(Write|Shell)$` matcher, which
+# reads as an obviously safe narrowing, would have let that exact write through.
+# Never add a matcher to the `preToolUse` registration. The
+# `beforeShellExecution` entry is kept alongside it deliberately: two
+# independent chances to refuse the one call class that can do the most damage.
 #
 # It is the Cursor half of the same mechanism `scripts/pause-gate.sh` is the
 # Claude half of, and it reads the SAME file: one concept, one environment
@@ -19,6 +31,12 @@
 #             `permission == "deny"`. Deny is carried entirely in the JSON
 #             body, not the exit code -- both allow and deny exit 0.
 #   - Failure to produce either: exit 2, human-readable reason on stderr.
+#   - Flag path present but not a readable regular file: exit 2, reason on
+#     stderr. A directory (or an unreadable file) at the flag path is a broken
+#     configuration, not "no pause requested"; M13 section 4.2 closes what M12
+#     deferred, for both gates at once -- the same clause `pause-gate.sh`'s
+#     header carries, because the read is now literally the same code
+#     (`read_pause_reason` in `scripts/lib/pause-flag.sh`).
 #
 # Three of those clauses differ from Claude's, and each difference was measured:
 #
@@ -53,8 +71,14 @@
 # worktree's `.cursor/hooks.json` (which `cursor-agent` reads from the
 # workspace -- measured) as:
 #
-#   {"version":1,"hooks":{"beforeShellExecution":[
-#     {"command":"/abs/path/cursor-shell-gate.sh","failClosed":true}]}}
+#   {"version":1,"hooks":{
+#     "beforeShellExecution":[
+#       {"command":"/abs/path/cursor-shell-gate.sh","failClosed":true}],
+#     "preToolUse":[
+#       {"command":"/abs/path/cursor-shell-gate.sh","failClosed":true}]}}
+#
+# -- both entries, the same command, and NO `matcher` key on the `preToolUse`
+# one, for the reason given at the top of this header.
 #
 # `failClosed: true` is not decoration. Without it, a hook that crashes, times
 # out, produces no output or produces unparseable output FAILS OPEN -- Cursor
