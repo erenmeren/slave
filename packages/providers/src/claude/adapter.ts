@@ -1,10 +1,10 @@
 import { spawn, type ChildProcess } from 'node:child_process'
-import { rm, stat } from 'node:fs/promises'
 import { dirname, isAbsolute, join } from 'node:path'
 import { createInterface } from 'node:readline'
 import type { RunId } from '@ai-team-os/domain'
 import { capabilitiesOf } from '../capabilities.js'
 import { AsyncEventQueue } from '../runtime/event-queue.js'
+import { clearAndVerifyPauseFlagAbsent } from '../runtime/pause-flag.js'
 import { buildChildEnv, terminateChild } from '../runtime/process.js'
 import { isRecord } from '../runtime/summary.js'
 import type { RunOutcome, RuntimeEvent } from '../types.js'
@@ -192,37 +192,6 @@ interface RunState {
  * queued instruction does not crash or silently pass an empty string.
  */
 const DEFAULT_RESUME_PROMPT = 'Continue the paused run.'
-
-/**
- * Clears `flagPath` and verifies it is actually gone -- the load-bearing half of `resume()`'s
- * contract (ADR 0001 §5/§6, findings 3.10, 4.2). A plain `rm` succeeding is not itself proof the
- * flag is absent: `rm(path, { force: true })` without `recursive: true` throws rather than
- * removing a directory sitting at `flagPath` (an anomalous but real way a "flag file" can fail to
- * be a plain file), and `force` only ever suppresses the file-already-missing case. Swallowing
- * whatever `rm` throws here and treating the following `stat` as the single source of truth is
- * simpler than trying to classify every way removal can fail, and just as safe: either the flag
- * is gone, in which case nothing above needed to distinguish *why* `rm` succeeded or failed to
- * matter, or it is still there, in which case this throws regardless of that reason.
- */
-async function clearAndVerifyPauseFlagAbsent(flagPath: string, runId: RunId): Promise<void> {
-  try {
-    await rm(flagPath, { force: true })
-  } catch {
-    // Deliberately swallowed -- see the function comment. The `stat` below decides.
-  }
-  try {
-    await stat(flagPath)
-  } catch (error) {
-    if (isRecord(error) && error['code'] === 'ENOENT') return // confirmed absent -- safe to resume
-    throw error
-  }
-  throw new Error(
-    `ClaudeCodeAdapter: refusing to resume run ${runId} -- its pause flag at ${flagPath} still exists ` +
-      'after an attempt to clear it. Resuming with the flag present would have the hook deny every ' +
-      'tool call the resumed run attempts, producing a run that looks like a pause loop rather than ' +
-      'a resumed one.',
-  )
-}
 
 const DEFAULT_KILL_GRACE_MS = 5_000
 
@@ -448,10 +417,11 @@ export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
    *    `spawnChild` replaces the map entry, so a consumer still `for await`-ing the old queue (the
    *    orchestrator's pump) is woken with `done: true` instead of hanging on an object `events()`
    *    will never hand out again.
-   * 3. Clears and verifies `checkpoint.pauseFlagPath` (`clearAndVerifyPauseFlagAbsent` below) --
-   *    moved here, *after* step 2, by the M5 live-gate fix (finding 1): a refused resume must not
-   *    open the gate for the live child it just declined to adopt. Before this change the flag was
-   *    cleared first, unconditionally, so a resume refused for a live pid still un-gated it --
+   * 3. Clears and verifies `checkpoint.pauseFlagPath` (`clearAndVerifyPauseFlagAbsent`, shared with
+   *    `CursorAdapter` in `runtime/pause-flag.ts`) -- moved here, *after* step 2, by the M5
+   *    live-gate fix (finding 1): a refused resume must not open the gate for the live child it
+   *    just declined to adopt. Before this change the flag was cleared first, unconditionally, so
+   *    a resume refused for a live pid still un-gated it --
    *    live in production, the refused resume let a still-running real CLI keep writing under a
    *    run already marked `failed`. Defence in depth: the pump now kills the child before a
    *    checkpoint's pause is ever recorded (see `apps/orchestrator/src/pump.ts`'s `hook_denied`
@@ -517,7 +487,12 @@ export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
 
     // M5 live-gate finding 1: after the live-pid check above, never before it -- see the docstring
     // above `resume()` for why this ordering itself is the fix.
-    await clearAndVerifyPauseFlagAbsent(checkpoint.pauseFlagPath, runId)
+    await clearAndVerifyPauseFlagAbsent({
+      flagPath: checkpoint.pauseFlagPath,
+      runId,
+      adapterName: 'ClaudeCodeAdapter',
+      gateNoun: 'hook',
+    })
 
     const resumedInput: StartRunInput = {
       runId,

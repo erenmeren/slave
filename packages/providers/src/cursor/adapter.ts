@@ -1,10 +1,10 @@
 import { spawn, type ChildProcess } from 'node:child_process'
-import { rm, stat } from 'node:fs/promises'
 import { isAbsolute } from 'node:path'
 import { createInterface } from 'node:readline'
 import type { RunId } from '@ai-team-os/domain'
 import { capabilitiesOf } from '../capabilities.js'
 import { AsyncEventQueue } from '../runtime/event-queue.js'
+import { clearAndVerifyPauseFlagAbsent } from '../runtime/pause-flag.js'
 import { buildChildEnv, terminateChild } from '../runtime/process.js'
 import { isRecord } from '../runtime/summary.js'
 import type { RunOutcome, RuntimeEvent } from '../types.js'
@@ -112,34 +112,6 @@ interface CursorRunState {
   cancelled: boolean
 }
 
-/**
- * Clears `flagPath` and verifies it is actually gone. Byte-for-byte the same contract
- * `ClaudeCodeAdapter` enforces, and load-bearing for the same reason: a flag file that survives the
- * clear makes the gate deny the resumed run's first tool call and every one after it, producing a
- * run that looks from the outside exactly like one stuck in a pause loop with no error saying why.
- * Under `failClosed: true` at `preToolUse` that is now every tool, not only shell commands.
- */
-async function clearAndVerifyPauseFlagAbsent(flagPath: string, runId: RunId): Promise<void> {
-  try {
-    await rm(flagPath, { force: true })
-  } catch {
-    // Deliberately swallowed -- the `stat` below is the single source of truth, exactly as in
-    // `ClaudeCodeAdapter`: classifying every way removal can fail buys nothing the stat does not.
-  }
-  try {
-    await stat(flagPath)
-  } catch (error) {
-    if (isRecord(error) && error['code'] === 'ENOENT') return
-    throw error
-  }
-  throw new Error(
-    `CursorAdapter: refusing to resume run ${runId} -- its pause flag at ${flagPath} still exists ` +
-      'after an attempt to clear it. Resuming with the flag present would have the gate deny every ' +
-      'tool call the resumed run attempts, producing a run that looks like a pause loop rather ' +
-      'than a resumed one.',
-  )
-}
-
 export class CursorAdapter implements AgentRuntimeAdapter {
   readonly id = 'cursor' as const
 
@@ -235,7 +207,12 @@ export class CursorAdapter implements AgentRuntimeAdapter {
       existing.queue.close()
     }
 
-    await clearAndVerifyPauseFlagAbsent(checkpoint.pauseFlagPath, runId)
+    await clearAndVerifyPauseFlagAbsent({
+      flagPath: checkpoint.pauseFlagPath,
+      runId,
+      adapterName: 'CursorAdapter',
+      gateNoun: 'gate',
+    })
 
     const args = [
       ...this.extraArgs,
