@@ -9,6 +9,32 @@
 export type ProviderKind = 'claude_code' | 'cursor'
 
 /**
+ * Every member of `ProviderKind`, as data (M12 Task 13 fix round 1). The canonical source for any
+ * SERVER-side caller that needs to enumerate the kinds to validate an untrusted string --
+ * `packages/control/src/org.ts`'s `isProviderKind` is the reason this exists. A hand rolled list
+ * with no link back to the type is exactly the failure this guards against: a third kind added to
+ * the union above without a matching entry here now fails the BUILD (see
+ * `_ProviderKindsComplete` below) instead of leaving a validator silently two-wide. Mirrors
+ * `capabilitiesOf`'s own `const unhandled: never` idiom (`capabilities.ts`) -- one canonical
+ * table beats several that agree today.
+ *
+ * NOT re-exported for CLIENT use: `apps/web/src/components/ProviderSelect.tsx` carries its own
+ * copy of this exact list, guarded by the identical `satisfies`/`Exclude` idiom, because a value
+ * import of anything from this package's barrel (`index.ts`) drags `claude/adapter.ts` and
+ * `cursor/adapter.ts` -- both `node:child_process` at module scope -- into whatever bundles it,
+ * and neither adapter has a `sideEffects: false` escape hatch. Two independently-guarded lists,
+ * not one shared value, is the deliberate trade against that risk; see `ProviderSelect.tsx`'s own
+ * docstring for the client half of this reasoning.
+ */
+export const PROVIDER_KINDS = ['claude_code', 'cursor'] as const satisfies readonly ProviderKind[]
+
+// Compile-time completeness check: `satisfies` above proves every element of `PROVIDER_KINDS` is
+// a `ProviderKind` (soundness); this proves the reverse -- every `ProviderKind` is IN
+// `PROVIDER_KINDS` (completeness) -- so omitting a member is a build error, not a silent gap.
+type _AssertNever<T extends never> = T
+type _ProviderKindsComplete = _AssertNever<Exclude<ProviderKind, (typeof PROVIDER_KINDS)[number]>>
+
+/**
  * `RunOutcome` is the normalized shape of the CLI's terminal `result` event.
  * Field names follow the domain's camelCase convention; the raw stream uses
  * snake_case (`is_error`, `total_cost_usd`, ...).

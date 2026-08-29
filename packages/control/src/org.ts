@@ -1,7 +1,7 @@
 import { prisma } from '@ai-team-os/db/client'
 import { type Result, err, ok } from '@ai-team-os/domain'
 import { appendEvent } from '@ai-team-os/events'
-import type { ProviderKind } from '@ai-team-os/providers'
+import { PROVIDER_KINDS, type ProviderKind } from '@ai-team-os/providers'
 import { admitProvider } from './budget.js'
 import type { ControlRefusal } from './refusal.js'
 import { resolveRuntime, workspaceDefaultProvider } from './runtime.js'
@@ -19,25 +19,12 @@ function isUniqueConstraintViolation(error: unknown): boolean {
 }
 
 /**
- * Every member of `ProviderKind` (M12 Task 7), as data. `@ai-team-os/providers` types the kind as
- * a plain string union -- see that package's `types.ts` docstring for why it does not import the
- * generated Prisma enum -- so there is no runtime value to check an untrusted string against
- * without this list living somewhere. It lives here rather than in `@ai-team-os/providers`
- * because the only caller that needs to validate an UNTRUSTED provider string (a CLI flag, a web
- * request body) is this module's own write surface; nothing downstream resolves or dispatches on
- * it TODAY -- that stops being true the moment Task 8's resolveRuntime reads the column, and this
- * paragraph must be re-read then rather than trusted.
+ * `isProviderKind` validates an UNTRUSTED provider string (a CLI flag, a web request body) --
+ * this module's own write surface is the only caller that needs to. `PROVIDER_KINDS` itself (M12
+ * Task 13 fix round 1) now lives in `@ai-team-os/providers` -- the one canonical, compile-time-
+ * guarded list, see that module's `types.ts` docstring -- rather than a private copy here that
+ * could drift from it.
  */
-const PROVIDER_KINDS = ['claude_code', 'cursor'] as const satisfies readonly ProviderKind[]
-
-// Compile-time completeness check, mirroring `packages/db/src/enums.ts`'s own `AssertNever`
-// idiom: `satisfies` above proves every element of `PROVIDER_KINDS` is a `ProviderKind`
-// (soundness); this proves the reverse -- every `ProviderKind` is in `PROVIDER_KINDS`
-// (completeness) -- so a third provider kind added to the type without a matching entry here
-// fails the build instead of silently validating as "unknown".
-type _AssertNever<T extends never> = T
-type _ProviderKindsComplete = _AssertNever<Exclude<ProviderKind, (typeof PROVIDER_KINDS)[number]>>
-
 function isProviderKind(value: string): value is ProviderKind {
   return (PROVIDER_KINDS as readonly string[]).includes(value)
 }

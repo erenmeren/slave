@@ -27,6 +27,16 @@ export type { ProviderKind } from '@ai-team-os/providers'
  */
 export { capabilitiesOf } from '@ai-team-os/providers'
 export type { ProviderCapabilities } from '@ai-team-os/providers'
+/**
+ * Re-exported for the same reason as capabilitiesOf above (M12 Task 13 fix round 1): a SERVER
+ * caller that needs every ProviderKind as data (packages/control/src/org.ts's own
+ * isProviderKind is exactly this shape of caller) should reach the one canonical,
+ * compile-time-guarded list rather than hand-roll another. NOT safe to value-import into a
+ * CLIENT component through this barrel -- see PROVIDER_KINDS's docstring in
+ * @ai-team-os/providers/src/types.ts for why, and apps/web/src/components/ProviderSelect.tsx
+ * for the client-safe mirror that exists because of it.
+ */
+export { PROVIDER_KINDS } from '@ai-team-os/providers'
 export * from './pause.js'
 export * from './stop.js'
 export * from './emergency.js'
