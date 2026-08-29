@@ -27,7 +27,8 @@
     "gate:m8-plan": "tsc --build && node --env-file=.env scripts/gate-m8-plan.mjs",
     "gate:m10-org": "tsc --build && node --env-file=.env scripts/gate-m10-org.mjs",
     "gate:m11-shell": "tsc --build && node --env-file=.env scripts/gate-m11-shell.mjs",
-    "gate:m12-providers": "tsc --build && node --env-file=.env scripts/gate-m12-providers.mjs"
+    "gate:m12-providers": "tsc --build && node --env-file=.env scripts/gate-m12-providers.mjs",
+    "gate:m13-runtime": "tsc --build && node --env-file=.env scripts/gate-m13-runtime.mjs"
   },
   "devDependencies": {
     "@testing-library/react": "^16.0.0",

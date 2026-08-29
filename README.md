@@ -65,6 +65,7 @@ Ubuntu, `apt-get install docker-compose-plugin`) before continuing.
 | `npm run gate:m10-org` | The M10 gate: a company staffed a project from templates and shipped its goal, unattended — twice, in parallel |
 | `npm run gate:m11-shell` | The M11 gate: the shell went global — a company was staffed, assigned, and steered entirely from the browser |
 | `npm run gate:m12-providers` | The M12 gate: two runtimes kept one promise — paused, resumed, and budgeted alike (**spends real money**: it drives live Claude and Cursor accounts, so it is not CI-runnable and is run deliberately, by hand) |
+| `npm run gate:m13-runtime` | The M13 gate: a pause is a stop and a stop is resumable — both runtimes paused, refused mid-stop, resumed, and re-budgeted from the browser (**spends real money**: it drives live Claude and Cursor accounts, so it is not CI-runnable and is run deliberately, by hand) |
 
 Integration tests require Postgres to be running. They **fail** rather than skip when it is not:
 a suite that skips reports success for work it did not do.
