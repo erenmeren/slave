@@ -796,12 +796,60 @@ try {
   // ============================================================================================
   // Stage 5: `AgentRun.costUsd` is `null` for the Cursor run and a real number for the Claude run.
   // Not coalesced, on purpose: `0` would be a lie a budget guardrail believes.
+  //
+  // READ THE ANNOUNCEMENT, NOT ONLY THE COLUMN. A null in `AgentRun.costUsd` has two completely
+  // different meanings and this stage exists to keep them apart. `pump.ts` writes the column only
+  // on the path that HAD a terminal result to write it from; a run whose stream ends without one
+  // is concluded `failed` with the column never touched (`pump.ts:667-681`), and an untouched
+  // column reads byte-for-byte like "this runtime reports no cost". Stage 2 admits such a run --
+  // it emitted `run.started`/`run.paused`/`run.resumed` and exactly one terminal event, and the
+  // terminal member is deliberately not compared between runtimes -- so a Cursor run that died
+  // mid-stream after its resume would have satisfied the old `costUsd !== null` check for exactly
+  // the wrong reason. That is the conflation this milestone was written to remove, reproduced
+  // inside the gate meant to prove it gone.
+  //
+  // So the figure is read from `run.succeeded`, whose payload carries what the runtime actually
+  // REPORTED (`pump.ts:709`), and the run is required to have reached `succeeded` first. A run
+  // that ended any other way did not report a cost, and a cost nobody wrote is not a cost the
+  // provider reported.
   // ============================================================================================
-  if (cursorTerminal.costUsd !== null) {
+
+  /** The `costUsd` a run's own `run.succeeded` event announced -- proof the figure was reported,
+   *  not left over. Fails, naming the status, for a run that never got to announce anything. */
+  async function reportedCostOf(label, runId, terminal) {
+    if (terminal.status !== 'succeeded') {
+      await fail(
+        `stage 5: ${label}'s run ended ${terminal.status}, not succeeded, so no cost was ever reported for it. ` +
+          "Its costUsd column says whatever nobody wrote, and this stage cannot tell that apart from a runtime's " +
+          'honest "I do not report cost" -- which is the whole distinction it exists to make.',
+      )
+    }
+    const announcement = await prisma.executionEvent.findFirst({
+      where: { runId, type: 'run_succeeded' },
+      orderBy: { seq: 'desc' },
+    })
+    if (announcement === null) {
+      await fail(`stage 5: ${label}'s run is succeeded but never emitted run.succeeded, so nothing announced its cost`)
+    }
+    const payload = announcement.payload
+    if (payload === null || typeof payload !== 'object' || !('costUsd' in payload)) {
+      await fail(
+        `stage 5: ${label}'s run.succeeded payload carries no costUsd key at all (${JSON.stringify(payload)}) -- ` +
+          'the terminal announcement is where a reader learns what a run cost',
+      )
+    }
+    return payload.costUsd
+  }
+
+  const cursorReportedCost = await reportedCostOf(CURSOR_WORKER, cursorRunId, cursorTerminal)
+  const claudeReportedCost = await reportedCostOf(CLAUDE_WORKER, claudeRunId, claudeTerminal)
+
+  if (cursorTerminal.costUsd !== null || cursorReportedCost !== null) {
     await fail(
-      `stage 5: the cursor run recorded costUsd=${String(cursorTerminal.costUsd)}, expected null. ` +
-        'Cursor reports no cost (reportsCost: false); any number here is invented, and a budget that believes ' +
-        'an invented number is worse than no budget at all.',
+      `stage 5: the cursor run recorded costUsd=${String(cursorTerminal.costUsd)} and announced ` +
+        `costUsd=${String(cursorReportedCost)}; both must be null. Cursor reports no cost ` +
+        '(reportsCost: false); any number here is invented, and a budget that believes an invented number is ' +
+        'worse than no budget at all.',
     )
   }
   if (typeof claudeTerminal.costUsd !== 'number' || !Number.isFinite(claudeTerminal.costUsd)) {
@@ -810,9 +858,17 @@ try {
         'Claude Code reports its own cost and the run row is where a budget reads it',
     )
   }
+  if (claudeReportedCost !== claudeTerminal.costUsd) {
+    await fail(
+      `stage 5: the claude_code run's row says costUsd=${String(claudeTerminal.costUsd)} but its run.succeeded ` +
+        `announced ${String(claudeReportedCost)} -- the column and the log must be the same measurement, or a ` +
+        'reader of one is being told something a reader of the other is not',
+    )
+  }
   console.log(
-    `stage 5 PASSED: costUsd is null for the cursor run and ${claudeTerminal.costUsd} for the claude_code run -- ` +
-      'unknown and measured, never coalesced',
+    `stage 5 PASSED: both runs reached succeeded and announced their own cost -- null for the cursor run, ` +
+      `${claudeTerminal.costUsd} for the claude_code run (row and run.succeeded agree) -- unknown and measured, ` +
+      'never coalesced and never merely unwritten',
   )
 
   console.log('PASS: two providers kept one promise')
