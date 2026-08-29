@@ -102,7 +102,6 @@ function agent(overrides: Partial<GraphAgent> = {}): GraphAgent {
     activeTaskId: null,
     activeTaskTitle: null,
     activeRunId: null,
-    costUsd: 0,
     ...overrides,
   }
 }
@@ -120,7 +119,6 @@ const SNAPSHOT: GraphSnapshot = {
       activeTaskId: 't1',
       activeTaskTitle: 'Ship the thing',
       activeRunId: 'run1',
-      costUsd: 1.23,
     }),
   ],
   tasks: [

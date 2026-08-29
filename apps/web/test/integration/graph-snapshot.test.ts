@@ -60,7 +60,7 @@ describe('buildGraphSnapshot', () => {
     expect(snapshot?.teams).toEqual([{ id: fixture.teamId, name: 'Engineering' }])
   })
 
-  it('wires an agent to its active run: activeTaskId, activeTaskTitle, activeRunId and cost', async (): Promise<void> => {
+  it('wires an agent to its active run: activeTaskId, activeTaskTitle, activeRunId', async (): Promise<void> => {
     const run = await prisma.agentRun.create({
       data: { taskId: fixture.taskId, agentId: fixture.agentId, status: 'working', costUsd: 2.5 },
     })
@@ -75,23 +75,15 @@ describe('buildGraphSnapshot', () => {
     expect(agent?.activeTaskId).toBe(fixture.taskId)
     expect(agent?.activeTaskTitle).toBe('Add the thing')
     expect(agent?.activeRunId).toBe(run.id)
-    expect(agent?.costUsd).toBe(2.5)
   })
 
-  it("leaves a live run's unknown cost unknown rather than reporting it as zero", async (): Promise<void> => {
-    // M12 Task 9 / ruling R3. Distinct from the idle case below: there IS a run here, and what is
-    // absent is the measurement, not the run.
-    const run = await prisma.agentRun.create({
-      data: { taskId: fixture.taskId, agentId: fixture.agentId, status: 'working', costUsd: null },
-    })
-    await prisma.task.update({ where: { id: fixture.taskId }, data: { activeRunId: run.id } })
+  // M12 Task 13 fix round 1, spec gap 4c: `GraphAgent.costUsd` is deleted (no renderer ever
+  // consumed it, per the controller's ruling) -- the test that once existed here asserted only
+  // that DTO field, on a run seeded the same way `wires an agent...` above already does, so it is
+  // removed rather than left asserting nothing. `AgentRun.costUsd` itself is untouched and still
+  // exercised by `overview.test.ts` and `server-org.test.ts`, which actually read it.
 
-    const snapshot = await buildGraphSnapshot(fixture.workspaceId)
-
-    expect(snapshot?.agents[0]?.costUsd).toBeNull()
-  })
-
-  it('reports an idle agent with no live run as null-wired and zero cost', async (): Promise<void> => {
+  it('reports an idle agent with no live run as null-wired', async (): Promise<void> => {
     const snapshot = await buildGraphSnapshot(fixture.workspaceId)
     const agent = snapshot?.agents[0]
 
@@ -99,7 +91,6 @@ describe('buildGraphSnapshot', () => {
     expect(agent?.activeTaskId).toBeNull()
     expect(agent?.activeTaskTitle).toBeNull()
     expect(agent?.activeRunId).toBeNull()
-    expect(agent?.costUsd).toBe(0)
   })
 
   it('matches the scheduler\'s dependenciesDone definition: false while a dependency is not done, true once it is', async (): Promise<void> => {

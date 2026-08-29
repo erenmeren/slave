@@ -2,6 +2,14 @@ import { prisma } from '@ai-team-os/db/client'
 import { toRunState } from '@ai-team-os/db'
 import { deriveAgentStatus, NON_TERMINAL_RUN_STATUSES, type TaskStatus } from '@ai-team-os/domain'
 
+/**
+ * `costUsd` lived here briefly (M12 Task 9, ruling R3, widened to `number | null` for Decision 6)
+ * and was deleted at M12 Task 13 fix round 1 (spec gap 4c, controller ruling): the graph surface
+ * has no renderer for cost -- `grep -rn cost apps/web/src/components/graph/` found nothing then
+ * and still finds nothing -- and a DTO field nothing consumes is the ruling's own words "the worse
+ * of the two" against rendering a `—` nobody asked for. If a future task wants cost on the graph,
+ * it re-adds the field at the point it also adds the renderer, not before.
+ */
 export interface GraphAgent {
   readonly id: string
   readonly name: string
@@ -11,20 +19,6 @@ export interface GraphAgent {
   readonly activeTaskId: string | null
   readonly activeTaskTitle: string | null
   readonly activeRunId: string | null
-  /**
-   * The live run's spend: `0` with no live run, `null` when a live run has no cost recorded.
-   * (A positive figure is not reachable here for the same reason it is not on
-   * `AgentCardData.costUsd` -- `pump.ts` writes `AgentRun.costUsd` only in the statement that
-   * makes a run terminal, and `run` here is non-terminal.)
-   *
-   * TASK 13: this field reaches no renderer. `grep -rn cost apps/web/src/components/graph/`
-   * returns nothing, and that was already true before M12 -- widening the type to `number | null`
-   * (ruling R3) discharged Decision 6 at the DTO and could not discharge "renders `—`", because
-   * there is nothing on the graph surface that shows cost at all. The graph's node design belongs
-   * to Task 13 (spec §8), so Task 9 routed the gap here rather than inventing a renderer for it or
-   * carrying it silently. Task 13 either renders this -- as `—` when null -- or deletes the field.
-   */
-  readonly costUsd: number | null
 }
 
 export interface GraphTask {
@@ -131,9 +125,6 @@ export async function buildGraphSnapshot(workspaceId: string): Promise<GraphSnap
         activeTaskId: run?.taskId ?? null,
         activeTaskTitle: run?.task?.title ?? null,
         activeRunId: run?.id ?? null,
-        // Same three-state split as `overview.ts` (M12 Task 9, ruling R3): `0` for no live run at
-        // all, the figure when one reported it, `null` when a live run's runtime reports no spend.
-        costUsd: run === null ? 0 : run.costUsd,
       }
     }),
     tasks: taskRows.map((row) => ({

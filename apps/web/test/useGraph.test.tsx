@@ -17,7 +17,6 @@ const SNAPSHOT: GraphSnapshot = {
       activeTaskId: null,
       activeTaskTitle: null,
       activeRunId: null,
-      costUsd: 0,
     },
   ],
   tasks: [

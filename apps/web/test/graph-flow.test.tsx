@@ -485,7 +485,6 @@ function agent(overrides: Partial<GraphAgent> = {}): GraphAgent {
     activeTaskId: null,
     activeTaskTitle: null,
     activeRunId: null,
-    costUsd: 0,
     ...overrides,
   }
 }
