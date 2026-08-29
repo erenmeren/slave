@@ -3,7 +3,7 @@ import { NON_TERMINAL_RUN_STATUSES, type Result, err, ok, runId as brandRunId } 
 import { appendEvent } from '@ai-team-os/events'
 import { signalPause } from '@ai-team-os/providers'
 import { runFilePaths } from './paths.js'
-import type { ControlRefusal } from './refusal.js'
+import { type ControlRefusal, refusalText } from './refusal.js'
 
 const PAUSABLE_STATUSES = ['starting', 'working', 'resuming'] as const
 
@@ -145,13 +145,24 @@ export async function pauseActiveRuns(
     // emergency stop -- a silent hole in the strongest guarantee this system makes, and precisely
     // when it matters most. A run whose pause could not be signalled belongs in `refused`
     // alongside the ones that lost a benign status race, which is what the caller already reports;
-    // what must never happen is the loop stopping early and nothing saying it did. The console
-    // line is what keeps the two kinds of `refused` distinguishable in the log.
+    // what must never happen is the loop stopping early and nothing saying it did.
+    //
+    // EVERY refusal is logged, not just a thrown one (M13 Task 4 review I1). Since Task 4 the
+    // pid-less Cursor case comes back as a `pause_unsignalled` refusal rather than an exception,
+    // so the `catch` below is no longer the path it takes -- and `PauseFanoutReport` carries ids
+    // only, which the CLI renders as "N already concluding". Logging just the throw would mean an
+    // operator hits emergency stop, a Cursor run is not paused at all, and the one line that could
+    // have said so never printed. `refusalText` is what keeps the two kinds of `refused`
+    // distinguishable now: a benign status race reads "run X is paused; this needs one of ...",
+    // an unsignalled pause reads "the pause could not be signalled to run X: ...". The fan-out's
+    // log is thereby a complete account of every run it did NOT pause, which for an emergency stop
+    // is the only account worth having.
     try {
       const result = await requestPause(run.id, requestedBy, category)
       if (result.ok) {
         requested.push(run.id)
       } else {
+        console.error(`[pause] ${refusalText(result.error)}`)
         refused.push(run.id)
       }
     } catch (error) {

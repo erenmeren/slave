@@ -1,7 +1,7 @@
 import { existsSync, mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { prisma } from '@ai-team-os/db/client'
 import { runId } from '@ai-team-os/domain'
 import { runFilePaths } from '../../src/paths.js'
@@ -222,7 +222,17 @@ describe('a pause that cannot be signalled', () => {
       data: { taskId: fixture.task.id, agentId: fixture.agent.id, status: 'working' },
     })
 
+    // `PauseFanoutReport` carries ids only, and the CLI renders `refused.length` as "already
+    // concluding" -- so the log line is the ONLY place an operator can learn that an emergency
+    // stop left a run running. It has to be as loud for a refusal as it was for the throw this
+    // refusal replaced (M13 Task 4 review I1).
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const report = await pauseActiveRuns(fixture.workspace.id, 'meren', 'emergency_stop')
+    const logged = errorSpy.mock.calls.map((call) => String(call[0]))
+    errorSpy.mockRestore()
+
+    const line = logged.find((entry) => entry.includes(unsignallable))
+    expect(line).toMatch(/cursor/)
 
     expect(report.refused).toContain(unsignallable)
     expect(report.requested).toContain(second.id)
