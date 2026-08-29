@@ -51,8 +51,8 @@ authentication story for the web routes (M11's localhost-only posture stands).
    liveness anyway and refuses with `run_still_stopping`. The second lock is cheap and turns a
    future ordering regression into a refusal instead of a lost run.
 4. **Every failed run start or resume costs an attempt.** `concludeFailedResume` and
-   `failToStart` share one helper that increments `attempt` and parks the task `blocked` at
-   `maxAttempts`. No path re-dispatches a paid run without counting it.
+   `failToStart` share one helper that increments `attempt` and, at `maxAttempts`, parks the
+   task exactly as `failToStart` already does (`failed` when exhausted). No path re-dispatches a paid run without counting it.
 5. **A claim that cannot be signalled is released.** `pauseActiveRuns` claims
    `pause_requested`, signals, and on a throw restores the prior status and reports the run
    as `refused`. A run never parks in `pause_requested` with nothing coming.
@@ -114,7 +114,8 @@ alive. A `null` pid is not a refusal (pre-M12 rows, and rows the pump already cl
 `failToStart`'s increment-then-park logic is extracted to `releaseTaskAfterFailure(task,
 runId)` and called from both `failToStart` and `concludeFailedResume`. Behavior of
 `failToStart` is unchanged; `concludeFailedResume` gains the increment and the
-`maxAttempts → blocked` transition. `lastRejectionReason` stays untouched on both.
+`maxAttempts → failed` transition `failToStart` already performs. `lastRejectionReason` stays
+untouched on both.
 
 ### 3.4 Claim, signal, release (`packages/control/src/pause.ts`)
 
@@ -134,7 +135,8 @@ gains it, named `pause_unsignalled`.
 - New: pump — during the grace window the row reads `pause_requested` and no `run.paused`
   exists; after the pid is dead, `paused` and the event. `requestResume` — a live pid (real
   `/bin/sleep`) is refused with the verbatim text; a dead pid proceeds. `concludeFailedResume`
-  — `attempt` increments; `blocked` at `maxAttempts`; no new run dispatched by the next tick.
+  — `attempt` increments; `failed` at `maxAttempts` (`failToStart`'s existing rule); no new run
+  dispatched by the next tick.
   `pauseActiveRuns` — a throwing signal restores the prior status and lands in `refused`.
 
 ## 4. Series B — One Runtime Module
@@ -160,7 +162,8 @@ Sourced by `scripts/pause-gate.sh` and `scripts/cursor-shell-gate.sh`. Provides:
 - `json_string` — node `JSON.stringify` fed on **stdin** (the argv hole closed once, for
   both), with the guard that the output begins with `"`.
 - `read_pause_reason` — fail-closed contract shared by both gates: `AITEAMOS_PAUSE_FLAG`
-  unset/empty → exit 2 with a message; path absent → "no pause"; path present but not a
+  unset/empty → the deny payload each gate emits today (exit 0, fail-closed, operator-readable —
+  unchanged); path absent → "no pause"; path present but not a
   regular file or unreadable → exit 2. (M12 deferred "a directory is an allow"; this closes
   it for both gates.)
 
@@ -171,7 +174,9 @@ is `{"permission":"allow"}`; Cursor's deny key is `user_message`. Both gate test
 ### 4.3 Proof of behavior preservation
 
 Each extraction task runs the full suite before and after and reports the deleted line
-count. No adapter or gate test changes in Series B. Claude's settings shape, flag path and
+count. No adapter test changes in Series B; the two gate tests change only in the
+`scripts/lib/pause-flag.sh` task, and only for the argv rows and the directory case §4.2 names.
+Claude's settings shape, flag path and
 hook contract are diffed byte-for-byte against `main` at the series' end.
 
 ## 5. Series C — Cursor's Gate, Proven
@@ -215,7 +220,8 @@ Spend: two Cursor runs, one spare.
 
 `PUT /api/w/[workspaceId]/provider` body `{ provider: ProviderKind | null }`;
 `PUT /api/w/[workspaceId]/budget` body `{ budgetUsd: number | null }`. Both through
-`orgControlRoute` (409 + verbatim refusal), mirroring `goal/route.ts`.
+`workspaceControlResponse` (409 + verbatim refusal, 404 for an unknown workspace), the shell
+`goal/route.ts` actually uses.
 
 ### 6.3 UI (`apps/web/src/components/RuntimeCard.tsx`)
 
@@ -267,7 +273,8 @@ on a missing `cursor-agent`, `claude`, `.env`, or DB. Stages, each asserted agai
 4. A budgeted workspace refuses `cursor` with `a budget needs a provider that reports cost`;
    after the card sets the budget to `null`, the same task dispatches.
 5. A deliberately failing resume (checkpoint pointed at a dead session) increments
-   `attempt`, parks the task `blocked` at `maxAttempts: 1`, and the next tick starts no run.
+   `attempt`, parks the task `failed` at `maxAttempts: 1` (`failToStart`'s rule), and the next
+   tick starts no run.
 
 PASS line: `a pause is a stop and a stop is resumable`, exit 0. Spend: at most three
 two-runtime executions, preceded by zero-spend rehearsals against fake CLIs.
@@ -277,12 +284,12 @@ two-runtime executions, preceded by zero-spend rehearsals against fake CLIs.
 - **Ordering.** The pause window is tested with a child that ignores SIGTERM for longer than
   the grace period, so the `pause_requested` interval is observable.
 - **Liveness.** `requestResume` against a real live pid and a real dead one.
-- **Attempts.** Every failed-start and failed-resume path counts, and `blocked` is reached.
+- **Attempts.** Every failed-start and failed-resume path counts, and exhaustion is reached.
 - **Preservation.** Series B: suite green untouched before and after each extraction;
   byte-diff of Claude's on-disk mechanism at the end.
 - **Evidence.** Series C's recordings are committed fixtures, exercised by the parser test.
 - **Surfaces.** Control, route and component layers each tested through the real path
-  (DB, `orgControlRoute`, rendered component), no mocks of the layer below.
+  (DB, `workspaceControlResponse`, rendered component), no mocks of the layer below.
 
 ## 9. Milestone Gate
 
