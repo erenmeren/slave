@@ -44,9 +44,12 @@ import { parseCursorLine } from './stream.js'
  *
  * - **A zero-line stream is diagnosed, not shrugged at.** See `zeroLineOutcome`.
  *
- * - **The hooks file registers MORE than `getCapabilities()` claims.** `.cursor/hooks.json` arms
- *   the gate at `preToolUse` as well as `beforeShellExecution`, while `gate` stays at
- *   `'shell-only'`; see `cursor/hooks.ts` for why, and the Task 12 report for the runs behind it.
+ * - **The hooks file registers exactly what `getCapabilities()` now claims.** `.cursor/hooks.json`
+ *   arms the gate at `preToolUse` as well as `beforeShellExecution`, and `gate` reads `'all-tools'`
+ *   because M13 Task 9 measured that `preToolUse` registration refusing both a shell command and a
+ *   file write while paused, with the control run (flag absent) showing both succeeding; see
+ *   `packages/providers/test/fixtures/cursor/gate/README.md` for the recorded runs, and
+ *   `cursor/hooks.ts` for why the registration carries no `matcher`.
  *
  * - **There is no mid-run pause.** `ProviderCapabilities.canPauseMidRun` is `false` for this
  *   runtime: pausing a Cursor run is cancelling its process (`cancel()`) and later `resume()`-ing

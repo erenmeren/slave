@@ -168,15 +168,14 @@ describe('CursorAdapter', () => {
   it('cannot pause mid-run but can resume a session', () => {
     const adapter = new CursorAdapter({ command: '/bin/true', gatePath })
     expect(adapter.id).toBe('cursor')
-    // `gate` stays at spec §7's `'shell-only'`, unraised. Task 12 registered the gate at
-    // `preToolUse` as well as `beforeShellExecution` -- so the hooks file is BROADER than this
-    // value claims -- but Step 4's two live runs did not produce a measured block, so there is no
-    // proof to raise it with, and a capability may only ever be widened by proof. The task report
-    // carries the runs and why they were inconclusive.
+    // `gate` reads `'all-tools'`, measured, not assumed (M13 Task 9/10). The recorded run at
+    // `packages/providers/test/fixtures/cursor/gate/run-2-flag-present.ndjson` shows the
+    // `preToolUse` registration refusing both a shell command and a file write while the pause
+    // flag was present, with the control run (flag absent) showing both succeeding.
     expect(adapter.getCapabilities()).toEqual({
       canPauseMidRun: false,
       canResumeSession: true,
-      gate: 'shell-only',
+      gate: 'all-tools',
       reportsCost: false,
     })
   })
