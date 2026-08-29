@@ -57,6 +57,14 @@ const CLAUDE_CODE_CAPABILITIES: ProviderCapabilities = {
  * "Cursor fires only the shell hooks" -- is superseded and false; `preToolUse` fires for `Read`,
  * `Write` and `Shell` alike.
  *
+ * That `preToolUse` registration has no `matcher`, and the recording shows this is LOAD-BEARING,
+ * not merely cautious: the write above was stopped at a `preToolUse` invocation whose `tool_name`
+ * was `"Read"`, not `"Write"` -- Cursor's edit tool reads its target before writing it, and both
+ * steps are gated under the edit call's own id, so the write never reached a `tool_name: "Write"`
+ * invocation at all. A matcher scoped to (say) `^(Write|Shell)$`, which reads as an obviously safe
+ * narrowing, would have let this exact write through. See `cursor/hooks.ts` for the full
+ * reasoning behind the no-matcher registration.
+ *
  * `canPauseMidRun` stays `false`: there is still no mechanism that stops the agent between tool
  * calls and leaves it resumable in place. The gate refuses calls; it does not suspend the run.
  * `reportsCost` stays `false`: the `result` line carries no cost figure at all.
@@ -64,6 +72,12 @@ const CLAUDE_CODE_CAPABILITIES: ProviderCapabilities = {
  * Measured on `cursor-agent 2026.08.25-3e8eec8` only -- the binary self-updates, and the fixture
  * README under `packages/providers/test/fixtures/cursor/gate/` records the version per payload.
  * Only a shell call and an edit call were measured; no MCP or subagent tool call was exercised.
+ *
+ * A capability in this table may only ever be WIDENED by proof, never narrowed: it may not be set
+ * to a value stricter than what is already recorded here, because narrowing it retroactively
+ * invalidates a configuration an operator was already told was acceptable. A later measurement
+ * that appears to warrant narrowing a value is evidence of a regression to investigate, not a
+ * reason to edit this table.
  */
 const CURSOR_CAPABILITIES: ProviderCapabilities = {
   canPauseMidRun: false,

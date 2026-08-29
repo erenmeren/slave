@@ -60,7 +60,7 @@ export interface CursorHooksConfig {
      * refused, `result.rejected` on each, `reason` the gate's `user_message` verbatim; the control
      * run (flag absent) shows both succeeding. Evidence:
      * `packages/providers/test/fixtures/cursor/gate/` (README, `hooks.json`,
-     * `run-2-flag-present.ndjson` lines 10 and 12, `run-2-hook.log`). `capabilitiesOf('cursor').gate`
+     * `run-2-flag-present.ndjson` lines 11 and 12, `run-2-hook.log`). `capabilitiesOf('cursor').gate`
      * now reads `'all-tools'` on the strength of this recording (`packages/providers/src/capabilities.ts`).
      * Measured on `cursor-agent 2026.08.25-3e8eec8` only -- the binary self-updates, and the
      * fixture README records the version per payload -- and only for a shell call and an edit
