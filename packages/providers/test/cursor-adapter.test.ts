@@ -99,6 +99,28 @@ function rejectedCompletedLine(callId: string): string {
   })
 }
 
+/**
+ * The `tool_call`/`completed` lines a REAL `cursor-agent` run produced when the pause flag was set
+ * (M13 Task 9's recorded evidence, committed under `fixtures/cursor/gate/` with its provenance),
+ * not synthesized ones. `observeRawLine` reads the rejection out of
+ * `tool_call.<name>ToolCall.result.rejected` -- where the tool's NAME is the KEY of the `tool_call`
+ * object rather than a field -- and `rejectedCompletedLine` above proves only that this test file
+ * agrees with itself about that shape.
+ *
+ * The recording already caught one way that self-agreement goes stale. `rejectedCompletedLine`'s
+ * reason text (`'Command execution was blocked by a hook: ...'`) is M12's, measured against
+ * `cursor-agent` 2026.08.11-e8db854; under 2026.08.25-3e8eec8 the recorded reason is instead the
+ * gate's own `user_message` verbatim followed by an agent-facing note. The adapter is indifferent
+ * to that -- it keys on the PRESENCE of `result.rejected` and never on the reason's wording -- and
+ * these two tests exist to keep it that way by pinning it to bytes the binary actually emitted.
+ */
+const RECORDED_DENY_LINES: readonly string[] = readFileSync(
+  new URL('./fixtures/cursor/gate/run-2-flag-present.ndjson', import.meta.url),
+  'utf8',
+)
+  .split('\n')
+  .filter((line) => line.includes('"rejected"'))
+
 describe('CursorAdapter', () => {
   let worktreePath: string
   let runDir: string
@@ -284,6 +306,56 @@ describe('CursorAdapter', () => {
     await adapter.start(input)
 
     expect(terminatedOf(await drain(adapter, input.runId)).outcome.deniedToolUseIds).toEqual(['call-a', 'call-b'])
+  })
+
+  it('reads the recorded gate denials off the real stream, not a synthesized one', async () => {
+    expect(RECORDED_DENY_LINES.length).toBeGreaterThan(0)
+
+    const adapter = adapterFor(
+      writeStreamScript(runDir, 'recorded-denied.sh', { lines: [...RECORDED_DENY_LINES, RESULT_LINE] }),
+    )
+    await adapter.start(input)
+
+    const outcome = terminatedOf(await drain(adapter, input.runId)).outcome
+    const recordedIds = RECORDED_DENY_LINES.map((line) => (JSON.parse(line) as { call_id: string }).call_id)
+    expect(outcome.deniedToolUseIds).toEqual(recordedIds)
+    // A denied run is a failed run to `pump.ts` even when `is_error` is false -- the list has to be
+    // non-empty for that to fire, and the recorded `result` line's subtype IS `success`.
+    expect(outcome.deniedToolUseIds.length).toBeGreaterThan(0)
+  })
+
+  it('recorded a refused file WRITE alongside the refused shell command', () => {
+    // The capability question M13 §5 exists to settle: the gate stops an edit, not only a shell
+    // call. `editToolCall` is the key Cursor used for the write, `shellToolCall` for the command,
+    // and both carry a `rejected` result in the same recorded run -- in which neither `write.txt`
+    // nor `shell.txt` was left on disk. Asserting the KEYS rather than a reason string is the
+    // durable half: the reason's wording changed between two binary versions, the keys did not.
+    const rejectedToolKeys = RECORDED_DENY_LINES.flatMap((line) => {
+      const parsed = JSON.parse(line) as {
+        tool_call: Record<string, { result?: { rejected?: unknown } }>
+      }
+      return Object.entries(parsed.tool_call)
+        .filter(([, call]) => call?.result?.rejected !== undefined)
+        .map(([key]) => key)
+    })
+    expect(rejectedToolKeys).toContain('editToolCall')
+    expect(rejectedToolKeys).toContain('shellToolCall')
+  })
+
+  it('carries the pause gate own deny message into the recorded rejection reason', () => {
+    const reasons = RECORDED_DENY_LINES.flatMap((line) => {
+      const parsed = JSON.parse(line) as {
+        tool_call: Record<string, { result?: { rejected?: { reason?: string } } }>
+      }
+      return Object.values(parsed.tool_call).map((call) => call?.result?.rejected?.reason ?? '')
+    }).filter((reason) => reason !== '')
+
+    // The reason is the gate's `user_message` verbatim -- NOT a fixed `Command execution was
+    // blocked by a hook: ` prefix, which is what the older binary emitted and what
+    // `rejectedCompletedLine` still hard-codes. Nothing in the adapter may depend on either
+    // spelling; this asserts what was measured so that a future change to it is visible here.
+    expect(reasons.length).toBe(RECORDED_DENY_LINES.length)
+    expect(reasons.every((reason) => reason.startsWith('Paused by the M13 gate evidence run.'))).toBe(true)
   })
 
   it('names the workspace-trust refusal, with the captured stderr, when the stream is empty', async () => {

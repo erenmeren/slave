@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "hooks": {
+    "beforeShellExecution": [
+      {
+        "command": "'/tmp/m13-cursor-gate/gate-wrapper.sh'",
+        "failClosed": true
+      }
+    ],
+    "preToolUse": [
+      {
+        "command": "'/tmp/m13-cursor-gate/gate-wrapper.sh'",
+        "failClosed": true
+      }
+    ]
+  }
+}
