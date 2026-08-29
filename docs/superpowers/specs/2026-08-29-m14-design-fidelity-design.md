@@ -103,15 +103,17 @@ Room" and "Design Tokens".
   right-aligned mono values.
 - **`TopBar`** — 52px, bg `#0c0f13`, a 1px bottom gradient `transparent → rgba(46,230,207,.5) →
   rgba(123,140,255,.3) → transparent`; the connection chip becomes `sse · <ms>` using the
-  SSE hook's measured heartbeat latency; the budget bar and two-step STOP keep M11's behavior
+  age of the most recent event on arrival (`Date.now() − event.ts` — heartbeat frames are id-only
+  and unobservable to `EventSource`, so arrival age is the measurable latency); the budget bar and two-step STOP keep M11's behavior
   and take the mockup's geometry.
 - **Motion** — `globals.css` gains `@keyframes pulse | dash | sweep | rise | spin` exactly as the
   mockup defines them, and `@media (prefers-reduced-motion: reduce) { * { animation: none !important } }`.
   New rows in any list get `.rise` (0.3s `translateY(5px)`); M11's dropped "new-row rise"
   lands here.
 
-Tests: each primitive renders its tokens (computed style assertions through the existing
-harness); the tone table is exhaustive over `RunStatus`/agent status; `AgentCard` renders all
+Tests: each primitive renders its tokens — in vitest as class-string / inline-style / SVG-attribute
+assertions (jsdom loads no CSS, so numbers derived from classes are asserted only by the Series D
+Playwright gate; each task lists which is which); the tone table is exhaustive over `RunStatus`/agent status; `AgentCard` renders all
 ten states in one `it.each`; reduced-motion removes every animation class.
 
 ## 4. Series B — The Data
@@ -246,7 +248,8 @@ review's fix wave takes the fixes.
 
 ## 7. Testing
 
-- **Primitives** — computed-style assertions; exhaustive tone/column tables; reduced-motion.
+- **Primitives** — class/inline-style assertions in vitest, computed numbers in the Playwright gate;
+  exhaustive tone/column tables; reduced-motion.
 - **Data** — parser fixture for the `Skill` tool_use line and for `usage`; pump writes
   `skillCalls`/tokens on every terminal path (integration, real DB); `syncSkillCatalog`
   against a temp directory tree (upsert, `missingSince`, version precedence); analytics
