@@ -4,15 +4,12 @@ import { useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import type { ProviderKind } from '@ai-team-os/control'
 import type { RosterCompany, RosterMemberRow } from '../server/org'
+import { ProviderSelect } from './ProviderSelect'
 import type { TemplateRow } from './TemplateCatalog'
 import { Button } from './ui/Button'
 import { DataTable, Row } from './ui/DataTable'
 import { EmptyTile } from './ui/EmptyTile'
 import { SectionLabel } from './ui/SectionLabel'
-
-/** Every `ProviderKind`, as `<option>` values (M12 Task 13) -- the same list
- *  `ModelOverrideEditor`/`TemplateCatalog` use. */
-const PROVIDER_KINDS: readonly ProviderKind[] = ['claude_code', 'cursor']
 
 /** A row from `listCompanies` (`server/org.ts`) -- no exported type there, so this is the one
  *  place that names the shape. */
@@ -21,8 +18,8 @@ export interface CompanyRow {
   readonly name: string
 }
 
-const MEMBER_COLUMNS = '1fr 110px 160px 140px'
-const MEMBER_HEADER = ['Name', 'Role', 'Template', 'Model'] as const
+const MEMBER_COLUMNS = '1fr 110px 160px 140px 120px'
+const MEMBER_HEADER = ['Name', 'Role', 'Template', 'Model', 'Provider'] as const
 
 /** Pulls a 409 refusal's `{ error }` text, falling back to something nameable for any other
  *  non-2xx or malformed body -- the `errorMessage` idiom this page's other forms already use. */
@@ -41,6 +38,8 @@ function MemberRow({ member }: { readonly member: RosterMemberRow }): React.JSX.
       <span className="truncate text-text-2">{member.role}</span>
       <span className="truncate text-text-2">{member.templateName}</span>
       <span className="font-mono text-xs text-text-2">{member.effectiveModel ?? '—'}</span>
+      {/* M12 Task 13 fix round 1, Important finding 3: `effectiveProvider` had no reader here. */}
+      <span className="font-mono text-xs text-text-2">{member.effectiveProvider ?? '—'}</span>
     </Row>
   )
 }
@@ -162,21 +161,15 @@ function TeamBlock({
         </label>
         <label className="flex flex-col gap-1 text-xs text-text-3">
           Provider
-          <select
-            aria-label="member provider"
-            data-testid="member-provider-select"
+          <ProviderSelect
+            testId="member-provider-select"
+            ariaLabel="member provider"
             value={provider}
-            onChange={(event) => setProvider(event.target.value as ProviderKind | '')}
+            onChange={setProvider}
             disabled={pending}
+            placeholder="select a provider"
             className="w-28 rounded border border-line bg-bg-2 px-2 py-1 text-sm text-text-1"
-          >
-            <option value="">select a provider</option>
-            {PROVIDER_KINDS.map((kind) => (
-              <option key={kind} value={kind}>
-                {kind}
-              </option>
-            ))}
-          </select>
+          />
         </label>
         <Button
           variant="ghost"

@@ -4,10 +4,7 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import type { ProviderKind } from '@ai-team-os/control'
 import { Button } from './ui/Button'
-
-/** Every `ProviderKind`, as `<option>` values -- the operator's own choice, not derived from any
- *  data already on screen (M12 Task 13, controller resolution 1). */
-const PROVIDER_KINDS: readonly ProviderKind[] = ['claude_code', 'cursor']
+import { ProviderSelect } from './ProviderSelect'
 
 /** Pulls a 409 refusal's `{ error }` text, falling back to something nameable for any other
  *  non-2xx or malformed body -- the `errorMessage` idiom `AssignCompanyDialog.tsx`/
@@ -81,21 +78,15 @@ export function ModelOverrideEditor({
 
   return (
     <div data-testid="model-override-editor" className="flex flex-wrap items-center gap-1">
-      <select
-        data-testid="model-override-provider"
-        aria-label="provider"
+      <ProviderSelect
+        testId="model-override-provider"
+        ariaLabel="provider"
         value={providerValue}
-        onChange={(event) => setProviderValue(event.target.value as ProviderKind | '')}
+        onChange={setProviderValue}
         disabled={pending}
+        placeholder="provider"
         className="rounded border border-line bg-bg-2 px-1.5 py-1 text-[11px] text-text-1"
-      >
-        <option value="">provider</option>
-        {PROVIDER_KINDS.map((kind) => (
-          <option key={kind} value={kind}>
-            {kind}
-          </option>
-        ))}
-      </select>
+      />
       <input
         data-testid="model-override-input"
         aria-label="model override"

@@ -6,6 +6,7 @@ import type { ProviderKind } from '@ai-team-os/control'
 import { Button } from './ui/Button'
 import { Chip } from './ui/Chip'
 import { DataTable, Row } from './ui/DataTable'
+import { ProviderSelect } from './ProviderSelect'
 
 /** A row from `listTemplates` (`server/org.ts`) -- no exported type there, so this is the one
  *  place that names the shape; `CompanyManager.tsx`'s add-member template `<select>` imports it
@@ -22,12 +23,8 @@ export interface TemplateRow {
   readonly defaultProvider?: ProviderKind | null
 }
 
-/** Every `ProviderKind`, as `<option>` values (M12 Task 13) -- the same list `ModelOverrideEditor`
- *  uses, not derived from anything already on screen. */
-const PROVIDER_KINDS: readonly ProviderKind[] = ['claude_code', 'cursor']
-
-const COLUMNS = '1fr 110px 2fr 140px'
-const HEADER = ['Name', 'Role', 'Description', 'Default model'] as const
+const COLUMNS = '1fr 110px 2fr 140px 120px'
+const HEADER = ['Name', 'Role', 'Description', 'Default model', 'Default provider'] as const
 
 /** Pulls a 409 refusal's `{ error }` text, falling back to something nameable for any other
  *  non-2xx or malformed body -- the `errorMessage` idiom `AssignCompanyDialog.tsx`/
@@ -105,6 +102,9 @@ export function TemplateCatalog({ templates }: { readonly templates: readonly Te
               <Chip>{template.role}</Chip>
               <span className="truncate text-text-2">{template.description}</span>
               <span className="font-mono text-xs text-text-2">{template.defaultModel ?? '—'}</span>
+              {/* M12 Task 13 fix round 1, Important finding 3: half a pair was legible, half was
+               *  not -- `defaultProvider` had no reader anywhere on this surface. */}
+              <span className="font-mono text-xs text-text-2">{template.defaultProvider ?? '—'}</span>
             </Row>
           ))}
         </DataTable>
@@ -163,21 +163,15 @@ export function TemplateCatalog({ templates }: { readonly templates: readonly Te
         </label>
         <label className="flex flex-col gap-1 text-xs text-text-3">
           Default provider
-          <select
-            aria-label="template default provider"
-            data-testid="template-default-provider-select"
+          <ProviderSelect
+            testId="template-default-provider-select"
+            ariaLabel="template default provider"
             value={defaultProvider}
-            onChange={(event) => setDefaultProvider(event.target.value as ProviderKind | '')}
+            onChange={setDefaultProvider}
             disabled={pending}
+            placeholder="select a provider"
             className="w-32 rounded border border-line bg-bg-2 px-2 py-1 text-sm text-text-1"
-          >
-            <option value="">select a provider</option>
-            {PROVIDER_KINDS.map((kind) => (
-              <option key={kind} value={kind}>
-                {kind}
-              </option>
-            ))}
-          </select>
+          />
         </label>
         <Button
           variant="primary"

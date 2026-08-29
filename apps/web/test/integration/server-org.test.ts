@@ -257,6 +257,78 @@ describe('org query module', () => {
       expect(member?.workers[0]?.model).toBe('haiku')
     })
 
+    // M12 Task 13 fix round 1, spec §8 / finding 4b: `providerSource` is `modelSource`'s pair,
+    // walked over the SAME chain (worker override -> roster row -> template default) via the
+    // provider columns instead of the model columns -- `chainSource` in `server/org.ts` is the
+    // one function computing both.
+    it("providerSource is 'roster' when the roster row's provider is set", async (): Promise<void> => {
+      const { companyTeamId, templateId } = await seedRoster()
+      const companyAgent = await prisma.companyAgent.create({
+        data: { companyTeamId, templateId, name: 'Atlas', model: 'opus', provider: 'claude_code' },
+      })
+
+      const roster = await listRoster()
+      const member = roster.flatMap((c) => c.teams).flatMap((t) => t.members).find((m) => m.companyAgentId === companyAgent.id)
+
+      expect(member?.providerSource).toBe('roster')
+      expect(member?.effectiveProvider).toBe('claude_code')
+    })
+
+    it("providerSource is 'template' when the roster row's provider is unset but the template default is set", async (): Promise<void> => {
+      const company = await prisma.company.create({ data: { name: 'Acme Robotics' } })
+      const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Eng' } })
+      const template = await prisma.agentTemplate.create({
+        data: { name: 'Backend Engineer', role: 'backend', defaultModel: 'sonnet', provider: 'cursor' },
+      })
+      const companyAgent = await prisma.companyAgent.create({
+        data: { companyTeamId: companyTeam.id, templateId: template.id, name: 'Atlas' },
+      })
+
+      const roster = await listRoster()
+      const member = roster.flatMap((c) => c.teams).flatMap((t) => t.members).find((m) => m.companyAgentId === companyAgent.id)
+
+      expect(member?.providerSource).toBe('template')
+      expect(member?.effectiveProvider).toBe('cursor')
+    })
+
+    it("providerSource is 'none' when neither the roster row nor the template default has a provider", async (): Promise<void> => {
+      const { companyTeamId, templateId } = await seedRoster()
+      const companyAgent = await prisma.companyAgent.create({
+        data: { companyTeamId, templateId, name: 'Atlas' },
+      })
+
+      const roster = await listRoster()
+      const member = roster.flatMap((c) => c.teams).flatMap((t) => t.members).find((m) => m.companyAgentId === companyAgent.id)
+
+      expect(member?.providerSource).toBe('none')
+      expect(member?.effectiveProvider).toBeNull()
+    })
+
+    it("providerSource is 'worker-varies' when any of the member's materialized workers overrides its own provider, even though the roster row has a provider", async (): Promise<void> => {
+      const { companyTeamId, templateId } = await seedRoster()
+      const companyAgent = await prisma.companyAgent.create({
+        data: { companyTeamId, templateId, name: 'Atlas', model: 'opus', provider: 'cursor' },
+      })
+      await prisma.agent.create({
+        data: {
+          teamId: fixture.teamId,
+          name: 'Atlas (worker)',
+          role: 'backend',
+          companyAgentId: companyAgent.id,
+          model: 'haiku',
+          provider: 'claude_code',
+        },
+      })
+
+      const roster = await listRoster()
+      const member = roster.flatMap((c) => c.teams).flatMap((t) => t.members).find((m) => m.companyAgentId === companyAgent.id)
+
+      expect(member?.providerSource).toBe('worker-varies')
+      // effectiveProvider still ignores the worker override -- it is the chain result.
+      expect(member?.effectiveProvider).toBe('cursor')
+      expect(member?.workers[0]?.provider).toBe('claude_code')
+    })
+
     it("reuses overview's status/current-task derivation for each worker sub-row", async (): Promise<void> => {
       const { companyTeamId, templateId } = await seedRoster()
       const companyAgent = await prisma.companyAgent.create({

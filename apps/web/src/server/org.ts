@@ -9,6 +9,26 @@ import { deriveAgentStatus, sumSpend, NON_TERMINAL_RUN_STATUSES, type AgentStatu
  *  never drift from the one capability table `@ai-team-os/providers` owns. */
 export type WorkerGate = ProviderCapabilities['gate']
 
+/**
+ * The chain vocabulary `modelSource` already established (M11 Task 8 brief), reused verbatim for
+ * `providerSource` (M12 Task 13 fix round 1, spec §8: "`modelSource` gains a provider counterpart
+ * so the resolution chain stays legible"). Deliberately the SAME function computing both, rather
+ * than two hand-written chains that could drift apart on the roster's own multi-workspace view --
+ * this is the one place a member's own model/provider chain (worker override, then the roster
+ * row, then the template default) is walked, which `resolveRuntime`'s worker-plus-workspace chain
+ * (`packages/control/src/runtime.ts`) cannot stand in for: a roster member has no single
+ * workspace to resolve a default against, and can carry several materialized workers whose own
+ * overrides disagree -- `'worker-varies'` names exactly that roster-only case.
+ */
+type ChainSource = 'worker-varies' | 'roster' | 'template' | 'none'
+
+function chainSource(hasWorkerOverride: boolean, rosterValue: unknown, templateValue: unknown): ChainSource {
+  if (hasWorkerOverride) return 'worker-varies'
+  if (rosterValue !== null) return 'roster'
+  if (templateValue !== null) return 'template'
+  return 'none'
+}
+
 // Mirrors overview.ts's ACTIVE_TASK_STATUSES exactly (the M8a widening: a task under review or in
 // the merge queue is still active work). Not imported from there -- overview.ts does not export
 // it, and this task's scope is one new module, nothing else changes.
@@ -167,9 +187,16 @@ export interface RosterMemberRow {
   readonly role: string
   readonly templateName: string
   readonly effectiveModel: string | null
-  readonly modelSource: 'worker-varies' | 'roster' | 'template' | 'none'
+  readonly modelSource: ChainSource
   readonly rosterModel: string | null
   readonly templateDefaultModel: string | null
+  /** `effectiveModel`'s pair (M12 Task 13 fix round 1, Important finding 3): the chain result
+   *  IGNORING worker overrides, same as `effectiveModel` -- each worker's own provider shows in
+   *  its sub-row below instead. */
+  readonly effectiveProvider: ProviderKind | null
+  /** `modelSource`'s pair (spec §8, fix round 1 finding 4b) -- the SAME chain, walked over the
+   *  provider columns via `chainSource` above instead of the model columns. */
+  readonly providerSource: ChainSource
   readonly workers: ReadonlyArray<{
     readonly agentId: string
     readonly workspaceId: string
@@ -249,14 +276,16 @@ export async function listRoster(): Promise<readonly RosterCompany[]> {
             currentTask: info?.currentTask ?? null,
           }
         })
-        const hasWorkerOverride = workers.some((w) => w.model !== null)
-        const modelSource: RosterMemberRow['modelSource'] = hasWorkerOverride
-          ? 'worker-varies'
-          : member.model !== null
-            ? 'roster'
-            : member.template.defaultModel !== null
-              ? 'template'
-              : 'none'
+        const modelSource = chainSource(
+          workers.some((w) => w.model !== null),
+          member.model,
+          member.template.defaultModel,
+        )
+        const providerSource = chainSource(
+          workers.some((w) => w.provider !== null),
+          member.provider,
+          member.template.provider,
+        )
 
         return {
           companyAgentId: member.id,
@@ -269,6 +298,8 @@ export async function listRoster(): Promise<readonly RosterCompany[]> {
           modelSource,
           rosterModel: member.model,
           templateDefaultModel: member.template.defaultModel,
+          effectiveProvider: member.provider ?? member.template.provider ?? null,
+          providerSource,
           workers,
         }
       }),

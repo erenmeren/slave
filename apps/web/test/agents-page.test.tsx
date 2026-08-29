@@ -23,6 +23,8 @@ function member(over: Partial<RosterMemberRow>): RosterMemberRow {
     modelSource: 'template',
     rosterModel: null,
     templateDefaultModel: 'claude-sonnet-4',
+    effectiveProvider: 'claude_code',
+    providerSource: 'template',
     workers: [],
     ...over,
   }
@@ -126,7 +128,9 @@ describe('RosterTable', () => {
     })
 
     it('template', () => {
-      const m = member({ name: 'C', modelSource: 'template', effectiveModel: 'claude-sonnet-4', rosterModel: null })
+      // providerSource overridden to 'roster' (not the member() default, also 'template'):
+      // otherwise both chips would show the text "template" and `getByText` would be ambiguous.
+      const m = member({ name: 'C', modelSource: 'template', effectiveModel: 'claude-sonnet-4', rosterModel: null, providerSource: 'roster' })
       render(<RosterTable roster={rosterWithMember(m)} />)
       expect(screen.getByText('claude-sonnet-4')).toBeTruthy()
       expect(screen.getByText('template')).toBeTruthy()
@@ -137,6 +141,36 @@ describe('RosterTable', () => {
       render(<RosterTable roster={rosterWithMember(m)} />)
       expect(screen.getByText('—')).toBeTruthy()
       expect(screen.getByText('none')).toBeTruthy()
+    })
+  })
+
+  // M12 Task 13 fix round 1, spec §8 / finding 4b: `providerSource` beside `modelSource`.
+  describe('the provider chain chip for each providerSource case', () => {
+    it('shows a template source when the provider comes from the template default', () => {
+      const m = member({
+        name: 'E',
+        effectiveProvider: 'cursor',
+        providerSource: 'template',
+        // A distinct modelSource so this test's own "template" assertion is unambiguous.
+        modelSource: 'roster',
+      })
+      render(<RosterTable roster={rosterWithMember(m)} />)
+      expect(screen.getByText('cursor')).toBeTruthy()
+      expect(screen.getByText('template')).toBeTruthy()
+    })
+
+    it('shows a roster source when the provider comes from the roster row override', () => {
+      const m = member({
+        name: 'F',
+        effectiveProvider: 'claude_code',
+        providerSource: 'roster',
+        // A distinct modelSource so this test's own "roster" assertion is unambiguous.
+        modelSource: 'none',
+        effectiveModel: null,
+      })
+      render(<RosterTable roster={rosterWithMember(m)} />)
+      expect(screen.getByText('claude_code')).toBeTruthy()
+      expect(screen.getByText('roster')).toBeTruthy()
     })
   })
 

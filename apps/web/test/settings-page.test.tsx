@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { ProviderKind } from '@ai-team-os/control'
 import { CompanyManager } from '../src/components/CompanyManager.js'
 import { SettingsClient } from '../src/components/SettingsClient.js'
 import { TemplateCatalog } from '../src/components/TemplateCatalog.js'
@@ -12,7 +13,16 @@ vi.mock('next/navigation', () => ({
   useRouter: () => ({ refresh: routerRefresh }),
 }))
 
-function template(over: Partial<{ id: string; name: string; role: string; description: string; defaultModel: string | null }> = {}) {
+function template(
+  over: Partial<{
+    id: string
+    name: string
+    role: string
+    description: string
+    defaultModel: string | null
+    defaultProvider: ProviderKind | null
+  }> = {},
+) {
   return {
     id: 't1',
     name: 'Backend Engineer',
@@ -33,6 +43,8 @@ function member(over: Partial<RosterMemberRow> = {}): RosterMemberRow {
     modelSource: 'template',
     rosterModel: null,
     templateDefaultModel: 'claude-sonnet-4',
+    effectiveProvider: 'claude_code',
+    providerSource: 'template',
     workers: [],
     ...over,
   }
@@ -70,7 +82,17 @@ describe('TemplateCatalog', () => {
 
   it('shows "—" for a template with no default model', () => {
     render(<TemplateCatalog templates={[template({ defaultModel: null })]} />)
-    expect(screen.getByText('—')).toBeTruthy()
+    // Two dashes now (M12 Task 13 fix round 1, finding 3): `template()`'s default carries no
+    // `defaultProvider` either, so both the model and the provider cells fall back to '—'.
+    expect(screen.getAllByText('—')).toHaveLength(2)
+  })
+
+  // M12 Task 13 fix round 1, Important finding 3: `defaultProvider` reached no renderer.
+  it('renders a template default provider beside its default model', () => {
+    render(<TemplateCatalog templates={[template({ defaultModel: 'claude-sonnet-4', defaultProvider: 'cursor' })]} />)
+    // Scoped to the table, not the form: the creation form's own provider `<select>` also
+    // renders a `cursor` `<option>`.
+    expect(within(screen.getByTestId('data-table')).getByText('cursor')).toBeTruthy()
   })
 
   describe('the creation form', () => {
@@ -226,6 +248,25 @@ describe('CompanyManager', () => {
 
     fireEvent.click(screen.getByTestId('company-toggle'))
     expect(screen.queryByTestId('company-detail')).toBeNull()
+  })
+
+  // M12 Task 13 fix round 1, Important finding 3: a member's provider had no reader on this
+  // surface either.
+  it("shows a member's effective provider beside its effective model", () => {
+    const m = member({ name: 'Alex', effectiveModel: 'claude-opus-4', effectiveProvider: 'cursor' })
+    render(
+      <CompanyManager
+        companies={[{ id: 'c1', name: 'Acme Robotics' }]}
+        roster={[company({ teams: [{ companyTeamId: 'ct1', teamName: 'Platform', members: [m] }] })]}
+        templates={[template()]}
+      />,
+    )
+    fireEvent.click(screen.getByTestId('company-toggle'))
+
+    const detail = screen.getByTestId('company-detail')
+    // Scoped to the member table, not the whole detail block: the add-member form's own
+    // provider `<select>` (`TeamBlock`) also renders a `cursor` `<option>` inside `detail`.
+    expect(within(detail).getByTestId('data-table').textContent).toContain('cursor')
   })
 
   describe('the company creation form', () => {
