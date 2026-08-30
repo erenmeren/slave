@@ -315,6 +315,21 @@ export interface WorkerRow {
   readonly projectName: string
   readonly status: string
   readonly currentTask: CurrentTask | null
+  /** The worker's team name -- the handoff's "department" column. */
+  readonly department: string
+  /**
+   * The worker's LIVE run's provider, `null` with no live run (the `AgentCardData.provider` rule,
+   * verbatim: a runtime is not decided until a run resolves it). A finished run's provider is
+   * deliberately NOT read here -- it would keep naming a runtime after the agent went idle.
+   */
+  readonly provider: ProviderKind | null
+  readonly gate: WorkerGate | null
+  /** `tokensIn + tokensOut` summed over this worker's runs that reported them; `null` when none
+   *  did (M14 Decision 4 -- Cursor reports none, and `0` would be a claim). */
+  readonly tokens: number | null
+  /** KNOWN spend across this worker's runs. */
+  readonly costUsd: number
+  readonly unmeasuredRuns: number
 }
 
 export async function listWorkers(): Promise<readonly WorkerRow[]> {
@@ -332,8 +347,24 @@ export async function listWorkers(): Promise<readonly WorkerRow[]> {
     maxToolCallsByWorkspace,
   )
 
+  const runs = await prisma.agentRun.findMany({
+    where: { agentId: { in: agents.map((a) => a.id) } },
+    select: { agentId: true, status: true, provider: true, costUsd: true, tokensIn: true, tokensOut: true, startedAt: true },
+    orderBy: { startedAt: 'desc' },
+  })
+  const runsByAgent = new Map<string, typeof runs>()
+  for (const run of runs) {
+    const list = runsByAgent.get(run.agentId)
+    if (list === undefined) runsByAgent.set(run.agentId, [run])
+    else list.push(run)
+  }
+
   return agents.map((agent) => {
     const info = liveInfo.get(agent.id)
+    const agentRuns = runsByAgent.get(agent.id) ?? []
+    const reported = agentRuns.filter((r) => r.tokensIn !== null || r.tokensOut !== null)
+    const liveProvider = agentRuns.find((r) => (NON_TERMINAL_RUN_STATUSES as readonly string[]).includes(r.status))?.provider ?? null
+    const { spend, unmeasuredRuns } = spendOf(agentRuns)
     return {
       agentId: agent.id,
       name: agent.name,
@@ -342,6 +373,12 @@ export async function listWorkers(): Promise<readonly WorkerRow[]> {
       projectName: agent.team.workspace.name,
       status: info?.status ?? 'idle',
       currentTask: info?.currentTask ?? null,
+      department: agent.team.name,
+      provider: liveProvider,
+      gate: liveProvider === null ? null : capabilitiesOf(liveProvider).gate,
+      tokens: reported.length === 0 ? null : reported.reduce((n, r) => n + (r.tokensIn ?? 0) + (r.tokensOut ?? 0), 0),
+      costUsd: spend,
+      unmeasuredRuns,
     }
   })
 }

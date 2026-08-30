@@ -1,9 +1,11 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { AgentStatus } from '@ai-team-os/domain'
 import type { RosterCompany, WorkerRow } from '../server/org'
+import type { AgentCardData, OverviewSnapshot } from '../server/overview'
 import type { StatusTone } from './ui/StatusPill'
+import { AgentPanel } from './AgentPanel'
 import { RosterTable } from './RosterTable'
 import { WorkersTable } from './WorkersTable'
 
@@ -49,6 +51,26 @@ export function AgentsClient({
   readonly workers: readonly WorkerRow[]
 }): React.JSX.Element {
   const [tab, setTab] = useState<Tab>('roster')
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null)
+  const [panelAgent, setPanelAgent] = useState<AgentCardData | null>(null)
+  const [panelWorkspaceId, setPanelWorkspaceId] = useState<string | null>(null)
+
+  useEffect((): void => {
+    if (selectedAgentId === null) {
+      setPanelAgent(null)
+      return
+    }
+    const worker = workers.find((w) => w.agentId === selectedAgentId)
+    if (worker === undefined) return
+    setPanelWorkspaceId(worker.workspaceId)
+    // The panel renders from the OVERVIEW snapshot of the agent's own workspace -- the one place
+    // an `AgentCardData` is built. Fetching it here rather than widening `WorkerRow` into an
+    // `AgentCardData` keeps one builder for that shape.
+    void fetch(`/api/w/${worker.workspaceId}/overview`)
+      .then(async (response) => (response.ok ? ((await response.json()) as OverviewSnapshot) : null))
+      .then((snapshot) => setPanelAgent(snapshot?.agents.find((a) => a.id === selectedAgentId) ?? null))
+      .catch(() => setPanelAgent(null))
+  }, [selectedAgentId, workers])
 
   return (
     <div className="flex flex-col gap-4 p-4">
@@ -69,7 +91,17 @@ export function AgentsClient({
           </button>
         ))}
       </div>
-      {tab === 'roster' ? <RosterTable roster={roster} /> : <WorkersTable initial={workers} />}
+      {tab === 'roster' ? <RosterTable roster={roster} /> : <WorkersTable initial={workers} onOpen={setSelectedAgentId} />}
+      {panelAgent !== null && panelWorkspaceId !== null && (
+        <AgentPanel
+          key={panelAgent.id}
+          agent={panelAgent}
+          liveEvents={[]}
+          workspaceId={panelWorkspaceId}
+          haltedReason={null}
+          onClose={() => setSelectedAgentId(null)}
+        />
+      )}
     </div>
   )
 }

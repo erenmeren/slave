@@ -69,6 +69,12 @@ function workerRow(over: Partial<WorkerRow>): WorkerRow {
     projectName: 'Checkout',
     status: 'working',
     currentTask: { title: 'Add the thing', pct: 40 },
+    department: 'Engineering',
+    provider: null,
+    gate: null,
+    tokens: null,
+    costUsd: 0,
+    unmeasuredRuns: 0,
     ...over,
   }
 }
@@ -98,7 +104,10 @@ describe('AgentsClient tabs', () => {
 
     expect(screen.queryByTestId('roster-company')).toBeNull()
     expect(screen.getByTestId('data-table')).toBeTruthy()
-    expect(screen.getByText('Checkout')).toBeTruthy()
+    // The Workers tab is the handoff's seven-column table (Task 9, C2) -- it has no Project
+    // column any more, so this asserts on the Department column (the team name) it replaced it
+    // with, not the `projectName` field the M11-era table used to render here.
+    expect(screen.getByTestId('worker-department').textContent).toBe('Engineering')
   })
 })
 
@@ -337,17 +346,18 @@ describe('ModelOverrideEditor', () => {
 })
 
 describe('WorkersTable', () => {
-  it('renders a flat row per worker with role, project, status, and task progress', () => {
+  it('renders a flat row per worker with role, department, status, and task progress', () => {
     render(
       <WorkersTable
         initial={[
-          workerRow({ name: 'Alex', role: 'backend', projectName: 'Checkout', status: 'working', currentTask: { title: 'Ship it', pct: 60 } }),
+          workerRow({ name: 'Alex', role: 'backend', department: 'Engineering', status: 'working', currentTask: { title: 'Ship it', pct: 60 } }),
         ]}
+        onOpen={() => {}}
       />,
     )
     expect(screen.getByText('Alex')).toBeTruthy()
     expect(screen.getByText('backend')).toBeTruthy()
-    expect(screen.getByText('Checkout')).toBeTruthy()
+    expect(screen.getByTestId('worker-department').textContent).toBe('Engineering')
     expect(screen.getByTestId('status-pill').getAttribute('data-tone')).toBe('working')
     expect(screen.getByText('Ship it')).toBeTruthy()
     expect(screen.getByTestId('progress-bar-fill').style.width).toBe('60%')
@@ -370,7 +380,7 @@ describe('WorkersTable', () => {
     })
 
     it('re-fetches GET /api/org/workers every 5s and replaces the rows', async () => {
-      render(<WorkersTable initial={[workerRow({ agentId: 'a1', name: 'Alex' })]} />)
+      render(<WorkersTable initial={[workerRow({ agentId: 'a1', name: 'Alex' })]} onOpen={() => {}} />)
       expect(screen.getByText('Alex')).toBeTruthy()
       expect(fetchMock).not.toHaveBeenCalled()
 
@@ -383,7 +393,7 @@ describe('WorkersTable', () => {
     })
 
     it('clears the interval on unmount (no further fetch after unmounting)', async () => {
-      const { unmount } = render(<WorkersTable initial={[workerRow({ agentId: 'a1', name: 'Alex' })]} />)
+      const { unmount } = render(<WorkersTable initial={[workerRow({ agentId: 'a1', name: 'Alex' })]} onOpen={() => {}} />)
       unmount()
 
       await act(async () => {
@@ -394,7 +404,7 @@ describe('WorkersTable', () => {
     })
 
     it('pauses polling while document.visibilityState is hidden, resumes once visible again', async () => {
-      render(<WorkersTable initial={[workerRow({ agentId: 'a1', name: 'Alex' })]} />)
+      render(<WorkersTable initial={[workerRow({ agentId: 'a1', name: 'Alex' })]} onOpen={() => {}} />)
       Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true })
 
       await act(async () => {
@@ -408,5 +418,62 @@ describe('WorkersTable', () => {
       })
       expect(fetchMock).toHaveBeenCalledWith('/api/org/workers')
     })
+  })
+})
+
+describe('WorkersTable — the handoff seven columns', () => {
+  it('uses the README grid template on the header and every row', () => {
+    render(<WorkersTable initial={[workerRow({})]} onOpen={() => {}} />)
+    const expected = '200px 130px 120px 1fr 110px 90px 80px'
+    expect(screen.getByTestId('data-table-header').style.gridTemplateColumns).toBe(expected)
+    expect(screen.getByTestId('data-table-row').style.gridTemplateColumns).toBe(expected)
+  })
+
+  it('names the seven columns in the README order', () => {
+    render(<WorkersTable initial={[workerRow({})]} onOpen={() => {}} />)
+    expect(screen.getAllByTestId('data-table-header-cell').map((c) => c.textContent)).toEqual([
+      'Agent', 'Department', 'Status', 'Current task', 'Provider', 'Tokens', 'Cost',
+    ])
+  })
+
+  it('renders an avatar tile, the department, and the status pill from the tone table', () => {
+    render(<WorkersTable initial={[workerRow({ name: 'Alex Turner', department: 'Engineering', status: 'working' })]} onOpen={() => {}} />)
+    expect(screen.getByTestId('avatar-tile').textContent).toBe('AT')
+    expect(screen.getByTestId('worker-department').textContent).toBe('Engineering')
+    expect(screen.getByTestId('status-pill').textContent).toBe('WORKING')
+  })
+
+  it('renders the current task with an inline progress bar, and — when there is none', () => {
+    const { rerender } = render(
+      <WorkersTable initial={[workerRow({ currentTask: { title: 'Add the thing', pct: 40 } })]} onOpen={() => {}} />,
+    )
+    expect(screen.getByTestId('progress-bar-fill').style.width).toBe('40%')
+
+    rerender(<WorkersTable initial={[workerRow({ currentTask: null })]} onOpen={() => {}} />)
+    expect(screen.getByTestId('worker-task').textContent).toBe('—')
+  })
+
+  it('renders tokens and cost, with the unknown mark where nothing was measured', () => {
+    const { rerender } = render(<WorkersTable initial={[workerRow({ tokens: 1_400_000, costUsd: 3.02 })]} onOpen={() => {}} />)
+    expect(screen.getByTestId('worker-tokens').textContent).toBe('1.4M')
+    expect(screen.getByTestId('worker-cost').textContent).toBe('$3.02')
+
+    rerender(<WorkersTable initial={[workerRow({ tokens: null, costUsd: 0 })]} onOpen={() => {}} />)
+    expect(screen.getByTestId('worker-tokens').textContent).toBe('—')
+  })
+
+  it('marks a shell-only gate beside the provider, and nothing for a runtime that gates every tool', () => {
+    const { rerender } = render(<WorkersTable initial={[workerRow({ provider: 'cursor', gate: 'shell-only' })]} onOpen={() => {}} />)
+    expect(screen.getByTestId('shell-only-mark')).toBeTruthy()
+
+    rerender(<WorkersTable initial={[workerRow({ provider: 'claude_code', gate: 'all-tools' })]} onOpen={() => {}} />)
+    expect(screen.queryByTestId('shell-only-mark')).toBeNull()
+  })
+
+  it('opens the agent panel on a row click', () => {
+    const onOpen = vi.fn()
+    render(<WorkersTable initial={[workerRow({ agentId: 'a9' })]} onOpen={onOpen} />)
+    fireEvent.click(screen.getByTestId('worker-row-button'))
+    expect(onOpen).toHaveBeenCalledWith('a9')
   })
 })

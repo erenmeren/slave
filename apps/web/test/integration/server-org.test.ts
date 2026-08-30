@@ -396,6 +396,59 @@ describe('org query module', () => {
       const workers = await listWorkers()
       expect(workers).toEqual([])
     })
+
+    // Task 9 (C2): `WorkerRow` gains `department`/`provider`/`gate`/`tokens`/`costUsd`/
+    // `unmeasuredRuns`. `department` is the worker's TEAM name -- `seed()`'s own team is named
+    // 'Engineering', so a roster-linked worker on `fixture.teamId` proves this without a second
+    // team fixture.
+    it('carries the team name as the department, and the live run provider', async (): Promise<void> => {
+      const company = await prisma.company.create({ data: { name: 'Acme Robotics' } })
+      const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Eng' } })
+      const template = await prisma.agentTemplate.create({ data: { name: 'Backend Engineer', role: 'backend' } })
+      const companyAgent = await prisma.companyAgent.create({
+        data: { companyTeamId: companyTeam.id, templateId: template.id, name: 'Atlas' },
+      })
+      await prisma.agent.create({
+        data: { teamId: fixture.teamId, name: 'Atlas (worker)', role: 'backend', companyAgentId: companyAgent.id },
+      })
+
+      const workers = await listWorkers()
+
+      // No run at all yet -- `provider` is null exactly as `AgentCardData.provider` is with no
+      // live run: a worker's runtime is not decided until a run resolves it.
+      expect(workers[0]?.department).toBe('Engineering')
+      expect(workers[0]?.provider).toBeNull()
+    })
+
+    it('sums tokens only over runs that reported them, and says null when none did', async (): Promise<void> => {
+      const company = await prisma.company.create({ data: { name: 'Acme Robotics' } })
+      const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Eng' } })
+      const template = await prisma.agentTemplate.create({ data: { name: 'Backend Engineer', role: 'backend' } })
+      const companyAgent = await prisma.companyAgent.create({
+        data: { companyTeamId: companyTeam.id, templateId: template.id, name: 'Atlas' },
+      })
+      const worker = await prisma.agent.create({
+        data: { teamId: fixture.teamId, name: 'Atlas (worker)', role: 'backend', companyAgentId: companyAgent.id },
+      })
+
+      const before = await listWorkers()
+      expect(before[0]?.tokens).toBeNull()
+
+      // A live (non-terminal) run that reported tokens and a provider -- `provider` and `tokens`
+      // both read off this one.
+      await prisma.agentRun.create({
+        data: { agentId: worker.id, taskId: fixture.taskId, status: 'working', provider: 'claude_code', tokensIn: 1200, tokensOut: 300 },
+      })
+      // A finished run that never reported tokens -- must NOT contribute a 0 to the sum, and
+      // must not be the one `provider` is read from (it is terminal).
+      await prisma.agentRun.create({
+        data: { agentId: worker.id, taskId: fixture.taskId, status: 'succeeded', provider: 'claude_code', tokensIn: null, tokensOut: null },
+      })
+
+      const after = await listWorkers()
+      expect(after[0]?.tokens).toBe(1500)
+      expect(after[0]?.provider).toBe('claude_code')
+    })
   })
 
   describe('listTemplates and listCompanies', () => {
