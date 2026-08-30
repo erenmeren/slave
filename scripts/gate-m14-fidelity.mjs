@@ -133,6 +133,8 @@ let agentId = null
 let taskId = null
 let daemon = null
 let daemonOutput = ''
+/** The browser console, newest last, for `fail()`'s dump. */
+const browserConsole = []
 let daemonExited = false
 let nextServer = null
 let browser = null
@@ -316,7 +318,7 @@ async function fail(message) {
   const url = page === null ? '<no page>' : page.url()
   throw new Error(
     `${message}\n--- browser url ---\n${url}\n--- screenshot ---\n${screenshotPath ?? '<none>'}\n` +
-      `--- daemon output (tail) ---\n${daemonTail}\n--- gate rows ---\n${rows}`,
+      `--- daemon output (tail) ---\n${daemonTail}\n--- browser console (tail) ---\n${browserConsole.slice(-40).join('\n')}\n--- gate rows ---\n${rows}`,
   )
 }
 
@@ -568,6 +570,17 @@ try {
   page = await context.newPage()
   page.setDefaultTimeout(ACTION_TIMEOUT_MS)
   page.on('pageerror', (error) => console.error(`[browser:pageerror] ${error}`))
+  // The browser's own console, kept for the failure dump: a page that renders on the server and
+  // then never hydrates says why only here (a chunk that 404'd, a hydration mismatch, a thrown
+  // effect), and a gate that times out on "no row became visible" without it is a gate that
+  // cannot say what it saw. Bounded, so a chatty page cannot grow the dump without limit.
+  page.on('console', (message) => {
+    browserConsole.push(`[${message.type()}] ${message.text().slice(0, 300)}`)
+    if (browserConsole.length > 200) browserConsole.shift()
+  })
+  page.on('requestfailed', (request) => {
+    browserConsole.push(`[requestfailed] ${request.url()} ${request.failure()?.errorText ?? ''}`)
+  })
 
   // ============================================================================================
   // Stage 1: nine pages render, and each is screenshotted.
