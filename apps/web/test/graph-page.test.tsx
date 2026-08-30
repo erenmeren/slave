@@ -372,7 +372,7 @@ describe('GraphClient', () => {
     ],
   }
 
-  it('offers four modes, with Skill chain disabled until a run has recorded skill data', async () => {
+  it('offers four modes, with Skill chain permanently disabled as `later`', async () => {
     const { rerender } = render(<GraphClient workspaceId="w1" initial={SNAPSHOT} />)
     await waitFor(() => expect(elkLayoutSpy).toHaveBeenCalled())
 
@@ -384,11 +384,37 @@ describe('GraphClient', () => {
     ])
     expect((screen.getByTestId('graph-mode-skill') as HTMLButtonElement).disabled).toBe(true)
 
+    // Fix round 1, Important 2 (controller ruling): recorded skill data is a DATA signal, not a
+    // view -- there is no skill-chain canvas to open onto, so the tab stays `later` even once a
+    // run has a `skillCalls` tally. `hasSkillData` remains the plumbing a later milestone flips.
     streamState.snapshot = { ...SNAPSHOT, agents: SNAPSHOT.agents.map((a) => ({ ...a, hasSkillData: true })) }
     rerender(<GraphClient workspaceId="w1" initial={SNAPSHOT} />)
 
-    expect((screen.getByTestId('graph-mode-skill') as HTMLButtonElement).disabled).toBe(false)
-    expect(screen.getByTestId('graph-mode-skill').textContent).toBe('Skill chain')
+    expect((screen.getByTestId('graph-mode-skill') as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByTestId('graph-mode-skill').textContent).toBe('Skill chain \u00b7 later')
+  })
+
+  it('never lets a click on the Skill chain tab strand the page on a blank canvas', async () => {
+    streamState.snapshot = { ...SNAPSHOT, agents: SNAPSHOT.agents.map((a) => ({ ...a, hasSkillData: true })) }
+    render(<GraphClient workspaceId="w1" initial={SNAPSHOT} />)
+    await waitFor(() => expect(elkLayoutSpy).toHaveBeenCalled())
+
+    fireEvent.click(screen.getByTestId('graph-mode-skill'))
+
+    // A disabled button fires nothing: no URL write, and Organization is still the mode showing a
+    // real canvas.
+    expect(routerReplace).not.toHaveBeenCalled()
+    expect(screen.getByTestId('graph-mode-org')).toHaveProperty('ariaCurrent', 'page')
+    expect(screen.getByTestId('graph-canvas')).toBeTruthy()
+  })
+
+  it('falls back to Organization for a hand-typed ?mode=skill rather than showing an empty panel', async () => {
+    searchParams = new URLSearchParams('mode=skill')
+    render(<GraphClient workspaceId="w1" initial={SNAPSHOT} />)
+    await waitFor(() => expect(elkLayoutSpy).toHaveBeenCalled())
+
+    expect(screen.getByTestId('graph-mode-org')).toHaveProperty('ariaCurrent', 'page')
+    expect(screen.getByTestId('graph-canvas')).toBeTruthy()
   })
 
   it('switches to Execution mode and draws the six pipeline stages', async () => {

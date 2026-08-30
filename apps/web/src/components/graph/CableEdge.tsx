@@ -39,6 +39,21 @@ const INACTIVE_STROKE = 'rgba(255,255,255,.13)'
 const GLOW_FILTER_ID = 'cable-glow'
 
 /**
+ * React Flow's own invisible hit target, reproduced verbatim from its `BaseEdge`
+ * (`@reactflow/core/dist/esm/index.js`: `strokeWidth={20} strokeOpacity={0}`).
+ *
+ * Every deps edge used to get one for free, because an edge with no `type` renders as React Flow's
+ * default bezier -- which is a `BaseEdge`. A custom edge component replaces that markup wholesale,
+ * so this has to be drawn here or it is gone: `.react-flow__edge`'s `pointer-events: visibleStroke`
+ * would leave "select an edge, press Delete" (spec §4.5, `DepsMode`'s shipped behaviour) aiming at
+ * the 1.4px core -- 3px for the inactive edge a dependency IS until its prerequisite is done.
+ *
+ * It deliberately does NOT carry `react-flow__edge-path`: `Particles.tsx:104` does a single
+ * `querySelector` for that class and must keep resolving to exactly one node, the core.
+ */
+const HIT_PATH_WIDTH = '20'
+
+/**
  * The design README's signature cable ("1b — Cables"), as a React Flow custom edge: three stacked
  * paths in ONE `<g>` — a 5px blurred halo (`feGaussianBlur stdDeviation=4`, opacity .18) in the
  * TARGET's status colour, a 1.4px solid core, and a 1.6px white dashed overlay
@@ -52,7 +67,8 @@ const GLOW_FILTER_ID = 'cable-glow'
  * reads its `offset-path` off `path.react-flow__edge-path`'s `d` attribute
  * (`Particles.tsx:103-107`). Exactly ONE path here carries that class — the core — so the
  * `querySelector` still resolves to a single node and the particle rides the same bezier the cable
- * draws. The halo and the flow overlay carry `data-cable` instead.
+ * draws. The halo and the flow overlay carry `data-cable` instead, and the hit path below carries
+ * React Flow's own `react-flow__edge-interaction`.
  *
  * The filter `<defs>` is emitted per active edge rather than hoisted to a shared defs layer:
  * React Flow gives an edge component no place to render outside its own `<g>`, and duplicate ids
@@ -105,6 +121,7 @@ export function CableEdge({
           strokeWidth={coreWidth}
           style={coreStyle}
         />
+        <path className="react-flow__edge-interaction" d={path} fill="none" strokeOpacity="0" strokeWidth={HIT_PATH_WIDTH} />
       </g>
     )
   }
@@ -138,6 +155,7 @@ export function CableEdge({
         opacity="0.95"
         style={coreStyle}
       />
+      <path className="react-flow__edge-interaction" d={path} fill="none" strokeOpacity="0" strokeWidth={HIT_PATH_WIDTH} />
       <path
         data-cable="flow"
         className="motion-safe:animate-[dash_1.15s_linear_infinite]"

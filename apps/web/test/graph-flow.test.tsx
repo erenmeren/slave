@@ -649,9 +649,9 @@ describe('CableEdge', () => {
     return container
   }
 
-  it('draws three stacked paths and one filter def inside one group', () => {
+  it('draws three visible paths, the invisible hit path, and one filter def inside one group', () => {
     const container = renderCable(ACTIVE)
-    expect(container.querySelectorAll('g[data-testid="cable-edge"] path')).toHaveLength(3)
+    expect(container.querySelectorAll('g[data-testid="cable-edge"] path')).toHaveLength(4)
     expect(container.querySelector('filter#cable-glow feGaussianBlur')?.getAttribute('stdDeviation')).toBe('4')
   })
 
@@ -661,6 +661,28 @@ describe('CableEdge', () => {
     expect(core).toHaveLength(1)
     expect(core[0]?.getAttribute('d')).toBeTruthy()
     expect(core[0]?.getAttribute('stroke-width')).toBe('1.4')
+  })
+
+  it("keeps React Flow's own 20px invisible hit path, on the same curve, off the core's class", () => {
+    // Fix round 1, Important 1: React Flow's `BaseEdge` always emits this, and every deps edge got
+    // one for free before they carried a `type`. Without it `.react-flow__edge`'s
+    // `pointer-events: visibleStroke` shrinks "select an edge, press Delete" to the 1.4px core --
+    // 3px for the inactive edge a dependency is until its prerequisite is done.
+    const container = renderCable(ACTIVE)
+    const hit = container.querySelectorAll('path.react-flow__edge-interaction')
+    expect(hit).toHaveLength(1)
+    expect(hit[0]?.getAttribute('stroke-width')).toBe('20')
+    expect(hit[0]?.getAttribute('stroke-opacity')).toBe('0')
+    // Same curve as the core, and NOT carrying the core's class -- `Particles`' single-node
+    // `querySelector('path.react-flow__edge-path')` must keep resolving to exactly one path.
+    expect(hit[0]?.getAttribute('d')).toBe(container.querySelector('path.react-flow__edge-path')?.getAttribute('d'))
+    expect(hit[0]?.classList.contains('react-flow__edge-path')).toBe(false)
+  })
+
+  it('gives the inactive edge the same 20px hit path -- a deps edge is inactive until its prerequisite is done', () => {
+    const container = renderCable({ tone: 'idle', active: false })
+    expect(container.querySelectorAll('path.react-flow__edge-interaction')).toHaveLength(1)
+    expect(container.querySelectorAll('path.react-flow__edge-path')).toHaveLength(1)
   })
 
   it('draws the halo at 5px, opacity .18, through the blur filter, in the tone colour', () => {
@@ -688,7 +710,9 @@ describe('CableEdge', () => {
 
   it('renders an inactive edge as one flat 3px line with no halo and no dash', () => {
     const container = renderCable({ tone: 'idle', active: false })
-    expect(container.querySelectorAll('g[data-testid="cable-edge"] path')).toHaveLength(1)
+    // The visible line plus the invisible hit path -- no halo, no dash overlay, no filter def.
+    expect(container.querySelectorAll('g[data-testid="cable-edge"] path')).toHaveLength(2)
+    expect(container.querySelectorAll('path[data-cable]')).toHaveLength(0)
     expect(container.querySelector('filter#cable-glow')).toBeNull()
     const core = container.querySelector('path.react-flow__edge-path')
     expect(core?.getAttribute('stroke-width')).toBe('3')

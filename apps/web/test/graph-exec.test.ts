@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest'
+import type { Node } from 'reactflow'
 import type { GraphSnapshot } from '../src/server/graph.js'
-import { buildExecutionGraph } from '../src/components/graph/ExecutionNodes.js'
+import { BOARD_COLUMNS, type BoardColumn } from '../src/lib/taskColumns.js'
+import {
+  buildExecutionGraph,
+  placeExecutionTasks,
+  STAGE_NODE_HEIGHT,
+  STAGE_NODE_PREFIX,
+  type StageNodeData,
+  type StageTaskNodeData,
+} from '../src/components/graph/ExecutionNodes.js'
 
 const SHELL_FACTS: GraphSnapshot['shellFacts'] = {
   workspace: { id: 'w1', name: 'W' },
@@ -106,8 +115,94 @@ describe('buildExecutionGraph', () => {
     expect((node?.data as { tone: string }).tone).toBe('blocked')
   })
 
-  it('seeds every node at the origin — this builder owns topology and data, never coordinates', () => {
+  it('leaves every STAGE at the origin — ELK owns the stage chain\'s coordinates, this does not', () => {
     const { nodes } = buildExecutionGraph(snapshot([task({ id: 't1', status: 'running' })]))
-    expect(nodes.every((node) => node.position.x === 0 && node.position.y === 0)).toBe(true)
+    const stages = nodes.filter((node) => node.type === 'stage')
+    expect(stages.every((node) => node.position.x === 0 && node.position.y === 0)).toBe(true)
+  })
+
+  it('separates the stage chain from the containment edges by node-id prefix, so ELK can be given only the chain', () => {
+    const { edges } = buildExecutionGraph(snapshot([task({ id: 't1', status: 'running' }), task({ id: 't2', status: 'blocked' })]))
+    const chain = edges.filter((edge) => edge.source.startsWith(STAGE_NODE_PREFIX) && edge.target.startsWith(STAGE_NODE_PREFIX))
+    expect(chain).toHaveLength(BOARD_COLUMNS.length - 1)
+    expect(edges).toHaveLength(chain.length + 2)
+  })
+})
+
+// ==================================================================================================
+// Fix round 1, Important 3: ELK lays out the STAGE CHAIN only. Feeding it the containment edges made
+// `layered`/RIGHT assign a stage's own tasks to the NEXT stage's layer -- a Backlog task rendered
+// under the Todo heading. `placeExecutionTasks` stacks each stage's tasks in that stage's own
+// column instead, from whatever position ELK gave the stage.
+// ==================================================================================================
+
+const COLUMN_X = 240
+const STAGE_Y = 40
+
+/** The stage row as ELK's `layered`/RIGHT pass leaves it: one column per stage, all on one row. */
+function withStagesLaidOut(nodes: readonly Node[]): Node[] {
+  return nodes.map((node) =>
+    node.type === 'stage'
+      ? { ...node, position: { x: BOARD_COLUMNS.indexOf((node.data as StageNodeData).column) * COLUMN_X, y: STAGE_Y } }
+      : node,
+  )
+}
+
+function placed(tasks: GraphSnapshot['tasks']): Node[] {
+  return placeExecutionTasks(withStagesLaidOut(buildExecutionGraph(snapshot(tasks)).nodes))
+}
+
+describe('placeExecutionTasks', () => {
+  it('puts every task in its OWN stage\'s column, never the next one\'s', () => {
+    const nodes = placed([
+      task({ id: 't1', status: 'backlog' }),
+      task({ id: 't2', status: 'running' }),
+      task({ id: 't3', status: 'merging' }),
+      task({ id: 't4', status: 'done' }),
+    ])
+    const stageX = new Map(
+      nodes.filter((node) => node.type === 'stage').map((node) => [(node.data as StageNodeData).column, node.position.x]),
+    )
+
+    for (const node of nodes.filter((n) => n.type === 'stageTask')) {
+      expect(node.position.x).toBe(stageX.get((node.data as StageTaskNodeData).column))
+    }
+    // And the columns really are distinct, so the assertion above is not vacuously true.
+    expect(new Set(nodes.filter((n) => n.type === 'stageTask').map((n) => n.position.x)).size).toBe(4)
+  })
+
+  it('clears every stage\'s own y band — a task never overlaps the heading it hangs under', () => {
+    const nodes = placed([task({ id: 't1', status: 'running' }), task({ id: 't2', status: 'verifying' })])
+    for (const node of nodes.filter((n) => n.type === 'stageTask')) {
+      expect(node.position.y).toBeGreaterThanOrEqual(STAGE_Y + STAGE_NODE_HEIGHT)
+    }
+  })
+
+  it('stacks a stage\'s tasks downward in priority order, highest first, with no two at the same y', () => {
+    const nodes = placed([
+      task({ id: 'low', status: 'running', priority: 0 }),
+      task({ id: 'urgent', status: 'running', priority: 4 }),
+      task({ id: 'mid', status: 'verifying', priority: 2 }),
+    ])
+    const stacked = nodes
+      .filter((node) => node.type === 'stageTask')
+      .sort((a, b) => a.position.y - b.position.y)
+
+    expect(stacked.map((node) => node.id)).toEqual(['execTask:urgent', 'execTask:mid', 'execTask:low'])
+    expect(new Set(stacked.map((node) => node.position.y)).size).toBe(3)
+  })
+
+  it('leaves the stage row exactly where ELK put it', () => {
+    const nodes = placed([task({ id: 't1', status: 'running' })])
+    const stages = nodes.filter((node) => node.type === 'stage')
+    expect(stages.map((node) => node.id)).toEqual(BOARD_COLUMNS.map((column: BoardColumn) => `stage:${column}`))
+    expect(stages.map((node) => node.position.x)).toEqual(BOARD_COLUMNS.map((_c, index) => index * COLUMN_X))
+    expect(stages.every((node) => node.position.y === STAGE_Y)).toBe(true)
+  })
+
+  it('is idempotent — re-placing an already-placed set moves nothing', () => {
+    const once = placed([task({ id: 't1', status: 'running' }), task({ id: 't2', status: 'running' })])
+    const twice = placeExecutionTasks(once)
+    expect(twice.map((node) => node.position)).toEqual(once.map((node) => node.position))
   })
 })

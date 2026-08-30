@@ -11,7 +11,7 @@ import type { GraphSnapshot } from '../../server/graph'
 import { HaltBanner } from '../HaltBanner'
 import { TopBar } from '../TopBar'
 import { DepsMode } from './DepsMode'
-import { buildExecutionGraph, EXECUTION_NODE_TYPES } from './ExecutionNodes'
+import { buildExecutionGraph, EXECUTION_NODE_TYPES, placeExecutionTasks, STAGE_NODE_PREFIX } from './ExecutionNodes'
 import { GraphCanvas } from './GraphCanvas'
 import { GraphDrawer } from './GraphDrawer'
 import { handleToolCallFrame, sweepExpired, type Particle } from './flow'
@@ -34,6 +34,13 @@ function isGraphMode(value: string | null): value is GraphMode {
   return value === 'org' || value === 'exec' || value === 'deps' || value === 'skill'
 }
 
+/** The modes that actually render a canvas. `skill` is `later` (see the tab's own comment), so a
+ *  hand-typed `?mode=skill` falls back to the default rather than showing an empty dark panel --
+ *  the tab being disabled only closes the click path, not the URL one. */
+function hasView(mode: GraphMode): boolean {
+  return mode !== 'skill'
+}
+
 const MODE_TABS: readonly { readonly mode: GraphMode; readonly label: string }[] = [
   { mode: 'org', label: 'Organization' },
   { mode: 'exec', label: 'Execution' },
@@ -45,21 +52,32 @@ const MODE_TABS: readonly { readonly mode: GraphMode; readonly label: string }[]
 const AGENT_NODE_PREFIX = 'agent:'
 
 /**
- * Execution mode (design README "1b — Modes"): its OWN node set, built by `ExecutionNodes.tsx` and
- * positioned by the same `useLayoutedGraph` every other mode uses — the identical shape `DepsMode`
- * takes for its own builder, just small enough to live here rather than in its own file.
+ * Execution mode (design README "1b — Modes"): its OWN node set, built by `ExecutionNodes.tsx`.
  *
- * `layered` runs left-to-right (`layout.ts` maps it to `elk.direction: RIGHT`), which is what puts
- * the stage chain across the canvas in `BOARD_COLUMNS` order. A stage's own task nodes hang off it
- * as ELK's next layer, so they trail to the right of their stage rather than sitting directly
- * beneath it — the topology is exact (the containment edge names the parent), the vertical
- * arrangement is ELK's, and tightening it to a strict column-per-stage grid needs a per-node ELK
- * partition option `layout.ts` does not pass today.
+ * ELK is handed the STAGE CHAIN ONLY — the six stage nodes and the five edges between them —
+ * because `layered`/RIGHT assigns a layer by longest path from a source, so feeding it the
+ * containment edges too put every stage's tasks in the NEXT stage's column (fix round 1,
+ * Important 3). `placeExecutionTasks` then stacks each stage's tasks under that stage, from
+ * whatever x ELK gave it. The containment edges stay in the rendered edge set — they are cables,
+ * they just are not layout input.
+ *
+ * Splitting on the node-id prefix rather than on `type` for the EDGES is deliberate: an edge only
+ * knows ids, and `STAGE_NODE_PREFIX` is the builder's own exported constant, so the two cannot
+ * drift apart.
  */
 function ExecutionMode({ snapshot }: { readonly snapshot: GraphSnapshot }): React.JSX.Element {
   const { nodes, edges } = useMemo(() => buildExecutionGraph(snapshot), [snapshot])
-  const { nodes: positioned, edges: visibleEdges } = useLayoutedGraph(nodes, edges, 'layered')
-  return <GraphCanvas nodes={positioned} edges={visibleEdges} nodeTypes={EXECUTION_NODE_TYPES} />
+  const stageNodes = useMemo(() => nodes.filter((node) => node.type === 'stage'), [nodes])
+  const taskNodes = useMemo(() => nodes.filter((node) => node.type === 'stageTask'), [nodes])
+  const stageEdges = useMemo(
+    () => edges.filter((edge) => edge.source.startsWith(STAGE_NODE_PREFIX) && edge.target.startsWith(STAGE_NODE_PREFIX)),
+    [edges],
+  )
+  const { nodes: positionedStages } = useLayoutedGraph(stageNodes, stageEdges, 'layered')
+  // Every node is always present here (the stage row is fixed, and a task never outlives its
+  // stage), so unlike org mode there is no pending-layout tick in which an edge could dangle.
+  const positioned = useMemo(() => placeExecutionTasks([...positionedStages, ...taskNodes]), [positionedStages, taskNodes])
+  return <GraphCanvas nodes={positioned} edges={edges} nodeTypes={EXECUTION_NODE_TYPES} />
 }
 
 /**
@@ -131,7 +149,7 @@ export function GraphClient({
   // synchronously, `router.replace` kept as the side effect that lets a refresh restore it.
   const [mode, setModeState] = useState<GraphMode>(() => {
     const raw = searchParams.get('mode')
-    return isGraphMode(raw) ? raw : DEFAULT_MODE
+    return isGraphMode(raw) && hasView(raw) ? raw : DEFAULT_MODE
   })
 
   const setMode = (next: GraphMode): void => {
@@ -151,10 +169,6 @@ export function GraphClient({
   // node not yet in the positioned set (a newly-appeared active-task satellite, for the one async
   // tick before its layout resolves) -- see `layout.ts`'s doc comment.
   const { nodes: positionedOrgNodes, edges: visibleOrgEdges } = useLayoutedGraph(orgNodes, orgEdges, 'mrtree')
-
-  // Skill chain is honestly `later` until some run has actually recorded skill data: a mode that
-  // would open onto nothing is worse than a tab that says it cannot yet (Decision 7).
-  const skillReachable = view.agents.some((agent) => agent.hasSkillData)
 
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null)
   const selectedAgent = view.agents.find((agent) => agent.id === selectedAgentId) ?? null
@@ -189,7 +203,13 @@ export function GraphClient({
        *  alert/banner component exists either) -- both predate this task and stay as-is. */}
       <nav aria-label="Graph mode" className="flex gap-1 border-b border-line px-3 py-2">
         {MODE_TABS.map((tab) => {
-          const disabled = tab.mode === 'skill' && !skillReachable
+          // Fix round 1, Important 2 (controller ruling): Skill chain is `later`, unconditionally.
+          // `GraphAgent.hasSkillData` says a run RECORDED a skill tally -- a data signal, not a
+          // view -- and there is no skill-chain canvas for this tab to open onto, so enabling it on
+          // that signal put the user on a blank dark panel indistinguishable from a broken page.
+          // The field stays in the snapshot as the plumbing a later milestone flips; this constant
+          // is the one line that milestone changes.
+          const disabled = tab.mode === 'skill'
           return (
             <button
               key={tab.mode}
@@ -197,7 +217,7 @@ export function GraphClient({
               data-testid={`graph-mode-${tab.mode}`}
               aria-current={mode === tab.mode ? 'page' : undefined}
               disabled={disabled}
-              title={disabled ? 'no run has recorded skill data yet' : undefined}
+              title={disabled ? 'arrives in a later milestone' : undefined}
               onClick={() => setMode(tab.mode)}
               className={`rounded px-2 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-50 ${
                 mode === tab.mode ? 'bg-bg-2 text-text-1' : 'text-text-2 hover:text-text-1'
