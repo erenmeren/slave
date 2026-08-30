@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { prisma } from '@ai-team-os/db/client'
@@ -138,6 +138,45 @@ describe('syncSkillCatalog', () => {
     writeFileSync(join(roots().personal, 'headless/SKILL.md'), '# no frontmatter here\n')
     const result = await syncSkillCatalog(roots())
     expect(result.upserted).toBe(0)
+  })
+
+  // `chmod 000` is not a permission the superuser observes, so the case this pins cannot be
+  // constructed as root.
+  it.skipIf(process.getuid?.() === 0)(
+    'skips a root it cannot read rather than declaring its skills gone',
+    async (): Promise<void> => {
+      writeSkill(roots().personal, 'my-notes', 'notes')
+      writeSkill(roots().project, 'house-style', 'house style')
+      await syncSkillCatalog(roots())
+
+      chmodSync(roots().personal, 0o000)
+      try {
+        const second = await syncSkillCatalog(roots())
+
+        // The distinction the catalog must not blur: unreadable is not gone. A transient EACCES on
+        // one root would otherwise stamp every skill under it as vanished, which reads exactly like
+        // a real mass-deletion.
+        expect(second.skippedRoots).toEqual([{ root: 'personal', path: roots().personal, code: 'EACCES' }])
+        expect(second.markedMissing).toBe(0)
+        expect((await prisma.skill.findFirstOrThrow({ where: { name: 'my-notes' } })).missingSince).toBeNull()
+        // ...and the roots it COULD read are still synced: one unreadable root is not a failed scan.
+        expect(second.upserted).toBe(1)
+        expect((await prisma.skill.findFirstOrThrow({ where: { name: 'house-style' } })).missingSince).toBeNull()
+      } finally {
+        chmodSync(roots().personal, 0o700)
+      }
+    },
+  )
+
+  it('still marks skills missing when their root is genuinely absent', async (): Promise<void> => {
+    writeSkill(roots().personal, 'my-notes', 'notes')
+    await syncSkillCatalog(roots())
+    rmSync(roots().personal, { recursive: true, force: true })
+
+    const second = await syncSkillCatalog(roots())
+    expect(second.skippedRoots).toEqual([])
+    expect(second.markedMissing).toBe(1)
+    expect((await prisma.skill.findFirstOrThrow({ where: { name: 'my-notes' } })).missingSince).not.toBeNull()
   })
 
   it('survives a root that does not exist at all', async (): Promise<void> => {

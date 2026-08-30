@@ -1,4 +1,4 @@
-import { syncSkillCatalog } from '@ai-team-os/control'
+import { describeSync, syncSkillCatalog } from '@ai-team-os/control'
 import { prisma } from '@ai-team-os/db/client'
 import type { WorkspaceId } from '@ai-team-os/domain'
 import { subscribeEvents, type EventSubscription } from '@ai-team-os/events'
@@ -86,10 +86,7 @@ export async function runDaemon(deps: DaemonDeps): Promise<void> {
   // one is worse than a daemon with an empty catalog. A failed scan is simply skipped --
   // `orchestrator skills sync` is the operator's retry.
   try {
-    const catalog = await syncSkillCatalog()
-    process.stdout.write(
-      `skill catalog synced: ${catalog.providers} provider(s), ${catalog.upserted} skill(s), ${catalog.markedMissing} marked missing\n`,
-    )
+    process.stdout.write(describeSync(await syncSkillCatalog()))
   } catch (error) {
     process.stderr.write(
       `[daemon] skill catalog sync failed: ${error instanceof Error ? error.message : String(error)}\n`,

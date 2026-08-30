@@ -14,6 +14,7 @@ import {
   requestStop,
   setAgentModel,
   setGoal,
+  describeSync,
   syncSkillCatalog,
 } from '@ai-team-os/control'
 import { prisma } from '@ai-team-os/db/client'
@@ -419,9 +420,7 @@ export async function main(argv: readonly string[]): Promise<number> {
         return 1
       }
       const result = await syncSkillCatalog()
-      process.stdout.write(
-        `skill catalog synced: ${result.providers} provider(s), ${result.upserted} skill(s), ${result.markedMissing} marked missing\n`,
-      )
+      process.stdout.write(describeSync(result))
       return 0
     }
 
