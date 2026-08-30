@@ -179,8 +179,13 @@ describe('parseCursorLine, against the recorded fixture', () => {
   })
 
   it('produces no hook variant for any line of a real run', () => {
-    // R4: Cursor's gate is a workspace hook, not a stream event. No branch of
-    // this parser may return one of the four hook/permission kinds.
+    // R4: Cursor's gate is a workspace hook, not a stream event, so the three
+    // Claude-shaped kinds (`hook_denied`, `hook_crashed`, `hook_failed_open`)
+    // never come out of this parser. `permission_denied` is the fourth
+    // HOOK_KINDS member and is NOT banned -- it IS the mapping for a rejected
+    // `tool_call`/`completed` half (see the parser's docstring) -- but this
+    // fixture (`cursor-run.ndjson`) has no rejection in it, so none of the
+    // four show up here either.
     for (const line of lines) {
       expect(HOOK_KINDS).not.toContain(parseCursorLine(line).kind)
     }

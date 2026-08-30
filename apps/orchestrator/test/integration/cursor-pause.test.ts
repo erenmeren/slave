@@ -217,12 +217,15 @@ describe('pumpRun, when a paused Cursor run ends', () => {
     // one more shell command, and `cursor-shell-gate.sh` -- armed by the flag this system just
     // wrote -- denies it. `cursor-agent`'s stream reports that denial as its OWN
     // `tool_call`/`completed` line whose result carries `rejected`, which `cursor/stream.ts` now
-    // maps to a mid-stream `permission_denied` event (M15) -- NOT as a field on the terminal
-    // `result` line, so `outcome.deniedToolUseIds` stays `[]` here exactly as it would for a real
-    // Cursor run. `cursor-agent` reads the denial as an ordinary tool error and can still reach its
-    // `result` line with `is_error: false`. A denial on a Cursor run is only ever produced by THIS
-    // system's own hook, and that hook only denies while the pause flag exists, so a non-empty
-    // `denied` tally means a pause was in flight: the clean terminal must not win the race.
+    // maps to a mid-stream `permission_denied` event (M15) -- AND which the real adapter's
+    // `withDerivedFields` (`cursor/adapter.ts`) independently folds onto `outcome.deniedToolUseIds`
+    // from that same completed/rejected line, on the very same terminated event. A real Cursor run
+    // therefore carries the id in BOTH places, and the fixture below does too (final review I1):
+    // the `permission_denied` event and the outcome's `deniedToolUseIds` name the same `call-9`.
+    // `cursor-agent` reads the denial as an ordinary tool error and can still reach its `result`
+    // line with `is_error: false`. A denial on a Cursor run is only ever produced by THIS system's
+    // own hook, and that hook only denies while the pause flag exists, so a non-empty `denied`
+    // tally means a pause was in flight: the clean terminal must not win the race.
     const ids = await seed('pause_requested')
 
     await pumpRun({
@@ -240,10 +243,12 @@ describe('pumpRun, when a paused Cursor run ends', () => {
             numTurns: 3,
             costUsd: null,
             tokens: null,
-            // Always `[]` for Cursor's `result` line -- the denial rode in on its own
-            // `permission_denied` event above, not as a field here. See `cursor/stream.ts`'s
-            // docstring.
-            deniedToolUseIds: [],
+            // Populated with the same id as the `permission_denied` event above: that is what
+            // the real adapter's `withDerivedFields` (`cursor/adapter.ts`) derives onto the
+            // outcome from the identical completed/rejected line. The pump reads `input.denied`
+            // for its pause decision (see `pump.ts`'s docstring), not this field -- but a
+            // realistic fixture carries both, since production does.
+            deniedToolUseIds: ['call-9'],
           },
         },
       ]),
