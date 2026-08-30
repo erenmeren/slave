@@ -235,11 +235,15 @@ const resultSchema = z.object({
   // Every recorded `result` line carries this; it is `.optional()` for the same reason every
   // other field here is -- a degraded error result is where the CLI is plausibly silent, and a
   // missing `usage` must degrade to `null`, not fail the parse of a line that must always
-  // produce `terminated`.
+  // produce `terminated`. The two cache fields are read for the same reason `input_tokens` is
+  // (fix round 1, below) -- they are billed, and `RunOutcome.tokens.input` reports what the run
+  // cost in tokens, not merely its freshly-read context.
   usage: z
     .object({
       input_tokens: z.number().optional(),
       output_tokens: z.number().optional(),
+      cache_creation_input_tokens: z.number().optional(),
+      cache_read_input_tokens: z.number().optional(),
     })
     .passthrough()
     .optional(),
@@ -303,12 +307,25 @@ function parseResultLine(raw: unknown, line: string): RuntimeEvent {
       deniedToolUseIds: (data.permission_denials ?? []).map((denial) => denial.tool_use_id),
       // Both halves or neither (M14 §4.2). A `usage` carrying only `input_tokens` describes a
       // measurement that did not complete, and reporting `{ input: 10, output: 0 }` would put a
-      // fabricated zero into every per-agent token sum on the Analytics page.
+      // fabricated zero into every per-agent token sum on the Analytics page. `input` is what the
+      // run was BILLED for, not merely `input_tokens` alone (fix round 1, controller ruling):
+      // `input_tokens + cache_creation_input_tokens + cache_read_input_tokens`, each counter
+      // treated as 0 when absent -- the fixture's own result line bills 4 fresh input tokens
+      // alongside 16,732 written to cache and 46,948 read back from it, and a figure that ignores
+      // the latter two reads as 4 tokens beside a $0.21 run, which is not what that run cost. The
+      // presence check stays on `input_tokens`/`output_tokens` alone: it is still those two that
+      // decide whether this `result` line measured usage at all, only the summed figure changes.
       tokens:
         data.usage !== undefined &&
         typeof data.usage.input_tokens === 'number' &&
         typeof data.usage.output_tokens === 'number'
-          ? { input: data.usage.input_tokens, output: data.usage.output_tokens }
+          ? {
+              input:
+                data.usage.input_tokens +
+                (data.usage.cache_creation_input_tokens ?? 0) +
+                (data.usage.cache_read_input_tokens ?? 0),
+              output: data.usage.output_tokens,
+            }
           : null,
     },
   }

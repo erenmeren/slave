@@ -530,7 +530,12 @@ describe('result line token usage (M14 §4.2)', () => {
       .find((l) => l.includes('"type":"result"'))
     const event = parseStreamLine(line as string)
     expect(event.kind).toBe('terminated')
-    expect((event as Extract<RuntimeEvent, { kind: 'terminated' }>).outcome.tokens).toEqual({ input: 4, output: 741 })
+    // BILLED input: input_tokens (4) + cache_creation_input_tokens (16_732) + cache_read_input_tokens
+    // (46_948) = 63_684. Fix round 1 (controller ruling): input_tokens alone reads as a near-zero
+    // 4 tokens beside this run's real $0.21 spend -- the README's Agents-table tokens column and the
+    // Analytics mock's "1.4M" are only reachable by counting what the run was actually billed for,
+    // and cache reads/writes ARE billed.
+    expect((event as Extract<RuntimeEvent, { kind: 'terminated' }>).outcome.tokens).toEqual({ input: 63_684, output: 741 })
   })
 
   it('is null, never zero, when the result line carries no usage at all', () => {
@@ -547,7 +552,7 @@ describe('result line token usage (M14 §4.2)', () => {
     expect((event as Extract<RuntimeEvent, { kind: 'terminated' }>).outcome.tokens).toBeNull()
   })
 
-  it('does not fold the cache counters into input -- they are a different quantity', () => {
+  it('folds both cache counters into input -- that is what the run was billed for', () => {
     const event = parseStreamLine(
       JSON.stringify({
         type: 'result',
@@ -558,6 +563,20 @@ describe('result line token usage (M14 §4.2)', () => {
         usage: { input_tokens: 4, output_tokens: 741, cache_creation_input_tokens: 16_732, cache_read_input_tokens: 46_948 },
       }),
     )
-    expect((event as Extract<RuntimeEvent, { kind: 'terminated' }>).outcome.tokens).toEqual({ input: 4, output: 741 })
+    expect((event as Extract<RuntimeEvent, { kind: 'terminated' }>).outcome.tokens).toEqual({ input: 63_684, output: 741 })
+  })
+
+  it('treats an absent cache counter as 0 in the sum, not as a reason to null the whole figure', () => {
+    const event = parseStreamLine(
+      JSON.stringify({
+        type: 'result',
+        subtype: 'success',
+        is_error: false,
+        num_turns: 1,
+        total_cost_usd: 0.1,
+        usage: { input_tokens: 4, output_tokens: 741, cache_read_input_tokens: 46_948 },
+      }),
+    )
+    expect((event as Extract<RuntimeEvent, { kind: 'terminated' }>).outcome.tokens).toEqual({ input: 46_952, output: 741 })
   })
 })
