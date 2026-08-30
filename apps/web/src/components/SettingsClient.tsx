@@ -1,7 +1,7 @@
 'use client'
 
 import type { RosterCompany } from '../server/org'
-import type { AdapterCard, PermissionRow } from '../server/settings'
+import type { AdapterCard, PermissionSection } from '../server/settings'
 import { CompanyManager, type CompanyRow } from './CompanyManager'
 import { DangerZone } from './DangerZone'
 import { PermissionMatrix } from './PermissionMatrix'
@@ -18,16 +18,17 @@ export function SettingsClient({
   roster,
   adapters,
   permissions,
-  dangerZone,
+  workspaces,
   showReseed,
 }: {
   readonly templates: readonly TemplateRow[]
   readonly companies: readonly CompanyRow[]
   readonly roster: readonly RosterCompany[]
   readonly adapters: readonly AdapterCard[]
-  readonly permissions: readonly PermissionRow[]
-  /** `null` when no single workspace can be named -- see `buildDangerZoneTarget`. */
-  readonly dangerZone: { readonly workspaceId: string; readonly halted: boolean } | null
+  /** One section per workspace -- see `PermissionSection`. */
+  readonly permissions: readonly PermissionSection[]
+  /** Every project, for the danger zone's target selector. */
+  readonly workspaces: readonly { readonly id: string; readonly name: string; readonly halted: boolean }[]
   /** Computed on the SERVER from `NODE_ENV`, never guessed at here. */
   readonly showReseed: boolean
 }): React.JSX.Element {
@@ -37,13 +38,9 @@ export function SettingsClient({
         <ProviderAdapterCards adapters={adapters} />
       </Panel>
       <Panel title="agent permissions">
-        <PermissionMatrix rows={permissions} />
+        <PermissionMatrix sections={permissions} />
       </Panel>
-      <DangerZone
-        workspaceId={dangerZone?.workspaceId ?? null}
-        halted={dangerZone?.halted ?? false}
-        showReseed={showReseed}
-      />
+      <DangerZone workspaces={workspaces} showReseed={showReseed} />
       <Panel title="Template catalog">
         <TemplateCatalog templates={templates} />
       </Panel>

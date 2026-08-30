@@ -75,7 +75,7 @@ describe('SettingsClient', () => {
         roster={[company()]}
         adapters={[]}
         permissions={[]}
-        dangerZone={null}
+        workspaces={[]}
         showReseed={false}
       />,
     )
@@ -553,17 +553,30 @@ describe('provider adapter cards', () => {
 })
 
 describe('the permission matrix', () => {
-  const rows = [{ agentId: 'a1', name: 'Alex', role: 'backend', cells: [
-    { tool: 'repo read', mode: 'allow' as const },
-    { tool: 'source write', mode: 'deny' as const },
-    { tool: 'run tests', mode: null },
-    { tool: 'create branch', mode: null },
-    { tool: 'deploy prod', mode: null },
-    { tool: 'read secrets', mode: null },
-  ] }]
+  function cells(over: Partial<Record<string, 'allow' | 'deny' | null>> = {}) {
+    return ['repo read', 'source write', 'run tests', 'create branch', 'deploy prod', 'read secrets'].map((tool) => ({
+      tool,
+      mode: over[tool] ?? null,
+    }))
+  }
+
+  const rows = [
+    {
+      workspaceId: 'w1',
+      workspaceName: 'Checkout Platform',
+      rows: [
+        {
+          agentId: 'a1',
+          name: 'Alex',
+          role: 'backend',
+          cells: cells({ 'repo read': 'allow', 'source write': 'deny' }),
+        },
+      ],
+    },
+  ]
 
   it('renders the six README columns and a glyph per cell', () => {
-    render(<PermissionMatrix rows={rows} />)
+    render(<PermissionMatrix sections={rows} />)
     expect(screen.getAllByTestId('perm-column').map((c) => c.textContent)).toEqual([
       'repo read', 'source write', 'run tests', 'create branch', 'deploy prod', 'read secrets',
     ])
@@ -572,13 +585,45 @@ describe('the permission matrix', () => {
   })
 
   it('distinguishes an unset cell from an explicit deny in its title', () => {
-    render(<PermissionMatrix rows={rows} />)
+    render(<PermissionMatrix sections={rows} />)
     expect(screen.getByTestId('perm-cell-a1-run tests').getAttribute('title')).toBe('not set')
     expect(screen.getByTestId('perm-cell-a1-source write').getAttribute('title')).toBe('denied')
   })
 
   it('captions the whole matrix as not yet enforced', () => {
-    render(<PermissionMatrix rows={rows} />)
+    render(<PermissionMatrix sections={rows} />)
+    expect(screen.getByTestId('perm-caption').textContent).toBe('not yet enforced at runtime')
+  })
+
+  // Fix round 1, finding 2: the matrix used to list every Agent in the database with nothing to
+  // say which project each belonged to -- two projects materialized from one roster produced
+  // indistinguishable duplicate "Alex · backend" rows.
+  it('renders one section per workspace, so same-named agents in two projects stay apart', () => {
+    render(
+      <PermissionMatrix
+        sections={[
+          { workspaceId: 'w1', workspaceName: 'Checkout Platform', rows: [{ agentId: 'a1', name: 'Alex', role: 'backend', cells: cells({ 'repo read': 'allow' }) }] },
+          { workspaceId: 'w2', workspaceName: 'Ledger', rows: [{ agentId: 'a2', name: 'Alex', role: 'backend', cells: cells({ 'repo read': 'deny' }) }] },
+        ]}
+      />,
+    )
+
+    const first = screen.getByTestId('permission-matrix-w1')
+    const second = screen.getByTestId('permission-matrix-w2')
+    expect(within(first).getByText('Checkout Platform')).toBeTruthy()
+    expect(within(second).getByText('Ledger')).toBeTruthy()
+
+    // The two same-named agents are distinct rows under distinct sections, and each cell carries
+    // its OWN agent's mode.
+    expect(within(first).getByTestId('perm-cell-a1-repo read').textContent).toBe('✓')
+    expect(within(second).getByTestId('perm-cell-a2-repo read').textContent).toBe('✕')
+    expect(within(first).queryByTestId('perm-cell-a2-repo read')).toBeNull()
+  })
+
+  it('says which workspace has no agents rather than dropping its section', () => {
+    render(<PermissionMatrix sections={[{ workspaceId: 'w9', workspaceName: 'Fresh', rows: [] }]} />)
+    expect(screen.getByTestId('permission-matrix-w9')).toBeTruthy()
+    expect(screen.getByTestId('perm-empty').textContent).toBe('no agents yet')
     expect(screen.getByTestId('perm-caption').textContent).toBe('not yet enforced at runtime')
   })
 
@@ -595,7 +640,7 @@ describe('the permission matrix', () => {
     })
 
     it('PUTs the flipped mode on a cell click', async (): Promise<void> => {
-      render(<PermissionMatrix rows={rows} />)
+      render(<PermissionMatrix sections={rows} />)
       await act(async () => {
         fireEvent.click(screen.getByTestId('perm-cell-a1-repo read'))
       })
@@ -608,7 +653,7 @@ describe('the permission matrix', () => {
     // An UNSET cell is not a deny: clicking it must ask for `allow`, not flip an unmade decision
     // into its opposite.
     it('PUTs allow on an unset cell, the same as on a denied one', async (): Promise<void> => {
-      render(<PermissionMatrix rows={rows} />)
+      render(<PermissionMatrix sections={rows} />)
       await act(async () => {
         fireEvent.click(screen.getByTestId('perm-cell-a1-run tests'))
       })
@@ -622,7 +667,7 @@ describe('the permission matrix', () => {
       fetchMock.mockImplementationOnce(
         async () => new Response(JSON.stringify({ error: 'a permission must name one of the six tools' }), { status: 409 }),
       )
-      render(<PermissionMatrix rows={rows} />)
+      render(<PermissionMatrix sections={rows} />)
       await act(async () => {
         fireEvent.click(screen.getByTestId('perm-cell-a1-repo read'))
       })
@@ -633,27 +678,68 @@ describe('the permission matrix', () => {
 })
 
 describe('realtime transport and the danger zone', () => {
+  const two = [
+    { id: 'w1', name: 'Checkout Platform', halted: false },
+    { id: 'w2', name: 'Ledger', halted: true },
+  ]
+
   it('shows SSE selected and WebSocket disabled', () => {
-    render(<DangerZone workspaceId={null} halted={false} showReseed={false} />)
+    render(<DangerZone workspaces={[]} showReseed={false} />)
     expect(screen.getByTestId('transport-sse').getAttribute('aria-checked')).toBe('true')
     expect((screen.getByTestId('transport-ws') as HTMLButtonElement).disabled).toBe(true)
     expect(screen.getByTestId('transport-ws').textContent).toContain('later')
   })
 
   it('offers reset demo data only when the server said it is available', () => {
-    const { rerender } = render(<DangerZone workspaceId={null} halted={false} showReseed={false} />)
+    const { rerender } = render(<DangerZone workspaces={[]} showReseed={false} />)
     expect(screen.queryByTestId('reseed-button')).toBeNull()
 
-    rerender(<DangerZone workspaceId={null} halted={false} showReseed />)
+    rerender(<DangerZone workspaces={[]} showReseed />)
     expect(screen.getByTestId('reseed-button')).toBeTruthy()
   })
 
-  it('offers the emergency stop only against a named workspace', () => {
-    const { rerender } = render(<DangerZone workspaceId={null} halted={false} showReseed={false} />)
-    expect(screen.queryByTestId('emergency-stop')).toBeNull()
-    expect(screen.getByTestId('danger-no-workspace')).toBeTruthy()
+  // Fix round 1, finding 1: the stop used to VANISH on any install with two or more projects.
+  // It now names its target through a selector, the same precedent Analytics carries (§5.7.9).
+  it('names its target with a selector when there is more than one project', () => {
+    render(<DangerZone workspaces={two} showReseed={false} />)
 
-    rerender(<DangerZone workspaceId="w1" halted={false} showReseed={false} />)
+    const select = screen.getByTestId('danger-workspace') as HTMLSelectElement
+    expect(select.getAttribute('aria-label')).toBe('danger zone workspace')
+    expect(Array.from(select.options).map((o) => o.textContent)).toEqual(['Checkout Platform', 'Ledger'])
+    // Default is the first by name -- `listProjects()` already orders them.
+    expect(select.value).toBe('w1')
     expect(screen.getByTestId('emergency-stop')).toBeTruthy()
+    expect(screen.queryByTestId('danger-no-workspace')).toBeNull()
+  })
+
+  it("points the stop at the SELECTED workspace, with that workspace's own halted state", async (): Promise<void> => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    try {
+      render(<DangerZone workspaces={two} showReseed={false} />)
+
+      // `w1` is not halted, so the stop is live and fires at `w1`.
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('emergency-stop'))
+      })
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('emergency-stop-confirm'))
+      })
+      expect(fetchMock).toHaveBeenCalledWith('/api/w/w1/emergency-stop', expect.objectContaining({ method: 'POST' }))
+
+      // Switching to `w2` -- which IS halted -- carries that workspace's real state across, so the
+      // button disables rather than offering to halt an already-halted project.
+      fireEvent.change(screen.getByTestId('danger-workspace'), { target: { value: 'w2' } })
+      expect((screen.getByTestId('emergency-stop') as HTMLButtonElement).disabled).toBe(true)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('falls back to the empty state only when there is no project at all', () => {
+    render(<DangerZone workspaces={[]} showReseed={false} />)
+    expect(screen.queryByTestId('emergency-stop')).toBeNull()
+    expect(screen.queryByTestId('danger-workspace')).toBeNull()
+    expect(screen.getByTestId('danger-no-workspace')).toBeTruthy()
   })
 })

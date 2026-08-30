@@ -46,7 +46,7 @@ const LATER: ReadonlyArray<{ kind: string; label: string; adapter: string }> = [
  * Honours the same `AITEAMOS_*_BIN` overrides `apps/orchestrator/src/cli.ts` does, so a fake-CLI
  * gate run sees the fakes rather than whatever happens to be installed on the gate machine.
  */
-async function versionOf(bin: string): Promise<string | null> {
+export async function versionOf(bin: string): Promise<string | null> {
   const override = bin === 'claude' ? process.env['AITEAMOS_CLAUDE_BIN'] : process.env['AITEAMOS_CURSOR_BIN']
   try {
     const { stdout } = await run(override !== undefined && override !== '' ? override : bin, ['--version'], {
@@ -59,13 +59,21 @@ async function versionOf(bin: string): Promise<string | null> {
   }
 }
 
-export async function buildProviderAdapters(): Promise<readonly AdapterCard[]> {
+/**
+ * @param resolveVersion how to ask a binary its version. Defaults to `versionOf`, i.e. the real
+ * PATH probe. Injected only by `settings-snapshot.test.ts`, which must map `connected` and
+ * `not found` without probing a real binary: `cursor-agent` self-updates, so no test may assert
+ * against a version string it did not itself supply.
+ */
+export async function buildProviderAdapters(
+  resolveVersion: (bin: string) => Promise<string | null> = versionOf,
+): Promise<readonly AdapterCard[]> {
   const bound = await prisma.agentRun.groupBy({ by: ['provider'], _count: { _all: true } })
   const countFor = (kind: string): number => bound.find((row) => row.provider === kind)?._count._all ?? 0
 
   const real = await Promise.all(
     REAL.map(async (adapter): Promise<AdapterCard> => {
-      const version = await versionOf(adapter.bin)
+      const version = await resolveVersion(adapter.bin)
       const capabilities = capabilitiesOf(adapter.kind)
       return {
         kind: adapter.kind,
@@ -111,11 +119,37 @@ export interface PermissionRow {
   readonly cells: readonly { readonly tool: string; readonly mode: 'allow' | 'deny' | null }[]
 }
 
-export async function buildPermissionMatrix(): Promise<readonly PermissionRow[]> {
-  const [agents, permissions] = await Promise.all([
-    prisma.agent.findMany({ orderBy: { name: 'asc' }, select: { id: true, name: true, role: true } }),
+/**
+ * One workspace's slice of the matrix (fix round 1, finding 2).
+ *
+ * The matrix used to be a flat list of EVERY `Agent` row in the database. Two projects
+ * materialized from the same roster then produced indistinguishable duplicate rows -- "Alex ·
+ * backend" twice, with nothing on either to say which project it governed -- and the query was
+ * unbounded besides. Grouping by workspace makes the row's owner part of the structure rather
+ * than something a reader has to infer, and bounds each grid to one project's roster.
+ */
+export interface PermissionSection {
+  readonly workspaceId: string
+  readonly workspaceName: string
+  readonly rows: readonly PermissionRow[]
+}
+
+export async function buildPermissionMatrix(): Promise<readonly PermissionSection[]> {
+  // TWO queries regardless of how many workspaces exist -- the agents ride in on the workspace
+  // query's `include`, and the permissions come back in one sweep keyed by agent. No per-workspace
+  // and no per-agent round trip.
+  const [workspaces, permissions] = await Promise.all([
+    prisma.workspace.findMany({
+      orderBy: { name: 'asc' },
+      select: {
+        id: true,
+        name: true,
+        teams: { select: { agents: { select: { id: true, name: true, role: true } } } },
+      },
+    }),
     prisma.agentPermission.findMany(),
   ])
+
   const byAgent = new Map<string, Map<string, 'allow' | 'deny'>>()
   for (const row of permissions) {
     const map = byAgent.get(row.agentId) ?? new Map<string, 'allow' | 'deny'>()
@@ -123,28 +157,23 @@ export async function buildPermissionMatrix(): Promise<readonly PermissionRow[]>
     byAgent.set(row.agentId, map)
   }
 
-  return agents.map((agent) => ({
-    agentId: agent.id,
-    name: agent.name,
-    role: agent.role,
-    // `null` is UNSET, and the cell says so: an agent nobody has decided about is not the same as
-    // one explicitly denied, and collapsing them would make the matrix claim a decision that was
-    // never taken.
-    cells: PERMISSION_TOOLS.map((tool) => ({ tool, mode: byAgent.get(agent.id)?.get(tool) ?? null })),
+  return workspaces.map((workspace) => ({
+    workspaceId: workspace.id,
+    workspaceName: workspace.name,
+    // Flattened then sorted, NOT ordered inside the `include`: a Prisma `orderBy` there sorts
+    // within each team, so a two-team workspace would come back as two separately-sorted runs
+    // concatenated rather than one roster in name order.
+    rows: workspace.teams
+      .flatMap((team) => team.agents)
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map((agent) => ({
+        agentId: agent.id,
+        name: agent.name,
+        role: agent.role,
+        // `null` is UNSET, and the cell says so: an agent nobody has decided about is not the
+        // same as one explicitly denied, and collapsing them would make the matrix claim a
+        // decision that was never taken.
+        cells: PERMISSION_TOOLS.map((tool) => ({ tool, mode: byAgent.get(agent.id)?.get(tool) ?? null })),
+      })),
   }))
-}
-
-/**
- * The one workspace the global Settings page's emergency stop may target, or `null`.
- *
- * Settings is a GLOBAL route -- it has no `workspaceId` in scope -- and an emergency stop halts a
- * named project, not "whichever one was first". So it is offered only when the choice is
- * unambiguous: exactly one workspace exists. With two or more, the danger zone says the stop
- * lives on the project's own top bar rather than picking a victim for the operator.
- */
-export async function buildDangerZoneTarget(): Promise<{ readonly workspaceId: string; readonly halted: boolean } | null> {
-  const workspaces = await prisma.workspace.findMany({ select: { id: true, haltedReason: true }, take: 2 })
-  const only = workspaces.length === 1 ? workspaces[0] : undefined
-  if (only === undefined) return null
-  return { workspaceId: only.id, halted: only.haltedReason !== null }
 }

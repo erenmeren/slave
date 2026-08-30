@@ -16,22 +16,31 @@ import { Panel } from './ui/Panel'
  * **Danger zone** holds the existing emergency stop and `reset demo data`. `showReseed` is
  * computed on the SERVER from `NODE_ENV` and handed down — the client never guesses at the
  * environment, and the route itself 404s in production regardless of what this component renders.
+ *
+ * The stop NAMES its target (fix round 1, finding 1). `/settings` is a global route, so an earlier
+ * version offered the stop only when exactly one workspace existed and hid it entirely on every
+ * real multi-project install — §5.7 promises the danger zone holds the stop, unqualified. A
+ * selector is the precedent §5.7 item 9 already sets for Analytics: the operator picks the project,
+ * and the button halts THAT one with THAT one's real halted state. Nothing is ever halted by
+ * default-guess.
  */
 export function DangerZone({
-  workspaceId,
-  halted,
+  workspaces,
   showReseed,
 }: {
-  /** `null` when the global Settings page cannot name ONE workspace to stop — see
-   *  `buildDangerZoneTarget`. An emergency stop with no named target is not offered. */
-  readonly workspaceId: string | null
-  readonly halted: boolean
+  /** Every project, in `listProjects()`'s name order. Empty only on an install with no project at
+   *  all, which is the one case with nothing for a stop to target. */
+  readonly workspaces: readonly { readonly id: string; readonly name: string; readonly halted: boolean }[]
   readonly showReseed: boolean
 }): React.JSX.Element {
   const router = useRouter()
   const [reseeding, setReseeding] = useState(false)
   const [reseedError, setReseedError] = useState<string | null>(null)
   const [confirming, setConfirming] = useState(false)
+  // The first by name is the default; `listProjects()` already ordered them, so this picks the
+  // same project the operator sees at the top of the list rather than an arbitrary row.
+  const [selectedId, setSelectedId] = useState<string | null>(workspaces[0]?.id ?? null)
+  const selected = workspaces.find((workspace) => workspace.id === selectedId) ?? workspaces[0]
 
   const reseed = async (): Promise<void> => {
     setReseeding(true)
@@ -78,16 +87,33 @@ export function DangerZone({
         <div className="flex flex-col gap-3 rounded-card border border-tone-blocked/22 p-3">
           <div className="flex flex-wrap items-center gap-3">
             <span className="text-xs text-text-2">stop every run in the project</span>
-            <span className="ml-auto">
-              {workspaceId === null ? (
+            <span className="ml-auto flex items-center gap-2">
+              {selected === undefined ? (
                 // Not a disabled button: there is nothing wrong with the control, there is simply
-                // no single project for a global page to aim it at. Saying where it lives is more
-                // use than a greyed-out STOP.
+                // no project on this install to aim it at yet.
                 <span data-testid="danger-no-workspace" className="font-mono text-[10px] text-text-3">
-                  open a project — its top bar carries the stop
+                  no project yet — the stop has nothing to halt
                 </span>
               ) : (
-                <EmergencyStopButton workspaceId={workspaceId} halted={halted} />
+                <>
+                  <select
+                    data-testid="danger-workspace"
+                    aria-label="danger zone workspace"
+                    value={selected.id}
+                    onChange={(event) => setSelectedId(event.target.value)}
+                    className="rounded-chip border border-line bg-bg-2 px-2 py-1 text-xs text-text-1"
+                  >
+                    {workspaces.map((workspace) => (
+                      <option key={workspace.id} value={workspace.id}>
+                        {workspace.name}
+                      </option>
+                    ))}
+                  </select>
+                  {/* Keyed on the selection so the confirm/error state of one project's stop never
+                      carries over onto another's — switching the target starts the two-step
+                      confirmation again from the top. */}
+                  <EmergencyStopButton key={selected.id} workspaceId={selected.id} halted={selected.halted} />
+                </>
               )}
             </span>
           </div>
