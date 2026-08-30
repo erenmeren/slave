@@ -273,28 +273,37 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
           // Spec §4.6: only a row that arrived after the live boundary was established animates
           // in. As of M14 Task 12 that entry is the handoff's own `rise` (design README "Motion":
           // "new rows enter with a 0.3s `translateY(5px)` rise"), not M5's `action-line-in`
-          // cross-fade. No layout shift either way: the row's box is already sized by
-          // `measureElement`/the estimate before the animation starts, and `rise` moves the row
-          // by a transform, which does not participate in layout.
+          // cross-fade. No layout shift: the row's box is already sized by `measureElement`/the
+          // estimate before the animation starts.
           const isLive = event.seq > liveBoundarySeqRef.current
           return (
+            // TWO elements, and the split is load-bearing (fix round 1, Critical 1). The OUTER one
+            // is the virtualizer's: it carries `measureElement` and the inline
+            // `transform: translateY(${virtualItem.start}px)` that puts the row at its place in the
+            // river. `rise` animates `transform`, and a CSS animation declaration sits ABOVE the
+            // style attribute in the cascade — put on this element it would blank that
+            // `translateY` for the animation's whole 300ms, painting a row that belongs 1800px
+            // down on top of the oldest visible one and then snapping it back. So the animation
+            // goes on an INNER wrapper, which owns no transform of its own.
             <div
               key={event.seq}
               data-index={virtualItem.index}
               data-testid="timeline-row"
               ref={virtualizer.measureElement}
               style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${virtualItem.start}px)` }}
-              // No gap between rows: the mock's river is flush (`AI Team OS Mockups.dc.html:857`,
-              // a bare `flex-direction:column` with no gap); each row's own `py-[6px]` is the rhythm.
-              className={isLive ? 'motion-safe:animate-[rise_0.3s_ease-out]' : ''}
             >
-              <Card
-                event={event}
-                workspaceId={workspaceId}
-                agentName={event.agentId !== null ? (agentNameById.get(event.agentId) ?? null) : null}
-                taskTitle={event.taskId !== null ? (taskTitleById.get(event.taskId) ?? null) : null}
-                dimmed={dimmedAgentId !== null && event.agentId !== dimmedAgentId}
-              />
+              {/* No gap between rows: the mock's river is flush (`AI Team OS Mockups.dc.html:857`,
+                * a bare `flex-direction:column` with no gap); each row's own `py-[6px]` is the
+                * rhythm. `measureElement` reads the OUTER element, whose height this one sets. */}
+              <div data-testid="timeline-row-rise" className={isLive ? 'motion-safe:animate-[rise_0.3s_ease-out]' : ''}>
+                <Card
+                  event={event}
+                  workspaceId={workspaceId}
+                  agentName={event.agentId !== null ? (agentNameById.get(event.agentId) ?? null) : null}
+                  taskTitle={event.taskId !== null ? (taskTitleById.get(event.taskId) ?? null) : null}
+                  dimmed={dimmedAgentId !== null && event.agentId !== dimmedAgentId}
+                />
+              </div>
             </div>
           )
         })}

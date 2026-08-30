@@ -6,12 +6,22 @@ import { announceProjectName } from '../../hooks/useProjectName'
 import { publishShellFacts } from '../../hooks/useShellFacts'
 import { useUrlFilters } from '../../hooks/useUrlFilters'
 import type { ActivityPage } from '../../server/activity'
+import type { ShellFacts } from '../../server/shell'
 import { HaltBanner } from '../HaltBanner'
 import { Sparkline } from '../Sparkline'
 import { TopBar } from '../TopBar'
 import { PanelHeader } from '../ui/PanelHeader'
 import { FilterBar } from './FilterBar'
 import { Timeline, type TimelineHandle } from './Timeline'
+
+/**
+ * How long the page waits after the newest event before re-reading the shell facts. A burst of
+ * arrivals -- which is the normal shape of this page's traffic -- therefore costs one request, not
+ * one per event, and the sidebar is never more than a beat behind the river it sits beside. Longer
+ * than `useWorkspaceStream`'s own 250ms notification debounce on purpose: these are two counts and
+ * four guardrails on a nav, not the page's own content.
+ */
+export const SHELL_REFETCH_DEBOUNCE_MS = 1_000
 
 /**
  * The activity page's client shell: TopBar (workspace name is static from the initial server
@@ -41,14 +51,57 @@ export function ActivityClient({
     announceProjectName(workspaceId, initial.workspace.name)
   }, [workspaceId, initial.workspace.name])
 
+  // The newest seq the page opened with. Compared against, never updated: once anything at all has
+  // arrived the newest seq has moved off it for good, and a `loadOlder` prepend cannot move it
+  // back (a prepend only ever adds SMALLER seqs).
+  const mountSeqRef = useRef<number | null>(events.at(-1)?.seq ?? null)
+
+  // The shell facts as of the last refetch, or `null` while the server-rendered ones are still
+  // the freshest thing this page has.
+  //
+  // Why this exists at all (fix round 1, Important 1): `useActivityStream` streams EVENTS and pages
+  // history -- it never re-derives the page DTO -- so `initial.shellFacts` is frozen at server
+  // render. Publishing only that would leave the sidebar's counts and guardrails stuck at load
+  // time for the whole visit, on the very page a person watches longest, and the fallback stream
+  // that used to keep them moving was removed by this same task. `TasksClient`/`GraphClient`
+  // publish a live snapshot because their own hooks refetch one; this page has to ask for it.
+  const [refetchedFacts, setRefetchedFacts] = useState<ShellFacts | null>(null)
+  const newestSeq = events.at(-1)?.seq ?? null
+
+  useEffect((): (() => void) | undefined => {
+    // Mount is not a reason to refetch: `initial.shellFacts` came out of the same server render as
+    // the seed page, so the first thing published is already current. Only a CHANGE in the newest
+    // seq -- an arrival, or a filter reload landing a different page -- asks for a fresh read.
+    if (newestSeq === null || newestSeq === mountSeqRef.current) return undefined
+
+    let cancelled = false
+    const timer = setTimeout((): void => {
+      void (async (): Promise<void> => {
+        try {
+          const response = await fetch(`/api/w/${workspaceId}/shell`)
+          if (!response.ok) return
+          const body = (await response.json()) as ShellFacts
+          if (!cancelled) setRefetchedFacts(body)
+        } catch {
+          // Keep the last good figures rather than blanking a nav over a transient failure.
+        }
+      })()
+    }, SHELL_REFETCH_DEBOUNCE_MS)
+
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [workspaceId, newestSeq])
+
   // Controller ruling carried from Task 3/8, and CLOSED here: Activity is the last of the four
   // workspace pages, so with this publication the sidebar has no route left that fails to publish
   // — `Sidebar.tsx`'s standalone fallback `EventSource` is gone (a one-shot fetch remains as the
   // belt-and-braces path for a route that somehow does not publish). Same idiom as
   // `OverviewClient`/`TasksClient`/`GraphClient`.
   useEffect((): void => {
-    publishShellFacts(workspaceId, initial.shellFacts)
-  }, [workspaceId, initial.shellFacts])
+    publishShellFacts(workspaceId, refetchedFacts ?? initial.shellFacts)
+  }, [workspaceId, refetchedFacts, initial.shellFacts])
   // Retraction is its OWN effect, keyed only on the workspace: folding it into the cleanup of the
   // publish above would retract and re-publish on every snapshot, and the sidebar would blank its
   // figures between the two.

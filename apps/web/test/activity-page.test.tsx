@@ -4,6 +4,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { DomainEventType } from '@ai-team-os/db'
 import { Sidebar } from '../src/components/Sidebar.js'
+import { SHELL_REFETCH_DEBOUNCE_MS } from '../src/components/activity/ActivityClient.js'
 import type { ActivityEventRow, ActivityPage } from '../src/server/activity.js'
 
 // ---- jsdom element-size mocks -----------------------------------------------------------------
@@ -396,7 +397,10 @@ describe('ActivityClient', () => {
     const { rerender } = render(<ActivityClient workspaceId="w1" initial={INITIAL} />)
 
     // The three seed rows (seq 1,2,3) were already on screen at mount — none of them is "new".
-    let rows = screen.getAllByTestId('timeline-row')
+    // Fix round 1, Critical 1: the animation lives on the INNER wrapper, never on `timeline-row`
+    // itself — that one carries the virtualizer's inline positioning `transform`, which a
+    // `transform` keyframe would outrank for the whole 300ms.
+    let rows = screen.getAllByTestId('timeline-row-rise')
     expect(rows).toHaveLength(3)
     for (const r of rows) expect(r.className).not.toContain('animate-[rise')
 
@@ -406,7 +410,7 @@ describe('ActivityClient', () => {
     streamState.events = [...streamState.events, row(4)]
     rerender(<ActivityClient workspaceId="w1" initial={INITIAL} />)
 
-    rows = screen.getAllByTestId('timeline-row')
+    rows = screen.getAllByTestId('timeline-row-rise')
     expect(rows).toHaveLength(4)
     expect(rows[3]?.className).toContain('motion-safe:animate-[rise_0.3s_ease-out]')
     // The three previously-mounted rows keep their identity (same key = same DOM node) — they
@@ -424,7 +428,7 @@ describe('ActivityClient', () => {
     streamState.events = [row(-1), row(0), ...streamState.events]
     rerender(<ActivityClient workspaceId="w1" initial={INITIAL} />)
 
-    const rows = screen.getAllByTestId('timeline-row')
+    const rows = screen.getAllByTestId('timeline-row-rise')
     expect(rows).toHaveLength(5)
     expect(rows[0]?.className).not.toContain('animate-[rise') // seq -1
     expect(rows[1]?.className).not.toContain('animate-[rise') // seq 0
@@ -461,7 +465,7 @@ describe('ActivityClient', () => {
     // Every reloaded row's seq (10, 11, 12) sits ABOVE the stale mount-time boundary (3) — without
     // a reset, `isLive` reads true for every one of them: a full-page animation flash on a routine
     // filter change, not a stray replay. None should animate: this reload reads as mount-equivalent.
-    let rows = screen.getAllByTestId('timeline-row')
+    let rows = screen.getAllByTestId('timeline-row-rise')
     expect(rows).toHaveLength(3)
     for (const r of rows) expect(r.className).not.toContain('animate-[rise')
 
@@ -469,7 +473,7 @@ describe('ActivityClient', () => {
     // reseeded to the reloaded page's own newest seq (12), not left unset/stuck at its old value.
     streamState.events = [...streamState.events, row(13)]
     rerender(<ActivityClient workspaceId="w1" initial={INITIAL} />)
-    rows = screen.getAllByTestId('timeline-row')
+    rows = screen.getAllByTestId('timeline-row-rise')
     expect(rows).toHaveLength(4)
     expect(rows[3]?.className).toContain('motion-safe:animate-[rise_0.3s_ease-out]')
     expect(rows[0]?.className).not.toContain('animate-[rise')
@@ -554,6 +558,90 @@ describe('ActivityClient', () => {
     fireEvent.click(screen.getByTestId('roster-row-a1'))
     expect(screen.getByTestId('roster-row-a1').getAttribute('aria-pressed')).toBe('false')
     expect(screen.getAllByTestId('activity-card').filter((c) => c.className.includes('opacity-[.35]'))).toHaveLength(0)
+  })
+
+  // ---- Fix round 1 ------------------------------------------------------------------------
+
+  it('Critical 1: the positioned row never carries the rise animation — a transform keyframe there would outrank its own translateY', () => {
+    const { rerender } = render(<ActivityClient workspaceId="w1" initial={INITIAL} />)
+
+    streamState.events = [...streamState.events, row(4)]
+    rerender(<ActivityClient workspaceId="w1" initial={INITIAL} />)
+
+    // The live arrival DOES animate...
+    const wrappers = screen.getAllByTestId('timeline-row-rise')
+    expect(wrappers[3]?.className).toContain('motion-safe:animate-[rise_0.3s_ease-out]')
+
+    // ...but never on the element the virtualizer positions. `rise` animates
+    // `transform: translateY(5px) → translateY(0)`, and a CSS animation declaration sits ABOVE
+    // the style attribute in the cascade: on this element it would blank
+    // `translateY(${virtualItem.start}px)` for the whole 300ms, painting a row that belongs at
+    // y=1840 on top of the oldest visible one and then snapping it back.
+    const positioned = screen.getAllByTestId('timeline-row')
+    expect(positioned).toHaveLength(4)
+    for (const rowEl of positioned) {
+      expect(rowEl.className).not.toContain('animate-[')
+      // And the positioning transform is still the only one on it.
+      expect(rowEl.style.transform).toContain('translateY(')
+    }
+  })
+
+  it('Important 1: re-reads the shell facts after a live event, so the sidebar beside the river does not freeze at load time', async () => {
+    // Before this fix the page published `initial.shellFacts` — frozen at server render — where
+    // `TasksClient`/`GraphClient` publish their live snapshot. Since Task 12 removed the sidebar's
+    // own fallback stream, that made `/w/:id/activity` the one page whose badges never moved.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      vi.stubGlobal('EventSource', FakeEventSource as unknown as typeof EventSource)
+      const fetchMock = vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              workspace: { id: 'w1', name: 'Checkout Platform' },
+              counts: { agentsWorking: 5, tasksActive: 9 },
+              guardrails: { budgetUsd: 20, maxConcurrentRuns: 3, runTimeoutMs: 1_800_000, maxAttempts: 3 },
+            }),
+            { status: 200 },
+          ),
+      )
+      vi.stubGlobal('fetch', fetchMock)
+
+      const initial = page({})
+      // A FUNCTION, not a stored element: re-rendering the identical element object lets React
+      // bail out before the component body runs, and the mutated `streamState` would never be
+      // read. Every other rerender in this file builds fresh JSX for the same reason.
+      const shell = (): ReactElement => (
+        <>
+          <Sidebar workspaceId="w1" />
+          <ActivityClient workspaceId="w1" initial={initial} />
+        </>
+      )
+      const { rerender } = render(shell())
+
+      // Mount publishes the server-rendered facts and asks for nothing: they came from the same
+      // render as the page itself.
+      expect(screen.getByTestId('nav-badge-Tasks').textContent).toBe('12')
+      expect(fetchMock).not.toHaveBeenCalled()
+
+      // Two events in one burst — the debounce must collapse them into a single request.
+      streamState.events = [...streamState.events, row(4)]
+      rerender(shell())
+      streamState.events = [...streamState.events, row(5)]
+      rerender(shell())
+      await act(async (): Promise<void> => {
+        await vi.advanceTimersByTimeAsync(SHELL_REFETCH_DEBOUNCE_MS)
+      })
+
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      expect(fetchMock).toHaveBeenCalledWith('/api/w/w1/shell')
+      // Republished: the sidebar reads the refreshed counts, not the ones it opened with.
+      expect(screen.getByTestId('nav-badge-Tasks').textContent).toBe('9')
+      expect(screen.getByTestId('nav-badge-Agents').textContent).toBe('5')
+      // And still nothing streamed for it.
+      expect(FakeEventSource.instances).toHaveLength(0)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('publishes its shell facts, so the global Sidebar opens no EventSource of its own while the page is mounted', () => {
