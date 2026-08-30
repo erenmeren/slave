@@ -3,10 +3,11 @@
 import type React from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
+import { useEffect, useState } from 'react'
 import { useProjectName } from '../hooks/useProjectName'
+import { useShellFacts } from '../hooks/useShellFacts'
 import { useWorkspaceStream } from '../hooks/useWorkspaceStream'
 import type { ShellFacts } from '../server/shell'
-import { useShellFacts } from './ShellFactsContext'
 
 /** The nine rows of the handoff's 3a shell, in its own order (design README §3a): Overview ·
  *  Agents · Tasks · Graph · Activity · Projects · Skills · Analytics · Settings. Four of them
@@ -136,13 +137,19 @@ function GuardrailRow({
  * Where the facts come from is decided HERE, once, and the two paths are two components rather
  * than one component with a conditional hook (controller ruling carried from M14 Task 3):
  *
- * - a page that already streams this workspace PROVIDES them (`ShellFactsContext`), and no
+ * - a page that already streams this workspace PUBLISHES them (`hooks/useShellFacts.ts`), and no
  *   second `EventSource` is opened at all;
- * - anywhere else — `/w/:id/tasks`, `/graph`, `/activity`, until Tasks 10-12 provide theirs —
+ * - anywhere else — `/w/:id/tasks`, `/graph`, `/activity`, until Tasks 10-12 publish theirs —
  *   it rides the workspace's SSE stream itself, exactly as it has since Task 3.
  *
- * A given page is in one case or the other for its whole life, so the branch never flips under a
- * mounted subtree and neither component ever loses its hooks.
+ * The one-render `mayFallBack` gate is what makes "only when nobody publishes" true at MOUNT as
+ * well as in steady state. `layout.tsx` renders `<Sidebar />` before `{children}`, so this
+ * component's effects run before the page's publish effect in the same commit; without the gate
+ * the sidebar would open a stream and close it a beat later on every page that does publish,
+ * which is the duplicate connection this exists to remove. Both updates land in one batched
+ * re-render, so the fallback mounts only where the publish never came — and until it does the
+ * rows render exactly what they rendered before: the unknown mark, which is what the streaming
+ * path shows until its first snapshot anyway.
  *
  * Returns a FRAGMENT, not a wrapper: its two blocks are direct flex children of `<nav>` so the
  * guardrail block's `mt-auto` has the sidebar's own free space to absorb, and its `order-last`
@@ -156,8 +163,12 @@ export function ProjectNav({
   readonly workspaceId: string
   readonly pathname: string
 }): React.JSX.Element {
-  const provided = useShellFacts()
-  if (provided !== null) return <ProjectNavRows workspaceId={workspaceId} pathname={pathname} facts={provided.facts} />
+  const published = useShellFacts(workspaceId)
+  const [mayFallBack, setMayFallBack] = useState(false)
+  useEffect((): void => setMayFallBack(true), [])
+
+  if (published !== null) return <ProjectNavRows workspaceId={workspaceId} pathname={pathname} facts={published} />
+  if (!mayFallBack) return <ProjectNavRows workspaceId={workspaceId} pathname={pathname} facts={null} />
   return <StreamingProjectNav workspaceId={workspaceId} pathname={pathname} />
 }
 

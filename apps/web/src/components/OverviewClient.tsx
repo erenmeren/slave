@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
+import { publishShellFacts } from '../hooks/useShellFacts'
 import { useSelectedId } from '../hooks/useSelectedId'
 import { useOverview } from '../hooks/useOverview'
 import { announceProjectName } from '../hooks/useProjectName'
@@ -11,33 +12,11 @@ import { AgentPanel } from './AgentPanel'
 import { GoalCard } from './GoalCard'
 import { RuntimeCard } from './RuntimeCard'
 import { HaltBanner } from './HaltBanner'
-import { ShellFactsProvider } from './ShellFactsContext'
+import { postControl } from '../lib/postControl'
 import { TopBar } from './TopBar'
 import { TopStrip } from './TopStrip'
 import { Button } from './ui/Button'
 import { Panel } from './ui/Panel'
-
-/** Pulls a refusal's `{ error }` text, falling back to something nameable for any other non-2xx
- *  or malformed body — `AgentPanel.tsx`/`GoalCard.tsx`'s `errorMessage`, the house pattern here
- *  being a small local copy rather than a shared control-plane module. */
-function errorMessage(data: unknown, status: number): string {
-  if (data !== null && typeof data === 'object') {
-    const value = (data as { error?: unknown }).error
-    if (typeof value === 'string') return value
-  }
-  return `request failed (${status})`
-}
-
-async function postControl(url: string): Promise<{ ok: true } | { ok: false; error: string }> {
-  try {
-    const response = await fetch(url, { method: 'POST' })
-    if (response.ok) return { ok: true }
-    const data: unknown = await response.json().catch(() => null)
-    return { ok: false, error: errorMessage(data, response.status) }
-  } catch (cause) {
-    return { ok: false, error: cause instanceof Error ? cause.message : String(cause) }
-  }
-}
 
 /**
  * The "blocked · needs you" panel (design README §3a.1). `flex-1` beside the fixed 340px events
@@ -197,34 +176,40 @@ export function OverviewClient({
     announceProjectName(workspaceId, view.workspace.name)
   }, [workspaceId, view.workspace.name])
 
-  // Controller ruling carried from Task 3: the root layout's `<Sidebar>` opens its own
-  // `EventSource` per workspace page. This page already streams the same workspace, and every
-  // figure the sidebar shows is in the snapshot it is already holding — so it hands them down
-  // and the sidebar opens nothing. `agentsWorking` is the same `status === 'working'` count the
+  // Controller ruling carried from Task 3 (and fix round 1): the root layout's `<Sidebar>` opens
+  // its own `EventSource` per workspace page. This page already streams the same workspace, and
+  // every figure the sidebar shows is in the snapshot it is already holding — so it publishes
+  // them to `hooks/useShellFacts.ts` and the sidebar opens nothing. A module store, not context:
+  // `layout.tsx` renders `<Sidebar />` as a SIBLING of `{children}`, so this component can never
+  // be its ancestor (the same constraint `announceProjectName` above is solving). `agentsWorking` is the same `status === 'working'` count the
   // strip's first tile shows, and `tasksActive` the same `tasks.active` its second one does; the
   // sidebar and the strip cannot disagree, because there is one number.
   const shellFacts = useMemo(
     () => ({
-      facts: {
-        workspace: { id: view.workspace.id, name: view.workspace.name },
-        counts: {
-          agentsWorking: view.agents.filter((a) => a.status === 'working').length,
-          tasksActive: view.tasks.active,
-        },
-        guardrails: {
-          budgetUsd: view.workspace.budgetUsd,
-          maxConcurrentRuns: view.workspace.maxConcurrentRuns,
-          runTimeoutMs: view.workspace.runTimeoutMs,
-          maxAttempts: view.workspace.maxAttempts,
-        },
+      workspace: { id: view.workspace.id, name: view.workspace.name },
+      counts: {
+        agentsWorking: view.agents.filter((a) => a.status === 'working').length,
+        tasksActive: view.tasks.active,
       },
-      latencyMs,
+      guardrails: {
+        budgetUsd: view.workspace.budgetUsd,
+        maxConcurrentRuns: view.workspace.maxConcurrentRuns,
+        runTimeoutMs: view.workspace.runTimeoutMs,
+        maxAttempts: view.workspace.maxAttempts,
+      },
     }),
-    [view, latencyMs],
+    [view],
   )
+  useEffect((): void => {
+    publishShellFacts(workspaceId, shellFacts)
+  }, [workspaceId, shellFacts])
+  // Retraction is its OWN effect, keyed only on the workspace: folding it into the cleanup of the
+  // publish above would retract and re-publish on every snapshot, and the sidebar would flip to
+  // its fallback stream (opening a connection) between the two.
+  useEffect((): (() => void) => () => publishShellFacts(workspaceId, null), [workspaceId])
 
   return (
-    <ShellFactsProvider value={shellFacts}>
+    <>
       <div className={`flex flex-1 flex-col ${error !== null ? 'opacity-60' : ''}`}>
         <TopBar
           workspaceId={workspaceId}
@@ -292,6 +277,6 @@ export function OverviewClient({
           onClose={() => selectAgent(null)}
         />
       )}
-    </ShellFactsProvider>
+    </>
   )
 }

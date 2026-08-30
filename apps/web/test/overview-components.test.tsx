@@ -4,11 +4,18 @@ import { act, fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi, afterEach, beforeEach } from 'vitest'
 import { AgentCard } from '../src/components/AgentCard.js'
 import { HaltBanner } from '../src/components/HaltBanner.js'
-import { BlockedPanel, LiveEventsPanel, MergeQueuePanel } from '../src/components/OverviewClient.js'
-import { ShellFactsProvider } from '../src/components/ShellFactsContext.js'
-import { ProjectNav } from '../src/components/Sidebar.js'
+import { BlockedPanel, LiveEventsPanel, MergeQueuePanel, OverviewClient } from '../src/components/OverviewClient.js'
+import { Sidebar } from '../src/components/Sidebar.js'
 import { TopStrip } from '../src/components/TopStrip.js'
 import type { AgentCardData, OverviewSnapshot } from '../src/server/overview.js'
+
+// `Sidebar` reads the pathname and `OverviewClient`'s `useSelectedId` reads the router — both are
+// mounted together in the topology test at the bottom of this file. Nothing else here uses them.
+vi.mock('next/navigation', () => ({
+  usePathname: () => '/w/w1',
+  useRouter: () => ({ replace: vi.fn() }),
+  useSearchParams: () => new URLSearchParams(),
+}))
 
 const agent = (over: Partial<AgentCardData>): AgentCardData => ({
   id: 'a1',
@@ -598,11 +605,23 @@ describe('Overview bottom row', () => {
   })
 })
 
-describe('ShellFactsContext', () => {
-  // Controller ruling carried from Task 3: the root layout's `Sidebar` opens its own
-  // `EventSource` per workspace page, which is a SECOND stream on every page that already has
-  // one. A page that has the facts provides them; the sidebar falls back to its own stream only
-  // where nobody does. Task 12 removes the fallback.
+describe('shell facts reach the sidebar across the layout\u2019s sibling boundary', () => {
+  // Fix round 1, Critical. `app/layout.tsx` renders `<Sidebar />` as a SIBLING of `{children}`,
+  // so nothing a page mounts can ever be an ancestor of the sidebar — a React context provider
+  // inside `OverviewClient` reaches it in a test tree and nowhere in `src/`. The codebase already
+  // solved this once, for the project name (`hooks/useProjectName.ts`): a module-level store the
+  // page publishes to and the sidebar subscribes to. `hooks/useShellFacts.ts` is the same
+  // pattern, and this test mounts the REAL topology so it cannot pass on a tree that does not
+  // exist.
+  const shell = (showPage: boolean): React.JSX.Element => (
+    <>
+      <Sidebar />
+      {showPage && <OverviewClient workspaceId="w1" initial={PUBLISHED} />}
+    </>
+  )
+
+  const live = (): FakeShellEventSource[] => FakeShellEventSource.instances.filter((source) => !source.closed)
+
   beforeEach((): void => {
     FakeShellEventSource.instances = []
     vi.stubGlobal('EventSource', FakeShellEventSource as unknown as typeof EventSource)
@@ -613,46 +632,64 @@ describe('ShellFactsContext', () => {
     vi.unstubAllGlobals()
   })
 
-  it('paints the nav badges and guardrails from the provider, opening no stream of its own', () => {
-    render(
-      <ShellFactsProvider
-        value={{
-          facts: {
-            workspace: { id: 'w1', name: 'Checkout' },
-            counts: { agentsWorking: 2, tasksActive: 5 },
-            guardrails: { budgetUsd: 100, maxConcurrentRuns: 3, runTimeoutMs: 1_800_000, maxAttempts: 3 },
-          },
-          latencyMs: 12,
-        }}
-      >
-        <ProjectNav workspaceId="w1" pathname="/w/w1" />
-      </ShellFactsProvider>,
-    )
+  it('opens no sidebar stream at all while the page is mounted, and paints its badges and guardrails', () => {
+    render(shell(true))
+
+    // ONE stream for the whole screen: the page's. Not one that is opened and closed a beat
+    // later either — the sidebar never constructs one, which is the point of the store.
+    expect(FakeShellEventSource.instances).toHaveLength(1)
     expect(screen.getByTestId('nav-badge-Agents').textContent).toBe('2')
-    expect(screen.getByTestId('nav-badge-Tasks').textContent).toBe('5')
+    expect(screen.getByTestId('nav-badge-Tasks').textContent).toBe('2')
     expect(screen.getByTestId('guardrail-budget').textContent).toBe('$100.00')
+    expect(screen.getByTestId('guardrail-concurrency').textContent).toBe('3')
     expect(screen.getByTestId('guardrail-timeout').textContent).toBe('30m')
-    expect(FakeShellEventSource.instances).toHaveLength(0)
+    expect(screen.getByTestId('guardrail-attempts').textContent).toBe('3')
   })
 
-  it('falls back to its own stream when no provider is mounted above it', () => {
-    render(<ProjectNav workspaceId="w1" pathname="/w/w1" />)
-    // The M14 Task 3 behaviour, unchanged where nothing provides the facts: one stream, and every
-    // figure reads the unknown mark until the first snapshot lands.
-    expect(FakeShellEventSource.instances).toHaveLength(1)
-    expect(screen.getByTestId('nav-badge-Agents').textContent).toBe('—')
+  it('falls back to its own stream once the publishing page unmounts', () => {
+    const { rerender } = render(shell(true))
+    expect(live()).toHaveLength(1)
+
+    rerender(shell(false))
+
+    // The page retracted on unmount, so the store holds nothing for `w1` and the sidebar goes
+    // back to fetching for itself — every figure at the unknown mark until its first snapshot.
+    expect(live()).toHaveLength(1)
+    expect(live()[0]?.url).toBe('/api/w/w1/events')
+    expect(screen.getByTestId('nav-badge-Agents').textContent).toBe('\u2014')
+    expect(screen.getByTestId('guardrail-budget').textContent).toBe('\u2014')
+  })
+
+  it('opens its own stream on a page that publishes nothing', () => {
+    render(<Sidebar />)
+    // The M14 Task 3 behaviour, unchanged where nothing publishes (Tasks/Graph/Activity, until
+    // Tasks 10-12 land): one stream, and the unknown mark until the first snapshot.
+    expect(live()).toHaveLength(1)
+    expect(screen.getByTestId('nav-badge-Agents').textContent).toBe('\u2014')
   })
 })
 
-/** Minimal `EventSource` stand-in (`shell.test.tsx`'s precedent) — these tests are about whether
- *  one gets OPENED at all, so it only has to count constructions. */
+/** The snapshot the topology test publishes from: two working agents, two active tasks, and the
+ *  four guardrail figures the sidebar's bottom block reads. */
+const PUBLISHED: OverviewSnapshot = snapshot([
+  agent({ id: 'a1', status: 'working' }),
+  agent({ id: 'a2', name: 'Sam Yates', status: 'working' }),
+])
+
+/** Minimal `EventSource` stand-in (`shell.test.tsx`'s precedent) — these tests are about which
+ *  connections exist, so it counts constructions and tracks closure. */
 class FakeShellEventSource {
   static instances: FakeShellEventSource[] = []
   onmessage: ((event: { data: string }) => void) | null = null
   onerror: (() => void) | null = null
   onopen: (() => void) | null = null
+  /** Tracked because these tests count LIVE connections, not constructions — an unmounted page's
+   *  stream is closed and must not be mistaken for the sidebar's. */
+  closed = false
   constructor(public url: string) {
     FakeShellEventSource.instances.push(this)
   }
-  close(): void {}
+  close(): void {
+    this.closed = true
+  }
 }
