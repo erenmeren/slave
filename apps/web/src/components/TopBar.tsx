@@ -1,16 +1,25 @@
 import type React from 'react'
 import { EmergencyStopButton } from './EmergencyStopButton'
 
-// `ui/Chip.tsx`'s exact recipe (`inline-flex items-center rounded-chip border px-2 py-0.5 text-xs`,
+// `ui/Chip.tsx`'s exact recipe (`inline-flex items-center rounded-chip border px-2 py-0.5`,
 // neutral surface `border-line bg-bg-2 text-text-2`), not the literal component -- `Chip` takes
 // only `tone`/`children`, no `data-testid` passthrough, and this badge's own `connection` test-id
-// (`shell.test.tsx`) must stay put. Same judgment `TaskCard.tsx`'s `CHIP_CLASS` documents.
-const CONNECTION_CHIP_CLASS = 'inline-flex items-center gap-1.5 rounded-chip border border-line bg-bg-2 px-2 py-0.5 text-xs text-text-2'
+// (`shell.test.tsx`) must stay put. Same judgment `TaskCard.tsx`'s `CHIP_CLASS` documents. The
+// 11px mono face is the handoff's own for a data chip (README "Design Tokens").
+const CONNECTION_CHIP_CLASS =
+  'inline-flex items-center gap-1.5 rounded-chip border border-line bg-bg-2 px-2 py-0.5 font-mono text-[11px] text-text-2'
 
 export interface TopBarProps {
   readonly workspaceId: string
   readonly workspaceName: string
   readonly connection: 'connected' | 'reconnecting'
+  /**
+   * The stream's measured latency (`useWorkspaceStream`'s `latencyMs`), or `null` before the first
+   * event has arrived — rendered `sse · —`. While `connection` is `reconnecting` the chip says so
+   * instead: a latency figure from before the stream dropped is stale, and a stale number beside
+   * a live-looking label is exactly the lie Decision 3 forbids.
+   */
+  readonly latencyMs: number | null
   /**
    * `null` means this page does not show a budget at all (the Tasks, Activity and Graph shells
    * pass it) -- a fact about the PAGE.
@@ -37,18 +46,39 @@ export interface TopBarProps {
   readonly halted: boolean
 }
 
-export function TopBar({ workspaceId, workspaceName, connection, budget, halted }: TopBarProps): React.JSX.Element {
+export function TopBar({
+  workspaceId,
+  workspaceName,
+  connection,
+  latencyMs,
+  budget,
+  halted,
+}: TopBarProps): React.JSX.Element {
   const budgetUsd = budget?.budgetUsd ?? null
   const ratio = budget === null || budgetUsd === null || budgetUsd <= 0 ? 0 : budget.spentUsd / budgetUsd
   const barColor = ratio >= 1 ? 'bg-status-danger' : ratio >= 0.8 ? 'bg-status-warn' : 'bg-status-working'
+  const connectionText = connection === 'connected' ? `sse · ${latencyMs === null ? '—' : `${latencyMs}ms`}` : 'reconnecting'
+
   return (
-    <header className="flex h-12 items-center gap-4 border-b border-line bg-bg-1 px-4">
-      <span className="text-sm font-medium">{workspaceName}</span>
+    <header data-testid="top-bar" className="relative flex h-[52px] flex-none items-center gap-4 bg-bg-1 px-4">
+      {/* The handoff's 1px gradient hairline (design README §3a): transparent → teal .5 → indigo
+        * .3 → transparent. Its own absolutely positioned element rather than a `border-bottom`,
+        * because a border cannot carry a gradient. */}
+      <span
+        data-testid="top-bar-hairline"
+        aria-hidden
+        className="pointer-events-none absolute inset-x-0 bottom-0 h-px bg-[linear-gradient(90deg,transparent,rgba(46,230,207,.5),rgba(123,140,255,.3),transparent)]"
+      />
+      <span className="text-[14.5px] font-semibold tracking-[-.2px]">{workspaceName}</span>
       <span data-testid="connection" className={CONNECTION_CHIP_CLASS}>
         <span
-          className={`inline-block h-2 w-2 rounded-full ${connection === 'connected' ? 'bg-status-working' : 'bg-status-warn'}`}
+          className={`inline-block h-2 w-2 rounded-full ${
+            connection === 'connected'
+              ? 'bg-status-working motion-safe:animate-[status-pulse_1.5s_ease-in-out_infinite]'
+              : 'bg-status-warn'
+          }`}
         />
-        {connection}
+        {connectionText}
       </span>
       <span className="ml-auto flex items-center gap-3">
         {budget !== null && (

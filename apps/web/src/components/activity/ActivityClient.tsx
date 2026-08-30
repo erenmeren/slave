@@ -95,10 +95,14 @@ export function ActivityClient({
 
   return (
     <div className="flex flex-1 flex-col">
+      {/* `latencyMs={null}` (M14 Task 3): `useActivityStream` wraps its own `EventSource` rather
+        * than `useWorkspaceStream` and measures no arrival age. `sse · —` is the honest reading
+        * for a chip with no measurement; widening that hook is not this task's scope. */}
       <TopBar
         workspaceId={workspaceId}
         workspaceName={initial.workspace.name}
         connection={connection}
+        latencyMs={null}
         budget={null}
         halted={initial.workspace.haltedReason !== null}
       />

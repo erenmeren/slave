@@ -251,6 +251,38 @@ describe('useWorkspaceStream', () => {
     await waitFor(() => expect(result.current.error).not.toBeNull())
   })
 
+  it('reports the age of each arriving event as the stream latency, clamped at zero', (): void => {
+    // M14 §3: the top bar's chip reads `sse · <ms>`. The number is the age of the frame when it
+    // landed, not a heartbeat round trip -- `server/sse.ts` writes its heartbeat as an ID-ONLY
+    // frame, which `EventSource` never surfaces as a `message` event.
+    const { result } = renderHook(() =>
+      useWorkspaceStream<Snapshot>({ workspaceId: 'w1', endpoint: '/api/w/w1/overview', initial: SNAPSHOT }),
+    )
+    expect(result.current.latencyMs).toBeNull()
+
+    const now = Date.now()
+    vi.setSystemTime(now)
+    push({ seq: 1, type: 'run.tool_call', ts: new Date(now - 42).toISOString() })
+    expect(result.current.latencyMs).toBe(42)
+
+    // A `ts` in the future (a clock that ticked backwards) reads 0, never a negative age.
+    push({ seq: 2, type: 'run.tool_call', ts: new Date(now + 5_000).toISOString() })
+    expect(result.current.latencyMs).toBe(0)
+  })
+
+  it('leaves the latency alone for a frame with no parseable ts', (): void => {
+    const { result } = renderHook(() =>
+      useWorkspaceStream<Snapshot>({ workspaceId: 'w1', endpoint: '/api/w/w1/overview', initial: SNAPSHOT }),
+    )
+    const now = Date.now()
+    vi.setSystemTime(now)
+    push({ seq: 1, type: 'run.started', ts: new Date(now - 7).toISOString() })
+    expect(result.current.latencyMs).toBe(7)
+
+    push({ seq: 2, type: 'run.started', ts: 'not-a-date' })
+    expect(result.current.latencyMs).toBe(7)
+  })
+
   it('closes the EventSource on unmount', (): void => {
     const { unmount } = renderHook(() =>
       useWorkspaceStream<Snapshot>({ workspaceId: 'w1', endpoint: '/api/w/w1/overview', initial: SNAPSHOT }),

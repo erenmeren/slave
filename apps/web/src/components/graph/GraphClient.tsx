@@ -64,7 +64,7 @@ export function GraphClient({
     setParticles((current) => handleToolCallFrame(event, orgEdgesRef.current, current, Date.now()))
   }
 
-  const { snapshot, connection, error } = useGraph(workspaceId, initial, onGraphEvent)
+  const { snapshot, connection, error, latencyMs } = useGraph(workspaceId, initial, onGraphEvent)
   const view = snapshot ?? initial
 
   // Fills the global shell's Sidebar project-section header with this workspace's real name
@@ -118,6 +118,7 @@ export function GraphClient({
         workspaceId={workspaceId}
         workspaceName={view.workspace.name}
         connection={connection}
+        latencyMs={latencyMs}
         budget={null}
         halted={view.workspace.haltedReason !== null}
       />

@@ -17,6 +17,19 @@ export interface WorkspaceStreamState<S> {
   readonly snapshot: S | null
   readonly connection: 'connected' | 'reconnecting'
   readonly error: string | null
+  /**
+   * Milliseconds between the server stamping an event (`ExecutionEvent.ts`) and this client
+   * receiving the frame. `null` until the first data frame with a parseable `ts` arrives.
+   *
+   * NOT the heartbeat's round trip, and deliberately so: `server/sse.ts` writes its heartbeat as
+   * an ID-ONLY frame (`id: <seq>\n\n`, no `data:`), which `EventSource` uses to advance
+   * `lastEventId` and never surfaces as a `message` event — there is nothing in the browser to
+   * time it against. An event's own arrival age measures the same path (append → LISTEN → SSE
+   * write → browser) and is observable. Both clocks are the same machine (the product is
+   * localhost-only), so skew is not a factor; clamped at 0 so a clock that ticks backwards shows
+   * `0ms` rather than a negative age.
+   */
+  readonly latencyMs: number | null
 }
 
 /**
@@ -36,6 +49,7 @@ export function useWorkspaceStream<S>(options: {
   const [snapshot, setSnapshot] = useState<S | null>(initial)
   const [connection, setConnection] = useState<'connected' | 'reconnecting'>('connected')
   const [error, setError] = useState<string | null>(null)
+  const [latencyMs, setLatencyMs] = useState<number | null>(null)
   const debounce = useRef<ReturnType<typeof setTimeout> | null>(null)
   const refetchSeq = useRef(0)
 
@@ -96,6 +110,13 @@ export function useWorkspaceStream<S>(options: {
       // the parse failure above: not ours to crash over (spec §9).
       if (event === null || typeof event !== 'object') return
 
+      // Stream latency (M14 §3): the age of this frame when it landed. See `latencyMs`'s docstring
+      // for why the heartbeat cannot serve — it is an id-only frame and fires no `message` event.
+      if (typeof event.ts === 'string') {
+        const sentAt = Date.parse(event.ts)
+        if (Number.isFinite(sentAt)) setLatencyMs(Math.max(0, Date.now() - sentAt))
+      }
+
       onEventRef.current?.(event)
 
       // Every event — recognized or not — is a wake-up (spec §6).
@@ -108,5 +129,5 @@ export function useWorkspaceStream<S>(options: {
     }
   }, [workspaceId, endpoint])
 
-  return { snapshot, connection, error }
+  return { snapshot, connection, error, latencyMs }
 }

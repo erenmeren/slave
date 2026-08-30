@@ -23,6 +23,9 @@ export interface OverviewState {
   readonly connection: 'connected' | 'reconnecting'
   /** Set when the latest refetch failed; the UI dims and shows it (spec §9). */
   readonly error: string | null
+  /** Passed straight through from `useWorkspaceStream` (M14 §3) — the top bar's `sse · <ms>`
+   *  chip. `null` until the first event with a parseable `ts` arrives. */
+  readonly latencyMs: number | null
 }
 
 /** A live line remembers which run produced it so a refetch can tell "still current" from "over". */
@@ -46,7 +49,7 @@ export function useOverview(workspaceId: string, initial: OverviewSnapshot): Ove
   const [lines, setLines] = useState<Record<string, LiveLine>>({})
   const [liveEvents, setLiveEvents] = useState<Record<string, readonly AgentFeedEvent[]>>({})
 
-  const { snapshot, connection, error } = useWorkspaceStream<OverviewSnapshot>({
+  const { snapshot, connection, error, latencyMs } = useWorkspaceStream<OverviewSnapshot>({
     workspaceId,
     endpoint: `/api/w/${workspaceId}/overview`,
     initial,
@@ -91,5 +94,5 @@ export function useOverview(workspaceId: string, initial: OverviewSnapshot): Ove
     [lines],
   )
 
-  return { snapshot, actionLines, liveEvents, connection, error }
+  return { snapshot, actionLines, liveEvents, connection, error, latencyMs }
 }

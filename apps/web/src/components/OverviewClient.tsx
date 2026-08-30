@@ -20,7 +20,7 @@ export function OverviewClient({
   readonly workspaceId: string
   readonly initial: OverviewSnapshot
 }): React.JSX.Element {
-  const { snapshot, actionLines, liveEvents, connection, error } = useOverview(workspaceId, initial)
+  const { snapshot, actionLines, liveEvents, connection, error, latencyMs } = useOverview(workspaceId, initial)
   const view = snapshot ?? initial
   const [selectedAgentId, selectAgent] = useSelectedId('agent')
   const selectedAgent = view.agents.find((agent) => agent.id === selectedAgentId) ?? null
@@ -39,6 +39,7 @@ export function OverviewClient({
           workspaceId={workspaceId}
           workspaceName={view.workspace.name}
           connection={connection}
+          latencyMs={latencyMs}
           budget={{
             spentUsd: view.workspace.spentUsd,
             budgetUsd: view.workspace.budgetUsd,

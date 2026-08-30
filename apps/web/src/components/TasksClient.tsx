@@ -58,7 +58,7 @@ export function TasksClient({
   readonly workspaceId: string
   readonly initial: TasksSnapshot
 }): React.JSX.Element {
-  const { snapshot, connection, error } = useTasks(workspaceId, initial)
+  const { snapshot, connection, error, latencyMs } = useTasks(workspaceId, initial)
   const view = snapshot ?? initial
   const [selectedId, setSelectedId] = useSelectedId('task')
   const selectedTask = view.tasks.find((task) => task.id === selectedId) ?? null
@@ -77,6 +77,7 @@ export function TasksClient({
           workspaceId={workspaceId}
           workspaceName={view.workspace.name}
           connection={connection}
+          latencyMs={latencyMs}
           budget={null}
           halted={view.workspace.haltedReason !== null}
         />
