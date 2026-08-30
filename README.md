@@ -67,6 +67,7 @@ Ubuntu, `apt-get install docker-compose-plugin`) before continuing.
 | `npm run gate:m12-providers` | The M12 gate: two runtimes kept one promise — paused, resumed, and budgeted alike (**spends real money**: it drives live Claude and Cursor accounts, so it is not CI-runnable and is run deliberately, by hand) |
 | `npm run gate:m13-runtime` | The M13 gate: a pause is a stop and a stop is resumable — both runtimes paused, refused mid-stop, resumed, and re-budgeted from the browser (**spends real money**: it drives live Claude and Cursor accounts, so it is not CI-runnable and is run deliberately, by hand). Rehearse it for free first — `AITEAMOS_CLAUDE_BIN="$PWD/scripts/gate-fakes/fake-claude.sh" AITEAMOS_CURSOR_BIN="$PWD/scripts/gate-fakes/fake-cursor-agent.sh" npm run gate:m13-runtime` — which runs every stage against fake CLIs and touches no vendor account |
 | `npm run gate:m14-fidelity` | The M14 gate: nine pages, one design — every page of the handoff's shell rendered on real data at 1440×900, the README's own numbers read back from `getComputedStyle`, reduced motion proved, and nine screenshots committed under `docs/superpowers/fidelity/m14/`. **Spends nothing**, and refuses to start without `AITEAMOS_CLAUDE_BIN` pointing at `scripts/gate-fakes/` — `AITEAMOS_CLAUDE_BIN="$PWD/scripts/gate-fakes/fake-claude.sh" npm run gate:m14-fidelity` |
+| `npm run gate:m15-boundary` | The M15 gate: the boundary holds — foreign Host, cross-site writes and cross-site SSE reads all refused by the middleware in a real `next dev`, same-origin traffic untouched. **Spends nothing**, CI-runnable. |
 
 Integration tests require Postgres to be running. They **fail** rather than skip when it is not:
 a suite that skips reports success for work it did not do.
@@ -208,11 +209,17 @@ template.defaultModel` resolution chain.
 npm run web
 ```
 
-Serves the Next.js app at `http://localhost:3000` (or the next free port — Next prints which one
-it picked if 3000 is taken). `npm run web` loads the root `.env` itself (`--env-file=.env`), the
-same file the orchestrator and the seed script use, so it needs no separate configuration: point it
-at a workspace with `http://localhost:3000/w/<workspaceId>` and it reads that workspace straight
-out of the development database.
+Runs `next dev apps/web -H 127.0.0.1`, serving the Next.js app at `http://127.0.0.1:3000` (or the
+next free port — Next prints which one it picked if 3000 is taken). The `-H 127.0.0.1` binds the
+socket to loopback only — this instance is not reachable from another machine on the network,
+and the app-wide boundary middleware (`apps/web/src/middleware.ts`) refuses any request whose Host
+header isn't `localhost`/`127.0.0.1`/`[::1]` and any cross-site `/api` request regardless, so the
+two defenses hold even if a proxy or a misconfigured host puts the port on a wider interface. A
+production `next start apps/web -H 127.0.0.1` carries the same flag for the same reason.
+`npm run web` loads the root `.env` itself (`--env-file=.env`), the same file the orchestrator and
+the seed script use, so it needs no separate configuration: point it at a workspace with
+`http://127.0.0.1:3000/w/<workspaceId>` and it reads that workspace straight out of the development
+database.
 
 The **Overview** page (`/w/<workspaceId>`) shows one card per agent — status, current task, live
 action line, provider, budget — a top strip with task counts and spend against the workspace

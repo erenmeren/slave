@@ -19,7 +19,7 @@
     "db:seed": "tsc --build && node --env-file=.env packages/db/dist/seed.js",
     "db:seed:test": "tsc --build && node scripts/seed-test.mjs",
     "orchestrator": "tsc --build && node --env-file=.env apps/orchestrator/dist/cli.js",
-    "web": "node --env-file=.env node_modules/next/dist/bin/next dev apps/web",
+    "web": "node --env-file=.env node_modules/next/dist/bin/next dev apps/web -H 127.0.0.1",
     "web:build": "next build apps/web",
     "demo": "tsc --build && node --env-file=.env scripts/demo-live.mjs",
     "gate:m8a-merge": "tsc --build && node --env-file=.env scripts/gate-m8a-merge.mjs",
@@ -29,7 +29,8 @@
     "gate:m11-shell": "tsc --build && node --env-file=.env scripts/gate-m11-shell.mjs",
     "gate:m12-providers": "tsc --build && node --env-file=.env scripts/gate-m12-providers.mjs",
     "gate:m13-runtime": "tsc --build && node --env-file=.env scripts/gate-m13-runtime.mjs",
-    "gate:m14-fidelity": "tsc --build && node --env-file=.env scripts/gate-m14-fidelity.mjs"
+    "gate:m14-fidelity": "tsc --build && node --env-file=.env scripts/gate-m14-fidelity.mjs",
+    "gate:m15-boundary": "tsc --build && node --env-file=.env scripts/gate-m15-boundary.mjs"
   },
   "devDependencies": {
     "@testing-library/react": "^16.0.0",
