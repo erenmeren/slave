@@ -53,14 +53,16 @@ describe('ProjectsClient', () => {
   it('shows the unmeasured line only when some of the project\'s runs reported no cost, never widening the strip', () => {
     // M12 Task 9 / ruling R3, applied to the sibling of the budget bar: `$12.50` presented alone
     // reads as this project's whole spend. It is only the measured part of it whenever any run
-    // reported nothing. Task 13 (M14) moved this off the stat strip entirely -- the handoff's
-    // strip is a fixed 4-up (`project-unmeasured` is its own line beneath it, Decision 4) -- so
-    // this no longer asserts a 5th `stat-strip-item`; `project-unmeasured` carries the coverage.
+    // reported nothing. Task 13 (M14) moved this off the stat strip entirely; the M14 fix wave
+    // (queue item (f)) moved it back INSIDE the spend tile as `StatStripItem.note`, which is
+    // where `TopStrip` has always nested its own `strip-unmeasured`. Re-pointed to assert the
+    // containment -- the strip is still a fixed 4-up, and the testid is unchanged.
     const { rerender } = render(
       <ProjectsClient projects={[project({ id: 'w1', unmeasuredRuns: 2 })]} companies={companies} />,
     )
     expect(screen.getAllByTestId('stat-strip-item')).toHaveLength(4)
-    expect(screen.getByTestId('project-unmeasured')).toBeTruthy()
+    const spendTile = screen.getAllByTestId('stat-strip-item')[3]
+    expect(spendTile?.contains(screen.getByTestId('project-unmeasured'))).toBe(true)
 
     rerender(<ProjectsClient projects={[project({ id: 'w1', unmeasuredRuns: 0 })]} companies={companies} />)
     expect(screen.getAllByTestId('stat-strip-item')).toHaveLength(4)
@@ -202,6 +204,29 @@ describe('the handoff project card', () => {
   it('shows the unknown mark on spend rather than a total that swallows unmeasured runs', () => {
     render(<ProjectsClient projects={[project({ spend: 4, unmeasuredRuns: 2 })]} companies={companies} />)
     expect(screen.getByTestId('project-unmeasured').textContent).toBe('2 runs unmeasured')
+    // Re-pointed by the M14 fix wave (queue item (f)): the caveat reads inside the tile it
+    // qualifies now, so the tile's own text carries both halves.
+    expect(screen.getAllByTestId('stat-strip-item')[3]?.textContent?.replace(/\s+/g, ' ').trim()).toBe(
+      'spend $4.00 2 runs unmeasured',
+    )
+  })
+
+  // M14 fix wave, review I4: `projects.png` showed `AGENTS 0` above six avatar tiles on the same
+  // card. The tile and the row read the same DTO's two halves; this pins that they agree.
+  it('puts the same number in the AGENTS tile as it puts faces in the avatar row', () => {
+    render(
+      <ProjectsClient
+        projects={[
+          project({
+            workerCount: 2,
+            team: [{ agentId: 'a1', name: 'Alex Turner', status: 'working' }, { agentId: 'a2', name: 'Bea Ng', status: 'idle' }],
+          }),
+        ]}
+        companies={companies}
+      />,
+    )
+    expect(screen.getAllByTestId('stat-strip-item')[0]?.textContent?.replace(/\s+/g, ' ').trim()).toBe('agents 2')
+    expect(screen.getAllByTestId('avatar-tile')).toHaveLength(2)
   })
 
   it('maps halted to Halted, active work to Running, and quiet to Idle', () => {

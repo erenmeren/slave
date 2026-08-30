@@ -4,6 +4,14 @@ export interface StatStripItem {
   readonly label: string
   readonly value: string
   readonly tone?: StatusTone
+  /**
+   * An optional line UNDER the value, inside the tile (M14 fix wave, queue item (f)). The one
+   * idiom for "this figure knows less than it looks like it knows": `TopStrip` already nests its
+   * `strip-unmeasured` inside the spend tile, and Projects used to hang the same sentence off the
+   * bottom of the whole strip. Same defect, two placements. It goes in the tile it qualifies --
+   * a caveat that is not beside its number is a caveat a reader has to work to attach.
+   */
+  readonly note?: React.ReactNode
 }
 
 /** The handoff stat strip (spec §3): an n-up row of `label`/`value` tiles with 1px gutters. */
@@ -23,7 +31,11 @@ export function StatStrip({ items }: { readonly items: ReadonlyArray<StatStripIt
             * text node between block children renders nothing, so this changes no pixel. */}
           <span className={`font-mono text-lg font-semibold ${item.tone !== undefined ? TONE_TEXT[item.tone] : 'text-text-1'}`}>
             {item.value}
-          </span>
+          </span>{' '}
+          {/* The same literal space as above, for the same reason: this tile's own `textContent`
+            * must read "spend $4.00 2 runs unmeasured", not "$4.002 runs". Whitespace-only text
+            * nodes are not rendered as flex items, so no pixel moves. */}
+          {item.note}
         </div>
       ))}
     </div>

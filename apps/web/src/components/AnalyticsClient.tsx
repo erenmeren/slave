@@ -43,7 +43,10 @@ export function AnalyticsClient({
   }
 
   return (
-    <div className="flex flex-col gap-4">
+    // `p-4`, the same page padding `SettingsClient` and `AgentsClient` use (M14 fix wave, review
+    // I5). Without it the `analytics` h1 was clipped mid-glyph against the sidebar's edge and the
+    // KPI strip ran flush into both viewport edges -- visible in the committed `analytics.png`.
+    <div className="flex flex-col gap-4 p-4">
       <div className="flex items-center justify-between gap-3">
         <h1 className="text-[15px] font-semibold tracking-[-.2px] text-text-1">analytics</h1>
         <select
@@ -114,7 +117,18 @@ export function AnalyticsClient({
                 <span data-testid={`perf-tokens-${row.agentId}`} className="font-mono text-[11px] text-text-2">
                   {row.tokens === null ? '—' : formatTokens(row.tokens)}
                 </span>
-                <span className="font-mono text-[11px] text-text-1">${row.costUsd.toFixed(2)}</span>
+                {/* The Spend KPI tile's own idiom, on the per-agent row (M14 fix wave, review
+                  * I1): a cost that hides how many of the agent's runs were never measured
+                  * presents the measured part of a bill as the whole of it. */}
+                <span className="font-mono text-[11px] text-text-1">
+                  ${row.costUsd.toFixed(2)}
+                  {row.unmeasuredRuns > 0 && (
+                    <span data-testid={`perf-unmeasured-${row.agentId}`} className="text-text-3">
+                      {' '}
+                      · {row.unmeasuredRuns} unmeasured
+                    </span>
+                  )}
+                </span>
               </Row>
             ))}
           </DataTable>

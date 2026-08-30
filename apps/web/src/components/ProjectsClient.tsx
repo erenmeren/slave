@@ -93,21 +93,30 @@ function ProjectCard({
         </div>
 
         <div className="mt-[14px]">
+          {/* The caveat rides INSIDE the spend tile, as `StatStripItem.note` (M14 fix wave, queue
+            * item (f)) -- exactly where `TopStrip` nests its own `strip-unmeasured`. It is never
+            * folded into the figure (Decision 4), and the strip stays exactly 4-up, which is the
+            * handoff's own geometry. */}
           <StatStrip
             items={[
               { label: 'agents', value: String(project.workerCount) },
               { label: 'active', value: String(project.taskCounts.active), ...(project.taskCounts.active > 0 ? { tone: 'working' as const } : {}) },
               { label: 'blocked', value: String(project.taskCounts.blocked), ...(project.taskCounts.blocked > 0 ? { tone: 'blocked' as const } : {}) },
-              { label: 'spend', value: `$${project.spend.toFixed(2)}` },
+              {
+                label: 'spend',
+                value: `$${project.spend.toFixed(2)}`,
+                ...(project.unmeasuredRuns > 0
+                  ? {
+                      note: (
+                        <span data-testid="project-unmeasured" className="font-mono text-[9.5px] text-status-warn">
+                          {project.unmeasuredRuns} run{project.unmeasuredRuns === 1 ? '' : 's'} unmeasured
+                        </span>
+                      ),
+                    }
+                  : {}),
+              },
             ]}
           />
-          {/* Its own line beneath the strip, never folded into the figure (Decision 4). The strip
-            * stays exactly 4-up, which is the handoff's own geometry. */}
-          {project.unmeasuredRuns > 0 && (
-            <p data-testid="project-unmeasured" className="mt-1 font-mono text-[9.5px] text-status-warn">
-              {project.unmeasuredRuns} run{project.unmeasuredRuns === 1 ? '' : 's'} unmeasured
-            </p>
-          )}
         </div>
       </Card>
       {project.companyName === null && (

@@ -75,6 +75,22 @@ describe('AnalyticsClient', () => {
     expect(screen.getByTestId('perf-avg-a2').textContent).toBe('—')
   })
 
+  // M14 fix wave, review I1: `unmeasuredRuns` reached this row's DTO and was rendered nowhere.
+  it('says how many of an agent runs went unmeasured, beside the cost', () => {
+    const rows = snapshot().perAgent.map((r) => (r.agentId === 'a1' ? { ...r, unmeasuredRuns: 3 } : r))
+    render(<AnalyticsClient snapshot={snapshot({ perAgent: rows })} workspaces={workspaces} seeded={false} />)
+    expect(screen.getByTestId('perf-unmeasured-a1').textContent?.replace(/\s+/g, ' ').trim()).toBe('· 3 unmeasured')
+    expect(screen.queryByTestId('perf-unmeasured-a2')).toBeNull()
+  })
+
+  // M14 fix wave, review I5: the page returned a bare `flex flex-col gap-4`, so the `analytics`
+  // h1 was clipped against the sidebar edge and both panels ran flush into the viewport. `p-4` is
+  // the padding Settings and Agents already use.
+  it('pads the page the way the other global pages do', () => {
+    const { container } = render(<AnalyticsClient snapshot={snapshot()} workspaces={workspaces} seeded={false} />)
+    expect(container.firstElementChild?.className).toContain('p-4')
+  })
+
   it('shows the seeded caption only on the seeded workspace', () => {
     const { rerender } = render(<AnalyticsClient snapshot={snapshot()} workspaces={workspaces} seeded />)
     expect(screen.getByTestId('analytics-caption').textContent).toBe('Last 7 days · seeded development data')
