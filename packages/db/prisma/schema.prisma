@@ -371,17 +371,24 @@ model AgentRun {
   /// pass one now gets `null` at the database level instead of a silently wrong `0`.
   costUsd           Float?
   /// Which skills this run invoked, and how many times each: `{ "superpowers:writing-plans": 2 }`
-  /// (M14 §4.1). Written ONCE, at the run's terminal conclusion, from a tally the pump keeps of
-  /// the `Skill` tool calls it already observes.
+  /// (M14 §4.1), from a tally the pump keeps of the `Skill` tool calls it already observes.
+  ///
+  /// Written ONCE per pump, when that pump's event STREAM ENDS -- however it ended: a terminal
+  /// result, a bare stream end, an operator's kill, or a pause. Deliberately not on the row's
+  /// terminal status writes (fix round 1): the tally is a fact of the stream, while the row's
+  /// conclusion is a fact of whoever won the race to write it, and those are different events --
+  /// `packages/control/src/stop.ts` concludes an operator-stopped run with no tally in hand, and
+  /// normally wins. A resumed run is a SECOND pump on this row, and MERGES into what is here
+  /// rather than replacing it, which is what makes a pause -> resume total add up.
   ///
   /// THREE states, and the difference between the last two is Decision 4 (keyed on the run's
   /// PROVIDER, never on what the stream happened to contain):
   ///   - `{ "<skill>": n }` -- a Claude run that invoked skills.
   ///   - `{}`              -- a Claude run that invoked none. A MEASUREMENT: we watched, and
   ///                          there were none.
-  ///   - `null`            -- a Cursor run, or a run that never concluded. UNKNOWN: that runtime
-  ///                          cannot report skill use at all, and an empty object there would
-  ///                          claim a measurement nobody made.
+  ///   - `null`            -- a Cursor run, or a run whose stream has not ended yet. UNKNOWN:
+  ///                          that runtime cannot report skill use at all, and an empty object
+  ///                          there would claim a measurement nobody made.
   skillCalls        Json?
   /// Which runtime produced this run (M12 Task 6). Nullable: this task only adds the column --
   /// Tasks 7/8 resolve and write it, so every run recorded before them reads back null.

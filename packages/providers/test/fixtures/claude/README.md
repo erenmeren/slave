@@ -82,16 +82,30 @@ was in question.
 
 ### Redaction
 
-The stream is byte for byte the CLI's stdout except for **one** mechanical substitution:
+The stream is byte for byte the CLI's stdout except for **two** mechanical substitutions:
 
 ```bash
-sed -e 's#/home/meren#/home/fixture-user#g' /tmp/m14-skill-fixture/raw.ndjson \
+sed -e 's#/home/meren#/home/fixture-user#g' \
+    -e 's#"messaging_socket_path":"/run/user/1001/cc-socks/1565400.sock"#"messaging_socket_path":"/run/user/UID/cc-socks/PID.sock"#' \
+    /tmp/m14-skill-fixture/raw.ndjson \
   > packages/providers/test/fixtures/claude/skill-tool-use.ndjson
 ```
 
-Ten occurrences, all in the `init` line: the `plugins[].path` entries, `memory_paths.auto`, and
-`messaging_socket_path`. Nothing else was altered — line count, ordering and every other byte are
-the capture's own.
+**Where each one lands** (counted on the committed file; the first record of this, in the original
+commit, said "ten occurrences, all in the `init` line" and was wrong on both halves — review
+Important 3):
+
+| Substitution | Sites |
+| --- | --- |
+| `/home/meren` → `/home/fixture-user` | **10**: nine on line 7, the `init` line (eight `plugins[].path` entries and `memory_paths.auto`), and **one on line 12**, inside the `user` message — the skill body's own `Base directory for this skill: …` header. |
+| `messaging_socket_path` → `/run/user/UID/cc-socks/PID.sock` | **1**, on line 7. Added in fix round 1: it was never a `/home/meren` site, so the first pass left it, and `/run/user/1001/cc-socks/1565400.sock` carries the operator's UID and a PID. |
+
+Nothing else was altered — line count, ordering and every other byte are the capture's own, and
+**line 9, the `Skill` tool_use, is byte-identical to the capture** (md5 `1890257a…`, unchanged by
+either substitution). The brief also suggested rewriting `cwd` to `/fake/claude-workdir/skill`;
+that was deliberately NOT applied — `/tmp/m14-skill-fixture` is a throwaway directory that
+identifies nobody, and leaving it makes the recording's provenance checkable against the command
+above.
 
 The capture contains **no email address** (verified by grep for `@`-shaped tokens: zero matches),
 so the `user_email` substitution the Cursor gate README applies had nothing to act on here. No

@@ -70,7 +70,9 @@ The three review fixtures and `plan-graph` share `complete`'s `session_id`
 
 1. Keep the stream **byte for byte** except for mechanical substitutions.
 2. Name every substitution, as a runnable command, in the README beside the file.
-3. Redact: the operator's email address, home directory paths, and transcript/session **paths**.
-   Session *ids* stay — they are random UUIDs, and the parser reads them.
+3. Redact: the operator's email address, home directory paths, transcript/session **paths**, and
+   any path carrying a UID or a PID (`messaging_socket_path` is the one the CLI emits — it was
+   missed on the first pass of `claude/skill-tool-use.ndjson` and caught in review). Session *ids*
+   stay — they are random UUIDs, and the parser reads them.
 4. Never add, remove or reorder a line to make a fixture fit a test. If a real recording does not
    fit, the fixture is right and its placement is wrong.

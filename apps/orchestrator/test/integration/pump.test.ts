@@ -1049,11 +1049,14 @@ describe('pumpRun', () => {
   /**
    * M14 §4.1 / Decisions 4 and 5: `AgentRun.skillCalls`.
    *
-   * The tally comes from the `tool_call` events this loop already sees -- no new `RuntimeEvent`
-   * variant, no second pass over the stream -- and is written ONCE, at the run's terminal
-   * conclusion. What these tests pin is the three-state column: a tally, a measured `{}`, and a
-   * `null` that means "this runtime cannot report", keyed on the PROVIDER rather than on what the
-   * stream happened to contain.
+   * The tally comes from the `tool_call` events the pump loop already sees -- no new
+   * `RuntimeEvent` variant, no second pass over the stream -- and is written ONCE per pump, when
+   * that pump's STREAM ENDS, whatever ended it. Fix round 1 moved it there from the row's four
+   * terminal status writes, because those two are different events: `packages/control/src/stop.ts`
+   * concludes an operator-stopped run from another package with no tally in hand and normally wins
+   * the race, and a pause writes no conclusion at all. What these tests pin is that single write,
+   * its merge, and the three-state column -- a tally, a measured `{}`, and a `null` that means
+   * "this runtime cannot report", keyed on the PROVIDER rather than on what the stream contained.
    */
   describe('skillCalls (M14 §4.1)', () => {
     const skillCall = (id: string, name: string): RuntimeEvent => ({
@@ -1156,32 +1159,10 @@ describe('pumpRun', () => {
       expect(run.skillCalls).toEqual({ 'superpowers:verification-before-completion': 1 })
     })
 
-    it('writes the tally when an operator stop is the conclusion', async (): Promise<void> => {
-      // The `stopping` + intent-record shape `requestStop` writes before its kill -- the branch
-      // that concludes `stopped` rather than `failed`. A run an operator stopped still invoked the
-      // skills it invoked.
-      await prisma.agentRun.update({
-        where: { id: ids.runId },
-        data: { status: 'stopping', stopRequestedBy: 'meren', stopRequestedAt: new Date() },
-      })
-
-      await pumpRun({
-        ...ids,
-        events: fromArray([
-          { kind: 'session_started', sessionId: 's-1' },
-          skillCall('t1', 'superpowers:systematic-debugging'),
-        ]),
-      })
-
-      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
-      expect(run.status).toBe('stopped')
-      expect(run.skillCalls).toEqual({ 'superpowers:systematic-debugging': 1 })
-    })
-
     it('writes the tally when a broken gate concludes the run', async (): Promise<void> => {
-      // The fourth terminal path: `hook_failed_open` halts the workspace and concludes the run
-      // `failed` from inside the loop, before either post-loop branch runs. A write added to the
-      // other three only would silently leave this one null.
+      // `hook_failed_open` halts the workspace and concludes the run `failed` from inside the loop.
+      // The write is still the one at the stream's end, which the loop reaches afterwards -- and it
+      // has to land on a row this pump itself already marked terminal.
       await pumpRun({
         ...ids,
         cancel: async (): Promise<void> => {},
@@ -1195,6 +1176,81 @@ describe('pumpRun', () => {
       const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
       expect(run.status).toBe('failed')
       expect(run.skillCalls).toEqual({ 'superpowers:test-driven-development': 1 })
+    })
+
+    it('keeps the tally when requestStop concluded the row before the stream ended (review Important 1)', async (): Promise<void> => {
+      // THE case fix round 1 exists for, and the one the previous round lost. `requestStop`
+      // (`packages/control/src/stop.ts`) claims `stopping`, kills the child, and writes the
+      // terminal row itself -- `{ status: 'stopped', terminalAt, endedAt }`, from another package,
+      // with no tally in hand. `pump.ts`'s own comment says that side normally wins in the CLI, so
+      // a tally carried only on this file's status-conditioned writes was measured and discarded
+      // on the most common deliberate stop there is.
+      //
+      // Modelled here as the real thing does it: the row is already terminal, concluded by someone
+      // else, when the pump's stream ends. The write must land anyway -- unconditioned on
+      // `endedAt` and on status.
+      async function* stopsMidStream(): AsyncIterable<RuntimeEvent> {
+        yield { kind: 'session_started', sessionId: 's-1' }
+        yield skillCall('t1', 'superpowers:systematic-debugging')
+        const now = new Date()
+        await prisma.agentRun.updateMany({
+          where: { id: ids.runId, endedAt: null },
+          data: { status: 'stopping', stopRequestedBy: 'meren', stopRequestedAt: now },
+        })
+        await prisma.agentRun.updateMany({
+          where: { id: ids.runId, endedAt: null },
+          data: { status: 'stopped', terminalAt: now, endedAt: now },
+        })
+      }
+
+      await pumpRun({ ...ids, events: stopsMidStream() })
+
+      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      // The other side's conclusion stands -- this write must not walk the status back.
+      expect(run.status).toBe('stopped')
+      expect(run.skillCalls).toEqual({ 'superpowers:systematic-debugging': 1 })
+    })
+
+    it('writes the tally on a pause, and the resumed pump adds to it instead of replacing it', async (): Promise<void> => {
+      // A pause writes no conclusion, so a tally that waited for one lost the whole first half of
+      // every paused run -- and the resume seed had nothing to read. Now the pause's own stream end
+      // writes it, and this is the production flow end to end: pause, resume, one total.
+      await pumpRun({
+        ...ids,
+        events: fromArray([
+          { kind: 'session_started', sessionId: 's-1' },
+          skillCall('t1', 'superpowers:brainstorming'),
+          { kind: 'hook_denied', hookName: 'PreToolUse:Write', reason: 'Paused by AI Team OS.' },
+        ]),
+      })
+
+      const paused = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      expect(paused.status).toBe('paused')
+      // A pause is not a conclusion, but it IS a stream end: what the run did before it is a fact.
+      expect(paused.endedAt).toBeNull()
+      expect(paused.skillCalls).toEqual({ 'superpowers:brainstorming': 1 })
+
+      // What the tick's paused->resuming claim leaves the row at before `resume()` pumps again.
+      await prisma.agentRun.update({ where: { id: ids.runId }, data: { status: 'resuming' } })
+
+      await pumpRun({
+        ...ids,
+        resumed: true,
+        events: fromArray([
+          { kind: 'session_started', sessionId: 's-1' },
+          skillCall('t2', 'superpowers:brainstorming'),
+          skillCall('t3', 'superpowers:writing-plans'),
+          { kind: 'terminated', outcome: okOutcome },
+        ]),
+      })
+
+      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      expect(run.status).toBe('succeeded')
+      // Merged, not replaced: the second pump counted only its own two calls.
+      expect(run.skillCalls).toEqual({
+        'superpowers:brainstorming': 2,
+        'superpowers:writing-plans': 1,
+      })
     })
 
     it('writes null, never an empty tally, for a Cursor run -- that runtime cannot report skills', async (): Promise<void> => {
@@ -1221,58 +1277,29 @@ describe('pumpRun', () => {
       expect(run.skillCalls).toBeNull()
     })
 
-    it('leaves skillCalls null on a run that is merely paused -- a pause is not a conclusion', async (): Promise<void> => {
+    it('applies the tally exactly once per stream end, however the row was concluded', async (): Promise<void> => {
+      // "Exactly once" is observable through the merge: the write reads the row back and ADDS, so
+      // a second write on any other path -- the four terminal status writes this replaced, say --
+      // would read its own first result and double every count. One Skill call must therefore come
+      // out as 1, on the path where the row is concluded from inside the loop and the stream end
+      // arrives afterwards.
+      //
+      // Not asserted with `vi.spyOn(prisma.agentRun, 'updateMany')`: measured here, spying on a
+      // Prisma model method records the call but does NOT call through (it returns `undefined`),
+      // so the probe would silently suppress the very write it claims to count.
       await pumpRun({
         ...ids,
+        cancel: async (): Promise<void> => {},
         events: fromArray([
           { kind: 'session_started', sessionId: 's-1' },
           skillCall('t1', 'superpowers:brainstorming'),
-          { kind: 'hook_denied', hookName: 'PreToolUse:Write', reason: 'Paused by AI Team OS.' },
+          { kind: 'hook_failed_open', hookName: 'PreToolUse:Write', exitCode: 127, stderr: 'gate is broken' },
         ]),
       })
 
       const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
-      expect(run.status).toBe('paused')
-      expect(run.skillCalls).toBeNull()
-    })
-
-    it('continues a resumed run’s tally rather than restarting it at zero', async (): Promise<void> => {
-      // A resume is a SECOND `pumpRun` on the same row. The tally is seeded from the row for the
-      // same reason `toolCalls` is incremented rather than overwritten: a count that restarts at
-      // zero forgets everything the first half of the run did.
-      await pumpRun({
-        ...ids,
-        events: fromArray([
-          { kind: 'session_started', sessionId: 's-1' },
-          skillCall('t1', 'superpowers:brainstorming'),
-          { kind: 'hook_denied', hookName: 'PreToolUse:Write', reason: 'Paused by AI Team OS.' },
-        ]),
-      })
-      // The pause wrote no tally, so the seed has to survive somewhere the second pump can read.
-      // It does not: `skillCalls` is null on a paused row by design, so the first half's skills are
-      // recoverable only if the row already carried them. Write the row the way a previous
-      // concluded pump would have, then prove the second pump adds to it instead of replacing it.
-      await prisma.agentRun.update({
-        where: { id: ids.runId },
-        data: { status: 'resuming', endedAt: null, skillCalls: { 'superpowers:brainstorming': 1 } },
-      })
-
-      await pumpRun({
-        ...ids,
-        resumed: true,
-        events: fromArray([
-          { kind: 'session_started', sessionId: 's-1' },
-          skillCall('t2', 'superpowers:brainstorming'),
-          skillCall('t3', 'superpowers:writing-plans'),
-          { kind: 'terminated', outcome: okOutcome },
-        ]),
-      })
-
-      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
-      expect(run.skillCalls).toEqual({
-        'superpowers:brainstorming': 2,
-        'superpowers:writing-plans': 1,
-      })
+      expect(run.status).toBe('failed')
+      expect(run.skillCalls).toEqual({ 'superpowers:brainstorming': 1 })
     })
   })
 

@@ -115,10 +115,60 @@ function runtimeReportsUsage(spawn: PumpRunInput['spawn']): boolean {
   return spawn?.provider !== 'cursor'
 }
 
-/** The tally as the JSON column wants it. A plain object, never a `Map` -- Prisma writes the
- *  latter as `{}`. */
-function skillCallsJson(tally: ReadonlyMap<string, number>): Record<string, number> {
-  return Object.fromEntries(tally)
+/**
+ * The row's stored tally, read defensively.
+ *
+ * `skillCalls` is a `Json?` column, so its static type is `JsonValue` and nothing at the database
+ * level stops a scalar from being in there. `Object.entries` over a string yields index keys rather
+ * than throwing, which would silently corrupt the tally instead of failing, so the shape is checked
+ * and non-numeric values are dropped rather than asserted away.
+ */
+function storedTally(value: unknown): Map<string, number> {
+  const tally = new Map<string, number>()
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return tally
+  for (const [name, count] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof count === 'number' && Number.isFinite(count)) tally.set(name, count)
+  }
+  return tally
+}
+
+/**
+ * Records what this pump watched, ONCE, when its stream ends -- however it ended (M14 §4.1,
+ * Decision 5, fix round 1).
+ *
+ * At the stream's end rather than on the terminal status writes, because **the tally is a fact of
+ * the STREAM and the row's conclusion is a fact of whoever won the race to write it**, and those
+ * are not the same event. `packages/control/src/stop.ts` concludes an operator-stopped run from
+ * another call path entirely, with no tally in hand, and by `pumpRun`'s own reckoning it normally
+ * wins -- so a tally carried only on this file's status-conditioned writes was measured and then
+ * discarded on the single most common way a run is stopped deliberately. A pause is the same shape
+ * of loss for the opposite reason: it writes no conclusion at all, so a tally that waited for one
+ * lost everything the run did before pausing, and the resume had nothing to continue from.
+ *
+ * Hence: unconditional, with no `endedAt`/status filter. The row may already be terminal -- that is
+ * the case this exists for -- and refusing to write onto a concluded row is precisely the bug.
+ *
+ * MERGED into what the row holds, not overwritten: a resumed run is a SECOND `pumpRun` on the same
+ * row, and its own `skillCalls` Map counts only what it watched.
+ */
+async function writeSkillTally(input: {
+  readonly runId: RunId
+  readonly tally: ReadonlyMap<string, number>
+  readonly spawn: PumpRunInput['spawn']
+}): Promise<void> {
+  if (!runtimeReportsUsage(input.spawn)) {
+    // Stated, not merely left alone: this runtime cannot report skill use, and `Prisma.DbNull` is
+    // SQL NULL -- the "we do not know" of Decision 4, never the `{}` that would claim a
+    // measurement nobody made.
+    await prisma.agentRun.updateMany({ where: { id: input.runId }, data: { skillCalls: Prisma.DbNull } })
+    return
+  }
+
+  const row = await prisma.agentRun.findUniqueOrThrow({ where: { id: input.runId } })
+  const merged = storedTally(row.skillCalls)
+  for (const [name, count] of input.tally) merged.set(name, (merged.get(name) ?? 0) + count)
+  // A plain object, never the `Map` -- Prisma writes the latter as `{}`.
+  await prisma.agentRun.updateMany({ where: { id: input.runId }, data: { skillCalls: Object.fromEntries(merged) } })
 }
 
 /**
@@ -395,13 +445,14 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
   let toolCalls = startingRow.toolCalls
   /**
    * Skills invoked during THIS pump, tallied from the `tool_call` events the loop already sees
-   * (M14 §4.1, Decision 5). Seeded from the row's existing tally rather than from empty, for the
-   * same reason `toolCalls` is: a resumed run is a SECOND `pumpRun` on the same row, and a tally
-   * that restarts at zero forgets everything the first half of the run did.
+   * (M14 §4.1, Decision 5).
+   *
+   * Empty, deliberately: this is what THIS pump watched, not the run's running total. The total is
+   * formed at the write, by merging this into whatever the row already holds -- so a resumed run's
+   * second pump adds to its first half instead of replacing it, and a merge cannot double-count a
+   * seed it also started from.
    */
-  const skillCalls = new Map<string, number>(
-    Object.entries((startingRow.skillCalls as Record<string, number> | null) ?? {}),
-  )
+  const skillCalls = new Map<string, number>()
   // Seeded from the row for the same reason the counter is: a resumed pump is continuing a run that
   // already has a session. Without this, a resumed run that pauses again bails with "nothing could
   // resume it" and silently leaves the *previous*, now-stale checkpoint for the next resume to use.
@@ -623,7 +674,6 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
                 status: 'failed',
                 terminalAt: now,
                 endedAt: now,
-                skillCalls: runtimeReportsUsage(input.spawn) ? skillCallsJson(skillCalls) : Prisma.DbNull,
               },
             })
             // The attempt counts, so a task cannot loop forever against a gate that stays broken.
@@ -663,6 +713,12 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
     }
 
   }
+
+  // The stream is over, whatever ended it: a terminal result, a bare end, an operator's kill, or a
+  // pause the loop kept reading past. Every `return` below this point is downstream of it, and
+  // there is no `return` above it inside the loop -- so this runs exactly once per pump, on every
+  // path, which is the whole point of it being here rather than on the conclusions.
+  await writeSkillTally({ runId, tally: skillCalls, spawn: input.spawn })
 
   if (gateFailed || paused) return null
 
@@ -712,7 +768,6 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
         status: 'stopped',
         terminalAt: now,
         endedAt: now,
-        skillCalls: runtimeReportsUsage(input.spawn) ? skillCallsJson(skillCalls) : Prisma.DbNull,
       },
     })
     if (stopClaimed.count > 0) {
@@ -744,7 +799,6 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
         status: 'failed',
         terminalAt: now,
         endedAt: now,
-        skillCalls: runtimeReportsUsage(input.spawn) ? skillCallsJson(skillCalls) : Prisma.DbNull,
       },
     })
     if (concluded.count > 0) await emit('run.failed', 'system', { reason })
@@ -761,10 +815,6 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
     data: {
       status: failed ? 'failed' : 'succeeded',
       costUsd: outcome.costUsd,
-      // M14 §4.1 / Decision 5: written ONCE, here at the run's conclusion, and on every other
-      // terminal path in this file too -- never on the two pause writes, which are not
-      // conclusions. `null` rather than `{}` when the runtime cannot report (Decision 4).
-      skillCalls: runtimeReportsUsage(input.spawn) ? skillCallsJson(skillCalls) : Prisma.DbNull,
       terminalAt: terminalNow,
       endedAt: terminalNow,
     },
