@@ -33,7 +33,6 @@ const agent = (over: Partial<AgentCardData>): AgentCardData => ({
   costUsd: 0,
   toolCalls: 0,
   pausedAtStep: null,
-  sparkline: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
   ...over,
 })
 

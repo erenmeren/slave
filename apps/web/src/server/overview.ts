@@ -3,7 +3,6 @@ import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, toRunState } from '@ai-team-os/db'
 import { capabilitiesOf, workspaceDefaultProvider, type ProviderCapabilities, type ProviderKind } from '@ai-team-os/control'
 import { deriveAgentStatus, sumSpend, NON_TERMINAL_RUN_STATUSES, type AgentStatus, type TaskStatus } from '@ai-team-os/domain'
 import { feedSummary, type AgentFeedEvent } from '../lib/feedSummary'
-import { bucketSparkline } from './activity'
 
 // Re-exported so callers that already import from `server/overview.ts` keep working; the
 // definition itself lives in the pure `lib/feedSummary.ts` module (controller ruling R3) so the
@@ -70,9 +69,6 @@ export interface AgentCardData {
   readonly resumeRequestedAt: string | null
   /** Last 20 execution events for this agent, oldest first — seeds the panel's live feed. */
   readonly recentEvents: readonly AgentFeedEvent[]
-  /** This agent's `run.tool_call` counts for the last 10 minutes, one bucket per minute, oldest
-   *  minute first, zero-filled. */
-  readonly sparkline: readonly number[]
   /**
    * The live run's spend so far. Panel's current-run block (spec §6).
    *
@@ -143,6 +139,20 @@ export interface OverviewSnapshot {
 // states that sit between a run finishing and the task landing on `main`.
 const ACTIVE_TASK_STATUSES = ['ready', 'running', 'verifying', 'reviewing', 'merging', 'rework'] as const
 
+/**
+ * The skill NAME out of a `Skill` tool call's summary. The summary's shape is the parser's, not
+ * this file's: `summaryFor` writes `Skill <name>` for a `Skill` call once `skill` joins
+ * `CLAUDE_SUMMARY_ARG_KEYS` (M14 Task 4, which owns that change). Everything else — a bare
+ * `Skill` from before that, a summary the parser could not fill, a non-string payload — is `null`,
+ * so the chip renders `—`. The word `Skill` is the TOOL's name and never a skill's, and printing
+ * it on a chip labelled "skill" would be a placeholder standing where an unknown belongs.
+ */
+function skillNameOf(summary: unknown): string | null {
+  if (typeof summary !== 'string') return null
+  const match = /^Skill\s+(\S+)/.exec(summary)
+  return match?.[1] ?? null
+}
+
 export async function buildOverviewSnapshot(workspaceId: string): Promise<OverviewSnapshot | null> {
   const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId } })
   if (workspace === null) return null
@@ -189,9 +199,15 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
     }
   }
 
-  // The card's skill chip: the latest `Skill` tool call on this run. One `findFirst` per LIVE run,
-  // in the loop that already issues one — the same bound the action-line read accepted. Prisma's
-  // JSON path filter keeps it a single indexed query rather than a scan-and-filter in Node.
+  // The card's skill chip: the latest `Skill` tool call on this run.
+  //
+  // COST, stated plainly: this is a second `findFirst` per LIVE run, in the loop that already
+  // issues one — two per live run, not one. And neither is index-backed: `ExecutionEvent` has no
+  // index on `runId`, and none on `payload` at all, so Postgres scans the run's events (the JSON
+  // path filter is evaluated per row, it does not reach an index) and stops at the first match in
+  // `seq` order. Acceptable at the live-run counts this milestone plans for, and the same N+1 the
+  // M4 review flagged for the action-line read above; a `(runId, seq desc)` index and a single
+  // grouped read for both facts is the fix, deferred.
   const skills = new Map<string, string>()
   for (const run of liveRunByAgent.values()) {
     const event = await prisma.executionEvent.findFirst({
@@ -199,8 +215,8 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
       orderBy: { seq: 'desc' },
     })
     if (event !== null) {
-      const summary = (event.payload as { summary?: string }).summary
-      if (typeof summary === 'string') skills.set(run.agentId, summary)
+      const skill = skillNameOf((event.payload as { summary?: unknown }).summary)
+      if (skill !== null) skills.set(run.agentId, skill)
     }
   }
 
@@ -231,24 +247,6 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
   // Rows arrived newest-first (capped per agent while iterating that order); the panel wants
   // oldest-first, newest at the bottom.
   for (const events of recentEventsByAgent.values()) events.reverse()
-
-  // One grouped query for every agent's sparkline, not one per agent. The DB enum's stored value
-  // is dotted (`'run.tool_call'`, confirmed against the schema and the test database — see
-  // `toolCallSparkline` in `server/activity.ts`), not the Prisma member name `run_tool_call`.
-  const sparklineNow = new Date()
-  const sparklineRows = await prisma.$queryRaw<Array<{ agent_id: string | null; minute: Date; n: bigint }>>`
-    SELECT "agentId" as agent_id, date_trunc('minute', ts) as minute, count(*) as n
-    FROM "ExecutionEvent"
-    WHERE "workspaceId" = ${workspaceId} AND type = 'run.tool_call'::"EventType"
-      AND ts >= now() - interval '10 minutes'
-    GROUP BY 1, 2`
-  const sparklineRowsByAgent = new Map<string, Array<{ minute: Date; n: bigint }>>()
-  for (const row of sparklineRows) {
-    if (row.agent_id === null) continue
-    const forAgent = sparklineRowsByAgent.get(row.agent_id)
-    if (forAgent === undefined) sparklineRowsByAgent.set(row.agent_id, [row])
-    else forAgent.push(row)
-  }
 
   // `agent: { team: { workspaceId } }`, not `task: { workspaceId }`: a `planning` run (M8b) has no
   // `Task` row, and its cost still counts toward the budget shown here.
@@ -321,7 +319,6 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
         queuedMessage: run?.queuedMessage ?? null,
         resumeRequestedAt: run?.resumeRequestedAt?.toISOString() ?? null,
         recentEvents: recentEventsByAgent.get(agent.id) ?? [],
-        sparkline: bucketSparkline(sparklineRowsByAgent.get(agent.id) ?? [], sparklineNow),
         // `run === null ? 0 : run.costUsd`, not `run?.costUsd ?? 0` (M12 Task 9, ruling R3). The
         // coalesce collapsed two different facts into one number: "no live run" (nothing has been
         // spent, a measured zero, the same claim `toolCalls: 0` makes on the next line) and "a

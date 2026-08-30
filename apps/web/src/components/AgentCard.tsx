@@ -99,7 +99,13 @@ export function AgentCard({
 
   const runId = agent.runId
   const canPause = runId !== null && (agent.status === 'starting' || agent.status === 'working' || agent.status === 'resuming')
-  const canResume = runId !== null && agent.status === 'paused'
+  // `AgentPanel.tsx`'s guard, mirrored rather than restated loosely: the resume intent is a single
+  // `resumeRequestedAt` column, so a second click cannot say anything the first did not. Disabled
+  // here keeps that double-click a no-op instead of a second POST the server has to refuse. (The
+  // panel also disables on a halted workspace; the card has no halt reason to read, and that one
+  // stays server-refused into `card-error`.)
+  const resumeRequestedWhilePaused = agent.status === 'paused' && agent.resumeRequestedAt !== null
+  const canResume = runId !== null && agent.status === 'paused' && !resumeRequestedWhilePaused
   const canStop = runId !== null && agent.status !== 'idle'
   const showResume = agent.status === 'paused' || agent.status === 'pausing'
 
@@ -165,7 +171,8 @@ export function AgentCard({
         </span>
       </div>
 
-      <ProgressBar pct={agent.progressPct} tone={tone} />
+      {/* 3px, the card's own thickness (design README "1a") — every table row keeps the 6px default. */}
+      <ProgressBar pct={agent.progressPct} tone={tone} size="card" />
 
       <div className="flex items-baseline justify-between font-mono text-[9.5px] text-text-3">
         <span data-testid="card-step">{agent.stepLabel ?? '—'}</span>
@@ -197,6 +204,14 @@ export function AgentCard({
         </Chip>
         <ShellOnlyMark gate={agent.gate} />
       </div>
+
+      {resumeRequestedWhilePaused && (
+        <span data-testid="card-resume-requested" className="text-[10.5px] text-text-3">
+          {/* The panel's own wording, verbatim: the same fact told twice in two places should not
+            * be told in two voices. */}
+          resume requested — waiting for the daemon
+        </span>
+      )}
 
       {errorText !== null && (
         <span role="alert" data-testid="card-error" className="text-[10.5px] text-status-danger">

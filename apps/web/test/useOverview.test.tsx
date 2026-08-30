@@ -30,7 +30,6 @@ const SNAPSHOT: OverviewSnapshot = {
       costUsd: 0,
       toolCalls: 0,
       pausedAtStep: null,
-      sparkline: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
     },
   ],
   tasks: { active: 1, blocked: 0, done: 0, failed: 0 },

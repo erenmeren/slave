@@ -36,7 +36,6 @@ const agent = (over: Partial<AgentCardData>): AgentCardData => ({
   costUsd: 0,
   toolCalls: 0,
   pausedAtStep: null,
-  sparkline: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
   ...over,
 })
 
@@ -265,6 +264,8 @@ describe('AgentCard — the handoff anatomy', () => {
     expect(card.className).toContain('px-[13px]')
     expect(card.className).toContain('py-[12px]')
     expect(card.className).toContain('hover:border-white/20')
+    // The README's 3px bar, the one number the first round left at `ProgressBar`'s 6px default.
+    expect(screen.getByTestId('progress-bar').className).toContain('h-[3px]')
   })
 
   it('sweeps the top hairline only while working', () => {
@@ -345,6 +346,32 @@ describe('AgentCard — the handoff anatomy', () => {
       fireEvent.click(screen.getByTestId('card-resume'))
     })
     expect(fetchMock).toHaveBeenCalledWith('/api/w/w1/runs/r1/resume', { method: 'POST' })
+  })
+
+  it('cannot ask for the same resume twice: a pending request disables Resume and says so', () => {
+    // `AgentPanel.tsx`'s guard, mirrored: the intent is a single `resumeRequestedAt` column, so a
+    // second click cannot mean anything the first did not already say. Same wording as the panel.
+    const { rerender } = render(
+      <AgentCard
+        agent={agent({ status: 'paused', taskStatus: 'running', runId: 'r1', resumeRequestedAt: '2026-08-29T09:00:00.000Z' })}
+        liveActionLine={null}
+        workspaceId="w1"
+        onOpen={() => {}}
+      />,
+    )
+    expect((screen.getByTestId('card-resume') as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByTestId('card-resume-requested').textContent).toBe('resume requested — waiting for the daemon')
+
+    rerender(
+      <AgentCard
+        agent={agent({ status: 'paused', taskStatus: 'running', runId: 'r1', resumeRequestedAt: null })}
+        liveActionLine={null}
+        workspaceId="w1"
+        onOpen={() => {}}
+      />,
+    )
+    expect((screen.getByTestId('card-resume') as HTMLButtonElement).disabled).toBe(false)
+    expect(screen.queryByTestId('card-resume-requested')).toBeNull()
   })
 
   it('POSTs stop, and opens the panel for Message rather than inventing a second textarea', async (): Promise<void> => {

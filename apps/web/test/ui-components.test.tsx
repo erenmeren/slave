@@ -175,6 +175,17 @@ describe('ProgressBar', () => {
     expect(fill.style.width).toBe('42%')
   })
 
+  it('is 6px by default and 3px in the card size', () => {
+    // The handoff gives the agent card a 3px bar (README "1a") and every table row the 6px one
+    // this component has always drawn; `size` is that one difference, not a second component.
+    const { rerender } = render(<ProgressBar pct={42} />)
+    expect(screen.getByTestId('progress-bar').className).toContain('h-1.5')
+
+    rerender(<ProgressBar pct={42} size="card" />)
+    expect(screen.getByTestId('progress-bar').className).toContain('h-[3px]')
+    expect(screen.getByTestId('progress-bar').className).not.toContain('h-1.5')
+  })
+
   it('clamps above 100 down to 100', () => {
     render(<ProgressBar pct={150} />)
     expect(screen.getByTestId('progress-bar-fill').style.width).toBe('100%')
