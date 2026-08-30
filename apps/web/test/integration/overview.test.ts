@@ -40,7 +40,7 @@ describe('buildOverviewSnapshot', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Approval", "Artifact", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
   })
@@ -463,5 +463,51 @@ describe('buildOverviewSnapshot', () => {
     const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
 
     expect(snapshot?.agents.map((a) => a.name)).toEqual(['Alex'])
+  })
+
+  it('carries the live run task id, its status, and the progress the tool-call ceiling defines', async (): Promise<void> => {
+    await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { maxToolCallsPerRun: 20 } })
+    await prisma.agentRun.create({
+      data: { agentId: fixture.agentId, taskId: fixture.taskId, status: 'working', toolCalls: 5, provider: 'claude_code' },
+    })
+
+    const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
+    expect(snapshot?.agents[0]?.taskId).toBe(fixture.taskId)
+    expect(snapshot?.agents[0]?.taskStatus).toBe('running')
+    expect(snapshot?.agents[0]?.progressPct).toBe(25)
+    expect(snapshot?.agents[0]?.stepLabel).toBe('5/20')
+  })
+
+  it('reports zero progress and no step label for an agent with no live run', async (): Promise<void> => {
+    const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
+    expect(snapshot?.agents[0]?.progressPct).toBe(0)
+    expect(snapshot?.agents[0]?.stepLabel).toBeNull()
+    expect(snapshot?.agents[0]?.taskId).toBeNull()
+    expect(snapshot?.agents[0]?.taskStatus).toBeNull()
+  })
+
+  it("reports the live run's most recent Skill tool call, and null when it has invoked none", async (): Promise<void> => {
+    const run = await prisma.agentRun.create({
+      data: { agentId: fixture.agentId, taskId: fixture.taskId, status: 'working', provider: 'claude_code' },
+    })
+    await appendEvent({
+      type: 'run.tool_call',
+      workspaceId: fixture.workspaceId,
+      agentId: fixture.agentId,
+      runId: run.id,
+      actor: 'agent',
+      payload: { name: 'Write', summary: 'Write a.txt' },
+    })
+    expect((await buildOverviewSnapshot(fixture.workspaceId))?.agents[0]?.skill).toBeNull()
+
+    await appendEvent({
+      type: 'run.tool_call',
+      workspaceId: fixture.workspaceId,
+      agentId: fixture.agentId,
+      runId: run.id,
+      actor: 'agent',
+      payload: { name: 'Skill', summary: 'Skill superpowers:writing-plans' },
+    })
+    expect((await buildOverviewSnapshot(fixture.workspaceId))?.agents[0]?.skill).toBe('Skill superpowers:writing-plans')
   })
 })

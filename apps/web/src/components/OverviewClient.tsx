@@ -64,7 +64,13 @@ export function OverviewClient({
         </div>
         <main className="grid grid-cols-1 gap-4 p-4 md:grid-cols-2 xl:grid-cols-3">
           {view.agents.map((agent) => (
-            <AgentCard key={agent.id} agent={agent} liveActionLine={actionLines[agent.id] ?? null} onOpen={selectAgent} />
+            <AgentCard
+              key={agent.id}
+              agent={agent}
+              liveActionLine={actionLines[agent.id] ?? null}
+              workspaceId={workspaceId}
+              onOpen={selectAgent}
+            />
           ))}
         </main>
       </div>

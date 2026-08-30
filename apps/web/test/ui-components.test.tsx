@@ -20,8 +20,19 @@ describe('Panel', () => {
         <p>panel body</p>
       </Panel>,
     )
-    expect(screen.getByTestId('panel-title').textContent).toBe('Roster')
+    // M14 Task 2: the title is rendered by `PanelHeader`, which reuses `SectionLabel` rather than
+    // carrying a second copy of the 9px/.09em recipe -- so the testid is `section-label`.
+    expect(screen.getByTestId('section-label').textContent).toBe('Roster')
     expect(screen.getByText('panel body')).toBeTruthy()
+  })
+
+  it('renders the optional right-hand action beside the title', () => {
+    render(
+      <Panel title="Live events" action={<a href="/activity">all →</a>}>
+        <p>panel body</p>
+      </Panel>,
+    )
+    expect(screen.getByTestId('panel-header-action').textContent).toBe('all →')
   })
 
   it('renders children with no title given', () => {
@@ -30,7 +41,9 @@ describe('Panel', () => {
         <p>bare body</p>
       </Panel>,
     )
-    expect(screen.queryByTestId('panel-title')).toBeNull()
+    // No title, no header at all -- and therefore nowhere for an action to sit either.
+    expect(screen.queryByTestId('panel-header')).toBeNull()
+    expect(screen.queryByTestId('section-label')).toBeNull()
     expect(screen.getByText('bare body')).toBeTruthy()
   })
 })

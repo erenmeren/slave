@@ -18,6 +18,13 @@ const agent = (over: Partial<AgentCardData>): AgentCardData => ({
   gate: 'all-tools',
   status: 'working',
   taskTitle: 'Add the thing',
+  // M14 Task 2 widened `AgentCardData` with the card's five handoff fields; this fixture
+  // states them so it keeps type-checking, and asserts nothing new about them.
+  taskId: null,
+  taskStatus: null,
+  progressPct: 0,
+  stepLabel: null,
+  skill: null,
   actionLine: null,
   runId: 'r1',
   queuedMessage: null,

@@ -1,7 +1,7 @@
 import { prisma } from '@ai-team-os/db/client'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, toRunState } from '@ai-team-os/db'
 import { capabilitiesOf, workspaceDefaultProvider, type ProviderCapabilities, type ProviderKind } from '@ai-team-os/control'
-import { deriveAgentStatus, sumSpend, NON_TERMINAL_RUN_STATUSES, type AgentStatus } from '@ai-team-os/domain'
+import { deriveAgentStatus, sumSpend, NON_TERMINAL_RUN_STATUSES, type AgentStatus, type TaskStatus } from '@ai-team-os/domain'
 import { feedSummary, type AgentFeedEvent } from '../lib/feedSummary'
 import { bucketSparkline } from './activity'
 
@@ -37,6 +37,29 @@ export interface AgentCardData {
   readonly gate: ProviderCapabilities['gate'] | null
   readonly status: AgentStatus
   readonly taskTitle: string | null
+  /** The live run's task id — the card renders `TASK-<first 8 chars>` from it (the handoff's mono
+   *  task reference). `null` with no live run or a task-less `planning` run (M8b). */
+  readonly taskId: string | null
+  /** The live run's task status, feeding `lib/tones.ts`'s `cardStateFor` so the card can reach
+   *  `blocked`/`review`/`completed` — three states `AgentStatus` alone cannot express. */
+  readonly taskStatus: TaskStatus | null
+  /**
+   * The run's progress as a percentage of the workspace's own tool-call ceiling
+   * (`Workspace.maxToolCallsPerRun`, the limit `sweep.ts` enforces), clamped to [0,100]. `0` with
+   * no live run: an absent run has made no progress, the same measured zero `toolCalls: 0` makes
+   * beside it. NOT null-able: there is no "unknown progress" state — the ceiling is a column and
+   * the count is a column.
+   */
+  readonly progressPct: number
+  /** `"<toolCalls>/<maxToolCallsPerRun>"`, or `null` with no live run (rendered `—`). */
+  readonly stepLabel: string | null
+  /**
+   * The skill this run most recently invoked — the `summary` of its latest `run.tool_call` event
+   * whose payload `name` is `Skill`. `null` when the run has invoked none, or on a runtime whose
+   * parser never sees a `Skill` tool (Cursor). A LIVE fact, distinct from `AgentRun.skillCalls`
+   * (M14 §4.1), which is an end-of-run tally and does not exist while the run is in flight.
+   */
+  readonly skill: string | null
   readonly actionLine: string | null
   readonly runId: string | null
   /** The instruction queued for this agent's live run, consumed on resume (Checkpoint semantics). */
@@ -166,6 +189,21 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
     }
   }
 
+  // The card's skill chip: the latest `Skill` tool call on this run. One `findFirst` per LIVE run,
+  // in the loop that already issues one — the same bound the action-line read accepted. Prisma's
+  // JSON path filter keeps it a single indexed query rather than a scan-and-filter in Node.
+  const skills = new Map<string, string>()
+  for (const run of liveRunByAgent.values()) {
+    const event = await prisma.executionEvent.findFirst({
+      where: { runId: run.id, type: 'run_tool_call', payload: { path: ['name'], equals: 'Skill' } },
+      orderBy: { seq: 'desc' },
+    })
+    if (event !== null) {
+      const summary = (event.payload as { summary?: string }).summary
+      if (typeof summary === 'string') skills.set(run.agentId, summary)
+    }
+  }
+
   // One query for every agent's recent events, not one per agent (the M4 review flagged
   // per-run queries as the first scaling cliff). `take` is generous enough that an even spread of
   // activity across agents leaves each with its own last 20; a single very chatty agent can still
@@ -267,6 +305,17 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
         gate: run === null || run.provider === null ? null : capabilitiesOf(run.provider).gate,
         status: deriveAgentStatus(run === null ? null : toRunState(run)),
         taskTitle: run?.task?.title ?? null,
+        taskId: run?.taskId ?? null,
+        taskStatus: (run?.task?.status as TaskStatus | undefined) ?? null,
+        // The ceiling is `sweep.ts`'s own, so the bar measures the run against the limit that will
+        // actually stop it. A workspace configured with a non-positive ceiling has no scale to
+        // measure against at all, and 0% is the only honest reading of an undefined denominator.
+        progressPct:
+          run === null || workspace.maxToolCallsPerRun <= 0
+            ? 0
+            : Math.min(100, Math.round((run.toolCalls / workspace.maxToolCallsPerRun) * 100)),
+        stepLabel: run === null ? null : `${run.toolCalls}/${workspace.maxToolCallsPerRun}`,
+        skill: skills.get(agent.id) ?? null,
         actionLine: lines.get(agent.id) ?? null,
         runId: run?.id ?? null,
         queuedMessage: run?.queuedMessage ?? null,
