@@ -1,6 +1,7 @@
 import { prisma } from '@ai-team-os/db/client'
 import { SEED_WORKSPACE_ID } from '@ai-team-os/db'
 import { sumSpend, NON_TERMINAL_RUN_STATUSES } from '@ai-team-os/domain'
+import { formatDuration } from '../lib/format'
 
 /**
  * The Analytics page's aggregation (M14 §4.4): one query round per section, all scoped to a
@@ -78,13 +79,11 @@ function windowStart(): Date {
   return start
 }
 
-/** `860000` → `14m 20s`; `45000` → `45s`. */
-export function formatDuration(ms: number): string {
-  const seconds = Math.round(ms / 1000)
-  const minutes = Math.floor(seconds / 60)
-  const rest = seconds % 60
-  return minutes === 0 ? `${rest}s` : `${minutes}m ${String(rest).padStart(2, '0')}s`
-}
+// `formatDuration` moved to `../lib/format.ts` (Task 16): this module value-imports
+// `@ai-team-os/db/client` at the top, so a client component that imported the function straight
+// from here would drag `pg`'s Node-only dependencies into the browser bundle. Re-exported below
+// so this module's own KPI computation (and any other server-side caller) still finds it here.
+export { formatDuration } from '../lib/format'
 
 export async function buildAnalytics(workspaceId: string | null): Promise<AnalyticsSnapshot> {
   const agentWhere = workspaceId === null ? {} : { team: { workspaceId } }
