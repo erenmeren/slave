@@ -92,6 +92,15 @@ vi.mock('../src/server/graph.js', () => ({
   buildGraphSnapshot: (...args: unknown[]) => buildGraphSnapshotMock(...args),
 }))
 
+// Fixture widening only (M14 Task 11): `GraphSnapshot` gained `shellFacts` so `GraphClient` can
+// publish them to the global shell's sidebar rather than the sidebar opening a second EventSource
+// on this route. Nothing above the drawer/mode-tab blocks asserts on them.
+const SHELL_FACTS: GraphSnapshot['shellFacts'] = {
+  workspace: { id: 'w1', name: 'Checkout Platform' },
+  counts: { agentsWorking: 1, tasksActive: 1 },
+  guardrails: { budgetUsd: 100, maxConcurrentRuns: 3, runTimeoutMs: 1_800_000, maxAttempts: 3 },
+}
+
 function agent(overrides: Partial<GraphAgent> = {}): GraphAgent {
   return {
     id: 'a1',
@@ -102,6 +111,12 @@ function agent(overrides: Partial<GraphAgent> = {}): GraphAgent {
     activeTaskId: null,
     activeTaskTitle: null,
     activeRunId: null,
+    provider: null,
+    model: null,
+    progressPct: 0,
+    checkpoints: [],
+    recentEvents: [],
+    hasSkillData: false,
     ...overrides,
   }
 }
@@ -125,6 +140,7 @@ const SNAPSHOT: GraphSnapshot = {
     { id: 't1', title: 'Ship the thing', status: 'running', priority: 1, attempt: 1, maxAttempts: 3, dependenciesDone: true },
   ],
   dependencies: [],
+  shellFacts: SHELL_FACTS,
 }
 
 describe('GraphClient', () => {
@@ -327,6 +343,147 @@ describe('GraphClient', () => {
     resolvePending?.()
     await waitFor(() => expect(screen.getByTestId('rf__edge-agent:a2->activeTask:t1')).toBeTruthy())
     expect(screen.getByTestId('active-task-node')).toBeTruthy()
+  })
+
+  // ---- the four modes, the drawer, and the instruct box (M14 Task 11) --------------------------
+
+  // 'Alex Turner' (not the shared SNAPSHOT's 'Alex') so the drawer's `AvatarTile` renders the
+  // two-word initials the handoff specifies, and 'run1' so the run-scoped controls are live.
+  const DRAWER_SNAPSHOT: GraphSnapshot = {
+    ...SNAPSHOT,
+    agents: [
+      agent({
+        id: 'a1',
+        name: 'Alex Turner',
+        role: 'backend',
+        status: 'working',
+        activeTaskId: 't1',
+        activeTaskTitle: 'Ship the thing',
+        activeRunId: 'run1',
+        provider: 'claude_code',
+        model: 'sonnet',
+        progressPct: 40,
+        checkpoints: [
+          { label: 'checkpoint at step 12', state: 'done' },
+          { label: 'step 18', state: 'current' },
+        ],
+        recentEvents: [{ seq: 9, ts: '2026-08-29T10:11:12.000Z', summary: 'Edit src/index.ts' }],
+      }),
+    ],
+  }
+
+  it('offers four modes, with Skill chain disabled until a run has recorded skill data', async () => {
+    const { rerender } = render(<GraphClient workspaceId="w1" initial={SNAPSHOT} />)
+    await waitFor(() => expect(elkLayoutSpy).toHaveBeenCalled())
+
+    expect(screen.getAllByTestId(/^graph-mode-/).map((tab) => tab.textContent)).toEqual([
+      'Organization',
+      'Execution',
+      'Dependencies',
+      'Skill chain \u00b7 later',
+    ])
+    expect((screen.getByTestId('graph-mode-skill') as HTMLButtonElement).disabled).toBe(true)
+
+    streamState.snapshot = { ...SNAPSHOT, agents: SNAPSHOT.agents.map((a) => ({ ...a, hasSkillData: true })) }
+    rerender(<GraphClient workspaceId="w1" initial={SNAPSHOT} />)
+
+    expect((screen.getByTestId('graph-mode-skill') as HTMLButtonElement).disabled).toBe(false)
+    expect(screen.getByTestId('graph-mode-skill').textContent).toBe('Skill chain')
+  })
+
+  it('switches to Execution mode and draws the six pipeline stages', async () => {
+    render(<GraphClient workspaceId="w1" initial={SNAPSHOT} />)
+    await waitFor(() => expect(elkLayoutSpy).toHaveBeenCalled())
+
+    fireEvent.click(screen.getByText('Execution'))
+
+    expect(routerReplace).toHaveBeenCalledWith('/w/w1/graph?mode=exec', { scroll: false })
+    await waitFor(() => expect(screen.getAllByTestId('stage-node')).toHaveLength(6))
+    // The one running task rides its own compact node under In Progress.
+    expect(screen.getAllByTestId('stage-task-node')).toHaveLength(1)
+  })
+
+  it('opens the 352px drawer on a node click and closes it again', async () => {
+    render(<GraphClient workspaceId="w1" initial={DRAWER_SNAPSHOT} />)
+    await waitFor(() => expect(screen.getByTestId('rf__node-agent:a1')).toBeTruthy())
+    expect(screen.queryByTestId('graph-drawer')).toBeNull()
+
+    fireEvent.click(screen.getByTestId('rf__node-agent:a1'))
+
+    const drawer = screen.getByTestId('graph-drawer')
+    expect(drawer.className).toContain('w-[352px]')
+    expect(within(drawer).getByTestId('avatar-tile').textContent).toBe('AT')
+    expect(within(drawer).getByTestId('drawer-provider').textContent).toBe('claude_code')
+    expect(within(drawer).getByTestId('drawer-model').textContent).toBe('sonnet')
+    expect(within(drawer).getByTestId('drawer-task').textContent).toBe('Ship the thing')
+    expect(within(drawer).getAllByTestId('drawer-checkpoint').map((row) => row.textContent)).toEqual([
+      '\u2713checkpoint at step 12',
+      '\u25cfstep 18',
+    ])
+    expect(within(drawer).getAllByTestId('drawer-event')).toHaveLength(1)
+    expect((within(drawer).getByTestId('drawer-reassign') as HTMLButtonElement).disabled).toBe(true)
+
+    fireEvent.click(within(drawer).getByTestId('drawer-close'))
+    expect(screen.queryByTestId('graph-drawer')).toBeNull()
+  })
+
+  it('does not open the drawer for a non-agent node', async () => {
+    render(<GraphClient workspaceId="w1" initial={DRAWER_SNAPSHOT} />)
+    await waitFor(() => expect(screen.getByTestId('rf__node-team:team1')).toBeTruthy())
+
+    fireEvent.click(screen.getByTestId('rf__node-team:team1'))
+
+    expect(screen.queryByTestId('graph-drawer')).toBeNull()
+  })
+
+  it('sends the free-text instruction on Enter through the existing run message route', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => new Response(JSON.stringify({ ok: true }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    render(<GraphClient workspaceId="w1" initial={DRAWER_SNAPSHOT} />)
+    await waitFor(() => expect(screen.getByTestId('rf__node-agent:a1')).toBeTruthy())
+    fireEvent.click(screen.getByTestId('rf__node-agent:a1'))
+
+    // A quick-instruction chip fills the box; Enter is what actually sends.
+    fireEvent.click(screen.getAllByTestId('drawer-quick')[0]!)
+    const input = screen.getByTestId('drawer-instruct') as HTMLInputElement
+    // Captured BEFORE Enter: a successful send clears the box, which is the point.
+    const sent = input.value
+    expect(sent.length).toBeGreaterThan(0)
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/w/w1/runs/run1/message')
+    expect(fetchMock.mock.calls[0]?.[1]?.method).toBe('POST')
+    expect(JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string)).toEqual({ message: sent })
+    await waitFor(() => expect((screen.getByTestId('drawer-instruct') as HTMLInputElement).value).toBe(''))
+  })
+
+  it('pauses and stops through the existing run routes', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => new Response(JSON.stringify({ ok: true }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    render(<GraphClient workspaceId="w1" initial={DRAWER_SNAPSHOT} />)
+    await waitFor(() => expect(screen.getByTestId('rf__node-agent:a1')).toBeTruthy())
+    fireEvent.click(screen.getByTestId('rf__node-agent:a1'))
+
+    fireEvent.click(screen.getByTestId('drawer-pause'))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/w/w1/runs/run1/pause')
+
+    fireEvent.click(screen.getByTestId('drawer-stop'))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+    expect(fetchMock.mock.calls[1]?.[0]).toBe('/api/w/w1/runs/run1/stop')
+  })
+
+  it('surfaces a refused control as the drawer\'s own error band', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => new Response(JSON.stringify({ error: 'run is not pausable' }), { status: 409 }))
+    vi.stubGlobal('fetch', fetchMock)
+    render(<GraphClient workspaceId="w1" initial={DRAWER_SNAPSHOT} />)
+    await waitFor(() => expect(screen.getByTestId('rf__node-agent:a1')).toBeTruthy())
+    fireEvent.click(screen.getByTestId('rf__node-agent:a1'))
+
+    fireEvent.click(screen.getByTestId('drawer-pause'))
+
+    await waitFor(() => expect(screen.getByTestId('drawer-error').textContent).toBe('run is not pausable'))
   })
 })
 

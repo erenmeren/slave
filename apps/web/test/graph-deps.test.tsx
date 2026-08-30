@@ -95,7 +95,15 @@ function task(overrides: Partial<GraphSnapshot['tasks'][number]>): GraphSnapshot
   }
 }
 
+// Fixture widening only (M14 Task 11): `GraphSnapshot` gained `shellFacts`. Nothing here reads it.
+const SHELL_FACTS: GraphSnapshot['shellFacts'] = {
+  workspace: { id: 'w1', name: 'W' },
+  counts: { agentsWorking: 0, tasksActive: 0 },
+  guardrails: { budgetUsd: null, maxConcurrentRuns: 3, runTimeoutMs: 1_800_000, maxAttempts: 3 },
+}
+
 const SNAPSHOT: GraphSnapshot = {
+  shellFacts: SHELL_FACTS,
   workspace: { id: 'w1', name: 'W', haltedReason: null },
   teams: [],
   agents: [],

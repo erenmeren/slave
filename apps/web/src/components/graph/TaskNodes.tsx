@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import type React from 'react'
 import { Handle, Position, type Edge, type Node, type NodeProps, type NodeTypes } from 'reactflow'
 import type { TaskStatus } from '@ai-team-os/domain'
+import { CARD_STATE_TONE, cardStateFor } from '../../lib/tones'
 import type { GraphSnapshot } from '../../server/graph'
 import { BORDER_FLASH_MS } from '../AgentCard'
 import { TASK_STATUS_BORDER, TASK_STATUS_DOT, TASK_STATUS_FLASH_COLOR } from '../TaskCard'
@@ -125,7 +126,9 @@ function unmetDependencyCount(taskId: string, dependencies: GraphSnapshot['depen
  * The dependency DAG's task nodes + `dependsOn -> task` edges (Task 6, spec's deps mode): one
  * node per snapshot task (id `task:<id>` -- deliberately distinct from org mode's `activeTask:
  * <id>` satellite, no collision), one edge per `TaskDependency` row, direction `dependsOn ->
- * task` so "this finishes first" reads left to right under the `layered` algorithm. Every node
+ * task` so "this finishes first" reads left to right under the `layered` algorithm. Every edge is
+ * a `cable` (M14 Task 11 -- `CableEdge.tsx`) in its target's tone, lit once its prerequisite is
+ * done. Every node
  * starts at `{x: 0, y: 0}` -- `layout.ts`'s `useLayoutedGraph` positions them, this function only
  * owns topology and node `data`, never coordinates (same split as `OrgNodes.buildOrgGraph`).
  */
@@ -154,7 +157,19 @@ export function buildDepsGraph(snapshot: GraphSnapshot): { readonly nodes: Node[
   const edges: Edge[] = snapshot.dependencies.map((dependency) => {
     const source = `task:${dependency.dependsOnTaskId}`
     const target = `task:${dependency.taskId}`
-    return { id: `${source}->${target}`, source, target }
+    return {
+      id: `${source}->${target}`,
+      source,
+      target,
+      type: 'cable',
+      // The TARGET's tone (design README "1b -- Cables"), and "active" means the prerequisite is
+      // satisfied: the way is CLEAR along this cable, which is the one thing a dependency edge
+      // has to say. An unmet prerequisite draws as the flat inactive line.
+      data: {
+        tone: CARD_STATE_TONE[cardStateFor('idle', statusById.get(dependency.taskId) ?? null)].tone,
+        active: statusById.get(dependency.dependsOnTaskId) === 'done',
+      },
+    }
   })
 
   return { nodes, edges }

@@ -2,7 +2,7 @@
 import type { ReactElement } from 'react'
 import { act, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ReactFlowProvider, type Edge, type NodeProps } from 'reactflow'
+import { Position, ReactFlowProvider, type Edge, type EdgeProps, type NodeProps } from 'reactflow'
 import type { GraphAgent, GraphSnapshot } from '../src/server/graph.js'
 import type { StreamEvent } from '../src/hooks/useWorkspaceStream.js'
 import {
@@ -16,6 +16,7 @@ import {
   tasksTurnedDone,
   type Particle,
 } from '../src/components/graph/flow.js'
+import { CableEdge, type CableEdgeData } from '../src/components/graph/CableEdge.js'
 import { Particles } from '../src/components/graph/Particles.js'
 import { AgentNode, ActiveTaskNode, type AgentNodeData, type ActiveTaskNodeData } from '../src/components/graph/OrgNodes.js'
 import { TaskNode, type TaskNodeData } from '../src/components/graph/TaskNodes.js'
@@ -96,6 +97,15 @@ vi.mock('elkjs/lib/elk.bundled.js', () => ({
 }))
 
 const AGENT_EDGE: Edge = { id: 'agent:a1->activeTask:t1', source: 'agent:a1', target: 'activeTask:t1' }
+
+// Fixture widening only (M14 Task 11): `GraphSnapshot` gained `shellFacts` so `GraphClient` can
+// publish them to the global shell's sidebar instead of the sidebar opening a second EventSource.
+// Nothing in this file asserts on them.
+const SHELL_FACTS: GraphSnapshot['shellFacts'] = {
+  workspace: { id: 'w1', name: 'W' },
+  counts: { agentsWorking: 0, tasksActive: 0 },
+  guardrails: { budgetUsd: null, maxConcurrentRuns: 3, runTimeoutMs: 1_800_000, maxAttempts: 3 },
+}
 
 // ==================================================================================================
 // flow.ts -- pure particle/wave state, no React
@@ -379,6 +389,7 @@ describe('DepsMode: completion wave', () => {
       agents: [],
       tasks: [task({ id: 't1', status: 'running' }), task({ id: 't2', status: 'ready', dependenciesDone: false })],
       dependencies: [{ taskId: 't2', dependsOnTaskId: 't1' }],
+      shellFacts: SHELL_FACTS,
     }
     const after: GraphSnapshot = { ...before, tasks: [{ ...before.tasks[0]!, status: 'done' }, before.tasks[1]!] }
 
@@ -409,6 +420,7 @@ describe('DepsMode: completion wave', () => {
       agents: [],
       tasks: [task({ id: 't1', status: 'done' }), task({ id: 't2', status: 'ready' })],
       dependencies: [{ taskId: 't2', dependsOnTaskId: 't1' }],
+      shellFacts: SHELL_FACTS,
     }
     render(<DepsMode workspaceId="w1" snapshot={snapshot} />)
 
@@ -423,6 +435,7 @@ describe('DepsMode: completion wave', () => {
       agents: [],
       tasks: [task({ id: 't1', status: 'running' }), task({ id: 't2', status: 'ready', dependenciesDone: false })],
       dependencies: [{ taskId: 't2', dependsOnTaskId: 't1' }],
+      shellFacts: SHELL_FACTS,
     }
     const afterDone: GraphSnapshot = { ...before, tasks: [{ ...before.tasks[0]!, status: 'done' }, before.tasks[1]!] }
     // A refetch landing mid-window with no NEW completion (same statuses as `afterDone`, just an
@@ -485,6 +498,12 @@ function agent(overrides: Partial<GraphAgent> = {}): GraphAgent {
     activeTaskId: null,
     activeTaskTitle: null,
     activeRunId: null,
+    provider: null,
+    model: null,
+    progressPct: 0,
+    checkpoints: [],
+    recentEvents: [],
+    hasSkillData: false,
     ...overrides,
   }
 }
@@ -495,6 +514,7 @@ const GRAPH_CLIENT_SNAPSHOT: GraphSnapshot = {
   agents: [agent({ id: 'a1', name: 'Alex', status: 'working', activeTaskId: 't1', activeTaskTitle: 'Ship it', activeRunId: 'run1' })],
   tasks: [{ id: 't1', title: 'Ship it', status: 'running', priority: 1, attempt: 1, maxAttempts: 3, dependenciesDone: true }],
   dependencies: [],
+  shellFacts: SHELL_FACTS,
 }
 
 describe('GraphClient: particle wiring end-to-end', () => {
@@ -592,5 +612,181 @@ describe('GraphClient: particle wiring end-to-end', () => {
       },
       { timeout: 400, interval: 10 },
     )
+  })
+})
+
+// ==================================================================================================
+// CableEdge -- the design README's signature cable ("1b -- Cables"). Rendered standalone inside a
+// bare `<svg>`: this component's whole contract is the SVG it emits (three stacked paths, one blur
+// filter, the dash attributes), and jsdom reports SVG ATTRIBUTES exactly. What jsdom cannot see is
+// class-derived CSS -- the milestone gate re-reads `stroke-dasharray`/`stroke-dashoffset` off
+// `getComputedStyle` on the real page, and confirms the halo's blur by eye.
+// ==================================================================================================
+
+describe('CableEdge', () => {
+  // The geometry half of `EdgeProps` -- the only part `CableEdge` reads besides `id` and `data`.
+  // The cast is the same "only the fields under test" shape `nodeProps` above takes for nodes.
+  const GEOMETRY = {
+    id: 'e1',
+    sourceX: 0,
+    sourceY: 0,
+    targetX: 100,
+    targetY: 100,
+    sourcePosition: Position.Bottom,
+    targetPosition: Position.Top,
+  }
+
+  const ACTIVE: CableEdgeData = { tone: 'working', active: true }
+
+  // `data` is explicit at every call site (no default): one of these tests is precisely about an
+  // edge that carries NO data, and a default would quietly substitute for it.
+  function renderCable(data: CableEdgeData | undefined): HTMLElement {
+    const { container } = render(
+      <svg>
+        <CableEdge {...({ ...GEOMETRY, data } as unknown as EdgeProps<CableEdgeData>)} />
+      </svg>,
+    )
+    return container
+  }
+
+  it('draws three stacked paths and one filter def inside one group', () => {
+    const container = renderCable(ACTIVE)
+    expect(container.querySelectorAll('g[data-testid="cable-edge"] path')).toHaveLength(3)
+    expect(container.querySelector('filter#cable-glow feGaussianBlur')?.getAttribute('stdDeviation')).toBe('4')
+  })
+
+  it('keeps exactly one react-flow__edge-path so Particles can still find its curve', () => {
+    const container = renderCable(ACTIVE)
+    const core = container.querySelectorAll('path.react-flow__edge-path')
+    expect(core).toHaveLength(1)
+    expect(core[0]?.getAttribute('d')).toBeTruthy()
+    expect(core[0]?.getAttribute('stroke-width')).toBe('1.4')
+  })
+
+  it('draws the halo at 5px, opacity .18, through the blur filter, in the tone colour', () => {
+    const container = renderCable(ACTIVE)
+    const halo = container.querySelector('path[data-cable="halo"]')
+    expect(halo?.getAttribute('stroke-width')).toBe('5')
+    expect(halo?.getAttribute('opacity')).toBe('0.18')
+    expect(halo?.getAttribute('filter')).toBe('url(#cable-glow)')
+    expect(halo?.getAttribute('stroke')).toBe('var(--color-tone-working)')
+  })
+
+  it('animates the white dashed overlay with the README dash exactly', () => {
+    const container = renderCable(ACTIVE)
+    const flow = container.querySelector('path[data-cable="flow"]')
+    // SVG ATTRIBUTES, which jsdom does report exactly -- unlike class-derived CSS, which it does
+    // not see at all. The gate re-reads `stroke-dasharray` off `getComputedStyle` on the real page.
+    expect(flow?.getAttribute('stroke-dasharray')).toBe('5 11')
+    expect(flow?.getAttribute('stroke')).toBe('#ffffff')
+    expect(flow?.getAttribute('stroke-width')).toBe('1.6')
+    // `motion-safe:` is what makes reduced motion kill the dash: Tailwind drops the utility
+    // entirely under `prefers-reduced-motion: reduce`, so the overlay renders as a static dashed
+    // line rather than a travelling one.
+    expect(flow?.getAttribute('class')).toContain('motion-safe:animate-[dash_1.15s_linear_infinite]')
+  })
+
+  it('renders an inactive edge as one flat 3px line with no halo and no dash', () => {
+    const container = renderCable({ tone: 'idle', active: false })
+    expect(container.querySelectorAll('g[data-testid="cable-edge"] path')).toHaveLength(1)
+    expect(container.querySelector('filter#cable-glow')).toBeNull()
+    const core = container.querySelector('path.react-flow__edge-path')
+    expect(core?.getAttribute('stroke-width')).toBe('3')
+    expect(core?.getAttribute('stroke')).toBe('rgba(255,255,255,.13)')
+    expect(core?.getAttribute('class')).not.toContain('animate-[dash')
+  })
+
+  it("writes the core's paint inline too, so React Flow's own .react-flow__edge-path rule cannot grey it out", () => {
+    // `@reactflow/core/dist/style.css` carries `.react-flow__edge-path { stroke: #b1b1b7;
+    // stroke-width: 1 }`, and a CSS RULE outranks a presentation attribute -- attributes alone
+    // render every cable as React Flow's grey hairline on the real page, which jsdom's attribute
+    // reads can never catch. This pins the inline declaration that outranks it.
+    const container = renderCable(ACTIVE)
+    const core = container.querySelector('path.react-flow__edge-path') as SVGPathElement
+    expect(core.style.stroke).toBe('var(--color-tone-working)')
+    expect(core.style.strokeWidth).toBe('1.4')
+  })
+
+  it("re-draws React Flow's selection cue on the core, since the inline paint outranks its own", () => {
+    const { container } = render(
+      <svg>
+        <CableEdge {...({ ...GEOMETRY, selected: true, data: ACTIVE } as unknown as EdgeProps<CableEdgeData>)} />
+      </svg>,
+    )
+    const core = container.querySelector('path.react-flow__edge-path') as SVGPathElement
+    expect(core.style.stroke).toBe('#ffffff')
+    expect(core.style.strokeWidth).toBe('2.5')
+  })
+
+  it('falls back to the idle tone rather than an undefined stroke when an edge carries no data', () => {
+    const container = renderCable(undefined)
+    const core = container.querySelector('path.react-flow__edge-path')
+    expect(core?.getAttribute('stroke')).toBe('rgba(255,255,255,.13)')
+  })
+})
+
+// ==================================================================================================
+// The cable and the particle, together, through a real React Flow tree: org mode's agent -> active-
+// task edge is now a `cable`, and `Particles.tsx` (NOT modified by this task) must still find its
+// curve on `path.react-flow__edge-path` inside that edge's own `<g>`.
+// ==================================================================================================
+
+describe('GraphClient: cables carry particles', () => {
+  let GraphClient: (props: { workspaceId: string; initial: GraphSnapshot }) => ReactElement
+
+  beforeEach(async () => {
+    mockElementSizes()
+    vi.stubGlobal('ResizeObserver', ResizeObserverStub)
+    vi.stubGlobal('DOMMatrixReadOnly', DOMMatrixReadOnlyStub)
+    stubMatchMedia(false)
+    stubVisibility('visible')
+    capturedOnEvent = null
+    streamState.snapshot = GRAPH_CLIENT_SNAPSHOT
+    streamState.connection = 'connected'
+    streamState.error = null
+    elkLayoutSpy.mockClear()
+    ;({ GraphClient } = await import('../src/components/graph/GraphClient.js'))
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+  })
+
+  it("renders org mode's live agent -> active-task edge as a cable, with the particle riding its core path", async () => {
+    render(<GraphClient workspaceId="w1" initial={GRAPH_CLIENT_SNAPSHOT} />)
+    const edgeGroup = await waitFor(() => screen.getByTestId('rf__edge-agent:a1->activeTask:t1'))
+
+    expect(within(edgeGroup).getByTestId('cable-edge')).toBeTruthy()
+    expect(edgeGroup.querySelectorAll('path[data-cable="halo"]')).toHaveLength(1)
+    // The single lookup `Particles.tsx:104` performs, verbatim.
+    const core = edgeGroup.querySelectorAll('path.react-flow__edge-path')
+    expect(core).toHaveLength(1)
+
+    act(() => {
+      capturedOnEvent?.({ type: 'run.tool_call', agentId: 'a1', runId: 'run1' })
+    })
+
+    await waitFor(
+      () => {
+        const liveEdgeGroup = screen.getByTestId('rf__edge-agent:a1->activeTask:t1')
+        const particle = within(liveEdgeGroup).queryByTestId('particle')
+        expect(particle).not.toBeNull()
+        expect(particle!.style.getPropertyValue('offset-path')).toBe(
+          `path('${liveEdgeGroup.querySelector('path.react-flow__edge-path')!.getAttribute('d')}')`,
+        )
+      },
+      { timeout: 400, interval: 10 },
+    )
+  })
+
+  it('paints the canvas surface, its 26px dot grid and the teal wash', async () => {
+    render(<GraphClient workspaceId="w1" initial={GRAPH_CLIENT_SNAPSHOT} />)
+    await waitFor(() => expect(screen.getByTestId('graph-canvas')).toBeTruthy())
+
+    const canvas = screen.getByTestId('graph-canvas')
+    expect(canvas.className).toContain('bg-[#08090c]')
+    expect(canvas.className).toContain('[background-size:26px_26px]')
+    expect(screen.getByTestId('graph-wash')).toBeTruthy()
   })
 })

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import type React from 'react'
 import { Handle, Position, type Edge, type Node, type NodeProps, type NodeTypes } from 'reactflow'
 import type { AgentStatus, TaskStatus } from '@ai-team-os/domain'
+import { CARD_STATE_TONE, cardStateFor, cardStateForAgent } from '../../lib/tones'
 import type { GraphSnapshot } from '../../server/graph'
 import { BORDER_FLASH_MS, DOT, FLASH_COLOR } from '../AgentCard'
 import { TASK_STATUS_BORDER, TASK_STATUS_DOT, TASK_STATUS_FLASH_COLOR } from '../TaskCard'
@@ -193,7 +194,9 @@ export const ORG_NODE_TYPES: NodeTypes = {
 
 /**
  * The workspace → team → agent hierarchy (spec §4.3), plus one active-task satellite + agent→task
- * edge per agent currently on a live run (spec §6). Every node starts at `{x: 0, y: 0}` --
+ * edge per agent currently on a live run (spec §6). Every edge is a `cable` (M14 Task 11 --
+ * `CableEdge.tsx`) carrying its TARGET's tone, lit only where something is actually happening.
+ * Every node starts at `{x: 0, y: 0}` --
  * `layout.ts`'s `useLayoutedGraph` positions them; this function only owns topology and node
  * `data`, never coordinates.
  */
@@ -218,7 +221,15 @@ export function buildOrgGraph(snapshot: GraphSnapshot): { readonly nodes: Node[]
       position: origin,
       data: { kind: 'team', name: team.name } satisfies TeamNodeData,
     })
-    edges.push({ id: `${workspaceNodeId}->${teamNodeId}`, source: workspaceNodeId, target: teamNodeId })
+    // Workspace → team is pure structure: nothing flows along it, so it draws as the inactive
+    // cable (3px, `rgba(255,255,255,.13)`, no dash) rather than a lit one.
+    edges.push({
+      id: `${workspaceNodeId}->${teamNodeId}`,
+      source: workspaceNodeId,
+      target: teamNodeId,
+      type: 'cable',
+      data: { tone: 'idle', active: false },
+    })
   }
 
   const taskStatusById = new Map(snapshot.tasks.map((task) => [task.id, task.status]))
@@ -239,7 +250,19 @@ export function buildOrgGraph(snapshot: GraphSnapshot): { readonly nodes: Node[]
         workspaceId: snapshot.workspace.id,
       } satisfies AgentNodeData,
     })
-    edges.push({ id: `${teamNodeId}->${agentNodeId}`, source: teamNodeId, target: agentNodeId })
+    edges.push({
+      id: `${teamNodeId}->${agentNodeId}`,
+      source: teamNodeId,
+      target: agentNodeId,
+      type: 'cable',
+      // The TARGET's tone (design README "1b -- Cables": "in the target's status colour"), and
+      // "active" means the target is doing something -- an idle branch of the org tree is
+      // structure, not traffic.
+      data: {
+        tone: CARD_STATE_TONE[cardStateForAgent(agent.status as AgentStatus)].tone,
+        active: agent.status !== 'idle',
+      },
+    })
 
     if (agent.activeTaskId !== null) {
       const taskNodeId = `activeTask:${agent.activeTaskId}`
@@ -254,7 +277,18 @@ export function buildOrgGraph(snapshot: GraphSnapshot): { readonly nodes: Node[]
           workspaceId: snapshot.workspace.id,
         } satisfies ActiveTaskNodeData,
       })
-      edges.push({ id: `${agentNodeId}->${taskNodeId}`, source: agentNodeId, target: taskNodeId })
+      // The particle track (spec §6). Always lit: this edge exists only while the agent HAS a live
+      // run, which is exactly what "active" means -- and the particle rides its core path.
+      edges.push({
+        id: `${agentNodeId}->${taskNodeId}`,
+        source: agentNodeId,
+        target: taskNodeId,
+        type: 'cable',
+        data: {
+          tone: CARD_STATE_TONE[cardStateFor(agent.status as AgentStatus, taskStatusById.get(agent.activeTaskId) ?? null)].tone,
+          active: true,
+        },
+      })
     }
   }
 
