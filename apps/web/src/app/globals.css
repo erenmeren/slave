@@ -132,6 +132,70 @@ body {
   }
 }
 
+/* ---- M14 motion vocabulary (design README "Interactions & Behavior" > Motion) ---------------
+ * The mockup's `pulsedot` is this file's existing `status-pulse` above and is deliberately NOT
+ * renamed -- every M11/M12 call site references it by that name. The four below are new.
+ * Every consumer applies these through Tailwind's `motion-safe:` variant; the media block at the
+ * bottom of this section is the belt-and-braces guarantee for anything that cannot (a literal
+ * class on a React Flow-owned element, for instance). */
+
+/* Cable dash travel: `stroke-dasharray: 5 11` animated to `stroke-dashoffset: -32` over 1.15s
+ * linear infinite (design README "1b — Cables"). The dasharray itself is an ATTRIBUTE on the
+ * path, not part of this keyframe -- only the offset moves. */
+@keyframes dash {
+  to {
+    stroke-dashoffset: -32;
+  }
+}
+
+/* The agent card's activity sweep: a 2.2s cubic-bezier(.4,0,.2,1) gradient across the top
+ * hairline while a card is `working`. Named `card-sweep`, not `sweep`: `sweep` is already an
+ * orchestrator concept (the guardrail sweep) and this file is read beside that vocabulary. */
+@keyframes card-sweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+/* New-row entry: 0.3s from `translateY(5px)`. M11's deferred "new-row rise" lands here. */
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* A pending spinner. The handoff lists `spin` in its motion vocabulary; the only consumer today
+ * is the Skills page's sync indicator. */
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Decision 8: under `prefers-reduced-motion: reduce` NOTHING animates. `animation-name` is what
+ * the milestone gate reads back off every element, so it is what this sets -- the duration and
+ * iteration count are belt-and-braces for a browser that resolves `animation-name` lazily.
+ * `!important` because Tailwind's `motion-safe:` utilities and any literal `animation:` shorthand
+ * both land at the same specificity. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-name: none !important;
+    animation-duration: 0s !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0s !important;
+  }
+}
+
 /* Panel slide-in: a short transform, CSS animation only (no springs library). */
 @keyframes panel-in {
   from {

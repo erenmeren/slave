@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
+import { AvatarTile, initialsOf } from '../src/components/ui/AvatarTile.js'
 import { Button } from '../src/components/ui/Button.js'
 import { Card } from '../src/components/ui/Card.js'
 import { Chip } from '../src/components/ui/Chip.js'
@@ -55,6 +56,67 @@ describe('StatusPill', () => {
     const pill = screen.getByTestId('status-pill')
     expect(pill.textContent).toBe('Blocked')
     expect(pill.getAttribute('data-tone')).toBe('blocked')
+  })
+})
+
+describe('initialsOf', () => {
+  it('takes the first letters of the first two words', () => {
+    expect(initialsOf('Checkout Platform')).toBe('CP')
+    expect(initialsOf('atlas software co')).toBe('AS')
+  })
+
+  it('takes one letter from a single-word name', () => {
+    expect(initialsOf('Alex')).toBe('A')
+  })
+
+  it('returns the unknown mark for an empty or whitespace-only name', () => {
+    expect(initialsOf('')).toBe('—')
+    expect(initialsOf('   ')).toBe('—')
+  })
+})
+
+describe('AvatarTile', () => {
+  it('renders the initials, the tone attribute, and the 28px/radius-7 recipe', () => {
+    render(<AvatarTile name="Alex Turner" tone="working" />)
+    const tile = screen.getByTestId('avatar-tile')
+    expect(tile.textContent).toBe('AT')
+    expect(tile.getAttribute('data-tone')).toBe('working')
+    // Class-string assertions only -- jsdom loads no CSS here (see the plan's "What jsdom can and
+    // cannot verify" table). `getComputedStyle(tile).width` would read `''`, not `28px`; the
+    // milestone gate is what checks the rendered box.
+    expect(tile.className).toContain('h-7')
+    expect(tile.className).toContain('w-7')
+    expect(tile.className).toContain('rounded-tile')
+    expect(tile.className).toContain('text-[11px]')
+  })
+
+  it('carries the name for assistive tech rather than only two letters', () => {
+    render(<AvatarTile name="Alex Turner" tone="idle" />)
+    expect(screen.getByTestId('avatar-tile').getAttribute('title')).toBe('Alex Turner')
+  })
+})
+
+describe('StatusPill pulse', () => {
+  it('defaults to the tone in-flight rule when no pulse is given', () => {
+    const { rerender } = render(<StatusPill tone="working" label="WORKING" />)
+    expect(screen.getByTestId('status-pill').querySelector('span')?.className).toContain('animate-[status-pulse')
+
+    rerender(<StatusPill tone="paused" label="PAUSED" />)
+    expect(screen.getByTestId('status-pill').querySelector('span')?.className).not.toContain('animate-[status-pulse')
+  })
+
+  it('lets an explicit pulse override the tone default in both directions', () => {
+    // `pause_requested` rides the `waiting` tone (which does not pulse by default) and MUST pulse.
+    const { rerender } = render(<StatusPill tone="waiting" label="PAUSING" pulse />)
+    expect(screen.getByTestId('status-pill').querySelector('span')?.className).toContain('animate-[status-pulse')
+
+    rerender(<StatusPill tone="working" label="WORKING" pulse={false} />)
+    expect(screen.getByTestId('status-pill').querySelector('span')?.className).not.toContain('animate-[status-pulse')
+  })
+
+  it('keeps the 20px pill radius class', () => {
+    render(<StatusPill tone="idle" label="IDLE" />)
+    expect(screen.getByTestId('status-pill').className).toContain('rounded-pill')
   })
 })
 

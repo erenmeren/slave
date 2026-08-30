@@ -80,15 +80,31 @@ const IN_FLIGHT_TONES: ReadonlySet<StatusTone> = new Set(['working', 'planning',
 
 /** The `1a`-alpha fill / `3d`-alpha border pill (spec §3). Presentational only — callers own
  *  what `tone` means for their domain object. */
-export function StatusPill({ tone, label }: { readonly tone: StatusTone; readonly label: string }): React.JSX.Element {
-  const pulse = IN_FLIGHT_TONES.has(tone) ? 'motion-safe:animate-[status-pulse_1.5s_ease-in-out_infinite]' : ''
+export function StatusPill({
+  tone,
+  label,
+  pulse,
+}: {
+  readonly tone: StatusTone
+  readonly label: string
+  /**
+   * Overrides the tone's own in-flight default. `lib/tones.ts`'s `CARD_STATE_TONE` supplies it,
+   * because pulse is a fact about the STATE and two states can share one tone: `pause_requested`
+   * ("PAUSING") rides the amber `waiting` tone and pulses, while plain `waiting` does not.
+   * Omitted, the pre-M14 `IN_FLIGHT_TONES` rule applies unchanged, so every M11/M12 call site
+   * (`RosterTable`, `WorkersTable`, `ProjectsClient`) keeps exactly the behaviour it has.
+   */
+  readonly pulse?: boolean
+}): React.JSX.Element {
+  const shouldPulse = pulse ?? IN_FLIGHT_TONES.has(tone)
+  const pulseClass = shouldPulse ? 'motion-safe:animate-[status-pulse_1.5s_ease-in-out_infinite]' : ''
   return (
     <span
       data-testid="status-pill"
       data-tone={tone}
-      className={`inline-flex items-center gap-1.5 rounded-pill border px-2 py-0.5 font-mono text-[10px] uppercase tracking-wide ${TONE_FILL[tone]} ${TONE_BORDER[tone]} ${TONE_TEXT[tone]}`}
+      className={`inline-flex items-center gap-1.5 rounded-pill border px-[7px] py-[3px] font-mono text-[9.5px] uppercase tracking-wide ${TONE_FILL[tone]} ${TONE_BORDER[tone]} ${TONE_TEXT[tone]}`}
     >
-      <span aria-hidden className={`h-1.5 w-1.5 rounded-full ${TONE_DOT[tone]} ${pulse}`} />
+      <span aria-hidden className={`h-[5px] w-[5px] rounded-full ${TONE_DOT[tone]} ${pulseClass}`} />
       {label}
     </span>
   )
