@@ -233,6 +233,10 @@ export function OverviewClient({
         <div className="grid grid-cols-1 gap-[11px] px-[20px] pt-[16px] md:grid-cols-2">
           <GoalCard workspaceId={workspaceId} goal={view.workspace.goal} suggestions={view.goalSuggestions} />
           <RuntimeCard
+            // The card's drafts are deliberately uncontrolled; a changed SAVED pair remounts it
+            // with fresh drafts, an unrelated re-render (same key) never clobbers a draft in
+            // progress (M15 spec §3 B4).
+            key={`${view.workspace.provider ?? ''}|${view.workspace.budgetUsd ?? ''}`}
             workspaceId={workspaceId}
             provider={view.workspace.provider}
             budgetUsd={view.workspace.budgetUsd}

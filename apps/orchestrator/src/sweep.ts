@@ -1,3 +1,4 @@
+import { isAlive } from '@ai-team-os/control'
 import { prisma as db } from '@ai-team-os/db/client'
 import { runId as brandRunId, type RunId, type RunStatus, type WorkspaceId } from '@ai-team-os/domain'
 import { appendEvent } from '@ai-team-os/events'
@@ -45,32 +46,6 @@ const ORPHANABLE: readonly RunStatus[] = NON_TERMINAL_RUN_STATUSES.filter((statu
  * process is gone, which is how a run that never finished dying is eventually concluded.
  */
 const SWEEPABLE: readonly RunStatus[] = ORPHANABLE.filter((status: RunStatus) => status !== 'stopping')
-
-/**
- * Whether the process is still there.
- *
- * `process.kill(pid, 0)` sends no signal and only asks. Never an "is the run old" heuristic — that
- * is the wall-clock timeout's job, and conflating the two makes a slow run look like a dead one.
- *
- * The known imprecision, stated rather than left to be discovered: pids are reused, so a recycled
- * pid reads as alive and the run is left alone. That is the safe direction — the sweep's wall-clock
- * half catches it eventually — but it means "alive" here is "something with that pid is alive".
- */
-function isAlive(pid: number | null): boolean {
-  // 0 and negatives select a process *group*, not a process: `kill(0, 0)` signals the caller's own
-  // group and always succeeds, so a run recorded with pid 0 would be permanently unreconcilable.
-  if (pid === null || pid <= 0) return false
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (error) {
-    // `EPERM` is positive evidence of life: POSIX returns it only for a process that *exists* but
-    // is not ours. Reading it as dead is the unsafe direction, and it is reachable the moment the
-    // daemon drops privileges or shares a pid namespace -- it would fail a run whose agent is very
-    // much alive, release its task, and start a second agent into the same worktree.
-    return (error as NodeJS.ErrnoException).code === 'EPERM'
-  }
-}
 
 /**
  * Whether a tick has run in this process.
@@ -126,6 +101,8 @@ export async function reconcileOrphans(deps: SweepDeps): Promise<number> {
 
   let failed = 0
   for (const run of runs) {
+    // Pid-liveness semantics (EPERM=alive, null/<=0=dead) live with the shared implementation in
+    // packages/providers/src/runtime/process.ts.
     if (isAlive(run.pid)) continue
 
     const now = new Date()

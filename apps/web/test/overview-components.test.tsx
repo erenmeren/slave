@@ -605,6 +605,58 @@ describe('Overview bottom row', () => {
   })
 })
 
+describe('RuntimeCard remount on a saved change (M15 spec \u00a73 B4)', () => {
+  /** OverviewClient's own stream (`useOverview.test.tsx`'s precedent) -- this describe never
+   *  mounts `<Sidebar>`, so it is the only `EventSource` in play. */
+  class FakeOverviewEventSource {
+    static instances: FakeOverviewEventSource[] = []
+    onmessage: ((event: { data: string }) => void) | null = null
+    onerror: (() => void) | null = null
+    onopen: (() => void) | null = null
+    constructor(public url: string) {
+      FakeOverviewEventSource.instances.push(this)
+    }
+    close(): void {}
+  }
+
+  beforeEach((): void => {
+    vi.useFakeTimers()
+    FakeOverviewEventSource.instances = []
+    vi.stubGlobal('EventSource', FakeOverviewEventSource as unknown as typeof EventSource)
+  })
+
+  afterEach((): void => {
+    vi.unstubAllGlobals()
+    vi.useRealTimers()
+  })
+
+  it('RuntimeCard drafts re-seed when the saved provider/budget pair changes', async (): Promise<void> => {
+    const view = snapshot([])
+    const initial = { ...view, workspace: { ...view.workspace, budgetUsd: 20 } }
+    const updated = { ...view, workspace: { ...view.workspace, budgetUsd: 35 } }
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(updated), { status: 200 })))
+
+    render(<OverviewClient workspaceId="w1" initial={initial} />)
+    expect((screen.getByLabelText('workspace budget') as HTMLInputElement).value).toBe('20')
+
+    // Dirty nothing on the card; simulate the snapshot moving under it via a real wake-up event
+    // and the debounced refetch it schedules (`useWorkspaceStream`'s wiring).
+    act((): void => {
+      FakeOverviewEventSource.instances[0]?.onmessage?.({
+        data: JSON.stringify({
+          seq: 1, ts: new Date(0).toISOString(), workspaceId: 'w1', actor: 'system',
+          type: 'workspace.settings_changed', payload: {},
+        }),
+      })
+    })
+    await act(async (): Promise<void> => {
+      await vi.advanceTimersByTimeAsync(300)
+    })
+
+    expect((screen.getByLabelText('workspace budget') as HTMLInputElement).value).toBe('35')
+  })
+})
+
 describe('shell facts reach the sidebar across the layout\u2019s sibling boundary', () => {
   // Fix round 1, Critical. `app/layout.tsx` renders `<Sidebar />` as a SIBLING of `{children}`,
   // so nothing a page mounts can ever be an ancestor of the sidebar — a React context provider
