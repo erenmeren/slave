@@ -51,12 +51,15 @@ export interface RunOutcome {
   readonly costUsd: number | null
   readonly deniedToolUseIds: readonly string[]
   /**
-   * The run's token usage, or `null` when the runtime does not report it (M14 §4.2). Never
-   * `{ input: 0, output: 0 }` for an unmeasured run -- zero is a figure a per-agent average would
-   * believe. `input` is the `result` line's `usage.input_tokens` and `output` its
-   * `usage.output_tokens`; the cache fields (`cache_creation_input_tokens`,
-   * `cache_read_input_tokens`) are deliberately NOT folded in -- they are a different quantity,
-   * and summing them into `input` would make one agent's cache hit look like extra work.
+   * The run's token usage, or `null` when the `result` line carried no `usage` at all (M14 §4.2,
+   * fix round 1). Never `{ input: 0, output: 0 }` for an unmeasured run -- zero is a figure a
+   * per-agent average would believe. `input` is BILLED input: `usage.input_tokens +
+   * usage.cache_creation_input_tokens + usage.cache_read_input_tokens`, each counter treated as
+   * `0` when absent -- the cache fields are folded in deliberately, not left out, because they
+   * are billed the same as fresh input and a figure that ignores them understates what the run
+   * actually cost. `output` is `usage.output_tokens` alone, unchanged. See
+   * `packages/providers/src/claude/stream.ts`'s `parseResultLine` for the exact expression and
+   * its worked example.
    */
   readonly tokens: { readonly input: number; readonly output: number } | null
 }
