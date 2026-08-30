@@ -23,6 +23,11 @@ const DIFF_CHAR_LIMIT = 60_000
 /** How many review runs a task may burn before its cycle is escalated rather than retried (Erratum 2). */
 const REVIEW_RETRY_CAP = 2
 
+/** Task ids already warned about as unreviewable -- once per daemon lifetime, not once per tick
+ *  (M15 spec §3 B5): the seeded `reviewing` fixture task made this line the daemon log's loudest
+ *  and least informative repetition. Bounded by the number of distinct stuck tasks. */
+const warnedUnreviewable = new Set<string>()
+
 /**
  * The prompt a review run starts from.
  *
@@ -208,10 +213,13 @@ async function dispatchReview(deps: TickDeps, task: ReviewableTask): Promise<Run
     orderBy: { startedAt: 'desc' },
   })
   if (latestImpl === null || latestImpl.worktreePath === null || task.branch === null) {
-    console.warn(
-      `[review] task ${task.id} is in reviewing but has no usable implementation run to review: ` +
-        `latestImpl=${latestImpl?.id ?? 'none'} worktreePath=${latestImpl?.worktreePath ?? 'none'} branch=${task.branch ?? 'none'}`,
-    )
+    if (!warnedUnreviewable.has(task.id)) {
+      warnedUnreviewable.add(task.id)
+      console.warn(
+        `[review] task ${task.id} is in reviewing but has no usable implementation run to review: ` +
+          `latestImpl=${latestImpl?.id ?? 'none'} worktreePath=${latestImpl?.worktreePath ?? 'none'} branch=${task.branch ?? 'none'}`,
+      )
+    }
     return null
   }
 

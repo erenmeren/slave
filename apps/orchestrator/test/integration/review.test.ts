@@ -8,7 +8,7 @@ import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@ai-team-os
 import { prisma } from '@ai-team-os/db/client'
 import { runId as brandRunId, workspaceId as brandWorkspaceId } from '@ai-team-os/domain'
 import { ClaudeCodeAdapter, type AdapterRegistry } from '@ai-team-os/providers'
-import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { buildReviewPrompt, concludeReview, dispatchReviews } from '../../src/review.js'
 import { drainPumps, tick, type TickDeps } from '../../src/tick.js'
 
@@ -208,6 +208,27 @@ describe('dispatchReviews', () => {
 
     expect(second).toEqual([])
     expect(await prisma.agentRun.count({ where: { kind: 'review' } })).toBe(1)
+  })
+
+  it('warns once, not once per tick, for a reviewing task with no usable implementation run', async (): Promise<void> => {
+    // No `seedReviewingTask`: that drives a real implementation run, which is exactly the thing
+    // this task must NOT have. Flipping the fixture's own `ready` task straight to `reviewing`
+    // reproduces the stuck state directly -- no implementation run ever recorded for it.
+    await prisma.task.update({ where: { id: fixture.taskId }, data: { status: 'reviewing' } })
+    const deps: TickDeps = {
+      workspaceId: brandWorkspaceId(fixture.workspaceId),
+      registry: singleAdapterRegistry(
+        new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'review-approve'], hookPath: REAL_GATE }),
+      ),
+    }
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await dispatchReviews(deps)
+    await dispatchReviews(deps)
+
+    const matching = warn.mock.calls.filter(([msg]) => String(msg).includes('no usable implementation run'))
+    expect(matching).toHaveLength(1)
+    warn.mockRestore()
   })
 
   it('escalates once with no reviewer-role agent in the workspace, and starts nothing', async (): Promise<void> => {
