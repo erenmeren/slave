@@ -185,6 +185,44 @@ describe('parseCursorLine, against the recorded fixture', () => {
   })
 })
 
+/**
+ * A REAL rejected `tool_call`/`completed` line, from the same M13 Task 9 gate recording
+ * `cursor-adapter.test.ts` already reads (`fixtures/cursor/gate/run-2-flag-present.ndjson`, cursor's
+ * own shell gate denying a call while the pause flag was present) -- not a synthesized shape. M15
+ * maps this: the completed half's `result` carries `rejected`, and that is Cursor's own denial
+ * echo, distinct from the Claude-shaped `hook_denied`/`hook_crashed`/`hook_failed_open` family R4
+ * still bans (see the parser's docstring). Never assert on `reason`'s text below: cursor-agent
+ * self-updates between runs and its message prefixes have changed before (M13 Task 9's own
+ * recording of a LATER binary already shows different wording for the same denial).
+ */
+const GATE_LINES = readFileSync(
+  new URL('./fixtures/cursor/gate/run-2-flag-present.ndjson', import.meta.url),
+  'utf8',
+)
+  .split('\n')
+  .filter(Boolean)
+const REJECTED_COMPLETED_LINE = GATE_LINES.find((line) => line.includes('"rejected"'))
+if (REJECTED_COMPLETED_LINE === undefined) {
+  throw new Error('fixture no longer contains a rejected completed line; the test below needs one')
+}
+
+describe('parseCursorLine, a rejected completed half (M15)', () => {
+  it('maps a completed half carrying a rejected result to permission_denied', () => {
+    const event = parseCursorLine(REJECTED_COMPLETED_LINE)
+    expect(event.kind).toBe('permission_denied')
+    if (event.kind !== 'permission_denied') throw new Error('expected permission_denied')
+    // `call_id`, verbatim -- the same field `tool_call`'s started half reports as `toolUseId`.
+    expect(event.toolUseId).toBe('tool_264c8d13-d13d-498e-bc8a-66a4ff75d74')
+    // `shellToolCall` -> `shell`, the same convention the started half's tool name follows.
+    expect(event.toolName).toBe('shell')
+  })
+
+  it('still ignores an ordinary completed half', () => {
+    // `lines[7]` (`cursor-run.ndjson`): a real completed half whose result carries no rejection.
+    expect(parseCursorLine(lines[7]!).kind).toBe('ignored')
+  })
+})
+
 describe('parseCursorLine, totality', () => {
   it('returns unparsable rather than throwing on a truncated line', () => {
     expect(parseCursorLine('{"type":"resu')).toEqual({ kind: 'unparsable', line: '{"type":"resu' })

@@ -58,19 +58,29 @@ import type { RuntimeEvent } from '../types.js'
  * `costUsd` and `stopReason` are ALWAYS `null`, never `0` and never a
  * default string: Cursor reports no spend (spec §7, capability
  * `reportsCost: false`) and unknown is not zero (spec Decision 6) -- zero is
- * a figure the budget guardrail believes. `deniedToolUseIds` is always `[]`;
- * Cursor's stream has no denial echo.
+ * a figure the budget guardrail believes. `deniedToolUseIds` on the RESULT
+ * line is always `[]`, still -- not because Cursor's stream has no denial
+ * echo (M15: it does, see below), but because the echo arrives as its OWN
+ * `tool_call`/`completed` line, addressed by `call_id`, not folded into the
+ * `result` line's fields the way a turn count or a cost would be.
  *
- * NO BRANCH OF THIS FUNCTION MAY RETURN `hook_denied`, `hook_crashed`,
- * `hook_failed_open` OR `permission_denied` (M12 Task 10 ruling R4). Those
- * four exist for a hook-capable adapter that sees its gate's decisions on
- * the stream. Cursor's gate is a workspace `.cursor/hooks.json` hook whose
+ * NO BRANCH OF THIS FUNCTION MAY RETURN `hook_denied`, `hook_crashed` OR
+ * `hook_failed_open` (M12 Task 10 ruling R4, narrowed by M15). Those three
+ * exist for a hook-capable adapter that sees its gate's decisions on the
+ * stream, and they drive `stopped_by_gate` and the workspace circuit
+ * breaker. Cursor's gate is a workspace `.cursor/hooks.json` hook whose
  * decisions never appear as stream lines -- the recording's only trace of
  * hooks at all is an empty `hookAdditionalContexts: []` array riding along
  * on the `tool_call` line -- and per the pre-flight ruling Cursor's shell
- * gate is defense-in-depth that does not produce `stopped_by_gate`. A
+ * gate is defense-in-depth that must never trip either mechanism. A
  * Claude-shaped hook line arriving here is noise, not a decision to
- * classify.
+ * classify, and the ban on those three STANDS.
+ *
+ * `permission_denied` is OFF that banned list as of M15: a completed
+ * `tool_call` whose result carries `rejected` (measured:
+ * `fixtures/cursor/gate/run-2-flag-present.ndjson`, M13 Task 9) is Cursor's
+ * OWN rejected echo, not a Claude-shaped hook line arriving where it does
+ * not belong, and reporting it is exactly what this parser exists to do.
  */
 export function parseCursorLine(line: string): RuntimeEvent {
   let raw: unknown
@@ -288,10 +298,32 @@ function parseToolCallLine(raw: unknown, line: string): RuntimeEvent {
   if (data.subtype !== 'started') {
     // `completed` carries the call's RESULT, under the same `call_id` the
     // `started` line already reported. It is a second line about ONE call,
-    // not a second call, and `RuntimeEvent` has no variant for a completion,
-    // so returning `tool_call` again would double every tool call in the
-    // feed and in any count taken over the stream. An unrecognized future
-    // subtype lands here too, by the same reasoning as everywhere else.
+    // not a second call, and `RuntimeEvent` has no variant for a plain
+    // completion, so returning `tool_call` again would double every tool
+    // call in the feed and in any count taken over the stream. An
+    // unrecognized future subtype lands here too, by the same reasoning as
+    // everywhere else -- UNLESS the result the completed half carries is a
+    // rejection, checked next.
+    //
+    // MEASURED (`fixtures/cursor/gate/run-2-flag-present.ndjson`, M13 Task 9):
+    // a call this system's own shell gate denied completes as
+    // `{"shellToolCall":{"result":{"rejected":{"command":...,"reason":...}}}}`
+    // -- the rejection nests under `result.rejected` inside the SAME
+    // tool-named object the started half's `args` sits in, not beside it.
+    // This is Cursor's OWN denial echo (M15), and it is distinct from the
+    // Claude-shaped `hook_denied`/`hook_crashed`/`hook_failed_open` family
+    // R4 still bans below: it is `permission_denied` off that list, per M15.
+    const toolKey = toolKeyOf(data.tool_call)
+    const payload = toolKey === undefined ? undefined : data.tool_call[toolKey]
+    const result = isRecord(payload) ? payload.result : undefined
+    if (toolKey !== undefined && isRecord(result) && 'rejected' in result) {
+      return {
+        kind: 'permission_denied',
+        // Same derivation the started half uses below: `shellToolCall` -> `shell`.
+        toolName: toolKey.endsWith('ToolCall') ? toolKey.slice(0, -'ToolCall'.length) : toolKey,
+        toolUseId: data.call_id,
+      }
+    }
     return { kind: 'ignored', line }
   }
 
@@ -381,7 +413,9 @@ function parseResultLine(raw: unknown, line: string): RuntimeEvent {
       // Cursor reports no spend. `null`, never `0` (spec Decision 6): zero is
       // a figure the budget guardrail believes.
       costUsd: null,
-      // Cursor's stream has no denial echo.
+      // Cursor's denial echo exists (M15) but does not live here: it is its
+      // own `tool_call`/`completed` line, mapped to `permission_denied`, not
+      // a field this `result` line carries.
       deniedToolUseIds: [],
       // Cursor's `result` line DOES carry `usage`, in camelCase: `inputTokens`,
       // `outputTokens`, `cacheReadTokens`, `cacheWriteTokens` -- the same four counters the

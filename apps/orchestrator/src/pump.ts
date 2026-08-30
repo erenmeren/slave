@@ -335,10 +335,15 @@ const CURSOR_PAUSE_REASON =
  * terminal result, or an errored one, is the genuine pause: the kill is exactly what caused it.
  *
  * **...unless the clean result was only reached because the pause gate denied a call** (final
- * review I2). `deniedToolUseIds` is populated from `tool_call/completed` lines whose result is
- * `rejected`, and on a Cursor run the ONLY thing that produces a rejection is this system's own
- * `beforeShellExecution` hook -- which denies only while the pause flag exists. So a non-empty
- * `deniedToolUseIds` is not incidental to the pause: it is evidence the pause was in flight and
+ * review I2, made real by M15). The check reads `input.denied`, the pump's own tally built while
+ * reading the stream -- as of M15 that tally fills for Cursor too, because a `tool_call/completed`
+ * line whose result is `rejected` now parses to `permission_denied` (`cursor/stream.ts`) and lands
+ * in `denied` the same way any other mid-stream denial does. `outcome.deniedToolUseIds` is `[]` for
+ * Cursor BY CONSTRUCTION -- Cursor's `result` line carries no such field, ever -- so reading it here
+ * made this check vacuous from the day it was written: it could never see a Cursor denial no matter
+ * how many calls the gate rejected. On a Cursor run the ONLY thing that produces a rejection is this
+ * system's own `beforeShellExecution` hook -- which denies only while the pause flag exists -- so a
+ * non-empty `denied` is not incidental to the pause: it is evidence the pause was in flight and
  * working. The sequence is `signalPause` writes the flag, SIGTERMs with a 2 s grace, the agent
  * starts one more shell command inside that window, the gate denies it (the entire purpose of
  * writing the flag before the kill), and `cursor-agent` treats the denial as an ordinary tool error
@@ -371,7 +376,12 @@ async function recordCursorPauseIfRequested(input: {
   // lost the race and does not get to reclassify it. Everything else -- no terminal result, an
   // errored one, or a clean one whose calls this system's own pause gate blocked -- reaches the
   // pause below. See the docstring's two "clean terminal" paragraphs.
-  if (input.outcome !== null && !input.outcome.isError && input.outcome.deniedToolUseIds.length === 0) return false
+  //
+  // `input.denied`, not `input.outcome.deniedToolUseIds`: the denial arrives as its own mid-stream
+  // `permission_denied` event and lands in the pump's own tally (M15); `outcome.deniedToolUseIds`
+  // is `[]` for Cursor by construction (its `result` line carries no such field), so reading it here
+  // made this check unable to ever see a Cursor denial.
+  if (input.outcome !== null && !input.outcome.isError && input.denied.length === 0) return false
 
   // Claimed, not written, and the claim is what makes this idempotent: `pause_requested` is the
   // one status that means "an operator asked and the signal was sent". A run that reached here in

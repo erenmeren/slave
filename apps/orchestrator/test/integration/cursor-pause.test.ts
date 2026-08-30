@@ -212,13 +212,17 @@ describe('pumpRun, when a paused Cursor run ends', () => {
   })
 
   it('records the pause when the clean terminal line was reached only because the gate denied a call', async (): Promise<void> => {
-    // THE CASE THE GATE EXISTS FOR (final review I2). `signalPause('cursor')` writes the flag and
-    // then SIGTERMs with a 2 s grace; in that window the agent can still start one more shell
-    // command, and `cursor-shell-gate.sh` -- armed by the flag this system just wrote -- denies it.
-    // `cursor-agent` reads that denial as an ordinary tool error and can still reach its `result`
-    // line with `is_error: false`. A denial on a Cursor run is only ever produced by THIS system's
-    // own hook, and that hook only denies while the pause flag exists, so a non-empty
-    // `deniedToolUseIds` means a pause was in flight: the clean terminal must not win the race.
+    // THE CASE THE GATE EXISTS FOR (final review I2, made real by M15). `signalPause('cursor')`
+    // writes the flag and then SIGTERMs with a 2 s grace; in that window the agent can still start
+    // one more shell command, and `cursor-shell-gate.sh` -- armed by the flag this system just
+    // wrote -- denies it. `cursor-agent`'s stream reports that denial as its OWN
+    // `tool_call`/`completed` line whose result carries `rejected`, which `cursor/stream.ts` now
+    // maps to a mid-stream `permission_denied` event (M15) -- NOT as a field on the terminal
+    // `result` line, so `outcome.deniedToolUseIds` stays `[]` here exactly as it would for a real
+    // Cursor run. `cursor-agent` reads the denial as an ordinary tool error and can still reach its
+    // `result` line with `is_error: false`. A denial on a Cursor run is only ever produced by THIS
+    // system's own hook, and that hook only denies while the pause flag exists, so a non-empty
+    // `denied` tally means a pause was in flight: the clean terminal must not win the race.
     const ids = await seed('pause_requested')
 
     await pumpRun({
@@ -226,6 +230,7 @@ describe('pumpRun, when a paused Cursor run ends', () => {
       spawn: spawnFacts,
       events: fromArray([
         { kind: 'session_started', sessionId: 's-cursor-1' },
+        { kind: 'permission_denied', toolName: 'shell', toolUseId: 'call-9' },
         {
           kind: 'terminated',
           outcome: {
@@ -235,7 +240,10 @@ describe('pumpRun, when a paused Cursor run ends', () => {
             numTurns: 3,
             costUsd: null,
             tokens: null,
-            deniedToolUseIds: ['call-9'],
+            // Always `[]` for Cursor's `result` line -- the denial rode in on its own
+            // `permission_denied` event above, not as a field here. See `cursor/stream.ts`'s
+            // docstring.
+            deniedToolUseIds: [],
           },
         },
       ]),
@@ -252,11 +260,10 @@ describe('pumpRun, when a paused Cursor run ends', () => {
     const checkpoint = await prisma.checkpoint.findUniqueOrThrow({ where: { runId: ids.runId } })
     expect(checkpoint.sessionId).toBe('s-cursor-1')
     expect(checkpoint.provider).toBe('cursor')
-    // `checkpoint.deniedToolUseIds` stays empty here on purpose, and it is not the same list: the
-    // pump's own `denied` accumulator collects mid-stream `permission_denied`/`hook_denied` events,
-    // which Cursor never emits (`gate: 'shell-only'`, and its denials arrive folded into the
-    // terminal `result` line instead). The denial that reclassified this run rides in `outcome`.
-    expect(checkpoint.deniedToolUseIds).toEqual([])
+    // As of M15 the pump's own `denied` accumulator DOES collect Cursor's mid-stream
+    // `permission_denied` events (they parse from the completed half's `rejected` result), so the
+    // id that reclassified this run rides in the checkpoint too.
+    expect(checkpoint.deniedToolUseIds).toEqual(['call-9'])
   })
 
   it('still fails a Cursor run whose calls were denied with no pause requested', async (): Promise<void> => {
