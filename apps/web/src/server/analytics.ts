@@ -91,7 +91,7 @@ export async function buildAnalytics(workspaceId: string | null): Promise<Analyt
   const runWhere = workspaceId === null ? {} : { agent: { team: { workspaceId } } }
   const from = windowStart()
 
-  const [agents, windowRuns, allRuns, pauses, liveRuns, tasks] = await Promise.all([
+  const [agents, windowRuns, allRuns, pauses, activeAgentRows, tasks] = await Promise.all([
     prisma.agent.findMany({ where: agentWhere, orderBy: { name: 'asc' }, select: { id: true, name: true, role: true } }),
     prisma.agentRun.findMany({
       where: { ...runWhere, terminalAt: { gte: from } },
@@ -115,7 +115,15 @@ export async function buildAnalytics(workspaceId: string | null): Promise<Analyt
     prisma.executionEvent.count({
       where: { type: 'run_paused', ...(workspaceId === null ? {} : { workspaceId }) },
     }),
-    prisma.agentRun.count({ where: { ...runWhere, status: { in: [...NON_TERMINAL_RUN_STATUSES] } } }),
+    // Agents, not runs: the scheduler enforces at most one non-terminal run per agent, but
+    // this query does not lean on that invariant staying true -- it names its unit directly
+    // (`distinct: ['agentId']`) rather than counting rows and hoping they never double up, the
+    // way `overview.ts`'s `liveRunByAgent` dedupes explicitly instead of trusting the same rule.
+    prisma.agentRun.findMany({
+      where: { ...runWhere, status: { in: [...NON_TERMINAL_RUN_STATUSES] } },
+      distinct: ['agentId'],
+      select: { agentId: true },
+    }),
     prisma.task.groupBy({
       by: ['status'],
       where: workspaceId === null ? {} : { workspaceId },
@@ -173,7 +181,7 @@ export async function buildAnalytics(workspaceId: string | null): Promise<Analyt
     },
     { label: 'Tool calls', value: String(toolCalls), note: null },
     { label: 'Pauses', value: String(pauses), note: null },
-    { label: 'Active agents', value: String(liveRuns), note: null },
+    { label: 'Active agents', value: String(activeAgentRows.length), note: null },
   ]
 
   // ---- per-agent performance -------------------------------------------------------------

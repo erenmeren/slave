@@ -129,6 +129,13 @@ describe('buildAnalytics', () => {
     expect(snapshot.kpis.find((k) => k.label === 'Pauses')?.value).toBe('2')
   })
 
+  it('counts active agents, not their runs: one agent with two non-terminal runs reads 1', async (): Promise<void> => {
+    await prisma.agentRun.create({ data: { agentId: fixture.agentId, status: 'working', provider: 'claude_code' } })
+    await prisma.agentRun.create({ data: { agentId: fixture.agentId, status: 'paused', provider: 'claude_code' } })
+    const snapshot = await buildAnalytics(fixture.workspaceId)
+    expect(snapshot.kpis.find((k) => k.label === 'Active agents')?.value).toBe('1')
+  })
+
   it('sums an agent tokens only over runs that reported them, and says null when none did', async (): Promise<void> => {
     await prisma.agentRun.create({
       data: { agentId: fixture.agentId, status: 'succeeded', provider: 'claude_code', tokensIn: 10, tokensOut: 90, terminalAt: new Date(), endedAt: new Date() },
