@@ -1,5 +1,7 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { isPreToolUseHookResponseLine, parseStreamLine } from '../src/claude/stream.js'
+import type { RuntimeEvent } from '../src/types.js'
 
 describe('parseStreamLine', () => {
   it('reads the session id from the init line', () => {
@@ -464,5 +466,54 @@ describe('isPreToolUseHookResponseLine', () => {
   it('is false for a non-hook_response line, and for unparsable text', () => {
     expect(isPreToolUseHookResponseLine(JSON.stringify({ type: 'assistant' }))).toBe(false)
     expect(isPreToolUseHookResponseLine('not json')).toBe(false)
+  })
+})
+
+describe('the Skill tool_use line (M14 §4.1, recorded)', () => {
+  // The whole file, not a hand-picked line: a mapping written from a recording is only honest if
+  // the test reads the recording. `test/fixtures/claude/README.md` carries the binary version, the
+  // command, and the one redaction applied.
+  const lines = readFileSync(new URL('./fixtures/claude/skill-tool-use.ndjson', import.meta.url), 'utf8')
+    .split('\n')
+    .filter((line) => line.trim().length > 0)
+
+  it('recognizes every Skill invocation in the recording as a tool_call named Skill', () => {
+    const skillCalls = lines
+      .map((line) => parseStreamLine(line))
+      .filter(
+        (event): event is Extract<RuntimeEvent, { kind: 'tool_call' }> =>
+          event.kind === 'tool_call' && event.toolName === 'Skill',
+      )
+
+    expect(skillCalls.length).toBeGreaterThan(0)
+    for (const call of skillCalls) {
+      // The summary carries the skill NAME, not the bare tool name -- `input.skill` is the only
+      // argument a `Skill` tool_use has, and without it every skill call reads identically in the
+      // action line and on the agent card's skill chip.
+      expect(call.summary).toMatch(/^Skill \S/)
+      expect(call.toolUseId).toMatch(/^toolu_/)
+    }
+  })
+
+  it('summarizes the recorded call as exactly `Skill <name>`, the shape the agent card parses', () => {
+    // Not merely "starts with Skill ": `apps/web/src/server/overview.ts`'s `skillNameOf` recovers
+    // the chip's label with /^Skill\s+(\S+)/, so the exact string is the contract between this
+    // parser and that card. The name is the fully-qualified `<plugin>:<name>` the CLI emitted.
+    const summaries = lines
+      .map((line) => parseStreamLine(line))
+      .filter((event) => event.kind === 'tool_call' && event.toolName === 'Skill')
+      .map((event) => (event as Extract<RuntimeEvent, { kind: 'tool_call' }>).summary)
+
+    expect(summaries).toEqual(['Skill superpowers:writing-plans'])
+  })
+
+  it('reads the session id off the recording\'s own init line', () => {
+    const started = lines.map((line) => parseStreamLine(line)).filter((event) => event.kind === 'session_started')
+    expect(started).toEqual([{ kind: 'session_started', sessionId: '17b4a7b6-ed80-4fbb-bd84-90268e0d8b98' }])
+  })
+
+  it('never returns unparsable for any line of the recording', () => {
+    const unparsable = lines.map((line) => parseStreamLine(line)).filter((event) => event.kind === 'unparsable')
+    expect(unparsable).toEqual([])
   })
 })

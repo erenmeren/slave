@@ -9,6 +9,12 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
  * `Write toolu_01UCoRZm85rNxfupNQPToZXL`.
  */
 export const CLAUDE_SUMMARY_ARG_KEYS = [
+  // First, deliberately: a `Skill` tool_use carries `{"skill": "<plugin>:<name>"}` and nothing
+  // else worth showing (M14 §4.1, measured from `test/fixtures/claude/skill-tool-use.ndjson`,
+  // whose README carries the binary version and the command). Ahead of `description` because a
+  // future CLI adding a `description` beside it must not shadow the one argument that names the
+  // skill -- without this key every skill call in the product reads as the bare word `Skill`.
+  'skill',
   'file_path',
   'path',
   'notebook_path',

@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { promisify } from 'node:util'
 import { killWithEscalation } from '@ai-team-os/control'
-import { prisma } from '@ai-team-os/db/client'
+import { Prisma, prisma } from '@ai-team-os/db/client'
 import type { AgentId, RunId, TaskId, WorkspaceId } from '@ai-team-os/domain'
 import { appendEvent } from '@ai-team-os/events'
 import { classifyGateEvent, type ProviderKind, type RunOutcome, type RuntimeEvent } from '@ai-team-os/providers'
@@ -89,6 +89,36 @@ function readPauseRequester(pauseFlagPath: string | undefined): string | null {
   } catch {
     return null
   }
+}
+
+/**
+ * Whether the runtime this run was SPAWNED with can report skill invocations and token usage at
+ * all (M14 §4.1/§4.2, Decision 4).
+ *
+ * Keyed on `spawn.provider` -- the same field `recordCursorPauseIfRequested` branches on -- and
+ * deliberately NOT on what the stream happened to contain. An empty tally means two different
+ * things depending on the runtime, and only one of them is a measurement: on Claude it is "we
+ * watched every tool call and none was a `Skill`" (`{}`), on Cursor it is "this runtime never
+ * emits one, so we do not know" (`null`). Writing `{}` for Cursor would put a fabricated zero
+ * into the Skills page's per-skill run counts and a fabricated zero token sum into every
+ * per-agent average on Analytics.
+ *
+ * `spawn` absent (a test fixture that never pauses, a caller with no spawn facts) reads as
+ * "not Cursor": the only runtime this rule excludes is the one that is named. Every real caller
+ * -- `tick`, `planning`, `review` and `resume` -- passes `spawn.provider`, so a genuine Cursor run
+ * always reaches this with `'cursor'` in hand.
+ *
+ * `false` is written as `Prisma.DbNull`, not a bare `null`: on a nullable Json column those are
+ * different values, and only the former is SQL NULL.
+ */
+function runtimeReportsUsage(spawn: PumpRunInput['spawn']): boolean {
+  return spawn?.provider !== 'cursor'
+}
+
+/** The tally as the JSON column wants it. A plain object, never a `Map` -- Prisma writes the
+ *  latter as `{}`. */
+function skillCallsJson(tally: ReadonlyMap<string, number>): Record<string, number> {
+  return Object.fromEntries(tally)
 }
 
 /**
@@ -363,6 +393,15 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
   // where the *run* is, not where this pump started reading.
   const startingRow = await prisma.agentRun.findUniqueOrThrow({ where: { id: runId } })
   let toolCalls = startingRow.toolCalls
+  /**
+   * Skills invoked during THIS pump, tallied from the `tool_call` events the loop already sees
+   * (M14 §4.1, Decision 5). Seeded from the row's existing tally rather than from empty, for the
+   * same reason `toolCalls` is: a resumed run is a SECOND `pumpRun` on the same row, and a tally
+   * that restarts at zero forgets everything the first half of the run did.
+   */
+  const skillCalls = new Map<string, number>(
+    Object.entries((startingRow.skillCalls as Record<string, number> | null) ?? {}),
+  )
   // Seeded from the row for the same reason the counter is: a resumed pump is continuing a run that
   // already has a session. Without this, a resumed run that pauses again bails with "nothing could
   // resume it" and silently leaves the *previous*, now-stale checkpoint for the next resume to use.
@@ -413,6 +452,15 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
         // 6/9) -- so writing a count that starts at zero refunds the tool-call budget every time
         // an agent pauses. Task 15's §3.3 ceiling reads this column.
         toolCalls += 1
+        if (event.toolName === 'Skill') {
+          // `summary` is `"Skill <name>"` (`summaryFor` with `CLAUDE_SUMMARY_ARG_KEYS`'s leading
+          // `'skill'` key, M14 Task 4) -- the name is everything after the first space. A `Skill`
+          // call whose `input.skill` was missing or unreadable summarizes to the bare tool name,
+          // and is counted under the sentinel below rather than dropped: a skill call that
+          // happened is a fact, even when the CLI did not say which skill.
+          const name = event.summary.startsWith('Skill ') ? event.summary.slice('Skill '.length) : '<unnamed>'
+          skillCalls.set(name, (skillCalls.get(name) ?? 0) + 1)
+        }
         lastToolUseId = event.toolUseId
         lastToolName = event.toolName
         await prisma.agentRun.updateMany({ where: { id: runId, endedAt: null }, data: { toolCalls: { increment: 1 } } })
@@ -571,7 +619,12 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
             const now = new Date()
             await prisma.agentRun.updateMany({
               where: { id: runId, endedAt: null },
-              data: { status: 'failed', terminalAt: now, endedAt: now },
+              data: {
+                status: 'failed',
+                terminalAt: now,
+                endedAt: now,
+                skillCalls: runtimeReportsUsage(input.spawn) ? skillCallsJson(skillCalls) : Prisma.DbNull,
+              },
             })
             // The attempt counts, so a task cannot loop forever against a gate that stays broken.
             // A task-less `planning` run (M8b) has no attempt counter to increment.
@@ -655,7 +708,12 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
     // must read `stopped`, and this is the side that has to write it when it wins that race.
     const stopClaimed = await prisma.agentRun.updateMany({
       where: { id: runId, endedAt: null, status: 'stopping', stopRequestedAt: { not: null } },
-      data: { status: 'stopped', terminalAt: now, endedAt: now },
+      data: {
+        status: 'stopped',
+        terminalAt: now,
+        endedAt: now,
+        skillCalls: runtimeReportsUsage(input.spawn) ? skillCallsJson(skillCalls) : Prisma.DbNull,
+      },
     })
     if (stopClaimed.count > 0) {
       // Read back who asked. Safe after the fact: nothing else can still be writing this row --
@@ -682,7 +740,12 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
     // under a daemon is what happens on *every* cancel.
     const concluded = await prisma.agentRun.updateMany({
       where: { id: runId, endedAt: null },
-      data: { status: 'failed', terminalAt: now, endedAt: now },
+      data: {
+        status: 'failed',
+        terminalAt: now,
+        endedAt: now,
+        skillCalls: runtimeReportsUsage(input.spawn) ? skillCallsJson(skillCalls) : Prisma.DbNull,
+      },
     })
     if (concluded.count > 0) await emit('run.failed', 'system', { reason })
     return null
@@ -698,6 +761,10 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
     data: {
       status: failed ? 'failed' : 'succeeded',
       costUsd: outcome.costUsd,
+      // M14 §4.1 / Decision 5: written ONCE, here at the run's conclusion, and on every other
+      // terminal path in this file too -- never on the two pause writes, which are not
+      // conclusions. `null` rather than `{}` when the runtime cannot report (Decision 4).
+      skillCalls: runtimeReportsUsage(input.spawn) ? skillCallsJson(skillCalls) : Prisma.DbNull,
       terminalAt: terminalNow,
       endedAt: terminalNow,
     },

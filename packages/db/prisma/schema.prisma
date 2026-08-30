@@ -370,6 +370,19 @@ model AgentRun {
   /// not let those two facts collide. Unknown cost is `null`; a future insert that forgets to
   /// pass one now gets `null` at the database level instead of a silently wrong `0`.
   costUsd           Float?
+  /// Which skills this run invoked, and how many times each: `{ "superpowers:writing-plans": 2 }`
+  /// (M14 §4.1). Written ONCE, at the run's terminal conclusion, from a tally the pump keeps of
+  /// the `Skill` tool calls it already observes.
+  ///
+  /// THREE states, and the difference between the last two is Decision 4 (keyed on the run's
+  /// PROVIDER, never on what the stream happened to contain):
+  ///   - `{ "<skill>": n }` -- a Claude run that invoked skills.
+  ///   - `{}`              -- a Claude run that invoked none. A MEASUREMENT: we watched, and
+  ///                          there were none.
+  ///   - `null`            -- a Cursor run, or a run that never concluded. UNKNOWN: that runtime
+  ///                          cannot report skill use at all, and an empty object there would
+  ///                          claim a measurement nobody made.
+  skillCalls        Json?
   /// Which runtime produced this run (M12 Task 6). Nullable: this task only adds the column --
   /// Tasks 7/8 resolve and write it, so every run recorded before them reads back null.
   provider          ProviderKind?

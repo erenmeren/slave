@@ -20,8 +20,14 @@ export type { PrismaClient }
  * Re-exported for the input types Prisma generates but does not surface on the model rows —
  * `Prisma.InputJsonValue` in particular, which is what a caller needs to hand an unknown-shaped
  * payload to a Json column without reaching for an unchecked assertion.
+ *
+ * A value export, not a type-only one (M14 Task 4): writing SQL NULL into a *nullable* Json column
+ * needs the runtime sentinel `Prisma.DbNull`. Prisma's generated input type for such a column
+ * deliberately does not accept a bare `null`, because `null` is ambiguous there — a JSON `null`
+ * value and an absent value are different facts, and `AgentRun.skillCalls` is a column whose whole
+ * point is that "unknown" and "measured as empty" must not collide.
  */
-export type { Prisma } from './generated/client.js'
+export { Prisma } from './generated/client.js'
 
 export type {
   AgentRun as AgentRunRow,

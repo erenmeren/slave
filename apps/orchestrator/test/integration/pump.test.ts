@@ -1045,4 +1045,235 @@ describe('pumpRun', () => {
     // about a second run, even in a workspace that is already halted.
     expect(await eventTypesFor(second.runId)).toContain('run.failed')
   })
+
+  /**
+   * M14 §4.1 / Decisions 4 and 5: `AgentRun.skillCalls`.
+   *
+   * The tally comes from the `tool_call` events this loop already sees -- no new `RuntimeEvent`
+   * variant, no second pass over the stream -- and is written ONCE, at the run's terminal
+   * conclusion. What these tests pin is the three-state column: a tally, a measured `{}`, and a
+   * `null` that means "this runtime cannot report", keyed on the PROVIDER rather than on what the
+   * stream happened to contain.
+   */
+  describe('skillCalls (M14 §4.1)', () => {
+    const skillCall = (id: string, name: string): RuntimeEvent => ({
+      kind: 'tool_call',
+      toolUseId: id,
+      toolName: 'Skill',
+      // `Skill <name>` is exactly what `summaryFor` emits for a recorded `Skill` tool_use --
+      // measured in `packages/providers/test/fixtures/claude/skill-tool-use.ndjson` and asserted
+      // in `stream.test.ts`. These fixtures must keep matching that shape or they are testing a
+      // string the parser never produces.
+      summary: `Skill ${name}`,
+    })
+
+    it('tallies Skill tool calls and writes them when the run concludes cleanly', async (): Promise<void> => {
+      await pumpRun({
+        ...ids,
+        events: fromArray([
+          { kind: 'session_started', sessionId: 's-1' },
+          skillCall('t1', 'superpowers:writing-plans'),
+          { kind: 'tool_call', toolUseId: 't2', toolName: 'Write', summary: 'Write a.txt' },
+          skillCall('t3', 'superpowers:writing-plans'),
+          skillCall('t4', 'superpowers:test-driven-development'),
+          { kind: 'terminated', outcome: okOutcome },
+        ]),
+      })
+
+      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      expect(run.status).toBe('succeeded')
+      expect(run.skillCalls).toEqual({
+        'superpowers:writing-plans': 2,
+        'superpowers:test-driven-development': 1,
+      })
+      // The non-Skill call is counted as a tool call and NOT as a skill: the two counters read the
+      // same events and must not be the same number.
+      expect(run.toolCalls).toBe(4)
+    })
+
+    it('writes the measured empty tally for a run that invoked no skill', async (): Promise<void> => {
+      await pumpRun({
+        ...ids,
+        events: fromArray([
+          { kind: 'session_started', sessionId: 's-1' },
+          { kind: 'tool_call', toolUseId: 't1', toolName: 'Write', summary: 'Write a.txt' },
+          { kind: 'terminated', outcome: okOutcome },
+        ]),
+      })
+
+      // `{}`, not null: this run WAS measured and used no skill. `null` is reserved for a runtime
+      // that cannot report (M14 Decision 4).
+      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      expect(run.skillCalls).toEqual({})
+      expect(run.skillCalls).not.toBeNull()
+    })
+
+    it('counts a Skill call the CLI did not name rather than dropping it', async (): Promise<void> => {
+      // `summaryFor` falls back to the bare tool name when the tool_use carries no readable
+      // argument. A `Skill` call in that state is still a skill call that happened; silently
+      // dropping it would make the tally quietly under-report, which is worse than a visible
+      // `<unnamed>` bucket an operator can ask about.
+      await pumpRun({
+        ...ids,
+        events: fromArray([
+          { kind: 'session_started', sessionId: 's-1' },
+          { kind: 'tool_call', toolUseId: 't1', toolName: 'Skill', summary: 'Skill' },
+          skillCall('t2', 'superpowers:brainstorming'),
+          { kind: 'terminated', outcome: okOutcome },
+        ]),
+      })
+
+      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      expect(run.skillCalls).toEqual({ '<unnamed>': 1, 'superpowers:brainstorming': 1 })
+    })
+
+    it('writes the tally on the failure path too, not only on success', async (): Promise<void> => {
+      await pumpRun({
+        ...ids,
+        events: fromArray([
+          { kind: 'session_started', sessionId: 's-1' },
+          skillCall('t1', 'superpowers:brainstorming'),
+          { kind: 'terminated', outcome: { ...okOutcome, isError: true } },
+        ]),
+      })
+
+      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      expect(run.status).toBe('failed')
+      expect(run.skillCalls).toEqual({ 'superpowers:brainstorming': 1 })
+    })
+
+    it('writes the tally when the stream ends with no terminal event', async (): Promise<void> => {
+      await pumpRun({
+        ...ids,
+        events: fromArray([
+          { kind: 'session_started', sessionId: 's-1' },
+          skillCall('t1', 'superpowers:verification-before-completion'),
+        ]),
+      })
+
+      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      expect(run.status).toBe('failed')
+      expect(run.skillCalls).toEqual({ 'superpowers:verification-before-completion': 1 })
+    })
+
+    it('writes the tally when an operator stop is the conclusion', async (): Promise<void> => {
+      // The `stopping` + intent-record shape `requestStop` writes before its kill -- the branch
+      // that concludes `stopped` rather than `failed`. A run an operator stopped still invoked the
+      // skills it invoked.
+      await prisma.agentRun.update({
+        where: { id: ids.runId },
+        data: { status: 'stopping', stopRequestedBy: 'meren', stopRequestedAt: new Date() },
+      })
+
+      await pumpRun({
+        ...ids,
+        events: fromArray([
+          { kind: 'session_started', sessionId: 's-1' },
+          skillCall('t1', 'superpowers:systematic-debugging'),
+        ]),
+      })
+
+      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      expect(run.status).toBe('stopped')
+      expect(run.skillCalls).toEqual({ 'superpowers:systematic-debugging': 1 })
+    })
+
+    it('writes the tally when a broken gate concludes the run', async (): Promise<void> => {
+      // The fourth terminal path: `hook_failed_open` halts the workspace and concludes the run
+      // `failed` from inside the loop, before either post-loop branch runs. A write added to the
+      // other three only would silently leave this one null.
+      await pumpRun({
+        ...ids,
+        cancel: async (): Promise<void> => {},
+        events: fromArray([
+          { kind: 'session_started', sessionId: 's-1' },
+          skillCall('t1', 'superpowers:test-driven-development'),
+          { kind: 'hook_failed_open', hookName: 'PreToolUse:Write', exitCode: 127, stderr: 'gate is broken' },
+        ]),
+      })
+
+      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      expect(run.status).toBe('failed')
+      expect(run.skillCalls).toEqual({ 'superpowers:test-driven-development': 1 })
+    })
+
+    it('writes null, never an empty tally, for a Cursor run -- that runtime cannot report skills', async (): Promise<void> => {
+      await pumpRun({
+        ...ids,
+        // The PROVIDER is the discriminator, not the stream: this run's event list is identical to
+        // the "invoked no skill" Claude case above, and the column must come out differently.
+        spawn: {
+          settingsPath: '/tmp/aiteamos-skillcalls/.cursor/hooks.json',
+          pauseFlagPath: '/tmp/aiteamos-skillcalls/pause.flag',
+          hookPath: '/opt/aiteamos/cursor-shell-gate.sh',
+          gitIdentity: { name: 'Alex', email: 'alex@example.com' },
+          provider: 'cursor',
+        },
+        events: fromArray([
+          { kind: 'session_started', sessionId: 's-1' },
+          { kind: 'tool_call', toolUseId: 't1', toolName: 'Write', summary: 'Write a.txt' },
+          { kind: 'terminated', outcome: okOutcome },
+        ]),
+      })
+
+      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      expect(run.status).toBe('succeeded')
+      expect(run.skillCalls).toBeNull()
+    })
+
+    it('leaves skillCalls null on a run that is merely paused -- a pause is not a conclusion', async (): Promise<void> => {
+      await pumpRun({
+        ...ids,
+        events: fromArray([
+          { kind: 'session_started', sessionId: 's-1' },
+          skillCall('t1', 'superpowers:brainstorming'),
+          { kind: 'hook_denied', hookName: 'PreToolUse:Write', reason: 'Paused by AI Team OS.' },
+        ]),
+      })
+
+      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      expect(run.status).toBe('paused')
+      expect(run.skillCalls).toBeNull()
+    })
+
+    it('continues a resumed run’s tally rather than restarting it at zero', async (): Promise<void> => {
+      // A resume is a SECOND `pumpRun` on the same row. The tally is seeded from the row for the
+      // same reason `toolCalls` is incremented rather than overwritten: a count that restarts at
+      // zero forgets everything the first half of the run did.
+      await pumpRun({
+        ...ids,
+        events: fromArray([
+          { kind: 'session_started', sessionId: 's-1' },
+          skillCall('t1', 'superpowers:brainstorming'),
+          { kind: 'hook_denied', hookName: 'PreToolUse:Write', reason: 'Paused by AI Team OS.' },
+        ]),
+      })
+      // The pause wrote no tally, so the seed has to survive somewhere the second pump can read.
+      // It does not: `skillCalls` is null on a paused row by design, so the first half's skills are
+      // recoverable only if the row already carried them. Write the row the way a previous
+      // concluded pump would have, then prove the second pump adds to it instead of replacing it.
+      await prisma.agentRun.update({
+        where: { id: ids.runId },
+        data: { status: 'resuming', endedAt: null, skillCalls: { 'superpowers:brainstorming': 1 } },
+      })
+
+      await pumpRun({
+        ...ids,
+        resumed: true,
+        events: fromArray([
+          { kind: 'session_started', sessionId: 's-1' },
+          skillCall('t2', 'superpowers:brainstorming'),
+          skillCall('t3', 'superpowers:writing-plans'),
+          { kind: 'terminated', outcome: okOutcome },
+        ]),
+      })
+
+      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      expect(run.skillCalls).toEqual({
+        'superpowers:brainstorming': 2,
+        'superpowers:writing-plans': 1,
+      })
+    })
+  })
+
 })
