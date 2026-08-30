@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { CARD_STATE_TONE, cardStateFor, cardStateForAgent, cardStateForRun, type CardState } from '../src/lib/tones.js'
-import type { AgentStatus, RunStatus, TaskStatus } from '@ai-team-os/domain'
+import type { AgentStatus, RunStatus } from '@ai-team-os/domain'
+import { TASK_STATUSES } from '@ai-team-os/db'
 
 // The mockup's own table (`AI Team OS Mockups.dc.html:912-923`), transcribed. Colour is checked
 // through the tone name rather than the hex, because `globals.css` owns the hex and a tone is how
@@ -94,11 +95,12 @@ describe('cardStateFor', () => {
   })
 
   it('covers every TaskStatus', () => {
-    const all: readonly TaskStatus[] = [
-      'backlog', 'ready', 'blocked', 'assigned', 'running',
-      'verifying', 'reviewing', 'merging', 'rework', 'done', 'failed', 'cancelled',
-    ]
-    for (const task of all) expect(typeof cardStateFor('idle', task)).toBe('string')
-    expect(all).toHaveLength(12)
+    // `TASK_STATUSES` (`@ai-team-os/db`'s `enums.ts`) is type-pinned complete and sound against
+    // the domain's `TaskStatus` union by its own `_TaskStatusesComplete`/`_TaskStatusesSound`
+    // assertions -- iterating it here, rather than a hardcoded array of literals plus a
+    // `toHaveLength`, means a thirteenth `TaskStatus` moves this test's coverage (and hits
+    // `cardStateFor`'s own `never` guard) automatically, with nothing in this file to remember
+    // to update.
+    for (const task of TASK_STATUSES) expect(typeof cardStateFor('idle', task)).toBe('string')
   })
 })

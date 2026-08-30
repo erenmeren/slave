@@ -149,14 +149,20 @@ body {
 }
 
 /* The agent card's activity sweep: a 2.2s cubic-bezier(.4,0,.2,1) gradient across the top
- * hairline while a card is `working`. Named `card-sweep`, not `sweep`: `sweep` is already an
- * orchestrator concept (the guardrail sweep) and this file is read beside that vocabulary. */
+ * hairline while a card is `working` (design README "1a"; byte-for-byte match to
+ * `mockups/AI Team OS Web.dc.html:20`, `@keyframes sweep{0%{transform:translateX(-100%)}
+ * 100%{transform:translateX(320%)}}`). The mockup's `.sweep` element (`Web.dc.html:151`) is
+ * `width:30%` inside a 1px-tall `overflow:hidden` hairline strip, so `-100%` sits it just off the
+ * strip's left edge and `320%` (320% of the element's own 30%-wide box = 96% of the strip) carries
+ * it fully past the right edge -- a full-width shimmer, not a partial one. Named `card-sweep`, not
+ * `sweep`: `sweep` is already an orchestrator concept (the guardrail sweep) and this file is read
+ * beside that vocabulary. */
 @keyframes card-sweep {
   0% {
     transform: translateX(-100%);
   }
   100% {
-    transform: translateX(100%);
+    transform: translateX(320%);
   }
 }
 

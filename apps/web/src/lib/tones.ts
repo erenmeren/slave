@@ -99,30 +99,37 @@ export function cardStateForAgent(status: AgentStatus): CardState {
  * overrides are exactly the states the handoff's card set has and the agent vocabulary does not.
  */
 export function cardStateFor(agent: AgentStatus, task: TaskStatus | null): CardState {
-  if (task !== null) {
-    switch (task) {
-      case 'blocked':
-        return 'blocked'
-      case 'reviewing':
-      case 'merging':
-        return 'review'
-      case 'failed':
-      case 'cancelled':
-        return 'blocked'
-      case 'done':
-        // Only when nobody is still working on it: a `done` task whose agent is mid-run means the
-        // agent has moved on and the snapshot has not caught up, and the AGENT is what this card
-        // is about.
-        if (agent === 'idle') return 'completed'
-        break
-      case 'backlog':
-      case 'ready':
-      case 'assigned':
-      case 'running':
-      case 'verifying':
-      case 'rework':
-        break
+  if (task === null) return cardStateForAgent(agent)
+  switch (task) {
+    case 'blocked':
+      return 'blocked'
+    case 'reviewing':
+    case 'merging':
+      return 'review'
+    case 'failed':
+    case 'cancelled':
+      return 'blocked'
+    case 'done':
+      // Only when nobody is still working on it: a `done` task whose agent is mid-run means the
+      // agent has moved on and the snapshot has not caught up, and the AGENT is what this card
+      // is about.
+      return agent === 'idle' ? 'completed' : cardStateForAgent(agent)
+    case 'backlog':
+    case 'ready':
+    case 'assigned':
+    case 'running':
+    case 'verifying':
+    case 'rework':
+      return cardStateForAgent(agent)
+    default: {
+      // The `capabilitiesOf` idiom (`packages/providers/src/capabilities.ts:29-38`). `tsconfig.base`
+      // sets `strict` but not `noImplicitReturns`, so a thirteenth `TaskStatus` added later would
+      // otherwise fall out of this switch with no compile error, silently landing on whatever
+      // `cardStateForAgent(agent)` returns -- exactly the "a status silently defaults" failure this
+      // file exists to rule out. Binding `task` to `never` makes that a BUILD failure naming the
+      // unhandled member.
+      const unhandled: never = task
+      throw new Error(`cardStateFor: unhandled TaskStatus ${JSON.stringify(unhandled)}`)
     }
   }
-  return cardStateForAgent(agent)
 }
