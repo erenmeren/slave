@@ -282,7 +282,7 @@ review's fix wave takes the fixes.
 `npm run gate:m14-fidelity` (§6) plus the per-task triple. The gate needs the seeded database
 and Playwright's Chromium; it spends nothing and never skips a page.
 
-## 10. Errata (post-execution)
+## 9. Errata (post-execution)
 
 Recorded 2026-08-30, from the final whole-branch review of M14
 (`.superpowers/sdd/2026-08-29-m14-design-fidelity/final-review.md`) and applied in the fix wave of
