@@ -254,4 +254,22 @@ describe('GraphCanvas default onNodeContextMenu', () => {
     expect(event).toBe(false)
     expect(screen.queryByTestId('node-menu')).toBeNull()
   })
+
+  // M14 fix wave, review I7: the canvas passed a bare `fitView`, so the fit ran once at init
+  // (before ELK had positioned anything) and, when it did land, landed on React Flow's own
+  // default `maxZoom: 2` -- `graph.png` was committed at roughly twice the mock's density.
+  it('fits at 1x with the design padding, never React Flow default 2x magnification', async () => {
+    const { GRAPH_FIT_VIEW_OPTIONS, GraphCanvas } = await import('../src/components/graph/GraphCanvas.js')
+    expect(GRAPH_FIT_VIEW_OPTIONS).toEqual({ maxZoom: 1, padding: 0.2 })
+
+    const nodes: Node[] = [{ id: 'workspace:w1', type: 'workspace', position: { x: 0, y: 0 }, data: { kind: 'workspace', name: 'W', haltedReason: null } }]
+    render(<GraphCanvas nodes={nodes} edges={[]} nodeTypes={{ workspace: WorkspaceNode }} />)
+    await waitFor(() => expect(screen.getByTestId('workspace-node')).toBeTruthy())
+
+    // React Flow writes the resolved zoom into the viewport transform; with one node and
+    // `maxZoom: 1` it must never exceed 1. The default options would have produced 2.
+    const viewport = document.querySelector('.react-flow__viewport') as HTMLElement | null
+    const scale = Number(/scale\((-?[\d.]+)\)/.exec(viewport?.style.transform ?? '')?.[1] ?? '1')
+    expect(scale).toBeLessThanOrEqual(1)
+  })
 })

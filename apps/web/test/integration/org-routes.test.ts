@@ -406,7 +406,10 @@ describe('the org routes', () => {
       expect(body.workers[0]?.name).toBe('Atlas (worker)')
     })
 
-    it('returns an empty list when no worker is roster-linked', async (): Promise<void> => {
+    // Renamed by the M14 fix wave (review I4): the route lists every agent now, so "empty" means
+    // "this fixture created no agents at all", not "none was roster-linked". The assertion is
+    // unchanged -- `seed()` here creates a workspace and nothing else.
+    it('returns an empty list when the database holds no agents at all', async (): Promise<void> => {
       const response = await workersGET()
       expect(response.status).toBe(200)
       expect(await response.json()).toEqual({ workers: [] })
@@ -447,16 +450,41 @@ describe('the org routes', () => {
   })
 
   describe('POST /api/dev/reseed', () => {
+    // Re-pointed by the M14 fix wave (review I8): the route takes the `Request` now, so it can
+    // read `sec-fetch-site`. The assertion itself is unchanged.
+    function reseedRequest(site?: string): Request {
+      return new Request('http://localhost:3000/api/dev/reseed', {
+        method: 'POST',
+        ...(site === undefined ? {} : { headers: { 'sec-fetch-site': site } }),
+      })
+    }
+
     it('404s outside development, so a production build cannot reach it at all', async (): Promise<void> => {
       // `vi.stubEnv`, not a hand-rolled `Object.defineProperty` on `process.env`: Node's env
       // proxy rejects a descriptor that is not writable AND enumerable, and vitest's helper is
       // the one that restores the previous value on `unstubAllEnvs` even if the assertion throws.
       vi.stubEnv('NODE_ENV', 'production')
       try {
-        expect((await reseedPOST()).status).toBe(404)
+        expect((await reseedPOST(reseedRequest())).status).toBe(404)
       } finally {
         vi.unstubAllEnvs()
       }
+    })
+
+    // M14 fix wave, review I8: this is the first route on the branch whose unauthenticated
+    // invocation destroys local state. A cross-site POST from any page in the developer's browser
+    // could wipe the database; `sec-fetch-site` is browser-set and unforgeable from page JS.
+    // These assert the REFUSAL only -- no case here is allowed to reach `npm run db:seed`.
+    it.each(['cross-site', 'same-site'])('404s a %s POST without touching the database', async (site): Promise<void> => {
+      const before = await prisma.workspace.count()
+      expect((await reseedPOST(reseedRequest(site))).status).toBe(404)
+      expect(await prisma.workspace.count()).toBe(before)
+    })
+
+    it('refuses before any side effect, with the same 404 production gets', async (): Promise<void> => {
+      const response = await reseedPOST(reseedRequest('cross-site'))
+      expect(response.status).toBe(404)
+      expect(await response.text()).toBe('not found')
     })
   })
 })

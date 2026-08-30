@@ -1,18 +1,57 @@
 'use client'
 
 import type React from 'react'
+import { useEffect } from 'react'
 import ReactFlow, {
   Controls,
   ReactFlowProvider,
+  useReactFlow,
   type Connection,
   type Edge,
   type EdgeTypes,
+  type FitViewOptions,
   type Node,
   type NodeMouseHandler,
   type NodeTypes,
 } from 'reactflow'
 import 'reactflow/dist/style.css'
 import { CABLE_EDGE_TYPES } from './CableEdge'
+
+/**
+ * The first paint's fit (M14 fix wave, review I7).
+ *
+ * `maxZoom: 1` because React Flow's own default is `2`: with a handful of nodes the fit is free
+ * to magnify, and `graph.png` was committed at roughly 2x -- the fit landed, at twice the mock's
+ * density. `padding: 0.2` leaves the design README's breathing room around the outermost node.
+ */
+export const GRAPH_FIT_VIEW_OPTIONS: FitViewOptions = { maxZoom: 1, padding: 0.2 }
+
+/**
+ * Re-fits once ELK has actually positioned the nodes (M14 fix wave, review I7).
+ *
+ * The bare `fitView` prop runs ONCE, at init -- and at init `layout.ts`'s `useLayoutedGraph` has
+ * not resolved yet, so every node is still at the builder's seeded `{x: 0, y: 0}`. Fitting a pile
+ * at the origin is what the real app opened on; the gate never saw it because `settleGraph()`
+ * waits for the layout and clicks the fit control by hand.
+ *
+ * Keyed on the node POSITIONS, not just the ids: the async layout pass changes coordinates
+ * without changing the set, which is exactly the transition that needs a re-fit. Lives in its own
+ * component because `useReactFlow` has to be called under `ReactFlowProvider`.
+ */
+function FitOnLayout({ nodes }: { readonly nodes: readonly Node[] }): null {
+  const { fitView } = useReactFlow()
+  const positionKey = nodes.map((node) => `${node.id}@${node.position.x},${node.position.y}`).join('|')
+
+  useEffect(() => {
+    if (nodes.length === 0) return
+    fitView(GRAPH_FIT_VIEW_OPTIONS)
+    // `positionKey` is the dependency; `nodes` itself is a new array identity on every render and
+    // would re-fit continuously, fighting an operator's own pan and zoom.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [positionKey, fitView])
+
+  return null
+}
 
 export interface GraphCanvasProps {
   readonly nodes: readonly Node[]
@@ -83,6 +122,7 @@ export function GraphCanvas({
           nodeTypes={nodeTypes}
           edgeTypes={edgeTypes}
           fitView
+          fitViewOptions={GRAPH_FIT_VIEW_OPTIONS}
           proOptions={{ hideAttribution: true }}
           onNodeContextMenu={(event, node) => {
             event.preventDefault()
@@ -95,6 +135,7 @@ export function GraphCanvas({
             : { onEdgesDelete: (deleted: Edge[]) => deleted.forEach((edge) => onEdgeDelete(edge.id)) })}
         >
           <Controls showInteractive={false} />
+          <FitOnLayout nodes={nodes} />
         </ReactFlow>
       </div>
     </ReactFlowProvider>
