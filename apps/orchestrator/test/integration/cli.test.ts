@@ -163,6 +163,23 @@ describe('the orchestrator CLI', () => {
     expect(`${result.stdout}${result.stderr}`).toMatch(/usage/i)
   }, 30_000)
 
+  it('runs skills sync and reports what it found', async (): Promise<void> => {
+    const result = await runCli(['skills', 'sync'])
+
+    expect(result.code).toBe(0)
+    // The catalog is read from the DAEMON HOST's disk, so this asserts the shape of the report
+    // rather than a count: a CI machine has no `~/.claude/skills`, and a machine that does has an
+    // unknowable number.
+    expect(result.stdout).toMatch(/^skill catalog synced: \d+ provider\(s\), \d+ skill\(s\), \d+ marked missing\n$/m)
+  }, 30_000)
+
+  it('refuses an unknown skills subcommand with usage', async (): Promise<void> => {
+    const result = await runCli(['skills', 'frobnicate'])
+
+    expect(result.code).not.toBe(0)
+    expect(`${result.stdout}${result.stderr}`).toMatch(/unknown skills subcommand: frobnicate/)
+  }, 30_000)
+
   it('clears a workspace safety halt', async (): Promise<void> => {
     await prisma.workspace.update({
       where: { id: fixture.workspaceId },

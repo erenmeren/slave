@@ -58,6 +58,8 @@ export type ControlRefusal =
   | { readonly kind: 'unmeasurable_budget'; readonly workspaceId: string; readonly provider: string }
   | { readonly kind: 'company_already_assigned'; readonly workspaceId: string; readonly companyName: string }
   | { readonly kind: 'agent_not_found'; readonly agentId: string }
+  /** A skill id that no `Skill` row carries (M14 §4.3). */
+  | { readonly kind: 'skill_not_found'; readonly skillId: string }
 
 export function refusalText(refusal: ControlRefusal): string {
   switch (refusal.kind) {
@@ -118,5 +120,7 @@ export function refusalText(refusal: ControlRefusal): string {
       return `this workspace is already run by ${refusal.companyName}`
     case 'agent_not_found':
       return `no agent with id ${refusal.agentId}`
+    case 'skill_not_found':
+      return `no skill with id ${refusal.skillId}`
   }
 }

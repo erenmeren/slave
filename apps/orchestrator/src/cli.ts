@@ -14,6 +14,7 @@ import {
   requestStop,
   setAgentModel,
   setGoal,
+  syncSkillCatalog,
 } from '@ai-team-os/control'
 import { prisma } from '@ai-team-os/db/client'
 import { workspaceId as brandWorkspaceId, type WorkspaceId } from '@ai-team-os/domain'
@@ -40,6 +41,8 @@ const USAGE = `usage: orchestrator <command> [options]
   set-goal --workspace <id> --goal "<text>"
                                        set the operator's standing instruction for what this
                                        workspace's agents are working toward
+  skills sync                          rescan the skill catalog from this host's disk:
+                                       ~/.claude/skills, the plugin cache, and <repo>/.claude/skills
   create-template --name <n> --role <r> [--model <m> --provider <p>] [--description <d>]
                                        add a reusable agent template to the catalog. --model and
                                        --provider are a pair: give both or neither.
@@ -404,6 +407,21 @@ export async function main(argv: readonly string[]): Promise<number> {
       const result = await setGoal(workspaceId, goal)
       if (!result.ok) throw new Error(refusalText(result.error))
       process.stdout.write(`goal set on ${workspaceId}\n`)
+      return 0
+    }
+
+    case 'skills': {
+      // The sub-verb is a positional, and `parseArgs` collects only flags -- so it is read off the
+      // raw argv rather than `flags`. `argv[1]` because `argv[0]` is the command itself.
+      const sub = argv[1]
+      if (sub !== 'sync') {
+        process.stderr.write(`unknown skills subcommand: ${String(sub)}\n\n${USAGE}`)
+        return 1
+      }
+      const result = await syncSkillCatalog()
+      process.stdout.write(
+        `skill catalog synced: ${result.providers} provider(s), ${result.upserted} skill(s), ${result.markedMissing} marked missing\n`,
+      )
       return 0
     }
 

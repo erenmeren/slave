@@ -242,10 +242,14 @@ model SkillProvider {
 }
 
 model Skill {
-  id          String @id @default(uuid())
-  providerId  String
-  name        String
-  description String
+  id           String    @id @default(uuid())
+  providerId   String
+  name         String
+  description  String
+  /// When a scan first failed to find this skill on disk (M14 Decision 6). The catalog NEVER
+  /// deletes: a run that referenced a skill keeps a row to point at, so its history stays
+  /// legible. Cleared the moment a later scan finds it again.
+  missingSince DateTime?
 
   provider SkillProvider @relation(fields: [providerId], references: [id], onDelete: Cascade)
   agents   AgentSkill[]
