@@ -3,6 +3,9 @@ import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ProviderKind } from '@ai-team-os/control'
 import { CompanyManager } from '../src/components/CompanyManager.js'
+import { DangerZone } from '../src/components/DangerZone.js'
+import { PermissionMatrix } from '../src/components/PermissionMatrix.js'
+import { ProviderAdapterCards } from '../src/components/ProviderAdapterCards.js'
 import { SettingsClient } from '../src/components/SettingsClient.js'
 import { TemplateCatalog } from '../src/components/TemplateCatalog.js'
 import type { RosterCompany, RosterMemberRow } from '../src/server/org.js'
@@ -65,7 +68,17 @@ afterEach(() => {
 
 describe('SettingsClient', () => {
   it('renders both panels', () => {
-    render(<SettingsClient templates={[template()]} companies={[{ id: 'c1', name: 'Acme Robotics' }]} roster={[company()]} />)
+    render(
+      <SettingsClient
+        templates={[template()]}
+        companies={[{ id: 'c1', name: 'Acme Robotics' }]}
+        roster={[company()]}
+        adapters={[]}
+        permissions={[]}
+        dangerZone={null}
+        showReseed={false}
+      />,
+    )
     expect(screen.getByText('Template catalog')).toBeTruthy()
     expect(screen.getByText('Companies')).toBeTruthy()
   })
@@ -510,5 +523,137 @@ describe('CompanyManager', () => {
       expect(screen.getByRole('alert').textContent).toContain('a model must name the provider that runs it')
       expect(routerRefresh).not.toHaveBeenCalled()
     })
+  })
+})
+
+describe('provider adapter cards', () => {
+  it('renders the two real adapters with their version and capabilities, and the two later ones disabled', () => {
+    render(
+      <ProviderAdapterCards
+        adapters={[
+          { kind: 'claude_code', label: 'Claude Code', state: 'connected', version: '2.1.234', adapter: 'ClaudeCodeAdapter', capabilities: { gate: 'all-tools', reportsCost: true, canPauseMidRun: true }, agentsBound: 5 },
+          { kind: 'codex', label: 'OpenAI Codex', state: 'later', version: null, adapter: 'CodexAdapter — planned', capabilities: null, agentsBound: 0 },
+        ]}
+      />,
+    )
+    expect(screen.getByTestId('adapter-version-claude_code').textContent).toBe('2.1.234')
+    expect(screen.getByTestId('adapter-capabilities-claude_code').textContent).toContain('all-tools')
+    expect(screen.getByTestId('adapter-state-codex').textContent).toBe('not configured · later')
+    expect((screen.getByTestId('adapter-cta-codex') as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('says a real adapter is not found rather than pretending it is connected', () => {
+    render(
+      <ProviderAdapterCards
+        adapters={[{ kind: 'cursor', label: 'Cursor', state: 'not found', version: null, adapter: 'CursorAdapter', capabilities: { gate: 'all-tools', reportsCost: false, canPauseMidRun: false }, agentsBound: 0 }]}
+      />,
+    )
+    expect(screen.getByTestId('adapter-state-cursor').textContent).toBe('not found on PATH')
+  })
+})
+
+describe('the permission matrix', () => {
+  const rows = [{ agentId: 'a1', name: 'Alex', role: 'backend', cells: [
+    { tool: 'repo read', mode: 'allow' as const },
+    { tool: 'source write', mode: 'deny' as const },
+    { tool: 'run tests', mode: null },
+    { tool: 'create branch', mode: null },
+    { tool: 'deploy prod', mode: null },
+    { tool: 'read secrets', mode: null },
+  ] }]
+
+  it('renders the six README columns and a glyph per cell', () => {
+    render(<PermissionMatrix rows={rows} />)
+    expect(screen.getAllByTestId('perm-column').map((c) => c.textContent)).toEqual([
+      'repo read', 'source write', 'run tests', 'create branch', 'deploy prod', 'read secrets',
+    ])
+    expect(screen.getByTestId('perm-cell-a1-repo read').textContent).toBe('✓')
+    expect(screen.getByTestId('perm-cell-a1-source write').textContent).toBe('✕')
+  })
+
+  it('distinguishes an unset cell from an explicit deny in its title', () => {
+    render(<PermissionMatrix rows={rows} />)
+    expect(screen.getByTestId('perm-cell-a1-run tests').getAttribute('title')).toBe('not set')
+    expect(screen.getByTestId('perm-cell-a1-source write').getAttribute('title')).toBe('denied')
+  })
+
+  it('captions the whole matrix as not yet enforced', () => {
+    render(<PermissionMatrix rows={rows} />)
+    expect(screen.getByTestId('perm-caption').textContent).toBe('not yet enforced at runtime')
+  })
+
+  describe('writing a cell', () => {
+    let fetchMock: ReturnType<typeof vi.fn>
+
+    beforeEach(() => {
+      fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }))
+      vi.stubGlobal('fetch', fetchMock)
+    })
+
+    afterEach(() => {
+      vi.unstubAllGlobals()
+    })
+
+    it('PUTs the flipped mode on a cell click', async (): Promise<void> => {
+      render(<PermissionMatrix rows={rows} />)
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('perm-cell-a1-repo read'))
+      })
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/agents/a1/permission',
+        expect.objectContaining({ method: 'PUT', body: JSON.stringify({ tool: 'repo read', mode: 'deny' }) }),
+      )
+    })
+
+    // An UNSET cell is not a deny: clicking it must ask for `allow`, not flip an unmade decision
+    // into its opposite.
+    it('PUTs allow on an unset cell, the same as on a denied one', async (): Promise<void> => {
+      render(<PermissionMatrix rows={rows} />)
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('perm-cell-a1-run tests'))
+      })
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/agents/a1/permission',
+        expect.objectContaining({ body: JSON.stringify({ tool: 'run tests', mode: 'allow' }) }),
+      )
+    })
+
+    it('shows a refusal verbatim without refreshing', async (): Promise<void> => {
+      fetchMock.mockImplementationOnce(
+        async () => new Response(JSON.stringify({ error: 'a permission must name one of the six tools' }), { status: 409 }),
+      )
+      render(<PermissionMatrix rows={rows} />)
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('perm-cell-a1-repo read'))
+      })
+      expect(screen.getByRole('alert').textContent).toBe('a permission must name one of the six tools')
+      expect(routerRefresh).not.toHaveBeenCalled()
+    })
+  })
+})
+
+describe('realtime transport and the danger zone', () => {
+  it('shows SSE selected and WebSocket disabled', () => {
+    render(<DangerZone workspaceId={null} halted={false} showReseed={false} />)
+    expect(screen.getByTestId('transport-sse').getAttribute('aria-checked')).toBe('true')
+    expect((screen.getByTestId('transport-ws') as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByTestId('transport-ws').textContent).toContain('later')
+  })
+
+  it('offers reset demo data only when the server said it is available', () => {
+    const { rerender } = render(<DangerZone workspaceId={null} halted={false} showReseed={false} />)
+    expect(screen.queryByTestId('reseed-button')).toBeNull()
+
+    rerender(<DangerZone workspaceId={null} halted={false} showReseed />)
+    expect(screen.getByTestId('reseed-button')).toBeTruthy()
+  })
+
+  it('offers the emergency stop only against a named workspace', () => {
+    const { rerender } = render(<DangerZone workspaceId={null} halted={false} showReseed={false} />)
+    expect(screen.queryByTestId('emergency-stop')).toBeNull()
+    expect(screen.getByTestId('danger-no-workspace')).toBeTruthy()
+
+    rerender(<DangerZone workspaceId="w1" halted={false} showReseed={false} />)
+    expect(screen.getByTestId('emergency-stop')).toBeTruthy()
   })
 })

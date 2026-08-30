@@ -1,5 +1,5 @@
 import { prisma } from '@ai-team-os/db/client'
-import { afterAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { POST as templatesPOST } from '../../src/app/api/org/templates/route.js'
 import { POST as companiesPOST } from '../../src/app/api/org/companies/route.js'
 import { POST as teamsPOST } from '../../src/app/api/org/teams/route.js'
@@ -7,6 +7,8 @@ import { POST as agentsPOST } from '../../src/app/api/org/agents/route.js'
 import { GET as workersGET } from '../../src/app/api/org/workers/route.js'
 import { POST as companyPOST } from '../../src/app/api/w/[workspaceId]/company/route.js'
 import { POST as modelPOST } from '../../src/app/api/agents/[agentId]/model/route.js'
+import { PUT as permissionPUT } from '../../src/app/api/agents/[agentId]/permission/route.js'
+import { POST as reseedPOST } from '../../src/app/api/dev/reseed/route.js'
 
 interface Fixture {
   readonly workspaceId: string
@@ -25,6 +27,20 @@ function jsonRequest(body: unknown): Request {
 
 function malformedRequest(): Request {
   return new Request('http://x', { method: 'POST', body: 'not json', headers: { 'content-type': 'application/json' } })
+}
+
+// M14 Task 14: the permission route is a PUT (a cell is set to a value, not appended to), so it
+// needs its own trio rather than reusing the POST helpers above.
+function jsonPutRequest(body: unknown): Request {
+  return new Request('http://x', { method: 'PUT', body: JSON.stringify(body), headers: { 'content-type': 'application/json' } })
+}
+
+function malformedPutRequest(): Request {
+  return new Request('http://x', { method: 'PUT', body: 'not json', headers: { 'content-type': 'application/json' } })
+}
+
+function agentParams(agentId: string): { params: Promise<{ agentId: string }> } {
+  return { params: Promise.resolve({ agentId }) }
 }
 
 describe('the org routes', () => {
@@ -394,6 +410,53 @@ describe('the org routes', () => {
       const response = await workersGET()
       expect(response.status).toBe(200)
       expect(await response.json()).toEqual({ workers: [] })
+    })
+  })
+
+  describe('PUT /api/agents/[agentId]/permission', () => {
+    async function seedPermissionAgent(): Promise<string> {
+      const team = await prisma.team.create({ data: { workspaceId: fixture.workspaceId, name: 'Permissions' } })
+      const agent = await prisma.agent.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
+      return agent.id
+    }
+
+    it('writes the cell and returns 200', async (): Promise<void> => {
+      const agentId = await seedPermissionAgent()
+      const response = await permissionPUT(jsonPutRequest({ tool: 'repo read', mode: 'allow' }), agentParams(agentId))
+      expect(response.status).toBe(200)
+      expect(await prisma.agentPermission.count({ where: { agentId } })).toBe(1)
+    })
+
+    it('409s with the verbatim refusal on a tool outside the six', async (): Promise<void> => {
+      const response = await permissionPUT(jsonPutRequest({ tool: 'rm -rf', mode: 'allow' }), agentParams(await seedPermissionAgent()))
+      expect(response.status).toBe(409)
+      expect(await response.json()).toEqual({ error: 'a permission must name one of the six tools' })
+    })
+
+    it('400s on a malformed body and on a missing mode', async (): Promise<void> => {
+      const agentId = await seedPermissionAgent()
+      expect((await permissionPUT(malformedPutRequest(), agentParams(agentId))).status).toBe(400)
+      expect((await permissionPUT(jsonPutRequest({ tool: 'repo read' }), agentParams(agentId))).status).toBe(400)
+    })
+
+    it('409s with the agent-not-found refusal on an unknown agent', async (): Promise<void> => {
+      const response = await permissionPUT(jsonPutRequest({ tool: 'repo read', mode: 'allow' }), agentParams('00000000-0000-4000-8000-000000000000'))
+      expect(response.status).toBe(409)
+      expect((await response.json()).error).toBe('no agent with id 00000000-0000-4000-8000-000000000000')
+    })
+  })
+
+  describe('POST /api/dev/reseed', () => {
+    it('404s outside development, so a production build cannot reach it at all', async (): Promise<void> => {
+      // `vi.stubEnv`, not a hand-rolled `Object.defineProperty` on `process.env`: Node's env
+      // proxy rejects a descriptor that is not writable AND enumerable, and vitest's helper is
+      // the one that restores the previous value on `unstubAllEnvs` even if the assertion throws.
+      vi.stubEnv('NODE_ENV', 'production')
+      try {
+        expect((await reseedPOST()).status).toBe(404)
+      } finally {
+        vi.unstubAllEnvs()
+      }
     })
   })
 })
