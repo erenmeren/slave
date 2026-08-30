@@ -1,7 +1,14 @@
 import { prisma } from '@ai-team-os/db/client'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, toRunState } from '@ai-team-os/db'
 import { capabilitiesOf, workspaceDefaultProvider, type ProviderCapabilities, type ProviderKind } from '@ai-team-os/control'
-import { deriveAgentStatus, sumSpend, NON_TERMINAL_RUN_STATUSES, type AgentStatus, type TaskStatus } from '@ai-team-os/domain'
+import {
+  deriveAgentStatus,
+  mergeQueueOrder,
+  sumSpend,
+  NON_TERMINAL_RUN_STATUSES,
+  type AgentStatus,
+  type TaskStatus,
+} from '@ai-team-os/domain'
 import { feedSummary, type AgentFeedEvent } from '../lib/feedSummary'
 
 // Re-exported so callers that already import from `server/overview.ts` keep working; the
@@ -13,6 +20,15 @@ export type { AgentFeedEvent }
 
 /** How many of an agent's most recent events seed the panel's live feed (spec §6). */
 const RECENT_EVENTS_LIMIT = 20
+
+/** The 340px live-events panel shows the workspace's last 8 (design README §3a.1). */
+const LIVE_EVENTS_LIMIT = 8
+
+/** The goal form offers three chips (design README §3a.1). */
+const GOAL_SUGGESTION_LIMIT = 3
+
+/** How far back to scan `workspace.goal_set` events to find three DISTINCT ones. */
+const GOAL_HISTORY_SCAN = 20
 
 export interface AgentCardData {
   readonly id: string
@@ -129,9 +145,68 @@ export interface OverviewSnapshot {
      * never needs the capability table (spec §6.3).
      */
     readonly costBlindBudgeted: boolean
+    /**
+     * The three guardrail columns the sidebar's bottom block reads (M14 Task 8, the
+     * `ShellFactsContext` half of the controller ruling carried from Task 3).
+     *
+     * They are here so the Overview page can PROVIDE the sidebar's facts out of the stream it
+     * already runs, instead of the root layout's `<Sidebar>` opening a second `EventSource` per
+     * workspace page. `server/shell.ts` still owns the standalone route for the pages that have
+     * no snapshot of their own (Tasks/Graph/Activity, until Tasks 10-12 provide theirs) -- this
+     * is the same four columns read once instead of twice, not a second source of truth.
+     */
+    readonly maxConcurrentRuns: number
+    readonly runTimeoutMs: number
+    readonly maxAttempts: number
   }
   readonly agents: readonly AgentCardData[]
-  readonly tasks: { readonly active: number; readonly blocked: number; readonly done: number; readonly failed: number }
+  readonly tasks: {
+    readonly active: number
+    /** Its own tile in the handoff's 6-up strip (M14 Task 8), as well as part of `active`. */
+    readonly ready: number
+    readonly blocked: number
+    readonly done: number
+    readonly failed: number
+  }
+  /**
+   * The "blocked · needs you" panel's contents: blocked tasks, plus every run whose status is
+   * `pause_requested` or `paused` (an operator asked and the answer has not landed, or it has and
+   * nobody resumed). Each carries the action an operator can take from this panel.
+   */
+  readonly blocked: readonly {
+    readonly kind: 'task' | 'run'
+    readonly id: string
+    readonly title: string
+    readonly detail: string
+    /** `'resume'` for a paused run, `null` for anything the panel can only report. */
+    readonly action: 'resume' | null
+    /** Set only when `action` is non-null. */
+    readonly runId: string | null
+  }[]
+  /** The last 8 events in this workspace, newest first -- the 340px live-events panel. */
+  readonly liveEvents: readonly { readonly seq: number; readonly ts: string; readonly summary: string }[]
+  /**
+   * Tasks in `merging`, in the order `apps/orchestrator/src/merge.ts` will actually process them.
+   * At most one is really merging (the queue is serialized); the rest are waiting.
+   */
+  readonly mergeQueue: readonly {
+    readonly id: string
+    readonly title: string
+    /**
+     * `false` for a `merging` task with no `task.review_approved` event -- one an operator moved
+     * by hand. `merge.ts` FILTERS such a task out of its candidate list, so it will never be
+     * picked up; the panel lists it last and marks it, because a task stuck in the queue forever
+     * is precisely what an operator opened the panel to find.
+     */
+    readonly hasApproval: boolean
+  }[]
+  /**
+   * The last three DISTINCT goals this workspace has been set, newest first, from
+   * `workspace.goal_set` events -- the suggestion chips under an empty goal form. Real history,
+   * never invented copy. Empty for a workspace that has never had a goal, which renders no chip
+   * row at all rather than a row of placeholders.
+   */
+  readonly goalSuggestions: readonly string[]
 }
 
 // A task under review or in the merge queue is still active work, not a vanished one — widened
@@ -271,6 +346,98 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
   const countOf = (statuses: readonly string[]): number =>
     taskGroups.filter((g) => statuses.includes(g.status)).reduce((n, g) => n + g._count._all, 0)
 
+  // The bottom row's three panels plus the goal chips, in one round with everything else loaded.
+  const [blockedTasks, pausedRuns, recentForPanel, mergingTasks, goalEvents] = await Promise.all([
+    prisma.task.findMany({ where: { workspaceId, status: 'blocked' }, orderBy: { createdAt: 'asc' } }),
+    prisma.agentRun.findMany({
+      where: { agent: { team: { workspaceId } }, status: { in: ['pause_requested', 'paused'] } },
+      orderBy: { startedAt: 'asc' },
+      include: { agent: true },
+    }),
+    prisma.executionEvent.findMany({ where: { workspaceId }, orderBy: { seq: 'desc' }, take: LIVE_EVENTS_LIMIT }),
+    prisma.task.findMany({ where: { workspaceId, status: 'merging' } }),
+    prisma.executionEvent.findMany({
+      where: { workspaceId, type: 'workspace_goal_set' },
+      orderBy: { seq: 'desc' },
+      take: GOAL_HISTORY_SCAN,
+    }),
+  ])
+
+  const blocked = [
+    ...blockedTasks.map((task) => ({
+      kind: 'task' as const,
+      id: task.id,
+      title: task.title,
+      detail: task.lastRejectionReason ?? 'blocked',
+      action: null,
+      runId: null,
+    })),
+    ...pausedRuns.map((run) => ({
+      kind: 'run' as const,
+      id: run.id,
+      title: run.agent.name,
+      detail: run.status === 'paused' ? `paused at step ${run.pausedAtStep ?? 0}` : 'pause requested',
+      // Only a run that has actually landed on `paused` can be resumed -- `requestResume` refuses
+      // a `pause_requested` one, and offering a button that always refuses is worse than none.
+      action: run.status === 'paused' ? ('resume' as const) : null,
+      runId: run.status === 'paused' ? run.id : null,
+    })),
+  ]
+
+  // FIFO by the LATEST `task.review_approved` event's seq -- `apps/orchestrator/src/merge.ts`'s
+  // own rule (`merge.ts:105-122`), which is the source of truth for what merges next. Two things
+  // this is NOT, both deliberate:
+  //
+  // - NOT `Approval.decidedAt`. That table exists in the schema and NOTHING writes it: the review
+  //   pass records its verdict as a `task.review_approved` EVENT. Ordering by a column no row
+  //   ever carries would silently degrade to the `createdAt` fallback, so the panel would claim
+  //   an approval order while showing a creation order.
+  // - NOT the FIRST approval. A task sent back to rework is re-approved, and `merge.ts` counts
+  //   only the latest as "when it became eligible to merge NOW" -- so a re-approved task goes to
+  //   the BACK of the queue. First-approval ordering would put it first and contradict the daemon.
+  //
+  // Ordered in JS rather than in SQL because the key lives on a related to-many row, which Prisma
+  // cannot `orderBy`; `mergeQueueOrder` is the daemon's own comparator, imported rather than
+  // rewritten (`packages/domain/src/merge/queue.ts`).
+  const approvalEvents =
+    mergingTasks.length === 0
+      ? []
+      : await prisma.executionEvent.findMany({
+          where: { workspaceId, type: 'task_review_approved', taskId: { in: mergingTasks.map((t) => t.id) } },
+          orderBy: { seq: 'asc' },
+          select: { taskId: true, seq: true },
+        })
+  const latestApprovalSeq = new Map<string, number>()
+  // Ascending order means the last write for a given task is its latest approval.
+  for (const event of approvalEvents) {
+    if (event.taskId !== null) latestApprovalSeq.set(event.taskId, Number(event.seq))
+  }
+  const taskById = new Map(mergingTasks.map((task) => [task.id, task]))
+  const approvedQueue = mergeQueueOrder(
+    mergingTasks
+      .filter((task) => latestApprovalSeq.has(task.id))
+      .map((task) => ({ taskId: task.id, enqueuedAt: latestApprovalSeq.get(task.id) as number })),
+  ).map((entry) => ({ id: entry.taskId, title: taskById.get(entry.taskId)?.title ?? '', hasApproval: true }))
+  // Controller ruling (b): a `merging` task the merge pass will never pick up is still LISTED --
+  // last, and marked. Ordered among themselves by creation, the only time they carry.
+  const unapprovedQueue = mergingTasks
+    .filter((task) => !latestApprovalSeq.has(task.id))
+    .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
+    .map((task) => ({ id: task.id, title: task.title, hasApproval: false }))
+
+  // The chips under an empty goal form: real history, deduplicated, newest first. Scanned over
+  // the last `GOAL_HISTORY_SCAN` events rather than the last three, because a workspace whose
+  // goal was set to the same text repeatedly would otherwise yield one chip out of three reads.
+  const seenGoals = new Set<string>()
+  const goalSuggestions: string[] = []
+  for (const event of goalEvents) {
+    const goal = (event.payload as { goal?: string }).goal
+    if (typeof goal !== 'string' || seenGoals.has(goal)) continue
+    seenGoals.add(goal)
+    goalSuggestions.push(goal)
+    if (goalSuggestions.length === GOAL_SUGGESTION_LIMIT) break
+  }
+
   return {
     workspace: {
       id: workspace.id,
@@ -288,6 +455,9 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
       // compiler-guarded mirror of `PROVIDER_KINDS` rather than importing the list. The client gets
       // a boolean and needs no table at all.
       costBlindBudgeted: provider !== null && workspace.budgetUsd !== null && !capabilitiesOf(provider).reportsCost,
+      maxConcurrentRuns: workspace.maxConcurrentRuns,
+      runTimeoutMs: workspace.runTimeoutMs,
+      maxAttempts: workspace.maxAttempts,
     },
     agents: agents.map((agent) => {
       const run = liveRunByAgent.get(agent.id) ?? null
@@ -331,9 +501,21 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
     }),
     tasks: {
       active: countOf([...ACTIVE_TASK_STATUSES]),
+      ready: countOf(['ready']),
       blocked: countOf(['blocked']),
       done: countOf(['done']),
       failed: countOf(['failed']),
     },
+    blocked,
+    liveEvents: recentForPanel.map((event) => ({
+      seq: Number(event.seq),
+      ts: event.ts.toISOString(),
+      summary: feedSummary(
+        DOMAIN_EVENT_TYPE_BY_DB_VALUE[event.type] ?? event.type,
+        event.payload as Record<string, unknown>,
+      ),
+    })),
+    mergeQueue: [...approvedQueue, ...unapprovedQueue],
+    goalSuggestions,
   }
 }

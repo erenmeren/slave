@@ -253,7 +253,9 @@ describe('buildOverviewSnapshot', () => {
     const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
 
     // Active = ready/running/verifying/rework (spec §5). The seeded fixture task is `running`.
-    expect(snapshot?.tasks).toEqual({ active: 3, blocked: 1, done: 1, failed: 1 })
+    // `ready` joins the bucket table in M14 Task 8 — the handoff's 6-up strip has a tile for it,
+    // and it was previously only ever folded into `active`.
+    expect(snapshot?.tasks).toEqual({ active: 3, ready: 1, blocked: 1, done: 1, failed: 1 })
   })
 
   it('counts a task under review and one in the merge queue as active, not vanished (M8a Task 12)', async () => {
@@ -273,8 +275,8 @@ describe('buildOverviewSnapshot', () => {
     const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
 
     // The seeded fixture task is `running`, plus the two just created: 3 active, none blocked/
-    // done/failed.
-    expect(snapshot?.tasks).toEqual({ active: 3, blocked: 0, done: 0, failed: 0 })
+    // done/failed — and none `ready`, which is its own tile now.
+    expect(snapshot?.tasks).toEqual({ active: 3, ready: 0, blocked: 0, done: 0, failed: 0 })
   })
 
   it('carries the halt verbatim', async (): Promise<void> => {
@@ -506,5 +508,168 @@ describe('buildOverviewSnapshot', () => {
       payload: { name: 'Skill', summary: 'Skill' },
     })
     expect((await buildOverviewSnapshot(fixture.workspaceId))?.agents[0]?.skill).toBeNull()
+  })
+  it('lists blocked tasks and paused runs together, with resume offered only on the runs', async (): Promise<void> => {
+    await prisma.task.update({ where: { id: fixture.taskId }, data: { status: 'blocked' } })
+    const run = await prisma.agentRun.create({
+      data: { agentId: fixture.agentId, status: 'paused', pausedAtStep: 7, provider: 'claude_code' },
+    })
+    const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
+    expect(snapshot?.blocked.map((b) => b.kind).sort()).toEqual(['run', 'task'])
+    expect(snapshot?.blocked.find((b) => b.kind === 'run')?.action).toBe('resume')
+    expect(snapshot?.blocked.find((b) => b.kind === 'run')?.runId).toBe(run.id)
+    expect(snapshot?.blocked.find((b) => b.kind === 'run')?.detail).toBe('paused at step 7')
+    expect(snapshot?.blocked.find((b) => b.kind === 'task')?.action).toBeNull()
+  })
+
+  it('reports a run that has only been ASKED to pause, and offers it no resume', async (): Promise<void> => {
+    // `requestResume` refuses a `pause_requested` run — no checkpoint exists yet. The panel names
+    // the state and waits; a button that always refuses is worse than none.
+    await prisma.agentRun.create({
+      data: { agentId: fixture.agentId, status: 'pause_requested', provider: 'claude_code' },
+    })
+    const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
+    const row = snapshot?.blocked.find((b) => b.kind === 'run')
+    expect(row?.detail).toBe('pause requested')
+    expect(row?.action).toBeNull()
+    expect(row?.runId).toBeNull()
+  })
+
+  it("names a blocked task's own rejection reason rather than repeating the word blocked", async (): Promise<void> => {
+    await prisma.task.update({
+      where: { id: fixture.taskId },
+      data: { status: 'blocked', lastRejectionReason: 'the payment provider keys are missing' },
+    })
+    const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
+    expect(snapshot?.blocked.find((b) => b.kind === 'task')?.detail).toBe('the payment provider keys are missing')
+  })
+
+  it('carries the last eight events newest first', async (): Promise<void> => {
+    for (let i = 0; i < 12; i += 1) {
+      await appendEvent({
+        type: 'run.tool_call',
+        workspaceId: fixture.workspaceId,
+        agentId: fixture.agentId,
+        actor: 'agent',
+        payload: { name: 'Write', summary: `Write ${i}.txt` },
+      })
+    }
+    const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
+    expect(snapshot?.liveEvents).toHaveLength(8)
+    expect(snapshot?.liveEvents[0]?.seq).toBeGreaterThan(snapshot?.liveEvents[7]?.seq ?? 0)
+    // The panel prints these verbatim, so the summary has to be the rendered line, not a raw type.
+    expect(snapshot?.liveEvents[0]?.summary).toBe('Write 11.txt')
+    expect(snapshot?.liveEvents.every((e) => e.summary.length > 0)).toBe(true)
+  })
+
+  it('lists merging tasks FIFO by review-approval seq and counts ready tasks in the strip', async (): Promise<void> => {
+    // Coordinator ruling (a): the queue's order is the one `apps/orchestrator/src/merge.ts`
+    // actually processes — FIFO by the LATEST `task.review_approved` event's seq, NOT
+    // `Approval.decidedAt` (no code writes an `Approval` row; the table is unused) and NOT
+    // `Task.createdAt`. Approved in the OPPOSITE order to creation, so this fails if the ordering
+    // silently falls back to creation time.
+    await prisma.task.update({ where: { id: fixture.taskId }, data: { status: 'merging' } })
+    const second = await prisma.task.create({
+      data: { workspaceId: fixture.workspaceId, title: 'Second', description: 'x', status: 'merging', requiredRole: 'backend', maxAttempts: 3 },
+    })
+    await appendEvent({
+      type: 'task.review_approved',
+      workspaceId: fixture.workspaceId,
+      taskId: second.id,
+      actor: 'agent',
+      payload: { reason: 'looks good' },
+    })
+    await appendEvent({
+      type: 'task.review_approved',
+      workspaceId: fixture.workspaceId,
+      taskId: fixture.taskId,
+      actor: 'agent',
+      payload: { reason: 'looks good' },
+    })
+    await prisma.task.create({
+      data: { workspaceId: fixture.workspaceId, title: 'Third', description: 'x', status: 'ready', requiredRole: 'backend', maxAttempts: 3 },
+    })
+    const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
+    expect(snapshot?.mergeQueue.map((t) => t.id)).toEqual([second.id, fixture.taskId])
+    expect(snapshot?.mergeQueue.every((t) => t.hasApproval)).toBe(true)
+    expect(snapshot?.tasks.ready).toBe(1)
+  })
+
+  it('sends a re-approved task to the BACK of the queue, as the merge pass does', async (): Promise<void> => {
+    // `merge.ts`: "Rework cycles re-approve, so a task can have more than one; only the latest
+    // counts as when it became eligible to merge *now*." First-approval ordering would put this
+    // task first and contradict the daemon on screen.
+    await prisma.task.update({ where: { id: fixture.taskId }, data: { status: 'merging' } })
+    const second = await prisma.task.create({
+      data: { workspaceId: fixture.workspaceId, title: 'Second', description: 'x', status: 'merging', requiredRole: 'backend', maxAttempts: 3 },
+    })
+    for (const taskId of [fixture.taskId, second.id, fixture.taskId]) {
+      await appendEvent({
+        type: 'task.review_approved',
+        workspaceId: fixture.workspaceId,
+        taskId,
+        actor: 'agent',
+        payload: { reason: 'looks good' },
+      })
+    }
+    const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
+    expect(snapshot?.mergeQueue.map((t) => t.id)).toEqual([second.id, fixture.taskId])
+  })
+
+  it('still lists a merging task with no approval event, last and marked', async (): Promise<void> => {
+    // Coordinator ruling (b). `merge.ts` FILTERS such a task out of its candidate list, so it
+    // will never be picked up — which is precisely why the operator has to see it sitting there.
+    await prisma.task.update({ where: { id: fixture.taskId }, data: { status: 'merging' } })
+    const orphan = await prisma.task.create({
+      data: { workspaceId: fixture.workspaceId, title: 'Moved by hand', description: 'x', status: 'merging', requiredRole: 'backend', maxAttempts: 3 },
+    })
+    await appendEvent({
+      type: 'task.review_approved',
+      workspaceId: fixture.workspaceId,
+      taskId: fixture.taskId,
+      actor: 'agent',
+      payload: { reason: 'looks good' },
+    })
+    const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
+    expect(snapshot?.mergeQueue.map((t) => t.id)).toEqual([fixture.taskId, orphan.id])
+    expect(snapshot?.mergeQueue.map((t) => t.hasApproval)).toEqual([true, false])
+  })
+
+  it('offers the last three distinct goals as suggestions, newest first', async (): Promise<void> => {
+    for (const goal of ['first', 'second', 'first', 'third', 'fourth']) {
+      await appendEvent({ type: 'workspace.goal_set', workspaceId: fixture.workspaceId, actor: 'human', payload: { goal } })
+    }
+    const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
+    expect(snapshot?.goalSuggestions).toEqual(['fourth', 'third', 'first'])
+  })
+
+  it('carries the guardrail columns the sidebar reads, so the page can provide them', async (): Promise<void> => {
+    // The `ShellFactsContext` half of the controller ruling carried from Task 3: the Overview
+    // page provides the sidebar's facts from the stream it already has, instead of the sidebar
+    // opening a second `EventSource`. It can only do that if the snapshot carries them.
+    await prisma.workspace.update({
+      where: { id: fixture.workspaceId },
+      data: { maxConcurrentRuns: 4, runTimeoutMs: 900_000, maxAttempts: 5 },
+    })
+    const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
+    expect(snapshot?.workspace.maxConcurrentRuns).toBe(4)
+    expect(snapshot?.workspace.runTimeoutMs).toBe(900_000)
+    expect(snapshot?.workspace.maxAttempts).toBe(5)
+  })
+
+  it("does not leak another workspace's blocked rows, events, queue or goals", async (): Promise<void> => {
+    const other = await prisma.workspace.create({
+      data: { name: 'Other', repoPath: '/tmp/other-bottom-row', verifyCommands: ['true'], setupCommands: [] },
+    })
+    await prisma.task.create({
+      data: { workspaceId: other.id, title: 'Not mine', description: 'x', status: 'blocked', requiredRole: 'backend', maxAttempts: 3 },
+    })
+    await appendEvent({ type: 'workspace.goal_set', workspaceId: other.id, actor: 'human', payload: { goal: 'not mine' } })
+
+    const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
+    expect(snapshot?.blocked).toEqual([])
+    expect(snapshot?.liveEvents).toEqual([])
+    expect(snapshot?.mergeQueue).toEqual([])
+    expect(snapshot?.goalSuggestions).toEqual([])
   })
 })

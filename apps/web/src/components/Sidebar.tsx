@@ -6,6 +6,7 @@ import { usePathname } from 'next/navigation'
 import { useProjectName } from '../hooks/useProjectName'
 import { useWorkspaceStream } from '../hooks/useWorkspaceStream'
 import type { ShellFacts } from '../server/shell'
+import { useShellFacts } from './ShellFactsContext'
 
 /** The nine rows of the handoff's 3a shell, in its own order (design README §3a): Overview ·
  *  Agents · Tasks · Graph · Activity · Projects · Skills · Analytics · Settings. Four of them
@@ -132,9 +133,16 @@ function GuardrailRow({
  * Guardrails block. Its own component because the counts need a hook and hooks cannot be
  * conditional — `Sidebar` renders this only when the pathname carries a workspace.
  *
- * It rides the workspace's SSE stream through `useWorkspaceStream` exactly as every other live
- * view does, with `initial: null` because the root layout has no snapshot to hand it. Until the
- * first refetch lands, every figure reads `—`.
+ * Where the facts come from is decided HERE, once, and the two paths are two components rather
+ * than one component with a conditional hook (controller ruling carried from M14 Task 3):
+ *
+ * - a page that already streams this workspace PROVIDES them (`ShellFactsContext`), and no
+ *   second `EventSource` is opened at all;
+ * - anywhere else — `/w/:id/tasks`, `/graph`, `/activity`, until Tasks 10-12 provide theirs —
+ *   it rides the workspace's SSE stream itself, exactly as it has since Task 3.
+ *
+ * A given page is in one case or the other for its whole life, so the branch never flips under a
+ * mounted subtree and neither component ever loses its hooks.
  *
  * Returns a FRAGMENT, not a wrapper: its two blocks are direct flex children of `<nav>` so the
  * guardrail block's `mt-auto` has the sidebar's own free space to absorb, and its `order-last`
@@ -148,13 +156,39 @@ export function ProjectNav({
   readonly workspaceId: string
   readonly pathname: string
 }): React.JSX.Element {
+  const provided = useShellFacts()
+  if (provided !== null) return <ProjectNavRows workspaceId={workspaceId} pathname={pathname} facts={provided.facts} />
+  return <StreamingProjectNav workspaceId={workspaceId} pathname={pathname} />
+}
+
+/** The fallback path: its own stream, `initial: null` because the root layout has no snapshot to
+ *  hand it. Until the first refetch lands, every figure reads `—`. */
+function StreamingProjectNav({
+  workspaceId,
+  pathname,
+}: {
+  readonly workspaceId: string
+  readonly pathname: string
+}): React.JSX.Element {
   const { snapshot } = useWorkspaceStream<ShellFacts | null>({
     workspaceId,
     endpoint: `/api/w/${workspaceId}/shell`,
     initial: null,
   })
-  const facts = snapshot
+  return <ProjectNavRows workspaceId={workspaceId} pathname={pathname} facts={snapshot} />
+}
 
+/** The rows themselves — no hooks, no fetching, so both paths above render exactly the same
+ *  markup from the same `ShellFacts | null`. */
+function ProjectNavRows({
+  workspaceId,
+  pathname,
+  facts,
+}: {
+  readonly workspaceId: string
+  readonly pathname: string
+  readonly facts: ShellFacts | null
+}): React.JSX.Element {
   const badgeFor = (key: 'none' | 'agentsWorking' | 'tasksActive'): string | undefined => {
     if (key === 'none') return undefined
     if (facts === null) return '—'

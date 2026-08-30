@@ -4,6 +4,9 @@ import { act, fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi, afterEach, beforeEach } from 'vitest'
 import { AgentCard } from '../src/components/AgentCard.js'
 import { HaltBanner } from '../src/components/HaltBanner.js'
+import { BlockedPanel, LiveEventsPanel, MergeQueuePanel } from '../src/components/OverviewClient.js'
+import { ShellFactsProvider } from '../src/components/ShellFactsContext.js'
+import { ProjectNav } from '../src/components/Sidebar.js'
 import { TopStrip } from '../src/components/TopStrip.js'
 import type { AgentCardData, OverviewSnapshot } from '../src/server/overview.js'
 
@@ -40,9 +43,20 @@ const agent = (over: Partial<AgentCardData>): AgentCardData => ({
 })
 
 const snapshot = (agents: readonly AgentCardData[]): OverviewSnapshot => ({
-  workspace: { id: 'w1', name: 'W', haltedReason: null, haltedAt: null, budgetUsd: 100, spentUsd: 3, unmeasuredRuns: 0, goal: null, provider: 'claude_code', costBlindBudgeted: false },
+  workspace: {
+    id: 'w1', name: 'W', haltedReason: null, haltedAt: null, budgetUsd: 100, spentUsd: 3, unmeasuredRuns: 0,
+    goal: null, provider: 'claude_code', costBlindBudgeted: false,
+    // M14 Task 8: the three guardrail columns the sidebar's bottom block reads. They live on the
+    // overview snapshot so the page can PROVIDE `ShellFacts` from the stream it already has,
+    // rather than the sidebar opening a second `EventSource` of its own on every workspace page.
+    maxConcurrentRuns: 3, runTimeoutMs: 1_800_000, maxAttempts: 3,
+  },
   agents,
-  tasks: { active: 2, blocked: 1, done: 4, failed: 0 },
+  tasks: { active: 2, ready: 3, blocked: 1, done: 4, failed: 0 },
+  blocked: [],
+  liveEvents: [],
+  mergeQueue: [],
+  goalSuggestions: [],
 })
 
 describe('AgentCard provider chip', () => {
@@ -73,23 +87,68 @@ describe('AgentCard provider chip', () => {
   })
 })
 
-describe('TopStrip', () => {
-  it('groups agent counts by derived status', () => {
+// The M11 strip's three agent buckets (`count-working` / `count-paused` / `count-idle`) are GONE
+// as of M14 Task 8: the handoff's 1a strip is a fixed 6-up — agents working · tasks active ·
+// tasks ready · tasks done · blocked · spend — and `paused`/`idle` are not among its six. A
+// paused agent still says so on its own card's pill (the ten states above), which is where the
+// handoff puts that fact; the strip answers "how much work is moving", not "what is each agent
+// doing". So this replaces the old bucket assertions rather than sitting beside them.
+describe('TopStrip \u2014 the handoff 6-up', () => {
+  it('renders six tiles in the README order with 1px gutters', () => {
+    render(<TopStrip snapshot={snapshot([agent({ status: 'working' })])} />)
+    const tiles = screen.getAllByTestId('strip-tile')
+    expect(tiles.map((t) => t.getAttribute('data-strip'))).toEqual([
+      'agents-working', 'tasks-active', 'tasks-ready', 'tasks-done', 'blocked', 'spend',
+    ])
+    // jsdom loads no CSS: the class is the assertion. `gap-px` over a `bg-line` section is what
+    // makes the hairline show THROUGH the grid rather than being drawn per tile.
+    expect(screen.getByTestId('strip').className).toContain('gap-px')
+    expect(screen.getByTestId('strip').className).toContain('grid-cols-6')
+    expect(screen.getByTestId('strip').className).toContain('bg-line')
+  })
+
+  it('counts agents, tasks and spend into their own tiles', () => {
     render(
       <TopStrip
         snapshot={snapshot([
           agent({ id: 'a1', status: 'working' }),
           agent({ id: 'a2', status: 'working' }),
           agent({ id: 'a3', status: 'paused' }),
-          agent({ id: 'a4', status: 'idle' }),
         ])}
       />,
     )
-    expect(screen.getByTestId('count-working').textContent).toContain('2')
-    expect(screen.getByTestId('count-paused').textContent).toContain('1')
-    expect(screen.getByTestId('count-idle').textContent).toContain('1')
-    expect(screen.getByTestId('count-tasks-active').textContent).toContain('2')
-    expect(screen.getByTestId('count-tasks-blocked').textContent).toContain('1')
+    expect(screen.getByTestId('strip-value-agents-working').textContent).toBe('2')
+    expect(screen.getByTestId('strip-value-tasks-active').textContent).toBe('2')
+    expect(screen.getByTestId('strip-value-tasks-ready').textContent).toBe('3')
+    expect(screen.getByTestId('strip-value-tasks-done').textContent).toBe('4')
+    expect(screen.getByTestId('strip-value-blocked').textContent).toBe('1')
+  })
+
+  it('renders spend as known spend, with the unmeasured count as its own line', () => {
+    render(<TopStrip snapshot={snapshot([])} />)
+    expect(screen.getByTestId('strip-value-spend').textContent).toBe('$3.00')
+    // Nothing unmeasured in this fixture, so nothing is claimed about a hole in the total.
+    expect(screen.queryByTestId('strip-unmeasured')).toBeNull()
+  })
+
+  it('says how many runs went unmeasured, rather than letting known spend read as total spend', () => {
+    const view = snapshot([])
+    render(<TopStrip snapshot={{ ...view, workspace: { ...view.workspace, unmeasuredRuns: 2 } }} />)
+    expect(screen.getByTestId('strip-unmeasured').textContent).toBe('2 unmeasured')
+  })
+
+  it('tones a non-zero count and leaves a zero neutral', () => {
+    const view = snapshot([agent({ status: 'working' })])
+    render(<TopStrip snapshot={view} />)
+    expect(screen.getByTestId('strip-value-agents-working').className).toContain('text-tone-working')
+    expect(screen.getByTestId('strip-value-blocked').className).toContain('text-tone-blocked')
+
+    const quiet = { ...view, agents: [], tasks: { active: 0, ready: 0, blocked: 0, done: 0, failed: 0 } }
+    render(<TopStrip snapshot={quiet} />)
+    // Two strips are mounted now; the second one's tiles are the later half of the query.
+    const blocked = screen.getAllByTestId('strip-value-blocked').at(-1)
+    expect(blocked?.className).toContain('text-text-1')
+    expect(blocked?.className).not.toContain('text-tone-blocked')
   })
 })
 
@@ -407,3 +466,193 @@ describe('AgentCard — the handoff anatomy', () => {
     expect(screen.getByTestId('card-error').textContent).toBe('the run is still stopping; retry in a moment')
   })
 })
+
+describe('Overview bottom row', () => {
+  let fetchMock: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('lists a blocked task and offers resume on a paused run', () => {
+    const view = {
+      ...snapshot([]),
+      blocked: [
+        { kind: 'task' as const, id: 't1', title: 'Payment provider keys', detail: 'blocked', action: null, runId: null },
+        { kind: 'run' as const, id: 'r1', title: 'Alex', detail: 'paused at step 7', action: 'resume' as const, runId: 'r1' },
+      ],
+    }
+    render(<BlockedPanel workspaceId="w1" items={view.blocked} />)
+    expect(screen.getAllByTestId('blocked-row')).toHaveLength(2)
+    expect(screen.getAllByTestId('blocked-row')[1]?.textContent).toContain('paused at step 7')
+    expect(screen.getByTestId('blocked-resume')).toBeTruthy()
+  })
+
+  it('offers no resume on a task, and none on a run that has only been ASKED to pause', () => {
+    // `requestResume` refuses a `pause_requested` run — there is no checkpoint to resume from
+    // yet. A button that always refuses is worse than no button, so the panel reports and waits.
+    render(
+      <BlockedPanel
+        workspaceId="w1"
+        items={[
+          { kind: 'task', id: 't1', title: 'Payment provider keys', detail: 'blocked', action: null, runId: null },
+          { kind: 'run', id: 'r2', title: 'Sam', detail: 'pause requested', action: null, runId: null },
+        ]}
+      />,
+    )
+    expect(screen.queryByTestId('blocked-resume')).toBeNull()
+  })
+
+  it('POSTs resume to the run route the card and panel already use, and shows a refusal verbatim', async (): Promise<void> => {
+    render(
+      <BlockedPanel
+        workspaceId="w1"
+        items={[{ kind: 'run', id: 'r1', title: 'Alex', detail: 'paused at step 7', action: 'resume', runId: 'r1' }]}
+      />,
+    )
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('blocked-resume'))
+    })
+    expect(fetchMock).toHaveBeenCalledWith('/api/w/w1/runs/r1/resume', { method: 'POST' })
+
+    fetchMock.mockImplementationOnce(
+      async () => new Response(JSON.stringify({ error: 'the run is still stopping; retry in a moment' }), { status: 409 }),
+    )
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('blocked-resume'))
+    })
+    expect(screen.getByTestId('blocked-error').textContent).toBe('the run is still stopping; retry in a moment')
+  })
+
+  it('says nothing needs you rather than drawing an empty list', () => {
+    render(<BlockedPanel workspaceId="w1" items={[]} />)
+    expect(screen.getByTestId('blocked-empty').textContent).toBe('nothing needs you')
+    expect(screen.queryByTestId('blocked-row')).toBeNull()
+  })
+
+  it('renders the 340px live-events panel with an all → action', () => {
+    render(<LiveEventsPanel workspaceId="w1" events={[{ seq: 9, ts: '2026-08-29T10:00:00.000Z', summary: 'Alex wrote a.txt' }]} />)
+    expect(screen.getByTestId('live-events').className).toContain('w-[340px]')
+    expect(screen.getByTestId('panel-header-action').textContent).toBe('all →')
+    expect(screen.getAllByTestId('live-event-row')).toHaveLength(1)
+    // The clock, not the whole ISO stamp — the handoff's events panel is a mono time column.
+    expect(screen.getAllByTestId('live-event-row')[0]?.textContent).toContain('10:00:00')
+  })
+
+  it('points all → at this workspace\'s Activity page', () => {
+    render(<LiveEventsPanel workspaceId="w1" events={[]} />)
+    expect(screen.getByTestId('panel-header-action').querySelector('a')?.getAttribute('href')).toBe('/w/w1/activity')
+    expect(screen.getByTestId('live-events-empty').textContent).toBe('no events yet')
+  })
+
+  it('gives a new live-events row the rise class and an existing one none', () => {
+    const { rerender } = render(<LiveEventsPanel workspaceId="w1" events={[{ seq: 1, ts: '2026-08-29T10:00:00.000Z', summary: 'a' }]} />)
+    rerender(
+      <LiveEventsPanel
+        workspaceId="w1"
+        events={[
+          { seq: 2, ts: '2026-08-29T10:00:01.000Z', summary: 'b' },
+          { seq: 1, ts: '2026-08-29T10:00:00.000Z', summary: 'a' },
+        ]}
+      />,
+    )
+    const rows = screen.getAllByTestId('live-event-row')
+    expect(rows[0]?.className).toContain('motion-safe:animate-[rise_0.3s_ease-out]')
+    expect(rows[1]?.className).not.toContain('animate-[rise')
+  })
+
+  it('lists the merge queue FIFO and says nothing when it is empty', () => {
+    const { rerender } = render(
+      <MergeQueuePanel queue={[{ id: 't1', title: 'API contract', hasApproval: true }, { id: 't2', title: 'Checkout UI', hasApproval: true }]} />,
+    )
+    expect(screen.getAllByTestId('merge-row').map((r) => r.textContent)).toEqual(['API contract', 'Checkout UI'])
+
+    rerender(<MergeQueuePanel queue={[]} />)
+    expect(screen.getByTestId('merge-empty').textContent).toBe('nothing in the queue')
+  })
+
+  // Coordinator ruling (b): the merge pass SKIPS a `merging` task with no `task.review_approved`
+  // event — it will never be picked up. The panel still lists it, last, and says why, because a
+  // task stuck in the queue is exactly what an operator opened this panel to find.
+  it('marks a queued task the merge pass will never pick up, and leaves the rest unmarked', () => {
+    render(
+      <MergeQueuePanel
+        queue={[
+          { id: 't1', title: 'API contract', hasApproval: true },
+          { id: 't2', title: 'Hand-moved task', hasApproval: false },
+        ]}
+      />,
+    )
+    expect(screen.getAllByTestId('merge-row').map((r) => r.textContent)).toEqual([
+      'API contract',
+      'Hand-moved taskno approval',
+    ])
+    const marks = screen.getAllByTestId('merge-queue-no-approval')
+    expect(marks).toHaveLength(1)
+    expect(marks[0]?.textContent).toBe('no approval')
+  })
+})
+
+describe('ShellFactsContext', () => {
+  // Controller ruling carried from Task 3: the root layout's `Sidebar` opens its own
+  // `EventSource` per workspace page, which is a SECOND stream on every page that already has
+  // one. A page that has the facts provides them; the sidebar falls back to its own stream only
+  // where nobody does. Task 12 removes the fallback.
+  beforeEach((): void => {
+    FakeShellEventSource.instances = []
+    vi.stubGlobal('EventSource', FakeShellEventSource as unknown as typeof EventSource)
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 200 })))
+  })
+
+  afterEach((): void => {
+    vi.unstubAllGlobals()
+  })
+
+  it('paints the nav badges and guardrails from the provider, opening no stream of its own', () => {
+    render(
+      <ShellFactsProvider
+        value={{
+          facts: {
+            workspace: { id: 'w1', name: 'Checkout' },
+            counts: { agentsWorking: 2, tasksActive: 5 },
+            guardrails: { budgetUsd: 100, maxConcurrentRuns: 3, runTimeoutMs: 1_800_000, maxAttempts: 3 },
+          },
+          latencyMs: 12,
+        }}
+      >
+        <ProjectNav workspaceId="w1" pathname="/w/w1" />
+      </ShellFactsProvider>,
+    )
+    expect(screen.getByTestId('nav-badge-Agents').textContent).toBe('2')
+    expect(screen.getByTestId('nav-badge-Tasks').textContent).toBe('5')
+    expect(screen.getByTestId('guardrail-budget').textContent).toBe('$100.00')
+    expect(screen.getByTestId('guardrail-timeout').textContent).toBe('30m')
+    expect(FakeShellEventSource.instances).toHaveLength(0)
+  })
+
+  it('falls back to its own stream when no provider is mounted above it', () => {
+    render(<ProjectNav workspaceId="w1" pathname="/w/w1" />)
+    // The M14 Task 3 behaviour, unchanged where nothing provides the facts: one stream, and every
+    // figure reads the unknown mark until the first snapshot lands.
+    expect(FakeShellEventSource.instances).toHaveLength(1)
+    expect(screen.getByTestId('nav-badge-Agents').textContent).toBe('—')
+  })
+})
+
+/** Minimal `EventSource` stand-in (`shell.test.tsx`'s precedent) — these tests are about whether
+ *  one gets OPENED at all, so it only has to count constructions. */
+class FakeShellEventSource {
+  static instances: FakeShellEventSource[] = []
+  onmessage: ((event: { data: string }) => void) | null = null
+  onerror: (() => void) | null = null
+  onopen: (() => void) | null = null
+  constructor(public url: string) {
+    FakeShellEventSource.instances.push(this)
+  }
+  close(): void {}
+}
