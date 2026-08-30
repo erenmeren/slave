@@ -210,7 +210,7 @@ function sweepStrayChildren(roots) {
       // A process that ended between the listing and this read, or one this user may not inspect.
     }
     try {
-      haystack += ` ${readFileSync(`/proc/${entry}/cmdline`, 'utf8')}`
+      haystack += `\0${readFileSync(`/proc/${entry}/cmdline`, 'utf8')}`
     } catch {
       // Same.
     }
@@ -596,11 +596,12 @@ try {
    * Waits for ELK to finish positioning the org graph.
    *
    * `useLayoutedGraph` lays out asynchronously (`elkjs` is dynamically imported and the layout is
-   * awaited), so for the first frames after mount every node sits at the origin. React Flow's
-   * `fitView` runs once at init, against exactly those stacked nodes, and never re-fits -- so a
-   * screenshot taken on arrival is a pile of overlapping boxes at an absurd zoom. The wait below is
-   * for the layout; the `fitView` control click after it is the ordinary operator affordance React
-   * Flow puts on the canvas, used here for what it is for.
+   * awaited), so for the first frames after mount every node sits at the origin. `GraphCanvas` now
+   * re-fits from an effect once the layouted positions land, at `maxZoom: 1` (M14 fix wave, review
+   * I7) -- before that fix the bare `fitView` prop ran once at init against exactly those stacked
+   * nodes and never re-fitted, and a screenshot taken on arrival was a pile of overlapping boxes.
+   * The wait below is still for the layout, and the `fitView` control click after it is the
+   * ordinary operator affordance React Flow puts on the canvas, kept as a belt-and-braces settle.
    */
   async function settleGraph() {
     await waitUntil('the graph layout to place every node somewhere of its own', 30_000, async () => {
@@ -718,12 +719,14 @@ try {
   // value is what proves the template is the README's string and not six coincidences.
   const AGENTS_COLUMNS = '200px 130px 120px 1fr 110px 90px 80px'
   await page.goto(`${baseUrl}/agents`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
-  // The Agents page opens on Roster, whose table has a template of its own; the handoff's seven
-  // columns are the Workers tab's.
-  // Keyed on the TABLE, not on its rows: `listWorkers()` returns only agents linked to a company
-  // (`companyAgentId != null`), so a development database whose workers were never staffed from a
-  // company renders the Workers table with its header and no rows -- which is still the seven-column
-  // grid this stage measures, and waiting for a row would hang on a page that is rendering correctly.
+  // The Agents page opens on WORKERS now (M14 fix wave, queue item (a)): the README's Agents page
+  // IS this seven-column table, and Roster is the tab beside it. The `clickUntil` below is kept
+  // anyway -- it is idempotent on an already-selected tab, and it is what makes this stage assert
+  // the template rather than assume which tab happened to be default.
+  // Keyed on the TABLE, not on its rows. `listWorkers()` no longer filters to roster-linked agents
+  // (review I4), so a seeded development database does render rows here -- but a database with no
+  // agents at all still renders the header alone, which is the same seven-column grid this stage
+  // measures, and waiting for a row would hang on a page that is rendering correctly.
   await clickUntil(
     page.getByTestId('agents-tab-workers'),
     async () =>
