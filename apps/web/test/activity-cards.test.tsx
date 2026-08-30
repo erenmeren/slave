@@ -2,6 +2,7 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import type { DomainEventType } from '@ai-team-os/db'
+import { ActivityCard } from '../src/components/activity/ActivityCard.js'
 import { ACTIVITY_CARDS } from '../src/components/activity/cards.js'
 import type { ActivityEventRow } from '../src/server/activity.js'
 
@@ -79,7 +80,10 @@ function fixtureFor(type: DomainEventType): ActivityEventRow {
   return baseEvent(type, PAYLOAD_BY_TYPE[type])
 }
 
-const CARD_PROPS = { workspaceId: 'w1', agentName: 'Alex', taskTitle: 'Add the thing' } as const
+// `dimmed` widening (M14 Task 12): the roster filter dims a row rather than hiding it, so every
+// card in the registry forwards the flag through `ActivityCardProps`. Undimmed is the default
+// every existing assertion in this file was written against.
+const CARD_PROPS = { workspaceId: 'w1', agentName: 'Alex', taskTitle: 'Add the thing', dimmed: false } as const
 
 describe('ACTIVITY_CARDS registry', () => {
   for (const type of Object.keys(ACTIVITY_CARDS) as DomainEventType[]) {
@@ -231,7 +235,7 @@ describe('targeted card bodies', () => {
   it('falls back to the bare id when agentName/taskTitle are null', () => {
     const Card = ACTIVITY_CARDS['task.started']
     render(
-      <Card event={fixtureFor('task.started')} workspaceId="w1" agentName={null} taskTitle={null} />,
+      <Card event={fixtureFor('task.started')} workspaceId="w1" agentName={null} taskTitle={null} dimmed={false} />,
     )
     expect(screen.getByTestId('agent-link').textContent).toBe('a1')
     expect(screen.getByTestId('task-link').textContent).toBe('t1')
@@ -278,5 +282,76 @@ describe('RunSucceededCard', () => {
     render(<Card event={baseEvent('run.succeeded', { numTurns: 5, costUsd: 1.23 })} {...CARD_PROPS} />)
 
     expect(screen.getByTestId('run-succeeded-stats').textContent).toContain('$1.23')
+  })
+})
+
+// ---- M14 Task 12: the river row (design README "1c", spec §5.5) -----------------------------
+
+describe('the river row', () => {
+  const base = {
+    event: {
+      seq: 1,
+      ts: '2026-08-29T10:00:00.000Z',
+      type: 'run.tool_call' as const,
+      actor: 'agent',
+      agentId: 'a1',
+      taskId: null,
+      runId: 'r1',
+      payload: {},
+      summary: 'Write a.txt',
+    },
+    workspaceId: 'w1',
+    agentName: 'Alex',
+    taskTitle: null,
+    dimmed: false,
+  }
+
+  it('lays out 74px timestamp, 28px dot gutter, then who + kind + text', () => {
+    render(<ActivityCard {...base}>body</ActivityCard>)
+    expect(screen.getByTestId('event-time').className).toContain('w-[74px]')
+    expect(screen.getByTestId('event-time').className).toContain('text-right')
+    expect(screen.getByTestId('event-gutter').className).toContain('w-[28px]')
+    expect(screen.getByTestId('event-dot').className).toContain('h-[7px]')
+  })
+
+  it("gives the dot the mockup's 7px box and its 0 0 9px glow in the event's own tone", () => {
+    render(<ActivityCard {...base}>body</ActivityCard>)
+    const dot = screen.getByTestId('event-dot')
+    // `run.*` is the working tone (a run doing work) — see `toneForEventType`.
+    expect(dot.className).toContain('w-[7px]')
+    expect(dot.className).toContain('bg-tone-working')
+    expect(dot.className).toContain('shadow-[0_0_9px_var(--color-tone-working)]')
+  })
+
+  it('tones the dot by kind prefix, not by one hardcoded colour', () => {
+    const { rerender } = render(<ActivityCard {...base}>body</ActivityCard>)
+    rerender(
+      <ActivityCard {...base} event={{ ...base.event, type: 'guardrail.tripped' }}>
+        body
+      </ActivityCard>,
+    )
+    expect(screen.getByTestId('event-dot').className).toContain('bg-tone-blocked')
+  })
+
+  it('dims a non-matching row to opacity .35 rather than hiding it', () => {
+    const { rerender } = render(<ActivityCard {...base}>body</ActivityCard>)
+    expect(screen.getByTestId('activity-card').className).not.toContain('opacity-[.35]')
+
+    rerender(
+      <ActivityCard {...base} dimmed>
+        body
+      </ActivityCard>,
+    )
+    expect(screen.getByTestId('activity-card').className).toContain('opacity-[.35]')
+  })
+
+  it('keeps the payload disclosure', () => {
+    render(<ActivityCard {...base}>body</ActivityCard>)
+    expect(screen.getByTestId('payload-toggle')).toBeTruthy()
+  })
+
+  it("renders the row's trailing ref, and the unknown mark when the event carries no task", () => {
+    render(<ActivityCard {...base}>body</ActivityCard>)
+    expect(screen.getByTestId('event-ref').textContent).toBe('—')
   })
 })

@@ -43,6 +43,14 @@ const INITIAL: ActivityPage = {
   sparkline: [0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
   agents: [],
   tasks: [],
+  // M14 Task 12 widenings — neither member is read by this hook, which pages `events`/`sparkline`
+  // only; they are here because `ActivityPage` now carries them.
+  typeVolumes: [],
+  shellFacts: {
+    workspace: { id: 'w1', name: 'mine' },
+    counts: { agentsWorking: 0, tasksActive: 0 },
+    guardrails: { budgetUsd: null, maxConcurrentRuns: 3, runTimeoutMs: 1_800_000, maxAttempts: 3 },
+  },
 }
 
 describe('useActivityStream', () => {

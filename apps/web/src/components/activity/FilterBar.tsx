@@ -27,9 +27,11 @@ export interface FilterBarProps extends UrlFilters {
   readonly tasks: readonly { readonly id: string; readonly title: string }[]
 }
 
-/** One of the five kind chips. Selected state reuses the existing neutral tokens (no new colour —
- *  the kinds aren't status-coloured) rather than the status palette, which already means
- *  something else (a run/task's own state) on every card these events render into. */
+/** One of the six kind chips, at the handoff's own stream-chip geometry (`AI Team OS
+ *  Mockups.dc.html:850`: `padding:3px 9px`, `border-radius:14px`, `500 10px` IBM Plex Mono).
+ *  Selected state reuses the existing neutral tokens (no new colour — the kinds aren't
+ *  status-coloured) rather than the status palette, which already means something else (a
+ *  run/task's own state) on every card these events render into. */
 function KindChip({
   kind,
   active,
@@ -45,7 +47,7 @@ function KindChip({
       data-testid={`kind-chip-${kind}`}
       aria-pressed={active}
       onClick={onToggle}
-      className={`rounded-full border px-2.5 py-1 text-xs transition-colors ${
+      className={`rounded-[14px] border px-[9px] py-[3px] font-mono text-[10px] font-medium transition-colors ${
         active ? 'border-text-1 bg-bg-2 text-text-1' : 'border-line bg-bg-1 text-text-3 hover:text-text-2'
       }`}
     >

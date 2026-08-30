@@ -22,6 +22,11 @@ export interface TimelineProps {
   readonly workspaceId: string
   readonly agentNameById: ReadonlyMap<string, string>
   readonly taskTitleById: ReadonlyMap<string, string>
+  /** The agent whose roster row is selected, or `null` for no roster filter. Every row that is
+   *  NOT that agent's renders dimmed (design README "Filtering": dim, never hide). Optional so a
+   *  caller with no roster beside it -- and this file's own scroll-anchoring test -- can leave it
+   *  off entirely. */
+  readonly dimmedAgentId?: string | null
   /** Fires whenever the viewport's distance from the bottom crosses the "pinned" threshold —
    *  both from an actual scroll and from a row's measured height changing (e.g. a payload
    *  `<details>` expanding), since the latter moves the true bottom with no scroll event of its
@@ -43,7 +48,7 @@ export interface TimelineProps {
  * prepend.
  */
 export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timeline(
-  { events, workspaceId, agentNameById, taskTitleById, onPinnedChange, onNearTop },
+  { events, workspaceId, agentNameById, taskTitleById, dimmedAgentId = null, onPinnedChange, onNearTop },
   ref,
 ): React.JSX.Element {
   const scrollRef = useRef<HTMLDivElement | null>(null)
@@ -60,7 +65,7 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
   const mountedRef = useRef(false)
 
   // Motion pass (spec §4.6): the "live boundary" seq — rows above it are new since mount / since
-  // the last confirmed `loadOlder` prepend and get the entry cross-fade; rows at or below it are
+  // the last confirmed `loadOlder` prepend and get the entry `rise`; rows at or below it are
   // already-seen (whether present at mount or loaded as history) and never animate. Seeded once
   // from whatever's on screen at mount (a fresh mount's own rows are never "new"); the `seq`
   // ordering invariant — a prepend only ever adds smaller seqs, a live arrival only ever adds
@@ -244,17 +249,33 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
       ref={scrollRef}
       data-testid="timeline-viewport"
       onScroll={handleScroll}
-      className="flex-1 overflow-y-auto p-3"
+      // `pt-3` and NOT `p-3` (the mock's own `padding:12px 0 0`, `AI Team OS Mockups.dc.html:855`):
+      // a left padding here would shift every row right without moving the rule, and the dot
+      // would no longer sit on it. The row's `pr-[18px]` carries the right-hand inset instead.
+      className="flex-1 overflow-y-auto pt-3"
     >
       <div style={{ height: virtualizer.getTotalSize(), position: 'relative', width: '100%' }}>
+        {/* The design README's vertical rule at x=88 (1c / §3a.5). Absolutely positioned inside
+          * THIS element rather than the scroll viewport: this one is already `position: relative`
+          * and is as tall as the whole river, so the rule spans every row instead of only the
+          * first viewport's worth and then scrolling away. `left` is INLINE so the gate can read
+          * the exact number back off `getComputedStyle`. */}
+        <span
+          data-testid="timeline-rule"
+          aria-hidden
+          style={{ left: '88px' }}
+          className="pointer-events-none absolute inset-y-0 w-px bg-[linear-gradient(180deg,transparent,rgba(46,230,207,.28),rgba(123,140,255,.18),transparent)]"
+        />
         {virtualItems.map((virtualItem) => {
           const event = events[virtualItem.index]
           if (event === undefined) return null
           const Card = ACTIVITY_CARDS[event.type]
-          // Spec §4.6: only a row that arrived after the live boundary was established cross-fades
-          // in — reuses the M5 `action-line-in` opacity keyframe (no layout shift: this row's box
-          // is already sized by `measureElement`/the estimate before the animation starts, and the
-          // keyframe never touches anything but `opacity`).
+          // Spec §4.6: only a row that arrived after the live boundary was established animates
+          // in. As of M14 Task 12 that entry is the handoff's own `rise` (design README "Motion":
+          // "new rows enter with a 0.3s `translateY(5px)` rise"), not M5's `action-line-in`
+          // cross-fade. No layout shift either way: the row's box is already sized by
+          // `measureElement`/the estimate before the animation starts, and `rise` moves the row
+          // by a transform, which does not participate in layout.
           const isLive = event.seq > liveBoundarySeqRef.current
           return (
             <div
@@ -263,13 +284,16 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
               data-testid="timeline-row"
               ref={virtualizer.measureElement}
               style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${virtualItem.start}px)` }}
-              className={`pb-2 ${isLive ? 'motion-safe:animate-[action-line-in_120ms_ease-out]' : ''}`}
+              // No gap between rows: the mock's river is flush (`AI Team OS Mockups.dc.html:857`,
+              // a bare `flex-direction:column` with no gap); each row's own `py-[6px]` is the rhythm.
+              className={isLive ? 'motion-safe:animate-[rise_0.3s_ease-out]' : ''}
             >
               <Card
                 event={event}
                 workspaceId={workspaceId}
                 agentName={event.agentId !== null ? (agentNameById.get(event.agentId) ?? null) : null}
                 taskTitle={event.taskId !== null ? (taskTitleById.get(event.taskId) ?? null) : null}
+                dimmed={dimmedAgentId !== null && event.agentId !== dimmedAgentId}
               />
             </div>
           )

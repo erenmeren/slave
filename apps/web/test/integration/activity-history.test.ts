@@ -266,6 +266,58 @@ describe('buildActivityHistory', () => {
       expect(await buildActivityPage('00000000-0000-4000-8000-000000000000')).toBeNull()
     })
 
+    it('reports 24-hour event volumes by kind prefix, busiest first, omitting silent kinds', async (): Promise<void> => {
+      // 3 `run.*`, 1 `task.*`, and one `guardrail.*` older than 24 hours which must NOT be
+      // counted -- a kind with nothing inside the window is omitted, never shown as a zero bar.
+      for (let i = 0; i < 3; i += 1) {
+        await appendEvent({
+          type: 'run.tool_call',
+          workspaceId: fixture.workspaceId,
+          taskId: fixture.taskId1,
+          agentId: fixture.agentId1,
+          actor: 'agent',
+          payload: { name: 'Write', summary: `call ${i}` },
+        })
+      }
+      await appendEvent({
+        type: 'task.started',
+        workspaceId: fixture.workspaceId,
+        taskId: fixture.taskId1,
+        agentId: fixture.agentId1,
+        actor: 'agent',
+        payload: { title: 'Add the thing' },
+      })
+      // `createMany`, not `appendEvent`: only a direct insert can backdate `ts`.
+      await prisma.executionEvent.createMany({
+        data: [
+          {
+            type: 'guardrail_tripped',
+            workspaceId: fixture.workspaceId,
+            taskId: fixture.taskId1,
+            agentId: fixture.agentId1,
+            actor: 'system',
+            payload: {},
+            ts: new Date(Date.now() - 25 * 60 * 60 * 1000),
+          },
+        ],
+      })
+
+      const page = await buildActivityPage(fixture.workspaceId)
+
+      expect(page?.typeVolumes).toEqual([
+        { prefix: 'run.*', count: 3 },
+        { prefix: 'task.*', count: 1 },
+      ])
+    })
+
+    it('carries the shell facts the page publishes to the global Sidebar', async (): Promise<void> => {
+      const page = await buildActivityPage(fixture.workspaceId)
+
+      expect(page?.shellFacts.workspace).toEqual({ id: fixture.workspaceId, name: 'Checkout Platform' })
+      expect(page?.shellFacts.guardrails.budgetUsd).toBe(100)
+      expect(page?.shellFacts.counts.tasksActive).toBe(2)
+    })
+
     it('carries the workspace agent/task rosters for the FilterBar and card name resolution', async (): Promise<void> => {
       const page = await buildActivityPage(fixture.workspaceId)
 

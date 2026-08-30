@@ -1,6 +1,7 @@
 import { prisma } from '@ai-team-os/db/client'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, EVENT_TYPE_BY_DOMAIN_TYPE, type DomainEventType } from '@ai-team-os/db'
 import { feedSummary } from '../lib/feedSummary'
+import { buildShellFacts, type ShellFacts } from './shell'
 import { EMPTY_ACTIVITY_FILTERS, type ActivityFilters } from '../lib/activityFilters'
 
 export interface ActivityEventRow {
@@ -36,6 +37,47 @@ export interface ActivityPage extends ActivityHistoryPage {
    *  `buildTasksSnapshot` already own the *full* agent/task shapes their own pages need). */
   readonly agents: readonly { readonly id: string; readonly name: string }[]
   readonly tasks: readonly { readonly id: string; readonly title: string }[]
+  /** Event counts by kind prefix over the last 24 hours, for the right rail's volume bars.
+   *  Sorted by count descending; a kind with no events in the window is omitted, never shown as
+   *  a zero bar. */
+  readonly typeVolumes: readonly { readonly prefix: string; readonly count: number }[]
+  /**
+   * The same counts/guardrails the global shell's `<Sidebar>` shows (M14 Task 3/8/12 controller
+   * ruling): this route already streams the workspace `/w/:id/activity` mounts, so
+   * `ActivityClient` publishes this to `hooks/useShellFacts.ts` on every snapshot rather than the
+   * sidebar opening a second connection against `/api/w/:id/shell` for the same workspace. The
+   * same member `TasksSnapshot` and `GraphView` already carry, for the same reason.
+   */
+  readonly shellFacts: ShellFacts
+}
+
+/**
+ * 24-hour volumes by KIND PREFIX (`run.*`, `task.*`, ...) -- the dotted domain name's first
+ * segment, not the six user-facing `ActivityKind` buckets: the rail answers "what has this
+ * system been doing", and the chips above it already answer "what do I want to see".
+ *
+ * The window is a SQL `interval` LITERAL rather than a bound parameter, for the same reason
+ * `toolCallSparkline`'s own `interval '10 minutes'` is one: Postgres infers no type for a
+ * placeholder in that position.
+ *
+ * Raw SQL for the same reason `toolCallSparkline` uses it: Prisma has no `groupBy` over a derived
+ * expression. The DB enum's stored values are dotted (`run.tool_call`), so `split_part` on the
+ * cast text is the prefix; the Prisma-mapped member name (`run_tool_call`) is a TypeScript-only
+ * alias that does not exist in Postgres.
+ */
+export async function eventTypeVolumes(
+  workspaceId: string,
+): Promise<readonly { readonly prefix: string; readonly count: number }[]> {
+  // `ORDER BY 2 DESC, 1 ASC`: count first (the rail is read widest-first), then the prefix
+  // itself, so two equally busy kinds always come back in the same order rather than in whatever
+  // order the scan happened to produce.
+  const rows = await prisma.$queryRaw<Array<{ prefix: string; n: bigint }>>`
+    SELECT split_part(type::text, '.', 1) || '.*' AS prefix, count(*) AS n
+    FROM "ExecutionEvent"
+    WHERE "workspaceId" = ${workspaceId} AND ts >= now() - interval '24 hours'
+    GROUP BY 1
+    ORDER BY 2 DESC, 1 ASC`
+  return rows.map((row) => ({ prefix: row.prefix, count: Number(row.n) }))
 }
 
 export const ACTIVITY_PAGE_LIMIT_DEFAULT = 100
@@ -154,10 +196,12 @@ export async function buildActivityPage(workspaceId: string): Promise<ActivityPa
   const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId } })
   if (workspace === null) return null
 
-  const [history, agents, tasks] = await Promise.all([
+  const [history, agents, tasks, typeVolumes, shellFacts] = await Promise.all([
     buildActivityHistory(workspaceId, EMPTY_ACTIVITY_FILTERS, {}),
     prisma.agent.findMany({ where: { team: { workspaceId } }, select: { id: true, name: true }, orderBy: { name: 'asc' } }),
     prisma.task.findMany({ where: { workspaceId }, select: { id: true, title: true }, orderBy: { title: 'asc' } }),
+    eventTypeVolumes(workspaceId),
+    buildShellFacts(workspaceId),
   ])
 
   return {
@@ -168,5 +212,9 @@ export async function buildActivityPage(workspaceId: string): Promise<ActivityPa
     sparkline: history!.sparkline,
     agents,
     tasks,
+    typeVolumes,
+    // Same reasoning as `history!`: `buildShellFacts` only returns null for a workspace that does
+    // not exist, which the lookup at the top of this function has already ruled out.
+    shellFacts: shellFacts!,
   }
 }

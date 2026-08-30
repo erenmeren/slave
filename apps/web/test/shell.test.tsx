@@ -5,7 +5,6 @@ import { ProjectNav, Sidebar } from '../src/components/Sidebar.js'
 import { ActivityClient } from '../src/components/activity/ActivityClient.js'
 import { TasksClient } from '../src/components/TasksClient.js'
 import { TopBar } from '../src/components/TopBar.js'
-import { REFETCH_DEBOUNCE_MS } from '../src/hooks/useWorkspaceStream.js'
 import type { ActivityPage } from '../src/server/activity.js'
 import type { TasksSnapshot } from '../src/server/tasks.js'
 
@@ -37,9 +36,10 @@ vi.mock('../src/hooks/useActivityStream.js', () => ({
   useActivityStream: () => streamState,
 }))
 
-/** Minimal `EventSource` stand-in (`tasks-components.test.tsx`'s precedent), now needed by every
- *  test in this file: as of M14 Task 3 the `Sidebar` itself rides the workspace's SSE stream to
- *  fetch its own counts and guardrails, so rendering one opens a stream. */
+/** Minimal `EventSource` stand-in (`tasks-components.test.tsx`'s precedent). Still needed by the
+ *  `TasksClient` case below, which streams for real — and by the several assertions that nothing
+ *  ELSE streams: as of M14 Task 12 the `Sidebar`'s own fallback is a one-shot `fetch`, not a
+ *  stream, so a `FakeEventSource` instance appearing at all is itself a failure. */
 class FakeEventSource {
   static instances: FakeEventSource[] = []
   onmessage: ((event: { data: string }) => void) | null = null
@@ -50,8 +50,6 @@ class FakeEventSource {
   }
   close(): void {}
 }
-
-const lastSource = (): FakeEventSource | undefined => FakeEventSource.instances.at(-1)
 
 let fetchMock: ReturnType<typeof vi.fn>
 
@@ -320,11 +318,13 @@ describe('ProjectNav counts and guardrails', () => {
         ),
     )
     render(<ProjectNav workspaceId="w1" pathname="/w/w1" />)
+    // One `fetch`, no stream to open (M14 Task 12): flushing the microtask queue is all the
+    // fallback needs. `advanceTimersByTimeAsync(0)` is how that is done under fake timers.
     await act(async (): Promise<void> => {
-      lastSource()?.onopen?.()
-      await vi.advanceTimersByTimeAsync(REFETCH_DEBOUNCE_MS)
+      await vi.advanceTimersByTimeAsync(0)
     })
 
+    expect(FakeEventSource.instances).toHaveLength(0)
     expect(screen.getByTestId('nav-badge-Tasks').textContent).toBe('12')
     expect(screen.getByTestId('nav-badge-Agents').textContent).toBe('3')
     expect(screen.getByTestId('guardrail-budget').textContent).toBe('$20.00')
@@ -347,15 +347,20 @@ describe('ProjectNav counts and guardrails', () => {
     )
     render(<ProjectNav workspaceId="w1" pathname="/w/w1" />)
     await act(async (): Promise<void> => {
-      lastSource()?.onopen?.()
-      await vi.advanceTimersByTimeAsync(REFETCH_DEBOUNCE_MS)
+      await vi.advanceTimersByTimeAsync(0)
     })
     expect(screen.getByTestId('guardrail-budget').textContent).toBe('—')
   })
 
-  it('reads the shell endpoint, not the overview snapshot', () => {
+  it('reads the shell endpoint once, and never opens a stream for it (M14 Task 12)', () => {
+    // Before Task 12 this fallback rode the workspace's SSE stream (`/api/w/w1/events`) and
+    // refetched on every notification. Every workspace route now PUBLISHES its shell facts, so
+    // the fallback is a single request to the shell endpoint itself — and the assertion that
+    // matters most is the second one: no `EventSource` anywhere.
     render(<ProjectNav workspaceId="w1" pathname="/w/w1" />)
-    expect(lastSource()?.url).toBe('/api/w/w1/events')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/w/w1/shell')
+    expect(FakeEventSource.instances).toHaveLength(0)
   })
 })
 
@@ -480,6 +485,14 @@ describe('the halt banner shows on every page', () => {
       sparkline: new Array(10).fill(0),
       agents: [],
       tasks: [],
+      // M14 Task 12 widenings: the right rail's 24h volumes, and the shell facts this page now
+      // publishes to `hooks/useShellFacts.ts` in place of the sidebar's removed fallback stream.
+      typeVolumes: [],
+      shellFacts: {
+        workspace: { id: 'w1', name: 'W' },
+        counts: { agentsWorking: 0, tasksActive: 0 },
+        guardrails: { budgetUsd: 20, maxConcurrentRuns: 3, runTimeoutMs: 3_600_000, maxAttempts: 3 },
+      },
     }
 
     render(<ActivityClient workspaceId="w1" initial={initial} />)

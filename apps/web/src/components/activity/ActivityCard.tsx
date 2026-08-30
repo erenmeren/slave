@@ -1,5 +1,6 @@
 import type { ReactElement, ReactNode } from 'react'
 import Link from 'next/link'
+import { TONE_DOT, TONE_TEXT, type StatusTone } from '../ui/StatusPill'
 import type { ActivityEventRow } from '../../server/activity'
 
 // `ui/Chip.tsx`'s exact recipe (`inline-flex items-center rounded-chip border px-2 py-0.5
@@ -20,16 +21,84 @@ export interface ActivityCardProps {
   readonly workspaceId: string
   readonly agentName: string | null
   readonly taskTitle: string | null
+  /** Dimmed to opacity .35 because a roster row is selected and this event is not that agent's
+   *  (design README "Filtering"). Widened onto the SHARED prop shape, not onto each card, so
+   *  every entry in `ACTIVITY_CARDS` forwards it through its existing `{...props}` spread with
+   *  no per-card edit. */
+  readonly dimmed: boolean
+}
+
+/**
+ * The river dot's tone, by the event type's dotted PREFIX. A DISPLAY mapping, not a domain one:
+ * `StatusTone` describes what a card looks like, and an event type is not a status -- nothing
+ * downstream may read a run's or a task's actual state back out of this. It exists so the stream
+ * reads as one system at a glance (every `run.*` the same teal, every `guardrail.*` the same
+ * red), which a per-type table of thirty colours would not achieve.
+ */
+export function toneForEventType(type: string): StatusTone {
+  const prefix = type.slice(0, type.indexOf('.') + 1)
+  switch (prefix) {
+    case 'run.':
+      return 'working'
+    case 'task.':
+      return 'planning'
+    case 'guardrail.':
+      return 'blocked'
+    case 'workspace.':
+      return 'review'
+    case 'agent.':
+      return 'waiting'
+    default:
+      return 'idle'
+  }
+}
+
+/** The stream dot's `0 0 9px` glow (design README "1c": "7px dot, 0 0 9px glow"). A separate map
+ *  from `ui/StatusPill`'s `TONE_GLOW`, which is the `0 0 8px` BAR glow the tokens section
+ *  specifies for progress fills -- two different numbers in the handoff, so two maps rather than
+ *  one that is wrong in one of the two places. Literal per-tone strings for the reason
+ *  `TONE_GLOW` documents: Tailwind only generates a class it can find as literal source text. */
+const TONE_DOT_GLOW: Record<StatusTone, string> = {
+  working: 'shadow-[0_0_9px_var(--color-tone-working)]',
+  planning: 'shadow-[0_0_9px_var(--color-tone-planning)]',
+  review: 'shadow-[0_0_9px_var(--color-tone-review)]',
+  waiting: 'shadow-[0_0_9px_var(--color-tone-waiting)]',
+  blocked: 'shadow-[0_0_9px_var(--color-tone-blocked)]',
+  done: 'shadow-[0_0_9px_var(--color-tone-done)]',
+  paused: 'shadow-[0_0_9px_var(--color-tone-paused)]',
+  idle: 'shadow-[0_0_9px_var(--color-tone-idle)]',
 }
 
 /** `2026-08-22T10:00:00.000Z` → `10:00:00` — a fixed slice of the ISO string rather than
  *  `toLocaleTimeString`, so the rendered text is timezone- and locale-independent (both in tests
- *  and across viewers). */
+ *  and across viewers). The 74px right-aligned mono column of the README's row anatomy; with the
+ *  28px dot gutter beside it, the 7px dot's centre lands at exactly x=88 — the rule
+ *  (`Timeline.tsx`) is drawn at that same number, and the two only agree because these two widths
+ *  are fixed. */
 function EventTime({ ts }: { readonly ts: string }): ReactElement {
   return (
-    <time dateTime={ts} data-testid="event-time" className="font-mono text-xs text-text-3">
+    <time
+      dateTime={ts}
+      data-testid="event-time"
+      className="w-[74px] flex-none pt-[1px] text-right font-mono text-[10.5px] text-text-3"
+    >
       {ts.slice(11, 19)}
     </time>
+  )
+}
+
+/** The 28px gutter and its 7px tone dot — the row's half of the x=88 rule. */
+function EventDot({ type }: { readonly type: string }): ReactElement {
+  const tone = toneForEventType(type)
+  return (
+    <span data-testid="event-gutter" className="flex w-[28px] flex-none justify-center pt-[4px]">
+      <span
+        data-testid="event-dot"
+        data-tone={tone}
+        aria-hidden
+        className={`h-[7px] w-[7px] rounded-full ${TONE_DOT[tone]} ${TONE_DOT_GLOW[tone]}`}
+      />
+    </span>
   )
 }
 
@@ -49,17 +118,21 @@ function AgentLink({
   workspaceId,
   agentId,
   agentName,
+  tone,
 }: {
   readonly workspaceId: string
   readonly agentId: string | null
   readonly agentName: string | null
+  /** The row's own dot tone, so "who" and its dot read as one statement (the mock paints both
+   *  from the same `e.color`). */
+  readonly tone: StatusTone
 }): ReactElement | null {
   if (agentId === null) return null
   return (
     <Link
       href={`/w/${workspaceId}?agent=${agentId}`}
       data-testid="agent-link"
-      className="text-xs text-text-2 hover:text-text-1 hover:underline"
+      className={`text-[12px] font-semibold hover:underline ${TONE_TEXT[tone]}`}
     >
       {agentName ?? agentId}
     </Link>
@@ -81,7 +154,7 @@ function TaskLink({
     <Link
       href={`/w/${workspaceId}/tasks?task=${taskId}`}
       data-testid="task-link"
-      className="text-xs text-text-2 hover:text-text-1 hover:underline"
+      className="hover:text-text-2 hover:underline"
     >
       {taskTitle ?? taskId}
     </Link>
@@ -94,11 +167,14 @@ function TaskLink({
 function PayloadDetails({ payload }: { readonly payload: Record<string, unknown> }): ReactElement {
   return (
     <details className="group">
+      {/* Design README "Event rows disclose payload on click (`▸ PAYLOAD` → `▾`)". `list-none`
+        * removes the browser's own disclosure triangle so the handoff's glyph is the only one. */}
       <summary
         data-testid="payload-toggle"
-        className="cursor-pointer text-[10px] uppercase tracking-wide text-text-3 group-open:text-text-2"
+        className="mt-[2px] cursor-pointer list-none text-[10px] uppercase tracking-wide text-text-3 group-open:text-text-2"
       >
-        payload
+        <span aria-hidden className="group-open:hidden">▸</span>
+        <span aria-hidden className="hidden group-open:inline">▾</span> payload
       </summary>
       <pre
         data-testid="payload-json"
@@ -111,36 +187,65 @@ function PayloadDetails({ payload }: { readonly payload: Record<string, unknown>
 }
 
 /**
- * The shared shell every card in `cards.tsx` wraps its body with: time, actor badge, agent/task
- * links, and the collapsible raw-payload `<details>`. Card bodies specialise only the middle
- * `children` slot — none of them re-implement the primitives above.
+ * The shared shell every card in `cards.tsx` wraps its body with — the design README's "1c" river
+ * row, not a card: `74px right-aligned mono timestamp · 28px dot gutter (7px dot, 0 0 9px glow) ·
+ * who + event kind + text · ref`. Card bodies specialise only the middle `children` slot; none of
+ * them re-implements the primitives above, and none of them had to change for this layout.
+ *
+ * The bordered `rounded-card` surface this used to draw is gone on purpose: the mock's stream
+ * (`AI Team OS Mockups.dc.html:858`) is a river of flush rows against the page, and thirty card
+ * borders stacked vertically is exactly what the vertical rule replaces.
  */
 export function ActivityCard({
   event,
   workspaceId,
   agentName,
   taskTitle,
+  dimmed,
   children,
 }: ActivityCardProps & { readonly children: ReactNode }): ReactElement {
+  const tone = toneForEventType(event.type)
   return (
-    // `ui/Card.tsx`'s surface tokens (`bg-bg-2`, `rounded-card`), not the literal component: `Card`
-    // renders its own `<div>`/`<button>` with a fixed `data-testid="card"` and no `data-event-type`
-    // passthrough, and `activity-page.test.tsx` asserts both this row's `activity-card` test-id and
-    // its `data-event-type` directly on the element. Same judgment `AgentCard.tsx` documents for
-    // its own `<article>`.
     <article
       data-testid="activity-card"
       data-event-type={event.type}
-      className="flex flex-col gap-1.5 rounded-card border border-line bg-bg-2 p-3"
+      // Dimmed, never hidden (design README "Filtering"): the river keeps its shape and its
+      // timestamps stay comparable, which a filtered-out row would destroy.
+      className={`flex items-start py-[6px] pr-[18px] transition-opacity ${dimmed ? 'opacity-[.35]' : ''}`}
     >
-      <header className="flex flex-wrap items-center gap-2">
-        <EventTime ts={event.ts} />
-        <ActorBadge actor={event.actor} />
-        <AgentLink workspaceId={workspaceId} agentId={event.agentId} agentName={agentName} />
-        <TaskLink workspaceId={workspaceId} taskId={event.taskId} taskTitle={taskTitle} />
-      </header>
-      <div className="text-sm text-text-1">{children}</div>
-      <PayloadDetails payload={event.payload} />
+      <EventTime ts={event.ts} />
+      <EventDot type={event.type} />
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-baseline gap-2">
+          {/* "who": the agent when the event names one (still a link to its Overview panel), the
+            * envelope's bare actor otherwise. Tone-coloured at 12px/600, as the mock's own
+            * `e.who` is. */}
+          {event.agentId === null ? (
+            <span data-testid="event-who" className={`text-[12px] font-semibold ${TONE_TEXT[tone]}`}>
+              {agentName ?? event.actor}
+            </span>
+          ) : (
+            <AgentLink workspaceId={workspaceId} agentId={event.agentId} agentName={agentName} tone={tone} />
+          )}
+          <ActorBadge actor={event.actor} />
+          {/* "event kind": the dotted type itself, mono 9.5px — the mock's `e.kind`. */}
+          <span data-testid="event-kind" className="font-mono text-[9.5px] text-text-3">
+            {event.type}
+          </span>
+        </div>
+        <div className="mt-[1px] text-[12px] text-[#c8cfda]">{children}</div>
+        <PayloadDetails payload={event.payload} />
+      </div>
+      {/* "ref": the task this row belongs to, or the unknown mark when it belongs to none. */}
+      {/* A flex item, so `truncate` blockifies and actually clips: a long task title must not
+        * push the row's own right edge out and destroy the river's alignment. */}
+      <span data-testid="event-ref" className="max-w-[140px] flex-none truncate pt-[3px] font-mono text-[9.5px] text-text-3">
+        {event.taskId === null ? (
+          '—'
+        ) : (
+          <TaskLink workspaceId={workspaceId} taskId={event.taskId} taskTitle={taskTitle} />
+        )}
+      </span>
     </article>
   )
 }

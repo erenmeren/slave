@@ -622,10 +622,15 @@ describe('shell facts reach the sidebar across the layout\u2019s sibling boundar
 
   const live = (): FakeShellEventSource[] => FakeShellEventSource.instances.filter((source) => !source.closed)
 
+  /** The sidebar's fallback is a one-shot `fetch` as of M14 Task 12, so the tests below assert on
+   *  the stub itself rather than on a stream instance. */
+  let shellFetch: ReturnType<typeof vi.fn>
+
   beforeEach((): void => {
     FakeShellEventSource.instances = []
     vi.stubGlobal('EventSource', FakeShellEventSource as unknown as typeof EventSource)
-    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 200 })))
+    shellFetch = vi.fn(async () => new Response('{}', { status: 200 }))
+    vi.stubGlobal('fetch', shellFetch)
   })
 
   afterEach((): void => {
@@ -646,25 +651,28 @@ describe('shell facts reach the sidebar across the layout\u2019s sibling boundar
     expect(screen.getByTestId('guardrail-attempts').textContent).toBe('3')
   })
 
-  it('falls back to its own stream once the publishing page unmounts', () => {
+  it('falls back to a ONE-SHOT fetch, never a second stream, once the publishing page unmounts', () => {
     const { rerender } = render(shell(true))
     expect(live()).toHaveLength(1)
 
     rerender(shell(false))
 
-    // The page retracted on unmount, so the store holds nothing for `w1` and the sidebar goes
-    // back to fetching for itself — every figure at the unknown mark until its first snapshot.
-    expect(live()).toHaveLength(1)
-    expect(live()[0]?.url).toBe('/api/w/w1/events')
+    // The page retracted on unmount, so the store holds nothing for `w1` and the sidebar reads
+    // the shell endpoint for itself — every figure at the unknown mark until that lands. As of
+    // M14 Task 12 that fallback is a single `fetch`, NOT an `EventSource`: the page's stream was
+    // the only one on screen, and it went away with the page.
+    expect(live()).toHaveLength(0)
+    expect(shellFetch).toHaveBeenCalledWith('/api/w/w1/shell')
     expect(screen.getByTestId('nav-badge-Agents').textContent).toBe('\u2014')
     expect(screen.getByTestId('guardrail-budget').textContent).toBe('\u2014')
   })
 
-  it('opens its own stream on a page that publishes nothing', () => {
+  it('opens no stream at all on a page that publishes nothing — one fetch of the shell endpoint', () => {
     render(<Sidebar />)
-    // The M14 Task 3 behaviour, unchanged where nothing publishes (Tasks/Graph/Activity, until
-    // Tasks 10-12 land): one stream, and the unknown mark until the first snapshot.
-    expect(live()).toHaveLength(1)
+    // The M14 Task 12 behaviour: every workspace route now publishes, so the sidebar's fallback
+    // exists only for a route that somehow does not — and it is a single request, not a stream.
+    expect(live()).toHaveLength(0)
+    expect(shellFetch).toHaveBeenCalledWith('/api/w/w1/shell')
     expect(screen.getByTestId('nav-badge-Agents').textContent).toBe('\u2014')
   })
 })

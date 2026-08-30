@@ -6,7 +6,6 @@ import { usePathname } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import { useProjectName } from '../hooks/useProjectName'
 import { useShellFacts } from '../hooks/useShellFacts'
-import { useWorkspaceStream } from '../hooks/useWorkspaceStream'
 import type { ShellFacts } from '../server/shell'
 
 /** The nine rows of the handoff's 3a shell, in its own order (design README §3a): Overview ·
@@ -138,18 +137,24 @@ function GuardrailRow({
  * than one component with a conditional hook (controller ruling carried from M14 Task 3):
  *
  * - a page that already streams this workspace PUBLISHES them (`hooks/useShellFacts.ts`), and no
- *   second `EventSource` is opened at all;
- * - anywhere else — `/w/:id/tasks`, `/graph`, `/activity`, until Tasks 10-12 publish theirs —
- *   it rides the workspace's SSE stream itself, exactly as it has since Task 3.
+ *   second connection is opened at all. As of M14 Task 12 all four workspace pages do this
+ *   (Overview, Tasks, Graph, Activity), which is every `/w/:id/...` route there is;
+ * - anywhere else, it reads `/api/w/:id/shell` ONCE and shows what comes back.
+ *
+ * That second path is deliberately a one-shot `fetch` and NOT a stream. Until Task 12 it was its
+ * own `EventSource`, which is what the publish mechanism existed to displace; leaving a live
+ * fallback in place would keep the duplicate-connection failure mode alive for any future route
+ * that forgets to publish, silently. A route that wants live figures publishes them — that is the
+ * contract — and the fetch is only here so a page that does not still shows real numbers instead
+ * of four dashes forever.
  *
  * The one-render `mayFallBack` gate is what makes "only when nobody publishes" true at MOUNT as
  * well as in steady state. `layout.tsx` renders `<Sidebar />` before `{children}`, so this
  * component's effects run before the page's publish effect in the same commit; without the gate
- * the sidebar would open a stream and close it a beat later on every page that does publish,
- * which is the duplicate connection this exists to remove. Both updates land in one batched
- * re-render, so the fallback mounts only where the publish never came — and until it does the
- * rows render exactly what they rendered before: the unknown mark, which is what the streaming
- * path shows until its first snapshot anyway.
+ * the sidebar would fire a request and discard it a beat later on every page that does publish,
+ * which is the duplicate work this exists to remove. Both updates land in one batched re-render,
+ * so the fallback mounts only where the publish never came — and until its response lands the
+ * rows render exactly what they rendered before: the unknown mark.
  *
  * Returns a FRAGMENT, not a wrapper: its two blocks are direct flex children of `<nav>` so the
  * guardrail block's `mt-auto` has the sidebar's own free space to absorb, and its `order-last`
@@ -169,24 +174,44 @@ export function ProjectNav({
 
   if (published !== null) return <ProjectNavRows workspaceId={workspaceId} pathname={pathname} facts={published} />
   if (!mayFallBack) return <ProjectNavRows workspaceId={workspaceId} pathname={pathname} facts={null} />
-  return <StreamingProjectNav workspaceId={workspaceId} pathname={pathname} />
+  return <FetchingProjectNav workspaceId={workspaceId} pathname={pathname} />
 }
 
-/** The fallback path: its own stream, `initial: null` because the root layout has no snapshot to
- *  hand it. Until the first refetch lands, every figure reads `—`. */
-function StreamingProjectNav({
+/**
+ * The fallback path: ONE `fetch` of `/api/w/:id/shell` per workspace, never a stream (M14 Task 12
+ * ruling — see `ProjectNav`'s doc comment). Until it resolves, every figure reads `—`, exactly as
+ * before. A failed or non-200 response leaves the figures at `—` rather than throwing: these are
+ * decorations on a nav, and there is no sensible way for a sidebar to report its own fetch error.
+ */
+function FetchingProjectNav({
   workspaceId,
   pathname,
 }: {
   readonly workspaceId: string
   readonly pathname: string
 }): React.JSX.Element {
-  const { snapshot } = useWorkspaceStream<ShellFacts | null>({
-    workspaceId,
-    endpoint: `/api/w/${workspaceId}/shell`,
-    initial: null,
-  })
-  return <ProjectNavRows workspaceId={workspaceId} pathname={pathname} facts={snapshot} />
+  const [facts, setFacts] = useState<ShellFacts | null>(null)
+
+  useEffect((): (() => void) => {
+    // Guards against a late response landing after this component has moved to another workspace
+    // (or unmounted entirely) and overwriting the newer one's figures.
+    let cancelled = false
+    void (async (): Promise<void> => {
+      try {
+        const response = await fetch(`/api/w/${workspaceId}/shell`)
+        if (!response.ok) return
+        const body = (await response.json()) as ShellFacts
+        if (!cancelled) setFacts(body)
+      } catch {
+        // Left at `—`.
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [workspaceId])
+
+  return <ProjectNavRows workspaceId={workspaceId} pathname={pathname} facts={facts} />
 }
 
 /** The rows themselves — no hooks, no fetching, so both paths above render exactly the same

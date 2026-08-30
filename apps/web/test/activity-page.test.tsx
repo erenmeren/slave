@@ -3,6 +3,7 @@ import type { ReactElement } from 'react'
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { DomainEventType } from '@ai-team-os/db'
+import { Sidebar } from '../src/components/Sidebar.js'
 import type { ActivityEventRow, ActivityPage } from '../src/server/activity.js'
 
 // ---- jsdom element-size mocks -----------------------------------------------------------------
@@ -106,6 +107,33 @@ const INITIAL: ActivityPage = {
   sparkline: [0, 0, 0, 0, 0, 0, 0, 0, 0, 3],
   agents: [{ id: 'a1', name: 'Alex' }],
   tasks: [{ id: 't1', title: 'Add the thing' }],
+  // M14 Task 12 widenings. `typeVolumes` feeds the right rail's 24h volume bars; `shellFacts`
+  // is what this page PUBLISHES to `hooks/useShellFacts.ts` so the sidebar opens no stream of
+  // its own (the same member `TasksSnapshot`/`GraphView` already carry).
+  typeVolumes: [],
+  shellFacts: {
+    workspace: { id: 'w1', name: 'Checkout Platform' },
+    counts: { agentsWorking: 3, tasksActive: 12 },
+    guardrails: { budgetUsd: 20, maxConcurrentRuns: 3, runTimeoutMs: 1_800_000, maxAttempts: 3 },
+  },
+}
+
+/** `INITIAL` with a few members swapped — the river tests below vary one field at a time. */
+function page(overrides: Partial<ActivityPage> = {}): ActivityPage {
+  return { ...INITIAL, ...overrides }
+}
+
+/** Minimal `EventSource` stand-in (`shell.test.tsx`'s precedent). Only the Sidebar-coexistence
+ *  test below needs it: nothing else in this file streams — `useActivityStream` is mocked. */
+class FakeEventSource {
+  static instances: FakeEventSource[] = []
+  onmessage: ((event: { data: string }) => void) | null = null
+  onerror: (() => void) | null = null
+  onopen: (() => void) | null = null
+  constructor(public url: string) {
+    FakeEventSource.instances.push(this)
+  }
+  close(): void {}
 }
 
 /** Sets scroll geometry on an already-rendered element and fires a `scroll` event, the same
@@ -140,6 +168,8 @@ describe('ActivityClient', () => {
 
   afterEach(() => {
     vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+    FakeEventSource.instances = []
   })
 
   it('renders the seed events through their per-type cards, newest at the bottom', () => {
@@ -362,13 +392,13 @@ describe('ActivityClient', () => {
 
   // ---- Task 10: motion pass (spec §4.6) ----------------------------------------------------
 
-  it('a newly arrived row (seq above the live boundary at mount) carries the action-line-in entry class; rows already on screen at mount do not', () => {
+  it('a newly arrived row (seq above the live boundary at mount) carries the rise entry class; rows already on screen at mount do not', () => {
     const { rerender } = render(<ActivityClient workspaceId="w1" initial={INITIAL} />)
 
     // The three seed rows (seq 1,2,3) were already on screen at mount — none of them is "new".
     let rows = screen.getAllByTestId('timeline-row')
     expect(rows).toHaveLength(3)
-    for (const r of rows) expect(r.className).not.toContain('action-line-in')
+    for (const r of rows) expect(r.className).not.toContain('animate-[rise')
 
     // A genuine live arrival lands above the mount-time live boundary (seq 3) — its wrapper is a
     // fresh DOM node keyed by its own seq, so the entry class is present from its very first
@@ -378,12 +408,12 @@ describe('ActivityClient', () => {
 
     rows = screen.getAllByTestId('timeline-row')
     expect(rows).toHaveLength(4)
-    expect(rows[3]?.className).toContain('motion-safe:animate-[action-line-in_120ms_ease-out]')
+    expect(rows[3]?.className).toContain('motion-safe:animate-[rise_0.3s_ease-out]')
     // The three previously-mounted rows keep their identity (same key = same DOM node) — they
     // never gain the class retroactively.
-    expect(rows[0]?.className).not.toContain('action-line-in')
-    expect(rows[1]?.className).not.toContain('action-line-in')
-    expect(rows[2]?.className).not.toContain('action-line-in')
+    expect(rows[0]?.className).not.toContain('animate-[rise')
+    expect(rows[1]?.className).not.toContain('animate-[rise')
+    expect(rows[2]?.className).not.toContain('animate-[rise')
   })
 
   it('rows loaded via loadOlder (prepended history) do NOT carry the entry animation class', () => {
@@ -396,8 +426,8 @@ describe('ActivityClient', () => {
 
     const rows = screen.getAllByTestId('timeline-row')
     expect(rows).toHaveLength(5)
-    expect(rows[0]?.className).not.toContain('action-line-in') // seq -1
-    expect(rows[1]?.className).not.toContain('action-line-in') // seq 0
+    expect(rows[0]?.className).not.toContain('animate-[rise') // seq -1
+    expect(rows[1]?.className).not.toContain('animate-[rise') // seq 0
   })
 
   it('the "new events" badge carries a motion-safe fade-in class', () => {
@@ -433,7 +463,7 @@ describe('ActivityClient', () => {
     // filter change, not a stray replay. None should animate: this reload reads as mount-equivalent.
     let rows = screen.getAllByTestId('timeline-row')
     expect(rows).toHaveLength(3)
-    for (const r of rows) expect(r.className).not.toContain('action-line-in')
+    for (const r of rows) expect(r.className).not.toContain('animate-[rise')
 
     // A genuine live arrival AFTER the switch must still animate — the boundary must have been
     // reseeded to the reloaded page's own newest seq (12), not left unset/stuck at its old value.
@@ -441,8 +471,113 @@ describe('ActivityClient', () => {
     rerender(<ActivityClient workspaceId="w1" initial={INITIAL} />)
     rows = screen.getAllByTestId('timeline-row')
     expect(rows).toHaveLength(4)
-    expect(rows[3]?.className).toContain('motion-safe:animate-[action-line-in_120ms_ease-out]')
-    expect(rows[0]?.className).not.toContain('action-line-in')
+    expect(rows[3]?.className).toContain('motion-safe:animate-[rise_0.3s_ease-out]')
+    expect(rows[0]?.className).not.toContain('animate-[rise')
+  })
+
+  // ---- M14 Task 12: the river, its rule, the right rail and the roster filter --------------
+
+  it('draws the vertical rule at exactly x=88 with the teal→indigo gradient', () => {
+    render(<ActivityClient workspaceId="w1" initial={page({})} />)
+    const rule = screen.getByTestId('timeline-rule')
+    // Inline style, which jsdom reports exactly. The gate re-reads `left` from computed style.
+    expect(rule.style.left).toBe('88px')
+    expect(rule.className).toContain(
+      'bg-[linear-gradient(180deg,transparent,rgba(46,230,207,.28),rgba(123,140,255,.18),transparent)]',
+    )
+  })
+
+  it('gives the scroll viewport no left padding, so the 74+28px row gutter really does put the dot on the rule', () => {
+    render(<ActivityClient workspaceId="w1" initial={page({})} />)
+    const viewport = screen.getByTestId('timeline-viewport')
+    expect(viewport.className).not.toContain('p-3')
+    expect(viewport.className).toContain('pt-3')
+  })
+
+  it('renders a volume bar per event kind, widest first, and nothing for a quiet window', () => {
+    const { rerender } = render(
+      <ActivityClient
+        workspaceId="w1"
+        initial={page({
+          typeVolumes: [
+            { prefix: 'task.*', count: 34 },
+            { prefix: 'run.*', count: 12 },
+          ],
+        })}
+      />,
+    )
+    const bars = screen.getAllByTestId('volume-bar')
+    expect(bars.map((b) => b.getAttribute('data-prefix'))).toEqual(['task.*', 'run.*'])
+    // Normalized to the largest: the widest bar is always 100%.
+    expect(screen.getAllByTestId('volume-fill')[0]?.style.width).toBe('100%')
+    expect(screen.getAllByTestId('volume-fill')[1]?.style.width).toBe('35%')
+
+    rerender(<ActivityClient workspaceId="w1" initial={page({ typeVolumes: [] })} />)
+    expect(screen.queryAllByTestId('volume-bar')).toHaveLength(0)
+  })
+
+  it('filtering to a roster row dims every card that is not that agent', () => {
+    render(
+      <ActivityClient
+        workspaceId="w1"
+        initial={page({
+          agents: [
+            { id: 'a1', name: 'Alex' },
+            { id: 'a2', name: 'Bea' },
+          ],
+        })}
+      />,
+    )
+    fireEvent.click(screen.getByTestId('roster-row-a1'))
+    const cards = screen.getAllByTestId('activity-card')
+    expect(cards.some((c) => c.className.includes('opacity-[.35]'))).toBe(true)
+  })
+
+  it('clicking the selected roster row again clears the filter, undimming every card', () => {
+    streamState.events = [row(1, { agentId: 'a1' }), row(2, { agentId: 'a2' })]
+    render(
+      <ActivityClient
+        workspaceId="w1"
+        initial={page({
+          agents: [
+            { id: 'a1', name: 'Alex' },
+            { id: 'a2', name: 'Bea' },
+          ],
+        })}
+      />,
+    )
+    fireEvent.click(screen.getByTestId('roster-row-a1'))
+    expect(screen.getByTestId('roster-row-a1').getAttribute('aria-pressed')).toBe('true')
+    // Only the OTHER agent's row dims — the selected agent's own row stays at full opacity.
+    expect(screen.getAllByTestId('activity-card').filter((c) => c.className.includes('opacity-[.35]'))).toHaveLength(1)
+
+    fireEvent.click(screen.getByTestId('roster-row-a1'))
+    expect(screen.getByTestId('roster-row-a1').getAttribute('aria-pressed')).toBe('false')
+    expect(screen.getAllByTestId('activity-card').filter((c) => c.className.includes('opacity-[.35]'))).toHaveLength(0)
+  })
+
+  it('publishes its shell facts, so the global Sidebar opens no EventSource of its own while the page is mounted', () => {
+    // The Task 3/8 ruling, closed out here: Activity is the last of the four workspace pages, so
+    // the sidebar's standalone fallback stream is gone. Nothing streams beside this page.
+    vi.stubGlobal('EventSource', FakeEventSource as unknown as typeof EventSource)
+    const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(
+      <>
+        {/* The root layout's order: `<Sidebar />` before `{children}`, which is what the
+          * one-render `mayFallBack` gate in `ProjectNav` exists to survive. */}
+        <Sidebar workspaceId="w1" />
+        <ActivityClient workspaceId="w1" initial={page({})} />
+      </>,
+    )
+
+    expect(FakeEventSource.instances).toHaveLength(0)
+    expect(fetchMock).not.toHaveBeenCalled()
+    // And the badges come from the publication, not from a fetch.
+    expect(screen.getByTestId('nav-badge-Tasks').textContent).toBe('12')
+    expect(screen.getByTestId('nav-badge-Agents').textContent).toBe('3')
+    expect(screen.getByTestId('guardrail-budget').textContent).toBe('$20.00')
   })
 })
 
