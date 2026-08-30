@@ -1,5 +1,6 @@
 import { prisma } from '@ai-team-os/db/client'
 import { NON_TERMINAL_RUN_STATUSES, type RunStatus, type TaskStatus } from '@ai-team-os/domain'
+import { buildShellFacts, type ShellFacts } from './shell'
 
 export interface TaskRunSummary {
   readonly id: string
@@ -29,20 +30,30 @@ export interface TaskBoardItem {
 export interface TasksSnapshot {
   readonly workspace: { readonly id: string; readonly name: string; readonly haltedReason: string | null }
   readonly tasks: readonly TaskBoardItem[]
+  /**
+   * The same counts/guardrails the global shell's `<Sidebar>` shows (M14 Task 8/10 controller
+   * ruling): this route already streams the workspace `/w/:id/tasks` mounts, so `TasksClient`
+   * publishes this to `hooks/useShellFacts.ts` on every snapshot rather than the sidebar opening
+   * a second `EventSource` against `/api/w/:id/shell` for the same workspace.
+   */
+  readonly shellFacts: ShellFacts
 }
 
 export async function buildTasksSnapshot(workspaceId: string): Promise<TasksSnapshot | null> {
-  const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId } })
-  if (workspace === null) return null
-
-  const tasks = await prisma.task.findMany({
-    where: { workspaceId },
-    orderBy: [{ priority: 'desc' }, { createdAt: 'asc' }],
-    include: { runs: { orderBy: { startedAt: 'desc' }, include: { checkpoint: true, agent: true } } },
-  })
+  const [workspace, tasks, shellFacts] = await Promise.all([
+    prisma.workspace.findUnique({ where: { id: workspaceId } }),
+    prisma.task.findMany({
+      where: { workspaceId },
+      orderBy: [{ priority: 'desc' }, { createdAt: 'asc' }],
+      include: { runs: { orderBy: { startedAt: 'desc' }, include: { checkpoint: true, agent: true } } },
+    }),
+    buildShellFacts(workspaceId),
+  ])
+  if (workspace === null || shellFacts === null) return null
 
   return {
     workspace: { id: workspace.id, name: workspace.name, haltedReason: workspace.haltedReason },
+    shellFacts,
     tasks: tasks.map((task) => {
       const liveRun = task.runs.find((run) => (NON_TERMINAL_RUN_STATUSES as readonly string[]).includes(run.status))
       return {

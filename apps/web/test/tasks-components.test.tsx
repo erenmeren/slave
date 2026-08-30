@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { BOARD_COLUMNS } from '../src/lib/taskColumns.js'
 import { TaskCard } from '../src/components/TaskCard.js'
 import { TaskColumn } from '../src/components/TaskColumn.js'
 import { TaskDetailPanel } from '../src/components/TaskDetailPanel.js'
@@ -13,18 +14,13 @@ vi.mock('next/navigation', () => ({
   useSearchParams: () => new URLSearchParams(),
 }))
 
-// The board's fixed, spec-mandated column order (design doc §5) — a deliberate literal here
-// since `@ai-team-os/domain` exports the wider 12-value `TaskStatus` type but no ordered
-// constant matching this narrower 8-column board.
-const BOARD_COLUMNS = ['backlog', 'ready', 'running', 'verifying', 'reviewing', 'blocked', 'done', 'failed'] as const
-
 const task = (over: Partial<TaskBoardItem>): TaskBoardItem => ({
   id: 't1',
   title: 'Add the thing',
   description: 'Add the thing to the app',
   status: 'running',
   priority: 1,
-  attempt: 2,
+  attempt: 1,
   maxAttempts: 3,
   assigneeName: 'Alex',
   branch: 'feature/add-the-thing',
@@ -35,15 +31,42 @@ const task = (over: Partial<TaskBoardItem>): TaskBoardItem => ({
 
 const snapshot = (tasks: readonly TaskBoardItem[]): TasksSnapshot => ({
   workspace: { id: 'w1', name: 'W', haltedReason: null },
+  shellFacts: {
+    workspace: { id: 'w1', name: 'W' },
+    counts: { agentsWorking: 0, tasksActive: 0 },
+    guardrails: { budgetUsd: 20, maxConcurrentRuns: 3, runTimeoutMs: 3_600_000, maxAttempts: 3 },
+  },
   tasks,
 })
 
+// `TasksClient` (via `useTasks`/`useWorkspaceStream`) opens a real `EventSource` and fetches on
+// open; neither exists/should run for real under jsdom, so both are stubbed file-wide — every
+// describe below that renders `<TasksClient>` shares this one stub rather than repeating it.
+class FakeEventSource {
+  onmessage: ((event: { data: string }) => void) | null = null
+  onerror: (() => void) | null = null
+  onopen: (() => void) | null = null
+  close(): void {}
+}
+
+beforeEach(() => {
+  vi.stubGlobal('EventSource', FakeEventSource as unknown as typeof EventSource)
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => new Response(JSON.stringify(snapshot([])), { status: 200 })),
+  )
+})
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
+
 describe('TaskColumn', () => {
-  it('renders all eight columns in the spec order, empty ones included', () => {
+  it('renders the six columns in the README order, empty ones included', () => {
     render(
       <div>
-        {BOARD_COLUMNS.map((status) => (
-          <TaskColumn key={status} status={status} tasks={[]} onSelect={() => {}} />
+        {BOARD_COLUMNS.map((column) => (
+          <TaskColumn key={column} column={column} tasks={[]} onSelect={() => {}} />
         ))}
       </div>,
     )
@@ -53,21 +76,15 @@ describe('TaskColumn', () => {
 })
 
 describe('TaskCard', () => {
-  it('shows the title, attempt/maxAttempts, and assignee when present', () => {
-    render(<TaskCard task={task({})} onSelect={() => {}} />)
+  it('shows the title and the attempt/maxAttempts step counter', () => {
+    render(<TaskCard task={task({ attempt: 2 })} onSelect={() => {}} />)
     expect(screen.getByText('Add the thing')).toBeTruthy()
-    expect(screen.getByTestId('attempt').textContent).toBe('2/3')
-    expect(screen.getByTestId('assignee').textContent).toBe('Alex')
+    expect(screen.getByTestId('task-step').textContent).toBe('2/3')
   })
 
-  it('omits the assignee when there is none', () => {
-    render(<TaskCard task={task({ assigneeName: null })} onSelect={() => {}} />)
-    expect(screen.queryByTestId('assignee')).toBeNull()
-  })
-
-  it("shows the task's priority", () => {
-    render(<TaskCard task={task({ priority: 7 })} onSelect={() => {}} />)
-    expect(screen.getByTestId('priority').textContent).toContain('7')
+  it("shows the task's priority as a word chip", () => {
+    render(<TaskCard task={task({ priority: 9 })} onSelect={() => {}} />)
+    expect(screen.getByTestId('task-priority').textContent).toBe('URGENT')
   })
 
   it('calls onSelect with the task id when clicked', () => {
@@ -145,29 +162,7 @@ describe('TaskDetailPanel', () => {
 })
 
 describe('TasksClient', () => {
-  // useTasks (via useWorkspaceStream) opens a real EventSource and fetches on open; neither
-  // exists/should run for real under jsdom, so both are stubbed to a no-op minimal stand-in —
-  // same shape as useTasks.test.tsx's FakeEventSource.
-  class FakeEventSource {
-    onmessage: ((event: { data: string }) => void) | null = null
-    onerror: (() => void) | null = null
-    onopen: (() => void) | null = null
-    close(): void {}
-  }
-
-  beforeEach(() => {
-    vi.stubGlobal('EventSource', FakeEventSource as unknown as typeof EventSource)
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => new Response(JSON.stringify(snapshot([])), { status: 200 })),
-    )
-  })
-
-  afterEach(() => {
-    vi.unstubAllGlobals()
-  })
-
-  it('renders all eight columns in order, empty ones included', () => {
+  it('renders all six columns in order, empty ones included', () => {
     render(<TasksClient workspaceId="w1" initial={snapshot([task({})])} />)
     const headings = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)
     expect(headings).toEqual(BOARD_COLUMNS)
@@ -184,10 +179,49 @@ describe('TasksClient', () => {
     expect(screen.queryByText('The full description')).toBeNull()
   })
 
-  it('buckets an off-column status (rework) into its board column while the card still reads the true status', () => {
+  it('buckets an off-column status (rework) into the Todo column while the card still carries the true status', () => {
     render(<TasksClient workspaceId="w1" initial={snapshot([task({ id: 't1', status: 'rework' })])} />)
-    const readyColumn = screen.getByTestId('column-ready')
-    expect(within(readyColumn).getByText('Add the thing')).toBeTruthy()
-    expect(within(readyColumn).getByTestId('status-label').textContent).toBe('rework')
+    const todoColumn = screen.getAllByTestId('column').find((c) => c.getAttribute('data-column') === 'Todo')
+    expect(todoColumn).toBeDefined()
+    const card = within(todoColumn!).getByTestId('task-card')
+    expect(card.getAttribute('data-status')).toBe('rework')
+  })
+})
+
+describe('the six-column board', () => {
+  it('renders six columns in the README order with a dot and a count each', () => {
+    render(<TasksClient workspaceId="w1" initial={snapshot([task({ status: 'running' }), task({ id: 't2', status: 'blocked' })])} />)
+    expect(screen.getAllByTestId('column').map((c) => c.getAttribute('data-column'))).toEqual([
+      'Backlog', 'Todo', 'In Progress', 'Review', 'Blocked', 'Done',
+    ])
+    expect(screen.getByTestId('column-count-In Progress').textContent).toBe('1')
+    expect(screen.getByTestId('column-count-Blocked').textContent).toBe('1')
+    expect(screen.getByTestId('column-dot-Blocked').getAttribute('data-tone')).toBe('blocked')
+  })
+
+  it('renders the compact card: mono id, priority chip, title, assignee chip, step counter', () => {
+    render(
+      <TaskCard
+        task={task({ id: '3f9a21c8-0000-4000-8000-000000000000', title: 'Implement Checkout API', priority: 3, assigneeName: 'Alex Turner', status: 'running' })}
+        onSelect={() => {}}
+      />,
+    )
+    expect(screen.getByTestId('task-ref').textContent).toBe('TASK-3f9a21c8')
+    expect(screen.getByTestId('task-priority').textContent).toBe('HIGH')
+    expect(screen.getByTestId('task-title').textContent).toBe('Implement Checkout API')
+    expect(screen.getByTestId('avatar-tile').textContent).toBe('AT')
+    expect(screen.getByTestId('task-step').textContent).toBe('1/3')
+  })
+
+  it('says unassigned rather than showing an empty avatar', () => {
+    render(<TaskCard task={task({ assigneeName: null })} onSelect={() => {}} />)
+    expect(screen.getByTestId('task-assignee').textContent).toBe('unassigned')
+    expect(screen.queryByTestId('avatar-tile')).toBeNull()
+  })
+
+  it('keeps a failed task on Done while its own pill still says failed', () => {
+    render(<TasksClient workspaceId="w1" initial={snapshot([task({ status: 'failed' })])} />)
+    expect(screen.getByTestId('column-count-Done').textContent).toBe('1')
+    expect(screen.getByTestId('status-pill').textContent).toBe('BLOCKED')
   })
 })

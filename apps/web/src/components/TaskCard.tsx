@@ -1,6 +1,9 @@
 import type { TaskStatus } from '@ai-team-os/domain'
+import { priorityChip } from '../lib/taskColumns'
+import { cardStateFor, CARD_STATE_TONE } from '../lib/tones'
 import type { TaskBoardItem } from '../server/tasks'
-import { Card } from './ui/Card'
+import { AvatarTile } from './ui/AvatarTile'
+import { StatusPill, TONE_TEXT } from './ui/StatusPill'
 
 // Reuses the M4 status vocabulary (design doc §8: "no new tokens expected") rather than minting
 // task-specific colours. Several statuses share a token deliberately — e.g. both `ready` and
@@ -73,13 +76,14 @@ export const TASK_STATUS_TEXT: Record<TaskStatus, string> = {
   cancelled: 'text-status-idle',
 }
 
-// Chip's visual recipe (`ui/Chip.tsx`: `inline-flex items-center rounded-chip border px-2 py-0.5
-// text-xs`, neutral surface `border-line bg-bg-2 text-text-2`), not the literal component — `Chip`
-// takes only `tone`/`children`, no `data-testid` passthrough, and this card's priority/assignee
-// chips must keep the `priority`/`assignee` test-ids `tasks-components.test.tsx` asserts on
-// unmodified. Same judgment Task 10 applied to `AgentCard.tsx`'s provider badge.
-const CHIP_CLASS = 'inline-flex items-center rounded-chip border border-line bg-bg-2 px-2 py-0.5 text-xs text-text-2'
-
+/**
+ * The handoff's compact card (design README §3a.3): mono id, priority chip, title, assignee
+ * chip, step counter (`attempt/maxAttempts`). Its state — and so its dot/pill tone — comes from
+ * `lib/tones.ts`'s `cardStateFor`, the ONE derivation every card in the app already goes through
+ * (Decision 2); the card has no `AgentStatus` of its own to hand it, so it passes `'idle'` and
+ * lets the task-status overrides in `cardStateFor` (`blocked`, `reviewing`/`merging` → `review`,
+ * `failed`/`cancelled` → `blocked`, `done` → `completed`) do the rest.
+ */
 export function TaskCard({
   task,
   onSelect,
@@ -87,35 +91,51 @@ export function TaskCard({
   readonly task: TaskBoardItem
   readonly onSelect: (id: string) => void
 }): React.JSX.Element {
+  const priority = priorityChip(task.priority)
+  const state = cardStateFor('idle', task.status)
+  const { tone, label, pulse } = CARD_STATE_TONE[state]
+
   return (
-    // `Card` (spec §3a compact card): outer surface only. Its own `data-testid="card"` /
-    // `data-selected` attributes are additive and asserted by no test here.
-    <Card onClick={() => onSelect(task.id)}>
-      <div className="flex items-center justify-between gap-2">
-        <span data-testid="task-id" className="font-mono text-[10px] text-text-3">
-          {task.id}
+    <button
+      type="button"
+      data-testid="task-card"
+      data-status={task.status}
+      onClick={() => onSelect(task.id)}
+      className={`flex w-full flex-col gap-1 rounded-tile border bg-[#0f1116] p-[10px] text-left transition-colors hover:border-white/[0.22] ${
+        task.status === 'blocked' ? 'border-tone-blocked/30' : 'border-line'
+      }`}
+    >
+      <span className="flex items-baseline gap-[7px]">
+        <span data-testid="task-ref" className="font-mono text-[9.5px] font-medium text-text-3">
+          TASK-{task.id.slice(0, 8)}
         </span>
-        <span data-testid="priority" className={`${CHIP_CLASS} font-mono`}>
-          p{task.priority}
+        <span data-testid="task-priority" className={`font-mono text-[9px] font-medium ${TONE_TEXT[priority.tone]}`}>
+          {priority.label}
         </span>
-      </div>
-      <div className="flex items-center gap-2">
-        <span data-testid="status-dot" className={`inline-block h-2 w-2 shrink-0 rounded-full ${TASK_STATUS_DOT[task.status]}`} />
-        <span className="text-sm text-text-1">{task.title}</span>
-      </div>
-      <div className="flex items-center gap-2 text-xs text-text-2">
-        <span data-testid="status-label" className={TASK_STATUS_TEXT[task.status]}>
-          {task.status}
+        <span className="ml-auto">
+          <StatusPill tone={tone} label={label} pulse={pulse} />
         </span>
-        <span data-testid="attempt" className="font-mono">
+      </span>
+      <span data-testid="task-title" className="text-[11.5px] leading-[1.35] text-[#dbe1ea]">
+        {task.title}
+      </span>
+      <span className="mt-[8px] flex items-center gap-[6px]">
+        {task.assigneeName === null ? (
+          <span data-testid="task-assignee" className="text-[10px] text-[#7c8697]">
+            unassigned
+          </span>
+        ) : (
+          <>
+            <AvatarTile name={task.assigneeName} tone={tone} />
+            <span data-testid="task-assignee" className="truncate text-[10px] text-[#7c8697]">
+              {task.assigneeName}
+            </span>
+          </>
+        )}
+        <span data-testid="task-step" className="ml-auto font-mono text-[9.5px] text-text-3">
           {task.attempt}/{task.maxAttempts}
         </span>
-        {task.assigneeName !== null && (
-          <span data-testid="assignee" className={`${CHIP_CLASS} ml-auto`}>
-            {task.assigneeName}
-          </span>
-        )}
-      </div>
-    </Card>
+      </span>
+    </button>
   )
 }

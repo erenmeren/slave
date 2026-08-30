@@ -6,6 +6,11 @@ import type { TasksSnapshot } from '../src/server/tasks.js'
 
 const SNAPSHOT: TasksSnapshot = {
   workspace: { id: 'w1', name: 'W', haltedReason: null },
+  shellFacts: {
+    workspace: { id: 'w1', name: 'W' },
+    counts: { agentsWorking: 0, tasksActive: 0 },
+    guardrails: { budgetUsd: 20, maxConcurrentRuns: 3, runTimeoutMs: 3_600_000, maxAttempts: 3 },
+  },
   tasks: [
     {
       id: 't1',

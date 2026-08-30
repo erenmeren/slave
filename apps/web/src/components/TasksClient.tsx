@@ -1,55 +1,16 @@
 'use client'
 
 import { useEffect } from 'react'
-import type { TaskStatus } from '@ai-team-os/domain'
+import { publishShellFacts } from '../hooks/useShellFacts'
 import { useSelectedId } from '../hooks/useSelectedId'
 import { useTasks } from '../hooks/useTasks'
 import { announceProjectName } from '../hooks/useProjectName'
+import { BOARD_COLUMNS, COLUMN_FOR_STATUS } from '../lib/taskColumns'
 import type { TasksSnapshot } from '../server/tasks'
 import { HaltBanner } from './HaltBanner'
 import { TaskColumn } from './TaskColumn'
 import { TaskDetailPanel } from './TaskDetailPanel'
 import { TopBar } from './TopBar'
-
-/** The board's eight columns, in the spec's exact order (design doc §5 — "Columns exactly the
- * eight task statuses", no ninth). */
-type BoardColumnStatus = 'backlog' | 'ready' | 'running' | 'verifying' | 'reviewing' | 'blocked' | 'done' | 'failed'
-
-// `@ai-team-os/domain` exports the wider 12-value `TaskStatus` type (it also covers `assigned`,
-// `merging`, `rework`, `cancelled`) but no ordered constant matching this narrower 8-column
-// board, so the order is a literal here.
-const BOARD_COLUMNS: readonly BoardColumnStatus[] = [
-  'backlog',
-  'ready',
-  'running',
-  'verifying',
-  'reviewing',
-  'blocked',
-  'done',
-  'failed',
-]
-
-// The four statuses outside the eight columns are live states, not dead ones (rework: a verify
-// failure with attempts remaining, or a provisioning/resume failure — orchestrator's verify.ts
-// and tick.ts). Every `TaskStatus` is bucketed onto a column here so such a task is still
-// reachable on the board; `Record<TaskStatus, BoardColumnStatus>` makes the mapping exhaustive —
-// a future `TaskStatus` addition is a compile error, not a silently-invisible task. The card
-// itself still shows the task's true status (TaskCard's own status label), so a rework task
-// visibly reads "rework" while sitting in the ready column.
-const BOARD_COLUMN_FOR_STATUS: Record<TaskStatus, BoardColumnStatus> = {
-  backlog: 'backlog',
-  ready: 'ready',
-  rework: 'ready',
-  blocked: 'blocked',
-  assigned: 'running',
-  running: 'running',
-  verifying: 'verifying',
-  reviewing: 'reviewing',
-  merging: 'reviewing',
-  done: 'done',
-  failed: 'failed',
-  cancelled: 'failed',
-}
 
 export function TasksClient({
   workspaceId,
@@ -70,6 +31,18 @@ export function TasksClient({
     announceProjectName(workspaceId, view.workspace.name)
   }, [workspaceId, view.workspace.name])
 
+  // Controller ruling carried from Task 3/8: this page already streams the workspace this
+  // snapshot's `shellFacts` describes, so it publishes them to `hooks/useShellFacts.ts` and the
+  // sidebar opens no second `EventSource` against `/api/w/:id/shell` (see `OverviewClient.tsx`
+  // for the exact idiom this mirrors).
+  useEffect((): void => {
+    publishShellFacts(workspaceId, view.shellFacts)
+  }, [workspaceId, view.shellFacts])
+  // Retraction is its OWN effect, keyed only on the workspace: folding it into the cleanup of the
+  // publish above would retract and re-publish on every snapshot, and the sidebar would flip to
+  // its fallback stream (opening a connection) between the two.
+  useEffect((): (() => void) => () => publishShellFacts(workspaceId, null), [workspaceId])
+
   return (
     <>
       <div className={`flex flex-1 flex-col ${error !== null ? 'opacity-60' : ''}`}>
@@ -87,12 +60,12 @@ export function TasksClient({
             showing stale data: {error}
           </div>
         )}
-        <main className="flex flex-1 gap-4 overflow-x-auto p-4">
-          {BOARD_COLUMNS.map((status) => (
+        <main className="grid grid-cols-6 gap-[10px] p-[16px]">
+          {BOARD_COLUMNS.map((column) => (
             <TaskColumn
-              key={status}
-              status={status}
-              tasks={view.tasks.filter((task) => BOARD_COLUMN_FOR_STATUS[task.status] === status)}
+              key={column}
+              column={column}
+              tasks={view.tasks.filter((task) => COLUMN_FOR_STATUS[task.status] === column)}
               onSelect={setSelectedId}
             />
           ))}

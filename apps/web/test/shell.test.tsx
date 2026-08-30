@@ -456,7 +456,15 @@ describe('the halt banner shows on every page', () => {
   it('TasksClient renders the reason as a role="alert" banner', () => {
     // `useTasks` (via `useWorkspaceStream`) opens a real `EventSource` and fetches on open — the
     // file-level `FakeEventSource` + `fetch` stubs cover both; this only pins the body.
-    const snapshot: TasksSnapshot = { workspace: { id: 'w1', name: 'W', haltedReason: HALT_REASON }, tasks: [] }
+    const snapshot: TasksSnapshot = {
+      workspace: { id: 'w1', name: 'W', haltedReason: HALT_REASON },
+      shellFacts: {
+        workspace: { id: 'w1', name: 'W' },
+        counts: { agentsWorking: 0, tasksActive: 0 },
+        guardrails: { budgetUsd: 20, maxConcurrentRuns: 3, runTimeoutMs: 3_600_000, maxAttempts: 3 },
+      },
+      tasks: [],
+    }
     fetchMock.mockImplementation(async () => new Response(JSON.stringify(snapshot), { status: 200 }))
 
     render(<TasksClient workspaceId="w1" initial={snapshot} />)
