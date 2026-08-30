@@ -96,18 +96,27 @@ describe('toneForStatus', () => {
 })
 
 describe('AgentsClient tabs', () => {
-  it('renders the roster tab by default and switches to the workers tab on click', () => {
+  // Re-pointed by the M14 fix wave (queue item (a) / review I3): the default tab was `roster`,
+  // and this test asserted it. The design README §3a.2 says the Agents page IS the seven-column
+  // workers table, so `workers` is the default now and Roster is the tab you click to.
+  it('renders the workers table by default and switches to the roster tab on click', () => {
     render(<AgentsClient roster={[company({})]} workers={[workerRow({})]} />)
-    expect(screen.getByTestId('roster-company')).toBeTruthy()
-
-    fireEvent.click(screen.getByTestId('agents-tab-workers'))
-
     expect(screen.queryByTestId('roster-company')).toBeNull()
     expect(screen.getByTestId('data-table')).toBeTruthy()
     // The Workers tab is the handoff's seven-column table (Task 9, C2) -- it has no Project
     // column any more, so this asserts on the Department column (the team name) it replaced it
     // with, not the `projectName` field the M11-era table used to render here.
     expect(screen.getByTestId('worker-department').textContent).toBe('Engineering')
+    expect(screen.getByTestId('agents-tab-workers').getAttribute('aria-selected')).toBe('true')
+
+    fireEvent.click(screen.getByTestId('agents-tab-roster'))
+
+    expect(screen.getByTestId('roster-company')).toBeTruthy()
+  })
+
+  it('puts Workers first in the tab row, because it is the page', () => {
+    render(<AgentsClient roster={[company({})]} workers={[workerRow({})]} />)
+    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Workers', 'Roster'])
   })
 })
 
@@ -118,6 +127,21 @@ describe('AgentsClient tabs', () => {
 // rows in its OWN internal state, never surfacing them back up. A worker materialized only after
 // the page's initial load is invisible to that stale prop, so a lookup against it is a silent
 // no-op for exactly the row an operator can see and click.
+// M14 fix wave, review I1 / Decision 4: `unmeasuredRuns` was on the row and rendered nowhere, so
+// the README's own `cost` column presented the measured part of a bill as the whole of it.
+describe('WorkersTable cost column', () => {
+  it('says how many of the agent runs were never measured, beside the cost', () => {
+    render(<WorkersTable initial={[workerRow({ agentId: 'a1', costUsd: 3.02, unmeasuredRuns: 2 })]} onOpen={() => {}} />)
+    expect(screen.getByTestId('worker-cost').textContent?.replace(/\s+/g, ' ').trim()).toBe('$3.02 · 2 unmeasured')
+  })
+
+  it('says nothing extra when every run was measured', () => {
+    render(<WorkersTable initial={[workerRow({ agentId: 'a1', costUsd: 3.02, unmeasuredRuns: 0 })]} onOpen={() => {}} />)
+    expect(screen.getByTestId('worker-cost').textContent?.replace(/\s+/g, ' ').trim()).toBe('$3.02')
+    expect(screen.queryByTestId('worker-unmeasured-a1')).toBeNull()
+  })
+})
+
 describe('AgentsClient row click opens the freshest data', () => {
   let fetchMock: ReturnType<typeof vi.fn>
 

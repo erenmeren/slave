@@ -72,7 +72,10 @@ describe('org query module', () => {
       expect(project?.companyName).toBeNull()
       expect(project?.halted).toBe(false)
       expect(project?.taskCounts).toEqual({ done: 1, total: 2, active: 1, blocked: 0 })
-      expect(project?.workerCount).toBe(0)
+      // Re-pointed by the M14 fix wave (review I4): `workerCount` counts every agent on the
+      // workspace's teams, staffed from a company or not. `seed()`'s 'Alex' is exactly such an
+      // agent, and it used to be counted as zero agents while the card drew its face.
+      expect(project?.workerCount).toBe(1)
       expect(project?.spend).toBeCloseTo(3.5)
       expect(project?.unmeasuredRuns).toBe(0)
     })
@@ -143,7 +146,7 @@ describe('org query module', () => {
       expect(project?.halted).toBe(true)
     })
 
-    it('counts only companyAgentId-linked agents toward workerCount', async (): Promise<void> => {
+    it('counts every agent on the workspace teams toward workerCount, staffed or not', async (): Promise<void> => {
       const company = await prisma.company.create({ data: { name: 'Acme Robotics' } })
       const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Eng' } })
       const template = await prisma.agentTemplate.create({ data: { name: 'Backend Engineer', role: 'backend' } })
@@ -157,8 +160,25 @@ describe('org query module', () => {
       const projects = await listProjects()
       const project = projects.find((p) => p.id === fixture.workspaceId)
 
-      // fixture.agentId ('Alex') has no companyAgentId, so only the new worker counts.
-      expect(project?.workerCount).toBe(1)
+      // Re-pointed by the M14 fix wave (review I4): fixture.agentId ('Alex') has no companyAgentId
+      // and IS an agent, so both count. Company staffing is metadata about an agent, not what
+      // makes one.
+      expect(project?.workerCount).toBe(2)
+    })
+
+    // Review I4: `projects.png` showed `AGENTS 0` directly above six avatar tiles on the same
+    // card. Both figures are on this DTO, so the disagreement is assertable here rather than
+    // only by eye -- the tile and the row must be the same count (the row is sliced to six for
+    // display; this fixture stays under that cap deliberately).
+    it('reports the same count in workerCount as it puts faces in the avatar row', async (): Promise<void> => {
+      const otherTeam = await prisma.team.create({ data: { workspaceId: fixture.workspaceId, name: 'Design' } })
+      await prisma.agent.create({ data: { teamId: otherTeam.id, name: 'Bea', role: 'design' } })
+
+      const project = (await listProjects()).find((p) => p.id === fixture.workspaceId)
+
+      expect(project?.workerCount).toBe(2)
+      expect(project?.team).toHaveLength(project?.workerCount ?? -1)
+      expect(project?.team.map((m) => m.name).sort()).toEqual(['Alex', 'Bea'])
     })
 
     it('carries the workspace goal and its workers onto every project row', async (): Promise<void> => {
@@ -377,7 +397,7 @@ describe('org query module', () => {
   })
 
   describe('listWorkers', () => {
-    it('returns only companyAgentId-linked agents, across every workspace', async (): Promise<void> => {
+    it('returns every agent across every workspace, staffed from a company or not', async (): Promise<void> => {
       const company = await prisma.company.create({ data: { name: 'Acme Robotics' } })
       const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Eng' } })
       const template = await prisma.agentTemplate.create({ data: { name: 'Backend Engineer', role: 'backend' } })
@@ -387,18 +407,32 @@ describe('org query module', () => {
       await prisma.agent.create({
         data: { teamId: fixture.teamId, name: 'Atlas (worker)', role: 'backend', companyAgentId: companyAgent.id },
       })
-      // A legacy, hand-made agent with no roster link must not appear.
+      // `seed()`'s hand-made 'Alex' has no roster link. Re-pointed by the M14 fix wave (review
+      // I4): it MUST appear -- the old filter is what rendered the Agents page as a bare header
+      // on every development database whose agents were never staffed from a company.
+      const workers = await listWorkers()
 
+      expect(workers.map((w) => w.name)).toEqual(['Alex', 'Atlas (worker)'])
+      const atlas = workers.find((w) => w.name === 'Atlas (worker)')
+      expect(atlas?.role).toBe('backend')
+      expect(atlas?.workspaceId).toBe(fixture.workspaceId)
+      expect(atlas?.projectName).toBe('Checkout Platform')
+    })
+
+    // Review I4, the ruling stated positively: an agent is an `Agent` row on a workspace's team.
+    // `department` is the team name (which every agent has); the company is optional.
+    it('lists an agent that was never staffed from a company, under its team name', async (): Promise<void> => {
       const workers = await listWorkers()
 
       expect(workers).toHaveLength(1)
-      expect(workers[0]?.name).toBe('Atlas (worker)')
-      expect(workers[0]?.role).toBe('backend')
-      expect(workers[0]?.workspaceId).toBe(fixture.workspaceId)
+      expect(workers[0]?.name).toBe('Alex')
+      expect(workers[0]?.department).toBe('Engineering')
       expect(workers[0]?.projectName).toBe('Checkout Platform')
+      expect(workers[0]?.status).toBe('idle')
     })
 
-    it('returns an empty list when no worker is roster-linked', async (): Promise<void> => {
+    it('returns an empty list only when the database holds no agents at all', async (): Promise<void> => {
+      await prisma.agent.deleteMany({})
       const workers = await listWorkers()
       expect(workers).toEqual([])
     })
@@ -419,11 +453,15 @@ describe('org query module', () => {
       })
 
       const workers = await listWorkers()
+      // Re-pointed by the M14 fix wave (review I4): `listWorkers` no longer filters to
+      // roster-linked agents, so `seed()`'s 'Alex' sorts ahead of 'Atlas (worker)' and index 0 is
+      // no longer this test's subject. Selected by name instead of by position.
+      const atlas = workers.find((w) => w.name === 'Atlas (worker)')
 
       // No run at all yet -- `provider` is null exactly as `AgentCardData.provider` is with no
       // live run: a worker's runtime is not decided until a run resolves it.
-      expect(workers[0]?.department).toBe('Engineering')
-      expect(workers[0]?.provider).toBeNull()
+      expect(atlas?.department).toBe('Engineering')
+      expect(atlas?.provider).toBeNull()
     })
 
     it('sums tokens only over runs that reported them, and says null when none did', async (): Promise<void> => {
@@ -437,8 +475,12 @@ describe('org query module', () => {
         data: { teamId: fixture.teamId, name: 'Atlas (worker)', role: 'backend', companyAgentId: companyAgent.id },
       })
 
+      // Re-pointed by the M14 fix wave (review I4), same reason as above: by name, not by index.
+      const atlasIn = (rows: readonly { name: string }[]): number =>
+        rows.findIndex((w) => w.name === 'Atlas (worker)')
+
       const before = await listWorkers()
-      expect(before[0]?.tokens).toBeNull()
+      expect(before[atlasIn(before)]?.tokens).toBeNull()
 
       // A live (non-terminal) run that reported tokens and a provider -- `provider` and `tokens`
       // both read off this one.
@@ -452,8 +494,8 @@ describe('org query module', () => {
       })
 
       const after = await listWorkers()
-      expect(after[0]?.tokens).toBe(1500)
-      expect(after[0]?.provider).toBe('claude_code')
+      expect(after[atlasIn(after)]?.tokens).toBe(1500)
+      expect(after[atlasIn(after)]?.provider).toBe('claude_code')
     })
   })
 

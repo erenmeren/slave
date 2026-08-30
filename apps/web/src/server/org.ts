@@ -46,6 +46,14 @@ export interface ProjectRow {
   readonly companyName: string | null
   readonly halted: boolean
   readonly taskCounts: { readonly done: number; readonly total: number; readonly active: number; readonly blocked: number }
+  /**
+   * How many agents this workspace has (M14 fix wave, ruling on review I4): every `Agent` row on
+   * one of its teams, staffed from a company or not. ONE definition of "agent", shared with
+   * `listWorkers` below and with the `team` avatar row on this very same DTO -- the card used to
+   * show `AGENTS 0` above six avatar tiles because the tile counted `companyAgentId != null` and
+   * the row counted team membership. Company staffing is optional metadata about an agent, never
+   * what makes one.
+   */
   readonly workerCount: number
   /** The workspace's own goal, one line -- the handoff's card description. `null` when unset, and
    *  the card then says so rather than inventing copy. */
@@ -73,7 +81,7 @@ export async function listProjects(): Promise<readonly ProjectRow[]> {
     orderBy: { name: 'asc' },
   })
 
-  const [taskGroups, spendRows, workerAgents] = await Promise.all([
+  const [taskGroups, spendRows] = await Promise.all([
     prisma.task.groupBy({ by: ['workspaceId', 'status'], _count: { _all: true } }),
     // `agent -> team -> workspaceId`, matching overview.ts's budget-bar spend source exactly: a
     // `planning` run (no Task row) still counts toward the workspace it ran under.
@@ -89,7 +97,6 @@ export async function listProjects(): Promise<readonly ProjectRow[]> {
         agent: { select: { team: { select: { workspaceId: true } } } },
       },
     }),
-    prisma.agent.findMany({ where: { companyAgentId: { not: null } }, select: { team: { select: { workspaceId: true } } } }),
   ])
 
   // Grouped first, then summed through `sumSpend` (M12 Task 9, ruling R3). The old running total
@@ -109,12 +116,6 @@ export async function listProjects(): Promise<readonly ProjectRow[]> {
     const forWorkspace = rowsByWorkspace.get(workspaceId)
     if (forWorkspace === undefined) rowsByWorkspace.set(workspaceId, [row])
     else forWorkspace.push(row)
-  }
-
-  const workerCountByWorkspace = new Map<string, number>()
-  for (const row of workerAgents) {
-    const workspaceId = row.team.workspaceId
-    workerCountByWorkspace.set(workspaceId, (workerCountByWorkspace.get(workspaceId) ?? 0) + 1)
   }
 
   // The avatar row's live status, via the SAME `deriveAgentStatus` translator every other status
@@ -150,7 +151,10 @@ export async function listProjects(): Promise<readonly ProjectRow[]> {
       active: countOf(workspace.id, [...ACTIVE_TASK_STATUSES]),
       blocked: countOf(workspace.id, ['blocked']),
     },
-    workerCount: workerCountByWorkspace.get(workspace.id) ?? 0,
+    // Counted off the SAME `workspace.teams[].agents` array the avatar row below slices, so the
+    // `AGENTS` tile and the row of faces beside it cannot disagree (review I4). No separate query:
+    // a second read is a second chance to answer the same question differently.
+    workerCount: workspace.teams.reduce((n, team) => n + team.agents.length, 0),
     // Capped at six: the handoff's avatar row is one line, and a seventh tile wraps it into
     // something that no longer reads as a team at a glance.
     team: workspace.teams
@@ -364,9 +368,20 @@ export interface WorkerRow {
   readonly unmeasuredRuns: number
 }
 
+/**
+ * Every agent, across every workspace, as the Agents page's seven-column table (design README
+ * §3a.2).
+ *
+ * NO `companyAgentId` filter (M14 fix wave, ruling on review I4): an agent is any `Agent` row on
+ * a workspace's team, and being staffed from a company roster is optional. The old
+ * `where: { companyAgentId: { not: null } }` made "worker" mean "roster-linked", which rendered
+ * the table as a bare header on any development database whose agents were created by hand --
+ * and disagreed with `listProjects`'s avatar row about how many agents a project has.
+ * `department` is the agent's TEAM name, which every agent has; `companyName` may be null, and
+ * that is not a reason to hide an agent from the page that lists agents.
+ */
 export async function listWorkers(): Promise<readonly WorkerRow[]> {
   const agents = await prisma.agent.findMany({
-    where: { companyAgentId: { not: null } },
     orderBy: { name: 'asc' },
     include: { team: { include: { workspace: true } } },
   })

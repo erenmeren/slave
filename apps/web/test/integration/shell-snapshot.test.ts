@@ -61,6 +61,25 @@ describe('buildShellFacts', () => {
     expect((await buildShellFacts(fixture.workspaceId))?.counts.agentsWorking).toBe(0)
   })
 
+  // M14 fix wave, review Minor 2: the badge says "agents working", and it counted live RUNS. One
+  // agent that happens to hold two live rows is one agent working -- otherwise the same workspace
+  // shows a different number depending on which page last published it.
+  it('counts an agent with two live runs once, because the badge counts agents', async (): Promise<void> => {
+    await prisma.agentRun.create({ data: { agentId: fixture.agentId, status: 'working' } })
+    await prisma.agentRun.create({ data: { agentId: fixture.agentId, status: 'working' } })
+
+    expect((await buildShellFacts(fixture.workspaceId))?.counts.agentsWorking).toBe(1)
+  })
+
+  it('still counts two DIFFERENT agents as two', async (): Promise<void> => {
+    const team = await prisma.team.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })
+    const second = await prisma.agent.create({ data: { teamId: team.id, name: 'Bea', role: 'qa' } })
+    await prisma.agentRun.create({ data: { agentId: fixture.agentId, status: 'working' } })
+    await prisma.agentRun.create({ data: { agentId: second.id, status: 'working' } })
+
+    expect((await buildShellFacts(fixture.workspaceId))?.counts.agentsWorking).toBe(2)
+  })
+
   it('counts a task under review and one in the merge queue as active', async (): Promise<void> => {
     for (const status of ['reviewing', 'merging', 'done'] as const) {
       await prisma.task.create({

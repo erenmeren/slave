@@ -14,7 +14,10 @@ import { deriveAgentStatus, NON_TERMINAL_RUN_STATUSES } from '@ai-team-os/domain
 export interface ShellFacts {
   readonly workspace: { readonly id: string; readonly name: string }
   readonly counts: {
-    /** Agents whose derived status is `working` — the handoff's "agents working" badge. */
+    /** Distinct AGENTS whose derived status is `working` — the handoff's "agents working" badge.
+     *  Agents, never runs: one agent with two live runs is one agent working (M14 fix wave,
+     *  review Minor 2 — the badge disagreed with Overview's per-agent strip on the same
+     *  workspace). */
     readonly agentsWorking: number
     /** Tasks in the six statuses `overview.ts` counts as active work. */
     readonly tasksActive: number
@@ -50,7 +53,12 @@ export async function buildShellFacts(workspaceId: string): Promise<ShellFacts |
 
   // `deriveAgentStatus` rather than a `status === 'working'` filter on the row: the domain owns
   // that mapping, and this badge must agree with the pill on every card that shows the same agent.
-  const agentsWorking = runs.filter((run) => deriveAgentStatus(toRunState(run)) === 'working').length
+  // Deduped by `agentId` (review Minor 2): the badge counts AGENTS, and `agentRun` can hold more
+  // than one live row for one agent, which made the same workspace's badge read differently
+  // depending on which page happened to be publishing.
+  const agentsWorking = new Set(
+    runs.filter((run) => deriveAgentStatus(toRunState(run)) === 'working').map((run) => run.agentId),
+  ).size
 
   return {
     workspace: { id: workspace.id, name: workspace.name },

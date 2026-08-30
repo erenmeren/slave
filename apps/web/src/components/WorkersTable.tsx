@@ -109,8 +109,18 @@ export function WorkersTable({
             <span data-testid="worker-tokens" className="font-mono text-[11px] text-[#7c8697]">
               {worker.tokens === null ? '—' : formatTokens(worker.tokens)}
             </span>
+            {/* The KPI tile's own idiom (M14 fix wave, review I1 / Decision 4: "a sum over
+              * unknowns says how many were unknown"). This column is the README's `cost`, and it
+              * used to print the MEASURED part of a bill as the whole of it -- `unmeasuredRuns`
+              * was already on the row, computed and thrown away. */}
             <span data-testid="worker-cost" className="font-mono text-[11px] text-text-1">
               ${worker.costUsd.toFixed(2)}
+              {worker.unmeasuredRuns > 0 && (
+                <span data-testid={`worker-unmeasured-${worker.agentId}`} className="text-text-3">
+                  {' '}
+                  · {worker.unmeasuredRuns} unmeasured
+                </span>
+              )}
             </span>
           </Row>
         )

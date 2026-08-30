@@ -36,9 +36,11 @@ export function toneForStatus(status: string): StatusTone {
   return (AGENT_STATUS_TONE as Record<string, StatusTone>)[status] ?? 'idle'
 }
 
+/** Workers first, and first in the row: the design README's Agents page (§3a.2) IS the
+ *  seven-column workers table. Roster stays a tab beside it (M14 fix wave, queue item (a)). */
 const TABS: ReadonlyArray<{ readonly id: Tab; readonly label: string }> = [
-  { id: 'roster', label: 'Roster' },
   { id: 'workers', label: 'Workers' },
+  { id: 'roster', label: 'Roster' },
 ]
 
 /** The Agents page's tabbed root (M11 Task 8): local tab state, Roster (grouped company -> team,
@@ -50,7 +52,11 @@ export function AgentsClient({
   readonly roster: readonly RosterCompany[]
   readonly workers: readonly WorkerRow[]
 }): React.JSX.Element {
-  const [tab, setTab] = useState<Tab>('roster')
+  // `'workers'`, not `'roster'` (M14 fix wave, queue item (a) / review I3): the README specifies
+  // the Agents page as the seven-column table, and the page opened on M11's roster instead. Landed
+  // only after `listWorkers` stopped filtering to roster-linked agents (review I4) -- flipping the
+  // default first would have opened the page on an empty header.
+  const [tab, setTab] = useState<Tab>('workers')
   /**
    * Fix round 1 (Important finding): the CLICKED worker's own `agentId`/`workspaceId`, captured
    * at click time from `WorkersTable`'s `onOpen(worker)` -- never re-derived by looking `workers`
