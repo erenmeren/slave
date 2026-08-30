@@ -614,8 +614,25 @@ try {
         ? { done: true, value: positions.length }
         : { done: false, detail: `${String(positions.length)} node(s) share ${String(distinct.size)} position(s)` }
     })
+    // The automatic fit must have landed BEFORE anyone clicks the control: the first M14 fix
+    // keyed the re-fit on the `nodes` prop and read the store a commit too early, and the real app
+    // opened on the pile at the origin while this gate, clicking the control by hand, saw a
+    // fitted graph and passed. Read the viewport as the page settled on its own; then click the
+    // control -- the ordinary operator affordance, and the same fit options -- and require that
+    // the click changed nothing. A control click that moves the graph is the bug reappearing.
+    const viewport = () =>
+      page.locator('.react-flow__viewport').evaluate((node) => node.style.transform).catch(() => null)
+    await delay(400)
+    const automatic = await viewport()
     await page.locator('.react-flow__controls-fitview').click().catch(() => {})
     await delay(400)
+    const clicked = await viewport()
+    if (automatic === null || automatic !== clicked) {
+      await fail(
+        `stage 2 (graph): the graph did not fit itself on layout -- viewport ${JSON.stringify(automatic)} on arrival, ${JSON.stringify(clicked)} after the fit control`,
+      )
+    }
+    console.log(`stage 2 (graph): fitted itself on layout -- viewport ${automatic}`)
   }
 
   async function capture(target) {

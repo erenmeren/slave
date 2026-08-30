@@ -6,6 +6,7 @@ import ReactFlow, {
   Controls,
   ReactFlowProvider,
   useReactFlow,
+  useStore,
   type Connection,
   type Edge,
   type EdgeTypes,
@@ -38,17 +39,31 @@ export const GRAPH_FIT_VIEW_OPTIONS: FitViewOptions = { maxZoom: 1, padding: 0.2
  * without changing the set, which is exactly the transition that needs a re-fit. Lives in its own
  * component because `useReactFlow` has to be called under `ReactFlowProvider`.
  */
-function FitOnLayout({ nodes }: { readonly nodes: readonly Node[] }): null {
+function FitOnLayout(): null {
   const { fitView } = useReactFlow()
-  const positionKey = nodes.map((node) => `${node.id}@${node.position.x},${node.position.y}`).join('|')
+  // Keyed on React Flow's OWN store, not on the `nodes` prop, and on each node's measured box as
+  // well as its position. Two things went wrong with the prop-keyed version the M14 fix wave
+  // shipped, and the real app opened on the pile at the origin every time because of them:
+  //  - `<ReactFlow>` copies the prop into its store in an effect of its own, in the same commit
+  //    as this one, so a prop-keyed fit read the PREVIOUS positions out of the store;
+  //  - the async ELK pass hands over new node objects, and React Flow drops their width/height
+  //    until it has re-measured them a frame later -- `fitView` refuses (returns `false`) while
+  //    any node is unmeasured, and a key that only watched positions never fired again.
+  // With the box in the key the re-measure is itself a change, and the fit that runs on it is the
+  // one that lands: every node positioned, every node measured.
+  const layoutKey = useStore((state) =>
+    Array.from(state.nodeInternals.values())
+      .map((node) => `${node.id}@${node.position.x},${node.position.y}:${node.width ?? 0}x${node.height ?? 0}`)
+      .join('|'),
+  )
 
   useEffect(() => {
-    if (nodes.length === 0) return
+    if (layoutKey === '') return
     fitView(GRAPH_FIT_VIEW_OPTIONS)
-    // `positionKey` is the dependency; `nodes` itself is a new array identity on every render and
-    // would re-fit continuously, fighting an operator's own pan and zoom.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [positionKey, fitView])
+    // `layoutKey` is the dependency: it changes exactly when a node lands somewhere new or gets
+    // its box, and not on the render-to-render array identity that would re-fit continuously,
+    // fighting an operator's own pan and zoom.
+  }, [layoutKey, fitView])
 
   return null
 }
@@ -139,7 +154,7 @@ export function GraphCanvas({
             * and the gate's `settleGraph()`, which clicks it -- would undo the 1x fit and land
             * back on `maxZoom: 2`. One set of fit options for every way of asking for a fit. */}
           <Controls showInteractive={false} fitViewOptions={GRAPH_FIT_VIEW_OPTIONS} />
-          <FitOnLayout nodes={nodes} />
+          <FitOnLayout />
         </ReactFlow>
       </div>
     </ReactFlowProvider>
