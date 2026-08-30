@@ -134,7 +134,11 @@ export function GraphCanvas({
             ? {}
             : { onEdgesDelete: (deleted: Edge[]) => deleted.forEach((edge) => onEdgeDelete(edge.id)) })}
         >
-          <Controls showInteractive={false} />
+          {/* The fit CONTROL takes the same options (M14 fix wave, review I7). `<Controls>` fits
+            * with React Flow's own defaults otherwise, so an operator clicking the affordance --
+            * and the gate's `settleGraph()`, which clicks it -- would undo the 1x fit and land
+            * back on `maxZoom: 2`. One set of fit options for every way of asking for a fit. */}
+          <Controls showInteractive={false} fitViewOptions={GRAPH_FIT_VIEW_OPTIONS} />
           <FitOnLayout nodes={nodes} />
         </ReactFlow>
       </div>
