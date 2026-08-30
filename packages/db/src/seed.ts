@@ -1,7 +1,8 @@
 import { prisma } from './client.js'
 import { TASK_STATUSES } from './enums.js'
+import { SEED_WORKSPACE_ID } from './seed-workspace-id.js'
 
-const WORKSPACE_ID = '00000000-0000-4000-8000-000000000001'
+export { SEED_WORKSPACE_ID }
 
 const TEAMS = ['Management', 'Engineering', 'Security', 'Product', 'Marketing'] as const
 
@@ -58,7 +59,7 @@ export async function seed(): Promise<void> {
 
   const workspace = await prisma.workspace.create({
     data: {
-      id: WORKSPACE_ID,
+      id: SEED_WORKSPACE_ID,
       name: 'Checkout Platform',
       repoPath: '/tmp/checkout-platform',
       verifyCommands: ['npm run build', 'npm test'],
