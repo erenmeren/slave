@@ -40,9 +40,12 @@ import type { RuntimeEvent } from '../types.js'
  *    carried through verbatim: an id this parser "repaired" would match
  *    nothing the runtime ever said.
  *  - The `result` line reports NO turn count, NO cost, and NO stop reason.
- *    It does report `usage` token counts -- spec §7's claim that Cursor
- *    reports no tokens is wrong -- but `RunOutcome` has nowhere to put them
- *    and a token count is not a price.
+ *    It DOES report `usage` token counts (`inputTokens`, `outputTokens`,
+ *    `cacheReadTokens`, `cacheWriteTokens` -- see
+ *    `test/fixtures/cursor/cursor-run.ndjson`); spec §7's claim that Cursor
+ *    reports no tokens is wrong, and spec §4.2's `Cursor -> null` rule
+ *    stands anyway because it is keyed on the PROVIDER, not on what the
+ *    stream happens to contain (M14 Decision 4). They are unmapped in M14.
  *
  * `numTurns: 0` on the terminal outcome is a documented FIDELITY GAP, not a
  * measurement: Cursor's result line carries no turn count at all, and this
@@ -327,10 +330,13 @@ const resultSchema = z.object({
   is_error: z.boolean().optional(),
   // Everything else on the real line -- `duration_ms`, `duration_api_ms`,
   // `result`, `session_id`, `request_id`, `usage` -- is deliberately unread:
-  // `RunOutcome` has no field for a duration, the final text has already
-  // been emitted as `text` events, and `usage` is a token count, not a
-  // price. Notably ABSENT from the real line: `num_turns`, `total_cost_usd`,
-  // `stop_reason`, `permission_denials`.
+  // `RunOutcome` has no field for a duration, and the final text has already
+  // been emitted as `text` events. `usage` IS present and IS populated
+  // (`inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens` --
+  // `test/fixtures/cursor/cursor-run.ndjson`); it goes unread because
+  // `RunOutcome.tokens` is `null` for Cursor by provider rule in M14, not
+  // because the counters are missing. Notably ABSENT from the real line:
+  // `num_turns`, `total_cost_usd`, `stop_reason`, `permission_denials`.
 })
 
 function parseResultLine(raw: unknown, line: string): RuntimeEvent {
@@ -377,8 +383,18 @@ function parseResultLine(raw: unknown, line: string): RuntimeEvent {
       costUsd: null,
       // Cursor's stream has no denial echo.
       deniedToolUseIds: [],
-      // Cursor's `result` line carries no usage of any kind (M12's recordings, M13's gate
-      // fixtures). `null`, not zero -- Decision 4.
+      // Cursor's `result` line DOES carry `usage`, in camelCase: `inputTokens`,
+      // `outputTokens`, `cacheReadTokens`, `cacheWriteTokens` -- the same four counters the
+      // Claude billed-input rule sums. See `test/fixtures/cursor/cursor-run.ndjson`, whose
+      // result line reads
+      // `"usage":{"inputTokens":15391,"outputTokens":223,"cacheReadTokens":25856,"cacheWriteTokens":0}`.
+      //
+      // `null` here is a PROVIDER rule, not an absence of data (M14 Decision 4: the
+      // discriminator is the provider, never the stream's contents -- `runtimeReportsUsage`).
+      // The four fields are UNMAPPED in M14 and mapping them is a follow-up, one parser change
+      // against a fixture that is already recorded. A comment claiming the data does not exist
+      // is what would stop that follow-up from ever being written (M14 fix wave, review I6);
+      // this comment says the opposite, on purpose.
       tokens: null,
     },
   }
