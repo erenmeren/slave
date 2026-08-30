@@ -38,6 +38,11 @@ export function BarChart({
           <g key={day.day} data-testid="bar-column" data-day={day.day}>
             <rect
               data-testid={`bar-fail-${day.day}`}
+              // The COUNT, beside the drawn height. A rect's height is normalized against the
+              // busiest day, so it cannot be read back as a number; `scripts/gate-m14-fidelity.mjs`
+              // stage 5 sums these against an independent SQL count, and an operator inspecting the
+              // chart gets the same figure the bar was drawn from.
+              data-count={day.failed}
               x={x}
               y={height - okHeight - failHeight}
               width={COLUMN_WIDTH}
@@ -47,6 +52,7 @@ export function BarChart({
             />
             <rect
               data-testid={`bar-ok-${day.day}`}
+              data-count={day.succeeded}
               x={x}
               y={height - okHeight}
               width={COLUMN_WIDTH}
