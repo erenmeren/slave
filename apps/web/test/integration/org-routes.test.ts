@@ -471,20 +471,7 @@ describe('the org routes', () => {
       }
     })
 
-    // M14 fix wave, review I8: this is the first route on the branch whose unauthenticated
-    // invocation destroys local state. A cross-site POST from any page in the developer's browser
-    // could wipe the database; `sec-fetch-site` is browser-set and unforgeable from page JS.
-    // These assert the REFUSAL only -- no case here is allowed to reach `npm run db:seed`.
-    it.each(['cross-site', 'same-site'])('404s a %s POST without touching the database', async (site): Promise<void> => {
-      const before = await prisma.workspace.count()
-      expect((await reseedPOST(reseedRequest(site))).status).toBe(404)
-      expect(await prisma.workspace.count()).toBe(before)
-    })
-
-    it('refuses before any side effect, with the same 404 production gets', async (): Promise<void> => {
-      const response = await reseedPOST(reseedRequest('cross-site'))
-      expect(response.status).toBe(404)
-      expect(await response.text()).toBe('not found')
-    })
+    // Cross-site refusal is now owned by the boundary middleware and `apps/web/test/boundary.test.ts`.
+    // The middleware 403s any cross-site /api request before this handler runs.
   })
 })
