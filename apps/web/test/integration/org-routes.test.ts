@@ -450,13 +450,8 @@ describe('the org routes', () => {
   })
 
   describe('POST /api/dev/reseed', () => {
-    // Re-pointed by the M14 fix wave (review I8): the route takes the `Request` now, so it can
-    // read `sec-fetch-site`. The assertion itself is unchanged.
-    function reseedRequest(site?: string): Request {
-      return new Request('http://localhost:3000/api/dev/reseed', {
-        method: 'POST',
-        ...(site === undefined ? {} : { headers: { 'sec-fetch-site': site } }),
-      })
+    function reseedRequest(): Request {
+      return new Request('http://localhost:3000/api/dev/reseed', { method: 'POST' })
     }
 
     it('404s outside development, so a production build cannot reach it at all', async (): Promise<void> => {
