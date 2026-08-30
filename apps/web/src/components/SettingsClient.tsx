@@ -2,6 +2,7 @@
 
 import type { RosterCompany } from '../server/org'
 import type { AdapterCard, PermissionSection } from '../server/settings'
+import { POSTURE } from '../lib/boundary'
 import { CompanyManager, type CompanyRow } from './CompanyManager'
 import { DangerZone } from './DangerZone'
 import { PermissionMatrix } from './PermissionMatrix'
@@ -39,6 +40,11 @@ export function SettingsClient({
       </Panel>
       <Panel title="agent permissions">
         <PermissionMatrix sections={permissions} />
+      </Panel>
+      <Panel title="security">
+        <p data-testid="security-posture" className="font-mono text-[10px] text-text-3">
+          {POSTURE} · no accounts · cross-site requests refused
+        </p>
       </Panel>
       <DangerZone workspaces={workspaces} showReseed={showReseed} />
       <Panel title="Template catalog">

@@ -82,6 +82,22 @@ describe('SettingsClient', () => {
     expect(screen.getByText('Template catalog')).toBeTruthy()
     expect(screen.getByText('Companies')).toBeTruthy()
   })
+
+  it('states the security posture, honestly and without controls', () => {
+    render(
+      <SettingsClient
+        templates={[template()]}
+        companies={[{ id: 'c1', name: 'Acme Robotics' }]}
+        roster={[company()]}
+        adapters={[]}
+        permissions={[]}
+        workspaces={[]}
+        showReseed={false}
+      />,
+    )
+    const posture = screen.getByTestId('security-posture')
+    expect(posture.textContent).toBe('loopback-only · no accounts · cross-site requests refused')
+  })
 })
 
 describe('TemplateCatalog', () => {
