@@ -10,6 +10,11 @@
   --line: rgba(255, 255, 255, 0.07); /* structural hairline */
   --text-1: #e7eaf0; /* primary */
   --text-2: #8a929e; /* muted */
+  /* The rung between "muted" and "label" on the handoff's text ramp (README "Design Tokens":
+   * ... muted #8a929e, dim #7c8697, faint #69727f, label #5b6472 ...). The mock uses it for
+   * numbers that sit BESIDE a label rather than being one -- the sidebar's nav counts and its
+   * bottom-block row labels (`AI Team OS Mockups.dc.html:57,63,70`). */
+  --text-faint: #69727f; /* faint */
   --text-3: #5b6472; /* label */
 
   /* Status colours (existing M4 vocabulary): remapped onto the handoff palette below rather
@@ -57,6 +62,7 @@
   --color-line: var(--line);
   --color-text-1: var(--text-1);
   --color-text-2: var(--text-2);
+  --color-text-faint: var(--text-faint);
   --color-text-3: var(--text-3);
   --color-status-working: var(--status-working);
   --color-status-starting: var(--status-starting);

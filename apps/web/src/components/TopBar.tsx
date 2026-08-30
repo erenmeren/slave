@@ -1,13 +1,23 @@
 import type React from 'react'
 import { EmergencyStopButton } from './EmergencyStopButton'
 
-// `ui/Chip.tsx`'s exact recipe (`inline-flex items-center rounded-chip border px-2 py-0.5`,
-// neutral surface `border-line bg-bg-2 text-text-2`), not the literal component -- `Chip` takes
-// only `tone`/`children`, no `data-testid` passthrough, and this badge's own `connection` test-id
-// (`shell.test.tsx`) must stay put. Same judgment `TaskCard.tsx`'s `CHIP_CLASS` documents. The
-// 11px mono face is the handoff's own for a data chip (README "Design Tokens").
-const CONNECTION_CHIP_CLASS =
-  'inline-flex items-center gap-1.5 rounded-chip border border-line bg-bg-2 px-2 py-0.5 font-mono text-[11px] text-text-2'
+// The mockup's own connection chip (`AI Team OS Web.dc.html:38-41`), not `ui/Chip.tsx`'s neutral
+// recipe: a radius-20 pill, `3px 9px`, a 1px status border at 25% alpha over a 6% fill, and a
+// `500 10px` mono label in the status colour beside a 5px dot. `Chip` cannot render it -- it takes
+// only `tone`/`children`, has no `data-testid` passthrough (this badge's `connection` test-id must
+// stay put) and uses the 5px chip radius. The mock draws only the connected state; `reconnecting`
+// takes the same geometry in the warn tone, because a chip that keeps the live colour while the
+// stream is down is the lie Decision 3 forbids.
+const CONNECTION_CHIP_BASE =
+  'inline-flex items-center gap-[6px] rounded-pill border px-[9px] py-[3px] font-mono text-[10px] font-medium'
+const CONNECTION_CHIP_TONE = {
+  connected: 'border-status-working/25 bg-status-working/[0.06] text-status-working',
+  reconnecting: 'border-status-warn/25 bg-status-warn/[0.06] text-status-warn',
+} as const
+const CONNECTION_DOT_TONE = {
+  connected: 'bg-status-working motion-safe:animate-[status-pulse_1.5s_ease-in-out_infinite]',
+  reconnecting: 'bg-status-warn',
+} as const
 
 export interface TopBarProps {
   readonly workspaceId: string
@@ -56,28 +66,35 @@ export function TopBar({
 }: TopBarProps): React.JSX.Element {
   const budgetUsd = budget?.budgetUsd ?? null
   const ratio = budget === null || budgetUsd === null || budgetUsd <= 0 ? 0 : budget.spentUsd / budgetUsd
-  const barColor = ratio >= 1 ? 'bg-status-danger' : ratio >= 0.8 ? 'bg-status-warn' : 'bg-status-working'
+  // Colour AND its `0 0 8px` glow in one lookup (`AI Team OS Web.dc.html:47`, and the README's
+  // "status colour at ... `0 0 8px` for bar glow" pattern): the two must never disagree.
+  const barColor =
+    ratio >= 1
+      ? 'bg-status-danger shadow-[0_0_8px_var(--color-status-danger)]'
+      : ratio >= 0.8
+        ? 'bg-status-warn shadow-[0_0_8px_var(--color-status-warn)]'
+        : 'bg-status-working shadow-[0_0_8px_var(--color-status-working)]'
   const connectionText = connection === 'connected' ? `sse · ${latencyMs === null ? '—' : `${latencyMs}ms`}` : 'reconnecting'
 
   return (
-    <header data-testid="top-bar" className="relative flex h-[52px] flex-none items-center gap-4 bg-bg-1 px-4">
+    <header
+      data-testid="top-bar"
+      className="relative flex h-[52px] flex-none items-center gap-4 border-b border-line bg-bg-1 px-4"
+    >
       {/* The handoff's 1px gradient hairline (design README §3a): transparent → teal .5 → indigo
         * .3 → transparent. Its own absolutely positioned element rather than a `border-bottom`,
-        * because a border cannot carry a gradient. */}
+        * because a border cannot carry a gradient -- and it sits at `bottom:-1px`, BENEATH the
+        * structural hairline rather than replacing it, exactly as the mock stacks the two
+        * (`AI Team OS Web.dc.html:32-33`). Without the border under it the bar's bottom edge
+        * would fade to nothing at both ends, where the gradient is transparent. */}
       <span
         data-testid="top-bar-hairline"
         aria-hidden
-        className="pointer-events-none absolute inset-x-0 bottom-0 h-px bg-[linear-gradient(90deg,transparent,rgba(46,230,207,.5),rgba(123,140,255,.3),transparent)]"
+        className="pointer-events-none absolute inset-x-0 -bottom-px h-px bg-[linear-gradient(90deg,transparent,rgba(46,230,207,.5),rgba(123,140,255,.3),transparent)]"
       />
       <span className="text-[14.5px] font-semibold tracking-[-.2px]">{workspaceName}</span>
-      <span data-testid="connection" className={CONNECTION_CHIP_CLASS}>
-        <span
-          className={`inline-block h-2 w-2 rounded-full ${
-            connection === 'connected'
-              ? 'bg-status-working motion-safe:animate-[status-pulse_1.5s_ease-in-out_infinite]'
-              : 'bg-status-warn'
-          }`}
-        />
+      <span data-testid="connection" className={`${CONNECTION_CHIP_BASE} ${CONNECTION_CHIP_TONE[connection]}`}>
+        <span className={`inline-block h-[5px] w-[5px] rounded-full ${CONNECTION_DOT_TONE[connection]}`} />
         {connectionText}
       </span>
       <span className="ml-auto flex items-center gap-3">
@@ -102,7 +119,7 @@ export function TopBar({
              *  an empty track would read as "0% of something" rather than "there is no
              *  something" (M12 Task 9 / ruling R11). */}
             {budgetUsd !== null && (
-              <span className="h-1.5 w-24 overflow-hidden rounded-full bg-bg-2">
+              <span className="h-[3px] w-[150px] overflow-hidden rounded-[2px] bg-white/[0.08]">
                 <span
                   className={`block h-full motion-safe:[transition:width_.5s_ease] ${barColor}`}
                   style={{ width: `${Math.min(100, ratio * 100)}%` }}

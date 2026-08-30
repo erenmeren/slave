@@ -7,8 +7,11 @@ import { useProjectName } from '../hooks/useProjectName'
 import { useWorkspaceStream } from '../hooks/useWorkspaceStream'
 import type { ShellFacts } from '../server/shell'
 
-/** The nine rows of the handoff's 3a shell, in its own order (design README §3a). Five are
- *  workspace-scoped and render only on a `/w/:id/...` route; four are global and always render. */
+/** The nine rows of the handoff's 3a shell, in its own order (design README §3a): Overview ·
+ *  Agents · Tasks · Graph · Activity · Projects · Skills · Analytics · Settings. Four of them
+ *  (Overview, Tasks, Graph, Activity) are `/w/:id/...` pages and render only on a workspace
+ *  route — they have nowhere to point without one. The other five are global and always render;
+ *  see `AGENTS_ROW` for the one that is both. */
 const GLOBAL_ROWS = [
   { label: 'Projects', href: '/' },
   { label: 'Skills', href: '/skills' },
@@ -16,12 +19,21 @@ const GLOBAL_ROWS = [
   { label: 'Settings', href: '/settings' },
 ] as const
 
+/**
+ * `Agents` is the one row that is BOTH. Its page (`/agents`, M11 Task 8) is global and must be
+ * reachable — and marked current — from every page, including `/agents` itself, where the root
+ * layout mounts `<Sidebar />` with no workspace in scope. But its badge is a workspace fact.
+ *
+ * So the row is rendered from exactly one of two places, never both: from `ProjectNav` while a
+ * workspace is in scope (that is where the count lives), and at the head of the global list
+ * otherwise, where it simply carries no badge. Either way it holds README §3a's second position
+ * among the rows that are showing.
+ */
+const AGENTS_ROW = { label: 'Agents', href: '/agents' } as const
+
 const PROJECT_ROWS = [
   { label: 'Overview', path: (id: string) => `/w/${id}`, badge: 'none' },
-  // `Agents` is the GLOBAL agents page (M11 Task 8) and keeps its global href; it sits among the
-  // workspace-scoped rows because its badge is a workspace fact, and because README §3a puts it
-  // second. Off a workspace route there is no count to carry, so the row does not render.
-  { label: 'Agents', path: () => '/agents', badge: 'agentsWorking' },
+  { label: AGENTS_ROW.label, path: () => AGENTS_ROW.href, badge: 'agentsWorking' },
   { label: 'Tasks', path: (id: string) => `/w/${id}/tasks`, badge: 'tasksActive' },
   { label: 'Graph', path: (id: string) => `/w/${id}/graph`, badge: 'none' },
   { label: 'Activity', path: (id: string) => `/w/${id}/activity`, badge: 'none' },
@@ -78,7 +90,7 @@ function NavRow({
     >
       <span>{label}</span>
       {badge !== undefined && (
-        <span data-testid={`nav-badge-${label}`} className="font-mono text-[9.5px] font-medium text-text-3">
+        <span data-testid={`nav-badge-${label}`} className="font-mono text-[9.5px] font-medium text-text-faint">
           {badge}
         </span>
       )}
@@ -107,7 +119,7 @@ function GuardrailRow({
 }): React.JSX.Element {
   return (
     <div className="flex items-baseline justify-between gap-2">
-      <dt className="text-text-3">{label}</dt>
+      <dt className="text-text-faint">{label}</dt>
       <dd data-testid={testId} className="text-text-1">
         {value}
       </dd>
@@ -197,9 +209,9 @@ export function ProjectNav({
   )
 }
 
-/** The handoff's 212px sidebar (design README §3a). Nine rows in the README's order: five
- *  workspace-scoped (only on a `/w/:id/...` route) then four global, with the Guardrails block
- *  pinned to the bottom. */
+/** The handoff's 212px sidebar (design README §3a). Nine rows in the README's order on a
+ *  workspace route; off one, the four `/w/:id/...` rows drop and five remain (Agents · Projects ·
+ *  Skills · Analytics · Settings), with the Guardrails block pinned to the bottom. */
 export function Sidebar({ workspaceId: workspaceIdProp, projectName }: SidebarProps = {}): React.JSX.Element {
   const pathname = usePathname()
   const workspaceId = workspaceIdProp ?? workspaceIdFromPathname(pathname)
@@ -214,7 +226,7 @@ export function Sidebar({ workspaceId: workspaceIdProp, projectName }: SidebarPr
         <>
           <div
             data-testid="project-section"
-            className="truncate px-[9px] pb-[7px] font-mono text-[9px] uppercase tracking-[.09em] text-text-3"
+            className="truncate px-[9px] pb-[7px] font-mono text-[9px] uppercase tracking-[.09em] text-text-faint"
           >
             {projectName ?? announcedName ?? workspaceId}
           </div>
@@ -222,6 +234,12 @@ export function Sidebar({ workspaceId: workspaceIdProp, projectName }: SidebarPr
         </>
       )}
       <div className={`flex flex-col gap-px ${workspaceId === null ? '' : 'mt-[12px]'}`}>
+        {/* Off a workspace route `ProjectNav` does not mount, so `Agents` is rendered here
+          * instead — badge-less, since the count is a workspace fact. This is what keeps the row
+          * present and `aria-current` on `/agents`, the page it links to. */}
+        {workspaceId === null && (
+          <NavRow label={AGENTS_ROW.label} href={AGENTS_ROW.href} current={pathname === AGENTS_ROW.href} />
+        )}
         {GLOBAL_ROWS.map((row) => (
           <NavRow key={row.label} label={row.label} href={row.href} current={pathname === row.href} />
         ))}

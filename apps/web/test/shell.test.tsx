@@ -123,10 +123,11 @@ describe('the shell', () => {
 
   it('marks Agents aria-current on the agents route', () => {
     pathname = '/agents'
-    // `workspaceId` explicitly: as of M14 Task 3 `Agents` is one of the five workspace-scoped
-    // rows (README §3a's nine, in its order), so the bare `/agents` pathname alone no longer
-    // renders it — the row appears while a workspace is open, and points at the global page.
-    render(<Sidebar workspaceId="w1" />)
+    // Propless, because that is the only configuration the root layout ever produces
+    // (`app/layout.tsx` mounts `<Sidebar />`). `Agents` is a GLOBAL page: it must be present and
+    // current here, or the row that took you to `/agents` vanishes on arrival.
+    render(<Sidebar />)
+    expect(navRow('Agents').getAttribute('href')).toBe('/agents')
     expect(navRow('Agents')).toHaveProperty('ariaCurrent', 'page')
   })
 
@@ -257,11 +258,25 @@ describe('the sidebar geometry and rows', () => {
     expect(screen.getByRole('link', { name: 'Analytics' }).getAttribute('href')).toBe('/analytics')
   })
 
-  it('drops the five workspace-scoped rows when the pathname carries no workspace', () => {
+  it('drops the four workspace-scoped rows, but never Agents, off a workspace route', () => {
+    // Overview/Tasks/Graph/Activity are `/w/:id/...` pages and have nowhere to point without a
+    // workspace. `Agents` is a global page and stays, keeping README §3a's order among what is
+    // left; it simply carries no count, because the count is a workspace fact.
     pathname = '/settings'
     render(<Sidebar />)
     const labels = screen.getAllByTestId('nav-row').map((row) => row.getAttribute('data-nav'))
-    expect(labels).toEqual(['Projects', 'Skills', 'Analytics', 'Settings'])
+    expect(labels).toEqual(['Agents', 'Projects', 'Skills', 'Analytics', 'Settings'])
+    expect(screen.queryByTestId('nav-badge-Agents')).toBeNull()
+    // And nothing streams: no workspace in scope means `ProjectNav` never mounts (Minor 11).
+    expect(FakeEventSource.instances).toHaveLength(0)
+  })
+
+  it('paints the live counts and guardrail labels in the mock faint tone', () => {
+    // The mock's nav badge (`AI Team OS Mockups.dc.html:63`) and its bottom-block row labels
+    // (`:70`) are `#69727f` — README "faint", one step above "label" `#5b6472`.
+    render(<ProjectNav workspaceId="w1" pathname="/w/w1" />)
+    expect(screen.getByTestId('nav-badge-Tasks').className).toContain('text-text-faint')
+    expect(screen.getByText('budget').className).toContain('text-text-faint')
   })
 
   it('marks the selected row with the handoff selected surface and its teal rail', () => {
@@ -360,6 +375,60 @@ describe('the top bar', () => {
 
     rerender(<TopBar workspaceId="w1" workspaceName="W" connection="connected" latencyMs={42} budget={null} halted={false} />)
     expect(screen.getByTestId('connection').textContent).toBe('sse · 42ms')
+  })
+
+  it('keeps the structural hairline under the gradient, as the mock does', () => {
+    // `AI Team OS Web.dc.html:32-33`: the bar has BOTH a `border-bottom:1px solid
+    // rgba(255,255,255,.07)` and the gradient element at `bottom:-1px`, beneath it.
+    render(<TopBar workspaceId="w1" workspaceName="W" connection="connected" latencyMs={null} budget={null} halted={false} />)
+    expect(screen.getByTestId('top-bar').className).toContain('border-b')
+    expect(screen.getByTestId('top-bar').className).toContain('border-line')
+    expect(screen.getByTestId('top-bar-hairline').className).toContain('-bottom-px')
+  })
+
+  it('gives the connection chip the mockup pill shape in the live status colour', () => {
+    // `AI Team OS Web.dc.html:38-41`: `padding:3px 9px`, `border-radius:20px`, border
+    // `rgba(46,230,207,.25)`, background `rgba(46,230,207,.06)`, `500 10px` mono `#2ee6cf`,
+    // 5px dot.
+    render(<TopBar workspaceId="w1" workspaceName="W" connection="connected" latencyMs={42} budget={null} halted={false} />)
+    const chip = screen.getByTestId('connection')
+    expect(chip.className).toContain('rounded-pill')
+    expect(chip.className).toContain('px-[9px]')
+    expect(chip.className).toContain('py-[3px]')
+    expect(chip.className).toContain('text-[10px]')
+    expect(chip.className).toContain('border-status-working/25')
+    expect(chip.className).toContain('bg-status-working/[0.06]')
+    expect(chip.className).toContain('text-status-working')
+    expect(chip.innerHTML).toContain('h-[5px]')
+  })
+
+  it('turns the chip amber, not teal, while the stream is reconnecting', () => {
+    render(<TopBar workspaceId="w1" workspaceName="W" connection="reconnecting" latencyMs={42} budget={null} halted={false} />)
+    const chip = screen.getByTestId('connection')
+    expect(chip.className).toContain('border-status-warn/25')
+    expect(chip.className).toContain('text-status-warn')
+    expect(chip.className).not.toContain('text-status-working')
+  })
+
+  it('draws the budget bar at the mockup geometry, with the glow in the threshold colour', () => {
+    // `AI Team OS Web.dc.html:47`: track `width:150px; height:3px; border-radius:2px;
+    // background:rgba(255,255,255,.08)`, fill `box-shadow:0 0 8px <colour>`.
+    render(
+      <TopBar
+        workspaceId="w1"
+        workspaceName="W"
+        connection="connected"
+        latencyMs={null}
+        budget={{ spentUsd: 5, budgetUsd: 20, unmeasuredRuns: 0 }}
+        halted={false}
+      />,
+    )
+    const html = screen.getByTestId('budget').innerHTML
+    expect(html).toContain('w-[150px]')
+    expect(html).toContain('h-[3px]')
+    expect(html).toContain('rounded-[2px]')
+    expect(html).toContain('bg-white/[0.08]')
+    expect(html).toContain('shadow-[0_0_8px_var(--color-status-working)]')
   })
 
   it('says reconnecting instead of a stale latency while the stream is down', () => {
