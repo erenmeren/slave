@@ -1,6 +1,6 @@
 # M15 — The Browser Boundary, M13's Debts, and Cursor's Tokens
 
-**Status:** Approved (sections approved in conversation 2026-08-30)
+**Status:** Approved (sections approved in conversation 2026-08-30; B2/B5 amended pre-plan after code reading — see their inline notes)
 **Approach:** C — full browser boundary now, named posture, shared-secret auth deferred until a non-loopback bind exists.
 
 ## 1. Why this milestone
@@ -121,11 +121,34 @@ shapes; the pre-claim `findUnique` survives for those checks, but `priorStatus` 
 the claim itself. New test: of two concurrent `requestPause` calls only one claims, and the
 value restored on a refused signal is the status the claim actually interrupted.
 
-**B2 — Cursor pauses discard `deniedToolUseIds`** (`apps/orchestrator/src/pump.ts`,
-`recordCursorPauseIfRequested`). The Claude path checkpoints `input.denied`; the Cursor path
-throws the outcome's list away and writes `[]`. Write the outcome's list. One expression, plus a
-test asserting a Cursor pause checkpoint carries the denied ids the fixture stream contains.
-This lands before anything reads the field — which is the whole point of doing it now.
+**B2 — Cursor denials never reach `deniedToolUseIds`** *(amended 2026-08-30 after code
+reading — the original "one expression in `recordCursorPauseIfRequested`" framing was wrong:
+that function already forwards the pump's `denied` tally; the tally is what never fills).*
+The real chain: Cursor's `tool_call` `subtype: "completed"` line carries the gate's denial as a
+`rejected` result (measured in M13; committed in
+`packages/providers/test/fixtures/cursor/gate/run-2-flag-present.ndjson`), but
+`parseToolCallLine` maps every completed half to `ignored`, so no `permission_denied` event is
+ever emitted, the pump's `denied` array stays empty, and every Cursor checkpoint records `[]`.
+Fix, in order:
+1. `packages/providers/src/cursor/stream.ts`: a completed `tool_call` half whose payload carries
+   a `rejected` result returns `{ kind: 'permission_denied', toolUseId, toolName }` (same variant
+   the Claude parser uses). M12 ruling R4's ban is AMENDED, not repealed: the `hook_denied` /
+   `hook_crashed` / `hook_failed_open` ban stands (those drive `stopped_by_gate` and the
+   circuit breaker — Cursor's gate is defense-in-depth and must never trip them);
+   `permission_denied` comes off the banned list because M13 measured a real denial echo on the
+   stream. The docstring's "Cursor's stream has no denial echo" sentence and the R4 paragraph
+   are rewritten in the same commit.
+2. `apps/orchestrator/src/pump.ts` `recordCursorPauseIfRequested`: the clean-terminal check reads
+   `input.outcome.deniedToolUseIds` — always `[]` for Cursor — and must read `input.denied`
+   (the pump's own tally, now fed by step 1) so a clean exit whose calls the pause gate blocked
+   still records the pause (the original review-I2 intent).
+3. The checkpoint write already forwards `input.denied` — with 1 and 2 it carries real ids.
+Accepted side effect, named: the pump's `guardrail.tripped` detail for a `permission_denied`
+says "denied by the permission mode"; for a Cursor hook rejection that wording is imprecise and
+stays as-is this milestone (changing the event text is a consumer-visible change out of scope).
+Tests: parser fixture test (rejected completed → `permission_denied`; ordinary completed →
+`ignored`), and a pump-level test that a Cursor run with a clean terminal but a denied call
+still pauses and checkpoints the denied id.
 
 **B3 — `sweep.ts`'s private `isAlive`** (`apps/orchestrator/src/sweep.ts:59`). Delete it; import
 `isAlive` from `@ai-team-os/control`. Behaviour is identical by inspection (EPERM alive, ESRCH
@@ -138,15 +161,22 @@ site on the saved pair: `key={`${provider ?? ''}|${budgetUsd ?? ''}`}`. A saved 
 with fresh drafts; an unsaved draft is never clobbered by a re-render that changed nothing.
 Chosen over effect-based sync deliberately (remount is the idiomatic "reset uncontrolled state").
 
-**B5 — seed hygiene** (`packages/db/src/seed.ts`). Two defects, one cause — the seed exists to
-show the UI, not to feed the daemon, and it currently feeds the daemon garbage every tick:
-- Every seeded agent whose template carries a role gets that role on its `Agent` row (Atlas
-  `manager` and Riley `reviewer` already do; the rest get their template's role — the daemon
-  reported `skippedNoRole: 12` on the seed workspace, so the implementer reconciles that count
-  against the seeded agents and drives it to 0).
-- The fixture task seeded in `reviewing` with no implementation run (`[review] task a9ae38b6 … no
-  usable implementation run` logged every tick) is re-seeded as `done` instead. Decision: change
-  the seeded status, do not fabricate a fake run.
+**B5 — seed hygiene** *(amended 2026-08-30 after code reading — `skippedNoRole` counts
+TASKS lacking `Task.requiredRole`, not agents: every seeded agent already has a role, and the
+count of 12 is the seed's one-task-per-status fixture set).* Giving those tasks roles would ARM
+the daemon: the seed workspace carries a live `ProviderConfiguration` (`claude_code`), so a
+daemon pointed at freshly-seeded data would start real, paid runs on demo tasks. That the seed
+is daemon-inert is a safety property, not a defect — M15 keeps it and writes it down:
+- `packages/db/src/seed.ts`: a comment on the task loop stating the invariant — seeded tasks
+  deliberately carry no `requiredRole`, so `decide()` can never dispatch them and a daemon
+  pointed at the seed spends nothing; the daemon's `skippedNoRole: 12` on this workspace is that
+  invariant showing, not a bug.
+- `apps/orchestrator/src/review.ts`: the `[review] task … has no usable implementation run`
+  warning (line ~212) fires every tick for the seeded `reviewing` fixture task. Dedupe it: a
+  module-level `Set<string>` of warned task ids, warn once per task per daemon lifetime. The
+  seeded task stays `reviewing` (the Tasks board's REVIEW column keeps its example; re-seeding
+  it `done` would break the one-task-per-status fixture).
+- Test: calling the review dispatch twice for the same unreviewable task warns once.
 
 ## 4. Series C — Cursor's tokens
 
