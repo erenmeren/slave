@@ -60,6 +60,7 @@ describe('parseStreamLine', () => {
         numTurns: 4,
         costUsd: 0.12,
         deniedToolUseIds: ['tu_1', 'tu_2'],
+        tokens: null,
       },
     })
   })
@@ -346,6 +347,7 @@ describe('parseStreamLine', () => {
         numTurns: 40,
         costUsd: 1.5,
         deniedToolUseIds: [],
+        tokens: null,
       },
     })
   })
@@ -367,6 +369,7 @@ describe('parseStreamLine', () => {
         numTurns: 2,
         costUsd: 0.01,
         deniedToolUseIds: [],
+        tokens: null,
       },
     })
   })
@@ -396,6 +399,7 @@ describe('parseStreamLine', () => {
         // nullable.
         costUsd: null,
         deniedToolUseIds: [],
+        tokens: null,
       },
     })
   })
@@ -421,6 +425,7 @@ describe('parseStreamLine', () => {
         numTurns: 4,
         costUsd: 0.12,
         deniedToolUseIds: [],
+        tokens: null,
       },
     })
   })
@@ -515,5 +520,44 @@ describe('the Skill tool_use line (M14 §4.1, recorded)', () => {
   it('never returns unparsable for any line of the recording', () => {
     const unparsable = lines.map((line) => parseStreamLine(line)).filter((event) => event.kind === 'unparsable')
     expect(unparsable).toEqual([])
+  })
+})
+
+describe('result line token usage (M14 §4.2)', () => {
+  it('reads usage.input_tokens and usage.output_tokens off a real result line', () => {
+    const line = readFileSync(new URL('./fixtures/complete.ndjson', import.meta.url), 'utf8')
+      .split('\n')
+      .find((l) => l.includes('"type":"result"'))
+    const event = parseStreamLine(line as string)
+    expect(event.kind).toBe('terminated')
+    expect((event as Extract<RuntimeEvent, { kind: 'terminated' }>).outcome.tokens).toEqual({ input: 4, output: 741 })
+  })
+
+  it('is null, never zero, when the result line carries no usage at all', () => {
+    const event = parseStreamLine(
+      JSON.stringify({ type: 'result', subtype: 'success', is_error: false, num_turns: 1, total_cost_usd: 0.1 }),
+    )
+    expect((event as Extract<RuntimeEvent, { kind: 'terminated' }>).outcome.tokens).toBeNull()
+  })
+
+  it('is null when usage is present but either half is missing -- half a measurement is none', () => {
+    const event = parseStreamLine(
+      JSON.stringify({ type: 'result', subtype: 'success', is_error: false, num_turns: 1, total_cost_usd: 0.1, usage: { input_tokens: 10 } }),
+    )
+    expect((event as Extract<RuntimeEvent, { kind: 'terminated' }>).outcome.tokens).toBeNull()
+  })
+
+  it('does not fold the cache counters into input -- they are a different quantity', () => {
+    const event = parseStreamLine(
+      JSON.stringify({
+        type: 'result',
+        subtype: 'success',
+        is_error: false,
+        num_turns: 1,
+        total_cost_usd: 0.1,
+        usage: { input_tokens: 4, output_tokens: 741, cache_creation_input_tokens: 16_732, cache_read_input_tokens: 46_948 },
+      }),
+    )
+    expect((event as Extract<RuntimeEvent, { kind: 'terminated' }>).outcome.tokens).toEqual({ input: 4, output: 741 })
   })
 })

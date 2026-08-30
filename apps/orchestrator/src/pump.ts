@@ -133,42 +133,70 @@ function storedTally(value: unknown): Map<string, number> {
 }
 
 /**
- * Records what this pump watched, ONCE, when its stream ends -- however it ended (M14 §4.1,
- * Decision 5, fix round 1).
+ * Records what this pump watched, ONCE, when its stream ends -- however it ended (M14 §4.1/§4.2,
+ * Decisions 4 and 5, fix round 1).
  *
- * At the stream's end rather than on the terminal status writes, because **the tally is a fact of
- * the STREAM and the row's conclusion is a fact of whoever won the race to write it**, and those
- * are not the same event. `packages/control/src/stop.ts` concludes an operator-stopped run from
- * another call path entirely, with no tally in hand, and by `pumpRun`'s own reckoning it normally
- * wins -- so a tally carried only on this file's status-conditioned writes was measured and then
- * discarded on the single most common way a run is stopped deliberately. A pause is the same shape
- * of loss for the opposite reason: it writes no conclusion at all, so a tally that waited for one
- * lost everything the run did before pausing, and the resume had nothing to continue from.
+ * At the stream's end rather than on the terminal status writes, because **these are facts of the
+ * STREAM, and the row's conclusion is a fact of whoever won the race to write it**, and those are
+ * not the same event. `packages/control/src/stop.ts` concludes an operator-stopped run from
+ * another call path entirely, with no tally or usage in hand, and by `pumpRun`'s own reckoning it
+ * normally wins -- so a tally or a token total carried only on this file's status-conditioned
+ * writes was measured and then discarded on the single most common way a run is stopped
+ * deliberately. A pause is the same shape of loss for the opposite reason: it writes no conclusion
+ * at all, so either figure that waited for one lost everything the run did before pausing, and the
+ * resume had nothing to continue from.
  *
- * Hence: unconditional, with no `endedAt`/status filter. The row may already be terminal -- that is
- * the case this exists for -- and refusing to write onto a concluded row is precisely the bug.
+ * `skillCalls` (unconditional, with no `endedAt`/status filter -- the row may already be
+ * terminal, that is the case this exists for, and refusing to write onto a concluded row is
+ * precisely the bug) and `tokensIn`/`tokensOut` (below) are two different columns with two
+ * different write conditions, because they answer two different questions: "what did THIS pump
+ * watch" (always answerable, even by a stream that produced no `result` line -- the answer may be
+ * "nothing") versus "what did the `result` line report" (answerable only when there was one).
  *
- * MERGED into what the row holds, not overwritten: a resumed run is a SECOND `pumpRun` on the same
- * row, and its own `skillCalls` Map counts only what it watched.
+ * `skillCalls` is MERGED into what the row holds, not overwritten: a resumed run is a SECOND
+ * `pumpRun` on the same row, and its own tally Map counts only what it watched. `tokensIn`/
+ * `tokensOut` are REPLACED, not merged, the one time they are written at all: a `result` line
+ * reports the run's cumulative usage, not a delta, the same way `costUsd` is a replace and not an
+ * accumulation.
  */
-async function writeSkillTally(input: {
+async function writeStreamUsage(input: {
   readonly runId: RunId
   readonly tally: ReadonlyMap<string, number>
   readonly spawn: PumpRunInput['spawn']
+  readonly outcome: RunOutcome | null
 }): Promise<void> {
-  if (!runtimeReportsUsage(input.spawn)) {
+  const reportsUsage = runtimeReportsUsage(input.spawn)
+
+  if (!reportsUsage) {
     // Stated, not merely left alone: this runtime cannot report skill use, and `Prisma.DbNull` is
     // SQL NULL -- the "we do not know" of Decision 4, never the `{}` that would claim a
     // measurement nobody made.
     await prisma.agentRun.updateMany({ where: { id: input.runId }, data: { skillCalls: Prisma.DbNull } })
-    return
+  } else {
+    const row = await prisma.agentRun.findUniqueOrThrow({ where: { id: input.runId } })
+    const merged = storedTally(row.skillCalls)
+    for (const [name, count] of input.tally) merged.set(name, (merged.get(name) ?? 0) + count)
+    // A plain object, never the `Map` -- Prisma writes the latter as `{}`.
+    await prisma.agentRun.updateMany({ where: { id: input.runId }, data: { skillCalls: Object.fromEntries(merged) } })
   }
 
-  const row = await prisma.agentRun.findUniqueOrThrow({ where: { id: input.runId } })
-  const merged = storedTally(row.skillCalls)
-  for (const [name, count] of input.tally) merged.set(name, (merged.get(name) ?? 0) + count)
-  // A plain object, never the `Map` -- Prisma writes the latter as `{}`.
-  await prisma.agentRun.updateMany({ where: { id: input.runId }, data: { skillCalls: Object.fromEntries(merged) } })
+  // Tokens are a fact of the `result` line, not of the stream ending: a pause or an operator's
+  // kill produces no `result` line at all (`outcome` stays `null`), and writing `null` onto the
+  // row then would erase a total an earlier pump of this same run already wrote (a resume that
+  // itself pauses again). So, unlike `skillCalls` above, this write only happens when THIS
+  // stream's `outcome` is not `null`.
+  if (input.outcome === null) return
+  await prisma.agentRun.updateMany({
+    where: { id: input.runId },
+    data: {
+      // `runtimeReportsUsage` is belt-and-braces here rather than redundant: `cursor/stream.ts`
+      // already yields `tokens: null` on every Cursor outcome, and this line is what keeps that
+      // true if a future Cursor build starts reporting a usage object this product has not
+      // measured. The PROVIDER decides, never what the outcome happens to carry.
+      tokensIn: reportsUsage ? (input.outcome.tokens?.input ?? null) : null,
+      tokensOut: reportsUsage ? (input.outcome.tokens?.output ?? null) : null,
+    },
+  })
 }
 
 /**
@@ -718,7 +746,7 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
   // pause the loop kept reading past. Every `return` below this point is downstream of it, and
   // there is no `return` above it inside the loop -- so this runs exactly once per pump, on every
   // path, which is the whole point of it being here rather than on the conclusions.
-  await writeSkillTally({ runId, tally: skillCalls, spawn: input.spawn })
+  await writeStreamUsage({ runId, tally: skillCalls, spawn: input.spawn, outcome })
 
   if (gateFailed || paused) return null
 

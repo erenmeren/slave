@@ -527,5 +527,8 @@ function zeroLineOutcome(state: CursorRunState, exitCode: number | null): RunOut
     // Unknown is not zero (spec Decision 6): zero is a figure the budget guardrail believes.
     costUsd: null,
     deniedToolUseIds: [...state.rejectedCallIds],
+    // Cursor reports no usage of any kind (M14 Decision 4), and this run wrote no result line at
+    // all.
+    tokens: null,
   }
 }

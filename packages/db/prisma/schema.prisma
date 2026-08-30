@@ -370,6 +370,12 @@ model AgentRun {
   /// not let those two facts collide. Unknown cost is `null`; a future insert that forgets to
   /// pass one now gets `null` at the database level instead of a silently wrong `0`.
   costUsd           Float?
+  /// `RunOutcome.tokens.input` / `.output` (M14 §4.2). Nullable, no default: `null` is UNMEASURED
+  /// -- a Cursor run (keyed on the run's PROVIDER, the same rule `skillCalls` follows), or a
+  /// degraded Claude `result` line that carried no `usage`. `0` would be a measured zero the
+  /// Analytics page would average in.
+  tokensIn          Int?
+  tokensOut         Int?
   /// Which skills this run invoked, and how many times each: `{ "superpowers:writing-plans": 2 }`
   /// (M14 §4.1), from a tally the pump keeps of the `Skill` tool calls it already observes.
   ///

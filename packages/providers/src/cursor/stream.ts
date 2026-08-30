@@ -377,6 +377,9 @@ function parseResultLine(raw: unknown, line: string): RuntimeEvent {
       costUsd: null,
       // Cursor's stream has no denial echo.
       deniedToolUseIds: [],
+      // Cursor's `result` line carries no usage of any kind (M12's recordings, M13's gate
+      // fixtures). `null`, not zero -- Decision 4.
+      tokens: null,
     },
   }
 }

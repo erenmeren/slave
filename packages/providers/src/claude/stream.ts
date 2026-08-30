@@ -232,6 +232,17 @@ const resultSchema = z.object({
   // cannot on its own tell a blocking crash from a genuine deny -- it is
   // read here only to carry the denied tool_use_ids into `RunOutcome`.
   permission_denials: z.array(z.object({ tool_use_id: z.string() })).optional(),
+  // Every recorded `result` line carries this; it is `.optional()` for the same reason every
+  // other field here is -- a degraded error result is where the CLI is plausibly silent, and a
+  // missing `usage` must degrade to `null`, not fail the parse of a line that must always
+  // produce `terminated`.
+  usage: z
+    .object({
+      input_tokens: z.number().optional(),
+      output_tokens: z.number().optional(),
+    })
+    .passthrough()
+    .optional(),
 })
 
 function parseResultLine(raw: unknown, line: string): RuntimeEvent {
@@ -290,6 +301,15 @@ function parseResultLine(raw: unknown, line: string): RuntimeEvent {
       // nothing.
       costUsd: data.total_cost_usd ?? null,
       deniedToolUseIds: (data.permission_denials ?? []).map((denial) => denial.tool_use_id),
+      // Both halves or neither (M14 §4.2). A `usage` carrying only `input_tokens` describes a
+      // measurement that did not complete, and reporting `{ input: 10, output: 0 }` would put a
+      // fabricated zero into every per-agent token sum on the Analytics page.
+      tokens:
+        data.usage !== undefined &&
+        typeof data.usage.input_tokens === 'number' &&
+        typeof data.usage.output_tokens === 'number'
+          ? { input: data.usage.input_tokens, output: data.usage.output_tokens }
+          : null,
     },
   }
 }

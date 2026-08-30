@@ -155,6 +155,7 @@ describe('parseCursorLine, against the recorded fixture', () => {
         numTurns: 0,
         costUsd: null,
         deniedToolUseIds: [],
+        tokens: null,
       },
     })
   })
@@ -365,6 +366,7 @@ describe('parseCursorLine, the result line', () => {
         numTurns: 0,
         costUsd: null,
         deniedToolUseIds: [],
+        tokens: null,
       },
     })
   })
@@ -382,6 +384,7 @@ describe('parseCursorLine, the result line', () => {
         numTurns: 0,
         costUsd: null,
         deniedToolUseIds: [],
+        tokens: null,
       },
     })
   })
@@ -399,6 +402,14 @@ describe('parseCursorLine, the result line', () => {
     const event = parseCursorLine(line)
     if (event.kind !== 'terminated') throw new Error('expected terminated')
     expect(event.outcome.costUsd).toBeNull()
+  })
+
+  it('reports no token usage -- Cursor never says (M14 Decision 4)', () => {
+    const terminal = parseCursorLine(
+      JSON.stringify({ type: 'result', subtype: 'success', is_error: false, duration_ms: 1200, result: 'done' }),
+    )
+    expect(terminal.kind).toBe('terminated')
+    expect((terminal as Extract<RuntimeEvent, { kind: 'terminated' }>).outcome.tokens).toBeNull()
   })
 })
 

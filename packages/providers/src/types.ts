@@ -50,6 +50,15 @@ export interface RunOutcome {
    */
   readonly costUsd: number | null
   readonly deniedToolUseIds: readonly string[]
+  /**
+   * The run's token usage, or `null` when the runtime does not report it (M14 §4.2). Never
+   * `{ input: 0, output: 0 }` for an unmeasured run -- zero is a figure a per-agent average would
+   * believe. `input` is the `result` line's `usage.input_tokens` and `output` its
+   * `usage.output_tokens`; the cache fields (`cache_creation_input_tokens`,
+   * `cache_read_input_tokens`) are deliberately NOT folded in -- they are a different quantity,
+   * and summing them into `input` would make one agent's cache hit look like extra work.
+   */
+  readonly tokens: { readonly input: number; readonly output: number } | null
 }
 
 /**

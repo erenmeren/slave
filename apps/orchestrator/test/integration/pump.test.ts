@@ -76,6 +76,7 @@ const okOutcome: RunOutcome = {
   numTurns: 3,
   costUsd: 0.05,
   deniedToolUseIds: [],
+  tokens: null,
 }
 
 interface Ids {
@@ -1300,6 +1301,91 @@ describe('pumpRun', () => {
       const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
       expect(run.status).toBe('failed')
       expect(run.skillCalls).toEqual({ 'superpowers:brainstorming': 1 })
+    })
+  })
+
+  /**
+   * M14 §4.2: `AgentRun.tokensIn` / `tokensOut`, written from `RunOutcome.tokens` at the same
+   * stream-end write `skillCalls` uses (Decision 4), NOT the terminal `succeeded`/`failed` write --
+   * tokens are a fact of the `result` line, which only that write ever has in hand. Unlike
+   * `skillCalls`, which is unconditional every time the stream ends, this write is conditioned on
+   * the stream having actually produced a `result` line: a pause or an operator's kill carries no
+   * `outcome` at all, and writing `null` onto the row then would erase a total an earlier pump of
+   * this same run already recorded.
+   */
+  describe('AgentRun.tokensIn / tokensOut (M14 §4.2)', () => {
+    it('writes the reported token counts beside the cost when the run concludes', async (): Promise<void> => {
+      await pumpRun({
+        ...ids,
+        events: fromArray([
+          { kind: 'session_started', sessionId: 's-1' },
+          { kind: 'terminated', outcome: { ...okOutcome, tokens: { input: 4, output: 741 } } },
+        ]),
+      })
+
+      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      expect(run.tokensIn).toBe(4)
+      expect(run.tokensOut).toBe(741)
+    })
+
+    it('leaves both token columns null for a runtime that reported none', async (): Promise<void> => {
+      await pumpRun({
+        ...ids,
+        events: fromArray([
+          { kind: 'session_started', sessionId: 's-1' },
+          // okOutcome's own tokens is already null -- a degraded or otherwise unmeasured result.
+          { kind: 'terminated', outcome: okOutcome },
+        ]),
+      })
+
+      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      expect(run.tokensIn).toBeNull()
+      expect(run.tokensOut).toBeNull()
+    })
+
+    it('writes null for a Cursor run even if its outcome somehow carried a usage object', async (): Promise<void> => {
+      await pumpRun({
+        ...ids,
+        // The PROVIDER is the discriminator, not what the outcome happens to carry -- the same
+        // rule `skillCalls` follows (Decision 4).
+        spawn: {
+          settingsPath: '/tmp/aiteamos-tokens/.cursor/hooks.json',
+          pauseFlagPath: '/tmp/aiteamos-tokens/pause.flag',
+          hookPath: '/opt/aiteamos/cursor-shell-gate.sh',
+          gitIdentity: { name: 'Alex', email: 'alex@example.com' },
+          provider: 'cursor',
+        },
+        events: fromArray([
+          { kind: 'session_started', sessionId: 's-1' },
+          // A figure this product has never measured on Cursor.
+          { kind: 'terminated', outcome: { ...okOutcome, tokens: { input: 1, output: 2 } } },
+        ]),
+      })
+
+      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      expect(run.tokensIn).toBeNull()
+      expect(run.tokensOut).toBeNull()
+    })
+
+    it('does not null out an already-written total when a later stream ends with no result line', async (): Promise<void> => {
+      // Sets up the state a resumed run's SECOND pump would find: a total already on the row
+      // from an earlier conclusion. This pump's own stream then ends on a pause -- no `result`
+      // line, so no `outcome` -- and the earlier figure must survive that write, not be
+      // overwritten with `null`.
+      await prisma.agentRun.update({ where: { id: ids.runId }, data: { tokensIn: 10, tokensOut: 20 } })
+
+      await pumpRun({
+        ...ids,
+        events: fromArray([
+          { kind: 'session_started', sessionId: 's-1' },
+          { kind: 'hook_denied', hookName: 'PreToolUse:Write', reason: 'Paused by AI Team OS.' },
+        ]),
+      })
+
+      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      expect(run.status).toBe('paused')
+      expect(run.tokensIn).toBe(10)
+      expect(run.tokensOut).toBe(20)
     })
   })
 
