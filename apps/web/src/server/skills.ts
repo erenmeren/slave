@@ -75,24 +75,20 @@ export async function buildSkillsPage(): Promise<SkillsPage> {
     prisma.agentRun.findMany({ where: { status: { in: [...NON_TERMINAL_RUN_STATUSES] } } }),
   ])
 
-  // Two indexes over the same tallies, because a tally key and a `Skill` row do not always agree:
-  //   - `exact` is what the pump actually wrote (`superpowers:writing-plans`).
-  //   - `bare` is that key's trailing segment, the form a personal/project skill is called under.
-  // A skill is looked up by its OWN provider-qualified key first, so two providers carrying the
-  // same skill name (`code-review` exists both as a plugin skill and as a personal one) never
-  // share a count. The bare fallback only fires when the qualified key was never recorded — it
-  // keeps a pre-prefix tally visible at the cost of being ambiguous in exactly that case, which
-  // is a better trade than showing a `0` for a skill the agents demonstrably used.
-  const exact = new Map<string, number>()
-  const bare = new Map<string, number>()
+  // ONE index, keyed by exactly what the pump wrote. There is deliberately no looser second
+  // lookup: an earlier round kept a trailing-segment fallback for a `plugin:*` row whose
+  // qualified key was never recorded, and it made a never-invoked `plugin:code-review` display
+  // the personal `code-review`'s nine calls -- a fabricated number on a row, which is worse than
+  // the merged totals it was meant to prevent. A skill nobody invoked reads `0`, and that zero is
+  // a measurement (Decision 3). Nothing is lost by the strictness: `tallyKeyFor` already returns
+  // the bare name for a `personal`/`project` provider, so those tallies are found by exact key.
+  const totals = new Map<string, number>()
   for (const run of runs) {
     for (const [name, count] of Object.entries((run.skillCalls as Record<string, unknown> | null) ?? {})) {
       // `typeof count === 'number'` because the column is Json and nothing in the database
       // enforces its shape: a malformed tally must be skipped, never coerced into a total.
       if (typeof count !== 'number' || !Number.isFinite(count)) continue
-      exact.set(name, (exact.get(name) ?? 0) + count)
-      const trailing = name.includes(':') ? (name.split(':').at(-1) ?? name) : name
-      bare.set(trailing, (bare.get(trailing) ?? 0) + count)
+      totals.set(name, (totals.get(name) ?? 0) + count)
     }
   }
 
@@ -115,7 +111,7 @@ export async function buildSkillsPage(): Promise<SkillsPage> {
           id: skill.id,
           name: skill.name,
           description: skill.description,
-          runs: exact.get(key) ?? bare.get(skill.name) ?? 0,
+          runs: totals.get(key) ?? 0,
           state: skill.missingSince === null ? ('ready' as const) : ('missing' as const),
           agentIds: agentsBySkill.get(skill.id) ?? [],
         }

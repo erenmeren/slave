@@ -50,11 +50,14 @@ describe('buildSkillsPage', () => {
   })
 
   it('sums the run tallies across every run that recorded one', async (): Promise<void> => {
+    // The keys are what the pump really writes for a `plugin:superpowers` skill --
+    // `{"skill": "superpowers:writing-plans"}` (`packages/providers/test/stream.test.ts:512`).
+    // `brainstorming` is in the tally but not in the catalog, and simply has no row to land on.
     await prisma.agentRun.create({
-      data: { agentId, status: 'succeeded', provider: 'claude_code', skillCalls: { 'writing-plans': 2, brainstorming: 5 } },
+      data: { agentId, status: 'succeeded', provider: 'claude_code', skillCalls: { 'superpowers:writing-plans': 2, brainstorming: 5 } },
     })
     await prisma.agentRun.create({
-      data: { agentId, status: 'failed', provider: 'claude_code', skillCalls: { 'writing-plans': 1 } },
+      data: { agentId, status: 'failed', provider: 'claude_code', skillCalls: { 'superpowers:writing-plans': 1 } },
     })
     // A run that reported nothing contributes nothing, and does not become a zero. `Prisma.DbNull`
     // is the sentinel the pump itself writes for exactly this (`apps/orchestrator/src/pump.ts:174`)
@@ -80,6 +83,26 @@ describe('buildSkillsPage', () => {
     expect(page.providers.map((p) => p.name)).toEqual(['personal', 'plugin:superpowers'])
     expect(page.providers[0]?.skills[0]?.runs).toBe(9)
     expect(page.providers[1]?.skills[0]?.runs).toBe(4)
+  })
+
+  it('gives a never-invoked plugin skill a zero, not its personal namesake’s count', async (): Promise<void> => {
+    // The live collision on this very machine: `code-review` exists both as a personal skill and
+    // under the `code-review` plugin. Only the personal one has ever been called, and its tally
+    // key is bare because a personal invocation is never colon-qualified. The plugin row must read
+    // `0` -- a measured zero (Decision 3), not a number borrowed from a namesake.
+    const personal = await prisma.skillProvider.create({ data: { name: 'personal' } })
+    const plugin = await prisma.skillProvider.create({ data: { name: 'plugin:code-review' } })
+    await prisma.skill.create({ data: { providerId: personal.id, name: 'code-review', description: 'mine' } })
+    await prisma.skill.create({ data: { providerId: plugin.id, name: 'code-review', description: 'theirs' } })
+    await prisma.agentRun.create({
+      data: { agentId, status: 'succeeded', provider: 'claude_code', skillCalls: { 'code-review': 9 } },
+    })
+
+    const page = await buildSkillsPage()
+    const rowFor = (providerName: string): number | undefined =>
+      page.providers.find((p) => p.name === providerName)?.skills.find((s) => s.name === 'code-review')?.runs
+    expect(rowFor('personal')).toBe(9)
+    expect(rowFor('plugin:code-review')).toBe(0)
   })
 
   it('reports a vanished skill as missing rather than dropping it', async (): Promise<void> => {
