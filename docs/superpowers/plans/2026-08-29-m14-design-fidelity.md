@@ -745,6 +745,11 @@ git commit -m "feat(web): ten states, one tone table, and the motion vocabulary 
 - Test: `apps/web/test/integration/overview.test.ts` (assert the five new DTO fields)
 - Test: `apps/web/test/useOverview.test.tsx` (fixture widening only — its literal
   `AgentCardData` must type-check)
+- Test: `apps/web/test/ui-components.test.tsx` (the two `Panel` assertions move from
+  `panel-title` to `section-label` — see Step 4)
+  <!-- ERRATUM 2026-08-30 (final review, plan erratum): this line was MISSING from the Files
+       block as written, while Step 4 below asserts "That file is named in this task's `Files:`
+       block for exactly this." Added so the two agree; the work itself was done. -->
 
 **Interfaces:**
 - Consumes: `CARD_STATE_TONE`, `cardStateFor` from `apps/web/src/lib/tones.ts`; `AvatarTile` from
@@ -1542,6 +1547,14 @@ Append to `apps/web/test/integration/overview.test.ts`, inside the existing
     expect((await buildOverviewSnapshot(fixture.workspaceId))?.agents[0]?.skill).toBe('Skill superpowers:writing-plans')
   })
 ```
+
+> **ERRATUM 2026-08-30 (final review, spec erratum 1 / plan erratum 6): the paragraph below is
+> DEAD.** The Task 8 NEEDS_CONTEXT ruling replaced the `Approval` table entirely with the
+> `task_review_approved` `ExecutionEvent.seq` rule (`packages/domain/src/merge/queue.ts`'s
+> `mergeQueueOrder`, shared with `apps/orchestrator/src/merge.ts`). No `Approval` row is written,
+> no `"Approval"` was added to any TRUNCATE list, and the merge queue is not FIFO by
+> `decidedAt`. Read the Task 8 ruling, not this. The same applies to every `Approval`/`decidedAt`
+> reference in this task's reference code below.
 
 `appendEvent` is already imported at the top of this file. The merge-queue test writes `Approval`
 rows, which this file's `beforeEach` TRUNCATE does not currently name — add `"Approval"` to that
@@ -4137,6 +4150,8 @@ Append to `apps/web/test/integration/overview.test.ts`:
     expect(snapshot?.liveEvents[0]?.seq).toBeGreaterThan(snapshot?.liveEvents[7]?.seq ?? 0)
   })
 
+  // ERRATUM 2026-08-30 (final review): DEAD reference code -- see the Task 8 ruling. The queue
+  // orders by the latest `task_review_approved` `ExecutionEvent.seq`, not by `Approval.decidedAt`.
   it('lists merging tasks FIFO by approval time and counts ready tasks in the strip', async (): Promise<void> => {
     await prisma.task.update({ where: { id: fixture.taskId }, data: { status: 'merging' } })
     const second = await prisma.task.create({
@@ -4184,6 +4199,11 @@ return:
       include: { agent: true },
     }),
     prisma.executionEvent.findMany({ where: { workspaceId }, orderBy: { seq: 'desc' }, take: 8 }),
+    // ERRATUM 2026-08-30 (final review): DEAD reference code -- see the Task 8 ruling. `Approval`
+    // is a dead table; the shipped query reads `task_review_approved` `ExecutionEvent.seq` through
+    // `packages/domain/src/merge/queue.ts`'s `mergeQueueOrder`, which `apps/orchestrator/src/merge.ts`
+    // shares so the panel and the daemon cannot disagree. A `merging` task with no approval event
+    // is listed LAST and marked, not sorted by `createdAt`.
     // FIFO by APPROVAL time (design README "Interactions & Behavior": "at most one task in
     // `merging` at a time, FIFO by approval time"). `Task` carries no `updatedAt`, so the ordering
     // comes from `Approval.decidedAt` -- the moment the review that put this task in the queue was
@@ -4241,6 +4261,9 @@ and to the returned object:
       ts: event.ts.toISOString(),
       summary: feedSummary(DOMAIN_EVENT_TYPE_BY_DB_VALUE[event.type] ?? event.type, event.payload as Record<string, unknown>),
     })),
+    // ERRATUM 2026-08-30 (final review): DEAD reference code -- see the Task 8 ruling. No
+    // `approvals` relation is read; the shipped sort is `mergeQueueOrder` over
+    // `task_review_approved` sequence numbers.
     // A task with no approval row yet (one an operator moved by hand) sorts by its own creation
     // time -- last, among tasks that WERE approved, which is where an un-reviewed entry belongs.
     mergeQueue: [...mergingTasks]

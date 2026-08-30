@@ -105,7 +105,11 @@ Room" and "Design Tokens".
   rgba(123,140,255,.3) → transparent`; the connection chip becomes `sse · <ms>` using the
   age of the most recent event on arrival (`Date.now() − event.ts` — heartbeat frames are id-only
   and unobservable to `EventSource`, so arrival age is the measurable latency); the budget bar and two-step STOP keep M11's behavior
-  and take the mockup's geometry.
+  and take the mockup's geometry. **Measured on Overview, Tasks and Graph only**: Activity streams
+  through `useActivityStream`, which wraps its own `EventSource` and measures no arrival age, so
+  `/activity` renders `sse · —`. A deviation on the record, not a defect — the honest reading of an
+  unmeasured latency — and widening the hook is scheduled, not done.
+  *(Deviation recorded 2026-08-30 — erratum 5.)*
 - **Motion** — `globals.css` gains `@keyframes pulse | dash | sweep | rise | spin` exactly as the
   mockup defines them, and `@media (prefers-reduced-motion: reduce) { * { animation: none !important } }`.
   New rows in any list get `.rise` (0.3s `translateY(5px)`); M11's dropped "new-row rise"
@@ -122,10 +126,13 @@ ten states in one `it.each`; reduced-motion removes every animation class.
 
 Claude Code invokes a skill as a `tool_use` named `Skill` with `input.skill` (e.g.
 `superpowers:brainstorming`). The pump already receives every `tool_call` event; it keeps a
-per-run `Map<string, number>` of skill names and, when the run concludes (any terminal path
-that writes `terminalAt`), writes `AgentRun.skillCalls Json?` as `{ [skillName]: count }`.
-Cursor runs write `null` (their parser never sees a `Skill` tool). Migration: one nullable
-column. Evidence: one real Claude run recorded as a fixture showing the `Skill` tool_use line
+per-run `Map<string, number>` of skill names and, **when the pump's event stream ends, however it
+ends** — a terminal result, a bare end, an operator's kill, or a pause — writes
+`AgentRun.skillCalls Json?` as `{ [skillName]: count }`, **merged into whatever the row already
+holds**. A run whose **provider** is Cursor writes `null`; the discriminator is the provider, never
+the stream's contents (`runtimeReportsUsage`). Migration: one nullable column.
+*(Corrected 2026-08-30 — erratum 2; the original said "when the run concludes (any terminal path
+that writes `terminalAt`)" and "their parser never sees a `Skill` tool".)* Evidence: one real Claude run recorded as a fixture showing the `Skill` tool_use line
 shape — the mapping is written from the recording, not from documentation (M12 discipline).
 
 ### 4.2 Tokens (`packages/providers/src/claude/stream.ts`, `packages/db`)
@@ -133,7 +140,10 @@ shape — the mapping is written from the recording, not from documentation (M12
 Claude's `result` line carries `usage.input_tokens`, `usage.output_tokens` (and cache
 fields). `RunOutcome` gains `tokens: { input: number; output: number } | null`; the pump
 writes `AgentRun.tokensIn Int?`, `tokensOut Int?` beside `costUsd`. Missing `usage` →
-`null`, never `0`. Cursor → `null`. Migration: two nullable columns.
+`null`, never `0`. Cursor → `null` — **by provider rule, not for want of data**: Cursor's `result`
+line does report usage (`inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens` — see
+`packages/providers/test/fixtures/cursor/cursor-run.ndjson`), and it is simply unmapped in M14.
+Migration: two nullable columns. *(Premise corrected 2026-08-30 — erratum 3.)*
 
 ### 4.3 The catalog (`packages/control/src/skills.ts`)
 
@@ -170,7 +180,12 @@ Each page is one task; each consumes Series A and, where named, Series B. Values
    row: "blocked · needs you" panel (flex 1) listing blocked tasks and `pause_requested`/paused
    runs with their action, plus a 340px live-events panel (last 8, `all →` to Activity).
    `GoalCard` gains the `waiting` caption and suggestion chips (the last three distinct goals);
-   a "merge queue · serial" panel lists `merging` tasks FIFO. `RuntimeCard` keeps its place.
+   a "merge queue · serial" panel lists `merging` tasks **in the daemon's own order**: ascending by
+   the latest `task_review_approved` `ExecutionEvent.seq` per task, ties broken by task id
+   (`packages/domain/src/merge/queue.ts`'s `mergeQueueOrder`, shared with
+   `apps/orchestrator/src/merge.ts`). A `merging` task with no approval event — which `merge.ts`
+   skips — is listed last and marked, because a task stuck in the queue is what the panel is for.
+   *(Corrected 2026-08-30 — erratum 1; the original said "FIFO".)* `RuntimeCard` keeps its place.
 2. **Agents** (`/agents`) — `DataTable` with grid template `200px 130px 120px 1fr 110px 90px 80px`:
    `AvatarTile`+name+role · department (team name) · `StatusPill` · current task with an inline
    `ProgressBar` · provider (mark only when `capabilitiesOf(kind).gate === 'shell-only'`) ·
@@ -185,8 +200,11 @@ Each page is one task; each consumes Series A and, where named, Series B. Values
    color, a 1.4px solid core, a 1.6px white dashed overlay `stroke-dasharray: 5 11` animated
    `stroke-dashoffset: -32` over 1.15s linear (behind reduced-motion); inactive edges 3px
    `rgba(255,255,255,.13)`, no animation. Canvas `#08090c`, 26px radial-dot grid, a soft teal
-   radial wash at the top. Mode switch Organization / Execution / Dependencies (Skill chain
-   appears once Series B data exists; otherwise a disabled `later`). A 352px right drawer:
+   radial wash at the top. Mode switch Organization / Execution / Dependencies. **Skill chain is a
+   disabled `later` for the whole of M14** (Task 11 ruling I2: a data signal is not a view);
+   `GraphAgent.hasSkillData` is the plumbing a later milestone flips, and nothing reads it today.
+   *(Corrected 2026-08-30 — erratum 4; the original promised it would appear once Series B data
+   exists.)* A 352px right drawer:
    selected agent header, provider/model tiles, current task + progress, checkpoint list
    (✓ / ● / ○ from `Checkpoint`), quick-instruction chips, free-text instruct (Enter sends —
    the existing message route), Pause / Reassign(`later`) / Stop, recent events.
@@ -263,3 +281,63 @@ review's fix wave takes the fixes.
 
 `npm run gate:m14-fidelity` (§6) plus the per-task triple. The gate needs the seeded database
 and Playwright's Chromium; it spends nothing and never skips a page.
+
+## 10. Errata (post-execution)
+
+Recorded 2026-08-30, from the final whole-branch review of M14
+(`.superpowers/sdd/2026-08-29-m14-design-fidelity/final-review.md`) and applied in the fix wave of
+the same date. Each is corrected **in place** above as well as listed here, so a reader who lands
+mid-document is not misled and a reader who wants the diff can find it in one place. The rule this
+milestone was written to enforce applies to its own spec: a claim nobody verified is a claim that
+will be relied on.
+
+1. **§5.1 — the merge queue is not FIFO.** The spec said the `merge queue · serial` panel lists
+   `merging` tasks FIFO. It lists them in the daemon's own order: ascending by the latest
+   `task_review_approved` `ExecutionEvent.seq` per task, ties broken by task id
+   (`packages/domain/src/merge/queue.ts`'s `mergeQueueOrder`, shared by `apps/orchestrator/src/merge.ts`
+   and `apps/web/src/server/overview.ts`, so the panel and the daemon cannot drift by construction).
+   A `merging` task with no approval event is listed last and marked. For the record: this sends a
+   re-approved rework task to the BACK of the queue, which is what the daemon does and what a narrow
+   reading of the README's "FIFO by approval time" would not predict.
+
+2. **§4.1 — `skillCalls` is a fact of the STREAM, not of a terminal status write.** The spec said
+   the tally is written "when the run concludes (any terminal path that writes `terminalAt`)". It
+   is written when the pump's event stream ends, however it ends — a terminal result, a bare end,
+   an operator's kill, or a pause — and merged into whatever the row already holds, never replacing
+   it (Task 4 ruling I1+I2). `control/stop.ts` concludes the row from another call path and
+   normally wins the race, so a terminal-status hook would have lost the tally exactly when an
+   operator stopped a run. The merge is also what makes a pause→resume total add up.
+   Second correction in the same section: "Cursor runs write `null` (their parser never sees a
+   `Skill` tool)" states a reason that is not the rule. A run whose **provider** is Cursor writes
+   `null`; the discriminator is the provider, never the stream's contents (`runtimeReportsUsage`).
+
+3. **§4.2 — "Cursor → `null`" is right, its premise is wrong.** The rule stands and did not change
+   in M14. But Cursor's `result` line DOES report usage, in camelCase:
+   `inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens` — the same four counters the
+   Claude billed-input rule sums. The repository's own recording proves it:
+   `packages/providers/test/fixtures/cursor/cursor-run.ndjson`'s result line carries
+   `"usage":{"inputTokens":15391,"outputTokens":223,"cacheReadTokens":25856,"cacheWriteTokens":0}`.
+   `RunOutcome.tokens` is `null` for Cursor **by provider rule, not for want of data**; the four
+   fields are unmapped in M14. The comment in `packages/providers/src/cursor/stream.ts` that denied
+   the data exists was corrected in the same fix wave (review I6) — it had contradicted the same
+   file's own docstring since M12.
+
+4. **§5.4 — Skill chain does not appear this milestone.** The spec said the fourth graph mode
+   "appears once Series B data exists; otherwise a disabled `later`". It is a disabled `later` for
+   the whole of M14 (Task 11 ruling I2: a data signal is not a view — having the data does not mean
+   having designed the view). `GraphAgent.hasSkillData` (`apps/web/src/server/graph.ts`) is the
+   plumbing a later milestone flips; nothing reads it today, and that is deliberate and tested.
+
+5. **§3 — the `sse · <ms>` chip is not measured on all nine pages.** It is measured on Overview,
+   Tasks and Graph, whose page-owned hooks time an event's arrival age. Activity streams through
+   `useActivityStream`, which wraps its own `EventSource` and measures nothing, so `/activity`
+   renders `sse · —`. That is the honest reading of an unmeasured latency and is left as-is;
+   widening the hook is a scheduled follow-up, recorded here rather than silently deviated from.
+
+6. **Plan errata** (`docs/superpowers/plans/2026-08-29-m14-design-fidelity.md`) — annotated in the
+   plan itself, listed here so the pair stays findable: Task 8's reference code reads a dead
+   `Approval` table via `decidedAt` (≈lines 4147-4148, 4189-4194, 4247) and instructs adding
+   `"Approval"` to a TRUNCATE list (≈lines 1546-1547). The Task 8 NEEDS_CONTEXT ruling replaced all
+   of it with the `task_review_approved` seq rule (erratum 1 above), so none of that reference code
+   describes what was built. Separately, Task 2's Step 4 names `ui-components.test.tsx` as being in
+   its Files block, where it is not.
