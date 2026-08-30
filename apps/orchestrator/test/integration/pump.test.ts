@@ -1305,15 +1305,19 @@ describe('pumpRun', () => {
   })
 
   /**
-   * M14 §4.2: `AgentRun.tokensIn` / `tokensOut`, written from `RunOutcome.tokens` at the same
-   * stream-end write `skillCalls` uses (Decision 4), NOT the terminal `succeeded`/`failed` write --
-   * tokens are a fact of the `result` line, which only that write ever has in hand. Unlike
-   * `skillCalls`, which is unconditional every time the stream ends, this write is conditioned on
-   * the stream having actually produced a `result` line: a pause or an operator's kill carries no
-   * `outcome` at all, and writing `null` onto the row then would erase a total an earlier pump of
-   * this same run already recorded.
+   * M14 §4.2, narrowed by M15 spec §4 (fix round 1): `AgentRun.tokensIn` / `tokensOut`, written
+   * from `RunOutcome.tokens` at the same stream-end write `skillCalls` uses, NOT the terminal
+   * `succeeded`/`failed` write -- tokens are a fact of the `result` line, which only that write
+   * ever has in hand. Unlike `skillCalls`, which is unconditional every time the stream ends,
+   * this write is conditioned on the stream having actually produced a `result` line: a pause or
+   * an operator's kill carries no `outcome` at all, and writing `null` onto the row then would
+   * erase a total an earlier pump of this same run already recorded.
+   *
+   * Unlike `skillCalls`, this column is NOT provider-gated: M14 Decision 4's `Cursor -> null`
+   * provider rule is superseded here by M15 spec §4. `outcome.tokens` is persisted whenever it
+   * is non-null, for any provider -- see the Cursor case below.
    */
-  describe('AgentRun.tokensIn / tokensOut (M14 §4.2)', () => {
+  describe('AgentRun.tokensIn / tokensOut (M14 §4.2, M15 spec §4)', () => {
     it('writes the reported token counts beside the cost when the run concludes', async (): Promise<void> => {
       await pumpRun({
         ...ids,
@@ -1343,11 +1347,16 @@ describe('pumpRun', () => {
       expect(run.tokensOut).toBeNull()
     })
 
-    it('writes null for a Cursor run even if its outcome somehow carried a usage object', async (): Promise<void> => {
+    it('writes a Cursor run’s reported tokens too -- M15 spec §4 supersedes the provider rule for tokens only, leaving skillCalls null', async (): Promise<void> => {
+      // M15 fix round 1: unlike `skillCalls` just above, `tokensIn`/`tokensOut` are no longer
+      // gated on `runtimeReportsUsage`/the provider. A non-null `outcome.tokens` is a measurement
+      // the stream actually reported -- here, the exact figures `cursor/stream.ts`'s
+      // `tokensFromUsage` derives from the recorded fixture's result line
+      // (`inputTokens:15391 + cacheReadTokens:25856 + cacheWriteTokens:0 = 41247`, `outputTokens:223`)
+      // -- and it is persisted for any provider. `skillCalls` still stays SQL NULL: Cursor
+      // genuinely never emits a `Skill` tool call, and that rule (Decision 4) is untouched.
       await pumpRun({
         ...ids,
-        // The PROVIDER is the discriminator, not what the outcome happens to carry -- the same
-        // rule `skillCalls` follows (Decision 4).
         spawn: {
           settingsPath: '/tmp/aiteamos-tokens/.cursor/hooks.json',
           pauseFlagPath: '/tmp/aiteamos-tokens/pause.flag',
@@ -1357,14 +1366,14 @@ describe('pumpRun', () => {
         },
         events: fromArray([
           { kind: 'session_started', sessionId: 's-1' },
-          // A figure this product has never measured on Cursor.
-          { kind: 'terminated', outcome: { ...okOutcome, tokens: { input: 1, output: 2 } } },
+          { kind: 'terminated', outcome: { ...okOutcome, tokens: { input: 41247, output: 223 } } },
         ]),
       })
 
       const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
-      expect(run.tokensIn).toBeNull()
-      expect(run.tokensOut).toBeNull()
+      expect(run.tokensIn).toBe(41247)
+      expect(run.tokensOut).toBe(223)
+      expect(run.skillCalls).toBeNull()
     })
 
     it('does not null out an already-written total when a later stream ends with no result line', async (): Promise<void> => {

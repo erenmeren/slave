@@ -92,16 +92,15 @@ function readPauseRequester(pauseFlagPath: string | undefined): string | null {
 }
 
 /**
- * Whether the runtime this run was SPAWNED with can report skill invocations and token usage at
- * all (M14 §4.1/§4.2, Decision 4).
+ * Whether the runtime this run was SPAWNED with can report SKILL invocations at all (M14
+ * §4.1, Decision 4, narrowed by M15 spec §4 -- see below).
  *
  * Keyed on `spawn.provider` -- the same field `recordCursorPauseIfRequested` branches on -- and
  * deliberately NOT on what the stream happened to contain. An empty tally means two different
  * things depending on the runtime, and only one of them is a measurement: on Claude it is "we
  * watched every tool call and none was a `Skill`" (`{}`), on Cursor it is "this runtime never
  * emits one, so we do not know" (`null`). Writing `{}` for Cursor would put a fabricated zero
- * into the Skills page's per-skill run counts and a fabricated zero token sum into every
- * per-agent average on Analytics.
+ * into the Skills page's per-skill run counts.
  *
  * `spawn` absent (a test fixture that never pauses, a caller with no spawn facts) reads as
  * "not Cursor": the only runtime this rule excludes is the one that is named. Every real caller
@@ -110,6 +109,13 @@ function readPauseRequester(pauseFlagPath: string | undefined): string | null {
  *
  * `false` is written as `Prisma.DbNull`, not a bare `null`: on a nullable Json column those are
  * different values, and only the former is SQL NULL.
+ *
+ * NOT used for `tokensIn`/`tokensOut` (M15 fix round 1): M14's provider-keyed `null` for Cursor
+ * tokens is superseded by M15 spec §4 for tokens specifically -- `cursor/stream.ts` now maps
+ * Cursor's `result`-line `usage` into `RunOutcome.tokens` under the same billed-input rule as
+ * Claude's, and `writeStreamUsage` below persists that figure, for ANY provider, whenever the
+ * stream actually reported it (`outcome.tokens` non-null). This function's name describes what
+ * it still gates: the skills tally, and only the skills tally.
  */
 function runtimeReportsUsage(spawn: PumpRunInput['spawn']): boolean {
   return spawn?.provider !== 'cursor'
@@ -165,9 +171,9 @@ async function writeStreamUsage(input: {
   readonly spawn: PumpRunInput['spawn']
   readonly outcome: RunOutcome | null
 }): Promise<void> {
-  const reportsUsage = runtimeReportsUsage(input.spawn)
+  const reportsSkillCalls = runtimeReportsUsage(input.spawn)
 
-  if (!reportsUsage) {
+  if (!reportsSkillCalls) {
     // Stated, not merely left alone: this runtime cannot report skill use, and `Prisma.DbNull` is
     // SQL NULL -- the "we do not know" of Decision 4, never the `{}` that would claim a
     // measurement nobody made.
@@ -189,12 +195,15 @@ async function writeStreamUsage(input: {
   await prisma.agentRun.updateMany({
     where: { id: input.runId },
     data: {
-      // `runtimeReportsUsage` is belt-and-braces here rather than redundant: `cursor/stream.ts`
-      // already yields `tokens: null` on every Cursor outcome, and this line is what keeps that
-      // true if a future Cursor build starts reporting a usage object this product has not
-      // measured. The PROVIDER decides, never what the outcome happens to carry.
-      tokensIn: reportsUsage ? (input.outcome.tokens?.input ?? null) : null,
-      tokensOut: reportsUsage ? (input.outcome.tokens?.output ?? null) : null,
+      // NOT gated on `runtimeReportsUsage`/`reportsSkillCalls` (M15 fix round 1): that function
+      // governs the skills tally only. `outcome.tokens` is written whenever it is NON-NULL, for
+      // ANY provider -- a non-null `tokens` is a measurement the stream actually reported
+      // (`cursor/stream.ts`'s `tokensFromUsage` already degrades a malformed or absent `usage`
+      // to `null` before this ever sees it), and M15 spec §4 supersedes M14's provider-keyed
+      // `null` for tokens specifically. When `outcome.tokens` is `null` -- Cursor result lines
+      // with no usable `usage`, or any provider's degraded reading -- both columns stay `null`.
+      tokensIn: input.outcome.tokens?.input ?? null,
+      tokensOut: input.outcome.tokens?.output ?? null,
     },
   })
 }

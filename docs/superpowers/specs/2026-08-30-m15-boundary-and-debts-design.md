@@ -203,12 +203,21 @@ erratum in the M14 spec pointing here. The stale comments in `cursor/stream.ts` 
 ~332–398, "usage is deliberately unread") are rewritten in the same commit that changes the
 behaviour.
 
-### 4.3 What does not change
+### 4.3 What does change, and what does not
 
-`pump.ts`'s `writeStreamUsage` already persists `outcome.tokens` when non-null, and
-Agents/Analytics already render numbers when `tokensIn/Out` are present — no DB migration, no UI
-work. **No backfill:** raw streams are not retained, so pre-M15 Cursor runs keep `null` tokens;
-their `—` in the UI is the honest record.
+Corrected (fix round 1): the parser change alone is inert. `pump.ts`'s `writeStreamUsage` gated
+`tokensIn`/`tokensOut` on `runtimeReportsUsage(input.spawn)`, the same provider check
+`skillCalls` uses — which returns `false` for every Cursor run, so a mapped `outcome.tokens` was
+computed and then discarded before it ever reached the row. That gate is changed in this
+milestone: `tokensIn`/`tokensOut` are now written from `outcome.tokens` whenever it is non-null,
+for any provider — a non-null `tokens` is a measurement the stream actually reported, and M15
+supersedes the M14 provider rule for tokens only. `runtimeReportsUsage` is untouched for
+`skillCalls`: Cursor genuinely never emits a `Skill` tool call, so that tally stays
+provider-keyed `null`.
+
+Agents/Analytics already render numbers when `tokensIn/Out` are present — no UI work, no DB
+migration. **No backfill:** raw streams are not retained, so pre-M15 Cursor runs keep `null`
+tokens; their `—` in the UI is the honest record.
 
 ## 5. Gate — `npm run gate:m15-boundary`
 

@@ -451,9 +451,10 @@ function parseResultLine(raw: unknown, line: string): RuntimeEvent {
       // (41247 billed input, 223 output -- `tokensFromUsage`'s doc comment above).
       //
       // Mapped, not `null`: M14 Decision 4's `Cursor -> null` provider rule is superseded by
-      // M15 (spec §4). `runtimeReportsUsage` in `pump.ts` is unrelated -- it gates SKILL
-      // completion tallies, not this field. A malformed `usage` degrades to `null` inside
-      // `tokensFromUsage`, never a guess; it never makes this `result` line itself unparsable.
+      // M15 (spec §4) for tokens specifically. `pump.ts`'s `writeStreamUsage` persists this
+      // field whenever it is non-null, for ANY provider (M15 fix round 1) -- `runtimeReportsUsage`
+      // there gates only the skills tally, not this one. A malformed `usage` degrades to `null`
+      // inside `tokensFromUsage`, never a guess; it never makes this `result` line unparsable.
       tokens: tokensFromUsage(data.usage),
     },
   }
