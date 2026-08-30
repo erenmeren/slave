@@ -1,5 +1,6 @@
 import type { AgentStatus, RunStatus, TaskStatus } from '@ai-team-os/domain'
 import type { StatusTone } from '../components/ui/StatusPill'
+import { COLUMN_FOR_STATUS, COLUMN_STATE } from './taskColumns'
 
 /**
  * The handoff's ten card states (`design_handoff_ai_team_os/mockups/AI Team OS Mockups.dc.html`
@@ -130,6 +131,51 @@ export function cardStateFor(agent: AgentStatus, task: TaskStatus | null): CardS
       // unhandled member.
       const unhandled: never = task
       throw new Error(`cardStateFor: unhandled TaskStatus ${JSON.stringify(unhandled)}`)
+    }
+  }
+}
+
+/**
+ * A TASK's own card state, with no agent in play (M14 fix wave, review I2).
+ *
+ * `COLUMN_STATE[COLUMN_FOR_STATUS[status]]` -- the state of the board column the task sits in,
+ * which is the one thing a task card, a dependency node and an execution node all already agree
+ * on. Every task-only surface used to call `cardStateFor('idle', status)`, borrowing the AGENT
+ * derivation and passing a fake idle agent; for `running`, `assigned`, `verifying`, `ready` and
+ * `backlog` that fell through to `cardStateForAgent('idle')` and painted a grey **IDLE** pill on a
+ * card sitting under the teal **IN PROGRESS** column head. One card, two answers.
+ *
+ * `failed` and `cancelled` are the two exceptions, and they are deliberate: `COLUMN_FOR_STATUS`
+ * puts both on the `Done` column (a column is a phase, and both of those end one), but a failed
+ * task is not a completed one -- they keep the `blocked` state `cardStateFor` already gave them,
+ * so the card says what happened while the board still files it where it belongs.
+ *
+ * `cardStateFor(agent, task)` is untouched and stays the AGENT-first derivation: `AgentCard` is
+ * about an agent that happens to hold a task, and this function is about a task that may have no
+ * agent at all.
+ */
+export function cardStateForTask(status: TaskStatus): CardState {
+  switch (status) {
+    case 'failed':
+    case 'cancelled':
+      return 'blocked'
+    case 'backlog':
+    case 'ready':
+    case 'rework':
+    case 'assigned':
+    case 'running':
+    case 'verifying':
+    case 'reviewing':
+    case 'merging':
+    case 'blocked':
+    case 'done':
+      return COLUMN_STATE[COLUMN_FOR_STATUS[status]]
+    default: {
+      // The same `never` guard `cardStateFor` carries, for the same reason: `noImplicitReturns` is
+      // off, so a thirteenth `TaskStatus` would otherwise fall out of this switch as `undefined`
+      // and render an empty pill. This makes it a BUILD failure naming the unhandled member.
+      const unhandled: never = status
+      throw new Error(`cardStateForTask: unhandled TaskStatus ${JSON.stringify(unhandled)}`)
     }
   }
 }

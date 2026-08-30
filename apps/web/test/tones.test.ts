@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { CARD_STATE_TONE, cardStateFor, cardStateForAgent, cardStateForRun, type CardState } from '../src/lib/tones.js'
-import type { AgentStatus, RunStatus } from '@ai-team-os/domain'
+import { CARD_STATE_TONE, cardStateFor, cardStateForAgent, cardStateForRun, cardStateForTask, type CardState } from '../src/lib/tones.js'
+import { COLUMN_FOR_STATUS, COLUMN_STATE } from '../src/lib/taskColumns.js'
+import type { AgentStatus, RunStatus, TaskStatus } from '@ai-team-os/domain'
 import { TASK_STATUSES } from '@ai-team-os/db'
 
 // The mockup's own table (`AI Team OS Mockups.dc.html:912-923`), transcribed. Colour is checked
@@ -102,5 +103,51 @@ describe('cardStateFor', () => {
     // `cardStateFor`'s own `never` guard) automatically, with nothing in this file to remember
     // to update.
     for (const task of TASK_STATUSES) expect(typeof cardStateFor('idle', task)).toBe('string')
+  })
+})
+
+// M14 fix wave, review I2. The defect this pins: a card in the teal IN PROGRESS column whose own
+// pill read a grey IDLE, because every task-only surface went through `cardStateFor('idle', s)`
+// and five statuses fell through that to the agent's own idleness.
+describe('cardStateForTask', () => {
+  const cases: ReadonlyArray<readonly [TaskStatus, CardState]> = [
+    ['backlog', 'idle'],
+    ['ready', 'planning'],
+    ['rework', 'planning'],
+    ['assigned', 'working'],
+    ['running', 'working'],
+    ['verifying', 'working'],
+    ['reviewing', 'review'],
+    ['merging', 'review'],
+    ['blocked', 'blocked'],
+    ['done', 'completed'],
+    ['failed', 'blocked'],
+    ['cancelled', 'blocked'],
+  ]
+
+  it.each(cases)('maps %s to %s', (status, expected) => {
+    expect(cardStateForTask(status)).toBe(expected)
+  })
+
+  it('covers every TaskStatus -- a thirteenth is a hole here and a build error in the source', () => {
+    expect(new Set(cases.map(([s]) => s))).toEqual(new Set(TASK_STATUSES))
+  })
+
+  it("is the column's state for every status except the two ends that are not completions", () => {
+    for (const status of TASK_STATUSES) {
+      const columnState = COLUMN_STATE[COLUMN_FOR_STATUS[status]]
+      if (status === 'failed' || status === 'cancelled') {
+        // Both sit on the Done column, and neither is done. The card says what happened.
+        expect(COLUMN_FOR_STATUS[status]).toBe('Done')
+        expect(cardStateForTask(status)).toBe('blocked')
+      } else {
+        expect(cardStateForTask(status)).toBe(columnState)
+      }
+    }
+  })
+
+  it('reads a running task as working, never as idle -- the pill agrees with the column head', () => {
+    expect(CARD_STATE_TONE[cardStateForTask('running')].label).toBe('WORKING')
+    expect(CARD_STATE_TONE[cardStateFor('idle', 'running')].label).toBe('IDLE')
   })
 })

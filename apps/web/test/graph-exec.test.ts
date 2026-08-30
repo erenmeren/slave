@@ -115,6 +115,15 @@ describe('buildExecutionGraph', () => {
     expect((node?.data as { tone: string }).tone).toBe('blocked')
   })
 
+  // M14 fix wave, review I2: this node used to take its tone from `cardStateFor('idle', status)`,
+  // which painted every live task on the execution graph the grey idle tone.
+  it('gives a running task node the working tone of the stage it hangs under, not idle', () => {
+    const { nodes } = buildExecutionGraph(snapshot([task({ id: 't1', status: 'running' })]))
+    const node = nodes.find((n) => n.type === 'stageTask')
+    expect((node?.data as { tone: string }).tone).toBe('working')
+    expect((node?.data as StageTaskNodeData).column).toBe('In Progress')
+  })
+
   it('leaves every STAGE at the origin — ELK owns the stage chain\'s coordinates, this does not', () => {
     const { nodes } = buildExecutionGraph(snapshot([task({ id: 't1', status: 'running' })]))
     const stages = nodes.filter((node) => node.type === 'stage')

@@ -1,6 +1,6 @@
 import type { TaskStatus } from '@ai-team-os/domain'
 import { priorityChip } from '../lib/taskColumns'
-import { cardStateFor, CARD_STATE_TONE } from '../lib/tones'
+import { cardStateForTask, CARD_STATE_TONE } from '../lib/tones'
 import type { TaskBoardItem } from '../server/tasks'
 import { AvatarTile } from './ui/AvatarTile'
 import { StatusPill, TONE_TEXT } from './ui/StatusPill'
@@ -79,10 +79,11 @@ export const TASK_STATUS_TEXT: Record<TaskStatus, string> = {
 /**
  * The handoff's compact card (design README §3a.3): mono id, priority chip, title, assignee
  * chip, step counter (`attempt/maxAttempts`). Its state — and so its dot/pill tone — comes from
- * `lib/tones.ts`'s `cardStateFor`, the ONE derivation every card in the app already goes through
- * (Decision 2); the card has no `AgentStatus` of its own to hand it, so it passes `'idle'` and
- * lets the task-status overrides in `cardStateFor` (`blocked`, `reviewing`/`merging` → `review`,
- * `failed`/`cancelled` → `blocked`, `done` → `completed`) do the rest.
+ * `lib/tones.ts`'s `cardStateForTask`, the ONE derivation for a card that is about a TASK
+ * (Decision 2). It used to call `cardStateFor('idle', task.status)` — borrowing the agent-first
+ * derivation with a fake idle agent — and so drew a grey **IDLE** pill on a `running` card sitting
+ * under the teal **IN PROGRESS** column head (M14 fix wave, review I2). `cardStateForTask` reads
+ * the card's own column state instead, so the pill and the column head cannot disagree.
  */
 export function TaskCard({
   task,
@@ -92,7 +93,7 @@ export function TaskCard({
   readonly onSelect: (id: string) => void
 }): React.JSX.Element {
   const priority = priorityChip(task.priority)
-  const state = cardStateFor('idle', task.status)
+  const state = cardStateForTask(task.status)
   const { tone, label, pulse } = CARD_STATE_TONE[state]
 
   return (

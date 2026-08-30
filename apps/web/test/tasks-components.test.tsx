@@ -219,6 +219,14 @@ describe('the six-column board', () => {
     expect(screen.queryByTestId('avatar-tile')).toBeNull()
   })
 
+  // M14 fix wave, review I2: the card used to pass a fake idle agent through `cardStateFor`, so a
+  // `running` task under the teal IN PROGRESS head wore a grey IDLE pill. It reads its column now.
+  it('gives a running task the working pill its own column head wears, not IDLE', () => {
+    render(<TaskCard task={task({ status: 'running' })} onSelect={() => {}} />)
+    expect(screen.getByTestId('status-pill').textContent).toBe('WORKING')
+    expect(screen.getByTestId('status-pill').getAttribute('data-tone')).toBe('working')
+  })
+
   it('keeps a failed task on Done while its own pill still says failed', () => {
     render(<TasksClient workspaceId="w1" initial={snapshot([task({ status: 'failed' })])} />)
     expect(screen.getByTestId('column-count-Done').textContent).toBe('1')

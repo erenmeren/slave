@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import type React from 'react'
 import { Handle, Position, type Edge, type Node, type NodeProps, type NodeTypes } from 'reactflow'
 import type { TaskStatus } from '@ai-team-os/domain'
-import { CARD_STATE_TONE, cardStateFor } from '../../lib/tones'
+import { CARD_STATE_TONE, cardStateForTask } from '../../lib/tones'
 import type { GraphSnapshot } from '../../server/graph'
 import { BORDER_FLASH_MS } from '../AgentCard'
 import { TASK_STATUS_BORDER, TASK_STATUS_DOT, TASK_STATUS_FLASH_COLOR } from '../TaskCard'
@@ -157,6 +157,12 @@ export function buildDepsGraph(snapshot: GraphSnapshot): { readonly nodes: Node[
   const edges: Edge[] = snapshot.dependencies.map((dependency) => {
     const source = `task:${dependency.dependsOnTaskId}`
     const target = `task:${dependency.taskId}`
+    // The TARGET's own state, through `cardStateForTask` -- the task-only derivation (M14 fix
+    // wave, review I2). This used to be `cardStateFor('idle', status)`, which handed the
+    // AGENT-first derivation a fake idle agent and drew every cable into a `running`, `assigned`
+    // or `verifying` task in the grey idle tone. `undefined` only for a dependency row pointing
+    // outside the snapshot's own task set; `idle` is the honest tone for a target we cannot see.
+    const targetStatus = statusById.get(dependency.taskId)
     return {
       id: `${source}->${target}`,
       source,
@@ -166,7 +172,7 @@ export function buildDepsGraph(snapshot: GraphSnapshot): { readonly nodes: Node[
       // satisfied: the way is CLEAR along this cable, which is the one thing a dependency edge
       // has to say. An unmet prerequisite draws as the flat inactive line.
       data: {
-        tone: CARD_STATE_TONE[cardStateFor('idle', statusById.get(dependency.taskId) ?? null)].tone,
+        tone: CARD_STATE_TONE[targetStatus === undefined ? 'idle' : cardStateForTask(targetStatus)].tone,
         active: statusById.get(dependency.dependsOnTaskId) === 'done',
       },
     }

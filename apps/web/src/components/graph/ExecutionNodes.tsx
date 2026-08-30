@@ -3,7 +3,7 @@
 import { Handle, Position, type Edge, type Node, type NodeProps, type NodeTypes } from 'reactflow'
 import type { TaskStatus } from '@ai-team-os/domain'
 import { BOARD_COLUMNS, COLUMN_FOR_STATUS, COLUMN_STATE, type BoardColumn } from '../../lib/taskColumns'
-import { CARD_STATE_TONE, cardStateFor } from '../../lib/tones'
+import { CARD_STATE_TONE, cardStateForTask } from '../../lib/tones'
 import type { GraphSnapshot } from '../../server/graph'
 import { TONE_BORDER, TONE_DOT, TONE_FILL, TONE_TEXT, type StatusTone } from '../ui/StatusPill'
 
@@ -169,9 +169,10 @@ export function buildExecutionGraph(snapshot: GraphSnapshot): { readonly nodes: 
           kind: 'stageTask',
           title: task.title,
           ref: `TASK-${task.id.slice(0, TASK_REF_LENGTH)}`,
-          // `cardStateFor('idle', status)` is the board card's own derivation: this node is about
-          // the TASK, and no agent status is in play here.
-          tone: CARD_STATE_TONE[cardStateFor('idle', task.status)].tone,
+          // `cardStateForTask` is the board card's own derivation: this node is about the TASK,
+          // and no agent status is in play here (M14 fix wave, review I2 — this used to pass a
+          // fake idle agent through `cardStateFor` and paint a live task's node grey).
+          tone: CARD_STATE_TONE[cardStateForTask(task.status)].tone,
           column,
         } satisfies StageTaskNodeData,
       })
