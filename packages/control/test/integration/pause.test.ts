@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -117,6 +117,33 @@ describe('requestPause', () => {
 
     const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })
     expect(after.pauseReason).toBe('emergency_stop')
+  })
+
+  it('two concurrent requests: exactly one claims, the loser is told pause_requested', async () => {
+    const { run } = fixture
+    const [a, b] = await Promise.all([requestPause(run.id, 'meren'), requestPause(run.id, 'meren')])
+    const outcomes = [a, b]
+    expect(outcomes.filter((r) => r.ok)).toHaveLength(1)
+    const refused = outcomes.find((r) => !r.ok)
+    expect(refused && !refused.ok && refused.error.kind).toBe('wrong_status')
+    const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })
+    expect(after.status).toBe('pause_requested')
+  })
+
+  it('a rollback restores the status the claim actually interrupted', async () => {
+    // Make signalPause fail: pre-create the run's own directory read-only, so `runFilePaths`'s
+    // `mkdirSync(dir, { recursive: true })` is a harmless no-op (the dir already exists) but the
+    // flag write inside it hits EACCES. (A nonexistent parent -- e.g. under `/proc` -- was tried
+    // first and hangs Node's recursive `mkdirSync` forever on this host; this reaches the same
+    // failure without going anywhere near that.)
+    const { run, workspace } = fixture
+    const { runDir } = runFilePaths(workspace.repoPath, runId(run.id))
+    chmodSync(runDir, 0o555)
+    await prisma.agentRun.update({ where: { id: run.id }, data: { status: 'resuming' } })
+    const result = await requestPause(run.id, 'meren')
+    expect(result.ok).toBe(false)
+    const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })
+    expect(after.status).toBe('resuming') // the claim's own reading, not a stale earlier read
   })
 })
 

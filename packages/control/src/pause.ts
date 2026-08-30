@@ -37,23 +37,25 @@ export async function requestPause(
   // reason (M12 Task 3's fix round; see its report for why the adapter-instance route the task
   // was originally specified with does not work).
 
-  // The status the claim interrupted, captured from the row read above -- before the claim
-  // overwrote it. `run.status` is the pre-claim value by construction: the `updateMany` below does
-  // not refresh this object.
-  const priorStatus = run.status
-
-  // Claimed, not written. `pause_requested` is a non-terminal status, so pausing a run that
-  // already finished puts a *concluded* run back into `activeRuns`, makes its agent look busy,
-  // and leaves it for the next restart's orphan sweep to flip to `failed` -- corrupting the
-  // record of a run that actually succeeded.
-  const claimed = await prisma.agentRun.updateMany({
-    where: { id: run.id, status: { in: [...PAUSABLE_STATUSES] } },
-    // `pauseReason` is the *category*: an operator asked, a guardrail tripped, or an emergency
-    // stop engaged. Task 12 carried the column forward as one nothing wrote; Task 9 is the first
-    // caller to pass anything but the human default.
-    data: { status: 'pause_requested', pauseReason: category },
-  })
-  if (claimed.count === 0) {
+  // Claim and read in ONE statement (M15 spec §3 B1): `priorStatus` must be the status this claim
+  // actually interrupted, not the status an earlier SELECT happened to see. `FOR UPDATE` orders a
+  // concurrent claimant behind this one; the RETURNING carries the pre-claim value out. Claimed,
+  // not written: `pause_requested` is a non-terminal status, so pausing a run that already
+  // finished puts a *concluded* run back into `activeRuns`, makes its agent look busy, and leaves
+  // it for the next restart's orphan sweep to flip to `failed` -- corrupting the record of a run
+  // that actually succeeded.
+  //
+  // `pauseReason` is the *category*: an operator asked, a guardrail tripped, or an emergency stop
+  // engaged. Task 12 carried the column forward as one nothing wrote; Task 9 is the first caller
+  // to pass anything but the human default.
+  const claimedRows = await prisma.$queryRaw<{ priorStatus: (typeof PAUSABLE_STATUSES)[number] }[]>`
+    UPDATE "AgentRun" AS r
+    SET status = 'pause_requested'::"RunStatus", "pauseReason" = ${category}::"PauseReason"
+    FROM (SELECT id, status FROM "AgentRun" WHERE id = ${run.id} FOR UPDATE) AS prev
+    WHERE r.id = prev.id AND prev.status = ANY(${[...PAUSABLE_STATUSES]}::text[]::"RunStatus"[])
+    RETURNING prev.status AS "priorStatus"`
+  const priorStatus = claimedRows[0]?.priorStatus
+  if (priorStatus === undefined) {
     return err({ kind: 'wrong_status', runId: run.id, status: run.status, needed: PAUSABLE_STATUSES })
   }
 
