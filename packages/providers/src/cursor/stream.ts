@@ -43,9 +43,10 @@ import type { RuntimeEvent } from '../types.js'
  *    It DOES report `usage` token counts (`inputTokens`, `outputTokens`,
  *    `cacheReadTokens`, `cacheWriteTokens` -- see
  *    `test/fixtures/cursor/cursor-run.ndjson`); spec §7's claim that Cursor
- *    reports no tokens is wrong, and spec §4.2's `Cursor -> null` rule
- *    stands anyway because it is keyed on the PROVIDER, not on what the
- *    stream happens to contain (M14 Decision 4). They are unmapped in M14.
+ *    reports no tokens is wrong. M14 Decision 4's `Cursor -> null` provider
+ *    rule is superseded by M15 (spec §4): the four counters are mapped into
+ *    `RunOutcome.tokens` under the same billed-input rule as Claude's, by
+ *    `tokensFromUsage` below.
  *
  * `numTurns: 0` on the terminal outcome is a documented FIDELITY GAP, not a
  * measurement: Cursor's result line carries no turn count at all, and this
@@ -360,16 +361,41 @@ const resultSchema = z.object({
   // is the only reason it reports.
   subtype: z.string().optional(),
   is_error: z.boolean().optional(),
-  // Everything else on the real line -- `duration_ms`, `duration_api_ms`,
-  // `result`, `session_id`, `request_id`, `usage` -- is deliberately unread:
-  // `RunOutcome` has no field for a duration, and the final text has already
-  // been emitted as `text` events. `usage` IS present and IS populated
-  // (`inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens` --
-  // `test/fixtures/cursor/cursor-run.ndjson`); it goes unread because
-  // `RunOutcome.tokens` is `null` for Cursor by provider rule in M14, not
-  // because the counters are missing. Notably ABSENT from the real line:
-  // `num_turns`, `total_cost_usd`, `stop_reason`, `permission_denials`.
+  // `usage` IS present and IS populated (`inputTokens`, `outputTokens`,
+  // `cacheReadTokens`, `cacheWriteTokens` -- `test/fixtures/cursor/cursor-run.ndjson`) and is
+  // read here, then mapped by `tokensFromUsage` below (M15 spec §4, superseding M14 Decision
+  // 4's `Cursor -> null` provider rule). It is `z.unknown()`, deliberately NOT a `z.object` of
+  // numbers: a wrongly-typed `usage` must degrade `tokens` to `null`, never make the whole
+  // result line unparsable and leave the orchestrator waiting on a process that already exited.
+  // Everything else on the real line -- `duration_ms`, `duration_api_ms`, `result`,
+  // `session_id`, `request_id` -- stays unread: `RunOutcome` has no field for a duration, and
+  // the final text has already been emitted as `text` events. Notably ABSENT from the real
+  // line: `num_turns`, `total_cost_usd`, `stop_reason`, `permission_denials`.
+  usage: z.unknown().optional(),
 })
+
+/**
+ * `RunOutcome.tokens` from the result line's `usage`, under the same billed-input rule as
+ * Claude's (`types.ts`): input = inputTokens + cacheReadTokens + cacheWriteTokens (each billed,
+ * each 0 when absent), output = outputTokens alone. Any PRESENT field that is not a
+ * non-negative finite number degrades the whole reading to `null` -- a partial figure is a lie
+ * the per-agent averages would believe, and cursor-agent self-updates without notice, so the
+ * shape is tolerated, never asserted (M15 spec §4).
+ */
+function tokensFromUsage(usage: unknown): { readonly input: number; readonly output: number } | null {
+  if (typeof usage !== 'object' || usage === null || Array.isArray(usage)) return null
+  const read = (key: string): number | null => {
+    const value = (usage as Record<string, unknown>)[key]
+    if (value === undefined) return 0
+    return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
+  }
+  const input = read('inputTokens')
+  const output = read('outputTokens')
+  const cacheRead = read('cacheReadTokens')
+  const cacheWrite = read('cacheWriteTokens')
+  if (input === null || output === null || cacheRead === null || cacheWrite === null) return null
+  return { input: input + cacheRead + cacheWrite, output }
+}
 
 function parseResultLine(raw: unknown, line: string): RuntimeEvent {
   const result = resultSchema.safeParse(raw)
@@ -421,15 +447,14 @@ function parseResultLine(raw: unknown, line: string): RuntimeEvent {
       // `outputTokens`, `cacheReadTokens`, `cacheWriteTokens` -- the same four counters the
       // Claude billed-input rule sums. See `test/fixtures/cursor/cursor-run.ndjson`, whose
       // result line reads
-      // `"usage":{"inputTokens":15391,"outputTokens":223,"cacheReadTokens":25856,"cacheWriteTokens":0}`.
+      // `"usage":{"inputTokens":15391,"outputTokens":223,"cacheReadTokens":25856,"cacheWriteTokens":0}`
+      // (41247 billed input, 223 output -- `tokensFromUsage`'s doc comment above).
       //
-      // `null` here is a PROVIDER rule, not an absence of data (M14 Decision 4: the
-      // discriminator is the provider, never the stream's contents -- `runtimeReportsUsage`).
-      // The four fields are UNMAPPED in M14 and mapping them is a follow-up, one parser change
-      // against a fixture that is already recorded. A comment claiming the data does not exist
-      // is what would stop that follow-up from ever being written (M14 fix wave, review I6);
-      // this comment says the opposite, on purpose.
-      tokens: null,
+      // Mapped, not `null`: M14 Decision 4's `Cursor -> null` provider rule is superseded by
+      // M15 (spec §4). `runtimeReportsUsage` in `pump.ts` is unrelated -- it gates SKILL
+      // completion tallies, not this field. A malformed `usage` degrades to `null` inside
+      // `tokensFromUsage`, never a guess; it never makes this `result` line itself unparsable.
+      tokens: tokensFromUsage(data.usage),
     },
   }
 }

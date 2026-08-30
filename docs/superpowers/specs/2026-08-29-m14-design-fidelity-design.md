@@ -341,3 +341,8 @@ will be relied on.
    of it with the `task_review_approved` seq rule (erratum 1 above), so none of that reference code
    describes what was built. Separately, Task 2's Step 4 names `ui-components.test.tsx` as being in
    its Files block, where it is not.
+
+7. §4.2's "Cursor → `null` tokens" provider rule is superseded by M15 (spec
+   2026-08-30-m15-boundary-and-debts-design.md §4): the recorded `usage` counters are mapped
+   under the same billed-input rule as Claude's. Pre-M15 Cursor runs keep `null` — no backfill,
+   raw streams are not retained.

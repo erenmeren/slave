@@ -155,7 +155,9 @@ describe('parseCursorLine, against the recorded fixture', () => {
         numTurns: 0,
         costUsd: null,
         deniedToolUseIds: [],
-        tokens: null,
+        // 15391 (input) + 25856 (cacheRead) + 0 (cacheWrite) = 41247, under
+        // the same billed-input rule as Claude's (M15 spec §4).
+        tokens: { input: 41247, output: 223 },
       },
     })
   })
@@ -163,9 +165,9 @@ describe('parseCursorLine, against the recorded fixture', () => {
   it('does not mistake the result line’s token usage for a cost', () => {
     // Spec §7 says Cursor reports "neither cost, tokens, nor a stop reason".
     // The fixture proves the middle claim WRONG: `usage` carries four token
-    // counts. It still carries no price, and `RunOutcome` has nowhere to put
-    // tokens, so `costUsd` stays null -- but a later reader must not be told
-    // the tokens were absent.
+    // counts, mapped into `RunOutcome.tokens` under the billed-input rule
+    // (M15 spec §4). It still carries no price, so `costUsd` stays null --
+    // but a later reader must not be told the tokens were absent.
     const raw = JSON.parse(lines[12]!) as { usage?: Record<string, number> }
     expect(raw.usage).toEqual({ inputTokens: 15391, outputTokens: 223, cacheReadTokens: 25856, cacheWriteTokens: 0 })
     expect(raw).not.toHaveProperty('total_cost_usd')
@@ -442,12 +444,30 @@ describe('parseCursorLine, the result line', () => {
     expect(event.outcome.costUsd).toBeNull()
   })
 
-  it('reports no token usage -- Cursor never says (M14 Decision 4)', () => {
+  it('reports null tokens when the result line carries no usage at all', () => {
     const terminal = parseCursorLine(
       JSON.stringify({ type: 'result', subtype: 'success', is_error: false, duration_ms: 1200, result: 'done' }),
     )
     expect(terminal.kind).toBe('terminated')
     expect((terminal as Extract<RuntimeEvent, { kind: 'terminated' }>).outcome.tokens).toBeNull()
+  })
+
+  it('maps the result usage under the billed-input rule: input+cacheRead+cacheWrite / output', () => {
+    const event = parseCursorLine(lines[12]!)
+    // 15391 + 25856 + 0 = 41247
+    expect(event.kind === 'terminated' && event.outcome.tokens).toEqual({ input: 41247, output: 223 })
+  })
+
+  it('degrades malformed usage to null, never to a guess', () => {
+    const line = JSON.stringify({ type: 'result', subtype: 'success', is_error: false, usage: { inputTokens: 'many' } })
+    const event = parseCursorLine(line)
+    expect(event.kind === 'terminated' && event.outcome.tokens).toBeNull()
+  })
+
+  it('absent usage stays null', () => {
+    const line = JSON.stringify({ type: 'result', subtype: 'success', is_error: false })
+    const event = parseCursorLine(line)
+    expect(event.kind === 'terminated' && event.outcome.tokens).toBeNull()
   })
 })
 
