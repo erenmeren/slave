@@ -51,26 +51,31 @@ export function AgentsClient({
   readonly workers: readonly WorkerRow[]
 }): React.JSX.Element {
   const [tab, setTab] = useState<Tab>('roster')
-  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null)
+  /**
+   * Fix round 1 (Important finding): the CLICKED worker's own `agentId`/`workspaceId`, captured
+   * at click time from `WorkersTable`'s `onOpen(worker)` -- never re-derived by looking `workers`
+   * (this component's prop, the Agents page's one-time server snapshot) back up by id.
+   * `WorkersTable` polls `/api/org/workers` every 5s and keeps the refreshed rows in its own
+   * internal state, which never flows back into this prop; a worker materialized only after the
+   * page's initial load has no entry in `workers` to find, and a lookup against it was a silent
+   * no-op for exactly the row an operator can see and click.
+   */
+  const [selected, setSelected] = useState<{ readonly agentId: string; readonly workspaceId: string } | null>(null)
   const [panelAgent, setPanelAgent] = useState<AgentCardData | null>(null)
-  const [panelWorkspaceId, setPanelWorkspaceId] = useState<string | null>(null)
 
   useEffect((): void => {
-    if (selectedAgentId === null) {
+    if (selected === null) {
       setPanelAgent(null)
       return
     }
-    const worker = workers.find((w) => w.agentId === selectedAgentId)
-    if (worker === undefined) return
-    setPanelWorkspaceId(worker.workspaceId)
     // The panel renders from the OVERVIEW snapshot of the agent's own workspace -- the one place
     // an `AgentCardData` is built. Fetching it here rather than widening `WorkerRow` into an
     // `AgentCardData` keeps one builder for that shape.
-    void fetch(`/api/w/${worker.workspaceId}/overview`)
+    void fetch(`/api/w/${selected.workspaceId}/overview`)
       .then(async (response) => (response.ok ? ((await response.json()) as OverviewSnapshot) : null))
-      .then((snapshot) => setPanelAgent(snapshot?.agents.find((a) => a.id === selectedAgentId) ?? null))
+      .then((snapshot) => setPanelAgent(snapshot?.agents.find((a) => a.id === selected.agentId) ?? null))
       .catch(() => setPanelAgent(null))
-  }, [selectedAgentId, workers])
+  }, [selected])
 
   return (
     <div className="flex flex-col gap-4 p-4">
@@ -91,15 +96,19 @@ export function AgentsClient({
           </button>
         ))}
       </div>
-      {tab === 'roster' ? <RosterTable roster={roster} /> : <WorkersTable initial={workers} onOpen={setSelectedAgentId} />}
-      {panelAgent !== null && panelWorkspaceId !== null && (
+      {tab === 'roster' ? (
+        <RosterTable roster={roster} />
+      ) : (
+        <WorkersTable initial={workers} onOpen={(worker) => setSelected({ agentId: worker.agentId, workspaceId: worker.workspaceId })} />
+      )}
+      {panelAgent !== null && selected !== null && (
         <AgentPanel
           key={panelAgent.id}
           agent={panelAgent}
           liveEvents={[]}
-          workspaceId={panelWorkspaceId}
+          workspaceId={selected.workspaceId}
           haltedReason={null}
-          onClose={() => setSelectedAgentId(null)}
+          onClose={() => setSelected(null)}
         />
       )}
     </div>

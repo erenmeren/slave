@@ -38,7 +38,14 @@ export function WorkersTable({
   onOpen,
 }: {
   readonly initial: readonly WorkerRow[]
-  readonly onOpen: (agentId: string) => void
+  /**
+   * Fix round 1 (Important finding): passes the clicked `WorkerRow` itself, not just its
+   * `agentId` -- `AgentsClient` needs the row's `workspaceId` too, and this table's OWN polled
+   * `workers` state (below) is the only place that's current for a worker materialized after the
+   * page's initial server snapshot. Re-deriving it from a caller's stale prop is exactly the bug
+   * this fixes.
+   */
+  readonly onOpen: (worker: WorkerRow) => void
 }): React.JSX.Element {
   const [workers, setWorkers] = useState<readonly WorkerRow[]>(initial)
 
@@ -72,7 +79,7 @@ export function WorkersTable({
             <button
               type="button"
               data-testid="worker-row-button"
-              onClick={() => onOpen(worker.agentId)}
+              onClick={() => onOpen(worker)}
               className="flex min-w-0 items-center gap-[9px] text-left"
             >
               <AvatarTile name={worker.name} tone={tone} />

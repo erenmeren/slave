@@ -111,6 +111,84 @@ describe('AgentsClient tabs', () => {
   })
 })
 
+// Fix round 1 (Important finding): the row-click panel must resolve `workspaceId` off the
+// clicked `WorkerRow` itself, never by re-deriving from `AgentsClient`'s own `workers` prop --
+// that prop is the Agents page's one-time server snapshot (`app/agents/page.tsx`, fetched once
+// per navigation), while `WorkersTable` polls `/api/org/workers` every 5s and keeps the refreshed
+// rows in its OWN internal state, never surfacing them back up. A worker materialized only after
+// the page's initial load is invisible to that stale prop, so a lookup against it is a silent
+// no-op for exactly the row an operator can see and click.
+describe('AgentsClient row click opens the freshest data', () => {
+  let fetchMock: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  it('opens the panel for a worker that only exists via the poll, not the stale server-snapshot prop', async () => {
+    const polledWorker = workerRow({ agentId: 'a2', workspaceId: 'w2', name: 'Blair' })
+    fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/org/workers') {
+        return new Response(JSON.stringify({ workers: [polledWorker] }), { status: 200 })
+      }
+      if (url === '/api/w/w2/overview') {
+        return new Response(
+          JSON.stringify({
+            agents: [
+              {
+                id: 'a2',
+                name: 'Blair',
+                role: 'backend',
+                provider: null,
+                gate: null,
+                status: 'working',
+                taskTitle: null,
+                taskId: null,
+                taskStatus: null,
+                progressPct: 0,
+                stepLabel: null,
+                skill: null,
+                actionLine: null,
+                runId: null,
+                queuedMessage: null,
+                resumeRequestedAt: null,
+                recentEvents: [],
+                costUsd: 0,
+                toolCalls: 0,
+                pausedAtStep: null,
+              },
+            ],
+          }),
+          { status: 200 },
+        )
+      }
+      throw new Error(`unexpected fetch ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    // The page's own snapshot knows only 'a1'/'w1' -- 'a2'/'w2' is materialized entirely by the
+    // poll below, and is the only worker on screen by the time it's clicked.
+    render(<AgentsClient roster={[company({})]} workers={[workerRow({ agentId: 'a1', workspaceId: 'w1', name: 'Alex' })]} />)
+    fireEvent.click(screen.getByTestId('agents-tab-workers'))
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000)
+    })
+    expect(screen.getByText('Blair')).toBeTruthy()
+
+    vi.useRealTimers()
+    fireEvent.click(screen.getByTestId('worker-row-button'))
+
+    expect(await screen.findByRole('heading', { name: 'Blair' })).toBeTruthy()
+  })
+})
+
 describe('RosterTable', () => {
   it('renders company -> team groups with member rows', () => {
     render(<RosterTable roster={[company({})]} />)
@@ -470,10 +548,14 @@ describe('WorkersTable — the handoff seven columns', () => {
     expect(screen.queryByTestId('shell-only-mark')).toBeNull()
   })
 
-  it('opens the agent panel on a row click', () => {
+  it('opens the agent panel on a row click, with the clicked worker itself -- not just its id', () => {
+    // Fix round 1: `onOpen` must hand back the full `WorkerRow` (or at least its `workspaceId`
+    // alongside `agentId`) -- `AgentsClient` needs a workspaceId that is CURRENT for the row
+    // actually clicked, which only this table's own (possibly polled) row can supply.
     const onOpen = vi.fn()
-    render(<WorkersTable initial={[workerRow({ agentId: 'a9' })]} onOpen={onOpen} />)
+    const worker = workerRow({ agentId: 'a9', workspaceId: 'w9' })
+    render(<WorkersTable initial={[worker]} onOpen={onOpen} />)
     fireEvent.click(screen.getByTestId('worker-row-button'))
-    expect(onOpen).toHaveBeenCalledWith('a9')
+    expect(onOpen).toHaveBeenCalledWith(worker)
   })
 })
