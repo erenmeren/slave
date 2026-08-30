@@ -160,6 +160,12 @@ describe('org query module', () => {
       // fixture.agentId ('Alex') has no companyAgentId, so only the new worker counts.
       expect(project?.workerCount).toBe(1)
     })
+
+    it('carries the workspace goal and its workers onto every project row', async (): Promise<void> => {
+      const projects = await listProjects()
+      expect(projects[0]?.goal).toBeNull()
+      expect(projects[0]?.team.map((m) => m.name)).toEqual(['Alex'])
+    })
   })
 
   describe('listRoster', () => {

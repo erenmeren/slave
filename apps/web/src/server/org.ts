@@ -47,6 +47,12 @@ export interface ProjectRow {
   readonly halted: boolean
   readonly taskCounts: { readonly done: number; readonly total: number; readonly active: number; readonly blocked: number }
   readonly workerCount: number
+  /** The workspace's own goal, one line -- the handoff's card description. `null` when unset, and
+   *  the card then says so rather than inventing copy. */
+  readonly goal: string | null
+  /** The project's workers, for the avatar row: name and the tone their derived status resolves
+   *  to. Capped at 6 -- a wider row wraps and stops reading as a team. */
+  readonly team: readonly { readonly agentId: string; readonly name: string; readonly status: string }[]
   /** KNOWN spend: every run of this project that reported a cost, summed. */
   readonly spend: number
   /**
@@ -60,7 +66,12 @@ export interface ProjectRow {
 }
 
 export async function listProjects(): Promise<readonly ProjectRow[]> {
-  const workspaces = await prisma.workspace.findMany({ include: { company: true }, orderBy: { name: 'asc' } })
+  // `teams: { include: { agents: true } }` -- the avatar row's source. One join, not a
+  // per-project query: every workspace's team roster comes back in this same round trip.
+  const workspaces = await prisma.workspace.findMany({
+    include: { company: true, teams: { include: { agents: true } } },
+    orderBy: { name: 'asc' },
+  })
 
   const [taskGroups, spendRows, workerAgents] = await Promise.all([
     prisma.task.groupBy({ by: ['workspaceId', 'status'], _count: { _all: true } }),
@@ -106,6 +117,20 @@ export async function listProjects(): Promise<readonly ProjectRow[]> {
     workerCountByWorkspace.set(workspaceId, (workerCountByWorkspace.get(workspaceId) ?? 0) + 1)
   }
 
+  // The avatar row's live status, via the SAME `deriveAgentStatus` translator every other status
+  // dot in the app uses (`loadAgentLiveInfo`, below) -- not a hand-rolled second read of the run
+  // table. One call over every team member across every workspace, not one per project.
+  const teamAgents = workspaces.flatMap((workspace) =>
+    workspace.teams.flatMap((team) => team.agents.map((agent) => ({ agent, workspaceId: workspace.id }))),
+  )
+  const workspaceIdByTeamAgent = new Map(teamAgents.map(({ agent, workspaceId }) => [agent.id, workspaceId] as const))
+  const maxToolCallsByWorkspace = new Map(workspaces.map((w) => [w.id, w.maxToolCallsPerRun] as const))
+  const teamAgentLiveInfo = await loadAgentLiveInfo(
+    teamAgents.map(({ agent }) => agent.id),
+    workspaceIdByTeamAgent,
+    maxToolCallsByWorkspace,
+  )
+
   const countOf = (workspaceId: string, statuses: readonly string[]): number =>
     taskGroups
       .filter((g) => g.workspaceId === workspaceId && statuses.includes(g.status))
@@ -118,6 +143,7 @@ export async function listProjects(): Promise<readonly ProjectRow[]> {
     name: workspace.name,
     companyName: workspace.company?.name ?? null,
     halted: workspace.haltedReason !== null,
+    goal: workspace.goal,
     taskCounts: {
       done: countOf(workspace.id, ['done']),
       total: totalOf(workspace.id),
@@ -125,6 +151,12 @@ export async function listProjects(): Promise<readonly ProjectRow[]> {
       blocked: countOf(workspace.id, ['blocked']),
     },
     workerCount: workerCountByWorkspace.get(workspace.id) ?? 0,
+    // Capped at six: the handoff's avatar row is one line, and a seventh tile wraps it into
+    // something that no longer reads as a team at a glance.
+    team: workspace.teams
+      .flatMap((team) => team.agents)
+      .slice(0, 6)
+      .map((agent) => ({ agentId: agent.id, name: agent.name, status: teamAgentLiveInfo.get(agent.id)?.status ?? 'idle' })),
     // `?? []` here is the case `?? 0` was always right about: a workspace with no runs at all has
     // spent nothing and has nothing unmeasured -- `sumSpend([])` says exactly that.
     ...spendOf(rowsByWorkspace.get(workspace.id) ?? []),

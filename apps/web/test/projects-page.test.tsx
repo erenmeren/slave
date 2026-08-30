@@ -21,6 +21,8 @@ function project(over: Partial<ProjectRow>): ProjectRow {
     workerCount: 3,
     spend: 12.5,
     unmeasuredRuns: 0,
+    goal: null,
+    team: [],
     ...over,
   }
 }
@@ -48,20 +50,21 @@ describe('ProjectsClient', () => {
     expect(screen.getAllByTestId('stat-strip-item')).toHaveLength(4)
   })
 
-  it('adds an Unmeasured stat only when some of the project\'s runs reported no cost', () => {
+  it('shows the unmeasured line only when some of the project\'s runs reported no cost, never widening the strip', () => {
     // M12 Task 9 / ruling R3, applied to the sibling of the budget bar: `$12.50` presented alone
     // reads as this project's whole spend. It is only the measured part of it whenever any run
-    // reported nothing, and a count carried to this seam and rendered nowhere would be exactly the
-    // unread-field defect Task 8's F7 was ordered to fix.
+    // reported nothing. Task 13 (M14) moved this off the stat strip entirely -- the handoff's
+    // strip is a fixed 4-up (`project-unmeasured` is its own line beneath it, Decision 4) -- so
+    // this no longer asserts a 5th `stat-strip-item`; `project-unmeasured` carries the coverage.
     const { rerender } = render(
       <ProjectsClient projects={[project({ id: 'w1', unmeasuredRuns: 2 })]} companies={companies} />,
     )
-    expect(screen.getAllByTestId('stat-strip-item')).toHaveLength(5)
-    expect(screen.getByText('Unmeasured')).toBeTruthy()
+    expect(screen.getAllByTestId('stat-strip-item')).toHaveLength(4)
+    expect(screen.getByTestId('project-unmeasured')).toBeTruthy()
 
     rerender(<ProjectsClient projects={[project({ id: 'w1', unmeasuredRuns: 0 })]} companies={companies} />)
     expect(screen.getAllByTestId('stat-strip-item')).toHaveLength(4)
-    expect(screen.queryByText('Unmeasured')).toBeNull()
+    expect(screen.queryByTestId('project-unmeasured')).toBeNull()
   })
 
   it('shows a dim "no company" badge and an assign button when unassigned', () => {
@@ -166,5 +169,49 @@ describe('ProjectsClient', () => {
       expect(screen.queryByTestId('assign-company-dialog')).toBeNull()
       expect(document.activeElement).toBe(trigger)
     })
+  })
+})
+
+describe('the handoff project card', () => {
+  it('shows the goal as the one-line description, and says so when there is none', () => {
+    const { rerender } = render(<ProjectsClient projects={[project({ goal: 'Payments rewrite' })]} companies={companies} />)
+    expect(screen.getByTestId('project-description').textContent).toBe('Payments rewrite')
+
+    rerender(<ProjectsClient projects={[project({ goal: null })]} companies={companies} />)
+    expect(screen.getByTestId('project-description').textContent).toBe('no goal set')
+  })
+
+  it('renders an avatar tile per team member instead of numbered placeholders', () => {
+    render(
+      <ProjectsClient
+        projects={[project({ team: [{ agentId: 'a1', name: 'Alex Turner', status: 'working' }, { agentId: 'a2', name: 'Bea Ng', status: 'idle' }] })]}
+        companies={companies}
+      />,
+    )
+    expect(screen.getAllByTestId('avatar-tile').map((t) => t.textContent)).toEqual(['AT', 'BN'])
+    expect(screen.getAllByTestId('avatar-tile')[0]?.getAttribute('data-tone')).toBe('working')
+  })
+
+  it('renders a 4-up stat strip: agents, active, blocked, spend', () => {
+    render(<ProjectsClient projects={[project({})]} companies={companies} />)
+    expect(screen.getAllByTestId('stat-strip-item').map((i) => i.textContent?.replace(/\s+/g, ' ').trim())).toEqual([
+      'agents 3', 'active 1', 'blocked 0', 'spend $12.50',
+    ])
+  })
+
+  it('shows the unknown mark on spend rather than a total that swallows unmeasured runs', () => {
+    render(<ProjectsClient projects={[project({ spend: 4, unmeasuredRuns: 2 })]} companies={companies} />)
+    expect(screen.getByTestId('project-unmeasured').textContent).toBe('2 runs unmeasured')
+  })
+
+  it('maps halted to Halted, active work to Running, and quiet to Idle', () => {
+    const { rerender } = render(<ProjectsClient projects={[project({ halted: true })]} companies={companies} />)
+    expect(screen.getByTestId('status-pill').textContent).toBe('HALTED')
+
+    rerender(<ProjectsClient projects={[project({ halted: false, taskCounts: { done: 0, total: 3, active: 2, blocked: 0 } })]} companies={companies} />)
+    expect(screen.getByTestId('status-pill').textContent).toBe('RUNNING')
+
+    rerender(<ProjectsClient projects={[project({ halted: false, taskCounts: { done: 3, total: 3, active: 0, blocked: 0 } })]} companies={companies} />)
+    expect(screen.getByTestId('status-pill').textContent).toBe('IDLE')
   })
 })
