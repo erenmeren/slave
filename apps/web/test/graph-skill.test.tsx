@@ -1,12 +1,19 @@
 // @vitest-environment jsdom
 import type { ReactElement } from 'react'
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ReactFlowProvider, type Node, type NodeProps } from 'reactflow'
 import type { GraphCanvasProps } from '../src/components/graph/GraphCanvas.js'
-import { buildSkillAggregateGraph, SKILL_NODE_PREFIX, skillProminence, type SkillNodeData } from '../src/components/graph/SkillNodes.js'
+import {
+  buildSkillAggregateGraph,
+  buildSkillChainGraph,
+  SKILL_NODE_PREFIX,
+  SKILLSTEP_NODE_PREFIX,
+  skillProminence,
+  type SkillNodeData,
+} from '../src/components/graph/SkillNodes.js'
 import type { GraphSnapshot } from '../src/server/graph.js'
-import type { SkillGraph } from '../src/server/skillGraph.js'
+import type { SkillGraph, SkillGraphRun } from '../src/server/skillGraph.js'
 
 // ---- GraphCanvas stub -------------------------------------------------------------------------
 // Same split `graph-deps.test.tsx` takes for `DepsMode`: `SkillMode` renders through the real
@@ -34,17 +41,21 @@ function nodeProps(node: Node): NodeProps {
 vi.mock('../src/components/graph/GraphCanvas.js', () => ({
   GraphCanvas: (props: GraphCanvasProps) => {
     graphCanvasCalls.push(props)
-    const Renderer = props.nodeTypes.skill
     return (
-      // `<Handle>` (rendered inside `SkillNode`) reads React Flow's zustand store off context --
-      // `ReactFlowProvider` supplies that store without the real `<ReactFlow>` component.
+      // `<Handle>` (rendered inside `SkillNode`/`SkillStepNode`) reads React Flow's zustand store
+      // off context -- `ReactFlowProvider` supplies that store without the real `<ReactFlow>`
+      // component. Looked up per-node by its own `type` (not just `.skill`) -- Task 12 adds a
+      // second node type (`skillstep`) this same stub must render too, for the Focus view.
       <ReactFlowProvider>
         <div data-testid="graph-canvas-stub">
-          {props.nodes.map((node) => (
-            <div key={node.id} data-testid={`node-${node.id}`}>
-              {Renderer ? <Renderer {...nodeProps(node)} /> : null}
-            </div>
-          ))}
+          {props.nodes.map((node) => {
+            const Renderer = props.nodeTypes[node.type ?? '']
+            return (
+              <div key={node.id} data-testid={`node-${node.id}`}>
+                {Renderer ? <Renderer {...nodeProps(node)} /> : null}
+              </div>
+            )
+          })}
           {props.edges.map((edge) => (
             <div key={edge.id} data-testid={`edge-${edge.id}`} />
           ))}
@@ -88,6 +99,18 @@ const SNAPSHOT: GraphSnapshot = {
 // `task()` helpers use.
 function skillGraph(overrides: Partial<SkillGraph> = {}): SkillGraph {
   return { skills: [], edges: [], runs: [], ...overrides }
+}
+
+function skillGraphRun(overrides: Partial<SkillGraphRun> = {}): SkillGraphRun {
+  return {
+    runId: 'run-1',
+    taskTitle: 'Ship the thing',
+    agentName: 'builder',
+    live: false,
+    startedAt: '2026-08-31T00:00:00.000Z',
+    chain: [],
+    ...overrides,
+  }
 }
 
 // ==================================================================================================
@@ -152,6 +175,68 @@ describe('buildSkillAggregateGraph', () => {
 })
 
 // ==================================================================================================
+// buildSkillChainGraph -- pure, no DOM. Order, badge, single-step (Task 12).
+// ==================================================================================================
+
+describe('buildSkillChainGraph', () => {
+  it("emits one skillstep:<i>-prefixed node per collapsed chain entry, in the run's own left-to-right order", () => {
+    const run = skillGraphRun({
+      chain: [
+        { name: 'brainstorming', count: 1 },
+        { name: 'writing-plans', count: 1 },
+        { name: 'test-driven-development', count: 3 },
+      ],
+    })
+    const { nodes } = buildSkillChainGraph(run)
+    expect(nodes.map((node) => node.id)).toEqual(['skillstep:0', 'skillstep:1', 'skillstep:2'])
+    expect(nodes.every((node) => node.type === 'skillstep')).toBe(true)
+    expect(nodes.every((node) => node.id.startsWith(SKILLSTEP_NODE_PREFIX))).toBe(true)
+    expect(nodes.map((node) => (node.data as { name: string }).name)).toEqual(['brainstorming', 'writing-plans', 'test-driven-development'])
+  })
+
+  it('carries in-order edges, step i -> i+1, as fixed-planning-tone inactive cables', () => {
+    const run = skillGraphRun({
+      chain: [
+        { name: 'a', count: 1 },
+        { name: 'b', count: 1 },
+        { name: 'c', count: 1 },
+      ],
+    })
+    const { edges } = buildSkillChainGraph(run)
+    expect(edges.map((edge) => [edge.source, edge.target])).toEqual([
+      ['skillstep:0', 'skillstep:1'],
+      ['skillstep:1', 'skillstep:2'],
+    ])
+    expect(edges.every((edge) => edge.type === 'cable')).toBe(true)
+    expect(edges.every((edge) => (edge.data as { tone: string }).tone === 'planning')).toBe(true)
+    expect(edges.every((edge) => (edge.data as { active: boolean }).active === false)).toBe(true)
+  })
+
+  it("stamps each step's own collapsed count on its data, for the ×N badge", () => {
+    const run = skillGraphRun({
+      chain: [
+        { name: 'brainstorming', count: 1 },
+        { name: 'test-driven-development', count: 4 },
+      ],
+    })
+    const { nodes } = buildSkillChainGraph(run)
+    expect(nodes.map((node) => (node.data as { count: number }).count)).toEqual([1, 4])
+  })
+
+  it('renders one node and zero edges for a single-skill run -- not an error, the shortest possible chain', () => {
+    const run = skillGraphRun({ chain: [{ name: 'brainstorming', count: 2 }] })
+    const { nodes, edges } = buildSkillChainGraph(run)
+    expect(nodes).toHaveLength(1)
+    expect(nodes[0]!.id).toBe('skillstep:0')
+    expect(edges).toEqual([])
+  })
+
+  it('returns no nodes and no edges for a run with an empty chain', () => {
+    expect(buildSkillChainGraph(skillGraphRun({ chain: [] }))).toEqual({ nodes: [], edges: [] })
+  })
+})
+
+// ==================================================================================================
 // skillProminence -- the pure bucket function (Step 1: "NOT free-form scaling").
 // ==================================================================================================
 
@@ -178,7 +263,7 @@ describe('skillProminence', () => {
 // ==================================================================================================
 
 describe('SkillMode', () => {
-  let SkillMode: (props: { workspaceId: string; snapshot: GraphSnapshot }) => ReactElement
+  let SkillMode: (props: { workspaceId: string; snapshot: GraphSnapshot; toolCallTick?: number }) => ReactElement
   let fetchMock: ReturnType<typeof vi.fn>
 
   beforeEach(async () => {
@@ -192,6 +277,9 @@ describe('SkillMode', () => {
   afterEach(() => {
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
+    // Safe no-op when a test never switched to fake timers -- guards the refetch-debounce test
+    // below from leaking fake timers into whichever test runs next.
+    vi.useRealTimers()
   })
 
   it("fetches Task 10's own route for its workspace on mount", async () => {
@@ -249,5 +337,170 @@ describe('SkillMode', () => {
     await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy())
     expect(screen.getByTestId('skill-error').textContent).toContain('404')
     expect(screen.getByTestId('graph-canvas-stub')).toBeTruthy()
+  })
+
+  // ================================================================================================
+  // Run selector strip (Task 12): one chip per `graph.runs` entry, live dot from `run.live`.
+  // ================================================================================================
+
+  it('renders one run chip per graph.runs entry — taskTitle (or the runId prefix) · agentName, plus a live dot', async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify(
+          skillGraph({
+            skills: [{ name: 'brainstorming', calls: 2 }],
+            runs: [
+              skillGraphRun({
+                runId: 'run-live-1',
+                taskTitle: 'Ship it',
+                agentName: 'builder',
+                live: true,
+                chain: [{ name: 'brainstorming', count: 1 }],
+              }),
+              skillGraphRun({
+                runId: 'run-done1',
+                taskTitle: null,
+                agentName: 'reviewer',
+                live: false,
+                chain: [{ name: 'brainstorming', count: 1 }],
+              }),
+            ],
+          }),
+        ),
+        { status: 200 },
+      ),
+    )
+    render(<SkillMode workspaceId="w1" snapshot={SNAPSHOT} />)
+
+    const chips = await waitFor(() => {
+      const found = screen.getAllByTestId('skill-run-chip')
+      expect(found).toHaveLength(2)
+      return found
+    })
+
+    expect(chips[0]!.textContent).toContain('Ship it')
+    expect(chips[0]!.textContent).toContain('builder')
+    // No taskTitle -- falls back to the 8-char runId prefix (`TASK-{id.slice(0,8)}`'s convention,
+    // sans the "TASK-" -- this is a run, not a task).
+    expect(chips[1]!.textContent).toContain('run-done1'.slice(0, 8))
+    expect(chips[1]!.textContent).toContain('reviewer')
+
+    const liveDot = chips[0]!.querySelector('[data-testid="skill-run-chip-dot"]')!
+    expect(liveDot.className).toContain('animate-pulse')
+    const idleDot = chips[1]!.querySelector('[data-testid="skill-run-chip-dot"]')!
+    expect(idleDot.className).not.toContain('animate-pulse')
+  })
+
+  // ================================================================================================
+  // Selection (Task 12): a chip click focuses the canvas on that run's chain; clear returns to the
+  // aggregate. Both directions.
+  // ================================================================================================
+
+  it("selecting a run chip swaps the canvas to that run's chain; the clear control swaps it back to the aggregate", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify(
+          skillGraph({
+            skills: [
+              { name: 'brainstorming', calls: 3 },
+              { name: 'writing-plans', calls: 1 },
+            ],
+            edges: [{ from: 'brainstorming', to: 'writing-plans', count: 1 }],
+            runs: [
+              skillGraphRun({
+                runId: 'run-1',
+                taskTitle: 'Ship it',
+                agentName: 'builder',
+                chain: [
+                  { name: 'brainstorming', count: 2 },
+                  { name: 'writing-plans', count: 1 },
+                ],
+              }),
+            ],
+          }),
+        ),
+        { status: 200 },
+      ),
+    )
+    render(<SkillMode workspaceId="w1" snapshot={SNAPSHOT} />)
+
+    // Aggregate view first (default, nobody focused yet).
+    await waitFor(() => expect(screen.getByTestId('node-skill:brainstorming')).toBeTruthy())
+    expect(screen.queryByTestId('skill-focus-clear')).toBeNull()
+
+    fireEvent.click(screen.getByTestId('skill-run-chip'))
+
+    // Focus view: skillstep nodes, in order, the repeated step carrying its ×N badge; the
+    // aggregate's own `skill:`-prefixed nodes are gone.
+    await waitFor(() => expect(screen.getByTestId('node-skillstep:0')).toBeTruthy())
+    expect(screen.getByTestId('node-skillstep:1')).toBeTruthy()
+    expect(screen.queryByTestId('node-skill:brainstorming')).toBeNull()
+    expect(
+      screen.getByTestId('node-skillstep:0').querySelector('[data-testid="skillstep-node-badge"]')?.textContent,
+    ).toBe('×2')
+    expect(screen.getByTestId('node-skillstep:1').querySelector('[data-testid="skillstep-node-badge"]')).toBeNull()
+
+    fireEvent.click(screen.getByTestId('skill-focus-clear'))
+
+    // Back to the aggregate; the chain's skillstep nodes are gone.
+    await waitFor(() => expect(screen.getByTestId('node-skill:brainstorming')).toBeTruthy())
+    expect(screen.queryByTestId('node-skillstep:0')).toBeNull()
+    expect(screen.queryByTestId('skill-focus-clear')).toBeNull()
+  })
+
+  // ================================================================================================
+  // Refetch wiring (Task 12): a `toolCallTick` bump debounces a re-fetch by >=2s, and never fires
+  // from the tick's own starting value on first render.
+  // ================================================================================================
+
+  it('debounces the stream-driven refetch by >=2s after toolCallTick changes, and not on first render', async () => {
+    const { rerender } = render(<SkillMode workspaceId="w1" snapshot={SNAPSHOT} toolCallTick={0} />)
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+
+    vi.useFakeTimers()
+    try {
+      rerender(<SkillMode workspaceId="w1" snapshot={SNAPSHOT} toolCallTick={1} />)
+
+      // Still inside the debounce window -- no second fetch yet.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000)
+      })
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+
+      // Past the >=2s window -- the debounced refetch fires.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_100)
+      })
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('collapses a burst of ticks inside one debounce window into a single refetch', async () => {
+    const { rerender } = render(<SkillMode workspaceId="w1" snapshot={SNAPSHOT} toolCallTick={0} />)
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+
+    vi.useFakeTimers()
+    try {
+      rerender(<SkillMode workspaceId="w1" snapshot={SNAPSHOT} toolCallTick={1} />)
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000)
+      })
+      rerender(<SkillMode workspaceId="w1" snapshot={SNAPSHOT} toolCallTick={2} />)
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000)
+      })
+      // 2s have elapsed since the FIRST tick, but the second tick reset the debounce window --
+      // still only the mount fetch so far.
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_100)
+      })
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

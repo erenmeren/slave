@@ -56,6 +56,10 @@ const DEFAULT_SIZE: Record<string, { readonly width: number; readonly height: nu
   // -- the same "silent fallback-size overlap" risk this file's own doc comment warns every new
   // node type about.
   skill: { width: 168, height: 44 },
+  // Task 12 (M18): `SkillNodes.tsx`'s `SkillStepNode` chip -- a distinct `type` from `skill` above
+  // (different data shape), but the SAME physical box, registered in its own right rather than
+  // left to `FALLBACK_SIZE` (180×56, which would silently overlap neighbours in the Focus chain).
+  skillstep: { width: 168, height: 44 },
 }
 const FALLBACK_SIZE = { width: 180, height: 56 } as const
 

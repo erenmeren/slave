@@ -109,8 +109,17 @@ export function GraphClient({
   const orgEdgesRef = useRef<readonly Edge[]>([])
   const [particles, setParticles] = useState<readonly Particle[]>([])
 
+  // Task 12 (M18): `SkillMode`'s own debounced-refetch signal -- see its doc comment for why this
+  // is the smaller diff over a second, skill-specific poll. Every `run.tool_call` frame already
+  // arrives here (the exact same raw-frame path org mode's particle spawn rides, just below); this
+  // just bumps a counter on the same condition `handleToolCallFrame` itself checks first, so
+  // `SkillMode` (mounted or not) can react to a prop change without this component knowing
+  // anything about the skill graph's own shape.
+  const [skillFrameTick, setSkillFrameTick] = useState(0)
+
   const onGraphEvent = (event: StreamEvent): void => {
     setParticles((current) => handleToolCallFrame(event, orgEdgesRef.current, current, Date.now()))
+    if (event.type === 'run.tool_call') setSkillFrameTick((tick) => tick + 1)
   }
 
   const { snapshot, connection, error, latencyMs } = useGraph(workspaceId, initial, onGraphEvent)
@@ -228,7 +237,7 @@ export function GraphClient({
           )}
           {mode === 'exec' && <ExecutionMode snapshot={view} />}
           {mode === 'deps' && <DepsMode workspaceId={workspaceId} snapshot={view} />}
-          {mode === 'skill' && <SkillMode workspaceId={workspaceId} snapshot={view} />}
+          {mode === 'skill' && <SkillMode workspaceId={workspaceId} snapshot={view} toolCallTick={skillFrameTick} />}
         </div>
         {selectedAgent !== null && (
           <GraphDrawer workspaceId={workspaceId} agent={selectedAgent} onClose={() => setSelectedAgentId(null)} />
