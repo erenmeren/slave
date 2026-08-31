@@ -195,6 +195,83 @@ Template per flake:
 
 ## Flake 3 — subscribe.test.ts "delivers exactly one notification per event across a reconnect"
 
+- **Evidence** — recorded failure: a single occurrence, the test's 15 s `testTimeout` tripped at
+  ~6× its normal duration (~2.6 s quiet), i.e. a stall rather than slowness — the signature of a
+  dropped disconnect leaving the subscription holding a dead client, not of a slow-but-progressing
+  reconnect. New this wave: read `packages/events/src/subscribe.ts` in full (added by `01ba261`'s
+  `reconnecting` boolean). Characterization before any change:
+  `scripts/repeat-test.sh 30 packages/events/test/integration/subscribe.test.ts "delivers exactly
+  one notification per event across a reconnect"` → **GREEN 30x** (~3.2–3.5 s/run) — as expected
+  for a microsecond-wide race, 30 clean loops neither reproduce nor disprove it.
+
+- **Mechanism (by inspection, not by a caught red)** — pre-fix `scheduleReconnect`
+  (`subscribe.ts`, then at lines 176–206): the guard `if (closed || reconnecting) return` (176/177)
+  makes "a reconnect loop is already in flight" the single piece of state that collapses one
+  disconnect's `error`, `error`, `end` trio into one loop (the `01ba261` design, confirmed against
+  real Postgres via `pg_terminate_backend`: one drop reliably fires that trio). The hole: the loop
+  sets `current = client` (line 196) on a successful reopen and only *then*, after the `while`
+  exits, clears `reconnecting = false` (line 203). Any `scheduleReconnect` call landing in that
+  span — including one fired by a disconnect on the *newly opened* client, reported at any point
+  from the moment `open()` starts through the instant before `reconnecting` clears — hits the
+  `reconnecting` branch of the guard and is dropped outright: no flag records that it happened, no
+  further loop iteration is scheduled. The subscription is left holding a `Client` that is already
+  dead (or about to die) with nothing left to notice. `close()` never sees this either — it only
+  knows about `current`, which still points at the dead client — so the subscription silently stops
+  delivering forever. The test's one recorded stall at ~6× normal duration is exactly what that
+  looks like from outside: no error, just nothing else ever arrives.
+
+- **Change** — replaced the boolean-only guard with a requested/looping pattern in
+  `scheduleReconnect` (`packages/events/src/subscribe.ts:184–228`). A new `reconnectRequested`
+  boolean is set to `true` on *every* call, unconditionally, before the `reconnecting` check —
+  so a call that arrives while a loop is already in flight is now recorded rather than dropped.
+  The loop's own condition became `while (!closed && reconnectRequested)`: each pass clears the
+  flag at its top, and only exits once a full pass completes with the flag still `false` — i.e.
+  once no new disconnect was reported anywhere during that pass, including in the zero-width
+  instant right after `current = client`. A pass also now discards whatever stale client is sitting
+  in `current` at its start via the file's existing `endDiscardedClient` (previously the loop never
+  called it on the disconnecting client, relying on the client already dying on its own; the new
+  shape needed it because, on a pass the loop was re-armed into by a disconnect that landed *after*
+  a previous pass's successful `current = client`, that client is the one now being discarded, and
+  `endDiscardedClient` is the file's one correct way to do that — bounded, listener-safe, matching
+  every other abandon site in this file). `close()`, `open()`, and `endDiscardedClient` itself were
+  not touched; `close()`'s existing contract (await `reconnectPromise` so it cannot resolve while
+  the subscription still has background network I/O in flight) holds unchanged because
+  `reconnectPromise` is still assigned once per `scheduleReconnect` "session" and still resolves
+  only when the `while` loop actually exits — now correctly gated on `reconnectRequested` too, not
+  just `closed`. The `01ba261` comment block (`subscribe.ts:74–87`) was extended, not replaced: it
+  still documents why `reconnecting` exists (collapsing the trio into one loop), with an added
+  paragraph describing the hole `reconnectRequested` closes. Commit: `db94ba5`.
+
+- **Proof** — new regression test added, `packages/events/test/integration/subscribe.test.ts`
+  "recovers when a second disconnect lands right after a reconnect settles" (two `killListeners()`
+  calls back to back, no wait between them, then confirms the subscription still converges to a
+  live LISTEN and delivers a post-recovery notification exactly once). Ran 30x alone *before* the
+  fix: **GREEN 30x** (as expected — the brief predicted it would likely pass even unfixed, since
+  the window is narrow; its value is as a permanent regression net, not a reproduction). After the
+  fix: `npx tsc --build` clean;
+  `scripts/repeat-test.sh 30 packages/events/test/integration/subscribe.test.ts` (whole file, all 9
+  tests including the two `close()`-duration timing neighbours) → **GREEN 30x**, stable per-test
+  timings across all 30 runs (`close() waits for an in-flight reconnect...` held at 890–944 ms every
+  run, no drift from the added `endDiscardedClient` call on the loop's stale client — it resolves
+  fast against an already-dying client); `npm test` → `Test Files 131 passed (131)`,
+  `Tests 1802 passed (1802)`, no orchestrator daemon running for either run.
+
+- **Residue** — honest note: the race window this fix closes was **never observed red
+  deterministically**, in this task or in the milestone's recorded evidence — the single historical
+  occurrence was a stall inferred from a blown timeout, not a caught-in-the-act drop, and 60
+  combined loop-runs of the target test (30 pre-fix on the existing test, 30 pre-fix on the new
+  regression test) stayed green throughout, consistent with a microsecond-wide window that
+  repetition alone cannot force. The fix and its regression test are justified by the by-inspection
+  mechanism above, not by a reproduced failure. One implementation risk considered and checked
+  empirically rather than dismissed by construction: because `reconnectRequested` is now set on
+  every `scheduleReconnect` call, including the redundant `error`/`error`/`end` echoes of a single
+  disconnect, a naive reading suggests those echoes could re-arm the loop into a spurious extra
+  pass even when the newly opened client is healthy. The 30× whole-file proof run above shows no
+  sign of this — per-test timings for the reconnect-dependent tests were stable and consistent with
+  their pre-fix baselines across all 30 runs — so if it happens at all, it is not currently
+  observable in this suite; a future investigation of unexplained added reconnect latency should
+  look here first.
+
 ## Flake 4 — stream.test.ts delivery tests (:77 and :115)
 
 ## Flake 5 — activity-history.test.ts sparkline buckets

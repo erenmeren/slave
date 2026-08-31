@@ -253,6 +253,36 @@ describe('subscribeEvents', () => {
   )
 
   it(
+    'recovers when a second disconnect lands right after a reconnect settles',
+    async () => {
+      // Two kills back to back: the second lands while the first's reconnect loop may still be
+      // inside its settlement window (`current` set, `reconnecting` not yet cleared). Before the
+      // fix, a disconnect in that window was dropped and the subscription held a dead client.
+      const seen: EventNotification[] = []
+      subscription = await subscribeEvents(url(), (n) => seen.push(n))
+
+      await killListeners()
+      await killListeners() // no wait between them — the second must not be droppable
+
+      // The subscription must still converge to a live LISTEN and deliver new events exactly once.
+      await expect
+        .poll(
+          async () => {
+            await notify(JSON.stringify({ seq: 41, workspaceId: 'w-race' }))
+            return seen.some((n) => n.seq === 41)
+          },
+          { timeout: 10_000, interval: 500 },
+        )
+        .toBe(true)
+      await wait(1_000)
+      await notify(JSON.stringify({ seq: 42, workspaceId: 'w-race' }))
+      await wait(1_000)
+      expect(seen.filter((n) => n.seq === 42)).toHaveLength(1)
+    },
+    20_000,
+  )
+
+  it(
     'close() waits for an in-flight reconnect to fully stop before resolving',
     async () => {
       subscription = await subscribeEvents(url(), () => {})

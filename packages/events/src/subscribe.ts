@@ -78,7 +78,15 @@ export async function subscribeEvents(
   // delivers every subsequent notification a second time. `reconnecting` makes "a reconnect is
   // already in flight" a single piece of state so at most one loop, and at most one new `Client`,
   // is ever created per disconnect.
+  //
+  // `reconnecting` alone still had a hole: the loop sets `current = client` and only *then* clears
+  // `reconnecting`. A disconnect landing in that window — or at any point after `open()` succeeded
+  // but before the flag clears — hit `if (closed || reconnecting) return` and was dropped, leaving
+  // the subscription holding a dead client forever. `reconnectRequested` closes it: every call
+  // records the request before checking `reconnecting`, and the loop re-reads it before it is
+  // allowed to end, so a disconnect can be coalesced into an in-flight loop but never discarded.
   let reconnecting = false
+  let reconnectRequested = false
   // The reconnect loop's own promise, tracked so close() can await it. Without this, close() could
   // resolve while the loop was still parked in its retry delay, promising a fully quiescent
   // subscription while a Client was about to be opened moments later — a false contract for a
@@ -174,11 +182,23 @@ export async function subscribeEvents(
   }
 
   function scheduleReconnect(): void {
-    if (closed || reconnecting) return
+    if (closed) return
+    // Never drop a disconnect: even while a loop is already in flight for an earlier one, this
+    // call is recorded here and the loop re-checks it before it is allowed to end.
+    reconnectRequested = true
+    if (reconnecting) return
     reconnecting = true
-    current = null
     reconnectPromise = (async (): Promise<void> => {
-      while (!closed) {
+      while (!closed && reconnectRequested) {
+        reconnectRequested = false
+        // Whatever `current` holds at the top of a pass is either the already-dying client that
+        // caused this pass to run, or — on a pass this loop was re-armed into by a disconnect that
+        // landed right after the previous pass's `current = client` — the client that disconnect
+        // was reported on. Either way it is not usable going forward, so it is discarded the same
+        // way every other abandoned client in this file is.
+        const stale = current
+        current = null
+        if (stale !== null) await endDiscardedClient(stale)
         await delay(RECONNECT_DELAY_MS)
         // Recheck immediately after the delay, before opening anything: close() may have run
         // while this loop was parked, and there is no reason to dial Postgres and issue LISTEN
@@ -192,12 +212,15 @@ export async function subscribeEvents(
             // not reachable from anywhere else yet, so end it here rather than leaving it
             // orphaned and listening.
             await endDiscardedClient(client)
-          } else {
-            current = client
+            break
           }
-          break
+          current = client
+          // A disconnect reported anywhere from here back to the top of this pass — including one
+          // that lands in the instant after the assignment above, before `while` is re-evaluated —
+          // set `reconnectRequested` again instead of being dropped, so the loop does not exit here.
         } catch {
           // keep retrying until close() is called
+          reconnectRequested = true
         }
       }
       reconnecting = false
