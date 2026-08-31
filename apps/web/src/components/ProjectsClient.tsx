@@ -86,7 +86,7 @@ function ProjectCard({
             <span
               data-testid="team-overflow"
               title={project.team.slice(6).map((member) => member.name).join(', ')}
-              className="flex h-[28px] w-[28px] items-center justify-center rounded-[7px] border border-line bg-bg-2 font-mono text-[10px] text-text-2"
+              className="flex h-[28px] w-[28px] items-center justify-center rounded-tile border border-line bg-bg-2 font-mono text-[10px] text-text-2"
             >
               +{project.team.length - 6}
             </span>
