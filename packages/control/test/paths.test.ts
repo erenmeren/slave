@@ -1,4 +1,4 @@
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -15,5 +15,16 @@ describe('runFilePaths', () => {
     expect(paths.pauseFlagPath).toContain('11111111-1111-4111-8111-111111111111')
     expect(paths.runDir).toContain('11111111-1111-4111-8111-111111111111')
     expect(paths.pauseFlagPath).not.toBe(paths.runDir)
+  })
+
+  it('refuses a repo path that does not exist, naming it, instead of hanging in mkdirSync', () => {
+    expect(() => runFilePaths('/nonexistent-root/definitely-not-here', runId('run-x' as any)))
+      .toThrow(/\/nonexistent-root\/definitely-not-here/)
+  })
+
+  it('refuses a repo path that is a file, not a directory', () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'paths-')), 'a-file')
+    writeFileSync(file, '')
+    expect(() => runFilePaths(file, runId('run-x' as any))).toThrow(/not a directory|a-file/)
   })
 })

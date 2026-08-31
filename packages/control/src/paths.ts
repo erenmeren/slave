@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import type { RunId } from '@ai-team-os/domain'
 
@@ -16,9 +16,25 @@ import type { RunId } from '@ai-team-os/domain'
  * `packages/providers` may know that a provider has a settings file, a hook script, or a flag
  * file). This function used to also hand back `settingsPath` directly; it no longer does, because
  * that would be exactly the knowledge Decision 1 forbids a caller here from having.
+ *
+ * Preflight the root before the recursive mkdirSync: on this host a nonexistent parent under
+ * a pseudo-filesystem (/proc was the recorded case — pause.test.ts) hangs recursive mkdirSync
+ * FOREVER, with no error to catch. statSync answers immediately for the same inputs, so a bad
+ * root becomes an actionable throw on the tick's hot path instead of a silent stall.
  */
 export function runFilePaths(repoPath: string, runId: RunId): { runDir: string; pauseFlagPath: string } {
+  let root
+  try {
+    root = statSync(repoPath)
+  } catch {
+    throw new Error(`runFilePaths: repo path does not exist: ${repoPath} (run ${runId})`)
+  }
+  if (!root.isDirectory()) throw new Error(`runFilePaths: repo path is not a directory: ${repoPath} (run ${runId})`)
   const dir = join(repoPath, '.aiteamos', 'runs', runId)
-  mkdirSync(dir, { recursive: true })
+  try {
+    mkdirSync(dir, { recursive: true })
+  } catch (error) {
+    throw new Error(`runFilePaths: cannot create run dir ${dir}: ${error instanceof Error ? error.message : String(error)}`)
+  }
   return { runDir: dir, pauseFlagPath: join(dir, 'pause.flag') }
 }
