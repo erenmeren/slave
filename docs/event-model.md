@@ -130,23 +130,33 @@ Two behaviours here matter to whoever wires this into an SSE route (M4):
   deadlines (`connectionTimeoutMillis` for connect/handshake, `query_timeout` for the `LISTEN`
   query) rather than one shared budget. If the first connect attempt exceeds either bound,
   `subscribeEvents()` rejects instead of hanging.
-- **`close()` can take up to roughly 8.25 seconds.** `close()` awaits any reconnect loop already in
-  flight. Every pass of that loop opens by discarding whatever stale client it inherited
-  (`endDiscardedClient(stale)`, bounded at up to 2000ms) before it does anything else. In the
-  pathological case, a single pass then pays the 250ms retry delay (`RECONNECT_DELAY_MS`), both of
-  `open()`'s 2000ms deadlines against a server that stalls exactly at the phase boundary, and a
-  further up-to-2000ms bounding the `end()` that discards that failed attempt's client. Those five
-  phases are sequential, so the ceiling is 2000 + 250 + 2000 + 2000 + 2000 = 8250ms.
+- **`close()` can take up to roughly 6.0 seconds.** `close()` awaits any reconnect loop already in
+  flight, and the loop's control flow means only one of two mutually exclusive windows sets the
+  ceiling — not the sum of every phase the loop can touch (an earlier pass over this doc claimed
+  ~8.25s by summing all five as if a single `close()` could pay them all; the loop's `if (closed)
+  break` checks make that unreachable):
 
-  Three things that are easy to get wrong here. The top-of-pass discard is part of the budget, not
-  a formality: it runs on every pass, including the very first one after a disconnect, before the
-  retry delay even starts. The failed-attempt `end()` bound is likewise part of the budget, not an
-  afterthought: a peer that answers `LISTEN` with an error and then holds the socket open makes
-  pg's own `end()` wait forever, so it is raced against the same 2000ms and the socket destroyed
-  on expiry. And a slow `close()` does **not** require a reconnect loop at all — discarding a
-  live client goes through the same bounded `end()`, which has been measured at 2007ms against a
-  half-open peer with nothing else in flight. Teardown code must not assume `close()` resolves
-  quickly, and should budget past 8.25s rather than at it.
+  - **`close()` lands while a pass is mid-`open()`.** A single failing attempt can burn up to both
+    of `open()`'s independent 2000ms deadlines sequentially — connect succeeding just under its
+    budget, then `LISTEN events` stalling out its own — before the query timeout finally rejects
+    it (up to 4000ms of stall), plus that failed attempt's client being discarded through the same
+    bounded `end()` (up to 2000ms more) = **6000ms**. Once `open()` settles, the loop's `while
+    (!closed && reconnectRequested)` check now reads `closed` as true and exits immediately — no
+    top-of-pass discard or retry delay stacks on top of this window.
+  - **`close()` lands at the top of a pass**, before `open()` is even called again: the
+    stale-client discard (`endDiscardedClient(stale)`, up to 2000ms) then the 250ms retry delay
+    (`RECONNECT_DELAY_MS`) = **2250ms**, because the loop's post-delay `if (closed) break` fires
+    right after and the pass never reaches `open()` at all.
+
+  max(6000, 2250) = 6.0s.
+
+  Two things are easy to get wrong here. The top-of-pass discard is part of the *2250ms* budget,
+  not a formality: it runs on every pass, including the very first one after a disconnect, before
+  the retry delay even starts — but that window's ceiling is still below the mid-`open()` one, so
+  it never becomes the binding case. And a slow `close()` does **not** require a reconnect loop at
+  all — discarding a live client goes through the same bounded `end()`, which has been measured at
+  2007ms against a half-open peer with nothing else in flight. Teardown code must not assume
+  `close()` resolves quickly, and should budget past 6.0s rather than at it.
 
 ### The fallback poll
 

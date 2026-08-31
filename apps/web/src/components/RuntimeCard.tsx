@@ -3,26 +3,10 @@
 import { useRouter } from 'next/navigation'
 import { useState } from 'react'
 import type { ProviderKind } from '@ai-team-os/control'
-import { errorMessage } from '../lib/postControl'
+import { sendControl } from '../lib/postControl'
 import { ProviderSelect } from './ProviderSelect'
 import { FieldLabel, INPUT_SHELL, PrimaryButton, TextField } from './ui/FormControls'
 import { Panel } from './ui/Panel'
-
-/** `GoalCard.tsx`'s `postControl` idiom with the verb Task 12's two routes use. */
-async function putControl(url: string, body: Record<string, unknown>): Promise<{ ok: true } | { ok: false; error: string }> {
-  try {
-    const response = await fetch(url, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
-    if (response.ok) return { ok: true }
-    const data: unknown = await response.json().catch(() => null)
-    return { ok: false, error: errorMessage(data, response.status) }
-  } catch (cause) {
-    return { ok: false, error: cause instanceof Error ? cause.message : String(cause) }
-  }
-}
 
 /**
  * The workspace's runtime and its spend ceiling, beside `GoalCard` on `/w/[workspaceId]`.
@@ -66,12 +50,12 @@ export function RuntimeCard({
   const submit = async (url: string, body: Record<string, unknown>): Promise<void> => {
     setPending(true)
     setErrorText(null)
-    const result = await putControl(url, body)
+    const error = await sendControl(url, { method: 'PUT', body })
     setPending(false)
-    if (result.ok) {
+    if (error === null) {
       router.refresh()
     } else {
-      setErrorText(result.error)
+      setErrorText(error)
     }
   }
 

@@ -30,12 +30,26 @@ const RECONNECT_DELAY_MS = 250
  *
  * The same budget bounds every `end()` that discards a client this file abandons — both the one at
  * the top of each reconnect pass (`endDiscardedClient(stale)`, discarding whatever `current` held
- * on entry) and the one that discards a failed attempt's client. A worst-case `close()` can pay
- * four of these sequentially plus the retry delay: the top-of-pass stale discard, RECONNECT_DELAY_MS,
- * then both of `open()`'s deadlines against a server stalling at the phase boundary, then the
- * failed-attempt discard — 2000 + 250 + 2000 + 2000 + 2000 = 8.25s, not ~6.25s. The loop terminates
- * either way, which is the point; the number matters only because M4's SSE teardown budgets against
- * it, so keep it in step with docs/event-model.md.
+ * on entry) and the one that discards a failed attempt's client. That makes `close()`'s true worst
+ * case ~6.0s, not the ~8.25s an earlier pass computed here — that number wrongly summed every phase
+ * below as if a single `close()` could pay all of them in one call, which the loop's control flow
+ * does not allow. There are two mutually exclusive places `close()` can land inside an in-flight
+ * reconnect, and the ceiling is the larger of the two:
+ *
+ * - **Mid-`open()`.** A single failing attempt can burn up to both of its own deadlines
+ *   sequentially — connect succeeding just under its 2000ms budget, then `LISTEN events` stalling
+ *   out its own 2000ms — before the query timeout is what finally rejects it (4000ms of stall),
+ *   plus the failed attempt's own client being discarded through this same bounded `end()`
+ *   (2000ms more) = 6000ms. `close()` landing here just marks `closed`; the loop's `catch` re-arms
+ *   `reconnectRequested` as usual, but `while (!closed && reconnectRequested)` now reads `closed`
+ *   as true and exits immediately — no top-of-pass discard or RECONNECT_DELAY_MS stacks on top.
+ * - **Top of a pass**, before `open()` is even called again: the stale-client discard
+ *   (`endDiscardedClient(stale)`, up to 2000ms) then `RECONNECT_DELAY_MS` (250ms) = 2250ms, because
+ *   `if (closed) break` (see `scheduleReconnect`) fires right after and the pass never reaches
+ *   `open()` at all.
+ *
+ * max(6000, 2250) = 6.0s. The loop terminates either way, which is the point; the number matters
+ * only because M4's SSE teardown budgets against it, so keep it in step with docs/event-model.md.
  */
 const OPEN_TIMEOUT_MS = 2_000
 
@@ -161,7 +175,22 @@ export async function subscribeEvents(
     client.on('end', scheduleReconnect)
   }
 
-  const open = async (): Promise<Client> => {
+  /**
+   * `isInitial` is true only for the very first call, at the bottom of this function — never for a
+   * call the reconnect loop makes on its own. It exists to close one specific hole: `attachHandlers`
+   * wires `client.on('error', scheduleReconnect)` before `connect()` even starts, and a connection
+   * that dies mid-`LISTEN` reaches both that listener and this function's own `catch` — confirmed
+   * against a real socket teardown during the query: `error` fires once, then the awaited
+   * `client.query()` itself rejects. Inside the loop that double delivery is harmless, because
+   * `scheduleReconnect` sees `reconnecting` already true and just re-arms `reconnectRequested`,
+   * which the catch below sets anyway. On the *first* call there is no loop yet: the `error` listener
+   * still fires and starts one (`reconnecting = true`, parked in its `RECONNECT_DELAY_MS` wait) before
+   * this catch gets a chance to run, but `subscribeEvents` is about to reject from the `throw` below,
+   * so nothing will ever hold a handle to close that loop — it would keep dialing Postgres and
+   * LISTENing forever, unowned. Marking `closed` here, before the loop's delay resolves, makes its
+   * `if (closed) break` (see `scheduleReconnect`) catch it on the very next tick instead.
+   */
+  const open = async (isInitial = false): Promise<Client> => {
     const client = new Client({
       connectionString,
       connectionTimeoutMillis: OPEN_TIMEOUT_MS,
@@ -172,6 +201,7 @@ export async function subscribeEvents(
       await client.connect()
       await client.query('LISTEN events')
     } catch (error) {
+      if (isInitial) closed = true
       // Leave no debris behind a failed attempt. pg cleans up after the two timeouts differently:
       // a `connectionTimeoutMillis` expiry destroys the socket itself, but a `query_timeout` expiry
       // only rejects the query and leaves the connection open and `_queryable` — so without an
@@ -231,7 +261,7 @@ export async function subscribeEvents(
     })()
   }
 
-  current = await open()
+  current = await open(true)
 
   return {
     async close(): Promise<void> {

@@ -3,30 +3,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { AgentFeedEvent } from '../lib/feedSummary'
 import type { AgentCardData } from '../server/overview'
-import { errorMessage } from '../lib/postControl'
+import { postControl } from '../lib/postControl'
 import { DOT } from './AgentCard'
 import { ShellOnlyMark } from './ShellOnlyMark'
 import { Button } from './ui/Button'
 import { Chip } from './ui/Chip'
 
 type ControlAction = 'pause' | 'resume' | 'stop' | 'message'
-
-/** Bare `fetch(url, { method: 'POST', ... })` — the constraint every control POST here follows.
- *  No state is written from the response beyond the error band; the event-driven refetch loop
- *  (`useOverview`) owns truth. */
-async function postControl(url: string, body?: Record<string, unknown>): Promise<{ ok: true } | { ok: false; error: string }> {
-  try {
-    const response =
-      body === undefined
-        ? await fetch(url, { method: 'POST' })
-        : await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
-    if (response.ok) return { ok: true }
-    const data: unknown = await response.json().catch(() => null)
-    return { ok: false, error: errorMessage(data, response.status) }
-  } catch (cause) {
-    return { ok: false, error: cause instanceof Error ? cause.message : String(cause) }
-  }
-}
 
 /** Seed (`agent.recentEvents`, last 20 from the DB) merged with the live buffer
  *  (`liveEvents[agent.id]`), deduplicated by seq, ascending — newest at the bottom. */

@@ -1,25 +1,9 @@
 'use client'
 
 import { useState } from 'react'
-import { errorMessage } from '../lib/postControl'
+import { postControl } from '../lib/postControl'
 import { FieldLabel, PrimaryButton, TextField } from './ui/FormControls'
 import { Panel } from './ui/Panel'
-
-/** Bare `fetch(url, { method: 'POST', ... })` — the `postControl` idiom from `AgentPanel.tsx`. */
-async function postControl(url: string, body: Record<string, unknown>): Promise<{ ok: true } | { ok: false; error: string }> {
-  try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
-    if (response.ok) return { ok: true }
-    const data: unknown = await response.json().catch(() => null)
-    return { ok: false, error: errorMessage(data, response.status) }
-  } catch (cause) {
-    return { ok: false, error: cause instanceof Error ? cause.message : String(cause) }
-  }
-}
 
 /**
  * Overview's goal card: a set-once form until the workspace has a goal, then a read-only display

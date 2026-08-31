@@ -1,23 +1,9 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { errorMessage } from '../lib/postControl'
+import { postControl } from '../lib/postControl'
 
 type Phase = 'idle' | 'confirm'
-
-/** Bare `fetch(url, { method: 'POST' })` — the `postControl` idiom from `AgentPanel.tsx`. No
- *  state is written from the response beyond the error band; the snapshot refetch loop owns
- *  `halted` (the standing no-optimistic-UI rule). */
-async function postControl(url: string): Promise<{ ok: true } | { ok: false; error: string }> {
-  try {
-    const response = await fetch(url, { method: 'POST' })
-    if (response.ok) return { ok: true }
-    const data: unknown = await response.json().catch(() => null)
-    return { ok: false, error: errorMessage(data, response.status) }
-  } catch (cause) {
-    return { ok: false, error: cause instanceof Error ? cause.message : String(cause) }
-  }
-}
 
 /**
  * The TopBar's workspace-wide emergency stop: idle red `STOP` button -> inline confirm (the

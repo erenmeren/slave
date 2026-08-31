@@ -3,29 +3,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Connection, Edge } from 'reactflow'
 import type { GraphSnapshot } from '../../server/graph'
-import { errorMessage } from '../../lib/postControl'
+import { sendControl } from '../../lib/postControl'
 import { EDGE_FLASH_MS, outgoingEdgeIds, tasksTurnedDone } from './flow'
 import { GraphCanvas } from './GraphCanvas'
 import { useLayoutedGraph } from './layout'
 import { buildDepsGraph, TASK_NODE_TYPES } from './TaskNodes'
-
-/** Bare `fetch` -- the M5 constraint every control mutation in this app follows
- *  (`AgentPanel.tsx`'s `postControl`). No state is written from the response beyond the error
- *  band: no optimistic edge insert, no optimistic edge removal -- the event-driven snapshot
- *  refetch (`useGraph`) owns truth for what edges actually exist. */
-async function postDependency(url: string, method: 'POST' | 'DELETE', body?: Record<string, unknown>): Promise<{ ok: true } | { ok: false; error: string }> {
-  try {
-    const response =
-      body === undefined
-        ? await fetch(url, { method })
-        : await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
-    if (response.ok) return { ok: true }
-    const data: unknown = await response.json().catch(() => null)
-    return { ok: false, error: errorMessage(data, response.status) }
-  } catch (cause) {
-    return { ok: false, error: cause instanceof Error ? cause.message : String(cause) }
-  }
-}
 
 const TASK_NODE_PREFIX = 'task:'
 
@@ -120,8 +102,8 @@ export function DepsMode({ workspaceId, snapshot }: { readonly workspaceId: stri
     const dependsOnTaskId = taskIdFromNodeId(source)
     const taskId = taskIdFromNodeId(target)
     if (dependsOnTaskId === null || taskId === null) return
-    void postDependency(`/api/w/${workspaceId}/tasks/${taskId}/dependencies`, 'POST', { dependsOnTaskId }).then((result) => {
-      if (!result.ok) setErrorText(result.error)
+    void sendControl(`/api/w/${workspaceId}/tasks/${taskId}/dependencies`, { method: 'POST', body: { dependsOnTaskId } }).then((error) => {
+      if (error !== null) setErrorText(error)
     })
   }
 
@@ -132,8 +114,8 @@ export function DepsMode({ workspaceId, snapshot }: { readonly workspaceId: stri
     const dependsOnTaskId = taskIdFromNodeId(edgeId.slice(0, separator))
     const taskId = taskIdFromNodeId(edgeId.slice(separator + 2))
     if (dependsOnTaskId === null || taskId === null) return
-    void postDependency(`/api/w/${workspaceId}/tasks/${taskId}/dependencies/${dependsOnTaskId}`, 'DELETE').then((result) => {
-      if (!result.ok) setErrorText(result.error)
+    void sendControl(`/api/w/${workspaceId}/tasks/${taskId}/dependencies/${dependsOnTaskId}`, { method: 'DELETE' }).then((error) => {
+      if (error !== null) setErrorText(error)
     })
   }
 

@@ -14,6 +14,12 @@ const url = (): string => process.env['TEST_DATABASE_URL'] ?? ''
  * - `goSilent()` — accept the TCP connection and never speak the protocol at all (hangs connect).
  * - `goSilentAfterHandshake()` — connect and authenticate normally, then swallow the first query
  *   and answer nothing (hangs `LISTEN events`).
+ * - `dieOnFirstListen()` — connect and authenticate normally, then, the first time only, sever
+ *   the connection the instant it sees the `LISTEN events` query, instead of forwarding it. Every
+ *   connection after that first one is forwarded as normal. Unlike `goSilentAfterHandshake()`,
+ *   which hangs the client on a timeout, this makes pg observe an actual dead socket — which is
+ *   what produces the double delivery (`client.query()` rejects *and* the client's `'error'` event
+ *   fires) that the initial-`open()` regression test below depends on.
  *
  * It can also *delay* the server rather than silence it — see
  * `holdServerMessagesUntilTerminate()`, which is what turns "a FATAL arrives at exactly the wrong
@@ -23,6 +29,7 @@ interface StallableProxy {
   readonly port: number
   goSilent(): void
   goSilentAfterHandshake(): void
+  dieOnFirstListen(): void
   /**
    * Stop forwarding what the server says and buffer it instead, then release the whole backlog at
    * the instant the client sends its Terminate ('X') message — i.e. from inside `client.end()`.
@@ -41,7 +48,7 @@ interface StallableProxy {
   close(): Promise<void>
 }
 
-type ProxyMode = 'forward' | 'silent' | 'silent-after-handshake'
+type ProxyMode = 'forward' | 'silent' | 'silent-after-handshake' | 'die-once-after-handshake'
 
 const QUERY_MESSAGE_TAG = 0x51 // 'Q' — the first byte of a simple-query protocol message
 const TERMINATE_MESSAGE_TAG = 0x58 // 'X' — what pg writes from inside `client.end()`
@@ -49,6 +56,7 @@ const TERMINATE_MESSAGE_TAG = 0x58 // 'X' — what pg writes from inside `client
 async function startStallableProxy(target: URL): Promise<StallableProxy> {
   let mode: ProxyMode = 'forward'
   let holding = false
+  let killedOnce = false
   const held: Buffer[] = []
   let onStall: () => void = (): void => {}
   const firstStall = new Promise<void>((resolve) => {
@@ -88,6 +96,18 @@ async function startStallableProxy(target: URL): Promise<StallableProxy> {
         onStall()
         return
       }
+      if (mode === 'die-once-after-handshake' && chunk[0] === QUERY_MESSAGE_TAG && !killedOnce) {
+        stalled = true
+        killedOnce = true
+        onStall()
+        // Sever both legs instead of forwarding, so pg observes a socket that died mid-query —
+        // the same disconnect shape a `pg_terminate_backend` produces once a client is fully
+        // connected (see `_handleErrorEvent`'s doc comment above), reachable here during the
+        // narrower `LISTEN` window instead.
+        up.destroy()
+        down.destroy()
+        return
+      }
       if (holding && chunk[0] === TERMINATE_MESSAGE_TAG) {
         holding = false
         for (const buffered of held) down.write(buffered)
@@ -122,6 +142,9 @@ async function startStallableProxy(target: URL): Promise<StallableProxy> {
     },
     goSilentAfterHandshake: (): void => {
       mode = 'silent-after-handshake'
+    },
+    dieOnFirstListen: (): void => {
+      mode = 'die-once-after-handshake'
     },
     holdServerMessagesUntilTerminate: (): void => {
       holding = true
@@ -482,6 +505,56 @@ describe('subscribeEvents', () => {
       30_000,
     )
   }
+
+  it(
+    'a failed initial open rejects subscribeEvents and leaves no orphaned reconnect loop LISTENing',
+    async () => {
+      // `open()`'s `attachHandlers` wires the client's `'error'` listener before `connect()` even
+      // starts. A connection that dies mid-`LISTEN` reaches that listener *and* rejects the awaited
+      // `client.query()` — confirmed against a real socket teardown (`error` fires once, then the
+      // query rejects with "Connection terminated unexpectedly"). Inside the reconnect loop that
+      // double delivery is harmless: `scheduleReconnect` sees `reconnecting` already true and just
+      // re-arms `reconnectRequested`, which the loop's own `catch` sets anyway. On the very first
+      // `open()` call there is no loop yet, so that same `'error'` event starts one — parked in its
+      // `RECONNECT_DELAY_MS` wait — before `subscribeEvents`'s `await open()` has even rejected. With
+      // no fix, nothing ever holds a handle to that loop, so it keeps dialing Postgres and LISTENing
+      // forever unowned; only the first connection attempt is severed here, so if that loop runs it
+      // reconnects successfully on its very next pass and leaves a real, live `LISTEN events` backend
+      // behind.
+      const target = new URL(url())
+      const activeProxy = await startStallableProxy(target)
+      proxy = activeProxy
+      activeProxy.dieOnFirstListen()
+
+      const appName = `task9-ownerless-${process.pid}`
+      const proxyUrl =
+        `postgresql://${target.username}:${target.password}` +
+        `@127.0.0.1:${activeProxy.port}${target.pathname}?application_name=${appName}`
+
+      const probe = new Client({ connectionString: url() })
+      await probe.connect()
+      try {
+        await expect(subscribeEvents(proxyUrl, () => {})).rejects.toThrow()
+
+        // Give an orphaned loop plenty of room to reconnect and settle into a live LISTEN: the
+        // proxy only severs the first attempt, `RECONNECT_DELAY_MS` is 250ms, and a real connect +
+        // LISTEN against the local test database completes in single-digit milliseconds.
+        await wait(3_000)
+
+        expect(await countListenBackends(probe)).toBe(0)
+      } finally {
+        // Belt and suspenders: if the assertion above ever fails, make sure this test does not
+        // leave a real orphaned backend running for the rest of the suite.
+        await probe.query(pidsForApp, [appName]).then(async (rows) => {
+          for (const row of rows.rows as Array<{ pid: number }>) {
+            await probe.query('SELECT pg_terminate_backend($1)', [row.pid])
+          }
+        })
+        await probe.end()
+      }
+    },
+    15_000,
+  )
 
   it(
     'close() survives a FATAL error that lands while the connection is being ended',
