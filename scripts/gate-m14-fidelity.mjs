@@ -133,13 +133,29 @@ let agentId = null
 let taskId = null
 let daemon = null
 let daemonOutput = ''
-/** The browser console, newest last, for `fail()`'s dump. */
+/** The browser console, newest last, for `fail()`'s dump. Includes `pageerror` text too (pushed
+ *  alongside `console`/`requestfailed` below) -- a page that crashes client-side says so ONLY as
+ *  a `pageerror`, and a dump that cannot show that is not a dump of what the browser actually saw. */
 const browserConsole = []
+/** `next dev`'s own raw stdout, module-level (not scoped to the try block that spawns it) so
+ *  `gotoReliably` below can read its tail without a parameter -- the exact same reason
+ *  `browserConsole` is module-level. */
+let nextOutput = ''
 let daemonExited = false
 let nextServer = null
 let browser = null
 let page = null
 let diagDir = null
+/** The exact text `next dev`'s manifest race throws, both server- and client-side (M17 Task 7,
+ *  Flake 6 investigation) -- the only signature `gotoReliably` treats as license to retry a
+ *  5xx/thrown navigation. An application 500 that does NOT carry this text fails the gate
+ *  immediately instead, by design (review finding, fix round 2: retrying every 5xx silently heals
+ *  real regressions too). */
+const MANIFEST_RACE_SIGNATURE = 'Unexpected end of JSON input'
+/** Every URL `gotoReliably` has retried, in call order (duplicates kept) -- printed beside the
+ *  gate's PASS line so a rising rate is visible in GREEN runs too, not only in a `fail()` dump
+ *  (review finding, fix round 2: a retry with no accounting is the M16 lesson's exact shape). */
+const gotoRetries = []
 
 /** `gate-m13-runtime.mjs`'s `makeRepo`: a real repository, because the tick provisions a real
  *  `git worktree` in it. */
@@ -359,7 +375,12 @@ async function waitVisible(locator, description) {
 }
 
 /**
- * `page.goto`, retried once on a server error.
+ * `page.goto`, retried once -- but ONLY when the failure carries `next dev`'s own manifest-race
+ * signature (`MANIFEST_RACE_SIGNATURE`, module-level). Everything else -- an application 500, a
+ * genuine navigation failure with no such text anywhere in the browser console or `next dev`'s
+ * own stdout since this call started -- fails the gate immediately, through `fail()`, with the
+ * usual dump. A retry that heals ANY 5xx would just as happily heal a real regression and let the
+ * run go green over it (review finding, fix round 2).
  *
  * M17 Task 7's Flake 6 investigation reproduced `SyntaxError: Unexpected end of JSON input` live,
  * server- and client-side, on three different pages across three different gate runs --
@@ -367,22 +388,64 @@ async function waitVisible(locator, description) {
  * `JSON.parse`, no lock, no atomic rename, and its cache is invalidated on every compile; a
  * request landing while a DIFFERENT route's compile is mid-rewrite of a shared manifest reads a
  * torn file and 500s. Widening `next.config.ts`'s on-demand-entries buffer and warming every
- * route before the browser arrives (both above) cut how OFTEN this fires -- neither closes it:
- * `next dev` still recompiles its client-HMR runtime chunk on ordinary navigation regardless of
- * either. The write that tears a read finishes in milliseconds, so the fix that actually closes
- * this is the one the symptom itself proves works -- the SAME failing run's very next request
- * always succeeded (both live reproductions self-healed on retry, seconds later, with no code
- * change). One retry, after a beat for the in-flight write to finish, standing in for that.
+ * route before the browser arrives (both above, unchanged) cut how OFTEN this fires -- neither
+ * closes it: `next dev` still recompiles its client-HMR runtime chunk on ordinary navigation
+ * regardless of either. The write that tears a read finishes in milliseconds, so the fix that
+ * actually closes this is the one the symptom itself proves works -- the SAME failing run's very
+ * next request always succeeded (both live reproductions self-healed on retry, seconds later,
+ * with no code change). One retry, after a beat for the in-flight write to finish, standing in
+ * for that -- and the retry itself is guarded: if IT also 5xxs or throws, that goes through
+ * `fail()` too, never escaping as a raw Playwright error (review finding, fix round 2).
  */
 async function gotoReliably(url) {
-  const first = await page.goto(url, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS }).catch((cause) => {
-    console.log(`gotoReliably: ${url} threw on the first attempt (${cause instanceof Error ? cause.message : String(cause)}) -- retrying once`)
-    return null
-  })
+  const consoleStart = browserConsole.length
+  const nextOutputStart = nextOutput.length
+  /** True once the manifest-race text has shown up in EITHER channel since this call started. A
+   *  short beat is given before the FIRST check (below) because the client-side `pageerror` for a
+   *  torn read can land a tick after `page.goto`'s own promise settles. */
+  const raced = () =>
+    browserConsole.slice(consoleStart).some((line) => line.includes(MANIFEST_RACE_SIGNATURE)) ||
+    nextOutput.slice(nextOutputStart).includes(MANIFEST_RACE_SIGNATURE)
+
+  let first = null
+  let firstError = null
+  try {
+    first = await page.goto(url, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
+  } catch (cause) {
+    firstError = cause
+  }
   if (first !== null && first.status() < 500) return first
-  if (first !== null) console.log(`gotoReliably: ${url} returned ${String(first.status())} -- retrying once`)
+
+  await delay(50) // the beat `raced()`'s docstring names
+  if (!raced()) {
+    await fail(
+      firstError !== null
+        ? `gotoReliably: ${url} failed (${firstError instanceof Error ? firstError.message : String(firstError)}) without the dev-server manifest-race signature`
+        : `gotoReliably: ${url} returned ${String(first.status())} without the dev-server manifest-race signature`,
+    )
+  }
+  console.log(
+    firstError !== null
+      ? `gotoReliably: ${url} threw on the first attempt (${firstError instanceof Error ? firstError.message : String(firstError)}), signature matched -- retrying once`
+      : `gotoReliably: ${url} returned ${String(first.status())}, signature matched -- retrying once`,
+  )
+  gotoRetries.push(url)
   await delay(300)
-  return page.goto(url, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
+
+  let second = null
+  let secondError = null
+  try {
+    second = await page.goto(url, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
+  } catch (cause) {
+    secondError = cause
+  }
+  if (secondError !== null) {
+    await fail(`gotoReliably: ${url} threw on the retry too (${secondError instanceof Error ? secondError.message : String(secondError)})`)
+  }
+  if (second.status() >= 500) {
+    await fail(`gotoReliably: ${url} returned ${String(second.status())} on the retry too`)
+  }
+  return second
 }
 
 /** Clicks `locator`, then bounded-waits for `predicate`. Deliberately does NOT re-click on every
@@ -557,7 +620,8 @@ try {
     env: { ...process.env, AITEAMOS_GATE_WARM: '1' },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
-  let nextOutput = ''
+  // `nextOutput` itself is module-level now (see its declaration near `browserConsole`) so
+  // `gotoReliably` can read its tail; this block still owns writing to it.
   let nextExited = false
   let resolvedPort = null
   nextServer.stdout.on('data', (chunk) => {
@@ -640,11 +704,20 @@ try {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } })
   page = await context.newPage()
   page.setDefaultTimeout(ACTION_TIMEOUT_MS)
-  page.on('pageerror', (error) => console.error(`[browser:pageerror] ${error}`))
   // The browser's own console, kept for the failure dump: a page that renders on the server and
   // then never hydrates says why only here (a chunk that 404'd, a hydration mismatch, a thrown
   // effect), and a gate that times out on "no row became visible" without it is a gate that
   // cannot say what it saw. Bounded, so a chatty page cannot grow the dump without limit.
+  // `pageerror` is pushed into the SAME array (not just printed) -- a client-side crash says so
+  // ONLY as a `pageerror`, never as a `console` message, and `gotoReliably`'s signature check
+  // below reads this array (review finding, fix round 2: it read only `browserConsole`, which
+  // never actually held the client-side text it was checking for).
+  page.on('pageerror', (error) => {
+    const text = `[pageerror] ${String(error)}`.slice(0, 300)
+    console.error(`[browser:pageerror] ${error}`)
+    browserConsole.push(text)
+    if (browserConsole.length > 200) browserConsole.shift()
+  })
   page.on('console', (message) => {
     browserConsole.push(`[${message.type()}] ${message.text().slice(0, 300)}`)
     if (browserConsole.length > 200) browserConsole.shift()
@@ -1243,6 +1316,14 @@ try {
       `(${String(sqlSucceeded)} succeeded, ${String(sqlFailed)} failed across 7 columns)`,
   )
 
+  // Beside the PASS line, not just in a `fail()` dump (review finding, fix round 2): a rising
+  // retry rate is a signal worth seeing in GREEN runs, not only the run where it finally isn't
+  // enough.
+  console.log(
+    gotoRetries.length === 0
+      ? 'gotoReliably: no retries this run'
+      : `gotoReliably retried ${String(gotoRetries.length)} time(s): ${JSON.stringify(gotoRetries)}`,
+  )
   console.log(`PASS: ${PASS_LINE}`)
   exitCode = 0
 } finally {

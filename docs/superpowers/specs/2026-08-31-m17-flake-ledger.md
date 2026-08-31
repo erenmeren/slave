@@ -439,7 +439,10 @@ Template per flake:
   its own source, not inferred), not something in this repo's page/component code.
 
 - **Change** — three additive layers in `scripts/gate-m14-fidelity.mjs` and `apps/web/next.config.ts`
-  (commit TBD), from least to most load-bearing:
+  (commit `d936551`, hardened by a same-day fix round after code review, commit `ad0debe`, that
+  narrowed the retry to the manifest-race signature, added a retry counter printed beside PASS, and
+  guarded the second attempt through `fail()` instead of letting it escape raw; see item 3 below and
+  the report's fix-round section for the review finding verbatim), from least to most load-bearing:
   1. **Warm every route once before the browser arrives** (`gate-m14-fidelity.mjs`, right after
      `next dev ready`): a filesystem walk of `apps/web/src/app` collects every `route.ts`/`page.tsx`,
      substitutes `[workspaceId]` with the real seeded id and any other dynamic segment with a fixed
@@ -459,16 +462,31 @@ Template per flake:
      gate now spawns `next dev` with `AITEAMOS_GATE_WARM=1`, and `next.config.ts` reads that var to
      set `onDemandEntries: { maxInactiveAge: 10 * 60 * 1000, pagesBufferLength: 50 }` — ONLY under
      that flag, so an ordinary developer's `next dev` keeps Next's defaults.
-  3. **Retry the browser's own navigation once, on a server error** (`gate-m14-fidelity.mjs`, new
-     `gotoReliably` helper, all 16 `page.goto(...)` call sites routed through it): (1) and (2) cut
-     how OFTEN the race fires but do not close it — `next dev` still recompiles its shared
-     client-HMR chunk on ordinary navigation independent of both. The write that tears a read
-     finishes in milliseconds (both live reproductions self-healed on the very next request, no
-     code change, seconds later), so `gotoReliably` retries once, after a 300ms beat, on any
-     response ≥500 or a thrown navigation. This is the layer that actually closed it: proven live
-     during the fix's own verification — `gotoReliably` fired and healed a real 500 on `/analytics`
-     (verification run before the counted 3×) and again on `/agents` and `/` (inside the counted
-     3×'s runs 1 and 2), and every one of those runs still finished green end to end.
+  3. **Retry the browser's own navigation once, but ONLY on the manifest-race signature**
+     (`gate-m14-fidelity.mjs`, new `gotoReliably` helper, all 15 `page.goto(...)` call sites routed
+     through it): (1) and (2) cut how OFTEN the race fires but do not close it — `next dev` still
+     recompiles its shared client-HMR chunk on ordinary navigation independent of both. The write
+     that tears a read finishes in milliseconds (both live reproductions self-healed on the very
+     next request, no code change, seconds later), so `gotoReliably` retries once, after a 300ms
+     beat, on a ≥500 response or a thrown navigation. This is the layer that actually closed it:
+     proven live during the fix's own verification — `gotoReliably` fired and healed a real 500 on
+     `/analytics` (verification run before the counted 3×) and again on `/agents` and `/` (inside
+     the counted 3×'s runs 1 and 2), and every one of those runs still finished green end to end.
+     **Fix round 2** (code review, same day): the first version retried ANY ≥500/thrown navigation
+     indiscriminately, with no accounting and an unguarded second attempt — exactly the shape of
+     hazard M16 already named (a gate that settles a page and carries on). `gotoReliably` now (a)
+     retries ONLY when `MANIFEST_RACE_SIGNATURE` ("Unexpected end of JSON input") shows up in the
+     browser-console buffer or `next dev`'s own stdout tail since that call started — anything else
+     fails the gate immediately, through `fail()`, naming the URL and status/error, so a real
+     application 500 can no longer heal itself and go green; (b) counts every retry in a
+     module-level array, printed beside the PASS line every run (`gotoReliably: no retries this
+     run` / `gotoReliably retried N time(s): [urls]`) so a rising rate is visible in GREEN runs,
+     not only a `fail()` dump; (c) routes the SECOND attempt through the same signature-blind
+     `fail()` guard if it also ≥500s or throws, so a double-failure can no longer escape as a raw
+     Playwright error. `pageerror` events — the ONLY channel the two live reproductions' client-side
+     signal ever appeared on — are now pushed into the same `browserConsole` array `fail()` dumps
+     and `raced()` reads, not merely printed to the terminal (a real, if minor, pre-existing gap:
+     the signature check would otherwise have been blind to the one signal it was reproduced with).
 
 - **Proof** — probe: `node --env-file=.env <scratchpad>/hydration-probe.mjs` → **hydrated 20/20**
   (not reproduced; probe never recreates the full gate's concurrent-compile conditions — see
@@ -481,7 +499,14 @@ Template per flake:
   the count per the brief's own rule, not counted above; two more fix iterations — warm-up alone,
   then warm-up + widened buffer, still without the retry — each reproduced the same class of
   failure again, on `/w/[workspaceId]/tasks` and then `/w/[workspaceId]/activity` itself, before
-  the retry layer was added and the counted 3× ran clean on the first attempt after.)
+  the retry layer was added and the counted 3× ran clean on the first attempt after.) Fix round 2
+  (narrowed retry + counter + guarded second attempt, per code review): a single gate run (a full
+  3× was not required for this scoped change, per the review) — **PASS**, `gotoReliably: no
+  retries this run` printed beside `PASS: nine pages, one design`, confirming the counter/PASS-line
+  wiring on a real run; the manifest race did not fire this particular run, so the signature-gate
+  branch itself was not re-exercised live (it was exercised, and matched, twice during fix round 1
+  — see above — and is otherwise verified by code review/inspection: `raced()` reads the exact
+  channel, `pageerror`, the two live reproductions' client-side signal actually arrived on).
 
 - **Residue** — the underlying `next dev` manifest race is upstream (confirmed in Next 15.5.23's
   own `load-manifest.external.js`), not patched, not reported — this ledger entry is the record.
