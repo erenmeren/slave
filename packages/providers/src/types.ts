@@ -91,7 +91,19 @@ export type RuntimeEvent =
       readonly exitCode: number
       readonly stderr: string
     }
-  | { readonly kind: 'permission_denied'; readonly toolName: string; readonly toolUseId: string }
+  | {
+      readonly kind: 'permission_denied'
+      readonly toolName: string
+      readonly toolUseId: string
+      /**
+       * The refusal's own stated reason, when the runtime reports one -- Cursor's `rejected.reason`
+       * (M18 Task 6; Claude's permission-mode denial carries none). Optional, not defaulted to `''`:
+       * a present-but-empty string would be indistinguishable from "the runtime said nothing", and
+       * the pump's own prefix check (`PERMISSION_DENY_REASON_PREFIX`) needs to tell those apart to
+       * decide whether this refusal is a matrix deny in Cursor-shaped disguise.
+       */
+      readonly reason?: string
+    }
   | { readonly kind: 'terminated'; readonly outcome: RunOutcome }
   | { readonly kind: 'ignored'; readonly line: string }
   | { readonly kind: 'unparsable'; readonly line: string }

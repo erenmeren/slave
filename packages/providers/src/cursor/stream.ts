@@ -318,11 +318,21 @@ function parseToolCallLine(raw: unknown, line: string): RuntimeEvent {
     const payload = toolKey === undefined ? undefined : data.tool_call[toolKey]
     const result = isRecord(payload) ? payload.result : undefined
     if (toolKey !== undefined && isRecord(result) && 'rejected' in result) {
+      // `rejected.reason` (measured alongside `rejected` itself, same fixture) was discarded here
+      // until M18 Task 6: it is what lets the pump tell a permission-matrix refusal wearing
+      // Cursor's OWN denial shape from an ordinary shell-gate pause -- the same prefix check
+      // `hook_denied.reason` gets on the Claude side. `isRecord`, not the schema (`tool_call` is
+      // `z.record(z.string(), z.unknown())`, so `rejected` is unchecked past "an object"): a
+      // present-but-not-a-string `reason` degrades to omitted, matching every other best-effort
+      // field this parser reads out of an unvalidated payload rather than failing the line over it.
+      const rejected = result.rejected
+      const reason = isRecord(rejected) && typeof rejected.reason === 'string' ? rejected.reason : undefined
       return {
         kind: 'permission_denied',
         // Same derivation the started half uses below: `shellToolCall` -> `shell`.
         toolName: toolKey.endsWith('ToolCall') ? toolKey.slice(0, -'ToolCall'.length) : toolKey,
         toolUseId: data.call_id,
+        ...(reason === undefined ? {} : { reason }),
       }
     }
     return { kind: 'ignored', line }

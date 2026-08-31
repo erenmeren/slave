@@ -224,6 +224,48 @@ describe('parseCursorLine, a rejected completed half (M15)', () => {
     expect(event.toolName).toBe('shell')
   })
 
+  it('reads the rejection reason off the real recording, unlike before M18 Task 6 -- but never asserts its wording (same self-update hazard as above)', () => {
+    const event = parseCursorLine(REJECTED_COMPLETED_LINE)
+    if (event.kind !== 'permission_denied') throw new Error('expected permission_denied')
+    // Measured present (M18 Task 6 brief) and, until this task, discarded. Only presence and type
+    // are pinned here -- the text itself is exactly what the comment above forbids asserting on.
+    expect(typeof event.reason).toBe('string')
+    expect(event.reason).not.toBe('')
+  })
+
+  it('reads a synthetic rejection carrying a permission-matrix reason into permission_denied.reason verbatim (M18 Task 6)', () => {
+    // Cursor's OWN denial echo, wearing the SAME matrix-prefixed reason Claude's `hook_denied`
+    // does -- this is what lets the pump's `permission_denied` case (`apps/orchestrator/src/pump.ts`)
+    // tell a matrix refusal apart from an ordinary Cursor shell-gate pause, the same way
+    // `classifyGateEvent` tells it apart on the Claude side.
+    const reason = "permission matrix denies 'run tests' (Bash) for this agent"
+    const line = JSON.stringify({
+      type: 'tool_call',
+      subtype: 'completed',
+      call_id: 'c-matrix-1',
+      tool_call: { shellToolCall: { args: { command: 'npm test' }, result: { rejected: { reason } } } },
+    })
+    expect(parseCursorLine(line)).toEqual({
+      kind: 'permission_denied',
+      toolName: 'shell',
+      toolUseId: 'c-matrix-1',
+      reason,
+    })
+  })
+
+  it('omits reason entirely (not a stringified undefined) when the rejection carries none', () => {
+    const line = JSON.stringify({
+      type: 'tool_call',
+      subtype: 'completed',
+      call_id: 'c-no-reason',
+      tool_call: { shellToolCall: { args: { command: 'ls' }, result: { rejected: {} } } },
+    })
+    const event = parseCursorLine(line)
+    expect(event).toEqual({ kind: 'permission_denied', toolName: 'shell', toolUseId: 'c-no-reason' })
+    if (event.kind !== 'permission_denied') throw new Error('expected permission_denied')
+    expect('reason' in event).toBe(false)
+  })
+
   it('still ignores an ordinary completed half', () => {
     // `lines[7]` (`cursor-run.ndjson`): a real completed half whose result carries no rejection.
     expect(parseCursorLine(lines[7]!).kind).toBe('ignored')

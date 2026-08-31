@@ -1,5 +1,5 @@
+import { classifyGateEvent, PERMISSION_DENY_REASON_PREFIX } from '@ai-team-os/providers'
 import { describe, expect, it } from 'vitest'
-import { classifyGateEvent } from '@ai-team-os/providers'
 
 describe('classifyGateEvent', () => {
   it('reads a denial as the gate stopping the run', () => {
@@ -7,6 +7,29 @@ describe('classifyGateEvent', () => {
       kind: 'stopped_by_gate',
       reason: 'paused',
     })
+  })
+
+  it('reads a hook_denied whose reason carries the matrix prefix as tool_denied, not stopped_by_gate (M18 Task 6)', () => {
+    // Both a pause deny and a matrix deny arrive as the identical `hook_denied` shape -- the prefix
+    // on `reason` is the only thing that tells them apart, and this is the one place that split
+    // happens.
+    expect(
+      classifyGateEvent({
+        kind: 'hook_denied',
+        hookName: 'PreToolUse:Bash',
+        reason: `${PERMISSION_DENY_REASON_PREFIX} 'run tests' (Bash) for this agent`,
+      }),
+    ).toEqual({ kind: 'tool_denied', tool: 'Bash', capability: 'run tests' })
+  })
+
+  it('falls back to the unknown/unknown payload, never a throw, on a prefixed reason whose tail is malformed', () => {
+    expect(
+      classifyGateEvent({
+        kind: 'hook_denied',
+        hookName: 'PreToolUse:Bash',
+        reason: `${PERMISSION_DENY_REASON_PREFIX} nonsense`,
+      }),
+    ).toEqual({ kind: 'tool_denied', tool: 'unknown', capability: 'unknown' })
   })
 
   it('reads a crashed gate and a failed-open gate as gate failure', () => {

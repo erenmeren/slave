@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { isPreToolUseHookResponseLine, parseStreamLine } from '../src/claude/stream.js'
+import { PERMISSION_DENY_REASON_PREFIX } from '../src/gate.js'
 import type { RuntimeEvent } from '../src/types.js'
 
 describe('parseStreamLine', () => {
@@ -25,6 +26,26 @@ describe('parseStreamLine', () => {
       hookName: 'PreToolUse:Bash',
       reason: 'Paused by AI Team OS.',
     })
+  })
+
+  it('passes a permission-matrix deny reason through hook_denied verbatim (M18 Task 6) -- classifyGateEvent, not this parser, tells it apart from a pause', () => {
+    // This parser makes no distinction at all between a pause deny and a matrix deny: both are an
+    // ordinary `hookSpecificOutput.permissionDecision: 'deny'` payload, and `reason` is copied
+    // through exactly as `extractDenyReason` reads it either way. The split lives one layer up, in
+    // `classifyGateEvent`'s prefix check -- this test exists to pin that no change was needed here
+    // for that split to work, per the M18 Task 6 brief's own "verify passthrough suffices" note.
+    const reason = `${PERMISSION_DENY_REASON_PREFIX} 'run tests' (Bash) for this agent`
+    const inner = JSON.stringify({
+      hookSpecificOutput: { permissionDecision: 'deny', permissionDecisionReason: reason },
+    })
+    const line = JSON.stringify({
+      type: 'system',
+      subtype: 'hook_response',
+      hook_name: 'PreToolUse:Bash',
+      hook_event: 'PreToolUse',
+      output: inner,
+    })
+    expect(parseStreamLine(line)).toEqual({ kind: 'hook_denied', hookName: 'PreToolUse:Bash', reason })
   })
 
   it('never conflates a permission-mode denial with a hook denial', () => {

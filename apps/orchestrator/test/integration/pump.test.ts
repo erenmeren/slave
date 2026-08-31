@@ -1,11 +1,29 @@
 import { spawn } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { isAlive } from '@ai-team-os/control'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@ai-team-os/db'
 import { prisma } from '@ai-team-os/db/client'
 import { agentId, runId, taskId, workspaceId } from '@ai-team-os/domain'
-import type { RunOutcome, RuntimeEvent } from '@ai-team-os/providers'
+import { parseStreamLine, type RunOutcome, type RuntimeEvent } from '@ai-team-os/providers'
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { OUTPUT_CAP, pumpRun } from '../../src/pump.js'
+
+/**
+ * Reads one of `packages/providers/test/fixtures/*.ndjson` and runs every line through the real
+ * Claude stream parser (`@ai-team-os/providers`'s `parseStreamLine`), the same function the real
+ * adapter's `events()` uses. This is what makes the M18 Task 6 tests below a genuine end-to-end
+ * proof of the fixture rather than a hand-authored stand-in for it: the matrix-prefixed reason
+ * string actually round-trips through the real parser (and, for `hook_denied`, through
+ * `classifyGateEvent` inside `pumpRun` itself) before `pumpRun` ever sees the resulting
+ * `RuntimeEvent`s.
+ */
+function eventsFromFixture(name: string): readonly RuntimeEvent[] {
+  const path = new URL(`../../../../packages/providers/test/fixtures/${name}.ndjson`, import.meta.url)
+  return readFileSync(path, 'utf8')
+    .split('\n')
+    .filter((line) => line.length > 0)
+    .map((line) => parseStreamLine(line))
+}
 
 /**
  * A real, never-exiting child standing in for the real CLI after a hook deny (M5 live-gate
@@ -1398,4 +1416,100 @@ describe('pumpRun', () => {
     })
   })
 
+  /**
+   * M18 Task 6: the streams and the pump must tell a MATRIX deny (the run continues) from a PAUSE
+   * deny (the run stops) apart, and a matrix deny gets its own `run.tool_denied` event instead.
+   *
+   * Both tests here run their fixture through `eventsFromFixture` -- the REAL Claude stream parser
+   * (`@ai-team-os/providers`'s `parseStreamLine`), not a hand-authored `RuntimeEvent` array -- so
+   * the fixture's own reason string, prefix and all, is what proves the routing, not a stand-in
+   * for it. `classifyGateEvent`'s prefix check sits between the two: the fixture's raw NDJSON goes
+   * in, `pumpRun`'s observable effects come out.
+   */
+  describe('permission-matrix denials vs pause denials (M18 Task 6)', () => {
+    it('runs a matrix-denied Bash call to completion: succeeded, never paused, no kill, one run.tool_denied, no guardrail.tripped, no denied tool use ids', async (): Promise<void> => {
+      const pid = await spawnNeverExiting()
+      await prisma.agentRun.update({ where: { id: ids.runId }, data: { pid, worktreePath: '/tmp' } })
+
+      try {
+        const outcome = await pumpRun({ ...ids, events: fromArray(eventsFromFixture('permission-matrix-deny')) })
+
+        // The run reached its own conclusion -- a matrix deny does not stop the stream, so
+        // `terminated` still arrives and `pumpRun` still returns its outcome.
+        expect(outcome).not.toBeNull()
+        const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+        expect(run.status).toBe('succeeded')
+        // Never paused: the whole point of Task 6 is that a matrix deny is not the pause protocol.
+        expect(run.pausedAtStep).toBeNull()
+
+        const types = await eventTypesFor(ids.runId)
+        expect(types).not.toContain('run.paused')
+        expect(types.filter((t) => t === 'run.tool_denied')).toHaveLength(1)
+        expect(types).not.toContain('guardrail.tripped')
+
+        const toolDenied = await prisma.executionEvent.findFirstOrThrow({
+          where: { runId: ids.runId, type: 'run_tool_denied' },
+        })
+        expect(toolDenied.payload).toEqual({ tool: 'Bash', capability: 'run tests' })
+
+        // No kill: `killWithEscalation` is reached only from the `stopped_by_gate` branch, which a
+        // matrix deny never takes. The never-exiting child is still alive to prove it -- the same
+        // shape this file's own pause-path kill tests use, in the other direction.
+        expect(isAlive(pid)).toBe(true)
+
+        // No checkpoint: nothing paused, so nothing had a reason to write one.
+        await expect(prisma.checkpoint.findUnique({ where: { runId: ids.runId } })).resolves.toBeNull()
+      } finally {
+        try {
+          process.kill(pid, 'SIGKILL')
+        } catch {
+          // Already dead -- not the point of this test either way.
+        }
+      }
+    })
+
+    it('regression: hook-deny.ndjson through the real parser still pauses, exactly as before Task 6', async (): Promise<void> => {
+      const pid = await spawnNeverExiting()
+      await prisma.agentRun.update({ where: { id: ids.runId }, data: { pid, worktreePath: '/tmp' } })
+
+      try {
+        const outcome = await pumpRun({
+          ...ids,
+          spawn: {
+            settingsPath: '/tmp/settings.json',
+            pauseFlagPath: '/tmp/pause.flag',
+            hookPath: '/tmp/pause-gate.sh',
+            gitIdentity: { name: 'Alex', email: 'alex@aiteamos.local' },
+          },
+          events: fromArray(eventsFromFixture('hook-deny')),
+        })
+
+        // Same shape `stopped_by_gate` has always produced (M13 Decisions 1-2): the pump kills the
+        // still-running child and pauses the row -- byte-identical to the pre-Task-6 behaviour,
+        // because this fixture's own deny reason ("Paused by AI Team OS. Stop and wait.") carries
+        // no matrix prefix, so `classifyGateEvent` still routes it to `stopped_by_gate`, not the
+        // new `tool_denied` kind.
+        expect(outcome).toBeNull()
+        const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+        expect(run.status).toBe('paused')
+        // Two tool_call events precede the deny in this recording (Read, then the denied Edit) --
+        // unlike the hand-authored single-tool-call pause tests above.
+        expect(run.pausedAtStep).toBe(2)
+
+        const types = await eventTypesFor(ids.runId)
+        expect(types).toContain('run.paused')
+        expect(types).not.toContain('run.tool_denied')
+        expect(types).not.toContain('guardrail.tripped')
+
+        expect(isAlive(pid)).toBe(false)
+        await expect(prisma.checkpoint.findUniqueOrThrow({ where: { runId: ids.runId } })).resolves.toBeTruthy()
+      } finally {
+        try {
+          process.kill(pid, 'SIGKILL')
+        } catch {
+          // Already dead -- that is the point of this test.
+        }
+      }
+    })
+  })
 })

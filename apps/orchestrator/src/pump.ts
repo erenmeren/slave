@@ -5,7 +5,14 @@ import { killWithEscalation } from '@ai-team-os/control'
 import { Prisma, prisma } from '@ai-team-os/db/client'
 import type { AgentId, RunId, TaskId, WorkspaceId } from '@ai-team-os/domain'
 import { appendEvent } from '@ai-team-os/events'
-import { classifyGateEvent, type ProviderKind, type RunOutcome, type RuntimeEvent } from '@ai-team-os/providers'
+import {
+  classifyGateEvent,
+  PERMISSION_DENY_REASON_PREFIX,
+  parsePermissionDenyReason,
+  type ProviderKind,
+  type RunOutcome,
+  type RuntimeEvent,
+} from '@ai-team-os/providers'
 
 /**
  * The cap on a single `run.output` payload (spec §9: the agent's text output "with a truncation
@@ -587,6 +594,26 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
         // removes the agent's ability to act; this is one tool refused, with the agent free to
         // try another -- and ADR 0001 measured it doing exactly that. Reporting it as `run.paused`
         // would tell an operator a run had stopped when it had not.
+        //
+        // M18 Task 6: Cursor's OWN denial echo carries the SAME permission-matrix reason Claude's
+        // `hook_denied` does, when it was the matrix (not Cursor's shell gate's own pause) that
+        // refused the call -- `reason` is optional because Claude's permission-mode denial and an
+        // ordinary Cursor shell-gate pause report none. A matrix-prefixed reason here is routed to
+        // the identical `run.tool_denied` handling `hook_denied` gets below, and -- unlike an
+        // ordinary permission-mode refusal -- does NEITHER of the two things below: it does not
+        // `denied.push`, because `denied` is exactly what `recordCursorPauseIfRequested` (:397)
+        // reads to decide whether a clean-terminal Cursor run was actually paused, and a matrix
+        // refusal on an otherwise-clean run poisoning that array would misclassify it as paused;
+        // and it does not emit `guardrail.tripped`, because a matrix deny is a fact the run
+        // survives, not an observation of the agent being refused by the permission MODE.
+        if (event.reason !== undefined && event.reason.startsWith(PERMISSION_DENY_REASON_PREFIX)) {
+          const parsed = parsePermissionDenyReason(event.reason)
+          await emit('run.tool_denied', 'agent', {
+            tool: parsed?.tool ?? 'unknown',
+            capability: parsed?.capability ?? 'unknown',
+          })
+          break
+        }
         denied.push(event.toolUseId)
         await emit('guardrail.tripped', 'system', {
           guardrail: 'permission_mode',
@@ -605,6 +632,12 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
         // below asks only `gateOutcome.kind`. This is the seam M12 Task 4 exists for: a runtime
         // whose gate produces differently-shaped events still drives both mechanisms below, as long
         // as its adapter's own `classifyGateEvent`-equivalent maps them the same way.
+        //
+        // M18 Task 6: `hook_denied` alone can also classify to a THIRD outcome, `tool_denied` --
+        // `classifyGateEvent` reads the matrix prefix off `event.reason` to tell a permission-matrix
+        // refusal (the run survives) from an actual pause deny (below) before this switch ever sees
+        // it, so the three-label `case` above stays accurate: it is still exactly the `RuntimeEvent`
+        // kinds `classifyGateEvent` maps, one of which now maps to two different outcomes.
         //
         // `permission_denied` is deliberately not one of this case's labels -- see its own case
         // above and `classifyGateEvent`'s docstring (controller ruling, M12 Task 4) for why: it is
@@ -736,6 +769,16 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
             // Two events, because the run failed *and* a guardrail is what failed it (§13.1).
             await emit('run.failed', 'system', { reason })
             await emit('guardrail.tripped', 'system', { guardrail: 'pause_gate', detail: reason })
+            break
+          }
+
+          case 'tool_denied': {
+            // M18 Task 6: a permission-MATRIX refusal, not a pause -- `classifyGateEvent` only
+            // reaches this kind when `hook_denied.reason` carries the matrix's own prefix. One
+            // event, exactly once per refusal, and nothing else: no `paused`, no checkpoint, no
+            // `killWithEscalation`. The run is still working; the agent is free to try something
+            // else, the same way ADR 0001 measured a permission-mode denial leaving it free to.
+            await emit('run.tool_denied', 'agent', { tool: gateOutcome.tool, capability: gateOutcome.capability })
             break
           }
         }

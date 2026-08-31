@@ -10,10 +10,22 @@ const STDERR_CAP = 1_000
 /**
  * How a run's write gate ended, stated so the orchestrator never asks which runtime produced it.
  * A runtime with `gate: 'none'` produces neither.
+ *
+ * `tool_denied` (M18 Task 6) is the third kind, sanctioned alongside the two above: a PERMISSION
+ * MATRIX refusal, which the run survives -- one tool was refused, the agent keeps going, nothing
+ * pauses. It is NOT a widening of `stopped_by_gate` (a matrix deny stops nothing, so folding it in
+ * would tell the pump to pause a run that is still working) and it is NOT `permission_denied`
+ * folded in here either -- see `classifyGateEvent`'s docstring for why that omission stands. It
+ * exists because a matrix deny arrives on the WIRE as the same `hook_denied` shape a pause deny
+ * does (Claude's PreToolUse hook is the one mechanism both routes through); the prefix on `reason`
+ * is the only thing that tells them apart, and `classifyGateEvent` is where that split belongs --
+ * the one place already trusted to translate a runtime-shaped `RuntimeEvent` into the
+ * provider-neutral vocabulary everything downstream reads.
  */
 export type GateOutcome =
   | { readonly kind: 'stopped_by_gate'; readonly reason: string }
   | { readonly kind: 'gate_failed'; readonly detail: string }
+  | { readonly kind: 'tool_denied'; readonly tool: string; readonly capability: string }
 
 /**
  * Every deny the PERMISSION MATRIX issues begins with this exact string — it is how the stream
@@ -22,6 +34,24 @@ export type GateOutcome =
  * spellings byte-equal, so neither can drift alone.
  */
 export const PERMISSION_DENY_REASON_PREFIX = 'permission matrix denies'
+
+/**
+ * The fixed grammar every matrix deny reason follows, verbatim (scripts/lib/permissions.sh, M18
+ * Task 3): `permission matrix denies '<capability>' (<tool>) for this agent`. Parses `{ tool,
+ * capability }` out of it, or `null` on anything that does not match -- a reason string the prefix
+ * check already confirmed starts with `PERMISSION_DENY_REASON_PREFIX` but whose tail the shell
+ * twin changed shape on, say, or a hand-built one in a test that got the punctuation wrong. Never
+ * throws: capabilities are fixed strings today (no apostrophes or parens of their own to escape),
+ * but this parses whatever comes down the wire, not what the shell script is trusted to send, so a
+ * capability containing a quote must degrade to `null` rather than crash the run that hit it.
+ */
+export function parsePermissionDenyReason(reason: string): { readonly tool: string; readonly capability: string } | null {
+  const match = /^permission matrix denies '(.*)' \((.+)\) for this agent$/.exec(reason)
+  if (match === null) return null
+  const [, capability, tool] = match
+  if (capability === undefined || tool === undefined) return null
+  return { tool, capability }
+}
 
 /**
  * Classifies a `RuntimeEvent` into the pause protocol's outcome, or `null` when the event says
@@ -48,8 +78,20 @@ export const PERMISSION_DENY_REASON_PREFIX = 'permission matrix denies'
  */
 export function classifyGateEvent(event: RuntimeEvent): GateOutcome | null {
   switch (event.kind) {
-    case 'hook_denied':
+    case 'hook_denied': {
+      // Both routes arrive here as the identical `hook_denied` shape -- Claude's PreToolUse hook
+      // is the one mechanism a pause deny AND a matrix deny both go through -- so the prefix on
+      // `reason` is the only thing that tells them apart (M18 Task 6). A malformed tail past a
+      // confirmed prefix (the shell twin drifted, or a hand-built reason in a test) still reports
+      // `tool_denied` -- the prefix already promised "this run continues", so falling through to
+      // `stopped_by_gate` here would pause a run the prefix just said would not pause -- with the
+      // documented `unknown`/`unknown` fallback payload rather than a thrown error.
+      if (event.reason.startsWith(PERMISSION_DENY_REASON_PREFIX)) {
+        const parsed = parsePermissionDenyReason(event.reason)
+        return { kind: 'tool_denied', tool: parsed?.tool ?? 'unknown', capability: parsed?.capability ?? 'unknown' }
+      }
       return { kind: 'stopped_by_gate', reason: event.reason }
+    }
     case 'hook_crashed':
     case 'hook_failed_open':
       return { kind: 'gate_failed', detail: gateFailureDetail(event) }
