@@ -86,7 +86,7 @@ The stream is byte for byte the CLI's stdout except for **two** mechanical subst
 
 ```bash
 sed -e 's#/home/<operator>#/home/fixture-user#g' \
-    -e 's#"messaging_socket_path":"/run/user/UID/cc-socks/PID.sock"#"messaging_socket_path":"/run/user/UID/cc-socks/PID.sock"#' \
+    -e 's#"messaging_socket_path":"/run/user/1001/cc-socks/1565400.sock"#"messaging_socket_path":"/run/user/UID/cc-socks/PID.sock"#' \
     /tmp/m14-skill-fixture/raw.ndjson \
   > packages/providers/test/fixtures/claude/skill-tool-use.ndjson
 ```
