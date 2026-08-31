@@ -1,6 +1,8 @@
 import { spawn } from 'node:child_process'
 import { StringDecoder } from 'node:string_decoder'
 
+import { KILL_GRACE_MS } from '@ai-team-os/control'
+
 /**
  * Running one arbitrary shell command from a workspace's configuration, safely.
  *
@@ -30,8 +32,11 @@ export const COMMAND_OUTPUT_LIMIT = 16 * 1024
  */
 export const DEFAULT_COMMAND_TIMEOUT_MS = 10 * 60_000
 
-/** How long a timed-out process group gets to die politely before it is killed outright. */
-const KILL_GRACE_MS = 2_000
+// How long a timed-out process group gets to die politely before it is killed outright.
+// `killGroup` below is its own mechanism -- it signals the process *group* (negative pid), where
+// `killWithEscalation` in `@ai-team-os/providers` signals a single pid -- but there is only one
+// grace period worth having an opinion about, so this borrows `KILL_GRACE_MS` from
+// `@ai-team-os/control` rather than restating the number.
 
 /**
  * How long to keep reading a finished command's pipes before giving up on them.
