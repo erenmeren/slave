@@ -137,7 +137,7 @@ Template per flake:
      cancel-failure case (`expect(events).toHaveLength(1)`), so reordering the sweep-side append
      ahead of `cancel()` (the brief's option (b)) would have broken that test's contract for no
      benefit — the log line gets the legibility without touching it.
-  Commit: `9ea7aec`.
+  Commit: `fad0ffa`.
 
 - **Proof** — `scripts/repeat-test.sh 20 apps/orchestrator/test/integration/cli.test.ts "the
   daemon enforces the run-timeout guardrail on a hung run"` → **GREEN 20x** (2.1–2.7 s/run),
