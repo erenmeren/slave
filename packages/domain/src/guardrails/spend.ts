@@ -96,3 +96,31 @@ export function sumSpend(runs: readonly SpendRow[]): Spend {
 function isInFlight(status: RunStatus): boolean {
   return (NON_TERMINAL_RUN_STATUSES as readonly RunStatus[]).includes(status)
 }
+
+/** One (provider, status) bucket of runs, pre-aggregated by the database. `knownUsd` is the
+ *  bucket's summed non-null costs (Postgres `sum()` skips NULLs — the same arithmetic as
+ *  `sumSpend`'s `known`); `measuredCount` is how many rows had a non-null cost. */
+export interface SpendGroup {
+  readonly provider: string | null
+  readonly status: RunStatus
+  readonly knownUsd: number
+  readonly rowCount: number
+  readonly measuredCount: number
+}
+
+/**
+ * `sumSpend` over rows the database has already grouped. The RULE lives in `sumSpend`'s doc
+ * comment above and does not repeat here: known sums unconditionally; a row is unmeasured when
+ * it spawned (`provider` written), finished (terminal status), and reported nothing. Groups
+ * only make the arithmetic wholesale: the unmeasured rows of a qualifying bucket are exactly
+ * `rowCount - measuredCount`. Equivalence is pinned by `test/spend-groups.test.ts`.
+ */
+export function sumSpendFromGroups(groups: readonly SpendGroup[]): Spend {
+  let known = 0
+  let unknownRuns = 0
+  for (const group of groups) {
+    known += group.knownUsd
+    if (group.provider !== null && !isInFlight(group.status)) unknownRuns += group.rowCount - group.measuredCount
+  }
+  return { known, unknownRuns }
+}

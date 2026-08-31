@@ -1,7 +1,15 @@
 import { prisma } from '@ai-team-os/db/client'
 import { toRunState } from '@ai-team-os/db'
 import { capabilitiesOf, type ProviderCapabilities, type ProviderKind } from '@ai-team-os/control'
-import { deriveAgentStatus, sumSpend, NON_TERMINAL_RUN_STATUSES, type AgentStatus, type SpendRow } from '@ai-team-os/domain'
+import {
+  deriveAgentStatus,
+  sumSpend,
+  sumSpendFromGroups,
+  NON_TERMINAL_RUN_STATUSES,
+  type AgentStatus,
+  type SpendGroup,
+  type SpendRow,
+} from '@ai-team-os/domain'
 
 /** A worker's resolved gate, from `capabilitiesOf(worker.provider).gate` (M12 Task 13) -- `null`
  *  only when the worker itself has no provider recorded, mirroring `provider: ProviderKind | null`
@@ -37,6 +45,13 @@ const ACTIVE_TASK_STATUSES = ['ready', 'running', 'verifying', 'reviewing', 'mer
 /** `sumSpend`'s pair under this DTO's own field names. */
 function spendOf(runs: readonly SpendRow[]): { readonly spend: number; readonly unmeasuredRuns: number } {
   const { known, unknownRuns } = sumSpend(runs)
+  return { spend: known, unmeasuredRuns: unknownRuns }
+}
+
+/** `spendOf`'s twin over pre-aggregated groups (`listProjects` below) -- `sumSpendFromGroups`'s
+ *  pair under this DTO's own field names, the same way `spendOf` above pairs `sumSpend`'s. */
+function spendOfGroups(groups: readonly SpendGroup[]): { readonly spend: number; readonly unmeasuredRuns: number } {
+  const { known, unknownRuns } = sumSpendFromGroups(groups)
   return { spend: known, unmeasuredRuns: unknownRuns }
 }
 
@@ -82,41 +97,54 @@ export async function listProjects(): Promise<readonly ProjectRow[]> {
     orderBy: { name: 'asc' },
   })
 
-  const [taskGroups, spendRows] = await Promise.all([
+  const [taskGroups, agentRows, spendGroups] = await Promise.all([
     prisma.task.groupBy({ by: ['workspaceId', 'status'], _count: { _all: true } }),
-    // `agent -> team -> workspaceId`, matching overview.ts's budget-bar spend source exactly: a
-    // `planning` run (no Task row) still counts toward the workspace it ran under.
-    // `provider` and `status` alongside the cost: those two are what tell an unmeasured run from a
-    // null cost (`sumSpend` carries the rule and the column facts). Not filtered in SQL -- a
-    // pre-M12 row has a real cost and a null `provider`, so a `WHERE` would drop its money out of
-    // `spend` in order to fix `unmeasuredRuns` beside it.
-    prisma.agentRun.findMany({
-      select: {
-        costUsd: true,
-        provider: true,
-        status: true,
-        agent: { select: { team: { select: { workspaceId: true } } } },
-      },
+    // `agent -> team -> workspaceId`, matching overview.ts's budget-bar spend source exactly (Task
+    // 13, M17): a `planning` run (no Task row) still counts toward the workspace it ran under.
+    // Prisma's `groupBy` cannot traverse a relation for its `by` columns, so the workspace each
+    // agent belongs to is resolved with this separate, cheap query instead.
+    prisma.agent.findMany({ select: { id: true, team: { select: { workspaceId: true } } } }),
+    // Grouped by the database rather than pulled row-by-row: `provider` and `status` alongside the
+    // summed/counted cost are what tell an unmeasured run from a null cost (`sumSpend`'s doc
+    // comment carries the rule and the column facts; `sumSpendFromGroups` restates it over
+    // buckets). Not filtered in SQL -- a pre-M12 row has a real cost and a null `provider`, so a
+    // `WHERE` would drop its money out of `spend` in order to fix `unmeasuredRuns` beside it.
+    prisma.agentRun.groupBy({
+      by: ['agentId', 'provider', 'status'],
+      _sum: { costUsd: true },
+      _count: { _all: true, costUsd: true },
     }),
   ])
 
-  // Grouped first, then summed through `sumSpend` (M12 Task 9, ruling R3). The old running total
-  // added `(run.costUsd ?? 0)` per row, which is the array form of the same defect the `_sum` sites
-  // had: a run nobody measured contributed a zero and then vanished from the figure entirely.
-  // `sumSpend` is the same function `overview.ts` uses, so the two surfaces that show an operator
-  // a spend figure cannot come to disagree about what an unmeasured run does to a total.
+  // Grouped first, then summed through `sumSpendFromGroups` (M12 Task 9 ruling R3; M17 Task 13's
+  // grouped rewrite). The old running total added `(run.costUsd ?? 0)` per row, which is the array
+  // form of the same defect the `_sum` sites had: a run nobody measured contributed a zero and then
+  // vanished from the figure entirely. `sumSpend`/`sumSpendFromGroups` are the same functions
+  // `overview.ts` uses, so the two surfaces that show an operator a spend figure cannot come to
+  // disagree about what an unmeasured run does to a total.
   // `world.ts`'s guardrail is deliberately NOT the third (fix round F3): its consumer is
   // forbidden to read `unknownRuns` (ruling R8), so the pair's second half would be discarded --
   // and its query runs inside `loadWorld`'s cumulative-15s transaction on the tick's hot path,
   // where `_sum` transfers one row instead of one float per run of the workspace's history. The
   // difference between these sites is the CONSUMER, not the arithmetic.
-  const rowsByWorkspace = new Map<string, SpendRow[]>()
-  for (const run of spendRows) {
-    const workspaceId = run.agent.team.workspaceId
-    const row: SpendRow = { costUsd: run.costUsd, provider: run.provider, status: run.status }
-    const forWorkspace = rowsByWorkspace.get(workspaceId)
-    if (forWorkspace === undefined) rowsByWorkspace.set(workspaceId, [row])
-    else forWorkspace.push(row)
+  const workspaceByAgent = new Map(agentRows.map((agent) => [agent.id, agent.team.workspaceId]))
+  const groupsByWorkspace = new Map<string, SpendGroup[]>()
+  for (const g of spendGroups) {
+    const workspaceId = workspaceByAgent.get(g.agentId)
+    if (workspaceId === undefined) continue
+    const group: SpendGroup = {
+      provider: g.provider,
+      // Prisma's generated `groupBy` status is its own enum type, distinct from the domain's
+      // `RunStatus` import -- assignable here with no cast because they are the SAME nine members
+      // (schema.prisma:25-35 = state.ts:3), verified against the schema rather than assumed.
+      status: g.status,
+      knownUsd: g._sum.costUsd ?? 0,
+      rowCount: g._count._all,
+      measuredCount: g._count.costUsd,
+    }
+    const list = groupsByWorkspace.get(workspaceId)
+    if (list === undefined) groupsByWorkspace.set(workspaceId, [group])
+    else list.push(group)
   }
 
   // The avatar row's live status, via the SAME `deriveAgentStatus` translator every other status
@@ -165,8 +193,8 @@ export async function listProjects(): Promise<readonly ProjectRow[]> {
       .flatMap((team) => team.agents)
       .map((agent) => ({ agentId: agent.id, name: agent.name, status: teamAgentLiveInfo.get(agent.id)?.status ?? 'idle' })),
     // `?? []` here is the case `?? 0` was always right about: a workspace with no runs at all has
-    // spent nothing and has nothing unmeasured -- `sumSpend([])` says exactly that.
-    ...spendOf(rowsByWorkspace.get(workspace.id) ?? []),
+    // spent nothing and has nothing unmeasured -- `sumSpendFromGroups([])` says exactly that.
+    ...spendOfGroups(groupsByWorkspace.get(workspace.id) ?? []),
   }))
 }
 
