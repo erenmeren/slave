@@ -10,6 +10,7 @@ import {
   type TaskStatus,
 } from '@ai-team-os/domain'
 import { feedSummary, type AgentFeedEvent } from '../lib/feedSummary'
+import { skillNameOf } from '../lib/skillName'
 
 // Re-exported so callers that already import from `server/overview.ts` keep working; the
 // definition itself lives in the pure `lib/feedSummary.ts` module (controller ruling R3) so the
@@ -213,20 +214,6 @@ export interface OverviewSnapshot {
 // (M8a Task 12) from the M5-era four to also cover `reviewing`/`merging`, the two verify-passed
 // states that sit between a run finishing and the task landing on `main`.
 const ACTIVE_TASK_STATUSES = ['ready', 'running', 'verifying', 'reviewing', 'merging', 'rework'] as const
-
-/**
- * The skill NAME out of a `Skill` tool call's summary. The summary's shape is the parser's, not
- * this file's: `summaryFor` writes `Skill <name>` for a `Skill` call once `skill` joins
- * `CLAUDE_SUMMARY_ARG_KEYS` (M14 Task 4, which owns that change). Everything else — a bare
- * `Skill` from before that, a summary the parser could not fill, a non-string payload — is `null`,
- * so the chip renders `—`. The word `Skill` is the TOOL's name and never a skill's, and printing
- * it on a chip labelled "skill" would be a placeholder standing where an unknown belongs.
- */
-function skillNameOf(summary: unknown): string | null {
-  if (typeof summary !== 'string') return null
-  const match = /^Skill\s+(\S+)/.exec(summary)
-  return match?.[1] ?? null
-}
 
 export async function buildOverviewSnapshot(workspaceId: string): Promise<OverviewSnapshot | null> {
   const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId } })
