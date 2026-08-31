@@ -6,7 +6,7 @@ import {
   parseReviewVerdict,
   type RunId,
 } from '@ai-team-os/domain'
-import { admitProvider, refusalText, runFilePaths } from '@ai-team-os/control'
+import { admitProvider, refusalText, resolveDenyList, runFilePaths, writePermissionsFile } from '@ai-team-os/control'
 import { prisma } from '@ai-team-os/db/client'
 import { appendEvent } from '@ai-team-os/events'
 import type { AgentRuntimeAdapter, RunHandle } from '@ai-team-os/providers'
@@ -234,10 +234,13 @@ async function dispatchReview(deps: TickDeps, task: ReviewableTask): Promise<Run
   // `decide()` uses for `requiredRole`, and Task 8's seed data uses the same spelling.
   // `companyAgent -> template` included so `resolveRuntime` (M12 Task 8) can walk the whole override
   // chain for whichever reviewer is actually picked below.
+  // `permissions` included alongside `companyAgent -> template` (M18 Task 5) -- see `tick.ts`'s
+  // own `startRun` for why: the resolved deny list is snapshotted at dispatch, from this run's own
+  // agent row.
   const reviewers = await prisma.agent.findMany({
     where: { role: 'reviewer', team: { workspaceId: task.workspaceId } },
     orderBy: { id: 'asc' },
-    include: { companyAgent: { include: { template: true } } },
+    include: { companyAgent: { include: { template: true } }, permissions: true },
   })
 
   if (reviewers.length === 0) {
@@ -356,6 +359,9 @@ async function dispatchReview(deps: TickDeps, task: ReviewableTask): Promise<Run
     // back opaquely on `handle.runFiles` below.
     const { runDir, pauseFlagPath } = runFilePaths(workspace.repoPath, runId)
 
+    // M18 Task 5 -- see `tick.ts`'s `startRun` for the full reasoning.
+    const permissionsFilePath = writePermissionsFile(runDir, resolveDenyList(reviewer.permissions, resolved.provider))
+
     const gitIdentity = { name: reviewer.name, email: `${emailLocalPart(reviewer)}@aiteamos.local` }
 
     handle = await runAdapter.start({
@@ -366,6 +372,7 @@ async function dispatchReview(deps: TickDeps, task: ReviewableTask): Promise<Run
       worktreePath: latestImpl.worktreePath,
       pauseFlagPath,
       runDir,
+      permissionsFilePath,
       gitIdentity,
       ...(model !== undefined ? { model } : {}),
     })

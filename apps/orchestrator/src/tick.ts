@@ -1,4 +1,12 @@
-import { admitProvider, claimResume, pauseActiveRuns, refusalText, runFilePaths } from '@ai-team-os/control'
+import {
+  admitProvider,
+  claimResume,
+  pauseActiveRuns,
+  refusalText,
+  resolveDenyList,
+  runFilePaths,
+  writePermissionsFile,
+} from '@ai-team-os/control'
 import { prisma } from '@ai-team-os/db/client'
 import {
   decide,
@@ -456,9 +464,12 @@ async function startRun(deps: TickDeps, taskId: TaskId, agentId: AgentId): Promi
   // `companyAgent -> template` included so `resolveRuntime` (M12 Task 8) can walk the whole override
   // chain -- a legacy agent with no roster link carries `companyAgent: null` and resolves through
   // its own column alone.
+  // `permissions` included alongside `companyAgent -> template` (M18 Task 5): the resolved deny
+  // list `writePermissionsFile` writes below is computed from this run's own agent row, at
+  // dispatch time, the same snapshot-at-spawn discipline `resolveRuntime` already uses for model.
   const agent = await prisma.agent.findUniqueOrThrow({
     where: { id: agentId },
-    include: { companyAgent: { include: { template: true } } },
+    include: { companyAgent: { include: { template: true } }, permissions: true },
   })
   const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: task.workspaceId } })
 
@@ -580,12 +591,19 @@ async function startRun(deps: TickDeps, taskId: TaskId, agentId: AgentId): Promi
     // else -- is that adapter's business, reported back opaquely on `handle.runFiles` below.
     const { runDir, pauseFlagPath } = runFilePaths(workspace.repoPath, runId)
 
+    // M18 Task 5: the permission matrix is resolved and snapshotted to disk HERE, at dispatch,
+    // against this run's own provider -- the same resolve-once-at-spawn discipline `model` already
+    // gets. `permissions.json` is written even when the deny list is empty (spec §2): the gate
+    // scripts distinguish "armed with nothing denied" from "not armed at all".
+    const permissionsFilePath = writePermissionsFile(runDir, resolveDenyList(agent.permissions, resolved.provider))
+
     handle = await runAdapter.start({
       runId,
       prompt: buildPrompt(task),
       worktreePath: worktree.path,
       pauseFlagPath,
       runDir,
+      permissionsFilePath,
       gitIdentity: { name: agent.name, email: `${emailLocalPart(agent)}@aiteamos.local` },
       // Conditional spread, not `model`, because `exactOptionalPropertyTypes` treats an explicit
       // `model: undefined` as a different (and disallowed) thing from the key being absent.

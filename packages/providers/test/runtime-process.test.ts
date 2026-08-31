@@ -54,12 +54,22 @@ describe('signalRun / isAlive (characterization)', () => {
 })
 
 describe('buildChildEnv (characterization)', () => {
-  it('carries the git identity (author + committer) and the pause-flag path', () => {
+  // M18 Task 5: `permissionsFilePath` became a required input field alongside `pauseFlagPath` --
+  // the contract genuinely grew (every start and every resume now writes `permissions.json` before
+  // spawning, so there is no real caller with a pause flag but no permissions file to point at),
+  // so both cases below were extended rather than left to characterize a narrower input shape than
+  // `buildChildEnv` actually accepts. This is the ONE sanctioned edit to an existing
+  // characterization test in this task (task-5-brief.md).
+  it('carries the git identity (author + committer), the pause-flag path, and the permissions-file path', () => {
     const env = buildChildEnv({
       gitIdentity: { name: 'AI Worker', email: 'worker@example.com' },
       pauseFlagPath: '/tmp/x/pause.flag',
+      permissionsFilePath: '/tmp/x/permissions.json',
     })
     expect(env['AITEAMOS_PAUSE_FLAG']).toBe('/tmp/x/pause.flag')
+    // M18 Task 5 -- AITEAMOS_PERMISSIONS_FILE, the ONE channel the gates read the resolved deny
+    // list's path on, the same shape of channel AITEAMOS_PAUSE_FLAG already is.
+    expect(env['AITEAMOS_PERMISSIONS_FILE']).toBe('/tmp/x/permissions.json')
     // process.ts:120-123 -- author and committer both, not just author.
     expect(env['GIT_AUTHOR_NAME']).toBe('AI Worker')
     expect(env['GIT_AUTHOR_EMAIL']).toBe('worker@example.com')
@@ -73,6 +83,7 @@ describe('buildChildEnv (characterization)', () => {
       const env = buildChildEnv({
         gitIdentity: { name: 'AI Worker', email: 'worker@example.com' },
         pauseFlagPath: '/tmp/x/pause.flag',
+        permissionsFilePath: '/tmp/x/permissions.json',
       })
       expect(env['AITEAMOS_TEST_PROBE']).toBe('inherited')
     } finally {

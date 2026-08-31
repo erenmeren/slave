@@ -48,6 +48,15 @@ export interface StartRunInput {
   readonly worktreePath: string
   readonly pauseFlagPath: string
   readonly runDir: string
+  /**
+   * The permission matrix's resolved deny list for this run (M18 Task 5), already written to disk
+   * by the caller as `permissions.json` inside `runDir` (`packages/control`'s
+   * `writePermissionsFile`, called once per start AND once per resume) -- this adapter never
+   * resolves the matrix itself, only tells the child where to find the resolved file, exactly the
+   * way `pauseFlagPath` already works. Required, not optional: every dispatch site writes the file
+   * before calling `start()`, even when the resolved deny list is empty.
+   */
+  readonly permissionsFilePath: string
   readonly gitIdentity: {
     readonly name: string
     readonly email: string
@@ -279,7 +288,11 @@ export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
       runId: input.runId,
       args,
       cwd: input.worktreePath,
-      env: buildChildEnv({ gitIdentity: input.gitIdentity, pauseFlagPath: input.pauseFlagPath }),
+      env: buildChildEnv({
+        gitIdentity: input.gitIdentity,
+        pauseFlagPath: input.pauseFlagPath,
+        permissionsFilePath: input.permissionsFilePath,
+      }),
       startInput: input,
       runFiles: { settingsPath, hookPath: this.hookPath },
     })
@@ -507,6 +520,17 @@ export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
       // directly, and `args` below points `--settings` at that same path, not at anything derived
       // from `runDir` a second time.
       runDir: dirname(checkpoint.settingsPath),
+      // Re-derived, not carried on `checkpoint`: `Checkpoint` (this package's own interface, not
+      // the Prisma model) deliberately gains no field with no matching persisted column (see
+      // `writePermissionsFile`'s docstring in `packages/control`). `permissions.json` always sits
+      // beside `pause.flag` in the run's own scratch directory (`runFilePaths`'s `runDir`), for
+      // every provider, so `dirname(checkpoint.pauseFlagPath)` recovers that directory exactly the
+      // way `resumedInput.runDir` above recovers it from `settingsPath` for THIS provider only --
+      // `pauseFlagPath` is the one field guaranteed to live in `runDir` on every adapter (Cursor's
+      // own `settingsPath` is a hooks file in the WORKTREE, not `runDir`). The orchestrator
+      // rewrites the file at this same path immediately before calling `resume()`
+      // (`apps/orchestrator/src/resume.ts`'s `executeResume`), so the two never disagree.
+      permissionsFilePath: join(dirname(checkpoint.pauseFlagPath), 'permissions.json'),
       gitIdentity: { name: checkpoint.gitAuthorName, email: checkpoint.gitAuthorEmail },
       // Carried forward from the checkpoint, never re-resolved: the run must continue with the SAME
       // model it started with (M10 §6, the `Checkpoint.model` docstring), independently of whatever
@@ -535,6 +559,7 @@ export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
       env: buildChildEnv({
         gitIdentity: resumedInput.gitIdentity,
         pauseFlagPath: resumedInput.pauseFlagPath,
+        permissionsFilePath: resumedInput.permissionsFilePath,
       }),
       startInput: resumedInput,
       runFiles: { settingsPath: checkpoint.settingsPath, hookPath: checkpoint.hookPath },

@@ -53,6 +53,11 @@ describe('ClaudeCodeAdapter', () => {
       // and writes `settings.json` inside it. Reusing `worktreePath` here (rather than a separate
       // directory) keeps this file's assertions unchanged from before the refactor.
       runDir: worktreePath,
+      // M18 Task 5: the resolved permission matrix's path, written by the caller before `start()`
+      // -- see `permissionsFilePath`'s own docstring on `StartRunInput`. No file need actually
+      // exist at this path for these tests (the adapter never reads it, only tells the child where
+      // it is), matching how `pauseFlagPath` above is exercised the same way.
+      permissionsFilePath: path.join(worktreePath, 'permissions.json'),
       gitIdentity: { name: 'Test Agent', email: 'agent@example.com' },
     }
   })
@@ -91,6 +96,15 @@ describe('ClaudeCodeAdapter', () => {
     expect(env['GIT_COMMITTER_NAME']).toBe(input.gitIdentity.name)
     expect(env['GIT_COMMITTER_EMAIL']).toBe(input.gitIdentity.email)
     expect(env['AITEAMOS_PAUSE_FLAG']).toBe(input.pauseFlagPath)
+  })
+
+  it('sets AITEAMOS_PERMISSIONS_FILE in the child environment (M18 Task 5)', async (): Promise<void> => {
+    // fixture 'env-echo' prints process.env keys as a result payload -- the same fixture and
+    // pattern the git-identity/pause-flag test above uses.
+    const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'env-echo'], hookPath })
+    await adapter.start(input)
+    const env = await collectEnvFrom(adapter, input.runId)
+    expect(env['AITEAMOS_PERMISSIONS_FILE']).toBe(input.permissionsFilePath)
   })
 
   it('appends --model to the spawned args when input.model is set', async (): Promise<void> => {

@@ -1,3 +1,5 @@
+import { writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { prisma } from '@ai-team-os/db/client'
 import { type Result, err, ok } from '@ai-team-os/domain'
 import type { ControlRefusal } from './refusal.js'
@@ -57,6 +59,35 @@ export function resolveDenyList(
     }
   }
   return [...byTool.entries()].map(([tool, capability]) => ({ tool, capability }))
+}
+
+/**
+ * Writes `permissions.json` into a run's own scratch directory (`runFilePaths`'s `runDir`) --
+ * the resolved deny list `scripts/lib/permissions.sh` reads back through `AITEAMOS_PERMISSIONS_
+ * FILE` (Task 5, spec §2). Called at every START (Task 5 dispatch sites) and every RESUME
+ * (`executeResume`): a fresh snapshot each time, never merged with what was there before -- a
+ * matrix edit reaches a run only the next time it starts or resumes, never one already in flight
+ * between those two points, exactly as the matrix UI copy states. `deny` is written even when
+ * empty: an armed-but-empty file is real JSON the gate reads as "nothing denied", a materially
+ * different case from the file being absent at all, which `read_permission_verdict` treats as "no
+ * matrix in play."
+ *
+ * `permissions.json` is a literal filename convention, not a value threaded through any type: both
+ * this function and each provider adapter's `resume()` (`packages/providers/src/claude/adapter.ts`,
+ * `cursor/adapter.ts`) assume it independently. The adapter has no `Checkpoint` field to recover
+ * the path from -- deliberately; see that interface's own docstring on why it may not gain a field
+ * with no matching Prisma column -- so `resume()` re-derives the identical path from
+ * `dirname(checkpoint.pauseFlagPath)` plus this same literal, the same way `AITEAMOS_PAUSE_FLAG` is
+ * a literal name duplicated across `process.ts` and the shell gates rather than imported across a
+ * package boundary `packages/providers` cannot cross back into `packages/control`.
+ */
+export function writePermissionsFile(
+  runDir: string,
+  denyList: readonly { readonly tool: string; readonly capability: string }[],
+): string {
+  const permissionsFilePath = join(runDir, 'permissions.json')
+  writeFileSync(permissionsFilePath, JSON.stringify({ version: 1, deny: denyList }, null, 2))
+  return permissionsFilePath
 }
 
 export async function setAgentPermission(

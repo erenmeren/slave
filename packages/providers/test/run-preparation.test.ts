@@ -33,6 +33,7 @@ describe('the Claude adapter prepares its own run files', () => {
       worktreePath: dir,
       pauseFlagPath: join(dir, 'pause.flag'),
       runDir,
+      permissionsFilePath: join(runDir, 'permissions.json'),
       gitIdentity: { name: 'a', email: 'a@b.c' },
     })
 

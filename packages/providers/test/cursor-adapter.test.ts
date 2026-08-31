@@ -142,6 +142,11 @@ describe('CursorAdapter', () => {
       worktreePath,
       pauseFlagPath: path.join(worktreePath, 'pause.flag'),
       runDir,
+      // M18 Task 5: the resolved permission matrix's path, written by the caller before `start()`
+      // -- see `permissionsFilePath`'s own docstring on `StartRunInput`. No file need actually
+      // exist here (the adapter never reads it, only tells the child where it is), matching how
+      // `pauseFlagPath` above is exercised the same way.
+      permissionsFilePath: path.join(runDir, 'permissions.json'),
       gitIdentity: { name: 'Test Agent', email: 'agent@example.com' },
     }
   })
@@ -246,6 +251,20 @@ describe('CursorAdapter', () => {
     await drain(adapter, input.runId)
 
     expect(readFileSync(envOut, 'utf8')).toBe(`${input.pauseFlagPath}\nTest Agent\n${worktreePath}\n`)
+  })
+
+  it('sets AITEAMOS_PERMISSIONS_FILE on the child (M18 Task 5)', async () => {
+    const envOut = path.join(worktreePath, 'permissions-env.txt')
+    const script = writeScript(
+      worktreePath,
+      'permissions-env-echo.sh',
+      `#!/bin/sh\nprintf '%s\\n' "$AITEAMOS_PERMISSIONS_FILE" > ${JSON.stringify(envOut)}\n`,
+    )
+    const adapter = adapterFor(script)
+    await adapter.start(input)
+    await drain(adapter, input.runId)
+
+    expect(readFileSync(envOut, 'utf8')).toBe(`${input.permissionsFilePath}\n`)
   })
 
   it('ends the stream when the child exits, even while a grandchild holds its stdout open', async () => {

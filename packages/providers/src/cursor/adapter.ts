@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process'
-import { isAbsolute } from 'node:path'
+import { dirname, isAbsolute, join } from 'node:path'
 import { createInterface } from 'node:readline'
 import type { RunId } from '@ai-team-os/domain'
 import { capabilitiesOf } from '../capabilities.js'
@@ -168,7 +168,11 @@ export class CursorAdapter implements AgentRuntimeAdapter {
       runId: input.runId,
       args,
       cwd: input.worktreePath,
-      env: buildChildEnv({ gitIdentity: input.gitIdentity, pauseFlagPath: input.pauseFlagPath }),
+      env: buildChildEnv({
+        gitIdentity: input.gitIdentity,
+        pauseFlagPath: input.pauseFlagPath,
+        permissionsFilePath: input.permissionsFilePath,
+      }),
       runFiles: { settingsPath: hooksPath, hookPath: this.gatePath },
     })
   }
@@ -237,6 +241,13 @@ export class CursorAdapter implements AgentRuntimeAdapter {
       env: buildChildEnv({
         gitIdentity: { name: checkpoint.gitAuthorName, email: checkpoint.gitAuthorEmail },
         pauseFlagPath: checkpoint.pauseFlagPath,
+        // Re-derived, not carried on `checkpoint` -- see `ClaudeCodeAdapter.resume`'s identical
+        // derivation and its docstring for why `Checkpoint` gains no field here. `pauseFlagPath` is
+        // the one field guaranteed to live in the run's `runDir` on THIS provider too: Cursor's own
+        // `checkpoint.settingsPath` is `.cursor/hooks.json` in the WORKTREE (this adapter's own
+        // docstring, above), not `runDir`, so deriving from it the way the Claude adapter derives
+        // `runDir` from `settingsPath` would recover the wrong directory here.
+        permissionsFilePath: join(dirname(checkpoint.pauseFlagPath), 'permissions.json'),
       }),
       runFiles: { settingsPath: checkpoint.settingsPath, hookPath: checkpoint.hookPath },
     })

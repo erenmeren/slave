@@ -5,7 +5,7 @@ import {
   parsePlanGraph,
   type RunId,
 } from '@ai-team-os/domain'
-import { admitProvider, refusalText, runFilePaths } from '@ai-team-os/control'
+import { admitProvider, refusalText, resolveDenyList, runFilePaths, writePermissionsFile } from '@ai-team-os/control'
 import { prisma } from '@ai-team-os/db/client'
 import { appendEvent } from '@ai-team-os/events'
 import type { AgentRuntimeAdapter, RunHandle } from '@ai-team-os/providers'
@@ -216,10 +216,13 @@ export async function dispatchPlanning(deps: TickDeps): Promise<RunId | null> {
   // uses for `role === 'reviewer'`.
   // `companyAgent -> template` included so `resolveRuntime` (M12 Task 8) can walk the whole override
   // chain for whichever manager is actually picked below.
+  // `permissions` included alongside `companyAgent -> template` (M18 Task 5) -- see `tick.ts`'s
+  // own `startRun` for why: the resolved deny list is snapshotted at dispatch, from this run's own
+  // agent row.
   const managers = await prisma.agent.findMany({
     where: { role: 'manager', team: { workspaceId: deps.workspaceId } },
     orderBy: { id: 'asc' },
-    include: { companyAgent: { include: { template: true } } },
+    include: { companyAgent: { include: { template: true } }, permissions: true },
   })
 
   if (managers.length === 0) {
@@ -321,6 +324,9 @@ export async function dispatchPlanning(deps: TickDeps): Promise<RunId | null> {
     // back opaquely on `handle.runFiles` below.
     const { runDir, pauseFlagPath } = runFilePaths(workspace.repoPath, runId)
 
+    // M18 Task 5 -- see `tick.ts`'s `startRun` for the full reasoning.
+    const permissionsFilePath = writePermissionsFile(runDir, resolveDenyList(manager.permissions, resolved.provider))
+
     const gitIdentity = { name: manager.name, email: `${emailLocalPart(manager)}@aiteamos.local` }
 
     handle = await runAdapter.start({
@@ -331,6 +337,7 @@ export async function dispatchPlanning(deps: TickDeps): Promise<RunId | null> {
       worktreePath: workspace.repoPath,
       pauseFlagPath,
       runDir,
+      permissionsFilePath,
       gitIdentity,
       ...(model !== undefined ? { model } : {}),
     })

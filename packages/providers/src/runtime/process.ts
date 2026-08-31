@@ -110,10 +110,18 @@ export function terminateChild(child: ChildProcess, graceMs: number): Promise<vo
  * `process.env` plus Cursor's additions, so setting it on the child is sufficient and no second
  * channel is needed (M12 Task 11 §3 Q3, §8(e)). One concept, one name, whichever runtime the run
  * is on.
+ *
+ * `AITEAMOS_PERMISSIONS_FILE` (M18 Task 5) is the same shape of channel, for the same reason:
+ * `scripts/lib/permissions.sh`'s `read_permission_verdict` is the ONE place either gate reads the
+ * resolved deny list's path from. `permissionsFilePath` is required, not optional -- every start
+ * and every resume writes `permissions.json` (`packages/control`'s `writePermissionsFile`) before
+ * spawning, even when the resolved deny list is empty, so there is no real call site that has a
+ * pause flag but no permissions file to point at.
  */
 export function buildChildEnv(input: {
   readonly gitIdentity: { readonly name: string; readonly email: string }
   readonly pauseFlagPath: string
+  readonly permissionsFilePath: string
 }): NodeJS.ProcessEnv {
   return {
     ...process.env,
@@ -122,5 +130,6 @@ export function buildChildEnv(input: {
     GIT_COMMITTER_NAME: input.gitIdentity.name,
     GIT_COMMITTER_EMAIL: input.gitIdentity.email,
     AITEAMOS_PAUSE_FLAG: input.pauseFlagPath,
+    AITEAMOS_PERMISSIONS_FILE: input.permissionsFilePath,
   }
 }

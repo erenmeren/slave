@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { requestResume } from '@ai-team-os/control'
 import { prisma } from '@ai-team-os/db/client'
@@ -159,6 +159,31 @@ describe('executing a resume intent from the daemon', () => {
     const promptIndex = argv.indexOf('-p')
     expect(promptIndex).toBeGreaterThanOrEqual(0)
     expect(argv[promptIndex + 1]).toBe(MARKER)
+  }, 60_000)
+
+  it('rewrites permissions.json with a fresh resolved deny list on resume (M18 Task 5)', async (): Promise<void> => {
+    const runId = await pauseARun()
+    const checkpointBefore = await prisma.checkpoint.findUniqueOrThrow({ where: { runId } })
+    // `runFilePaths`'s own contract: `permissions.json` sits beside `pause.flag` in the run's own
+    // scratch directory -- the same derivation `executeResume` itself uses.
+    const permissionsPath = join(dirname(checkpointBefore.pauseFlagPath), 'permissions.json')
+    expect(JSON.parse(readFileSync(permissionsPath, 'utf8'))).toEqual({ version: 1, deny: [] })
+
+    // The matrix edit happens BETWEEN pause and resume -- exactly the window the file must be
+    // rewritten across, not merely written once at the original dispatch.
+    await prisma.agentPermission.create({ data: { agentId: fixture.agentId, tool: 'run tests', mode: 'deny' } })
+
+    expect((await requestResume(runId, MARKER, 'web')).ok).toBe(true)
+    await tick({
+      workspaceId: brandWorkspaceId(fixture.workspaceId),
+      registry: singleAdapterRegistry(fakeAdapter('env-echo')),
+    })
+    await drainPumps()
+
+    expect(JSON.parse(readFileSync(permissionsPath, 'utf8'))).toEqual({
+      version: 1,
+      deny: [{ tool: 'Bash', capability: 'run tests' }],
+    })
   }, 60_000)
 
   it('leaves nothing to do on the tick after the one that claimed the intent', async (): Promise<void> => {

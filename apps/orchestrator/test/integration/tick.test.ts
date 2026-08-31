@@ -194,6 +194,32 @@ describe('tick', () => {
     expect(git(['status', '--porcelain'], worktreePath)).toBe('')
   })
 
+  it('writes the resolved permission matrix into the run dir at dispatch (M18 Task 5)', async (): Promise<void> => {
+    // A denied capability that maps to a real Claude Code tool (`resolveDenyList`'s
+    // `CAPABILITY_TOOLS` table): 'run tests' -> Bash.
+    await prisma.agentPermission.create({ data: { agentId: fixture.agentId, tool: 'run tests', mode: 'deny' } })
+
+    await tick(deps)
+
+    const run = await prisma.agentRun.findFirstOrThrow()
+    // `runFilePaths`'s own contract: `.aiteamos/runs/<runId>` under the repo root, beside
+    // `pause.flag` -- not under the worktree (the previous test's own assertion).
+    const permissionsPath = join(fixture.repoPath, '.aiteamos', 'runs', run.id, 'permissions.json')
+    const written: unknown = JSON.parse(readFileSync(permissionsPath, 'utf8'))
+    expect(written).toEqual({ version: 1, deny: [{ tool: 'Bash', capability: 'run tests' }] })
+  })
+
+  it('writes an armed-but-empty permissions.json when nothing is denied (M18 Task 5)', async (): Promise<void> => {
+    await tick(deps)
+
+    const run = await prisma.agentRun.findFirstOrThrow()
+    const permissionsPath = join(fixture.repoPath, '.aiteamos', 'runs', run.id, 'permissions.json')
+    const written: unknown = JSON.parse(readFileSync(permissionsPath, 'utf8'))
+    // Present and armed, distinct from the file being absent -- `read_permission_verdict` treats
+    // those two cases differently (spec §2; `scripts/lib/permissions.sh`'s own docstring).
+    expect(written).toEqual({ version: 1, deny: [] })
+  })
+
   it('emits guardrail.tripped and starts nothing when decide halts', async (): Promise<void> => {
     // Spend past the workspace's budget on a run that already concluded: money is spent whether or
     // not the run is still going, which is why `loadWorld` sums every run regardless of status.

@@ -1,3 +1,5 @@
+import { dirname } from 'node:path'
+import { resolveDenyList, writePermissionsFile } from '@ai-team-os/control'
 import { prisma } from '@ai-team-os/db/client'
 import {
   agentId as brandAgentId,
@@ -45,10 +47,12 @@ export interface ExecuteResumeOptions {
 export async function executeResume(options: ExecuteResumeOptions): Promise<void> {
   const { message } = options
   // `agent -> team`, not `task`: a `planning` run (M8b) has no `Task` row, and `agent -> team ->
-  // workspace` is the only linkage such a run has to a workspace.
+  // workspace` is the only linkage such a run has to a workspace. `permissions` alongside it (M18
+  // Task 5): the matrix is re-resolved and the run's `permissions.json` rewritten below, against
+  // whatever the agent's permission rows say NOW -- not what they said at the original dispatch.
   const run = await prisma.agentRun.findUniqueOrThrow({
     where: { id: options.runId },
-    include: { agent: { include: { team: true } } },
+    include: { agent: { include: { team: true, permissions: true } } },
   })
 
   // Thrown, not refused: by the time this runs the claim has already flipped the run to `resuming`,
@@ -66,6 +70,18 @@ export async function executeResume(options: ExecuteResumeOptions): Promise<void
   // column existed was necessarily a Claude Code run (there was no other adapter that could have
   // produced it), so this backfills a known fact rather than guessing among live alternatives.
   const adapter = resolveAdapter(options.registry, checkpoint.provider ?? 'claude_code')
+
+  // M18 Task 5: rewritten here, at RESUME, exactly as it was at the run's original start -- a
+  // fresh snapshot each time, not a copy of the one `start()` wrote. `runDir` is `pauseFlagPath`'s
+  // own directory (`runFilePaths`'s contract every dispatch site already relies on: `pauseFlagPath:
+  // join(dir, 'pause.flag')`), the one field guaranteed to live there on every provider -- unlike
+  // `settingsPath`, which for Cursor is a hooks file in the WORKTREE, not `runDir`. Both adapters'
+  // own `resume()` re-derive this SAME path independently from `checkpoint.pauseFlagPath` (see
+  // `writePermissionsFile`'s docstring for why the path is a literal convention, not a field on
+  // `Checkpoint`), so what is written here is exactly what `AITEAMOS_PERMISSIONS_FILE` will point
+  // the resumed child at.
+  const runDir = dirname(checkpoint.pauseFlagPath)
+  writePermissionsFile(runDir, resolveDenyList(run.agent.permissions, checkpoint.provider ?? 'claude_code'))
 
   // The checkpoint is the whole point of `resume`'s signature: this process may never have called
   // `start()` for that run, so the settings file, the hook path and the git identity exist nowhere

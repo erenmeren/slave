@@ -120,6 +120,9 @@ describe('ClaudeCodeAdapter.resume', () => {
       pauseFlagPath: path.join(worktreePath, 'pause.flag'),
       // M12 Task 2: the adapter derives and writes settings.json inside this directory itself.
       runDir: worktreePath,
+      // M18 Task 5: see `permissionsFilePath`'s own docstring on `StartRunInput` -- no file need
+      // actually exist here for these tests.
+      permissionsFilePath: path.join(worktreePath, 'permissions.json'),
       gitIdentity: { name: 'Test Agent', email: 'agent@example.com' },
     }
 
