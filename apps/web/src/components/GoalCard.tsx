@@ -1,20 +1,9 @@
 'use client'
 
 import { useState } from 'react'
+import { errorMessage } from '../lib/postControl'
 import { FieldLabel, PrimaryButton, TextField } from './ui/FormControls'
 import { Panel } from './ui/Panel'
-
-/** Pulls a 409 refusal's `{ error }` text, falling back to something nameable for any other
- *  non-2xx or malformed body — same helper as `AgentPanel.tsx`'s `errorMessage`, copied rather
- *  than imported (the house pattern here is a small local copy, not a shared control-plane
- *  module). */
-function errorMessage(data: unknown, status: number): string {
-  if (data !== null && typeof data === 'object') {
-    const value = (data as { error?: unknown }).error
-    if (typeof value === 'string') return value
-  }
-  return `request failed (${status})`
-}
 
 /** Bare `fetch(url, { method: 'POST', ... })` — the `postControl` idiom from `AgentPanel.tsx`. */
 async function postControl(url: string, body: Record<string, unknown>): Promise<{ ok: true } | { ok: false; error: string }> {

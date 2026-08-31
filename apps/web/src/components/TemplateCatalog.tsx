@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import type { ProviderKind } from '@ai-team-os/control'
+import { errorMessage } from '../lib/postControl'
 import { Chip } from './ui/Chip'
 import { DataTable, Row } from './ui/DataTable'
 import { FieldLabel, INPUT_SHELL, PrimaryButton, TextField } from './ui/FormControls'
@@ -25,18 +26,6 @@ export interface TemplateRow {
 
 const COLUMNS = '1fr 110px 2fr 140px 120px'
 const HEADER = ['Name', 'Role', 'Description', 'Default model', 'Default provider'] as const
-
-/** Pulls a 409 refusal's `{ error }` text, falling back to something nameable for any other
- *  non-2xx or malformed body -- the `errorMessage` idiom `AssignCompanyDialog.tsx`/
- *  `ModelOverrideEditor.tsx` already use, copied rather than imported (a small local copy is the
- *  house pattern here, not a shared control-plane module). */
-function errorMessage(data: unknown, status: number): string {
-  if (data !== null && typeof data === 'object') {
-    const value = (data as { error?: unknown }).error
-    if (typeof value === 'string') return value
-  }
-  return `request failed (${status})`
-}
 
 /**
  * Settings' template catalog (M11 Task 9 brief): the template list (name, role chip, description,

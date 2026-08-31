@@ -3,20 +3,9 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import type { ProviderKind } from '@ai-team-os/control'
+import { errorMessage } from '../lib/postControl'
 import { Button } from './ui/Button'
 import { ProviderSelect } from './ProviderSelect'
-
-/** Pulls a 409 refusal's `{ error }` text, falling back to something nameable for any other
- *  non-2xx or malformed body -- the `errorMessage` idiom `AssignCompanyDialog.tsx`/
- *  `EmergencyStopButton.tsx` already use, copied rather than imported (a small local copy is the
- *  house pattern here, not a shared control-plane module). */
-function errorMessage(data: unknown, status: number): string {
-  if (data !== null && typeof data === 'object') {
-    const value = (data as { error?: unknown }).error
-    if (typeof value === 'string') return value
-  }
-  return `request failed (${status})`
-}
 
 /**
  * The per-worker model+provider override row (M11 Task 8 brief; the pair, M12 Task 13): a plain

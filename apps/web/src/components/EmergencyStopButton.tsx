@@ -1,20 +1,9 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
+import { errorMessage } from '../lib/postControl'
 
 type Phase = 'idle' | 'confirm'
-
-/** Pulls a 409 refusal's `{ error }` text, falling back to something nameable for any other
- *  non-2xx or malformed body — same helper as `AgentPanel.tsx`'s `errorMessage`, copied rather
- *  than imported (the house pattern here is a small local copy, not a shared control-plane
- *  module). */
-function errorMessage(data: unknown, status: number): string {
-  if (data !== null && typeof data === 'object') {
-    const value = (data as { error?: unknown }).error
-    if (typeof value === 'string') return value
-  }
-  return `request failed (${status})`
-}
 
 /** Bare `fetch(url, { method: 'POST' })` — the `postControl` idiom from `AgentPanel.tsx`. No
  *  state is written from the response beyond the error band; the snapshot refetch loop owns

@@ -3,22 +3,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { AgentFeedEvent } from '../lib/feedSummary'
 import type { AgentCardData } from '../server/overview'
+import { errorMessage } from '../lib/postControl'
 import { DOT } from './AgentCard'
 import { ShellOnlyMark } from './ShellOnlyMark'
 import { Button } from './ui/Button'
 import { Chip } from './ui/Chip'
 
 type ControlAction = 'pause' | 'resume' | 'stop' | 'message'
-
-/** Pulls a 409 refusal's `{ error }` text, falling back to something nameable for any other
- *  non-2xx or malformed body — the panel's error band must never render blank (spec §9). */
-function errorMessage(data: unknown, status: number): string {
-  if (data !== null && typeof data === 'object') {
-    const value = (data as { error?: unknown }).error
-    if (typeof value === 'string') return value
-  }
-  return `request failed (${status})`
-}
 
 /** Bare `fetch(url, { method: 'POST', ... })` — the constraint every control POST here follows.
  *  No state is written from the response beyond the error band; the event-driven refetch loop

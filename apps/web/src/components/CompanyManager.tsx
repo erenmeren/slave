@@ -4,6 +4,7 @@ import { useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import type { ProviderKind } from '@ai-team-os/control'
 import type { RosterCompany, RosterMemberRow } from '../server/org'
+import { errorMessage } from '../lib/postControl'
 import { ProviderSelect } from './ProviderSelect'
 import type { TemplateRow } from './TemplateCatalog'
 import { DataTable, Row } from './ui/DataTable'
@@ -20,16 +21,6 @@ export interface CompanyRow {
 
 const MEMBER_COLUMNS = '1fr 110px 160px 140px 120px'
 const MEMBER_HEADER = ['Name', 'Role', 'Template', 'Model', 'Provider'] as const
-
-/** Pulls a 409 refusal's `{ error }` text, falling back to something nameable for any other
- *  non-2xx or malformed body -- the `errorMessage` idiom this page's other forms already use. */
-function errorMessage(data: unknown, status: number): string {
-  if (data !== null && typeof data === 'object') {
-    const value = (data as { error?: unknown }).error
-    if (typeof value === 'string') return value
-  }
-  return `request failed (${status})`
-}
 
 function MemberRow({ member }: { readonly member: RosterMemberRow }): React.JSX.Element {
   return (

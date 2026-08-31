@@ -3,18 +3,10 @@
 import { useRouter } from 'next/navigation'
 import { useState } from 'react'
 import type { ProviderKind } from '@ai-team-os/control'
+import { errorMessage } from '../lib/postControl'
 import { ProviderSelect } from './ProviderSelect'
 import { FieldLabel, INPUT_SHELL, PrimaryButton, TextField } from './ui/FormControls'
 import { Panel } from './ui/Panel'
-
-/** Pulls a 409 refusal's `{ error }` text -- the same local helper `GoalCard.tsx` carries. */
-function errorMessage(data: unknown, status: number): string {
-  if (data !== null && typeof data === 'object') {
-    const value = (data as { error?: unknown }).error
-    if (typeof value === 'string') return value
-  }
-  return `request failed (${status})`
-}
 
 /** `GoalCard.tsx`'s `postControl` idiom with the verb Task 12's two routes use. */
 async function putControl(url: string, body: Record<string, unknown>): Promise<{ ok: true } | { ok: false; error: string }> {

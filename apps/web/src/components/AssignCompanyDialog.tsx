@@ -2,19 +2,8 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { errorMessage } from '../lib/postControl'
 import { Button } from './ui/Button'
-
-/** Pulls a 409 refusal's `{ error }` text, falling back to something nameable for any other
- *  non-2xx or malformed body -- the `errorMessage` idiom `GoalCard.tsx`/`EmergencyStopButton.tsx`
- *  already use, copied rather than imported (a small local copy is the house pattern here, not a
- *  shared control-plane module). */
-function errorMessage(data: unknown, status: number): string {
-  if (data !== null && typeof data === 'object') {
-    const value = (data as { error?: unknown }).error
-    if (typeof value === 'string') return value
-  }
-  return `request failed (${status})`
-}
 
 export interface AssignCompanyDialogProps {
   readonly workspaceId: string

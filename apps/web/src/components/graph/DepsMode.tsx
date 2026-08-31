@@ -3,21 +3,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Connection, Edge } from 'reactflow'
 import type { GraphSnapshot } from '../../server/graph'
+import { errorMessage } from '../../lib/postControl'
 import { EDGE_FLASH_MS, outgoingEdgeIds, tasksTurnedDone } from './flow'
 import { GraphCanvas } from './GraphCanvas'
 import { useLayoutedGraph } from './layout'
 import { buildDepsGraph, TASK_NODE_TYPES } from './TaskNodes'
-
-/** Pulls a non-2xx refusal's `{ error }` text, falling back to something nameable for any other
- *  malformed body -- the same shape as `AgentPanel.tsx`'s `errorMessage` (the error band must
- *  never render blank). */
-function errorMessage(data: unknown, status: number): string {
-  if (data !== null && typeof data === 'object') {
-    const value = (data as { error?: unknown }).error
-    if (typeof value === 'string') return value
-  }
-  return `request failed (${status})`
-}
 
 /** Bare `fetch` -- the M5 constraint every control mutation in this app follows
  *  (`AgentPanel.tsx`'s `postControl`). No state is written from the response beyond the error
