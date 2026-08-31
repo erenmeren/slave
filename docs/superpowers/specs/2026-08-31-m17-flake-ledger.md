@@ -274,6 +274,71 @@ Template per flake:
 
 ## Flake 4 — stream.test.ts delivery tests (:77 and :115)
 
+- **Evidence** — recorded failure: a single observed occurrence, noted in-file as a comment on
+  each test ("Observed once; not reproduced in the eight runs after") — the 2026 mitigation was
+  the tests' own 20 s `testTimeout` (both tests already carry it: `packages/events/test/integration/stream.test.ts:103`,
+  `:124`). New this wave: read `stream.test.ts:77–125` and `packages/events/src/stream.ts:35–95`
+  and ran the brief's two-phase measurement. Quiet: `scripts/repeat-test.sh 20
+  packages/events/test/integration/stream.test.ts` → **GREEN 20x**, whole-file `vitest run`
+  invocation 3699–3807 ms per run; the two delivery tests held steady at 571–578 ms (":77",
+  "delivers an event appended after the stream started...") and 1023–1040 ms (":115", "delivers
+  an event that was never announced, via the fallback poll..."). Loaded: `nproc - 2` (6, per Task
+  2's deviation from literal `nproc` on this host) concurrent `yes > /dev/null`, then
+  `scripts/repeat-test.sh 10 packages/events/test/integration/stream.test.ts` → **GREEN 10x**,
+  whole-file invocation 4730–7000 ms per run; the two delivery tests rose to 588–661 ms (":77")
+  and 1029–1132 ms (":115") — visibly slower under contention but nowhere near either test's
+  5000 ms `expect.poll` timeout or 20 s outer budget. **30/30 GREEN total**, no red observed. All
+  `yes` processes confirmed killed (`pgrep -x yes`, empty) before and after; no orchestrator
+  daemon at any point (verified via `/proc/<pid>/cmdline`, not bare `pgrep -f`, which false-matches
+  this session's own invoking shell command text).
+
+- **Mechanism** — not applicable to a "no code change" ruling in the sense of a bug being fixed;
+  the suspected mechanism named in the brief (LISTEN/NOTIFY delivery latency before `expect.poll`
+  starts, `stream.ts:35`'s `catchUp`) is the thing this measurement pass targeted and did not
+  catch red. Structurally: each test's own timeout budget decomposes as setup + a 5000 ms
+  `expect.poll` (interval 50 ms for :77, 100 ms for :115) + a fixed settle `wait` (500 ms for :77,
+  700 ms for :115) — both waits are poll-bounded (satisfied the instant `seen.length` clears zero,
+  not slept-out), so the observed whole-test time is setup-plus-actual-delivery-latency plus the
+  fixed settle, never the poll's own ceiling. Backing out the settle wait from the worst observed
+  totals puts the setup+delivery portion at ≤161 ms (:77, 661−500) and ≤432 ms (:115, 1132−700)
+  against each test's own 5000 ms poll timeout — 31× and ~11.6× headroom respectively on the poll
+  phase alone, before even reaching the outer 20 s budget. Task 4's reconnect fix
+  (`packages/events/src/subscribe.ts:184–228`) already sits underneath this file's NOTIFY path
+  (`createEventStream` → `subscribeEvents`), so any residual reconnect-drop risk that could have
+  starved `catchUp`'s notification trigger was closed before this task's runs, consistent with the
+  clean 30/30.
+
+- **Change** — none. Margin math: worst single-test time observed across all 30 runs (quiet +
+  loaded) was 1132 ms (":115", loaded run 6) against each test's 20 000 ms budget = **17.7×
+  headroom** (20000 / 1132). On the inner `expect.poll` specifically — the piece actually exposed
+  to LISTEN/NOTIFY delivery latency — worst inferred setup+delivery time was ≤432 ms against its
+  own 5000 ms poll timeout = **≥11.6× headroom**. Both tests' waits are `expect.poll`-bounded, not
+  sleep-bounded, for the delivery condition itself; the only fixed sleeps (`wait(500)` /
+  `wait(700)`) exist deliberately to let a duplicate delivery show up, not to wait for the primary
+  assertion, so they cannot themselves produce a timeout-shaped flake. No product or test code
+  changed; the in-file "observed once, not reproduced" comment on the first test
+  (`stream.test.ts:97–102`, cross-referenced by the second test's comment at `:123`) already is
+  the instrumentation this ruling leaves in place — a real recurrence still reports a legible
+  `expect.poll` failure naming which assertion was unsatisfied, per the same design Flake 1/3's
+  `testTimeout` work already established.
+
+- **Proof** — `scripts/repeat-test.sh 20 packages/events/test/integration/stream.test.ts` →
+  **GREEN 20x** (3699–3807 ms/run), unloaded. `scripts/repeat-test.sh 10
+  packages/events/test/integration/stream.test.ts` under `nproc - 2` (6) synthetic `yes` load →
+  **GREEN 10x** (4730–7000 ms/run). **30/30 total**, no red. Load processes confirmed started and
+  killed cleanly (`pgrep -x yes` empty before and after); no orchestrator daemon running for
+  either phase.
+
+- **Residue** — the single historical occurrence (pre-M17, "observed once; not reproduced in the
+  eight runs after") was never reproduced in this task's 30 combined runs either, consistent with
+  a rare, load-dependent delivery-latency tail this measurement's synthetic CPU load did not
+  happen to hit (the same category of honest gap Flake 3 documented: repetition alone cannot force
+  a microsecond-to-millisecond-wide timing tail). Residual risk is accepted at the measured
+  headroom (≥11.6× on the poll phase, 17.7× on the outer budget) rather than eliminated; the
+  in-file comments on both tests remain the instrumentation for a future recurrence. No further
+  action queued — unlike Flake 3, this task's brief did not call for a new regression test, since
+  no mechanism was caught in the act to regress-test against.
+
 ## Flake 5 — activity-history.test.ts sparkline buckets
 
 ## Flake 6 — live-gate Activity hydration
