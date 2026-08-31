@@ -32,6 +32,12 @@ export default defineConfig({
           environment: 'node',
           setupFiles: ['./test-setup/require-database.ts'],
           poolOptions: { threads: { singleThread: true } },
+          // Default was vitest's 5000ms, which the shared-DB TRUNCATE+seed hooks crossed under
+          // full-suite load three times (M11 x2, M12 x1) with a test body that does no waiting.
+          // M17 flake ledger, Flake 1: worst observed single test under load = 533 ms,
+          // rounded up to 1_000 ms; x3 headroom => 3_000 ms, below the 15_000 ms floor this
+          // budget uses instead. A real hang still fails, 3x later than the default did.
+          testTimeout: 15_000,
         },
       },
     ],
