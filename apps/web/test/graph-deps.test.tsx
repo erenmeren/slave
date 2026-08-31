@@ -149,6 +149,23 @@ describe('DepsMode', () => {
     expect(node.querySelector('[data-testid="attempt"]')?.textContent).toBe('1/3')
   })
 
+  // M16 Task 8 fix round 1: `TaskNodes.tsx`'s border/dot come from `TaskCard.tsx`'s
+  // `TASK_STATUS_*` tables -- a second mapping that predates `lib/tones.ts`'s single table and
+  // had drifted from it, painting a `reviewing` task's node the paused/grey tone here while the
+  // Tasks board (routed through `cardStateForTask`/`CARD_STATE_TONE`) already read it as review.
+  it('gives a reviewing task node the review tone, not the stale paused one', async () => {
+    const reviewingSnapshot: GraphSnapshot = {
+      ...SNAPSHOT,
+      tasks: [task({ id: 't4', title: 'Ship it', status: 'reviewing', attempt: 1, maxAttempts: 3, dependenciesDone: true })],
+      dependencies: [],
+    }
+    render(<DepsMode workspaceId="w1" snapshot={reviewingSnapshot} />)
+
+    const node = screen.getByTestId('node-task:t4').querySelector('[data-testid="task-node"]')!
+    expect(node.className).toContain('border-tone-review')
+    expect(node.className).not.toContain('border-tone-paused')
+  })
+
   it('shows "waiting on N" (N = unmet dependency count, not raw dependency count) on a ready task with dependenciesDone: false', async () => {
     render(<DepsMode workspaceId="w1" snapshot={SNAPSHOT} />)
 

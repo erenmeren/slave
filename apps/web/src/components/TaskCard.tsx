@@ -8,6 +8,14 @@ import { StatusPill, TONE_TEXT } from './ui/StatusPill'
 // Reuses the M4 status vocabulary (design doc §8: "no new tokens expected") rather than minting
 // task-specific colours. Several statuses share a token deliberately — e.g. both `ready` and
 // `verifying` read as "in flight, not yet the agent's turn" (starting/cyan).
+//
+// These three tables predate `lib/tones.ts`'s single tone table (`CARD_STATE_TONE`/
+// `cardStateForTask`) and are a second mapping the M16 spec's single-source rule (§5) does not
+// want -- `TaskCard.tsx` itself no longer reads them (it calls `cardStateForTask` directly), but
+// `graph/TaskNodes.tsx` (Dependencies mode) and `graph/OrgNodes.tsx` (the active-task satellite)
+// still do. M16 Task 8 fix round 1 reconciles only `reviewing`, the one entry a live regression
+// caught drifted to the paused/grey tone instead of review/purple; a full derivation off the one
+// table (retiring these three `Record`s entirely) is a parked follow-up, not this fix's scope.
 export const TASK_STATUS_DOT: Record<TaskStatus, string> = {
   backlog: 'bg-tone-idle',
   ready: 'bg-tone-planning',
@@ -15,7 +23,7 @@ export const TASK_STATUS_DOT: Record<TaskStatus, string> = {
   assigned: 'bg-tone-planning',
   running: 'bg-tone-working',
   verifying: 'bg-tone-planning',
-  reviewing: 'bg-tone-paused',
+  reviewing: 'bg-tone-review',
   merging: 'bg-tone-paused',
   rework: 'bg-tone-waiting',
   done: 'bg-tone-working',
@@ -35,7 +43,7 @@ export const TASK_STATUS_BORDER: Record<TaskStatus, string> = {
   assigned: 'border-tone-planning',
   running: 'border-tone-working',
   verifying: 'border-tone-planning',
-  reviewing: 'border-tone-paused',
+  reviewing: 'border-tone-review',
   merging: 'border-tone-paused',
   rework: 'border-tone-waiting',
   done: 'border-tone-working',
@@ -53,7 +61,7 @@ export const TASK_STATUS_FLASH_COLOR: Record<TaskStatus, string> = {
   assigned: 'var(--color-tone-planning)',
   running: 'var(--color-tone-working)',
   verifying: 'var(--color-tone-planning)',
-  reviewing: 'var(--color-tone-paused)',
+  reviewing: 'var(--color-tone-review)',
   merging: 'var(--color-tone-paused)',
   rework: 'var(--color-tone-waiting)',
   done: 'var(--color-tone-working)',
