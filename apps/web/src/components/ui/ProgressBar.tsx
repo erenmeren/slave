@@ -21,18 +21,25 @@ export function ProgressBar({
   tone = 'working',
   size = 'default',
 }: {
-  readonly pct: number
+  // null is unmeasured, 0 is a measurement (M16 spec §4)
+  readonly pct: number | null
   readonly tone?: StatusTone
   readonly size?: 'default' | 'card'
 }): React.JSX.Element {
-  const clamped = Math.min(100, Math.max(0, pct))
+  const clamped = pct === null ? null : Math.min(100, Math.max(0, pct))
   return (
-    <div data-testid="progress-bar" className={`w-full overflow-hidden rounded-full bg-bg-2 ${TRACK_HEIGHT[size]}`}>
-      <div
-        data-testid="progress-bar-fill"
-        className={`h-full motion-safe:[transition:width_.5s_ease] ${TONE_DOT[tone]} ${TONE_GLOW[tone]}`}
-        style={{ width: `${clamped}%` }}
-      />
+    <div
+      data-testid="progress-bar"
+      className={`w-full overflow-hidden rounded-full bg-bg-2 ${TRACK_HEIGHT[size]}`}
+      aria-valuenow={clamped ?? undefined}
+    >
+      {clamped !== null && (
+        <div
+          data-testid="progress-bar-fill"
+          className={`h-full motion-safe:[transition:width_.5s_ease] ${TONE_DOT[tone]} ${TONE_GLOW[tone]}`}
+          style={{ width: `${clamped}%` }}
+        />
+      )}
     </div>
   )
 }

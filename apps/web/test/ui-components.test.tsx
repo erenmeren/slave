@@ -195,6 +195,19 @@ describe('ProgressBar', () => {
     render(<ProgressBar pct={-10} />)
     expect(screen.getByTestId('progress-bar-fill').style.width).toBe('0%')
   })
+
+  it('draws no fill and claims no value when unmeasured', () => {
+    render(<ProgressBar pct={null} />)
+    const bar = screen.getByTestId('progress-bar')
+    expect(bar.getAttribute('aria-valuenow')).toBeNull()
+    expect(screen.queryByTestId('progress-bar-fill')).toBeNull()
+  })
+
+  it('a real zero still measures: fill present, aria-valuenow 0', () => {
+    render(<ProgressBar pct={0} />)
+    expect(screen.getByTestId('progress-bar').getAttribute('aria-valuenow')).toBe('0')
+    expect(screen.getByTestId('progress-bar-fill')).toBeTruthy()
+  })
 })
 
 describe('SectionLabel', () => {

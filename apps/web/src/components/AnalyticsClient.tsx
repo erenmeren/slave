@@ -105,7 +105,7 @@ export function AnalyticsClient({
                 <span className="font-mono text-[11px] text-text-2">{row.runs}</span>
                 <span className="flex items-center gap-1">
                   <span className="w-[34px]">
-                    <ProgressBar pct={row.successPct ?? 0} />
+                    <ProgressBar pct={row.successPct} />
                   </span>
                   <span data-testid={`perf-success-${row.agentId}`} className="font-mono text-[11px] text-text-2">
                     {row.successPct === null ? '—' : `${row.successPct}%`}
