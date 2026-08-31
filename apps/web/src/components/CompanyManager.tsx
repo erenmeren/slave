@@ -6,9 +6,9 @@ import type { ProviderKind } from '@ai-team-os/control'
 import type { RosterCompany, RosterMemberRow } from '../server/org'
 import { ProviderSelect } from './ProviderSelect'
 import type { TemplateRow } from './TemplateCatalog'
-import { Button } from './ui/Button'
 import { DataTable, Row } from './ui/DataTable'
 import { EmptyTile } from './ui/EmptyTile'
+import { FieldLabel, GhostButton, INPUT_SHELL, PrimaryButton, SelectField, TextField } from './ui/FormControls'
 import { SectionLabel } from './ui/SectionLabel'
 
 /** A row from `listCompanies` (`server/org.ts`) -- no exported type there, so this is the one
@@ -119,48 +119,54 @@ function TeamBlock({
           void submit()
         }}
       >
-        <label className="flex flex-col gap-1 text-xs text-text-3">
-          Template
-          <select
-            aria-label="member template"
-            data-testid="member-template-select"
-            value={templateId}
-            onChange={(event) => setTemplateId(event.target.value)}
-            disabled={pending}
-            className="w-40 rounded border border-line bg-bg-2 px-2 py-1 text-sm text-text-1"
-          >
-            <option value="">select a template</option>
-            {templates.map((template) => (
-              <option key={template.id} value={template.id}>
-                {template.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="flex flex-col gap-1 text-xs text-text-3">
-          Name
-          <input
-            aria-label="member name"
-            data-testid="member-name-input"
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            disabled={pending}
-            className="w-36 rounded border border-line bg-bg-2 px-2 py-1 text-sm text-text-1"
-          />
-        </label>
-        <label className="flex flex-col gap-1 text-xs text-text-3">
-          Model
-          <input
-            aria-label="member model"
-            data-testid="member-model-input"
-            value={model}
-            onChange={(event) => setModel(event.target.value)}
-            disabled={pending}
-            className="w-28 rounded border border-line bg-bg-2 px-2 py-1 font-mono text-sm text-text-1"
-          />
-        </label>
-        <label className="flex flex-col gap-1 text-xs text-text-3">
-          Provider
+        <SelectField
+          label="Template"
+          selectProps={
+            {
+              'aria-label': 'member template',
+              'data-testid': 'member-template-select',
+              value: templateId,
+              onChange: (event) => setTemplateId(event.target.value),
+              disabled: pending,
+              className: 'w-40',
+            } as React.SelectHTMLAttributes<HTMLSelectElement>
+          }
+        >
+          <option value="">select a template</option>
+          {templates.map((template) => (
+            <option key={template.id} value={template.id}>
+              {template.name}
+            </option>
+          ))}
+        </SelectField>
+        <TextField
+          label="Name"
+          inputProps={
+            {
+              'aria-label': 'member name',
+              'data-testid': 'member-name-input',
+              value: name,
+              onChange: (event) => setName(event.target.value),
+              disabled: pending,
+              className: 'w-36',
+            } as React.InputHTMLAttributes<HTMLInputElement>
+          }
+        />
+        <TextField
+          label="Model"
+          inputProps={
+            {
+              'aria-label': 'member model',
+              'data-testid': 'member-model-input',
+              value: model,
+              onChange: (event) => setModel(event.target.value),
+              disabled: pending,
+              className: 'w-28 font-mono',
+            } as React.InputHTMLAttributes<HTMLInputElement>
+          }
+        />
+        <label className="flex flex-col gap-1">
+          <FieldLabel>Provider</FieldLabel>
           <ProviderSelect
             testId="member-provider-select"
             ariaLabel="member provider"
@@ -168,17 +174,12 @@ function TeamBlock({
             onChange={setProvider}
             disabled={pending}
             placeholder="select a provider"
-            className="w-28 rounded border border-line bg-bg-2 px-2 py-1 text-sm text-text-1"
+            className={`w-28 ${INPUT_SHELL}`}
           />
         </label>
-        <Button
-          variant="ghost"
-          type="submit"
-          data-testid="member-submit"
-          disabled={pending || templateId === '' || name === ''}
-        >
+        <GhostButton type="submit" data-testid="member-submit" disabled={pending || templateId === '' || name === ''}>
           Add member
-        </Button>
+        </GhostButton>
         {errorText !== null && (
           <span role="alert" data-testid="member-error" className="text-xs text-status-danger">
             {errorText}
@@ -245,20 +246,22 @@ function CompanyDetail({
           void submit()
         }}
       >
-        <label className="flex flex-col gap-1 text-xs text-text-3">
-          Team name
-          <input
-            aria-label="team name"
-            data-testid="team-name-input"
-            value={teamName}
-            onChange={(event) => setTeamName(event.target.value)}
-            disabled={pending}
-            className="w-40 rounded border border-line bg-bg-2 px-2 py-1 text-sm text-text-1"
-          />
-        </label>
-        <Button variant="ghost" type="submit" data-testid="team-submit" disabled={pending || teamName === ''}>
+        <TextField
+          label="Team name"
+          inputProps={
+            {
+              'aria-label': 'team name',
+              'data-testid': 'team-name-input',
+              value: teamName,
+              onChange: (event) => setTeamName(event.target.value),
+              disabled: pending,
+              className: 'w-40',
+            } as React.InputHTMLAttributes<HTMLInputElement>
+          }
+        />
+        <GhostButton type="submit" data-testid="team-submit" disabled={pending || teamName === ''}>
           Add team
-        </Button>
+        </GhostButton>
         {errorText !== null && (
           <span role="alert" data-testid="team-error" className="text-xs text-status-danger">
             {errorText}
@@ -353,21 +356,23 @@ export function CompanyManager({
           void submit()
         }}
       >
-        <label className="flex flex-col gap-1 text-xs text-text-3">
-          Name
-          <input
-            ref={nameInputRef}
-            aria-label="company name"
-            data-testid="company-name-input"
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            disabled={pending}
-            className="w-48 rounded border border-line bg-bg-2 px-2 py-1 text-sm text-text-1"
-          />
-        </label>
-        <Button variant="primary" type="submit" data-testid="company-submit" disabled={pending || name === ''}>
+        <TextField
+          label="Name"
+          inputProps={
+            {
+              ref: nameInputRef,
+              'aria-label': 'company name',
+              'data-testid': 'company-name-input',
+              value: name,
+              onChange: (event) => setName(event.target.value),
+              disabled: pending,
+              className: 'w-48',
+            } as React.InputHTMLAttributes<HTMLInputElement>
+          }
+        />
+        <PrimaryButton type="submit" data-testid="company-submit" disabled={pending || name === ''}>
           Add company
-        </Button>
+        </PrimaryButton>
         {errorText !== null && (
           <span role="alert" data-testid="company-error" className="text-xs text-status-danger">
             {errorText}

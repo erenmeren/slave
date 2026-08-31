@@ -3,9 +3,9 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import type { ProviderKind } from '@ai-team-os/control'
-import { Button } from './ui/Button'
 import { Chip } from './ui/Chip'
 import { DataTable, Row } from './ui/DataTable'
+import { FieldLabel, INPUT_SHELL, PrimaryButton, TextField } from './ui/FormControls'
 import { ProviderSelect } from './ProviderSelect'
 
 /** A row from `listTemplates` (`server/org.ts`) -- no exported type there, so this is the one
@@ -117,52 +117,60 @@ export function TemplateCatalog({ templates }: { readonly templates: readonly Te
           void submit()
         }}
       >
-        <label className="flex flex-col gap-1 text-xs text-text-3">
-          Name
-          <input
-            aria-label="template name"
-            data-testid="template-name-input"
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            disabled={pending}
-            className="w-36 rounded border border-line bg-bg-2 px-2 py-1 text-sm text-text-1"
-          />
-        </label>
-        <label className="flex flex-col gap-1 text-xs text-text-3">
-          Role
-          <input
-            aria-label="template role"
-            data-testid="template-role-input"
-            value={role}
-            onChange={(event) => setRole(event.target.value)}
-            disabled={pending}
-            className="w-28 rounded border border-line bg-bg-2 px-2 py-1 text-sm text-text-1"
-          />
-        </label>
-        <label className="flex flex-col gap-1 text-xs text-text-3">
-          Description
-          <input
-            aria-label="template description"
-            data-testid="template-description-input"
-            value={description}
-            onChange={(event) => setDescription(event.target.value)}
-            disabled={pending}
-            className="w-48 rounded border border-line bg-bg-2 px-2 py-1 text-sm text-text-1"
-          />
-        </label>
-        <label className="flex flex-col gap-1 text-xs text-text-3">
-          Default model
-          <input
-            aria-label="template default model"
-            data-testid="template-default-model-input"
-            value={defaultModel}
-            onChange={(event) => setDefaultModel(event.target.value)}
-            disabled={pending}
-            className="w-32 rounded border border-line bg-bg-2 px-2 py-1 font-mono text-sm text-text-1"
-          />
-        </label>
-        <label className="flex flex-col gap-1 text-xs text-text-3">
-          Default provider
+        <TextField
+          label="Name"
+          inputProps={
+            {
+              'aria-label': 'template name',
+              'data-testid': 'template-name-input',
+              value: name,
+              onChange: (event) => setName(event.target.value),
+              disabled: pending,
+              className: 'w-36',
+            } as React.InputHTMLAttributes<HTMLInputElement>
+          }
+        />
+        <TextField
+          label="Role"
+          inputProps={
+            {
+              'aria-label': 'template role',
+              'data-testid': 'template-role-input',
+              value: role,
+              onChange: (event) => setRole(event.target.value),
+              disabled: pending,
+              className: 'w-28',
+            } as React.InputHTMLAttributes<HTMLInputElement>
+          }
+        />
+        <TextField
+          label="Description"
+          inputProps={
+            {
+              'aria-label': 'template description',
+              'data-testid': 'template-description-input',
+              value: description,
+              onChange: (event) => setDescription(event.target.value),
+              disabled: pending,
+              className: 'w-48',
+            } as React.InputHTMLAttributes<HTMLInputElement>
+          }
+        />
+        <TextField
+          label="Default model"
+          inputProps={
+            {
+              'aria-label': 'template default model',
+              'data-testid': 'template-default-model-input',
+              value: defaultModel,
+              onChange: (event) => setDefaultModel(event.target.value),
+              disabled: pending,
+              className: 'w-32 font-mono',
+            } as React.InputHTMLAttributes<HTMLInputElement>
+          }
+        />
+        <label className="flex flex-col gap-1">
+          <FieldLabel>Default provider</FieldLabel>
           <ProviderSelect
             testId="template-default-provider-select"
             ariaLabel="template default provider"
@@ -170,17 +178,12 @@ export function TemplateCatalog({ templates }: { readonly templates: readonly Te
             onChange={setDefaultProvider}
             disabled={pending}
             placeholder="select a provider"
-            className="w-32 rounded border border-line bg-bg-2 px-2 py-1 text-sm text-text-1"
+            className={`w-32 ${INPUT_SHELL}`}
           />
         </label>
-        <Button
-          variant="primary"
-          type="submit"
-          data-testid="template-submit"
-          disabled={pending || name === '' || role === ''}
-        >
+        <PrimaryButton type="submit" data-testid="template-submit" disabled={pending || name === '' || role === ''}>
           Add template
-        </Button>
+        </PrimaryButton>
         {errorText !== null && (
           <span role="alert" data-testid="template-error" className="text-xs text-status-danger">
             {errorText}
