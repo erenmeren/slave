@@ -39,7 +39,7 @@ Template per flake:
   hook-heavy integration tests generally.
 
 - **Change** — added an explicit `testTimeout: 15_000` to the **integration** vitest project
-  only (`vitest.config.ts`), with the margin math in a config comment. Commit: `5d675c1`.
+  only (`vitest.config.ts`), with the margin math in a config comment. Commit: `b0cdd4c`.
   Margin math: worst observed single test under load = 533 ms → rounded up to the next second =
   1_000 ms → ×3 headroom = 3_000 ms, which is below the brief's 15_000 ms floor, so the floor
   governs: **testTimeout = 15_000 ms**. A real hang still fails, 3x later than the old default.
@@ -361,7 +361,8 @@ Template per flake:
   `bucketSparkline`'s `< SPARKLINE_MINUTES` guard, and is silently dropped rather than landing at
   index 0.
 
-- **Change** — one injected clock threaded through all three reads. `toolCallSparkline(workspaceId,
+- **Change** — one injected clock threaded through all three reads. Commit: `4bf6874`.
+  `toolCallSparkline(workspaceId,
   now: Date = new Date())` now casts the same `now` into the SQL predicate
   (`ts >= ${now}::timestamp - interval '10 minutes'` — the explicit `::timestamp` cast was necessary
   beyond the brief's literal `${now} - interval '10 minutes'`: Postgres could not otherwise infer

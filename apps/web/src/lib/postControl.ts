@@ -1,14 +1,13 @@
 /**
- * The one shared copy of the control-POST idiom, for NEW call sites (M14).
+ * The one shared copy of the control-POST idiom (M14).
  *
- * Three older local copies exist -- `AgentPanel.tsx`, `GoalCard.tsx`,
- * `EmergencyStopButton.tsx` -- each documented as a deliberate small copy of the house pattern.
- * They are NOT rewritten here: their tests are not this task's to touch, and rewriting three
- * working components to import a function they already have is churn. What this module prevents
- * is a FOURTH copy.
+ * `AgentPanel.tsx`, `GoalCard.tsx`, and `EmergencyStopButton.tsx` each carried their own small
+ * copy of this pattern before Task 14; all three, along with every other call site, now import
+ * `errorMessage` from here instead. This is the single canonical copy repo-wide -- what it
+ * prevents is a new one appearing.
  *
- * The contract every copy shares and this one keeps: a bare `fetch`, no state written from the
- * response beyond the error text, and the event-driven refetch loop owning truth.
+ * The contract every call site relies on: a bare `fetch`, no state written from the response
+ * beyond the error text, and the event-driven refetch loop owning truth.
  */
 
 /** Pulls a 409 refusal's `{ error }` text, falling back to something nameable for any other

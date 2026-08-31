@@ -120,6 +120,13 @@ export function bucketSparkline(
  * the SQL window and the bucket index against each other.
  */
 export async function toolCallSparkline(workspaceId: string, now: Date = new Date()): Promise<readonly number[]> {
+  // The ::timestamp cast on `now` below is load-bearing, not decorative: a bare `${now}` bound
+  // parameter next to an `interval` literal leaves Postgres unable to infer the parameter's type
+  // and it raises 42883 ("operator does not exist: timestamp without time zone >= interval"). The
+  // cast matches the column's own timestamp(3) type (`ExecutionEvent.ts`'s undecorated
+  // `DateTime @default(now())`), so it does not shift the value -- and both sides of the comparison
+  // stay timezone-naive, which is what keeps it timezone-safe (see the flake ledger's Flake 5 for
+  // the empirical trace of the failure this cast prevents).
   const rows = await prisma.$queryRaw<Array<{ minute: Date; n: bigint }>>`
     SELECT date_trunc('minute', ts) as minute, count(*) as n
     FROM "ExecutionEvent"

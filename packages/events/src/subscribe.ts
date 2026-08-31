@@ -28,11 +28,14 @@ const RECONNECT_DELAY_MS = 250
  * cross-region), and the cost of erring short is only a retry 250ms later rather than a surfaced
  * error, so short is the cheap direction.
  *
- * The same budget bounds the `end()` that discards a failed attempt's client, so a worst-case
- * `close()` pays three of these sequentially plus the retry delay: RECONNECT_DELAY_MS, then both
- * of `open()`'s deadlines against a server stalling at the phase boundary, then the discard —
- * ~6.25s, not ~4s. The loop terminates either way, which is the point; the number matters only
- * because M4's SSE teardown budgets against it, so keep it in step with docs/event-model.md.
+ * The same budget bounds every `end()` that discards a client this file abandons — both the one at
+ * the top of each reconnect pass (`endDiscardedClient(stale)`, discarding whatever `current` held
+ * on entry) and the one that discards a failed attempt's client. A worst-case `close()` can pay
+ * four of these sequentially plus the retry delay: the top-of-pass stale discard, RECONNECT_DELAY_MS,
+ * then both of `open()`'s deadlines against a server stalling at the phase boundary, then the
+ * failed-attempt discard — 2000 + 250 + 2000 + 2000 + 2000 = 8.25s, not ~6.25s. The loop terminates
+ * either way, which is the point; the number matters only because M4's SSE teardown budgets against
+ * it, so keep it in step with docs/event-model.md.
  */
 const OPEN_TIMEOUT_MS = 2_000
 
