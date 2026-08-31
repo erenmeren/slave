@@ -52,6 +52,15 @@ PAUSE_GATE_LIB_DIR="$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}" || printf
     "${PAUSE_GATE_LIB_DIR}/lib/pause-flag.sh" >&2
   exit 2
 }
+# scripts/lib/permissions.sh -- M18's permission-matrix check, shared with scripts/cursor-shell-gate.sh.
+# Same bootstrap dir, same fail-loudly posture as the pause-flag source above: a deployment that
+# copied this script without its second library must refuse rather than silently skip the matrix.
+# shellcheck source=lib/permissions.sh
+. "${PAUSE_GATE_LIB_DIR}/lib/permissions.sh" || {
+  printf 'pause-gate.sh: deployed without its library -- expected to find it at %s. Copy scripts/lib/permissions.sh alongside this script (in a lib/ directory beside it), or point AITEAMOS_HOOK_PATH at the repository'"'"'s own scripts/pause-gate.sh.\n' \
+    "${PAUSE_GATE_LIB_DIR}/lib/permissions.sh" >&2
+  exit 2
+}
 
 # Fails loudly on stderr and exits 2 -- the measured fail-closed exit code for a PreToolUse hook.
 # Used for every case where this script cannot produce a well-formed answer, so that "the gate
@@ -78,7 +87,10 @@ deny() {
   fail_closed "failed to write the deny payload (reason was: ${reason})"
 }
 
-cat > /dev/null   # drain the hook payload on stdin
+# Captured, not drained: the permission matrix's verdict (below) needs the tool name the payload
+# carries. read_permission_verdict only parses it when AITEAMOS_PERMISSIONS_FILE is armed --
+# Task 2's helper returns allow instantly otherwise -- so this costs nothing on the pre-M18 path.
+hook_payload=$(cat)
 
 read_pause_reason
 pause_status=$?
@@ -89,8 +101,9 @@ case $pause_status in
   # and the reason the shared helper reports this case rather than answering it: only this file
   # knows how Claude spells a deny.
   2) deny "$PAUSE_REASON" ;;
-  # No pause requested. The ONLY status that reaches the allow below, and it says so explicitly
-  # rather than by falling out of the `esac`, so that the catch-all beneath it cannot swallow it.
+  # No pause requested. The ONLY status that reaches the permission-matrix check and the allow
+  # below, and it says so explicitly rather than by falling out of the `esac`, so that the
+  # catch-all beneath it cannot swallow it.
   1) ;;
   # Every other status is a gate that broke in a way this file does not enumerate, and it must fail
   # closed like every other failure here. The status that makes this arm load-bearing is 127: a
@@ -101,5 +114,12 @@ case $pause_status in
   *) fail_closed "read_pause_reason returned an unexpected status ${pause_status}" ;;
 esac
 
-# Status 1: no pause requested. Claude's allow is silence.
+# Only status 1 (no pause requested) reaches here. Pause always wins: an operator's pause is
+# checked first, above, and this permission-matrix check never runs while a pause is armed --
+# `deny` above already exited the whole script.
+if read_permission_verdict "$hook_payload"; then
+  deny "permission matrix denies '${PERMISSION_DENY_CAPABILITY}' (${PERMISSION_DENY_TOOL}) for this agent"
+fi
+
+# No pause requested, and the tool is not matrix-denied. Claude's allow is silence.
 exit 0

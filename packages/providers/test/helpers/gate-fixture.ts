@@ -23,6 +23,15 @@ export type GateScriptName = 'pause-gate.sh' | 'cursor-shell-gate.sh'
  *
  * This exists once, rather than five times, so the next change to the gates' on-disk layout has one
  * place to be made instead of five places to be missed.
+ *
+ * M18 Task 3 added a second shared library, `scripts/lib/permissions.sh` (the permission-matrix
+ * check), which `pause-gate.sh` now sources unconditionally right beside `pause-flag.sh` -- so it
+ * is copied here too, for BOTH gate names, even though only `pause-gate.sh` sources it today
+ * (Task 4 wires `cursor-shell-gate.sh` to the same file). Copying it unconditionally means this
+ * fixture does not need to know which gate sources which library, and costs nothing: none of the
+ * existing suites set `AITEAMOS_PERMISSIONS_FILE`, so `read_permission_verdict` allows instantly
+ * (its own "no matrix in play" branch) regardless of whether the copy is present in a lib/ that
+ * gets used.
  */
 export function copyGateInto(dir: string, script: GateScriptName): string {
   const scriptPath = path.join(dir, script)
@@ -33,10 +42,12 @@ export function copyGateInto(dir: string, script: GateScriptName): string {
 
   const libDir = path.join(dir, 'lib')
   mkdirSync(libDir, { recursive: true })
-  const libPath = path.join(libDir, 'pause-flag.sh')
-  copyFileSync(path.join(repoRoot, 'scripts/lib/pause-flag.sh'), libPath)
-  // Sourced, never executed -- mirroring the repo's own 0644 on it.
-  chmodSync(libPath, 0o644)
+  for (const libName of ['pause-flag.sh', 'permissions.sh']) {
+    const libPath = path.join(libDir, libName)
+    copyFileSync(path.join(repoRoot, 'scripts/lib', libName), libPath)
+    // Sourced, never executed -- mirroring the repo's own 0644 on both.
+    chmodSync(libPath, 0o644)
+  }
 
   return scriptPath
 }
