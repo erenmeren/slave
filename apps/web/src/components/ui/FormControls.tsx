@@ -61,7 +61,7 @@ export function GhostButton({ className, ...rest }: React.ButtonHTMLAttributes<H
     <button
       type="button"
       {...rest}
-      className={`rounded-[5px] border border-line bg-transparent px-2.5 py-1 text-xs text-text-2 transition-colors hover:border-white/25 hover:text-text-0 disabled:cursor-not-allowed disabled:opacity-50 ${className ?? ''}`.trim()}
+      className={`rounded-[5px] border border-line bg-transparent px-2.5 py-1 text-xs text-text-2 transition-colors hover:border-white/25 hover:text-white disabled:cursor-not-allowed disabled:opacity-50 ${className ?? ''}`.trim()}
     />
   )
 }

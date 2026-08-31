@@ -87,7 +87,7 @@ export function RuntimeCard({
     <Panel title="Runtime">
       <div className="flex flex-col gap-2">
         <form
-          className="flex items-center gap-2"
+          className="flex items-end gap-2"
           onSubmit={(event) => {
             event.preventDefault()
             // `''` is the "(none)" option and means an explicit `null` -- "this workspace has no
@@ -113,7 +113,7 @@ export function RuntimeCard({
         </form>
 
         <form
-          className="flex items-center gap-2"
+          className="flex items-end gap-2"
           onSubmit={(event) => {
             event.preventDefault()
             // The two states stay apart in both directions: the checkbox -- and ONLY the checkbox
@@ -142,7 +142,7 @@ export function RuntimeCard({
               } as React.InputHTMLAttributes<HTMLInputElement>
             }
           />
-          <label className="flex items-center gap-1 font-mono text-[9px] uppercase tracking-[.09em] text-text-3">
+          <label className="flex items-center gap-1">
             <input
               type="checkbox"
               aria-label="not budgeted"
@@ -150,7 +150,7 @@ export function RuntimeCard({
               onChange={(event) => setUnbudgeted(event.target.checked)}
               disabled={pending}
             />
-            not budgeted
+            <FieldLabel>not budgeted</FieldLabel>
           </label>
           <PrimaryButton type="submit" data-testid="runtime-budget-submit" disabled={pending}>
             set budget

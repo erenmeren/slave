@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { PrimaryButton, TextField } from './ui/FormControls'
+import { FieldLabel, PrimaryButton, TextField } from './ui/FormControls'
 import { Panel } from './ui/Panel'
 
 /** Pulls a 409 refusal's `{ error }` text, falling back to something nameable for any other
@@ -80,8 +80,8 @@ export function GoalCard({
       {/* The handoff's caption for an unset goal (design README §3a.1). Not an error and not a
         * placeholder standing in for a value: it names the state the workspace is actually in --
         * nothing has been asked of it yet, so nothing is planning. */}
-      <p data-testid="goal-waiting" className="font-mono text-[9px] uppercase tracking-[.09em] text-text-3">
-        waiting for a goal
+      <p data-testid="goal-waiting">
+        <FieldLabel>waiting for a goal</FieldLabel>
       </p>
       {suggestions.length > 0 && (
         <div className="flex flex-wrap gap-1">

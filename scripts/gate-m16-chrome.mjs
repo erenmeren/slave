@@ -282,9 +282,25 @@ try {
       )} -- vacuous-but-stated pass (the seeded database has no AgentPermission rows)`,
     )
   } else {
-    const hasUnset = distinctGlyphs.has('–')
-    const hasDenied = distinctGlyphs.has('✕')
-    if (hasUnset && hasDenied) assert('–' !== '✕', 'check 2 (settings matrix): unset and denied glyphs must be distinct')
+    // Bind the assert to the page's own mode->glyph mapping (`data-mode`) rather than two glyph
+    // literals: the earlier form asserted `'–' !== '✕'`, a comparison of string constants that
+    // could never fail and proved nothing about what actually rendered. This reads, per mode
+    // actually present among the cells, the glyph THAT MODE renders, then checks unset and deny
+    // disagree -- so a future change that collapsed both modes onto one glyph would trip it.
+    const modeGlyphs = await page.evaluate(() => {
+      const map = {}
+      for (const element of document.querySelectorAll('[data-testid^="perm-cell-"]')) {
+        const mode = element.getAttribute('data-mode') ?? 'unset'
+        if (!(mode in map)) map[mode] = element.textContent?.trim() ?? ''
+      }
+      return map
+    })
+    if ('unset' in modeGlyphs && 'deny' in modeGlyphs) {
+      assert(
+        modeGlyphs.unset !== modeGlyphs.deny,
+        `check 2 (settings matrix): unset glyph ${JSON.stringify(modeGlyphs.unset)} and deny glyph ${JSON.stringify(modeGlyphs.deny)} must be distinct`,
+      )
+    }
     console.log(
       `check 2 PASSED: ${String(distinctGlyphs.size)} distinct glyph(s) across ${String(glyphs.length)} cell(s) -- ` +
         `${JSON.stringify([...distinctGlyphs])}`,

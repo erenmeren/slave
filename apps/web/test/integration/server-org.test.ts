@@ -168,8 +168,8 @@ describe('org query module', () => {
 
     // Review I4: `projects.png` showed `AGENTS 0` directly above six avatar tiles on the same
     // card. Both figures are on this DTO, so the disagreement is assertable here rather than
-    // only by eye -- the tile and the row must be the same count (the row is sliced to six for
-    // display; this fixture stays under that cap deliberately).
+    // only by eye -- the tile and the row must be the same count (the server sends the whole
+    // team uncapped; the CLIENT is what caps the avatar row at six for display).
     it('reports the same count in workerCount as it puts faces in the avatar row', async (): Promise<void> => {
       const otherTeam = await prisma.team.create({ data: { workspaceId: fixture.workspaceId, name: 'Design' } })
       await prisma.agent.create({ data: { teamId: otherTeam.id, name: 'Bea', role: 'design' } })

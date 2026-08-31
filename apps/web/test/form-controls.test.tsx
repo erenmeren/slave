@@ -38,6 +38,18 @@ describe('FormControls', () => {
     expect(button.disabled).toBe(true)
   })
 
+  // Final review I1: `hover:text-text-0` named a token Tailwind v4 never generates (no
+  // `--text-0` in globals.css), so the hover brighten was dead -- only the border changed.
+  // The handoff's own words are the authority: ghost buttons brighten text to `#fff` on hover.
+  // Pinned here so a class-string regression back to the nonexistent token fails a real test,
+  // not just a human rereading the CSS ramp.
+  it('GhostButton: hover brightens text to white, not to a nonexistent text-0 token', () => {
+    render(<GhostButton data-testid="gb-hover">cancel</GhostButton>)
+    const button = screen.getByTestId('gb-hover') as HTMLButtonElement
+    expect(button.className).toContain('hover:text-white')
+    expect(button.className).not.toContain('text-text-0')
+  })
+
   it('PrimaryButton: working tone by default, blocked on request', () => {
     render(<PrimaryButton data-testid="pw">set goal</PrimaryButton>)
     render(<PrimaryButton data-testid="pb" tone="blocked">stop</PrimaryButton>)
