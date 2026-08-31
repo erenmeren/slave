@@ -42,7 +42,7 @@ export function ActivityClient({
   readonly initial: ActivityPage
 }): React.JSX.Element {
   const { filters, kinds, rawTypes, setKinds, setRawTypes, setAgents, setTasks } = useUrlFilters()
-  const { events, connection, loadOlder, sparkline } = useActivityStream({ workspaceId, filters, initial })
+  const { events, connection, loadOlder, sparkline, latencyMs } = useActivityStream({ workspaceId, filters, initial })
 
   // Fills the global shell's Sidebar project-section header with this workspace's real name
   // (M11 Task 10 ruling 2) — the root layout mounts one <Sidebar> with no per-route params of its
@@ -175,14 +175,11 @@ export function ActivityClient({
 
   return (
     <div className="flex flex-1 flex-col">
-      {/* `latencyMs={null}` (M14 Task 3): `useActivityStream` wraps its own `EventSource` rather
-        * than `useWorkspaceStream` and measures no arrival age. `sse · —` is the honest reading
-        * for a chip with no measurement; widening that hook is not this task's scope. */}
       <TopBar
         workspaceId={workspaceId}
         workspaceName={initial.workspace.name}
         connection={connection}
-        latencyMs={null}
+        latencyMs={latencyMs}
         budget={null}
         halted={initial.workspace.haltedReason !== null}
       />

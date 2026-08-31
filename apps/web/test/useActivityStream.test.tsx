@@ -413,6 +413,80 @@ describe('useActivityStream', () => {
     expect(clearIntervalSpy).toHaveBeenCalled()
   })
 
+  it('computes latencyMs from event.ts — the age of the frame when it landed', () => {
+    vi.useFakeTimers()
+    const now = new Date('2026-08-31T12:00:00Z').getTime()
+    vi.setSystemTime(now)
+
+    const { result } = renderHook(() =>
+      useActivityStream({ workspaceId: 'w1', filters: EMPTY_ACTIVITY_FILTERS, initial: INITIAL }),
+    )
+
+    // Start with null (no message yet)
+    expect(result.current.latencyMs).toBe(null)
+
+    // Push an event with a ts 500ms in the past
+    const sentAt = new Date(now - 500).toISOString()
+    push({
+      seq: 4,
+      ts: sentAt,
+      type: 'task.started',
+      actor: 'system',
+      workspaceId: 'w1',
+      payload: { title: 'x' },
+    })
+
+    // latencyMs should be ~500 (clamped to ≥0, so should be 500)
+    expect(result.current.latencyMs).toBe(500)
+
+    // Advance time and push another event sent 1000ms ago
+    vi.advanceTimersByTime(200)
+    const sentAt2 = new Date(now + 200 - 1000).toISOString()
+    push({
+      seq: 5,
+      ts: sentAt2,
+      type: 'task.started',
+      actor: 'system',
+      workspaceId: 'w1',
+      payload: { title: 'y' },
+    })
+
+    expect(result.current.latencyMs).toBe(1000)
+
+    vi.useRealTimers()
+  })
+
+  it('latencyMs stays null if no event carries a valid ts', () => {
+    const { result } = renderHook(() =>
+      useActivityStream({ workspaceId: 'w1', filters: EMPTY_ACTIVITY_FILTERS, initial: INITIAL }),
+    )
+
+    expect(result.current.latencyMs).toBe(null)
+
+    // Push an event with no ts field
+    push({
+      seq: 4,
+      type: 'task.started',
+      actor: 'system',
+      workspaceId: 'w1',
+      payload: { title: 'x' },
+    })
+
+    expect(result.current.latencyMs).toBe(null)
+
+    // Push an event with an unparseable ts
+    push({
+      seq: 5,
+      ts: 'not a date',
+      type: 'task.started',
+      actor: 'system',
+      workspaceId: 'w1',
+      payload: { title: 'y' },
+    })
+
+    expect(result.current.latencyMs).toBe(null)
+  })
+
   it('Finding 2: an empty filtered page 1 omits `from` on the stream URL instead of sending from=0', async () => {
     fetchMock.mockImplementation(
       async () =>

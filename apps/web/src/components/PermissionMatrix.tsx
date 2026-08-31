@@ -95,6 +95,9 @@ export function PermissionMatrix({ sections }: { readonly sections: readonly Per
       {sections.map((section) => (
         <div key={section.workspaceId} data-testid={`permission-matrix-${section.workspaceId}`} className="flex flex-col gap-2">
           <SectionLabel>{section.workspaceName}</SectionLabel>
+          <p className="text-xs text-text-3">
+            Denials are enforced at dispatch snapshot — matrix edits don't affect runs already in flight. The three shell-backed capabilities deny the shell tool as a whole. 'Read secrets' is not yet enforced.
+          </p>
 
           {section.rows.length === 0 ? (
             // The section stays even with nobody in it: a project whose roster is empty is a fact

@@ -19,6 +19,7 @@ export interface ActivityStreamState {
   readonly exhausted: boolean
   readonly sparkline: readonly number[]
   readonly error: string | null
+  readonly latencyMs: number | null
 }
 
 /** `undefined` (an SSE envelope's optional fields) adapted to `null` (the row shape) — the same
@@ -85,6 +86,7 @@ export function useActivityStream(options: {
   const [exhausted, setExhausted] = useState(false)
   const [sparkline, setSparkline] = useState<readonly number[]>(initial.sparkline)
   const [error, setError] = useState<string | null>(null)
+  const [latencyMs, setLatencyMs] = useState<number | null>(null)
 
   // Refs so the mount effect (deps `[workspaceId, filterKey]`) always reads the *current* value
   // without needing it in its dependency array — the same identity-churn technique
@@ -125,6 +127,13 @@ export function useActivityStream(options: {
           return // not ours to crash over
         }
         if (event === null || typeof event !== 'object' || typeof event.seq !== 'number') return
+
+        // Stream latency: the age of this frame when it landed. See `WorkspaceStreamState.latencyMs`'s
+        // docstring for why the heartbeat cannot serve — it is an id-only frame and fires no `message` event.
+        if (typeof event.ts === 'string') {
+          const sentAt = Date.parse(event.ts)
+          if (Number.isFinite(sentAt)) setLatencyMs(Math.max(0, Date.now() - sentAt))
+        }
 
         const row = rowFromEnvelope(event)
         setEvents((current) => appendRow(current, row))
@@ -254,5 +263,5 @@ export function useActivityStream(options: {
     })()
   }
 
-  return { events, connection, loadOlder, loadingOlder, exhausted, sparkline, error }
+  return { events, connection, loadOlder, loadingOlder, exhausted, sparkline, error, latencyMs }
 }
