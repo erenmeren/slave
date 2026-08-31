@@ -31,7 +31,8 @@
     "gate:m13-runtime": "tsc --build && node --env-file=.env scripts/gate-m13-runtime.mjs",
     "gate:m14-fidelity": "tsc --build && node --env-file=.env scripts/gate-m14-fidelity.mjs",
     "gate:m15-boundary": "tsc --build && node --env-file=.env scripts/gate-m15-boundary.mjs",
-    "gate:m16-chrome": "tsc --build && node --env-file=.env scripts/gate-m16-chrome.mjs"
+    "gate:m16-chrome": "tsc --build && node --env-file=.env scripts/gate-m16-chrome.mjs",
+    "gate:m17-stability": "node scripts/gate-m17-stability.mjs"
   },
   "devDependencies": {
     "@testing-library/react": "^16.0.0",
