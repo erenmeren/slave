@@ -116,6 +116,10 @@ Pause dispatches on capability:
   and writes a checkpoint carrying the provider's session identifier. Resume continues that
   session.
 
+> **Post-merge note (2026-08-31, M17):** measured true. The capability dispatch was wired for
+> real by M12's final fix wave (`canPauseMidRun` drives the pause path); M13 later moved the
+> shared primitives below `packages/control` (`providers/src/runtime/`).
+
 A provider with neither capability cannot be registered. Emergency stop is unchanged for
 both: cancellation is universal, and it remains the strongest guarantee in the system.
 
@@ -185,10 +189,21 @@ pid in `RunHandle`. Stream mapping:
 assistant messages — Cursor reports neither cost, tokens, nor a stop reason. The derivation
 is documented at the parse site as a fidelity gap, not presented as a reported figure.
 
+> **Post-merge note (2026-08-31, M17):** the tokens half is superseded — Cursor's `result` line
+> DOES carry usage, and since M14/M15 the parser maps it and the pump persists it
+> (`pump.test.ts` "writes a Cursor run's reported tokens too"). `costUsd` remains unreported.
+
 The write gate is a `beforeShellExecution` hook returning `permission: "deny"`, driven by the
 same flag file the Claude gate reads. Because Cursor fires only the shell hooks, the gate
 covers shell commands alone — hence `gate: 'shell-only'`, and hence pause does not
 depend on it.
+
+> **Post-merge note (2026-08-31, M17):** "Cursor fires only the shell hooks" was measured FALSE
+> in M13 Task 9 — the matcher-less `preToolUse` fires for Read/Write/Shell, and M13 Task 10
+> raised `gate` to `'all-tools'`. And one stated limitation belongs here: the gate *script*
+> lives in this repo and is invoked by absolute path, but its registration
+> (`<worktree>/.cursor/hooks.json`) is worktree-local — an agent can delete its own gate
+> registration mid-run. Claude's settings live outside the worktree.
 
 Capabilities: `{ canPauseMidRun: false, canResumeSession: true, gate: 'shell-only',
 reportsCost: false }`. Every one of these is verified against the installed binary during
