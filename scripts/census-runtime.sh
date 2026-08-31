@@ -38,5 +38,11 @@ if [[ "$json_defs" != "scripts/lib/pause-flag.sh" ]]; then
   fail=1
 fi
 
+perm_defs=$(grep -rln '^read_permission_verdict()' scripts | sort | tr '\n' ' ' | sed 's/ $//')
+if [[ "$perm_defs" != "scripts/lib/permissions.sh" ]]; then
+  echo "CENSUS FAIL: read_permission_verdict() defined in: ${perm_defs:-<nowhere>} (expected only scripts/lib/permissions.sh)" >&2
+  fail=1
+fi
+
 if [[ $fail -eq 0 ]]; then echo "census clean: one definition site per consolidated block"; fi
 exit $fail

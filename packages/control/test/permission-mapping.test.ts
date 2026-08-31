@@ -82,9 +82,9 @@ describe('resolveDenyList', () => {
     expect(resolveDenyList([], 'claude_code')).toEqual([])
   })
 
-  // Task 2 creates `scripts/lib/permissions.sh` and un-todos this test (both tasks' reports say
-  // so). Until then there is nothing on disk for `readFileSync` to read.
-  it.todo('the shell helper spells the deny prefix exactly as the TS constant', () => {
+  // Task 2 creates `scripts/lib/permissions.sh` -- pinned here, byte-equal, against the TS
+  // constant so neither spelling can drift alone.
+  it('the shell helper spells the deny prefix exactly as the TS constant', () => {
     const lib = readFileSync('scripts/lib/permissions.sh', 'utf8')
     expect(lib).toContain(PERMISSION_DENY_REASON_PREFIX)
   })
