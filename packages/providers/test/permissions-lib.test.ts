@@ -178,4 +178,31 @@ describe('scripts/lib/permissions.sh: read_permission_verdict', () => {
     expect(result.code).toBe(0)
     expect(result.status).toBe(1)
   })
+
+  // Security-review Important finding (post-landing): `JSON.parse("null")` succeeds, so a
+  // literal `null` payload slipped past the BADPAYLOAD try/catch and the next line's
+  // `payload.tool_name` threw an uncaught TypeError -- a raw node stack trace on stderr, failing
+  // closed only incidentally (node exit 1 landing in the generic `*)` arm). `null` IS valid JSON
+  // and names no tool, so the correct verdict is a clean ALLOW, not BADPAYLOAD and not a crash.
+  it('allows cleanly, with no stderr, when the payload is the literal JSON null', async () => {
+    const file = writePermissionsFile('{"version":1,"deny":[{"tool":"Bash","capability":"run tests"}]}')
+    const result = await runVerdict('null', file)
+    expect(result.code).toBe(0)
+    expect(result.status).toBe(1)
+    expect(result.tool).toBe('')
+    expect(result.capability).toBe('')
+    expect(result.stderr).toBe('')
+  })
+
+  // The brief's own checklist named this alongside `null` ("valid JSON but not an object"); a
+  // bare array has no `.tool_name` either but was already safe pre-fix (`typeof undefined ===
+  // "string"` is false, no throw) -- kept as a cheap companion case so the class of input stays
+  // covered, not just the one member that used to crash.
+  it('allows cleanly when the payload is valid JSON but not an object (an array)', async () => {
+    const file = writePermissionsFile('{"version":1,"deny":[{"tool":"Bash","capability":"run tests"}]}')
+    const result = await runVerdict('[1]', file)
+    expect(result.code).toBe(0)
+    expect(result.status).toBe(1)
+    expect(result.stderr).toBe('')
+  })
 })

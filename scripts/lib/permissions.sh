@@ -50,10 +50,16 @@ PERMISSION_DENY_CAPABILITY=''
 #                 (pre-M18 runs, rehearsals -- no matrix in play at all); the payload has no
 #                 `tool_name` (Claude Stop/SessionStart hooks, Cursor's beforeShellExecution
 #                 pre-Task-4 -- only a payload that is not JSON at all fails closed, per this
-#                 file's own design note above); the tool is present but not on the deny list;
-#                 an empty deny list.
-#     exit 2    -> FAIL CLOSED. The payload did not parse as JSON while a permissions file is
-#                 armed, or the permissions file itself is missing-but-unreadable or malformed
+#                 file's own design note above); the payload parses to valid JSON that is not an
+#                 object at all -- `null`, `[1]`, `"x"`, `7` -- which has no `tool_name` to read
+#                 either, and is a DIFFERENT case from BADPAYLOAD: it parsed fine, it just names
+#                 no tool, so it allows exactly like a missing key rather than failing closed
+#                 (fixed post-landing, security-review Important finding: `JSON.parse("null")`
+#                 succeeds, so `payload.tool_name` on a bare `null` threw an uncaught TypeError
+#                 before this guard existed -- caught only incidentally, as a nonzero node exit);
+#                 the tool is present but not on the deny list; an empty deny list.
+#     exit 2    -> FAIL CLOSED. The payload did not parse as JSON at all while a permissions file
+#                 is armed, or the permissions file itself is missing-but-unreadable or malformed
 #                 (not valid JSON, or its `deny` key is not an array). A gate cannot produce a
 #                 well-formed answer in either case, so it must not fall through to one that
 #                 reads as allow -- same doctrine as pause-flag.sh's own unreadable-file case.
@@ -71,7 +77,13 @@ read_permission_verdict() {
       let payload, file;
       try { payload = JSON.parse(raw); } catch { process.stdout.write("BADPAYLOAD"); return; }
       try { file = JSON.parse(require("node:fs").readFileSync(process.env.AITEAMOS_PERMISSIONS_FILE, "utf8")); } catch { process.stdout.write("BADFILE"); return; }
-      const tool = typeof payload.tool_name === "string" ? payload.tool_name : null;
+      // `payload` is valid JSON here (the parse above already succeeded) but need not be an
+      // object -- JSON.parse("null"), JSON.parse("[1]") and JSON.parse("7") all succeed. Reading
+      // `.tool_name` off a non-object without this guard throws (TypeError on null; undefined
+      // -- not a throw -- on an array/number/string, which the `typeof ... === "string"` check
+      // alone would have handled, but null needed the explicit `!== null` too). Treated the same
+      // as "no tool_name": ALLOW, not BADPAYLOAD -- it parsed fine, it just names no tool.
+      const tool = payload !== null && typeof payload === "object" && typeof payload.tool_name === "string" ? payload.tool_name : null;
       const deny = Array.isArray(file.deny) ? file.deny : null;
       if (deny === null) { process.stdout.write("BADFILE"); return; }
       if (tool === null) { process.stdout.write("ALLOW"); return; }
