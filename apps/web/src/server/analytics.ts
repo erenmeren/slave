@@ -1,6 +1,6 @@
-import { prisma } from '@ai-team-os/db/client'
+import { Prisma, prisma } from '@ai-team-os/db/client'
 import { SEED_WORKSPACE_ID } from '@ai-team-os/db'
-import { sumSpend, NON_TERMINAL_RUN_STATUSES } from '@ai-team-os/domain'
+import { NON_TERMINAL_RUN_STATUSES } from '@ai-team-os/domain'
 import { formatDuration } from '../lib/format'
 
 /**
@@ -64,6 +64,54 @@ export interface AnalyticsSnapshot {
   readonly perAgent: readonly AgentPerformanceRow[]
 }
 
+/** One row per agent that has ever run, from `perAgentRunAggregates` — every JS reduce the old
+ *  `allRuns` + per-agent pass used to do, expressed as a SQL `FILTER` instead. `bigint` on the
+ *  COUNT/SUM-of-integer columns is `pg`'s driver behaviour for those aggregates; every consumer
+ *  converts with `Number()` at the point it reads the field, never earlier. */
+interface AgentAggRow {
+  readonly agentId: string
+  readonly terminal: bigint
+  readonly succeeded: bigint
+  readonly durationMsSum: number | null
+  readonly durationCount: bigint
+  readonly reported: bigint
+  readonly tokensSum: bigint | null
+  readonly knownUsd: number | null
+  readonly unmeasured: bigint
+  readonly toolCalls: bigint
+}
+
+/**
+ * One row per agent that has ever run in this scope, grouped in SQL rather than fetched as
+ * `AgentRun` rows and reduced in JS (Task 12, M17): the old `allRuns` findMany pulled every run in
+ * the database on the global (`workspaceId: null`) route. Every branch below is the same rule the
+ * old JS reduce applied, restated as a `FILTER` clause — see `apps/web/test/integration/
+ * analytics-aggregates.test.ts` for the equivalence proof against that old computation.
+ */
+export async function perAgentRunAggregates(workspaceId: string | null): Promise<readonly AgentAggRow[]> {
+  const scopeJoin =
+    workspaceId === null
+      ? Prisma.empty
+      : Prisma.sql`JOIN "Agent" a ON a."id" = r."agentId" JOIN "Team" t ON t."id" = a."teamId" WHERE t."workspaceId" = ${workspaceId}`
+  return prisma.$queryRaw<AgentAggRow[]>(Prisma.sql`
+    SELECT r."agentId" AS "agentId",
+      COUNT(*) FILTER (WHERE r."terminalAt" IS NOT NULL) AS terminal,
+      COUNT(*) FILTER (WHERE r."terminalAt" IS NOT NULL AND r."status"::text = 'succeeded') AS succeeded,
+      (SUM(EXTRACT(EPOCH FROM (r."endedAt" - r."startedAt")) * 1000)
+        FILTER (WHERE r."terminalAt" IS NOT NULL AND r."endedAt" IS NOT NULL AND r."endedAt" >= r."startedAt"))::float8 AS "durationMsSum",
+      COUNT(*) FILTER (WHERE r."terminalAt" IS NOT NULL AND r."endedAt" IS NOT NULL AND r."endedAt" >= r."startedAt") AS "durationCount",
+      COUNT(*) FILTER (WHERE r."tokensIn" IS NOT NULL OR r."tokensOut" IS NOT NULL) AS reported,
+      SUM(COALESCE(r."tokensIn", 0) + COALESCE(r."tokensOut", 0))
+        FILTER (WHERE r."tokensIn" IS NOT NULL OR r."tokensOut" IS NOT NULL) AS "tokensSum",
+      SUM(r."costUsd")::float8 AS "knownUsd",
+      COUNT(*) FILTER (WHERE r."costUsd" IS NULL AND r."provider" IS NOT NULL
+        AND r."status"::text NOT IN (${Prisma.join([...NON_TERMINAL_RUN_STATUSES])})) AS unmeasured,
+      SUM(r."toolCalls") AS "toolCalls"
+    FROM "AgentRun" r
+    ${scopeJoin}
+    GROUP BY r."agentId"`)
+}
+
 const WINDOW_DAYS = 7
 
 /** `YYYY-MM-DD` in UTC. The day boundary is UTC everywhere in this module — a local boundary would
@@ -90,27 +138,13 @@ export async function buildAnalytics(workspaceId: string | null): Promise<Analyt
   const runWhere = workspaceId === null ? {} : { agent: { team: { workspaceId } } }
   const from = windowStart()
 
-  const [agents, windowRuns, allRuns, pauses, activeAgentRows, tasks] = await Promise.all([
+  const [agents, windowRuns, aggRows, pauses, activeAgentRows, tasks] = await Promise.all([
     prisma.agent.findMany({ where: agentWhere, orderBy: { name: 'asc' }, select: { id: true, name: true, role: true } }),
     prisma.agentRun.findMany({
       where: { ...runWhere, terminalAt: { gte: from } },
       select: { status: true, terminalAt: true },
     }),
-    prisma.agentRun.findMany({
-      where: runWhere,
-      select: {
-        agentId: true,
-        status: true,
-        provider: true,
-        costUsd: true,
-        tokensIn: true,
-        tokensOut: true,
-        toolCalls: true,
-        startedAt: true,
-        endedAt: true,
-        terminalAt: true,
-      },
-    }),
+    perAgentRunAggregates(workspaceId),
     prisma.executionEvent.count({
       where: { type: 'run_paused', ...(workspaceId === null ? {} : { workspaceId }) },
     }),
@@ -155,10 +189,21 @@ export async function buildAnalytics(workspaceId: string | null): Promise<Analyt
   const failedTasks = countOf(['failed'])
   const successDenominator = done + failedTasks
 
-  const terminalRuns = allRuns.filter((run) => run.terminalAt !== null && run.endedAt !== null)
-  const durations = terminalRuns.map((run) => (run.endedAt as Date).getTime() - run.startedAt.getTime()).filter((ms) => ms >= 0)
-  const spend = sumSpend(allRuns.map((run) => ({ costUsd: run.costUsd, provider: run.provider, status: run.status })))
-  const toolCalls = allRuns.reduce((n, run) => n + run.toolCalls, 0)
+  // Every ingredient below is a straight sum across `aggRows` (one row per agent) of the exact
+  // figure the old per-agent `FILTER`-equivalent JS reduce produced for that agent — see
+  // `perAgentRunAggregates`'s doc comment and the equivalence test it points to.
+  let durationMsSum = 0
+  let durationCount = 0
+  let knownUsd = 0
+  let unknownRuns = 0
+  let toolCallsTotal = 0
+  for (const row of aggRows) {
+    durationMsSum += row.durationMsSum ?? 0
+    durationCount += Number(row.durationCount)
+    knownUsd += row.knownUsd ?? 0
+    unknownRuns += Number(row.unmeasured)
+    toolCallsTotal += Number(row.toolCalls)
+  }
 
   const kpis: readonly Kpi[] = [
     {
@@ -168,53 +213,44 @@ export async function buildAnalytics(workspaceId: string | null): Promise<Analyt
     },
     {
       label: 'Avg run duration',
-      value: durations.length === 0 ? '—' : formatDuration(durations.reduce((a, b) => a + b, 0) / durations.length),
-      note: durations.length === 0 ? null : `over ${durations.length} run(s)`,
+      value: durationCount === 0 ? '—' : formatDuration(durationMsSum / durationCount),
+      note: durationCount === 0 ? null : `over ${durationCount} run(s)`,
     },
     {
       label: 'Spend',
-      value: `$${spend.known.toFixed(2)}`,
+      value: `$${knownUsd.toFixed(2)}`,
       // Its own line, never folded into the figure (Decision 4): a total that silently absorbs
       // unmeasured runs as zeros presents the measured part of a bill as the whole of it.
-      note: spend.unknownRuns === 0 ? null : `${spend.unknownRuns} run${spend.unknownRuns === 1 ? '' : 's'} unmeasured`,
+      note: unknownRuns === 0 ? null : `${unknownRuns} run${unknownRuns === 1 ? '' : 's'} unmeasured`,
     },
-    { label: 'Tool calls', value: String(toolCalls), note: null },
+    { label: 'Tool calls', value: String(toolCallsTotal), note: null },
     { label: 'Pauses', value: String(pauses), note: null },
     { label: 'Active agents', value: String(activeAgentRows.length), note: null },
   ]
 
   // ---- per-agent performance -------------------------------------------------------------
-  const runsByAgent = new Map<string, typeof allRuns>()
-  for (const run of allRuns) {
-    const list = runsByAgent.get(run.agentId)
-    if (list === undefined) runsByAgent.set(run.agentId, [run])
-    else list.push(run)
-  }
+  const aggByAgent = new Map(aggRows.map((row) => [row.agentId, row]))
 
   const perAgent: readonly AgentPerformanceRow[] = agents.map((agent) => {
-    const runs = runsByAgent.get(agent.id) ?? []
-    const terminal = runs.filter((run) => run.terminalAt !== null)
-    const succeeded = terminal.filter((run) => run.status === 'succeeded').length
-    const agentDurations = terminal
-      .filter((run) => run.endedAt !== null)
-      .map((run) => (run.endedAt as Date).getTime() - run.startedAt.getTime())
-      .filter((ms) => ms >= 0)
-    const reported = runs.filter((run) => run.tokensIn !== null || run.tokensOut !== null)
-    const agentSpend = sumSpend(runs.map((run) => ({ costUsd: run.costUsd, provider: run.provider, status: run.status })))
+    const agg = aggByAgent.get(agent.id)
+    const terminal = agg === undefined ? 0 : Number(agg.terminal)
 
     return {
       agentId: agent.id,
       name: agent.name,
       role: agent.role,
-      runs: terminal.length,
-      successPct: terminal.length === 0 ? null : Math.round((succeeded / terminal.length) * 100),
-      avgDurationMs: agentDurations.length === 0 ? null : agentDurations.reduce((a, b) => a + b, 0) / agentDurations.length,
+      runs: terminal,
+      // `null` when the agent has no terminal run at all — no denominator, no rate.
+      successPct: terminal === 0 || agg === undefined ? null : Math.round((Number(agg.succeeded) / terminal) * 100),
+      // Mean `endedAt − startedAt` in ms over terminal runs, `null` with none.
+      avgDurationMs:
+        agg === undefined || Number(agg.durationCount) === 0 ? null : (agg.durationMsSum ?? 0) / Number(agg.durationCount),
       // `null` when NO run reported, a sum when some did (Decision 4). A partial sum is still a
       // real measurement of the runs that reported; a zero would be a claim about the ones that
       // did not.
-      tokens: reported.length === 0 ? null : reported.reduce((n, run) => n + (run.tokensIn ?? 0) + (run.tokensOut ?? 0), 0),
-      costUsd: agentSpend.known,
-      unmeasuredRuns: agentSpend.unknownRuns,
+      tokens: agg === undefined || Number(agg.reported) === 0 ? null : Number(agg.tokensSum ?? 0n),
+      costUsd: agg?.knownUsd ?? 0,
+      unmeasuredRuns: agg === undefined ? 0 : Number(agg.unmeasured),
     }
   })
 
