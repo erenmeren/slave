@@ -208,6 +208,20 @@ describe('ProgressBar', () => {
     expect(screen.getByTestId('progress-bar').getAttribute('aria-valuenow')).toBe('0')
     expect(screen.getByTestId('progress-bar-fill')).toBeTruthy()
   })
+
+  it('is a progressbar to assistive tech, with bounds', () => {
+    render(<ProgressBar pct={40} />)
+    const bar = screen.getByRole('progressbar')
+    expect(bar.getAttribute('aria-valuemin')).toBe('0')
+    expect(bar.getAttribute('aria-valuemax')).toBe('100')
+    expect(bar.getAttribute('aria-valuenow')).toBe('40')
+  })
+
+  it('unmeasured keeps the role but omits aria-valuenow (ARIA indeterminate)', () => {
+    render(<ProgressBar pct={null} />)
+    const bar = screen.getByRole('progressbar')
+    expect(bar.getAttribute('aria-valuenow')).toBeNull()
+  })
 })
 
 describe('SectionLabel', () => {

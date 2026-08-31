@@ -31,6 +31,9 @@ export function ProgressBar({
     <div
       data-testid="progress-bar"
       className={`w-full overflow-hidden rounded-full bg-bg-2 ${TRACK_HEIGHT[size]}`}
+      role="progressbar"
+      aria-valuemin={0}
+      aria-valuemax={100}
       aria-valuenow={clamped ?? undefined}
     >
       {clamped !== null && (
