@@ -14,12 +14,15 @@ import type { PermissionSection } from '../server/settings'
  * not decoration: an operator who denies `deploy prod` here and believes it took effect is worse
  * off than one who was never offered the control, so the surface states the gap it has.
  *
- * `null` (unset) and `deny` share the `✕` glyph but not the `title`: the tooltip says `not set`
- * or `denied`, because an undecided permission is not a decision to refuse.
+ * The cell glyph reflects its mode: `allow` shows a check mark `✓` in the working tone, `deny`
+ * shows a cross `✕` in the blocked tone, and `null` (unset) shows an en dash `–` in the dim tone,
+ * because an undecided permission is distinct from a decision to refuse.
  *
  * One grid PER WORKSPACE (fix round 1, finding 2), because two projects built from the same roster
  * hold different agents with identical names, and a flat list of them is unreadable: the section
  * header is what says whose "Alex · backend" a row governs.
+ *
+ * Not yet enforced at runtime.
  */
 type Mode = 'allow' | 'deny' | null
 
@@ -131,7 +134,28 @@ export function PermissionMatrix({ sections }: { readonly sections: readonly Per
                       <span className="truncate font-mono text-[10px] text-text-3">{row.role}</span>
                     </span>
                     {row.cells.map((cell) => {
-                      const allowed = cell.mode === 'allow'
+                      const isAllow = cell.mode === 'allow'
+                      const isDeny = cell.mode === 'deny'
+                      const isUnset = cell.mode === null
+
+                      let glyph: string
+                      let colorClass: string
+                      let bgBorderClass: string
+
+                      if (isAllow) {
+                        glyph = '✓'
+                        colorClass = 'text-tone-working'
+                        bgBorderClass = 'border-tone-working/24 bg-tone-working/10'
+                      } else if (isDeny) {
+                        glyph = '✕'
+                        colorClass = 'text-tone-blocked'
+                        bgBorderClass = 'border-tone-blocked/24 bg-tone-blocked/8'
+                      } else {
+                        glyph = '–'
+                        colorClass = 'text-text-3'
+                        bgBorderClass = 'border-text-3/24 bg-text-3/8'
+                      }
+
                       return (
                         <span key={cell.tool} className="flex justify-center">
                           <button
@@ -142,13 +166,9 @@ export function PermissionMatrix({ sections }: { readonly sections: readonly Per
                             title={TITLE[cell.mode ?? 'unset']}
                             aria-label={`${row.name} · ${cell.tool} · ${TITLE[cell.mode ?? 'unset']}`}
                             onClick={() => void write(row.agentId, cell.tool, flip(cell.mode))}
-                            className={`h-5 w-5 rounded-chip border text-[11px] leading-none disabled:cursor-not-allowed disabled:opacity-50 ${
-                              allowed
-                                ? 'border-tone-done/24 bg-tone-done/10 text-tone-done'
-                                : 'border-tone-blocked/24 bg-tone-blocked/8 text-tone-blocked'
-                            }`}
+                            className={`h-5 w-5 rounded-chip border text-[11px] leading-none disabled:cursor-not-allowed disabled:opacity-50 ${colorClass} ${bgBorderClass}`}
                           >
-                            {allowed ? '✓' : '✕'}
+                            {glyph}
                           </button>
                         </span>
                       )

@@ -598,6 +598,7 @@ describe('the permission matrix', () => {
     ])
     expect(screen.getByTestId('perm-cell-a1-repo read').textContent).toBe('✓')
     expect(screen.getByTestId('perm-cell-a1-source write').textContent).toBe('✕')
+    expect(screen.getByTestId('perm-cell-a1-run tests').textContent).toBe('–')
   })
 
   it('distinguishes an unset cell from an explicit deny in its title', () => {
