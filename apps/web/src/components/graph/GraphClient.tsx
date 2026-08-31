@@ -18,6 +18,7 @@ import { handleToolCallFrame, sweepExpired, type Particle } from './flow'
 import { useLayoutedGraph } from './layout'
 import { buildOrgGraph, ORG_NODE_TYPES } from './OrgNodes'
 import { Particles } from './Particles'
+import { SkillMode } from './SkillMode'
 
 /** Sweep tick for expired particles (spec §6: "a sweep on each frame/tick removes expired") --
  *  frequent enough that a particle's ~600ms lifetime never lingers visibly past its expiry, cheap
@@ -34,11 +35,13 @@ function isGraphMode(value: string | null): value is GraphMode {
   return value === 'org' || value === 'exec' || value === 'deps' || value === 'skill'
 }
 
-/** The modes that actually render a canvas. `skill` is `later` (see the tab's own comment), so a
- *  hand-typed `?mode=skill` falls back to the default rather than showing an empty dark panel --
- *  the tab being disabled only closes the click path, not the URL one. */
-function hasView(mode: GraphMode): boolean {
-  return mode !== 'skill'
+/** The modes that actually render a canvas -- Task 11 (M18) gives `skill` its own aggregate
+ *  canvas (`SkillMode`), so every mode now has a view and a hand-typed `?mode=skill` renders it
+ *  same as any other mode's URL. Kept as its own function (rather than inlined at the one call
+ *  site) so a future mode that DOES need the "URL falls back to default" treatment has a place to
+ *  add the exception without re-deriving this. */
+function hasView(_mode: GraphMode): boolean {
+  return true
 }
 
 const MODE_TABS: readonly { readonly mode: GraphMode; readonly label: string }[] = [
@@ -202,31 +205,18 @@ export function GraphClient({
        *  existing token-based recipe, same as the "stale data" banner just above (no `ui/`
        *  alert/banner component exists either) -- both predate this task and stay as-is. */}
       <nav aria-label="Graph mode" className="flex gap-1 border-b border-line px-3 py-2">
-        {MODE_TABS.map((tab) => {
-          // Fix round 1, Important 2 (controller ruling): Skill chain is `later`, unconditionally.
-          // `GraphAgent.hasSkillData` says a run RECORDED a skill tally -- a data signal, not a
-          // view -- and there is no skill-chain canvas for this tab to open onto, so enabling it on
-          // that signal put the user on a blank dark panel indistinguishable from a broken page.
-          // The field stays in the snapshot as the plumbing a later milestone flips; this constant
-          // is the one line that milestone changes.
-          const disabled = tab.mode === 'skill'
-          return (
-            <button
-              key={tab.mode}
-              type="button"
-              data-testid={`graph-mode-${tab.mode}`}
-              aria-current={mode === tab.mode ? 'page' : undefined}
-              disabled={disabled}
-              title={disabled ? 'arrives in a later milestone' : undefined}
-              onClick={() => setMode(tab.mode)}
-              className={`rounded px-2 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-50 ${
-                mode === tab.mode ? 'bg-bg-2 text-text-1' : 'text-text-2 hover:text-text-1'
-              }`}
-            >
-              {disabled ? `${tab.label} · later` : tab.label}
-            </button>
-          )
-        })}
+        {MODE_TABS.map((tab) => (
+          <button
+            key={tab.mode}
+            type="button"
+            data-testid={`graph-mode-${tab.mode}`}
+            aria-current={mode === tab.mode ? 'page' : undefined}
+            onClick={() => setMode(tab.mode)}
+            className={`rounded px-2 py-1 text-xs ${mode === tab.mode ? 'bg-bg-2 text-text-1' : 'text-text-2 hover:text-text-1'}`}
+          >
+            {tab.label}
+          </button>
+        ))}
       </nav>
       <div className="relative flex min-h-0 flex-1">
         <div className="relative min-w-0 flex-1">
@@ -238,6 +228,7 @@ export function GraphClient({
           )}
           {mode === 'exec' && <ExecutionMode snapshot={view} />}
           {mode === 'deps' && <DepsMode workspaceId={workspaceId} snapshot={view} />}
+          {mode === 'skill' && <SkillMode workspaceId={workspaceId} snapshot={view} />}
         </div>
         {selectedAgent !== null && (
           <GraphDrawer workspaceId={workspaceId} agent={selectedAgent} onClose={() => setSelectedAgentId(null)} />

@@ -52,6 +52,10 @@ const DEFAULT_SIZE: Record<string, { readonly width: number; readonly height: nu
   agent: { width: 220, height: 92 },
   activeTask: { width: 140, height: 40 },
   task: { width: 220, height: 64 },
+  // Task 11 (M18): MUST match `SkillNodes.tsx`'s `SkillNode` chip exactly (`w-[168px] h-[44px]`)
+  // -- the same "silent fallback-size overlap" risk this file's own doc comment warns every new
+  // node type about.
+  skill: { width: 168, height: 44 },
 }
 const FALLBACK_SIZE = { width: 180, height: 56 } as const
 

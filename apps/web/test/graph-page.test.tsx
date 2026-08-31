@@ -372,7 +372,10 @@ describe('GraphClient', () => {
     ],
   }
 
-  it('offers four modes, with Skill chain permanently disabled as `later`', async () => {
+  // Task 11 (M18): the fourth tab unlocks -- `SkillMode`'s own aggregate canvas. This is the
+  // sanctioned edit to the test that used to pin the `disabled`/`\u00b7 later` tab (fix round 1,
+  // Important 2 of the M14 plan): that ruling is exactly what this task reverses.
+  it('offers four modes, all enabled -- Skill chain included', async () => {
     const { rerender } = render(<GraphClient workspaceId="w1" initial={SNAPSHOT} />)
     await waitFor(() => expect(elkLayoutSpy).toHaveBeenCalled())
 
@@ -380,41 +383,49 @@ describe('GraphClient', () => {
       'Organization',
       'Execution',
       'Dependencies',
-      'Skill chain \u00b7 later',
+      'Skill chain',
     ])
-    expect((screen.getByTestId('graph-mode-skill') as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByTestId('graph-mode-skill') as HTMLButtonElement).disabled).toBe(false)
 
-    // Fix round 1, Important 2 (controller ruling): recorded skill data is a DATA signal, not a
-    // view -- there is no skill-chain canvas to open onto, so the tab stays `later` even once a
-    // run has a `skillCalls` tally. `hasSkillData` remains the plumbing a later milestone flips.
+    // `hasSkillData` stays what the M14 ruling made it: a reachability signal only, not what
+    // gates this tab (the tab is unconditionally enabled either way).
     streamState.snapshot = { ...SNAPSHOT, agents: SNAPSHOT.agents.map((a) => ({ ...a, hasSkillData: true })) }
     rerender(<GraphClient workspaceId="w1" initial={SNAPSHOT} />)
 
-    expect((screen.getByTestId('graph-mode-skill') as HTMLButtonElement).disabled).toBe(true)
-    expect(screen.getByTestId('graph-mode-skill').textContent).toBe('Skill chain \u00b7 later')
+    expect((screen.getByTestId('graph-mode-skill') as HTMLButtonElement).disabled).toBe(false)
+    expect(screen.getByTestId('graph-mode-skill').textContent).toBe('Skill chain')
   })
 
-  it('never lets a click on the Skill chain tab strand the page on a blank canvas', async () => {
-    streamState.snapshot = { ...SNAPSHOT, agents: SNAPSHOT.agents.map((a) => ({ ...a, hasSkillData: true })) }
+  // Forced consequence of the same unlock (not itself the named sanctioned edit): the old
+  // assertion here was the literal opposite of Task 11's mandate -- a click now genuinely
+  // switches mode and renders `SkillMode`'s own canvas rather than no-op'ing.
+  it('switches to Skill chain mode on a click, rendering its own canvas rather than stranding on org', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ skills: [], edges: [], runs: [] }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
     render(<GraphClient workspaceId="w1" initial={SNAPSHOT} />)
     await waitFor(() => expect(elkLayoutSpy).toHaveBeenCalled())
 
     fireEvent.click(screen.getByTestId('graph-mode-skill'))
 
-    // A disabled button fires nothing: no URL write, and Organization is still the mode showing a
-    // real canvas.
-    expect(routerReplace).not.toHaveBeenCalled()
-    expect(screen.getByTestId('graph-mode-org')).toHaveProperty('ariaCurrent', 'page')
+    expect(routerReplace).toHaveBeenCalledWith('/w/w1/graph?mode=skill', { scroll: false })
+    expect(screen.getByTestId('graph-mode-skill')).toHaveProperty('ariaCurrent', 'page')
     expect(screen.getByTestId('graph-canvas')).toBeTruthy()
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/w/w1/skill-graph'))
   })
 
-  it('falls back to Organization for a hand-typed ?mode=skill rather than showing an empty panel', async () => {
+  // Forced consequence of the same unlock: `hasView` no longer special-cases `skill`, so a
+  // hand-typed `?mode=skill` now opens the real view instead of falling back to Organization --
+  // the exact opposite of what this test used to guard.
+  it('opens Skill chain mode directly for a hand-typed ?mode=skill, now that the tab has a view', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ skills: [], edges: [], runs: [] }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
     searchParams = new URLSearchParams('mode=skill')
     render(<GraphClient workspaceId="w1" initial={SNAPSHOT} />)
     await waitFor(() => expect(elkLayoutSpy).toHaveBeenCalled())
 
-    expect(screen.getByTestId('graph-mode-org')).toHaveProperty('ariaCurrent', 'page')
+    expect(screen.getByTestId('graph-mode-skill')).toHaveProperty('ariaCurrent', 'page')
     expect(screen.getByTestId('graph-canvas')).toBeTruthy()
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/w/w1/skill-graph'))
   })
 
   it('switches to Execution mode and draws the six pipeline stages', async () => {
