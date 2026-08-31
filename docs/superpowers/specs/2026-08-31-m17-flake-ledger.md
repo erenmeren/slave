@@ -341,4 +341,64 @@ Template per flake:
 
 ## Flake 5 — activity-history.test.ts sparkline buckets
 
+- **Evidence** — three independent clocks decided the sparkline's bucket layout: the test's own
+  `new Date()` (`activity-history.test.ts:214`, pre-fix), the server's own `new Date()`
+  (`toolCallSparkline`, `apps/web/src/server/activity.ts:119`, pre-fix), and Postgres's `now()` in
+  the raw-SQL window (`:124`, pre-fix). `bucketSparkline` (`:95`) already took an injectable `now`;
+  nothing else did. A minute boundary crossed between any two of the three readings shifts every
+  bucket index by one, which drops the test's `at(9)` (9-minutes-ago) row out of the 10-minute
+  window it asserts is inside it — a genuine, if narrow (sub-second-per-minute), race, not a design
+  smell caught only by inspection.
+
+- **Mechanism** — `bucketSparkline` keys each SQL row by `nowMinute - floor(row.minute / 60_000)`
+  where `nowMinute` comes from whichever `now` the caller passed. Pre-fix, the test computed its
+  `at(9)` timestamp against the test's `new Date()`, the SQL window's lower bound came from
+  Postgres's `now()`, and the bucket index came from the server's own separate `new Date()` — three
+  reads of "now" that are only guaranteed equal if no minute rolls over between them. If the SQL
+  `now()` read lands one minute later than the test's `at(9)` computation, the row is now
+  (`now() - interval '10 minutes'`)-excluded entirely; if the server's bucketing `new Date()` reads
+  one minute later than the test's, `at(9)`'s row shifts to `minutesAgo = 10`, outside
+  `bucketSparkline`'s `< SPARKLINE_MINUTES` guard, and is silently dropped rather than landing at
+  index 0.
+
+- **Change** — one injected clock threaded through all three reads. `toolCallSparkline(workspaceId,
+  now: Date = new Date())` now casts the same `now` into the SQL predicate
+  (`ts >= ${now}::timestamp - interval '10 minutes'` — the explicit `::timestamp` cast was necessary
+  beyond the brief's literal `${now} - interval '10 minutes'`: Postgres could not otherwise infer
+  the bound parameter's type against the `interval` literal and raised `operator does not exist:
+  timestamp without time zone >= interval`, matching `ExecutionEvent.ts`'s undecorated
+  `DateTime @default(now())` column type) and passes the identical `now` into `bucketSparkline`.
+  `buildActivityHistory` gained a trailing `now: Date = new Date()` parameter (after the existing
+  optional `options`) and forwards it to `toolCallSparkline`; `buildActivityPage` was left
+  unchanged — it composes `buildActivityHistory(workspaceId, EMPTY_ACTIVITY_FILTERS, {})` and only
+  ever reuses `history.sparkline`, never re-deriving it, so no threading was needed there and its
+  behaviour (and the HTTP route's, which calls `buildActivityHistory` directly with no `now`) is
+  byte-for-byte unchanged — the new parameter is trailing and defaulted everywhere. The bucketing
+  test (`activity-history.test.ts:213–239`) now computes a mid-minute-aligned `now` (`Math.floor(Date.now()
+  / 60_000) * 60_000 + 30_000`, i.e. second `:30` of the current minute) so its own `at(N)`
+  timestamps can never straddle a `date_trunc('minute', …)` boundary, and calls
+  `buildActivityHistory(fixture.workspaceId, EMPTY_ACTIVITY_FILTERS, {}, now)` directly (rather than
+  `buildActivityPage`, which has no way to receive an injected clock) so that one `now` is the only
+  clock in play. The route test at `:335` ("Finding 3…") asserts through the real HTTP handler,
+  which has no clock to inject; it previously pinned an exact bucket value
+  (`sparkline.at(-1)).toBe(1)`) against the real wall clock between an `appendEvent` and the
+  request that reads it back — a second, independent (if very narrow) minute-boundary race. Per the
+  brief's fork, this was relaxed to a shape/sum assertion
+  (`sparkline.reduce((a, b) => a + b, 0)).toBe(1)`) rather than threaded, since threading a clock
+  into an HTTP route's public surface for test convenience would change production API shape for no
+  product benefit.
+
+- **Proof** — `npx tsc --build` clean. `scripts/repeat-test.sh 20
+  apps/web/test/integration/activity-history.test.ts` → **GREEN 20x**, 2815–3000 ms/run, no red.
+  `npm run web:build` green (no `next dev` server was running at any point, confirmed via `pgrep -fa
+  'next dev'` excluding self-matches, before and after). Full suite after a `.next` cleanup: `npm
+  test` → **131 test files / 1807 tests, all passed**, 158.73 s.
+
+- **Residue** — none queued. The fix is structural (one clock, not a timing margin), so there is no
+  residual race in `toolCallSparkline`/`buildActivityHistory` to re-measure later the way Flake 4's
+  margin-based ruling required. The route-level relaxation at `:335` still leaves that one test
+  reading the real wall clock end-to-end (an HTTP handler has no injectable clock), but it now
+  asserts shape/sum rather than an exact bucket index, so a minute boundary crossing there can no
+  longer flip it red — no further action queued.
+
 ## Flake 6 — live-gate Activity hydration

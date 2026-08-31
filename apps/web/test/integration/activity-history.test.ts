@@ -211,7 +211,10 @@ describe('buildActivityHistory', () => {
 
   describe('sparkline', () => {
     it('buckets run.tool_call counts into 10 one-minute buckets, oldest first, zero-filled, non-tool-call types excluded', async (): Promise<void> => {
-      const now = new Date()
+      // Mid-minute (:30), not the raw wall clock, so a row's `at(N)` timestamp can never straddle
+      // a `date_trunc('minute', …)` boundary relative to `now` — the window, the SQL grouping, and
+      // the bucket index all read this one instant.
+      const now = new Date(Math.floor(Date.now() / 60_000) * 60_000 + 30_000)
       const at = (minutesAgo: number): Date => new Date(now.getTime() - minutesAgo * 60_000)
       await prisma.executionEvent.createMany({
         data: [
@@ -229,7 +232,7 @@ describe('buildActivityHistory', () => {
         ],
       })
 
-      const page = await buildActivityPage(fixture.workspaceId)
+      const page = await buildActivityHistory(fixture.workspaceId, EMPTY_ACTIVITY_FILTERS, {}, now)
 
       expect(page?.sparkline).toHaveLength(10)
       expect(page?.sparkline[9]).toBe(2) // current minute
@@ -347,7 +350,10 @@ describe('buildActivityHistory', () => {
     })
     const unfilteredBody = (await unfiltered.json()) as { sparkline: number[] }
     expect(unfilteredBody.sparkline).toHaveLength(10)
-    expect(unfilteredBody.sparkline.at(-1)).toBe(1)
+    // Shape, not an exact bucket: the route reads the real clock (no injected `now` — an HTTP
+    // handler has no clock to inject), so a minute boundary crossed between the `appendEvent`
+    // above and this request could shift which index the one row lands in.
+    expect(unfilteredBody.sparkline.reduce((a, b) => a + b, 0)).toBe(1)
 
     // A filter that excludes every event in the log still reports the true workspace-wide rate —
     // the sparkline is never filtered, only `events` is (review finding 3).

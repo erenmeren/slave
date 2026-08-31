@@ -114,14 +114,17 @@ export function bucketSparkline(
  * etc. — confirmed against the schema and `\dT+ "EventType"` on the test database), so the raw-SQL
  * literal below must be dotted too; the Prisma-mapped member name (`run_tool_call`) is a
  * TypeScript-only alias that does not exist in Postgres.
+ *
+ * The window predicate and `bucketSparkline` share the single `now` passed in (or defaulted here)
+ * rather than each taking its own reading, so a minute boundary crossed between the two can't shift
+ * the SQL window and the bucket index against each other.
  */
-export async function toolCallSparkline(workspaceId: string): Promise<readonly number[]> {
-  const now = new Date()
+export async function toolCallSparkline(workspaceId: string, now: Date = new Date()): Promise<readonly number[]> {
   const rows = await prisma.$queryRaw<Array<{ minute: Date; n: bigint }>>`
     SELECT date_trunc('minute', ts) as minute, count(*) as n
     FROM "ExecutionEvent"
     WHERE "workspaceId" = ${workspaceId} AND type = 'run.tool_call'::"EventType"
-      AND ts >= now() - interval '10 minutes'
+      AND ts >= ${now}::timestamp - interval '10 minutes'
     GROUP BY 1`
   return bucketSparkline(rows, now)
 }
@@ -138,6 +141,7 @@ export async function buildActivityHistory(
   workspaceId: string,
   filters: ActivityFilters,
   options?: { readonly before?: number; readonly limit?: number },
+  now: Date = new Date(),
 ): Promise<ActivityHistoryPage | null> {
   const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId } })
   if (workspace === null) return null
@@ -162,7 +166,7 @@ export async function buildActivityHistory(
       orderBy: { seq: 'desc' },
       take,
     }),
-    toolCallSparkline(workspaceId),
+    toolCallSparkline(workspaceId, now),
   ])
 
   const events: ActivityEventRow[] = rows.map((row) => {
