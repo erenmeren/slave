@@ -29,7 +29,7 @@ const lines = readFileSync(new URL('./fixtures/cursor/cursor-run.ndjson', import
 
 /** The tool call the fixture actually made, verbatim. */
 const FIXTURE_TOOL_PATH =
-  '/tmp/claude-1001/-home-meren-projects-slave-of-ai/5c8fce38-aa67-4680-a656-317da244ac99/scratchpad/cursor-fixture/note.txt'
+  '/tmp/claude-1001/-home-fixture-user-projects-repo/5c8fce38-aa67-4680-a656-317da244ac99/scratchpad/cursor-fixture/note.txt'
 const FIXTURE_CALL_ID =
   'call-ae488142-4603-40ee-b2b1-6af10cd2ae63-0\nfc_12f193b8-7246-9972-8a7f-29022849f6a6_0'
 

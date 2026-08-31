@@ -36,7 +36,7 @@ to test the file the product writes:
 ```bash
 node --input-type=module -e "
   const { cursorHooksPath, writeCursorHooksFile } =
-    await import('/home/meren/projects/slave-of-ai/packages/providers/dist/cursor/hooks.js')
+    await import('/home/fixture-user/projects/slave-of-ai/packages/providers/dist/cursor/hooks.js')
   for (const root of ['/tmp/m13-cursor-gate/run-1', '/tmp/m13-cursor-gate/run-2']) {
     writeCursorHooksFile({ hooksPath: cursorHooksPath(root), gatePath: '/tmp/m13-cursor-gate/gate-wrapper.sh' })
   }
@@ -56,7 +56,7 @@ LOG="${AITEAMOS_GATE_LOG:-}"
 if [[ -z "$LOG" ]]; then printf 'gate-wrapper.sh: AITEAMOS_GATE_LOG is unset\n' >&2; exit 2; fi
 payload=$(cat)
 printf '>>> stdin: %s\n' "$payload" >> "$LOG"
-out=$(printf '%s' "$payload" | /home/meren/projects/slave-of-ai/scripts/cursor-shell-gate.sh)
+out=$(printf '%s' "$payload" | /home/fixture-user/projects/slave-of-ai/scripts/cursor-shell-gate.sh)
 status=$?
 printf '<<< exit %s stdout: %s\n' "$status" "$out" >> "$LOG"
 printf '%s\n' "$out"

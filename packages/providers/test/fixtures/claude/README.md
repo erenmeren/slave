@@ -85,8 +85,8 @@ was in question.
 The stream is byte for byte the CLI's stdout except for **two** mechanical substitutions:
 
 ```bash
-sed -e 's#/home/meren#/home/fixture-user#g' \
-    -e 's#"messaging_socket_path":"/run/user/1001/cc-socks/1565400.sock"#"messaging_socket_path":"/run/user/UID/cc-socks/PID.sock"#' \
+sed -e 's#/home/<operator>#/home/fixture-user#g' \
+    -e 's#"messaging_socket_path":"/run/user/UID/cc-socks/PID.sock"#"messaging_socket_path":"/run/user/UID/cc-socks/PID.sock"#' \
     /tmp/m14-skill-fixture/raw.ndjson \
   > packages/providers/test/fixtures/claude/skill-tool-use.ndjson
 ```
@@ -97,8 +97,8 @@ Important 3):
 
 | Substitution | Sites |
 | --- | --- |
-| `/home/meren` → `/home/fixture-user` | **10**: nine on line 7, the `init` line (eight `plugins[].path` entries and `memory_paths.auto`), and **one on line 12**, inside the `user` message — the skill body's own `Base directory for this skill: …` header. |
-| `messaging_socket_path` → `/run/user/UID/cc-socks/PID.sock` | **1**, on line 7. Added in fix round 1: it was never a `/home/meren` site, so the first pass left it, and `/run/user/1001/cc-socks/1565400.sock` carries the operator's UID and a PID. |
+| `/home/<operator>` → `/home/fixture-user` | **10**: nine on line 7, the `init` line (eight `plugins[].path` entries and `memory_paths.auto`), and **one on line 12**, inside the `user` message — the skill body's own `Base directory for this skill: …` header. |
+| `messaging_socket_path` → `/run/user/UID/cc-socks/PID.sock` | **1**, on line 7. Added in fix round 1: it was never a home-dir site, so the first pass left it, and the socket path carries the operator's UID and a PID. |
 
 Nothing else was altered — line count, ordering and every other byte are the capture's own, and
 **line 9, the `Skill` tool_use, is byte-identical to the capture** (md5 `1890257a…`, unchanged by
