@@ -126,6 +126,16 @@ PAUSE_GATE_LIB_DIR="$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}" || printf
     "${PAUSE_GATE_LIB_DIR}/lib/pause-flag.sh" >&2
   exit 2
 }
+# scripts/lib/permissions.sh -- M18's permission-matrix check, shared with scripts/pause-gate.sh
+# (Task 3). Same bootstrap dir, same fail-loudly posture as the pause-flag source above: a
+# deployment that copied this script without its second library must refuse rather than silently
+# skip the matrix.
+# shellcheck source=lib/permissions.sh
+. "${PAUSE_GATE_LIB_DIR}/lib/permissions.sh" || {
+  printf 'cursor-shell-gate.sh: deployed without its library -- expected to find it at %s. Copy scripts/lib/permissions.sh alongside this script (in a lib/ directory beside it), or point AITEAMOS_CURSOR_GATE_PATH at the repository'"'"'s own scripts/cursor-shell-gate.sh.\n' \
+    "${PAUSE_GATE_LIB_DIR}/lib/permissions.sh" >&2
+  exit 2
+}
 
 # Fails loudly on stderr and exits 2 -- Cursor's blocking exit code. Used for
 # every case where this script cannot produce a well-formed answer, so that
@@ -162,7 +172,10 @@ allow() {
   fail_closed 'failed to write the allow payload'
 }
 
-cat > /dev/null   # drain the hook payload on stdin
+# Captured, not drained: the permission matrix's verdict (below) needs the payload's tool
+# identity. read_permission_verdict only parses it when AITEAMOS_PERMISSIONS_FILE is armed --
+# it returns allow instantly otherwise -- so this costs nothing on the pre-M18 path.
+hook_payload=$(cat)
 
 read_pause_reason
 pause_status=$?
@@ -171,8 +184,9 @@ case $pause_status in
   0) deny "$PAUSE_REASON" ;;
   # Unchanged from M12: no flag path is a deny with a body, at exit 0, not a hook failure.
   2) deny "$PAUSE_REASON" ;;
-  # No pause requested. The ONLY status that reaches the allow below, and it says so explicitly
-  # rather than by falling out of the `esac`, so that the catch-all beneath it cannot swallow it.
+  # No pause requested. The ONLY status that reaches the permission-matrix check and the allow
+  # below, and it says so explicitly rather than by falling out of the `esac`, so that the
+  # catch-all beneath it cannot swallow it.
   1) ;;
   # Every other status is a gate that broke in a way this file does not enumerate, and it must fail
   # closed like every other failure here. The status that makes this arm load-bearing is 127: a
@@ -183,6 +197,29 @@ case $pause_status in
   *) fail_closed "read_pause_reason returned an unexpected status ${pause_status}" ;;
 esac
 
-# Status 1: no pause requested. Cursor's allow must say so OUT LOUD -- silence here is read as a
-# hook failure, which `failClosed: true` converts into a block on every tool call of every run.
+# Only status 1 (no pause requested) reaches here. Pause always wins: an operator's pause is
+# checked first, above, and this permission-matrix check never runs while a pause is armed --
+# `deny` above already exited the whole script.
+#
+# 'shell' is passed as `default_tool` on EVERY call, whichever of this gate's two hook
+# registrations fired. read_permission_verdict's own shape guard (scripts/lib/permissions.sh)
+# is what makes that inert except for the one shape it is meant for: Cursor's
+# `beforeShellExecution` payload, measured (fixtures/cursor/gate/run-1-hook.log line 5) to carry
+# a top-level `command` string and NO tool-identity key at all. This gate's `preToolUse`
+# registration -- the one that fires for every OTHER tool, per the header above -- always carries
+# `tool_name` in the same fixture, so `default_tool` never substitutes there.
+#
+# CAVEAT (measured, header :11-14 of this file): Cursor's `preToolUse` `tool_name` is NOT
+# trustworthy for write/read discrimination -- a file WRITE was captured arriving with
+# `"tool_name":"Read"`. This gate does not attempt to correct that here; it is spec section 2's
+# stated v1 limitation ("Cursor caveat"), not a bug this task fixes. Shell enforcement via
+# `beforeShellExecution` (the `default_tool` fallback above) is the reliable half; non-shell
+# enforcement on Cursor stays best-effort.
+if read_permission_verdict "$hook_payload" 'shell'; then
+  deny "permission matrix denies '${PERMISSION_DENY_CAPABILITY}' (${PERMISSION_DENY_TOOL}) for this agent"
+fi
+
+# No pause requested, and the tool is not matrix-denied. Cursor's allow must say so OUT LOUD --
+# silence here is read as a hook failure, which `failClosed: true` converts into a block on every
+# tool call of every run.
 allow

@@ -23,6 +23,15 @@ interface RunHookOptions {
   // The script to spawn, when it is deliberately NOT the repo's own copy -- used by the
   // deployment tests below, which need a gate at a path they control.
   readonly gateOverride?: string
+  // Written to stdin as the hook payload (`hook_payload=$(cat)`, M18 Task 4). Omitted leaves
+  // stdin empty, exactly as every pre-Task-4 test here already relies on: an empty payload has
+  // no `tool_name` and no `command`, so `read_permission_verdict` allows regardless of what a
+  // permissions file says.
+  readonly payload?: string
+  // Sets AITEAMOS_PERMISSIONS_FILE for the child. Omitted deletes it from the child's environment
+  // entirely (not merely "leaves it unset in this test file's own process") -- the permission
+  // matrix must stay completely out of the picture for every pre-Task-4-shaped test in this file.
+  readonly permissionsFile?: string
 }
 
 interface RunHookResult {
@@ -60,6 +69,11 @@ function runHook(options: RunHookOptions = {}): Promise<RunHookResult> {
   } else {
     env['AITEAMOS_PAUSE_FLAG'] = flagPath
   }
+  if (options.permissionsFile === undefined) {
+    delete env['AITEAMOS_PERMISSIONS_FILE']
+  } else {
+    env['AITEAMOS_PERMISSIONS_FILE'] = options.permissionsFile
+  }
 
   return new Promise((resolve, reject) => {
     const child = spawn(options.gateOverride ?? gatePath, [], { env, stdio: ['pipe', 'pipe', 'pipe'] })
@@ -92,8 +106,19 @@ function runHook(options: RunHookOptions = {}): Promise<RunHookResult> {
       resolve({ stdout, stderr, code })
     })
 
+    if (options.payload !== undefined) {
+      child.stdin.write(options.payload)
+    }
     child.stdin.end()
   })
+}
+
+/** Writes `{"version":1,"deny":[...]}` to a fresh temp file and returns its path. */
+function writePermissionsFile(deny: ReadonlyArray<{ readonly tool: string; readonly capability: string }>): string {
+  const dir = mkdtempSync(path.join(tmpdir(), 'aiteamos-cursor-gate-matrix-'))
+  const filePath = path.join(dir, 'permissions.json')
+  writeFileSync(filePath, JSON.stringify({ version: 1, deny }))
+  return filePath
 }
 
 describe('cursor-shell-gate.sh', () => {
@@ -294,5 +319,119 @@ describe('cursor-shell-gate.sh', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
+  })
+
+  // M18 Task 4: this gate now also consumes `read_permission_verdict` (scripts/lib/permissions.sh,
+  // shared with pause-gate.sh) against the hook payload it captures on stdin, and refuses a
+  // matrix-denied tool via Cursor's own `deny()` shape -- but only once the pause check above has
+  // already said "no pause requested" (status 1).
+  describe('permission matrix', () => {
+    it('denies a matrix-listed preToolUse tool, naming the capability and tool in user_message', async (): Promise<void> => {
+      const permissionsFile = writePermissionsFile([{ tool: 'edit', capability: 'source write' }])
+      try {
+        const { stdout, code } = await runHook({
+          flagExists: false,
+          payload: JSON.stringify({ tool_name: 'edit', hook_event_name: 'preToolUse' }),
+          permissionsFile,
+        })
+        expect(code).toBe(0)
+        const parsed = JSON.parse(stdout) as { permission: string; user_message: string }
+        expect(parsed.permission).toBe('deny')
+        // The prefix is pinned byte-equal against packages/providers/src/gate.ts's
+        // PERMISSION_DENY_REASON_PREFIX by packages/control/test/permission-mapping.test.ts --
+        // this assertion is deliberately exact, not `.toContain`, so a drift here is caught here.
+        expect(parsed.user_message).toBe("permission matrix denies 'source write' (edit) for this agent")
+      } finally {
+        rmSync(path.dirname(permissionsFile), { recursive: true, force: true })
+      }
+    })
+
+    // The mechanism Task 4 adds: `beforeShellExecution`'s real captured payload (measured against
+    // fixtures/cursor/gate/run-1-hook.log) carries a top-level `command` string and NO tool-name
+    // key at all. The gate passes 'shell' as `default_tool` on every call, and the library's own
+    // shape guard (a `command` string present, no `tool_name`) is what makes that substitution
+    // fire only for this shape.
+    it('denies a beforeShellExecution-shaped payload (no tool_name) via the shell default_tool', async (): Promise<void> => {
+      const permissionsFile = writePermissionsFile([{ tool: 'shell', capability: 'run tests' }])
+      try {
+        const { stdout, code } = await runHook({
+          flagExists: false,
+          payload: JSON.stringify({ command: 'echo hi', cwd: '/tmp', hook_event_name: 'beforeShellExecution' }),
+          permissionsFile,
+        })
+        expect(code).toBe(0)
+        const parsed = JSON.parse(stdout) as { permission: string; user_message: string }
+        expect(parsed.permission).toBe('deny')
+        expect(parsed.user_message).toBe("permission matrix denies 'run tests' (shell) for this agent")
+      } finally {
+        rmSync(path.dirname(permissionsFile), { recursive: true, force: true })
+      }
+    })
+
+    it('allows explicitly when the payload names a tool absent from the deny list', async (): Promise<void> => {
+      const permissionsFile = writePermissionsFile([{ tool: 'shell', capability: 'run tests' }])
+      try {
+        const { stdout, code } = await runHook({
+          flagExists: false,
+          payload: JSON.stringify({ tool_name: 'read', hook_event_name: 'preToolUse' }),
+          permissionsFile,
+        })
+        expect(code).toBe(0)
+        const parsed = JSON.parse(stdout) as { permission: string }
+        expect(parsed.permission).toBe('allow')
+      } finally {
+        rmSync(path.dirname(permissionsFile), { recursive: true, force: true })
+      }
+    })
+
+    it('lets an operator pause win over a matrix deny on the same tool call', async (): Promise<void> => {
+      const permissionsFile = writePermissionsFile([{ tool: 'shell', capability: 'run tests' }])
+      try {
+        const { stdout, code } = await runHook({
+          flagExists: true,
+          reason: 'operator paused',
+          payload: JSON.stringify({ command: 'echo hi', hook_event_name: 'beforeShellExecution' }),
+          permissionsFile,
+        })
+        expect(code).toBe(0)
+        const parsed = JSON.parse(stdout) as { permission: string; user_message: string }
+        expect(parsed.permission).toBe('deny')
+        // The pause reason, not the matrix's -- proof the matrix check never ran (pause_status 0
+        // exits the script from inside the `case`, above the `if read_permission_verdict` line).
+        expect(parsed.user_message).toBe('operator paused')
+      } finally {
+        rmSync(path.dirname(permissionsFile), { recursive: true, force: true })
+      }
+    })
+
+    it('does not consult the matrix at all when AITEAMOS_PERMISSIONS_FILE is unset', async (): Promise<void> => {
+      // No `permissionsFile` option: `read_permission_verdict`'s own first branch (unset/missing
+      // file) returns allow before it ever looks at the payload -- a tool name that WOULD be
+      // denied if a matrix were armed proves the matrix truly played no part.
+      const { stdout, code } = await runHook({
+        flagExists: false,
+        payload: JSON.stringify({ command: 'echo hi', hook_event_name: 'beforeShellExecution' }),
+      })
+      expect(code).toBe(0)
+      const parsed = JSON.parse(stdout) as { permission: string }
+      expect(parsed.permission).toBe('allow')
+    })
+
+    it('exits 2 and names the gate when the hook payload is not JSON while a permissions file is armed', async (): Promise<void> => {
+      const permissionsFile = writePermissionsFile([{ tool: 'shell', capability: 'run tests' }])
+      try {
+        const { stdout, stderr, code } = await runHook({
+          flagExists: false,
+          payload: 'not json at all',
+          permissionsFile,
+        })
+        expect(code).toBe(2)
+        expect(stdout).toBe('')
+        expect(stderr).toContain('cursor-shell-gate.sh')
+        expect(stderr).toContain('did not parse as JSON')
+      } finally {
+        rmSync(path.dirname(permissionsFile), { recursive: true, force: true })
+      }
+    })
   })
 })

@@ -27,11 +27,26 @@
 # run-1-hook.log's real captured hook stdin (`"tool_name":"Read"`, `"tool_name":"Shell"`) and
 # against the M18 design doc's own measurement (docs/superpowers/specs/
 # 2026-08-31-m18-skill-and-teeth-design.md section 2: "Claude: tool_name"). The node one-liner
-# below reads that key directly. Cursor's `beforeShellExecution` payload (the shape
-# cursor-shell-gate.sh actually gates on) carries NO `tool_name` key at all -- Task 4 extends this
-# same one-liner with Cursor's own key/shape rather than forking a second helper, per this file's
-# one-library discipline; until Task 4 lands, a Cursor beforeShellExecution payload falls into the
-# "no tool_name" branch below and allows.
+# below reads that key directly. That same fixture's `preToolUse` lines are ALSO what
+# `cursor-shell-gate.sh` receives, unmodified -- Cursor's tool_name there is "Read"/"Shell"/
+# "Write" (Claude-shaped casing), which never matches `permissions.json`'s resolved Cursor
+# vocabulary of lowercase `read`/`edit`/`shell` (`packages/control/src/permission.ts`'s
+# `CAPABILITY_TOOLS`). That mismatch is not fixed here -- it is exactly the measured caveat
+# `cursor-shell-gate.sh:11-14` and spec section 2 both name: Cursor's `preToolUse` tool identity
+# is untrustworthy for enforcement, a stated v1 limitation, not a bug this file works around.
+#
+# Cursor's `beforeShellExecution` payload (the OTHER hook `cursor-shell-gate.sh` gates on) carries
+# NO `tool_name` key at all -- confirmed against the same fixture's line 5: only `command`, `cwd`,
+# `sandbox`, `session_id`, `hook_event_name` and workspace/user fields, no tool identity of any
+# kind. `read_permission_verdict`'s optional second argument, `default_tool`, is Task 4's
+# accommodation for exactly that shape: the caller (a gate) may pass a fallback tool name, used
+# ONLY when the payload has no `tool_name` string AND does carry a `command` string of its own --
+# the shape unique to `beforeShellExecution`. `cursor-shell-gate.sh` passes `'shell'` on every
+# call, unconditionally; the shape guard below is what keeps that inert for every OTHER
+# tool_name-less payload (Claude's own Stop/SessionStart hooks, a malformed payload) so those keep
+# allowing exactly as they did before this argument existed, rather than being silently
+# reattributed to a fabricated tool identity. This is the one place Cursor's key/shape differs
+# enough to need a second key at all -- still one helper, never a fork.
 #
 # NODE FED ON STDIN, NEVER ARGV -- pause-flag.sh's json_string rationale applies identically here:
 # an operator-influenced payload string beginning with `-` would otherwise be parsed by node ITSELF
@@ -42,22 +57,24 @@
 PERMISSION_DENY_TOOL=''
 PERMISSION_DENY_CAPABILITY=''
 
-# read_permission_verdict "$payload"
+# read_permission_verdict "$payload" ["$default_tool"]
 #   Contract (mirrors pause-flag.sh's report-don't-print shape):
 #     return 0 -> DENY. PERMISSION_DENY_TOOL and PERMISSION_DENY_CAPABILITY are set to the
 #                 matched deny row; the caller spells the deny body.
 #     return 1 -> ALLOW. Covers: AITEAMOS_PERMISSIONS_FILE unset or the file does not exist
 #                 (pre-M18 runs, rehearsals -- no matrix in play at all); the payload has no
-#                 `tool_name` (Claude Stop/SessionStart hooks, Cursor's beforeShellExecution
-#                 pre-Task-4 -- only a payload that is not JSON at all fails closed, per this
-#                 file's own design note above); the payload parses to valid JSON that is not an
-#                 object at all -- `null`, `[1]`, `"x"`, `7` -- which has no `tool_name` to read
-#                 either, and is a DIFFERENT case from BADPAYLOAD: it parsed fine, it just names
-#                 no tool, so it allows exactly like a missing key rather than failing closed
-#                 (fixed post-landing, security-review Important finding: `JSON.parse("null")`
-#                 succeeds, so `payload.tool_name` on a bare `null` threw an uncaught TypeError
-#                 before this guard existed -- caught only incidentally, as a nonzero node exit);
-#                 the tool is present but not on the deny list; an empty deny list.
+#                 `tool_name` AND (no `default_tool` was given, or the payload doesn't have the
+#                 `command`-string shape `default_tool` requires) -- Claude's Stop/SessionStart
+#                 hooks, any payload that just doesn't name a tool -- only a payload that is not
+#                 JSON at all fails closed, per this file's own design note above); the payload
+#                 parses to valid JSON that is not an object at all -- `null`, `[1]`, `"x"`, `7`
+#                 -- which has no `tool_name` to read either, and is a DIFFERENT case from
+#                 BADPAYLOAD: it parsed fine, it just names no tool, so it allows exactly like a
+#                 missing key rather than failing closed (fixed post-landing, security-review
+#                 Important finding: `JSON.parse("null")` succeeds, so `payload.tool_name` on a
+#                 bare `null` threw an uncaught TypeError before this guard existed -- caught only
+#                 incidentally, as a nonzero node exit); the tool is present but not on the deny
+#                 list; an empty deny list.
 #     exit 2    -> FAIL CLOSED. The payload did not parse as JSON at all while a permissions file
 #                 is armed, or the permissions file itself is missing-but-unreadable or malformed
 #                 (not valid JSON, or its `deny` key is not an array). A gate cannot produce a
@@ -66,11 +83,12 @@ PERMISSION_DENY_CAPABILITY=''
 read_permission_verdict() {
   PERMISSION_DENY_TOOL=''
   PERMISSION_DENY_CAPABILITY=''
+  local default_tool="${2:-}"
   if [[ -z "${AITEAMOS_PERMISSIONS_FILE:-}" || ! -e "${AITEAMOS_PERMISSIONS_FILE:-/nonexistent}" ]]; then
     return 1  # no matrix in play (pre-M18 runs, rehearsals): allow
   fi
   local verdict
-  verdict=$(printf '%s' "$1" | AITEAMOS_PERMISSIONS_FILE="$AITEAMOS_PERMISSIONS_FILE" node -e '
+  verdict=$(printf '%s' "$1" | AITEAMOS_PERMISSIONS_FILE="$AITEAMOS_PERMISSIONS_FILE" AITEAMOS_DEFAULT_TOOL="$default_tool" node -e '
     let raw = "";
     process.stdin.on("data", (c) => { raw += c; });
     process.stdin.on("end", () => {
@@ -83,7 +101,18 @@ read_permission_verdict() {
       // -- not a throw -- on an array/number/string, which the `typeof ... === "string"` check
       // alone would have handled, but null needed the explicit `!== null` too). Treated the same
       // as "no tool_name": ALLOW, not BADPAYLOAD -- it parsed fine, it just names no tool.
-      const tool = payload !== null && typeof payload === "object" && typeof payload.tool_name === "string" ? payload.tool_name : null;
+      const isObject = payload !== null && typeof payload === "object";
+      let tool = isObject && typeof payload.tool_name === "string" ? payload.tool_name : null;
+      // Cursors beforeShellExecution payload (measured: fixtures/cursor/gate/run-1-hook.log line
+      // 5) carries no tool_name at all, only a top-level `command` string. `default_tool` is the
+      // caller-supplied fallback for exactly that shape -- applied ONLY when tool_name is absent
+      // AND `command` is present, so a tool_name-less payload of any OTHER shape (Claude
+      // Stop/SessionStart hooks, a garbage-but-valid-JSON object) still allows untouched, rather
+      // than being silently reattributed to a fabricated tool identity.
+      const defaultTool = process.env.AITEAMOS_DEFAULT_TOOL || "";
+      if (tool === null && defaultTool !== "" && isObject && typeof payload.command === "string") {
+        tool = defaultTool;
+      }
       const deny = Array.isArray(file.deny) ? file.deny : null;
       if (deny === null) { process.stdout.write("BADFILE"); return; }
       if (tool === null) { process.stdout.write("ALLOW"); return; }

@@ -19,12 +19,15 @@ const libPath = path.join(repoRoot, 'scripts/lib/permissions.sh')
 // documents against option-injection (an operator-influenced string beginning with `-` must not
 // be parsed by anything as a flag), preserved here since `read_permission_verdict` passes its
 // own `$1` straight into a `node` invocation the same way.
+// TEST_DEFAULT_TOOL threads `runVerdict`'s optional `defaultTool` argument through to
+// `read_permission_verdict`'s own optional second positional argument (M18 Task 4) -- unset (the
+// common case) leaves it `${2:-}`-defaulted to empty, exactly as an un-passed argument would.
 const DRIVER_SCRIPT = `#!/usr/bin/env bash
 set -uo pipefail
 PAUSE_GATE_NAME='test-gate'
 . "$PERMISSIONS_LIB_PATH"
 payload=$(cat)
-read_permission_verdict "$payload"
+read_permission_verdict "$payload" "\${TEST_DEFAULT_TOOL:-}"
 status=$?
 printf 'STATUS=%s\\n' "$status"
 printf 'TOOL=%s\\n' "$PERMISSION_DENY_TOOL"
@@ -49,7 +52,11 @@ function makeTmpDir(prefix: string): string {
   return dir
 }
 
-function runVerdict(payload: string, permissionsFile: string | undefined): Promise<VerdictResult> {
+function runVerdict(
+  payload: string,
+  permissionsFile: string | undefined,
+  defaultTool?: string,
+): Promise<VerdictResult> {
   const dir = makeTmpDir('aiteamos-permissions-lib-driver-')
   const driverPath = path.join(dir, 'driver.sh')
   writeFileSync(driverPath, DRIVER_SCRIPT)
@@ -59,6 +66,11 @@ function runVerdict(payload: string, permissionsFile: string | undefined): Promi
     delete env['AITEAMOS_PERMISSIONS_FILE']
   } else {
     env['AITEAMOS_PERMISSIONS_FILE'] = permissionsFile
+  }
+  if (defaultTool === undefined) {
+    delete env['TEST_DEFAULT_TOOL']
+  } else {
+    env['TEST_DEFAULT_TOOL'] = defaultTool
   }
 
   return new Promise((resolve, reject) => {
@@ -139,6 +151,62 @@ describe('scripts/lib/permissions.sh: read_permission_verdict', () => {
     const result = await runVerdict('{"hook_event_name":"SessionStart"}', file)
     expect(result.code).toBe(0)
     expect(result.status).toBe(1)
+  })
+
+  // M18 Task 4: the optional second argument. Cursor's `beforeShellExecution` payload (measured,
+  // packages/providers/test/fixtures/cursor/gate/run-1-hook.log line 5) carries a top-level
+  // `command` string and no `tool_name` at all -- this is the shape `default_tool` exists for.
+  describe('default_tool (Cursor beforeShellExecution accommodation)', () => {
+    it('denies via default_tool when the payload has a command string but no tool_name', async () => {
+      const file = writePermissionsFile('{"version":1,"deny":[{"tool":"shell","capability":"run tests"}]}')
+      const result = await runVerdict('{"command":"echo hi","cwd":"/tmp"}', file, 'shell')
+      expect(result.code).toBe(0)
+      expect(result.status).toBe(0)
+      expect(result.tool).toBe('shell')
+      expect(result.capability).toBe('run tests')
+    })
+
+    it('allows via default_tool when the payload command-shaped tool is not on the deny list', async () => {
+      const file = writePermissionsFile('{"version":1,"deny":[{"tool":"edit","capability":"source write"}]}')
+      const result = await runVerdict('{"command":"echo hi"}', file, 'shell')
+      expect(result.code).toBe(0)
+      expect(result.status).toBe(1)
+    })
+
+    it('prefers tool_name over default_tool when the payload carries both', async () => {
+      // Not a real Cursor shape (a fixture-measured payload never carries both), but pins the
+      // precedence explicitly: tool_name is read directly from the hook and must win over a
+      // caller-supplied fallback whenever it is present.
+      const file = writePermissionsFile('{"version":1,"deny":[{"tool":"shell","capability":"run tests"}]}')
+      const result = await runVerdict('{"tool_name":"Read","command":"echo hi"}', file, 'shell')
+      expect(result.code).toBe(0)
+      expect(result.status).toBe(1) // "Read" is not on the deny list -- default_tool never substitutes
+    })
+
+    it('does not substitute default_tool when the payload has neither tool_name nor a command string', async () => {
+      // The shape guard: default_tool applies ONLY to the beforeShellExecution shape (a `command`
+      // string, no `tool_name`). A payload that merely lacks tool_name for some other reason --
+      // Claude's own Stop/SessionStart hooks, say -- must keep allowing exactly as it did before
+      // this argument existed, never get silently reattributed to the fallback tool.
+      const file = writePermissionsFile('{"version":1,"deny":[{"tool":"shell","capability":"run tests"}]}')
+      const result = await runVerdict('{"hook_event_name":"SessionStart"}', file, 'shell')
+      expect(result.code).toBe(0)
+      expect(result.status).toBe(1)
+    })
+
+    it('does not substitute default_tool when the command key is present but not a string', async () => {
+      const file = writePermissionsFile('{"version":1,"deny":[{"tool":"shell","capability":"run tests"}]}')
+      const result = await runVerdict('{"command":123}', file, 'shell')
+      expect(result.code).toBe(0)
+      expect(result.status).toBe(1)
+    })
+
+    it('leaves behavior unchanged when default_tool is omitted, even for a command-shaped payload', async () => {
+      const file = writePermissionsFile('{"version":1,"deny":[{"tool":"shell","capability":"run tests"}]}')
+      const result = await runVerdict('{"command":"echo hi"}', file)
+      expect(result.code).toBe(0)
+      expect(result.status).toBe(1)
+    })
   })
 
   it('allows when AITEAMOS_PERMISSIONS_FILE is unset -- no matrix in play', async () => {
