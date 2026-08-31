@@ -26,8 +26,8 @@ export function runFilePaths(repoPath: string, runId: RunId): { runDir: string; 
   let root
   try {
     root = statSync(repoPath)
-  } catch {
-    throw new Error(`runFilePaths: repo path does not exist: ${repoPath} (run ${runId})`)
+  } catch (error) {
+    throw new Error(`runFilePaths: cannot stat repo path ${repoPath} (run ${runId}): ${error instanceof Error ? error.message : String(error)}`)
   }
   if (!root.isDirectory()) throw new Error(`runFilePaths: repo path is not a directory: ${repoPath} (run ${runId})`)
   const dir = join(repoPath, '.aiteamos', 'runs', runId)
