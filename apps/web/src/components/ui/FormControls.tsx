@@ -10,7 +10,10 @@ export function FieldLabel({ children }: { readonly children: React.ReactNode })
   return <span className="font-mono text-[9px] uppercase tracking-[.09em] text-text-3">{children}</span>
 }
 
-const INPUT_SHELL =
+// Exported so a shell the kit cannot own directly (a shared component wrapped at its call
+// site, e.g. ProviderSelect in RuntimeCard.tsx) can still use the exact same radius/border/text
+// shell rather than hand-copying this string.
+export const INPUT_SHELL =
   'rounded-[7px] border border-line bg-bg-0 px-2.5 py-1.5 text-sm text-text-1 placeholder:text-text-3 focus:border-white/25 focus:outline-none'
 
 export function TextField({

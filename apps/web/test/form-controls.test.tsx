@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
-import { FieldLabel, GhostButton, PrimaryButton, SelectField, TextField } from '../src/components/ui/FormControls.js'
+import { FieldLabel, GhostButton, INPUT_SHELL, PrimaryButton, SelectField, TextField } from '../src/components/ui/FormControls.js'
 
 describe('FormControls', () => {
   it('TextField: 7px radius shell, mono label, props reach the input', () => {
@@ -43,5 +43,9 @@ describe('FormControls', () => {
     expect(screen.getByTestId('pw').className).toContain('tone-working')
     expect(screen.getByTestId('pb').className).toContain('tone-blocked')
     expect(screen.getByTestId('pb').className).toContain('rounded-[5px]')
+  })
+
+  it('INPUT_SHELL is exported so a shell the kit cannot own directly can reuse it verbatim', () => {
+    expect(INPUT_SHELL).toContain('rounded-[7px]')
   })
 })

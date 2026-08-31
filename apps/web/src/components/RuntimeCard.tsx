@@ -4,14 +4,8 @@ import { useRouter } from 'next/navigation'
 import { useState } from 'react'
 import type { ProviderKind } from '@ai-team-os/control'
 import { ProviderSelect } from './ProviderSelect'
-import { FieldLabel, PrimaryButton, TextField } from './ui/FormControls'
+import { FieldLabel, INPUT_SHELL, PrimaryButton, TextField } from './ui/FormControls'
 import { Panel } from './ui/Panel'
-
-// Mirrors FormControls.tsx's private INPUT_SHELL (not exported) so ProviderSelect -- which owns
-// its own <select> markup and cannot be nested inside SelectField -- still gets the kit's exact
-// shell. Keep this in sync with FormControls.tsx's INPUT_SHELL if the kit's radius/shell changes.
-const SELECT_SHELL =
-  'rounded-[7px] border border-line bg-bg-0 px-2.5 py-1.5 text-sm text-text-1 placeholder:text-text-3 focus:border-white/25 focus:outline-none'
 
 /** Pulls a 409 refusal's `{ error }` text -- the same local helper `GoalCard.tsx` carries. */
 function errorMessage(data: unknown, status: number): string {
@@ -110,7 +104,7 @@ export function RuntimeCard({
               onChange={setDraftProvider}
               disabled={pending}
               placeholder="(none)"
-              className={SELECT_SHELL}
+              className={INPUT_SHELL}
             />
           </label>
           <PrimaryButton type="submit" data-testid="runtime-provider-submit" disabled={pending}>
