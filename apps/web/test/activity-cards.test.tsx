@@ -30,6 +30,7 @@ const PAYLOAD_BY_TYPE: Record<DomainEventType, Record<string, unknown>> = {
   'task.rework': { reason: 'tests failed on attempt 1', attempt: 2 },
   'run.started': { sessionId: 's1' },
   'run.tool_call': { name: 'Read', summary: 'apps/web/src/index.ts' },
+  'run.tool_denied': { tool: 'Bash', capability: 'run tests' },
   'run.paused': { atStep: 4 },
   'run.resumed': { sessionId: 's1' },
   'agent.message_sent': { category: 'instruction', body: 'Please retry with the other approach.' },
@@ -100,6 +101,12 @@ describe('targeted card bodies', () => {
     const Card = ACTIVITY_CARDS['run.tool_call']
     render(<Card event={fixtureFor('run.tool_call')} {...CARD_PROPS} />)
     expect(screen.getByTestId('tool-name').textContent).toBe('Read')
+  })
+
+  it('run.tool_denied shows the tool and the denied capability', () => {
+    const Card = ACTIVITY_CARDS['run.tool_denied']
+    render(<Card event={fixtureFor('run.tool_denied')} {...CARD_PROPS} />)
+    expect(screen.getByTestId('tool-denied-text').textContent).toBe('Bash denied — run tests')
   })
 
   it('run.failed shows the reason', () => {

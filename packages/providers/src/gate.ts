@@ -16,6 +16,14 @@ export type GateOutcome =
   | { readonly kind: 'gate_failed'; readonly detail: string }
 
 /**
+ * Every deny the PERMISSION MATRIX issues begins with this exact string — it is how the stream
+ * parsers tell a matrix refusal (the run continues) from a pause deny (the run stops). The
+ * shell twin lives in scripts/lib/permissions.sh; packages/control's mapping test pins the two
+ * spellings byte-equal, so neither can drift alone.
+ */
+export const PERMISSION_DENY_REASON_PREFIX = 'permission matrix denies'
+
+/**
  * Classifies a `RuntimeEvent` into the pause protocol's outcome, or `null` when the event says
  * nothing about it.
  *

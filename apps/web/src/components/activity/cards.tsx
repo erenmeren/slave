@@ -302,6 +302,22 @@ function RunOutputCard(props: ActivityCardProps): ReactElement {
   )
 }
 
+// ---- run.tool_denied (schema.ts, M18 §2) --------------------------------------------------------
+// A per-call refusal the agent is expected to route around -- the run continues -- so this reads
+// as a warning, not a failure: `warn` is the tone the guardrail/rework/review-rejected cards
+// already use for "something was refused but nothing stopped".
+
+function RunToolDeniedCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as { tool: string; capability: string }
+  return (
+    <ActivityCard {...props}>
+      <Transition tone="warn" label="tool denied">
+        <span data-testid="tool-denied-text">{`${payload.tool} denied — ${payload.capability}`}</span>
+      </Transition>
+    </ActivityCard>
+  )
+}
+
 // ---- guardrail.tripped (schema.ts:40-44) -------------------------------------------------------
 // The real payload carries exactly two fields — `guardrail` (the limit's name, e.g.
 // `budget_exhausted`, `concurrency`) and `detail` (the bound and the observed value folded into
@@ -494,6 +510,7 @@ export const ACTIVITY_CARDS = {
   'task.rework': TaskReworkCard,
   'run.started': RunStartedCard,
   'run.tool_call': RunToolCallCard,
+  'run.tool_denied': RunToolDeniedCard,
   'run.paused': RunPausedCard,
   'run.resumed': RunResumedCard,
   'agent.message_sent': AgentMessageSentCard,

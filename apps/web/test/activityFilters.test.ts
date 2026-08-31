@@ -21,6 +21,11 @@ describe('parseActivityFilters', () => {
     expect(result.filters.agents).toEqual(['a1', 'a2'])
     expect([...result.filters.types].sort()).toEqual(['guardrail.tripped', 'run.output'])
   })
+  it('expands kinds=tool_calls to run.tool_call, run.output and run.tool_denied', () => {
+    const result = parseActivityFilters(new URLSearchParams('kinds=tool_calls'))
+    if (!result.ok) throw new Error(result.error)
+    expect([...result.filters.types].sort()).toEqual(['run.output', 'run.tool_call', 'run.tool_denied'])
+  })
   it('expands kinds=workspace to the goal, plan, company-assigned and settings-changed event types', () => {
     const result = parseActivityFilters(new URLSearchParams('kinds=workspace'))
     if (!result.ok) throw new Error(result.error)

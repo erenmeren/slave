@@ -13,6 +13,7 @@ export const EVENT_TYPE_BY_DOMAIN_TYPE = {
   'task.rework': 'task_rework',
   'run.started': 'run_started',
   'run.tool_call': 'run_tool_call',
+  'run.tool_denied': 'run_tool_denied',
   'run.paused': 'run_paused',
   'run.resumed': 'run_resumed',
   'agent.message_sent': 'agent_message_sent',

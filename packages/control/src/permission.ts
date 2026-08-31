@@ -7,10 +7,11 @@ import type { ControlRefusal } from './refusal.js'
  * validates against it and `apps/web/src/server/settings.ts` renders it, so a seventh column is a
  * single edit rather than two that can disagree.
  *
- * **Not yet enforced at runtime** (M14 Decision 7). Nothing in `packages/providers` or
- * `apps/orchestrator` reads `AgentPermission`; the matrix is editable and the page says so in
- * as many words. This verb exists so the intent is RECORDED before the enforcement lands, not so
- * the surface can pretend it is enforced.
+ * Enforcement (M18 §2) resolves ORCHESTRATOR-SIDE, at dispatch/resume snapshot time:
+ * `resolveDenyList` below maps each `deny` row to real vendor tool names via `CAPABILITY_TOOLS`
+ * and the result is written into a run's `permissions.json`, which the gate scripts read as a
+ * dumb membership test. A matrix edit does not reach a run already in flight -- stated in the
+ * matrix UI copy -- and `read secrets` stays unenforced (a path predicate, no tool carries it).
  */
 export const PERMISSION_TOOLS = [
   'repo read',
@@ -25,6 +26,37 @@ export type PermissionTool = (typeof PERMISSION_TOOLS)[number]
 
 function isPermissionTool(value: string): value is PermissionTool {
   return (PERMISSION_TOOLS as readonly string[]).includes(value)
+}
+
+/**
+ * v1 capability→vendor-tool resolution (spec §2, measured 2026-08-31). Coarse by design:
+ * the three shell-backed capabilities all deny the shell tool outright (command-string
+ * inspection is out of scope), and 'read secrets' maps to nothing — it is a path predicate
+ * no tool carries, stated as unenforced in the matrix UI. Unmapped tools always pass.
+ */
+const CAPABILITY_TOOLS: Record<string, { readonly claude_code: readonly string[]; readonly cursor: readonly string[] }> = {
+  'repo read': { claude_code: ['Read'], cursor: ['read'] },
+  'source write': { claude_code: ['Write', 'Edit', 'NotebookEdit'], cursor: ['edit'] },
+  'run tests': { claude_code: ['Bash'], cursor: ['shell'] },
+  'create branch': { claude_code: ['Bash'], cursor: ['shell'] },
+  'deploy prod': { claude_code: ['Bash'], cursor: ['shell'] },
+  'read secrets': { claude_code: [], cursor: [] },
+}
+
+/** The resolved deny list `permissions.json` carries: one entry per denied vendor tool, naming
+ *  the (first) denied capability that put it there. Deny rows only — unset and allow pass. */
+export function resolveDenyList(
+  rows: readonly { readonly tool: string; readonly mode: 'allow' | 'deny' }[],
+  provider: 'claude_code' | 'cursor',
+): readonly { readonly tool: string; readonly capability: string }[] {
+  const byTool = new Map<string, string>()
+  for (const row of rows) {
+    if (row.mode !== 'deny') continue
+    for (const tool of CAPABILITY_TOOLS[row.tool]?.[provider] ?? []) {
+      if (!byTool.has(tool)) byTool.set(tool, row.tool)
+    }
+  }
+  return [...byTool.entries()].map(([tool, capability]) => ({ tool, capability }))
 }
 
 export async function setAgentPermission(

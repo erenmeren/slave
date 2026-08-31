@@ -20,7 +20,9 @@ export type ActivityKind = (typeof ACTIVITY_KINDS)[number]
  */
 export const TYPES_BY_KIND = {
   runs: ['run.started', 'run.succeeded', 'run.failed', 'run.paused', 'run.resumed'],
-  tool_calls: ['run.tool_call', 'run.output'],
+  // `run.tool_denied` sits beside `run.tool_call`, not under `runs`: it is a per-call refusal
+  // (M18 §2) an operator filtering to individual tool activity needs, not a run lifecycle event.
+  tool_calls: ['run.tool_call', 'run.output', 'run.tool_denied'],
   tasks: [
     'task.created',
     'task.started',

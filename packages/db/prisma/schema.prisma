@@ -520,6 +520,7 @@ enum EventType {
   run_stopped                @map("run.stopped")
   run_succeeded              @map("run.succeeded")
   run_failed                 @map("run.failed")
+  run_tool_denied            @map("run.tool_denied")
   task_dependency_added      @map("task.dependency_added")
   task_dependency_removed    @map("task.dependency_removed")
   task_review_started        @map("task.review_started")
@@ -546,4 +547,5 @@ model ExecutionEvent {
   @@index([workspaceId, seq])
   @@index([workspaceId, agentId, seq])
   @@index([workspaceId, taskId, seq])
+  @@index([runId, seq])
 }
