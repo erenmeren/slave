@@ -83,7 +83,7 @@ function NavRow({
       data-nav={label}
       href={href}
       aria-current={current ? 'page' : undefined}
-      className={`flex items-center justify-between rounded-tile px-[9px] py-[7px] text-[12.5px] transition-colors ${
+      className={`flex items-center justify-between rounded-nav px-[9px] py-[7px] text-[12.5px] transition-colors ${
         current
           ? 'bg-[#151a21] font-medium text-text-1 shadow-[inset_2px_0_0_var(--color-tone-working)]'
           : 'text-text-2 hover:bg-white/[0.045] hover:text-text-1'

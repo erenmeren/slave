@@ -29,8 +29,9 @@
   --tone-paused: #8a929e;
   --tone-idle: #5b6472;
 
-  /* Radii (spec §3): 5 chip/button · 7 input/tile · 8 card · 9–10 panel · 20 pill. */
+  /* Radii (spec §3): 5 chip/button · 6 nav/small · 7 input/tile · 8 card · 9–10 panel · 20 pill. */
   --radius-chip: 5px;
+  --radius-nav: 6px;
   --radius-tile: 7px;
   --radius-card: 8px;
   --radius-panel: 9px;
@@ -61,6 +62,7 @@
   --color-tone-paused: var(--tone-paused);
   --color-tone-idle: var(--tone-idle);
   --radius-chip: var(--radius-chip);
+  --radius-nav: var(--radius-nav);
   --radius-tile: var(--radius-tile);
   --radius-card: var(--radius-card);
   --radius-panel: var(--radius-panel);
