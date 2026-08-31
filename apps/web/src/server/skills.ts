@@ -1,6 +1,6 @@
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { Prisma, prisma } from '@ai-team-os/db/client'
+import { prisma } from '@ai-team-os/db/client'
 import { toRunState } from '@ai-team-os/db'
 import { deriveAgentStatus, NON_TERMINAL_RUN_STATUSES, type AgentStatus } from '@ai-team-os/domain'
 
@@ -52,21 +52,37 @@ function tallyKeyFor(providerName: string, skillName: string): string {
 }
 
 /**
+ * Per-skill call totals summed in SQL — the `skillCalls` JSON never crosses the wire whole.
+ * Guards mirror the old in-memory loop exactly: a non-object column (Cursor's DbNull is SQL
+ * NULL; a JsonNull would be 'null'::jsonb) contributes nothing, and a non-number value inside
+ * an object is skipped. jsonb numbers are always finite, so `Number.isFinite` has no SQL twin.
+ * Proven against that old loop by `test/integration/skill-call-totals.test.ts`, which stays in
+ * the suite as the permanent equivalence oracle.
+ */
+export async function skillCallTotals(): Promise<ReadonlyMap<string, number>> {
+  const rows = await prisma.$queryRaw<Array<{ name: string; total: number }>>`
+    SELECT je.key AS name, SUM((je.value)::numeric)::float8 AS total
+    FROM (
+      SELECT "skillCalls" FROM "AgentRun"
+      WHERE "skillCalls" IS NOT NULL AND jsonb_typeof("skillCalls") = 'object'
+    ) runs, LATERAL jsonb_each(runs."skillCalls") AS je
+    WHERE jsonb_typeof(je.value) = 'number'
+    GROUP BY je.key`
+  return new Map(rows.map((row) => [row.name, row.total]))
+}
+
+/**
  * The Skills page's snapshot (M14 §5.8). Run counts are summed from `AgentRun.skillCalls`, which
  * is an END-OF-RUN fact (§4.1): a run in flight contributes nothing, so a skill invoked by a live
  * run shows its previous total until that run concludes. Stated here because a page of counts
  * that silently trails the board is worse than one that says it does.
  */
 export async function buildSkillsPage(): Promise<SkillsPage> {
-  const [providers, runs, assignments, agents, liveRuns] = await Promise.all([
+  const [providers, totals, assignments, agents, liveRuns] = await Promise.all([
     // Alphabetical, which is also the spec's stated order — `personal` < `plugin:*` < `project`
     // sort that way on their own, so this needs no hand-written provider ranking to maintain.
     prisma.skillProvider.findMany({ orderBy: { name: 'asc' }, include: { skills: { orderBy: { name: 'asc' } } } }),
-    // `Prisma.DbNull`, not a bare `null`: `skillCalls` is a nullable Json column, where Prisma
-    // rejects `null` as ambiguous between a JSON `null` and an absent value (`db/client.ts`).
-    // The filter matters beyond tidiness — a Cursor run is `null` here, and Decision 4 says an
-    // unmeasured run must contribute nothing rather than a zero.
-    prisma.agentRun.findMany({ where: { skillCalls: { not: Prisma.DbNull } }, select: { skillCalls: true } }),
+    skillCallTotals(),
     prisma.agentSkill.findMany({ orderBy: { agentId: 'asc' } }),
     prisma.agent.findMany({ orderBy: { name: 'asc' }, select: { id: true, name: true } }),
     // No `select`: `toRunState` maps a whole `AgentRun` row, and narrowing the query to the four
@@ -74,23 +90,6 @@ export async function buildSkillsPage(): Promise<SkillsPage> {
     // reason `server/shell.ts:40` gives). The row set is bounded by the live runs, not by history.
     prisma.agentRun.findMany({ where: { status: { in: [...NON_TERMINAL_RUN_STATUSES] } } }),
   ])
-
-  // ONE index, keyed by exactly what the pump wrote. There is deliberately no looser second
-  // lookup: an earlier round kept a trailing-segment fallback for a `plugin:*` row whose
-  // qualified key was never recorded, and it made a never-invoked `plugin:code-review` display
-  // the personal `code-review`'s nine calls -- a fabricated number on a row, which is worse than
-  // the merged totals it was meant to prevent. A skill nobody invoked reads `0`, and that zero is
-  // a measurement (Decision 3). Nothing is lost by the strictness: `tallyKeyFor` already returns
-  // the bare name for a `personal`/`project` provider, so those tallies are found by exact key.
-  const totals = new Map<string, number>()
-  for (const run of runs) {
-    for (const [name, count] of Object.entries((run.skillCalls as Record<string, unknown> | null) ?? {})) {
-      // `typeof count === 'number'` because the column is Json and nothing in the database
-      // enforces its shape: a malformed tally must be skipped, never coerced into a total.
-      if (typeof count !== 'number' || !Number.isFinite(count)) continue
-      totals.set(name, (totals.get(name) ?? 0) + count)
-    }
-  }
 
   const agentsBySkill = new Map<string, string[]>()
   for (const row of assignments) {
@@ -111,6 +110,15 @@ export async function buildSkillsPage(): Promise<SkillsPage> {
           id: skill.id,
           name: skill.name,
           description: skill.description,
+          // ONE index, keyed by exactly what the pump wrote. There is deliberately no looser
+          // second lookup: an earlier round kept a trailing-segment fallback for a `plugin:*`
+          // row whose qualified key was never recorded, and it made a never-invoked
+          // `plugin:code-review` display the personal `code-review`'s nine calls -- a
+          // fabricated number on a row, which is worse than the merged totals it was meant to
+          // prevent. A skill nobody invoked reads `0`, and that zero is a measurement
+          // (Decision 3). Nothing is lost by the strictness: `tallyKeyFor` already returns the
+          // bare name for a `personal`/`project` provider, so those tallies are found by exact
+          // key.
           runs: totals.get(key) ?? 0,
           state: skill.missingSince === null ? ('ready' as const) : ('missing' as const),
           agentIds: agentsBySkill.get(skill.id) ?? [],
