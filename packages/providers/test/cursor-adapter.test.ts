@@ -449,6 +449,32 @@ describe('CursorAdapter', () => {
       expect(argv).toContain('stop rewriting the tests')
     })
 
+    it('sets AITEAMOS_PERMISSIONS_FILE on the child at resume, derived from the checkpoint (M18 Task 5 fix round 1)', async () => {
+      // A `pauseFlagPath` in a DIFFERENT directory from `checkpointFor()`'s own `settingsPath`
+      // (`worktreePath/.cursor/hooks.json`) and from `input.pauseFlagPath` -- in the default
+      // checkpoint these all resolve to `worktreePath`, so a `permissionsFilePath` derivation
+      // that accidentally read `checkpoint.settingsPath`'s directory (Cursor's hooks file, in the
+      // WORKTREE -- see this adapter's own docstring) instead of `checkpoint.pauseFlagPath`'s
+      // would still land on the right answer by coincidence. This directory makes that
+      // coincidence impossible, the same reasoning `adapter-resume.test.ts`'s divergent-checkpoint
+      // test uses for the Claude adapter.
+      const divergentPauseDir = path.join(worktreePath, 'resume-pause-dir')
+      mkdirSync(divergentPauseDir)
+      const checkpoint: Checkpoint = { ...checkpointFor(), pauseFlagPath: path.join(divergentPauseDir, 'pause.flag') }
+
+      const envOut = path.join(worktreePath, 'resume-permissions-env.txt')
+      const script = writeScript(
+        worktreePath,
+        'resume-permissions-env-echo.sh',
+        `#!/bin/sh\nprintf '%s\\n' "$AITEAMOS_PERMISSIONS_FILE" > ${JSON.stringify(envOut)}\n`,
+      )
+      const adapter = adapterFor(script)
+      await adapter.resume(input.runId, checkpoint, null)
+      await drain(adapter, input.runId)
+
+      expect(readFileSync(envOut, 'utf8')).toBe(`${path.join(divergentPauseDir, 'permissions.json')}\n`)
+    })
+
     it('rewrites the hooks file and clears the pause flag before spawning', async () => {
       writeFileSync(input.pauseFlagPath, 'paused by an operator\n')
       const adapter = new CursorAdapter({ command: '/bin/echo', gatePath })

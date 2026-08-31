@@ -234,11 +234,22 @@ describe('ClaudeCodeAdapter.resume', () => {
     // fail. Every other test in this file leaves the checkpoint's four fields equal to the
     // original start()'s own (set in `beforeEach`), which is exactly why none of them can tell the
     // two sources apart -- only this divergence proves which one `resume()` actually used.
+    // M18 Task 5 fix round 1 (Important 2): a `pauseFlagPath` in a DIFFERENT directory from
+    // `checkpoint.settingsPath`'s (which stays `worktreePath`, unchanged above) and from
+    // `input.pauseFlagPath`'s own directory -- in the DEFAULT `checkpoint` (this file's
+    // `beforeEach`), `pauseFlagPath`, `settingsPath` and `runDir` all resolve to `worktreePath`,
+    // so a `permissionsFilePath` derivation that accidentally read `checkpoint.settingsPath`'s
+    // directory (or `input.runDir`) instead of `checkpoint.pauseFlagPath`'s would still produce
+    // the "right" answer by coincidence. This directory makes that coincidence impossible: only
+    // deriving from `pauseFlagPath` itself lands here.
+    const divergentPauseDir = path.join(worktreePath, 'resume-pause-dir')
+    mkdirSync(divergentPauseDir)
     const divergentCheckpoint: Checkpoint = {
       ...checkpoint,
       settingsPath: path.join(worktreePath, 'divergent-settings.json'),
       gitAuthorName: 'Divergent Author',
       gitAuthorEmail: 'divergent@example.com',
+      pauseFlagPath: path.join(divergentPauseDir, 'pause.flag'),
     }
 
     const handle = await adapter.resume(input.runId, divergentCheckpoint, 'do the other thing')
@@ -257,6 +268,12 @@ describe('ClaudeCodeAdapter.resume', () => {
     expect(env['GIT_COMMITTER_EMAIL']).toBe('divergent@example.com')
     expect(env['GIT_AUTHOR_NAME']).not.toBe(input.gitIdentity.name)
     expect(env['GIT_AUTHOR_EMAIL']).not.toBe(input.gitIdentity.email)
+
+    // M18 Task 5 fix round 1 (Important 2): AITEAMOS_PERMISSIONS_FILE on a RESUME spawn, derived
+    // from THIS checkpoint's own `pauseFlagPath` -- not the original start()'s `input.
+    // permissionsFilePath`, and not `checkpoint.settingsPath`'s directory either.
+    expect(env['AITEAMOS_PERMISSIONS_FILE']).toBe(path.join(divergentPauseDir, 'permissions.json'))
+    expect(env['AITEAMOS_PERMISSIONS_FILE']).not.toBe(input.permissionsFilePath)
   })
 
   it('appends --model to the resumed spawn when checkpoint.model is set', async (): Promise<void> => {

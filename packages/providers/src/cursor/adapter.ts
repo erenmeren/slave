@@ -1,11 +1,11 @@
 import { spawn, type ChildProcess } from 'node:child_process'
-import { dirname, isAbsolute, join } from 'node:path'
+import { dirname, isAbsolute } from 'node:path'
 import { createInterface } from 'node:readline'
 import type { RunId } from '@ai-team-os/domain'
 import { capabilitiesOf } from '../capabilities.js'
 import { AsyncEventQueue } from '../runtime/event-queue.js'
 import { clearAndVerifyPauseFlagAbsent } from '../runtime/pause-flag.js'
-import { buildChildEnv, terminateChild } from '../runtime/process.js'
+import { buildChildEnv, permissionsFilePathFor, terminateChild } from '../runtime/process.js'
 import { isRecord } from '../runtime/summary.js'
 import type { RunOutcome, RuntimeEvent } from '../types.js'
 import type { AgentRuntimeAdapter, ProviderCapabilities, RunHandle, StartRunInput } from '../claude/adapter.js'
@@ -246,8 +246,10 @@ export class CursorAdapter implements AgentRuntimeAdapter {
         // the one field guaranteed to live in the run's `runDir` on THIS provider too: Cursor's own
         // `checkpoint.settingsPath` is `.cursor/hooks.json` in the WORKTREE (this adapter's own
         // docstring, above), not `runDir`, so deriving from it the way the Claude adapter derives
-        // `runDir` from `settingsPath` would recover the wrong directory here.
-        permissionsFilePath: join(dirname(checkpoint.pauseFlagPath), 'permissions.json'),
+        // `runDir` from `settingsPath` would recover the wrong directory here. `permissionsFilePathFor`
+        // (M18 Task 5 fix round 1) is the ONE definition of the filename itself, shared with the
+        // Claude adapter and `writePermissionsFile` -- never joined as a literal here.
+        permissionsFilePath: permissionsFilePathFor(dirname(checkpoint.pauseFlagPath)),
       }),
       runFiles: { settingsPath: checkpoint.settingsPath, hookPath: checkpoint.hookPath },
     })

@@ -1,7 +1,7 @@
 import { writeFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { prisma } from '@ai-team-os/db/client'
 import { type Result, err, ok } from '@ai-team-os/domain'
+import { permissionsFilePathFor } from '@ai-team-os/providers'
 import type { ControlRefusal } from './refusal.js'
 
 /**
@@ -72,20 +72,23 @@ export function resolveDenyList(
  * different case from the file being absent at all, which `read_permission_verdict` treats as "no
  * matrix in play."
  *
- * `permissions.json` is a literal filename convention, not a value threaded through any type: both
- * this function and each provider adapter's `resume()` (`packages/providers/src/claude/adapter.ts`,
- * `cursor/adapter.ts`) assume it independently. The adapter has no `Checkpoint` field to recover
- * the path from -- deliberately; see that interface's own docstring on why it may not gain a field
- * with no matching Prisma column -- so `resume()` re-derives the identical path from
- * `dirname(checkpoint.pauseFlagPath)` plus this same literal, the same way `AITEAMOS_PAUSE_FLAG` is
- * a literal name duplicated across `process.ts` and the shell gates rather than imported across a
- * package boundary `packages/providers` cannot cross back into `packages/control`.
+ * `permissionsFilePathFor` (`@ai-team-os/providers`) is the ONE definition of the `'permissions.
+ * json'` filename convention (M18 Task 5, fix round 1 -- a divergent literal here fails OPEN, not
+ * closed: `read_permission_verdict` treats a missing/wrong-path file exactly like "no matrix in
+ * play" and allows). This function imports it rather than joining the literal itself; each
+ * provider adapter's `resume()` (`packages/providers/src/claude/adapter.ts`, `cursor/adapter.ts`)
+ * calls the SAME function, in-package, to re-derive the identical path from
+ * `dirname(checkpoint.pauseFlagPath)` -- `resume()` has no `Checkpoint` field to recover the path
+ * from directly (deliberately; see that interface's own docstring on why it may not gain a field
+ * with no matching Prisma column). The helper lives in `packages/providers`, not here, for the
+ * same reason `KILL_GRACE_MS` does (M13 Decision 6, `process.ts`'s own docstring): `packages/
+ * control` already depends on `@ai-team-os/providers`, never the reverse.
  */
 export function writePermissionsFile(
   runDir: string,
   denyList: readonly { readonly tool: string; readonly capability: string }[],
 ): string {
-  const permissionsFilePath = join(runDir, 'permissions.json')
+  const permissionsFilePath = permissionsFilePathFor(runDir)
   writeFileSync(permissionsFilePath, JSON.stringify({ version: 1, deny: denyList }, null, 2))
   return permissionsFilePath
 }

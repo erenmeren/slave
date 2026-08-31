@@ -5,7 +5,7 @@ import type { RunId } from '@ai-team-os/domain'
 import { capabilitiesOf } from '../capabilities.js'
 import { AsyncEventQueue } from '../runtime/event-queue.js'
 import { clearAndVerifyPauseFlagAbsent } from '../runtime/pause-flag.js'
-import { buildChildEnv, terminateChild } from '../runtime/process.js'
+import { buildChildEnv, permissionsFilePathFor, terminateChild } from '../runtime/process.js'
 import { isRecord } from '../runtime/summary.js'
 import type { RunOutcome, RuntimeEvent } from '../types.js'
 import type { Checkpoint } from './checkpoint.js'
@@ -527,10 +527,13 @@ export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
       // every provider, so `dirname(checkpoint.pauseFlagPath)` recovers that directory exactly the
       // way `resumedInput.runDir` above recovers it from `settingsPath` for THIS provider only --
       // `pauseFlagPath` is the one field guaranteed to live in `runDir` on every adapter (Cursor's
-      // own `settingsPath` is a hooks file in the WORKTREE, not `runDir`). The orchestrator
-      // rewrites the file at this same path immediately before calling `resume()`
-      // (`apps/orchestrator/src/resume.ts`'s `executeResume`), so the two never disagree.
-      permissionsFilePath: join(dirname(checkpoint.pauseFlagPath), 'permissions.json'),
+      // own `settingsPath` is a hooks file in the WORKTREE, not `runDir`). `permissionsFilePathFor`
+      // (this package's own `runtime/process.js`, M18 Task 5 fix round 1) is the ONE definition of
+      // the filename itself -- called here rather than joined again, so this can never drift from
+      // what `writePermissionsFile` wrote. The orchestrator rewrites the file at this same path
+      // immediately before calling `resume()` (`apps/orchestrator/src/resume.ts`'s
+      // `executeResume`), so the two never disagree.
+      permissionsFilePath: permissionsFilePathFor(dirname(checkpoint.pauseFlagPath)),
       gitIdentity: { name: checkpoint.gitAuthorName, email: checkpoint.gitAuthorEmail },
       // Carried forward from the checkpoint, never re-resolved: the run must continue with the SAME
       // model it started with (M10 §6, the `Checkpoint.model` docstring), independently of whatever

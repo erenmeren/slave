@@ -1,4 +1,5 @@
 import type { ChildProcess } from 'node:child_process'
+import { join } from 'node:path'
 
 /**
  * How long a signalled process gets to exit on its own before it is killed outright.
@@ -92,6 +93,22 @@ export function terminateChild(child: ChildProcess, graceMs: number): Promise<vo
 
     child.kill('SIGTERM')
   })
+}
+
+/**
+ * Where a run's resolved permission matrix snapshot lives, inside its own scratch directory (M18
+ * Task 5, fix round 1 -- Important 1). The ONE definition of the `'permissions.json'` filename
+ * convention: before this existed, `packages/control`'s `writePermissionsFile` and both adapters'
+ * `resume()` derivations each joined the literal independently, and a one-character drift between
+ * them fails OPEN, not closed -- `read_permission_verdict` (`scripts/lib/permissions.sh`) treats a
+ * missing/wrong-path file exactly like "no matrix in play" and allows. Lives here, below
+ * `packages/control`, for the same reason `KILL_GRACE_MS` above does (M13 Decision 6):
+ * `packages/control` already depends on `@ai-team-os/providers` (it imports `PROVIDER_KINDS` and
+ * `signalPause` from it), never the reverse, so the shared primitive belongs on this side of that
+ * edge and `writePermissionsFile` imports it rather than re-deriving it.
+ */
+export function permissionsFilePathFor(runDir: string): string {
+  return join(runDir, 'permissions.json')
 }
 
 /**
