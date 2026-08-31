@@ -101,8 +101,8 @@ function runVerdict(
       const capabilityMatch = /^CAPABILITY=(.*)$/m.exec(stdout)
       resolve({
         status: statusMatch ? Number(statusMatch[1]) : null,
-        tool: toolMatch ? toolMatch[1] : '',
-        capability: capabilityMatch ? capabilityMatch[1] : '',
+        tool: toolMatch?.[1] ?? '',
+        capability: capabilityMatch?.[1] ?? '',
         code,
         stderr,
       })
