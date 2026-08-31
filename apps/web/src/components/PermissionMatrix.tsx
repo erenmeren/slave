@@ -10,10 +10,9 @@ import type { PermissionSection } from '../server/settings'
  * The Settings permission matrix (M14 §5.7): a row per agent, a column per README tool, a cell
  * per pair.
  *
- * Editable, and captioned in as many words that nothing reads it yet (Decision 7). The caption is
- * not decoration: an operator who denies `deploy prod` here and believes it took effect is worse
- * off than one who was never offered the control, so the surface states the gap it has.
- *
+ * Denials ARE enforced at dispatch snapshot through the gate scripts (spec §2): the resolved deny
+ * list in the run's permissions.json blocks tool use at pre-tool dispatch, shell-backed capabilities
+ * are coarse-grained, `read secrets` is unenforced, and Cursor enforcement is non-shell best-effort.
  * The cell glyph reflects its mode: `allow` shows a check mark `✓` in the working tone, `deny`
  * shows a cross `✕` in the blocked tone, and `null` (unset) shows an en dash `–` in the dim tone,
  * because an undecided permission is distinct from a decision to refuse.
@@ -21,8 +20,6 @@ import type { PermissionSection } from '../server/settings'
  * One grid PER WORKSPACE (fix round 1, finding 2), because two projects built from the same roster
  * hold different agents with identical names, and a flat list of them is unreadable: the section
  * header is what says whose "Alex · backend" a row governs.
- *
- * Not yet enforced at runtime.
  */
 type Mode = 'allow' | 'deny' | null
 

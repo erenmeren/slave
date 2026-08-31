@@ -264,12 +264,9 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
   // The card's skill chip: the latest `Skill` tool call on this run.
   //
   // COST, stated plainly: this is a second `findFirst` per LIVE run, in the loop that already
-  // issues one — two per live run, not one. And neither is index-backed: `ExecutionEvent` has no
-  // index on `runId`, and none on `payload` at all, so Postgres scans the run's events (the JSON
-  // path filter is evaluated per row, it does not reach an index) and stops at the first match in
-  // `seq` order. Acceptable at the live-run counts this milestone plans for, and the same N+1 the
-  // M4 review flagged for the action-line read above; a `(runId, seq desc)` index and a single
-  // grouped read for both facts is the fix, deferred.
+  // issues one — two per live run, not one. The `(runId, seq)` index landed in M18 (migration
+  // 20260831190100) and serves the per-run read; the remaining cost is the type/payload filter
+  // (the functional-index follow-up is M19 backlog).
   const skills = new Map<string, string>()
   for (const run of liveRunByAgent.values()) {
     const event = await prisma.executionEvent.findFirst({

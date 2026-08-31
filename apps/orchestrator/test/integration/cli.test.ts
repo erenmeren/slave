@@ -727,7 +727,7 @@ describe('the orchestrator CLI', () => {
 
     const exited = new Promise<number | null>((res) => child.on('exit', (code) => res(code)))
     child.kill('SIGTERM')
-    // §11's shutdown awaits the subscription's close, which can take ~6.25s. Budgeting past it
+    // §11's shutdown awaits the subscription's close, which can take ~6.0s. Budgeting past it
     // rather than racing it is the point: a daemon that exits while a pump is mid-write loses the
     // run's last events.
     const code = await Promise.race([

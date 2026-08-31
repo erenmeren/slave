@@ -21,6 +21,8 @@ export interface SkillGraphRun {
 
 export interface SkillGraph {
   readonly skills: readonly { readonly name: string; readonly calls: number }[]
+  /** Each edge's succession count is computed but not yet rendered (v1 ships flat cables; M19
+   *  renders thickness from it or drops it — controller ruling 2026-08-31). */
   readonly edges: readonly { readonly from: string; readonly to: string; readonly count: number }[]
   readonly runs: readonly SkillGraphRun[]
 }
