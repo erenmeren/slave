@@ -136,7 +136,7 @@ describe('TaskDetailPanel', () => {
               toolCalls: 2,
               startedAt: new Date(0).toISOString(),
               endedAt: null,
-              checkpoint: { pausedAtStep: 4, sessionId: 's1', dirtyFileCount: 2 },
+              checkpoint: { pausedAtStep: 4, sessionId: 's1', dirtyFileCount: 2, deniedDuringPause: [] },
             },
           ],
         })}
@@ -144,6 +144,40 @@ describe('TaskDetailPanel', () => {
       />,
     )
     expect(screen.getByText(/paused at step 4/)).toBeTruthy()
+    expect(screen.queryByText(/denied during pause/)).toBeNull()
+  })
+
+  it("shows 'N tool calls denied during pause · <id-prefixes>' when the checkpoint has denials", () => {
+    // M18 Task 7: `run.tool_call` event payloads carry no `tool_use_id` (verified against
+    // `packages/domain/src/events/schema.ts`), so `summary` is always `null` today and the panel
+    // always falls back to the truncated id -- not a gap in this test, a fact of the data.
+    render(
+      <TaskDetailPanel
+        task={task({
+          runs: [
+            {
+              id: 'r1',
+              status: 'paused',
+              costUsd: 0.1,
+              toolCalls: 2,
+              startedAt: new Date(0).toISOString(),
+              endedAt: null,
+              checkpoint: {
+                pausedAtStep: 4,
+                sessionId: 's1',
+                dirtyFileCount: 2,
+                deniedDuringPause: [
+                  { id: 'call-abcdef01', summary: null },
+                  { id: 'call-ghijkl02', summary: null },
+                ],
+              },
+            },
+          ],
+        })}
+        onClose={() => {}}
+      />,
+    )
+    expect(screen.getByText(/2 tool calls denied during pause · call-abc…, call-ghi…/)).toBeTruthy()
   })
 
   it('calls onClose when the close control is used', () => {

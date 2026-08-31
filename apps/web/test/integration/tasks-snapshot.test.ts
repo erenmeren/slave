@@ -88,6 +88,51 @@ describe('buildTasksSnapshot', () => {
     expect(task?.runs[0]?.checkpoint?.pausedAtStep).toBe(3)
     expect(task?.runs[0]?.checkpoint?.dirtyFileCount).toBe(2)
     expect(task?.runs.map((r) => r.id)).toEqual([newerRun.id, olderRun.id])
+    // No denials on this checkpoint -- an absent field the panel does not render (`toEqual([])`,
+    // not an omitted key: `TaskRunSummary.checkpoint.deniedDuringPause` is not optional).
+    expect(task?.runs[0]?.checkpoint?.deniedDuringPause).toEqual([])
+  })
+
+  it("maps a checkpoint's denied tool-use ids to a null-summary fallback (M18 Task 7)", async (): Promise<void> => {
+    // `run.tool_call` event payloads carry only `{ name, summary }` -- no `tool_use_id`
+    // (`packages/domain/src/events/schema.ts`) -- so there is no field to join `deniedToolUseIds`
+    // against. This is the measured, permanent shape, not a placeholder pending a future join.
+    const seeded = await prisma.task.create({
+      data: {
+        workspaceId: fixture.workspaceId,
+        title: 'Paused with denials',
+        description: 'x',
+        status: 'blocked',
+        requiredRole: 'backend',
+        maxAttempts: 3,
+      },
+    })
+    const run = await prisma.agentRun.create({
+      data: { taskId: seeded.id, agentId: fixture.agentId, status: 'paused', pausedAtStep: 2 },
+    })
+    await prisma.checkpoint.create({
+      data: {
+        runId: run.id,
+        sessionId: 'session-denied',
+        worktreePath: '/tmp/tasks-snapshot-fixture/.aiteamos/worktrees/T-denied123',
+        pauseFlagPath: '/tmp/tasks-snapshot-fixture/.aiteamos/runs/pause.flag',
+        settingsPath: '/tmp/tasks-snapshot-fixture/.aiteamos/runs/settings.json',
+        hookPath: '/tmp/tasks-snapshot-fixture/scripts/pause-gate.sh',
+        gitAuthorName: 'Alex',
+        gitAuthorEmail: 'alex@aiteamos.local',
+        headCommit: 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678',
+        dirtyFiles: [],
+        deniedToolUseIds: ['toolu_01DEF', 'toolu_01GHI'],
+      },
+    })
+
+    const snapshot = await buildTasksSnapshot(fixture.workspaceId)
+    const task = snapshot?.tasks.find((t) => t.id === seeded.id)
+
+    expect(task?.runs[0]?.checkpoint?.deniedDuringPause).toEqual([
+      { id: 'toolu_01DEF', summary: null },
+      { id: 'toolu_01GHI', summary: null },
+    ])
   })
 
   it("keeps a run's unknown cost unknown rather than reporting it as $0.00", async (): Promise<void> => {

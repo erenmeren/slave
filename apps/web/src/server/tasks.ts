@@ -10,7 +10,22 @@ export interface TaskRunSummary {
   readonly toolCalls: number
   readonly startedAt: string
   readonly endedAt: string | null
-  readonly checkpoint: { readonly pausedAtStep: number | null; readonly sessionId: string; readonly dirtyFileCount: number } | null
+  readonly checkpoint: {
+    readonly pausedAtStep: number | null
+    readonly sessionId: string
+    readonly dirtyFileCount: number
+    /**
+     * The pause gate's `Checkpoint.deniedToolUseIds` (M15), one entry per denied tool use.
+     * `summary` is always `null` today -- a MEASURED limit, not a TODO: `run.tool_call` event
+     * payloads carry only `{ name, summary }` (`packages/domain/src/events/schema.ts`,
+     * `apps/orchestrator/src/pump.ts`'s `tool_call` case) with no `tool_use_id`, so there is no
+     * field to join a denied id back to the event that named it. Inventing a join (e.g. matching
+     * by ordinal position or nearest `seq`) would assert a correspondence the data does not
+     * support, so this stays an honest `null` and `TaskDetailPanel` falls back to the truncated
+     * id. A future task that adds `toolUseId` to the event payload can populate this for real.
+     */
+    readonly deniedDuringPause: readonly { readonly id: string; readonly summary: string | null }[]
+  } | null
 }
 
 export interface TaskBoardItem {
@@ -84,6 +99,10 @@ export async function buildTasksSnapshot(workspaceId: string): Promise<TasksSnap
                   pausedAtStep: run.pausedAtStep,
                   sessionId: run.checkpoint.sessionId,
                   dirtyFileCount: run.checkpoint.dirtyFiles.length,
+                  // No extra query here (see the DTO field's own comment): `checkpoint: true`
+                  // above already selects every `Checkpoint` column, so `deniedToolUseIds` needs
+                  // no widening, and there is no `run.tool_call` field to join those ids against.
+                  deniedDuringPause: run.checkpoint.deniedToolUseIds.map((id) => ({ id, summary: null })),
                 },
         })),
       }

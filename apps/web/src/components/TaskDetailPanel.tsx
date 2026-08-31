@@ -73,6 +73,22 @@ export function TaskDetailPanel({
                     dirty files
                   </div>
                 )}
+                {run.checkpoint !== null && run.checkpoint.deniedDuringPause.length > 0 && (
+                  // `summary` is always `null` today (see `TaskRunSummary.checkpoint`'s own
+                  // comment: no join key exists), so this always renders the id-prefix fallback --
+                  // not a bug, a fact of the data. Same 8-char id-prefix convention as
+                  // `TaskCard`/`AgentCard`'s `TASK-{id.slice(0, 8)}`; unlike a task's random UUID
+                  // this can render two Claude `toolu_01…` ids identically (they share that fixed
+                  // vendor prefix) -- an accepted limit of a best-effort display, not a bug to fix
+                  // here. `font-mono text-[10px] text-text-3`, adjacent to `SECTION_LABEL_CLASS`
+                  // (`ui/SectionLabel.tsx`) rather than reusing it: that class is for headings
+                  // (uppercase, wide tracking), and this is a value line, same relationship the
+                  // `paused at step` line above already has to it.
+                  <div className="mt-1 font-mono text-[10px] text-text-3">
+                    {run.checkpoint.deniedDuringPause.length} tool call{run.checkpoint.deniedDuringPause.length === 1 ? '' : 's'} denied
+                    during pause · {run.checkpoint.deniedDuringPause.map((denied) => denied.summary ?? `${denied.id.slice(0, 8)}…`).join(', ')}
+                  </div>
+                )}
               </li>
             ))}
           </ul>
