@@ -4,8 +4,14 @@ import { useRouter } from 'next/navigation'
 import { useState } from 'react'
 import type { ProviderKind } from '@ai-team-os/control'
 import { ProviderSelect } from './ProviderSelect'
-import { Button } from './ui/Button'
+import { FieldLabel, PrimaryButton, TextField } from './ui/FormControls'
 import { Panel } from './ui/Panel'
+
+// Mirrors FormControls.tsx's private INPUT_SHELL (not exported) so ProviderSelect -- which owns
+// its own <select> markup and cannot be nested inside SelectField -- still gets the kit's exact
+// shell. Keep this in sync with FormControls.tsx's INPUT_SHELL if the kit's radius/shell changes.
+const SELECT_SHELL =
+  'rounded-[7px] border border-line bg-bg-0 px-2.5 py-1.5 text-sm text-text-1 placeholder:text-text-3 focus:border-white/25 focus:outline-none'
 
 /** Pulls a 409 refusal's `{ error }` text -- the same local helper `GoalCard.tsx` carries. */
 function errorMessage(data: unknown, status: number): string {
@@ -95,18 +101,21 @@ export function RuntimeCard({
             void submit(`/api/w/${workspaceId}/provider`, { provider: draftProvider === '' ? null : draftProvider })
           }}
         >
-          <ProviderSelect
-            ariaLabel="workspace provider"
-            testId="runtime-provider"
-            value={draftProvider}
-            onChange={setDraftProvider}
-            disabled={pending}
-            placeholder="(none)"
-            className="rounded border border-line bg-bg-0 px-2 py-1 text-sm text-text-1"
-          />
-          <Button type="submit" variant="primary" data-testid="runtime-provider-submit" disabled={pending}>
+          <label className="flex flex-col gap-1">
+            <FieldLabel>provider</FieldLabel>
+            <ProviderSelect
+              ariaLabel="workspace provider"
+              testId="runtime-provider"
+              value={draftProvider}
+              onChange={setDraftProvider}
+              disabled={pending}
+              placeholder="(none)"
+              className={SELECT_SHELL}
+            />
+          </label>
+          <PrimaryButton type="submit" data-testid="runtime-provider-submit" disabled={pending}>
             set runtime
-          </Button>
+          </PrimaryButton>
         </form>
 
         <form
@@ -123,18 +132,23 @@ export function RuntimeCard({
             })
           }}
         >
-          <input
-            type="number"
-            step="0.01"
-            required
-            data-testid="runtime-budget-input"
-            aria-label="workspace budget"
-            value={draftBudget}
-            onChange={(event) => setDraftBudget(event.target.value)}
-            disabled={pending || unbudgeted}
-            className="w-32 rounded border border-line bg-bg-0 px-2 py-1 text-sm text-text-1"
+          <TextField
+            label="budget (usd)"
+            inputProps={
+              {
+                type: 'number',
+                step: '0.01',
+                required: true,
+                'data-testid': 'runtime-budget-input',
+                'aria-label': 'workspace budget',
+                value: draftBudget,
+                onChange: (event) => setDraftBudget(event.target.value),
+                disabled: pending || unbudgeted,
+                className: 'w-32',
+              } as React.InputHTMLAttributes<HTMLInputElement>
+            }
           />
-          <label className="flex items-center gap-1 text-xs text-text-2">
+          <label className="flex items-center gap-1 font-mono text-[9px] uppercase tracking-[.09em] text-text-3">
             <input
               type="checkbox"
               aria-label="not budgeted"
@@ -144,9 +158,9 @@ export function RuntimeCard({
             />
             not budgeted
           </label>
-          <Button type="submit" variant="primary" data-testid="runtime-budget-submit" disabled={pending}>
+          <PrimaryButton type="submit" data-testid="runtime-budget-submit" disabled={pending}>
             set budget
-          </Button>
+          </PrimaryButton>
         </form>
 
         {costBlindBudgeted && (

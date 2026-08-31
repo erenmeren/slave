@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { Button } from './ui/Button'
+import { PrimaryButton, TextField } from './ui/FormControls'
 import { Panel } from './ui/Panel'
 
 /** Pulls a 409 refusal's `{ error }` text, falling back to something nameable for any other
@@ -80,7 +80,7 @@ export function GoalCard({
       {/* The handoff's caption for an unset goal (design README §3a.1). Not an error and not a
         * placeholder standing in for a value: it names the state the workspace is actually in --
         * nothing has been asked of it yet, so nothing is planning. */}
-      <p data-testid="goal-waiting" className="text-xs text-text-3">
+      <p data-testid="goal-waiting" className="font-mono text-[9px] uppercase tracking-[.09em] text-text-3">
         waiting for a goal
       </p>
       {suggestions.length > 0 && (
@@ -107,17 +107,21 @@ export function GoalCard({
           void submit()
         }}
       >
-        <input
-          data-testid="goal-input"
-          aria-label="workspace goal"
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          disabled={pending}
-          className="flex-1 rounded border border-line bg-bg-0 px-2 py-1 text-sm text-text-1"
+        <TextField
+          inputProps={
+            {
+              'data-testid': 'goal-input',
+              'aria-label': 'workspace goal',
+              value: draft,
+              onChange: (event) => setDraft(event.target.value),
+              disabled: pending,
+              className: 'flex-1',
+            } as React.InputHTMLAttributes<HTMLInputElement>
+          }
         />
-        <Button type="submit" variant="primary" data-testid="goal-submit" disabled={pending}>
+        <PrimaryButton type="submit" data-testid="goal-submit" disabled={pending}>
           set goal
-        </Button>
+        </PrimaryButton>
       </form>
       {errorText !== null && (
         <span role="alert" data-testid="goal-error" className="text-xs text-status-danger">
