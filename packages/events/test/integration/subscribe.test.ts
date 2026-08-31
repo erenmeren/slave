@@ -253,16 +253,33 @@ describe('subscribeEvents', () => {
   )
 
   it(
-    'recovers when a second disconnect lands right after a reconnect settles',
+    'survives two disconnects back to back and still delivers exactly once',
     async () => {
-      // Two kills back to back: the second lands while the first's reconnect loop may still be
-      // inside its settlement window (`current` set, `reconnecting` not yet cleared). Before the
-      // fix, a disconnect in that window was dropped and the subscription held a dead client.
+      // Two kills with no wait between them. This does NOT land the second kill inside the
+      // reconnect loop's settlement window (`current` set, `reconnecting` not yet cleared): kill
+      // #2's own connect + `pg_terminate_backend` round trip completes in ~5-20ms, well before the
+      // first loop's 250ms retry delay even elapses, so pg_stat_activity has zero `LISTEN events`
+      // rows for it to find — asserted explicitly below. The settlement window itself is covered
+      // by the offset sweep in the next test. What this test does cover: the subscription must
+      // survive two `error`/`error`/`end` trios landing back to back on the same dead client
+      // without losing track of itself, and converge to exactly one live LISTEN afterward — the
+      // same contract "delivers exactly one notification per event across a reconnect" checks for
+      // a single disconnect, here checked for two in immediate succession.
       const seen: EventNotification[] = []
       subscription = await subscribeEvents(url(), (n) => seen.push(n))
 
-      await killListeners()
-      await killListeners() // no wait between them — the second must not be droppable
+      const probe = new Client({ connectionString: url() })
+      await probe.connect()
+      try {
+        await killListeners()
+        // Structural proof that the second kill below is a no-op at the database level: the first
+        // loop's `RECONNECT_DELAY_MS` (250ms) has not elapsed yet, so no replacement client exists
+        // for `killListeners()` to find or terminate.
+        expect(await countListenBackends(probe)).toBe(0)
+        await killListeners()
+      } finally {
+        await probe.end()
+      }
 
       // The subscription must still converge to a live LISTEN and deliver new events exactly once.
       await expect
@@ -278,6 +295,42 @@ describe('subscribeEvents', () => {
       await notify(JSON.stringify({ seq: 42, workspaceId: 'w-race' }))
       await wait(1_000)
       expect(seen.filter((n) => n.seq === 42)).toHaveLength(1)
+    },
+    20_000,
+  )
+
+  const SETTLEMENT_WINDOW_OFFSETS_MS = [200, 230, 250, 270, 300]
+
+  it.each(SETTLEMENT_WINDOW_OFFSETS_MS)(
+    'recovers when a second disconnect lands %dms after the first, inside the settlement window',
+    async (offsetMs) => {
+      // The first kill's reconnect loop discards the dead client, waits RECONNECT_DELAY_MS
+      // (250ms), then dials `open()` and installs the new client via `current = client`. Sweeping
+      // the second kill's delay across that boundary lands it inside `open()`'s connect/LISTEN
+      // span for the offsets nearest 250ms, and just after installation for the offsets past it —
+      // the reachable window the back-to-back test above cannot reach (proved there to be a
+      // structural no-op). `open()` attaches its `error`/`end` handlers before `connect()` even
+      // resolves, so a disconnect reported anywhere in that span must be recorded, not dropped.
+      const seen: EventNotification[] = []
+      subscription = await subscribeEvents(url(), (n) => seen.push(n))
+
+      await killListeners()
+      await wait(offsetMs)
+      await killListeners()
+
+      await expect
+        .poll(
+          async () => {
+            await notify(JSON.stringify({ seq: 51, workspaceId: `w-sweep-${offsetMs}` }))
+            return seen.some((n) => n.seq === 51)
+          },
+          { timeout: 10_000, interval: 500 },
+        )
+        .toBe(true)
+      await wait(1_000)
+      await notify(JSON.stringify({ seq: 52, workspaceId: `w-sweep-${offsetMs}` }))
+      await wait(1_000)
+      expect(seen.filter((n) => n.seq === 52)).toHaveLength(1)
     },
     20_000,
   )
