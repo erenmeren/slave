@@ -16,10 +16,12 @@ Activity chip that reads `—`, and sweeps three M17 leftovers.
 **Non-goals:** no auth story (localhost-only posture unchanged); no live mid-run permission
 resync (snapshot at start/resume, stated limitation); no Skills-page redesign; no per-command
 granularity (enforcement is at the matrix's tool level, `PERMISSION_TOOLS`); no new
-dependencies; no schema changes beyond, at most, one additive `EventType` enum value for the
-denial trail — and only if the existing event vocabulary genuinely has no fitting type (the
-implementing task inventories the enum first). The `AgentPermission` table already exists;
-Series B's skill data comes from `ExecutionEvent` as-is.
+dependencies; schema changes limited to exactly two additive migrations — the `run.tool_denied`
+`EventType` value (the enum was inventoried 2026-08-31: no denial-ish member exists;
+`guardrail_tripped` is the closest and means something else) and an `ExecutionEvent`
+`(runId, seq)` index (the N+1 note at `overview.ts:277-285` names it as the deferred fix; the
+skill-chain DTO is the third consumer that makes it due). The `AgentPermission` table already
+exists; no `Checkpoint` column (resume re-derives, §2).
 
 **Branch:** `feature/m18-skill-and-teeth`. Binding rules carry over: one vitest run at a time,
 daemon down during tests, apps/web tasks gate on `npm run web:build`, flake bar (a retry that
@@ -57,11 +59,54 @@ hook on every tool call (Claude: `PreToolUse` → `scripts/pause-gate.sh`; Curso
   the run's event trail and visible in Activity) and never to the paused/stopped path. The
   implementing tasks measure the actual stream shapes against fixtures before wiring —
   M12/M13's fixture discipline.
-- **Tool vocabulary.** The matrix's column set is `PERMISSION_TOOLS` (settings.ts) — that
-  constant is the single source; the mapping from vendor tool names to matrix tools lives in
-  ONE place per provider (the task inventories actual tool names from existing fixtures; e.g.
-  Claude `Bash` ↔ matrix `Shell` if the columns say so — the code follows the constant, this
-  spec does not restate the list).
+- **Tool vocabulary — the mapping is the hard truth (measured 2026-08-31).** The matrix's six
+  columns (`PERMISSION_TOOLS`, `packages/control/src/permission.ts:15-22`) are *capability
+  phrases*, not tool names; the wire carries ~25 Claude tools and Cursor's `shell/edit/read`.
+  v1 mapping, resolved ORCHESTRATOR-SIDE at file-write time (one TS table beside
+  `PERMISSION_TOOLS`; the gate scripts stay dumb membership tests):
+  - `repo read` → Claude `Read` / Cursor `read`
+  - `source write` → Claude `Write`, `Edit`, `NotebookEdit` / Cursor `edit`
+  - `run tests`, `create branch`, `deploy prod` → all shell-backed: a deny on ANY of the three
+    denies Claude `Bash` / Cursor `shell`, and the deny reason names the denied capability.
+    Coarse by design — command-string inspection is out of scope; the matrix UI copy states
+    the coarseness.
+  - `read secrets` → **unenforced in v1** (a path predicate, no tool maps to it); the matrix
+    UI copy says so.
+  - Every unmapped tool passes (default-allow doctrine).
+  The `permissions.json` therefore carries the RESOLVED vendor-tool deny list for that run's
+  provider: `{"version":1,"deny":[{"tool":"Bash","capability":"run tests"}]}` — empty `deny`
+  written when nothing is denied.
+- **Cursor caveat (measured, M13):** Cursor's `preToolUse` `tool_name` is untrustworthy for
+  write/read discrimination (a file write arrived as `tool_name: "Read"` —
+  `cursor-shell-gate.sh:11-14`). v1: shell enforcement via `beforeShellExecution` is reliable;
+  non-shell enforcement on Cursor is best-effort, stated in the spec and the task report.
+- **Discrimination from pause denials.** The deny reason carries a fixed prefix
+  (`permission matrix denies`), defined once as a TS constant (`packages/providers/src/gate.ts`)
+  and written literally by the shell helper — a test pins the two spellings equal. Claude:
+  the matrix deny arrives as `hook_denied` whose `reason` starts with the prefix;
+  `classifyGateEvent` gains a THIRD `GateOutcome` kind (`tool_denied`) — `gate.ts:20-40`'s
+  own doctrine sanctions a new kind and forbids widening the existing two. Cursor: the stream
+  starts reading the measured-but-discarded `rejected.reason` (`cursor/stream.ts:309-333`)
+  into the `permission_denied` event; a prefix match routes it the same way. The pump's new
+  `tool_denied` case emits `run.tool_denied` `{ tool, capability }` and NOTHING else — it must
+  not push into the pump-local `denied` array (that would poison the Cursor was-this-pause-real
+  heuristic at `pump.ts:397`) and must not touch the paused/stopped path.
+- **The gate's hot path stays one node call.** Both gates today drain stdin unread
+  (`pause-gate.sh:81`, `cursor-shell-gate.sh:165`); the permissions branch captures the payload
+  and a single `node -e` (stdin: the payload; argv-free, the `json_string` discipline) reads
+  the payload's tool name plus the permissions file and answers ALLOW / DENY-with-capability.
+  Unparseable payload or unreadable-but-present permissions file → fail closed (`exit 2`),
+  never silently allow. A MISSING permissions file → allow (pre-M18 runs and rehearsals
+  without the orchestrator still gate pause correctly). Pause check remains first.
+- **Resume.** `executeResume` (`apps/orchestrator/src/resume.ts`) never calls `runFilePaths` —
+  the permissions file is re-derived (`dirname(checkpoint.pauseFlagPath)/permissions.json`) and
+  REWRITTEN from the agent's current rows at resume (a fresh snapshot; no `Checkpoint` column).
+- **Plumbing details:** `buildChildEnv` gains a required `permissionsFilePath` →
+  `AITEAMOS_PERMISSIONS_FILE` (all four adapter call sites + both `StartInput` shapes);
+  dispatch sites (tick.ts:459/581, planning.ts:222/322, review.ts:240/357) already hold the
+  Agent row — `permissions: true` joins the existing `include`. The shared shell logic lives in
+  `scripts/lib/permissions.sh`, mirroring `pause-flag.sh`'s conventions (report-don't-print,
+  out-parameter globals, `PAUSE_GATE_NAME` prefixes) and gets a census row.
 - **Matrix UI:** one copy change only — the section's descriptive line says denials are
   enforced at dispatch snapshot, plus the existing cells unchanged.
 - **Proof:** unit tests on the shell helper (both gates × allow/deny/unset/malformed-file);
@@ -75,9 +120,11 @@ hook on every tool call (Claude: `PreToolUse` → `scripts/pause-gate.sh`; Curso
 trail from §2's permission denials (`run.tool_denied` events). The reader shows the checkpoint
 field; permission denials are already visible in Activity via their event. Do not conflate.
 
-- Where: wherever the paused run's checkpoint renders today (the implementing task locates the
-  real surface — AgentPanel / task board panel — and reports it; the mockup's drawer checkpoint
-  list is the aesthetic reference).
+- Where (located 2026-08-31): the task board's paused-run line — `TaskDetailPanel.tsx:70-75`
+  ("paused at step N · session … · N dirty files"), served by `tasks.ts`'s checkpoint DTO at
+  :13/:80-87. `deniedToolUseIds` reaches NO web DTO today (grep-verified) — this is greenfield,
+  and the house rule (graph.ts:24-34) binds: the DTO field ships with its renderer in the same
+  task.
 - What: a "denied during pause" line listing the denied tool uses. The ids are opaque
   `toolUseId`s; the reader joins them against the run's `run.tool_call` events to show human
   summaries where a match exists, and falls back to a count + truncated ids where not.
@@ -85,11 +132,13 @@ field; permission denials are already visible in Activity via their event. Do no
 
 ## 4. Series A3 — the sse·ms chip
 
-Activity's `sse · <ms>` chip reads `—` because `useActivityStream` measures no arrival age.
-Decision: the chip shows **age since last SSE arrival** (client-clock only — skew-free), not
-server-to-client latency. The hook records `Date.now()` at each message; the chip re-renders on
-a 1s tick showing the age (`sse · 0.4s` / `sse · 12s`), em-dash until the first message, and
-whatever stale/disconnected styling the chip already carries stays untouched.
+Activity's `sse · <ms>` chip reads `—` because `ActivityClient.tsx:178-188` hard-codes
+`latencyMs={null}` — `useActivityStream` wraps its own `EventSource` and measures nothing.
+Decision (revised to the HOUSE pattern, 2026-08-31): copy `useWorkspaceStream.ts:113-118`
+verbatim — on each message, `latencyMs = max(0, Date.now() - Date.parse(event.ts))` — so every
+page's chip computes the same number the same way (`TopBar.tsx:77` already renders
+`sse · <n>ms`). Changes confined to `useActivityStream.ts` (state + `ActivityStreamState`
+field) and `ActivityClient.tsx:185`. Em-dash until the first message stays.
 
 ## 5. Series A4 — mini debts (M17 leftovers)
 
@@ -102,20 +151,31 @@ whatever stale/disconnected styling the chip already carries stays untouched.
   rejection, no handle, orphaned LISTEN client). Fix at the root: during initial open, a
   failure path must not leave a live loop — mark closed / detach before rethrowing (the
   implementing task reads the file and picks the minimal shape), plus a regression test.
-- `postControl`/`putControl` wrapper duplication across components (M17 backlog): inventory the
-  copies; byte-identical ones re-point at `lib/postControl.ts`'s exports (the errorMessage
-  pattern, Task 14 style); divergent ones are left with a one-line report note.
+- `postControl` wrapper duplication (M17 backlog; inventoried 2026-08-31): widen the lib with
+  one `sendControl(url, { method, body? })` that subsumes every variant, keep `postControl` as
+  a thin alias, then re-point the five named wrappers (`AgentPanel:17-29` byte-identical —
+  delete; `EmergencyStopButton:11-20` and `GoalCard:9-22` strict subsets — call `postControl`;
+  `RuntimeCard:12-25` PUT and `graph/DepsMode:16-28` POST|DELETE — call `sendControl`). The
+  six INLINE copies (PermissionMatrix, SkillsClient, ModelOverrideEditor, TemplateCatalog,
+  AssignCompanyDialog, CompanyManager) stay — noted to the backlog, not this milestone. The
+  lib's "single canonical copy" docstring becomes true again.
 
 ## 6. Series B — the Skill-chain view (user decision: both views)
 
 The Graph's `skill` tab unlocks with its own node/edge set (design README "1b — Modes": each
 mode is its own set; "skills of one task" is the task-focus half).
 
-**Data (server).** `skillCalls` is an unordered tally — the ORDER lives in `ExecutionEvent`:
-`run.tool_call` events whose tool is `Skill` (the pump's summary convention `Skill <name>`; the
-implementing task verifies the payload shape against fixtures and parses from the payload
-field, falling back to the summary prefix only if the payload carries no tool name). New
-bounded server query (graph.ts or a sibling `skill-graph.ts`):
+**Data (server) — verified shapes (2026-08-31).** `skillCalls` is an unordered tally — the
+ORDER lives in `ExecutionEvent`: payload keys are `name`/`summary` (schema.ts:25-29; the pump
+renames `toolName`→`name` at pump.ts:572). A Skill call is `payload.name === 'Skill'` (the DB
+filter precedent is `overview.ts:289`: `payload: { path: ['name'], equals: 'Skill' }`) and the
+skill name parses from the summary via `skillNameOf`'s `/^Skill\s+(\S+)/` convention
+(overview.ts:225-229 — REUSE it, don't fork a second unknown-handling convention). The new
+`(runId, seq)` index (§1 non-goals) makes the per-run scan cheap. New SIBLING builder — NOT a
+`GraphSnapshot` widening (the costUsd ruling at graph.ts:24-34 and the 250ms-debounce cost
+both forbid it): `buildSkillGraph(workspaceId)` in `apps/web/src/server/skillGraph.ts` behind
+its own route `apps/web/src/app/api/w/[workspaceId]/skill-graph/route.ts` (mirror the 14-line
+graph/route.ts):
 
 - Scope: the workspace's most recent N runs that contain at least one Skill call (N = 50,
   a named constant), newest first — bounded by construction, no full-table scan (M17 §4 rule).
@@ -135,10 +195,24 @@ bounded server query (graph.ts or a sibling `skill-graph.ts`):
   auto-fit — including M16's fit-after-measure rule).
 - **Focus:** picking a run (from a run-selector strip: recent runs with task title + agent +
   live dot) switches the canvas to that run's chain, left-to-right, ×N badges on collapsed
-  repeats, in-order edges. Deselect returns to aggregate. Selection also reachable by arriving
-  from another mode with an agent selected whose latest run has skill data (`hasSkillData`
-  finally earns its keep — it marks selectable agents).
-- **Tab unlock:** `hasView('skill')` becomes true; the `?mode=skill` fallback comment dies.
+  repeats, in-order edges. Deselect returns to aggregate. The DTO's `runs[]` carries its own
+  metadata (runId, taskTitle, agentName, live, startedAt) — `GraphSnapshot` has run ids only
+  for LIVE runs (graph.ts:176), and finished runs are exactly where skill data lives, so the
+  selector cannot lean on the snapshot. `hasSkillData` stays what the M14 ruling made it:
+  a reachability signal only.
+- **House mechanics (verified):** builder follows the `buildDepsGraph` contract — pure, nodes
+  at `{x:0,y:0}`, exported id prefix + frozen node-type map, edges `type: 'cable'` with
+  `{tone, active}`; layout via `useLayoutedGraph(nodes, edges, 'layered')`; the new node type
+  registers its footprint in `layout.ts` `DEFAULT_SIZE` (or it lays out at fallback silently);
+  `GraphCanvas` provides fit-after-measure for free. `SkillMode` lives in its own file on the
+  `DepsMode.tsx:52-162` template (error band, empty-state hint, canvas), receives
+  `{ workspaceId, snapshot }` like its siblings, fetches its own DTO on mount and refetches,
+  debounced, when the graph stream delivers a `run.tool_call` frame (GraphClient already
+  receives raw frames via `onGraphEvent`). No drawer for skill nodes in v1 (skill≠agent; the
+  selector strip is the interaction surface).
+- **Tab unlock:** `hasView('skill')` becomes true and `GraphClient.tsx:212`'s
+  `disabled = tab.mode === 'skill'` dies — the comment at :206-211 names this exact line as
+  the one a later milestone flips. The `· later` suffix goes with it.
 - **Empty state:** a workspace with zero Skill events renders an honest empty panel naming why
   (no skill calls recorded yet), never a blank canvas.
 
