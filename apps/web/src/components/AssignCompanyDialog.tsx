@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { errorMessage } from '../lib/postControl'
 import { Button } from './ui/Button'
+import { SECTION_LABEL_CLASS } from './ui/SectionLabel'
 
 export interface AssignCompanyDialogProps {
   readonly workspaceId: string
@@ -96,7 +97,7 @@ export function AssignCompanyDialog({ workspaceId, companies, onClose, triggerRe
         data-testid="assign-company-dialog"
         className="flex w-72 flex-col gap-3 rounded-panel border border-line bg-bg-1 p-4 shadow-resting"
       >
-        <h3 className="font-mono text-[9px] uppercase tracking-[.09em] text-text-3">Assign a company</h3>
+        <h3 className={SECTION_LABEL_CLASS}>Assign a company</h3>
         {companies.length === 0 ? (
           <p className="text-xs text-text-3">no companies yet -- create one in Settings.</p>
         ) : (

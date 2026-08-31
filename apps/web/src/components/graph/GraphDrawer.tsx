@@ -10,6 +10,7 @@ import { Button } from '../ui/Button'
 import { Chip } from '../ui/Chip'
 import { PanelHeader } from '../ui/PanelHeader'
 import { ProgressBar } from '../ui/ProgressBar'
+import { SECTION_LABEL_CLASS } from '../ui/SectionLabel'
 import { StatusPill } from '../ui/StatusPill'
 
 /** The handoff's quick-instruction chips (design README "1b — Drawer"). Fixed copy, and
@@ -95,13 +96,13 @@ export function GraphDrawer({
         * cells recipe — one shared border rather than two abutting ones. */}
       <div className="grid grid-cols-2 gap-px overflow-hidden rounded-tile border border-line bg-line">
         <div className="bg-bg-2 p-[10px]">
-          <div className="font-mono text-[9px] uppercase tracking-[.09em] text-text-3">provider</div>
+          <div className={SECTION_LABEL_CLASS}>provider</div>
           <div data-testid="drawer-provider" className="truncate font-mono text-[11px] text-text-1">
             {agent.provider ?? '—'}
           </div>
         </div>
         <div className="bg-bg-2 p-[10px]">
-          <div className="font-mono text-[9px] uppercase tracking-[.09em] text-text-3">model</div>
+          <div className={SECTION_LABEL_CLASS}>model</div>
           <div data-testid="drawer-model" className="truncate font-mono text-[11px] text-text-1">
             {agent.model ?? '—'}
           </div>

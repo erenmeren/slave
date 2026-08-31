@@ -1,4 +1,5 @@
 import type React from 'react'
+import { SECTION_LABEL_CLASS } from './SectionLabel'
 
 /**
  * The handoff's form language, written once (M16 spec §2). Appearance only: no state, no
@@ -7,7 +8,7 @@ import type React from 'react'
  * nowhere else: 7px input/tile, 5px chip/button (README "Design Tokens").
  */
 export function FieldLabel({ children }: { readonly children: React.ReactNode }): React.JSX.Element {
-  return <span className="font-mono text-[9px] uppercase tracking-[.09em] text-text-3">{children}</span>
+  return <span className={SECTION_LABEL_CLASS}>{children}</span>
 }
 
 // Exported so a shell the kit cannot own directly (a shared component wrapped at its call

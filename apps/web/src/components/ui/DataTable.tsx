@@ -1,3 +1,5 @@
+import { SECTION_LABEL_CLASS } from './SectionLabel'
+
 /**
  * The handoff data table (spec §3): an explicit `grid-template-columns` shared between the header
  * and every row rather than an actual `<table>` — matches the mockups' grid-row layouts (e.g. the
@@ -17,7 +19,7 @@ export function DataTable({
     <div data-testid="data-table" className="flex flex-col overflow-hidden rounded-card border border-line bg-bg-2">
       <div data-testid="data-table-header" className="grid gap-2 border-b border-line px-3 py-2" style={{ gridTemplateColumns: columns }}>
         {header.map((label) => (
-          <span key={label} data-testid="data-table-header-cell" className="font-mono text-[9px] uppercase tracking-[.09em] text-text-3">
+          <span key={label} data-testid="data-table-header-cell" className={SECTION_LABEL_CLASS}>
             {label}
           </span>
         ))}

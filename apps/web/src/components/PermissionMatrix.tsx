@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { errorMessage } from '../lib/postControl'
-import { SectionLabel } from './ui/SectionLabel'
+import { SECTION_LABEL_CLASS, SectionLabel } from './ui/SectionLabel'
 import type { PermissionSection } from '../server/settings'
 
 /**
@@ -107,7 +107,7 @@ export function PermissionMatrix({ sections }: { readonly sections: readonly Per
             <div className="overflow-x-auto">
               <div className="min-w-[560px]">
                 <div style={grid(section.rows[0]?.cells.length ?? 0)} className="grid items-end gap-y-1 border-b border-line pb-1.5">
-                  <span className="font-mono text-[9px] uppercase tracking-[.09em] text-text-3">agent</span>
+                  <span className={SECTION_LABEL_CLASS}>agent</span>
                   {/* The columns come from the row's own cells rather than a second copy of the
                       list: the server built them from `PERMISSION_TOOLS`, so this renders that one
                       list, and `grid()` sizes itself from the same count. */}
@@ -115,7 +115,7 @@ export function PermissionMatrix({ sections }: { readonly sections: readonly Per
                     <span
                       key={cell.tool}
                       data-testid="perm-column"
-                      className="text-center font-mono text-[9px] uppercase tracking-[.09em] text-text-3"
+                      className={`text-center ${SECTION_LABEL_CLASS}`}
                     >
                       {cell.tool}
                     </span>

@@ -1,3 +1,4 @@
+import { SECTION_LABEL_CLASS } from './SectionLabel'
 import { TONE_TEXT, type StatusTone } from './StatusPill'
 
 export interface StatStripItem {
@@ -24,7 +25,7 @@ export function StatStrip({ items }: { readonly items: ReadonlyArray<StatStripIt
     >
       {items.map((item, index) => (
         <div key={`${item.label}-${index}`} data-testid="stat-strip-item" className="flex flex-col gap-1 bg-bg-1 p-[10px]">
-          <span className="font-mono text-[9px] uppercase tracking-[.09em] text-text-3">{item.label}</span>{' '}
+          <span className={SECTION_LABEL_CLASS}>{item.label}</span>{' '}
           {/* The literal space above: label and value stack visually (flex-col), but a reader of
             * this tile's OWN `textContent` -- Task 13's project card test, `toContain` callers
             * elsewhere -- gets "label value", not "labelvalue" run together. A whitespace-only
