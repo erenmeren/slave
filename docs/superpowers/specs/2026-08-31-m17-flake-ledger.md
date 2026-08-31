@@ -439,7 +439,7 @@ Template per flake:
   its own source, not inferred), not something in this repo's page/component code.
 
 - **Change** — three additive layers in `scripts/gate-m14-fidelity.mjs` and `apps/web/next.config.ts`
-  (commit `d936551`, hardened by a same-day fix round after code review, commit `ad0debe`, that
+  (commit `d936551`, hardened by a same-day fix round after code review, commit `6cffdcc`, that
   narrowed the retry to the manifest-race signature, added a retry counter printed beside PASS, and
   guarded the second attempt through `fail()` instead of letting it escape raw; see item 3 below and
   the report's fix-round section for the review finding verbatim), from least to most load-bearing:
