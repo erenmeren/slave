@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ProjectsClient } from '../src/components/ProjectsClient.js'
 import type { ProjectRow } from '../src/server/org.js'
@@ -238,5 +238,37 @@ describe('the handoff project card', () => {
 
     rerender(<ProjectsClient projects={[project({ halted: false, taskCounts: { done: 3, total: 3, active: 0, blocked: 0 } })]} companies={companies} />)
     expect(screen.getByTestId('status-pill').textContent).toBe('IDLE')
+  })
+
+  it('caps the avatar row at six and says how many more', () => {
+    const team = [
+      { agentId: 'a1', name: 'Alex Turner', status: 'working' },
+      { agentId: 'a2', name: 'Bea Ng', status: 'idle' },
+      { agentId: 'a3', name: 'Chen Lee', status: 'working' },
+      { agentId: 'a4', name: 'Dana Fox', status: 'idle' },
+      { agentId: 'a5', name: 'Eve Martin', status: 'working' },
+      { agentId: 'a6', name: 'Frank Smith', status: 'idle' },
+      { agentId: 'a7', name: 'Grace Johnson', status: 'working' },
+      { agentId: 'a8', name: 'Henry Brown', status: 'idle' },
+    ]
+    render(<ProjectsClient projects={[project({ team })]} companies={companies} />)
+    const teamRow = screen.getByLabelText('team')
+    expect(within(teamRow).getAllByTestId('avatar-tile')).toHaveLength(6)
+    const overflow = within(teamRow).getByTestId('team-overflow')
+    expect(overflow.textContent).toBe('+2')
+    expect(overflow.title).toContain('Grace Johnson')
+  })
+
+  it('renders no overflow tile at six or fewer', () => {
+    const team = [
+      { agentId: 'a1', name: 'Alex Turner', status: 'working' },
+      { agentId: 'a2', name: 'Bea Ng', status: 'idle' },
+      { agentId: 'a3', name: 'Chen Lee', status: 'working' },
+      { agentId: 'a4', name: 'Dana Fox', status: 'idle' },
+      { agentId: 'a5', name: 'Eve Martin', status: 'working' },
+      { agentId: 'a6', name: 'Frank Smith', status: 'idle' },
+    ]
+    render(<ProjectsClient projects={[project({ team })]} companies={companies} />)
+    expect(screen.queryByTestId('team-overflow')).toBeNull()
   })
 })

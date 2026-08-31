@@ -75,13 +75,22 @@ function ProjectCard({
         </div>
 
         <div aria-label="team" className="mt-[13px] flex flex-wrap items-center gap-1">
-          {project.team.map((member) => (
+          {project.team.slice(0, 6).map((member) => (
             <AvatarTile
               key={member.agentId}
               name={member.name}
               tone={CARD_STATE_TONE[cardStateForAgent(member.status as AgentStatus)].tone}
             />
           ))}
+          {project.team.length > 6 && (
+            <span
+              data-testid="team-overflow"
+              title={project.team.slice(6).map((member) => member.name).join(', ')}
+              className="flex h-[28px] w-[28px] items-center justify-center rounded-[7px] border border-line bg-bg-2 font-mono text-[10px] text-text-2"
+            >
+              +{project.team.length - 6}
+            </span>
+          )}
         </div>
 
         <div className="mt-[14px]">
