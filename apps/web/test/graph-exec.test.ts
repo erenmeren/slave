@@ -124,6 +124,16 @@ describe('buildExecutionGraph', () => {
     expect((node?.data as StageTaskNodeData).column).toBe('In Progress')
   })
 
+  // M16 Task 8: the Tasks board reads a `reviewing` task's pill as the review tone (purple), via
+  // the same `lib/tones.ts` table. This node must read the same fact from the same table, not a
+  // local mapping that drifts from it and falls back to grey.
+  it('gives a reviewing task node the review tone, the same table the Tasks board reads', () => {
+    const { nodes } = buildExecutionGraph(snapshot([task({ id: 't1', status: 'reviewing' })]))
+    const node = nodes.find((n) => n.type === 'stageTask')
+    expect((node?.data as { tone: string }).tone).toBe('review')
+    expect((node?.data as StageTaskNodeData).column).toBe('Review')
+  })
+
   it('leaves every STAGE at the origin — ELK owns the stage chain\'s coordinates, this does not', () => {
     const { nodes } = buildExecutionGraph(snapshot([task({ id: 't1', status: 'running' })]))
     const stages = nodes.filter((node) => node.type === 'stage')
