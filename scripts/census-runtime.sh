@@ -19,18 +19,18 @@ check_one() { # regex, expected-single-file
   fi
 }
 
-check_one '^export class AsyncEventQueue'                          'packages/providers/src/runtime/event-queue.ts'
-check_one '^export (async )?function terminateChild'               'packages/providers/src/runtime/process.ts'
-check_one '^export (async )?function killWithEscalation'           'packages/providers/src/runtime/process.ts'
-check_one '^export (async )?function clearAndVerifyPauseFlagAbsent' 'packages/providers/src/runtime/pause-flag.ts'
-check_one '^export function isRecord'                              'packages/providers/src/runtime/summary.ts'
+check_one '^(export )?class AsyncEventQueue\b'                          'packages/providers/src/runtime/event-queue.ts'
+check_one '^(export )?(async )?function terminateChild\b'               'packages/providers/src/runtime/process.ts'
+check_one '^(export )?(async )?function killWithEscalation\b'           'packages/providers/src/runtime/process.ts'
+check_one '^(export )?(async )?function clearAndVerifyPauseFlagAbsent\b' 'packages/providers/src/runtime/pause-flag.ts'
+check_one '^(export )?function isRecord\b'                              'packages/providers/src/runtime/summary.ts'
 # `claude/flags.ts` also defines a `preflightGate` — a deliberate Claude-shaped wrapper (M13) that
 # calls the runtime one below with Claude's own preflight inputs, not a second implementation of it.
-check_one '^export (async )?function preflightGate'                'packages/providers/src/claude/flags.ts packages/providers/src/runtime/gate-preflight.ts'
-check_one '^export (async )?function runGateScript'                'packages/providers/src/runtime/gate-preflight.ts'
-check_one '^export function buildChildEnv'                         'packages/providers/src/runtime/process.ts'
-check_one '^export function summaryFor'                            'packages/providers/src/runtime/summary.ts'
-check_one 'const KILL_GRACE_MS = '                                 'packages/providers/src/runtime/process.ts'
+check_one '^(export )?(async )?function preflightGate\b'                'packages/providers/src/claude/flags.ts packages/providers/src/runtime/gate-preflight.ts'
+check_one '^(export )?(async )?function runGateScript\b'                'packages/providers/src/runtime/gate-preflight.ts'
+check_one '^(export )?function buildChildEnv\b'                         'packages/providers/src/runtime/process.ts'
+check_one '^(export )?function summaryFor\b'                            'packages/providers/src/runtime/summary.ts'
+check_one 'const KILL_GRACE_MS = '                                      'packages/providers/src/runtime/process.ts'
 
 json_defs=$(grep -rln '^json_string()' scripts | sort | tr '\n' ' ' | sed 's/ $//')
 if [[ "$json_defs" != "scripts/lib/pause-flag.sh" ]]; then
