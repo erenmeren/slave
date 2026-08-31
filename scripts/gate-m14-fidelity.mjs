@@ -358,6 +358,33 @@ async function waitVisible(locator, description) {
   }
 }
 
+/**
+ * `page.goto`, retried once on a server error.
+ *
+ * M17 Task 7's Flake 6 investigation reproduced `SyntaxError: Unexpected end of JSON input` live,
+ * server- and client-side, on three different pages across three different gate runs --
+ * `next/dist/server/load-manifest.external.js`'s `loadManifest` is a bare `readFileSync` +
+ * `JSON.parse`, no lock, no atomic rename, and its cache is invalidated on every compile; a
+ * request landing while a DIFFERENT route's compile is mid-rewrite of a shared manifest reads a
+ * torn file and 500s. Widening `next.config.ts`'s on-demand-entries buffer and warming every
+ * route before the browser arrives (both above) cut how OFTEN this fires -- neither closes it:
+ * `next dev` still recompiles its client-HMR runtime chunk on ordinary navigation regardless of
+ * either. The write that tears a read finishes in milliseconds, so the fix that actually closes
+ * this is the one the symptom itself proves works -- the SAME failing run's very next request
+ * always succeeded (both live reproductions self-healed on retry, seconds later, with no code
+ * change). One retry, after a beat for the in-flight write to finish, standing in for that.
+ */
+async function gotoReliably(url) {
+  const first = await page.goto(url, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS }).catch((cause) => {
+    console.log(`gotoReliably: ${url} threw on the first attempt (${cause instanceof Error ? cause.message : String(cause)}) -- retrying once`)
+    return null
+  })
+  if (first !== null && first.status() < 500) return first
+  if (first !== null) console.log(`gotoReliably: ${url} returned ${String(first.status())} -- retrying once`)
+  await delay(300)
+  return page.goto(url, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
+}
+
 /** Clicks `locator`, then bounded-waits for `predicate`. Deliberately does NOT re-click on every
  *  poll tick -- ordinary request latency is not a hydration race, and re-clicking would send a
  *  second real POST while the first is still in flight. A single retry click fires only once the
@@ -524,7 +551,10 @@ try {
   const preferredPort = await findFreePort()
   nextServer = spawn('node', ['node_modules/next/dist/bin/next', 'dev', 'apps/web', '-p', String(preferredPort)], {
     cwd: repoRoot,
-    env: process.env,
+    // `AITEAMOS_GATE_WARM=1` widens `next.config.ts`'s on-demand-entries buffer for THIS `next
+    // dev` only (M17 Task 7, Flake 6 investigation) -- see that file for the mechanism. An
+    // ordinary developer's `next dev` never sets this and keeps Next's defaults.
+    env: { ...process.env, AITEAMOS_GATE_WARM: '1' },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   let nextOutput = ''
@@ -558,6 +588,47 @@ try {
   }
   const baseUrl = `http://localhost:${String(resolvedPort)}`
   console.log(`next dev ready at ${baseUrl}`)
+
+  // ---- Warm every route once, synchronously, before the browser (or any concurrent client
+  // polling) exists. M17 Task 7's Flake 6 investigation reproduced `SyntaxError: Unexpected end
+  // of JSON input` twice live -- once server-side on `/analytics` (a page already compiled
+  // minutes earlier), once on `/w/[workspaceId]/tasks` -- both mid-burst, once a live run started
+  // firing several routes' FIRST compiles at once. `next/dist/server/load-manifest.external.js`'s
+  // `loadManifest` is the reason: `readFileSync` then `JSON.parse`, no atomic rename, no lock, and
+  // its cache is invalidated on every compile -- so a request landing while a DIFFERENT route's
+  // compile is mid-rewrite of a shared manifest reads a torn file and throws exactly that error,
+  // server-side, and the client sees the identical text when the broken flight payload it was
+  // streaming reaches the browser. Warming every route here, one at a time, means nothing compiles
+  // for the first time once the interactive stages begin -- no later request can race a write that
+  // never happens again. Covers page.tsx AND route.ts: the SSE route is compiled the same lazy way
+  // and is exactly what Flake 6's original evidence named missing (no `/activity/stream` request
+  // at all) -- `fetch` on it is cancelled the instant headers land, since its body never closes on
+  // its own.
+  console.log('warming every route before the browser arrives (closes the dev-server manifest race)...')
+  const WARMUP_APP_DIR = join(repoRoot, 'apps/web/src/app')
+  const DUMMY_ID = '00000000-0000-4000-8000-000000000000'
+  const warmupRouteFiles = []
+  ;(function walkAppDir(dir) {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.isDirectory()) walkAppDir(join(dir, entry.name))
+      else if (entry.name === 'route.ts' || entry.name === 'page.tsx') warmupRouteFiles.push(join(dir, entry.name))
+    }
+  })(WARMUP_APP_DIR)
+  for (const file of warmupRouteFiles.sort()) {
+    const routeDir = file.slice(WARMUP_APP_DIR.length).replace(/\/(route\.ts|page\.tsx)$/, '')
+    const urlPath = routeDir === ''
+      ? '/'
+      : routeDir
+          .split('/')
+          .map((segment) => (segment === '[workspaceId]' ? workspaceId : segment.startsWith('[') ? DUMMY_ID : segment))
+          .join('/')
+    const response = await fetch(`${baseUrl}${urlPath}`).catch((cause) => {
+      throw new Error(`warm-up request for ${urlPath} failed: ${cause instanceof Error ? cause.message : String(cause)}`)
+    })
+    await response.body?.cancel().catch(() => {})
+    console.log(`warm-up: ${urlPath} -> ${String(response.status)}`)
+  }
+  console.log(`warm-up done: ${String(warmupRouteFiles.length)} route(s) compiled`)
 
   browser = await chromium.launch({
     executablePath: chromiumPath,
@@ -660,7 +731,7 @@ try {
   }
 
   for (const target of PAGES) {
-    await page.goto(`${baseUrl}${target.path()}`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
+    await gotoReliably(`${baseUrl}${target.path()}`)
     await waitVisible(page.getByTestId(target.testId), `${target.name}'s structural marker [data-testid=${target.testId}]`)
     // The sidebar is on every one of the nine, and its own width is stage 2's first assertion --
     // asserting it is PRESENT here means a page that renders without the shell fails by name.
@@ -722,7 +793,7 @@ try {
   let currentPath = null
   for (const [pageName, path, selector, property, expected] of NUMBERS) {
     if (path !== currentPath) {
-      await page.goto(`${baseUrl}${path}`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
+      await gotoReliably(`${baseUrl}${path}`)
       currentPath = path
       // Hydrated before anything is measured: a `getComputedStyle` taken against the server's
       // first paint would be reading a page React has not finished with.
@@ -748,7 +819,7 @@ try {
   // reckoning and that the flexible track actually took the remaining space; the authored inline
   // value is what proves the template is the README's string and not six coincidences.
   const AGENTS_COLUMNS = '200px 130px 120px 1fr 110px 90px 80px'
-  await page.goto(`${baseUrl}/agents`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
+  await gotoReliably(`${baseUrl}/agents`)
   // The Agents page opens on WORKERS now (M14 fix wave, queue item (a)): the README's Agents page
   // IS this seven-column table, and Roster is the tab beside it. The `clickUntil` below is kept
   // anyway -- it is idempotent on an already-selected tab, and it is what makes this stage assert
@@ -799,7 +870,7 @@ try {
   // ============================================================================================
   // Stage 4a: the two-step STOP, the halt banner, and clear-halt.
   // ============================================================================================
-  await page.goto(`${baseUrl}/w/${workspaceId}`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
+  await gotoReliably(`${baseUrl}/w/${workspaceId}`)
   await clickUntil(
     page.getByTestId('emergency-stop'),
     async () => page.getByTestId('emergency-stop-confirm').first().isVisible(),
@@ -825,7 +896,7 @@ try {
   // a global page would mean a page had guessed at a workspace it does not belong to.
   const SCOPED = new Set(['overview', 'tasks', 'graph', 'activity'])
   for (const target of PAGES) {
-    await page.goto(`${baseUrl}${target.path()}`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
+    await gotoReliably(`${baseUrl}${target.path()}`)
     await waitVisible(page.getByTestId(target.testId), `${target.name} while the workspace is halted`)
     if (SCOPED.has(target.name)) {
       await waitVisible(
@@ -850,7 +921,7 @@ try {
   if (cleared.haltedReason !== null) {
     await fail(`stage 4a: clear-halt left haltedReason=${JSON.stringify(cleared.haltedReason)}`)
   }
-  await page.goto(`${baseUrl}/w/${workspaceId}`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
+  await gotoReliably(`${baseUrl}/w/${workspaceId}`)
   await waitVisible(page.getByTestId('strip'), 'the Overview strip after the halt was cleared')
   await waitUntil('the halt banner to disappear once the halt is cleared', 30_000, async () => {
     const remaining = await page.getByRole('alert').filter({ hasText: 'workspace halted' }).count()
@@ -902,7 +973,7 @@ try {
   })
   console.log(`stage 4b: run ${run.id} is working (pid ${String(run.pid)}, provider ${String(run.provider)})`)
 
-  await page.goto(`${baseUrl}/w/${workspaceId}`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
+  await gotoReliably(`${baseUrl}/w/${workspaceId}`)
   // Truth from snapshot, never optimistic (design README "State Management"): the card is read for
   // the label the SERVER derived, not for anything a click set locally.
   await waitUntil('the card to show WORKING', 30_000, async () => {
@@ -920,7 +991,7 @@ try {
   // screenshot of a different thing.
   for (const target of PAGES) {
     if (!LIVE_PAGES.has(target.name)) continue
-    await page.goto(`${baseUrl}${target.path()}`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
+    await gotoReliably(`${baseUrl}${target.path()}`)
     await waitVisible(page.getByTestId(target.testId), `${target.name} with a live run`)
     // A beat for the first SSE snapshot to land: these four pages all render from the server's
     // initial payload and then immediately refetch, and a capture taken between the two shows the
@@ -939,7 +1010,7 @@ try {
   // ============================================================================================
   // Stage 3b: the motion that a `working` card is supposed to have.
   // ============================================================================================
-  await page.goto(`${baseUrl}/w/${workspaceId}`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
+  await gotoReliably(`${baseUrl}/w/${workspaceId}`)
   await waitVisible(page.getByTestId('card-sweep'), "the working card's sweep")
   await assertComputed('overview', '[data-testid="card-sweep"]', 'animation-duration', '2.2s')
   await assertComputed('overview', '[data-testid="card-sweep"]', 'animation-timing-function', 'cubic-bezier(0.4, 0, 0.2, 1)')
@@ -951,7 +1022,7 @@ try {
   // ============================================================================================
   // Stage 2b: the cable, which exists only while something is flowing along it.
   // ============================================================================================
-  await page.goto(`${baseUrl}/w/${workspaceId}/graph`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
+  await gotoReliably(`${baseUrl}/w/${workspaceId}/graph`)
   await waitVisible(page.locator('path[data-cable="flow"]'), "the org graph's lit cable")
   // The README's number is `stroke-dasharray: 5 11`, which is what `CableEdge` writes as the SVG
   // presentation attribute. Chromium's COMPUTED serialization of that list is `5px, 11px` -- pixel
@@ -967,7 +1038,7 @@ try {
   // ============================================================================================
   await page.emulateMedia({ reducedMotion: 'reduce' })
   for (const path of [`/w/${workspaceId}`, `/w/${workspaceId}/graph`]) {
-    await page.goto(`${baseUrl}${path}`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
+    await gotoReliably(`${baseUrl}${path}`)
     // The elements whose motion stage 3b/2b just proved must still BE here -- otherwise "nothing
     // animates" would be satisfied by a page that rendered nothing.
     await waitVisible(
@@ -997,7 +1068,7 @@ try {
   // ============================================================================================
   // Stage 4b (second half): a pause shows `pause_requested`, then `paused`.
   // ============================================================================================
-  await page.goto(`${baseUrl}/w/${workspaceId}`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
+  await gotoReliably(`${baseUrl}/w/${workspaceId}`)
   await waitVisible(page.getByTestId('card-pause'), "the card's Pause button")
   let sawPauseRequested = false
   await clickUntil(
@@ -1046,7 +1117,7 @@ try {
   // ============================================================================================
   // Stage 4c: a roster click filters the stream and dims the rest.
   // ============================================================================================
-  await page.goto(`${baseUrl}/w/${workspaceId}/activity`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
+  await gotoReliably(`${baseUrl}/w/${workspaceId}/activity`)
   await waitVisible(page.getByTestId('activity-card'), 'at least one activity card')
   const countDimmed = async () =>
     page
@@ -1110,7 +1181,7 @@ try {
         "This gate reads the DAEMON HOST's ~/.claude/plugins/cache; a machine without the superpowers plugin cannot run it.",
     )
   }
-  await page.goto(`${baseUrl}/skills`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
+  await gotoReliably(`${baseUrl}/skills`)
   await waitVisible(page.getByTestId(`provider-name-${superpowers.id}`), 'the plugin:superpowers provider on the Skills page')
   const providerLabel = await page.getByTestId(`provider-name-${superpowers.id}`).first().textContent()
   if ((providerLabel ?? '').trim() !== 'plugin:superpowers') {
@@ -1147,7 +1218,7 @@ try {
     )
   }
 
-  await page.goto(`${baseUrl}/analytics?workspace=${workspaceId}`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
+  await gotoReliably(`${baseUrl}/analytics?workspace=${workspaceId}`)
   await waitVisible(page.getByTestId('kpi-tile'), 'the Analytics KPI strip')
   const columns = await page.locator('[data-testid="bar-column"]').count()
   if (columns !== 7) {

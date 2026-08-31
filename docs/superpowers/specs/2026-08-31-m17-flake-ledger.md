@@ -402,3 +402,95 @@ Template per flake:
   longer flip it red — no further action queued.
 
 ## Flake 6 — live-gate Activity hydration
+
+- **Evidence** — post-M16 gate re-run: 2 of 3 runs FAILED — SSR delivered the Activity page (3
+  events counted in the rail), then **zero** client requests (no `/activity/stream`, no `/shell`);
+  the page never hydrated (spec §2 roster). A cheap, targeted probe (20 loops: fresh Playwright
+  context → `page.goto(baseUrl + '/w/<seeded-workspace>/activity', { waitUntil: 'load' })` →
+  `page.waitForRequest` on `/activity/stream`, 15s timeout, next dev spawned/torn down identically
+  to the gate, `next dev` warm log + console/pageerror/requestfailed collectors cribbed verbatim
+  from `gate-m14-fidelity.mjs:525–583`) reproduced NOTHING: **hydrated 20/20**, every loop firing
+  its `/activity/stream` request in well under the timeout. New this wave: the gate itself,
+  standalone (pre-fix), failed twice while proving at the gate — once on `/analytics` (a page
+  already compiled and served 200 three times earlier in the SAME run), once on
+  `/w/[workspaceId]/tasks` (also already compiled) — both `SyntaxError: Unexpected end of JSON
+  input`, server-side (`[next] ⨯ ... { page: '...' }`) AND client-side (`[browser:pageerror]`),
+  both at moments of high concurrent request load (a live run just starting, several routes'
+  first-ever compiles landing close together). Reproduced a third time, on `/w/[workspaceId]/tasks`
+  and then `/w/[workspaceId]/activity` itself, while iterating on the fix below.
+
+- **Mechanism** — not Activity-specific, and not a hydration bug: `next dev`'s own manifest reader
+  (`node_modules/next/dist/server/load-manifest.external.js:36–53`, `loadManifest`) does
+  `readFileSync` then bare `JSON.parse`, no lock, no atomic rename, and its cache is invalidated on
+  every compile. A request landing while a compile (ANY route's — first-visit OR the shared
+  client-HMR runtime chunk that `next dev` recompiles on ordinary navigation regardless of prior
+  warm-up, observed as unnamed `✓ Compiled in Nms (524 modules)` lines with no preceding
+  `○ Compiling ...`) is mid-rewrite of a shared manifest reads a torn file and throws exactly this
+  `SyntaxError`, server-side; the client sees the identical text when the broken flight payload the
+  server was mid-stream on reaches the browser and fails to parse there too — one root cause, two
+  observation points. The original Activity-hydration symptom (zero client requests after correct
+  SSR) is the same class of failure wearing a different face: if the manifest read that resolves
+  `/w/<id>/activity`'s OWN route (or the script tag referencing its client chunk) is what tears,
+  the page can render server-side from data already in hand while the client bundle that would
+  have opened `/activity/stream` never loads at all. The probe's 20/20 clean run doesn't contradict
+  this — it never produces the concurrent-compile conditions the full 5-stage gate does (nine pages
+  under a live run, several never-yet-hit API routes compiling back to back); the probe is a single
+  page, fresh-context, cold-then-idle. This is a `next dev` implementation bug (confirmed by reading
+  its own source, not inferred), not something in this repo's page/component code.
+
+- **Change** — three additive layers in `scripts/gate-m14-fidelity.mjs` and `apps/web/next.config.ts`
+  (commit TBD), from least to most load-bearing:
+  1. **Warm every route once before the browser arrives** (`gate-m14-fidelity.mjs`, right after
+     `next dev ready`): a filesystem walk of `apps/web/src/app` collects every `route.ts`/`page.tsx`,
+     substitutes `[workspaceId]` with the real seeded id and any other dynamic segment with a fixed
+     dummy UUID, and issues one plain `fetch` per route (GET; every route that answers GET is
+     read-only, verified by hand against all 27 `route.ts` files' exported methods before adding
+     this — a GET to a POST/PUT/DELETE-only route 405s without invoking the handler). The SSE route
+     (`/activity/stream`) is included and its body cancelled the instant headers land, since it
+     never closes on its own. Front-loads every API route the interactive stages hit for the first
+     time deep into the run (pause/resume/stop/message/emergency-stop/budget/goal/provider/company/
+     org/*/skills/assign/agents-model/agents-permission/dev-reseed), which is where the two live
+     reproductions actually happened — NOT on any page's first-ever visit.
+  2. **Widen the on-demand-entries buffer, gate-only** (`next.config.ts`): `next dev` evicts a
+     compiled route after 60s idle or once more than 5 OTHER routes have been visited since
+     (`node_modules/next/dist/server/config-shared.js:66–67` defaults; eviction logic confirmed
+     live in `on-demand-entry-handler.js:225–247,438,470`) — trivially exceeded by a 5-stage,
+     9-page, multi-minute gate run, so a page warmed by (1) can still need recompiling later. The
+     gate now spawns `next dev` with `AITEAMOS_GATE_WARM=1`, and `next.config.ts` reads that var to
+     set `onDemandEntries: { maxInactiveAge: 10 * 60 * 1000, pagesBufferLength: 50 }` — ONLY under
+     that flag, so an ordinary developer's `next dev` keeps Next's defaults.
+  3. **Retry the browser's own navigation once, on a server error** (`gate-m14-fidelity.mjs`, new
+     `gotoReliably` helper, all 16 `page.goto(...)` call sites routed through it): (1) and (2) cut
+     how OFTEN the race fires but do not close it — `next dev` still recompiles its shared
+     client-HMR chunk on ordinary navigation independent of both. The write that tears a read
+     finishes in milliseconds (both live reproductions self-healed on the very next request, no
+     code change, seconds later), so `gotoReliably` retries once, after a 300ms beat, on any
+     response ≥500 or a thrown navigation. This is the layer that actually closed it: proven live
+     during the fix's own verification — `gotoReliably` fired and healed a real 500 on `/analytics`
+     (verification run before the counted 3×) and again on `/agents` and `/` (inside the counted
+     3×'s runs 1 and 2), and every one of those runs still finished green end to end.
+
+- **Proof** — probe: `node --env-file=.env <scratchpad>/hydration-probe.mjs` → **hydrated 20/20**
+  (not reproduced; probe never recreates the full gate's concurrent-compile conditions — see
+  Mechanism). Gate 3×, chained (`npm run gate:m14-fidelity && npm run gate:m14-fidelity && npm run
+  gate:m14-fidelity`), counted from the first attempt after all three Change layers landed:
+  run 1 **PASS** (99s, `gotoReliably` retried `/agents` once, healed), run 2 **PASS** (100s,
+  `gotoReliably` retried `/` once, healed), run 3 **PASS** (98s, no retry needed) — **3/3 green**,
+  `ALL THREE GREEN`. (Pre-fix, for the record: two standalone gate runs 1-1/1-0 red/green on
+  `/analytics`; the first chained-3× attempt died on run 1 — `/w/[workspaceId]/tasks` — restarting
+  the count per the brief's own rule, not counted above; two more fix iterations — warm-up alone,
+  then warm-up + widened buffer, still without the retry — each reproduced the same class of
+  failure again, on `/w/[workspaceId]/tasks` and then `/w/[workspaceId]/activity` itself, before
+  the retry layer was added and the counted 3× ran clean on the first attempt after.)
+
+- **Residue** — the underlying `next dev` manifest race is upstream (confirmed in Next 15.5.23's
+  own `load-manifest.external.js`), not patched, not reported — this ledger entry is the record.
+  `gotoReliably`'s one retry is what actually closes it for this gate, and it is a dev-server-only
+  hazard (`next start`/production serving loads manifests once at boot, never mid-request) with no
+  equivalent risk in the shipped app. If a future Next upgrade fixes the torn read upstream, layers
+  (1)–(3) stay correct as defensive belt-and-braces (idle cost: ~30 warm-up requests and a handful
+  of possible retries, all before or during a gate run that already takes ~100s). If it recurs
+  server-side even through a THIRD retry attempt on some future machine/load profile, that is the
+  next signal to escalate to `next dev --turbo` (a different, actively-developed dev compiler) or
+  to file the manifest-write race upstream with the two live reproductions' exact log lines as
+  evidence, both preserved in this entry.
