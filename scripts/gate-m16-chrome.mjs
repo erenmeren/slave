@@ -28,7 +28,9 @@
 //      `AgentPermission` rows, so every cell is unset and this check is vacuous-but-stated: it
 //      prints the one glyph found and passes rather than silently skipping.
 //   3. Projects `/`: a workspace card's `team-overflow` pill iff its TRUE team size (read straight
-//      from Prisma, independent of the capped list the page itself renders) is over six.
+//      from Prisma, an independent oracle) is over six -- and the seed's own 9-agent workspace
+//      proves the tile genuinely reachable (fix round 1: `server/org.ts` no longer caps
+//      `ProjectRow.team` server-side).
 //   4. Repo hygiene (no browser): Task 7's own clean-check grep, expected empty.
 //   5. Analytics `/analytics`: a per-agent row whose success cell reads `—` has a progress bar with
 //      no `aria-valuenow`; if no such row exists in the seed, the fallback proves the wiring exists
@@ -291,21 +293,24 @@ try {
 
   // ============================================================================================
   // Check 3: Projects / -- team-overflow iff the TRUE team size (read from Prisma, independent of
-  // the capped list the page itself renders) is over six.
+  // whatever the page itself renders) is over six.
+  //
+  // Fix round 1 (controller ruling): `server/org.ts`'s `listProjects` USED to cap `ProjectRow.team`
+  // at 6 agents server-side, on top of the six-avatar cap `ProjectsClient.tsx` already owns --
+  // which made `team-overflow` structurally unreachable no matter how large a workspace's real
+  // roster was. That server-side `.slice(0, 6)` is gone: `ProjectRow.team` now carries the FULL
+  // team, so this check asserts the genuine oracle (the raw roster size) with no accommodation for
+  // a cap that no longer exists.
   // ============================================================================================
   const workspacesByName = await prisma.workspace.findMany({
     include: { teams: { include: { agents: true } } },
     orderBy: { name: 'asc' },
   })
-  // `server/org.ts`'s `listProjects` caps `ProjectRow.team` at 6 agents (`.slice(0, 6)`) BEFORE it
-  // ever reaches `ProjectsClient` -- so the client's own `project.team.length > 6` check that gates
-  // `team-overflow` can never see more than 6, no matter how large the roster really is. The oracle
-  // mirrors that same cap (not the raw roster size) so this check asks the question the rendered
-  // page can actually answer, rather than failing on a ceiling the app enforces one layer up.
-  const trueTeamSizes = workspacesByName.map((workspace) => {
-    const rosterSize = workspace.teams.reduce((n, team) => n + team.agents.length, 0)
-    return { id: workspace.id, name: workspace.name, rosterSize, size: Math.min(rosterSize, 6) }
-  })
+  const trueTeamSizes = workspacesByName.map((workspace) => ({
+    id: workspace.id,
+    name: workspace.name,
+    size: workspace.teams.reduce((n, team) => n + team.agents.length, 0),
+  }))
 
   await page.goto(url('/'), { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
   await waitVisible(page.getByTestId('project-card'), 'a project card')
@@ -316,6 +321,7 @@ try {
         'workspace(s) -- the page and the independent oracle disagree on how many projects exist',
     )
   }
+  let sawOverflow = false
   for (let index = 0; index < trueTeamSizes.length; index += 1) {
     const oracle = trueTeamSizes[index]
     const card = page.getByTestId('project-card').nth(index)
@@ -333,9 +339,13 @@ try {
       assert(
         actualText === expectedText,
         `check 3 (projects): workspace ${oracle.id} (${oracle.name}) team-overflow reads ${JSON.stringify(actualText)}, ` +
-          `expected ${JSON.stringify(expectedText)} (${String(oracle.size)} members, capped at 6)`,
+          `expected ${JSON.stringify(expectedText)} (${String(oracle.size)} members)`,
       )
-      console.log(`check 3: workspace ${oracle.name} has ${String(oracle.size)} members -- team-overflow reads ${actualText}`)
+      sawOverflow = true
+      console.log(
+        `check 3: workspace ${oracle.name} genuinely has ${String(oracle.size)} team members -- team-overflow reads ` +
+          `${actualText}, proving the tile is reachable`,
+      )
     } else {
       if (overflowCount !== 0) {
         await fail(
@@ -343,13 +353,16 @@ try {
             `(<=6) but its card shows a team-overflow pill anyway`,
         )
       }
-      console.log(
-        `check 3: workspace ${oracle.name} has a ${String(oracle.rosterSize)}-agent roster, capped to ` +
-          `${String(oracle.size)} before render (<=6) -- team-overflow correctly absent`,
-      )
+      console.log(`check 3: workspace ${oracle.name} has ${String(oracle.size)} team members (<=6) -- team-overflow correctly absent`)
     }
   }
-  console.log(`check 3 PASSED: team-overflow matches Prisma's own team-size count on all ${String(cardCount)} project card(s)`)
+  console.log(
+    sawOverflow
+      ? `check 3 PASSED: team-overflow matches Prisma's own team-size count on all ${String(cardCount)} project card(s), ` +
+          'and a genuine >6-member workspace proved the tile reachable'
+      : `check 3 PASSED: team-overflow matches Prisma's own team-size count on all ${String(cardCount)} project card(s) ` +
+          '(no workspace in this database has more than 6 team members, so only the absent-branch was exercised)',
+  )
 
   // ============================================================================================
   // Check 5: Analytics /analytics -- a `—` success cell pairs with a progress bar carrying no

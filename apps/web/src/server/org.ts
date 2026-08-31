@@ -59,7 +59,8 @@ export interface ProjectRow {
    *  the card then says so rather than inventing copy. */
   readonly goal: string | null
   /** The project's workers, for the avatar row: name and the tone their derived status resolves
-   *  to. Capped at 6 -- a wider row wraps and stops reading as a team. */
+   *  to. The FULL team, uncapped -- `ProjectsClient.tsx` owns the six-avatar cap and the `+N`
+   *  overflow tile that reads past it (fix round 1). */
   readonly team: readonly { readonly agentId: string; readonly name: string; readonly status: string }[]
   /** KNOWN spend: every run of this project that reported a cost, summed. */
   readonly spend: number
@@ -151,15 +152,17 @@ export async function listProjects(): Promise<readonly ProjectRow[]> {
       active: countOf(workspace.id, [...ACTIVE_TASK_STATUSES]),
       blocked: countOf(workspace.id, ['blocked']),
     },
-    // Counted off the SAME `workspace.teams[].agents` array the avatar row below slices, so the
-    // `AGENTS` tile and the row of faces beside it cannot disagree (review I4). No separate query:
-    // a second read is a second chance to answer the same question differently.
+    // Counted off the SAME `workspace.teams[].agents` array the avatar row below is built from, so
+    // the `AGENTS` tile and the row of faces beside it cannot disagree (review I4). No separate
+    // query: a second read is a second chance to answer the same question differently.
     workerCount: workspace.teams.reduce((n, team) => n + team.agents.length, 0),
-    // Capped at six: the handoff's avatar row is one line, and a seventh tile wraps it into
-    // something that no longer reads as a team at a glance.
+    // The FULL team, uncapped (fix round 1: the six-avatar cap moved client-side in
+    // `ProjectsClient.tsx` back in Task 4, and a server-side `.slice(0, 6)` on top of it made the
+    // `+N` overflow tile structurally unreachable -- the client never saw a team longer than six to
+    // know it was showing a prefix. Bounded by the workspace's own agent count, which is never
+    // unbounded in practice.
     team: workspace.teams
       .flatMap((team) => team.agents)
-      .slice(0, 6)
       .map((agent) => ({ agentId: agent.id, name: agent.name, status: teamAgentLiveInfo.get(agent.id)?.status ?? 'idle' })),
     // `?? []` here is the case `?? 0` was always right about: a workspace with no runs at all has
     // spent nothing and has nothing unmeasured -- `sumSpend([])` says exactly that.
