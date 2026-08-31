@@ -240,7 +240,7 @@ Template per flake:
   only when the `while` loop actually exits — now correctly gated on `reconnectRequested` too, not
   just `closed`. The `01ba261` comment block (`subscribe.ts:74–87`) was extended, not replaced: it
   still documents why `reconnecting` exists (collapsing the trio into one loop), with an added
-  paragraph describing the hole `reconnectRequested` closes. Commit: `db94ba5`.
+  paragraph describing the hole `reconnectRequested` closes. Commit: `8c708a7`.
 
 - **Proof** — new regression test added, `packages/events/test/integration/subscribe.test.ts`
   "recovers when a second disconnect lands right after a reconnect settles" (two `killListeners()`
