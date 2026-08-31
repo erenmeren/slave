@@ -275,7 +275,7 @@ export function ActivityClient({
                     // which is the only way back to the undimmed river without a reload.
                     aria-pressed={rosterAgentId === agent.id}
                     onClick={() => setRosterAgentId((current) => (current === agent.id ? null : agent.id))}
-                    className={`w-full truncate rounded-nav px-2 py-1 text-left text-[12.5px] transition-colors ${
+                    className={`w-full truncate rounded-tile px-2 py-1 text-left text-[12.5px] transition-colors ${
                       rosterAgentId === agent.id ? 'bg-[#151a21] text-text-1' : 'text-text-2 hover:text-text-1'
                     }`}
                   >

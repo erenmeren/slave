@@ -29,9 +29,8 @@
   --tone-paused: #8a929e;
   --tone-idle: #5b6472;
 
-  /* Radii (spec §3): 5 chip/button · 6 nav/small · 7 input/tile · 8 card · 9–10 panel · 20 pill. */
+  /* Radii (spec §3): 5 chip/button · 7 input/tile · 8 card · 9–10 panel · 20 pill. */
   --radius-chip: 5px;
-  --radius-nav: 6px;
   --radius-tile: 7px;
   --radius-card: 8px;
   --radius-panel: 9px;
@@ -39,7 +38,6 @@
 
   /* Shadows (spec §3 / design_handoff README "Design Tokens"). */
   --shadow-resting: 0 4px 16px rgba(0, 0, 0, 0.35);
-  --shadow-floor: 0 40px 90px rgba(0, 0, 0, 0.7);
 
   --font-sans: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;
   --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
@@ -63,13 +61,11 @@
   --color-tone-paused: var(--tone-paused);
   --color-tone-idle: var(--tone-idle);
   --radius-chip: var(--radius-chip);
-  --radius-nav: var(--radius-nav);
   --radius-tile: var(--radius-tile);
   --radius-card: var(--radius-card);
   --radius-panel: var(--radius-panel);
   --radius-pill: var(--radius-pill);
   --shadow-resting: var(--shadow-resting);
-  --shadow-floor: var(--shadow-floor);
   --font-sans: var(--font-sans);
   --font-mono: var(--font-mono);
 }
