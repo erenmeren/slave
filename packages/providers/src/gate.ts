@@ -35,6 +35,22 @@ export type GateOutcome =
  */
 export const PERMISSION_DENY_REASON_PREFIX = 'permission matrix denies'
 
+/** Escapes every regex metacharacter in `s`, so a literal can be interpolated into a `RegExp`. */
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/**
+ * Built FROM `PERMISSION_DENY_REASON_PREFIX` (fix round 1, review minor 5) rather than repeating
+ * its text as a second literal -- the prefix the parser matches against and the prefix
+ * `classifyGateEvent` checks with `.startsWith` must never be able to drift apart from each other,
+ * only both together from the shell twin (which `packages/control`'s mapping test still pins
+ * separately).
+ */
+const PERMISSION_DENY_REASON_PATTERN = new RegExp(
+  `^${escapeRegExp(PERMISSION_DENY_REASON_PREFIX)} '(.*)' \\((.+)\\) for this agent$`,
+)
+
 /**
  * The fixed grammar every matrix deny reason follows, verbatim (scripts/lib/permissions.sh, M18
  * Task 3): `permission matrix denies '<capability>' (<tool>) for this agent`. Parses `{ tool,
@@ -44,9 +60,15 @@ export const PERMISSION_DENY_REASON_PREFIX = 'permission matrix denies'
  * throws: capabilities are fixed strings today (no apostrophes or parens of their own to escape),
  * but this parses whatever comes down the wire, not what the shell script is trusted to send, so a
  * capability containing a quote must degrade to `null` rather than crash the run that hit it.
+ *
+ * A `null` here is NOT a "believe it anyway" case (fix round 1, review Important 4 controller
+ * ruling): `classifyGateEvent` and `pump.ts`'s `permission_denied` case both route a `null` back to
+ * their ordinary, non-matrix handling -- a pause for Claude, an ordinary permission-mode denial for
+ * Cursor -- rather than reporting an invented `tool`/`capability`. Fail-safe is pausing, not
+ * trusting an unparseable matrix claim.
  */
 export function parsePermissionDenyReason(reason: string): { readonly tool: string; readonly capability: string } | null {
-  const match = /^permission matrix denies '(.*)' \((.+)\) for this agent$/.exec(reason)
+  const match = PERMISSION_DENY_REASON_PATTERN.exec(reason)
   if (match === null) return null
   const [, capability, tool] = match
   if (capability === undefined || tool === undefined) return null
@@ -80,15 +102,21 @@ export function classifyGateEvent(event: RuntimeEvent): GateOutcome | null {
   switch (event.kind) {
     case 'hook_denied': {
       // Both routes arrive here as the identical `hook_denied` shape -- Claude's PreToolUse hook
-      // is the one mechanism a pause deny AND a matrix deny both go through -- so the prefix on
-      // `reason` is the only thing that tells them apart (M18 Task 6). A malformed tail past a
-      // confirmed prefix (the shell twin drifted, or a hand-built reason in a test) still reports
-      // `tool_denied` -- the prefix already promised "this run continues", so falling through to
-      // `stopped_by_gate` here would pause a run the prefix just said would not pause -- with the
-      // documented `unknown`/`unknown` fallback payload rather than a thrown error.
-      if (event.reason.startsWith(PERMISSION_DENY_REASON_PREFIX)) {
-        const parsed = parsePermissionDenyReason(event.reason)
-        return { kind: 'tool_denied', tool: parsed?.tool ?? 'unknown', capability: parsed?.capability ?? 'unknown' }
+      // is the one mechanism a pause deny AND a matrix deny both go through -- so `reason` is the
+      // only thing that tells them apart (M18 Task 6).
+      //
+      // Fix round 1 (review Important 4, controller ruling -- overrides this function's original
+      // `unknown`/`unknown` fallback): `tool_denied` is reported ONLY on a full, successful parse
+      // of `reason`. A reason that merely starts with the prefix but fails to parse -- the shell
+      // twin drifted, or a hand-built reason in a test got the grammar wrong -- falls through to
+      // `stopped_by_gate` below, exactly like a reason carrying no prefix at all. FAIL-SAFE IS
+      // PAUSING: an unparseable claim of "this was the matrix" is not trusted merely because it
+      // looks like one, and a paused run an operator can inspect is the safe failure mode, not a
+      // silently-invented `tool: 'unknown'` on a run that keeps going ungated in a way nothing
+      // downstream can name.
+      const parsed = parsePermissionDenyReason(event.reason)
+      if (parsed !== null) {
+        return { kind: 'tool_denied', tool: parsed.tool, capability: parsed.capability }
       }
       return { kind: 'stopped_by_gate', reason: event.reason }
     }

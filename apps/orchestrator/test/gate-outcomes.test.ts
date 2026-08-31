@@ -22,14 +22,18 @@ describe('classifyGateEvent', () => {
     ).toEqual({ kind: 'tool_denied', tool: 'Bash', capability: 'run tests' })
   })
 
-  it('falls back to the unknown/unknown payload, never a throw, on a prefixed reason whose tail is malformed', () => {
-    expect(
-      classifyGateEvent({
-        kind: 'hook_denied',
-        hookName: 'PreToolUse:Bash',
-        reason: `${PERMISSION_DENY_REASON_PREFIX} nonsense`,
-      }),
-    ).toEqual({ kind: 'tool_denied', tool: 'unknown', capability: 'unknown' })
+  it('falls back to stopped_by_gate (pause), never tool_denied, on a prefixed reason whose tail fails to parse (M18 Task 6 fix round 1, review Important 4 controller ruling: fail-safe is pausing)', () => {
+    // A reason that only *looks* like a matrix deny (starts with the prefix, but the shell twin
+    // drifted or a hand-built reason got the grammar wrong) is NOT trusted as one. The original
+    // `unknown`/`unknown` fallback here silently let the run keep going ungated on an unparseable
+    // claim; this pauses it instead, the same as a reason carrying no prefix at all -- an operator
+    // can inspect a paused run, but nothing can un-happen an ungated tool call this function wrongly
+    // let through.
+    const reason = `${PERMISSION_DENY_REASON_PREFIX} nonsense`
+    expect(classifyGateEvent({ kind: 'hook_denied', hookName: 'PreToolUse:Bash', reason })).toEqual({
+      kind: 'stopped_by_gate',
+      reason,
+    })
   })
 
   it('reads a crashed gate and a failed-open gate as gate failure', () => {

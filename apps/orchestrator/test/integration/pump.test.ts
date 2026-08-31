@@ -4,7 +4,7 @@ import { isAlive } from '@ai-team-os/control'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@ai-team-os/db'
 import { prisma } from '@ai-team-os/db/client'
 import { agentId, runId, taskId, workspaceId } from '@ai-team-os/domain'
-import { parseStreamLine, type RunOutcome, type RuntimeEvent } from '@ai-team-os/providers'
+import { PERMISSION_DENY_REASON_PREFIX, parseStreamLine, type RunOutcome, type RuntimeEvent } from '@ai-team-os/providers'
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { OUTPUT_CAP, pumpRun } from '../../src/pump.js'
 
@@ -1503,6 +1503,107 @@ describe('pumpRun', () => {
 
         expect(isAlive(pid)).toBe(false)
         await expect(prisma.checkpoint.findUniqueOrThrow({ where: { runId: ids.runId } })).resolves.toBeTruthy()
+      } finally {
+        try {
+          process.kill(pid, 'SIGKILL')
+        } catch {
+          // Already dead -- that is the point of this test.
+        }
+      }
+    })
+
+    it('a Cursor matrix denial does not poison the pause-real heuristic: run.tool_denied emitted, denied left empty, no guardrail.tripped, the matrix id excluded from the terminal failure check (fix round 1, review Important 2 + Critical 1)', async (): Promise<void> => {
+      // Seeded `pause_requested`, deliberately: `recordCursorPauseIfRequested` (:397) only even
+      // looks at its own early-return when this status is armed by an in-flight operator pause
+      // request. This proves the heuristic itself survives a matrix denial mid-run -- a
+      // clean-terminal Cursor run whose only denial was the matrix's own must NOT be reclassified
+      // as paused just because a pause was requested while it was finishing.
+      await prisma.agentRun.update({
+        where: { id: ids.runId },
+        data: { status: 'pause_requested', worktreePath: '/tmp' },
+      })
+
+      const matrixReason = "permission matrix denies 'run tests' (shell) for this agent"
+      const outcome = await pumpRun({
+        ...ids,
+        spawn: {
+          settingsPath: '/tmp/aiteamos-cursor-matrix/.cursor/hooks.json',
+          pauseFlagPath: '/tmp/aiteamos-cursor-matrix/pause.flag',
+          hookPath: '/opt/aiteamos/cursor-shell-gate.sh',
+          gitIdentity: { name: 'Alex', email: 'alex@example.com' },
+          provider: 'cursor',
+        },
+        events: fromArray([
+          { kind: 'session_started', sessionId: 's-cursor-matrix' },
+          { kind: 'permission_denied', toolName: 'shell', toolUseId: 'c1', reason: matrixReason },
+          // `c1` echoed in `deniedToolUseIds` too -- the exact reason-blind shape
+          // `cursor/adapter.ts`'s `rejectedCallIds` derivation produces for real (review Critical 1).
+          { kind: 'terminated', outcome: { ...okOutcome, deniedToolUseIds: ['c1'] } },
+        ]),
+      })
+
+      // Critical 1: `c1` is excluded from the failure check because THIS pump itself confirmed, via
+      // a full parse of the matrix-prefixed reason, that it was a survivable refusal -- the run
+      // concludes on its own merits, not failed by the CLI's reason-blind denial echo.
+      expect(outcome).not.toBeNull()
+      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      expect(run.status).toBe('succeeded')
+      // NOT reclassified as paused despite the `pause_requested` seed: `recordCursorPauseIfRequested`
+      // saw a clean terminal outcome AND an empty `denied` (the matrix branch never pushes into it),
+      // so its own early-return fired before the pause claim was even attempted.
+      expect(run.pausedAtStep).toBeNull()
+
+      const types = await eventTypesFor(ids.runId)
+      expect(types).not.toContain('run.paused')
+      expect(types.filter((t) => t === 'run.tool_denied')).toHaveLength(1)
+      expect(types).not.toContain('guardrail.tripped')
+
+      const toolDenied = await prisma.executionEvent.findFirstOrThrow({
+        where: { runId: ids.runId, type: 'run_tool_denied' },
+      })
+      expect(toolDenied.payload).toEqual({ tool: 'shell', capability: 'run tests' })
+
+      await expect(prisma.checkpoint.findUnique({ where: { runId: ids.runId } })).resolves.toBeNull()
+    })
+
+    it('pauses, does not tool_deny, on a hook_denied reason that only starts with the matrix prefix but fails to parse (fix round 1, review Important 4 controller ruling: fail-safe is pausing)', async (): Promise<void> => {
+      const pid = await spawnNeverExiting()
+      await prisma.agentRun.update({ where: { id: ids.runId }, data: { pid, worktreePath: '/tmp' } })
+
+      try {
+        // Carries the prefix -- so a pre-fix-round-1 `classifyGateEvent` would have reported
+        // `tool_denied` with the `unknown`/`unknown` fallback -- but the tail does not match the
+        // grammar `parsePermissionDenyReason` requires.
+        const malformedReason = `${PERMISSION_DENY_REASON_PREFIX} nonsense`
+        const outcome = await pumpRun({
+          ...ids,
+          spawn: {
+            settingsPath: '/tmp/settings.json',
+            pauseFlagPath: '/tmp/pause.flag',
+            hookPath: '/tmp/pause-gate.sh',
+            gitIdentity: { name: 'Alex', email: 'alex@aiteamos.local' },
+          },
+          events: fromArray([
+            { kind: 'session_started', sessionId: 's-1' },
+            { kind: 'tool_call', toolUseId: 'tu_1', toolName: 'Bash', summary: 'Bash echo hi' },
+            { kind: 'hook_denied', hookName: 'PreToolUse:Bash', reason: malformedReason },
+          ]),
+        })
+
+        // Fail-safe is pausing: an unparseable claim of "this was the matrix" is treated exactly
+        // like an ordinary pause deny, not trusted merely because it looks like one.
+        expect(outcome).toBeNull()
+        const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+        expect(run.status).toBe('paused')
+        expect(run.pausedAtStep).toBe(1)
+
+        const types = await eventTypesFor(ids.runId)
+        expect(types).toContain('run.paused')
+        expect(types).not.toContain('run.tool_denied')
+
+        expect(isAlive(pid)).toBe(false)
+        const checkpoint = await prisma.checkpoint.findUniqueOrThrow({ where: { runId: ids.runId } })
+        expect(checkpoint.pauseReason).toBe(malformedReason)
       } finally {
         try {
           process.kill(pid, 'SIGKILL')

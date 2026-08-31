@@ -1,8 +1,10 @@
 # Provider stream fixtures: what each one is, and where it came from
 
-Every file here is a captured `stream-json` transcript. Nothing in this tree is hand-authored
-JSON: the parsers under `packages/providers/src` are written **from recordings**, never from
-documentation (the M12 discipline), and these files are the recordings.
+Every file here is a captured `stream-json` transcript, with exactly one declared exception
+(`permission-matrix-deny.ndjson` — see its own section below): the parsers under
+`packages/providers/src` are written **from recordings**, never from documentation (the M12
+discipline), and these files are the recordings. Hand-authored JSON is not the default here; it is
+the narrow, documented fallback for a shape no build of the real CLI could yet produce.
 
 ## Layout, and why it is not flat
 
@@ -38,17 +40,19 @@ recording made for M14 §4.1.
 
 ## The fake-CLI replay modes
 
-These are the M3/M8 captures. Their provenance below is reconstructed from the files themselves
-and from `git log` — they predate this README, and no contemporaneous recording note was written
-for them, which is precisely the gap this file and `claude/README.md` exist to close going
-forward. Everything stated here is checkable against the bytes on disk.
+These are the M3/M8 captures, plus one later, deliberately hand-authored exception (see its own
+section below the table). Provenance for the twelve captures below is reconstructed from the files
+themselves and from `git log` — they predate this README, and no contemporaneous recording note
+was written for them, which is precisely the gap this file and `claude/README.md` exist to close
+going forward. Everything stated here is checkable against the bytes on disk.
 
-Facts common to all twelve: `claude_code_version` **2.1.234**, `model` `claude-opus-5[1m]`, and a
-`cwd` of `/fake/claude-workdir/<mode>` with a `session_id` of `fake-session-<mode>` — i.e. the
-workdir and session identifiers were rewritten to fixture-scoped placeholders at capture time.
-Note that the `init` line's `plugins[].path` and `memory_paths` were **not** rewritten and still
-carry the recording operator's home directory; `claude/skill-tool-use.ndjson` redacts those, and
-these files should be brought in line the next time they are touched.
+Facts common to the twelve CAPTURED recordings (`permission-matrix-deny.ndjson` is the exception —
+see below): `claude_code_version` **2.1.234**, `model` `claude-opus-5[1m]`, and a `cwd` of
+`/fake/claude-workdir/<mode>` with a `session_id` of `fake-session-<mode>` — i.e. the workdir and
+session identifiers were rewritten to fixture-scoped placeholders at capture time. Note that the
+`init` line's `plugins[].path` and `memory_paths` were **not** rewritten and still carry the
+recording operator's home directory; `claude/skill-tool-use.ndjson` redacts those, and these files
+should be brought in line the next time they are touched.
 
 | File | Introduced | What it records |
 | --- | --- | --- |
@@ -62,9 +66,39 @@ these files should be brought in line the next time they are touched.
 | `malformed.ndjson` | `b17561c` | Contains one line that is not JSON. The parser must return `unparsable` for it and keep going; a bad line must not kill a run. |
 | `review-approve.ndjson`, `review-reject.ndjson`, `review-invalid.ndjson` | `a16add4` | `complete`'s transcript with the final `result.result` replaced by the reviewer's JSON verdict — approve, reject, and a malformed verdict. They drive the fake CLI's `m8a-flow` mode. |
 | `plan-graph.ndjson` | `e8f2bb0` | Same base, with `result.result` carrying a planning task graph. Drives `m8-flow`'s planning arm. |
+| `permission-matrix-deny.ndjson` | M18 Task 6 fix round 1 | **Hand-authored, not captured — see the section below.** `Read` allowed, then `Bash` met a `PreToolUse` hook denying with the M18 permission-matrix grammar (`permission matrix denies 'run tests' (Bash) for this agent`), the agent adapts and reports instead of retrying, and the `result` line is honest about the denial: `is_error: false` but `permission_denials` carries `toolu_pmd_002`, matching what `hook-deny.ndjson` itself measures the real CLI doing for a hook deny of any kind. |
 
 The three review fixtures and `plan-graph` share `complete`'s `session_id`
 (`fake-session-complete`) because they are edits of it, not separate captures.
+
+## `permission-matrix-deny.ndjson` — the one hand-authored exception
+
+Unlike every other fixture in this directory, `permission-matrix-deny.ndjson` is **not** a captured
+recording. It is modeled byte-for-byte on `hook-deny.ndjson`'s own narrative shape (allow the first
+tool, deny the second, the agent adapts, a clean-but-honest result, the routine `Stop` tail) with
+the deny's `permissionDecisionReason` swapped for the M18 permission-matrix grammar
+(`permission matrix denies '<capability>' (<tool>) for this agent`, `packages/providers/src/gate.ts`)
+and the `result` line's `permission_denials` carrying the denied `toolu_pmd_002` — matching, not
+omitting, what `hook-deny.ndjson` itself measures the real CLI doing for a hook deny regardless of
+*why* the hook denied (M18 Task 6 fix round 1, review Critical 1: an early version of this fixture
+omitted `permission_denials` to make the integration test's run conclude `succeeded`, which removed
+the very signal `pump.ts`'s failure computation needed fixing, rather than fixing it).
+
+**Why hand-authored rather than captured**: the permission matrix (M18) is new within this same
+milestone, and no build of `claude` (or `cursor-agent`) able to actually produce a matrix-denied
+`PreToolUse` hook response existed to record from when this fixture was needed — a real capture
+requires the shell gate's M18 Task 3/4 wiring already deployed against a live CLI run, which is
+downstream of the very work this fixture exists to test. **A real capture is a queued backlog
+item**; when one lands, this file should be replaced by the genuine recording (its ids and reason
+text mechanically substituted per rule 2 below) rather than kept as a hand-authored stand-in
+indefinitely.
+
+It also does not carry the "facts common to the twelve captured recordings" noted above: its `init`
+line is schema-minimal (`type`, `subtype`, `session_id` — exactly the fields `parseStreamLine`'s
+zod schemas read) rather than a full `claude_code_version`/`model`/`cwd`/tool-inventory line, because
+there is no real capture to draw those fields from honestly; inventing plausible-looking values for
+them would be a second fabrication stacked on the first, not a fix for it. `session_id` DOES follow
+the shared convention (`fake-session-permission-matrix-deny`).
 
 ## Redaction rules for anything added here
 
@@ -76,3 +110,10 @@ The three review fixtures and `plan-graph` share `complete`'s `session_id`
    stay — they are random UUIDs, and the parser reads them.
 4. Never add, remove or reorder a line to make a fixture fit a test. If a real recording does not
    fit, the fixture is right and its placement is wrong.
+
+These four govern every fixture that starts from a real recording. `permission-matrix-deny.ndjson`
+is the one declared exception to rules 1 and 4 — there is no real recording for it to keep byte for
+byte or to defer to — and its own section above states why, in the open, rather than silently
+breaking the discipline. It still follows rule 3's redaction rules (nothing to redact: every value
+in it is either a fixture-scoped placeholder or the M18 grammar itself) and rule 2's spirit, by
+naming the substitution it stands in for.

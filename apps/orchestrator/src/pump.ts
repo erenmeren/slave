@@ -496,6 +496,22 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
   let lastToolUseId: string | null = null
   let lastToolName: string | null = null
   const denied: string[] = []
+  /**
+   * M18 Task 6 fix round 1 (review Critical 1): the tool-use ids this pump itself routed to
+   * `run.tool_denied` rather than the pause protocol or the permission-mode guardrail. The real
+   * CLI (measured: `hook-deny.ndjson` carries the denied id in the terminal `result`'s
+   * `permission_denials`; Cursor's adapter pushes any rejected `call_id` into
+   * `RunOutcome.deniedToolUseIds` the same reason-blind way, `cursor/adapter.ts`'s
+   * `rejectedCallIds`) reports EVERY denied call there, a matrix refusal included -- it has no
+   * concept of "the matrix said no but the run is fine". Without this set, the failure check below
+   * (`outcome.deniedToolUseIds.length > 0`) would fail a run this very function just finished
+   * proving survived a matrix refusal, silently undoing Task 6's own routing work at the one place
+   * that concludes the run. Populated at the two sites that already know a denial was a matrix one
+   * (the `tool_denied` `GateOutcome` case below, and `permission_denied`'s matrix branch above) --
+   * an ordinary pause deny or permission-mode denial is never added, so it keeps failing the run
+   * exactly as it always has.
+   */
+  const matrixDeniedToolUseIds = new Set<string>()
   // Seeded from the row, not from zero, for the same reason the column is incremented: on a resume
   // this pump is continuing a run that already made tool calls, and `pausedAtStep` should say
   // where the *run* is, not where this pump started reading.
@@ -606,13 +622,22 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
         // refusal on an otherwise-clean run poisoning that array would misclassify it as paused;
         // and it does not emit `guardrail.tripped`, because a matrix deny is a fact the run
         // survives, not an observation of the agent being refused by the permission MODE.
+        //
+        // Fix round 1 (review Important 4, controller ruling): routed only on a FULL parse, the
+        // same rule `classifyGateEvent` now applies on the Claude side -- fail-safe is treating an
+        // unparseable prefixed reason as an ORDINARY permission-mode denial (falls through below),
+        // never as a matrix refusal this pump cannot actually name the tool/capability for.
         if (event.reason !== undefined && event.reason.startsWith(PERMISSION_DENY_REASON_PREFIX)) {
           const parsed = parsePermissionDenyReason(event.reason)
-          await emit('run.tool_denied', 'agent', {
-            tool: parsed?.tool ?? 'unknown',
-            capability: parsed?.capability ?? 'unknown',
-          })
-          break
+          if (parsed !== null) {
+            // Review Critical 1: `event.toolUseId` is the exact `call_id` `cursor/adapter.ts`'s
+            // `rejectedCallIds` (hence `RunOutcome.deniedToolUseIds`) also records for this same
+            // rejection -- recorded here so the terminal failure check below can tell this denial
+            // apart from a genuine one.
+            matrixDeniedToolUseIds.add(event.toolUseId)
+            await emit('run.tool_denied', 'agent', { tool: parsed.tool, capability: parsed.capability })
+            break
+          }
         }
         denied.push(event.toolUseId)
         await emit('guardrail.tripped', 'system', {
@@ -774,11 +799,21 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
 
           case 'tool_denied': {
             // M18 Task 6: a permission-MATRIX refusal, not a pause -- `classifyGateEvent` only
-            // reaches this kind when `hook_denied.reason` carries the matrix's own prefix. One
+            // reaches this kind on a FULL parse of `hook_denied.reason` (fix round 1, review
+            // Important 4 controller ruling: a prefixed-but-malformed reason stays `stopped_by_gate`
+            // above -- fail-safe is pausing, not silently trusting an unparseable matrix claim). One
             // event, exactly once per refusal, and nothing else: no `paused`, no checkpoint, no
             // `killWithEscalation`. The run is still working; the agent is free to try something
             // else, the same way ADR 0001 measured a permission-mode denial leaving it free to.
             await emit('run.tool_denied', 'agent', { tool: gateOutcome.tool, capability: gateOutcome.capability })
+            // Review Critical 1: the CLI reports this same denial in the terminal result's
+            // `permission_denials` regardless of WHY the hook denied it (measured:
+            // `hook-deny.ndjson`'s pause deny lands there too) -- `lastToolUseId` is the id of the
+            // tool_use that immediately preceded this hook's response, the same association
+            // `writeCheckpoint`'s own `lastToolUseId` field already relies on for the pause path.
+            // `null` only when a hook_denied arrives with no tool_call ever observed first, which
+            // means nothing in `outcome.deniedToolUseIds` could be this one anyway.
+            if (lastToolUseId !== null) matrixDeniedToolUseIds.add(lastToolUseId)
             break
           }
         }
@@ -918,7 +953,22 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
   // A clean completion with denials is a failure. ADR 0001 measured a run reporting
   // `is_error: false` while landing nothing, detectable only through `permission_denials` -- so the
   // terminal flag alone is not what decides this.
-  const failed = outcome.isError || outcome.deniedToolUseIds.length > 0
+  //
+  // M18 Task 6 fix round 1 (review Critical 1): `outcome.deniedToolUseIds` is the CLI's own account
+  // of every call it denied, a permission-matrix refusal included -- measured on both providers.
+  // Claude's terminal `result` line lists a hook-denied id in `permission_denials` regardless of
+  // WHY the hook denied it (`hook-deny.ndjson`'s pause deny is there too, alongside every
+  // hook_crash/fail-open denial); Cursor's adapter pushes any rejected `call_id` into
+  // `rejectedCallIds` -> `deniedToolUseIds` the same reason-blind way (`cursor/adapter.ts`'s
+  // `observeRawLine`, which reads only `result.rejected`, never the reason inside it). Trusting this
+  // field unfiltered would fail every matrix-denied run this very function just finished routing to
+  // `run.tool_denied` -- undoing Task 6's own work at the one place that concludes the run.
+  // `matrixDeniedToolUseIds` is exactly (and only) the ids this pump itself confirmed, via a FULL
+  // parse of a matrix-prefixed reason, were a survivable refusal rather than a pause or an ordinary
+  // permission-mode denial -- so excluding them here still fails a genuine pause/permission-mode
+  // denial byte-identically to before this fix.
+  const nonMatrixDeniedToolUseIds = outcome.deniedToolUseIds.filter((id) => !matrixDeniedToolUseIds.has(id))
+  const failed = outcome.isError || nonMatrixDeniedToolUseIds.length > 0
   const terminalNow = new Date()
   const concluded = await prisma.agentRun.updateMany({
     where: { id: runId, endedAt: null },
@@ -934,9 +984,12 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
   if (concluded.count === 0) return outcome
 
   if (failed) {
+    // Named from the FILTERED list, not `outcome.deniedToolUseIds` raw: a matrix-excused id
+    // contributed nothing to `failed` above, and naming it here as if it had would misdescribe why
+    // an `isError` run actually failed.
     const denied =
-      outcome.deniedToolUseIds.length > 0
-        ? ` ${outcome.deniedToolUseIds.length} tool call(s) were denied: ${outcome.deniedToolUseIds.join(', ')}`
+      nonMatrixDeniedToolUseIds.length > 0
+        ? ` ${nonMatrixDeniedToolUseIds.length} tool call(s) were denied: ${nonMatrixDeniedToolUseIds.join(', ')}`
         : ''
     await emit('run.failed', 'system', { reason: `${outcome.terminalReason}.${denied}`.trim() })
   } else {
