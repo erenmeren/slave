@@ -96,20 +96,37 @@ Template per flake:
   closes the child's stdout. `pump.ts:800–807`'s own comment already documents this design:
   "the guardrail sweep... claims the SAME `stopping` status ahead of its own `adapter.cancel`...
   and writes no terminal row of its own -- it relies on this branch."
-  These two writers are triggered by the *same* child dying but through *two different, unordered
-  event listeners*: `sweep.ts`'s `await adapter.cancel()` resolves via `terminateChild`'s
-  `child.once('exit', ...)` (`packages/providers/src/runtime/process.ts:76–95`), while the pump's
-  loop ends via `lines.once('close', ...)` on a readline wrapping `child.stdout`
-  (`packages/providers/src/claude/adapter.ts:375–385`). Node's `child_process` API gives no
-  ordering guarantee between a child's `'exit'` and its stdio streams' `'close'`. Downstream, the
-  two writers also need different amounts of further async work before their own write lands:
-  sweep needs one more DB round trip (`appendEvent`); the pump needs a `writeStreamUsage` call
-  (1–2 queries), a conditioned `stopClaimed` update, and only then the `concluded` status update
-  plus its own `emit`. Under quiet conditions sweep's shorter chain usually — but not
-  structurally guaranteed to — finish first, which is why this is rare rather than routine. The
-  test then compounds the race: it polls only for `status === 'failed'`, then does a single
-  *immediate*, unretried read of `guardrail_tripped` events — asserting an ordering the code never
-  promises. This is a genuine, narrow race between two independent, unsynchronized writers, not a
+  These two writers are triggered by the *same* child dying but through *two different event
+  listeners*, and — corrected after task review — these are NOT symmetric/unordered: `sweep.ts`'s
+  `await adapter.cancel()` resolves via `terminateChild`'s `child.once('exit', ...)`
+  (`packages/providers/src/runtime/process.ts:76–95`), while the pump's loop ends via
+  `lines.once('close', ...)` on a readline wrapping `child.stdout`
+  (`packages/providers/src/claude/adapter.ts:375–385`). `packages/providers/src/claude/adapter.ts:450–465`
+  already carries a measured fact this investigation missed on first pass: readline's `'close'` on
+  `child.stdout` was probed 200 times against a real child process and fired *before* the child's
+  own `'exit'` event in **200/200 runs** (recorded there for a different call site, `resume()`'s
+  live-child check, but the same two events on the same kind of child). So the pump's own trigger
+  — the stdout stream closing — reliably fires FIRST, not at a coin-flip; `sweep.ts`'s `cancel()`
+  resolution is the one that is reliably a step behind at the trigger level. What actually decides
+  which writer's *DB write* lands first is entirely downstream of that: sweep needs one more DB
+  round trip (`appendEvent`), itself serialized behind the process-wide `appendChain`
+  (`packages/events/src/append.ts:36`) shared by every append in the process; the pump needs a
+  `writeStreamUsage` call (1–2 queries, not chain-serialized), a conditioned `stopClaimed` update,
+  and only then the `concluded` status update plus its own `emit` (which *is* chain-serialized).
+  Under quiet conditions the pump's longer list of plain queries apparently still loses to sweep's
+  shorter, chain-serialized append (matching the observed rarity) — but under full-suite
+  contention, the `appendChain` is what a daemon process shares across every concurrent run's
+  events, so it plausibly absorbs a disproportionate amount of that contention's delay, while the
+  pump's non-chain queries are not similarly funneled through one shared serialization point. That
+  is the plausible reason full-suite contention (many concurrent processes/DB connections, and —
+  within this one daemon process — many runs' events all fighting over the same `appendChain`)
+  produced the recorded red, while this task's single-file synthetic CPU load (one run, one chain,
+  no chain contention to speak of) could not reproduce it. The test then compounds whichever writer
+  wins: it polls only for `status === 'failed'`, then does a single *immediate*, unretried read of
+  `guardrail_tripped` events — asserting an ordering the code never promises, regardless of which
+  of the two writers is favored to win it. This is a genuine, narrow race between two independent,
+  unsynchronized writers — asymmetric at the trigger (pump's fires first, reliably) but decided
+  downstream by chain contention (sweep's shorter path usually still wins) — not a
   wrong writer, not a lost claim, and not an event rename (candidate 3 in the brief was checked
   and ruled out: the `guardrail.tripped` / `guardrail_tripped` spelling difference is the Prisma
   `EventType` enum's `@map` between the domain literal and the DB value —
@@ -159,6 +176,22 @@ Template per flake:
   having `sweep.ts` write a short-lived marker the pump's stream-end branch can read to attribute
   its own conclusion — but that is model/behavior surface beyond this flake's fix, and the current
   two-writer design is deliberate (the cancel-failure test guards it), not accidental.
+  **Sharpened after task review** (documentation-only correction, no further code change): the
+  original write-up above described the race as a symmetric/unordered coin flip between the two
+  writers' *trigger* events. `packages/providers/src/claude/adapter.ts:450–465` already carries a
+  200/200-measured fact this investigation did not surface on first pass — `child.stdout`'s
+  readline `'close'` reliably fires before the child's own `'exit'`, so the pump's trigger is
+  reliably first, not a coin flip. It is the *downstream* work after each trigger — sweep's single
+  `appendEvent` call, chain-serialized behind the process-wide `appendChain`, versus the pump's
+  longer sequence of plain (non-chain-serialized) queries plus its own chain-serialized `emit` —
+  that plausibly decides the actual winner, and plausibly explains why `appendChain` contention
+  specifically (many concurrent runs' events sharing one process-wide chain, worse under
+  full-suite load with more daemons/runs live at once) is the more precise thing a future
+  investigation of a recurrence should measure, rather than raw CPU load or DB latency in general.
+  Neither the mechanism's conclusion (a real, narrow, structural race between two unsynchronized
+  writers) nor the fix (poll for both conditions; log the alternate writer) changes — this
+  sharpens the "why full-suite and not single-file load" explanation for whoever investigates a
+  recurrence.
 
 ## Flake 3 — subscribe.test.ts "delivers exactly one notification per event across a reconnect"
 
