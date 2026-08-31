@@ -852,7 +852,23 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
         endedAt: now,
       },
     })
-    if (concluded.count > 0) await emit('run.failed', 'system', { reason })
+    if (concluded.count > 0) {
+      // Names this writer, deliberately: `sweep.ts`'s timeout/tool-cap claim writes no terminal
+      // status of its own (see the `stopClaimed` comment above) -- THIS branch is what concludes
+      // a guardrail-cancelled run to `failed`, and it races that same sweep's own
+      // `guardrail.tripped` append. Both are triggered by the same child dying, but through two
+      // DIFFERENT, unordered listeners (`child.exit` drives the sweep's `cancel`; `child.stdout`'s
+      // `close` drives this branch), so there is no guarantee the guardrail event has committed
+      // by the time this write lands. Flake 2 (M17): an observer polling for `status === 'failed'`
+      // alone can see it before the event that explains it exists. This line makes that ordering
+      // legible in daemon output rather than a status flip with no visible cause yet.
+      console.warn(
+        `[pump] run ${runId} concluded 'failed': the output stream ended with no terminal result. ` +
+          'If a guardrail sweep claimed this run into `stopping` moments earlier, its own ' +
+          '`guardrail.tripped` append is a separate write racing this one and may still be in flight.',
+      )
+      await emit('run.failed', 'system', { reason })
+    }
     return null
   }
 

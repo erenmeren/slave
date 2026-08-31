@@ -70,6 +70,96 @@ Template per flake:
 
 ## Flake 2 — cli.test.ts "the daemon enforces the run-timeout guardrail on a hung run"
 
+- **Evidence** — recorded failure: M12 Task 8, under full-suite load, `AgentRun.status` reached
+  `failed` but zero `guardrail_tripped` events existed. New this wave: read
+  `apps/orchestrator/test/integration/cli.test.ts:745–781`, `apps/orchestrator/src/sweep.ts:202–299`,
+  `apps/orchestrator/src/daemon.ts:96–140`, `apps/orchestrator/src/pump.ts:476–888`, and
+  `packages/providers/src/claude/adapter.ts:296–399`/`packages/providers/src/runtime/process.ts`
+  (`terminateChild`). Reproduction: `scripts/repeat-test.sh` against this one test, under
+  synthetic `nproc - 2` (6) `yes > /dev/null` load — 10 runs, then 30 more (40 total loaded runs
+  across two batches) — stayed **GREEN 10x** / **GREEN 30x**; every run's own duration held
+  steady at 1.0–1.7 s regardless of load (`tests` timing in the vitest summary), unlike Flake 1's
+  hook I/O, which measurably slowed under the same load. That is itself informative: this test's
+  race window is not CPU-contention-sized, it is event-ordering-sized (see Mechanism), so a
+  single-file synthetic-load loop was never going to be the tool that catches it — consistent with
+  the recorded failure being a single occurrence under genuine full-suite (many concurrent
+  processes/DB connections) contention. Per the brief's step 2 fallback ("if 10 loaded runs stay
+  green, the mechanism must be established by reading alone... and still apply the fix the
+  reading justifies"), the mechanism below is established from the code, not from a caught red.
+
+- **Mechanism** — `sweep.ts`'s timeout path never writes `AgentRun.status` to `failed` itself. On
+  a breach it claims `stopping` (`sweep.ts:246–250`), calls `await adapter.cancel(...)`
+  (`sweep.ts:275`), and only then appends `guardrail.tripped` (`sweep.ts:280–295`). The row's
+  actual `failed` conclusion is written by a *different* component — `pump.ts`'s "stream ended
+  without terminal result" branch (`pump.ts:838–855`, now :838–867 after this change) — once its
+  `for await` loop over the adapter's event queue ends, which happens when `adapter.cancel`'s kill
+  closes the child's stdout. `pump.ts:800–807`'s own comment already documents this design:
+  "the guardrail sweep... claims the SAME `stopping` status ahead of its own `adapter.cancel`...
+  and writes no terminal row of its own -- it relies on this branch."
+  These two writers are triggered by the *same* child dying but through *two different, unordered
+  event listeners*: `sweep.ts`'s `await adapter.cancel()` resolves via `terminateChild`'s
+  `child.once('exit', ...)` (`packages/providers/src/runtime/process.ts:76–95`), while the pump's
+  loop ends via `lines.once('close', ...)` on a readline wrapping `child.stdout`
+  (`packages/providers/src/claude/adapter.ts:375–385`). Node's `child_process` API gives no
+  ordering guarantee between a child's `'exit'` and its stdio streams' `'close'`. Downstream, the
+  two writers also need different amounts of further async work before their own write lands:
+  sweep needs one more DB round trip (`appendEvent`); the pump needs a `writeStreamUsage` call
+  (1–2 queries), a conditioned `stopClaimed` update, and only then the `concluded` status update
+  plus its own `emit`. Under quiet conditions sweep's shorter chain usually — but not
+  structurally guaranteed to — finish first, which is why this is rare rather than routine. The
+  test then compounds the race: it polls only for `status === 'failed'`, then does a single
+  *immediate*, unretried read of `guardrail_tripped` events — asserting an ordering the code never
+  promises. This is a genuine, narrow race between two independent, unsynchronized writers, not a
+  wrong writer, not a lost claim, and not an event rename (candidate 3 in the brief was checked
+  and ruled out: the `guardrail.tripped` / `guardrail_tripped` spelling difference is the Prisma
+  `EventType` enum's `@map` between the domain literal and the DB value —
+  `packages/db/src/enums.ts:19`, `packages/domain/src/events/schema.ts:42` — both sides of the
+  test and the emitter already agree). Candidate 2 (the daemon coalescer) does not apply either:
+  `runTimeoutMs: 1` means the very next `sweep()` after the run gets a pid catches it, coalescing
+  only delays, and delay does not explain zero events after a full 15 s poll window followed by an
+  unretried read.
+
+- **Change** — two changes, both justified directly by the mechanism above, neither a rename of
+  any operator-visible event (only additions):
+  1. **Test fix** (the actual flake fix) — `apps/orchestrator/test/integration/cli.test.ts`: the
+     poll loop now waits for *both* `run.status === 'failed'` **and** a `run_timeout`
+     `guardrail_tripped` event before breaking, instead of polling for status alone and then doing
+     one unretried event read. This matches what the code actually guarantees (both writers will
+     eventually land, with no ordering promise between them) instead of an assumption the code
+     never made.
+  2. **Product instrumentation** (discriminating, additive, no schema/event change) —
+     `apps/orchestrator/src/pump.ts`: the "stream ended without terminal result" branch now logs a
+     `console.warn` naming itself as the alternate `failed` writer and noting that a guardrail
+     sweep's own `guardrail.tripped` append may still be in flight, so a *real* recurrence (a
+     genuine full-suite-contention red, or a future regression) is legible in daemon output rather
+     than a silent status flip. No new persisted event was added — `apps/orchestrator/test/integration/sweep.test.ts:259–271`
+     already locks the existing single-event, post-cancel `guardrail.tripped` shape for the
+     cancel-failure case (`expect(events).toHaveLength(1)`), so reordering the sweep-side append
+     ahead of `cancel()` (the brief's option (b)) would have broken that test's contract for no
+     benefit — the log line gets the legibility without touching it.
+  Commit: `9ea7aec`.
+
+- **Proof** — `scripts/repeat-test.sh 20 apps/orchestrator/test/integration/cli.test.ts "the
+  daemon enforces the run-timeout guardrail on a hung run"` → **GREEN 20x** (2.1–2.7 s/run),
+  unloaded. Same command with `nproc - 2` (6) synthetic `yes` load running throughout → **GREEN
+  15x** (2.4–2.7 s/run) — all `yes` processes confirmed killed (`pgrep -x yes`) before and after.
+  `npm test` → `Test Files 131 passed (131)`, `Tests 1801 passed (1801)`, 145.69 s — includes the
+  new `console.warn` firing (as expected, harmlessly) in `pump.test.ts`'s existing
+  "fails a run whose stream ends without a terminal result" and skillCalls-no-terminal-event
+  cases. No stray orchestrator daemon or vitest process at any point (checked via
+  `/proc/<pid>/cmdline` on every live `node` pid, not `pgrep -f`, which false-matches its own
+  invoking shell's command text on this host).
+
+- **Residue** — the underlying race between `sweep.ts`'s post-cancel event append and `pump.ts`'s
+  stream-end status write is *reduced in observability impact* (the test no longer asserts an
+  ordering the code doesn't guarantee, and a recurrence now logs) but not eliminated at the
+  source: the two writers are still unsynchronized, by design, for reasons `sweep.test.ts:259–271`
+  locks in (the cancel-failure diagnostic needs `cancel()` to have already resolved before the
+  event's `detail` is composed). A future task could close the underlying race itself — e.g. by
+  having `sweep.ts` write a short-lived marker the pump's stream-end branch can read to attribute
+  its own conclusion — but that is model/behavior surface beyond this flake's fix, and the current
+  two-writer design is deliberate (the cancel-failure test guards it), not accidental.
+
 ## Flake 3 — subscribe.test.ts "delivers exactly one notification per event across a reconnect"
 
 ## Flake 4 — stream.test.ts delivery tests (:77 and :115)

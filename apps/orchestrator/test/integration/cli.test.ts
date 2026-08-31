@@ -756,22 +756,32 @@ describe('the orchestrator CLI', () => {
       },
     })
     try {
+      // The run's `status` write and the guardrail's `guardrail_tripped` append are two
+      // INDEPENDENT writers racing the same process death. `sweep.ts`'s timeout claim writes no
+      // terminal status of its own -- it claims `stopping`, awaits `adapter.cancel`, and only then
+      // appends the event. `pump.ts` is what concludes the row to `failed`, from its own stream
+      // ending with no terminal result once the child's stdout closes. `cancel`'s resolution
+      // (`child.exit`) and the pump's stream end (`child.stdout`'s `close`) are two different
+      // listeners on the same dying child with no ordering guarantee between them (M17 flake 2),
+      // so polling for `status === 'failed'` alone can observe it before the event that explains
+      // it has committed. Polling for both together is what makes this assertion match what the
+      // code actually guarantees, rather than how fast the second writer usually is.
       const deadline = Date.now() + 15_000
       let run = null
+      let timeouts: { readonly payload: unknown }[] = []
       for (;;) {
         run = await prisma.agentRun.findFirst({ where: { taskId: fixture.taskId } })
-        if (run !== null && run.status === 'failed') break
+        const guardrails = await prisma.executionEvent.findMany({
+          where: { workspaceId: fixture.workspaceId, type: 'guardrail_tripped' },
+        })
+        timeouts = guardrails.filter(
+          (event) => (event.payload as { guardrail?: string }).guardrail === 'run_timeout',
+        )
+        if (run !== null && run.status === 'failed' && timeouts.length > 0) break
         if (Date.now() > deadline) break
         await new Promise((res) => setTimeout(res, 100))
       }
       expect(run?.status).toBe('failed')
-
-      const guardrails = await prisma.executionEvent.findMany({
-        where: { workspaceId: fixture.workspaceId, type: 'guardrail_tripped' },
-      })
-      const timeouts = guardrails.filter(
-        (event) => (event.payload as { guardrail?: string }).guardrail === 'run_timeout',
-      )
       expect(timeouts.length).toBeGreaterThan(0)
     } finally {
       const exited = new Promise((res) => child.on('exit', res))
