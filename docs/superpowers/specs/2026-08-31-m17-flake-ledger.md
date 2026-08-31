@@ -487,6 +487,23 @@ Template per flake:
      signal ever appeared on — are now pushed into the same `browserConsole` array `fail()` dumps
      and `raced()` reads, not merely printed to the terminal (a real, if minor, pre-existing gap:
      the signature check would otherwise have been blind to the one signal it was reproduced with).
+     **Fix round 3** (re-review, same day): round 2 introduced a NEW bug while fixing the first —
+     `browserConsole` still cap-and-shifted at 200 entries, and `raced()` records a starting INDEX
+     into it (`consoleStart = browserConsole.length`); once the array had ever reached the cap, its
+     `.length` stopped growing, so a `consoleStart` captured at ≥200 made `browserConsole.slice(consoleStart)`
+     return `[]` for the rest of the run — the client-side half of the signature check silently
+     going dead on any sufficiently long/chatty run, which would have hard-FAILED the gate on a
+     genuine late client-side race instead of retrying it (flakiness reintroduced in the opposite
+     direction). `browserConsole` is now append-only for the life of one run (all three listeners
+     route through one `pushBrowserConsole` helper; a `console.warn` past 10 000 entries, never a
+     truncation — `fail()`'s own dump already bounds itself at read time with `.slice(-40)`, so
+     nothing needed the array itself bounded). Same round: `second.status()` on the guarded retry
+     could still throw a raw, undump'd `TypeError` if the second `page.goto` resolved `null`
+     without throwing (Playwright's documented contract for a same-document/anchor navigation) —
+     `describe()`, a single helper both `fail()` messages and the retry log line now share, is the
+     only place either attempt's `.status()` is ever called, always behind a `response !== null`
+     guard beside it (this also closed the identical latent gap on the FIRST attempt's `fail()`
+     message, one `describe()` call away from where the reviewer's note pointed).
 
 - **Proof** — probe: `node --env-file=.env <scratchpad>/hydration-probe.mjs` → **hydrated 20/20**
   (not reproduced; probe never recreates the full gate's concurrent-compile conditions — see
@@ -506,7 +523,18 @@ Template per flake:
   wiring on a real run; the manifest race did not fire this particular run, so the signature-gate
   branch itself was not re-exercised live (it was exercised, and matched, twice during fix round 1
   — see above — and is otherwise verified by code review/inspection: `raced()` reads the exact
-  channel, `pageerror`, the two live reproductions' client-side signal actually arrived on).
+  channel, `pageerror`, the two live reproductions' client-side signal actually arrived on). Fix
+  round 3 (append-only `browserConsole` + null-guarded `.status()` on both attempts, per re-review):
+  a single gate run — **PASS**, and this run genuinely hit the manifest race live: `gotoReliably:
+  http://localhost:39145/w/<id> returned 500, signature matched -- retrying once`, then
+  `gotoReliably retried 1 time(s): ["http://localhost:39145/w/<id>"]` printed beside `PASS: nine
+  pages, one design` — direct live proof the append-only fix's whole path works end to end (the
+  client-side `pageerror` landed in `browserConsole` via `pushBrowserConsole`, `raced()` found it,
+  and the retry healed the run to green). Whether this particular buffer had already crossed the
+  old 200-entry cap at that point wasn't independently logged (nothing dumps `browserConsole`'s
+  length outside a `fail()` that didn't fire here) — the fix closes the bug by construction
+  regardless (the array can no longer stop growing, so no `consoleStart` can ever go stale), and
+  this run is live confirmation the detection path itself still works correctly post-fix.
 
 - **Residue** — the underlying `next dev` manifest race is upstream (confirmed in Next 15.5.23's
   own `load-manifest.external.js`), not patched, not reported — this ledger entry is the record.

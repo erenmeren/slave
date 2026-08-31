@@ -133,10 +133,33 @@ let agentId = null
 let taskId = null
 let daemon = null
 let daemonOutput = ''
-/** The browser console, newest last, for `fail()`'s dump. Includes `pageerror` text too (pushed
- *  alongside `console`/`requestfailed` below) -- a page that crashes client-side says so ONLY as
- *  a `pageerror`, and a dump that cannot show that is not a dump of what the browser actually saw. */
+/** The browser console, newest last, for `fail()`'s dump (which reads only the tail, `.slice(-40)`
+ *  -- see `fail()` below) and for `gotoReliably`'s `raced()` window (see there). Includes
+ *  `pageerror` text too (pushed alongside `console`/`requestfailed` via `pushBrowserConsole`
+ *  below) -- a page that crashes client-side says so ONLY as a `pageerror`, and a dump that cannot
+ *  show that is not a dump of what the browser actually saw.
+ *
+ *  APPEND-ONLY for the life of one gate run -- it used to cap-and-shift at 200 entries, but
+ *  `raced()` records a starting INDEX into this array and reads forward from it; once the array
+ *  had ever reached the old cap, its length stopped growing and every `slice(consoleStart)` taken
+ *  afterward returned `[]` forever, silently killing the client-side half of the signature check
+ *  for the rest of the run -- invisible in a passing run, and a real client-side manifest race
+ *  late in a 9-page run would have hard-FAILED the gate instead of retrying (review finding, fix
+ *  round 3). `fail()`'s own dump already bounds itself at read time, so nothing needs this array
+ *  bounded; `pushBrowserConsole` only WARNS past an unreasonable size, it never truncates. */
 const browserConsole = []
+
+/** The only way anything appends to `browserConsole` -- keeps every listener below consistent
+ *  (one used to cap-and-shift, one didn't, which was itself part of the bug this replaces). */
+function pushBrowserConsole(text) {
+  browserConsole.push(text.slice(0, 300))
+  if (browserConsole.length % 10_000 === 0) {
+    console.warn(
+      `browserConsole has grown to ${String(browserConsole.length)} entries this run -- unusually chatty ` +
+        `for one gate run, but left append-only on purpose (see its declaration) rather than truncated`,
+    )
+  }
+}
 /** `next dev`'s own raw stdout, module-level (not scoped to the try block that spawns it) so
  *  `gotoReliably` below can read its tail without a parameter -- the exact same reason
  *  `browserConsole` is module-level. */
@@ -407,6 +430,20 @@ async function gotoReliably(url) {
     browserConsole.slice(consoleStart).some((line) => line.includes(MANIFEST_RACE_SIGNATURE)) ||
     nextOutput.slice(nextOutputStart).includes(MANIFEST_RACE_SIGNATURE)
 
+  /** One description for every outcome of a `page.goto` attempt -- thrown, resolved `null`
+   *  (Playwright's own contract for a same-document/anchor navigation; unexpected here, but never
+   *  trusted not to happen), or a real `Response`. Used both for `fail()`'s message and the retry
+   *  log line, so there is exactly one place that ever calls `.status()` -- always behind the
+   *  `response !== null` guard right beside it (review finding, fix round 3: the ORIGINAL version
+   *  guarded `.status()` on the fast-path return but not in the message it built when the first
+   *  attempt resolved `null` with no thrown error, and never guarded it at all on the second
+   *  attempt -- a null response there escaped as a raw, undump'd `TypeError`, not through `fail()`). */
+  const describe = (response, error) => {
+    if (error !== null) return `failed (${error instanceof Error ? error.message : String(error)})`
+    if (response === null) return 'resolved with no response (an anchor/same-document navigation, per Playwright -- unexpected for a full page load)'
+    return `returned ${String(response.status())}`
+  }
+
   let first = null
   let firstError = null
   try {
@@ -418,17 +455,9 @@ async function gotoReliably(url) {
 
   await delay(50) // the beat `raced()`'s docstring names
   if (!raced()) {
-    await fail(
-      firstError !== null
-        ? `gotoReliably: ${url} failed (${firstError instanceof Error ? firstError.message : String(firstError)}) without the dev-server manifest-race signature`
-        : `gotoReliably: ${url} returned ${String(first.status())} without the dev-server manifest-race signature`,
-    )
+    await fail(`gotoReliably: ${url} ${describe(first, firstError)} without the dev-server manifest-race signature`)
   }
-  console.log(
-    firstError !== null
-      ? `gotoReliably: ${url} threw on the first attempt (${firstError instanceof Error ? firstError.message : String(firstError)}), signature matched -- retrying once`
-      : `gotoReliably: ${url} returned ${String(first.status())}, signature matched -- retrying once`,
-  )
+  console.log(`gotoReliably: ${url} ${describe(first, firstError)}, signature matched -- retrying once`)
   gotoRetries.push(url)
   await delay(300)
 
@@ -439,11 +468,8 @@ async function gotoReliably(url) {
   } catch (cause) {
     secondError = cause
   }
-  if (secondError !== null) {
-    await fail(`gotoReliably: ${url} threw on the retry too (${secondError instanceof Error ? secondError.message : String(secondError)})`)
-  }
-  if (second.status() >= 500) {
-    await fail(`gotoReliably: ${url} returned ${String(second.status())} on the retry too`)
+  if (secondError !== null || second === null || second.status() >= 500) {
+    await fail(`gotoReliably: ${url} ${describe(second, secondError)} on the retry too`)
   }
   return second
 }
@@ -707,23 +733,22 @@ try {
   // The browser's own console, kept for the failure dump: a page that renders on the server and
   // then never hydrates says why only here (a chunk that 404'd, a hydration mismatch, a thrown
   // effect), and a gate that times out on "no row became visible" without it is a gate that
-  // cannot say what it saw. Bounded, so a chatty page cannot grow the dump without limit.
-  // `pageerror` is pushed into the SAME array (not just printed) -- a client-side crash says so
-  // ONLY as a `pageerror`, never as a `console` message, and `gotoReliably`'s signature check
-  // below reads this array (review finding, fix round 2: it read only `browserConsole`, which
-  // never actually held the client-side text it was checking for).
+  // cannot say what it saw. `pageerror` is pushed into the SAME array (not just printed) -- a
+  // client-side crash says so ONLY as a `pageerror`, never as a `console` message, and
+  // `gotoReliably`'s signature check reads this array (review finding, fix round 2: it read only
+  // `browserConsole`, which never actually held the client-side text it was checking for). All
+  // three listeners go through `pushBrowserConsole` (append-only -- see its declaration; review
+  // finding, fix round 3, also closes the pre-existing inconsistency where this listener and
+  // `console`'s capped-and-shifted while `requestfailed`'s did neither).
   page.on('pageerror', (error) => {
-    const text = `[pageerror] ${String(error)}`.slice(0, 300)
     console.error(`[browser:pageerror] ${error}`)
-    browserConsole.push(text)
-    if (browserConsole.length > 200) browserConsole.shift()
+    pushBrowserConsole(`[pageerror] ${String(error)}`)
   })
   page.on('console', (message) => {
-    browserConsole.push(`[${message.type()}] ${message.text().slice(0, 300)}`)
-    if (browserConsole.length > 200) browserConsole.shift()
+    pushBrowserConsole(`[${message.type()}] ${message.text()}`)
   })
   page.on('requestfailed', (request) => {
-    browserConsole.push(`[requestfailed] ${request.url()} ${request.failure()?.errorText ?? ''}`)
+    pushBrowserConsole(`[requestfailed] ${request.url()} ${request.failure()?.errorText ?? ''}`)
   })
 
   // ============================================================================================
