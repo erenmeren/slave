@@ -210,7 +210,7 @@ export function SkillsClient({ page }: { readonly page: SkillsPage }): React.JSX
         ))}
 
         {errorText !== null && (
-          <span role="alert" data-testid="skills-error" className="text-xs text-status-danger">
+          <span role="alert" data-testid="skills-error" className="text-xs text-tone-blocked">
             {errorText}
           </span>
         )}

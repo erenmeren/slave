@@ -11,12 +11,12 @@ import { EmergencyStopButton } from './EmergencyStopButton'
 const CONNECTION_CHIP_BASE =
   'inline-flex items-center gap-[6px] rounded-pill border px-[9px] py-[3px] font-mono text-[10px] font-medium'
 const CONNECTION_CHIP_TONE = {
-  connected: 'border-status-working/25 bg-status-working/[0.06] text-status-working',
-  reconnecting: 'border-status-warn/25 bg-status-warn/[0.06] text-status-warn',
+  connected: 'border-tone-working/25 bg-tone-working/[0.06] text-tone-working',
+  reconnecting: 'border-tone-waiting/25 bg-tone-waiting/[0.06] text-tone-waiting',
 } as const
 const CONNECTION_DOT_TONE = {
-  connected: 'bg-status-working motion-safe:animate-[status-pulse_1.5s_ease-in-out_infinite]',
-  reconnecting: 'bg-status-warn',
+  connected: 'bg-tone-working motion-safe:animate-[status-pulse_1.5s_ease-in-out_infinite]',
+  reconnecting: 'bg-tone-waiting',
 } as const
 
 export interface TopBarProps {
@@ -70,10 +70,10 @@ export function TopBar({
   // "status colour at ... `0 0 8px` for bar glow" pattern): the two must never disagree.
   const barColor =
     ratio >= 1
-      ? 'bg-status-danger shadow-[0_0_8px_var(--color-status-danger)]'
+      ? 'bg-tone-blocked shadow-[0_0_8px_var(--color-tone-blocked)]'
       : ratio >= 0.8
-        ? 'bg-status-warn shadow-[0_0_8px_var(--color-status-warn)]'
-        : 'bg-status-working shadow-[0_0_8px_var(--color-status-working)]'
+        ? 'bg-tone-waiting shadow-[0_0_8px_var(--color-tone-waiting)]'
+        : 'bg-tone-working shadow-[0_0_8px_var(--color-tone-working)]'
   const connectionText = connection === 'connected' ? `sse · ${latencyMs === null ? '—' : `${latencyMs}ms`}` : 'reconnecting'
 
   return (
@@ -113,8 +113,8 @@ export function TopBar({
              *  transition -- spec §3's `.5s ease`) satisfies this migration's "motion behind
              *  prefers-reduced-motion" rule, not the literal component: `ProgressBar` colours its
              *  fill from the `StatusTone` vocabulary, but `shell.test.tsx` pins the literal
-             *  `bg-status-warn`/`bg-status-danger` class strings the older M4 vocabulary uses for
-             *  this ratio's own three-way threshold (not a status at all). */}
+             *  `bg-tone-waiting`/`bg-tone-blocked` class strings used directly here for this
+             *  ratio's own three-way threshold (not a status at all). */}
             {/* No bar at all for an unbudgeted workspace: a bar is a fraction of a ceiling, and
              *  an empty track would read as "0% of something" rather than "there is no
              *  something" (M12 Task 9 / ruling R11). */}

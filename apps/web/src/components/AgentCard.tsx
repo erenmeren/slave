@@ -11,13 +11,13 @@ import { ProgressBar } from './ui/ProgressBar'
 import { StatusPill, TONE_BORDER } from './ui/StatusPill'
 
 export const DOT: Record<AgentCardData['status'], string> = {
-  working: 'bg-status-working',
-  starting: 'bg-status-starting',
-  resuming: 'bg-status-starting',
-  pausing: 'bg-status-paused',
-  paused: 'bg-status-paused',
-  stopping: 'bg-status-stopping',
-  idle: 'bg-status-idle',
+  working: 'bg-tone-working',
+  starting: 'bg-tone-planning',
+  resuming: 'bg-tone-planning',
+  pausing: 'bg-tone-paused',
+  paused: 'bg-tone-paused',
+  stopping: 'bg-tone-waiting',
+  idle: 'bg-tone-idle',
 }
 
 /** The border-flash's `--flash-color` source per status (M5 spec §8) — no new colour tokens, just
@@ -25,13 +25,13 @@ export const DOT: Record<AgentCardData['status'], string> = {
  *  Exported: `OrgNodes.tsx`'s `AgentNode` reuses this same map for its own border flash rather
  *  than re-deriving the status→colour assignment a second time. */
 export const FLASH_COLOR: Record<AgentCardData['status'], string> = {
-  working: 'var(--color-status-working)',
-  starting: 'var(--color-status-starting)',
-  resuming: 'var(--color-status-starting)',
-  pausing: 'var(--color-status-paused)',
-  paused: 'var(--color-status-paused)',
-  stopping: 'var(--color-status-stopping)',
-  idle: 'var(--color-status-idle)',
+  working: 'var(--color-tone-working)',
+  starting: 'var(--color-tone-planning)',
+  resuming: 'var(--color-tone-planning)',
+  pausing: 'var(--color-tone-paused)',
+  paused: 'var(--color-tone-paused)',
+  stopping: 'var(--color-tone-waiting)',
+  idle: 'var(--color-tone-idle)',
 }
 
 /** 800ms border-flash decay window (M5 spec §8) — the peripheral-vision cue that a status changed.
@@ -214,7 +214,7 @@ export function AgentCard({
       )}
 
       {errorText !== null && (
-        <span role="alert" data-testid="card-error" className="text-[10.5px] text-status-danger">
+        <span role="alert" data-testid="card-error" className="text-[10.5px] text-tone-blocked">
           {errorText}
         </span>
       )}

@@ -181,7 +181,7 @@ function TeamBlock({
           Add member
         </GhostButton>
         {errorText !== null && (
-          <span role="alert" data-testid="member-error" className="text-xs text-status-danger">
+          <span role="alert" data-testid="member-error" className="text-xs text-tone-blocked">
             {errorText}
           </span>
         )}
@@ -263,7 +263,7 @@ function CompanyDetail({
           Add team
         </GhostButton>
         {errorText !== null && (
-          <span role="alert" data-testid="team-error" className="text-xs text-status-danger">
+          <span role="alert" data-testid="team-error" className="text-xs text-tone-blocked">
             {errorText}
           </span>
         )}
@@ -374,7 +374,7 @@ export function CompanyManager({
           Add company
         </PrimaryButton>
         {errorText !== null && (
-          <span role="alert" data-testid="company-error" className="text-xs text-status-danger">
+          <span role="alert" data-testid="company-error" className="text-xs text-tone-blocked">
             {errorText}
           </span>
         )}

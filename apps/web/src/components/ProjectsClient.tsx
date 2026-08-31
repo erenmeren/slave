@@ -117,7 +117,7 @@ function ProjectCard({
                 ...(project.unmeasuredRuns > 0
                   ? {
                       note: (
-                        <span data-testid="project-unmeasured" className="font-mono text-[9.5px] text-status-warn">
+                        <span data-testid="project-unmeasured" className="font-mono text-[9.5px] text-tone-waiting">
                           {project.unmeasuredRuns} run{project.unmeasuredRuns === 1 ? '' : 's'} unmeasured
                         </span>
                       ),

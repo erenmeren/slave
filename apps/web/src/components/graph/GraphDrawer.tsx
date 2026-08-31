@@ -185,7 +185,7 @@ export function GraphDrawer({
       </section>
 
       {errorText !== null && (
-        <span role="alert" data-testid="drawer-error" className="text-xs text-status-danger">
+        <span role="alert" data-testid="drawer-error" className="text-xs text-tone-blocked">
           {errorText}
         </span>
       )}

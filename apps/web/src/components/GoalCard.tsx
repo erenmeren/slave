@@ -124,7 +124,7 @@ export function GoalCard({
         </PrimaryButton>
       </form>
       {errorText !== null && (
-        <span role="alert" data-testid="goal-error" className="text-xs text-status-danger">
+        <span role="alert" data-testid="goal-error" className="text-xs text-tone-blocked">
           {errorText}
         </span>
       )}

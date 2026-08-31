@@ -89,7 +89,7 @@ export function TaskNode({ id, data }: NodeProps<TaskNodeData>): React.JSX.Eleme
           {data.attempt}/{data.maxAttempts}
         </span>
         {data.waitingOn !== null && (
-          <span data-testid="waiting-badge" className="rounded bg-status-warn/10 px-1 text-status-warn">
+          <span data-testid="waiting-badge" className="rounded bg-tone-waiting/10 px-1 text-tone-waiting">
             waiting on {data.waitingOn}
           </span>
         )}

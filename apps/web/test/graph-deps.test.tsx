@@ -145,7 +145,7 @@ describe('DepsMode', () => {
 
     const node = screen.getByTestId('node-task:t2').querySelector('[data-testid="task-node"]')!
     expect(node.textContent).toContain('Write the API')
-    expect(node.className).toContain('border-status-working') // running
+    expect(node.className).toContain('border-tone-working') // running
     expect(node.querySelector('[data-testid="attempt"]')?.textContent).toBe('1/3')
   })
 

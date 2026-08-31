@@ -127,7 +127,7 @@ function ParticleDot({ particle }: { readonly particle: Particle }): React.JSX.E
     <circle
       data-testid="particle"
       r={3}
-      className="fill-status-working motion-safe:animate-[particle-travel_600ms_linear]"
+      className="fill-tone-working motion-safe:animate-[particle-travel_600ms_linear]"
       style={{ offsetPath: `path('${target.d}')` }}
     />,
     target.element,

@@ -158,12 +158,12 @@ export function RuntimeCard({
         </form>
 
         {costBlindBudgeted && (
-          <span data-testid="runtime-cost-blind-warning" className="text-xs text-status-warn">
+          <span data-testid="runtime-cost-blind-warning" className="text-xs text-tone-waiting">
             this provider reports no cost; a budgeted workspace will refuse it at dispatch
           </span>
         )}
         {errorText !== null && (
-          <span role="alert" data-testid="runtime-error" className="text-xs text-status-danger">
+          <span role="alert" data-testid="runtime-error" className="text-xs text-tone-blocked">
             {errorText}
           </span>
         )}

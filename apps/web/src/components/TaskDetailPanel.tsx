@@ -47,7 +47,7 @@ export function TaskDetailPanel({
         {task.lastRejectionReason !== null && (
           <>
             <dt className="text-text-3">rejection</dt>
-            <dd className="text-status-warn">{task.lastRejectionReason}</dd>
+            <dd className="text-tone-waiting">{task.lastRejectionReason}</dd>
           </>
         )}
       </dl>

@@ -132,7 +132,7 @@ export function DangerZone({
                       data-testid="reseed-confirm"
                       disabled={reseeding}
                       onClick={() => void reseed()}
-                      className="rounded-chip border border-status-danger/40 bg-status-danger/10 px-2 py-1 text-xs text-status-danger disabled:opacity-60"
+                      className="rounded-chip border border-tone-blocked/40 bg-tone-blocked/10 px-2 py-1 text-xs text-tone-blocked disabled:opacity-60"
                     >
                       {reseeding ? 'reseeding…' : 'replace the data'}
                     </button>
@@ -150,14 +150,14 @@ export function DangerZone({
                     type="button"
                     data-testid="reseed-button"
                     onClick={() => setConfirming(true)}
-                    className="rounded-chip border border-status-danger/40 bg-status-danger/10 px-2 py-1 text-xs text-status-danger"
+                    className="rounded-chip border border-tone-blocked/40 bg-tone-blocked/10 px-2 py-1 text-xs text-tone-blocked"
                   >
                     reset demo data
                   </button>
                 )}
               </span>
               {reseedError !== null && (
-                <span role="alert" className="w-full text-xs text-status-danger">
+                <span role="alert" className="w-full text-xs text-tone-blocked">
                   {reseedError}
                 </span>
               )}

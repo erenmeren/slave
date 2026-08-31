@@ -153,7 +153,7 @@ export function DepsMode({ workspaceId, snapshot }: { readonly workspaceId: stri
         <div
           role="alert"
           data-testid="deps-error"
-          className="absolute inset-x-0 top-0 z-10 border-b border-status-danger/40 bg-status-danger/10 px-4 py-1.5 text-xs text-status-danger"
+          className="absolute inset-x-0 top-0 z-10 border-b border-tone-blocked/40 bg-tone-blocked/10 px-4 py-1.5 text-xs text-tone-blocked"
         >
           {errorText}
         </div>

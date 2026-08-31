@@ -9,71 +9,71 @@ import { StatusPill, TONE_TEXT } from './ui/StatusPill'
 // task-specific colours. Several statuses share a token deliberately — e.g. both `ready` and
 // `verifying` read as "in flight, not yet the agent's turn" (starting/cyan).
 export const TASK_STATUS_DOT: Record<TaskStatus, string> = {
-  backlog: 'bg-status-idle',
-  ready: 'bg-status-starting',
-  blocked: 'bg-status-warn',
-  assigned: 'bg-status-starting',
-  running: 'bg-status-working',
-  verifying: 'bg-status-starting',
-  reviewing: 'bg-status-paused',
-  merging: 'bg-status-paused',
-  rework: 'bg-status-warn',
-  done: 'bg-status-working',
-  failed: 'bg-status-danger',
-  cancelled: 'bg-status-idle',
+  backlog: 'bg-tone-idle',
+  ready: 'bg-tone-planning',
+  blocked: 'bg-tone-waiting',
+  assigned: 'bg-tone-planning',
+  running: 'bg-tone-working',
+  verifying: 'bg-tone-planning',
+  reviewing: 'bg-tone-paused',
+  merging: 'bg-tone-paused',
+  rework: 'bg-tone-waiting',
+  done: 'bg-tone-working',
+  failed: 'bg-tone-blocked',
+  cancelled: 'bg-tone-idle',
 }
 
-// Same status → colour mapping as `TASK_STATUS_DOT`, as literal `border-status-*` strings rather
+// Same status → colour mapping as `TASK_STATUS_DOT`, as literal `border-tone-*` strings rather
 // than a runtime `.replace('bg-', 'border-')` on the dot's own class: Tailwind v4 generates
 // utilities by scanning source text for literal class names, so an assembled-at-runtime string
 // (however mechanically derived from a literal) never gets generated — the graph's active-task
 // satellite (`OrgNodes.tsx`) hit exactly this, fix-round-1 finding 4.
 export const TASK_STATUS_BORDER: Record<TaskStatus, string> = {
-  backlog: 'border-status-idle',
-  ready: 'border-status-starting',
-  blocked: 'border-status-warn',
-  assigned: 'border-status-starting',
-  running: 'border-status-working',
-  verifying: 'border-status-starting',
-  reviewing: 'border-status-paused',
-  merging: 'border-status-paused',
-  rework: 'border-status-warn',
-  done: 'border-status-working',
-  failed: 'border-status-danger',
-  cancelled: 'border-status-idle',
+  backlog: 'border-tone-idle',
+  ready: 'border-tone-planning',
+  blocked: 'border-tone-waiting',
+  assigned: 'border-tone-planning',
+  running: 'border-tone-working',
+  verifying: 'border-tone-planning',
+  reviewing: 'border-tone-paused',
+  merging: 'border-tone-paused',
+  rework: 'border-tone-waiting',
+  done: 'border-tone-working',
+  failed: 'border-tone-blocked',
+  cancelled: 'border-tone-idle',
 }
 
 // The border-flash's `--flash-color` source per `TaskStatus` (M7 task 8, spec §6's status-flash
 // signal) — same "reuse the existing tokens through their `@theme inline` names" rule
 // `AgentCard.tsx`'s own `FLASH_COLOR` follows, just keyed by the wider status vocabulary tasks use.
 export const TASK_STATUS_FLASH_COLOR: Record<TaskStatus, string> = {
-  backlog: 'var(--color-status-idle)',
-  ready: 'var(--color-status-starting)',
-  blocked: 'var(--color-status-warn)',
-  assigned: 'var(--color-status-starting)',
-  running: 'var(--color-status-working)',
-  verifying: 'var(--color-status-starting)',
-  reviewing: 'var(--color-status-paused)',
-  merging: 'var(--color-status-paused)',
-  rework: 'var(--color-status-warn)',
-  done: 'var(--color-status-working)',
-  failed: 'var(--color-status-danger)',
-  cancelled: 'var(--color-status-idle)',
+  backlog: 'var(--color-tone-idle)',
+  ready: 'var(--color-tone-planning)',
+  blocked: 'var(--color-tone-waiting)',
+  assigned: 'var(--color-tone-planning)',
+  running: 'var(--color-tone-working)',
+  verifying: 'var(--color-tone-planning)',
+  reviewing: 'var(--color-tone-paused)',
+  merging: 'var(--color-tone-paused)',
+  rework: 'var(--color-tone-waiting)',
+  done: 'var(--color-tone-working)',
+  failed: 'var(--color-tone-blocked)',
+  cancelled: 'var(--color-tone-idle)',
 }
 
 export const TASK_STATUS_TEXT: Record<TaskStatus, string> = {
-  backlog: 'text-status-idle',
-  ready: 'text-status-starting',
-  blocked: 'text-status-warn',
-  assigned: 'text-status-starting',
-  running: 'text-status-working',
-  verifying: 'text-status-starting',
-  reviewing: 'text-status-paused',
-  merging: 'text-status-paused',
-  rework: 'text-status-warn',
-  done: 'text-status-working',
-  failed: 'text-status-danger',
-  cancelled: 'text-status-idle',
+  backlog: 'text-tone-idle',
+  ready: 'text-tone-planning',
+  blocked: 'text-tone-waiting',
+  assigned: 'text-tone-planning',
+  running: 'text-tone-working',
+  verifying: 'text-tone-planning',
+  reviewing: 'text-tone-paused',
+  merging: 'text-tone-paused',
+  rework: 'text-tone-waiting',
+  done: 'text-tone-working',
+  failed: 'text-tone-blocked',
+  cancelled: 'text-tone-idle',
 }
 
 /**

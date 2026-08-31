@@ -177,12 +177,12 @@ describe('GraphClient', () => {
 
     const alexNode = agentNodes.find((node) => node.textContent?.includes('Alex'))!
     expect(alexNode.textContent).toContain('backend')
-    expect(within(alexNode).getByTestId('status-dot').className).toContain('bg-status-idle')
+    expect(within(alexNode).getByTestId('status-dot').className).toContain('bg-tone-idle')
     expect(alexNode.textContent).toContain('idle')
 
     const samNode = agentNodes.find((node) => node.textContent?.includes('Sam'))!
     expect(samNode.textContent).toContain('frontend')
-    expect(within(samNode).getByTestId('status-dot').className).toContain('bg-status-working')
+    expect(within(samNode).getByTestId('status-dot').className).toContain('bg-tone-working')
     expect(samNode.textContent).toContain('Ship the thing')
   })
 
@@ -193,7 +193,7 @@ describe('GraphClient', () => {
 
     const root = screen.getByTestId('workspace-node')
     expect(root.getAttribute('data-halted')).toBe('true')
-    expect(root.className).toContain('border-status-danger')
+    expect(root.className).toContain('border-tone-blocked')
   })
 
   it('renders no halt colouring when the workspace is not halted', async () => {
@@ -202,7 +202,7 @@ describe('GraphClient', () => {
 
     const root = screen.getByTestId('workspace-node')
     expect(root.getAttribute('data-halted')).toBe('false')
-    expect(root.className).not.toContain('border-status-danger')
+    expect(root.className).not.toContain('border-tone-blocked')
   })
 
   // ---- active-task satellite (spec §6's particle track) ----------------------------------------
@@ -225,7 +225,7 @@ describe('GraphClient', () => {
     expect(screen.queryAllByTestId('active-task-node')).toHaveLength(0)
   })
 
-  it('fix-round-1 finding 4: colours the satellite border with the literal border-status-working class for a running (non-danger) task', async () => {
+  it('fix-round-1 finding 4: colours the satellite border with the literal border-tone-working class for a running (non-danger) task', async () => {
     render(<GraphClient workspaceId="w1" initial={SNAPSHOT} />) // t1's status is 'running'
     await waitFor(() => expect(elkLayoutSpy).toHaveBeenCalled())
 
@@ -234,7 +234,7 @@ describe('GraphClient', () => {
     // literal class name appears in source text, so an assembled-at-build string like the old
     // `.replace()` shape never actually renders (jsdom can't observe that directly; this pins the
     // fixed source to the literal it must produce).
-    expect(screen.getByTestId('active-task-node').className).toContain('border-status-working')
+    expect(screen.getByTestId('active-task-node').className).toContain('border-tone-working')
   })
 
   // ---- mode tab ↔ URL round trip -----------------------------------------------------------------

@@ -56,7 +56,7 @@ export function TasksClient({
         />
         {view.workspace.haltedReason !== null && <HaltBanner reason={view.workspace.haltedReason} />}
         {error !== null && (
-          <div role="alert" className="border-b border-status-warn/40 bg-status-warn/10 px-4 py-1.5 text-xs text-status-warn">
+          <div role="alert" className="border-b border-tone-waiting/40 bg-tone-waiting/10 px-4 py-1.5 text-xs text-tone-waiting">
             showing stale data: {error}
           </div>
         )}

@@ -17,19 +17,9 @@
   --text-faint: #69727f; /* faint */
   --text-3: #5b6472; /* label */
 
-  /* Status colours (existing M4 vocabulary): remapped onto the handoff palette below rather
-   * than renamed — every existing `--status-*`/`bg-status-*`/etc. utility keeps compiling.
-   * `resuming`/`pausing` still ride `starting`/`paused` respectively, as before. */
-  --status-working: #2ee6cf;
-  --status-starting: #7b8cff; /* also resuming — spinning up reads as the handoff's "planning" tone */
-  --status-paused: #8a929e;   /* also pausing */
-  --status-stopping: #f5b34a; /* transitional/uncertain — the handoff's "waiting" amber */
-  --status-idle: #5b6472;
-  --status-danger: #f87171;   /* halt, failed, over budget */
-  --status-warn: #f5b34a;     /* budget past 80% — same amber family as `stopping` */
-
-  /* Handoff status tones (new vocabulary, spec §3): the eight `StatusTone` values the
-   * `ui/` component library renders — its own names, independent of the M4 vocabulary above. */
+  /* Handoff status tones (spec §3): the eight `StatusTone` values the `ui/` component library
+   * renders — the one tone vocabulary the app now uses end to end (the earlier M4 status
+   * variables have folded into this). */
   --tone-working: #2ee6cf;
   --tone-planning: #7b8cff;
   --tone-review: #c084fc;
@@ -64,13 +54,6 @@
   --color-text-2: var(--text-2);
   --color-text-faint: var(--text-faint);
   --color-text-3: var(--text-3);
-  --color-status-working: var(--status-working);
-  --color-status-starting: var(--status-starting);
-  --color-status-paused: var(--status-paused);
-  --color-status-stopping: var(--status-stopping);
-  --color-status-idle: var(--status-idle);
-  --color-status-danger: var(--status-danger);
-  --color-status-warn: var(--status-warn);
   --color-tone-working: var(--tone-working);
   --color-tone-planning: var(--tone-planning);
   --color-tone-review: var(--tone-review);
@@ -248,7 +231,7 @@ body {
  * Flow's own edge `className` lands on the wrapping `<g>`, not directly on the `<path>` a
  * descendant-selector rule needs to reach; that combination is why this is a second keyframe rather
  * than a `motion-safe:animate-[border-flash_800ms_ease-out]` reuse. Same 800ms decay language, same
- * "no new colour tokens" rule (reuses `--color-status-working`), and the same reduced-motion
+ * "no new colour tokens" rule (reuses `--color-tone-working`), and the same reduced-motion
  * guarantee `motion-safe:` gives everywhere else -- just hand-written as the
  * `prefers-reduced-motion: no-preference` media query `motion-safe:` itself compiles to, because a
  * plain literal edge `className` (not a Tailwind utility) is what has to carry it here. */
@@ -264,7 +247,7 @@ body {
     stroke-width: 1;
   }
   50% {
-    stroke: var(--color-status-working);
+    stroke: var(--color-tone-working);
     stroke-width: 3;
   }
 }

@@ -52,7 +52,7 @@ export function TopStrip({ snapshot }: { readonly snapshot: OverviewSnapshot }):
           </span>
           <span className="truncate text-[11px] text-text-2">{tile.label}</span>
           {tile.key === 'spend' && snapshot.workspace.unmeasuredRuns > 0 && (
-            <span data-testid="strip-unmeasured" className="font-mono text-[9.5px] text-status-warn">
+            <span data-testid="strip-unmeasured" className="font-mono text-[9.5px] text-tone-waiting">
               {snapshot.workspace.unmeasuredRuns} unmeasured
             </span>
           )}

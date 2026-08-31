@@ -182,7 +182,7 @@ export function PermissionMatrix({ sections }: { readonly sections: readonly Per
       ))}
 
       {errorText !== null && (
-        <span role="alert" className="text-xs text-status-danger">
+        <span role="alert" className="text-xs text-tone-blocked">
           {errorText}
         </span>
       )}

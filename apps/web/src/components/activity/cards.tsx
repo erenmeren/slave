@@ -9,13 +9,13 @@ import { ActivityCard, type ActivityCardProps } from './ActivityCard'
 // every type got a card, not these casts.
 
 const TRANSITION_COLOR = {
-  idle: 'text-status-idle',
-  starting: 'text-status-starting',
-  paused: 'text-status-paused',
-  stopping: 'text-status-stopping',
-  working: 'text-status-working',
-  danger: 'text-status-danger',
-  warn: 'text-status-warn',
+  idle: 'text-tone-idle',
+  starting: 'text-tone-planning',
+  paused: 'text-tone-paused',
+  stopping: 'text-tone-waiting',
+  working: 'text-tone-working',
+  danger: 'text-tone-blocked',
+  warn: 'text-tone-waiting',
 } as const
 
 /** A status-coloured transition label — the recurring "<coloured word> — <detail>" shape shared

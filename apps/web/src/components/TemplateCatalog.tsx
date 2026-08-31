@@ -185,7 +185,7 @@ export function TemplateCatalog({ templates }: { readonly templates: readonly Te
           Add template
         </PrimaryButton>
         {errorText !== null && (
-          <span role="alert" data-testid="template-error" className="text-xs text-status-danger">
+          <span role="alert" data-testid="template-error" className="text-xs text-tone-blocked">
             {errorText}
           </span>
         )}

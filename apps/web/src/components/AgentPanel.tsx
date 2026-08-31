@@ -150,7 +150,7 @@ export function AgentPanel({
       </div>
 
       {errorText !== null && (
-        <div role="alert" data-testid="panel-error" className="rounded border border-status-danger/40 bg-status-danger/10 px-2 py-1.5 text-xs text-status-danger">
+        <div role="alert" data-testid="panel-error" className="rounded border border-tone-blocked/40 bg-tone-blocked/10 px-2 py-1.5 text-xs text-tone-blocked">
           {errorText}
         </div>
       )}
@@ -174,7 +174,7 @@ export function AgentPanel({
       )}
 
       {status === 'paused' && workspaceHalted && (
-        <p data-testid="resume-halt-reason" className="text-xs text-status-danger">
+        <p data-testid="resume-halt-reason" className="text-xs text-tone-blocked">
           workspace halted: {haltedReason}
         </p>
       )}

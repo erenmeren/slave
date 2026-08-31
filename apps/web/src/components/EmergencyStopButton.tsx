@@ -95,7 +95,7 @@ export function EmergencyStopButton({
           data-testid="emergency-stop-confirm"
           disabled={pending}
           onClick={() => void confirm()}
-          className="rounded border border-status-danger/40 bg-status-danger/10 px-2 py-1 text-xs text-status-danger disabled:opacity-60"
+          className="rounded border border-tone-blocked/40 bg-tone-blocked/10 px-2 py-1 text-xs text-tone-blocked disabled:opacity-60"
         >
           stop everything
         </button>
@@ -108,7 +108,7 @@ export function EmergencyStopButton({
           cancel
         </button>
         {errorText !== null && (
-          <span role="alert" className="text-xs text-status-danger">
+          <span role="alert" className="text-xs text-tone-blocked">
             {errorText}
           </span>
         )}
@@ -124,7 +124,7 @@ export function EmergencyStopButton({
       disabled={halted}
       title={halted ? 'workspace is already halted' : undefined}
       onClick={() => setPhase('confirm')}
-      className="rounded border border-status-danger/40 bg-status-danger/10 px-2 py-1 text-xs text-status-danger disabled:opacity-60"
+      className="rounded border border-tone-blocked/40 bg-tone-blocked/10 px-2 py-1 text-xs text-tone-blocked disabled:opacity-60"
     >
       STOP
     </button>

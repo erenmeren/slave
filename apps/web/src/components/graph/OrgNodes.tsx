@@ -104,10 +104,10 @@ export function WorkspaceNode({ data }: NodeProps<WorkspaceNodeData>): React.JSX
     <div
       data-testid="workspace-node"
       data-halted={halted}
-      className={`rounded border-2 px-4 py-3 text-center ${halted ? 'border-status-danger bg-status-danger/10' : 'border-line bg-bg-1'}`}
+      className={`rounded border-2 px-4 py-3 text-center ${halted ? 'border-tone-blocked bg-tone-blocked/10' : 'border-line bg-bg-1'}`}
     >
       <div className="text-sm font-medium text-text-1">{data.name}</div>
-      {halted && <div className="mt-1 text-xs text-status-danger">halted: {data.haltedReason}</div>}
+      {halted && <div className="mt-1 text-xs text-tone-blocked">halted: {data.haltedReason}</div>}
       <Handle type="source" position={Position.Bottom} />
     </div>
   )

@@ -107,7 +107,7 @@ export function ModelOverrideEditor({
         Clear
       </Button>
       {errorText !== null && (
-        <span role="alert" data-testid="model-override-error" className="text-xs text-status-danger">
+        <span role="alert" data-testid="model-override-error" className="text-xs text-tone-blocked">
           {errorText}
         </span>
       )}

@@ -323,7 +323,7 @@ describe('node status flash (M5 border-flash idiom)', () => {
 
     const node = screen.getByTestId('agent-node')
     expect(node.className).toContain('motion-safe:animate-[border-flash_800ms_ease-out]')
-    expect(node.style.getPropertyValue('--flash-color')).toBe('var(--color-status-working)')
+    expect(node.style.getPropertyValue('--flash-color')).toBe('var(--color-tone-working)')
   })
 
   it('ActiveTaskNode: no flash on initial mount, flashes on a status change', () => {

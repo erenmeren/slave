@@ -130,7 +130,7 @@ export function AssignCompanyDialog({ workspaceId, companies, onClose, triggerRe
           </ul>
         )}
         {errorText !== null && (
-          <p role="alert" data-testid="assign-error" className="text-xs text-status-danger">
+          <p role="alert" data-testid="assign-error" className="text-xs text-tone-blocked">
             {errorText}
           </p>
         )}

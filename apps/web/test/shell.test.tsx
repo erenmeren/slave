@@ -155,11 +155,11 @@ describe('the shell', () => {
     const { rerender } = render(
       <TopBar workspaceId="w1" workspaceName="W" connection="connected" latencyMs={null} budget={{ spentUsd: 85, budgetUsd: 100, unmeasuredRuns: 0 }} halted={false} />,
     )
-    expect(screen.getByTestId('budget').innerHTML).toContain('bg-status-warn')
+    expect(screen.getByTestId('budget').innerHTML).toContain('bg-tone-waiting')
     rerender(
       <TopBar workspaceId="w1" workspaceName="W" connection="connected" latencyMs={null} budget={{ spentUsd: 101, budgetUsd: 100, unmeasuredRuns: 0 }} halted={false} />,
     )
-    expect(screen.getByTestId('budget').innerHTML).toContain('bg-status-danger')
+    expect(screen.getByTestId('budget').innerHTML).toContain('bg-tone-blocked')
   })
 
   it('says how many runs went unmeasured, so known spend is not read as total spend', () => {
@@ -215,9 +215,9 @@ describe('the shell', () => {
     const budget = screen.getByTestId('budget')
     expect(budget.textContent).toContain('$3.20')
     expect(budget.textContent).not.toContain('/')
-    expect(budget.innerHTML).not.toContain('bg-status-working')
-    expect(budget.innerHTML).not.toContain('bg-status-warn')
-    expect(budget.innerHTML).not.toContain('bg-status-danger')
+    expect(budget.innerHTML).not.toContain('bg-tone-working')
+    expect(budget.innerHTML).not.toContain('bg-tone-waiting')
+    expect(budget.innerHTML).not.toContain('bg-tone-blocked')
   })
 
   it('reports the connection state it was given', () => {
@@ -401,18 +401,18 @@ describe('the top bar', () => {
     expect(chip.className).toContain('px-[9px]')
     expect(chip.className).toContain('py-[3px]')
     expect(chip.className).toContain('text-[10px]')
-    expect(chip.className).toContain('border-status-working/25')
-    expect(chip.className).toContain('bg-status-working/[0.06]')
-    expect(chip.className).toContain('text-status-working')
+    expect(chip.className).toContain('border-tone-working/25')
+    expect(chip.className).toContain('bg-tone-working/[0.06]')
+    expect(chip.className).toContain('text-tone-working')
     expect(chip.innerHTML).toContain('h-[5px]')
   })
 
   it('turns the chip amber, not teal, while the stream is reconnecting', () => {
     render(<TopBar workspaceId="w1" workspaceName="W" connection="reconnecting" latencyMs={42} budget={null} halted={false} />)
     const chip = screen.getByTestId('connection')
-    expect(chip.className).toContain('border-status-warn/25')
-    expect(chip.className).toContain('text-status-warn')
-    expect(chip.className).not.toContain('text-status-working')
+    expect(chip.className).toContain('border-tone-waiting/25')
+    expect(chip.className).toContain('text-tone-waiting')
+    expect(chip.className).not.toContain('text-tone-working')
   })
 
   it('draws the budget bar at the mockup geometry, with the glow in the threshold colour', () => {
@@ -433,7 +433,7 @@ describe('the top bar', () => {
     expect(html).toContain('h-[3px]')
     expect(html).toContain('rounded-[2px]')
     expect(html).toContain('bg-white/[0.08]')
-    expect(html).toContain('shadow-[0_0_8px_var(--color-status-working)]')
+    expect(html).toContain('shadow-[0_0_8px_var(--color-tone-working)]')
   })
 
   it('says reconnecting instead of a stale latency while the stream is down', () => {

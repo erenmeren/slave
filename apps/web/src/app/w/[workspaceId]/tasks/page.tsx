@@ -11,7 +11,7 @@ export default async function TasksPage({
   const { workspaceId } = await params
   const snapshot = await buildTasksSnapshot(workspaceId)
   if (snapshot === null) {
-    return <main className="p-6 text-status-danger">no workspace with id {workspaceId}</main>
+    return <main className="p-6 text-tone-blocked">no workspace with id {workspaceId}</main>
   }
   // Keyed so a client-side workspace-to-workspace navigation remounts the client instead of
   // rendering the old workspace's state under the new URL.

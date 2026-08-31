@@ -62,7 +62,7 @@ export function BlockedPanel({
           </ul>
         )}
         {errorText !== null && (
-          <span role="alert" data-testid="blocked-error" className="text-xs text-status-danger">
+          <span role="alert" data-testid="blocked-error" className="text-xs text-tone-blocked">
             {errorText}
           </span>
         )}
@@ -144,7 +144,7 @@ export function MergeQueuePanel({ queue }: { readonly queue: OverviewSnapshot['m
                 // this one is not waiting its turn — it is stuck, and only the mark says so.
                 <span
                   data-testid="merge-queue-no-approval"
-                  className="shrink-0 rounded-chip border border-status-warn/40 px-1.5 py-0.5 font-mono text-[9.5px] text-status-warn"
+                  className="shrink-0 rounded-chip border border-tone-waiting/40 px-1.5 py-0.5 font-mono text-[9.5px] text-tone-waiting"
                 >
                   no approval
                 </span>
@@ -225,7 +225,7 @@ export function OverviewClient({
         />
         {view.workspace.haltedReason !== null && <HaltBanner reason={view.workspace.haltedReason} />}
         {error !== null && (
-          <div role="alert" className="border-b border-status-warn/40 bg-status-warn/10 px-4 py-1.5 text-xs text-status-warn">
+          <div role="alert" className="border-b border-tone-waiting/40 bg-tone-waiting/10 px-4 py-1.5 text-xs text-tone-waiting">
             showing stale data: {error}
           </div>
         )}
