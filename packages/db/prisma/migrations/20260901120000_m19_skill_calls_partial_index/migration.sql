@@ -1,0 +1,41 @@
+-- M19 C1: skillGraph.ts's two queries (groupBy at :59, findMany at :80) filter every
+-- ExecutionEvent row of a workspace on an un-indexed JSON path. This partial index carries
+-- exactly those rows. SQL-only: Prisma's schema language cannot express a partial/expression
+-- index, so schema.prisma has no counterpart (known drift, stated here).
+--
+-- The predicate's expression form matches Prisma's emitted SQL verbatim (Task 8 Step 1: captured
+-- via `log: ['query']` against the dev DB, then confirmed via EXPLAIN with literal-substituted
+-- values). Prisma's `payload: { path: ['name'], equals: 'Skill' }` filter compiles to
+-- `("payload"#>ARRAY[$n]::text[])::jsonb::jsonb = $n` (a jsonb `#>` path extraction compared to a
+-- jsonb-encoded string), NOT the `->>'name'` text form originally anticipated. Because Prisma
+-- issues this as an UNNAMED prepared statement, Postgres always custom-plans it with the actual
+-- bound values (per Postgres docs on unnamed statements), so the `ARRAY[$n]::text[]` path
+-- argument and the redundant `::jsonb::jsonb` cast constant-fold away to a plain Const, and
+-- EXPLAIN's Filter shows exactly `(payload #> '{name}'::text[]) = '"Skill"'::jsonb` -- that
+-- normalized form is this index's partial predicate below.
+--
+-- `type`, by contrast, is deliberately an INDEXED COLUMN here, not part of the partial WHERE --
+-- a real gotcha found while proving this index, worth recording. Prisma emits the type filter as
+-- `"type" = CAST($n::text AS "EventType")`. Unlike the payload path, this CAST does NOT
+-- constant-fold to a plain Const (verified: EXPLAIN keeps it as a live `('run.tool_call'::cstring)
+-- ::"EventType"` coercion, and `SELECT 1 WHERE CAST(...) = 'run.tool_call'::"EventType"` does not
+-- get optimized away the way a same-value Const-to-Const comparison does). A partial index's WHERE
+-- predicate is matched by Postgres's predicate-implication prover (predtest.c), which needs the
+-- query's clause and the index's clause to be the same expression tree (or one provably a Const
+-- special case of the other) -- a literal `type = 'run.tool_call'` in the predicate folds to a
+-- Const at CREATE INDEX time and structurally does NOT match Prisma's non-Const CAST clause, so
+-- that form is a dead partial predicate (proven by EXPLAIN with `enable_seqscan = off` and every
+-- competing index dropped: the planner still would not touch it). Worse, the CAST form itself
+-- cannot be written into a partial predicate at all -- `CREATE INDEX ... WHERE "type" =
+-- CAST('run.tool_call'::text AS "EventType")` is flatly rejected: "functions in index predicate
+-- must be marked IMMUTABLE". Making `type` an ordinary indexed COLUMN sidesteps both problems --
+-- ordinary index-condition matching (unlike partial-predicate implication) accepts any pseudo-
+-- constant right-hand expression, CAST included -- and EXPLAIN confirms the planner uses this
+-- index (`Index Cond` covering workspaceId/type/runId, `Index Only Scan` on the groupBy) once
+-- `type` moved out of the predicate. The `(workspaceId, type, runId, seq)` column order also
+-- means both queries' `ORDER BY` (seq desc-of-max for the groupBy, runId/seq asc for the
+-- findMany) is satisfied by index order directly -- neither plan needs a Sort node.
+-- CreateIndex
+CREATE INDEX IF NOT EXISTS "ExecutionEvent_skill_calls_idx"
+ON "ExecutionEvent" ("workspaceId", "type", "runId", "seq")
+WHERE (payload #> '{name}'::text[]) = '"Skill"'::jsonb;

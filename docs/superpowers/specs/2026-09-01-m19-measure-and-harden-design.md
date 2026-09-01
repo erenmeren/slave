@@ -65,6 +65,19 @@ B — never silently patched.
 
 - **C1** — functional index on the Skill payload path used by `buildSkillGraph`; migration;
   before/after `EXPLAIN` recorded in the task report.
+
+  **C1 evidence** (dev DB, workspace `00000000-…-000001`, 7-row table): Prisma's `payload: {
+  path: ['name'], equals: 'Skill' }` folds to `(payload #> '{name}'::text[]) = '"Skill"'::jsonb`
+  (provable Const), but its `type = CAST($n::text AS "EventType")` does **not** fold — so `type`
+  had to become an ordinary indexed column (`workspaceId, type, runId, seq`), not part of the
+  partial predicate, or the index was structurally invisible to the planner (proven dead by
+  EXPLAIN with every competing index dropped). Before: both queries `Seq Scan`, `Filter:
+  (workspaceId=… AND (payload #> '{name}') = '"Skill"' AND type = (…::cstring)::"EventType")`.
+  Table too small (7 rows) for the planner to prefer the index unforced; with
+  `enable_seqscan = off` both queries switch to `Index (Only) Scan using
+  "ExecutionEvent_skill_calls_idx"`, `Index Cond` covering `workspaceId`/`type`/`runId`, groupBy
+  as `Heap Fetches: 0`, and both queries' `ORDER BY` satisfied by index order (no `Sort` node).
+  Full plans and the CAST-immutability rejection in Task 8's report.
 - **C2** — typecheck gate step: `npm run typecheck` (the full chain at `package.json:15`)
   becomes a standard milestone-gate step; proven by a probe that it catches a red `tsc --build`
   alone misses (test-tsconfig breakage).
