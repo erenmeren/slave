@@ -2,7 +2,7 @@
 import type { ReactElement } from 'react'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ReactFlowProvider, type Node, type NodeProps } from 'reactflow'
+import { Position, ReactFlowProvider, type EdgeProps, type Node, type NodeProps } from 'reactflow'
 import type { GraphCanvasProps } from '../src/components/graph/GraphCanvas.js'
 import {
   buildSkillAggregateGraph,
@@ -12,6 +12,7 @@ import {
   skillProminence,
   type SkillNodeData,
 } from '../src/components/graph/SkillNodes.js'
+import { CableEdge, type CableEdgeData } from '../src/components/graph/CableEdge.js'
 import type { GraphSnapshot } from '../src/server/graph.js'
 import type { SkillGraph, SkillGraphRun } from '../src/server/skillGraph.js'
 
@@ -171,6 +172,66 @@ describe('buildSkillAggregateGraph', () => {
 
   it('returns no nodes and no edges for the empty DTO', () => {
     expect(buildSkillAggregateGraph(skillGraph())).toEqual({ nodes: [], edges: [] })
+  })
+
+  it("stamps each edge's raw succession count onto data.weight, for CableEdge to render as thickness (C3)", () => {
+    const { edges } = buildSkillAggregateGraph(GRAPH)
+    expect(edges.map((edge) => (edge.data as { weight: number }).weight)).toEqual([2, 2])
+  })
+})
+
+// ==================================================================================================
+// Cable thickness -- C3: an aggregate edge's `weight` (the server's raw succession count) renders as
+// the cable's stroke width. Rendered through the real `CableEdge`, not the `GraphCanvas` stub above
+// (which only stands in a `data-testid` div per edge) -- same "render the real edge component"
+// approach `graph-flow.test.tsx`'s own `CableEdge` describe block takes, fed here with the exact
+// `data` `buildSkillAggregateGraph` produces.
+// ==================================================================================================
+
+describe('cable thickness from edge weight (C3)', () => {
+  const GEOMETRY = {
+    sourceX: 0,
+    sourceY: 0,
+    targetX: 100,
+    targetY: 100,
+    sourcePosition: Position.Bottom,
+    targetPosition: Position.Top,
+  }
+
+  it('renders a heavier edge (count 4) with a thicker core than a lighter one (count 1), attribute and inline style agreeing', () => {
+    const graph = skillGraph({
+      skills: [
+        { name: 'a', calls: 1 },
+        { name: 'b', calls: 1 },
+        { name: 'c', calls: 1 },
+      ],
+      edges: [
+        { from: 'a', to: 'b', count: 1 },
+        { from: 'b', to: 'c', count: 4 },
+      ],
+    })
+    const { edges } = buildSkillAggregateGraph(graph)
+    expect(edges).toHaveLength(2)
+
+    const { container } = render(
+      <svg>
+        <CableEdge {...({ ...GEOMETRY, id: edges[0]!.id, data: edges[0]!.data } as unknown as EdgeProps<CableEdgeData>)} />
+        <CableEdge {...({ ...GEOMETRY, id: edges[1]!.id, data: edges[1]!.data } as unknown as EdgeProps<CableEdgeData>)} />
+      </svg>,
+    )
+
+    const cores = container.querySelectorAll('path.react-flow__edge-path')
+    expect(cores).toHaveLength(2)
+    const light = cores[0] as SVGPathElement
+    const heavy = cores[1] as SVGPathElement
+
+    // The attribute and the inline style must agree -- React Flow's own stylesheet outranks the
+    // attribute, so a mismatch here would render correctly in this DOM read but wrong on the page.
+    expect(light.getAttribute('stroke-width')).toBe(light.style.strokeWidth)
+    expect(heavy.getAttribute('stroke-width')).toBe(heavy.style.strokeWidth)
+
+    expect(light.style.strokeWidth).not.toBe(heavy.style.strokeWidth)
+    expect(Number(heavy.style.strokeWidth)).toBeGreaterThan(Number(light.style.strokeWidth))
   })
 })
 

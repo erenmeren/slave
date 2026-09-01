@@ -9,6 +9,10 @@ export interface CableEdgeData {
   readonly tone: StatusTone
   /** `false` renders the inactive cable: 3px, `rgba(255,255,255,.13)`, no dash, no halo. */
   readonly active: boolean
+  /** The raw succession count behind this cable (M19 C3) — absent keeps today's flat literals.
+   *  Only the aggregate skill graph builder stamps this (`SkillNodes.tsx`'s `buildSkillAggregateGraph`);
+   *  the chain/focus builder and every other edge kind stay weightless by construction. See `widthFor`. */
+  readonly weight?: number
 }
 
 /**
@@ -54,6 +58,21 @@ const GLOW_FILTER_ID = 'cable-glow'
 const HIT_PATH_WIDTH = '20'
 
 /**
+ * The core's width as traffic, not just state (M19 C3): a `weight` (an edge's raw succession
+ * count) scales the line 1.4px/3px..3.8px/4.5px, clamped so one very hot edge cannot swamp the
+ * canvas. `weight` is `undefined` for every edge kind except the aggregate skill graph's own
+ * (`buildSkillAggregateGraph`) — those keep today's flat literals, unclamped and unscaled.
+ */
+function widthFor(weight: number | undefined, active: boolean): string {
+  if (weight === undefined) return active ? '1.4' : '3'
+  const raw = active ? 1.4 + 0.6 * (weight - 1) : 3 + 0.5 * (weight - 1)
+  const clamped = active ? Math.min(Math.max(raw, 1.4), 3.8) : Math.min(Math.max(raw, 3), 4.5)
+  // Rounded to 2dp so e.g. weight 4/active doesn't hand SVG a `3.1999999999999997` float-noise
+  // string -- the clamp's own math is unaffected, this only tidies the printed attribute/style.
+  return String(Math.round(clamped * 100) / 100)
+}
+
+/**
  * The design README's signature cable ("1b — Cables"), as a React Flow custom edge: three stacked
  * paths in ONE `<g>` — a 5px blurred halo (`feGaussianBlur stdDeviation=4`, opacity .18) in the
  * TARGET's status colour, a 1.4px solid core, and a 1.6px white dashed overlay
@@ -97,7 +116,7 @@ export function CableEdge({
   // `.react-flow__edge.selected .react-flow__edge-path` — a rule the inline style below
   // deliberately outranks, so the cue is re-drawn here instead: white, and thicker.
   const coreStroke = selected === true ? '#ffffff' : tint
-  const coreWidth = selected === true ? '2.5' : active ? '1.4' : '3'
+  const coreWidth = selected === true ? '2.5' : widthFor(data?.weight, active)
 
   /**
    * The core's paint, as an INLINE STYLE as well as attributes. React Flow's own stylesheet carries

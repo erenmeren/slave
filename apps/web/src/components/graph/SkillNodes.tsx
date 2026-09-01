@@ -149,7 +149,9 @@ export const SKILL_NODE_TYPES: NodeTypes = {
  * Every edge is a `cable` (M14 Task 11 -- `CableEdge.tsx`) at the fixed `planning` tone
  * (`SkillNode`'s own tone, above) and `active: false` -- the aggregate view has no notion of an
  * edge currently "in flight" (that is a per-run, focus-view fact -- Task 12), so every cable here
- * draws the flat inactive line, honestly.
+ * draws the flat inactive line, honestly. It DOES carry `weight: edge.count` (M19 C3), so the flat
+ * line still renders as thick as its own traffic -- the chain/focus builder below stays weightless:
+ * a chain edge is traversed exactly once by construction, so its own count would always be 1.
  *
  * `graph.skills`/`graph.edges` arrive from `server/skillGraph.ts` already ordered (name-sorted /
  * `(from, to)`-sorted) -- this function preserves that order rather than re-sorting, the same
@@ -178,7 +180,7 @@ export function buildSkillAggregateGraph(graph: SkillGraph): { readonly nodes: N
       source,
       target,
       type: 'cable',
-      data: { tone: 'planning', active: false },
+      data: { tone: 'planning', active: false, weight: edge.count },
     }
   })
 
