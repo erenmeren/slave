@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { errorMessage } from '../lib/postControl'
+import { sendControl } from '../lib/postControl'
 import { CARD_STATE_TONE, cardStateForAgent } from '../lib/tones'
 import type { SkillsPage, SkillRow } from '../server/skills'
 import { Button } from './ui/Button'
@@ -48,31 +48,20 @@ export function SkillsClient({ page }: { readonly page: SkillsPage }): React.JSX
   const agentsById = new Map(page.agents.map((agent) => [agent.id, agent] as const))
 
   /**
-   * Both writes, through one helper. A bare `fetch`, nothing written into local state from a 200
-   * beyond clearing the error, and `router.refresh()` owning truth — the `lib/postControl.ts`
-   * contract. `postControl` itself is not used because it only speaks POST and unassign is a
-   * DELETE (the pair IS the resource; there is no state between assigned and not).
+   * Both writes, through one helper. `postControl` itself is not used because it only speaks POST
+   * and unassign is a DELETE (the pair IS the resource; there is no state between assigned and
+   * not) — `sendControl` carries both verbs since M18 Task 9, so this dials it directly.
    */
   const send = async (method: 'POST' | 'DELETE', agentId: string, skillId: string): Promise<void> => {
     setPending(true)
     setErrorText(null)
-    try {
-      const response = await fetch('/api/skills/assign', {
-        method,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ agentId, skillId }),
-      })
-      if (response.ok) {
-        router.refresh()
-        return
-      }
-      const data: unknown = await response.json().catch(() => null)
-      setErrorText(errorMessage(data, response.status))
-    } catch (cause) {
-      setErrorText(cause instanceof Error ? cause.message : String(cause))
-    } finally {
-      setPending(false)
+    const error = await sendControl('/api/skills/assign', { method, body: { agentId, skillId } })
+    if (error === null) {
+      router.refresh()
+    } else {
+      setErrorText(error)
     }
+    setPending(false)
   }
 
   return (

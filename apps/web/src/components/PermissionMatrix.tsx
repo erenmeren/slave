@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { errorMessage } from '../lib/postControl'
+import { sendControl } from '../lib/postControl'
 import { SECTION_LABEL_CLASS, SectionLabel } from './ui/SectionLabel'
 import type { PermissionSection } from '../server/settings'
 
@@ -60,25 +60,13 @@ export function PermissionMatrix({ sections }: { readonly sections: readonly Per
   const write = async (agentId: string, tool: string, mode: 'allow' | 'deny'): Promise<void> => {
     setPending(true)
     setErrorText(null)
-    // A local PUT rather than `postControl` (which is POST-only): the same contract — a bare
-    // fetch, nothing written from the response but the error text, and the refresh owning truth.
-    try {
-      const response = await fetch(`/api/agents/${agentId}/permission`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tool, mode }),
-      })
-      if (!response.ok) {
-        const data: unknown = await response.json().catch(() => null)
-        setErrorText(errorMessage(data, response.status))
-        return
-      }
+    const error = await sendControl(`/api/agents/${agentId}/permission`, { method: 'PUT', body: { tool, mode } })
+    if (error === null) {
       router.refresh()
-    } catch (cause) {
-      setErrorText(cause instanceof Error ? cause.message : String(cause))
-    } finally {
-      setPending(false)
+    } else {
+      setErrorText(error)
     }
+    setPending(false)
   }
 
   return (

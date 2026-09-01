@@ -4,7 +4,7 @@ import { useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import type { ProviderKind } from '@ai-team-os/control'
 import type { RosterCompany, RosterMemberRow } from '../server/org'
-import { errorMessage } from '../lib/postControl'
+import { sendControl } from '../lib/postControl'
 import { ProviderSelect } from './ProviderSelect'
 import type { TemplateRow } from './TemplateCatalog'
 import { DataTable, Row } from './ui/DataTable'
@@ -59,35 +59,28 @@ function TeamBlock({
   const submit = async (): Promise<void> => {
     setPending(true)
     setErrorText(null)
-    try {
-      const response = await fetch('/api/org/agents', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          companyTeamId,
-          templateId,
-          name,
-          // A `provider` never travels without the `model` it names (controller resolution 2):
-          // if the operator left the model blank, nothing here is sent even when a provider is
-          // selected -- that pairing is the server's to refuse, not this form's to invent.
-          ...(model !== '' ? { model, ...(provider !== '' ? { provider } : {}) } : {}),
-        }),
-      })
-      if (response.ok) {
-        router.refresh()
-        setTemplateId('')
-        setName('')
-        setModel('')
-        setProvider('')
-        return
-      }
-      const data: unknown = await response.json().catch(() => null)
-      setErrorText(errorMessage(data, response.status))
-    } catch (cause) {
-      setErrorText(cause instanceof Error ? cause.message : String(cause))
-    } finally {
-      setPending(false)
+    const error = await sendControl('/api/org/agents', {
+      method: 'POST',
+      body: {
+        companyTeamId,
+        templateId,
+        name,
+        // A `provider` never travels without the `model` it names (controller resolution 2):
+        // if the operator left the model blank, nothing here is sent even when a provider is
+        // selected -- that pairing is the server's to refuse, not this form's to invent.
+        ...(model !== '' ? { model, ...(provider !== '' ? { provider } : {}) } : {}),
+      },
+    })
+    if (error === null) {
+      router.refresh()
+      setTemplateId('')
+      setName('')
+      setModel('')
+      setProvider('')
+    } else {
+      setErrorText(error)
     }
+    setPending(false)
   }
 
   return (
@@ -200,24 +193,14 @@ function CompanyDetail({
   const submit = async (): Promise<void> => {
     setPending(true)
     setErrorText(null)
-    try {
-      const response = await fetch('/api/org/teams', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ companyId, name: teamName }),
-      })
-      if (response.ok) {
-        router.refresh()
-        setTeamName('')
-        return
-      }
-      const data: unknown = await response.json().catch(() => null)
-      setErrorText(errorMessage(data, response.status))
-    } catch (cause) {
-      setErrorText(cause instanceof Error ? cause.message : String(cause))
-    } finally {
-      setPending(false)
+    const error = await sendControl('/api/org/teams', { method: 'POST', body: { companyId, name: teamName } })
+    if (error === null) {
+      router.refresh()
+      setTeamName('')
+    } else {
+      setErrorText(error)
     }
+    setPending(false)
   }
 
   return (
@@ -289,24 +272,14 @@ export function CompanyManager({
   const submit = async (): Promise<void> => {
     setPending(true)
     setErrorText(null)
-    try {
-      const response = await fetch('/api/org/companies', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name }),
-      })
-      if (response.ok) {
-        router.refresh()
-        setName('')
-        return
-      }
-      const data: unknown = await response.json().catch(() => null)
-      setErrorText(errorMessage(data, response.status))
-    } catch (cause) {
-      setErrorText(cause instanceof Error ? cause.message : String(cause))
-    } finally {
-      setPending(false)
+    const error = await sendControl('/api/org/companies', { method: 'POST', body: { name } })
+    if (error === null) {
+      router.refresh()
+      setName('')
+    } else {
+      setErrorText(error)
     }
+    setPending(false)
   }
 
   const teamsFor = (companyId: string): RosterCompany['teams'] => roster.find((c) => c.companyId === companyId)?.teams ?? []

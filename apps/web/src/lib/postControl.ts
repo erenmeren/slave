@@ -5,11 +5,11 @@
  *
  * `AgentPanel.tsx`, `GoalCard.tsx`, `EmergencyStopButton.tsx`, `RuntimeCard.tsx`, and
  * `graph/DepsMode.tsx` (`postDependency`) each carried their own small copy of this fetch-and-decode
- * logic before Task 9 wired all five to call `sendControl`/`postControl` here instead. A handful of
- * other control surfaces (`PermissionMatrix`, `SkillsClient`, `ModelOverrideEditor`,
- * `TemplateCatalog`, `AssignCompanyDialog`, `CompanyManager`) still carry their own inline copies --
- * not migrated by this task, left as backlog -- so "canonical" here names the shape every new call
- * site should reach for, not yet a repo-wide guarantee.
+ * logic before Task 9 wired all five to call `sendControl`/`postControl` here instead. Task 10 (M19
+ * Series C) finished the sweep -- `PermissionMatrix`, `SkillsClient`, `ModelOverrideEditor`,
+ * `TemplateCatalog`, `AssignCompanyDialog`, and `CompanyManager`'s three submits all dial
+ * `sendControl` now too -- so "canonical" here is a repo-wide guarantee as of M19, not just the
+ * shape a new call site should reach for.
  *
  * The contract every call site relies on: a bare `fetch`, no state written from the response
  * beyond the error text, and the event-driven refetch loop owning truth.

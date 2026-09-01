@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { errorMessage } from '../lib/postControl'
+import { sendControl } from '../lib/postControl'
 import { Button } from './ui/Button'
 import { SECTION_LABEL_CLASS } from './ui/SectionLabel'
 
@@ -61,24 +61,14 @@ export function AssignCompanyDialog({ workspaceId, companies, onClose, triggerRe
     if (selectedId === null) return
     setPending(true)
     setErrorText(null)
-    try {
-      const response = await fetch(`/api/w/${workspaceId}/company`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ companyId: selectedId }),
-      })
-      if (response.ok) {
-        router.refresh()
-        onClose()
-        return
-      }
-      const data: unknown = await response.json().catch(() => null)
-      setErrorText(errorMessage(data, response.status))
-    } catch (cause) {
-      setErrorText(cause instanceof Error ? cause.message : String(cause))
-    } finally {
-      setPending(false)
+    const error = await sendControl(`/api/w/${workspaceId}/company`, { method: 'POST', body: { companyId: selectedId } })
+    if (error === null) {
+      router.refresh()
+      onClose()
+    } else {
+      setErrorText(error)
     }
+    setPending(false)
   }
 
   return (

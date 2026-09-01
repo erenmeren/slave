@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import type { ProviderKind } from '@ai-team-os/control'
-import { errorMessage } from '../lib/postControl'
+import { sendControl } from '../lib/postControl'
 import { Chip } from './ui/Chip'
 import { DataTable, Row } from './ui/DataTable'
 import { FieldLabel, INPUT_SHELL, PrimaryButton, TextField } from './ui/FormControls'
@@ -47,36 +47,29 @@ export function TemplateCatalog({ templates }: { readonly templates: readonly Te
   const submit = async (): Promise<void> => {
     setPending(true)
     setErrorText(null)
-    try {
-      const response = await fetch('/api/org/templates', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name,
-          role,
-          ...(description !== '' ? { description } : {}),
-          // A `defaultProvider` never travels without a `defaultModel` beside it (controller
-          // resolution 3, the `CompanyManager` idiom): if the operator left the model blank,
-          // nothing here is sent even when a provider is selected.
-          ...(defaultModel !== '' ? { defaultModel, ...(defaultProvider !== '' ? { defaultProvider } : {}) } : {}),
-        }),
-      })
-      if (response.ok) {
-        router.refresh()
-        setName('')
-        setRole('')
-        setDescription('')
-        setDefaultModel('')
-        setDefaultProvider('')
-        return
-      }
-      const data: unknown = await response.json().catch(() => null)
-      setErrorText(errorMessage(data, response.status))
-    } catch (cause) {
-      setErrorText(cause instanceof Error ? cause.message : String(cause))
-    } finally {
-      setPending(false)
+    const error = await sendControl('/api/org/templates', {
+      method: 'POST',
+      body: {
+        name,
+        role,
+        ...(description !== '' ? { description } : {}),
+        // A `defaultProvider` never travels without a `defaultModel` beside it (controller
+        // resolution 3, the `CompanyManager` idiom): if the operator left the model blank,
+        // nothing here is sent even when a provider is selected.
+        ...(defaultModel !== '' ? { defaultModel, ...(defaultProvider !== '' ? { defaultProvider } : {}) } : {}),
+      },
+    })
+    if (error === null) {
+      router.refresh()
+      setName('')
+      setRole('')
+      setDescription('')
+      setDefaultModel('')
+      setDefaultProvider('')
+    } else {
+      setErrorText(error)
     }
+    setPending(false)
   }
 
   return (

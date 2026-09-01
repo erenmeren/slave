@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import type { ProviderKind } from '@ai-team-os/control'
-import { errorMessage } from '../lib/postControl'
+import { sendControl } from '../lib/postControl'
 import { Button } from './ui/Button'
 import { ProviderSelect } from './ProviderSelect'
 
@@ -46,23 +46,13 @@ export function ModelOverrideEditor({
   const post = async (body: { readonly model: string | null; readonly provider?: ProviderKind }): Promise<void> => {
     setPending(true)
     setErrorText(null)
-    try {
-      const response = await fetch(`/api/agents/${agentId}/model`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      })
-      if (response.ok) {
-        router.refresh()
-        return
-      }
-      const data: unknown = await response.json().catch(() => null)
-      setErrorText(errorMessage(data, response.status))
-    } catch (cause) {
-      setErrorText(cause instanceof Error ? cause.message : String(cause))
-    } finally {
-      setPending(false)
+    const error = await sendControl(`/api/agents/${agentId}/model`, { method: 'POST', body: { ...body } })
+    if (error === null) {
+      router.refresh()
+    } else {
+      setErrorText(error)
     }
+    setPending(false)
   }
 
   return (
