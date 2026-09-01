@@ -1,3 +1,6 @@
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { prisma } from '@ai-team-os/db/client'
 import { emergencyStop } from '../../src/emergency.js'
@@ -9,10 +12,13 @@ interface Fixture {
 }
 
 async function seed(): Promise<Fixture> {
+  // A real directory, not a placeholder: emergencyStop pauses the working run, and requestPause
+  // reaches runFilePaths, whose statSync preflight refuses a repo path that does not exist.
+  const repoPath = mkdtempSync(join(tmpdir(), 'aiteamos-control-emergency-'))
   const workspace = await prisma.workspace.create({
     data: {
       name: 'Checkout Platform',
-      repoPath: '/tmp/does-not-matter',
+      repoPath,
       verifyCommands: ['npm test'],
       setupCommands: ['npm ci'],
     },
