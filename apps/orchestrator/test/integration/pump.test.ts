@@ -1705,5 +1705,66 @@ describe('pumpRun', () => {
       })
       expect(toolDenied.payload).toEqual({ tool: 'Bash', capability: 'run tests', toolUseId: null })
     })
+
+    /**
+     * B3 (M19): the Cursor-side sibling of `:1574`'s Claude `hook_denied` pin. A `permission_denied`
+     * reason that starts with `PERMISSION_DENY_REASON_PREFIX` but fails `parsePermissionDenyReason`'s
+     * grammar takes the SAME fall-through (`pump.ts:638-646`) -- but Cursor's `permission_denied`
+     * case is not the pause protocol the way `hook_denied` is: it never kills the child or writes a
+     * checkpoint, it only `denied.push`es the id and emits `guardrail.tripped`. This test pins that
+     * the fall-through is reached for Cursor's own routing too, and that the id -- never added to
+     * `matrixDeniedToolUseIds` because the parse failed -- fails the run when the terminal outcome
+     * echoes it back, exactly as an ordinary (non-matrix) permission-mode denial always has. This
+     * should PASS immediately; a failure here means the fall-through itself is broken.
+     */
+    it("a Cursor permission_denied reason that only starts with the matrix prefix but fails to parse falls through to the ordinary denial path: no run.tool_denied, one guardrail.tripped, c9 lands in denied, and the run fails on the CLI's own echo", async (): Promise<void> => {
+      const malformedReason = `${PERMISSION_DENY_REASON_PREFIX} nonsense`
+      const outcome = await pumpRun({
+        ...ids,
+        spawn: {
+          settingsPath: '/tmp/aiteamos-cursor-malformed/.cursor/hooks.json',
+          pauseFlagPath: '/tmp/aiteamos-cursor-malformed/pause.flag',
+          hookPath: '/opt/aiteamos/cursor-shell-gate.sh',
+          gitIdentity: { name: 'Alex', email: 'alex@example.com' },
+          provider: 'cursor',
+        },
+        events: fromArray([
+          { kind: 'session_started', sessionId: 's-cursor-malformed' },
+          { kind: 'permission_denied', toolName: 'shell', toolUseId: 'c9', reason: malformedReason },
+          // `c9` echoed in `deniedToolUseIds` too -- the exact reason-blind shape
+          // `cursor/adapter.ts`'s `rejectedCallIds` derivation produces for real (review Critical 1).
+          { kind: 'terminated', outcome: { ...okOutcome, deniedToolUseIds: ['c9'] } },
+        ]),
+      })
+
+      // The stream still ends in a terminal result -- a permission-mode denial does not stop it,
+      // matrix-shaped reason or not.
+      expect(outcome).not.toBeNull()
+      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      // Ordinary path, not the matrix branch: a denial whose reason fails to parse is never
+      // excluded from `outcome.deniedToolUseIds`, so the run fails on the CLI's own echoed id --
+      // exactly the pre-Task-6 behaviour for any permission-mode denial.
+      expect(run.status).toBe('failed')
+      // Never paused: Cursor's `permission_denied` case is not the pause protocol regardless of
+      // reason content -- only `hook_denied`/`hook_crashed`/`hook_failed_open` route there.
+      expect(run.pausedAtStep).toBeNull()
+
+      const types = await eventTypesFor(ids.runId)
+      expect(types).not.toContain('run.tool_denied')
+      expect(types).not.toContain('run.paused')
+      expect(types.filter((t) => t === 'guardrail.tripped')).toHaveLength(1)
+
+      const tripped = await prisma.executionEvent.findFirstOrThrow({
+        where: { runId: ids.runId, type: 'guardrail_tripped' },
+      })
+      expect(tripped.payload).toEqual({
+        guardrail: 'permission_mode',
+        detail: 'shell was denied by the permission mode (c9)',
+      })
+
+      // No checkpoint: `recordCursorPauseIfRequested` never claims -- the seeded status is
+      // `starting`, not `pause_requested` -- so nothing had a reason to write one.
+      await expect(prisma.checkpoint.findUnique({ where: { runId: ids.runId } })).resolves.toBeNull()
+    })
   })
 })
