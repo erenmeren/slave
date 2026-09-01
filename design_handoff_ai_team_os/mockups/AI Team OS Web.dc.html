@@ -1,0 +1,742 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet><meta charset="utf-8">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+html,body{margin:0;height:100%;background:#070809;font-family:'IBM Plex Sans',system-ui,sans-serif}
+a{color:#2ee6cf;text-decoration:none}a:hover{color:#7fe9db}
+*{scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.14) transparent}
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.3;transform:scale(.75)}}
+@keyframes dash{to{stroke-dashoffset:-28}}
+@keyframes sweep{0%{transform:translateX(-100%)}100%{transform:translateX(320%)}}
+@keyframes rise{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}
+@keyframes spin{to{transform:rotate(360deg)}}
+.pulsedot{animation:pulse 1.5s ease-in-out infinite}
+.flow{stroke-dasharray:4 10;animation:dash 1s linear infinite}
+.rise{animation:rise .3s ease-out}
+.sweep{animation:sweep 2.2s cubic-bezier(.4,0,.2,1) infinite}
+.spin{animation:spin 1.1s linear infinite}
+</style></helmet>
+
+<div style="height:100vh;display:flex;flex-direction:column;background:#0a0c0f;color:#e7eaf0;overflow:hidden">
+
+<div style="height:52px;flex:none;display:flex;align-items:center;gap:14px;padding:0 16px;border-bottom:1px solid rgba(255,255,255,.07);background:#0c0f13;position:relative">
+<div style="position:absolute;left:0;right:0;bottom:-1px;height:1px;background:linear-gradient(90deg,transparent,rgba(46,230,207,.5),rgba(123,140,255,.3),transparent)"></div>
+<div style="display:flex;align-items:center;gap:9px">
+<div style="width:20px;height:20px;border-radius:6px;background:linear-gradient(150deg,#2ee6cf,#7b8cff);box-shadow:0 0 12px rgba(46,230,207,.4)"></div>
+<span style="font:600 12.5px 'IBM Plex Sans',sans-serif;letter-spacing:-.1px">AI Team OS</span>
+</div>
+<span style="flex:none;white-space:nowrap;font:400 11px 'IBM Plex Mono',monospace;color:#5b6472">demo · {{ started }}</span>
+<div style="display:flex;align-items:center;gap:6px;padding:3px 9px;border:1px solid rgba(46,230,207,.25);border-radius:20px;background:rgba(46,230,207,.06)">
+<span class="pulsedot" style="width:5px;height:5px;border-radius:50%;background:#2ee6cf"></span>
+<span style="font:500 10px 'IBM Plex Mono',monospace;color:#2ee6cf">sse · {{ latency }}</span>
+</div>
+<div style="flex:1"></div>
+<div style="display:flex;align-items:center;gap:10px">
+<div style="text-align:right">
+<div style="font:500 11px 'IBM Plex Mono',monospace;color:#c8cfda">{{ spend }} <span style="color:#5b6472">/ $20.00</span></div>
+<div style="width:150px;height:3px;border-radius:2px;background:rgba(255,255,255,.08);margin-top:4px;overflow:hidden"><div style="height:100%;width:{{ budgetPw }};background:{{ budgetColor }};box-shadow:0 0 8px {{ budgetColor }}"></div></div>
+</div>
+<sc-if value="{{ stopIdle }}" hint-placeholder-val="{{ true }}">
+<div onClick="{{ onStopAsk }}" style="padding:6px 13px;border:1px solid rgba(248,113,113,.35);border-radius:6px;background:rgba(248,113,113,.07);color:#f87171;font:600 11px 'IBM Plex Mono',monospace;letter-spacing:.06em;cursor:pointer" style-hover="background:rgba(248,113,113,.18)">STOP</div>
+</sc-if>
+<sc-if value="{{ stopAsking }}" hint-placeholder-val="{{ false }}">
+<div class="rise" style="display:flex;gap:6px">
+<div onClick="{{ onStopConfirm }}" style="padding:6px 11px;border-radius:6px;background:#f87171;color:#1a0808;font:600 11px 'IBM Plex Mono',monospace;cursor:pointer">stop everything</div>
+<div onClick="{{ onStopCancel }}" style="padding:6px 11px;border:1px solid rgba(255,255,255,.14);border-radius:6px;color:#a8b0bd;font:400 11px 'IBM Plex Mono',monospace;cursor:pointer">cancel</div>
+</div>
+</sc-if>
+<sc-if value="{{ halted }}" hint-placeholder-val="{{ false }}">
+<div onClick="{{ onClearHalt }}" style="padding:6px 13px;border:1px solid rgba(46,230,207,.35);border-radius:6px;background:rgba(46,230,207,.09);color:#2ee6cf;font:600 11px 'IBM Plex Mono',monospace;cursor:pointer">clear halt</div>
+</sc-if>
+</div>
+</div>
+
+<sc-if value="{{ halted }}" hint-placeholder-val="{{ false }}">
+<div style="flex:none;display:flex;align-items:center;gap:10px;padding:9px 16px;background:rgba(248,113,113,.1);border-bottom:1px solid rgba(248,113,113,.3)">
+<span style="width:6px;height:6px;border-radius:50%;background:#f87171;box-shadow:0 0 9px #f87171"></span>
+<span style="font:500 11.5px 'IBM Plex Mono',monospace;color:#f87171">workspace halted — emergency stop by web operator</span>
+<span style="font-size:11.5px;color:#c88">zamanlama durdu · aktif koşulara duraklatma dağıtıldı</span>
+</div>
+</sc-if>
+
+<div style="flex:1;display:flex;min-height:0">
+
+<div style="width:172px;flex:none;border-right:1px solid rgba(255,255,255,.07);background:#0c0f13;display:flex;flex-direction:column">
+<div style="padding:12px 8px;display:flex;flex-direction:column;gap:1px">
+<sc-for list="{{ nav }}" as="n" hint-placeholder-count="4">
+<div onClick="{{ n.onClick }}" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;background:{{ n.bg }};color:{{ n.fg }};font-size:12.5px;font-weight:{{ n.weight }};box-shadow:{{ n.rail }};cursor:pointer" style-hover="background:rgba(255,255,255,.045);color:#e7eaf0">
+<span style="width:5px;height:5px;border-radius:50%;background:{{ n.dot }}"></span>
+<span style="flex:1">{{ n.label }}</span>
+<span style="font:500 9.5px 'IBM Plex Mono',monospace;color:#69727f">{{ n.badge }}</span>
+</div>
+</sc-for>
+</div>
+<div style="margin-top:auto;padding:12px;border-top:1px solid rgba(255,255,255,.07)">
+<div style="font:500 9px 'IBM Plex Mono',monospace;letter-spacing:.1em;color:#5b6472;margin-bottom:9px">GUARDRAILS</div>
+<div style="display:flex;flex-direction:column;gap:6px">
+<sc-for list="{{ rails }}" as="g" hint-placeholder-count="4">
+<div style="display:flex;align-items:center;gap:7px;font:400 10px 'IBM Plex Mono',monospace"><span style="width:4px;height:4px;border-radius:50%;background:{{ g.color }}"></span><span style="flex:1;color:#8a929e">{{ g.label }}</span><span style="color:#69727f">{{ g.val }}</span></div>
+</sc-for>
+</div>
+</div>
+</div>
+
+<div style="flex:1;min-width:0;display:flex;flex-direction:column">
+
+<sc-if value="{{ pgOverview }}" hint-placeholder-val="{{ true }}">
+<div style="flex:1;min-height:0;overflow-y:auto">
+<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:1px;background:rgba(255,255,255,.07);border-bottom:1px solid rgba(255,255,255,.07)">
+<sc-for list="{{ tiles }}" as="t" hint-placeholder-count="5">
+<div style="background:#0c0f13;padding:14px 16px">
+<div style="font:600 24px 'IBM Plex Mono',monospace;letter-spacing:-1.2px;color:{{ t.color }}">{{ t.val }}</div>
+<div style="font-size:11px;color:#8a929e;margin-top:3px">{{ t.label }}</div>
+</div>
+</sc-for>
+</div>
+
+<div style="padding:18px 20px">
+<div style="border:1px solid {{ goalBdc }};border-radius:10px;background:#0f1217;padding:16px 18px;position:relative;overflow:hidden">
+<div style="position:absolute;left:0;top:0;bottom:0;width:2px;background:{{ goalRail }}"></div>
+<div style="display:flex;align-items:center;gap:9px">
+<span style="font:500 9.5px 'IBM Plex Mono',monospace;letter-spacing:.14em;color:#5b6472">GOAL</span>
+<span style="font:400 10px 'IBM Plex Mono',monospace;color:{{ goalStateColor }}">{{ goalState }}</span>
+</div>
+<sc-if value="{{ noGoal }}" hint-placeholder-val="{{ true }}">
+<div style="display:flex;gap:9px;margin-top:11px">
+<input value="{{ goalDraft }}" onChange="{{ onGoalDraft }}" onKeyDown="{{ onGoalKey }}" placeholder="Üç numaralı not dosyası ve bunları listeleyen bir README yaz" style="flex:1;box-sizing:border-box;padding:11px 13px;border:1px solid rgba(255,255,255,.12);border-radius:7px;background:#0a0c0f;color:#e7eaf0;font-family:'IBM Plex Sans',sans-serif;font-size:13.5px;outline:none"></input>
+<div onClick="{{ onSetGoal }}" style="flex:none;display:flex;align-items:center;padding:0 18px;border-radius:7px;background:#2ee6cf;color:#04120f;font-size:12.5px;font-weight:600;cursor:pointer" style-hover="filter:brightness(1.12)">set goal</div>
+</div>
+<div style="display:flex;gap:7px;margin-top:10px">
+<sc-for list="{{ goalSuggestions }}" as="s" hint-placeholder-count="3">
+<div onClick="{{ s.onClick }}" style="padding:4px 10px;border:1px solid rgba(255,255,255,.1);border-radius:14px;font-size:11px;color:#8a929e;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:210px" style-hover="border-color:#2ee6cf;color:#2ee6cf">{{ s.label }}</div>
+</sc-for>
+</div>
+</sc-if>
+<sc-if value="{{ hasGoal }}" hint-placeholder-val="{{ false }}">
+<div style="margin-top:10px">
+<div style="font-size:17px;font-weight:500;letter-spacing:-.2px;color:#f2f5f9">{{ goal }}</div>
+<div style="display:flex;align-items:center;gap:0;margin-top:16px">
+<sc-for list="{{ pipeline }}" as="p" hint-placeholder-count="6">
+<div style="flex:1;display:flex;align-items:center;gap:0">
+<div style="flex:1">
+<div style="height:2px;border-radius:1px;background:{{ p.bar }};box-shadow:{{ p.glow }}"></div>
+<div style="display:flex;align-items:center;gap:6px;margin-top:8px">
+<span class="{{ p.anim }}" style="width:5px;height:5px;border-radius:50%;background:{{ p.dot }}"></span>
+<span style="font:500 10.5px 'IBM Plex Mono',monospace;color:{{ p.fg }}">{{ p.label }}</span>
+</div>
+<div style="font-size:10px;color:#5b6472;margin-top:2px">{{ p.note }}</div>
+</div>
+<span style="width:22px;text-align:center;color:#2b3138;font-size:11px">{{ p.arrow }}</span>
+</div>
+</sc-for>
+</div>
+</div>
+</sc-if>
+</div>
+
+<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:16px">
+<sc-for list="{{ agents }}" as="a" hint-placeholder-count="3">
+<div style="border:1px solid {{ a.bdc }};border-radius:9px;background:#0f1217;padding:14px 15px;box-shadow:{{ a.shadow }};position:relative;overflow:hidden">
+<sc-if value="{{ a.busy }}" hint-placeholder-val="{{ false }}">
+<div style="position:absolute;left:0;top:0;right:0;height:1px;overflow:hidden"><div class="sweep" style="width:30%;height:100%;background:linear-gradient(90deg,transparent,{{ a.color }},transparent)"></div></div>
+</sc-if>
+<div style="display:flex;align-items:flex-start;gap:10px">
+<div style="width:32px;height:32px;flex:none;border-radius:9px;background:{{ a.bgc }};border:1px solid {{ a.bdc }};display:flex;align-items:center;justify-content:center;font:600 12px 'IBM Plex Mono',monospace;color:{{ a.color }}">{{ a.initials }}</div>
+<div style="flex:1;min-width:0">
+<div style="font-size:14px;font-weight:600;letter-spacing:-.2px">{{ a.name }}</div>
+<div style="font:400 10.5px 'IBM Plex Mono',monospace;color:#69727f;margin-top:2px;white-space:nowrap">{{ a.role }}</div>
+<div style="font-size:11.5px;color:#8a929e;margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ a.line }}</div>
+</div>
+<div style="flex:none;white-space:nowrap;display:flex;align-items:center;gap:5px;padding:3px 8px 3px 6px;border-radius:20px;background:{{ a.bgc }};border:1px solid {{ a.bdc }}"><span class="{{ a.anim }}" style="width:5px;height:5px;border-radius:50%;background:{{ a.color }}"></span><span style="font:500 9.5px 'IBM Plex Mono',monospace;color:{{ a.color }}">{{ a.statusLabel }}</span></div>
+</div>
+<div style="height:3px;border-radius:2px;background:rgba(255,255,255,.07);margin-top:13px;overflow:hidden"><div style="height:100%;width:{{ a.pw }};background:{{ a.color }};box-shadow:0 0 8px {{ a.color }};transition:width .5s ease"></div></div>
+<div style="display:flex;align-items:center;justify-content:space-between;margin-top:8px;font:400 10px 'IBM Plex Mono',monospace;color:#69727f">
+<span>{{ a.worktree }}</span><span>{{ a.turns }}</span>
+</div>
+</div>
+</sc-for>
+</div>
+
+<div style="display:grid;grid-template-columns:1fr 300px;gap:12px;margin-top:16px">
+<div style="border:1px solid rgba(255,255,255,.08);border-radius:9px;background:#0f1217;padding:14px 15px">
+<div style="display:flex;align-items:center;gap:8px;margin-bottom:11px"><span class="pulsedot" style="width:5px;height:5px;border-radius:50%;background:#2ee6cf"></span><span style="flex:none;white-space:nowrap;font:500 9px 'IBM Plex Mono',monospace;letter-spacing:.1em;color:#5b6472">SON OLAYLAR</span><span style="flex:1;height:1px;background:rgba(255,255,255,.06)"></span><span onClick="{{ goActivity }}" style="font:400 10px 'IBM Plex Mono',monospace;color:#69727f;cursor:pointer" style-hover="color:#2ee6cf">hepsi →</span></div>
+<div style="display:flex;flex-direction:column;gap:7px">
+<sc-for list="{{ miniEvents }}" as="e" hint-placeholder-count="6">
+<div style="display:flex;align-items:baseline;gap:9px;font-size:12px">
+<span style="flex:none;font:400 10.5px 'IBM Plex Mono',monospace;color:#5b6472">{{ e.t }}</span>
+<span style="flex:none;padding:1px 6px;border-radius:4px;background:{{ e.chipBg }};font:500 9px 'IBM Plex Mono',monospace;color:{{ e.color }}">{{ e.kind }}</span>
+<span style="min-width:0;color:#c8cfda;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ e.text }}</span>
+</div>
+</sc-for>
+</div>
+</div>
+<div style="border:1px solid rgba(255,255,255,.08);border-radius:9px;background:#0f1217;padding:14px 15px">
+<div style="font:500 9px 'IBM Plex Mono',monospace;letter-spacing:.1em;color:#5b6472;margin-bottom:11px">MERGE KUYRUĞU · SERİ</div>
+<sc-if value="{{ queueEmpty }}" hint-placeholder-val="{{ true }}">
+<div style="font-size:12px;color:#5b6472;padding:6px 0">kuyruk boş</div>
+</sc-if>
+<div style="display:flex;flex-direction:column;gap:7px">
+<sc-for list="{{ mergeQueue }}" as="q" hint-placeholder-count="2">
+<div style="display:flex;align-items:center;gap:8px;padding:7px 9px;border:1px solid {{ q.bdc }};border-radius:6px;background:{{ q.bg }}">
+<span style="font:500 9.5px 'IBM Plex Mono',monospace;color:#5b6472">{{ q.pos }}</span>
+<span style="flex:1;min-width:0;font-size:11.5px;color:#c8cfda;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ q.title }}</span>
+<span style="font:500 9.5px 'IBM Plex Mono',monospace;color:{{ q.color }}">{{ q.state }}</span>
+</div>
+</sc-for>
+</div>
+</div>
+</div>
+</div>
+</div>
+</sc-if>
+
+<sc-if value="{{ pgTasks }}" hint-placeholder-val="{{ false }}">
+<div style="flex:1;min-height:0;display:flex;flex-direction:column">
+<div style="display:grid;grid-template-columns:repeat(6,1fr);gap:1px;background:rgba(255,255,255,.07);border-bottom:1px solid rgba(255,255,255,.07);flex:none">
+<sc-for list="{{ columns }}" as="c" hint-placeholder-count="6">
+<div style="background:#0c0f13;padding:11px 14px;display:flex;align-items:center;gap:8px">
+<span style="width:5px;height:5px;border-radius:50%;background:{{ c.color }};box-shadow:0 0 7px {{ c.color }}"></span>
+<span style="font:500 9.5px 'IBM Plex Mono',monospace;letter-spacing:.08em;color:#8a929e">{{ c.name }}</span>
+<span style="margin-left:auto;font:600 13px 'IBM Plex Mono',monospace;color:{{ c.countColor }}">{{ c.count }}</span>
+</div>
+</sc-for>
+</div>
+<div style="flex:1;min-height:0;overflow-y:auto;display:grid;grid-template-columns:repeat(6,1fr);gap:10px;padding:12px 14px;align-items:start">
+<sc-for list="{{ columns }}" as="c" hint-placeholder-count="6">
+<div style="display:flex;flex-direction:column;gap:8px">
+<sc-for list="{{ c.items }}" as="it" hint-placeholder-count="1">
+<div class="rise" style="border:1px solid {{ it.bdc }};border-radius:8px;background:#0f1217;padding:11px 12px;box-shadow:{{ it.shadow }}">
+<div style="display:flex;align-items:center;gap:6px">
+<span class="{{ it.anim }}" style="width:5px;height:5px;border-radius:50%;background:{{ it.color }}"></span>
+<span style="font:500 9.5px 'IBM Plex Mono',monospace;color:#5b6472">{{ it.key }}</span>
+<span style="margin-left:auto;font:500 9px 'IBM Plex Mono',monospace;color:#69727f">{{ it.attempts }}</span>
+</div>
+<div style="font-size:12.5px;line-height:1.35;color:#dbe1ea;margin-top:6px">{{ it.title }}</div>
+<sc-if value="{{ it.hasBar }}" hint-placeholder-val="{{ false }}">
+<div style="height:2px;border-radius:1px;background:rgba(255,255,255,.08);margin-top:9px;overflow:hidden"><div style="height:100%;width:{{ it.pw }};background:{{ it.color }};transition:width .5s ease"></div></div>
+</sc-if>
+<div style="display:flex;align-items:center;gap:6px;margin-top:9px">
+<span style="width:16px;height:16px;border-radius:5px;background:{{ it.agentBg }};display:flex;align-items:center;justify-content:center;font:600 8px 'IBM Plex Mono',monospace;color:{{ it.agentColor }}">{{ it.agentInitials }}</span>
+<span style="font-size:10.5px;color:#7c8697">{{ it.agent }}</span>
+<span style="margin-left:auto;font:400 9.5px 'IBM Plex Mono',monospace;color:{{ it.color }}">{{ it.note }}</span>
+</div>
+</div>
+</sc-for>
+</div>
+</sc-for>
+</div>
+</div>
+</sc-if>
+
+<sc-if value="{{ pgActivity }}" hint-placeholder-val="{{ false }}">
+<div style="flex:1;min-height:0;display:flex">
+<div style="flex:1;min-width:0;display:flex;flex-direction:column">
+<div style="flex:none;padding:11px 16px;border-bottom:1px solid rgba(255,255,255,.07);display:flex;align-items:center;gap:7px">
+<sc-for list="{{ filters }}" as="f" hint-placeholder-count="5">
+<div onClick="{{ f.onClick }}" style="padding:4px 11px;border:1px solid {{ f.bdc }};border-radius:14px;background:{{ f.bg }};font:500 10.5px 'IBM Plex Mono',monospace;color:{{ f.fg }};cursor:pointer">{{ f.label }}</div>
+</sc-for>
+<span style="margin-left:auto;font:400 10.5px 'IBM Plex Mono',monospace;color:#5b6472">{{ eventCount }} olay · append-only</span>
+</div>
+<div style="flex:1;min-height:0;overflow-y:auto;padding:10px 0">
+<sc-for list="{{ events }}" as="e" hint-placeholder-count="10">
+<div onClick="{{ e.onToggle }}" style="display:flex;align-items:flex-start;padding:8px 16px 8px 0;cursor:pointer;background:{{ e.rowBg }}" style-hover="background:rgba(255,255,255,.025)">
+<span style="width:78px;flex:none;text-align:right;font:400 10.5px 'IBM Plex Mono',monospace;color:#5b6472">{{ e.t }}</span>
+<span style="width:30px;flex:none;display:flex;justify-content:center;padding-top:4px"><span style="width:6px;height:6px;border-radius:50%;background:{{ e.color }};box-shadow:0 0 8px {{ e.color }}"></span></span>
+<div style="flex:1;min-width:0">
+<div style="display:flex;align-items:center;gap:8px">
+<span style="padding:1px 6px;border-radius:4px;background:{{ e.chipBg }};font:500 9px 'IBM Plex Mono',monospace;color:{{ e.color }}">{{ e.kind }}</span>
+<span style="font-size:11.5px;font-weight:600;color:#a8b0bd">{{ e.who }}</span>
+<span style="font:400 9.5px 'IBM Plex Mono',monospace;color:#5b6472">{{ e.ref }}</span>
+</div>
+<div style="font-size:12.5px;color:#c8cfda;margin-top:3px">{{ e.text }}</div>
+<div style="display:{{ e.payloadDisplay }};margin-top:8px;padding:10px 12px;border:1px solid rgba(255,255,255,.08);border-radius:7px;background:#0a0c0f;font:400 11px/1.6 'IBM Plex Mono',monospace;color:#8a929e;white-space:pre-wrap">{{ e.payload }}</div>
+<div style="font:400 9px 'IBM Plex Mono',monospace;letter-spacing:.1em;color:#3f4650;margin-top:5px">{{ e.caret }} PAYLOAD</div>
+</div>
+</div>
+</sc-for>
+</div>
+</div>
+<div style="width:270px;flex:none;border-left:1px solid rgba(255,255,255,.07);padding:14px 15px">
+<div style="font:500 9px 'IBM Plex Mono',monospace;letter-spacing:.1em;color:#5b6472;margin-bottom:11px">OLAY TİPLERİ</div>
+<div style="display:flex;flex-direction:column;gap:9px">
+<sc-for list="{{ eventTypes }}" as="t" hint-placeholder-count="5">
+<div>
+<div style="display:flex;justify-content:space-between;font:400 10.5px 'IBM Plex Mono',monospace;color:#a8b0bd"><span>{{ t.label }}</span><span style="color:#69727f">{{ t.n }}</span></div>
+<div style="height:3px;border-radius:2px;background:rgba(255,255,255,.06);margin-top:5px;overflow:hidden"><div style="height:100%;width:{{ t.pw }};background:{{ t.color }}"></div></div>
+</div>
+</sc-for>
+</div>
+</div>
+</div>
+</sc-if>
+
+<sc-if value="{{ pgGraph }}" hint-placeholder-val="{{ false }}">
+<div style="flex:1;min-height:0;display:flex;flex-direction:column">
+<div style="flex:none;padding:11px 16px;border-bottom:1px solid rgba(255,255,255,.07);display:flex;align-items:center;gap:12px">
+<div style="display:flex;gap:2px;padding:2px;border:1px solid rgba(255,255,255,.08);border-radius:7px;background:#0f1217">
+<sc-for list="{{ graphModes }}" as="m" hint-placeholder-count="2">
+<div onClick="{{ m.onClick }}" style="padding:5px 12px;border-radius:5px;font-size:11.5px;font-weight:500;cursor:pointer;background:{{ m.bg }};color:{{ m.fg }};box-shadow:{{ m.shadow }}">{{ m.label }}</div>
+</sc-for>
+</div>
+<span style="font:400 10.5px 'IBM Plex Mono',monospace;color:#5b6472">{{ graphHint }}</span>
+</div>
+<div style="flex:1;position:relative;overflow:hidden;background-color:#08090c;background-image:radial-gradient(rgba(255,255,255,.05) 1px,transparent 1px);background-size:24px 24px">
+<div style="position:absolute;inset:0;background:radial-gradient(55% 45% at 50% 25%,rgba(46,230,207,.06),transparent 70%)"></div>
+{{ graphEdges }}
+<sc-for list="{{ graphNodes }}" as="n" hint-placeholder-count="6">
+<div style="position:absolute;left:{{ n.left }};top:{{ n.top }};width:{{ n.w }};box-sizing:border-box;border:1px solid {{ n.bdc }};border-radius:8px;background:rgba(15,18,23,.94);padding:9px 11px;box-shadow:{{ n.shadow }}">
+<div style="display:flex;align-items:center;gap:7px">
+<span class="{{ n.anim }}" style="width:6px;height:6px;flex:none;border-radius:50%;background:{{ n.color }};box-shadow:0 0 8px {{ n.color }}"></span>
+<span style="font-size:12.5px;font-weight:600;letter-spacing:-.1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ n.label }}</span>
+</div>
+<div style="font:400 9.5px 'IBM Plex Mono',monospace;color:#7c8697;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ n.sub }}</div>
+<div style="display:flex;align-items:center;gap:6px;margin-top:7px">
+<span style="font:500 8.5px 'IBM Plex Mono',monospace;letter-spacing:.04em;color:{{ n.color }}">{{ n.state }}</span>
+<span style="flex:1;height:2px;border-radius:1px;background:rgba(255,255,255,.08);overflow:hidden"><span style="display:block;height:100%;width:{{ n.pw }};background:{{ n.color }};transition:width .5s ease"></span></span>
+</div>
+</div>
+</sc-for>
+</div>
+</div>
+</sc-if>
+
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:&quot;100%&quot;,&quot;height&quot;:900}}">
+class Component extends DCLogic {
+  meta = {
+    idle:      {c:'#5b6472', l:'IDLE',      p:false},
+    working:   {c:'#2ee6cf', l:'WORKING',   p:true},
+    reviewing: {c:'#c084fc', l:'REVIEWING', p:true},
+    verifying: {c:'#7b8cff', l:'VERIFYING', p:true},
+    merging:   {c:'#f5b34a', l:'MERGING',   p:true},
+    ready:     {c:'#7c8697', l:'READY',     p:false},
+    blocked:   {c:'#f87171', l:'BLOCKED',   p:false},
+    paused:    {c:'#f5b34a', l:'PAUSED',    p:false},
+    pausing:   {c:'#f5b34a', l:'PAUSING',   p:true},
+    done:      {c:'#4ade80', l:'DONE',      p:false},
+    failed:    {c:'#f87171', l:'FAILED',    p:false}
+  };
+
+  plan = [
+    {key:'core',   title:'Write the feature core', deps:[]},
+    {key:'api',    title:'Expose the API',         deps:['core']},
+    {key:'polish', title:'Document and polish',    deps:['api']}
+  ];
+
+  state = {
+    page: 'overview',
+    goal: '',
+    goalDraft: '',
+    phase: 'empty',
+    tasks: [],
+    events: [],
+    openEvent: null,
+    filter: 'all',
+    graphMode: 'org',
+    spend: 0,
+    sec: 0,
+    stop: 'idle',
+    halted: false,
+    agents: {
+      atlas: {name:'Atlas', role:'manager',  status:'idle', pct:0, turns:0, worktree:'—'},
+      alex:  {name:'Alex',  role:'backend',  status:'idle', pct:0, turns:0, worktree:'—'},
+      riley: {name:'Riley', role:'reviewer', status:'idle', pct:0, turns:0, worktree:'—'}
+    }
+  };
+
+  componentDidMount() {
+    this.iv = setInterval(() => this.tick(), 1000);
+  }
+  componentWillUnmount() { clearInterval(this.iv); }
+
+  stamp() {
+    const base = 17 * 3600 + 34 * 60 + 11 + this.state.sec;
+    const h = String(Math.floor(base / 3600) % 24).padStart(2, '0');
+    const m = String(Math.floor(base / 60) % 60).padStart(2, '0');
+    const s = String(base % 60).padStart(2, '0');
+    return h + ':' + m + ':' + s;
+  }
+
+  emit(kind, who, text, ref, payload) {
+    this.setState(s => ({events: [{
+      id: s.events.length + 1, t: this.stamp(), kind, who: who || '', text,
+      ref: ref || '', payload: payload || '{ }'
+    }, ...s.events].slice(0, 60)}));
+  }
+
+  setAgent(id, patch) {
+    this.setState(s => ({agents: {...s.agents, [id]: {...s.agents[id], ...patch}}}));
+  }
+  setTask(key, patch) {
+    this.setState(s => ({tasks: s.tasks.map(t => t.key === key ? {...t, ...patch} : t)}));
+  }
+
+  tick() {
+    const s = this.state;
+    this.setState({sec: s.sec + 1});
+    if (s.halted || s.phase === 'empty') return;
+    this.setState(st => ({spend: Math.min(20, st.spend + 0.021)}));
+
+    if (s.phase === 'planning') {
+      const a = s.agents.atlas;
+      const pct = Math.min(100, a.pct + 22);
+      this.setAgent('atlas', {pct, turns: Math.min(3, Math.round(pct / 34))});
+      if (pct >= 100) {
+        this.setState({
+          phase: 'running',
+          tasks: this.plan.map((p, i) => ({...p, status: i === 0 ? 'working' : 'ready', pct: 0, attempts: '0/3', agent: i === 0 ? 'alex' : null, note: i === 0 ? 'worktree hazır' : 'bağımlılık bekliyor'}))
+        });
+        this.setAgent('atlas', {status: 'idle', pct: 0, worktree: '—'});
+        this.setAgent('alex', {status: 'working', pct: 0, worktree: 'wt/core'});
+        this.emit('workspace.plan_created', 'Atlas', 'planned 3 tasks', '',
+          '{\n  "tasks": [\n    { "key": "core",   "title": "Write the feature core" },\n    { "key": "api",    "title": "Expose the API",  "deps": ["core"] },\n    { "key": "polish", "title": "Document and polish", "deps": ["api"] }\n  ]\n}');
+        this.plan.forEach(p => this.emit('task.created', 'Atlas', p.title, 'T-' + p.key, '{ "key": "' + p.key + '", "status": "ready" }'));
+        this.emit('run.succeeded', 'Atlas', 'planning run succeeded — 3 turns · $0.21', '', '{ "turns": 3, "cost_usd": 0.21 }');
+      }
+      return;
+    }
+
+    if (s.phase !== 'running') return;
+
+    const active = s.tasks.find(t => ['working', 'verifying', 'reviewing', 'merging'].indexOf(t.status) > -1);
+    if (!active) {
+      const next = s.tasks.find(t => t.status === 'ready' && t.deps.every(d => (s.tasks.find(x => x.key === d) || {}).status === 'done'));
+      if (next) {
+        this.setTask(next.key, {status: 'working', agent: 'alex', pct: 0, note: 'worktree hazır'});
+        this.setAgent('alex', {status: 'working', pct: 0, worktree: 'wt/' + next.key, turns: 0});
+        this.emit('run.started', 'Alex', 'run started — ' + next.title, 'T-' + next.key, '{ "worktree": "wt/' + next.key + '", "branch": "task/' + next.key + '" }');
+      } else if (s.tasks.length && s.tasks.every(t => t.status === 'done')) {
+        if (s.phase !== 'finished') {
+          this.setState({phase: 'finished'});
+          this.emit('workspace.goal_reached', '', 'hedef tamamlandı — 3 merge commit main üzerinde', '', '{ "commits": ["8a6c206", "53b5195", "929b15e"] }');
+        }
+      }
+      return;
+    }
+
+    const pct = Math.min(100, active.pct + 25);
+    this.setTask(active.key, {pct});
+    if (active.status === 'working') {
+      this.setAgent('alex', {pct, turns: Math.min(4, Math.round(pct / 25))});
+      if (pct >= 100) {
+        this.setTask(active.key, {status: 'verifying', pct: 0, note: 'npm test'});
+        this.setAgent('alex', {status: 'verifying', pct: 40});
+        this.emit('run.succeeded', 'Alex', 'run succeeded — 4 turns · $0.34', 'T-' + active.key, '{ "turns": 4, "cost_usd": 0.34 }');
+        this.emit('task.verifying', 'Alex', 'verify komutları koşuyor (worktree)', 'T-' + active.key, '{ "cmd": "npm test", "cwd": "wt/' + active.key + '" }');
+      }
+    } else if (active.status === 'verifying') {
+      if (pct >= 75) {
+        this.setTask(active.key, {status: 'reviewing', pct: 0, agent: 'riley', note: 'diff yargılanıyor'});
+        this.setAgent('alex', {status: 'idle', pct: 0, worktree: '—'});
+        this.setAgent('riley', {status: 'reviewing', pct: 0, worktree: 'wt/' + active.key + ' (ro)', turns: 0});
+        this.emit('task.verified', 'Alex', 'verify yeşil — inceleme kuyruğuna alındı', 'T-' + active.key, '{ "exit_code": 0, "duration_ms": 4120 }');
+      }
+    } else if (active.status === 'reviewing') {
+      this.setAgent('riley', {pct, turns: Math.min(2, Math.round(pct / 50))});
+      if (pct >= 100) {
+        this.setTask(active.key, {status: 'merging', pct: 0, note: 'rebase + re-verify'});
+        this.setAgent('riley', {status: 'idle', pct: 0, worktree: '—'});
+        this.emit('review.approved', 'Riley', 'approve — “diff hedefe uygun, testler anlamlı”', 'T-' + active.key,
+          '{\n  "verdict": "approve",\n  "reason": "diff hedefe uygun, testler anlamlı"\n}');
+      }
+    } else if (active.status === 'merging') {
+      if (pct >= 75) {
+        const sha = {core: '929b15e', api: '53b5195', polish: '8a6c206'}[active.key] || 'a1b2c3d';
+        this.setTask(active.key, {status: 'done', pct: 100, note: sha});
+        this.emit('task.merged', '', 'merge(T-' + active.key + '): ' + active.title, 'T-' + active.key,
+          '{ "sha": "' + sha + '", "strategy": "--no-ff", "reverify": "green" }');
+      }
+    }
+  }
+
+  setGoal() {
+    const g = (this.state.goalDraft || '').trim() || 'Üç numaralı not dosyası ve bunları listeleyen bir README yaz';
+    this.setState({goal: g, phase: 'planning', goalDraft: ''});
+    this.setAgent('atlas', {status: 'working', pct: 0, worktree: 'wt/plan', turns: 0});
+    this.emit('workspace.goal_set', 'human', 'goal set — ' + g, '', '{ "goal": "' + g + '" }');
+    this.emit('run.started', 'Atlas', 'planning run started (task-less run)', '', '{ "role": "manager", "task": null }');
+  }
+
+  colOf(status) {
+    const m = this.meta[status] || this.meta.idle;
+    return m;
+  }
+
+  buildGraph() {
+    const st = this.state;
+    if (st.graphMode === 'org') {
+      const A = st.agents;
+      const nodes = [
+        {id:'ws', label:'Demo Workspace', sub:'checkout demo · sse', status: st.halted ? 'blocked' : 'working', cx:420, cy:26, w:190, pct:100},
+        {id:'atlas', label:'Atlas', sub:'manager · claude-code', status:A.atlas.status, cx:200, cy:150, w:172, pct:A.atlas.pct},
+        {id:'alex', label:'Alex', sub:'backend · claude-code', status:A.alex.status, cx:420, cy:150, w:172, pct:A.alex.pct},
+        {id:'riley', label:'Riley', sub:'reviewer · claude-code', status:A.riley.status, cx:640, cy:150, w:172, pct:A.riley.pct}
+      ];
+      const edges = [['ws','atlas',A.atlas.status!=='idle'],['ws','alex',A.alex.status!=='idle'],['ws','riley',A.riley.status!=='idle']];
+      return {nodes, edges};
+    }
+    const st2 = this.state.tasks;
+    if (!st2.length) return {nodes: [{id:'none', label:'Plan yok', sub:'önce bir hedef girin', status:'idle', cx:420, cy:120, w:190, pct:0}], edges: []};
+    const nodes = st2.map((t, i) => ({
+      id: t.key, label: t.title, sub: 'T-' + t.key + ' · ' + t.attempts, status: t.status,
+      cx: 420, cy: 40 + i * 120, w: 230, pct: t.status === 'done' ? 100 : t.pct
+    }));
+    const edges = st2.filter(t => t.deps.length).map(t => [t.deps[0], t.key, t.status !== 'ready']);
+    return {nodes, edges};
+  }
+
+  edgeLayer(nodes, edges) {
+    const by = {}; nodes.forEach(n => by[n.id] = n);
+    const out = [];
+    edges.forEach(([f, t, active], i) => {
+      const a = by[f], b = by[t];
+      if (!a || !b) return;
+      const x1 = a.cx, y1 = a.cy + 62, x2 = b.cx, y2 = b.cy;
+      const dy = Math.max(24, (y2 - y1) * 0.5);
+      const d = 'M' + x1 + ',' + y1 + ' C' + x1 + ',' + (y1 + dy) + ' ' + x2 + ',' + (y2 - dy) + ' ' + x2 + ',' + y2;
+      const col = active ? this.colOf(b.status).c : 'rgba(255,255,255,.14)';
+      out.push(React.createElement('path', {key: 'g' + i, d, fill: 'none', stroke: col, strokeWidth: active ? 5 : 3, opacity: active ? .16 : .4, filter: active ? 'url(#eg)' : undefined}));
+      out.push(React.createElement('path', {key: 'l' + i, d, fill: 'none', stroke: col, strokeWidth: 1.2, opacity: active ? .9 : .4}));
+      if (active) out.push(React.createElement('path', {key: 'f' + i, className: 'flow', d, fill: 'none', stroke: '#fff', strokeWidth: 1.4, opacity: .7, strokeLinecap: 'round'}));
+    });
+    return React.createElement('svg', {
+      width: '100%', height: '100%', viewBox: '0 0 840 460', preserveAspectRatio: 'xMidYMin meet',
+      style: {position: 'absolute', inset: 0, pointerEvents: 'none'}
+    }, React.createElement('defs', null, React.createElement('filter', {id: 'eg', x: '-50%', y: '-50%', width: '200%', height: '200%'}, React.createElement('feGaussianBlur', {stdDeviation: 4}))), out);
+  }
+
+  renderVals() {
+    const st = this.state;
+    const T = st.tasks;
+    const cnt = s => T.filter(t => t.status === s).length;
+
+    const navDef = [
+      ['overview', 'Overview', st.phase === 'empty' ? 'goal' : ''],
+      ['tasks', 'Tasks', T.length ? String(T.length) : '0'],
+      ['activity', 'Activity', st.events.length ? String(st.events.length) : ''],
+      ['graph', 'Graph', T.length ? '3' : '']
+    ];
+    const nav = navDef.map(([k, label, badge]) => ({
+      label, badge,
+      bg: st.page === k ? 'rgba(46,230,207,.09)' : 'transparent',
+      fg: st.page === k ? '#e7eaf0' : '#8a929e',
+      weight: st.page === k ? '500' : '400',
+      rail: st.page === k ? 'inset 2px 0 0 #2ee6cf' : 'none',
+      dot: st.page === k ? '#2ee6cf' : '#3f4650',
+      onClick: () => this.setState({page: k})
+    }));
+
+    const agents = ['atlas', 'alex', 'riley'].map(id => {
+      const a = st.agents[id];
+      const m = this.colOf(st.halted && a.status !== 'idle' ? 'pausing' : a.status);
+      const busy = a.status !== 'idle' && !st.halted;
+      return {
+        name: a.name, role: a.role, initials: a.name.slice(0, 2).toUpperCase(),
+        color: m.c, statusLabel: m.l, anim: m.p ? 'pulsedot' : '',
+        bgc: m.c + '1a', bdc: m.c + '3d', busy,
+        shadow: busy ? '0 0 0 1px ' + m.c + '18, 0 6px 22px rgba(0,0,0,.45)' : '0 4px 16px rgba(0,0,0,.3)',
+        pw: a.pct + '%',
+        worktree: a.worktree,
+        turns: a.turns ? a.turns + ' turns' : '—',
+        line: a.status === 'idle' ? 'boşta — iş bekliyor' : (id === 'atlas' ? 'hedefi görev grafına çeviriyor' : (id === 'riley' ? 'diff yargılıyor (yeniden inşa etmiyor)' : 'kod yazıyor · izole worktree'))
+      };
+    });
+
+    const colDef = [
+      ['RUNNING', ['working'], '#2ee6cf'], ['VERIFYING', ['verifying'], '#7b8cff'],
+      ['REVIEWING', ['reviewing'], '#c084fc'], ['MERGING', ['merging'], '#f5b34a'],
+      ['READY', ['ready'], '#7c8697'], ['DONE', ['done'], '#4ade80']
+    ];
+    const columns = colDef.map(([name, sts, color]) => {
+      const items = T.filter(t => sts.indexOf(t.status) > -1);
+      return {
+        name, color, count: String(items.length),
+        countColor: items.length ? '#e7eaf0' : '#3f4650',
+        items: items.map(t => {
+          const m = this.colOf(t.status);
+          const ag = t.agent ? st.agents[t.agent] : null;
+          return {
+            key: 'T-' + t.key, title: t.title, attempts: t.attempts, note: t.note,
+            color: m.c, anim: m.p ? 'pulsedot' : '',
+            bdc: t.status === 'done' ? 'rgba(74,222,128,.28)' : 'rgba(255,255,255,.09)',
+            shadow: m.p ? '0 0 0 1px ' + m.c + '14' : 'none',
+            hasBar: ['working', 'verifying', 'reviewing', 'merging'].indexOf(t.status) > -1,
+            pw: t.pct + '%',
+            agent: ag ? ag.name : 'unassigned',
+            agentInitials: ag ? ag.name.slice(0, 2).toUpperCase() : '··',
+            agentColor: ag ? this.colOf(ag.status).c : '#5b6472',
+            agentBg: (ag ? this.colOf(ag.status).c : '#5b6472') + '26'
+          };
+        })
+      };
+    });
+
+    const kindColor = k => {
+      if (k.indexOf('run.') === 0) return '#2ee6cf';
+      if (k.indexOf('task.merged') === 0) return '#4ade80';
+      if (k.indexOf('task.') === 0) return '#7b8cff';
+      if (k.indexOf('review.') === 0) return '#c084fc';
+      if (k.indexOf('guardrail') === 0) return '#f87171';
+      if (k.indexOf('workspace.') === 0) return '#f5b34a';
+      return '#8a929e';
+    };
+    const filtered = st.filter === 'all' ? st.events : st.events.filter(e => e.kind.indexOf(st.filter) === 0);
+    const events = filtered.map(e => {
+      const c = kindColor(e.kind);
+      const open = st.openEvent === e.id;
+      return {
+        ...e, color: c, chipBg: c + '18',
+        payloadDisplay: open ? 'block' : 'none',
+        caret: open ? '▾' : '▸',
+        rowBg: open ? 'rgba(255,255,255,.03)' : 'transparent',
+        onToggle: () => this.setState({openEvent: open ? null : e.id})
+      };
+    });
+
+    const filters = [['all', 'all'], ['run', 'run.*'], ['task', 'task.*'], ['review', 'review.*'], ['workspace', 'workspace.*']]
+      .map(([k, label]) => ({
+        label,
+        fg: st.filter === k ? '#2ee6cf' : '#7c8697',
+        bg: st.filter === k ? 'rgba(46,230,207,.1)' : 'transparent',
+        bdc: st.filter === k ? 'rgba(46,230,207,.35)' : 'rgba(255,255,255,.1)',
+        onClick: () => this.setState({filter: k})
+      }));
+
+    const typeCounts = {};
+    st.events.forEach(e => { const p = e.kind.split('.')[0] + '.*'; typeCounts[p] = (typeCounts[p] || 0) + 1; });
+    const maxT = Math.max(1, ...Object.values(typeCounts));
+    const eventTypes = Object.keys(typeCounts).map(k => ({
+      label: k, n: String(typeCounts[k]), color: kindColor(k.replace('.*', '.')),
+      pw: Math.round(typeCounts[k] / maxT * 100) + '%'
+    }));
+
+    const phases = [
+      ['HEDEF', 'goal set', ['planning', 'running', 'finished']],
+      ['PLANLAMA', 'görev grafı', ['planning', 'running', 'finished']],
+      ['ÇALIŞMA', 'izole worktree', ['running', 'finished']],
+      ['DOĞRULAMA', 'verify komutları', ['running', 'finished']],
+      ['İNCELEME', 'bağımsız QA', ['running', 'finished']],
+      ['MERGE', 'seri kuyruk', ['finished']]
+    ];
+    const stageActive = {
+      planning: 1, running: T.filter(t => t.status === 'done').length ? 4 : 2, finished: 6
+    }[st.phase] || 0;
+    const pipeline = phases.map(([label, note], i) => {
+      const done = i < stageActive;
+      const now = i === stageActive && st.phase !== 'finished' && st.phase !== 'empty';
+      const c = done ? '#4ade80' : (now ? '#2ee6cf' : '#2b3138');
+      return {
+        label, note, arrow: i === phases.length - 1 ? '' : '›',
+        bar: done ? 'rgba(74,222,128,.6)' : (now ? '#2ee6cf' : 'rgba(255,255,255,.09)'),
+        glow: now ? '0 0 10px rgba(46,230,207,.5)' : 'none',
+        dot: c, fg: done || now ? '#e7eaf0' : '#5b6472',
+        anim: now ? 'pulsedot' : ''
+      };
+    });
+
+    const g = this.buildGraph();
+    const graphNodes = g.nodes.map(n => {
+      const m = this.colOf(n.status);
+      return {
+        ...n, left: (n.cx - n.w / 2) + 'px', top: n.cy + 'px', w: n.w + 'px',
+        color: m.c, state: m.l, anim: m.p ? 'pulsedot' : '',
+        bdc: m.p ? m.c + '66' : 'rgba(255,255,255,.11)',
+        shadow: m.p ? '0 0 0 1px ' + m.c + '33, 0 0 22px ' + m.c + '26' : '0 4px 18px rgba(0,0,0,.5)',
+        pw: (n.pct || 0) + '%'
+      };
+    });
+
+    const mergeQueue = T.filter(t => ['merging', 'reviewing'].indexOf(t.status) > -1).map((t, i) => {
+      const m = this.colOf(t.status);
+      return {
+        pos: '0' + (i + 1), title: t.title, state: t.status === 'merging' ? 'rebase+verify' : 'review',
+        color: m.c, bdc: t.status === 'merging' ? 'rgba(245,179,74,.3)' : 'rgba(255,255,255,.08)',
+        bg: t.status === 'merging' ? 'rgba(245,179,74,.06)' : 'transparent'
+      };
+    });
+
+    const spend = '$' + st.spend.toFixed(2);
+    const budgetPct = Math.min(100, st.spend / 20 * 100);
+
+    const goalStates = {empty: 'bekleniyor', planning: 'planlanıyor', running: 'çalışıyor', finished: 'tamamlandı'};
+
+    return {
+      nav, agents, columns, events, filters, eventTypes, pipeline, graphNodes, mergeQueue,
+      graphEdges: this.edgeLayer(g.nodes, g.edges),
+      pgOverview: st.page === 'overview', pgTasks: st.page === 'tasks',
+      pgActivity: st.page === 'activity', pgGraph: st.page === 'graph',
+      started: '2026-08-23T17:32',
+      latency: (38 + (st.sec % 7)) + 'ms',
+      spend, budgetPw: budgetPct + '%',
+      budgetColor: budgetPct > 80 ? '#f87171' : '#2ee6cf',
+      tiles: [
+        {label: 'agents working', val: String(['atlas','alex','riley'].filter(k => st.agents[k].status !== 'idle').length), color: '#2ee6cf'},
+        {label: 'tasks active', val: String(cnt('working') + cnt('verifying') + cnt('reviewing') + cnt('merging')), color: '#7b8cff'},
+        {label: 'tasks ready', val: String(cnt('ready')), color: '#8a929e'},
+        {label: 'tasks done', val: String(cnt('done')), color: '#4ade80'},
+        {label: 'blocked', val: '0', color: '#5b6472'}
+      ],
+      goal: st.goal, goalDraft: st.goalDraft,
+      noGoal: st.phase === 'empty', hasGoal: st.phase !== 'empty',
+      goalState: goalStates[st.phase] || '',
+      goalStateColor: st.phase === 'finished' ? '#4ade80' : (st.phase === 'empty' ? '#5b6472' : '#2ee6cf'),
+      goalBdc: st.phase === 'empty' ? 'rgba(46,230,207,.3)' : 'rgba(255,255,255,.09)',
+      goalRail: st.phase === 'empty' ? '#2ee6cf' : 'transparent',
+      goalSuggestions: [
+        ['not dosyaları + README', 'Üç numaralı not dosyası ve bunları listeleyen bir README yaz'],
+        ['kupon desteği', 'Sepet API’sine kupon desteği ekle'],
+        ['idempotency key', 'Ödeme akışına idempotency key koy']
+      ].map(([label, full]) => ({label, onClick: () => this.setState({goalDraft: full})})),
+      onGoalDraft: (e) => this.setState({goalDraft: e.target.value}),
+      onGoalKey: (e) => { if (e.key === 'Enter') this.setGoal(); },
+      onSetGoal: () => this.setGoal(),
+      miniEvents: events.slice(0, 6),
+      eventCount: String(st.events.length),
+      queueEmpty: mergeQueue.length === 0,
+      graphModes: [['org', 'Organization'], ['dep', 'Dependencies']].map(([k, label]) => ({
+        label,
+        bg: st.graphMode === k ? 'rgba(46,230,207,.14)' : 'transparent',
+        fg: st.graphMode === k ? '#2ee6cf' : '#8a929e',
+        shadow: st.graphMode === k ? 'inset 0 0 0 1px rgba(46,230,207,.3)' : 'none',
+        onClick: () => this.setState({graphMode: k})
+      })),
+      graphHint: st.graphMode === 'org' ? 'workspace → ajanlar · canlı durum' : 'planın çıkardığı bağımlılık zinciri',
+      rails: [
+        {label: 'bütçe', val: '$20', color: budgetPct > 80 ? '#f87171' : '#4ade80'},
+        {label: 'eşzamanlılık', val: '3/6', color: '#4ade80'},
+        {label: 'koşu t/o', val: '30dk', color: '#4ade80'},
+        {label: 'deneme', val: '3', color: '#4ade80'}
+      ],
+      stopIdle: st.stop === 'idle' && !st.halted,
+      stopAsking: st.stop === 'asking' && !st.halted,
+      halted: st.halted,
+      onStopAsk: () => this.setState({stop: 'asking'}),
+      onStopCancel: () => this.setState({stop: 'idle'}),
+      onStopConfirm: () => {
+        this.setState({stop: 'idle', halted: true});
+        this.emit('guardrail.tripped', 'human', 'workspace halted: emergency stop by web operator', '', '{ "reason": "emergency_stop", "source": "web" }');
+      },
+      onClearHalt: () => {
+        this.setState({halted: false});
+        this.emit('workspace.halt_cleared', 'human', 'clear-halt — zamanlama serbest, koşular resume', '', '{ "resumed": true }');
+      },
+      goActivity: () => this.setState({page: 'activity'})
+    };
+  }
+}
+</script>
+</body>
+</html>

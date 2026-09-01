@@ -1,0 +1,1766 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics><meta name="design_doc_mode" content="canvas">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Instrument+Serif:ital@0;1&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#f0eee9;font-family:'IBM Plex Sans',system-ui,sans-serif}
+a{color:#2a78d6;text-decoration:none}a:hover{color:#1a5fb4}
+.dv-turn{padding:40px 44px 32px;border-bottom:1px solid rgba(0,0,0,.08);scroll-margin-top:16px}
+.dv-thd{display:flex;align-items:baseline;gap:10px;margin:0 0 20px}
+.dv-tid{font:600 10px 'IBM Plex Mono',monospace;padding:3px 7px;background:#1a1a1a;color:#fff;border-radius:4px;text-decoration:none}
+.dv-tid:hover{color:#fff}
+.dv-tname{font:600 13px/1.2 'IBM Plex Sans',sans-serif;color:#1a1a1a}
+.dv-opts{display:flex;flex-wrap:wrap;gap:28px;align-items:flex-start}
+.dv-opt{flex:none;display:flex;flex-direction:column;gap:9px;scroll-margin-top:16px}
+.dv-oid{font:600 10.5px 'IBM Plex Mono',monospace;padding:3px 7px;background:rgba(0,0,0,.08);color:#1a1a1a;border-radius:5px;text-decoration:none}
+.dv-oid:hover{color:#1a1a1a}
+.dv-olabel{display:flex;align-items:baseline;gap:8px;font:400 11px/1.3 'IBM Plex Sans',sans-serif;color:rgba(0,0,0,.55)}
+.dv-card{max-width:100%;background:#0a0c0f;border:1px solid rgba(0,0,0,.12);border-radius:10px;box-shadow:0 8px 30px rgba(0,0,0,.18);overflow:hidden}
+.dv-opt:target .dv-oid{background:#2a78d6;color:#fff}
+.dv-next{margin:22px 0 0;font:12px/1.5 'IBM Plex Sans',sans-serif;color:rgba(0,0,0,.5)}
+@keyframes dash{to{stroke-dashoffset:-32}}
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.35;transform:scale(.8)}}
+@keyframes scan{0%{transform:translateY(0)}100%{transform:translateY(300px)}}
+@keyframes glow{0%,100%{opacity:.35}50%{opacity:.9}}
+.flow{stroke-dasharray:5 11;animation:dash 1.15s linear infinite}
+.pulsedot{animation:pulse 1.6s ease-in-out infinite}
+.glowline{animation:glow 2.6s ease-in-out infinite}
+@keyframes beamrun{to{background-position:34px 0}}
+@keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-4px)}}
+@keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+.beamrun{animation:beamrun .55s linear infinite}
+.beamslow{animation:beamrun 1.6s linear infinite}
+.floaty{animation:float 3.4s ease-in-out infinite}
+.rise{animation:rise .35s ease-out}
+input[type=range]{accent-color:#2ee6cf}
+</style></helmet>
+
+<section class="dv-turn" id="t3">
+<div class="dv-thd"><a class="dv-tid" href="#t3">3</a><span class="dv-tname">All nine pages — one navigable shell (click the sidebar)</span></div>
+<div class="dv-opts">
+<div class="dv-opt" id="3a">
+<div class="dv-olabel"><a class="dv-oid" href="#3a">3a</a>Overview · Agents · Tasks · Graph · Activity · Projects · Skills · Analytics · Settings</div>
+<div class="dv-card" style="width:1340px">
+<div style="display:flex;height:880px;font-family:'IBM Plex Sans',sans-serif;color:#e7eaf0;background:#0a0c0f">
+
+<div style="width:212px;flex:none;border-right:1px solid rgba(255,255,255,.07);background:#0c0f13;display:flex;flex-direction:column">
+<div style="padding:16px 16px 14px;border-bottom:1px solid rgba(255,255,255,.07);display:flex;align-items:center;gap:9px">
+<div style="width:22px;height:22px;border-radius:6px;background:linear-gradient(160deg,#2ee6cf,#7b8cff);box-shadow:0 0 14px rgba(46,230,207,.35)"></div>
+<div><div style="font-size:12.5px;font-weight:600;letter-spacing:-.1px">AI Team OS</div><div style="font:400 9.5px 'IBM Plex Mono',monospace;color:#69727f;margin-top:1px">checkout-platform</div></div>
+</div>
+<div style="padding:10px 8px;display:flex;flex-direction:column;gap:1px">
+<sc-for list="{{ nav }}" as="n" hint-placeholder-count="9">
+<div onClick="{{ n.onClick }}" style="display:flex;align-items:center;justify-content:space-between;padding:7px 9px;border-radius:6px;background:{{ n.bg }};color:{{ n.fg }};font-size:12.5px;font-weight:{{ n.weight }};box-shadow:{{ n.rail }};cursor:pointer" style-hover="background:rgba(255,255,255,.045);color:#e7eaf0">
+<span>{{ n.label }}</span><span style="font:500 9.5px 'IBM Plex Mono',monospace;color:#69727f">{{ n.badge }}</span>
+</div>
+</sc-for>
+</div>
+<div style="margin-top:auto;padding:12px;border-top:1px solid rgba(255,255,255,.07)">
+<div style="font:500 9px 'IBM Plex Mono',monospace;letter-spacing:.09em;color:#5b6472;margin-bottom:7px">RUNTIME</div>
+<div style="display:flex;align-items:center;justify-content:space-between;font:400 10.5px 'IBM Plex Mono',monospace;color:#8a929e"><span style="display:flex;align-items:center;gap:6px"><span class="pulsedot" style="width:5px;height:5px;border-radius:50%;background:#2ee6cf"></span>SSE connected</span><span style="color:#69727f">42ms</span></div>
+<div style="margin-top:10px;padding-top:9px;border-top:1px solid rgba(255,255,255,.06);display:flex;justify-content:space-between;font:400 10.5px 'IBM Plex Mono',monospace"><span style="color:#69727f">spend / today</span><span style="color:#e7eaf0">$8.43</span></div>
+</div>
+</div>
+
+<div style="flex:1;min-width:0;display:flex;flex-direction:column">
+<div style="height:58px;flex:none;border-bottom:1px solid rgba(255,255,255,.07);display:flex;align-items:center;gap:14px;padding:0 20px;background:#0c0f13">
+<div><div style="font-size:14.5px;font-weight:600;letter-spacing:-.2px">{{ pageTitle }}</div><div style="font-size:11px;color:#7c8697;margin-top:1px">{{ pageSub }}</div></div>
+<div style="flex:1"></div>
+<div style="display:flex;align-items:center;gap:7px;padding:5px 9px;border:1px solid rgba(255,255,255,.09);border-radius:6px;font:400 11px 'IBM Plex Mono',monospace;color:#8a929e">⌘K</div>
+<div style="padding:6px 12px;border-radius:6px;background:#2ee6cf;color:#04120f;font-size:11.5px;font-weight:600;cursor:pointer" style-hover="filter:brightness(1.1)">New task</div>
+</div>
+
+<div style="flex:1;min-height:0;overflow-y:auto">
+
+<sc-if value="{{ pgOverview }}" hint-placeholder-val="{{ true }}">
+<div>
+<div style="display:grid;grid-template-columns:repeat(6,1fr);gap:1px;background:rgba(255,255,255,.07);border-bottom:1px solid rgba(255,255,255,.07)">
+<sc-for list="{{ appSummary }}" as="s" hint-placeholder-count="6">
+<div style="background:#0c0f13;padding:13px 15px">
+<div style="font:600 22px 'IBM Plex Mono',monospace;letter-spacing:-1px;color:{{ s.color }}">{{ s.count }}</div>
+<div style="font-size:11px;color:#8a929e;margin-top:2px">{{ s.label }}</div>
+</div>
+</sc-for>
+</div>
+<div style="padding:16px 20px;display:grid;grid-template-columns:repeat(3,1fr);gap:11px">
+<sc-for list="{{ cards }}" as="c" hint-placeholder-count="8">
+<div onClick="{{ c.onOpen }}" style="border:1px solid {{ c.bdc }};border-radius:8px;background:#0f1217;padding:12px 13px;display:flex;flex-direction:column;gap:9px;cursor:pointer" style-hover="border-color:rgba(255,255,255,.2)">
+<div style="display:flex;align-items:flex-start;gap:9px">
+<div style="width:28px;height:28px;flex:none;border-radius:7px;background:{{ c.bgc }};border:1px solid {{ c.bdc }};display:flex;align-items:center;justify-content:center;font:600 11px 'IBM Plex Mono',monospace;color:{{ c.color }}">{{ c.initials }}</div>
+<div style="min-width:0;flex:1"><div style="font-size:13px;font-weight:600">{{ c.name }}</div><div style="font-size:10.5px;color:#7c8697;margin-top:1px">{{ c.role }}</div></div>
+<div style="display:flex;align-items:center;gap:5px;padding:3px 7px 3px 6px;border-radius:20px;background:{{ c.bgc }};border:1px solid {{ c.bdc }}"><span class="{{ c.dotAnim }}" style="width:5px;height:5px;border-radius:50%;background:{{ c.color }}"></span><span style="font:500 9.5px 'IBM Plex Mono',monospace;color:{{ c.color }}">{{ c.statusLabel }}</span></div>
+</div>
+<div style="display:flex;align-items:baseline;gap:7px"><span style="flex:none;font:500 10px 'IBM Plex Mono',monospace;color:#5b6472">{{ c.taskId }}</span><span style="min-width:0;font-size:11.5px;color:#c8cfda;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ c.task }}</span></div>
+<div style="height:3px;border-radius:2px;background:rgba(255,255,255,.07);overflow:hidden"><div style="height:100%;width:{{ c.pw }};background:{{ c.color }};box-shadow:0 0 8px {{ c.color }}"></div></div>
+<div style="display:flex;gap:5px;padding-top:3px;border-top:1px solid rgba(255,255,255,.06)">
+<div onClick="{{ c.onToggle }}" style="flex:1;text-align:center;padding:5px 0;border-radius:5px;border:1px solid {{ c.bdc }};background:{{ c.bgc }};color:{{ c.color }};font-size:10.5px;font-weight:500;cursor:pointer">{{ c.toggleLabel }}</div>
+<div style="flex:1;text-align:center;padding:5px 0;border-radius:5px;border:1px solid rgba(255,255,255,.09);color:#a8b0bd;font-size:10.5px;cursor:pointer">Message</div>
+</div>
+</div>
+</sc-for>
+</div>
+</div>
+</sc-if>
+
+<sc-if value="{{ pgAgents }}" hint-placeholder-val="{{ true }}">
+<div style="padding:16px 20px">
+<div style="border:1px solid rgba(255,255,255,.08);border-radius:9px;overflow:hidden">
+<div style="display:grid;grid-template-columns:200px 130px 120px 1fr 110px 90px 80px;gap:0;background:#0f1217;border-bottom:1px solid rgba(255,255,255,.08);padding:9px 14px;font:500 9px 'IBM Plex Mono',monospace;letter-spacing:.08em;color:#5b6472">
+<span>AGENT</span><span>DEPARTMENT</span><span>STATUS</span><span>CURRENT TASK</span><span>PROVIDER</span><span>TOKENS</span><span>COST</span>
+</div>
+<sc-for list="{{ agentRows }}" as="r" hint-placeholder-count="8">
+<div onClick="{{ r.onRow }}" style="display:grid;grid-template-columns:200px 130px 120px 1fr 110px 90px 80px;align-items:center;padding:11px 14px;border-bottom:1px solid rgba(255,255,255,.05);cursor:pointer" style-hover="background:rgba(255,255,255,.03)">
+<div style="display:flex;align-items:center;gap:9px;min-width:0">
+<span style="width:26px;height:26px;flex:none;border-radius:7px;background:{{ r.bgc }};border:1px solid {{ r.bdc }};display:flex;align-items:center;justify-content:center;font:600 10px 'IBM Plex Mono',monospace;color:{{ r.color }}">{{ r.initials }}</span>
+<div style="min-width:0"><div style="font-size:12.5px;font-weight:600">{{ r.name }}</div><div style="font-size:10px;color:#7c8697;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.role }}</div></div>
+</div>
+<span style="font-size:11.5px;color:#a8b0bd">{{ r.dept }}</span>
+<span style="display:inline-flex;align-items:center;gap:5px;padding:3px 7px 3px 6px;border-radius:20px;background:{{ r.bgc }};border:1px solid {{ r.bdc }};width:fit-content"><span class="{{ r.dotAnim }}" style="width:5px;height:5px;border-radius:50%;background:{{ r.color }}"></span><span style="font:500 9px 'IBM Plex Mono',monospace;color:{{ r.color }}">{{ r.statusLabel }}</span></span>
+<div style="min-width:0;padding-right:14px">
+<div style="display:flex;align-items:baseline;gap:7px"><span style="flex:none;font:500 9.5px 'IBM Plex Mono',monospace;color:#5b6472">{{ r.taskId }}</span><span style="min-width:0;font-size:11.5px;color:#c8cfda;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.task }}</span></div>
+<div style="height:3px;border-radius:2px;background:rgba(255,255,255,.07);margin-top:5px;overflow:hidden"><div style="height:100%;width:{{ r.pw }};background:{{ r.color }}"></div></div>
+</div>
+<span style="font:400 11px 'IBM Plex Mono',monospace;color:#a8b0bd">{{ r.provider }}</span>
+<span style="font:400 11px 'IBM Plex Mono',monospace;color:#7c8697">{{ r.tokens }}</span>
+<span style="font:400 11px 'IBM Plex Mono',monospace;color:#e7eaf0">{{ r.cost }}</span>
+</div>
+</sc-for>
+</div>
+</div>
+</sc-if>
+
+<sc-if value="{{ pgTasks }}" hint-placeholder-val="{{ true }}">
+<div style="padding:14px 16px">
+<div style="display:flex;gap:7px;margin-bottom:13px">
+<sc-for list="{{ chips }}" as="ch" hint-placeholder-count="5">
+<div onClick="{{ ch.onClick }}" style="padding:4px 10px;border-radius:14px;border:1px solid {{ ch.bdc }};background:{{ ch.bg }};font:500 10px 'IBM Plex Mono',monospace;color:{{ ch.fg }};cursor:pointer">{{ ch.label }}</div>
+</sc-for>
+</div>
+<div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px">
+<sc-for list="{{ boardCols }}" as="col" hint-placeholder-count="6">
+<div style="display:flex;flex-direction:column;gap:8px">
+<div style="display:flex;align-items:center;gap:7px;padding-bottom:7px;border-bottom:1px solid rgba(255,255,255,.07)">
+<span style="width:5px;height:5px;border-radius:50%;background:{{ col.color }}"></span>
+<span style="font:500 9.5px 'IBM Plex Mono',monospace;letter-spacing:.06em;color:#a8b0bd">{{ col.name }}</span>
+<span style="font:400 9.5px 'IBM Plex Mono',monospace;color:#5b6472">{{ col.count }}</span>
+</div>
+<sc-for list="{{ col.items }}" as="it" hint-placeholder-count="2">
+<div style="border:1px solid {{ it.bdc }};border-radius:7px;background:#0f1116;padding:10px;cursor:pointer" style-hover="border-color:rgba(255,255,255,.22)">
+<div style="display:flex;align-items:baseline;gap:7px"><span style="font:500 9.5px 'IBM Plex Mono',monospace;color:#5b6472">{{ it.id }}</span><span style="font:500 9px 'IBM Plex Mono',monospace;color:{{ it.pColor }}">{{ it.priority }}</span></div>
+<div style="font-size:11.5px;color:#dbe1ea;margin-top:4px;line-height:1.35">{{ it.title }}</div>
+<div style="display:flex;align-items:center;gap:6px;margin-top:8px">
+<span style="width:16px;height:16px;border-radius:5px;background:{{ it.bgc }};display:flex;align-items:center;justify-content:center;font:600 8px 'IBM Plex Mono',monospace;color:{{ it.color }}">{{ it.initials }}</span>
+<span style="font-size:10px;color:#7c8697">{{ it.agent }}</span>
+<span style="margin-left:auto;font:400 9.5px 'IBM Plex Mono',monospace;color:#5b6472">{{ it.step }}</span>
+</div>
+</div>
+</sc-for>
+</div>
+</sc-for>
+</div>
+</div>
+</sc-if>
+
+<sc-if value="{{ pgGraph }}" hint-placeholder-val="{{ true }}">
+<div style="display:flex;flex-direction:column;height:820px">
+<div style="padding:12px 20px;border-bottom:1px solid rgba(255,255,255,.07);display:flex;align-items:center;gap:14px">
+<div style="display:flex;gap:2px;padding:2px;border:1px solid rgba(255,255,255,.08);border-radius:7px;background:#0f1217">
+<sc-for list="{{ modes }}" as="m" hint-placeholder-count="5">
+<div onClick="{{ m.onClick }}" style="padding:5px 11px;border-radius:5px;font-size:11.5px;font-weight:500;cursor:pointer;background:{{ m.bg }};color:{{ m.fg }};box-shadow:{{ m.shadow }}">{{ m.label }}</div>
+</sc-for>
+</div>
+<span style="font:400 10.5px 'IBM Plex Mono',monospace;color:#5b6472">elk.js layered · left-to-right</span>
+</div>
+<div style="flex:1;position:relative;overflow:hidden;background-color:#08090c;background-image:radial-gradient(rgba(255,255,255,.055) 1px,transparent 1px);background-size:26px 26px">
+{{ cableLayer }}
+<sc-for list="{{ gnodes }}" as="n" hint-placeholder-count="12">
+<div onClick="{{ n.onClick }}" style="position:absolute;left:{{ n.left }};top:{{ n.top }};width:{{ n.w }};box-sizing:border-box;border:1px solid {{ n.bdc }};border-radius:8px;background:{{ n.panel }};padding:8px 10px;cursor:pointer;box-shadow:{{ n.shadow }}" style-hover="border-color:rgba(255,255,255,.28)">
+<div style="display:flex;align-items:center;gap:7px"><span class="{{ n.dotAnim }}" style="width:6px;height:6px;flex:none;border-radius:50%;background:{{ n.color }};box-shadow:0 0 8px {{ n.color }}"></span><span style="font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ n.label }}</span></div>
+<div style="font-size:9.5px;color:#7c8697;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ n.sub }}</div>
+<div style="display:flex;align-items:center;gap:5px;margin-top:6px"><span style="font:500 8.5px 'IBM Plex Mono',monospace;color:{{ n.color }}">{{ n.statusLabel }}</span><span style="flex:1;height:2px;border-radius:1px;background:rgba(255,255,255,.08);overflow:hidden"><span style="display:block;height:100%;width:{{ n.pw }};background:{{ n.color }}"></span></span></div>
+</div>
+</sc-for>
+</div>
+</div>
+</sc-if>
+
+<sc-if value="{{ pgActivity }}" hint-placeholder-val="{{ true }}">
+<div style="display:flex;min-height:0">
+<div style="flex:1;min-width:0;padding:14px 0 20px">
+<div style="padding:0 20px 12px;display:flex;gap:7px">
+<sc-for list="{{ chips }}" as="ch" hint-placeholder-count="5">
+<div onClick="{{ ch.onClick }}" style="padding:4px 10px;border-radius:14px;border:1px solid {{ ch.bdc }};background:{{ ch.bg }};font:500 10px 'IBM Plex Mono',monospace;color:{{ ch.fg }};cursor:pointer">{{ ch.label }}</div>
+</sc-for>
+</div>
+<div style="position:relative">
+<div style="position:absolute;left:106px;top:0;bottom:0;width:1px;background:linear-gradient(180deg,transparent,rgba(46,230,207,.28),rgba(123,140,255,.18),transparent)"></div>
+<sc-for list="{{ feed }}" as="e" hint-placeholder-count="12">
+<div style="display:flex;align-items:flex-start;padding:7px 20px 7px 0">
+<span style="width:92px;flex:none;text-align:right;font:400 10.5px 'IBM Plex Mono',monospace;color:#5b6472">{{ e.t }}</span>
+<span style="width:28px;flex:none;display:flex;justify-content:center;padding-top:4px"><span style="width:7px;height:7px;border-radius:50%;background:{{ e.color }};box-shadow:0 0 9px {{ e.color }}"></span></span>
+<div style="flex:1;min-width:0">
+<div style="display:flex;align-items:baseline;gap:8px"><span style="font-size:12px;font-weight:600;color:{{ e.color }}">{{ e.who }}</span><span style="font:400 9.5px 'IBM Plex Mono',monospace;color:#5b6472">{{ e.kind }}</span></div>
+<div style="font-size:12px;color:#c8cfda;margin-top:1px">{{ e.text }}</div>
+</div>
+<span style="flex:none;font:400 9.5px 'IBM Plex Mono',monospace;color:#5b6472;padding-top:3px">{{ e.ref }}</span>
+</div>
+</sc-for>
+</div>
+</div>
+<div style="width:280px;flex:none;border-left:1px solid rgba(255,255,255,.07);padding:16px">
+<div style="font:500 9px 'IBM Plex Mono',monospace;letter-spacing:.09em;color:#5b6472;margin-bottom:11px">EVENT TYPES · 24H</div>
+<div style="display:flex;flex-direction:column;gap:9px">
+<sc-for list="{{ eventTypes }}" as="t" hint-placeholder-count="6">
+<div>
+<div style="display:flex;justify-content:space-between;font:400 10.5px 'IBM Plex Mono',monospace;color:#a8b0bd"><span>{{ t.label }}</span><span style="color:#69727f">{{ t.n }}</span></div>
+<div style="height:4px;border-radius:2px;background:rgba(255,255,255,.06);margin-top:4px;overflow:hidden"><div style="height:100%;width:{{ t.pw }};background:{{ t.color }}"></div></div>
+</div>
+</sc-for>
+</div>
+</div>
+</div>
+</sc-if>
+
+<sc-if value="{{ pgProjects }}" hint-placeholder-val="{{ true }}">
+<div style="padding:18px 20px;display:grid;grid-template-columns:repeat(3,1fr);gap:14px">
+<sc-for list="{{ projects }}" as="p" hint-placeholder-count="3">
+<div style="border:1px solid rgba(255,255,255,.08);border-radius:9px;background:#0f1217;padding:15px;cursor:pointer" style-hover="border-color:rgba(255,255,255,.2)">
+<div style="display:flex;align-items:flex-start;gap:9px">
+<div style="flex:1;min-width:0"><div style="font-size:14px;font-weight:600;letter-spacing:-.2px">{{ p.name }}</div><div style="font-size:11px;color:#7c8697;margin-top:2px">{{ p.sub }}</div></div>
+<span style="flex:none;padding:3px 8px;border-radius:20px;background:{{ p.bgc }};border:1px solid {{ p.bdc }};font:500 9px 'IBM Plex Mono',monospace;color:{{ p.color }}">{{ p.statusLabel }}</span>
+</div>
+<div style="display:flex;align-items:center;gap:4px;margin-top:13px">
+<sc-for list="{{ p.team }}" as="m" hint-placeholder-count="4">
+<span style="width:22px;height:22px;border-radius:50%;background:{{ m.bgc }};border:1px solid {{ m.color }};display:flex;align-items:center;justify-content:center;font:600 8.5px 'IBM Plex Mono',monospace;color:{{ m.color }}">{{ m.initials }}</span>
+</sc-for>
+</div>
+<div style="height:5px;border-radius:3px;background:rgba(255,255,255,.07);margin-top:14px;overflow:hidden"><div style="height:100%;width:{{ p.pct }};background:{{ p.color }};box-shadow:0 0 10px {{ p.color }}"></div></div>
+<div style="display:flex;justify-content:space-between;font:400 10px 'IBM Plex Mono',monospace;color:#69727f;margin-top:5px"><span>progress</span><span>{{ p.pct }}</span></div>
+<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:rgba(255,255,255,.07);border-radius:7px;overflow:hidden;margin-top:14px">
+<div style="background:#0c0f13;padding:9px 10px"><div style="font:600 15px 'IBM Plex Mono',monospace;color:#e7eaf0">{{ p.agents }}</div><div style="font-size:9.5px;color:#7c8697;margin-top:1px">agents</div></div>
+<div style="background:#0c0f13;padding:9px 10px"><div style="font:600 15px 'IBM Plex Mono',monospace;color:#2ee6cf">{{ p.active }}</div><div style="font-size:9.5px;color:#7c8697;margin-top:1px">active</div></div>
+<div style="background:#0c0f13;padding:9px 10px"><div style="font:600 15px 'IBM Plex Mono',monospace;color:{{ p.blockedColor }}">{{ p.blocked }}</div><div style="font-size:9.5px;color:#7c8697;margin-top:1px">blocked</div></div>
+<div style="background:#0c0f13;padding:9px 10px"><div style="font:600 15px 'IBM Plex Mono',monospace;color:#e7eaf0">{{ p.cost }}</div><div style="font-size:9.5px;color:#7c8697;margin-top:1px">spend</div></div>
+</div>
+</div>
+</sc-for>
+</div>
+</sc-if>
+
+<sc-if value="{{ pgSkills }}" hint-placeholder-val="{{ true }}">
+<div style="padding:18px 20px;display:grid;grid-template-columns:1fr 340px;gap:16px">
+<div>
+<div style="display:flex;align-items:center;gap:9px;margin-bottom:12px">
+<span style="font:500 9px 'IBM Plex Mono',monospace;letter-spacing:.09em;color:#5b6472">SKILL PROVIDER · SUPERPOWERS</span>
+<span style="padding:2px 7px;border-radius:4px;background:rgba(123,140,255,.12);font:500 9px 'IBM Plex Mono',monospace;color:#9aa6ff">shared · not copied into agents</span>
+</div>
+<div style="display:flex;flex-direction:column;gap:8px">
+<sc-for list="{{ superpowers }}" as="s" hint-placeholder-count="6">
+<div style="border:1px solid rgba(255,255,255,.08);border-radius:8px;background:#0f1217;padding:12px 14px;display:flex;align-items:center;gap:14px">
+<div style="flex:1;min-width:0">
+<div style="display:flex;align-items:baseline;gap:8px"><span style="font:500 12.5px 'IBM Plex Mono',monospace;color:#e7eaf0">{{ s.label }}</span><span style="font:400 9.5px 'IBM Plex Mono',monospace;color:{{ s.color }}">{{ s.state }}</span></div>
+<div style="height:3px;border-radius:2px;background:rgba(255,255,255,.07);margin-top:8px;overflow:hidden"><div style="height:100%;width:{{ s.pw }};background:{{ s.color }}"></div></div>
+</div>
+<div style="width:70px;flex:none;text-align:right"><div style="font:600 14px 'IBM Plex Mono',monospace;color:#e7eaf0">{{ s.uses }}</div><div style="font-size:9.5px;color:#7c8697">runs · 7d</div></div>
+<div style="width:70px;flex:none;text-align:right;font:400 10.5px 'IBM Plex Mono',monospace;color:#7c8697">{{ s.agents }}</div>
+</div>
+</sc-for>
+</div>
+</div>
+<div>
+<div style="font:500 9px 'IBM Plex Mono',monospace;letter-spacing:.09em;color:#5b6472;margin-bottom:12px">DOMAIN SKILLS</div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+<sc-for list="{{ domainSkills }}" as="d" hint-placeholder-count="8">
+<div style="border:1px solid rgba(255,255,255,.08);border-radius:7px;background:#0f1217;padding:10px 11px">
+<div style="font:500 11.5px 'IBM Plex Mono',monospace;color:#dbe1ea">{{ d.label }}</div>
+<div style="display:flex;align-items:center;justify-content:space-between;margin-top:7px"><span style="font:500 9px 'IBM Plex Mono',monospace;color:{{ d.sColor }}">{{ d.source }}</span><span style="font-size:9.5px;color:#69727f">{{ d.agents }}</span></div>
+</div>
+</sc-for>
+</div>
+<div style="margin-top:16px;border:1px dashed rgba(255,255,255,.14);border-radius:8px;padding:13px;text-align:center">
+<div style="font-size:11.5px;color:#a8b0bd">Add skill source</div>
+<div style="font:400 10px 'IBM Plex Mono',monospace;color:#5b6472;margin-top:3px">git · local path · built-in registry</div>
+</div>
+</div>
+</div>
+</sc-if>
+
+<sc-if value="{{ pgAnalytics }}" hint-placeholder-val="{{ true }}">
+<div style="padding:0 0 20px">
+<div style="display:grid;grid-template-columns:repeat(6,1fr);gap:1px;background:rgba(255,255,255,.07);border-bottom:1px solid rgba(255,255,255,.07)">
+<sc-for list="{{ kpis }}" as="k" hint-placeholder-count="6">
+<div style="background:#0c0f13;padding:14px 15px">
+<div style="font-size:10.5px;color:#7c8697">{{ k.label }}</div>
+<div style="font:600 20px 'IBM Plex Mono',monospace;letter-spacing:-.8px;color:{{ k.color }};margin-top:5px">{{ k.val }}</div>
+<div style="font:400 9.5px 'IBM Plex Mono',monospace;color:#69727f;margin-top:2px">{{ k.delta }} vs prev</div>
+</div>
+</sc-for>
+</div>
+<div style="padding:18px 20px;display:grid;grid-template-columns:1fr 1fr;gap:16px">
+<div style="border:1px solid rgba(255,255,255,.08);border-radius:9px;background:#0f1217;padding:15px">
+<div style="font:500 9px 'IBM Plex Mono',monospace;letter-spacing:.09em;color:#5b6472">TASKS COMPLETED · 7 DAYS</div>
+<div style="display:flex;align-items:flex-end;gap:14px;height:180px;margin-top:18px">
+<sc-for list="{{ chart }}" as="b" hint-placeholder-count="7">
+<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:7px">
+<span style="font:400 9.5px 'IBM Plex Mono',monospace;color:#69727f">{{ b.val }}</span>
+<div style="width:100%;display:flex;flex-direction:column;justify-content:flex-end;gap:2px">
+<div style="height:{{ b.failH }};border-radius:2px 2px 0 0;background:rgba(248,113,113,.55)"></div>
+<div style="height:{{ b.okH }};border-radius:0 0 2px 2px;background:linear-gradient(180deg,#2ee6cf,rgba(46,230,207,.35));box-shadow:0 0 14px rgba(46,230,207,.25)"></div>
+</div>
+<span style="font:400 9.5px 'IBM Plex Mono',monospace;color:#5b6472">{{ b.d }}</span>
+</div>
+</sc-for>
+</div>
+</div>
+<div style="border:1px solid rgba(255,255,255,.08);border-radius:9px;background:#0f1217;padding:15px">
+<div style="font:500 9px 'IBM Plex Mono',monospace;letter-spacing:.09em;color:#5b6472;margin-bottom:12px">AGENT PERFORMANCE</div>
+<div style="display:grid;grid-template-columns:1fr 46px 80px 70px 60px;gap:0;padding-bottom:7px;border-bottom:1px solid rgba(255,255,255,.07);font:500 9px 'IBM Plex Mono',monospace;color:#5b6472"><span>AGENT</span><span>DONE</span><span>SUCCESS</span><span>AVG</span><span>COST</span></div>
+<sc-for list="{{ perf }}" as="p" hint-placeholder-count="6">
+<div style="display:grid;grid-template-columns:1fr 46px 80px 70px 60px;align-items:center;padding:9px 0;border-bottom:1px solid rgba(255,255,255,.045)">
+<div style="display:flex;align-items:center;gap:8px;min-width:0"><span style="width:22px;height:22px;flex:none;border-radius:6px;background:{{ p.bgc }};display:flex;align-items:center;justify-content:center;font:600 9px 'IBM Plex Mono',monospace;color:{{ p.color }}">{{ p.initials }}</span><div style="min-width:0"><div style="font-size:11.5px;font-weight:600">{{ p.name }}</div><div style="font-size:9.5px;color:#7c8697">{{ p.role }}</div></div></div>
+<span style="font:400 11px 'IBM Plex Mono',monospace;color:#a8b0bd">{{ p.done }}</span>
+<div style="display:flex;align-items:center;gap:6px"><span style="width:34px;height:3px;border-radius:2px;background:rgba(255,255,255,.08);overflow:hidden"><span style="display:block;height:100%;width:{{ p.pw }};background:{{ p.rateColor }}"></span></span><span style="font:400 10px 'IBM Plex Mono',monospace;color:{{ p.rateColor }}">{{ p.rate }}</span></div>
+<span style="font:400 10.5px 'IBM Plex Mono',monospace;color:#7c8697">{{ p.avg }}</span>
+<span style="font:400 10.5px 'IBM Plex Mono',monospace;color:#e7eaf0">{{ p.cost }}</span>
+</div>
+</sc-for>
+</div>
+</div>
+</div>
+</sc-if>
+
+<sc-if value="{{ pgSettings }}" hint-placeholder-val="{{ true }}">
+<div style="padding:18px 20px;display:flex;flex-direction:column;gap:18px;max-width:980px">
+<div>
+<div style="font:500 9px 'IBM Plex Mono',monospace;letter-spacing:.09em;color:#5b6472;margin-bottom:11px">PROVIDER ADAPTERS</div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+<sc-for list="{{ providers }}" as="p" hint-placeholder-count="4">
+<div style="border:1px solid rgba(255,255,255,.08);border-radius:8px;background:#0f1217;padding:13px 14px;display:flex;align-items:center;gap:12px">
+<span style="width:8px;height:8px;flex:none;border-radius:50%;background:{{ p.color }};box-shadow:0 0 9px {{ p.color }}"></span>
+<div style="flex:1;min-width:0">
+<div style="display:flex;align-items:baseline;gap:8px"><span style="font-size:13px;font-weight:600">{{ p.name }}</span><span style="font:500 9px 'IBM Plex Mono',monospace;color:{{ p.color }}">{{ p.statusLabel }}</span></div>
+<div style="font:400 10px 'IBM Plex Mono',monospace;color:#7c8697;margin-top:3px">{{ p.adapter }} · {{ p.models }}</div>
+<div style="font-size:10px;color:#69727f;margin-top:2px">{{ p.agents }}</div>
+</div>
+<span style="flex:none;padding:5px 11px;border-radius:6px;border:1px solid rgba(255,255,255,.12);color:#a8b0bd;font-size:11px;cursor:pointer" style-hover="border-color:rgba(255,255,255,.3);color:#fff">{{ p.cta }}</span>
+</div>
+</sc-for>
+</div>
+</div>
+<div>
+<div style="font:500 9px 'IBM Plex Mono',monospace;letter-spacing:.09em;color:#5b6472;margin-bottom:11px">AGENT PERMISSIONS</div>
+<div style="border:1px solid rgba(255,255,255,.08);border-radius:8px;overflow:hidden">
+<div style="display:grid;grid-template-columns:190px repeat(6,1fr);background:#0f1217;border-bottom:1px solid rgba(255,255,255,.08);padding:9px 14px;font:500 9px 'IBM Plex Mono',monospace;letter-spacing:.05em;color:#5b6472">
+<span>ROLE</span>
+<sc-for list="{{ permCols }}" as="c" hint-placeholder-count="6"><span>{{ c.label }}</span></sc-for>
+</div>
+<sc-for list="{{ permRows }}" as="r" hint-placeholder-count="5">
+<div style="display:grid;grid-template-columns:190px repeat(6,1fr);align-items:center;padding:9px 14px;border-bottom:1px solid rgba(255,255,255,.05)">
+<span style="font-size:11.5px;color:#dbe1ea">{{ r.role }}</span>
+<sc-for list="{{ r.cells }}" as="c" hint-placeholder-count="6">
+<span style="width:20px;height:20px;border-radius:5px;background:{{ c.bg }};display:flex;align-items:center;justify-content:center;font:600 10px 'IBM Plex Mono',monospace;color:{{ c.fg }}">{{ c.glyph }}</span>
+</sc-for>
+</div>
+</sc-for>
+</div>
+</div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+<div style="border:1px solid rgba(255,255,255,.08);border-radius:8px;background:#0f1217;padding:14px">
+<div style="font:500 9px 'IBM Plex Mono',monospace;letter-spacing:.09em;color:#5b6472;margin-bottom:11px">REALTIME TRANSPORT</div>
+<div style="display:flex;align-items:center;gap:9px;padding:9px 11px;border:1px solid rgba(46,230,207,.35);border-radius:7px;background:rgba(46,230,207,.07)">
+<span style="width:12px;height:12px;border-radius:50%;border:3px solid #2ee6cf"></span>
+<div><div style="font-size:12px;font-weight:500">Server-Sent Events</div><div style="font-size:10px;color:#7c8697;margin-top:1px">one-way event fan-out · simplest for the MVP</div></div>
+</div>
+<div style="display:flex;align-items:center;gap:9px;padding:9px 11px;border:1px solid rgba(255,255,255,.09);border-radius:7px;margin-top:7px">
+<span style="width:12px;height:12px;border-radius:50%;border:1px solid rgba(255,255,255,.28)"></span>
+<div><div style="font-size:12px;color:#a8b0bd">WebSocket</div><div style="font-size:10px;color:#69727f;margin-top:1px">needed later for interactive agent sessions</div></div>
+</div>
+</div>
+<div style="border:1px solid rgba(248,113,113,.22);border-radius:8px;background:rgba(248,113,113,.04);padding:14px">
+<div style="font:500 9px 'IBM Plex Mono',monospace;letter-spacing:.09em;color:#f87171;margin-bottom:11px">DANGER ZONE</div>
+<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0"><div><div style="font-size:12px">Stop all agents</div><div style="font-size:10px;color:#7c8697;margin-top:1px">checkpoints are kept</div></div><span style="padding:5px 11px;border-radius:6px;border:1px solid rgba(248,113,113,.35);color:#f87171;font-size:11px;cursor:pointer">Stop all</span></div>
+<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-top:1px solid rgba(255,255,255,.06)"><div><div style="font-size:12px">Reset seeded demo data</div><div style="font-size:10px;color:#7c8697;margin-top:1px">re-seeds 8 agents and 12 tasks</div></div><span style="padding:5px 11px;border-radius:6px;border:1px solid rgba(255,255,255,.14);color:#a8b0bd;font-size:11px;cursor:pointer">Reset</span></div>
+</div>
+</div>
+</div>
+</sc-if>
+
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+<p class="dv-next">Try next: "add the agent detail page as a tenth route" · "make Tasks drag-and-droppable" · "put <a class="dv-oid" href="#2a">2a</a>'s 3D floor in as a Floor route"</p>
+</section>
+
+<section class="dv-turn" id="t2">
+<div class="dv-thd"><a class="dv-tid" href="#t2">2</a><span class="dv-tname">The Floor — a 3D live office you can watch, rooted in <a class="dv-oid" href="#1b">1b</a>'s cable language</span></div>
+<div class="dv-opts">
+<div class="dv-opt" id="2a">
+<div class="dv-olabel"><a class="dv-oid" href="#2a">2a</a>Isometric floor: desks, screens, glowing chat links, agents talking and passing work. Drag the angle slider, click a desk</div>
+<div class="dv-card" style="width:1340px">
+<div style="height:900px;display:flex;flex-direction:column;font-family:'IBM Plex Sans',sans-serif;color:#e7eaf0;background:#07080b">
+
+<div style="height:54px;flex:none;border-bottom:1px solid rgba(255,255,255,.07);display:flex;align-items:center;gap:16px;padding:0 18px;background:#0a0c10">
+<div style="display:flex;align-items:center;gap:9px"><div style="width:20px;height:20px;border-radius:6px;background:linear-gradient(160deg,#2ee6cf,#7b8cff);box-shadow:0 0 14px rgba(46,230,207,.4)"></div><span style="font-size:13.5px;font-weight:600">The Floor</span></div>
+<span style="font:400 11px 'IBM Plex Mono',monospace;color:#5b6472">checkout-platform · 8 agents · live</span>
+<div style="flex:1"></div>
+<div style="display:flex;align-items:center;gap:9px">
+<span style="font:400 10px 'IBM Plex Mono',monospace;color:#5b6472">ANGLE</span>
+<input type="range" min="0" max="70" value="{{ yaw }}" onChange="{{ onYaw }}" style="width:120px"></input>
+<span style="font:500 10px 'IBM Plex Mono',monospace;color:#a8b0bd;width:30px">{{ yawLabel }}</span>
+<div style="display:flex;gap:2px;margin-left:6px">
+<span onClick="{{ zoomOut }}" style="width:24px;height:24px;display:flex;align-items:center;justify-content:center;border:1px solid rgba(255,255,255,.1);border-radius:5px;color:#a8b0bd;font-size:13px;cursor:pointer" style-hover="border-color:rgba(255,255,255,.3);color:#fff">−</span>
+<span onClick="{{ zoomIn }}" style="width:24px;height:24px;display:flex;align-items:center;justify-content:center;border:1px solid rgba(255,255,255,.1);border-radius:5px;color:#a8b0bd;font-size:13px;cursor:pointer" style-hover="border-color:rgba(255,255,255,.3);color:#fff">+</span>
+</div>
+<span style="font:400 10px 'IBM Plex Mono',monospace;color:#5b6472;width:34px">{{ zoomLabel }}</span>
+<div onClick="{{ toggleBeams }}" style="padding:5px 10px;border:1px solid {{ beamsBdc }};border-radius:6px;font:500 10.5px 'IBM Plex Mono',monospace;color:{{ beamsFg }};cursor:pointer">{{ beamsLabel }}</div>
+</div>
+</div>
+
+<div style="flex:1;display:flex;min-height:0">
+<div style="flex:1;min-width:0;position:relative;overflow:hidden;background:radial-gradient(70% 60% at 50% 32%,#101725 0%,#0a0c11 55%,#07080b 100%)">
+<div style="position:absolute;inset:0;background-image:radial-gradient(rgba(255,255,255,.05) 1px,transparent 1px);background-size:30px 30px;opacity:.5"></div>
+
+<div style="position:absolute;inset:0;perspective:1500px;display:flex;align-items:center;justify-content:center;padding-bottom:110px;box-sizing:border-box">
+<div style="position:relative;width:900px;height:580px;transform-style:preserve-3d;transform:{{ worldT }};transition:transform .25s ease-out">
+
+<div style="position:absolute;inset:-40px;border-radius:22px;background:linear-gradient(155deg,#0e1319,#0a0d12);box-shadow:0 0 0 1px rgba(255,255,255,.06),0 40px 90px rgba(0,0,0,.7)"></div>
+<div style="position:absolute;inset:-40px;border-radius:22px;background-image:linear-gradient(rgba(255,255,255,.028) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.028) 1px,transparent 1px);background-size:45px 45px"></div>
+
+<sc-for list="{{ officeRooms }}" as="r" hint-placeholder-count="5">
+<div style="position:absolute;left:{{ r.left }};top:{{ r.top }};width:{{ r.w }};height:{{ r.h }};box-sizing:border-box;border:1px dashed {{ r.edge }};border-radius:12px;background:{{ r.tint }}">
+<div style="position:absolute;left:12px;top:9px;transform:{{ r.rot }};transform-origin:0 50%;font:600 9px 'IBM Plex Mono',monospace;letter-spacing:.14em;color:{{ r.edge }}">{{ r.label }}</div>
+</div>
+</sc-for>
+
+<sc-for list="{{ beams }}" as="b" hint-placeholder-count="8">
+<div style="position:absolute;left:{{ b.left }};top:{{ b.top }};width:{{ b.w }};height:{{ b.h }};transform-origin:0 50%;transform:{{ b.transform }};opacity:{{ b.opacity }};transition:opacity .3s">
+<div style="position:absolute;inset:-5px 0;background:{{ b.col }};filter:blur(7px);opacity:{{ b.glowOpacity }};border-radius:6px"></div>
+<div class="{{ b.anim }}" style="position:absolute;inset:0;border-radius:2px;background-image:repeating-linear-gradient(90deg,transparent 0 14px,{{ b.col }} 14px 26px);background-size:34px 100%"></div>
+</div>
+</sc-for>
+
+<sc-for list="{{ deskNodes }}" as="d" hint-placeholder-count="8">
+<div style="position:absolute;left:{{ d.left }};top:{{ d.top }};width:124px;height:68px;transform-style:preserve-3d">
+<div style="position:absolute;left:-26px;top:-22px;width:176px;height:112px;background:{{ d.haloBg }};opacity:{{ d.haloOpacity }};border-radius:50%"></div>
+<div onClick="{{ d.onClick }}" style="position:absolute;inset:0;border-radius:9px;box-sizing:border-box;border:1px solid {{ d.slabEdge }};background:{{ d.slabBg }};box-shadow:{{ d.slabGlow }};cursor:pointer">
+<div style="position:absolute;left:8px;right:8px;bottom:7px;height:3px;border-radius:2px;background:rgba(255,255,255,.07);overflow:hidden"><div style="height:100%;width:{{ d.pw }};background:{{ d.color }}"></div></div>
+</div>
+<div style="position:absolute;left:62px;top:34px;width:0;height:0;transform-style:preserve-3d;transform:{{ billboardT }}">
+<div style="position:absolute;left:-92px;bottom:6px;width:184px;display:flex;flex-direction:column;align-items:center;gap:5px">
+<div class="rise" style="max-width:184px;padding:6px 9px;border-radius:9px;border:1px solid {{ d.bubbleEdge }};background:rgba(10,13,18,.96);box-shadow:0 6px 20px rgba(0,0,0,.6);font-size:10.5px;line-height:1.35;color:#dbe1ea;display:{{ d.bubbleDisplay }}">{{ d.bubble }}</div>
+<div style="width:150px;box-sizing:border-box;border:1px solid {{ d.screenEdge }};border-radius:7px;background:{{ d.screenBg }};box-shadow:{{ d.screenGlow }};padding:6px 8px">
+<div style="display:flex;align-items:center;gap:5px">
+<span class="{{ d.dotAnim }}" style="width:5px;height:5px;border-radius:50%;background:{{ d.color }}"></span>
+<span style="font:500 8.5px 'IBM Plex Mono',monospace;letter-spacing:.05em;color:{{ d.color }}">{{ d.statusLabel }}</span>
+<span style="margin-left:auto;font:400 8.5px 'IBM Plex Mono',monospace;color:#5b6472">{{ d.pw }}</span>
+</div>
+<div style="font-size:10px;color:#c8cfda;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ d.task }}</div>
+<div style="font:400 8.5px 'IBM Plex Mono',monospace;color:#69727f;margin-top:2px">{{ d.skill }}</div>
+</div>
+<div class="floaty" style="display:flex;align-items:center;gap:7px;padding:4px 9px 4px 5px;border-radius:20px;border:1px solid rgba(255,255,255,.1);background:rgba(10,13,18,.92)">
+<span style="width:20px;height:20px;border-radius:50%;background:{{ d.avatarBg }};border:1px solid {{ d.avatarEdge }};display:flex;align-items:center;justify-content:center;font:600 8.5px 'IBM Plex Mono',monospace;color:{{ d.color }}">{{ d.initials }}</span>
+<span style="font-size:11px;font-weight:600;color:{{ d.nameFg }}">{{ d.name }}</span>
+<span style="font:400 8.5px 'IBM Plex Mono',monospace;color:#5b6472">{{ d.shortRole }}</span>
+<span style="width:5px;height:5px;border-radius:50%;background:#2ee6cf;opacity:{{ d.earOpacity }};box-shadow:0 0 7px #2ee6cf"></span>
+</div>
+</div>
+</div>
+</div>
+</sc-for>
+</div>
+</div>
+
+<div style="position:absolute;left:16px;bottom:14px;display:flex;align-items:center;gap:10px;padding:9px 13px;border:1px solid rgba(255,255,255,.09);border-radius:9px;background:rgba(9,11,15,.9);max-width:660px">
+<span style="flex:none;width:6px;height:6px;border-radius:50%;background:{{ talkColor }};box-shadow:0 0 8px {{ talkColor }}"></span>
+<span style="flex:none;white-space:nowrap;font:600 10.5px 'IBM Plex Mono',monospace;color:{{ talkColor }}">{{ talkFrom }} → {{ talkTo }}</span>
+<span style="font-size:11.5px;color:#c8cfda;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ talkNow }}</span>
+</div>
+<div style="position:absolute;right:16px;bottom:14px;display:flex;gap:12px;padding:8px 12px;border:1px solid rgba(255,255,255,.08);border-radius:8px;background:rgba(9,11,15,.85);font:400 10px 'IBM Plex Mono',monospace;color:#7c8697">
+<span>click a desk</span><span>slider rotates the floor</span><span>bright link = talking now</span>
+</div>
+</div>
+
+<div style="width:340px;flex:none;border-left:1px solid rgba(255,255,255,.07);background:#0a0c10;display:flex;flex-direction:column;min-height:0">
+<div style="padding:15px 16px;border-bottom:1px solid rgba(255,255,255,.07)">
+<div style="display:flex;align-items:flex-start;gap:10px">
+<div style="width:34px;height:34px;flex:none;border-radius:9px;background:{{ dsel.bgc }};border:1px solid {{ dsel.bdc }};display:flex;align-items:center;justify-content:center;font:600 12px 'IBM Plex Mono',monospace;color:{{ dsel.color }}">{{ dsel.initials }}</div>
+<div style="flex:1;min-width:0">
+<div style="font-size:14.5px;font-weight:600;letter-spacing:-.2px">{{ dsel.label }}</div>
+<div style="font-size:11px;color:#7c8697;margin-top:1px">{{ dsel.sub }}</div>
+</div>
+<div style="display:flex;align-items:center;gap:5px;padding:3px 8px 3px 6px;border-radius:20px;background:{{ dsel.bgc }};border:1px solid {{ dsel.bdc }}"><span class="{{ dsel.dotAnim }}" style="width:5px;height:5px;border-radius:50%;background:{{ dsel.color }}"></span><span style="font:500 9.5px 'IBM Plex Mono',monospace;color:{{ dsel.color }}">{{ dsel.statusLabel }}</span></div>
+</div>
+<div style="display:flex;align-items:baseline;gap:8px;margin-top:12px"><span style="font:500 10px 'IBM Plex Mono',monospace;color:#5b6472">{{ dsel.taskId }}</span><span style="font-size:12.5px">{{ dsel.task }}</span></div>
+<div style="height:4px;border-radius:2px;background:rgba(255,255,255,.07);margin-top:8px;overflow:hidden"><div style="height:100%;width:{{ dsel.pw }};background:{{ dsel.color }};box-shadow:0 0 10px {{ dsel.color }}"></div></div>
+<div style="display:flex;gap:6px;margin-top:12px">
+<div onClick="{{ dsel.onToggle }}" style="flex:1;text-align:center;padding:6px 0;border-radius:6px;border:1px solid {{ dsel.bdc }};background:{{ dsel.bgc }};color:{{ dsel.color }};font-size:11.5px;font-weight:500;cursor:pointer" style-hover="filter:brightness(1.35)">{{ dsel.toggleLabel }}</div>
+<div style="flex:1;text-align:center;padding:6px 0;border-radius:6px;border:1px solid rgba(255,255,255,.1);color:#a8b0bd;font-size:11.5px;cursor:pointer" style-hover="border-color:rgba(255,255,255,.25);color:#fff">Walk over</div>
+</div>
+</div>
+
+<div style="flex:1;min-height:0;overflow:hidden;padding:14px 16px;display:flex;flex-direction:column">
+<div style="display:flex;align-items:center;gap:7px;margin-bottom:10px"><span class="pulsedot" style="width:5px;height:5px;border-radius:50%;background:#2ee6cf"></span><span style="font:500 9px 'IBM Plex Mono',monospace;letter-spacing:.09em;color:#5b6472">FLOOR CHATTER · AGENT ↔ AGENT</span></div>
+<div style="flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:9px;mask-image:linear-gradient(180deg,#000 0,#000 88%,transparent 100%)">
+<sc-for list="{{ transcript }}" as="c" hint-placeholder-count="6">
+<div style="display:flex;gap:9px">
+<span style="flex:none;font:400 10px 'IBM Plex Mono',monospace;color:#5b6472;padding-top:2px">{{ c.t }}</span>
+<div style="min-width:0">
+<div style="display:flex;align-items:baseline;gap:6px"><span style="font:600 10.5px 'IBM Plex Mono',monospace;color:{{ c.color }}">{{ c.from }} → {{ c.to }}</span><span style="font:400 9px 'IBM Plex Mono',monospace;color:#5b6472">{{ c.kind }}</span></div>
+<div style="font-size:11.5px;line-height:1.4;color:#c8cfda;margin-top:2px">{{ c.text }}</div>
+</div>
+</div>
+</sc-for>
+</div>
+</div>
+
+<div style="border-top:1px solid rgba(255,255,255,.07);padding:13px 16px">
+<div style="font:500 9px 'IBM Plex Mono',monospace;letter-spacing:.09em;color:#5b6472;margin-bottom:9px">CHANNEL VOLUME</div>
+<div style="display:flex;flex-direction:column;gap:7px">
+<sc-for list="{{ channels }}" as="ch" hint-placeholder-count="6">
+<div style="display:flex;align-items:center;gap:9px">
+<span style="width:112px;flex:none;font:400 10px 'IBM Plex Mono',monospace;color:#a8b0bd;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ ch.label }}</span>
+<span style="flex:1;height:4px;border-radius:2px;background:rgba(255,255,255,.06);overflow:hidden"><span style="display:block;height:100%;width:{{ ch.pw }};background:{{ ch.color }};box-shadow:0 0 8px {{ ch.color }}"></span></span>
+<span style="width:24px;text-align:right;font:400 9.5px 'IBM Plex Mono',monospace;color:#69727f">{{ ch.msgs }}</span>
+</div>
+</sc-for>
+</div>
+</div>
+
+<div style="border-top:1px solid rgba(255,255,255,.07);padding:12px 16px;display:flex;align-items:center;gap:9px">
+<span style="font:500 11px 'IBM Plex Mono',monospace;color:#2ee6cf">say ›</span>
+<input value="{{ draft }}" onChange="{{ onDraft }}" onKeyDown="{{ onDraftKey }}" placeholder="Interrupt the floor…" style="flex:1;border:0;outline:none;background:transparent;color:#e7eaf0;font-family:'IBM Plex Sans',sans-serif;font-size:12px"></input>
+<span onClick="{{ onSend }}" style="padding:4px 11px;border-radius:5px;border:1px solid rgba(46,230,207,.35);background:rgba(46,230,207,.1);color:#2ee6cf;font:500 10.5px 'IBM Plex Mono',monospace;cursor:pointer">↵</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+<p class="dv-next">Try next: "add a camera that follows the active handoff in <a class="dv-oid" href="#2a">2a</a>" · "give each room a live meeting table" · "merge <a class="dv-oid" href="#2a">2a</a>'s floor with <a class="dv-oid" href="#1c">1c</a>'s event stream"</p>
+</section>
+
+<section class="dv-turn" id="t1">
+<div class="dv-thd"><a class="dv-tid" href="#t1">1</a><span class="dv-tname">AI Team OS — three directions for the control surface</span></div>
+<div class="dv-opts">
+
+<div class="dv-opt" id="1a">
+<div class="dv-olabel"><a class="dv-oid" href="#1a">1a</a>Control Room — dense agent grid, status-first, everything clickable</div>
+<div class="dv-card" style="width:1300px">
+<div style="display:flex;height:840px;font-family:'IBM Plex Sans',sans-serif;color:#e7eaf0;background:#0a0c0f">
+
+<div style="width:212px;flex:none;border-right:1px solid rgba(255,255,255,.07);background:#0c0f13;display:flex;flex-direction:column">
+<div style="padding:16px 16px 14px;border-bottom:1px solid rgba(255,255,255,.07);display:flex;align-items:center;gap:9px">
+<div style="width:22px;height:22px;border-radius:6px;background:linear-gradient(160deg,#2ee6cf,#7b8cff);box-shadow:0 0 14px rgba(46,230,207,.35)"></div>
+<div><div style="font-size:12.5px;font-weight:600;letter-spacing:-.1px">AI Team OS</div><div style="font:400 9.5px 'IBM Plex Mono',monospace;color:#69727f;margin-top:1px">checkout-platform</div></div>
+</div>
+<div style="padding:10px 8px;display:flex;flex-direction:column;gap:1px">
+<div style="display:flex;align-items:center;gap:9px;padding:7px 9px;border-radius:6px;background:rgba(46,230,207,.09);color:#e7eaf0;font-size:12.5px;font-weight:500;box-shadow:inset 2px 0 0 #2ee6cf"><span style="width:5px;height:5px;border-radius:50%;background:#2ee6cf"></span>Overview</div>
+<div style="display:flex;align-items:center;justify-content:space-between;padding:7px 9px;border-radius:6px;color:#8a929e;font-size:12.5px" style-hover="background:rgba(255,255,255,.045);color:#e7eaf0"><span>Agents</span><span style="font:500 9.5px 'IBM Plex Mono',monospace;color:#69727f">8</span></div>
+<div style="display:flex;align-items:center;justify-content:space-between;padding:7px 9px;border-radius:6px;color:#8a929e;font-size:12.5px" style-hover="background:rgba(255,255,255,.045);color:#e7eaf0"><span>Tasks</span><span style="font:500 9.5px 'IBM Plex Mono',monospace;color:#69727f">12</span></div>
+<div style="display:flex;align-items:center;justify-content:space-between;padding:7px 9px;border-radius:6px;color:#8a929e;font-size:12.5px" style-hover="background:rgba(255,255,255,.045);color:#e7eaf0"><span>Graph</span><span style="font:500 9.5px 'IBM Plex Mono',monospace;color:#69727f">5</span></div>
+<div style="display:flex;align-items:center;justify-content:space-between;padding:7px 9px;border-radius:6px;color:#8a929e;font-size:12.5px" style-hover="background:rgba(255,255,255,.045);color:#e7eaf0"><span>Activity</span><span style="width:5px;height:5px;border-radius:50%;background:#f5b34a"></span></div>
+<div style="height:9px"></div>
+<div style="padding:6px 9px;font:500 9px 'IBM Plex Mono',monospace;letter-spacing:.09em;color:#5b6472">WORKSPACE</div>
+<div style="padding:7px 9px;border-radius:6px;color:#8a929e;font-size:12.5px" style-hover="background:rgba(255,255,255,.045);color:#e7eaf0">Projects</div>
+<div style="padding:7px 9px;border-radius:6px;color:#8a929e;font-size:12.5px" style-hover="background:rgba(255,255,255,.045);color:#e7eaf0">Skills</div>
+<div style="padding:7px 9px;border-radius:6px;color:#8a929e;font-size:12.5px" style-hover="background:rgba(255,255,255,.045);color:#e7eaf0">Analytics</div>
+<div style="padding:7px 9px;border-radius:6px;color:#8a929e;font-size:12.5px" style-hover="background:rgba(255,255,255,.045);color:#e7eaf0">Settings</div>
+</div>
+<div style="margin-top:auto;padding:12px;border-top:1px solid rgba(255,255,255,.07)">
+<div style="font:500 9px 'IBM Plex Mono',monospace;letter-spacing:.09em;color:#5b6472;margin-bottom:7px">RUNTIME</div>
+<div style="display:flex;flex-direction:column;gap:5px">
+<div style="display:flex;align-items:center;justify-content:space-between;font:400 10.5px 'IBM Plex Mono',monospace;color:#8a929e"><span style="display:flex;align-items:center;gap:6px"><span class="pulsedot" style="width:5px;height:5px;border-radius:50%;background:#2ee6cf"></span>Claude Code</span><span style="color:#69727f">5</span></div>
+<div style="display:flex;align-items:center;justify-content:space-between;font:400 10.5px 'IBM Plex Mono',monospace;color:#8a929e"><span style="display:flex;align-items:center;gap:6px"><span style="width:5px;height:5px;border-radius:50%;background:#7b8cff"></span>Cursor</span><span style="color:#69727f">3</span></div>
+</div>
+<div style="margin-top:11px;padding-top:10px;border-top:1px solid rgba(255,255,255,.06);display:flex;justify-content:space-between;font:400 10.5px 'IBM Plex Mono',monospace"><span style="color:#69727f">spend / today</span><span style="color:#e7eaf0">$8.43</span></div>
+</div>
+</div>
+
+<div style="flex:1;min-width:0;display:flex;flex-direction:column">
+<div style="height:52px;flex:none;border-bottom:1px solid rgba(255,255,255,.07);display:flex;align-items:center;gap:14px;padding:0 18px;background:#0c0f13">
+<div style="font-size:14px;font-weight:600;letter-spacing:-.2px">Overview</div>
+<div style="font:400 11px 'IBM Plex Mono',monospace;color:#69727f">{{ clock }} · live</div>
+<div style="flex:1"></div>
+<div style="display:flex;align-items:center;gap:7px;padding:5px 9px;border:1px solid rgba(255,255,255,.09);border-radius:6px;font:400 11px 'IBM Plex Mono',monospace;color:#8a929e" style-hover="border-color:rgba(255,255,255,.2);color:#e7eaf0">Search or run command <span style="padding:1px 4px;border:1px solid rgba(255,255,255,.14);border-radius:3px;font-size:9.5px">⌘K</span></div>
+<div onClick="{{ pauseAll }}" style="padding:6px 11px;border:1px solid rgba(245,179,74,.3);border-radius:6px;background:rgba(245,179,74,.08);color:#f5b34a;font-size:11.5px;font-weight:500;cursor:pointer" style-hover="background:rgba(245,179,74,.16)">Pause all</div>
+</div>
+
+<div style="display:grid;grid-template-columns:repeat(6,1fr);gap:1px;background:rgba(255,255,255,.07);border-bottom:1px solid rgba(255,255,255,.07)">
+<sc-for list="{{ summary }}" as="s" hint-placeholder-count="6">
+<div onClick="{{ s.onClick }}" style="background:#0c0f13;padding:13px 15px;cursor:pointer" style-hover="background:#11151b">
+<div style="display:flex;align-items:baseline;gap:7px"><span style="font:600 22px 'IBM Plex Mono',monospace;letter-spacing:-1px;color:{{ s.color }}">{{ s.count }}</span><span style="width:5px;height:5px;border-radius:50%;background:{{ s.color }};margin-bottom:5px"></span></div>
+<div style="font-size:11px;color:#8a929e;margin-top:2px">{{ s.label }}</div>
+</div>
+</sc-for>
+</div>
+
+<div style="flex:1;overflow:hidden;padding:16px 18px;display:flex;flex-direction:column;gap:13px">
+<div style="display:flex;align-items:center;gap:8px">
+<div style="font:500 9.5px 'IBM Plex Mono',monospace;letter-spacing:.09em;color:#5b6472">TEAM · 8 AGENTS</div>
+<div style="flex:1;height:1px;background:rgba(255,255,255,.07)"></div>
+<div style="font:400 10.5px 'IBM Plex Mono',monospace;color:#69727f">{{ filterLabel }}</div>
+</div>
+<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:11px">
+<sc-for list="{{ cards }}" as="c" hint-placeholder-count="8">
+<div onClick="{{ c.onOpen }}" style="border:1px solid {{ c.bdc }};border-radius:8px;background:#0f1217;padding:12px 13px 11px;display:flex;flex-direction:column;gap:9px;cursor:pointer;box-shadow:{{ c.shadow }}" style-hover="border-color:rgba(255,255,255,.2)">
+<div style="display:flex;align-items:flex-start;gap:9px">
+<div style="width:28px;height:28px;flex:none;border-radius:7px;background:{{ c.bgc }};border:1px solid {{ c.bdc }};display:flex;align-items:center;justify-content:center;font:600 11px 'IBM Plex Mono',monospace;color:{{ c.color }}">{{ c.initials }}</div>
+<div style="min-width:0;flex:1">
+<div style="font-size:13px;font-weight:600;letter-spacing:-.1px">{{ c.name }}</div>
+<div style="font-size:10.5px;color:#7c8697;margin-top:1px">{{ c.role }}</div>
+</div>
+<div style="display:flex;align-items:center;gap:5px;padding:3px 7px 3px 6px;border-radius:20px;background:{{ c.bgc }};border:1px solid {{ c.bdc }}">
+<span class="{{ c.dotAnim }}" style="width:5px;height:5px;border-radius:50%;background:{{ c.color }}"></span>
+<span style="font:500 9.5px 'IBM Plex Mono',monospace;letter-spacing:.02em;color:{{ c.color }}">{{ c.statusLabel }}</span>
+</div>
+</div>
+<div style="display:flex;flex-direction:column;gap:6px">
+<div style="display:flex;align-items:baseline;gap:7px">
+<span style="font:500 10px 'IBM Plex Mono',monospace;color:#5b6472">{{ c.taskId }}</span>
+<span style="font-size:11.5px;color:#c8cfda;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ c.task }}</span>
+</div>
+<div style="height:3px;border-radius:2px;background:rgba(255,255,255,.07);overflow:hidden">
+<div style="height:100%;width:{{ c.pw }};background:{{ c.color }};box-shadow:0 0 8px {{ c.color }}"></div>
+</div>
+<div style="display:flex;align-items:center;justify-content:space-between;font:400 10px 'IBM Plex Mono',monospace;color:#69727f">
+<span>{{ c.step }}</span><span>{{ c.pw }}</span>
+</div>
+</div>
+<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+<span style="padding:2px 6px;border-radius:4px;background:rgba(123,140,255,.1);border:1px solid rgba(123,140,255,.2);font:500 9.5px 'IBM Plex Mono',monospace;color:#9aa6ff">{{ c.skill }}</span>
+<span style="padding:2px 6px;border-radius:4px;background:rgba(255,255,255,.05);font:400 9.5px 'IBM Plex Mono',monospace;color:#7c8697">q:{{ c.queue }}</span>
+<span style="padding:2px 6px;border-radius:4px;background:rgba(255,255,255,.05);font:400 9.5px 'IBM Plex Mono',monospace;color:#7c8697">{{ c.provider }}</span>
+</div>
+<div style="display:flex;gap:5px;padding-top:2px;border-top:1px solid rgba(255,255,255,.06);margin-top:1px">
+<div onClick="{{ c.onToggle }}" style="flex:1;text-align:center;padding:5px 0;border-radius:5px;border:1px solid {{ c.bdc }};background:{{ c.bgc }};color:{{ c.color }};font-size:10.5px;font-weight:500;cursor:pointer" style-hover="filter:brightness(1.35)">{{ c.toggleLabel }}</div>
+<div onClick="{{ c.onMessage }}" style="flex:1;text-align:center;padding:5px 0;border-radius:5px;border:1px solid rgba(255,255,255,.09);color:#a8b0bd;font-size:10.5px;cursor:pointer" style-hover="border-color:rgba(255,255,255,.22);color:#fff">Message</div>
+<div style="width:28px;text-align:center;padding:5px 0;border-radius:5px;border:1px solid rgba(255,255,255,.09);color:#7c8697;font-size:10.5px;cursor:pointer" style-hover="border-color:rgba(248,113,113,.4);color:#f87171">■</div>
+</div>
+</div>
+</sc-for>
+</div>
+
+<div style="margin-top:auto;display:flex;gap:11px">
+<div style="flex:1;border:1px solid rgba(248,113,113,.22);border-radius:8px;background:rgba(248,113,113,.04);padding:11px 13px">
+<div style="display:flex;align-items:center;gap:7px;margin-bottom:8px"><span style="width:5px;height:5px;border-radius:50%;background:#f87171"></span><span style="font:500 9.5px 'IBM Plex Mono',monospace;letter-spacing:.09em;color:#f87171">BLOCKED · NEEDS YOU</span></div>
+<div style="display:flex;flex-direction:column;gap:6px">
+<div style="display:flex;align-items:center;gap:9px;font-size:11.5px;color:#c8cfda"><span style="font:500 10px 'IBM Plex Mono',monospace;color:#5b6472">TASK-147</span>Payment provider keys missing<span style="margin-left:auto;padding:2px 7px;border-radius:4px;border:1px solid rgba(248,113,113,.3);color:#f87171;font-size:10px;cursor:pointer">Resolve</span></div>
+<div style="display:flex;align-items:center;gap:9px;font-size:11.5px;color:#c8cfda"><span style="font:500 10px 'IBM Plex Mono',monospace;color:#5b6472">TASK-151</span>Waiting on human approval — security review<span style="margin-left:auto;padding:2px 7px;border-radius:4px;border:1px solid rgba(46,230,207,.3);color:#2ee6cf;font-size:10px;cursor:pointer">Review</span></div>
+</div>
+</div>
+<div style="width:340px;flex:none;border:1px solid rgba(255,255,255,.08);border-radius:8px;background:#0f1217;padding:11px 13px">
+<div style="display:flex;align-items:center;gap:7px;margin-bottom:8px"><span class="pulsedot" style="width:5px;height:5px;border-radius:50%;background:#2ee6cf"></span><span style="font:500 9.5px 'IBM Plex Mono',monospace;letter-spacing:.09em;color:#5b6472">LIVE EVENTS</span></div>
+<div style="display:flex;flex-direction:column;gap:5px">
+<sc-for list="{{ miniFeed }}" as="e" hint-placeholder-count="3">
+<div style="display:flex;gap:8px;font:400 10.5px 'IBM Plex Mono',monospace"><span style="flex:none;white-space:nowrap;color:#5b6472">{{ e.t }}</span><span style="min-width:0;color:{{ e.color }};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ e.text }}</span></div>
+</sc-for>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+
+<div class="dv-opt" id="1b">
+<div class="dv-olabel"><a class="dv-oid" href="#1b">1b</a>Live Wiring — the graph is the product; glowing cables carry work between agents</div>
+<div class="dv-card" style="width:1320px">
+<div style="height:840px;display:flex;flex-direction:column;font-family:'IBM Plex Sans',sans-serif;color:#e7eaf0;background:#08090c">
+<div style="height:52px;flex:none;border-bottom:1px solid rgba(255,255,255,.07);display:flex;align-items:center;gap:16px;padding:0 18px;background:#0b0d11">
+<div style="display:flex;align-items:center;gap:9px"><div style="width:20px;height:20px;border-radius:6px;background:linear-gradient(160deg,#2ee6cf,#7b8cff);box-shadow:0 0 14px rgba(46,230,207,.4)"></div><span style="font-size:13.5px;font-weight:600">Graph</span></div>
+<div style="display:flex;gap:2px;padding:2px;border:1px solid rgba(255,255,255,.08);border-radius:7px;background:#0f1217">
+<sc-for list="{{ modes }}" as="m" hint-placeholder-count="5">
+<div onClick="{{ m.onClick }}" style="padding:5px 11px;border-radius:5px;font-size:11.5px;font-weight:500;cursor:pointer;background:{{ m.bg }};color:{{ m.fg }};box-shadow:{{ m.shadow }}">{{ m.label }}</div>
+</sc-for>
+</div>
+<div style="flex:1"></div>
+<div style="display:flex;align-items:center;gap:13px;font:400 10.5px 'IBM Plex Mono',monospace;color:#7c8697">
+<span style="display:flex;align-items:center;gap:6px"><span class="pulsedot" style="width:5px;height:5px;border-radius:50%;background:#2ee6cf"></span>3 working</span>
+<span style="display:flex;align-items:center;gap:6px"><span style="width:5px;height:5px;border-radius:50%;background:#f5b34a"></span>1 waiting</span>
+<span style="display:flex;align-items:center;gap:6px"><span style="width:5px;height:5px;border-radius:50%;background:#f87171"></span>2 blocked</span>
+<span style="padding:4px 9px;border:1px solid rgba(255,255,255,.1);border-radius:5px;cursor:pointer" style-hover="border-color:rgba(255,255,255,.25);color:#e7eaf0">auto-layout · elk</span>
+</div>
+</div>
+
+<div style="flex:1;display:flex;min-height:0">
+<div style="flex:1;position:relative;min-width:0;overflow:hidden;background-color:#08090c;background-image:radial-gradient(rgba(255,255,255,.055) 1px,transparent 1px);background-size:26px 26px">
+<div style="position:absolute;inset:0;background:radial-gradient(60% 50% at 50% 20%,rgba(46,230,207,.07),transparent 70%)"></div>
+{{ cableLayer }}
+<sc-for list="{{ gnodes }}" as="n" hint-placeholder-count="12">
+<div onClick="{{ n.onClick }}" style="position:absolute;left:{{ n.left }};top:{{ n.top }};width:{{ n.w }};box-sizing:border-box;border:1px solid {{ n.bdc }};border-radius:8px;background:{{ n.panel }};padding:8px 10px;cursor:pointer;box-shadow:{{ n.shadow }}" style-hover="border-color:rgba(255,255,255,.28)">
+<div style="display:flex;align-items:center;gap:7px">
+<span class="{{ n.dotAnim }}" style="width:6px;height:6px;flex:none;border-radius:50%;background:{{ n.color }};box-shadow:0 0 8px {{ n.color }}"></span>
+<span style="font-size:12px;font-weight:600;letter-spacing:-.1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ n.label }}</span>
+</div>
+<div style="font-size:9.5px;color:#7c8697;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ n.sub }}</div>
+<div style="display:flex;align-items:center;gap:5px;margin-top:6px">
+<span style="font:500 8.5px 'IBM Plex Mono',monospace;letter-spacing:.04em;color:{{ n.color }}">{{ n.statusLabel }}</span>
+<span style="flex:1;height:2px;border-radius:1px;background:rgba(255,255,255,.08);overflow:hidden"><span style="display:block;height:100%;width:{{ n.pw }};background:{{ n.color }}"></span></span>
+</div>
+</div>
+</sc-for>
+<div style="position:absolute;left:14px;bottom:14px;display:flex;gap:14px;padding:8px 12px;border:1px solid rgba(255,255,255,.08);border-radius:7px;background:rgba(11,13,17,.85);font:400 10px 'IBM Plex Mono',monospace;color:#7c8697">
+<span>drag to pan</span><span>scroll to zoom</span><span>right-click node for actions</span>
+</div>
+</div>
+
+<div style="width:352px;flex:none;border-left:1px solid rgba(255,255,255,.07);background:#0b0d11;display:flex;flex-direction:column;min-height:0">
+<div style="padding:15px 16px;border-bottom:1px solid rgba(255,255,255,.07)">
+<div style="display:flex;align-items:flex-start;gap:10px">
+<div style="width:34px;height:34px;flex:none;border-radius:8px;background:{{ sel.bgc }};border:1px solid {{ sel.bdc }};display:flex;align-items:center;justify-content:center;font:600 12px 'IBM Plex Mono',monospace;color:{{ sel.color }}">{{ sel.initials }}</div>
+<div style="flex:1;min-width:0">
+<div style="font-size:14.5px;font-weight:600;letter-spacing:-.2px">{{ sel.label }}</div>
+<div style="font-size:11px;color:#7c8697;margin-top:1px">{{ sel.sub }}</div>
+</div>
+<div style="display:flex;align-items:center;gap:5px;padding:3px 8px 3px 6px;border-radius:20px;background:{{ sel.bgc }};border:1px solid {{ sel.bdc }}"><span class="{{ sel.dotAnim }}" style="width:5px;height:5px;border-radius:50%;background:{{ sel.color }}"></span><span style="font:500 9.5px 'IBM Plex Mono',monospace;color:{{ sel.color }}">{{ sel.statusLabel }}</span></div>
+</div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:13px">
+<div style="border:1px solid rgba(255,255,255,.07);border-radius:6px;padding:7px 9px"><div style="font:400 9px 'IBM Plex Mono',monospace;color:#5b6472">PROVIDER</div><div style="font-size:11.5px;margin-top:2px">{{ sel.provider }}</div></div>
+<div style="border:1px solid rgba(255,255,255,.07);border-radius:6px;padding:7px 9px"><div style="font:400 9px 'IBM Plex Mono',monospace;color:#5b6472">MODEL</div><div style="font-size:11.5px;margin-top:2px">{{ sel.model }}</div></div>
+</div>
+</div>
+
+<div style="padding:14px 16px;border-bottom:1px solid rgba(255,255,255,.07)">
+<div style="font:500 9px 'IBM Plex Mono',monospace;letter-spacing:.09em;color:#5b6472;margin-bottom:9px">CURRENT TASK</div>
+<div style="display:flex;align-items:baseline;gap:8px"><span style="font:500 10px 'IBM Plex Mono',monospace;color:#5b6472">{{ sel.taskId }}</span><span style="font-size:12.5px;font-weight:500">{{ sel.task }}</span></div>
+<div style="height:4px;border-radius:2px;background:rgba(255,255,255,.07);margin-top:9px;overflow:hidden"><div style="height:100%;width:{{ sel.pw }};background:{{ sel.color }};box-shadow:0 0 10px {{ sel.color }}"></div></div>
+<div style="display:flex;justify-content:space-between;font:400 10px 'IBM Plex Mono',monospace;color:#69727f;margin-top:5px"><span>{{ sel.step }}</span><span>{{ sel.pw }}</span></div>
+<div style="margin-top:12px;display:flex;flex-direction:column;gap:6px">
+<sc-for list="{{ checkpoints }}" as="cp" hint-placeholder-count="6">
+<div style="display:flex;align-items:center;gap:8px;font-size:11.5px;color:{{ cp.fg }}"><span style="font:500 11px 'IBM Plex Mono',monospace;color:{{ cp.mark }};width:10px">{{ cp.glyph }}</span>{{ cp.label }}<span style="margin-left:auto;font:400 9.5px 'IBM Plex Mono',monospace;color:#5b6472">{{ cp.t }}</span></div>
+</sc-for>
+</div>
+</div>
+
+<div style="padding:14px 16px;border-bottom:1px solid rgba(255,255,255,.07)">
+<div style="font:500 9px 'IBM Plex Mono',monospace;letter-spacing:.09em;color:#5b6472;margin-bottom:9px">SKILL CHAIN · SUPERPOWERS</div>
+<div style="display:flex;align-items:center;gap:0">
+<sc-for list="{{ skillChain }}" as="s" hint-placeholder-count="5">
+<div style="display:flex;align-items:center">
+<div style="padding:4px 8px;border-radius:5px;border:1px solid {{ s.bdc }};background:{{ s.bg }};font:500 9.5px 'IBM Plex Mono',monospace;color:{{ s.fg }}">{{ s.label }}</div>
+<div style="width:10px;height:1px;background:{{ s.line }}"></div>
+</div>
+</sc-for>
+</div>
+</div>
+
+<div style="flex:1;min-height:0;overflow:hidden;padding:14px 16px;display:flex;flex-direction:column">
+<div style="font:500 9px 'IBM Plex Mono',monospace;letter-spacing:.09em;color:#5b6472;margin-bottom:9px">INSTRUCT AGENT</div>
+<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:9px">
+<sc-for list="{{ quickMsgs }}" as="q" hint-placeholder-count="3">
+<div onClick="{{ q.onClick }}" style="padding:4px 8px;border-radius:14px;border:1px solid rgba(255,255,255,.1);font-size:10.5px;color:#a8b0bd;cursor:pointer" style-hover="border-color:#2ee6cf;color:#2ee6cf">{{ q.label }}</div>
+</sc-for>
+</div>
+<div style="border:1px solid rgba(255,255,255,.1);border-radius:7px;background:#0f1217;padding:9px 10px">
+<input value="{{ draft }}" onChange="{{ onDraft }}" onKeyDown="{{ onDraftKey }}" placeholder="Use Redis for the session cache…" style="width:100%;box-sizing:border-box;border:0;outline:none;background:transparent;color:#e7eaf0;font-family:'IBM Plex Sans',sans-serif;font-size:12px"></input>
+<div style="display:flex;align-items:center;gap:6px;margin-top:9px">
+<span style="padding:2px 7px;border-radius:4px;background:rgba(123,140,255,.12);font:500 9.5px 'IBM Plex Mono',monospace;color:#9aa6ff">instruction</span>
+<span style="font:400 9.5px 'IBM Plex Mono',monospace;color:#5b6472">recorded as event</span>
+<div onClick="{{ onSend }}" style="margin-left:auto;padding:4px 12px;border-radius:5px;background:#2ee6cf;color:#04120f;font-size:11px;font-weight:600;cursor:pointer" style-hover="filter:brightness(1.12)">Send ↵</div>
+</div>
+</div>
+<div style="display:flex;gap:6px;margin-top:11px">
+<div onClick="{{ sel.onToggle }}" style="flex:1;text-align:center;padding:7px 0;border-radius:6px;border:1px solid {{ sel.bdc }};background:{{ sel.bgc }};color:{{ sel.color }};font-size:11.5px;font-weight:500;cursor:pointer" style-hover="filter:brightness(1.35)">{{ sel.toggleLabel }}</div>
+<div style="flex:1;text-align:center;padding:7px 0;border-radius:6px;border:1px solid rgba(255,255,255,.1);color:#a8b0bd;font-size:11.5px;cursor:pointer" style-hover="border-color:rgba(255,255,255,.25);color:#fff">Reassign</div>
+<div style="padding:7px 12px;border-radius:6px;border:1px solid rgba(248,113,113,.25);color:#f87171;font-size:11.5px;cursor:pointer" style-hover="background:rgba(248,113,113,.1)">Stop</div>
+</div>
+<div style="margin-top:13px;padding-top:11px;border-top:1px solid rgba(255,255,255,.07);flex:1;min-height:0;overflow:hidden">
+<div style="font:500 9px 'IBM Plex Mono',monospace;letter-spacing:.09em;color:#5b6472;margin-bottom:8px">RECENT EVENTS</div>
+<div style="display:flex;flex-direction:column;gap:6px">
+<sc-for list="{{ drawerFeed }}" as="e" hint-placeholder-count="4">
+<div style="display:flex;gap:8px;font:400 10.5px 'IBM Plex Mono',monospace"><span style="color:#5b6472;flex:none">{{ e.t }}</span><span style="color:{{ e.color }}">{{ e.text }}</span></div>
+</sc-for>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+
+<div class="dv-opt" id="1c">
+<div class="dv-olabel"><a class="dv-oid" href="#1c">1c</a>Signal — stream-first console: roster, live event river, board. Keyboard-driven</div>
+<div class="dv-card" style="width:1300px">
+<div style="height:840px;display:flex;flex-direction:column;font-family:'IBM Plex Sans',sans-serif;color:#e7eaf0;background:#0a0b0e">
+<div style="height:56px;flex:none;border-bottom:1px solid rgba(255,255,255,.07);display:flex;align-items:center;gap:14px;padding:0 20px;position:relative;overflow:hidden">
+<div class="glowline" style="position:absolute;left:0;right:0;bottom:0;height:1px;background:linear-gradient(90deg,transparent,#2ee6cf,#7b8cff,transparent)"></div>
+<div style="font:600 12.5px 'IBM Plex Mono',monospace;letter-spacing:-.2px">ai-team-os</div>
+<div style="font:400 11px 'IBM Plex Mono',monospace;color:#5b6472">/ checkout-platform</div>
+<div style="flex:1;display:flex;justify-content:center">
+<div style="width:440px;display:flex;align-items:center;gap:9px;padding:7px 11px;border:1px solid rgba(255,255,255,.1);border-radius:7px;background:#0f1116" style-hover="border-color:rgba(46,230,207,.4)">
+<span style="color:#2ee6cf;font:500 11px 'IBM Plex Mono',monospace">›</span>
+<span style="flex:1;font:400 11.5px 'IBM Plex Mono',monospace;color:#69727f">assign TASK-152 to Emma · pause Alex · ask Sarah…</span>
+<span style="padding:1px 5px;border:1px solid rgba(255,255,255,.14);border-radius:3px;font:500 9.5px 'IBM Plex Mono',monospace;color:#7c8697">⌘K</span>
+</div>
+</div>
+<div style="display:flex;align-items:center;gap:9px">
+<div onClick="{{ toggleStream }}" style="display:flex;align-items:center;gap:6px;padding:5px 10px;border:1px solid {{ streamBdc }};border-radius:6px;background:{{ streamBg }};font:500 10.5px 'IBM Plex Mono',monospace;color:{{ streamFg }};cursor:pointer">
+<span class="{{ streamAnim }}" style="width:5px;height:5px;border-radius:50%;background:{{ streamFg }}"></span>{{ streamLabel }}
+</div>
+<div style="font:400 11px 'IBM Plex Mono',monospace;color:#7c8697">{{ clock }}</div>
+</div>
+</div>
+
+<div style="flex:1;display:flex;min-height:0">
+<div style="width:290px;flex:none;border-right:1px solid rgba(255,255,255,.07);display:flex;flex-direction:column;min-height:0">
+<div style="padding:13px 15px 10px;display:flex;align-items:center;justify-content:space-between">
+<span style="font:500 9px 'IBM Plex Mono',monospace;letter-spacing:.09em;color:#5b6472">ROSTER</span>
+<span onClick="{{ clearFilter }}" style="font:400 10px 'IBM Plex Mono',monospace;color:#69727f;cursor:pointer" style-hover="color:#2ee6cf">{{ filterLabel }}</span>
+</div>
+<div style="flex:1;overflow:hidden;padding:0 8px 10px;display:flex;flex-direction:column;gap:2px">
+<sc-for list="{{ cards }}" as="c" hint-placeholder-count="8">
+<div onClick="{{ c.onFilter }}" style="display:flex;align-items:center;gap:9px;padding:8px 9px;border-radius:7px;background:{{ c.rowBg }};cursor:pointer;box-shadow:{{ c.rowRail }}" style-hover="background:rgba(255,255,255,.045)">
+<span class="{{ c.dotAnim }}" style="width:6px;height:6px;flex:none;border-radius:50%;background:{{ c.color }};box-shadow:0 0 7px {{ c.color }}"></span>
+<div style="flex:1;min-width:0">
+<div style="display:flex;align-items:baseline;gap:6px"><span style="font-size:12.5px;font-weight:600">{{ c.name }}</span><span style="font:400 9.5px 'IBM Plex Mono',monospace;color:#5b6472">{{ c.shortRole }}</span></div>
+<div style="font-size:10.5px;color:#7c8697;margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ c.task }}</div>
+</div>
+<div style="width:34px;flex:none;text-align:right"><span style="font:500 10px 'IBM Plex Mono',monospace;color:{{ c.color }}">{{ c.pw }}</span></div>
+</div>
+</sc-for>
+</div>
+<div style="border-top:1px solid rgba(255,255,255,.07);padding:12px 15px;display:flex;flex-direction:column;gap:8px">
+<div style="font:500 9px 'IBM Plex Mono',monospace;letter-spacing:.09em;color:#5b6472">CAPACITY</div>
+<sc-for list="{{ capacity }}" as="k" hint-placeholder-count="4">
+<div style="display:flex;align-items:center;gap:9px"><span style="width:64px;font:400 10px 'IBM Plex Mono',monospace;color:#7c8697">{{ k.label }}</span><span style="flex:1;height:5px;border-radius:3px;background:rgba(255,255,255,.06);overflow:hidden"><span style="display:block;height:100%;width:{{ k.pw }};background:{{ k.color }}"></span></span><span style="font:500 10px 'IBM Plex Mono',monospace;color:#a8b0bd">{{ k.val }}</span></div>
+</sc-for>
+</div>
+</div>
+
+<div style="flex:1;min-width:0;display:flex;flex-direction:column;border-right:1px solid rgba(255,255,255,.07);position:relative;overflow:hidden">
+<div style="padding:13px 18px 10px;display:flex;align-items:center;gap:8px;border-bottom:1px solid rgba(255,255,255,.07)">
+<span style="font:500 9px 'IBM Plex Mono',monospace;letter-spacing:.09em;color:#5b6472">EVENT STREAM</span>
+<div style="flex:1;display:flex;gap:5px;justify-content:flex-end">
+<sc-for list="{{ chips }}" as="ch" hint-placeholder-count="4">
+<div onClick="{{ ch.onClick }}" style="padding:3px 9px;border-radius:14px;border:1px solid {{ ch.bdc }};background:{{ ch.bg }};font:500 10px 'IBM Plex Mono',monospace;color:{{ ch.fg }};cursor:pointer">{{ ch.label }}</div>
+</sc-for>
+</div>
+</div>
+<div style="flex:1;min-height:0;overflow:hidden;padding:12px 0 0;position:relative">
+<div style="position:absolute;left:88px;top:0;bottom:0;width:1px;background:linear-gradient(180deg,transparent,rgba(46,230,207,.28),rgba(123,140,255,.18),transparent)"></div>
+<div style="display:flex;flex-direction:column">
+<sc-for list="{{ feed }}" as="e" hint-placeholder-count="12">
+<div style="display:flex;align-items:flex-start;gap:0;padding:6px 18px 6px 0;background:{{ e.rowBg }}">
+<span style="width:74px;flex:none;text-align:right;font:400 10.5px 'IBM Plex Mono',monospace;color:#5b6472">{{ e.t }}</span>
+<span style="width:28px;flex:none;display:flex;justify-content:center;padding-top:4px"><span style="width:7px;height:7px;border-radius:50%;background:{{ e.color }};box-shadow:0 0 9px {{ e.color }}"></span></span>
+<div style="flex:1;min-width:0">
+<div style="display:flex;align-items:baseline;gap:8px"><span style="font-size:12px;font-weight:600;color:{{ e.color }}">{{ e.who }}</span><span style="font:400 9.5px 'IBM Plex Mono',monospace;color:#5b6472">{{ e.kind }}</span></div>
+<div style="font-size:12px;color:#c8cfda;margin-top:1px">{{ e.text }}</div>
+</div>
+<span style="flex:none;font:400 9.5px 'IBM Plex Mono',monospace;color:#5b6472;padding-top:3px">{{ e.ref }}</span>
+</div>
+</sc-for>
+</div>
+</div>
+<div style="border-top:1px solid rgba(255,255,255,.07);padding:11px 18px;display:flex;align-items:center;gap:9px;background:#0c0e12">
+<span style="font:500 11px 'IBM Plex Mono',monospace;color:#2ee6cf">{{ targetLabel }} ›</span>
+<input value="{{ draft }}" onChange="{{ onDraft }}" onKeyDown="{{ onDraftKey }}" placeholder="Stop validation work and prioritise payment integration" style="flex:1;border:0;outline:none;background:transparent;color:#e7eaf0;font-family:'IBM Plex Sans',sans-serif;font-size:12.5px"></input>
+<span onClick="{{ onSend }}" style="padding:5px 12px;border-radius:5px;border:1px solid rgba(46,230,207,.35);background:rgba(46,230,207,.1);color:#2ee6cf;font:500 11px 'IBM Plex Mono',monospace;cursor:pointer" style-hover="background:rgba(46,230,207,.2)">send ↵</span>
+</div>
+</div>
+
+<div style="width:330px;flex:none;display:flex;flex-direction:column;min-height:0">
+<div style="padding:13px 15px 10px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid rgba(255,255,255,.07)">
+<span style="font:500 9px 'IBM Plex Mono',monospace;letter-spacing:.09em;color:#5b6472">BOARD</span>
+<span style="font:400 10px 'IBM Plex Mono',monospace;color:#69727f">12 open · 2 blocked</span>
+</div>
+<div style="flex:1;overflow:hidden;padding:11px 12px;display:flex;flex-direction:column;gap:12px">
+<sc-for list="{{ columns }}" as="col" hint-placeholder-count="4">
+<div style="display:flex;flex-direction:column;gap:6px">
+<div style="display:flex;align-items:center;gap:7px"><span style="width:5px;height:5px;border-radius:50%;background:{{ col.color }}"></span><span style="font:500 10px 'IBM Plex Mono',monospace;letter-spacing:.06em;color:#a8b0bd">{{ col.name }}</span><span style="font:400 10px 'IBM Plex Mono',monospace;color:#5b6472">{{ col.count }}</span><span style="flex:1;height:1px;background:rgba(255,255,255,.06)"></span></div>
+<sc-for list="{{ col.items }}" as="it" hint-placeholder-count="2">
+<div style="border:1px solid {{ it.bdc }};border-radius:7px;background:#0f1116;padding:9px 10px;opacity:{{ it.opacity }};cursor:pointer" style-hover="border-color:rgba(255,255,255,.22)">
+<div style="display:flex;align-items:baseline;gap:7px"><span style="font:500 9.5px 'IBM Plex Mono',monospace;color:#5b6472">{{ it.id }}</span><span style="font:500 9px 'IBM Plex Mono',monospace;color:{{ it.pColor }}">{{ it.priority }}</span></div>
+<div style="font-size:12px;color:#dbe1ea;margin-top:3px;line-height:1.35">{{ it.title }}</div>
+<div style="display:flex;align-items:center;gap:6px;margin-top:7px">
+<span style="width:16px;height:16px;border-radius:5px;background:{{ it.bgc }};display:flex;align-items:center;justify-content:center;font:600 8px 'IBM Plex Mono',monospace;color:{{ it.color }}">{{ it.initials }}</span>
+<span style="font-size:10.5px;color:#7c8697">{{ it.agent }}</span>
+<span style="margin-left:auto;font:400 9.5px 'IBM Plex Mono',monospace;color:#5b6472">{{ it.step }}</span>
+</div>
+</div>
+</sc-for>
+</div>
+</sc-for>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+
+</div>
+<p class="dv-next">Try next: "build out <a class="dv-oid" href="#1b">1b</a>'s execution + dependency modes properly" · "merge <a class="dv-oid" href="#1a">1a</a>'s cards into <a class="dv-oid" href="#1c">1c</a>'s stream layout" · "show the agent detail page full-screen"</p>
+</section>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:&quot;100%&quot;,&quot;height&quot;:1000},&quot;officeTilt&quot;:{&quot;editor&quot;:&quot;range&quot;,&quot;default&quot;:56,&quot;min&quot;:38,&quot;max&quot;:70,&quot;step&quot;:1,&quot;unit&quot;:&quot;°&quot;,&quot;tsType&quot;:&quot;number&quot;,&quot;section&quot;:&quot;The Floor (3D)&quot;}}">
+class Component extends DCLogic {
+  meta = {
+    working:   {label:'WORKING',   color:'#2ee6cf', pulse:true},
+    planning:  {label:'PLANNING',  color:'#7b8cff', pulse:true},
+    waiting:   {label:'WAITING',   color:'#f5b34a', pulse:false},
+    review:    {label:'REVIEW',    color:'#c084fc', pulse:true},
+    paused:    {label:'PAUSED',    color:'#8a929e', pulse:false},
+    pause_requested:{label:'PAUSING', color:'#f5b34a', pulse:true},
+    resuming:  {label:'RESUMING',  color:'#2ee6cf', pulse:true},
+    blocked:   {label:'BLOCKED',   color:'#f87171', pulse:false},
+    idle:      {label:'IDLE',      color:'#5b6472', pulse:false},
+    completed: {label:'DONE',      color:'#4ade80', pulse:false}
+  };
+
+  state = {
+    tick: 0,
+    minute: 0,
+    page: 'overview',
+    openRow: 'alex',
+    yaw: 30,
+    zoom: 0.86,
+    beams: true,
+    talkIdx: 0,
+    deskSel: 'alex',
+    transcript: [],
+    mode: 'org',
+    selectedId: 'alex',
+    filter: null,
+    streaming: true,
+    chip: 'all',
+    draft: '',
+    events: [
+      {t:'17:10:42', who:'Maya',  kind:'task.blocked',      text:'waiting on backend — regression suite held', ref:'TASK-149', status:'waiting'},
+      {t:'17:09:18', who:'Alex',  kind:'artifact.created',  text:'CheckoutService.ts written, 14 tests green', ref:'TASK-142', status:'working'},
+      {t:'17:08:03', who:'Sarah', kind:'review.requested',  text:'threat model ready — human approval needed', ref:'TASK-151', status:'review'},
+      {t:'17:06:55', who:'Alex',  kind:'skill.started',     text:'test-driven-development · red phase', ref:'TASK-142', status:'working'},
+      {t:'17:05:31', who:'Emma',  kind:'task.started',      text:'checkout UI empty + error states', ref:'TASK-144', status:'working'},
+      {t:'17:04:12', who:'Atlas', kind:'task.assigned',     text:'assigned TASK-144 to Emma (frontend)', ref:'TASK-144', status:'planning'},
+      {t:'17:03:40', who:'Oliver',kind:'agent.paused',      text:'checkpoint created at step 5/9', ref:'TASK-146', status:'paused'},
+      {t:'17:02:07', who:'John',  kind:'task.completed',    text:'requirements v2 signed off', ref:'TASK-138', status:'completed'},
+      {t:'17:01:19', who:'Atlas', kind:'agent.started',     text:'sprint allocation across 8 agents', ref:'—', status:'planning'}
+    ],
+    agents: [
+      {id:'atlas', name:'Atlas', role:'AI Manager', short:'mgr', dept:'Leadership', status:'planning', taskId:'—', task:'Sprint allocation', progress:34, step:'2/6 steps', skill:'writing-plans', queue:2, provider:'Claude Code', model:'sonnet-4.5'},
+      {id:'alex', name:'Alex', role:'Senior Backend Developer', short:'be', dept:'Engineering', status:'working', taskId:'TASK-142', task:'Implement Checkout API', progress:72, step:'7/11 steps', skill:'TDD', queue:3, provider:'Claude Code', model:'sonnet-4.5'},
+      {id:'emma', name:'Emma', role:'Frontend Developer', short:'fe', dept:'Engineering', status:'working', taskId:'TASK-144', task:'Checkout UI states', progress:41, step:'4/9 steps', skill:'brainstorming', queue:2, provider:'Cursor', model:'gpt-5-codex'},
+      {id:'sarah', name:'Sarah', role:'Security Engineer', short:'sec', dept:'Security', status:'review', taskId:'TASK-151', task:'Threat model: payments', progress:88, step:'8/9 steps', skill:'code-review', queue:1, provider:'Claude Code', model:'opus-4.1'},
+      {id:'maya', name:'Maya', role:'QA Engineer', short:'qa', dept:'Engineering', status:'waiting', taskId:'TASK-149', task:'Regression suite', progress:12, step:'blocked by 142', skill:'verification', queue:1, provider:'Claude Code', model:'sonnet-4.5'},
+      {id:'daniel', name:'Daniel', role:'DevOps Engineer', short:'ops', dept:'Platform', status:'idle', taskId:'—', task:'No task assigned', progress:0, step:'available', skill:'—', queue:0, provider:'Cursor', model:'gpt-5-codex'},
+      {id:'john', name:'John', role:'Business Analyst', short:'ba', dept:'Product', status:'completed', taskId:'TASK-138', task:'Requirements v2', progress:100, step:'6/6 steps', skill:'writing-plans', queue:0, provider:'Cursor', model:'gpt-5-codex'},
+      {id:'oliver', name:'Oliver', role:'SEO Specialist', short:'seo', dept:'Marketing', status:'paused', taskId:'TASK-146', task:'Checkout SEO audit', progress:55, step:'5/9 · checkpoint', skill:'verification', queue:1, provider:'Cursor', model:'gpt-5-codex'}
+    ]
+  };
+
+  office = {
+    rooms: [
+      {id:'eng',  label:'ENGINEERING',  left:34,  top:92,  w:372, h:300, tint:'rgba(46,230,207,.05)',  edge:'rgba(46,230,207,.22)'},
+      {id:'mgr',  label:'COMMAND',      left:420, top:16,  w:190, h:120, tint:'rgba(123,140,255,.06)', edge:'rgba(123,140,255,.26)'},
+      {id:'sec',  label:'SECURITY',     left:626, top:92,  w:238, h:142, tint:'rgba(192,132,252,.05)', edge:'rgba(192,132,252,.22)'},
+      {id:'qa',   label:'QA LAB',       left:626, top:262, w:238, h:150, tint:'rgba(245,179,74,.05)',  edge:'rgba(245,179,74,.22)'},
+      {id:'prod', label:'PRODUCT',      left:250, top:424, w:380, h:126, tint:'rgba(255,255,255,.035)',edge:'rgba(255,255,255,.14)'}
+    ],
+    desks: [
+      {id:'atlas',  x:515, y:62},
+      {id:'alex',   x:140, y:160},
+      {id:'emma',   x:140, y:330},
+      {id:'daniel', x:320, y:246},
+      {id:'sarah',  x:745, y:158},
+      {id:'maya',   x:745, y:332},
+      {id:'john',   x:500, y:482},
+      {id:'oliver', x:330, y:482}
+    ],
+    channels: [
+      {from:'atlas', to:'alex',  vol:.9},
+      {from:'atlas', to:'sarah', vol:.5},
+      {from:'atlas', to:'john',  vol:.4},
+      {from:'alex',  to:'emma',  vol:.7},
+      {from:'alex',  to:'maya',  vol:1},
+      {from:'emma',  to:'maya',  vol:.6},
+      {from:'sarah', to:'atlas', vol:.8},
+      {from:'daniel',to:'maya',  vol:.2}
+    ]
+  };
+
+  chatter = [
+    {from:'alex',  to:'maya',   text:'CheckoutService is green — 14 tests. Handing the branch over.', kind:'handoff'},
+    {from:'maya',  to:'alex',   text:'Got it. I need the seed fixtures before I can run regression.', kind:'question'},
+    {from:'atlas', to:'emma',   text:'Emma, ship the error states first — payments demo is at 18:00.', kind:'priority'},
+    {from:'sarah', to:'atlas',  text:'Threat model done. Two findings, one needs a human decision.', kind:'review'},
+    {from:'emma',  to:'alex',   text:'Your DTO renamed total → grandTotal. Updating the client.', kind:'context'},
+    {from:'john',  to:'atlas',  text:'Requirements v2 signed off by the merchant team.', kind:'update'},
+    {from:'atlas', to:'daniel', text:'Stay on standby — canary deploy right after QA clears.', kind:'instruction'},
+    {from:'maya',  to:'sarah',  text:'Can you pair on the token-leak repro? 10 minutes.', kind:'question'}
+  ];
+
+  pool = [
+    {who:'Alex', kind:'checkpoint.created', text:'green phase committed — refactor next', ref:'TASK-142', status:'working'},
+    {who:'Emma', kind:'artifact.created', text:'CheckoutSummary.tsx scaffolded', ref:'TASK-144', status:'working'},
+    {who:'Atlas', kind:'agent.status_changed', text:'Daniel promoted to standby for deploy', ref:'—', status:'planning'},
+    {who:'Sarah', kind:'skill.completed', text:'systematic-debugging closed on token leak', ref:'TASK-151', status:'review'},
+    {who:'Maya', kind:'task.progress_updated', text:'12 of 40 regression cases stubbed', ref:'TASK-149', status:'waiting'}
+  ];
+
+  componentDidMount() {
+    this.iv = setInterval(() => {
+      this.setState(s => {
+        const agents = s.agents.map(a => a.status === 'working'
+          ? {...a, progress: Math.min(99, a.progress + 1 + Math.floor(Math.random() * 3))} : a);
+        return {agents, tick: s.tick + 1, minute: s.minute + 1};
+      });
+    }, 1700);
+    this.iv2 = setInterval(() => {
+      if (!this.state.streaming) return;
+      const e = this.pool[Math.floor(Math.random() * this.pool.length)];
+      this.setState(s => ({events: [{...e, t: this.stamp(s.minute)}, ...s.events].slice(0, 14)}));
+    }, 4200);
+    this.startChatter();
+  }
+
+  officeVals() {
+    const st = this.state;
+    const tilt = Math.max(38, Math.min(70, this.props.officeTilt ?? 56));
+    const yaw = st.yaw;
+    const A = {}; this.state.agents.forEach(a => A[a.id] = a);
+    const talk = this.chatter[st.talkIdx];
+
+    const deskNodes = this.office.desks.map(d => {
+      const a = A[d.id]; const c = this.cardOf(a);
+      const sel = st.deskSel === d.id;
+      const away = a.status === 'idle' || a.status === 'paused';
+      const speaking = talk.from === d.id;
+      const listening = talk.to === d.id;
+      return {
+        id: d.id, name: c.name, role: c.role, shortRole: a.short, initials: c.initials,
+        color: c.color, statusLabel: c.statusLabel, dotAnim: c.dotAnim, pw: c.pw,
+        task: a.task, taskId: a.taskId, skill: a.skill,
+        left: (d.x - 62) + 'px', top: (d.y - 34) + 'px',
+        slabBg: sel ? 'rgba(28,34,42,.95)' : 'rgba(18,22,28,.9)',
+        slabEdge: sel ? c.color + 'aa' : 'rgba(255,255,255,.12)',
+        slabGlow: away ? 'none' : '0 0 26px ' + c.color + '2e',
+        haloBg: 'radial-gradient(closest-side,' + c.color + '55,transparent 72%)',
+        haloOpacity: away ? '0.12' : '0.55',
+        screenBg: away ? 'rgba(14,17,22,.9)' : 'rgba(11,20,24,.92)',
+        screenEdge: away ? 'rgba(255,255,255,.1)' : c.color + '66',
+        screenGlow: away ? 'none' : '0 0 18px ' + c.color + '3d, inset 0 0 20px ' + c.color + '1a',
+        avatarBg: c.color + '26', avatarEdge: c.color + '80',
+        bodyBg: away ? 'rgba(255,255,255,.06)' : c.color + '2b',
+        bubble: speaking ? talk.text : '',
+        bubbleDisplay: speaking ? 'block' : 'none',
+        bubbleEdge: speaking ? c.color + '77' : 'transparent',
+        earOpacity: listening ? '1' : '0',
+        nameFg: away ? '#7c8697' : '#e7eaf0',
+        onClick: () => this.setState({deskSel: d.id, selectedId: d.id, filter: d.id})
+      };
+    });
+
+    const pos = {}; this.office.desks.forEach(d => pos[d.id] = d);
+    const beams = this.office.channels.map((ch, i) => {
+      const a = pos[ch.from], b = pos[ch.to];
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const len = Math.sqrt(dx * dx + dy * dy);
+      const ang = Math.atan2(dy, dx) * 180 / Math.PI;
+      const hot = (talk.from === ch.from && talk.to === ch.to) || (talk.from === ch.to && talk.to === ch.from);
+      const col = hot ? '#ffffff' : this.m(A[ch.to].status).color;
+      return {
+        left: a.x + 'px', top: a.y + 'px', w: len + 'px',
+        transform: 'rotate(' + ang + 'deg)',
+        col, hot,
+        h: hot ? '3px' : '2px',
+        opacity: st.beams ? (hot ? '1' : String(0.2 + ch.vol * 0.35)) : '0',
+        glowOpacity: st.beams ? (hot ? '0.5' : String(ch.vol * 0.16)) : '0',
+        anim: hot ? 'beamrun' : (ch.vol > .55 ? 'beamslow' : ''),
+        label: A[ch.from].name + ' → ' + A[ch.to].name
+      };
+    });
+
+    const kindColor = {handoff:'#2ee6cf', question:'#f5b34a', priority:'#f87171', review:'#c084fc', context:'#7b8cff', update:'#4ade80', instruction:'#9aa6ff'};
+    const transcript = (st.transcript.length ? st.transcript : [{...talk, t: this.stamp(st.minute)}]).map(c => ({
+      t: c.t, text: c.text, kind: c.kind,
+      from: A[c.from].name, to: A[c.to].name,
+      color: kindColor[c.kind] || '#8a929e'
+    }));
+
+    const channels = this.office.channels.slice(0, 6).map((ch, i) => ({
+      label: A[ch.from].name + ' ⇄ ' + A[ch.to].name,
+      pw: Math.round(ch.vol * 100) + '%',
+      msgs: String(3 + Math.round(ch.vol * 26)),
+      color: this.m(A[ch.to].status).color
+    }));
+
+    const dsel = A[st.deskSel] ? this.cardOf(A[st.deskSel]) : null;
+
+    return {
+      officeRooms: this.office.rooms.map(r => ({...r, left: r.left + 'px', top: r.top + 'px', w: r.w + 'px', h: r.h + 'px', rot: 'rotateZ(' + (-yaw) + 'deg)'})),
+      deskNodes, beams, transcript, channels,
+      worldT: 'rotateX(' + tilt + 'deg) rotateZ(' + yaw + 'deg) scale(' + st.zoom + ')',
+      billboardT: 'rotateZ(' + (-yaw) + 'deg) rotateX(' + (-tilt) + 'deg)',
+      yaw: String(yaw),
+      yawLabel: yaw + '°',
+      zoomLabel: Math.round(st.zoom * 100) + '%',
+      onYaw: (e) => this.setState({yaw: Number(e.target.value)}),
+      zoomIn: () => this.setState({zoom: Math.min(1.15, this.state.zoom + 0.08)}),
+      zoomOut: () => this.setState({zoom: Math.max(0.6, this.state.zoom - 0.08)}),
+      toggleBeams: () => this.setState({beams: !this.state.beams}),
+      beamsLabel: st.beams ? 'links on' : 'links off',
+      beamsFg: st.beams ? '#2ee6cf' : '#7c8697',
+      beamsBdc: st.beams ? 'rgba(46,230,207,.35)' : 'rgba(255,255,255,.1)',
+      dsel: dsel ? {...dsel, label: dsel.name, sub: dsel.role} : null,
+      talkNow: talk.text,
+      talkFrom: A[talk.from].name,
+      talkTo: A[talk.to].name,
+      talkColor: kindColor[talk.kind] || '#8a929e',
+      talkKind: talk.kind
+    };
+  }
+  componentWillUnmount() { clearInterval(this.iv); clearInterval(this.iv2); clearInterval(this.iv3); }
+
+  startChatter() {
+    this.iv3 = setInterval(() => {
+      this.setState(s => {
+        const i = (s.talkIdx + 1) % this.chatter.length;
+        const c = this.chatter[i];
+        return {talkIdx: i, transcript: [{...c, t: this.stamp(s.minute)}, ...s.transcript].slice(0, 6)};
+      });
+    }, 3600);
+  }
+
+  stamp(m) {
+    const base = 17 * 60 + 11 + Math.floor(m / 2);
+    const hh = String(Math.floor(base / 60)).padStart(2, '0');
+    const mm = String(base % 60).padStart(2, '0');
+    const ss = String((m * 17) % 60).padStart(2, '0');
+    return hh + ':' + mm + ':' + ss;
+  }
+  m(status) { return this.meta[status] || this.meta.idle; }
+  initials(name) { return name.slice(0, 2).toUpperCase(); }
+  log(who, kind, text, ref, status) {
+    this.setState(s => ({events: [{t: this.stamp(s.minute), who, kind, text, ref: ref || '—', status}, ...s.events].slice(0, 14)}));
+  }
+  setStatus(id, status) {
+    this.setState(s => ({agents: s.agents.map(a => a.id === id ? {...a, status} : a)}));
+  }
+  toggle(a) {
+    if (a.status === 'paused') {
+      this.setStatus(a.id, 'resuming');
+      this.log(a.name, 'agent.resumed', 'resuming from checkpoint ' + a.step, a.taskId, 'resuming');
+      setTimeout(() => this.setStatus(a.id, 'working'), 900);
+    } else if (a.status === 'idle' || a.status === 'completed') {
+      this.setStatus(a.id, 'planning');
+      this.log(a.name, 'task.assigned', 'picked up next item from queue', a.taskId, 'planning');
+    } else {
+      this.setStatus(a.id, 'pause_requested');
+      this.log(a.name, 'agent.pause_requested', 'draining current step before checkpoint', a.taskId, 'pause_requested');
+      setTimeout(() => {
+        this.setStatus(a.id, 'paused');
+        this.log(a.name, 'checkpoint.created', 'safe checkpoint stored — agent paused', a.taskId, 'paused');
+      }, 1300);
+    }
+  }
+
+  cardOf(a) {
+    const m = this.m(a.status);
+    const sel = this.state.filter === a.id;
+    return {
+      ...a, color: m.color, statusLabel: m.label,
+      dotAnim: m.pulse ? 'pulsedot' : '',
+      bgc: m.color + '1a', bdc: m.color + '3d',
+      shadow: a.status === 'working' ? '0 0 0 1px ' + m.color + '14, 0 6px 22px rgba(0,0,0,.45)' : '0 4px 16px rgba(0,0,0,.35)',
+      initials: this.initials(a.name), shortRole: a.short,
+      pw: a.progress + '%',
+      toggleLabel: a.status === 'paused' ? 'Resume' : (a.status === 'idle' || a.status === 'completed' ? 'Assign' : 'Pause'),
+      rowBg: sel ? 'rgba(46,230,207,.08)' : 'transparent',
+      rowRail: sel ? 'inset 2px 0 0 #2ee6cf' : 'none',
+      onOpen: () => this.setState({selectedId: a.id, filter: a.id}),
+      onFilter: () => this.setState({filter: this.state.filter === a.id ? null : a.id, selectedId: a.id}),
+      onToggle: (ev) => { if (ev) ev.stopPropagation(); this.toggle(a); },
+      onMessage: (ev) => { if (ev) ev.stopPropagation(); this.setState({selectedId: a.id, filter: a.id}); }
+    };
+  }
+
+  orgGraph() {
+    const A = {}; this.state.agents.forEach(a => A[a.id] = a);
+    const n = (id, label, sub, status, cx, cy, w, agent, progress) => ({id, label, sub, status, cx, cy, w: w || 130, h: 58, agent, progress});
+    const nodes = [
+      n('you', 'You', 'human operator', 'completed', 460, 14, 116, null, 100),
+      n('atlas', A.atlas.name, A.atlas.role, A.atlas.status, 460, 96, 168, 'atlas', A.atlas.progress),
+      n('englead', 'Nora', 'Engineering Manager', 'planning', 168, 212, 156, null, 60),
+      n('seclead', 'Iris', 'Security Lead', 'review', 462, 212, 156, null, 80),
+      n('prodlead', 'Leo', 'Product Lead', 'planning', 756, 212, 156, null, 45),
+      n('alex', A.alex.name, 'Backend', A.alex.status, 76, 330, 132, 'alex', A.alex.progress),
+      n('emma', A.emma.name, 'Frontend', A.emma.status, 218, 330, 132, 'emma', A.emma.progress),
+      n('daniel', A.daniel.name, 'DevOps', A.daniel.status, 360, 330, 132, 'daniel', A.daniel.progress),
+      n('sarah', A.sarah.name, 'Security', A.sarah.status, 500, 330, 132, 'sarah', A.sarah.progress),
+      n('john', A.john.name, 'Analyst', A.john.status, 690, 330, 132, 'john', A.john.progress),
+      n('oliver', A.oliver.name, 'SEO', A.oliver.status, 832, 330, 132, 'oliver', A.oliver.progress),
+      n('maya', A.maya.name, 'QA gate', A.maya.status, 462, 452, 140, 'maya', A.maya.progress)
+    ];
+    const edges = [
+      ['you','atlas',1],['atlas','englead',1],['atlas','seclead',0],['atlas','prodlead',0],
+      ['englead','alex',1],['englead','emma',1],['englead','daniel',0],
+      ['seclead','sarah',1],['prodlead','john',0],['prodlead','oliver',0],
+      ['alex','maya',1],['emma','maya',1],['sarah','maya',0]
+    ];
+    return {nodes, edges};
+  }
+
+  execGraph() {
+    const n = (id, label, sub, status, cx, cy, w, progress) => ({id, label, sub, status, cx, cy, w: w || 158, h: 58, progress});
+    const nodes = [
+      n('req', 'Requirements', 'John · analyst', 'completed', 120, 90, 158, 100),
+      n('arch', 'Architecture', 'Atlas · solution design', 'completed', 320, 90, 158, 100),
+      n('be', 'Backend build', 'Alex · TDD', 'working', 528, 30, 158, 72),
+      n('fe', 'Frontend build', 'Emma · UI states', 'working', 528, 150, 158, 41),
+      n('sec', 'Security review', 'Sarah · threat model', 'review', 736, 90, 158, 88),
+      n('gate', 'Human approval', 'you · gate', 'waiting', 462, 250, 190, 0),
+      n('qa', 'QA verification', 'Maya · blocked', 'blocked', 462, 360, 170, 12),
+      n('rel', 'Release', 'Daniel · idle', 'idle', 462, 462, 170, 0)
+    ];
+    const edges = [['req','arch',1],['arch','be',1],['arch','fe',1],['be','sec',1],['fe','sec',0],['sec','gate',1],['gate','qa',0],['qa','rel',0]];
+    return {nodes, edges};
+  }
+
+  depGraph() {
+    const n = (id, label, sub, status, cx, cy, progress) => ({id, label, sub, status, cx, cy, w: 176, h: 58, progress});
+    const nodes = [
+      n('t138', 'TASK-138', 'Requirements v2', 'completed', 462, 20, 100),
+      n('t139', 'TASK-139', 'API contract', 'completed', 462, 116, 100),
+      n('t142', 'TASK-142', 'Checkout API', 'working', 250, 214, 72),
+      n('t144', 'TASK-144', 'Checkout UI', 'working', 672, 214, 41),
+      n('t151', 'TASK-151', 'Payments threat model', 'review', 462, 312, 88),
+      n('t147', 'TASK-147', 'Provider keys', 'blocked', 200, 410, 0),
+      n('t149', 'TASK-149', 'Regression suite', 'waiting', 600, 410, 12),
+      n('t152', 'TASK-152', 'Canary deploy', 'idle', 462, 500, 0)
+    ];
+    const edges = [['t138','t139',1],['t139','t142',1],['t139','t144',1],['t142','t151',1],['t144','t151',0],['t151','t147',0],['t151','t149',1],['t149','t152',0],['t147','t152',0]];
+    return {nodes, edges};
+  }
+
+  skillGraph() {
+    const n = (id, label, sub, status, cy, progress) => ({id, label, sub, status, cx: 462, cy, w: 260, h: 58, progress});
+    const nodes = [
+      n('t', 'Checkout API', 'TASK-142 · Alex', 'working', 20, 72),
+      n('bs', 'brainstorming', 'superpowers', 'completed', 112, 100),
+      n('wp', 'writing-plans', 'superpowers', 'completed', 204, 100),
+      n('tdd', 'test-driven-development', 'superpowers · running', 'working', 296, 64),
+      n('ver', 'verification', 'superpowers', 'idle', 388, 0),
+      n('cr', 'requesting-code-review', 'superpowers', 'idle', 480, 0)
+    ];
+    const edges = [['t','bs',1],['bs','wp',1],['wp','tdd',1],['tdd','ver',0],['ver','cr',0]];
+    return {nodes, edges};
+  }
+
+  graph() {
+    const g = this.state.mode;
+    if (g === 'exec') return this.execGraph();
+    if (g === 'dep') return this.depGraph();
+    if (g === 'skill') return this.skillGraph();
+    return this.orgGraph();
+  }
+
+  cableLayer(nodes, edges) {
+    const by = {}; nodes.forEach(n => by[n.id] = n);
+    const paths = [];
+    edges.forEach(([f, t, active], i) => {
+      const a = by[f], b = by[t];
+      if (!a || !b) return;
+      const x1 = a.cx, y1 = a.cy + a.h, x2 = b.cx, y2 = b.cy;
+      const dy = Math.max(30, (y2 - y1) * 0.55);
+      const d = 'M' + x1 + ',' + y1 + ' C' + x1 + ',' + (y1 + dy) + ' ' + x2 + ',' + (y2 - dy) + ' ' + x2 + ',' + y2;
+      const col = active ? this.m(b.status).color : 'rgba(255,255,255,.13)';
+      paths.push(React.createElement('path', {key: 'h' + i, d, fill: 'none', stroke: col, strokeWidth: active ? 5 : 3, opacity: active ? 0.18 : 0.5, filter: active ? 'url(#cableGlow)' : undefined}));
+      paths.push(React.createElement('path', {key: 'c' + i, d, fill: 'none', stroke: col, strokeWidth: active ? 1.4 : 1, opacity: active ? 0.95 : 0.45}));
+      if (active) paths.push(React.createElement('path', {key: 'f' + i, className: 'flow', d, fill: 'none', stroke: '#ffffff', strokeWidth: 1.6, opacity: 0.75, strokeLinecap: 'round'}));
+    });
+    return React.createElement('svg', {
+      width: '100%', height: '100%', viewBox: '0 0 924 570',
+      preserveAspectRatio: 'xMidYMin meet',
+      style: {position: 'absolute', inset: 0, pointerEvents: 'none'}
+    }, React.createElement('defs', null,
+        React.createElement('filter', {id: 'cableGlow', x: '-50%', y: '-50%', width: '200%', height: '200%'},
+          React.createElement('feGaussianBlur', {stdDeviation: 4}))), paths);
+  }
+
+  appData = {
+    board: [
+      ['Backlog', '#5b6472', [
+        ['TASK-155', 'Fraud rules engine', '—', 'low', '0/6', 'idle'],
+        ['TASK-156', 'Guest checkout flow', '—', 'low', '0/4', 'idle']
+      ]],
+      ['Todo', '#7b8cff', [
+        ['TASK-152', 'Canary deploy pipeline', 'Daniel', 'high', '0/5', 'idle'],
+        ['TASK-153', 'Analytics events', 'Emma', 'med', '0/3', 'idle']
+      ]],
+      ['In Progress', '#2ee6cf', [
+        ['TASK-142', 'Implement Checkout API', 'Alex', 'high', '7/11', 'working'],
+        ['TASK-144', 'Checkout UI states', 'Emma', 'med', '4/9', 'working']
+      ]],
+      ['Review', '#c084fc', [
+        ['TASK-151', 'Payments threat model', 'Sarah', 'high', '8/9', 'review']
+      ]],
+      ['Blocked', '#f87171', [
+        ['TASK-147', 'Payment provider keys', 'Daniel', 'urgent', '0/4', 'blocked'],
+        ['TASK-149', 'Regression suite', 'Maya', 'med', '1/8', 'waiting']
+      ]],
+      ['Done', '#4ade80', [
+        ['TASK-139', 'API contract v2', 'Alex', 'med', '5/5', 'completed'],
+        ['TASK-138', 'Requirements v2', 'John', 'med', '6/6', 'completed']
+      ]]
+    ],
+    projects: [
+      ['Checkout Platform', 'active', 8, 12, 2, '$8.43', 64, ['Atlas','Alex','Emma','Sarah','Maya'], 'Payments rewrite — Stripe + fraud rules'],
+      ['Merchant Portal', 'active', 5, 7, 1, '$4.90', 81, ['Atlas','Emma','John','Oliver'], 'Self-serve onboarding and reporting'],
+      ['Mobile Wallet', 'planning', 4, 5, 0, '$2.11', 28, ['Atlas','Daniel','Maya'], 'Apple/Google Pay tokenisation spike']
+    ],
+    superpowers: [
+      ['brainstorming', 24, 6, 'idle'],
+      ['writing-plans', 18, 5, 'idle'],
+      ['test-driven-development', 31, 3, 'working'],
+      ['systematic-debugging', 12, 4, 'idle'],
+      ['verification', 15, 2, 'waiting'],
+      ['requesting-code-review', 9, 3, 'review']
+    ],
+    domainSkills: [
+      ['spring-boot', 'git', 3], ['postgres', 'git', 4], ['kafka', 'git', 2], ['docker', 'built-in', 5],
+      ['next.js', 'built-in', 3], ['stripe-api', 'local', 2], ['playwright', 'built-in', 2], ['terraform', 'git', 1]
+    ],
+    kpis: [
+      ['Task success rate', '92%', '+3.1', '#4ade80'],
+      ['Avg execution', '14m 20s', '−1m 05', '#2ee6cf'],
+      ['Tokens today', '4.2M', '+340k', '#f5b34a'],
+      ['Cost today', '$8.43', '+$1.12', '#e7eaf0'],
+      ['Failure rate', '4.1%', '−0.8', '#f87171'],
+      ['Retries', '7', '+2', '#c084fc']
+    ],
+    chart: [['Mon', 62, 6], ['Tue', 74, 4], ['Wed', 48, 9], ['Thu', 86, 3], ['Fri', 92, 5], ['Sat', 34, 2], ['Sun', 58, 4]],
+    perf: [
+      ['Alex', 'Backend', 42, 95, '12m 40s', '1.4M', '$3.02'],
+      ['Emma', 'Frontend', 31, 90, '9m 12s', '0.9M', '$1.88'],
+      ['Sarah', 'Security', 18, 97, '21m 05s', '0.7M', '$1.66'],
+      ['Maya', 'QA', 26, 88, '16m 33s', '0.6M', '$1.10'],
+      ['John', 'Analyst', 12, 100, '7m 48s', '0.3M', '$0.51'],
+      ['Oliver', 'SEO', 8, 75, '11m 02s', '0.3M', '$0.26']
+    ],
+    providers: [
+      ['Claude Code', 'connected', 5, 'ClaudeCodeAdapter', 'sonnet-4.5 · opus-4.1', '#2ee6cf'],
+      ['Cursor', 'connected', 3, 'CursorAdapter', 'gpt-5-codex', '#7b8cff'],
+      ['OpenAI Codex', 'not configured', 0, 'CodexAdapter — planned', '—', '#5b6472'],
+      ['Gemini', 'not configured', 0, 'GeminiAdapter — planned', '—', '#5b6472']
+    ],
+    perms: [
+      ['Backend Developer', 1, 1, 1, 1, 0, 0],
+      ['Frontend Developer', 1, 1, 1, 1, 0, 0],
+      ['DevOps Engineer', 1, 1, 1, 1, 1, 0],
+      ['Security Engineer', 1, 0, 1, 0, 0, 1],
+      ['QA Engineer', 1, 0, 1, 0, 0, 0]
+    ],
+    permCols: ['repo read', 'source write', 'run tests', 'create branch', 'deploy prod', 'read secrets']
+  };
+
+  appVals() {
+    const st = this.state;
+    const page = st.page || 'overview';
+    const A = {}; st.agents.forEach(a => A[a.id] = a);
+    const byName = {}; st.agents.forEach(a => byName[a.name] = a);
+    const count = s => st.agents.filter(a => a.status === s).length;
+
+    const navDef = [
+      ['overview', 'Overview', ''], ['agents', 'Agents', '8'], ['tasks', 'Tasks', '12'],
+      ['graph', 'Graph', '5'], ['activity', 'Activity', 'live'], ['projects', 'Projects', '3'],
+      ['skills', 'Skills', '14'], ['analytics', 'Analytics', ''], ['settings', 'Settings', '']
+    ];
+    const nav = navDef.map(([k, label, badge]) => ({
+      label, badge, key: k,
+      bg: page === k ? 'rgba(46,230,207,.09)' : 'transparent',
+      fg: page === k ? '#e7eaf0' : '#8a929e',
+      rail: page === k ? 'inset 2px 0 0 #2ee6cf' : 'none',
+      weight: page === k ? '500' : '400',
+      onClick: () => this.setState({page: k})
+    }));
+
+    const titles = {
+      overview: ['Overview', 'Who is working, who needs you — right now'],
+      agents: ['Agents', '8 agents across 5 departments · 2 providers'],
+      tasks: ['Tasks', '12 active · 2 blocked · sprint 14'],
+      graph: ['Graph', 'Organization, execution, dependencies and skill chains'],
+      activity: ['Activity', 'Structured execution events, newest first'],
+      projects: ['Projects', '3 projects · $15.44 spend this week'],
+      skills: ['Skills', 'Superpowers provider + domain skills'],
+      analytics: ['Analytics', 'Last 7 days · seeded development data'],
+      settings: ['Settings', 'Providers, permissions, realtime transport']
+    };
+
+    const statusRow = (name, status) => {
+      const m = this.m(status);
+      return {color: m.color, label: m.label, bgc: m.color + '1a', bdc: m.color + '3d', anim: m.pulse ? 'pulsedot' : ''};
+    };
+
+    const boardCols = this.appData.board.map(([name, color, items]) => ({
+      name: name.toUpperCase(), color, count: String(items.length),
+      items: items.map(([id, title, agent, priority, step, status]) => {
+        const m = this.m(status);
+        return {
+          id, title, agent: agent === '—' ? 'unassigned' : agent, step,
+          priority: priority.toUpperCase(),
+          pColor: priority === 'urgent' ? '#f87171' : (priority === 'high' ? '#f5b34a' : '#69727f'),
+          initials: agent === '—' ? '··' : agent.slice(0, 2).toUpperCase(),
+          color: m.color, bgc: m.color + '1f',
+          bdc: status === 'blocked' ? 'rgba(248,113,113,.3)' : 'rgba(255,255,255,.08)'
+        };
+      })
+    }));
+
+    const agentRows = st.agents.map(a => {
+      const c = this.cardOf(a);
+      return {
+        ...c, dept: a.dept, model: a.model,
+        cost: '$' + (0.3 + a.progress / 42).toFixed(2),
+        tokens: (0.2 + a.progress / 90).toFixed(1) + 'M',
+        skillList: a.skill === '—' ? 'none active' : a.skill + ' · verification',
+        onRow: () => this.setState({selectedId: a.id, filter: a.id, page: 'overview'})
+      };
+    });
+
+    const projects = this.appData.projects.map(([name, status, agents, active, blocked, cost, pct, team, sub]) => {
+      const m = status === 'active' ? this.m('working') : this.m('planning');
+      return {
+        name, sub, cost, pct: pct + '%', color: m.color,
+        statusLabel: status.toUpperCase(), bgc: m.color + '1a', bdc: m.color + '3d',
+        agents: String(agents), active: String(active), blocked: String(blocked),
+        blockedColor: blocked > 0 ? '#f87171' : '#5b6472',
+        team: team.map(n => ({
+          initials: n.slice(0, 2).toUpperCase(),
+          color: byName[n] ? this.m(byName[n].status).color : '#7c8697',
+          bgc: (byName[n] ? this.m(byName[n].status).color : '#7c8697') + '26'
+        }))
+      };
+    });
+
+    const superpowers = this.appData.superpowers.map(([label, uses, agents, status]) => {
+      const m = this.m(status);
+      return {
+        label, uses: String(uses), agents: agents + ' agents',
+        pw: Math.min(100, uses * 3) + '%', color: m.color,
+        state: status === 'idle' ? 'ready' : m.label.toLowerCase()
+      };
+    });
+    const domainSkills = this.appData.domainSkills.map(([label, source, agents]) => ({
+      label, source, agents: agents + ' agents',
+      sColor: source === 'git' ? '#7b8cff' : (source === 'local' ? '#f5b34a' : '#8a929e')
+    }));
+
+    const kpis = this.appData.kpis.map(([label, val, delta, color]) => ({label, val, delta, color}));
+    const chart = this.appData.chart.map(([d, ok, fail]) => ({
+      d, okH: (ok * 1.5) + 'px', failH: (fail * 1.5) + 'px', val: String(ok)
+    }));
+    const perf = this.appData.perf.map(([name, role, done, rate, avg, tokens, cost]) => ({
+      name, role, done: String(done), rate: rate + '%', avg, tokens, cost,
+      initials: name.slice(0, 2).toUpperCase(),
+      color: byName[name] ? this.m(byName[name].status).color : '#7c8697',
+      bgc: (byName[name] ? this.m(byName[name].status).color : '#7c8697') + '26',
+      pw: rate + '%',
+      rateColor: rate >= 90 ? '#4ade80' : (rate >= 80 ? '#f5b34a' : '#f87171')
+    }));
+
+    const providers = this.appData.providers.map(([name, status, agents, adapter, models, color]) => ({
+      name, adapter, models, color,
+      statusLabel: status.toUpperCase(),
+      agents: agents ? agents + ' agents bound' : 'no agents',
+      bgc: color + '18', bdc: color + '3d',
+      cta: status === 'connected' ? 'Configure' : 'Connect'
+    }));
+
+    const permRows = this.appData.perms.map(([role, ...vals]) => ({
+      role,
+      cells: vals.map((v, i) => ({
+        glyph: v ? '✓' : '✕',
+        fg: v ? '#4ade80' : '#f87171',
+        bg: v ? 'rgba(74,222,128,.1)' : 'rgba(248,113,113,.08)'
+      }))
+    }));
+    const permCols = this.appData.permCols.map(label => ({label}));
+
+    const eventTypes = [
+      ['task.*', 34, '#2ee6cf'], ['agent.*', 28, '#7b8cff'], ['skill.*', 19, '#c084fc'],
+      ['artifact.*', 12, '#4ade80'], ['checkpoint.*', 9, '#f5b34a'], ['review.*', 5, '#f87171']
+    ].map(([label, n, color]) => ({label, n: String(n), color, pw: Math.min(100, n * 2.6) + '%'}));
+
+    return {
+      nav, pageTitle: titles[page][0], pageSub: titles[page][1],
+      pgOverview: page === 'overview', pgAgents: page === 'agents', pgTasks: page === 'tasks',
+      pgGraph: page === 'graph', pgActivity: page === 'activity', pgProjects: page === 'projects',
+      pgSkills: page === 'skills', pgAnalytics: page === 'analytics', pgSettings: page === 'settings',
+      boardCols, agentRows, projects, superpowers, domainSkills, kpis, chart, perf, providers, permRows, permCols, eventTypes,
+      appSummary: [
+        {label: 'Working', count: String(count('working')), color: '#2ee6cf'},
+        {label: 'Waiting', count: String(count('waiting')), color: '#f5b34a'},
+        {label: 'Paused', count: String(count('paused') + count('pause_requested')), color: '#8a929e'},
+        {label: 'Idle', count: String(count('idle')), color: '#5b6472'},
+        {label: 'Active tasks', count: '12', color: '#e7eaf0'},
+        {label: 'Blocked', count: '2', color: '#f87171'}
+      ]
+    };
+  }
+
+  ledgerVals() {
+    const st = this.state;
+    const ink = {
+      working: ['#d8a24a', 'working'],
+      planning: ['#9aa08c', 'planning'],
+      review:   ['#a8927f', 'in review'],
+      waiting:  ['#8d877c', 'waiting'],
+      paused:   ['#918a7d', 'paused'],
+      pause_requested: ['#8d877c', 'pausing'],
+      resuming: ['#d8a24a', 'resuming'],
+      blocked:  ['#b4553f', 'blocked'],
+      idle:     ['#8d877c', 'idle'],
+      completed:['#7f8f6b', 'delivered']
+    };
+    const open = st.openRow || 'alex';
+
+    const rows = st.agents.map((a, i) => {
+      const k = ink[a.status] || ink.idle;
+      const isOpen = open === a.id;
+      return {
+        id: a.id, name: a.name, role: a.role, dept: a.dept,
+        no: String(i + 1).padStart(2, '0'),
+        word: k[1], mark: k[0],
+        task: a.task, taskId: a.taskId === '—' ? '' : a.taskId,
+        pct: a.progress + '%', pctNum: String(a.progress).padStart(2, '0'),
+        provider: a.provider.toLowerCase(),
+        skill: a.skill === '—' ? 'none' : a.skill,
+        queue: String(a.queue),
+        rowBg: isOpen ? 'rgba(232,227,216,.035)' : 'transparent',
+        detailDisplay: isOpen ? 'block' : 'none',
+        caret: isOpen ? '−' : '+',
+        actLabel: a.status === 'paused' ? 'resume' : (a.status === 'idle' || a.status === 'completed' ? 'assign' : 'pause'),
+        onRow: () => this.setState({openRow: isOpen ? null : a.id, selectedId: a.id}),
+        onAct: (ev) => { if (ev) ev.stopPropagation(); this.toggle(a); }
+      };
+    });
+
+    const count = s => st.agents.filter(a => a.status === s).length;
+    const tally = [
+      ['working', String(count('working')), '#d8a24a'],
+      ['waiting', String(count('waiting')), '#8d877c'],
+      ['blocked', '2', '#b4553f'],
+      ['delivered', String(count('completed')), '#7f8f6b'],
+      ['spend', '$8.43', '#e8e3d8']
+    ].map(([label, val, color], i, arr) => ({label, val, color, rule: i === arr.length - 1 ? 'transparent' : 'rgba(232,227,216,.12)'}));
+
+    const A = {}; st.agents.forEach(a => A[a.id] = a);
+    const dispatch = (st.transcript.length ? st.transcript : [{...this.chatter[st.talkIdx], t: this.stamp(st.minute)}])
+      .slice(0, 5).map(c => ({t: c.t.slice(0, 5), from: A[c.from].name, to: A[c.to].name, text: c.text, kind: c.kind}));
+
+    const stations = [
+      ['Requirements', 'delivered', '#7f8f6b'],
+      ['Architecture', 'delivered', '#7f8f6b'],
+      ['Build', 'working', '#d8a24a'],
+      ['Security', 'in review', '#a8927f'],
+      ['Approval', 'waiting on you', '#8d877c'],
+      ['QA', 'blocked', '#b4553f'],
+      ['Release', 'not started', '#8d877c']
+    ].map(([label, state, color], i) => ({label, state, color, no: '0' + (i + 1)}));
+
+    const checkpoints = [
+      ['01', 'DTO + schema', 'closed 17:02'], ['02', 'Controller', 'closed 17:04'],
+      ['03', 'Repository', 'closed 17:05'], ['04', 'Service layer', 'closed 17:07'],
+      ['05', 'Unit tests', 'running'], ['06', 'Integration tests', 'queued']
+    ].map(([no, label, note]) => ({no, label, note, fg: note === 'running' ? '#d8a24a' : (note === 'queued' ? '#8d877c' : '#c3bcaf')}));
+
+    const index = [
+      ['01', 'Overview'], ['02', 'Agents'], ['03', 'Tasks'], ['04', 'Graph'], ['05', 'Activity'],
+      ['06', 'Projects'], ['07', 'Skills'], ['08', 'Analytics'], ['09', 'Settings']
+    ].map(([no, label], i) => ({
+      no, label,
+      fg: i === 1 ? '#e8e3d8' : '#8d877c',
+      rule: i === 1 ? '#d8a24a' : 'transparent'
+    }));
+
+    return {ledgerRows: rows, tally, dispatch, stations, ledgerCheckpoints: checkpoints, ledgerIndex: index};
+  }
+
+  renderVals() {
+    const st = this.state;
+    const cards = st.agents.map(a => this.cardOf(a));
+    const byId = {}; cards.forEach(c => byId[c.id] = c);
+    const count = s => st.agents.filter(a => a.status === s).length;
+
+    const summary = [
+      {label: 'Working', count: count('working'), color: '#2ee6cf'},
+      {label: 'Waiting', count: count('waiting'), color: '#f5b34a'},
+      {label: 'Paused', count: count('paused') + count('pause_requested'), color: '#8a929e'},
+      {label: 'Idle', count: count('idle'), color: '#5b6472'},
+      {label: 'Active tasks', count: 12, color: '#e7eaf0'},
+      {label: 'Blocked', count: 2, color: '#f87171'}
+    ].map(s => ({...s, count: String(s.count), onClick: () => this.setState({filter: null})}));
+
+    const g = this.graph();
+    const scale = 1;
+    const gnodes = g.nodes.map(n => {
+      const m = this.m(n.status);
+      const active = n.id === st.selectedId;
+      return {
+        ...n,
+        left: (n.cx - n.w / 2) + 'px', top: n.cy + 'px', w: n.w + 'px',
+        color: m.color, statusLabel: m.label, dotAnim: m.pulse ? 'pulsedot' : '',
+        pw: (n.progress || 0) + '%',
+        panel: active ? '#151a21' : 'rgba(15,18,23,.92)',
+        bdc: active ? m.color + '99' : 'rgba(255,255,255,.11)',
+        shadow: active ? '0 0 0 1px ' + m.color + '55, 0 0 26px ' + m.color + '33' : '0 4px 18px rgba(0,0,0,.5)',
+        onClick: () => this.setState({selectedId: n.id})
+      };
+    });
+
+    const modes = [
+      {k: 'org', label: 'Organization'}, {k: 'exec', label: 'Execution'},
+      {k: 'dep', label: 'Dependencies'}, {k: 'skill', label: 'Skill chain'}, {k: 'comm', label: 'Comms'}
+    ].map(m => ({
+      label: m.label,
+      bg: st.mode === m.k ? 'rgba(46,230,207,.14)' : 'transparent',
+      fg: st.mode === m.k ? '#2ee6cf' : '#8a929e',
+      shadow: st.mode === m.k ? 'inset 0 0 0 1px rgba(46,230,207,.3)' : 'none',
+      onClick: () => this.setState({mode: m.k === 'comm' ? 'org' : m.k})
+    }));
+
+    const selNode = g.nodes.find(n => n.id === st.selectedId) || g.nodes[1] || g.nodes[0];
+    const selAgent = st.agents.find(a => a.id === (selNode.agent || selNode.id));
+    const base = selAgent ? this.cardOf(selAgent) : null;
+    const sm = this.m(selNode.status);
+    const sel = base ? {
+      ...base, label: base.name, sub: base.role
+    } : {
+      label: selNode.label, sub: selNode.sub, initials: selNode.label.slice(0, 2).toUpperCase(),
+      color: sm.color, statusLabel: sm.label, dotAnim: sm.pulse ? 'pulsedot' : '',
+      bgc: sm.color + '1a', bdc: sm.color + '3d',
+      provider: '—', model: '—', taskId: selNode.id.toUpperCase(), task: selNode.label,
+      pw: (selNode.progress || 0) + '%', step: 'stage', toggleLabel: 'Pause',
+      onToggle: () => {}
+    };
+
+    const cpDef = [
+      ['DTO + schema', 'done', '17:02'], ['Controller', 'done', '17:04'],
+      ['Repository', 'done', '17:05'], ['Service', 'done', '17:07'],
+      ['Unit tests', 'run', 'now'], ['Integration tests', 'todo', '—']
+    ];
+    const checkpoints = cpDef.map(([label, s, t]) => ({
+      label, t,
+      glyph: s === 'done' ? '✓' : (s === 'run' ? '●' : '○'),
+      mark: s === 'done' ? '#4ade80' : (s === 'run' ? '#2ee6cf' : '#5b6472'),
+      fg: s === 'todo' ? '#69727f' : '#c8cfda'
+    }));
+
+    const chainDef = [['brainstorm', 'done'], ['plan', 'done'], ['TDD', 'run'], ['verify', 'todo'], ['review', 'todo']];
+    const skillChain = chainDef.map(([label, s], i) => ({
+      label,
+      fg: s === 'done' ? '#4ade80' : (s === 'run' ? '#2ee6cf' : '#69727f'),
+      bg: s === 'run' ? 'rgba(46,230,207,.12)' : 'transparent',
+      bdc: s === 'done' ? 'rgba(74,222,128,.3)' : (s === 'run' ? 'rgba(46,230,207,.45)' : 'rgba(255,255,255,.1)'),
+      line: i === chainDef.length - 1 ? 'transparent' : 'rgba(255,255,255,.15)'
+    }));
+
+    const quickMsgs = ['Use Redis here', 'Add Zod validation', 'Prioritise payments', 'Write tests first']
+      .map(label => ({label, onClick: () => this.setState({draft: label})}));
+
+    const filtered = st.filter ? st.events.filter(e => e.who === (byId[st.filter] || {}).name) : st.events;
+    const chipFiltered = st.chip === 'all' ? filtered : filtered.filter(e => e.kind.indexOf(st.chip) === 0);
+    const feed = chipFiltered.map(e => {
+      const m = this.m(e.status);
+      return {...e, color: m.color, rowBg: 'transparent'};
+    });
+
+    const chips = [
+      {k: 'all', label: 'all'}, {k: 'task', label: 'task.*'}, {k: 'agent', label: 'agent.*'},
+      {k: 'skill', label: 'skill.*'}, {k: 'artifact', label: 'artifact.*'}
+    ].map(c => ({
+      label: c.label,
+      fg: st.chip === c.k ? '#2ee6cf' : '#7c8697',
+      bg: st.chip === c.k ? 'rgba(46,230,207,.1)' : 'transparent',
+      bdc: st.chip === c.k ? 'rgba(46,230,207,.35)' : 'rgba(255,255,255,.1)',
+      onClick: () => this.setState({chip: c.k})
+    }));
+
+    const capacity = [
+      {label: 'engineering', pw: '74%', val: '74%', color: '#2ee6cf'},
+      {label: 'security', pw: '52%', val: '52%', color: '#c084fc'},
+      {label: 'product', pw: '31%', val: '31%', color: '#7b8cff'},
+      {label: 'tokens', pw: '61%', val: '4.2M', color: '#f5b34a'}
+    ];
+
+    const taskDef = [
+      ['In Progress', '#2ee6cf', [
+        ['TASK-142', 'Implement Checkout API', 'Alex', 'high', '7/11', 'working'],
+        ['TASK-144', 'Checkout UI states', 'Emma', 'med', '4/9', 'working']
+      ]],
+      ['Review', '#c084fc', [['TASK-151', 'Payments threat model', 'Sarah', 'high', '8/9', 'review']]],
+      ['Blocked', '#f87171', [
+        ['TASK-147', 'Payment provider keys missing', 'Daniel', 'urgent', '0/4', 'blocked'],
+        ['TASK-149', 'Regression suite', 'Maya', 'med', '1/8', 'waiting']
+      ]],
+      ['Done', '#4ade80', [['TASK-138', 'Requirements v2', 'John', 'med', '6/6', 'completed']]]
+    ];
+    const columns = taskDef.map(([name, color, items]) => ({
+      name: name.toUpperCase(), color, count: String(items.length),
+      items: items.map(([id, title, agent, priority, step, status]) => {
+        const m = this.m(status);
+        const dim = st.filter && (byId[st.filter] || {}).name !== agent;
+        return {
+          id, title, agent, step, priority: priority.toUpperCase(),
+          pColor: priority === 'urgent' ? '#f87171' : (priority === 'high' ? '#f5b34a' : '#69727f'),
+          initials: this.initials(agent), color: m.color, bgc: m.color + '1f',
+          bdc: status === 'blocked' ? 'rgba(248,113,113,.3)' : 'rgba(255,255,255,.08)',
+          opacity: dim ? '0.35' : '1'
+        };
+      })
+    }));
+
+    const send = () => {
+      if (!st.draft.trim()) return;
+      const target = (byId[st.selectedId] || byId[st.filter] || byId.alex);
+      this.log('You → ' + target.name, 'agent.message_received', '"' + st.draft.trim() + '"', target.taskId, 'planning');
+      this.setState({draft: ''});
+    };
+
+    const target = byId[st.selectedId] || byId[st.filter] || byId.alex;
+
+    return {
+      ...this.officeVals(),
+      ...this.appVals(),
+      ...this.ledgerVals(),
+      cards, summary, gnodes, modes, sel, checkpoints, skillChain, quickMsgs, chips, capacity, columns, feed,
+      cableLayer: this.cableLayer(g.nodes, g.edges),
+      clock: this.stamp(st.minute),
+      filterLabel: st.filter ? 'filtered · ' + (byId[st.filter] || {}).name + ' ✕' : 'all agents',
+      clearFilter: () => this.setState({filter: null}),
+      miniFeed: st.events.slice(0, 3).map(e => ({t: e.t.slice(0, 5), text: e.who + ' — ' + e.text, color: this.m(e.status).color})),
+      drawerFeed: st.events.slice(0, 4).map(e => ({t: e.t.slice(0, 5), text: e.text, color: this.m(e.status).color})),
+      draft: st.draft,
+      targetLabel: target ? target.name.toLowerCase() : 'team',
+      onDraft: (e) => this.setState({draft: e.target.value}),
+      onDraftKey: (e) => { if (e.key === 'Enter') send(); },
+      onSend: send,
+      pauseAll: () => {
+        st.agents.filter(a => a.status === 'working').forEach(a => this.toggle(a));
+      },
+      toggleStream: () => this.setState({streaming: !st.streaming}),
+      streamLabel: st.streaming ? 'live' : 'paused',
+      streamFg: st.streaming ? '#2ee6cf' : '#f5b34a',
+      streamBg: st.streaming ? 'rgba(46,230,207,.1)' : 'rgba(245,179,74,.1)',
+      streamBdc: st.streaming ? 'rgba(46,230,207,.35)' : 'rgba(245,179,74,.35)',
+      streamAnim: st.streaming ? 'pulsedot' : ''
+    };
+  }
+}
+</script>
+</body>
+</html>
