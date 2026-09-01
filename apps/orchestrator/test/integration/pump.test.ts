@@ -1667,8 +1667,8 @@ describe('pumpRun', () => {
     })
 
     /**
-     * B2 (M19): Task 1's REAL capture (`hook-deny.ndjson` et al) proved hook responses are NOT
-     * adjacency-ordered -- a second `PreToolUse:Read` response landed AFTER a Bash tool_use, AFTER
+     * B2 (M19): Task 1's REAL capture (`permission-matrix-deny.ndjson`) proved hook responses are
+     * NOT adjacency-ordered -- a second `PreToolUse:Read` response landed AFTER a Bash tool_use, AFTER
      * that Bash call's own deny, and AFTER the deny's tool_result. "The last tool_call this pump
      * saw" is therefore not reliably the call a deny belongs to; it was only right in that
      * recording by luck. This test forces the mismatch by hand: the last `tool_call` this pump

@@ -827,15 +827,21 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
             // `killWithEscalation`. The run is still working; the agent is free to try something
             // else, the same way ADR 0001 measured a permission-mode denial leaving it free to.
             // B2 (M19): "the last tool_call this pump saw" is not, on its own, proof this deny
-            // belongs to it. Task 1's REAL capture (`hook-deny.ndjson`) measured hook responses
-            // arriving OUT OF ADJACENCY ORDER -- a second `PreToolUse:Read` response landed after a
-            // Bash tool_use, after that Bash call's own deny, and after the deny's tool_result.
-            // "Last tool_call seen" was the right id in that recording by luck, not by contract. The
-            // deny reason itself already carries the tool name it refused (`gateOutcome.tool`, from
-            // `parsePermissionDenyReason`), so the association is trusted only when that name
-            // matches the last tool_call's own name -- a cross-check this pump can make without
-            // extending the stream parser to pair `hook_id`/`hook_started` (out of this task's
-            // scope; see the task report for why that would still be the more complete fix).
+            // belongs to it. Task 1's REAL capture (`permission-matrix-deny.ndjson`) measured hook
+            // responses arriving OUT OF ADJACENCY ORDER -- a second `PreToolUse:Read` response
+            // landed after a Bash tool_use, after that Bash call's own deny, and after the deny's
+            // tool_result. "Last tool_call seen" was the right id in that recording by luck, not by
+            // contract. The deny reason itself already carries the tool name it refused
+            // (`gateOutcome.tool`, from `parsePermissionDenyReason`), so the association is trusted
+            // only when that name matches the last tool_call's own name -- a cross-check this pump
+            // can make without extending the stream parser to pair `hook_id`/`hook_started` (out of
+            // this task's scope; see the task report for why that would still be the more complete
+            // fix). This is the conservative side of a genuine trade-off, not a free win: a REAL
+            // matrix deny whose hook response happens to arrive after a subsequent, DIFFERENTLY
+            // NAMED tool_call also fails this check, so `associated` is `null` for a legitimate
+            // survivable refusal too, and the run can over-fail. Chosen anyway, because the
+            // alternative -- trusting the bare adjacency -- is the exact mis-association this fix
+            // exists to close.
             const associated = lastToolUse !== null && lastToolUse.name === gateOutcome.tool ? lastToolUse.id : null
             await emit('run.tool_denied', 'agent', {
               tool: gateOutcome.tool,
