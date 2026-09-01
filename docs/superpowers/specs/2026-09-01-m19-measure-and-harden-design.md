@@ -174,3 +174,99 @@ test change**. What the hand-authored file did not and could not model:
 - `git add` with explicit paths only.
 - Verify backlog items against source before planning them (done 2026-09-01 for every item
   above).
+
+## Errata (post-execution, 2026-09-01)
+
+Written at Task 14, after every other task landed. Where this section and the sections above
+disagree, this section is what shipped.
+
+### A1 — the capture, and what it changed
+
+`packages/providers/test/fixtures/permission-matrix-deny.ndjson` is now a real `claude` recording
+(2.1.252, 2026-09-01, one run, **$0.0741884**), made by `scripts/capture-matrix-deny.mjs` driving
+this repository's own orchestrator daemon. It replaced M18's hand-authored file with **no product
+and no test change**: all 52 `pump.test.ts` cases and all 18 `fake-claude.test.ts` cases passed on
+the real bytes as committed. Every assumption the hand-authored file encoded about the deny itself
+held byte for byte.
+
+**Eight divergence findings** came out of it (the seven in the "A1 findings" section above plus the
+init-line disclosure caught in review). Two mattered enough to change code and both were routed
+into Series B: the non-adjacency of hook responses (→ B2) and the id flow the resume echo re-reads
+(→ B1). The rest are recorded, not chased.
+
+The review round added a **fifth standing redaction rule**: the `init` line's environment catalog
+(`tools`, `mcp_servers`, `plugins`, `slash_commands`, `skills`, `agents`) published which
+third-party accounts the recording operator had connected — a privacy class rules 1–4 had no reason
+to anticipate, since it carries no path, email, UID or PID. Rule 5 replaces each inventory array
+with a `fixture-*` stand-in of the same schema and **binds every future capture**; it is the rule
+the M19 gate's check 2 pins by number. Two plugin names left visible in the fixture's own
+`SessionStart` hook output were ruled acceptable (public plugin names, no account or path) rather
+than scrubbed, on stream-fidelity grounds.
+
+### A2 — a no-op verdict, and B5 dropped
+
+`cursor-agent` was still **2026.08.25-3e8eec8**, byte-identical to the version M13 measured, so
+there was nothing new to measure: the standing "write ≠ edit enforcement is not fixed" verdict
+carries forward unchanged and A2 cost **$0.00**. The task's diff is documentation only. Per the
+spec's own conditional, **B5 (Task 7) was dropped, not deferred** — see the Series B entry above.
+
+### B1/B2 — what landed
+
+- **B1**: the `run.tool_denied` payload now carries the denied `toolUseId`, and a resumed pump seeds
+  `matrixDeniedToolUseIds` from the run's already-persisted denials, so the resume echo of a
+  previously-denied call cannot re-fail a run that survived the deny the first time.
+- **B2**: the deny→tool association is name-checked. `pump.ts` tracks `lastToolUse` as `{id, name}`
+  rather than a bare id, and a `hook_response` whose `hook_name` does not match the last `tool_call`
+  is not credited to it. The direction is deliberately conservative (fail-safe): an unassociable
+  deny fails the run rather than being silently excluded.
+- **Known limit, unclosed**: two *same-named* calls racing in one stream are still ambiguous. The
+  real fix is `hook_id`↔`hook_started` pairing, which A1's capture proves the stream carries and
+  `parseStreamLine` ignores. Out of scope here; an M20+ backlog candidate.
+- **Known limit, unclosed**: `toolUseId` survives only in `ExecutionEvent.payload`'s raw column —
+  `packages/events/schema.ts`'s non-strict domain schema strips it, so the next *typed* consumer of
+  that event will find nothing there. Recorded, not fixed.
+
+### C1 — the index's columns are not the plan's
+
+The plan asked for `(workspaceId, runId, seq)`. What shipped is
+**`(workspaceId, type, runId, seq)`**, partial on `(payload #> '{name}') = '"Skill"'::jsonb`
+(`20260901120000_m19_skill_calls_partial_index`). The reason is a real finding, not a preference:
+Prisma emits the `type` filter as a **parameterized cast**, which cannot live inside a partial
+index predicate — the planner would never match it, and the DDL would not be IMMUTABLE. So `type`
+moved out of the predicate and into the key columns. The predicate that remains is reachable only
+because `@prisma/adapter-pg` issues these statements **unnamed**, which Postgres always plans as
+custom plans with the parameters substituted; a driver change to named/cached prepared statements
+would plan them generically, the partial predicate would stop matching, and the index would go dead
+**silently** — a correct result over a Seq Scan, with no error. That failure mode is documented at
+the query site in `apps/web/src/server/skillGraph.ts`.
+
+Two corrections to earlier claims: the `groupBy` still carries its own `Sort`/`GroupAggregate` for
+the `MAX(seq) DESC` ordering (an aggregate result no index order can satisfy) — the index removes
+the *input* sort, not the outer one; and the applied migration's header keeps its now-imprecise
+"no Sort node" wording on purpose, because editing an applied migration for comment-only text costs
+a checksum hand-repair. The correction lives at the query site and here.
+
+The M19 gate checks this index **by name only**, deliberately: the column list is free to keep
+following the query, but the migration having run at all is not.
+
+### C7 — wider than the two examples
+
+The `TASK_STATUS_*` dot-tables folded into one derivation off the tone table moved **29 cells
+across 7 statuses** (plus a `TEXT`/`reviewing` fix), where the task brief named two example
+movements. This was pre-ruled in the SDD ledger before execution: the spec mandates derivation, and
+recon had already shown derivation is not colour-preserving, so the movements are the point rather
+than a regression. The handoff tokens agree with the derived direction (`done` = green). There is no
+visual-snapshot tooling in this repo, so the evidence is the derivation chain plus a 7/7 spot-check
+in review, not a screenshot diff.
+
+### Deferred minors
+
+Every deferred minor from every task — including the ones named above — is recorded in
+`.superpowers/sdd/2026-09-01-m19-measure-and-harden/progress.md` under its own task line. They are
+the M20 backlog's raw material and were deliberately not chased here.
+
+### Final spend
+
+**$0.0741884** total against a **$2.00** milestone cap — A1's single capture, and nothing else.
+Both live measurements happened once, during execution; the gate reads their recorded evidence and
+spawns no vendor CLI at all, so verifying this milestone costs nothing forever.
