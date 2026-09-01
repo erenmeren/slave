@@ -179,3 +179,16 @@ export function cardStateForTask(status: TaskStatus): CardState {
     }
   }
 }
+
+/**
+ * The single source for `TaskCard.tsx`'s four `TASK_STATUS_*` tables (M19 C7). A status's tone is
+ * always its card state's own tone -- `cardStateForTask` into `CARD_STATE_TONE`, the same two
+ * calls a `TaskCard` render makes for its pill. `TaskCard.tsx` builds each of its four
+ * `Record<TaskStatus, string>` exports by looping every `TaskStatus` through this into one of
+ * `StatusPill`'s own `TONE_*` tables, rather than hand-maintaining a second `TaskStatus`-keyed
+ * mapping that can drift from this one (the defect M16 Task 8 fix round 1 partially caught: only
+ * `reviewing`'s `TASK_STATUS_TEXT` entry got fixed, not the mapping itself).
+ */
+export function toneForTaskStatus(status: TaskStatus): StatusTone {
+  return CARD_STATE_TONE[cardStateForTask(status)].tone
+}

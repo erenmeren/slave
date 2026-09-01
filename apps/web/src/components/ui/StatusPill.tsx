@@ -37,6 +37,25 @@ export const TONE_BORDER: Record<StatusTone, string> = {
   idle: 'border-tone-idle/24',
 }
 
+/**
+ * Plain (no alpha) `border-tone-*` literal per tone -- the solid-border counterpart to
+ * `TONE_BORDER`'s `/24`-alpha pill border. `TaskCard.tsx`'s `TASK_STATUS_BORDER` (M19 C7)
+ * derives off this table, not `TONE_BORDER`: its consumers (`graph/OrgNodes.tsx`,
+ * `graph/TaskNodes.tsx`) render a plain solid node border with no alpha stacked on top, so
+ * deriving off the alpha table would dim every graph node border to ~24% opacity -- a real visual
+ * regression the M19 C7 tone remap does not sanction. Same literal-string rule as `TONE_BORDER`.
+ */
+export const TONE_BORDER_SOLID: Record<StatusTone, string> = {
+  working: 'border-tone-working',
+  planning: 'border-tone-planning',
+  review: 'border-tone-review',
+  waiting: 'border-tone-waiting',
+  blocked: 'border-tone-blocked',
+  done: 'border-tone-done',
+  paused: 'border-tone-paused',
+  idle: 'border-tone-idle',
+}
+
 export const TONE_TEXT: Record<StatusTone, string> = {
   working: 'text-tone-working',
   planning: 'text-tone-planning',
@@ -57,6 +76,23 @@ export const TONE_DOT: Record<StatusTone, string> = {
   done: 'bg-tone-done',
   paused: 'bg-tone-paused',
   idle: 'bg-tone-idle',
+}
+
+/**
+ * The border-flash's `--flash-color` source per `StatusTone` (M19 C7) -- an inline CSS custom
+ * property value, not a class, so the Tailwind literal-scan rule above does not apply here; it
+ * mirrors `AgentCard.tsx`'s own `FLASH_COLOR` pattern, and is what `TaskCard.tsx`'s
+ * `TASK_STATUS_FLASH_COLOR` (M7 task 8, spec §6's status-flash signal) now derives off.
+ */
+export const TONE_FLASH_COLOR: Record<StatusTone, string> = {
+  working: 'var(--color-tone-working)',
+  planning: 'var(--color-tone-planning)',
+  review: 'var(--color-tone-review)',
+  waiting: 'var(--color-tone-waiting)',
+  blocked: 'var(--color-tone-blocked)',
+  done: 'var(--color-tone-done)',
+  paused: 'var(--color-tone-paused)',
+  idle: 'var(--color-tone-idle)',
 }
 
 /** `ProgressBar`'s "0 0 8px" glow (spec §3), solid tone colour — an arbitrary-value literal per

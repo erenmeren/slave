@@ -1,88 +1,28 @@
+import { TASK_STATUSES } from '@ai-team-os/db'
 import type { TaskStatus } from '@ai-team-os/domain'
 import { priorityChip } from '../lib/taskColumns'
-import { cardStateForTask, CARD_STATE_TONE } from '../lib/tones'
+import { cardStateForTask, CARD_STATE_TONE, toneForTaskStatus } from '../lib/tones'
 import type { TaskBoardItem } from '../server/tasks'
 import { AvatarTile } from './ui/AvatarTile'
-import { StatusPill, TONE_TEXT } from './ui/StatusPill'
+import { StatusPill, TONE_BORDER_SOLID, TONE_DOT, TONE_FLASH_COLOR, TONE_TEXT, type StatusTone } from './ui/StatusPill'
 
-// Reuses the M4 status vocabulary (design doc §8: "no new tokens expected") rather than minting
-// task-specific colours. Several statuses share a token deliberately — e.g. both `ready` and
-// `verifying` read as "in flight, not yet the agent's turn" (starting/cyan).
-//
-// These three tables predate `lib/tones.ts`'s single tone table (`CARD_STATE_TONE`/
-// `cardStateForTask`) and are a second mapping the M16 spec's single-source rule (§5) does not
-// want -- `TaskCard.tsx` itself no longer reads them (it calls `cardStateForTask` directly), but
-// `graph/TaskNodes.tsx` (Dependencies mode) and `graph/OrgNodes.tsx` (the active-task satellite)
-// still do. M16 Task 8 fix round 1 reconciles only `reviewing`, the one entry a live regression
-// caught drifted to the paused/grey tone instead of review/purple; a full derivation off the one
-// table (retiring these three `Record`s entirely) is a parked follow-up, not this fix's scope.
-export const TASK_STATUS_DOT: Record<TaskStatus, string> = {
-  backlog: 'bg-tone-idle',
-  ready: 'bg-tone-planning',
-  blocked: 'bg-tone-waiting',
-  assigned: 'bg-tone-planning',
-  running: 'bg-tone-working',
-  verifying: 'bg-tone-planning',
-  reviewing: 'bg-tone-review',
-  merging: 'bg-tone-paused',
-  rework: 'bg-tone-waiting',
-  done: 'bg-tone-working',
-  failed: 'bg-tone-blocked',
-  cancelled: 'bg-tone-idle',
+// The four tables below are derived, not hand-maintained (M19 C7): each is one loop over every
+// `TaskStatus` through `toneForTaskStatus` into the matching `StatusPill` `TONE_*` table, so this
+// file cannot carry a second, independently-drifting copy of the status→tone mapping
+// `lib/tones.ts` already owns (the defect M16 Task 8 fix round 1 only partially closed -- see
+// `toneForTaskStatus`'s own comment). `graph/TaskNodes.tsx` and `graph/OrgNodes.tsx` still import
+// these by name; `TaskCard` itself renders through `cardStateForTask` directly, below.
+function taskStatusTable(tones: Record<StatusTone, string>): Record<TaskStatus, string> {
+  return Object.fromEntries(TASK_STATUSES.map((status) => [status, tones[toneForTaskStatus(status)]])) as Record<
+    TaskStatus,
+    string
+  >
 }
 
-// Same status → colour mapping as `TASK_STATUS_DOT`, as literal `border-tone-*` strings rather
-// than a runtime `.replace('bg-', 'border-')` on the dot's own class: Tailwind v4 generates
-// utilities by scanning source text for literal class names, so an assembled-at-runtime string
-// (however mechanically derived from a literal) never gets generated — the graph's active-task
-// satellite (`OrgNodes.tsx`) hit exactly this, fix-round-1 finding 4.
-export const TASK_STATUS_BORDER: Record<TaskStatus, string> = {
-  backlog: 'border-tone-idle',
-  ready: 'border-tone-planning',
-  blocked: 'border-tone-waiting',
-  assigned: 'border-tone-planning',
-  running: 'border-tone-working',
-  verifying: 'border-tone-planning',
-  reviewing: 'border-tone-review',
-  merging: 'border-tone-paused',
-  rework: 'border-tone-waiting',
-  done: 'border-tone-working',
-  failed: 'border-tone-blocked',
-  cancelled: 'border-tone-idle',
-}
-
-// The border-flash's `--flash-color` source per `TaskStatus` (M7 task 8, spec §6's status-flash
-// signal) — same "reuse the existing tokens through their `@theme inline` names" rule
-// `AgentCard.tsx`'s own `FLASH_COLOR` follows, just keyed by the wider status vocabulary tasks use.
-export const TASK_STATUS_FLASH_COLOR: Record<TaskStatus, string> = {
-  backlog: 'var(--color-tone-idle)',
-  ready: 'var(--color-tone-planning)',
-  blocked: 'var(--color-tone-waiting)',
-  assigned: 'var(--color-tone-planning)',
-  running: 'var(--color-tone-working)',
-  verifying: 'var(--color-tone-planning)',
-  reviewing: 'var(--color-tone-review)',
-  merging: 'var(--color-tone-paused)',
-  rework: 'var(--color-tone-waiting)',
-  done: 'var(--color-tone-working)',
-  failed: 'var(--color-tone-blocked)',
-  cancelled: 'var(--color-tone-idle)',
-}
-
-export const TASK_STATUS_TEXT: Record<TaskStatus, string> = {
-  backlog: 'text-tone-idle',
-  ready: 'text-tone-planning',
-  blocked: 'text-tone-waiting',
-  assigned: 'text-tone-planning',
-  running: 'text-tone-working',
-  verifying: 'text-tone-planning',
-  reviewing: 'text-tone-paused',
-  merging: 'text-tone-paused',
-  rework: 'text-tone-waiting',
-  done: 'text-tone-working',
-  failed: 'text-tone-blocked',
-  cancelled: 'text-tone-idle',
-}
+export const TASK_STATUS_DOT: Record<TaskStatus, string> = taskStatusTable(TONE_DOT)
+export const TASK_STATUS_BORDER: Record<TaskStatus, string> = taskStatusTable(TONE_BORDER_SOLID)
+export const TASK_STATUS_FLASH_COLOR: Record<TaskStatus, string> = taskStatusTable(TONE_FLASH_COLOR)
+export const TASK_STATUS_TEXT: Record<TaskStatus, string> = taskStatusTable(TONE_TEXT)
 
 /**
  * The handoff's compact card (design README §3a.3): mono id, priority chip, title, assignee

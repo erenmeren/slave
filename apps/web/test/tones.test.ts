@@ -1,8 +1,18 @@
 import { describe, expect, it } from 'vitest'
-import { CARD_STATE_TONE, cardStateFor, cardStateForAgent, cardStateForRun, cardStateForTask, type CardState } from '../src/lib/tones.js'
+import {
+  CARD_STATE_TONE,
+  cardStateFor,
+  cardStateForAgent,
+  cardStateForRun,
+  cardStateForTask,
+  toneForTaskStatus,
+  type CardState,
+} from '../src/lib/tones.js'
 import { COLUMN_FOR_STATUS, COLUMN_STATE } from '../src/lib/taskColumns.js'
 import type { AgentStatus, RunStatus, TaskStatus } from '@ai-team-os/domain'
 import { TASK_STATUSES } from '@ai-team-os/db'
+import { TASK_STATUS_BORDER, TASK_STATUS_DOT, TASK_STATUS_FLASH_COLOR, TASK_STATUS_TEXT } from '../src/components/TaskCard.js'
+import { TONE_BORDER_SOLID, TONE_DOT, TONE_FLASH_COLOR, TONE_TEXT } from '../src/components/ui/StatusPill.js'
 
 // The mockup's own table (`AI Team OS Mockups.dc.html:912-923`), transcribed. Colour is checked
 // through the tone name rather than the hex, because `globals.css` owns the hex and a tone is how
@@ -149,5 +159,41 @@ describe('cardStateForTask', () => {
   it('reads a running task as working, never as idle -- the pill agrees with the column head', () => {
     expect(CARD_STATE_TONE[cardStateForTask('running')].label).toBe('WORKING')
     expect(CARD_STATE_TONE[cardStateFor('idle', 'running')].label).toBe('IDLE')
+  })
+})
+
+// M19 C7: `TaskCard.tsx`'s four `TASK_STATUS_*` tables (DOT/BORDER/FLASH_COLOR/TEXT) used to be a
+// second, hand-maintained mapping off `TaskStatus` that predated `cardStateForTask`/
+// `CARD_STATE_TONE` and had already drifted from it once (M16 Task 8's `reviewing` fix). This is
+// the one-line derivation that retires that second mapping: a status's tone is always its card
+// state's tone.
+describe('toneForTaskStatus', () => {
+  it("is 'done' for a done task -- CARD_STATE_TONE.completed.tone", () => {
+    expect(toneForTaskStatus('done')).toBe('done')
+  })
+
+  it('covers every TaskStatus', () => {
+    for (const status of TASK_STATUSES) expect(typeof toneForTaskStatus(status)).toBe('string')
+  })
+
+  // The single-source guarantee (M16 spec §5): whatever `TaskCard.tsx` exports for a status, in
+  // any of the four tables, is exactly what that status's derived tone reads out of StatusPill's
+  // own tone tables. A `TASK_STATUS_*` table built any other way -- a literal, a copy, a stale
+  // entry -- fails this loop.
+  //
+  // BORDER is checked against `TONE_BORDER_SOLID`, not `TONE_BORDER`: `TONE_BORDER` carries a
+  // `/24` alpha suffix (StatusPill's own pill border), while `TASK_STATUS_BORDER`'s consumers
+  // (`OrgNodes.tsx`, `TaskNodes.tsx`) render a plain solid `border-tone-*` node border with no
+  // alpha stacked on top. Deriving BORDER off the alpha table would dim every graph node border
+  // to ~24% opacity -- a real visual regression, not the sanctioned tone remap -- so
+  // `TONE_BORDER_SOLID` exists as the plain-string counterpart for exactly this derivation.
+  it('is the single source for all twelve statuses across all four tables', () => {
+    for (const status of TASK_STATUSES) {
+      const tone = toneForTaskStatus(status)
+      expect(TASK_STATUS_DOT[status]).toBe(TONE_DOT[tone])
+      expect(TASK_STATUS_BORDER[status]).toBe(TONE_BORDER_SOLID[tone])
+      expect(TASK_STATUS_FLASH_COLOR[status]).toBe(TONE_FLASH_COLOR[tone])
+      expect(TASK_STATUS_TEXT[status]).toBe(TONE_TEXT[tone])
+    }
   })
 })
