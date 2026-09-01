@@ -329,7 +329,9 @@ async function runChild(label, command, args, options = {}) {
 
 /** The spec's spend-ledger table, parsed rather than eyeballed: the block of `|`-delimited rows
  *  immediately under the `## Spend ledger` heading, minus its header and separator rows. Returns
- *  `{ run, actualCell }` per row -- the "Actual" column is the fourth cell. */
+ *  `{ run, actual }` per row. The "Actual" column is located BY HEADER NAME, not by position: the
+ *  table's column order is the spec's to change, and a positional read would silently start
+ *  measuring the wrong column the day someone inserts one. */
 function parseSpendLedger(markdown) {
   const lines = markdown.split('\n')
   const headingIndex = lines.findIndex((line) => /^##\s+Spend ledger\s*$/.test(line))
