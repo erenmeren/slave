@@ -76,8 +76,12 @@ B — never silently patched.
   Table too small (7 rows) for the planner to prefer the index unforced; with
   `enable_seqscan = off` both queries switch to `Index (Only) Scan using
   "ExecutionEvent_skill_calls_idx"`, `Index Cond` covering `workspaceId`/`type`/`runId`, groupBy
-  as `Heap Fetches: 0`, and both queries' `ORDER BY` satisfied by index order (no `Sort` node).
-  Full plans and the CAST-immutability rejection in Task 8's report.
+  as `Heap Fetches: 0`. The findMany's `ORDER BY runId, seq` is fully satisfied by index order --
+  no `Sort` node at all. The groupBy is more nuanced: the index removes the *input* sort feeding
+  `GroupAggregate` (before: two `Sort` nodes, one by `runId` ahead of the scan and one by
+  `MAX(seq) DESC` after; after: only the latter remains) -- the outer sort by `MAX(seq) DESC`
+  survives because it orders an *aggregate result*, which index order can never satisfy. Full
+  plans and the CAST-immutability rejection in Task 8's report.
 - **C2** — typecheck gate step: `npm run typecheck` (the full chain at `package.json:15`)
   becomes a standard milestone-gate step; proven by a probe that it catches a red `tsc --build`
   alone misses (test-tsconfig breakage).

@@ -52,10 +52,24 @@ export async function buildSkillGraph(workspaceId: string): Promise<SkillGraph |
   // Step 1 (bound BEFORE the event fetch, M17 §4): the newest `SKILL_GRAPH_RUN_LIMIT` distinct
   // runIds that have a Skill event at all, in ONE grouped query -- "newest" is each run's own
   // latest Skill event (`_max: seq`), ordered desc, so the LIMIT is applied by the database, not
-  // by fetching every candidate and sorting/truncating in JS. This still filters `ExecutionEvent`
-  // by an un-indexed JSON payload path -- the same cost `overview.ts`'s per-agent skill lookup
-  // already pays -- but the row it reads per match is bare (`runId`, `seq`), not the full payload
-  // the chain itself needs.
+  // by fetching every candidate and sorting/truncating in JS. The row it reads per match is bare
+  // (`runId`, `seq`), not the full payload the chain itself needs.
+  //
+  // This query and the `findMany` below (M19 C1 migration
+  // `20260901120000_m19_skill_calls_partial_index`) ride
+  // `ExecutionEvent_skill_calls_idx` -- `(workspaceId, type, runId, seq)`, partial on
+  // `(payload #> '{name}') = '"Skill"'::jsonb`. The `findMany`'s `ORDER BY runId, seq` is fully
+  // satisfied by index order (no `Sort` node). This groupBy still needs its own outer sort by
+  // `MAX(seq) DESC` -- that orders an *aggregate result*, which no index order can ever satisfy
+  // -- but the index removes the *input* sort that used to feed `GroupAggregate` (grouping by
+  // `runId` is now free, since index order already delivers rows in `runId` order).
+  //
+  // The index is reachable only because Prisma's `@prisma/adapter-pg` issues these as UNNAMED
+  // prepared statements, which Postgres always plans as CUSTOM plans -- substituting the actual
+  // bound `workspaceId`/`type`/`payload` values before the partial predicate is checked. A
+  // GENERIC plan (a named/cached prepared statement, which a driver change could start using)
+  // cannot prove the predicate from unbound parameters, and the index would go dead silently --
+  // EXPLAIN would keep showing a correct result with no error, just a Seq Scan again.
   const grouped = await prisma.executionEvent.groupBy({
     by: ['runId'],
     where: { workspaceId, type: 'run_tool_call', runId: { not: null }, payload: { path: ['name'], equals: 'Skill' } },
