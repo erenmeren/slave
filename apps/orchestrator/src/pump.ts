@@ -522,8 +522,8 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
    * RESUMED session's terminal result also echoes a denial from BEFORE the pause was not directly
    * measured (that capture never paused and resumed). This seed is fail-safe hardening against
    * that possibility either way: if the resumed session's echo does carry a pre-pause id, an empty
-   * set would count an already-survived denial as a fresh failure at the exclusion below (:970);
-   * if it never does, the seed is a no-op.
+   * set would count an already-survived denial as a fresh failure at the `nonMatrixDeniedToolUseIds`
+   * filter below; if it never does, the seed is a no-op.
    */
   if (input.resumed === true) {
     const prior = await prisma.executionEvent.findMany({
@@ -992,8 +992,9 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
   // `run.tool_denied` -- undoing Task 6's own work at the one place that concludes the run.
   // `matrixDeniedToolUseIds` is exactly (and only) the ids this pump itself confirmed, via a FULL
   // parse of a matrix-prefixed reason, were a survivable refusal rather than a pause or an ordinary
-  // permission-mode denial -- so excluding them here still fails a genuine pause/permission-mode
-  // denial byte-identically to before this fix.
+  // permission-mode denial -- or that a prior pump on this run confirmed and recorded the same way,
+  // read back on resume (see the resume seed at the Set's declaration) -- so excluding them here
+  // still fails a genuine pause/permission-mode denial byte-identically to before this fix.
   const nonMatrixDeniedToolUseIds = outcome.deniedToolUseIds.filter((id) => !matrixDeniedToolUseIds.has(id))
   const failed = outcome.isError || nonMatrixDeniedToolUseIds.length > 0
   const terminalNow = new Date()

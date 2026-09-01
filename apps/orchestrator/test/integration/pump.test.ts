@@ -1628,8 +1628,8 @@ describe('pumpRun', () => {
      * ACCUMULATES a pre-pause denial too was not directly measured (that capture had no pause/resume
      * cycle) -- this seed is fail-safe hardening against that possibility, not a claim it was
      * observed. Without it, a fresh empty set on the resumed pump would count an already-survived
-     * matrix denial as a fresh failure, via the very exclusion this file's other tests just proved
-     * (`nonMatrixDeniedToolUseIds`, pump.ts:970).
+     * matrix denial as a fresh failure, via the very `nonMatrixDeniedToolUseIds` filter this file's
+     * other tests just proved.
      */
     it('B1: a resumed pump seeds matrixDeniedToolUseIds from the run\'s own prior run.tool_denied events, so the resumed CLI\'s echo of an already-survived matrix denial does not re-fail the run', async (): Promise<void> => {
       // Seed a REAL prior `run.tool_denied` event through the house append path (`appendEvent`,
