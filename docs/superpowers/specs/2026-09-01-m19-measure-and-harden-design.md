@@ -43,6 +43,10 @@ B — never silently patched.
 - Two outcomes, both valuable: fixed → B5 opens (un-inert Cursor non-shell enforcement,
   `CAPABILITY_TOOLS` updated); not fixed → enforcement stays inert v1, measurement report and
   version record refreshed.
+- **Verdict (recorded 2026-09-01): `not fixed`** — `cursor-agent --version` still reports
+  `2026.08.25-3e8eec8`, the exact binary M13 measured on 2026-08-29, so the standing
+  id-sharing evidence in `packages/providers/test/fixtures/cursor/gate/README.md` is current and no
+  paid run was made ($0.00). Task 7 dropped per spec (B5 conditional).
 
 ## Series B — hardening informed by A
 
@@ -54,7 +58,8 @@ B — never silently patched.
 - **B4** — `permissions.json` self-policing threat note: the child can rewrite its own runDir;
   goes into spec §7 as a stated limitation, sibling to the Cursor gate-inside-worktree note.
 - **B5 (conditional on A2)** — un-inert Cursor non-shell enforcement. If A2 says "not fixed",
-  this task is dropped, not deferred.
+  this task is dropped, not deferred. **DROPPED 2026-09-01:** A2's verdict is `not fixed` (same
+  binary version, standing measurement current) — see the A2 verdict above.
 
 ## Series C — hygiene and performance (independent)
 
@@ -90,7 +95,7 @@ verifies their recorded evidence rather than re-spending:
 | Run | Vendor | Cap | Actual | Version |
 |-----|--------|-----|--------|---------|
 | A1 matrix-deny capture | Claude CLI | $1.00 | **$0.0741884** (2026-09-01, one run, no retry) | **2.1.252 (Claude Code)** |
-| A2 write≠edit probe | cursor-agent | ~$1.00 | _(recorded at run time)_ | _(recorded)_ |
+| A2 write≠edit probe | cursor-agent | ~$1.00 | **$0.00** (2026-09-01, no run: version unchanged) | **2026.08.25-3e8eec8** (identical to the M13-measured version) |
 
 ### A1 findings (recorded 2026-09-01, routed to B1/B2)
 

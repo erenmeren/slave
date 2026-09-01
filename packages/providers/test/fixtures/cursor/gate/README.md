@@ -172,3 +172,52 @@ invalidated M12's runs — the spare was spent re-taking the control on the new 
 that version-matched control which is committed here as `run-1-flag-absent.ndjson`. The superseded
 first control passed identically (both files written, four allows) and is recorded in the task
 report.
+
+## 2026-09-01 — M19 Task A2 re-measure: a no-op at the same version, verdict `not fixed` stands
+
+M19 Task A2 exists to re-check one thing: whether `preToolUse` still reports a write's tool identity
+untruthfully — the id-sharing fact recorded above, where the `editToolCall`'s first gated step
+arrives as `tool_name: "Read"` carrying the edit call's own `call_id`. That fact is what keeps
+Cursor non-shell enforcement inert, so it was worth re-measuring against a binary that
+**self-updates between runs** (project memory, 2026-08-29).
+
+The first act of the task was the version check, before anything else could disturb it:
+
+```bash
+$ cursor-agent --version
+2026.08.25-3e8eec8
+$ readlink -f "$(command -v cursor-agent)"
+/home/fixture-user/.local/share/cursor-agent/versions/2026.08.25-3e8eec8/cursor-agent
+$ ls /home/fixture-user/.local/share/cursor-agent/versions/
+2026.08.11-e8db854
+2026.08.25-3e8eec8
+```
+
+**It is the same binary the runs above were taken against** — the same installed version directory,
+still the one the `cursor-agent` symlink resolves to, with no newer version present alongside it.
+And that equality is checkable from the committed artifacts rather than from this sentence, because
+the hook payloads report their own version:
+
+```bash
+$ grep -o '"cursor_version":"[^"]*"' run-1-hook.log run-2-hook.log | sort -u
+run-1-hook.log:"cursor_version":"2026.08.25-3e8eec8"
+run-2-hook.log:"cursor_version":"2026.08.25-3e8eec8"
+```
+
+The two runs recorded above therefore remain the CURRENT measurement of this binary's behaviour,
+not a stale one: re-running the probe on 2026-09-01 could only have re-derived what
+`run-1-hook.log` and `run-2-hook.log` already hold, at vendor cost and with no new information.
+
+- **What ran:** the version check only. **No `cursor-agent` run was made**, so there are no
+  `run-3-*` files. Their absence is the finding, not an omission.
+- **Verdict: `not fixed`** — carried over unchanged from 2026-08-29, on the same version. The
+  evidence is the line already committed here: the write is denied at the `preToolUse` for
+  `tool_name: "Read"` whose `tool_use_id` is `tool_5a6e260f-7383-4253-9e67-091682afc64`, the same id
+  as the rejected `editToolCall`'s `call_id` (`run-2-hook.log`, and the `editToolCall` in
+  `run-2-flag-present.ndjson`).
+- **Consequence:** Cursor non-shell enforcement stays inert v1. M19 B5/Task 7 is **dropped**, per
+  the spec's own conditional.
+- **Spend: $0.00**, against an approved cap of ~$1.00. The version check is free.
+
+The next re-measure should begin the same way and is only worth its cost once
+`cursor-agent --version` reports something other than `2026.08.25-3e8eec8`.
