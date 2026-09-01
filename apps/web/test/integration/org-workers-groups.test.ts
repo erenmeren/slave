@@ -13,10 +13,13 @@ import { listWorkers } from '../../src/server/org.js'
  * Three agents, one per group of rule branches the task brief lists:
  *
  * - Alex: (a) an unmeasured terminal run, (b) an in-flight run with a provider, (c) a pre-M12 row
- *   (real cost, null provider), (d) a measured zero, (e) an ordinary measured run with tokens.
- *   Same five branches `org-spend-groups.test.ts` seeds for `listProjects`, plus (e) now also
- *   reports tokens so `tokens` and live `provider` (read off (b), Alex's only non-terminal run)
- *   both have something to compute over.
+ *   (real cost, null provider), (d) a measured zero, (e) an ordinary measured run with tokens, and
+ *   (e2) a measured run reporting ONLY `tokensIn` (`tokensOut` null) -- review fix round 1: the
+ *   matrix must isolate a single-column token report, not just "both set" and "both null", so a
+ *   `tokens` computation built on `_sum.tokensIn` and `_sum.tokensOut` independently (rather than
+ *   treating the pair as one unit) is actually exercised. Branches (a)-(e) are the same five
+ *   `org-spend-groups.test.ts` seeds for `listProjects`; (e) and (e2) between them give `tokens`
+ *   and live `provider` (read off (b), Alex's only non-terminal run) something to compute over.
  * - Blake: (f) an agent whose runs ALL omit tokens -- `tokens` must be `null`, not `0`.
  * - Casey: (g) an agent with TWO non-terminal runs at different `startedAt` -- live `provider`
  *   must be the NEWER one's, proving the "first row per agent, ordered by startedAt desc" rule
@@ -110,7 +113,7 @@ async function seedRuleBranchRuns(fixture: Fixture): Promise<void> {
         endedAt: plusMs(60_000),
         terminalAt: plusMs(60_000),
       },
-      // Alex (e): ordinary measured run, and the only one of Alex's that reports tokens.
+      // Alex (e): ordinary measured run, reporting both token columns.
       //   -> known += 1.25, unmeasuredRuns += 0; tokens += 1000 + 500 = 1500
       {
         agentId: fixture.alexId,
@@ -119,6 +122,21 @@ async function seedRuleBranchRuns(fixture: Fixture): Promise<void> {
         costUsd: 1.25,
         tokensIn: 1000,
         tokensOut: 500,
+        startedAt: t0,
+        endedAt: plusMs(60_000),
+        terminalAt: plusMs(60_000),
+      },
+      // Alex (e2): a measured run reporting ONLY `tokensIn` -- `tokensOut` null. Must still count
+      //   toward `tokens` (300 once, not skipped for the null half) without disturbing
+      //   `unmeasuredRuns` (it carries a real cost, so it is a measured run, not a hole).
+      //   -> known += 0.75, unmeasuredRuns += 0; tokens += 300 + 0 = 300
+      {
+        agentId: fixture.alexId,
+        status: 'succeeded',
+        provider: 'claude_code',
+        costUsd: 0.75,
+        tokensIn: 300,
+        tokensOut: null,
         startedAt: t0,
         endedAt: plusMs(60_000),
         terminalAt: plusMs(60_000),
@@ -173,10 +191,11 @@ async function seedRuleBranchRuns(fixture: Fixture): Promise<void> {
   })
 }
 
-// By hand, Alex: known = 0 (a) + 0 (b) + 2.00 (c) + 0 (d) + 1.25 (e) = 3.25; unmeasuredRuns: only
-// (a) qualifies (provider written, terminal, no cost) = 1; tokens: only (e) reports = 1000+500 =
-// 1500; live provider: Alex's only non-terminal run is (b) -> 'claude_code'.
-const ALEX_EXPECTED = { costUsd: 3.25, unmeasuredRuns: 1, tokens: 1500, provider: 'claude_code' as const }
+// By hand, Alex: known = 0 (a) + 0 (b) + 2.00 (c) + 0 (d) + 1.25 (e) + 0.75 (e2) = 4.00;
+// unmeasuredRuns: only (a) qualifies (provider written, terminal, no cost) = 1; tokens: (e)
+// reports 1000+500 = 1500, (e2) reports 300+0 = 300 (tokensOut null contributes 0, not skipped) ->
+// 1800; live provider: Alex's only non-terminal run is (b) -> 'claude_code'.
+const ALEX_EXPECTED = { costUsd: 4.0, unmeasuredRuns: 1, tokens: 1800, provider: 'claude_code' as const }
 
 // By hand, Blake: known = 5.00 + 3.50 = 8.50; unmeasuredRuns = 0 (both measured); tokens: neither
 // run reports -> null; live provider: no non-terminal run -> null.

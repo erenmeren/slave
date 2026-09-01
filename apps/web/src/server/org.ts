@@ -465,7 +465,10 @@ export async function listWorkers(): Promise<readonly WorkerRow[]> {
   }
 
   // First row per agent wins -- `liveRuns` is ordered newest-first, so this is the newer of an
-  // agent's non-terminal runs when it has more than one.
+  // agent's non-terminal runs when it has more than one. (Review Minor: `orderBy` here is a single
+  // key, `startedAt` -- two non-terminal runs of the same agent with an EXACTLY equal `startedAt`
+  // tie-break in whatever order Postgres returns them, which is unspecified. Pre-existing: the
+  // prior whole-history `findMany` this replaced ordered by the same single `startedAt` key.)
   const liveProviderByAgent = new Map<string, (typeof liveRuns)[number]['provider']>()
   for (const run of liveRuns) {
     if (!liveProviderByAgent.has(run.agentId)) liveProviderByAgent.set(run.agentId, run.provider)
