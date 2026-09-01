@@ -258,6 +258,13 @@ refusal texts, the event payload. Routes: `org-routes.test.ts` idiom, all three 
   (`.cursor/hooks.json`; the CLI has no out-of-tree settings path), so a run can delete its
   own gate. Claude's settings live outside the worktree. Emergency stop (cancellation) is
   unaffected on both.
+- **New limitation, stated (M19):** `permissions.json` lives in the run's own runDir
+  (`<repo>/.aiteamos/runs/<runId>/`), which the child process can write. A run that edits or
+  deletes its own permissions file disarms the matrix for its remaining tool calls — the same
+  self-policing boundary as Cursor's in-worktree `.cursor/hooks.json` above, on both providers.
+  The gates fail closed only on a MALFORMED file (exit 2); an absent file is allow-by-design
+  (`scripts/lib/permissions.sh:87`), so deletion is the quiet path. Enforcement v1 is a
+  guardrail against an honest agent's overreach, not a sandbox against an adversarial one.
 
 ### 7.2 `scripts/gate-m13-runtime.mjs`
 

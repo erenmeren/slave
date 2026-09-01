@@ -53,6 +53,10 @@
 # as an option rather than reaching the script. One node invocation reads BOTH the captured hook
 # payload (stdin) and the permissions file (read from disk inside the same process, path via
 # AITEAMOS_PERMISSIONS_FILE) so this stays a single subprocess spawn per tool call.
+#
+# SELF-POLICING THREAT MODEL (M19 spec) -- docs/superpowers/specs/2026-08-29-m13-runtime-hardening-design.md §7.1:
+# A run that deletes its own permissions file disarms the matrix for its remaining tool calls; the same
+# self-policing boundary as Cursor's in-worktree `.cursor/hooks.json` above, on both providers.
 
 PERMISSION_DENY_TOOL=''
 PERMISSION_DENY_CAPABILITY=''
