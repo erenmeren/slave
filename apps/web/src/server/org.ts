@@ -3,12 +3,10 @@ import { toRunState } from '@ai-team-os/db'
 import { capabilitiesOf, type ProviderCapabilities, type ProviderKind } from '@ai-team-os/control'
 import {
   deriveAgentStatus,
-  sumSpend,
   sumSpendFromGroups,
   NON_TERMINAL_RUN_STATUSES,
   type AgentStatus,
   type SpendGroup,
-  type SpendRow,
 } from '@ai-team-os/domain'
 
 /** A worker's resolved gate, from `capabilitiesOf(worker.provider).gate` (M12 Task 13) -- `null`
@@ -42,14 +40,10 @@ function chainSource(hasWorkerOverride: boolean, rosterValue: unknown, templateV
 // it, and this task's scope is one new module, nothing else changes.
 const ACTIVE_TASK_STATUSES = ['ready', 'running', 'verifying', 'reviewing', 'merging', 'rework'] as const
 
-/** `sumSpend`'s pair under this DTO's own field names. */
-function spendOf(runs: readonly SpendRow[]): { readonly spend: number; readonly unmeasuredRuns: number } {
-  const { known, unknownRuns } = sumSpend(runs)
-  return { spend: known, unmeasuredRuns: unknownRuns }
-}
-
-/** `spendOf`'s twin over pre-aggregated groups (`listProjects` below) -- `sumSpendFromGroups`'s
- *  pair under this DTO's own field names, the same way `spendOf` above pairs `sumSpend`'s. */
+/** `sumSpendFromGroups`'s pair under this DTO's own field names (`listProjects` and `listWorkers`
+ *  below both group in SQL and share this one wrapper -- `spendOf`, the equivalent wrapper over a
+ *  whole-history row array, was deleted in the M19 Task 12 rewrite once `listWorkers` stopped being
+ *  its last caller). */
 function spendOfGroups(groups: readonly SpendGroup[]): { readonly spend: number; readonly unmeasuredRuns: number } {
   const { known, unknownRuns } = sumSpendFromGroups(groups)
   return { spend: known, unmeasuredRuns: unknownRuns }
@@ -416,33 +410,72 @@ export async function listWorkers(): Promise<readonly WorkerRow[]> {
     orderBy: { name: 'asc' },
     include: { team: { include: { workspace: true } } },
   })
+  const agentIds = agents.map((a) => a.id)
 
   const workspaceIdByAgent = new Map(agents.map((a) => [a.id, a.team.workspaceId] as const))
   const maxToolCallsByWorkspace = new Map(agents.map((a) => [a.team.workspaceId, a.team.workspace.maxToolCallsPerRun] as const))
-  const liveInfo = await loadAgentLiveInfo(
-    agents.map((a) => a.id),
-    workspaceIdByAgent,
-    maxToolCallsByWorkspace,
-  )
 
-  const runs = await prisma.agentRun.findMany({
-    where: { agentId: { in: agents.map((a) => a.id) } },
-    select: { agentId: true, status: true, provider: true, costUsd: true, tokensIn: true, tokensOut: true, startedAt: true },
-    orderBy: { startedAt: 'desc' },
-  })
-  const runsByAgent = new Map<string, typeof runs>()
-  for (const run of runs) {
-    const list = runsByAgent.get(run.agentId)
-    if (list === undefined) runsByAgent.set(run.agentId, [run])
-    else list.push(run)
+  const [liveInfo, runGroups, liveRuns] = await Promise.all([
+    loadAgentLiveInfo(agentIds, workspaceIdByAgent, maxToolCallsByWorkspace),
+    // Grouped by the database (M19 Task 12; the same move `listProjects`' spend groups made in M17
+    // Task 13), now also carrying `tokensIn`/`tokensOut` so `tokens` can be summed without pulling
+    // every run into memory. `_count.tokensIn`/`_count.tokensOut` count only the bucket's non-null
+    // values -- exactly what `tokens`'s null rule needs: a bucket where NEITHER column was ever
+    // reported still has a `_sum` of `null` (indistinguishable from "summed to zero"), so the count
+    // beside it is what tells the two apart.
+    prisma.agentRun.groupBy({
+      by: ['agentId', 'provider', 'status'],
+      _sum: { costUsd: true, tokensIn: true, tokensOut: true },
+      _count: { _all: true, costUsd: true, tokensIn: true, tokensOut: true },
+    }),
+    // The live provider, as a SEPARATE bounded query rather than read off the grouped rows above --
+    // `groupBy` can only aggregate a bucket, never return "the newest row in it". In-flight runs
+    // are few by construction (at most one non-terminal run per agent in the steady state), so this
+    // stays cheap while preserving today's newest-first pick exactly.
+    prisma.agentRun.findMany({
+      where: { agentId: { in: agentIds }, status: { in: [...NON_TERMINAL_RUN_STATUSES] } },
+      select: { agentId: true, provider: true, startedAt: true },
+      orderBy: { startedAt: 'desc' },
+    }),
+  ])
+
+  // Same `SpendGroup` construction as `listProjects` above, keyed by agent instead of workspace.
+  // `tokenTotalsByAgent` is `spendGroupsByAgent`'s token-side twin: `sum` accumulates unconditionally
+  // (a group nobody reported tokens in has a `_sum` of `null`, so `?? 0` contributes nothing),
+  // `reported` is set the moment ANY group of the agent shows a non-zero token count -- the null
+  // rule is about whether the agent EVER reported, not whether any one bucket did.
+  const spendGroupsByAgent = new Map<string, SpendGroup[]>()
+  const tokenTotalsByAgent = new Map<string, { sum: number; reported: boolean }>()
+  for (const g of runGroups) {
+    const spendGroup: SpendGroup = {
+      provider: g.provider,
+      status: g.status,
+      knownUsd: g._sum.costUsd ?? 0,
+      rowCount: g._count._all,
+      measuredCount: g._count.costUsd,
+    }
+    const spendList = spendGroupsByAgent.get(g.agentId)
+    if (spendList === undefined) spendGroupsByAgent.set(g.agentId, [spendGroup])
+    else spendList.push(spendGroup)
+
+    const totals = tokenTotalsByAgent.get(g.agentId) ?? { sum: 0, reported: false }
+    totals.sum += (g._sum.tokensIn ?? 0) + (g._sum.tokensOut ?? 0)
+    if (g._count.tokensIn > 0 || g._count.tokensOut > 0) totals.reported = true
+    tokenTotalsByAgent.set(g.agentId, totals)
+  }
+
+  // First row per agent wins -- `liveRuns` is ordered newest-first, so this is the newer of an
+  // agent's non-terminal runs when it has more than one.
+  const liveProviderByAgent = new Map<string, (typeof liveRuns)[number]['provider']>()
+  for (const run of liveRuns) {
+    if (!liveProviderByAgent.has(run.agentId)) liveProviderByAgent.set(run.agentId, run.provider)
   }
 
   return agents.map((agent) => {
     const info = liveInfo.get(agent.id)
-    const agentRuns = runsByAgent.get(agent.id) ?? []
-    const reported = agentRuns.filter((r) => r.tokensIn !== null || r.tokensOut !== null)
-    const liveProvider = agentRuns.find((r) => (NON_TERMINAL_RUN_STATUSES as readonly string[]).includes(r.status))?.provider ?? null
-    const { spend, unmeasuredRuns } = spendOf(agentRuns)
+    const liveProvider = liveProviderByAgent.get(agent.id) ?? null
+    const { spend, unmeasuredRuns } = spendOfGroups(spendGroupsByAgent.get(agent.id) ?? [])
+    const tokenTotals = tokenTotalsByAgent.get(agent.id)
     return {
       agentId: agent.id,
       name: agent.name,
@@ -454,7 +487,7 @@ export async function listWorkers(): Promise<readonly WorkerRow[]> {
       department: agent.team.name,
       provider: liveProvider,
       gate: liveProvider === null ? null : capabilitiesOf(liveProvider).gate,
-      tokens: reported.length === 0 ? null : reported.reduce((n, r) => n + (r.tokensIn ?? 0) + (r.tokensOut ?? 0), 0),
+      tokens: tokenTotals === undefined || !tokenTotals.reported ? null : tokenTotals.sum,
       costUsd: spend,
       unmeasuredRuns,
     }
