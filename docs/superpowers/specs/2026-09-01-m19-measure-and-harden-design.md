@@ -259,6 +259,14 @@ than a regression. The handoff tokens agree with the derived direction (`done` =
 visual-snapshot tooling in this repo, so the evidence is the derivation chain plus a 7/7 spot-check
 in review, not a screenshot diff.
 
+### Gate check 4 — narrower than the Gate section says
+
+The Gate section's item 4 above ("Equivalence tests (C5) green; full suite green") reads wider than
+what shipped: `gate-m19-measure-and-harden.mjs`'s check 4 runs only the C5 equivalence suite
+(`apps/web/test/integration/org-workers-groups.test.ts`), not the full suite — the full suite is
+enforced at every task's commit gate and by the pre-push hook, consistent with this standing gate's
+own design of reading recorded evidence rather than re-running the world.
+
 ### Deferred minors
 
 Every deferred minor from every task — including the ones named above — is recorded in

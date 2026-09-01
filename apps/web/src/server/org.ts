@@ -425,6 +425,7 @@ export async function listWorkers(): Promise<readonly WorkerRow[]> {
     // beside it is what tells the two apart.
     prisma.agentRun.groupBy({
       by: ['agentId', 'provider', 'status'],
+      where: { agentId: { in: agentIds } },
       _sum: { costUsd: true, tokensIn: true, tokensOut: true },
       _count: { _all: true, costUsd: true, tokensIn: true, tokensOut: true },
     }),
