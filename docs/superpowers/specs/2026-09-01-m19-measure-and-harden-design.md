@@ -25,10 +25,12 @@ B — never silently patched.
 - Dev workspace, permission matrix with an explicit deny on a tool the task is certain to
   attempt; real Claude CLI through the orchestrator.
 - Capture the NDJSON stream; scrub home-dir per the M17 rule (including the mangled form);
-  replace `packages/providers/test/fixtures/claude/permission-matrix-deny.ndjson` (the
-  hand-authored one) with the genuine capture.
-- The fixture gains a **provenance header**: CLI version, date, cost, and the workspace/matrix
-  shape that produced it.
+  replace `packages/providers/test/fixtures/permission-matrix-deny.ndjson` (top level — it is a
+  replay mode enumerated by `fake-claude.mjs`, so it must stay in the replay namespace; the
+  spec's first draft wrongly placed it under `claude/`) with the genuine capture.
+- Provenance goes where this repo keeps it — the sibling `fixtures/README.md` (NDJSON carries no
+  comments): CLI version, date, runnable command, cost, and the workspace/matrix shape that
+  produced it. The "hand-authored exception" section is retired. The four redaction rules bind.
 - Success: pump classification holds on the real capture — matrix deny → `run.tool_denied`,
   run **continues**, matrix-attributed ids excluded exact-set from the failure computation.
   Shape divergence from the hand-authored fixture = finding, recorded, routed to B1/B2.
