@@ -512,6 +512,29 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
    * exactly as it always has.
    */
   const matrixDeniedToolUseIds = new Set<string>()
+  /**
+   * B1 (M19): seeded on resume from the run's own prior `run.tool_denied` events, not left at the
+   * empty set above. A prior pump on this run confirmed these ids as matrix denies -- it emitted
+   * `run.tool_denied` for each, `toolUseId` included -- but that confirmation lived only in THIS
+   * function's local `Set`, gone the moment the process paused. The real recorded matrix-deny run
+   * (`permission-matrix-deny.ndjson`, Task 1's capture) shows the CLI echoing a denied id in the
+   * terminal `result`'s `permission_denials` regardless of why the hook denied it; whether a
+   * RESUMED session's terminal result also echoes a denial from BEFORE the pause was not directly
+   * measured (that capture never paused and resumed). This seed is fail-safe hardening against
+   * that possibility either way: if the resumed session's echo does carry a pre-pause id, an empty
+   * set would count an already-survived denial as a fresh failure at the exclusion below (:970);
+   * if it never does, the seed is a no-op.
+   */
+  if (input.resumed === true) {
+    const prior = await prisma.executionEvent.findMany({
+      where: { runId, type: 'run_tool_denied' },
+      select: { payload: true },
+    })
+    for (const row of prior) {
+      const id = (row.payload as { toolUseId?: unknown }).toolUseId
+      if (typeof id === 'string') matrixDeniedToolUseIds.add(id)
+    }
+  }
   // Seeded from the row, not from zero, for the same reason the column is incremented: on a resume
   // this pump is continuing a run that already made tool calls, and `pausedAtStep` should say
   // where the *run* is, not where this pump started reading.
@@ -635,7 +658,7 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
             // rejection -- recorded here so the terminal failure check below can tell this denial
             // apart from a genuine one.
             matrixDeniedToolUseIds.add(event.toolUseId)
-            await emit('run.tool_denied', 'agent', { tool: parsed.tool, capability: parsed.capability })
+            await emit('run.tool_denied', 'agent', { tool: parsed.tool, capability: parsed.capability, toolUseId: event.toolUseId })
             break
           }
         }
@@ -805,7 +828,11 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
             // event, exactly once per refusal, and nothing else: no `paused`, no checkpoint, no
             // `killWithEscalation`. The run is still working; the agent is free to try something
             // else, the same way ADR 0001 measured a permission-mode denial leaving it free to.
-            await emit('run.tool_denied', 'agent', { tool: gateOutcome.tool, capability: gateOutcome.capability })
+            await emit('run.tool_denied', 'agent', {
+              tool: gateOutcome.tool,
+              capability: gateOutcome.capability,
+              toolUseId: lastToolUseId,
+            })
             // Review Critical 1: the CLI reports this same denial in the terminal result's
             // `permission_denials` regardless of WHY the hook denied it (measured:
             // `hook-deny.ndjson`'s pause deny lands there too) -- `lastToolUseId` is the id of the

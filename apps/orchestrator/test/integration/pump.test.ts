@@ -4,6 +4,7 @@ import { isAlive } from '@ai-team-os/control'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@ai-team-os/db'
 import { prisma } from '@ai-team-os/db/client'
 import { agentId, runId, taskId, workspaceId } from '@ai-team-os/domain'
+import { appendEvent } from '@ai-team-os/events'
 import { PERMISSION_DENY_REASON_PREFIX, parseStreamLine, type RunOutcome, type RuntimeEvent } from '@ai-team-os/providers'
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { OUTPUT_CAP, pumpRun } from '../../src/pump.js'
@@ -1450,7 +1451,11 @@ describe('pumpRun', () => {
         const toolDenied = await prisma.executionEvent.findFirstOrThrow({
           where: { runId: ids.runId, type: 'run_tool_denied' },
         })
-        expect(toolDenied.payload).toEqual({ tool: 'Bash', capability: 'run tests' })
+        expect(toolDenied.payload).toEqual({
+          tool: 'Bash',
+          capability: 'run tests',
+          toolUseId: 'toolu_01LiQfhzhqKJPfrr4pAD1Xjs',
+        })
 
         // No kill: `killWithEscalation` is reached only from the `stopped_by_gate` branch, which a
         // matrix deny never takes. The never-exiting child is still alive to prove it -- the same
@@ -1561,7 +1566,7 @@ describe('pumpRun', () => {
       const toolDenied = await prisma.executionEvent.findFirstOrThrow({
         where: { runId: ids.runId, type: 'run_tool_denied' },
       })
-      expect(toolDenied.payload).toEqual({ tool: 'shell', capability: 'run tests' })
+      expect(toolDenied.payload).toEqual({ tool: 'shell', capability: 'run tests', toolUseId: 'c1' })
 
       await expect(prisma.checkpoint.findUnique({ where: { runId: ids.runId } })).resolves.toBeNull()
     })
@@ -1611,6 +1616,54 @@ describe('pumpRun', () => {
           // Already dead -- that is the point of this test.
         }
       }
+    })
+
+    /**
+     * B1 (M19): `matrixDeniedToolUseIds` (pump.ts:514) is a fresh empty `Set` on every `pumpRun`
+     * call, resumed ones included, and nothing before this fix persisted the ids it confirmed. A
+     * resumed CLI session's terminal `result.permission_denials` echoes the tool_use ids it denied
+     * -- measured byte-for-byte in `permission-matrix-deny.ndjson` (Task 1's real capture) for a
+     * single-pump run, where the SAME `toolu_01LiQ...` id appears once as the hook denial and again
+     * in the terminal `permission_denials` array. Whether a resumed session's terminal result
+     * ACCUMULATES a pre-pause denial too was not directly measured (that capture had no pause/resume
+     * cycle) -- this seed is fail-safe hardening against that possibility, not a claim it was
+     * observed. Without it, a fresh empty set on the resumed pump would count an already-survived
+     * matrix denial as a fresh failure, via the very exclusion this file's other tests just proved
+     * (`nonMatrixDeniedToolUseIds`, pump.ts:970).
+     */
+    it('B1: a resumed pump seeds matrixDeniedToolUseIds from the run\'s own prior run.tool_denied events, so the resumed CLI\'s echo of an already-survived matrix denial does not re-fail the run', async (): Promise<void> => {
+      // Seed a REAL prior `run.tool_denied` event through the house append path (`appendEvent`,
+      // `@ai-team-os/events`'s only write path to the event log) -- exactly what a first pump on
+      // this run would have written before it paused, third payload key (`toolUseId`) included.
+      await appendEvent({
+        type: 'run.tool_denied',
+        workspaceId: ids.workspaceId,
+        taskId: ids.taskId,
+        agentId: ids.agentId,
+        runId: ids.runId,
+        actor: 'agent',
+        payload: { tool: 'Bash', capability: 'run tests', toolUseId: 'toolu_old_matrix' },
+      })
+
+      // A resumed pump (`resumed: true`): no fresh denial anywhere in this stream, but the
+      // terminal outcome echoes the OLD matrix-denied id, exactly as a resumed CLI session's
+      // `permission_denials` might.
+      const outcome = await pumpRun({
+        ...ids,
+        resumed: true,
+        events: fromArray([
+          { kind: 'session_started', sessionId: 's-resumed' },
+          { kind: 'terminated', outcome: { ...okOutcome, deniedToolUseIds: ['toolu_old_matrix'] } },
+        ]),
+      })
+
+      expect(outcome).not.toBeNull()
+      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      expect(run.status).toBe('succeeded')
+
+      const types = await eventTypesFor(ids.runId)
+      expect(types).not.toContain('run.failed')
+      expect(types).not.toContain('guardrail.tripped')
     })
   })
 })
