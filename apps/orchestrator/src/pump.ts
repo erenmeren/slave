@@ -493,8 +493,7 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
 
   let outcome: RunOutcome | null = null
 
-  let lastToolUseId: string | null = null
-  let lastToolName: string | null = null
+  let lastToolUse: { readonly id: string; readonly name: string } | null = null
   const denied: string[] = []
   /**
    * M18 Task 6 fix round 1 (review Critical 1): the tool-use ids this pump itself routed to
@@ -609,8 +608,7 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
           const name = event.summary.startsWith('Skill ') ? event.summary.slice('Skill '.length) : '<unnamed>'
           skillCalls.set(name, (skillCalls.get(name) ?? 0) + 1)
         }
-        lastToolUseId = event.toolUseId
-        lastToolName = event.toolName
+        lastToolUse = { id: event.toolUseId, name: event.toolName }
         await prisma.agentRun.updateMany({ where: { id: runId, endedAt: null }, data: { toolCalls: { increment: 1 } } })
         // `summary` is the readable form the parser derives from the tool_use block's `input`
         // (M4 spec §1) -- e.g. `Write note3.txt` rather than the opaque `toolUseId`. It falls
@@ -716,8 +714,8 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
               runId,
               sessionId,
               toolCalls,
-              lastToolUseId,
-              lastToolName,
+              lastToolUseId: lastToolUse?.id ?? null,
+              lastToolName: lastToolUse?.name ?? null,
               denied,
               spawn: input.spawn,
               pauseReason: gateOutcome.reason,
@@ -828,19 +826,34 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
             // event, exactly once per refusal, and nothing else: no `paused`, no checkpoint, no
             // `killWithEscalation`. The run is still working; the agent is free to try something
             // else, the same way ADR 0001 measured a permission-mode denial leaving it free to.
+            // B2 (M19): "the last tool_call this pump saw" is not, on its own, proof this deny
+            // belongs to it. Task 1's REAL capture (`hook-deny.ndjson`) measured hook responses
+            // arriving OUT OF ADJACENCY ORDER -- a second `PreToolUse:Read` response landed after a
+            // Bash tool_use, after that Bash call's own deny, and after the deny's tool_result.
+            // "Last tool_call seen" was the right id in that recording by luck, not by contract. The
+            // deny reason itself already carries the tool name it refused (`gateOutcome.tool`, from
+            // `parsePermissionDenyReason`), so the association is trusted only when that name
+            // matches the last tool_call's own name -- a cross-check this pump can make without
+            // extending the stream parser to pair `hook_id`/`hook_started` (out of this task's
+            // scope; see the task report for why that would still be the more complete fix).
+            const associated = lastToolUse !== null && lastToolUse.name === gateOutcome.tool ? lastToolUse.id : null
             await emit('run.tool_denied', 'agent', {
               tool: gateOutcome.tool,
               capability: gateOutcome.capability,
-              toolUseId: lastToolUseId,
+              toolUseId: associated,
             })
-            // Review Critical 1: the CLI reports this same denial in the terminal result's
-            // `permission_denials` regardless of WHY the hook denied it (measured:
-            // `hook-deny.ndjson`'s pause deny lands there too) -- `lastToolUseId` is the id of the
-            // tool_use that immediately preceded this hook's response, the same association
-            // `writeCheckpoint`'s own `lastToolUseId` field already relies on for the pause path.
-            // `null` only when a hook_denied arrives with no tool_call ever observed first, which
-            // means nothing in `outcome.deniedToolUseIds` could be this one anyway.
-            if (lastToolUseId !== null) matrixDeniedToolUseIds.add(lastToolUseId)
+            // Review Critical 1, narrowed by B2: the CLI reports this same denial in the terminal
+            // result's `permission_denials` regardless of WHY the hook denied it (measured:
+            // `hook-deny.ndjson`'s pause deny lands there too), and this Set is what the terminal
+            // failure check excludes from `outcome.deniedToolUseIds` (`nonMatrixDeniedToolUseIds`)
+            // -- so a wrongly-associated id here would not just mislabel one event, it would launder
+            // that id out of the failure check for the rest of this pump's run AND get persisted
+            // into `run.tool_denied`'s own payload, ready to be re-seeded into every subsequent
+            // resume of this run (the seed at this Set's declaration reads exactly that payload
+            // back). On a name mismatch `associated` is `null` above, so nothing is added here --
+            // the mismatched id stays in `outcome.deniedToolUseIds` unexcluded, and a run that
+            // terminal-echoes it still fails, exactly as fail-safe requires.
+            if (associated !== null) matrixDeniedToolUseIds.add(associated)
             break
           }
         }
@@ -889,8 +902,8 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
       runId,
       sessionId,
       toolCalls,
-      lastToolUseId,
-      lastToolName,
+      lastToolUseId: lastToolUse?.id ?? null,
+      lastToolName: lastToolUse?.name ?? null,
       denied,
       outcome,
       spawn: input.spawn,

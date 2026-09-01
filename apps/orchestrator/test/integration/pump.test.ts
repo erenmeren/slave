@@ -1665,5 +1665,45 @@ describe('pumpRun', () => {
       expect(types).not.toContain('run.failed')
       expect(types).not.toContain('guardrail.tripped')
     })
+
+    /**
+     * B2 (M19): Task 1's REAL capture (`hook-deny.ndjson` et al) proved hook responses are NOT
+     * adjacency-ordered -- a second `PreToolUse:Read` response landed AFTER a Bash tool_use, AFTER
+     * that Bash call's own deny, and AFTER the deny's tool_result. "The last tool_call this pump
+     * saw" is therefore not reliably the call a deny belongs to; it was only right in that
+     * recording by luck. This test forces the mismatch by hand: the last `tool_call` this pump
+     * observed is `Read`/`toolu_r1`, but the deny reason names `Bash` -- a call this pump never saw
+     * as the last one. The deny is still real (`run.tool_denied` still fires), but the id must NOT
+     * be laundered into `matrixDeniedToolUseIds` on a name mismatch -- fail-safe is failing the run,
+     * not excluding an id this pump cannot actually vouch for.
+     */
+    it("B2: an adjacency mismatch between the last tool_call and the deny reason's own tool name does not associate the id — run.tool_denied still fires with toolUseId null, and the id is not excluded from the terminal failure check", async (): Promise<void> => {
+      const matrixReason = "permission matrix denies 'run tests' (Bash) for this agent"
+      const outcome = await pumpRun({
+        ...ids,
+        events: fromArray([
+          { kind: 'session_started', sessionId: 's-1' },
+          { kind: 'tool_call', toolUseId: 'toolu_r1', toolName: 'Read', summary: 'Read /tmp/notes.txt' },
+          { kind: 'hook_denied', hookName: 'PreToolUse:Bash', reason: matrixReason },
+          { kind: 'terminated', outcome: { ...okOutcome, deniedToolUseIds: ['toolu_r1'] } },
+        ]),
+      })
+
+      expect(outcome).not.toBeNull()
+      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      // Fail-safe: the mismatched id was never added to `matrixDeniedToolUseIds`, so it still
+      // shows up in `nonMatrixDeniedToolUseIds` and fails the run -- a wrong association must
+      // never launder an id out of the failure check.
+      expect(run.status).toBe('failed')
+
+      const types = await eventTypesFor(ids.runId)
+      // The deny itself is still real and still reported, mismatch or not.
+      expect(types.filter((t) => t === 'run.tool_denied')).toHaveLength(1)
+
+      const toolDenied = await prisma.executionEvent.findFirstOrThrow({
+        where: { runId: ids.runId, type: 'run_tool_denied' },
+      })
+      expect(toolDenied.payload).toEqual({ tool: 'Bash', capability: 'run tests', toolUseId: null })
+    })
   })
 })
