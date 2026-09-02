@@ -20,6 +20,7 @@
     "db:seed:test": "tsc --build && node scripts/seed-test.mjs",
     "orchestrator": "tsc --build && node --env-file=.env apps/orchestrator/dist/cli.js",
     "web": "node --env-file=.env node_modules/next/dist/bin/next dev apps/web -H 127.0.0.1",
+    "web:exposed": "node --env-file=.env node_modules/next/dist/bin/next dev apps/web -H 0.0.0.0",
     "web:build": "next build apps/web",
     "demo": "tsc --build && node --env-file=.env scripts/demo-live.mjs",
     "gate:m8a-merge": "tsc --build && node --env-file=.env scripts/gate-m8a-merge.mjs",

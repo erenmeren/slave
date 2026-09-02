@@ -71,6 +71,7 @@ Ubuntu, `apt-get install docker-compose-plugin`) before continuing.
 | `npm run gate:m16-chrome` | The M16 gate: one tone table, the handoff's forms — the goal form's radii, the permission matrix's cell glyphs, a project card's team-overflow pill, an unmeasured Analytics row's bare progress bar, and Task 7's status-\* rename all read back from a real rendered page (`getComputedStyle` via `playwright-core`) or grepped straight from the repo. **Spends nothing**, CI-runnable. |
 | `npm run gate:m17-stability` | The M17 gate: the full suite runs five times consecutively with no red, the runtime duplication census holds (one definition site per M13-consolidated block), and the four equivalence tests that license M17's query rewrites still exist. **Spends nothing**, CI-runnable, needs the test database up, and refuses under a genuinely running orchestrator daemon (`pgrep`'s candidate PIDs are confirmed against `/proc/<pid>/cmdline` so the gate's own wrapper shell can't self-match and false-refuse). |
 | `npm run gate:m18-skill-and-teeth` | The M18 gate: a refused tool, a readable chain, and two honest chips — a permission-matrix deny survives a dispatched run (one `run.tool_denied`, zero `guardrail.tripped`, never `paused`) and the Activity page renders the denial card; the Skill chain tab's aggregate canvas, its Focus click (DOM order plus a ×N badge), the clear control, and `skill-empty` on a genuinely fresh workspace; the Activity `sse · <n>ms` chip measuring a real frame and a seeded paused checkpoint's `deniedToolUseIds` reaching the Task detail panel's reader line. **Spends nothing** (drives a fixture-replaying fake CLI for its one dispatch regardless of what `AITEAMOS_CLAUDE_BIN` names), and refuses to start without `AITEAMOS_CLAUDE_BIN` pointing at `scripts/gate-fakes/`, without the dev database carrying the two m18 migrations, or under a genuinely running orchestrator daemon — `AITEAMOS_CLAUDE_BIN="$PWD/scripts/gate-fakes/fake-claude.sh" npm run gate:m18-skill-and-teeth`. Needs the dev database and a real browser (`playwright-core` + `CHROMIUM_PATH`). |
+| `npm run gate:m20-auth` | The M20 gate: the door has a lock — run A re-executes `gate:m15-boundary` with the password removed (loopback mode did not move, proven by the same script); run B boots `next dev` with a random password and walks the whole password mode: 302 to `/login`, 401 for headerless API calls, a slow 401 for the wrong password, a cookie for the right one, SSE with it, a tampered and an expired cookie refused, Bearer on the API only, cross-site refused even with a cookie, a tailnet Host welcome, logout, and the Settings posture line. **Spends nothing**, CI-runnable, needs the seeded dev database. |
 
 Integration tests require Postgres to be running. They **fail** rather than skip when it is not:
 a suite that skips reports success for work it did not do.
@@ -223,6 +224,21 @@ production `next start apps/web -H 127.0.0.1` carries the same flag for the same
 the seed script use, so it needs no separate configuration: point it at a workspace with
 `http://127.0.0.1:3000/w/<workspaceId>` and it reads that workspace straight out of the development
 database.
+
+### Reaching it from another device
+
+Set `AITEAMOS_PASSWORD` in `.env` and start with `npm run web:exposed` (`-H 0.0.0.0`). With a
+password configured the app answers to any Host name and asks for the password on every page
+(a login form) and every `/api/` call (a 401 without a session cookie); `curl` and scripts send
+it as `Authorization: Bearer <password>`. The session is a signed cookie, 30 days, no table —
+changing the password logs every device out. Settings' security line reads
+`password login · single operator · cross-site requests refused` in this mode, and carries a
+Logout button. Without a password, nothing changes: the instance stays loopback-only and
+`web:exposed` is inert (the Host rule refuses every non-loopback name).
+
+The password and the cookie travel in clear over plain HTTP. Use a tailnet (Tailscale — the
+recommended path; the wire is already encrypted) or a LAN you trust, never the open internet;
+TLS is deliberately not this app's job.
 
 The **Overview** page (`/w/<workspaceId>`) shows one card per agent — status, current task, live
 action line, provider, budget — a top strip with task counts and spend against the workspace
