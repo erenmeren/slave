@@ -15,7 +15,10 @@ const EXEMPT = new Set(['gate-m20-auth.mjs', 'web-exposed.mjs'])
 /** A next-dev spawner, by source text: either quote style of the argv pair, or the bare binary
  *  path. This is a per-file census over top-level `scripts/*.mjs` only -- a second spawn inside a
  *  file that already calls `loopbackChildEnv(` once, or a spawner under `scripts/lib/` or
- *  `scripts/gate-fakes/`, is invisible to it (M22 A1). */
+ *  `scripts/gate-fakes/`, is invisible to it (M22 A1). A non-spawner script that merely mentions
+ *  the binary path or the argv pair (in a comment, say) is a false positive that fails check 1
+ *  loud and closed with the "spawns next dev without loopbackChildEnv" message -- acceptable for
+ *  a string census. */
 const SPAWN_RE = /['"]dev['"],\s*['"]apps\/web['"]|node_modules\/next\/dist\/bin\/next/
 
 function assert(condition, message) { if (!condition) throw new Error(message) }
@@ -33,9 +36,10 @@ let exitCode = 1
 try {
   // 1. Census: every next-dev spawner uses loopbackChildEnv, except the two named exceptions.
   {
-    // The census greps source text, and THIS file's own search strings (SPAWN_RE's pattern and
-    // 'loopbackChildEnv(') would match it -- so the gate excludes itself rather than counting
-    // itself as a twelfth spawner. Each candidate is read once; its text travels with its name.
+    // The census greps source text. This file's own regex source does NOT match itself (its
+    // separators are escaped), but 'loopbackChildEnv(' appears here as a search string and a future
+    // verbatim quote of the argv pair would match -- so the gate excludes itself by name rather than
+    // ever counting itself as a twelfth spawner.
     const spawners = readdirSync(`${repoRoot}scripts`)
       .filter((f) => f.endsWith('.mjs') && f !== 'gate-m21-loose-ends.mjs')
       .map((name) => ({ name, text: readFileSync(`${repoRoot}scripts/${name}`, 'utf8') }))

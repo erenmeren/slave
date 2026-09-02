@@ -51,8 +51,8 @@ describe('classifyGateEvent threads hookId (M21 C1, pinned in M22)', () => {
     expect(outcome).not.toBeNull()
     expect(outcome !== null && 'hookId' in outcome).toBe(false)
   })
-  it('never puts hookId on a pause deny (stopped_by_gate)', () => {
-    const outcome = classifyGateEvent({ kind: 'hook_denied', hookName: 'PreToolUse:Bash', reason: 'paused by the operator', hookId: 'hk-1' })
+  it('never puts hookId on a non-matrix deny (the real pause reason → stopped_by_gate)', () => {
+    const outcome = classifyGateEvent({ kind: 'hook_denied', hookName: 'PreToolUse:Bash', reason: 'Paused by AI Team OS. Stop and wait.', hookId: 'hk-1' })
     expect(outcome?.kind).toBe('stopped_by_gate')
     expect(outcome !== null && 'hookId' in outcome).toBe(false)
   })

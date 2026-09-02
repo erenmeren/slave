@@ -507,8 +507,9 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
    * tool_use_id -- and the parser surfaces only the FIRST tool_use block of a multi-block assistant
    * line (`packages/providers/src/claude/stream.ts` ~:406), so in that unmeasured shape the hooks
    * bind to the first block, not the last. An entry is deleted when a deny resolves it; an allowed
-   * hook's entry lives for the run (two per gated tool call), so the map is bounded by twice the
-   * run's gated tool-call count (two PreToolUse hooks start per call).
+   * hook's entry lives for the run (two per gated tool call), so the map is bounded by at most twice
+   * the run's gated tool-call count (up to two PreToolUse hooks started per call in the measured
+   * capture; this product registers one).
    */
   const hookBindings = new Map<string, { readonly toolUseId: string; readonly toolName: string }>()
   const denied: string[] = []

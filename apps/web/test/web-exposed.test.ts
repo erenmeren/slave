@@ -18,7 +18,8 @@ afterAll(() => {
 })
 
 /** A stand-in for next's bin: prints its argv as JSON, then exits with STUB_EXIT, or waits for
- *  SIGTERM when STUB_WAIT=1 (exiting 0 on it). The real next must never start on 0.0.0.0 here. */
+ *  SIGTERM when STUB_WAIT=1 (exiting 0 on it), or STUB_SELF_KILL=1 kills itself with SIGKILL
+ *  right after printing. The real next must never start on 0.0.0.0 here. */
 function writeStub(): string {
   const dir = mkdtempSync(join(tmpdir(), 'aiteamos-web-exposed-'))
   stubDirs.push(dir)
