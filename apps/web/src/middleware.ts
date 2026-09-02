@@ -15,8 +15,8 @@ import { SESSION_COOKIE, verifyBearer, verifySession } from './lib/session'
  * the proto follows the forwarded header) — measured under `next dev` AND `next start`. A
  * `NextResponse.redirect(nextUrl.clone())` therefore sends a tailnet client to ITS OWN localhost,
  * which is exactly the deployment M20 exists for. A relative Location would be the tidier fix but
- * is not available: Next's middleware adapter parses every `Location` through `new NextURL(...)`
- * with no base (`next/dist/server/web/adapter.js:339`) and answers 500 `TypeError: Invalid URL`.
+ * is not available: the adapter's `new NextURL(location)` call in `next/dist/server/web/adapter.js`
+ * parses every `Location` with no base, and answers 500 `TypeError: Invalid URL`.
  * So the host the operator typed is echoed back, and the adapter leaves a non-`localhost` host
  * alone. Which hosts may reach this line is `boundary.ts`'s business, not this file's: loopback
  * mode already refused every foreign host above, and password mode answers to any host on purpose.
@@ -46,11 +46,14 @@ export async function middleware(request: NextRequest): Promise<NextResponse> {
   if (verdict.kind === 'refused') return NextResponse.json({ error: verdict.reason }, { status: 403 })
   if (request.nextUrl.pathname.startsWith('/api/')) return NextResponse.json({ error: verdict.reason }, { status: 401 })
 
-  // `||`, not `??`: a header sent with an EMPTY value reads back as `''`, not `null`, and an empty
-  // host or scheme makes the Location unparsable (`http:///login`, `://host/login`) — which the
-  // adapter turns into the same 500 a relative Location gives. The proto is allowlisted rather
-  // than merely non-empty so nothing else (`X-Forwarded-Proto: javascript`) can reach the header;
-  // `nextUrl` is the fallback for both, and its own scheme and host are well-formed by parsing.
+  // `||`, not `??`: a header sent with an EMPTY value reads back as `''`, not `null`, and the two
+  // empties fail differently — measured, not assumed. An empty proto (`://host/login`) is
+  // unparsable and the adapter turns it into the same 500 a relative Location gives; an empty host
+  // (`http:///login`) PARSES, to host `login`, so the browser would be sent silently to
+  // `http://login/…` — a wrong-host redirect, not an error. Both are why `nextUrl` is the fallback
+  // for each half: its own scheme and host are well-formed by parsing. The proto is allowlisted
+  // rather than merely non-empty so nothing else (`X-Forwarded-Proto: javascript`) can reach the
+  // header.
   const next = encodeURIComponent(`${request.nextUrl.pathname}${request.nextUrl.search}`)
   const forwarded = request.headers.get('x-forwarded-proto')?.split(',')[0]?.trim().toLowerCase()
   const proto = forwarded === 'http' || forwarded === 'https' ? forwarded : request.nextUrl.protocol.replace(':', '')
