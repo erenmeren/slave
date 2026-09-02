@@ -65,6 +65,22 @@ describe('POST /api/auth/login', () => {
       expect(response.status).toBe(401)
     },
   )
+
+  it('serialises concurrent wrong guesses (M21 B3): the second waits behind the first, a right guess does not', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const started = performance.now()
+    const [first, second, right] = await Promise.all([
+      loginPOST(loginRequest({ password: 'wrong-1' })).then((r) => ({ status: r.status, at: performance.now() - started })),
+      loginPOST(loginRequest({ password: 'wrong-2' })).then((r) => ({ status: r.status, at: performance.now() - started })),
+      loginPOST(loginRequest({ password: 'hunter2' })).then((r) => ({ status: r.status, at: performance.now() - started })),
+    ])
+    expect(first.status).toBe(401)
+    expect(second.status).toBe(401)
+    expect(right.status).toBe(204)
+    expect(Math.min(first.at, second.at)).toBeGreaterThanOrEqual(290)
+    expect(Math.max(first.at, second.at)).toBeGreaterThanOrEqual(590)
+    expect(right.at).toBeLessThan(250)
+  })
 })
 
 describe('POST /api/auth/logout', () => {
