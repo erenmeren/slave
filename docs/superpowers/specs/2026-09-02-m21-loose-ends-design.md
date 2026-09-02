@@ -228,3 +228,15 @@ spend.
   from child environments through one helper; nothing else reads it.
 - M20's Errata 2 (port-stripped Origin) and Errata 8 (delay bounds latency) are marked
   "closed by M21 B1/B3" in the M20 spec in the same commit as the code.
+
+## 9. Errata (post-execution, 2026-09-02)
+
+1. §2 A1: `loopbackChildEnv` sets `AITEAMOS_PASSWORD` to `''` rather than deleting it, because the two `measure-*` scripts pass `--env-file=.env` to their child and Node's env-file loader repopulates an absent key but never overrides a present one (verified on Node 26.7); blank is loopback mode under `authEnv`'s trim rule.
+2. §8: "the gates DELETE it from child environments" reads "the gates BLANK it", per Erratum 1.
+3. §4 C5: the capture's last parsed line is the routine `Stop` `hook_response` and the `result` line is second-to-last (fixture README redaction rule 4, `fake-claude.test.ts`), so check 2 asserts that order plus exactly one trailing `\n`; the plan's "last line is the result line" was wrong.
+4. §4 C1: `hook_denied.hookId` is `string | undefined` (key absent when the line carried no `hook_id`), not `string | null`, so existing event literals compile under `exactOptionalPropertyTypes`; `GateOutcome.tool_denied.hookId` is threaded through `classifyGateEvent` the same way; and a bound hook whose deny reason names a different tool resolves to `null` (final-review tightening).
+5. §4 C2: the resume seed reads `prisma.executionEvent.findMany({ where: { runId, type: 'run_tool_denied' } })` through `@ai-team-os/db`'s `toExecutionEvent` mapper (already exported), not through `@ai-team-os/events`' reader, which is not run-filterable.
+6. §6 check 1: the census excludes `gate-m21-loose-ends.mjs` itself (its search strings self-match) and asserts `>= 11` spawners over top-level `scripts/*.mjs`; it is a per-file string census, not a per-spawn-site one.
+7. §6 check 4 / §2 A3: both child invocations are `spawnSync` with stdout printed before `status` and the PASS / `Test Files 6 passed` assertions, so a failing child is quoted, not swallowed.
+8. §3 B3: the README paragraph on the 300 ms delay is rewritten in the same change (it stated the non-serialisation B3 closes).
+9. §8: M20 Errata 9 (the M15 gate requires the variable unset) is also closed by M21 A1 and marked so.

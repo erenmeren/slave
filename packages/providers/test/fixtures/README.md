@@ -305,5 +305,6 @@ These five govern every fixture here, with no declared exception left. `permissi
 was the last one — exempt from rules 1 and 4 because it had no real recording to keep byte for byte
 or to defer to — and M19 Task A1 recorded one, so the exemption is retired rather than merely
 narrowed. Rule 4 in particular now binds it like everything else: its two out-of-order hook
-responses and its `hook_started` lines stay exactly where the CLI put them, including the ones
-nothing reads.
+responses and its `hook_started` lines stay exactly where the CLI put them, including the
+SessionStart/UserPromptSubmit/PostToolUse/Stop starts nothing reads (the PreToolUse starts are read
+since M21 C1).
