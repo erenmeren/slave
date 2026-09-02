@@ -1667,6 +1667,77 @@ describe('pumpRun', () => {
     })
 
     /**
+     * C3 negative control 1 (M21): the B1 seed is the RESUME path's, and only the resume path's.
+     * Identical prior `run.tool_denied` row, identical terminal echo -- but a FRESH pump
+     * (`resumed` unset) reads nothing back, so the echoed id is an id THIS pump never confirmed
+     * and the run fails on it. Without this control, B1 would pass just as well against a seed
+     * that ran unconditionally, which would let any run inherit a previous run's excuses.
+     */
+    it('C3 negative control 1: a NON-resumed pump does not seed from prior run.tool_denied events — the echoed id still fails the run', async (): Promise<void> => {
+      await appendEvent({
+        type: 'run.tool_denied',
+        workspaceId: ids.workspaceId,
+        taskId: ids.taskId,
+        agentId: ids.agentId,
+        runId: ids.runId,
+        actor: 'agent',
+        payload: { tool: 'Bash', capability: 'run tests', toolUseId: 'toolu_old_matrix' },
+      })
+
+      await pumpRun({
+        ...ids,
+        events: fromArray([
+          { kind: 'session_started', sessionId: 's-1' },
+          { kind: 'terminated', outcome: { ...okOutcome, deniedToolUseIds: ['toolu_old_matrix'] } },
+        ]),
+      })
+
+      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      expect(run.status).toBe('failed')
+    })
+
+    /**
+     * C3 negative control 2 (M21): the seed excuses exactly the ids a prior pump confirmed, and
+     * nothing else. A resumed pump seeded with `toolu_old_matrix` still fails on
+     * `toolu_new_real` -- a denial nobody ever routed through `run.tool_denied` -- and
+     * `run.failed`'s reason names only the unexcused id (it is built from
+     * `nonMatrixDeniedToolUseIds`, not from `outcome.deniedToolUseIds` raw). Without this
+     * control, B1 would pass just as well against a seed that swallowed the whole terminal echo.
+     */
+    it('C3 negative control 2: a resumed pump seeded with one id still fails on a genuine denial it never confirmed', async (): Promise<void> => {
+      await appendEvent({
+        type: 'run.tool_denied',
+        workspaceId: ids.workspaceId,
+        taskId: ids.taskId,
+        agentId: ids.agentId,
+        runId: ids.runId,
+        actor: 'agent',
+        payload: { tool: 'Bash', capability: 'run tests', toolUseId: 'toolu_old_matrix' },
+      })
+
+      await pumpRun({
+        ...ids,
+        resumed: true,
+        events: fromArray([
+          { kind: 'session_started', sessionId: 's-resumed' },
+          {
+            kind: 'terminated',
+            outcome: { ...okOutcome, deniedToolUseIds: ['toolu_old_matrix', 'toolu_new_real'] },
+          },
+        ]),
+      })
+
+      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      expect(run.status).toBe('failed')
+
+      const failed = await prisma.executionEvent.findFirstOrThrow({
+        where: { runId: ids.runId, type: 'run_failed' },
+      })
+      expect(JSON.stringify(failed.payload)).toContain('toolu_new_real')
+      expect(JSON.stringify(failed.payload)).not.toContain('toolu_old_matrix')
+    })
+
+    /**
      * B2 (M19): Task 1's REAL capture (`permission-matrix-deny.ndjson`) proved hook responses are
      * NOT adjacency-ordered -- a second `PreToolUse:Read` response landed AFTER a Bash tool_use, AFTER
      * that Bash call's own deny, and AFTER the deny's tool_result. "The last tool_call this pump
@@ -1699,6 +1770,71 @@ describe('pumpRun', () => {
       const types = await eventTypesFor(ids.runId)
       // The deny itself is still real and still reported, mismatch or not.
       expect(types.filter((t) => t === 'run.tool_denied')).toHaveLength(1)
+
+      const toolDenied = await prisma.executionEvent.findFirstOrThrow({
+        where: { runId: ids.runId, type: 'run_tool_denied' },
+      })
+      expect(toolDenied.payload).toEqual({ tool: 'Bash', capability: 'run tests', toolUseId: null })
+    })
+
+    /**
+     * C1 (M21): the fix B2 named and deferred. The stream now carries `hook_started` with the
+     * `hook_id` the later `hook_denied` answers, so the pump binds an id to the tool_use its hook
+     * serves AT HOOK START -- while adjacency is still true -- and resolves by that id when the
+     * response finally lands. This test is B2's over-fail, reproduced exactly: a real Bash matrix
+     * deny whose hook response arrives after an unrelated `Read` tool_call. Under the bare name
+     * rule the association was `null` and the run over-failed; with the binding it resolves to
+     * `toolu_bash` and the run survives, which is what the real capture
+     * (`permission-matrix-deny.ndjson`, a response on line 24 answering line 15) actually shows.
+     */
+    it('C1: a deny whose hook_response lands AFTER a differently named later tool_call still associates the right id via hook_id, and the run survives (closes the B2 over-fail)', async (): Promise<void> => {
+      const matrixReason = "permission matrix denies 'run tests' (Bash) for this agent"
+      const outcome = await pumpRun({
+        ...ids,
+        events: fromArray([
+          { kind: 'session_started', sessionId: 's-1' },
+          { kind: 'tool_call', toolUseId: 'toolu_bash', toolName: 'Bash', summary: 'Bash npm test' },
+          { kind: 'hook_started', hookId: 'hk-bash', hookName: 'PreToolUse:Bash' },
+          { kind: 'tool_call', toolUseId: 'toolu_read', toolName: 'Read', summary: 'Read notes.txt' },
+          { kind: 'hook_started', hookId: 'hk-read', hookName: 'PreToolUse:Read' },
+          { kind: 'hook_denied', hookName: 'PreToolUse:Bash', reason: matrixReason, hookId: 'hk-bash' },
+          { kind: 'terminated', outcome: { ...okOutcome, deniedToolUseIds: ['toolu_bash'] } },
+        ]),
+      })
+
+      expect(outcome).not.toBeNull()
+      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      expect(run.status).toBe('succeeded')
+
+      const toolDenied = await prisma.executionEvent.findFirstOrThrow({
+        where: { runId: ids.runId, type: 'run_tool_denied' },
+      })
+      expect(toolDenied.payload).toEqual({ tool: 'Bash', capability: 'run tests', toolUseId: 'toolu_bash' })
+    })
+
+    /**
+     * C1 fail-safe (M21): binding happens only when the hook's own tool name matches the last
+     * tool_call -- B2's cross-check, kept, because `hook_started` carries no `tool_use_id` of its
+     * own and adjacency is all there is to bind on. A `hook_started` that fails that check binds
+     * NOTHING, so a deny carrying its id finds no binding and falls back to the same name rule,
+     * which fails too: the association is `null`, the id is never laundered out of the terminal
+     * failure check, and the run fails. An unbindable hook must never be a free pass.
+     */
+    it('C1: a hook_started whose tool name does not match the last tool_call binds nothing, so a deny by that hook_id falls back to null (fail-safe)', async (): Promise<void> => {
+      const matrixReason = "permission matrix denies 'run tests' (Bash) for this agent"
+      await pumpRun({
+        ...ids,
+        events: fromArray([
+          { kind: 'session_started', sessionId: 's-1' },
+          { kind: 'tool_call', toolUseId: 'toolu_read', toolName: 'Read', summary: 'Read notes.txt' },
+          { kind: 'hook_started', hookId: 'hk-x', hookName: 'PreToolUse:Bash' },
+          { kind: 'hook_denied', hookName: 'PreToolUse:Bash', reason: matrixReason, hookId: 'hk-x' },
+          { kind: 'terminated', outcome: { ...okOutcome, deniedToolUseIds: ['toolu_read'] } },
+        ]),
+      })
+
+      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      expect(run.status).toBe('failed')
 
       const toolDenied = await prisma.executionEvent.findFirstOrThrow({
         where: { runId: ids.runId, type: 'run_tool_denied' },

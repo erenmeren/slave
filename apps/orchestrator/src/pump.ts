@@ -495,6 +495,18 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
   let outcome: RunOutcome | null = null
 
   let lastToolUse: { readonly id: string; readonly name: string } | null = null
+  /**
+   * M21 C1: `hook_id` -> the tool_use its PreToolUse hook serves. Bound when the hook STARTS --
+   * immediately after the tool_use it belongs to, before any later tool_call -- and only when the
+   * hook's tool name matches the last tool_call (the B2 cross-check, kept). A later `hook_denied`
+   * carrying that id resolves here, so the out-of-order RESPONSE the real capture recorded
+   * (`permission-matrix-deny.ndjson` line 24 answering line 15 after an unrelated Bash deny) no
+   * longer matters, and B2's over-fail (a deny answered after a differently named call) is closed.
+   * Residual limit, measured and unfixable from the stream: parallel same-named tool_use blocks in
+   * ONE assistant message start their hooks after the whole message, so both bind to the last
+   * block; `hook_started` carries no tool_use_id. Entries are consumed on resolution.
+   */
+  const hookBindings = new Map<string, { readonly toolUseId: string; readonly toolName: string }>()
   const denied: string[] = []
   /**
    * M18 Task 6 fix round 1 (review Critical 1): the tool-use ids this pump itself routed to
@@ -616,6 +628,19 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
         // (M4 spec §1) -- e.g. `Write note3.txt` rather than the opaque `toolUseId`. It falls
         // back to the bare tool name when no known argument key is present.
         await emit('run.tool_call', 'agent', { name: event.toolName, summary: event.summary })
+        break
+      }
+
+      case 'hook_started': {
+        // M21 C1: bind while adjacency is still true. The parser emits this for `PreToolUse` only,
+        // and its `hookName` is `PreToolUse:<tool>` -- the tool the hook is about to gate. Nothing
+        // is bound unless that name matches the last `tool_call`: `hook_started` carries no
+        // `tool_use_id` of its own, so adjacency is the only evidence there is, and B2's
+        // cross-check is what keeps a hook that cannot be placed from being placed anyway.
+        const tool = event.hookName.startsWith('PreToolUse:') ? event.hookName.slice('PreToolUse:'.length) : null
+        if (tool !== null && lastToolUse !== null && lastToolUse.name === tool) {
+          hookBindings.set(event.hookId, { toolUseId: lastToolUse.id, toolName: lastToolUse.name })
+        }
         break
       }
 
@@ -833,18 +858,31 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
             // responses arriving OUT OF ADJACENCY ORDER -- a second `PreToolUse:Read` response
             // landed after a Bash tool_use, after that Bash call's own deny, and after the deny's
             // tool_result. "Last tool_call seen" was the right id in that recording by luck, not by
-            // contract. The deny reason itself already carries the tool name it refused
-            // (`gateOutcome.tool`, from `parsePermissionDenyReason`), so the association is trusted
-            // only when that name matches the last tool_call's own name -- a cross-check this pump
-            // can make without extending the stream parser to pair `hook_id`/`hook_started` (out of
-            // this task's scope; see the task report for why that would still be the more complete
-            // fix). This is the conservative side of a genuine trade-off, not a free win: a REAL
-            // matrix deny whose hook response happens to arrive after a subsequent, DIFFERENTLY
-            // NAMED tool_call also fails this check, so `associated` is `null` for a legitimate
-            // survivable refusal too, and the run can over-fail. Chosen anyway, because the
-            // alternative -- trusting the bare adjacency -- is the exact mis-association this fix
-            // exists to close.
-            const associated = lastToolUse !== null && lastToolUse.name === gateOutcome.tool ? lastToolUse.id : null
+            // contract. B2 narrowed that to the denies whose reason names the same tool as the last
+            // tool_call (`gateOutcome.tool`, from `parsePermissionDenyReason`), and paid for it with
+            // an over-fail: a REAL matrix deny answered after a differently NAMED later call failed
+            // the check too, so `associated` was `null` for a legitimate survivable refusal.
+            //
+            // M21 C1 closes that over-fail. The binding above -- made when the hook STARTED, while
+            // adjacency was still true -- is consulted FIRST, so an out-of-order response resolves
+            // by its own `hook_id` rather than by whatever happened to be last. B2's name rule stays
+            // as the fallback for a deny with no `hook_id` (an older CLI, another runtime) and for
+            // one whose id never bound. The residual limit is the parallel same-message case:
+            // several same-named `tool_use` blocks in ONE assistant message have their hooks start
+            // after the whole message, and `hook_started` carries no `tool_use_id`, so they all bind
+            // to the last block. Fail-safe is unchanged in both fallbacks: when neither the binding
+            // nor the name rule can vouch for an id, `associated` is `null` and nothing below
+            // launders that id out of the terminal failure check.
+            const bound = gateOutcome.hookId === undefined ? undefined : hookBindings.get(gateOutcome.hookId)
+            // Consumed on resolution: a hook_id answers exactly once, and a map that only grows
+            // would keep a stale binding alive for a whole run.
+            if (gateOutcome.hookId !== undefined) hookBindings.delete(gateOutcome.hookId)
+            const associated =
+              bound !== undefined
+                ? bound.toolUseId
+                : lastToolUse !== null && lastToolUse.name === gateOutcome.tool
+                  ? lastToolUse.id
+                  : null
             await emit('run.tool_denied', 'agent', {
               tool: gateOutcome.tool,
               capability: gateOutcome.capability,

@@ -25,7 +25,19 @@ const STDERR_CAP = 1_000
 export type GateOutcome =
   | { readonly kind: 'stopped_by_gate'; readonly reason: string }
   | { readonly kind: 'gate_failed'; readonly detail: string }
-  | { readonly kind: 'tool_denied'; readonly tool: string; readonly capability: string }
+  | {
+      readonly kind: 'tool_denied'
+      readonly tool: string
+      readonly capability: string
+      /**
+       * M21 C1: the denying hook's own `hook_id`, carried through from `hook_denied` when the CLI
+       * sent one. The pump bound this id to a `tool_use` when the hook STARTED, so it -- not the
+       * last `tool_call` seen, which the real capture proved is not reliably the refused one --
+       * is what resolves the denial to the call it actually refused. Absent (`undefined`) for a
+       * runtime or a line that carried no `hook_id`; the pump falls back to M19 B2's name rule.
+       */
+      readonly hookId?: string
+    }
 
 /**
  * Every deny the PERMISSION MATRIX issues begins with this exact string — it is how the stream
@@ -116,7 +128,15 @@ export function classifyGateEvent(event: RuntimeEvent): GateOutcome | null {
       // downstream can name.
       const parsed = parsePermissionDenyReason(event.reason)
       if (parsed !== null) {
-        return { kind: 'tool_denied', tool: parsed.tool, capability: parsed.capability }
+        // M21 C1: `hookId` is passed through only when the line carried one -- spread rather than
+        // set, because `exactOptionalPropertyTypes` distinguishes "absent" from "present and
+        // undefined", and the pump reads absence as "no binding to look up".
+        return {
+          kind: 'tool_denied',
+          tool: parsed.tool,
+          capability: parsed.capability,
+          ...(event.hookId === undefined ? {} : { hookId: event.hookId }),
+        }
       }
       return { kind: 'stopped_by_gate', reason: event.reason }
     }
