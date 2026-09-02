@@ -295,8 +295,22 @@ try {
   }
   console.log('stage 2: the headerless escape hatch is closed')
 
-  // 3. Wrong password -> slow 401, no cookie.
+  // 3. Wrong password -> slow 401, no cookie. MEASURED ON A WARM ROUTE, and that is the whole
+  // point of the throwaway request below: `next dev` compiles a route on its first request, and
+  // this stage is the first traffic `/api/auth/login` sees. A cold measurement is dominated by the
+  // compiler rather than by the product -- observed `✓ Compiled /api/auth/login in 305ms` with a
+  // `POST /api/auth/login 401 in 657ms` on one run and 149ms/508ms on another -- so a cold
+  // `>= 250` bound would still have passed with `FAILED_LOGIN_DELAY_MS` deleted, and its verdict
+  // would swing with the machine. The first POST is asserted only for its 401 (the answer must not
+  // depend on being warm); the SECOND one, on a route that is already compiled, is the one whose
+  // elapsed time can only be the deliberate delay.
   {
+    const warmup = await fetch(url('/api/auth/login'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ password: `${PASSWORD}x` }),
+    })
+    assert(warmup.status === 401, `wrong password (warm-up): expected 401, got ${warmup.status}`)
     const started = Date.now()
     const res = await fetch(url('/api/auth/login'), {
       method: 'POST',
@@ -307,9 +321,10 @@ try {
     assert(res.status === 401, `wrong password: expected 401, got ${res.status}`)
     assert((await res.json()).error === 'wrong password', 'wrong password: unexpected body')
     assert(res.headers.get('set-cookie') === null, 'wrong password must not set a cookie')
-    assert(elapsed >= 250, `wrong password answered in ${String(elapsed)}ms -- expected >= 250`)
+    assert(elapsed >= 250, `wrong password answered in ${String(elapsed)}ms on a warm route -- expected >= 250`)
+    console.log(`  (the warm wrong-password POST took ${String(elapsed)}ms)`)
   }
-  console.log('stage 3: the wrong password costs 300 ms and earns no cookie')
+  console.log('stage 3: on a warm route the wrong password costs 300 ms and earns no cookie')
 
   // 4. Right password -> 204 + cookie with the spec attributes.
   let cookie
