@@ -46,8 +46,14 @@ export async function middleware(request: NextRequest): Promise<NextResponse> {
   if (verdict.kind === 'refused') return NextResponse.json({ error: verdict.reason }, { status: 403 })
   if (request.nextUrl.pathname.startsWith('/api/')) return NextResponse.json({ error: verdict.reason }, { status: 401 })
 
+  // `||`, not `??`: a header sent with an EMPTY value reads back as `''`, not `null`, and an empty
+  // host or scheme makes the Location unparsable (`http:///login`, `://host/login`) — which the
+  // adapter turns into the same 500 a relative Location gives. The proto is allowlisted rather
+  // than merely non-empty so nothing else (`X-Forwarded-Proto: javascript`) can reach the header;
+  // `nextUrl` is the fallback for both, and its own scheme and host are well-formed by parsing.
   const next = encodeURIComponent(`${request.nextUrl.pathname}${request.nextUrl.search}`)
-  const proto = request.headers.get('x-forwarded-proto')?.split(',')[0]?.trim() ?? request.nextUrl.protocol.replace(':', '')
-  const host = request.headers.get('host') ?? request.nextUrl.host
+  const forwarded = request.headers.get('x-forwarded-proto')?.split(',')[0]?.trim().toLowerCase()
+  const proto = forwarded === 'http' || forwarded === 'https' ? forwarded : request.nextUrl.protocol.replace(':', '')
+  const host = request.headers.get('host') || request.nextUrl.host
   return new NextResponse(null, { status: 302, headers: { location: `${proto}://${host}/login?next=${next}` } })
 }
