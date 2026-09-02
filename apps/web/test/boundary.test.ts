@@ -161,6 +161,16 @@ describe('boundaryVerdict in password mode', () => {
     })
   })
 
+  it('refuses an unparsable Origin in password mode too', () => {
+    for (const origin of ['null', 'not a url']) {
+      expect(boundaryVerdict({ ...pw, sessionValid: true, origin })).toEqual({
+        allow: false,
+        kind: 'refused',
+        reason: `cross-origin request refused (origin: ${origin})`,
+      })
+    }
+  })
+
   it('in loopback mode the Origin still goes against the allowlist (localhost ↔ 127.0.0.1 allowed)', () => {
     expect(boundaryVerdict({ ...base, host: '127.0.0.1:3000', origin: 'http://localhost:3000' })).toEqual({ allow: true })
   })

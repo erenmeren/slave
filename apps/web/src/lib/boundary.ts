@@ -96,7 +96,7 @@ function crossSiteRefusal(request: BoundaryRequest): BoundaryVerdict | null {
           sameSide = request.host !== null && originHost === request.host.toLowerCase()
           break
         default:
-          assertNever(request.mode)
+          return assertNever(request.mode)
       }
     }
     if (!sameSide) return refused(`cross-origin request refused (origin: ${request.origin})`)
@@ -119,7 +119,7 @@ export function boundaryVerdict(request: BoundaryRequest): BoundaryVerdict {
       // Skipped: the defence is the credential now, and answering to a tailnet hostname is the point.
       break
     default:
-      assertNever(request.mode)
+      return assertNever(request.mode)
   }
 
   // Rule 3 runs before rule 2's public-path allow so that the login POST — public, but an
@@ -144,7 +144,7 @@ export function boundaryVerdict(request: BoundaryRequest): BoundaryVerdict {
     case 'loopback-only':
       break
     default:
-      assertNever(request.mode)
+      return assertNever(request.mode)
   }
 
   // Rule 5 — loopback mode, nothing objected: curl, scripts, the gate, the operator's browser.

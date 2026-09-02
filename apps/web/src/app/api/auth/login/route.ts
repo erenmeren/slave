@@ -9,6 +9,7 @@ export const dynamic = 'force-dynamic'
  *  second regardless of connection count. What this does not bound: a distributed attacker across
  *  many processes, and it is not a lockout — the password's entropy is the real defence (README
  *  says so). Successes never touch the queue. */
+// The queue does not drain on client abort: N aborted wrong guesses still delay the next failure by N×300 ms. Successes never wait.
 const FAILED_LOGIN_DELAY_MS = 300
 let failureGate: Promise<void> = Promise.resolve()
 

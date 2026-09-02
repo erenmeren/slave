@@ -244,7 +244,7 @@ it and gets full read/write on a socket bound to every interface. `npm run web:e
 refuses to start when `AITEAMOS_PASSWORD` is blank or unset (`scripts/web-exposed.mjs`, one line
 on stderr and exit 2); the loopback `npm run web` is the command for a passwordless instance.
 
-Pick a long random password — `openssl rand -base64 24`. The 300 ms delay on a failed login is a
+Pick a long random password. The 300 ms delay on a failed login is a
 queue: one process answers at most ~3.3 wrong guesses a second regardless of connection count. It
 is not a lockout and does not bound a distributed attacker; the password's own entropy is the real
 defence — use a long random value (e.g. `openssl rand -base64 24`).
