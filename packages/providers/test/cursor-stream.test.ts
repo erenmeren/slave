@@ -33,7 +33,7 @@ const FIXTURE_TOOL_PATH =
 const FIXTURE_CALL_ID =
   'call-ae488142-4603-40ee-b2b1-6af10cd2ae63-0\nfc_12f193b8-7246-9972-8a7f-29022849f6a6_0'
 
-const HOOK_KINDS = ['hook_denied', 'hook_crashed', 'hook_failed_open', 'permission_denied'] as const
+const HOOK_KINDS = ['hook_started', 'hook_denied', 'hook_crashed', 'hook_failed_open', 'permission_denied'] as const
 
 describe('parseCursorLine, against the recorded fixture', () => {
   it('recorded 13 lines whose types are exactly what the mapping below is derived from', () => {

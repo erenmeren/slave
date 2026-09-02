@@ -78,7 +78,22 @@ export type RuntimeEvent =
   | { readonly kind: 'session_started'; readonly sessionId: string }
   | { readonly kind: 'tool_call'; readonly toolUseId: string; readonly toolName: string; readonly summary: string }
   | { readonly kind: 'text'; readonly text: string }
-  | { readonly kind: 'hook_denied'; readonly hookName: string; readonly reason: string }
+  /**
+   * A `PreToolUse` hook began for the most recent `tool_use` (M21 C1). Emitted for `PreToolUse`
+   * alone -- every other hook event's start (`SessionStart`, `Stop`, ...) stays `ignored`, because
+   * only the write gate's own start is worth binding to a tool call. The pump binds `hookId` to
+   * that `tool_use`, so a later `hook_denied` carrying the same `hookId` resolves to the call it
+   * actually refused instead of to whatever `tool_call` happened to be last -- the mis-association
+   * M19 B2 could only narrow with a tool-name cross-check.
+   */
+  | { readonly kind: 'hook_started'; readonly hookId: string; readonly hookName: string }
+  | {
+      readonly kind: 'hook_denied'
+      readonly hookName: string
+      readonly reason: string
+      /** The line's hook_id, when the CLI sent one; pairs this response to its hook_started. */
+      readonly hookId?: string
+    }
   | {
       readonly kind: 'hook_crashed'
       readonly hookName: string

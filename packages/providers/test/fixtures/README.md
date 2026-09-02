@@ -155,16 +155,19 @@ tests"}` and zero `guardrail.tripped` — the M18 Task 6 routing, confirmed agai
 rather than against a file describing it.
 
 Three things the hand-authored file did not have, all of them consequences of this being a real
-recording rather than a sketch. The first two are read by nothing today and are the M19 findings
-routed to B1/B2 (`docs/superpowers/specs/2026-09-01-m19-measure-and-harden-design.md`):
+recording rather than a sketch. The first two were read by nothing when this was written and are
+the M19 findings routed to B1/B2 (`docs/superpowers/specs/2026-09-01-m19-measure-and-harden-design.md`);
+the first is now read, by M21 C1's `hook_id` pairing:
 
 - **`hook_started` lines, and hook responses that are not adjacency-ordered.** Two `PreToolUse`
   hooks run per tool call here (this repo's gate plus a plugin's), and their responses come back out
   of order: the second `PreToolUse:Read` response is on **line 24**, *after* the `Bash` tool_use,
   after its deny response, and after the deny's `tool_result`. `hook_id` pairs each response to its
-  `hook_started` (line 15 ↔ line 24) and is the only thing that does; `parseStreamLine` ignores it,
-  and `pump.ts` associates a deny with a tool by "the last `tool_call` seen". In this recording that
-  association is correct — but the recording shows it is a guess, not a guarantee.
+  `hook_started` (line 15 ↔ line 24) and is the only thing that does. M21 C1 acts on that:
+  `parseStreamLine` now turns a `PreToolUse` `hook_started` into an event and carries `hook_id`
+  onto `hook_denied`, so the pump can pair the two instead of associating a deny with a tool by
+  "the last `tool_call` seen". In this recording that older association is correct — but the
+  recording shows it was a guess, not a guarantee.
 - **`tool_result_meta`** on the denied `tool_result` (line 23):
   `[{"id":"toolu_01LiQ…","non_execution_kind":"permission-rule"}]`, alongside a
   `tool_use_result` of `"Error: permission matrix denies 'run tests' (Bash) for this agent"`. A

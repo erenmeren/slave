@@ -309,8 +309,11 @@ describe('parseStreamLine', () => {
     })
   })
 
-  it('ignores hook_started, hook_progress and thinking_tokens system lines', () => {
+  it('ignores hook_progress, thinking_tokens, and a hook_started line carrying no hook_id', () => {
     // Recognized housekeeping lines the real CLI emits constantly; none carry a decision.
+    // The `hook_started` here is deliberately the malformed case (no `hook_id`): since M21 C1 a
+    // well-formed `PreToolUse` start IS an event, but one with nothing to pair on is `ignored`,
+    // never `unparsable` -- it carries no verdict, so failing to read it is not a defect.
     const lines = [
       JSON.stringify({ type: 'system', subtype: 'hook_started', hook_name: 'PreToolUse:Bash', hook_event: 'PreToolUse' }),
       JSON.stringify({ type: 'system', subtype: 'hook_progress', hook_name: 'PreToolUse:Bash', output: '{}\n' }),
@@ -599,5 +602,28 @@ describe('result line token usage (M14 §4.2)', () => {
       }),
     )
     expect((event as Extract<RuntimeEvent, { kind: 'terminated' }>).outcome.tokens).toEqual({ input: 46_952, output: 741 })
+  })
+})
+
+describe('hook_id pairing (M21 C1, recorded)', () => {
+  const lines = readFileSync(new URL('./fixtures/permission-matrix-deny.ndjson', import.meta.url), 'utf8').split('\n')
+  it('turns the two PreToolUse:Read hook_started lines (14, 15) into two events with distinct ids and one name', () => {
+    expect(parseStreamLine(lines[13]!)).toEqual({ kind: 'hook_started', hookId: '0fa69a02-650f-4832-bc13-e4e11e2c8923', hookName: 'PreToolUse:Read' })
+    expect(parseStreamLine(lines[14]!)).toEqual({ kind: 'hook_started', hookId: '172dbed1-a4c8-41cd-a6ac-ce9527937e84', hookName: 'PreToolUse:Read' })
+  })
+  it('keeps non-PreToolUse hook_started lines ignored (line 1, SessionStart)', () => {
+    expect(parseStreamLine(lines[0]!).kind).toBe('ignored')
+  })
+  it("carries the deny's hook_id on hook_denied (line 22 answers line 20's PreToolUse:Bash)", () => {
+    const event = parseStreamLine(lines[21]!)
+    expect(event.kind).toBe('hook_denied')
+    if (event.kind === 'hook_denied') {
+      expect(event.hookId).toBe('ccfca4a2-d61e-4dc6-b4dd-d91c91b8529b')
+      expect(event.hookName).toBe('PreToolUse:Bash')
+    }
+  })
+  it('omits hookId when a hook_response line has no hook_id (older captures)', () => {
+    const line = JSON.stringify({ type: 'system', subtype: 'hook_response', hook_name: 'PreToolUse:Bash', hook_event: 'PreToolUse', output: JSON.stringify({ hookSpecificOutput: { permissionDecision: 'deny', permissionDecisionReason: 'no' } }), exit_code: 0 })
+    expect(parseStreamLine(line)).toEqual({ kind: 'hook_denied', hookName: 'PreToolUse:Bash', reason: 'no' })
   })
 })

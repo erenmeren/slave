@@ -79,12 +79,14 @@ function parseSystemLine(raw: unknown, line: string): RuntimeEvent {
       return parseInitLine(raw, line)
     case 'hook_response':
       return parseHookResponseLine(raw, line)
+    case 'hook_started':
+      return parseHookStartedLine(raw, line)
     case 'permission_denied':
       return parsePermissionDeniedLine(raw, line)
     default:
       // Recognized system housekeeping this parser does not act on --
-      // `hook_started`, `hook_progress`, `thinking_tokens`, and any future
-      // subtype the CLI adds. None carries a decision.
+      // `hook_progress`, `thinking_tokens`, and any future subtype the CLI
+      // adds. None carries a decision.
       return { kind: 'ignored', line }
   }
 }
@@ -114,9 +116,34 @@ function parsePermissionDeniedLine(raw: unknown, line: string): RuntimeEvent {
   return { kind: 'permission_denied', toolName: result.data.tool_name, toolUseId: result.data.tool_use_id }
 }
 
+const hookStartedSchema = z.object({
+  type: z.literal('system'),
+  subtype: z.literal('hook_started'),
+  hook_id: z.string(),
+  hook_name: z.string(),
+  hook_event: z.string().optional(),
+})
+
+/**
+ * A `hook_started` line announces a hook run and its `hook_id`, the id its own
+ * `hook_response` later echoes back (measured: `permission-matrix-deny.ndjson` lines 20/22).
+ * Only `PreToolUse` starts become events -- the rest is housekeeping, `ignored` as before.
+ *
+ * A malformed one is `ignored`, NOT `unparsable`: unlike `hook_response`, this line carries no
+ * decision, so failing to read it drops a correlation hint, not a gate verdict, and must not be
+ * counted against the run as a defect.
+ */
+function parseHookStartedLine(raw: unknown, line: string): RuntimeEvent {
+  const result = hookStartedSchema.safeParse(raw)
+  if (!result.success) return { kind: 'ignored', line }
+  if (effectiveHookEventOf(result.data) !== 'PreToolUse') return { kind: 'ignored', line }
+  return { kind: 'hook_started', hookId: result.data.hook_id, hookName: result.data.hook_name }
+}
+
 const hookResponseSchema = z.object({
   type: z.literal('system'),
   subtype: z.literal('hook_response'),
+  hook_id: z.string().optional(),
   hook_name: z.string(),
   hook_event: z.string().optional(),
   output: z.string().optional(),
@@ -198,7 +225,15 @@ function parseHookResponseLine(raw: unknown, line: string): RuntimeEvent {
 
   const denyReason = extractDenyReason(data.output)
   if (denyReason !== null) {
-    return { kind: 'hook_denied', hookName: data.hook_name, reason: denyReason }
+    // The `hookId` key is present only when the line actually carried one (M21 C1): an older
+    // capture with no `hook_id` gets NO key rather than an invented empty string, so the pump can
+    // tell "this CLI does not pair" from "this response pairs with nothing".
+    return {
+      kind: 'hook_denied',
+      hookName: data.hook_name,
+      reason: denyReason,
+      ...(data.hook_id === undefined ? {} : { hookId: data.hook_id }),
+    }
   }
 
   if (data.exit_code === undefined) return { kind: 'unparsable', line }
