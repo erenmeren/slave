@@ -35,7 +35,8 @@
     "gate:m16-chrome": "tsc --build && node --env-file=.env scripts/gate-m16-chrome.mjs",
     "gate:m17-stability": "node scripts/gate-m17-stability.mjs",
     "gate:m18-skill-and-teeth": "tsc --build && node --env-file=.env scripts/gate-m18-skill-and-teeth.mjs",
-    "gate:m19-measure-and-harden": "tsc --build && node --env-file=.env scripts/gate-m19-measure-and-harden.mjs"
+    "gate:m19-measure-and-harden": "tsc --build && node --env-file=.env scripts/gate-m19-measure-and-harden.mjs",
+    "gate:m20-auth": "tsc --build && node --env-file=.env scripts/gate-m20-auth.mjs"
   },
   "devDependencies": {
     "@testing-library/react": "^16.0.0",
