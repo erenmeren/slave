@@ -22,7 +22,7 @@
 // NEVER RUN THIS WHILE A DEV SERVER IS ALREADY SERVING `apps/web` — the preflight below refuses.
 //
 //   npm run gate:m20-auth
-import { execFileSync, spawn, spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { createHash, createHmac, randomBytes } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { request as httpRequest } from 'node:http'
@@ -183,16 +183,19 @@ try {
   {
     const env = { ...process.env }
     delete env.AITEAMOS_PASSWORD
-    const out = execFileSync('node', ['scripts/gate-m15-boundary.mjs'], {
+    const child = spawnSync('node', ['scripts/gate-m15-boundary.mjs'], {
       cwd: repoRoot,
       env,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'inherit'],
       maxBuffer: 32 * 1024 * 1024,
     })
+    const out = child.stdout ?? ''
+    // Printed BEFORE the assertions: a failing M15 stage must be named, not swallowed (M21 A3).
     process.stdout.write(`${out.split('\n').map((line) => `[m15] ${line}`).join('\n')}\n`)
-    assert(out.includes(M15_PASS), 'run A: gate-m15-boundary did not PASS with the password removed')
-    // The child is gone by now (execFileSync returned), but its forked worker may outlive it and
+    assert(child.status === 0, `run A: gate-m15-boundary exited ${String(child.status)} (signal ${String(child.signal)})`)
+    assert(out.includes(M15_PASS), 'run A: gate-m15-boundary did not print its PASS line')
+    // The child is gone by now (spawnSync returned), but its forked worker may outlive it and
     // keep the port — and the two runs share `apps/web/.next`, so run B must start on a quiet
     // machine. The port comes out of the child's own ready line.
     const m15Port = /next dev ready at http:\/\/127\.0\.0\.1:(\d+)/.exec(out)?.[1]
@@ -292,8 +295,11 @@ try {
     const res = await fetch(url(`/api/w/${W}/overview`))
     assert(res.status === 401, `headerless overview: expected 401, got ${res.status}`)
     assert((await res.json()).error === 'authentication required', 'unexpected 401 body')
+    const sse = await fetch(url(`/api/w/${W}/events`), { headers: { accept: 'text/event-stream' } })
+    assert(sse.status === 401, `cookieless SSE: expected 401, got ${sse.status}`)
+    assert((await sse.json()).error === 'authentication required', 'cookieless SSE: unexpected body')
   }
-  console.log('stage 2: the headerless escape hatch is closed')
+  console.log('stage 2: the headerless escape hatch is closed, on JSON and on the event stream')
 
   // 3. Wrong password -> slow 401, no cookie. MEASURED ON A WARM ROUTE, and that is the whole
   // point of the throwaway request below: `next dev` compiles a route on its first request, and
@@ -323,8 +329,23 @@ try {
     assert(res.headers.get('set-cookie') === null, 'wrong password must not set a cookie')
     assert(elapsed >= 250, `wrong password answered in ${String(elapsed)}ms on a warm route -- expected >= 250`)
     console.log(`  (the warm wrong-password POST took ${String(elapsed)}ms)`)
+    // M21 B3: refusals are a queue, not a per-request sleep. Two concurrent wrong guesses on the
+    // warm route must complete ~300 ms apart; the later one at >= 550 ms (600 minus the same slack
+    // the single measurement allows).
+    const pairStarted = Date.now()
+    const wrong = () =>
+      fetch(url('/api/auth/login'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ password: `${PASSWORD}y` }),
+      }).then((r) => ({ status: r.status, at: Date.now() - pairStarted }))
+    const [a, b] = await Promise.all([wrong(), wrong()])
+    assert(a.status === 401 && b.status === 401, 'concurrent wrong guesses: expected two 401s')
+    const later = Math.max(a.at, b.at)
+    assert(later >= 550, `concurrent wrong guesses: the later one answered at ${String(later)}ms -- expected >= 550 (serialised)`)
+    console.log(`  (two concurrent wrong guesses answered at ${String(Math.min(a.at, b.at))}ms and ${String(later)}ms)`)
   }
-  console.log('stage 3: on a warm route the wrong password costs 300 ms and earns no cookie')
+  console.log('stage 3: on a warm route the wrong password costs 300 ms, earns no cookie, and waits its turn')
 
   // 4. Right password -> 204 + cookie with the spec attributes.
   let cookie
