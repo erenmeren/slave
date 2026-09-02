@@ -233,6 +233,22 @@ describe('cable thickness from edge weight (C3)', () => {
     expect(light.style.strokeWidth).not.toBe(heavy.style.strokeWidth)
     expect(Number(heavy.style.strokeWidth)).toBeGreaterThan(Number(light.style.strokeWidth))
   })
+
+  it.each([[Number.NaN], [Number.POSITIVE_INFINITY], [Number.NEGATIVE_INFINITY]])(
+    'renders the default width, never "NaN", for the non-finite weight %s (M21 C4)',
+    (weight) => {
+      const graph = skillGraph({ skills: [{ name: 'a', calls: 1 }, { name: 'b', calls: 1 }], edges: [{ from: 'a', to: 'b', count: 1 }] })
+      const { edges } = buildSkillAggregateGraph(graph)
+      const data = { ...edges[0]!.data, weight }
+      const { container } = render(
+        <svg>
+          <CableEdge {...({ ...GEOMETRY, id: edges[0]!.id, data } as unknown as EdgeProps<CableEdgeData>)} />
+        </svg>,
+      )
+      const core = container.querySelector('path.react-flow__edge-path') as SVGPathElement
+      expect(core.style.strokeWidth).toBe('3')
+    },
+  )
 })
 
 // ==================================================================================================

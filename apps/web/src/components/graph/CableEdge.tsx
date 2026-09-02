@@ -64,7 +64,8 @@ const HIT_PATH_WIDTH = '20'
  * (`buildSkillAggregateGraph`) — those keep today's flat literals, unclamped and unscaled.
  */
 function widthFor(weight: number | undefined, active: boolean): string {
-  if (weight === undefined) return active ? '1.4' : '3'
+  // A non-finite weight (a corrupt count) gets the default, never the string "NaN" as a stroke-width (M21 C4).
+  if (weight === undefined || !Number.isFinite(weight)) return active ? '1.4' : '3'
   const raw = active ? 1.4 + 0.6 * (weight - 1) : 3 + 0.5 * (weight - 1)
   const clamped = active ? Math.min(Math.max(raw, 1.4), 3.8) : Math.min(Math.max(raw, 3), 4.5)
   // Rounded to 2dp so e.g. weight 4/active doesn't hand SVG a `3.1999999999999997` float-noise

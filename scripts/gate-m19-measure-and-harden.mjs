@@ -44,6 +44,7 @@
 // Cheap, file-and-database checks run first and the browser stage runs last, so a missing migration
 // or a softened README costs seconds rather than a full dev-server boot.
 
+import assert from 'node:assert'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
@@ -484,7 +485,8 @@ try {
   // ============================================================================================
   // Check 2: the A1 capture, and the provenance that makes it a recording rather than a story.
   // ============================================================================================
-  const fixtureLines = readFileSync(FIXTURE_PATH, 'utf8').split('\n')
+  const raw = readFileSync(FIXTURE_PATH, 'utf8')
+  const fixtureLines = raw.split('\n')
   const parsedLines = []
   for (let i = 0; i < fixtureLines.length; i += 1) {
     const line = fixtureLines[i]
@@ -497,6 +499,18 @@ try {
       )
     }
   }
+  // M21 C5: the capture must END the way every Claude capture in this repo ends (fixture README
+  // redaction rule 4; fake-claude.test.ts pins it): the result line, then the routine Stop hook's
+  // response, then exactly one newline. A truncated or re-appended recording fails here and names
+  // its tail.
+  assert(raw.endsWith('\n') && !raw.endsWith('\n\n'), 'check 2: fixture must end with exactly one newline')
+  const last = parsedLines[parsedLines.length - 1]
+  const secondLast = parsedLines[parsedLines.length - 2]
+  assert(
+    last !== undefined && last.type === 'system' && last.subtype === 'hook_response' && last.hook_name === 'Stop',
+    `check 2: the last line must be the routine Stop hook_response, got ${JSON.stringify({ type: last?.type, subtype: last?.subtype, hook_name: last?.hook_name })}`,
+  )
+  assert(secondLast !== undefined && secondLast.type === 'result', `check 2: the result line must be second-to-last, got type ${String(secondLast?.type)}`)
   const resultLines = parsedLines.filter((entry) => entry?.type === 'result')
   if (resultLines.length !== 1) {
     throw new Error(`check 2: the fixture carries ${String(resultLines.length)} terminal \`result\` line(s), expected exactly 1`)
