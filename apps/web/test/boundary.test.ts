@@ -58,6 +58,10 @@ describe('boundaryVerdict', () => {
     expect(boundaryVerdict({ ...base, origin: 'http://127.0.0.1:3000' }).allow).toBe(true)
   })
 
+  it('ignores the port in loopback mode still', () => {
+    expect(boundaryVerdict({ ...base, host: '127.0.0.1:3000', origin: 'http://localhost:8080' })).toEqual({ allow: true })
+  })
+
   it('refuses a foreign Origin, quoting it verbatim', () => {
     expect(boundaryVerdict({ ...base, origin: 'https://evil.example' })).toEqual({
       allow: false,
@@ -77,6 +81,11 @@ describe('boundaryVerdict', () => {
   it('prefers Sec-Fetch-Site over Origin when both are present', () => {
     // A same-origin fetch still carries Origin on POSTs; metadata wins.
     expect(boundaryVerdict({ ...base, secFetchSite: 'cross-site', origin: 'http://localhost:3000' }).allow).toBe(false)
+  })
+
+  it('throws, never allows, on a mode it does not know (M21 B2)', () => {
+    expect(() => boundaryVerdict({ ...base, mode: 'sso' as never })).toThrow(/unreachable: sso/)
+    expect(() => postureFor('sso' as never)).toThrow(/unreachable: sso/)
   })
 })
 
@@ -126,10 +135,20 @@ describe('boundaryVerdict in password mode', () => {
     })
   })
 
-  it('compares an Origin against the request Host, not the loopback list', () => {
+  it('compares an Origin against the request Host WITH its port in password mode (M21 B1)', () => {
     const host = 'box.tail1234.ts.net:3000'
     expect(boundaryVerdict({ ...pw, host, sessionValid: true, origin: 'http://box.tail1234.ts.net:3000' })).toEqual({ allow: true })
-    expect(boundaryVerdict({ ...pw, host, sessionValid: true, origin: 'http://box.tail1234.ts.net:8080' })).toEqual({ allow: true })
+    expect(boundaryVerdict({ ...pw, host: 'Box.Tail1234.TS.net:3000', sessionValid: true, origin: 'http://box.tail1234.ts.net:3000' })).toEqual({ allow: true })
+    expect(boundaryVerdict({ ...pw, host, sessionValid: true, origin: 'http://box.tail1234.ts.net:8080' })).toEqual({
+      allow: false,
+      kind: 'refused',
+      reason: 'cross-origin request refused (origin: http://box.tail1234.ts.net:8080)',
+    })
+    expect(boundaryVerdict({ ...pw, host: 'box.tail1234.ts.net:80', sessionValid: true, origin: 'http://box.tail1234.ts.net' })).toEqual({
+      allow: false,
+      kind: 'refused',
+      reason: 'cross-origin request refused (origin: http://box.tail1234.ts.net)',
+    })
     expect(boundaryVerdict({ ...pw, host, sessionValid: true, origin: 'http://evil.example' })).toEqual({
       allow: false,
       kind: 'refused',
