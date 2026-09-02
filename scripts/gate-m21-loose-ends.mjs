@@ -1,7 +1,7 @@
 // The M21 gate (spec §6): no loose ends. Zero spend. Checks 2 and 3 run the M15 and M20 gates as
 // children WITH a configured AITEAMOS_PASSWORD in their environment -- the breakage A1 fixed, proven
 // where it bit. Sequential: the children boot dev servers on the shared apps/web/.next.
-import { execFileSync, spawnSync } from 'node:child_process'
+import { spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -26,14 +26,21 @@ let exitCode = 1
 try {
   // 1. Census: every next-dev spawner uses loopbackChildEnv, except the two named exceptions.
   {
-    const spawners = readdirSync(`${repoRoot}scripts`).filter((f) => f.endsWith('.mjs') && readFileSync(`${repoRoot}scripts/${f}`, 'utf8').includes("'dev', 'apps/web'"))
-    assert(spawners.length >= 11, `check 1: expected >= 11 next-dev spawners, found ${String(spawners.length)}: ${spawners.join(', ')}`)
-    for (const f of spawners) {
-      const uses = readFileSync(`${repoRoot}scripts/${f}`, 'utf8').includes('loopbackChildEnv(')
-      if (EXEMPT.has(f)) assert(!uses, `check 1: ${f} is a named exception and must not use loopbackChildEnv`)
-      else assert(uses, `check 1: ${f} spawns next dev without loopbackChildEnv`)
+    // The census greps source text, and THIS file's own search strings ("'dev', 'apps/web'" and
+    // 'loopbackChildEnv(') would match it -- so the gate excludes itself rather than counting
+    // itself as a twelfth spawner. Each candidate is read once; its text travels with its name.
+    const spawners = readdirSync(`${repoRoot}scripts`)
+      .filter((f) => f.endsWith('.mjs') && f !== 'gate-m21-loose-ends.mjs')
+      .map((name) => ({ name, text: readFileSync(`${repoRoot}scripts/${name}`, 'utf8') }))
+      .filter(({ text }) => text.includes("'dev', 'apps/web'"))
+    const names = spawners.map(({ name }) => name)
+    assert(spawners.length >= 11, `check 1: expected >= 11 next-dev spawners, found ${String(spawners.length)}: ${names.join(', ')}`)
+    for (const { name, text } of spawners) {
+      const uses = text.includes('loopbackChildEnv(')
+      if (EXEMPT.has(name)) assert(!uses, `check 1: ${name} is a named exception and must not use loopbackChildEnv`)
+      else assert(uses, `check 1: ${name} spawns next dev without loopbackChildEnv`)
     }
-    for (const f of EXEMPT) assert(spawners.includes(f), `check 1: exception ${f} not found among spawners`)
+    for (const f of EXEMPT) assert(names.includes(f), `check 1: exception ${f} not found among spawners`)
   }
   console.log('check 1: every dev-server spawner strips the password, the two exceptions by name')
 
@@ -58,7 +65,13 @@ try {
       'packages/providers/test/stream.test.ts',
       'packages/domain/test/events/schema.test.ts',
     ]
-    const out = execFileSync('npx', ['vitest', 'run', ...files], { cwd: repoRoot, env: process.env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] })
+    // Print what vitest said BEFORE judging it: a non-zero exit must be diagnosable from the
+    // transcript, not swallowed by a throw that carries no output. Same print-then-assert shape
+    // as runChildGate.
+    const child = spawnSync('npx', ['vitest', 'run', ...files], { cwd: repoRoot, env: process.env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], maxBuffer: 64 * 1024 * 1024 })
+    const out = child.stdout ?? ''
+    process.stdout.write(`${out.split('\n').slice(-40).map((line) => `[vitest] ${line}`).join('\n')}\n`)
+    assert(child.status === 0, `check 4: vitest exited ${String(child.status)} (signal ${String(child.signal)})`)
     assert(/Test Files\s+6 passed/.test(out), `check 4: expected 6 passed test files -- got:\n${out.slice(-600)}`)
   }
   console.log('check 4: the six unit files that carry M21 are green')
