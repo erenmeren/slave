@@ -13,6 +13,9 @@
  *
  * The contract every call site relies on: a bare `fetch`, no state written from the response
  * beyond the error text, and the event-driven refetch loop owning truth.
+ *
+ * M20 Task 7: a 401 from anywhere outside `/login` itself navigates to `/login?next=<here>` --
+ * an expired or missing session lands on the door instead of a red band that never clears.
  */
 
 /** Pulls a 409 refusal's `{ error }` text, falling back to something nameable for any other
@@ -41,6 +44,14 @@ export async function sendControl(
             body: JSON.stringify(options.body),
           })
     if (response.ok) return null
+    // An expired or missing session anywhere in the app lands on the login page instead of a red
+    // band that never clears (M20 spec §3.4). Every control surface dials this one function
+    // (M19 C4), so this is the one place. On /login itself a 401 is a wrong password, not an
+    // expired session — the form shows it.
+    if (response.status === 401 && typeof window !== 'undefined' && window.location.pathname !== '/login') {
+      const here = `${window.location.pathname}${window.location.search}`
+      window.location.assign(`/login?next=${encodeURIComponent(here)}`)
+    }
     const data: unknown = await response.json().catch(() => null)
     return errorMessage(data, response.status)
   } catch (cause) {

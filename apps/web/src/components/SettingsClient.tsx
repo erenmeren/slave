@@ -5,6 +5,7 @@ import type { AdapterCard, PermissionSection } from '../server/settings'
 import type { BoundaryMode } from '../lib/authEnv'
 import { CompanyManager, type CompanyRow } from './CompanyManager'
 import { DangerZone } from './DangerZone'
+import { LogoutButton } from './LogoutButton'
 import { PermissionMatrix } from './PermissionMatrix'
 import { ProviderAdapterCards } from './ProviderAdapterCards'
 import { TemplateCatalog, type TemplateRow } from './TemplateCatalog'
@@ -35,7 +36,6 @@ export function SettingsClient({
   /** Computed on the SERVER from `NODE_ENV`, never guessed at here. */
   readonly showReseed: boolean
   /** Computed on the SERVER from `AITEAMOS_PASSWORD` (`boundaryMode()`), never guessed here. */
-  // M20 Task 7 renders the Logout button behind this
   readonly mode: BoundaryMode
   /** `postureFor(mode)` — the single source for the security line (M20 spec §2.3). */
   readonly posture: string
@@ -52,6 +52,7 @@ export function SettingsClient({
         <p data-testid="security-posture" className="font-mono text-[10px] text-text-3">
           {posture}
         </p>
+        {mode === 'password' && <LogoutButton />}
       </Panel>
       <DangerZone workspaces={workspaces} showReseed={showReseed} />
       <Panel title="Template catalog">

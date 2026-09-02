@@ -108,6 +108,26 @@ describe('SettingsClient', () => {
       mode="password" posture="password login · single operator · cross-site requests refused" />)
     expect(screen.getByTestId('security-posture').textContent).toBe('password login · single operator · cross-site requests refused')
   })
+
+  it('offers Logout only in password mode', () => {
+    render(<SettingsClient templates={[template()]} companies={[]} roster={[]} adapters={[]} permissions={[]} workspaces={[]} showReseed={false}
+      mode="loopback-only" posture="loopback-only · no accounts · cross-site requests refused" />)
+    expect(screen.queryByTestId('logout')).toBeNull()
+  })
+
+  it('Logout posts to /api/auth/logout and lands on /login', async () => {
+    const assign = vi.fn()
+    Object.defineProperty(window, 'location', { configurable: true, value: { assign, pathname: '/settings', search: '' } })
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 204 }))
+    render(<SettingsClient templates={[template()]} companies={[]} roster={[]} adapters={[]} permissions={[]} workspaces={[]} showReseed={false}
+      mode="password" posture="password login · single operator · cross-site requests refused" />)
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('logout'))
+    })
+    expect(fetchMock).toHaveBeenCalledWith('/api/auth/logout', expect.objectContaining({ method: 'POST' }))
+    expect(assign).toHaveBeenCalledWith('/login')
+    vi.restoreAllMocks()
+  })
 })
 
 describe('TemplateCatalog', () => {
