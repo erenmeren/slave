@@ -1843,6 +1843,41 @@ describe('pumpRun', () => {
     })
 
     /**
+     * C1 fail-safe, final-review tightening (M21): the binding's `toolName` is a GUARD, not
+     * decoration. A hook that bound cleanly (its name matched the tool_call it followed) but whose
+     * deny reason then names a DIFFERENT tool is corrupted evidence -- the two halves of the same
+     * hook disagree about what it gated -- so the association is `null`, and it must NEVER fall
+     * through to the name rule for a second guess. Without the guard `bound.toolUseId` would be
+     * returned unchecked: `toolu_bash` would be laundered out of the terminal failure check and
+     * this run would report success on a refusal nothing could vouch for.
+     */
+    it('C1: a bound hook whose deny reason names a different tool resolves to null and fails the run (the toolName guard)', async (): Promise<void> => {
+      await pumpRun({
+        ...ids,
+        events: fromArray([
+          { kind: 'session_started', sessionId: 's-1' },
+          { kind: 'tool_call', toolUseId: 'toolu_bash', toolName: 'Bash', summary: 'Bash npm test' },
+          { kind: 'hook_started', hookId: 'hk-1', hookName: 'PreToolUse:Bash' },
+          {
+            kind: 'hook_denied',
+            hookName: 'PreToolUse:Bash',
+            reason: "permission matrix denies 'read secrets' (Read) for this agent",
+            hookId: 'hk-1',
+          },
+          { kind: 'terminated', outcome: { ...okOutcome, deniedToolUseIds: ['toolu_bash'] } },
+        ]),
+      })
+
+      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      expect(run.status).toBe('failed')
+
+      const toolDenied = await prisma.executionEvent.findFirstOrThrow({
+        where: { runId: ids.runId, type: 'run_tool_denied' },
+      })
+      expect(toolDenied.payload).toEqual({ tool: 'Read', capability: 'read secrets', toolUseId: null })
+    })
+
+    /**
      * B3 (M19): the Cursor-side sibling of `:1574`'s Claude `hook_denied` pin. A `permission_denied`
      * reason that starts with `PERMISSION_DENY_REASON_PREFIX` but fails `parsePermissionDenyReason`'s
      * grammar takes the SAME fall-through (`pump.ts:638-646`) -- but Cursor's `permission_denied`

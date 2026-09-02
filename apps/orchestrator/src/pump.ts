@@ -503,8 +503,12 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
    * (`permission-matrix-deny.ndjson` line 24 answering line 15 after an unrelated Bash deny) no
    * longer matters, and B2's over-fail (a deny answered after a differently named call) is closed.
    * Residual limit, measured and unfixable from the stream: parallel same-named tool_use blocks in
-   * ONE assistant message start their hooks after the whole message, so both bind to the last
-   * block; `hook_started` carries no tool_use_id. Entries are consumed on resolution.
+   * ONE assistant message start their hooks after the whole message and `hook_started` carries no
+   * tool_use_id -- and the parser surfaces only the FIRST tool_use block of a multi-block assistant
+   * line (`packages/providers/src/claude/stream.ts` ~:406), so in that unmeasured shape the hooks
+   * bind to the first block, not the last. An entry is deleted when a deny resolves it; an allowed
+   * hook's entry lives for the run (two per gated tool call), so the map is bounded by the run's
+   * tool-call count.
    */
   const hookBindings = new Map<string, { readonly toolUseId: string; readonly toolName: string }>()
   const denied: string[] = []
@@ -869,17 +873,23 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
             // as the fallback for a deny with no `hook_id` (an older CLI, another runtime) and for
             // one whose id never bound. The residual limit is the parallel same-message case:
             // several same-named `tool_use` blocks in ONE assistant message have their hooks start
-            // after the whole message, and `hook_started` carries no `tool_use_id`, so they all bind
-            // to the last block. Fail-safe is unchanged in both fallbacks: when neither the binding
-            // nor the name rule can vouch for an id, `associated` is `null` and nothing below
-            // launders that id out of the terminal failure check.
+            // after the whole message, `hook_started` carries no `tool_use_id`, and the parser
+            // surfaces only the FIRST of those blocks (`claude/stream.ts` ~:406), so in that
+            // unmeasured shape they all bind to the first block, not the last. Fail-safe is
+            // unchanged in every path: when neither the binding nor the name rule can vouch for an
+            // id, `associated` is `null` and nothing below launders that id out of the terminal
+            // failure check.
             const bound = gateOutcome.hookId === undefined ? undefined : hookBindings.get(gateOutcome.hookId)
-            // Consumed on resolution: a hook_id answers exactly once, and a map that only grows
-            // would keep a stale binding alive for a whole run.
+            // Consumed on resolution: a hook_id answers exactly once, so its entry goes here.
             if (gateOutcome.hookId !== undefined) hookBindings.delete(gateOutcome.hookId)
+            // A bound hook naming a different tool than its own deny reason is corrupted evidence,
+            // not a case for a second guess, so a mismatch resolves to `null` and NEVER falls
+            // through to the name rule below.
             const associated =
               bound !== undefined
-                ? bound.toolUseId
+                ? bound.toolName === gateOutcome.tool
+                  ? bound.toolUseId
+                  : null
                 : lastToolUse !== null && lastToolUse.name === gateOutcome.tool
                   ? lastToolUse.id
                   : null
@@ -896,8 +906,10 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
             // that id out of the failure check for the rest of this pump's run AND get persisted
             // into `run.tool_denied`'s own payload, ready to be re-seeded into every subsequent
             // resume of this run (the seed at this Set's declaration reads exactly that payload
-            // back). On a name mismatch `associated` is `null` above, so nothing is added here --
-            // the mismatched id stays in `outcome.deniedToolUseIds` unexcluded, and a run that
+            // back). There are three ways to reach no id -- unbound plus a name mismatch, bound but
+            // naming a different tool, and no `hook_id` plus a name mismatch -- so: when no binding
+            // or cross-check yields an id, `associated` is `null` above and nothing is added here.
+            // The unvouched id stays in `outcome.deniedToolUseIds` unexcluded, and a run that
             // terminal-echoes it still fails, exactly as fail-safe requires.
             if (associated !== null) matrixDeniedToolUseIds.add(associated)
             break
