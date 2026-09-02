@@ -26,8 +26,10 @@ function writeStub(): string {
   writeFileSync(
     path,
     [
+      "if (process.env.STUB_WAIT === '1') process.on('SIGTERM', () => process.exit(0))",
       "process.stdout.write(JSON.stringify(process.argv.slice(2)) + '\\n')",
-      "if (process.env.STUB_WAIT === '1') { process.on('SIGTERM', () => process.exit(0)); setInterval(() => {}, 1000) }",
+      "if (process.env.STUB_SELF_KILL === '1') process.kill(process.pid, 'SIGKILL')",
+      "else if (process.env.STUB_WAIT === '1') setInterval(() => {}, 1000)",
       'else process.exit(Number(process.env.STUB_EXIT ?? 0))',
       '',
     ].join('\n'),
@@ -54,8 +56,9 @@ function run(
     let sawStdout = false
     child.stdout.on('data', (chunk) => {
       stdout += String(chunk)
-      // The stub has printed its argv, so it has already installed its SIGTERM handler -- the one
-      // observable fact that replaces a wall-clock guess about when signalling is safe.
+      // The stub installs its SIGTERM handler before printing its argv, so the first stdout chunk
+      // means the handler is already in place -- the one observable fact that replaces a
+      // wall-clock guess about when signalling is safe.
       if (!sawStdout) {
         sawStdout = true
         onFirstStdout?.(child)
@@ -96,5 +99,12 @@ describe('scripts/web-exposed.mjs (M21 D)', () => {
     )
     expect(JSON.parse(result.stdout.trim())).toEqual(['dev', 'apps/web', '-H', '0.0.0.0'])
     expect(result.code).toBe(0)
+  })
+
+  it('maps a signal death to 128 + the signal number (SIGKILL → 137)', async () => {
+    const stub = writeStub()
+    const result = await run({ AITEAMOS_PASSWORD: 'hunter2', AITEAMOS_NEXT_BIN: stub, STUB_SELF_KILL: '1' })
+    expect(JSON.parse(result.stdout.trim())).toEqual(['dev', 'apps/web', '-H', '0.0.0.0'])
+    expect(result.code).toBe(137)
   })
 })

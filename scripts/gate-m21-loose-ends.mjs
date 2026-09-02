@@ -12,12 +12,19 @@ const M15_PASS = 'PASS: the boundary holds — loopback-only, cross-site refused
 const M20_PASS = 'PASS: the door has a lock — loopback unchanged without a password, login required with one'
 const EXEMPT = new Set(['gate-m20-auth.mjs', 'web-exposed.mjs'])
 
+/** A next-dev spawner, by source text: either quote style of the argv pair, or the bare binary
+ *  path. This is a per-file census over top-level `scripts/*.mjs` only -- a second spawn inside a
+ *  file that already calls `loopbackChildEnv(` once, or a spawner under `scripts/lib/` or
+ *  `scripts/gate-fakes/`, is invisible to it (M22 A1). */
+const SPAWN_RE = /['"]dev['"],\s*['"]apps\/web['"]|node_modules\/next\/dist\/bin\/next/
+
 function assert(condition, message) { if (!condition) throw new Error(message) }
 
 function runChildGate(script, env, passLine, label) {
   const child = spawnSync('node', [script], { cwd: repoRoot, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], maxBuffer: 64 * 1024 * 1024 })
   const out = child.stdout ?? ''
   process.stdout.write(`${out.split('\n').map((line) => `[${label}] ${line}`).join('\n')}\n`)
+  assert(child.error === undefined, `${label}: could not start: ${child.error?.message ?? ''}`)
   assert(child.status === 0, `${label}: exited ${String(child.status)} (signal ${String(child.signal)})`)
   assert(out.includes(passLine), `${label}: PASS line missing`)
 }
@@ -26,13 +33,13 @@ let exitCode = 1
 try {
   // 1. Census: every next-dev spawner uses loopbackChildEnv, except the two named exceptions.
   {
-    // The census greps source text, and THIS file's own search strings ("'dev', 'apps/web'" and
+    // The census greps source text, and THIS file's own search strings (SPAWN_RE's pattern and
     // 'loopbackChildEnv(') would match it -- so the gate excludes itself rather than counting
     // itself as a twelfth spawner. Each candidate is read once; its text travels with its name.
     const spawners = readdirSync(`${repoRoot}scripts`)
       .filter((f) => f.endsWith('.mjs') && f !== 'gate-m21-loose-ends.mjs')
       .map((name) => ({ name, text: readFileSync(`${repoRoot}scripts/${name}`, 'utf8') }))
-      .filter(({ text }) => text.includes("'dev', 'apps/web'"))
+      .filter(({ text }) => SPAWN_RE.test(text))
     const names = spawners.map(({ name }) => name)
     assert(spawners.length >= 11, `check 1: expected >= 11 next-dev spawners, found ${String(spawners.length)}: ${names.join(', ')}`)
     for (const { name, text } of spawners) {
@@ -71,6 +78,7 @@ try {
     const child = spawnSync('npx', ['vitest', 'run', ...files], { cwd: repoRoot, env: process.env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], maxBuffer: 64 * 1024 * 1024 })
     const out = child.stdout ?? ''
     process.stdout.write(`${out.split('\n').slice(-40).map((line) => `[vitest] ${line}`).join('\n')}\n`)
+    assert(child.error === undefined, `check 4: could not start vitest: ${child.error?.message ?? ''}`)
     assert(child.status === 0, `check 4: vitest exited ${String(child.status)} (signal ${String(child.signal)})`)
     assert(/Test Files\s+6 passed/.test(out), `check 4: expected 6 passed test files -- got:\n${out.slice(-600)}`)
   }

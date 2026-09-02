@@ -502,13 +502,13 @@ try {
   // M21 C5: the capture must END the way every Claude capture in this repo ends (fixture README
   // redaction rule 4; fake-claude.test.ts pins it): the result line, then the routine Stop hook's
   // response, then exactly one newline. A truncated or re-appended recording fails here and names
-  // its tail.
+  // its tail. Keyed on `hook_event` to match fake-claude.test.ts.
   assert(raw.endsWith('\n') && !raw.endsWith('\n\n'), 'check 2: fixture must end with exactly one newline')
   const last = parsedLines[parsedLines.length - 1]
   const secondLast = parsedLines[parsedLines.length - 2]
   assert(
-    last !== undefined && last.type === 'system' && last.subtype === 'hook_response' && last.hook_name === 'Stop',
-    `check 2: the last line must be the routine Stop hook_response, got ${JSON.stringify({ type: last?.type, subtype: last?.subtype, hook_name: last?.hook_name })}`,
+    last !== undefined && last.type === 'system' && last.subtype === 'hook_response' && last.hook_event === 'Stop',
+    `check 2: the last line must be the routine Stop hook_response, got ${JSON.stringify({ type: last?.type, subtype: last?.subtype, hook_event: last?.hook_event })}`,
   )
   assert(secondLast !== undefined && secondLast.type === 'result', `check 2: the result line must be second-to-last, got type ${String(secondLast?.type)}`)
   const resultLines = parsedLines.filter((entry) => entry?.type === 'result')
