@@ -151,6 +151,12 @@ describe('the shell', () => {
     expect(navRow('Tasks')).toHaveProperty('ariaCurrent', 'page')
   })
 
+  it('renders nothing on /login — the shell is a logged-in surface', () => {
+    pathname = '/login'
+    const { container } = render(<Sidebar />)
+    expect(container.innerHTML).toBe('')
+  })
+
   it('turns the budget bar amber past 80% and red past 100%', () => {
     const { rerender } = render(
       <TopBar workspaceId="w1" workspaceName="W" connection="connected" latencyMs={null} budget={{ spentUsd: 85, budgetUsd: 100, unmeasuredRuns: 0 }} halted={false} />,

@@ -282,10 +282,13 @@ function ProjectNavRows({
 /** The handoff's 212px sidebar (design README §3a). Nine rows in the README's order on a
  *  workspace route; off one, the four `/w/:id/...` rows drop and five remain (Agents · Projects ·
  *  Skills · Analytics · Settings), with the Guardrails block pinned to the bottom. */
-export function Sidebar({ workspaceId: workspaceIdProp, projectName }: SidebarProps = {}): React.JSX.Element {
+export function Sidebar({ workspaceId: workspaceIdProp, projectName }: SidebarProps = {}): React.JSX.Element | null {
   const pathname = usePathname()
   const workspaceId = workspaceIdProp ?? workspaceIdFromPathname(pathname)
   const announcedName = useProjectName(workspaceId)
+  // The shell is a logged-in surface; the login page stands alone (M20 spec §3.3). Hooks above
+  // run unconditionally so the early return keeps React's hook order stable.
+  if (pathname === '/login') return null
 
   return (
     <nav
