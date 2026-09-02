@@ -46,7 +46,7 @@ page are the callers of `authEnv.ts`, and nothing else is.
 
 No boot-time refusal is needed for "exposed without a password": with no password the M15 Host
 rule still refuses every non-loopback Host, so an accidental `-H 0.0.0.0` is inert, as M15 §2.4
-already promised.
+already promised — superseded by Errata 7.
 
 ### 2.2 `apps/web/src/lib/session.ts` (new)
 
@@ -302,3 +302,16 @@ with one`. Registered as `gate:m20-auth` in the root `package.json`; README row 
 - `postureFor(mode)` is the single source for the Settings card text.
 - Comments change in the same commit as the behaviour they describe.
 - No new dependencies; no schema migration.
+
+## 8. Errata (post-execution, 2026-09-02)
+
+1. §2.4: the unauthenticated-page 302 carries an **absolute** `Location` built from the request's own `Host` header and an `http|https`-allowlisted `x-forwarded-proto` (each falling back to `nextUrl`), because Next's middleware adapter parses every `Location` through `new NextURL(value)` with no base (a relative value 500s) and `nextUrl`'s host is normalised to `localhost` regardless of `Host`/`X-Forwarded-Host`; consequently, in password mode the redirect's host echoes whatever `Host` the requester sent — an ordinary host-header-redirect exposure that affects only that requester, and a reverse proxy in front must forward the real `Host`.
+2. §2.3 rule 3: in password mode the `Origin` fallback compares host parts with the port stripped on both sides, so a page served on a different port of the same hostname reads as same-side when `Sec-Fetch-Site` is absent (browsers without fetch metadata only); browsers with fetch metadata report `same-site` for that case and are refused.
+3. §2.3 rule order: the implementation evaluates rule 3 (cross-site refusal) before rule 2 (public-path allow) on `/api/` paths so that `/api/auth/login` is public yet still refused cross-site; outcomes are identical to the listed order.
+4. §5 check 5: the SSE route sends no greeting frame — with no `?from` the replay is empty and the first bytes are the 15 s id-only heartbeat — so the gate budgets 25 s for "delivers its first SSE frame" and must not be tightened below the heartbeat interval.
+5. §5 check 3: the ≥ 250 ms bound is measured on a **warm** route after one throwaway wrong-password POST, because a cold `next dev` compile of the route alone exceeds 250 ms and would pass the check with the delay deleted.
+6. §6: the auth-route tests live at `apps/web/test/auth-routes.test.ts` (unit project — the integration project's setup demands a database) and use **real** timers with a ≥ 290 ms wall-clock assertion, because the route's `setTimeout(300)` is registered only after asynchronous Web Crypto work and so is never reached by a fake clock advanced beforehand.
+7. §2.1: "an accidental `-H 0.0.0.0` is inert" overstates M15 §2.4, which promises refusal of browsers and accidents only — a LAN client that forges `Host: localhost` with curl passes the Host rule and the headerless escape hatch in loopback mode, so `web:exposed` without a password is a misconfiguration, not a no-op; the `web:exposed` script therefore refuses to start when `AITEAMOS_PASSWORD` is blank (`scripts/web-exposed.mjs`, exit 2).
+8. §3.1: the 300 ms failed-login delay bounds latency per attempt, not throughput — attempts are not serialised, so concurrent connections multiply the guess rate — and the password's entropy is the actual brute-force defence.
+9. §5/§7: `gate:m15-boundary` run standalone now requires `AITEAMOS_PASSWORD` to be unset in the environment (in password mode its stage 1 receives 302/401 rather than 403); `gate:m20-auth` run A deletes the variable from the child environment for exactly this reason.
+10. §2.2: `verifySession` accepts an expiry of 1–12 decimal digits only (the concrete form of "a non-integer expiry → false"), and an empty signature part is rejected before any HMAC work.

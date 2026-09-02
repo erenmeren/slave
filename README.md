@@ -67,7 +67,7 @@ Ubuntu, `apt-get install docker-compose-plugin`) before continuing.
 | `npm run gate:m12-providers` | The M12 gate: two runtimes kept one promise — paused, resumed, and budgeted alike (**spends real money**: it drives live Claude and Cursor accounts, so it is not CI-runnable and is run deliberately, by hand) |
 | `npm run gate:m13-runtime` | The M13 gate: a pause is a stop and a stop is resumable — both runtimes paused, refused mid-stop, resumed, and re-budgeted from the browser (**spends real money**: it drives live Claude and Cursor accounts, so it is not CI-runnable and is run deliberately, by hand). Rehearse it for free first — `AITEAMOS_CLAUDE_BIN="$PWD/scripts/gate-fakes/fake-claude.sh" AITEAMOS_CURSOR_BIN="$PWD/scripts/gate-fakes/fake-cursor-agent.sh" npm run gate:m13-runtime` — which runs every stage against fake CLIs and touches no vendor account |
 | `npm run gate:m14-fidelity` | The M14 gate: nine pages, one design — every page of the handoff's shell rendered on real data at 1440×900, the README's own numbers read back from `getComputedStyle`, reduced motion proved, and nine screenshots committed under `docs/superpowers/fidelity/m14/`. **Spends nothing**, and refuses to start without `AITEAMOS_CLAUDE_BIN` pointing at `scripts/gate-fakes/` — `AITEAMOS_CLAUDE_BIN="$PWD/scripts/gate-fakes/fake-claude.sh" npm run gate:m14-fidelity` |
-| `npm run gate:m15-boundary` | The M15 gate: the boundary holds — foreign Host, cross-site writes and cross-site SSE reads all refused by the middleware in a real `next dev`, same-origin traffic untouched. **Spends nothing**, CI-runnable. |
+| `npm run gate:m15-boundary` | The M15 gate: the boundary holds — foreign Host, cross-site writes and cross-site SSE reads all refused by the middleware in a real `next dev`, same-origin traffic untouched. **Spends nothing**, CI-runnable. Requires `AITEAMOS_PASSWORD` unset — in password mode its stage 1 receives 302/401 instead of 403; `gate:m20-auth` run A deletes the variable for you. |
 | `npm run gate:m16-chrome` | The M16 gate: one tone table, the handoff's forms — the goal form's radii, the permission matrix's cell glyphs, a project card's team-overflow pill, an unmeasured Analytics row's bare progress bar, and Task 7's status-\* rename all read back from a real rendered page (`getComputedStyle` via `playwright-core`) or grepped straight from the repo. **Spends nothing**, CI-runnable. |
 | `npm run gate:m17-stability` | The M17 gate: the full suite runs five times consecutively with no red, the runtime duplication census holds (one definition site per M13-consolidated block), and the four equivalence tests that license M17's query rewrites still exist. **Spends nothing**, CI-runnable, needs the test database up, and refuses under a genuinely running orchestrator daemon (`pgrep`'s candidate PIDs are confirmed against `/proc/<pid>/cmdline` so the gate's own wrapper shell can't self-match and false-refuse). |
 | `npm run gate:m18-skill-and-teeth` | The M18 gate: a refused tool, a readable chain, and two honest chips — a permission-matrix deny survives a dispatched run (one `run.tool_denied`, zero `guardrail.tripped`, never `paused`) and the Activity page renders the denial card; the Skill chain tab's aggregate canvas, its Focus click (DOM order plus a ×N badge), the clear control, and `skill-empty` on a genuinely fresh workspace; the Activity `sse · <n>ms` chip measuring a real frame and a seeded paused checkpoint's `deniedToolUseIds` reaching the Task detail panel's reader line. **Spends nothing** (drives a fixture-replaying fake CLI for its one dispatch regardless of what `AITEAMOS_CLAUDE_BIN` names), and refuses to start without `AITEAMOS_CLAUDE_BIN` pointing at `scripts/gate-fakes/`, without the dev database carrying the two m18 migrations, or under a genuinely running orchestrator daemon — `AITEAMOS_CLAUDE_BIN="$PWD/scripts/gate-fakes/fake-claude.sh" npm run gate:m18-skill-and-teeth`. Needs the dev database and a real browser (`playwright-core` + `CHROMIUM_PATH`). |
@@ -233,8 +233,18 @@ password configured the app answers to any Host name and asks for the password o
 it as `Authorization: Bearer <password>`. The session is a signed cookie, 30 days, no table —
 changing the password logs every device out. Settings' security line reads
 `password login · single operator · cross-site requests refused` in this mode, and carries a
-Logout button. Without a password, nothing changes: the instance stays loopback-only and
-`web:exposed` is inert (the Host rule refuses every non-loopback name).
+Logout button.
+
+Never run `web:exposed` without a password. The Host rule refuses every non-loopback Host name,
+which stops browsers and accidents — but as the M15 spec §2.4 says in as many words, it is "not
+against a hostile LAN": a client that forges `Host: localhost` with `curl` walks straight through
+it and gets full read/write on a socket bound to every interface. `npm run web:exposed` therefore
+refuses to start when `AITEAMOS_PASSWORD` is blank or unset (`scripts/web-exposed.mjs`, one line
+on stderr and exit 2); the loopback `npm run web` is the command for a passwordless instance.
+
+Pick a long random password — `openssl rand -base64 24`. The 300 ms delay on a failed login
+bounds latency per attempt, not throughput: attempts are not serialised, so a client opening many
+connections at once multiplies its guess rate. The password's own entropy is the real defence.
 
 The password and the cookie travel in clear over plain HTTP. Use a tailnet (Tailscale — the
 recommended path; the wire is already encrypted) or a LAN you trust, never the open internet;
