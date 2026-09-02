@@ -35,6 +35,18 @@ describe('parseExecutionEvent', () => {
     }
   })
 
+  it.each([['toolu_01ABC'], [null]])('keeps run.tool_denied.toolUseId = %j through the parse (M21 C2)', (toolUseId) => {
+    const result = parseExecutionEvent({ ...BASE, type: 'run.tool_denied', runId: 'run-1', payload: { tool: 'Bash', capability: 'run tests', toolUseId } })
+    expect(result.ok).toBe(true)
+    if (result.ok && result.value.type === 'run.tool_denied') expect(result.value.payload.toolUseId).toBe(toolUseId)
+  })
+
+  it('tolerates a pre-B1 run.tool_denied without toolUseId', () => {
+    const result = parseExecutionEvent({ ...BASE, type: 'run.tool_denied', runId: 'run-1', payload: { tool: 'Bash', capability: 'run tests' } })
+    expect(result.ok).toBe(true)
+    if (result.ok && result.value.type === 'run.tool_denied') expect(result.value.payload.toolUseId).toBeUndefined()
+  })
+
   it('accepts an agent.message_sent event with a category', () => {
     const result = parseExecutionEvent({
       ...BASE,

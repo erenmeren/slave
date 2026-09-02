@@ -27,7 +27,16 @@ export const executionEventSchema = z.discriminatedUnion('type', [
     type: z.literal('run.tool_call'),
     payload: z.object({ name: z.string(), summary: z.string() }),
   }),
-  z.object({ ...envelope, type: z.literal('run.tool_denied'), payload: z.object({ tool: z.string(), capability: z.string() }) }),
+  z.object({
+    ...envelope,
+    type: z.literal('run.tool_denied'),
+    payload: z.object({
+      tool: z.string(),
+      capability: z.string(),
+      // M19 B1 writes toolUseId (string | null); rows from before B1 lack it. Typed in M21 C2 so a typed reader keeps it.
+      toolUseId: z.string().nullable().optional(),
+    }),
+  }),
   z.object({ ...envelope, type: z.literal('run.paused'), payload: z.object({ atStep: z.number().int() }) }),
   z.object({ ...envelope, type: z.literal('run.resumed'), payload: z.object({ sessionId: z.string() }) }),
   z.object({

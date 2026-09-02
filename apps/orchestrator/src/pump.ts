@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { promisify } from 'node:util'
 import { killWithEscalation } from '@ai-team-os/control'
+import { toExecutionEvent } from '@ai-team-os/db'
 import { Prisma, prisma } from '@ai-team-os/db/client'
 import type { AgentId, RunId, TaskId, WorkspaceId } from '@ai-team-os/domain'
 import { appendEvent } from '@ai-team-os/events'
@@ -522,16 +523,17 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
    * measured (that capture never paused and resumed). This seed is fail-safe hardening against
    * that possibility either way: if the resumed session's echo does carry a pre-pause id, an empty
    * set would count an already-survived denial as a fresh failure at the `nonMatrixDeniedToolUseIds`
-   * filter below; if it never does, the seed is a no-op.
+   * filter below; if it never does, the seed is a no-op. The read goes through the typed mapper now
+   * that the schema declares the field (M21 C2); the previous raw-column cast is gone.
    */
   if (input.resumed === true) {
-    const prior = await prisma.executionEvent.findMany({
-      where: { runId, type: 'run_tool_denied' },
-      select: { payload: true },
-    })
+    const prior = await prisma.executionEvent.findMany({ where: { runId, type: 'run_tool_denied' } })
     for (const row of prior) {
-      const id = (row.payload as { toolUseId?: unknown }).toolUseId
-      if (typeof id === 'string') matrixDeniedToolUseIds.add(id)
+      const parsed = toExecutionEvent(row)
+      if (!parsed.ok) throw new Error(`event log contains an unparseable run.tool_denied row at seq ${String(row.seq)}: ${parsed.error}`)
+      if (parsed.value.type === 'run.tool_denied' && typeof parsed.value.payload.toolUseId === 'string') {
+        matrixDeniedToolUseIds.add(parsed.value.payload.toolUseId)
+      }
     }
   }
   // Seeded from the row, not from zero, for the same reason the column is incremented: on a resume
