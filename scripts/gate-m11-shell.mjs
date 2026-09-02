@@ -27,6 +27,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
+import { loopbackChildEnv } from './lib/child-env.mjs'
 import { chromium } from 'playwright-core'
 import { prisma } from '../packages/db/dist/client.js'
 
@@ -268,7 +269,8 @@ try {
   const preferredPort = await findFreePort()
   nextProc = spawn('node', ['node_modules/next/dist/bin/next', 'dev', 'apps/web', '-p', String(preferredPort)], {
     cwd: repoRoot,
-    env: process.env,
+    // M21 A1: the operator's AITEAMOS_PASSWORD must not reach the child, or every page is /login.
+    env: loopbackChildEnv(),
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   let nextOutput = ''

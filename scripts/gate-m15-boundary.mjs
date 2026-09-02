@@ -31,6 +31,7 @@ import { request as httpRequest } from 'node:http'
 import { createServer } from 'node:net'
 import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
+import { loopbackChildEnv } from './lib/child-env.mjs'
 
 const NEXT_READY_TIMEOUT_MS = 180_000
 const PROCESS_EXIT_TIMEOUT_MS = 20_000
@@ -97,7 +98,8 @@ try {
   nextServer = spawn(
     'node',
     ['node_modules/next/dist/bin/next', 'dev', 'apps/web', '-p', String(preferredPort), '-H', '127.0.0.1'],
-    { cwd: repoRoot, env: process.env, stdio: ['ignore', 'pipe', 'pipe'] },
+    // M21 A1: the operator's AITEAMOS_PASSWORD must not reach the child, or every page is /login.
+    { cwd: repoRoot, env: loopbackChildEnv(), stdio: ['ignore', 'pipe', 'pipe'] },
   )
   let nextOutput = ''
   let nextExited = false

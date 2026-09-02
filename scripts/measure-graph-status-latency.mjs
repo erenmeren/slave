@@ -27,6 +27,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
+import { loopbackChildEnv } from './lib/child-env.mjs'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE } from '../packages/db/dist/index.js'
 import { prisma } from '../packages/db/dist/client.js'
 
@@ -115,7 +116,8 @@ try {
   web = spawn(
     'node',
     ['--env-file=.env', 'node_modules/next/dist/bin/next', 'dev', 'apps/web', '--port', PORT],
-    { stdio: ['ignore', 'pipe', 'pipe'] },
+    // M21 A1: the operator's AITEAMOS_PASSWORD must not reach the child, or every page is /login.
+    { env: loopbackChildEnv(), stdio: ['ignore', 'pipe', 'pipe'] },
   )
   web.stdout.on('data', (chunk) => process.stdout.write(`[web] ${chunk}`))
   web.stderr.on('data', (chunk) => process.stderr.write(`[web] ${chunk}`))

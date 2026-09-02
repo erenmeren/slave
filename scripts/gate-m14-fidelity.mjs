@@ -77,6 +77,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
+import { loopbackChildEnv } from './lib/child-env.mjs'
 import { chromium } from 'playwright-core'
 import { isAlive, syncSkillCatalog } from '../packages/control/dist/index.js'
 import { prisma } from '../packages/db/dist/client.js'
@@ -643,7 +644,8 @@ try {
     // `AITEAMOS_GATE_WARM=1` widens `next.config.ts`'s on-demand-entries buffer for THIS `next
     // dev` only (M17 Task 7, Flake 6 investigation) -- see that file for the mechanism. An
     // ordinary developer's `next dev` never sets this and keeps Next's defaults.
-    env: { ...process.env, AITEAMOS_GATE_WARM: '1' },
+    // M21 A1: the operator's AITEAMOS_PASSWORD must not reach the child, or every page is /login.
+    env: loopbackChildEnv({ AITEAMOS_GATE_WARM: '1' }),
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   // `nextOutput` itself is module-level now (see its declaration near `browserConsole`) so

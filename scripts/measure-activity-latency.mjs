@@ -18,6 +18,7 @@
 
 import { spawn } from 'node:child_process'
 import { setTimeout as delay } from 'node:timers/promises'
+import { loopbackChildEnv } from './lib/child-env.mjs'
 import { prisma } from '../packages/db/dist/client.js'
 import { appendEvent } from '../packages/events/dist/index.js'
 
@@ -71,7 +72,8 @@ async function waitForWebReady(baseUrl, timeoutMs) {
 const web = spawn(
   'node',
   ['--env-file=.env', 'node_modules/next/dist/bin/next', 'dev', 'apps/web', '--port', PORT],
-  { stdio: ['ignore', 'pipe', 'pipe'] },
+  // M21 A1: the operator's AITEAMOS_PASSWORD must not reach the child, or every page is /login.
+  { env: loopbackChildEnv(), stdio: ['ignore', 'pipe', 'pipe'] },
 )
 web.stdout.on('data', (chunk) => process.stdout.write(`[web] ${chunk}`))
 web.stderr.on('data', (chunk) => process.stderr.write(`[web] ${chunk}`))
