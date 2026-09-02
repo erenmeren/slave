@@ -507,8 +507,8 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
    * tool_use_id -- and the parser surfaces only the FIRST tool_use block of a multi-block assistant
    * line (`packages/providers/src/claude/stream.ts` ~:406), so in that unmeasured shape the hooks
    * bind to the first block, not the last. An entry is deleted when a deny resolves it; an allowed
-   * hook's entry lives for the run (two per gated tool call), so the map is bounded by the run's
-   * tool-call count.
+   * hook's entry lives for the run (two per gated tool call), so the map is bounded by twice the
+   * run's gated tool-call count (two PreToolUse hooks start per call).
    */
   const hookBindings = new Map<string, { readonly toolUseId: string; readonly toolName: string }>()
   const denied: string[] = []
@@ -546,6 +546,9 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
     const prior = await prisma.executionEvent.findMany({ where: { runId, type: 'run_tool_denied' } })
     for (const row of prior) {
       const parsed = toExecutionEvent(row)
+      // Deliberate: a row that fails the typed parse means the write gate was bypassed
+      // (packages/events/src/read.ts applies the same rule); throwing beats a run that silently
+      // forgets a confirmed deny.
       if (!parsed.ok) throw new Error(`event log contains an unparseable run.tool_denied row at seq ${String(row.seq)}: ${parsed.error}`)
       if (parsed.value.type === 'run.tool_denied' && typeof parsed.value.payload.toolUseId === 'string') {
         matrixDeniedToolUseIds.add(parsed.value.payload.toolUseId)
