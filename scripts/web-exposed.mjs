@@ -11,6 +11,7 @@
 // this process is a pass-through: the child inherits the streams, signals are forwarded, and the
 // child's exit code becomes ours.
 import { spawn } from 'node:child_process'
+import { constants as osConstants } from 'node:os'
 
 const password = (process.env['AITEAMOS_PASSWORD'] ?? '').trim()
 if (password.length === 0) {
@@ -20,7 +21,11 @@ if (password.length === 0) {
   process.exit(2)
 }
 
-const child = spawn('node', ['node_modules/next/dist/bin/next', 'dev', 'apps/web', '-H', '0.0.0.0'], {
+// AITEAMOS_NEXT_BIN exists for apps/web/test/web-exposed.test.ts, which must never start the real
+// next on 0.0.0.0; not an operator knob.
+const nextBin = process.env['AITEAMOS_NEXT_BIN'] ?? 'node_modules/next/dist/bin/next'
+
+const child = spawn('node', [nextBin, 'dev', 'apps/web', '-H', '0.0.0.0'], {
   stdio: 'inherit',
 })
 
@@ -35,9 +40,11 @@ child.on('error', (error) => {
   process.exit(1)
 })
 
-// A child killed by a signal reports `code === null`; 128 + signal number is the shell's own
-// convention for that, and keeps "did it exit cleanly?" answerable by the caller.
+// A child killed by a signal reports `code === null`; 128 + the signal's number is the shell's own
+// convention for that (SIGINT → 130, SIGTERM → 143, SIGKILL → 137), and keeps "did it exit
+// cleanly?" answerable by the caller. The table is looked up rather than spelled out so every
+// signal maps, not just the two we forward; an unknown name falls back to SIGTERM's 15.
 child.on('exit', (code, signal) => {
   if (code !== null) process.exit(code)
-  process.exit(signal === 'SIGINT' ? 130 : 143)
+  process.exit(128 + (osConstants.signals[signal] ?? 15))
 })
