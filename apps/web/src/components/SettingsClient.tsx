@@ -2,7 +2,7 @@
 
 import type { RosterCompany } from '../server/org'
 import type { AdapterCard, PermissionSection } from '../server/settings'
-import { POSTURE } from '../lib/boundary'
+import type { BoundaryMode } from '../lib/authEnv'
 import { CompanyManager, type CompanyRow } from './CompanyManager'
 import { DangerZone } from './DangerZone'
 import { PermissionMatrix } from './PermissionMatrix'
@@ -21,6 +21,8 @@ export function SettingsClient({
   permissions,
   workspaces,
   showReseed,
+  mode,
+  posture,
 }: {
   readonly templates: readonly TemplateRow[]
   readonly companies: readonly CompanyRow[]
@@ -32,6 +34,11 @@ export function SettingsClient({
   readonly workspaces: readonly { readonly id: string; readonly name: string; readonly halted: boolean }[]
   /** Computed on the SERVER from `NODE_ENV`, never guessed at here. */
   readonly showReseed: boolean
+  /** Computed on the SERVER from `AITEAMOS_PASSWORD` (`boundaryMode()`), never guessed here. */
+  // M20 Task 7 renders the Logout button behind this
+  readonly mode: BoundaryMode
+  /** `postureFor(mode)` — the single source for the security line (M20 spec §2.3). */
+  readonly posture: string
 }): React.JSX.Element {
   return (
     <div className="flex flex-col gap-4 p-4">
@@ -43,7 +50,7 @@ export function SettingsClient({
       </Panel>
       <Panel title="security">
         <p data-testid="security-posture" className="font-mono text-[10px] text-text-3">
-          {POSTURE} · no accounts · cross-site requests refused
+          {posture}
         </p>
       </Panel>
       <DangerZone workspaces={workspaces} showReseed={showReseed} />

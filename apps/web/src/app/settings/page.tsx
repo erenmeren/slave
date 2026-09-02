@@ -1,6 +1,8 @@
 import { listCompanies, listProjects, listRoster, listTemplates } from '../../server/org'
 import { buildPermissionMatrix, buildProviderAdapters } from '../../server/settings'
 import { SettingsClient } from '../../components/SettingsClient'
+import { boundaryMode } from '../../lib/authEnv'
+import { postureFor } from '../../lib/boundary'
 
 export const dynamic = 'force-dynamic'
 
@@ -16,6 +18,7 @@ export default async function SettingsPage(): Promise<React.JSX.Element> {
     buildPermissionMatrix(),
     listProjects(),
   ])
+  const mode = boundaryMode()
   return (
     <SettingsClient
       templates={templates}
@@ -29,6 +32,8 @@ export default async function SettingsPage(): Promise<React.JSX.Element> {
       // Decided on the SERVER, so the client never has to guess -- and the route itself 404s in
       // production regardless, so hiding the button is the second lock, not the only one.
       showReseed={process.env['NODE_ENV'] !== 'production'}
+      mode={mode}
+      posture={postureFor(mode)}
     />
   )
 }

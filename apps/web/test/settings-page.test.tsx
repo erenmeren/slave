@@ -77,6 +77,8 @@ describe('SettingsClient', () => {
         permissions={[]}
         workspaces={[]}
         showReseed={false}
+        mode="loopback-only"
+        posture="loopback-only · no accounts · cross-site requests refused"
       />,
     )
     expect(screen.getByText('Template catalog')).toBeTruthy()
@@ -93,10 +95,18 @@ describe('SettingsClient', () => {
         permissions={[]}
         workspaces={[]}
         showReseed={false}
+        mode="loopback-only"
+        posture="loopback-only · no accounts · cross-site requests refused"
       />,
     )
     const posture = screen.getByTestId('security-posture')
     expect(posture.textContent).toBe('loopback-only · no accounts · cross-site requests refused')
+  })
+
+  it('renders whatever posture the server computed (password mode names the login)', () => {
+    render(<SettingsClient templates={[template()]} companies={[]} roster={[]} adapters={[]} permissions={[]} workspaces={[]} showReseed={false}
+      mode="password" posture="password login · single operator · cross-site requests refused" />)
+    expect(screen.getByTestId('security-posture').textContent).toBe('password login · single operator · cross-site requests refused')
   })
 })
 
