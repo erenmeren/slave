@@ -433,7 +433,7 @@ non-zero if either exceeds 1000ms. It cleans up the workspace, its git repositor
 server it started before exiting.
 
 The **Agents page** (`/agents`) is the org-wide roster, tabbed Roster / Workers / Teams. Every
-project worker row on the Workers tab carries inline rename/re-role/delete controls (M23 D1) —
+project worker row on the Roster tab carries inline rename/re-role/delete controls (M23 D1) —
 rename edits the agent's name in place, re-role changes the string the scheduler matches against a
 task's `requiredRole` (refused while the agent has a non-terminal run), and delete removes the row
 (refused while it carries any run history at all, terminal included). The **Teams** tab lists every
