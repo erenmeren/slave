@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import type { ProviderKind } from '@ai-team-os/control'
 import { errorMessage } from '../lib/postControl'
+import { onUnauthorized } from '../lib/onUnauthorized'
 import { ProviderSelect } from './ProviderSelect'
 import { FieldLabel, INPUT_SHELL, PrimaryButton, TextField } from './ui/FormControls'
 
@@ -41,32 +42,51 @@ export function ProjectsPanel(): React.JSX.Element {
   const [errorText, setErrorText] = useState<string | null>(null)
 
   const verifyCommands = splitCommands(verifyText)
-  const canSubmit = name.trim() !== '' && repoPath.trim() !== '' && verifyCommands.length > 0
+  // `required` on the budget field mirrors `RuntimeCard.tsx:96-111`'s guard: `Number('')` is
+  // `0`, so a cleared field with the checkbox unchecked must refuse to submit rather than
+  // silently posting a real (and strictest-possible) budget the operator never typed.
+  const canSubmit =
+    name.trim() !== '' && repoPath.trim() !== '' && verifyCommands.length > 0 && (unbudgeted || budgetText.trim() !== '')
 
+  // try/catch/finally, the same shape `sendControl` (`lib/postControl.ts`) uses: a network
+  // failure (fetch rejecting, or a 201 whose body is not the `{ id }` this route promises) must
+  // still clear `pending` and land something in the error band, not an unhandled rejection with
+  // the submit button stuck disabled forever.
   const submit = async (): Promise<void> => {
     setPending(true)
     setErrorText(null)
-    const response = await fetch('/api/org/workspaces', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name,
-        repoPath,
-        baseBranch,
-        verifyCommands,
-        setupCommands: splitCommands(setupText),
-        budgetUsd: unbudgeted ? null : Number(budgetText),
-        provider: provider === '' ? null : provider,
-      }),
-    })
-    setPending(false)
-    if (response.ok) {
-      const data = (await response.json()) as { id: string }
-      router.push(`/w/${data.id}`)
-      return
+    try {
+      const response = await fetch('/api/org/workspaces', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name,
+          repoPath,
+          baseBranch,
+          verifyCommands,
+          setupCommands: splitCommands(setupText),
+          budgetUsd: unbudgeted ? null : Number(budgetText),
+          provider: provider === '' ? null : provider,
+        }),
+      })
+      if (response.status === 401) onUnauthorized()
+      if (response.ok) {
+        const data: unknown = await response.json().catch(() => null)
+        const id = data !== null && typeof data === 'object' ? (data as { id?: unknown }).id : undefined
+        if (typeof id === 'string') {
+          router.push(`/w/${id}`)
+          return
+        }
+        setErrorText(errorMessage(data, response.status))
+        return
+      }
+      const data: unknown = await response.json().catch(() => null)
+      setErrorText(errorMessage(data, response.status))
+    } catch (cause) {
+      setErrorText(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setPending(false)
     }
-    const data: unknown = await response.json().catch(() => null)
-    setErrorText(errorMessage(data, response.status))
   }
 
   return (
@@ -75,7 +95,10 @@ export function ProjectsPanel(): React.JSX.Element {
       className="flex flex-col gap-3"
       onSubmit={(event) => {
         event.preventDefault()
-        void submit()
+        // `canSubmit` also guards a raw form submit (e.g. Enter in a field), not just the button's
+        // `disabled` attribute -- the disabled attribute alone stops a click but not a submit event
+        // dispatched directly on the form.
+        if (canSubmit && !pending) void submit()
       }}
     >
       <div className="flex flex-wrap items-end gap-2">
@@ -155,6 +178,7 @@ export function ProjectsPanel(): React.JSX.Element {
             {
               type: 'number',
               step: '0.01',
+              required: !unbudgeted,
               'data-testid': 'create-workspace-budget',
               'aria-label': 'workspace budget',
               value: budgetText,

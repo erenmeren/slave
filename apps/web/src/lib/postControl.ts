@@ -1,3 +1,5 @@
+import { onUnauthorized } from './onUnauthorized'
+
 /**
  * The one shared implementation of the control-mutation idiom (M14; widened in M18 Task 9 to a
  * single `sendControl` covering every verb this app's control surfaces use -- POST, PUT, and
@@ -46,12 +48,9 @@ export async function sendControl(
     if (response.ok) return null
     // An expired or missing session anywhere in the app lands on the login page instead of a red
     // band that never clears (M20 spec §3.4). Every control surface dials this one function
-    // (M19 C4), so this is the one place. On /login itself a 401 is a wrong password, not an
-    // expired session — the form shows it.
-    if (response.status === 401 && typeof window !== 'undefined' && window.location.pathname !== '/login') {
-      const here = `${window.location.pathname}${window.location.search}`
-      window.location.assign(`/login?next=${encodeURIComponent(here)}`)
-    }
+    // (M19 C4), so this is the one place -- `onUnauthorized` is the shared four lines, pulled out
+    // so a control surface that cannot use `sendControl` (`ProjectsPanel`) still gets it.
+    if (response.status === 401) onUnauthorized()
     const data: unknown = await response.json().catch(() => null)
     return errorMessage(data, response.status)
   } catch (cause) {
