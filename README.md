@@ -314,6 +314,17 @@ bearer token: the cookie is the only credential, for browsers and scripts alike.
 line reads `accounts · signed in as <you> · cross-site requests refused` in this mode, and carries a
 Logout button.
 
+`AITEAMOS_PASSWORD` is retired (M20's single shared password, replaced by M23's per-user accounts):
+an existing `.env` that still sets it is read as loopback-only now, not password mode. Replace it
+with `AITEAMOS_SESSION_SECRET` (`openssl rand -hex 32`) and create your first user with
+`create-user`, as above.
+
+Every account is a full operator, not a scoped role — there are no roles here. `createWorkspace`
+accepts any absolute `repoPath` and arbitrary `verifyCommands`/`setupCommands` from any signed-in
+user, and the orchestrator executes them: signing in is enough to attach any local path this
+process can read as a workspace and define the commands that run against it, i.e. arbitrary code
+execution on this host. Create accounts only for people you would give a shell to.
+
 Never run `web:exposed` without accounts. The Host rule refuses every non-loopback Host name,
 which stops browsers and accidents — but as the M15 spec §2.4 says in as many words, it is "not
 against a hostile LAN": a client that forges `Host: localhost` with `curl` walks straight through
@@ -344,7 +355,12 @@ and directly from the event payload, because it is display-only and never confus
 The **Tasks board** (`/w/<workspaceId>/tasks`) lays every task out in columns by status — backlog,
 ready, running, verifying, reviewing, blocked, done, failed. Clicking a card opens a detail panel
 with its description, branch, rejection reason and its runs, newest first, each with its status,
-cost, tool calls and (for a paused run) the step it paused at.
+cost, tool calls and (for a paused run) the step it paused at. The panel's **Artifacts** section
+lists anything the task's runs wrote (verify output, review notes) and reads one back on click —
+served only from the workspace's own artifact root, never a path outside it. A terminal task with a
+collected-on-demand worktree carries a **Collect worktree** button, `git worktree remove` behind a
+confirm step that keeps the branch and only clears the tree from disk (the same pass the daemon
+runs automatically for aged trees, M23 B2).
 
 The **Activity page** (`/w/<workspaceId>/activity`, in the Sidebar next to Overview and Tasks) is a
 live, filterable, infinitely-scrollable timeline of every `ExecutionEvent` in the workspace — every
@@ -415,6 +431,15 @@ transition's underlying event, polls `GET /api/w/<workspaceId>/graph` until the 
 reflects it, reporting the latency from the event's own `ts` to the moment it's reflected — exiting
 non-zero if either exceeds 1000ms. It cleans up the workspace, its git repository, and the web
 server it started before exiting.
+
+The **Agents page** (`/agents`) is the org-wide roster, tabbed Roster / Workers / Teams. Every
+project worker row on the Workers tab carries inline rename/re-role/delete controls (M23 D1) —
+rename edits the agent's name in place, re-role changes the string the scheduler matches against a
+task's `requiredRole` (refused while the agent has a non-terminal run), and delete removes the row
+(refused while it carries any run history at all, terminal included). The **Teams** tab lists every
+project team with the same inline rename, plus delete refused while the team still has agents.
+Every one of these edits appends an `org.changed` event, so it shows up on the Activity page like
+any other workspace change.
 
 ```bash
 npm run gate:m8a-merge

@@ -623,6 +623,16 @@ execution plan's, not this document's series letters.
     later step in the job sees it. Cost if wrong: `gate:m23-onboarding` fails in CI with no
     reachable Chromium, the same failure mode as any operator running it on a browserless machine.
 
+14. **`worktree_remove_failed` is a fifth `collectTaskWorktree` refusal kind (Task 4 fix round 1)
+    — amends §3 B2.** B2 names four refusals: `task_not_found`, `task_not_terminal`,
+    `run_still_alive`, `nothing_to_collect`. The tree adds a fifth,
+    `worktree_remove_failed` (`{ taskId, path, reason }`): `git worktree remove`/`prune` itself can
+    throw (a locked index, a permissions error, a disk gone away) inside the row-locked
+    transaction B2 specifies, and that throw now surfaces as a refusal rather than an unhandled
+    rejection — the row is left untouched (nothing was written before the throw), so a retry sees
+    the same terminal task with the same path. Cost if wrong: none — this only replaces a crash
+    with a named, retriable refusal on a path B2 did not anticipate failing.
+
 **Out of scope, recorded rather than fixed:**
 
 - **Org refusals answer 409, not 404 (T10).** The design spec's global constraints name 404 as
