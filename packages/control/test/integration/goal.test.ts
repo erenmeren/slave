@@ -8,6 +8,8 @@ import { setGoal } from '../../src/goal.js'
 // A real directory, not a placeholder (M23 G3): runFilePaths' statSync preflight refuses a repo path that does not exist, and a reboot clears /tmp -- the trap emergency.test.ts fell into at ce48adc.
 const repoPath = mkdtempSync(join(tmpdir(), 'aiteamos-control-goal-'))
 
+afterAll(() => rmSync(repoPath, { recursive: true, force: true }))
+
 interface Fixture {
   readonly workspace: { readonly id: string }
 }
@@ -33,8 +35,6 @@ describe('setGoal', () => {
     )
     fixture = await seed()
   })
-
-  afterAll(() => rmSync(repoPath, { recursive: true, force: true }))
 
   it('sets the goal column and emits exactly one workspace.goal_set event with the goal in the payload', async () => {
     const { workspace } = fixture

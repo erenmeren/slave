@@ -10,6 +10,8 @@ import { workspaceDefaultProvider } from '../../src/runtime.js'
 // A real directory, not a placeholder (M23 G3): runFilePaths' statSync preflight refuses a repo path that does not exist, and a reboot clears /tmp -- the trap emergency.test.ts fell into at ce48adc.
 const repoPath = mkdtempSync(join(tmpdir(), 'aiteamos-control-workspace-settings-'))
 
+afterAll(() => rmSync(repoPath, { recursive: true, force: true }))
+
 interface Fixture {
   readonly workspace: { readonly id: string }
 }
@@ -35,8 +37,6 @@ describe('the workspace settings verbs', () => {
     )
     fixture = await seed()
   })
-
-  afterAll(() => rmSync(repoPath, { recursive: true, force: true }))
 
   describe('setWorkspaceProvider', () => {
     it('replaces any existing row so the workspace always resolves exactly one default', async (): Promise<void> => {
