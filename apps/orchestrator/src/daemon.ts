@@ -186,6 +186,11 @@ export async function runDaemon(deps: DaemonDeps): Promise<void> {
     })
   } finally {
     if (timer !== null) clearInterval(timer)
+    // An in-flight `runCollect` is not drained the way `coalescer.inFlight()` drains the tick
+    // below: `collectTaskWorktree` is one atomic transaction, so a disconnect mid-flight either
+    // fails cleanly (nothing committed, nothing to lose) or had already committed (nothing left
+    // to drain) -- unlike a tick, there is no partial state a shutdown could catch it mid-write.
+    // The pass simply retries on the next cycle, or the next process's startup call.
     if (collectTimer !== null) clearInterval(collectTimer)
     coalescer.stop()
 
