@@ -87,8 +87,13 @@ try {
     // Print what vitest said BEFORE judging it: a non-zero exit must be diagnosable from the
     // transcript, not swallowed by a throw that carries no output. Same print-then-assert shape
     // as runChildGate.
-    const child = spawnSync('npx', ['vitest', 'run', ...files], { cwd: repoRoot, env: process.env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], maxBuffer: 64 * 1024 * 1024 })
-    const out = child.stdout ?? ''
+    // Colour off, twice over: GitHub Actions advertises a colour-capable log, so vitest interleaves
+    // ANSI escapes between "Test Files" and "6 passed" and the regex below never matches (observed
+    // on the first CI run, 2026-09-03). `NO_COLOR` + `FORCE_COLOR=0` ask vitest to stay plain, and
+    // the strip below makes the assertion hold even if a future reporter ignores the ask.
+    const child = spawnSync('npx', ['vitest', 'run', ...files], { cwd: repoRoot, env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], maxBuffer: 64 * 1024 * 1024 })
+    // eslint-disable-next-line no-control-regex -- stripping terminal escapes is the whole point
+    const out = (child.stdout ?? '').replace(/\x1b\[[0-9;]*m/g, '')
     process.stdout.write(`${out.split('\n').slice(-40).map((line) => `[vitest] ${line}`).join('\n')}\n`)
     assert(child.error === undefined, `check 4: could not start vitest: ${child.error?.message ?? ''}`)
     assert(child.status === 0, `check 4: vitest exited ${String(child.status)} (signal ${String(child.signal)})`)
