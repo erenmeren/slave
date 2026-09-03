@@ -126,6 +126,30 @@ substitute database as proof that Compose was exercised.
 Everything below drives the *development* database configured in `.env`. It spawns real `claude`
 processes, creates real git worktrees inside the workspace's own repository, and spends real money.
 
+### Attaching a repository
+
+A workspace is a real, local git clone. Attach one with the CLI (or the Settings page's Projects
+panel, which posts the same fields):
+
+```bash
+npm run orchestrator -- create-workspace --name <n> --repo <abs path> [--base main] \
+  --verify "<cmd>" [--verify "<cmd>" ...] [--setup "<cmd>" ...] \
+  [--budget <usd> | --no-budget] [--provider claude_code|cursor]
+```
+
+Four things are validated before anything is written: `--repo` must be an absolute path; it must
+exist and be a directory; it must be a git working tree; and `--base` (default `main`) must name a
+branch that already exists in it. At least one `--verify` command is required — a workspace with
+none can never reach `done`.
+
+Everything the orchestrator writes for this workspace — worktrees and per-attempt artifacts —
+lives under `<repo>/.aiteamos/`, already gitignored by `ensureIgnored` so none of it lands in the
+repository's own history.
+
+The seeded "Checkout Platform" workspace points at `/tmp/checkout-platform`, which does not
+survive a reboot. That is by design, not a bug to fix: none of its seeded tasks carry a
+`requiredRole`, so the scheduler never picks them up, and the workspace stays inert either way.
+
 ```bash
 npm run orchestrator -- help          # the commands, and what clear-halt is not
 npm run orchestrator -- tick          # one scheduling pass, then wait for the run it started

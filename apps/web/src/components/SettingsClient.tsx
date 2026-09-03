@@ -7,6 +7,7 @@ import { CompanyManager, type CompanyRow } from './CompanyManager'
 import { DangerZone } from './DangerZone'
 import { LogoutButton } from './LogoutButton'
 import { PermissionMatrix } from './PermissionMatrix'
+import { ProjectsPanel } from './ProjectsPanel'
 import { ProviderAdapterCards } from './ProviderAdapterCards'
 import { TemplateCatalog, type TemplateRow } from './TemplateCatalog'
 import { Panel } from './ui/Panel'
@@ -55,6 +56,9 @@ export function SettingsClient({
         {mode === 'password' && <LogoutButton />}
       </Panel>
       <DangerZone workspaces={workspaces} showReseed={showReseed} />
+      <Panel title="Projects">
+        <ProjectsPanel />
+      </Panel>
       <Panel title="Template catalog">
         <TemplateCatalog templates={templates} />
       </Panel>

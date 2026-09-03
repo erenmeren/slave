@@ -83,6 +83,7 @@ describe('SettingsClient', () => {
     )
     expect(screen.getByText('Template catalog')).toBeTruthy()
     expect(screen.getByText('Companies')).toBeTruthy()
+    expect(screen.getByTestId('create-workspace-form')).toBeTruthy()
   })
 
   it('states the security posture, honestly and without controls', () => {
