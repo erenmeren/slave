@@ -10,6 +10,7 @@ import type { StreamEvent } from '../../hooks/useWorkspaceStream'
 import type { GraphSnapshot } from '../../server/graph'
 import { HaltBanner } from '../HaltBanner'
 import { TopBar } from '../TopBar'
+import { CommunicationMode } from './CommunicationMode'
 import { DepsMode } from './DepsMode'
 import { buildExecutionGraph, EXECUTION_NODE_TYPES, placeExecutionTasks, STAGE_NODE_PREFIX } from './ExecutionNodes'
 import { GraphCanvas } from './GraphCanvas'
@@ -26,13 +27,14 @@ import { SkillMode } from './SkillMode'
  *  interval rather than a `requestAnimationFrame` loop. */
 const PARTICLE_SWEEP_INTERVAL_MS = 100
 
-/** The four modes of design README "1b — Modes". `deps` keeps its pre-M14 spelling because it is
- *  a URL value people already have in links and history, not just an internal literal. */
-type GraphMode = 'org' | 'exec' | 'deps' | 'skill'
+/** The five modes of design README "1b — Modes" (`comm` added Task 12, M23 E3). `deps` keeps its
+ *  pre-M14 spelling because it is a URL value people already have in links and history, not just
+ *  an internal literal. */
+type GraphMode = 'org' | 'exec' | 'deps' | 'skill' | 'comm'
 const DEFAULT_MODE: GraphMode = 'org'
 
 function isGraphMode(value: string | null): value is GraphMode {
-  return value === 'org' || value === 'exec' || value === 'deps' || value === 'skill'
+  return value === 'org' || value === 'exec' || value === 'deps' || value === 'skill' || value === 'comm'
 }
 
 /** The modes that actually render a canvas -- Task 11 (M18) gives `skill` its own aggregate
@@ -49,7 +51,21 @@ const MODE_TABS: readonly { readonly mode: GraphMode; readonly label: string }[]
   { mode: 'exec', label: 'Execution' },
   { mode: 'deps', label: 'Dependencies' },
   { mode: 'skill', label: 'Skill chain' },
+  { mode: 'comm', label: 'Communication' },
 ]
+
+/** The domain event types Communication mode's own fold (`communicationFold.ts`) reads (spec §6
+ *  E1) -- any frame carrying one of these is a hand-off this view's fetched graph doesn't know
+ *  about yet, so `onGraphEvent` below bumps `commFrameTick` on exactly these, same "bump a plain
+ *  counter on the frame types this view cares about" shape `skillFrameTick`'s own `run.tool_call`
+ *  check uses. */
+const COMM_FRAME_TYPES: ReadonlySet<string> = new Set([
+  'run.started',
+  'task.review_started',
+  'task.review_rejected',
+  'agent.message_sent',
+  'workspace.plan_created',
+])
 
 /** `agent:<id>` — `buildOrgGraph`'s node-id prefix, and the one node kind the drawer opens for. */
 const AGENT_NODE_PREFIX = 'agent:'
@@ -117,9 +133,16 @@ export function GraphClient({
   // anything about the skill graph's own shape.
   const [skillFrameTick, setSkillFrameTick] = useState(0)
 
+  // Task 12 (M23 E3): `CommunicationMode`'s own debounced-refetch signal, the same shape as
+  // `skillFrameTick` just above -- one counter bumped once per raw frame whose `type` is one of
+  // `COMM_FRAME_TYPES`, handed down as a prop rather than opening a second connection or growing
+  // `useGraph`'s own API.
+  const [commFrameTick, setCommFrameTick] = useState(0)
+
   const onGraphEvent = (event: StreamEvent): void => {
     setParticles((current) => handleToolCallFrame(event, orgEdgesRef.current, current, Date.now()))
     if (event.type === 'run.tool_call') setSkillFrameTick((tick) => tick + 1)
+    if (event.type !== undefined && COMM_FRAME_TYPES.has(event.type)) setCommFrameTick((tick) => tick + 1)
   }
 
   const { snapshot, connection, error, latencyMs } = useGraph(workspaceId, initial, onGraphEvent)
@@ -238,6 +261,7 @@ export function GraphClient({
           {mode === 'exec' && <ExecutionMode snapshot={view} />}
           {mode === 'deps' && <DepsMode workspaceId={workspaceId} snapshot={view} />}
           {mode === 'skill' && <SkillMode workspaceId={workspaceId} snapshot={view} toolCallTick={skillFrameTick} />}
+          {mode === 'comm' && <CommunicationMode workspaceId={workspaceId} frameTick={commFrameTick} />}
         </div>
         {selectedAgent !== null && (
           <GraphDrawer workspaceId={workspaceId} agent={selectedAgent} onClose={() => setSelectedAgentId(null)} />

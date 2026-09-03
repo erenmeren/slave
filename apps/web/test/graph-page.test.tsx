@@ -375,7 +375,7 @@ describe('GraphClient', () => {
   // Task 11 (M18): the fourth tab unlocks -- `SkillMode`'s own aggregate canvas. This is the
   // sanctioned edit to the test that used to pin the `disabled`/`\u00b7 later` tab (fix round 1,
   // Important 2 of the M14 plan): that ruling is exactly what this task reverses.
-  it('offers four modes, all enabled -- Skill chain included', async () => {
+  it('offers five modes, all enabled -- Skill chain and Communication included', async () => {
     const { rerender } = render(<GraphClient workspaceId="w1" initial={SNAPSHOT} />)
     await waitFor(() => expect(elkLayoutSpy).toHaveBeenCalled())
 
@@ -384,6 +384,7 @@ describe('GraphClient', () => {
       'Execution',
       'Dependencies',
       'Skill chain',
+      'Communication',
     ])
     expect((screen.getByTestId('graph-mode-skill') as HTMLButtonElement).disabled).toBe(false)
 
@@ -426,6 +427,34 @@ describe('GraphClient', () => {
     expect(screen.getByTestId('graph-mode-skill')).toHaveProperty('ariaCurrent', 'page')
     expect(screen.getByTestId('graph-canvas')).toBeTruthy()
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/w/w1/skill-graph'))
+  })
+
+  // Task 12 (M23 E3): the fifth mode, Communication -- its own `?mode=comm` round trip and its own
+  // sibling DTO route, same shape as the Skill chain tests just above.
+  it('writes ?mode=comm when Communication is clicked, and renders its own canvas', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ agents: [], edges: [] }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    render(<GraphClient workspaceId="w1" initial={SNAPSHOT} />)
+    await waitFor(() => expect(elkLayoutSpy).toHaveBeenCalled())
+
+    fireEvent.click(screen.getByTestId('graph-mode-comm'))
+
+    expect(routerReplace).toHaveBeenCalledWith('/w/w1/graph?mode=comm', { scroll: false })
+    expect(screen.getByTestId('graph-mode-comm')).toHaveProperty('ariaCurrent', 'page')
+    expect(screen.getByTestId('graph-canvas')).toBeTruthy()
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/w/w1/graph/communication'))
+  })
+
+  it('opens Communication mode directly for a hand-typed ?mode=comm', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ agents: [], edges: [] }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    searchParams = new URLSearchParams('mode=comm')
+    render(<GraphClient workspaceId="w1" initial={SNAPSHOT} />)
+    await waitFor(() => expect(elkLayoutSpy).toHaveBeenCalled())
+
+    expect(screen.getByTestId('graph-mode-comm')).toHaveProperty('ariaCurrent', 'page')
+    expect(screen.getByTestId('graph-canvas')).toBeTruthy()
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/w/w1/graph/communication'))
   })
 
   it('switches to Execution mode and draws the six pipeline stages', async () => {
