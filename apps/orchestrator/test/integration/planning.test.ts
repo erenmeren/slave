@@ -376,6 +376,9 @@ describe('concludePlanning', () => {
       (event) => DOMAIN_EVENT_TYPE_BY_DB_VALUE[event.type] === 'workspace.plan_created',
     )
     expect(planCreated).toHaveLength(1)
+    // M23 E1: the plan names its planner -- the communication graph's `plan` edge is derived
+    // from this field, not from `runId` (which the fold never reads).
+    expect(planCreated[0]?.agentId).toBe(run.agentId)
     const payload = planCreated[0]?.payload as unknown as { goal: string; tasks: readonly { title: string }[] }
     expect(payload.goal).toBe('Ship the checkout redesign')
     expect(payload.tasks.map((task) => task.title).sort()).toEqual(

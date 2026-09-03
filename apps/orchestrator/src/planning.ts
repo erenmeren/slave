@@ -151,6 +151,7 @@ export async function concludePlanning(runId: RunId): Promise<void> {
   await appendEvent({
     type: 'workspace.plan_created',
     workspaceId,
+    agentId: run.agentId,
     runId: run.id,
     actor: 'agent',
     payload: {
