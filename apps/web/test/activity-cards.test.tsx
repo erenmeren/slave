@@ -59,6 +59,11 @@ const PAYLOAD_BY_TYPE: Record<DomainEventType, Record<string, unknown>> = {
   'task.review_approved': { reason: 'diff matches the task' },
   'task.review_rejected': { reason: 'edge case unhandled', attempt: 2 },
   'task.merge_failed': { reason: 'conflict in package.json' },
+  'task.worktree_collected': {
+    path: '/repo/.aiteamos/worktrees/T-abc',
+    reason: 'operator',
+    branch: 'aiteamos/T-abc-x',
+  },
   'workspace.goal_set': { goal: 'Ship the checkout flow' },
   'workspace.plan_created': {
     goal: 'Ship the checkout flow',
@@ -172,6 +177,13 @@ describe('targeted card bodies', () => {
     const Card = ACTIVITY_CARDS['task.merge_failed']
     render(<Card event={fixtureFor('task.merge_failed')} {...CARD_PROPS} />)
     expect(screen.getByTestId('merge-failed-reason').textContent).toBe('conflict in package.json')
+  })
+
+  it('task.worktree_collected shows the path and the reason', () => {
+    const Card = ACTIVITY_CARDS['task.worktree_collected']
+    render(<Card event={fixtureFor('task.worktree_collected')} {...CARD_PROPS} />)
+    expect(screen.getByTestId('worktree-collected-path').textContent).toBe('/repo/.aiteamos/worktrees/T-abc')
+    expect(screen.getByTestId('transition-label').textContent).toBe('worktree collected')
   })
 
   it('workspace.created shows the name, repo path and verify command count', () => {

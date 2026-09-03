@@ -134,6 +134,23 @@ function TaskFailedCard(props: ActivityCardProps): ReactElement {
   )
 }
 
+// M23 B2: `collectTaskWorktree` removed a terminal task's worktree -- aged out or by an
+// operator's button. `idle` tone: this is bookkeeping after the task already concluded, not a
+// new outcome of its own.
+function TaskWorktreeCollectedCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as { path: string; reason: 'aged' | 'operator'; branch: string | null }
+  return (
+    <ActivityCard {...props}>
+      <Transition tone="idle" label="worktree collected">
+        <span data-testid="worktree-collected-path" className="font-mono">
+          {payload.path}
+        </span>{' '}
+        · {payload.reason}
+      </Transition>
+    </ActivityCard>
+  )
+}
+
 function TaskDependencyAddedCard(props: ActivityCardProps): ReactElement {
   const payload = props.event.payload as { dependsOnTaskId: string; dependsOnTitle: string; requestedBy: string }
   return (
@@ -544,6 +561,7 @@ export const ACTIVITY_CARDS = {
   'task.review_approved': TaskReviewApprovedCard,
   'task.review_rejected': TaskReviewRejectedCard,
   'task.merge_failed': TaskMergeFailedCard,
+  'task.worktree_collected': TaskWorktreeCollectedCard,
   'workspace.goal_set': WorkspaceGoalSetCard,
   'workspace.plan_created': WorkspacePlanCreatedCard,
   'workspace.company_assigned': WorkspaceCompanyAssignedCard,

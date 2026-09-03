@@ -535,6 +535,9 @@ enum EventType {
   workspace_settings_changed @map("workspace.settings_changed")
   /// M23 A1: the first event a workspace ever logs, from `createWorkspace`.
   workspace_created          @map("workspace.created")
+  /// M23 B2: `collectTaskWorktree` removed a terminal task's worktree -- aged out or by an
+  /// operator's button.
+  task_worktree_collected    @map("task.worktree_collected")
 }
 
 model ExecutionEvent {

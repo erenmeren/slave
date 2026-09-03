@@ -1,7 +1,6 @@
-import { execFile } from 'node:child_process'
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
-import { promisify } from 'node:util'
+import { gitIn, ORCHESTRATOR_GIT_IDENTITY } from '@ai-team-os/control'
 import {
   COMMAND_OUTPUT_LIMIT,
   DEFAULT_COMMAND_TIMEOUT_MS,
@@ -16,8 +15,6 @@ import {
  */
 export const SETUP_OUTPUT_LIMIT = COMMAND_OUTPUT_LIMIT
 
-const execFileAsync = promisify(execFile)
-
 /**
  * Where worktrees live, relative to the workspace's repository root (spec §7.1). Inside the repo
  * rather than in a temp directory: a worktree is the inspection surface for a failed run (§7.4),
@@ -27,21 +24,13 @@ const execFileAsync = promisify(execFile)
 const WORKTREE_ROOT = join('.aiteamos', 'worktrees')
 
 /**
- * The identity every git command *the orchestrator itself* issues runs under -- layer 3 of spec
- * §7.3. Distinct from `StartRunInput.gitIdentity`, which is the *agent's* identity for the commits
- * a run produces; nothing here creates a commit, so this name is what would appear only if a git
- * subcommand unexpectedly needed an author, and it should read as the orchestrator rather than
- * impersonate whichever agent triggered the provisioning.
- *
- * Supplied per-command with `-c` rather than by writing `git config`, for the reason the M0 spike
- * found the hard way: `.git/config` is repo-wide state that worktrees do *not* isolate, so two
- * concurrent agents recovering from a missing-identity error both write it and silently overwrite
- * each other.
+ * Moved to `@ai-team-os/control` in M23 B2 (`packages/control/src/git.ts`): `collectTaskWorktree`
+ * needs the identical identity-scoped git wrapper this module already runs every other worktree
+ * command through, and `packages/control` cannot depend on `apps/orchestrator`. Re-exported here
+ * (`review.ts` and `merge.ts` still import `gitIn` from this module) so this module's own uses
+ * below (`gitIn`, `ORCHESTRATOR_GIT_IDENTITY.name`/`.email`) need no changes either.
  */
-const ORCHESTRATOR_GIT_IDENTITY = {
-  name: 'AI Team OS',
-  email: 'orchestrator@aiteamos.local',
-} as const
+export { gitIn, ORCHESTRATOR_GIT_IDENTITY }
 
 /**
  * Task keys and slugs both become path segments and part of a branch name. `join()` collapses
@@ -127,29 +116,6 @@ export class WorktreeExistsError extends Error {
     super(`worktree for this task already exists (${reason}): ${path} on ${branch}`)
     this.name = 'WorktreeExistsError'
   }
-}
-
-/**
- * Runs git with the orchestrator's identity supplied per-command. The `-c` pairs must precede the
- * subcommand, which is why this wrapper exists rather than each call site assembling its own argv.
- *
- * Exported as `gitIn` for Task 5's review dispatch, which needs the identical identity-scoped `git
- * diff` this module already runs every other git subcommand through -- a second wrapper would be a
- * second place the `-c user.name=…`/`-c user.email=…` pair could drift from this one.
- */
-export async function gitIn(cwd: string, ...args: readonly string[]): Promise<string> {
-  const { stdout } = await execFileAsync(
-    'git',
-    [
-      '-c',
-      `user.name=${ORCHESTRATOR_GIT_IDENTITY.name}`,
-      '-c',
-      `user.email=${ORCHESTRATOR_GIT_IDENTITY.email}`,
-      ...args,
-    ],
-    { cwd },
-  )
-  return stdout.trim()
 }
 
 /** True when the ref exists. `show-ref --verify` exits non-zero rather than printing when it does not. */

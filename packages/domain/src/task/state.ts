@@ -45,7 +45,10 @@ export interface IllegalTransition {
   readonly event: TaskEvent['type']
 }
 
-const TERMINAL: readonly TaskStatus[] = ['done', 'failed', 'cancelled']
+/** Which statuses end a task's life. Exported (M23 B1) for `collectTaskWorktree`'s own terminal
+ *  check -- the same set that ends `applyTaskEvent`'s state machine gates whether a worktree is
+ *  ever safe to remove. */
+export const TERMINAL: readonly TaskStatus[] = ['done', 'failed', 'cancelled']
 
 export function initialTaskState(maxAttempts: number): TaskState {
   return {

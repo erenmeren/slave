@@ -38,6 +38,7 @@ export const TYPES_BY_KIND = {
     'task.review_approved',
     'task.review_rejected',
     'task.merge_failed',
+    'task.worktree_collected',
   ],
   interventions: ['run.pause_requested', 'run.resume_requested', 'run.stopped', 'agent.message_sent'],
   guardrails: ['guardrail.tripped'],

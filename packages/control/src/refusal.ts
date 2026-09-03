@@ -74,6 +74,13 @@ export type ControlRefusal =
   | { readonly kind: 'base_branch_not_found'; readonly path: string; readonly branch: string }
   /** Spec §10: a workspace with no verify command can never reach `done` on its own. */
   | { readonly kind: 'verify_commands_empty' }
+  /** `collectTaskWorktree` (M23 B2): the task has not yet reached one of `TERMINAL`'s statuses. */
+  | { readonly kind: 'task_not_terminal'; readonly taskId: string; readonly status: string }
+  /** `collectTaskWorktree`: a run on the task is still non-terminal, or its process is still alive
+   *  by pid -- either way its worktree may still be in use. */
+  | { readonly kind: 'run_still_alive'; readonly taskId: string; readonly runId: string }
+  /** `collectTaskWorktree`: no run on this (terminal) task carries a worktree path to remove. */
+  | { readonly kind: 'nothing_to_collect'; readonly taskId: string }
 
 export function refusalText(refusal: ControlRefusal): string {
   switch (refusal.kind) {
@@ -150,5 +157,14 @@ export function refusalText(refusal: ControlRefusal): string {
       return `branch ${refusal.branch} does not exist in ${refusal.path}`
     case 'verify_commands_empty':
       return 'at least one verify command is required: a workspace with none can never reach done'
+    case 'task_not_terminal':
+      return (
+        `task ${refusal.taskId} is ${refusal.status}; only a done, failed or cancelled task's ` +
+        'worktree can be collected'
+      )
+    case 'run_still_alive':
+      return `run ${refusal.runId} of task ${refusal.taskId} is still alive`
+    case 'nothing_to_collect':
+      return `task ${refusal.taskId} has no worktree to collect`
   }
 }

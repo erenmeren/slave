@@ -159,6 +159,12 @@ export const executionEventSchema = z.discriminatedUnion('type', [
       provider: z.string().nullable(),
     }),
   }),
+  // M23 B2: `collectTaskWorktree` removed a terminal task's worktree.
+  z.object({
+    ...envelope,
+    type: z.literal('task.worktree_collected'),
+    payload: z.object({ path: z.string().min(1), reason: z.enum(['aged', 'operator']), branch: z.string().nullable() }),
+  }),
 ])
 
 export type ExecutionEvent = z.infer<typeof executionEventSchema>
