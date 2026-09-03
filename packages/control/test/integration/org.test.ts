@@ -1,7 +1,15 @@
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { prisma } from '@ai-team-os/db/client'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { addCompanyAgent, addCompanyTeam, assignCompany, createCompany, createTemplate, setAgentModel } from '../../src/org.js'
 import { refusalText } from '../../src/refusal.js'
+
+// A real directory, not a placeholder (M23 G3): runFilePaths' statSync preflight refuses a repo path that does not exist, and a reboot clears /tmp -- the trap emergency.test.ts fell into at ce48adc.
+const repoPath = mkdtempSync(join(tmpdir(), 'aiteamos-control-org-'))
+
+afterAll(() => rmSync(repoPath, { recursive: true, force: true }))
 
 describe('catalog and company CRUD', () => {
   beforeEach(async (): Promise<void> => {
@@ -321,7 +329,7 @@ describe('assignCompany', () => {
     const workspace = await prisma.workspace.create({
       data: {
         name: 'Checkout Platform',
-        repoPath: '/tmp/does-not-matter',
+        repoPath,
         verifyCommands: ['npm test'],
         setupCommands: ['npm ci'],
       },
@@ -605,7 +613,7 @@ describe('setAgentModel', () => {
 
   async function seedAgent(): Promise<{ id: string }> {
     const workspace = await prisma.workspace.create({
-      data: { name: 'Checkout Platform', repoPath: '/tmp/does-not-matter', verifyCommands: ['true'], setupCommands: [] },
+      data: { name: 'Checkout Platform', repoPath, verifyCommands: ['true'], setupCommands: [] },
     })
     const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
     const agent = await prisma.agent.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
@@ -717,7 +725,7 @@ describe('write-time budget admission', () => {
     const workspace = await prisma.workspace.create({
       data: {
         name: 'Checkout Platform',
-        repoPath: '/tmp/does-not-matter',
+        repoPath,
         verifyCommands: ['true'],
         setupCommands: [],
         budgetUsd,

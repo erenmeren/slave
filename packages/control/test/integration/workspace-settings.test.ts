@@ -1,8 +1,14 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { prisma } from '@ai-team-os/db/client'
 import { refusalText } from '../../src/refusal.js'
 import { setWorkspaceBudget, setWorkspaceProvider } from '../../src/workspace.js'
 import { workspaceDefaultProvider } from '../../src/runtime.js'
+
+// A real directory, not a placeholder (M23 G3): runFilePaths' statSync preflight refuses a repo path that does not exist, and a reboot clears /tmp -- the trap emergency.test.ts fell into at ce48adc.
+const repoPath = mkdtempSync(join(tmpdir(), 'aiteamos-control-workspace-settings-'))
 
 interface Fixture {
   readonly workspace: { readonly id: string }
@@ -12,7 +18,7 @@ async function seed(): Promise<Fixture> {
   const workspace = await prisma.workspace.create({
     data: {
       name: 'Checkout Platform',
-      repoPath: '/tmp/does-not-matter',
+      repoPath,
       verifyCommands: ['npm test'],
       setupCommands: ['npm ci'],
     },
@@ -29,6 +35,8 @@ describe('the workspace settings verbs', () => {
     )
     fixture = await seed()
   })
+
+  afterAll(() => rmSync(repoPath, { recursive: true, force: true }))
 
   describe('setWorkspaceProvider', () => {
     it('replaces any existing row so the workspace always resolves exactly one default', async (): Promise<void> => {

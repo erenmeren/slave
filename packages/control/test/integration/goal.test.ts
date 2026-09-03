@@ -1,6 +1,12 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { prisma } from '@ai-team-os/db/client'
 import { setGoal } from '../../src/goal.js'
+
+// A real directory, not a placeholder (M23 G3): runFilePaths' statSync preflight refuses a repo path that does not exist, and a reboot clears /tmp -- the trap emergency.test.ts fell into at ce48adc.
+const repoPath = mkdtempSync(join(tmpdir(), 'aiteamos-control-goal-'))
 
 interface Fixture {
   readonly workspace: { readonly id: string }
@@ -10,7 +16,7 @@ async function seed(): Promise<Fixture> {
   const workspace = await prisma.workspace.create({
     data: {
       name: 'Checkout Platform',
-      repoPath: '/tmp/does-not-matter',
+      repoPath,
       verifyCommands: ['npm test'],
       setupCommands: ['npm ci'],
     },
@@ -27,6 +33,8 @@ describe('setGoal', () => {
     )
     fixture = await seed()
   })
+
+  afterAll(() => rmSync(repoPath, { recursive: true, force: true }))
 
   it('sets the goal column and emits exactly one workspace.goal_set event with the goal in the payload', async () => {
     const { workspace } = fixture
