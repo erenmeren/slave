@@ -9,11 +9,16 @@ import {
   createCompany,
   createTemplate,
   createWorkspace,
+  deleteAgent,
+  deleteTeam,
   emergencyStop,
   refusalText,
+  renameAgent,
+  renameTeam,
   requestPause,
   requestStop,
   setAgentModel,
+  setAgentRole,
   setGoal,
   describeSync,
   syncSkillCatalog,
@@ -71,6 +76,16 @@ const USAGE = `usage: orchestrator <command> [options]
                                        top of the resolution chain, above its roster row and its
                                        template's default. A model only means something inside the
                                        provider that runs it, so --model requires --provider.
+  rename-agent --agent <id> --name <n> rename a project agent
+  set-role --agent <id> --role <r>     change a project agent's role -- refused while the agent
+                                       holds a live run
+  delete-agent --agent <id> --yes      remove a project agent -- refused while it carries any run
+                                       history, terminal or not. Omit --yes to see what would be
+                                       deleted without doing it.
+  rename-team --team <id> --name <n>   rename a project team
+  delete-team --team <id> --yes        remove a project team -- refused while it still has any
+                                       agent on its roster. Omit --yes to see what would be
+                                       deleted without doing it.
 
   clear-halt and resume are different actions and it matters which you reach for.
   resume --run continues ONE paused run that is waiting to be continued.
@@ -555,6 +570,67 @@ export async function main(argv: readonly string[]): Promise<number> {
       )
       if (!result.ok) throw new Error(refusalText(result.error))
       process.stdout.write(clear ? `model cleared on ${agentId}\n` : `model set to ${model} on ${agentId}\n`)
+      return 0
+    }
+
+    // ---- D2: CLI surfaces for the roster editing verbs (M23 §5) --------------------------------
+    // `rename-agent`/`set-role`/`delete-agent`/`rename-team`/`delete-team` mirror `set-model`'s
+    // shape: resolve the flags, call the verb, print its refusal text through `refusalText` on
+    // failure. The two deletes add one thing `set-model` doesn't need -- a `--yes` gate. Deleting
+    // is the one edit here with no undo (`renameAgent`/`setAgentRole`/`renameTeam` can all be
+    // pointed back), so a bare `delete-agent --agent <id>` names what it WOULD have deleted and
+    // stops, rather than doing it on the strength of the command alone.
+
+    case 'rename-agent': {
+      const agentId = requireFlag(flags, 'agent')
+      const name = requireFlag(flags, 'name')
+      const result = await renameAgent(agentId, name)
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(`agent ${agentId} renamed\n`)
+      return 0
+    }
+
+    case 'set-role': {
+      const agentId = requireFlag(flags, 'agent')
+      const role = requireFlag(flags, 'role')
+      const result = await setAgentRole(agentId, role)
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(`role set to ${role} on ${agentId}\n`)
+      return 0
+    }
+
+    case 'delete-agent': {
+      const agentId = requireFlag(flags, 'agent')
+      // `'yes' in flags`, not `flags['yes'] !== undefined`: same reasoning as `set-model`'s
+      // `--clear` above -- a bare `--yes` records `undefined` as its value, not the string `true`.
+      if (!('yes' in flags)) {
+        const agent = await prisma.agent.findUnique({ where: { id: agentId }, select: { name: true } })
+        throw new Error(`refusing without --yes: this would delete agent ${agent?.name ?? agentId} (${agentId})`)
+      }
+      const result = await deleteAgent(agentId)
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(`agent ${agentId} deleted\n`)
+      return 0
+    }
+
+    case 'rename-team': {
+      const teamId = requireFlag(flags, 'team')
+      const name = requireFlag(flags, 'name')
+      const result = await renameTeam(teamId, name)
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(`team ${teamId} renamed\n`)
+      return 0
+    }
+
+    case 'delete-team': {
+      const teamId = requireFlag(flags, 'team')
+      if (!('yes' in flags)) {
+        const team = await prisma.team.findUnique({ where: { id: teamId }, select: { name: true } })
+        throw new Error(`refusing without --yes: this would delete team ${team?.name ?? teamId} (${teamId})`)
+      }
+      const result = await deleteTeam(teamId)
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(`team ${teamId} deleted\n`)
       return 0
     }
 

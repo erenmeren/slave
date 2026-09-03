@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import type { RosterCompany, RosterMemberRow, WorkerGate } from '../server/org'
+import { AgentRowActions } from './AgentRowActions'
 import { toneForStatus } from './AgentsClient'
 import { ModelOverrideEditor } from './ModelOverrideEditor'
 import { Chip } from './ui/Chip'
@@ -90,6 +91,7 @@ function MemberRow({ member }: { readonly member: RosterMemberRow }): React.JSX.
                  *  non-empty string, so a truthy check excludes exactly `null`/`undefined`. */}
                 {worker.gate ? <Chip>{GATE_LABEL[worker.gate]}</Chip> : null}
                 <ModelOverrideEditor agentId={worker.agentId} model={worker.model} provider={worker.provider} />
+                <AgentRowActions agentId={worker.agentId} name={worker.name} role={worker.role} />
               </div>
             ))
           )}

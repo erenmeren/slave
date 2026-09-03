@@ -260,6 +260,12 @@ export interface RosterMemberRow {
   readonly providerSource: ChainSource
   readonly workers: ReadonlyArray<{
     readonly agentId: string
+    /** The worker's OWN `Agent.name`/`Agent.role` (M23 D2) -- distinct from this roster member's
+     *  `name`/`role` above, which are the CATALOG identity a worker starts from at materialization
+     *  and can since have drifted from via `renameAgent`/`setAgentRole`. `AgentRowActions` edits
+     *  these two, not the roster row. */
+    readonly name: string
+    readonly role: string
     readonly workspaceId: string
     readonly projectName: string
     readonly status: string
@@ -328,6 +334,8 @@ export async function listRoster(): Promise<readonly RosterCompany[]> {
           const info = liveInfo.get(worker.id)
           return {
             agentId: worker.id,
+            name: worker.name,
+            role: worker.role,
             workspaceId: worker.team.workspaceId,
             projectName: worker.team.workspace.name,
             status: info?.status ?? 'idle',
@@ -517,4 +525,33 @@ export async function listTemplates(): Promise<
 
 export async function listCompanies(): Promise<readonly { id: string; name: string }[]> {
   return prisma.company.findMany({ select: { id: true, name: true }, orderBy: { name: 'asc' } })
+}
+
+/** One project `Team` row for the Agents page's Teams tab (M23 D3) -- `agentCount` is what
+ *  `TeamsTable` disables its delete button on: `deleteTeam` refuses a non-empty team. */
+export interface ProjectTeamRow {
+  readonly teamId: string
+  readonly name: string
+  readonly workspaceId: string
+  readonly projectName: string
+  readonly agentCount: number
+}
+
+/**
+ * Every project TEAM, across every workspace (the `Team` row `renameTeam`/`deleteTeam`
+ * address) -- ordered project then name, so a multi-project install reads as grouped even
+ * though `TeamsTable` renders one flat `DataTable`.
+ */
+export async function listProjectTeams(): Promise<readonly ProjectTeamRow[]> {
+  const teams = await prisma.team.findMany({
+    include: { workspace: { select: { name: true } }, _count: { select: { agents: true } } },
+    orderBy: [{ workspace: { name: 'asc' } }, { name: 'asc' }],
+  })
+  return teams.map((team) => ({
+    teamId: team.id,
+    name: team.name,
+    workspaceId: team.workspaceId,
+    projectName: team.workspace.name,
+    agentCount: team._count.agents,
+  }))
 }

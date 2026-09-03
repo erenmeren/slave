@@ -65,6 +65,10 @@ interface Fixture {
   readonly workspaceId: string
   readonly taskId: string
   readonly agentId: string
+  readonly teamId: string
+  /** A second, empty team on the same workspace -- `delete-team` succeeds only against a team
+   *  with no agents on it, and `fixture.teamId` always has `agentId` on its roster. */
+  readonly emptyTeamId: string
   readonly repoPath: string
 }
 
@@ -82,6 +86,7 @@ async function seed(overrides: { readonly name?: string } = {}): Promise<Fixture
   // starting the run under test.
   await prisma.providerConfiguration.create({ data: { workspaceId: workspace.id, kind: 'claude_code', settings: {} } })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
+  const emptyTeam = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Design' } })
   const agent = await prisma.agent.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
   const task = await prisma.task.create({
     data: {
@@ -93,7 +98,7 @@ async function seed(overrides: { readonly name?: string } = {}): Promise<Fixture
       maxAttempts: workspace.maxAttempts,
     },
   })
-  return { workspaceId: workspace.id, taskId: task.id, agentId: agent.id, repoPath }
+  return { workspaceId: workspace.id, taskId: task.id, agentId: agent.id, teamId: team.id, emptyTeamId: emptyTeam.id, repoPath }
 }
 
 describe('the orchestrator CLI', () => {
@@ -840,6 +845,83 @@ describe('the orchestrator CLI', () => {
       const result = await runCli(['create-workspace', '--name', 'Free', '--repo', makeRepo(), '--verify', 'true', '--no-budget'])
       expect(result.code).toBe(0)
       expect((await prisma.workspace.findFirstOrThrow({ where: { name: 'Free' } })).budgetUsd).toBeNull()
+    })
+  })
+
+  // M23 D2: the CLI surfaces for the five roster-editing verbs (`packages/control/src/org.ts`).
+  describe('roster editing', () => {
+    it('renames an agent', async () => {
+      const result = await runCli(['rename-agent', '--agent', fixture.agentId, '--name', 'Jordan'])
+
+      expect(result.code).toBe(0)
+      expect(result.stdout).toMatch(new RegExp(`^agent ${fixture.agentId} renamed$`, 'm'))
+      expect((await prisma.agent.findUniqueOrThrow({ where: { id: fixture.agentId } })).name).toBe('Jordan')
+    })
+
+    it('sets an agent role', async () => {
+      const result = await runCli(['set-role', '--agent', fixture.agentId, '--role', 'frontend'])
+
+      expect(result.code).toBe(0)
+      expect(result.stdout).toMatch(new RegExp(`^role set to frontend on ${fixture.agentId}$`, 'm'))
+      expect((await prisma.agent.findUniqueOrThrow({ where: { id: fixture.agentId } })).role).toBe('frontend')
+    })
+
+    it('deletes an agent with --yes', async () => {
+      const result = await runCli(['delete-agent', '--agent', fixture.agentId, '--yes'])
+
+      expect(result.code).toBe(0)
+      expect(result.stdout).toMatch(new RegExp(`^agent ${fixture.agentId} deleted$`, 'm'))
+      expect(await prisma.agent.findUnique({ where: { id: fixture.agentId } })).toBeNull()
+    })
+
+    it('refuses to delete an agent without --yes, naming what it would have deleted', async () => {
+      const result = await runCli(['delete-agent', '--agent', fixture.agentId])
+
+      expect(result.code).toBe(1)
+      expect(result.stderr).toContain(`refusing without --yes: this would delete agent Alex (${fixture.agentId})`)
+      expect(await prisma.agent.findUnique({ where: { id: fixture.agentId } })).not.toBeNull()
+    })
+
+    it('passes a real refusal through refusalText -- agent_has_runs', async () => {
+      const task = await prisma.task.create({
+        data: {
+          workspaceId: fixture.workspaceId,
+          title: 'Ship it',
+          description: 'ship it',
+          maxAttempts: 3,
+        },
+      })
+      await prisma.agentRun.create({ data: { taskId: task.id, agentId: fixture.agentId, status: 'succeeded' } })
+
+      const result = await runCli(['delete-agent', '--agent', fixture.agentId, '--yes'])
+
+      expect(result.code).toBe(1)
+      expect(result.stderr).toContain(`agent ${fixture.agentId} has 1 run(s) in history and stays (rename it or leave it idle)`)
+      expect(await prisma.agent.findUnique({ where: { id: fixture.agentId } })).not.toBeNull()
+    })
+
+    it('renames a team', async () => {
+      const result = await runCli(['rename-team', '--team', fixture.teamId, '--name', 'Platform'])
+
+      expect(result.code).toBe(0)
+      expect(result.stdout).toMatch(new RegExp(`^team ${fixture.teamId} renamed$`, 'm'))
+      expect((await prisma.team.findUniqueOrThrow({ where: { id: fixture.teamId } })).name).toBe('Platform')
+    })
+
+    it('deletes an empty team with --yes', async () => {
+      const result = await runCli(['delete-team', '--team', fixture.emptyTeamId, '--yes'])
+
+      expect(result.code).toBe(0)
+      expect(result.stdout).toMatch(new RegExp(`^team ${fixture.emptyTeamId} deleted$`, 'm'))
+      expect(await prisma.team.findUnique({ where: { id: fixture.emptyTeamId } })).toBeNull()
+    })
+
+    it('refuses to delete a team without --yes, naming what it would have deleted', async () => {
+      const result = await runCli(['delete-team', '--team', fixture.emptyTeamId])
+
+      expect(result.code).toBe(1)
+      expect(result.stderr).toContain(`refusing without --yes: this would delete team Design (${fixture.emptyTeamId})`)
+      expect(await prisma.team.findUnique({ where: { id: fixture.emptyTeamId } })).not.toBeNull()
     })
   })
 })

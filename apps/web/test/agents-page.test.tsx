@@ -49,6 +49,10 @@ function rosterWithMember(m: RosterMemberRow): readonly RosterCompany[] {
 function rosterWorker(over: Partial<RosterMemberRow['workers'][number]> = {}): RosterMemberRow['workers'][number] {
   return {
     agentId: 'wk1',
+    // M23 D2: the worker's OWN name/role, distinct from the roster member's -- `AgentRowActions`
+    // renders/edits these.
+    name: 'Alex',
+    role: 'backend',
     workspaceId: 'w1',
     projectName: 'Checkout',
     status: 'working',
@@ -100,7 +104,7 @@ describe('AgentsClient tabs', () => {
   // and this test asserted it. The design README §3a.2 says the Agents page IS the seven-column
   // workers table, so `workers` is the default now and Roster is the tab you click to.
   it('renders the workers table by default and switches to the roster tab on click', () => {
-    render(<AgentsClient roster={[company({})]} workers={[workerRow({})]} />)
+    render(<AgentsClient roster={[company({})]} workers={[workerRow({})]} teams={[]} />)
     expect(screen.queryByTestId('roster-company')).toBeNull()
     expect(screen.getByTestId('data-table')).toBeTruthy()
     // The Workers tab is the handoff's seven-column table (Task 9, C2) -- it has no Project
@@ -114,9 +118,25 @@ describe('AgentsClient tabs', () => {
     expect(screen.getByTestId('roster-company')).toBeTruthy()
   })
 
-  it('puts Workers first in the tab row, because it is the page', () => {
-    render(<AgentsClient roster={[company({})]} workers={[workerRow({})]} />)
-    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Workers', 'Roster'])
+  it('puts Workers first in the tab row, because it is the page -- Teams (M23 D3) trails Roster', () => {
+    render(<AgentsClient roster={[company({})]} workers={[workerRow({})]} teams={[]} />)
+    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Workers', 'Roster', 'Teams'])
+  })
+
+  it('switches to the Teams tab and renders a TeamsTable row', () => {
+    render(
+      <AgentsClient
+        roster={[company({})]}
+        workers={[workerRow({})]}
+        teams={[{ teamId: 't1', name: 'Platform', workspaceId: 'w1', projectName: 'Checkout', agentCount: 2 }]}
+      />,
+    )
+    expect(screen.queryByTestId('team-rename')).toBeNull()
+
+    fireEvent.click(screen.getByTestId('agents-tab-teams'))
+
+    expect(screen.getByTestId('agents-tab-teams').getAttribute('aria-selected')).toBe('true')
+    expect(screen.getByTestId('team-rename').textContent).toBe('Platform')
   })
 })
 
@@ -198,7 +218,7 @@ describe('AgentsClient row click opens the freshest data', () => {
 
     // The page's own snapshot knows only 'a1'/'w1' -- 'a2'/'w2' is materialized entirely by the
     // poll below, and is the only worker on screen by the time it's clicked.
-    render(<AgentsClient roster={[company({})]} workers={[workerRow({ agentId: 'a1', workspaceId: 'w1', name: 'Alex' })]} />)
+    render(<AgentsClient roster={[company({})]} workers={[workerRow({ agentId: 'a1', workspaceId: 'w1', name: 'Alex' })]} teams={[]} />)
     fireEvent.click(screen.getByTestId('agents-tab-workers'))
 
     await act(async () => {
@@ -289,6 +309,8 @@ describe('RosterTable', () => {
     it('reveals its workers (project, status, current task + progress, model, override editor) and hides them collapsed', () => {
       const worker = {
         agentId: 'wk1',
+        name: 'Alex',
+        role: 'backend',
         workspaceId: 'w1',
         projectName: 'Checkout',
         status: 'working',

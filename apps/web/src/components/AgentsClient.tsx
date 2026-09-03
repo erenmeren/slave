@@ -2,14 +2,15 @@
 
 import { useEffect, useState } from 'react'
 import type { AgentStatus } from '@ai-team-os/domain'
-import type { RosterCompany, WorkerRow } from '../server/org'
+import type { ProjectTeamRow, RosterCompany, WorkerRow } from '../server/org'
 import type { AgentCardData, OverviewSnapshot } from '../server/overview'
 import type { StatusTone } from './ui/StatusPill'
 import { AgentPanel } from './AgentPanel'
 import { RosterTable } from './RosterTable'
+import { TeamsTable } from './TeamsTable'
 import { WorkersTable } from './WorkersTable'
 
-type Tab = 'roster' | 'workers'
+type Tab = 'roster' | 'workers' | 'teams'
 
 /**
  * The M11 Task 8 status→tone mapping (controller ruling): every value `deriveAgentStatus`
@@ -41,16 +42,20 @@ export function toneForStatus(status: string): StatusTone {
 const TABS: ReadonlyArray<{ readonly id: Tab; readonly label: string }> = [
   { id: 'workers', label: 'Workers' },
   { id: 'roster', label: 'Roster' },
+  { id: 'teams', label: 'Teams' },
 ]
 
 /** The Agents page's tabbed root (M11 Task 8): local tab state, Roster (grouped company -> team,
- *  expandable member rows) and Workers (a flat, self-polling table) as the two panels. */
+ *  expandable member rows), Workers (a flat, self-polling table), and Teams (M23 D3: project
+ *  team rename/delete, fed by `listProjectTeams()`) as the three panels. */
 export function AgentsClient({
   roster,
   workers,
+  teams,
 }: {
   readonly roster: readonly RosterCompany[]
   readonly workers: readonly WorkerRow[]
+  readonly teams: readonly ProjectTeamRow[]
 }): React.JSX.Element {
   // `'workers'`, not `'roster'` (M14 fix wave, queue item (a) / review I3): the README specifies
   // the Agents page as the seven-column table, and the page opened on M11's roster instead. Landed
@@ -104,6 +109,8 @@ export function AgentsClient({
       </div>
       {tab === 'roster' ? (
         <RosterTable roster={roster} />
+      ) : tab === 'teams' ? (
+        <TeamsTable teams={teams} />
       ) : (
         <WorkersTable initial={workers} onOpen={(worker) => setSelected({ agentId: worker.agentId, workspaceId: worker.workspaceId })} />
       )}
