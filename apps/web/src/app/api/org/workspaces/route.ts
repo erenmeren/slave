@@ -1,4 +1,5 @@
 import { createWorkspace, refusalText, type ProviderKind } from '@ai-team-os/control'
+import { requirePrincipal } from '../../../../server/principal'
 
 export const dynamic = 'force-dynamic'
 const BODY_ERROR = 'the body must be { name, repoPath, verifyCommands: string[], baseBranch?, setupCommands?, budgetUsd?, provider? }'
@@ -8,6 +9,8 @@ function strings(value: unknown): string[] | null {
 }
 
 export async function POST(request: Request): Promise<Response> {
+  const gate = await requirePrincipal()
+  if ('response' in gate) return gate.response
   const body: unknown = await request.json().catch(() => null)
   if (body === null || typeof body !== 'object') return Response.json({ error: BODY_ERROR }, { status: 400 })
   const b = body as Record<string, unknown>
@@ -28,7 +31,7 @@ export async function POST(request: Request): Promise<Response> {
     setupCommands,
     ...(b['budgetUsd'] === undefined ? {} : { budgetUsd: b['budgetUsd'] as number | null }),
     ...(b['provider'] === undefined ? {} : { provider: b['provider'] as ProviderKind | null }),
-  })
+  }, gate.principal ?? undefined)
   return result.ok
     ? Response.json({ ok: true, id: result.value.id }, { status: 201 })
     : Response.json({ error: refusalText(result.error) }, { status: 409 })

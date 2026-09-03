@@ -2,9 +2,14 @@ import { prisma } from '@ai-team-os/db/client'
 import { type Result, err, ok } from '@ai-team-os/domain'
 import { appendEvent } from '@ai-team-os/events'
 import { killWithEscalation } from './kill.js'
+import type { Principal } from './principal.js'
 import type { ControlRefusal } from './refusal.js'
 
-export async function requestStop(runId: string, requestedBy: string): Promise<Result<void, ControlRefusal>> {
+export async function requestStop(
+  runId: string,
+  requestedBy: string,
+  principal?: Principal,
+): Promise<Result<void, ControlRefusal>> {
   // Scoped through `agent -> team`, not `task`: a `planning` run (M8b) has no `Task` row, and
   // `agent -> team -> workspace` is the only linkage such a run has to a workspace.
   const run = await prisma.agentRun.findUnique({
@@ -75,6 +80,7 @@ export async function requestStop(runId: string, requestedBy: string): Promise<R
           ? `cancelled by ${requestedBy}`
           : `cancelled by ${requestedBy}; no live process to signal (pid ${String(run.pid)})`,
       },
+      userId: principal?.userId ?? null,
     })
   }
   return ok(undefined)

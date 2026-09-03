@@ -33,6 +33,7 @@ function rowFromEnvelope(event: ExecutionEvent): ActivityEventRow {
     agentId: event.agentId ?? null,
     taskId: event.taskId ?? null,
     runId: event.runId ?? null,
+    userId: event.userId ?? null,
     payload: event.payload as Record<string, unknown>,
     summary: feedSummary(event.type, event.payload as Record<string, unknown>),
   }

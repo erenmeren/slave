@@ -118,6 +118,7 @@ export async function concludePlanning(runId: RunId): Promise<void> {
           status: 'ready',
           requiredRole: planTask.role,
           createdBy: 'agent',
+          createdByUserId: workspace.goalSetByUserId,
           maxAttempts: workspace.maxAttempts,
         },
       })

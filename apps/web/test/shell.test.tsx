@@ -491,6 +491,7 @@ describe('the halt banner shows on every page', () => {
       sparkline: new Array(10).fill(0),
       agents: [],
       tasks: [],
+      users: [],
       // M14 Task 12 widenings: the right rail's 24h volumes, and the shell facts this page now
       // publishes to `hooks/useShellFacts.ts` in place of the sidebar's removed fallback stream.
       typeVolumes: [],

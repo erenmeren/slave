@@ -29,6 +29,7 @@ function row(seq: number, overrides: Partial<ActivityEventRow> = {}): ActivityEv
     agentId: null,
     taskId: null,
     runId: null,
+    userId: null,
     payload: { title: `row ${seq}` },
     summary: 'task.created',
     ...overrides,
@@ -43,6 +44,7 @@ const INITIAL: ActivityPage = {
   sparkline: [0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
   agents: [],
   tasks: [],
+  users: [],
   // M14 Task 12 widenings — neither member is read by this hook, which pages `events`/`sparkline`
   // only; they are here because `ActivityPage` now carries them.
   typeVolumes: [],

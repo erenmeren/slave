@@ -95,6 +95,7 @@ function row(seq: number, overrides: Partial<ActivityEventRow> = {}): ActivityEv
     agentId: null,
     taskId: null,
     runId: null,
+    userId: null,
     payload: { title: `event ${seq}` },
     summary: `event ${seq}`,
     ...overrides,
@@ -108,6 +109,7 @@ const INITIAL: ActivityPage = {
   sparkline: [0, 0, 0, 0, 0, 0, 0, 0, 0, 3],
   agents: [{ id: 'a1', name: 'Alex' }],
   tasks: [{ id: 't1', title: 'Add the thing' }],
+  users: [{ id: 'u1', username: 'ada' }],
   // M14 Task 12 widenings. `typeVolumes` feeds the right rail's 24h volume bars; `shellFacts`
   // is what this page PUBLISHES to `hooks/useShellFacts.ts` so the sidebar opens no stream of
   // its own (the same member `TasksSnapshot`/`GraphView` already carry).
@@ -681,6 +683,7 @@ describe('Timeline scroll anchoring', () => {
         workspaceId="w1"
         agentNameById={new Map()}
         taskTitleById={new Map()}
+        userNameById={new Map()}
         onPinnedChange={vi.fn()}
         onNearTop={vi.fn()}
       />,
@@ -696,6 +699,7 @@ describe('Timeline scroll anchoring', () => {
           workspaceId="w1"
           agentNameById={new Map()}
           taskTitleById={new Map()}
+          userNameById={new Map()}
           onPinnedChange={vi.fn()}
           onNearTop={vi.fn()}
         />,

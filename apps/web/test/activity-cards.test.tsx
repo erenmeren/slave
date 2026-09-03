@@ -15,6 +15,7 @@ function baseEvent(type: DomainEventType, payload: Record<string, unknown>): Act
     agentId: 'a1',
     taskId: 't1',
     runId: 'r1',
+    userId: null,
     payload,
     summary: 'a summary',
   }
@@ -97,7 +98,13 @@ function fixtureFor(type: DomainEventType): ActivityEventRow {
 // `dimmed` widening (M14 Task 12): the roster filter dims a row rather than hiding it, so every
 // card in the registry forwards the flag through `ActivityCardProps`. Undimmed is the default
 // every existing assertion in this file was written against.
-const CARD_PROPS = { workspaceId: 'w1', agentName: 'Alex', taskTitle: 'Add the thing', dimmed: false } as const
+const CARD_PROPS = {
+  workspaceId: 'w1',
+  agentName: 'Alex',
+  taskTitle: 'Add the thing',
+  userName: null,
+  dimmed: false,
+} as const
 
 describe('ACTIVITY_CARDS registry', () => {
   for (const type of Object.keys(ACTIVITY_CARDS) as DomainEventType[]) {
@@ -286,7 +293,14 @@ describe('targeted card bodies', () => {
   it('falls back to the bare id when agentName/taskTitle are null', () => {
     const Card = ACTIVITY_CARDS['task.started']
     render(
-      <Card event={fixtureFor('task.started')} workspaceId="w1" agentName={null} taskTitle={null} dimmed={false} />,
+      <Card
+        event={fixtureFor('task.started')}
+        workspaceId="w1"
+        agentName={null}
+        taskTitle={null}
+        userName={null}
+        dimmed={false}
+      />,
     )
     expect(screen.getByTestId('agent-link').textContent).toBe('a1')
     expect(screen.getByTestId('task-link').textContent).toBe('t1')
@@ -348,14 +362,30 @@ describe('the river row', () => {
       agentId: 'a1',
       taskId: null,
       runId: 'r1',
+      userId: null,
       payload: {},
       summary: 'Write a.txt',
     },
     workspaceId: 'w1',
     agentName: 'Alex',
     taskTitle: null,
+    userName: null,
     dimmed: false,
   }
+
+  it('renders "by ada" after the actor badge when the event carries a userName', () => {
+    render(
+      <ActivityCard {...base} userName="ada">
+        body
+      </ActivityCard>,
+    )
+    expect(screen.getByTestId('event-user').textContent).toBe('by ada')
+  })
+
+  it('renders no event-user chip when the event carries no userName', () => {
+    render(<ActivityCard {...base}>body</ActivityCard>)
+    expect(screen.queryByTestId('event-user')).toBeNull()
+  })
 
   it('lays out 74px timestamp, 28px dot gutter, then who + kind + text', () => {
     render(<ActivityCard {...base}>body</ActivityCard>)

@@ -1,9 +1,12 @@
 import { createTemplate, type ProviderKind } from '@ai-team-os/control'
 import { orgControlResponse } from '../../../../server/orgControlRoute'
+import { requirePrincipal } from '../../../../server/principal'
 
 export const dynamic = 'force-dynamic'
 
 export async function POST(request: Request): Promise<Response> {
+  const gate = await requirePrincipal()
+  if ('response' in gate) return gate.response
   const body: unknown = await request.json().catch(() => null)
   if (body === null || typeof body !== 'object') {
     return Response.json({ error: 'the body must be { "name": string, "role": string }' }, { status: 400 })

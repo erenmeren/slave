@@ -1,5 +1,6 @@
 import { renameTeam } from '@ai-team-os/control'
 import { orgControlResponse } from '../../../../../server/orgControlRoute'
+import { requirePrincipal } from '../../../../../server/principal'
 
 export const dynamic = 'force-dynamic'
 
@@ -10,6 +11,8 @@ export async function PUT(
   request: Request,
   context: { params: Promise<{ teamId: string }> },
 ): Promise<Response> {
+  const gate = await requirePrincipal()
+  if ('response' in gate) return gate.response
   const { teamId } = await context.params
   const body: unknown = await request.json().catch(() => null)
   if (body === null || typeof body !== 'object') {
@@ -19,5 +22,5 @@ export async function PUT(
   if (typeof name !== 'string') {
     return Response.json({ error: BODY_ERROR }, { status: 400 })
   }
-  return orgControlResponse(() => renameTeam(teamId, name))
+  return orgControlResponse(() => renameTeam(teamId, name, gate.principal ?? undefined))
 }

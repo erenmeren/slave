@@ -38,7 +38,7 @@ interface Fixture {
   readonly repoPath: string
 }
 
-async function seed(goal: string | null): Promise<Fixture> {
+async function seed(goal: string | null, goalSetByUserId?: string | null): Promise<Fixture> {
   const repoPath = makeRepo()
   const workspace = await prisma.workspace.create({
     data: {
@@ -48,6 +48,7 @@ async function seed(goal: string | null): Promise<Fixture> {
       verifyCommands: ['true'],
       setupCommands: [],
       goal,
+      ...(goalSetByUserId === undefined ? {} : { goalSetByUserId }),
     },
   })
   // M12 Task 8: no agent in this file names a model anywhere in the chain, so `resolveRuntime`
@@ -91,7 +92,7 @@ describe('dispatchPlanning', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace", "User" RESTART IDENTITY CASCADE',
     )
   })
 
@@ -312,7 +313,7 @@ describe('concludePlanning', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace", "User" RESTART IDENTITY CASCADE',
     )
   })
 
@@ -384,6 +385,21 @@ describe('concludePlanning', () => {
     expect(payload.tasks.map((task) => task.title).sort()).toEqual(
       ['Document and polish', 'Expose the API', 'Write the feature core'].sort(),
     )
+  })
+
+  it('carries the workspace goalSetByUserId onto every task it creates (M23 F6)', async (): Promise<void> => {
+    const user = await prisma.user.create({ data: { username: 'ada', passwordHash: 'irrelevant-for-this-test' } })
+    const fixture = await seed('Ship the checkout redesign', user.id)
+    repos.push(fixture.repoPath)
+    await addManager(fixture.teamId)
+
+    const runId = await dispatchPlanning(depsFor(fixture.workspaceId))
+    expect(runId).not.toBeNull()
+    await drainPumps()
+
+    const tasks = await prisma.task.findMany({ where: { workspaceId: fixture.workspaceId } })
+    expect(tasks.length).toBeGreaterThan(0)
+    for (const task of tasks) expect(task.createdByUserId).toBe(user.id)
   })
 
   it('(b) a subsequent dispatchPlanning starts nothing once the graph became the board', async (): Promise<void> => {

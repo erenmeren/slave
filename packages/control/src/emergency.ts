@@ -2,6 +2,7 @@ import { prisma } from '@ai-team-os/db/client'
 import { type Result, err, ok } from '@ai-team-os/domain'
 import { appendEvent } from '@ai-team-os/events'
 import { pauseActiveRuns } from './pause.js'
+import type { Principal } from './principal.js'
 import type { ControlRefusal } from './refusal.js'
 
 export interface EmergencyStopReport {
@@ -21,6 +22,7 @@ export interface EmergencyStopReport {
 export async function emergencyStop(
   workspaceId: string,
   requestedBy: string,
+  principal?: Principal,
 ): Promise<Result<EmergencyStopReport, ControlRefusal>> {
   const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId } })
   if (workspace === null) return err({ kind: 'workspace_not_found', workspaceId })
@@ -41,6 +43,7 @@ export async function emergencyStop(
       workspaceId,
       actor: 'human', // an operator did this, not the system
       payload: { guardrail: 'emergency_stop', detail: `engaged by ${requestedBy}` },
+      userId: principal?.userId ?? null,
     })
   }
 

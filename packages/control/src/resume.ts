@@ -3,6 +3,7 @@ import { type Result, err, ok } from '@ai-team-os/domain'
 import { appendEvent } from '@ai-team-os/events'
 import { capabilitiesOf, type ProviderKind } from '@ai-team-os/providers'
 import { isAlive } from './kill.js'
+import type { Principal } from './principal.js'
 import type { ControlRefusal } from './refusal.js'
 
 const RESUMABLE_STATUSES = ['paused'] as const
@@ -46,6 +47,7 @@ export async function requestResume(
   runId: string,
   rawMessage: string | null,
   requestedBy: string,
+  principal?: Principal,
 ): Promise<Result<void, ControlRefusal>> {
   // An empty or whitespace-only message is the "say nothing" case, not a literal instruction: the
   // adapter would otherwise spawn the child with `-p ''` (see `updateQueuedMessage`'s doc comment
@@ -126,6 +128,7 @@ export async function requestResume(
     runId: run.id,
     actor: 'human',
     payload: { requestedBy, message },
+    userId: principal?.userId ?? null,
   })
   return ok(undefined)
 }

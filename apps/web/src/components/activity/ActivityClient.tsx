@@ -109,6 +109,7 @@ export function ActivityClient({
 
   const agentNameById = useMemo(() => new Map(initial.agents.map((agent) => [agent.id, agent.name])), [initial.agents])
   const taskTitleById = useMemo(() => new Map(initial.tasks.map((task) => [task.id, task.title])), [initial.tasks])
+  const userNameById = useMemo(() => new Map(initial.users.map((user) => [user.id, user.username])), [initial.users])
 
   // The roster row a click has selected, or `null`. Design README "Filtering": clicking a roster
   // row filters the stream — as a DIM (opacity .35), not a removal, so the river keeps its shape
@@ -206,6 +207,7 @@ export function ActivityClient({
             workspaceId={workspaceId}
             agentNameById={agentNameById}
             taskTitleById={taskTitleById}
+            userNameById={userNameById}
             dimmedAgentId={rosterAgentId}
             onPinnedChange={handlePinnedChange}
             onNearTop={loadOlder}

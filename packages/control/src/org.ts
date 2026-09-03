@@ -259,6 +259,7 @@ export interface AssignReport {
 export async function assignCompany(
   workspaceId: string,
   companyId: string,
+  principal?: Principal,
 ): Promise<Result<AssignReport, ControlRefusal>> {
   const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId } })
   if (workspace === null) return err({ kind: 'workspace_not_found', workspaceId })
@@ -330,6 +331,7 @@ export async function assignCompany(
     workspaceId,
     actor: 'human',
     payload: { company: company.name, workers: outcome.value.createdWorkers },
+    userId: principal?.userId ?? null,
   })
 
   return ok(outcome.value)
@@ -378,6 +380,7 @@ export async function setAgentModel(
   agentId: string,
   model: string | null,
   provider: ProviderKind | null,
+  principal?: Principal,
 ): Promise<Result<void, ControlRefusal>> {
   if (model !== null && model.trim() === '') return err({ kind: 'invalid_model' })
   if (provider !== null && !isProviderKind(provider)) return err({ kind: 'invalid_provider', provider })
@@ -418,6 +421,7 @@ export async function setAgentModel(
       from: `${agent.model ?? '—'}@${agent.provider ?? '—'}`,
       to: `${model ?? '—'}@${provider ?? '—'}`,
     },
+    userId: principal?.userId ?? null,
   })
 
   return ok(undefined)
@@ -432,9 +436,8 @@ export async function setAgentModel(
 // this task adds, so an operator can see a roster edit in the same timeline as everything else
 // that happened to a workspace.
 //
-// `principal?: Principal` is accepted and ignored on all five, same as every other control verb
-// ahead of Series F: the parameter exists so Task 10's CLI/web callers compile against the real
-// signature now, not so it does anything yet.
+// `principal?: Principal` is accepted on all five (M23 F6): its `userId`, if any, rides the
+// `org.changed` event each of them appends, the same as every other control verb.
 
 /**
  * Locks and loads one `Agent` row for an editing verb, with exactly what every caller below
@@ -477,7 +480,7 @@ async function lockTeam(tx: Prisma.TransactionClient, teamId: string) {
 export async function renameAgent(
   agentId: string,
   name: string,
-  _principal?: Principal,
+  principal?: Principal,
 ): Promise<Result<void, ControlRefusal>> {
   if (name.trim() === '') return err({ kind: 'invalid_name' })
 
@@ -500,6 +503,7 @@ export async function renameAgent(
     agentId,
     actor: 'human',
     payload: { entity: 'agent', id: agentId, field: 'name', from: outcome.value.from, to: name },
+    userId: principal?.userId ?? null,
   })
 
   return ok(undefined)
@@ -514,7 +518,7 @@ export async function renameAgent(
 export async function setAgentRole(
   agentId: string,
   role: string,
-  _principal?: Principal,
+  principal?: Principal,
 ): Promise<Result<void, ControlRefusal>> {
   if (role.trim() === '') return err({ kind: 'invalid_role' })
 
@@ -542,6 +546,7 @@ export async function setAgentRole(
     agentId,
     actor: 'human',
     payload: { entity: 'agent', id: agentId, field: 'role', from: outcome.value.from, to: role },
+    userId: principal?.userId ?? null,
   })
 
   return ok(undefined)
@@ -557,7 +562,7 @@ export async function setAgentRole(
  */
 export async function deleteAgent(
   agentId: string,
-  _principal?: Principal,
+  principal?: Principal,
 ): Promise<Result<void, ControlRefusal>> {
   const outcome = await prisma.$transaction(async (tx) => {
     const agent = await lockAgent(tx, agentId)
@@ -582,6 +587,7 @@ export async function deleteAgent(
     agentId,
     actor: 'human',
     payload: { entity: 'agent', id: agentId, field: 'deleted', from: outcome.value.from, to: null },
+    userId: principal?.userId ?? null,
   })
 
   return ok(undefined)
@@ -592,7 +598,7 @@ export async function deleteAgent(
 export async function renameTeam(
   teamId: string,
   name: string,
-  _principal?: Principal,
+  principal?: Principal,
 ): Promise<Result<void, ControlRefusal>> {
   if (name.trim() === '') return err({ kind: 'invalid_name' })
 
@@ -614,6 +620,7 @@ export async function renameTeam(
     workspaceId: outcome.value.workspaceId,
     actor: 'human',
     payload: { entity: 'team', id: teamId, field: 'name', from: outcome.value.from, to: name },
+    userId: principal?.userId ?? null,
   })
 
   return ok(undefined)
@@ -627,7 +634,7 @@ export async function renameTeam(
  */
 export async function deleteTeam(
   teamId: string,
-  _principal?: Principal,
+  principal?: Principal,
 ): Promise<Result<void, ControlRefusal>> {
   const outcome = await prisma.$transaction(async (tx) => {
     const team = await lockTeam(tx, teamId)
@@ -651,6 +658,7 @@ export async function deleteTeam(
     workspaceId: outcome.value.workspaceId,
     actor: 'human',
     payload: { entity: 'team', id: teamId, field: 'deleted', from: outcome.value.from, to: null },
+    userId: principal?.userId ?? null,
   })
 
   return ok(undefined)

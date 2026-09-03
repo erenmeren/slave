@@ -54,7 +54,7 @@ describe('buildActivityHistory', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace", "User" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
   })
@@ -332,6 +332,23 @@ describe('buildActivityHistory', () => {
         { id: fixture.taskId1, title: 'Add the thing' },
         { id: fixture.taskId2, title: 'Fix the other thing' },
       ])
+    })
+
+    it('carries every local account for resolving an event userId to a username (M23 F6)', async (): Promise<void> => {
+      const user = await prisma.user.create({ data: { username: 'ada', passwordHash: 'irrelevant-for-this-test' } })
+      await appendEvent({
+        type: 'workspace.goal_set',
+        workspaceId: fixture.workspaceId,
+        actor: 'human',
+        payload: { goal: 'Ship the checkout redesign' },
+        userId: user.id,
+      })
+
+      const page = await buildActivityPage(fixture.workspaceId)
+
+      expect(page?.users).toEqual([{ id: user.id, username: 'ada' }])
+      const goalSet = page?.events.find((event) => event.type === 'workspace.goal_set')
+      expect(goalSet?.userId).toBe(user.id)
     })
   })
 

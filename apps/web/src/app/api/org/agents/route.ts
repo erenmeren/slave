@@ -1,9 +1,12 @@
 import { addCompanyAgent, type ProviderKind } from '@ai-team-os/control'
 import { orgControlResponse } from '../../../../server/orgControlRoute'
+import { requirePrincipal } from '../../../../server/principal'
 
 export const dynamic = 'force-dynamic'
 
 export async function POST(request: Request): Promise<Response> {
+  const gate = await requirePrincipal()
+  if ('response' in gate) return gate.response
   const body: unknown = await request.json().catch(() => null)
   if (body === null || typeof body !== 'object') {
     return Response.json(

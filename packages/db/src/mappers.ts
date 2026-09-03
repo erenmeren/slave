@@ -52,6 +52,7 @@ export function toExecutionEvent(row: ExecutionEventRow): Result<ExecutionEvent,
     ...(row.taskId === null ? {} : { taskId: taskId(row.taskId) }),
     ...(row.agentId === null ? {} : { agentId: agentId(row.agentId) }),
     ...(row.runId === null ? {} : { runId: runId(row.runId) }),
+    ...(row.userId === null ? {} : { userId: row.userId }),
     actor: row.actor,
     payload: row.payload,
   }

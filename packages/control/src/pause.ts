@@ -3,6 +3,7 @@ import { NON_TERMINAL_RUN_STATUSES, type Result, err, ok, runId as brandRunId } 
 import { appendEvent } from '@ai-team-os/events'
 import { signalPause } from '@ai-team-os/providers'
 import { runFilePaths } from './paths.js'
+import type { Principal } from './principal.js'
 import { type ControlRefusal, refusalText } from './refusal.js'
 
 const PAUSABLE_STATUSES = ['starting', 'working', 'resuming'] as const
@@ -14,6 +15,7 @@ export async function requestPause(
   runId: string,
   requestedBy: string,
   category: PauseCategory = 'human',
+  principal?: Principal,
 ): Promise<Result<void, ControlRefusal>> {
   // Scoped through `agent -> team`, not `task`: a `planning` run (M8b) has no `Task` row, and
   // `agent -> team -> workspace` is the only linkage such a run has to a workspace -- the same
@@ -103,6 +105,7 @@ export async function requestPause(
     runId: run.id,
     actor: 'human',
     payload: { requestedBy },
+    userId: principal?.userId ?? null,
   })
   return ok(undefined)
 }

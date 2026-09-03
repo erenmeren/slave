@@ -1,5 +1,6 @@
 import { setWorkspaceProvider, type ProviderKind } from '@ai-team-os/control'
 import { workspaceControlResponse } from '../../../../../server/workspaceControlRoute'
+import { requirePrincipal } from '../../../../../server/principal'
 
 export const dynamic = 'force-dynamic'
 
@@ -7,6 +8,8 @@ export async function PUT(
   request: Request,
   context: { params: Promise<{ workspaceId: string }> },
 ): Promise<Response> {
+  const gate = await requirePrincipal()
+  if ('response' in gate) return gate.response
   const { workspaceId } = await context.params
   const body: unknown = await request.json().catch(() => null)
   // `'provider' in body` rather than a truthiness check: `null` is a real instruction here ("this
@@ -23,6 +26,6 @@ export async function PUT(
   // refusal and its verbatim text, and a second validator here would be a second place for the
   // list of kinds to go stale.
   return workspaceControlResponse(workspaceId, () =>
-    setWorkspaceProvider(workspaceId, provider as ProviderKind | null),
+    setWorkspaceProvider(workspaceId, provider as ProviderKind | null, gate.principal ?? undefined),
   )
 }

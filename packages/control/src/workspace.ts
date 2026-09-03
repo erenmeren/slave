@@ -33,6 +33,7 @@ import type { ControlRefusal } from './refusal.js'
 export async function setWorkspaceProvider(
   workspaceId: string,
   kind: ProviderKind | null,
+  principal?: Principal,
 ): Promise<Result<void, ControlRefusal>> {
   if (kind !== null && !isProviderKind(kind)) return err({ kind: 'invalid_provider', provider: kind })
 
@@ -75,6 +76,7 @@ export async function setWorkspaceProvider(
     workspaceId,
     actor: 'human',
     payload: { field: 'provider', from, to: kind },
+    userId: principal?.userId ?? null,
   })
   return ok(undefined)
 }
@@ -94,6 +96,7 @@ export async function setWorkspaceProvider(
 export async function setWorkspaceBudget(
   workspaceId: string,
   usd: number | null,
+  principal?: Principal,
 ): Promise<Result<void, ControlRefusal>> {
   if (usd !== null && (!Number.isFinite(usd) || usd < 0)) return err({ kind: 'invalid_budget' })
 
@@ -109,6 +112,7 @@ export async function setWorkspaceBudget(
     workspaceId,
     actor: 'human',
     payload: { field: 'budgetUsd', from: workspace.budgetUsd, to: usd },
+    userId: principal?.userId ?? null,
   })
   return ok(undefined)
 }
@@ -136,7 +140,7 @@ function cleanCommands(commands: readonly string[] | undefined): string[] {
 /** Spec §2 A1. Refusals in the spec's table order; nothing is written until every check passed. */
 export async function createWorkspace(
   input: CreateWorkspaceInput,
-  _principal?: Principal,
+  principal?: Principal,
 ): Promise<Result<{ id: string }, ControlRefusal>> {
   const name = input.name.trim()
   if (name.length === 0) return err({ kind: 'invalid_name' })
@@ -184,6 +188,7 @@ export async function createWorkspace(
     workspaceId: id,
     actor: 'human',
     payload: { name, repoPath: input.repoPath, baseBranch, verifyCommands, provider },
+    userId: principal?.userId ?? null,
   })
   return ok({ id })
 }

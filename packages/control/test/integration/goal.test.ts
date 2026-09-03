@@ -31,7 +31,7 @@ describe('setGoal', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Approval", "AgentMessage", "Artifact", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Approval", "AgentMessage", "Artifact", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace", "User" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
   })
@@ -52,6 +52,38 @@ describe('setGoal', () => {
     expect(events).toHaveLength(1)
     expect(events[0]?.payload).toEqual({ goal: 'Ship the checkout redesign' })
     expect(events[0]?.actor).toBe('human')
+  })
+
+  it('stamps the event and the workspace with the principal, when one is given', async () => {
+    const { workspace } = fixture
+    const user = await prisma.user.create({ data: { username: 'ada', passwordHash: 'irrelevant-for-this-test' } })
+
+    const result = await setGoal(workspace.id, 'Ship the checkout redesign', { userId: user.id })
+
+    expect(result.ok).toBe(true)
+
+    const after = await prisma.workspace.findUniqueOrThrow({ where: { id: workspace.id } })
+    expect(after.goalSetByUserId).toBe(user.id)
+
+    const events = await prisma.executionEvent.findMany({
+      where: { workspaceId: workspace.id, type: 'workspace_goal_set' },
+    })
+    expect(events).toHaveLength(1)
+    expect(events[0]?.userId).toBe(user.id)
+  })
+
+  it('leaves goalSetByUserId and the event userId null with no principal', async () => {
+    const { workspace } = fixture
+
+    await setGoal(workspace.id, 'Ship the checkout redesign')
+
+    const after = await prisma.workspace.findUniqueOrThrow({ where: { id: workspace.id } })
+    expect(after.goalSetByUserId).toBeNull()
+
+    const events = await prisma.executionEvent.findMany({
+      where: { workspaceId: workspace.id, type: 'workspace_goal_set' },
+    })
+    expect(events[0]?.userId).toBeNull()
   })
 
   it('refuses a blank goal, leaving the column untouched and emitting no event', async () => {

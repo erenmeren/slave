@@ -12,6 +12,9 @@ export interface ActivityEventRow {
   readonly agentId: string | null
   readonly taskId: string | null
   readonly runId: string | null
+  /** M23 F6: who caused this event, or null -- the CLI/orchestrator write no user, and every
+   *  event from before this column existed reads back null too. */
+  readonly userId: string | null
   readonly payload: Record<string, unknown>
   readonly summary: string
 }
@@ -37,6 +40,11 @@ export interface ActivityPage extends ActivityHistoryPage {
    *  `buildTasksSnapshot` already own the *full* agent/task shapes their own pages need). */
   readonly agents: readonly { readonly id: string; readonly name: string }[]
   readonly tasks: readonly { readonly id: string; readonly title: string }[]
+  /** Every local account (M23 F6), for resolving an event's bare `userId` to a username the same
+   *  way `agents`/`tasks` resolve `agentId`/`taskId`. The whole table, unfiltered -- there is no
+   *  per-workspace scoping for a `User` row, and this table is small (bound assumption: an
+   *  operator's local accounts, not a multi-tenant user base). */
+  readonly users: readonly { readonly id: string; readonly username: string }[]
   /** Event counts by kind prefix over the last 24 hours, for the right rail's volume bars.
    *  Sorted by count descending; a kind with no events in the window is omitted, never shown as
    *  a zero bar. */
@@ -187,6 +195,7 @@ export async function buildActivityHistory(
       agentId: row.agentId,
       taskId: row.taskId,
       runId: row.runId,
+      userId: row.userId,
       payload,
       summary: feedSummary(domainType, payload),
     }
@@ -207,10 +216,11 @@ export async function buildActivityPage(workspaceId: string): Promise<ActivityPa
   const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId } })
   if (workspace === null) return null
 
-  const [history, agents, tasks, typeVolumes, shellFacts] = await Promise.all([
+  const [history, agents, tasks, users, typeVolumes, shellFacts] = await Promise.all([
     buildActivityHistory(workspaceId, EMPTY_ACTIVITY_FILTERS, {}),
     prisma.agent.findMany({ where: { team: { workspaceId } }, select: { id: true, name: true }, orderBy: { name: 'asc' } }),
     prisma.task.findMany({ where: { workspaceId }, select: { id: true, title: true }, orderBy: { title: 'asc' } }),
+    prisma.user.findMany({ select: { id: true, username: true }, orderBy: { username: 'asc' } }),
     eventTypeVolumes(workspaceId),
     buildShellFacts(workspaceId),
   ])
@@ -223,6 +233,7 @@ export async function buildActivityPage(workspaceId: string): Promise<ActivityPa
     sparkline: history!.sparkline,
     agents,
     tasks,
+    users,
     typeVolumes,
     // Same reasoning as `history!`: `buildShellFacts` only returns null for a workspace that does
     // not exist, which the lookup at the top of this function has already ruled out.

@@ -1,5 +1,6 @@
 import { assignSkill, unassignSkill } from '@ai-team-os/control'
 import { orgControlResponse } from '../../../../server/orgControlRoute'
+import { requirePrincipal } from '../../../../server/principal'
 
 export const dynamic = 'force-dynamic'
 
@@ -24,12 +25,16 @@ async function pair(request: Request): Promise<{ agentId: string; skillId: strin
  * about the daemon host's disk.
  */
 export async function POST(request: Request): Promise<Response> {
+  const gate = await requirePrincipal()
+  if ('response' in gate) return gate.response
   const parsed = await pair(request)
   if (parsed === null) return Response.json({ error: SHAPE }, { status: 400 })
   return orgControlResponse(() => assignSkill(parsed.agentId, parsed.skillId))
 }
 
 export async function DELETE(request: Request): Promise<Response> {
+  const gate = await requirePrincipal()
+  if ('response' in gate) return gate.response
   const parsed = await pair(request)
   if (parsed === null) return Response.json({ error: SHAPE }, { status: 400 })
   return orgControlResponse(() => unassignSkill(parsed.agentId, parsed.skillId))

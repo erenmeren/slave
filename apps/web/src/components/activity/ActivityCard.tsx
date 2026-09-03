@@ -21,6 +21,10 @@ export interface ActivityCardProps {
   readonly workspaceId: string
   readonly agentName: string | null
   readonly taskTitle: string | null
+  /** The web session's username that produced this event, or null (M23 F6): the CLI and the
+   *  orchestrator write no user, and a run whose event predates this column reads back null too.
+   *  Resolved by the page from `ActivityPage.users`, the same way `agentName`/`taskTitle` are. */
+  readonly userName: string | null
   /** Dimmed to opacity .35 because a roster row is selected and this event is not that agent's
    *  (design README "Filtering"). Widened onto the SHARED prop shape, not onto each card, so
    *  every entry in `ACTIVITY_CARDS` forwards it through its existing `{...props}` spread with
@@ -201,6 +205,7 @@ export function ActivityCard({
   workspaceId,
   agentName,
   taskTitle,
+  userName,
   dimmed,
   children,
 }: ActivityCardProps & { readonly children: ReactNode }): ReactElement {
@@ -228,6 +233,13 @@ export function ActivityCard({
             <AgentLink workspaceId={workspaceId} agentId={event.agentId} agentName={agentName} tone={tone} />
           )}
           <ActorBadge actor={event.actor} />
+          {/* Who, by name (M23 F6) -- only when the event carries an attributed user; the CLI and
+            * the orchestrator's events render with no such chip at all. */}
+          {userName === null ? null : (
+            <span data-testid="event-user" className={ACTOR_CHIP_CLASS}>
+              by {userName}
+            </span>
+          )}
           {/* "event kind": the dotted type itself, mono 9.5px — the mock's `e.kind`. */}
           <span data-testid="event-kind" className="font-mono text-[9.5px] text-text-3">
             {event.type}

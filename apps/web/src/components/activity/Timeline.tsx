@@ -22,6 +22,9 @@ export interface TimelineProps {
   readonly workspaceId: string
   readonly agentNameById: ReadonlyMap<string, string>
   readonly taskTitleById: ReadonlyMap<string, string>
+  /** M23 F6: resolves an event's bare `userId` to the username the header's "by <username>" chip
+   *  shows -- mirrors `agentNameById`/`taskTitleById`. */
+  readonly userNameById: ReadonlyMap<string, string>
   /** The agent whose roster row is selected, or `null` for no roster filter. Every row that is
    *  NOT that agent's renders dimmed (design README "Filtering": dim, never hide). Optional so a
    *  caller with no roster beside it -- and this file's own scroll-anchoring test -- can leave it
@@ -48,7 +51,7 @@ export interface TimelineProps {
  * prepend.
  */
 export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timeline(
-  { events, workspaceId, agentNameById, taskTitleById, dimmedAgentId = null, onPinnedChange, onNearTop },
+  { events, workspaceId, agentNameById, taskTitleById, userNameById, dimmedAgentId = null, onPinnedChange, onNearTop },
   ref,
 ): React.JSX.Element {
   const scrollRef = useRef<HTMLDivElement | null>(null)
@@ -301,6 +304,7 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
                   workspaceId={workspaceId}
                   agentName={event.agentId !== null ? (agentNameById.get(event.agentId) ?? null) : null}
                   taskTitle={event.taskId !== null ? (taskTitleById.get(event.taskId) ?? null) : null}
+                  userName={event.userId !== null ? (userNameById.get(event.userId) ?? null) : null}
                   dimmed={dimmedAgentId !== null && event.agentId !== dimmedAgentId}
                 />
               </div>

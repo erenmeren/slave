@@ -68,6 +68,10 @@ model Workspace {
   /// (Decision 7). Assignment is one-way in M10 -- no un-assignment or re-assignment to a
   /// different company (Decision 2) -- so this column only ever moves from null to set.
   companyId      String?
+  /// Who set the current goal (M23 F6), nullable: the CLI and the orchestrator act with no user,
+  /// and every workspace created before this column existed reads back null. `onDelete: SetNull`
+  /// -- a workspace must survive the deletion of the account that once set its goal.
+  goalSetByUserId String?
 
   maxConcurrentRuns       Int   @default(3)
   /// The spend ceiling this workspace's budget guardrail enforces (spec §9.2). Nullable as of
@@ -90,6 +94,7 @@ model Workspace {
   // addresses it), so this optional relation keeps Prisma's Postgres default for an optional
   // FK -- SetNull -- rather than a Cascade that would destroy a project's history.
   company Company? @relation(fields: [companyId], references: [id])
+  goalSetByUser User? @relation(fields: [goalSetByUserId], references: [id], onDelete: SetNull)
 
   teams                  Team[]
   providerConfigurations ProviderConfiguration[]
@@ -315,17 +320,23 @@ model Task {
   lastRejectionReason String?
   branch              String?
   createdBy           Actor      @default(human)
+  /// Who caused this task to be created (M23 F6), nullable: the planner runs with no user for
+  /// tasks created before this column existed, and `createdBy: agent`/`system` tasks have no
+  /// human to attribute either. `onDelete: SetNull` -- a task must survive the deletion of the
+  /// account that once created it.
+  createdByUserId     String?
   createdAt           DateTime   @default(now())
   enqueuedAt          DateTime?
   mergeClaimedAt      DateTime?
 
-  workspace    Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  runs         AgentRun[]
-  artifacts    Artifact[]
-  messages     AgentMessage[]
-  approvals    Approval[]
-  dependencies TaskDependency[] @relation("dependent")
-  dependents   TaskDependency[] @relation("dependedOn")
+  workspace     Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdByUser User?            @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+  runs          AgentRun[]
+  artifacts     Artifact[]
+  messages      AgentMessage[]
+  approvals     Approval[]
+  dependencies  TaskDependency[] @relation("dependent")
+  dependents    TaskDependency[] @relation("dependedOn")
 
   @@index([workspaceId, status])
 }
@@ -554,19 +565,31 @@ model ExecutionEvent {
   runId       String?
   actor       Actor
   payload     Json
+  /// Who caused this event (M23 F6), nullable: the CLI and the orchestrator write events with no
+  /// user, so this rides on every append but is unset unless a web request supplied a
+  /// `Principal`. `onDelete: SetNull` -- the event log must survive the deletion of the account
+  /// that once produced an entry in it.
+  userId      String?
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([workspaceId, seq])
   @@index([workspaceId, agentId, seq])
   @@index([workspaceId, taskId, seq])
   @@index([runId, seq])
+  @@index([userId])
 }
 
 /// M23 F2: a local account -- username + PBKDF2 password hash, nothing else. The event and task
-/// columns that attribute activity to one of these rows (m23_event_user) come with a later task;
-/// this table stands alone until then.
+/// columns that attribute activity to one of these rows (m23_event_user, M23 F6) point back here
+/// via the relations below.
 model User {
   id           String   @id @default(uuid())
   username     String   @unique
   passwordHash String
   createdAt    DateTime @default(now())
+
+  executionEvents    ExecutionEvent[]
+  createdTasks       Task[]
+  goalSetWorkspaces  Workspace[]
 }

@@ -1,5 +1,6 @@
 import { setWorkspaceBudget } from '@ai-team-os/control'
 import { workspaceControlResponse } from '../../../../../server/workspaceControlRoute'
+import { requirePrincipal } from '../../../../../server/principal'
 
 export const dynamic = 'force-dynamic'
 
@@ -7,6 +8,8 @@ export async function PUT(
   request: Request,
   context: { params: Promise<{ workspaceId: string }> },
 ): Promise<Response> {
+  const gate = await requirePrincipal()
+  if ('response' in gate) return gate.response
   const { workspaceId } = await context.params
   const body: unknown = await request.json().catch(() => null)
   if (typeof body !== 'object' || body === null || !('budgetUsd' in body)) {
@@ -18,5 +21,7 @@ export async function PUT(
   }
   // A negative or non-finite number is a REFUSAL, not a 400: `invalid_budget` carries the
   // operator-facing text, and the card shows it verbatim.
-  return workspaceControlResponse(workspaceId, () => setWorkspaceBudget(workspaceId, budgetUsd))
+  return workspaceControlResponse(workspaceId, () =>
+    setWorkspaceBudget(workspaceId, budgetUsd, gate.principal ?? undefined),
+  )
 }

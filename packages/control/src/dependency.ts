@@ -1,6 +1,7 @@
 import { prisma } from '@ai-team-os/db/client'
 import { type Result, err, ok } from '@ai-team-os/domain'
 import { appendEvent } from '@ai-team-os/events'
+import type { Principal } from './principal.js'
 import type { ControlRefusal } from './refusal.js'
 
 /**
@@ -26,6 +27,7 @@ export async function addTaskDependency(
   taskId: string,
   dependsOnTaskId: string,
   requestedBy: string,
+  principal?: Principal,
 ): Promise<Result<void, ControlRefusal>> {
   if (taskId === dependsOnTaskId) return err({ kind: 'self_dependency', taskId })
 
@@ -122,6 +124,7 @@ export async function addTaskDependency(
     taskId,
     actor: 'human',
     payload: { dependsOnTaskId, dependsOnTitle: dependsOnTask.title, requestedBy },
+    userId: principal?.userId ?? null,
   })
   return ok(undefined)
 }
@@ -135,6 +138,7 @@ export async function removeTaskDependency(
   taskId: string,
   dependsOnTaskId: string,
   requestedBy: string,
+  principal?: Principal,
 ): Promise<Result<void, ControlRefusal>> {
   const deleted = await prisma.taskDependency.deleteMany({ where: { taskId, dependsOnTaskId } })
   if (deleted.count === 0) return err({ kind: 'dependency_not_found', taskId, dependsOnTaskId })
@@ -153,6 +157,7 @@ export async function removeTaskDependency(
     taskId,
     actor: 'human',
     payload: { dependsOnTaskId, dependsOnTitle: dependsOnTask.title, requestedBy },
+    userId: principal?.userId ?? null,
   })
   return ok(undefined)
 }

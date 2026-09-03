@@ -9,6 +9,9 @@ const envelope = {
   agentId: z.string().min(1).optional(),
   runId: z.string().min(1).optional(),
   actor: z.enum(['human', 'agent', 'system']),
+  // M23 F6: who caused this event. Nullable/optional -- the CLI and the orchestrator write
+  // events with no user, and every row from before this field existed reads back undefined.
+  userId: z.string().min(1).nullable().optional(),
 }
 
 /** One member per event type. The payload shape is bound to the type by construction. */

@@ -8,7 +8,7 @@ const url = (): string => process.env['TEST_DATABASE_URL'] ?? ''
 let subscription: EventSubscription | null = null
 
 beforeEach(async (): Promise<void> => {
-  await prisma.$executeRawUnsafe('TRUNCATE TABLE "ExecutionEvent" RESTART IDENTITY CASCADE')
+  await prisma.$executeRawUnsafe('TRUNCATE TABLE "ExecutionEvent", "User" RESTART IDENTITY CASCADE')
 })
 
 afterEach(async (): Promise<void> => {
@@ -75,6 +75,37 @@ describe('appendEvent', () => {
     expect(event.agentId).toBeUndefined()
     expect(event.runId).toBeUndefined()
     expect(await prisma.executionEvent.count()).toBe(1)
+  })
+
+  it('writes and reads back a userId when the caller supplies one', async () => {
+    const user = await prisma.user.create({ data: { username: 'u1', passwordHash: 'irrelevant-for-this-test' } })
+
+    const event = await appendEvent({
+      type: 'task.created',
+      workspaceId: 'w1',
+      taskId: 'task-1',
+      actor: 'human',
+      payload: { title: 'Add checkout retry' },
+      userId: user.id,
+    })
+
+    expect(event.userId).toBe(user.id)
+    const row = await prisma.executionEvent.findUniqueOrThrow({ where: { seq: event.seq } })
+    expect(row.userId).toBe(user.id)
+  })
+
+  it('leaves userId null/absent when the caller supplies none', async () => {
+    const event = await appendEvent({
+      type: 'task.created',
+      workspaceId: 'w1',
+      taskId: 'task-1',
+      actor: 'human',
+      payload: { title: 'Add checkout retry' },
+    })
+
+    expect(event.userId).toBeUndefined()
+    const row = await prisma.executionEvent.findUniqueOrThrow({ where: { seq: event.seq } })
+    expect(row.userId).toBeNull()
   })
 
   it('leaves no row when the payload does not match the event type', async () => {

@@ -52,7 +52,7 @@ export async function terminalTimestamp(taskId: string): Promise<Date | null> {
 export async function collectTaskWorktree(
   taskId: string,
   reason: 'aged' | 'operator',
-  _principal?: Principal,
+  principal?: Principal,
 ): Promise<Result<{ path: string }, ControlRefusal>> {
   const plan = await prisma.$transaction(
     async (tx) => {
@@ -101,6 +101,7 @@ export async function collectTaskWorktree(
     taskId,
     actor: reason === 'aged' ? 'system' : 'human',
     payload: { path, reason, branch: task.branch },
+    userId: principal?.userId ?? null,
   })
   return ok({ path })
 }

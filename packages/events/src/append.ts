@@ -14,6 +14,11 @@ export interface AppendableEvent {
   readonly runId?: string
   readonly actor: 'human' | 'agent' | 'system'
   readonly payload: unknown
+  /**
+   * Who caused this event (M23 F6). `null`/absent for the CLI and the orchestrator, which have
+   * no user; a web caller with a `Principal` passes its `userId`.
+   */
+  readonly userId?: string | null
 }
 
 /**
@@ -62,6 +67,7 @@ async function appendEventNow(input: AppendableEvent): Promise<ExecutionEvent> {
         taskId: input.taskId ?? null,
         agentId: input.agentId ?? null,
         runId: input.runId ?? null,
+        userId: input.userId ?? null,
         actor: input.actor,
         payload: input.payload as Prisma.InputJsonValue,
       },

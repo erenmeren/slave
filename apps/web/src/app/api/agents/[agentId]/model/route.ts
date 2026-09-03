@@ -1,5 +1,6 @@
 import { setAgentModel, type ProviderKind } from '@ai-team-os/control'
 import { orgControlResponse } from '../../../../../server/orgControlRoute'
+import { requirePrincipal } from '../../../../../server/principal'
 
 export const dynamic = 'force-dynamic'
 
@@ -9,6 +10,8 @@ export async function POST(
   request: Request,
   context: { params: Promise<{ agentId: string }> },
 ): Promise<Response> {
+  const gate = await requirePrincipal()
+  if ('response' in gate) return gate.response
   const { agentId } = await context.params
   const body: unknown = await request.json().catch(() => null)
   if (body === null || typeof body !== 'object' || !('model' in body)) {
@@ -27,5 +30,7 @@ export async function POST(
   if (provider !== null && typeof provider !== 'string') {
     return Response.json({ error: BODY_ERROR }, { status: 400 })
   }
-  return orgControlResponse(() => setAgentModel(agentId, model, provider as ProviderKind | null))
+  return orgControlResponse(() =>
+    setAgentModel(agentId, model, provider as ProviderKind | null, gate.principal ?? undefined),
+  )
 }

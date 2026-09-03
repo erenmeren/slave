@@ -1,5 +1,6 @@
 import { deleteAgent } from '@ai-team-os/control'
 import { orgControlResponse } from '../../../../server/orgControlRoute'
+import { requirePrincipal } from '../../../../server/principal'
 
 export const dynamic = 'force-dynamic'
 
@@ -10,6 +11,8 @@ export async function DELETE(
   _request: Request,
   context: { params: Promise<{ agentId: string }> },
 ): Promise<Response> {
+  const gate = await requirePrincipal()
+  if ('response' in gate) return gate.response
   const { agentId } = await context.params
-  return orgControlResponse(() => deleteAgent(agentId))
+  return orgControlResponse(() => deleteAgent(agentId, gate.principal ?? undefined))
 }
