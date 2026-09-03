@@ -789,4 +789,57 @@ describe('the orchestrator CLI', () => {
       await Promise.race([exited, new Promise((res) => setTimeout(res, 12_000))])
     }
   }, 40_000)
+
+  describe('create-workspace', () => {
+    it('creates a workspace from a real repo and prints its id', async () => {
+      const dir = makeRepo()
+      const result = await runCli([
+        'create-workspace',
+        '--name',
+        'Billing',
+        '--repo',
+        dir,
+        '--verify',
+        'npm test',
+        '--verify',
+        'npm run lint',
+        '--setup',
+        'npm ci',
+        '--budget',
+        '7',
+        '--provider',
+        'claude_code',
+      ])
+      expect(result.code).toBe(0)
+      const id = /^workspace (\S+) created$/m.exec(result.stdout)?.[1]
+      expect(id).toBeDefined()
+      if (id === undefined) throw new Error('unreachable: asserted above')
+      const row = await prisma.workspace.findUniqueOrThrow({ where: { id } })
+      expect(row).toMatchObject({
+        name: 'Billing',
+        repoPath: dir,
+        verifyCommands: ['npm test', 'npm run lint'],
+        setupCommands: ['npm ci'],
+        budgetUsd: 7,
+      })
+    })
+
+    it('refuses a relative path with the refusal text and exit 1', async () => {
+      const result = await runCli(['create-workspace', '--name', 'Billing', '--repo', 'repo', '--verify', 'npm test'])
+      expect(result.code).toBe(1)
+      expect(result.stderr).toContain('the repository path must be absolute')
+    })
+
+    it('requires --verify', async () => {
+      const result = await runCli(['create-workspace', '--name', 'Billing', '--repo', makeRepo()])
+      expect(result.code).toBe(1)
+      expect(result.stderr).toContain('at least one verify command is required')
+    })
+
+    it('--no-budget stores null', async () => {
+      const result = await runCli(['create-workspace', '--name', 'Free', '--repo', makeRepo(), '--verify', 'true', '--no-budget'])
+      expect(result.code).toBe(0)
+      expect((await prisma.workspace.findFirstOrThrow({ where: { name: 'Free' } })).budgetUsd).toBeNull()
+    })
+  })
 })

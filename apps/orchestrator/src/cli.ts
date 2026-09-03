@@ -8,6 +8,7 @@ import {
   claimResume,
   createCompany,
   createTemplate,
+  createWorkspace,
   emergencyStop,
   refusalText,
   requestPause,
@@ -42,6 +43,13 @@ const USAGE = `usage: orchestrator <command> [options]
   set-goal --workspace <id> --goal "<text>"
                                        set the operator's standing instruction for what this
                                        workspace's agents are working toward
+  create-workspace --name <n> --repo <abs path> [--base main] --verify "<cmd>" [--verify "<cmd>" ...]
+                   [--setup "<cmd>" ...] [--budget <usd> | --no-budget] [--provider claude_code|cursor]
+                                       attach an existing local clone as a workspace. The path
+                                       must be absolute and a git work tree, the base branch must
+                                       exist, and at least one verify command is required -- a
+                                       workspace with none can never reach done. --verify and
+                                       --setup repeat, one command each, run in the order given.
   skills sync                          rescan the skill catalog from this host's disk:
                                        ~/.claude/skills, the plugin cache, and <repo>/.claude/skills
   create-template --name <n> --role <r> [--model <m> --provider <p>] [--description <d>]
@@ -79,7 +87,10 @@ interface Args {
   readonly flags: Flags
 }
 
-type Flags = Readonly<Record<string, string | undefined>>
+type Flags = Readonly<Record<string, string | readonly string[] | undefined>>
+
+/** Flags that repeat: every occurrence is collected, in order, rather than the usual last-wins. */
+const REPEATABLE: ReadonlySet<string> = new Set(['verify', 'setup'])
 
 /**
  * `--flag value`, `--flag=value`, and `--flag` on its own.
@@ -92,25 +103,32 @@ type Flags = Readonly<Record<string, string | undefined>>
  */
 function parseArgs(argv: readonly string[]): Args {
   const [command = 'help', ...rest] = argv
-  const flags: Record<string, string | undefined> = {}
+  const flags: Record<string, string | readonly string[] | undefined> = {}
+  // Repeatable keys collect every occurrence, in order; every other key is last-wins, as before.
+  const setFlag = (key: string, value: string): void => {
+    flags[key] = REPEATABLE.has(key) ? [...((flags[key] as readonly string[] | undefined) ?? []), value] : value
+  }
   for (let i = 0; i < rest.length; i += 1) {
     const token = rest[i]
     if (token === undefined || !token.startsWith('--')) continue
 
     const equals = token.indexOf('=')
     if (equals > 2) {
-      flags[token.slice(2, equals)] = token.slice(equals + 1)
+      setFlag(token.slice(2, equals), token.slice(equals + 1))
       continue
     }
 
     const next = rest[i + 1]
     if (next === undefined) {
-      flags[token.slice(2)] = undefined
+      const key = token.slice(2)
+      // A bare repeatable flag with no value is ignored: an empty command is dropped by the verb
+      // anyway (`cleanCommands`), so there is nothing worth recording as a "value".
+      if (!REPEATABLE.has(key)) flags[key] = undefined
       continue
     }
     // A value is whatever follows, even if it starts with `--`: an operator name or a resume
     // message is free-form text and may legitimately look like a flag.
-    flags[token.slice(2)] = next
+    setFlag(token.slice(2), next)
     i += 1
   }
   return { command, flags }
@@ -194,7 +212,7 @@ function buildAdapterRegistry(): AdapterRegistry {
  * another's. So: name them and refuse.
  */
 async function resolveWorkspace(flags: Flags): Promise<WorkspaceId> {
-  const given = flags['workspace']
+  const given = flagText(flags, 'workspace')
   if (given !== undefined) return brandWorkspaceId(given)
 
   const all = await prisma.workspace.findMany({ select: { id: true, name: true } })
@@ -206,8 +224,27 @@ async function resolveWorkspace(flags: Flags): Promise<WorkspaceId> {
   )
 }
 
-function requireFlag(flags: Flags, name: string): string {
+/**
+ * The string-typed read every non-repeatable flag goes through, now that `Flags` also holds
+ * arrays. A repeated non-repeatable flag can't happen by construction (`REPEATABLE` is the only
+ * source of arrays in `parseArgs`), so the throw here is the type guard's honest fallback rather
+ * than a reachable user-facing refusal.
+ */
+function flagText(flags: Flags, name: string): string | undefined {
   const value = flags[name]
+  if (Array.isArray(value)) throw new Error(`--${name} was given more than once`)
+  return value as string | undefined
+}
+
+/** Every value given for a repeatable flag, in order; a single occurrence still comes back as one-element. */
+function flagList(flags: Flags, name: string): readonly string[] {
+  const value = flags[name]
+  if (value === undefined) return []
+  return Array.isArray(value) ? value : [value as string]
+}
+
+function requireFlag(flags: Flags, name: string): string {
+  const value = flagText(flags, name)
   if (value === undefined) throw new Error(`--${name} is required`)
   return value
 }
@@ -249,7 +286,7 @@ export async function main(argv: readonly string[]): Promise<number> {
     }
 
     case 'daemon': {
-      const period = Number(flags['period'] ?? '1000')
+      const period = Number(flagText(flags, 'period') ?? '1000')
       await runDaemon({
         workspaceId: await resolveWorkspace(flags),
         registry: buildAdapterRegistry(),
@@ -294,7 +331,7 @@ export async function main(argv: readonly string[]): Promise<number> {
     }
 
     case 'pause': {
-      const result = await requestPause(requireFlag(flags, 'run'), flags['by'] ?? 'operator')
+      const result = await requestPause(requireFlag(flags, 'run'), flagText(flags, 'by') ?? 'operator')
       if (!result.ok) throw new Error(refusalText(result.error))
       process.stdout.write(`pause_requested: the gate will deny ${requireFlag(flags, 'run')}'s next tool call\n`)
       return 0
@@ -302,7 +339,7 @@ export async function main(argv: readonly string[]): Promise<number> {
 
     case 'resume': {
       const run = await mustGetRun(requireFlag(flags, 'run'))
-      const explicit = flags['message']
+      const explicit = flagText(flags, 'message')
       // A halt is raised by a pause-gate failure or an unverifiable workspace (§13.1, §8), so
       // resuming into one relaunches an agent whose gate may still be broken -- the recurrence the
       // halt exists to bound. The help text promises this; it has to be true.
@@ -391,7 +428,7 @@ export async function main(argv: readonly string[]): Promise<number> {
 
     case 'emergency-stop': {
       const workspaceId = await resolveWorkspace({ ...flags, workspace: requireFlag(flags, 'workspace') })
-      const result = await emergencyStop(workspaceId, flags['by'] ?? 'operator')
+      const result = await emergencyStop(workspaceId, flagText(flags, 'by') ?? 'operator')
       if (!result.ok) throw new Error(refusalText(result.error))
       const { engaged, requested, refused } = result.value
       process.stdout.write(
@@ -427,9 +464,9 @@ export async function main(argv: readonly string[]): Promise<number> {
     case 'create-template': {
       const name = requireFlag(flags, 'name')
       const role = requireFlag(flags, 'role')
-      const description = flags['description']
-      const model = flags['model']
-      const provider = flags['provider']
+      const description = flagText(flags, 'description')
+      const model = flagText(flags, 'model')
+      const provider = flagText(flags, 'provider')
       const result = await createTemplate(name, role, {
         ...(description !== undefined ? { description } : {}),
         ...(model !== undefined ? { defaultModel: model } : {}),
@@ -461,8 +498,8 @@ export async function main(argv: readonly string[]): Promise<number> {
       const companyTeamId = requireFlag(flags, 'team')
       const templateId = requireFlag(flags, 'template')
       const name = requireFlag(flags, 'name')
-      const model = flags['model']
-      const provider = flags['provider']
+      const model = flagText(flags, 'model')
+      const provider = flagText(flags, 'provider')
       const result = await addCompanyAgent(companyTeamId, templateId, name, {
         ...(model !== undefined ? { model } : {}),
         ...(provider !== undefined ? { provider: provider as ProviderKind } : {}),
@@ -481,14 +518,35 @@ export async function main(argv: readonly string[]): Promise<number> {
       return 0
     }
 
+    case 'create-workspace': {
+      const name = requireFlag(flags, 'name')
+      const repoPath = requireFlag(flags, 'repo')
+      const budgetText = flagText(flags, 'budget')
+      const noBudget = 'no-budget' in flags
+      if (budgetText !== undefined && noBudget) throw new Error('--budget and --no-budget are exclusive')
+      const budgetUsd = noBudget ? null : budgetText === undefined ? undefined : Number(budgetText)
+      const result = await createWorkspace({
+        name,
+        repoPath,
+        ...(flagText(flags, 'base') !== undefined ? { baseBranch: flagText(flags, 'base') as string } : {}),
+        verifyCommands: flagList(flags, 'verify'),
+        setupCommands: flagList(flags, 'setup'),
+        ...(budgetUsd === undefined ? {} : { budgetUsd }),
+        ...(flagText(flags, 'provider') !== undefined ? { provider: flagText(flags, 'provider') as ProviderKind } : {}),
+      })
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(`workspace ${result.value.id} created\n`)
+      return 0
+    }
+
     case 'set-model': {
       const agentId = requireFlag(flags, 'agent')
       // `'clear' in flags`, not `flags['clear'] !== undefined`: a bare `--clear` (no value
       // following it) is exactly how `parseArgs` records a flag with no argument -- it sets the
       // key to `undefined` rather than leaving it absent, so `!== undefined` can never see it.
       const clear = 'clear' in flags
-      const model = flags['model']
-      const provider = flags['provider']
+      const model = flagText(flags, 'model')
+      const provider = flagText(flags, 'provider')
       if (!clear && model === undefined) throw new Error('--model or --clear is required')
       const result = await setAgentModel(
         agentId,
