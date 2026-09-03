@@ -8,6 +8,11 @@ import { GET as workersGET } from '../../src/app/api/org/workers/route.js'
 import { POST as companyPOST } from '../../src/app/api/w/[workspaceId]/company/route.js'
 import { POST as modelPOST } from '../../src/app/api/agents/[agentId]/model/route.js'
 import { PUT as permissionPUT } from '../../src/app/api/agents/[agentId]/permission/route.js'
+import { PUT as agentNamePUT } from '../../src/app/api/agents/[agentId]/name/route.js'
+import { PUT as agentRolePUT } from '../../src/app/api/agents/[agentId]/role/route.js'
+import { DELETE as agentDELETE } from '../../src/app/api/agents/[agentId]/route.js'
+import { PUT as teamNamePUT } from '../../src/app/api/teams/[teamId]/name/route.js'
+import { DELETE as teamDELETE } from '../../src/app/api/teams/[teamId]/route.js'
 import { POST as reseedPOST } from '../../src/app/api/dev/reseed/route.js'
 
 interface Fixture {
@@ -41,6 +46,15 @@ function malformedPutRequest(): Request {
 
 function agentParams(agentId: string): { params: Promise<{ agentId: string }> } {
   return { params: Promise.resolve({ agentId }) }
+}
+
+// M23 D3 fix round 1: the roster-editing routes' own `teamId` pair to `agentParams` above.
+function teamParams(teamId: string): { params: Promise<{ teamId: string }> } {
+  return { params: Promise.resolve({ teamId }) }
+}
+
+function deleteRequest(): Request {
+  return new Request('http://x', { method: 'DELETE' })
 }
 
 describe('the org routes', () => {
@@ -446,6 +460,166 @@ describe('the org routes', () => {
       const response = await permissionPUT(jsonPutRequest({ tool: 'repo read', mode: 'allow' }), agentParams('00000000-0000-4000-8000-000000000000'))
       expect(response.status).toBe(409)
       expect((await response.json()).error).toBe('no agent with id 00000000-0000-4000-8000-000000000000')
+    })
+  })
+
+  // M23 D2/D3 fix round 1: route-level coverage for the five roster-editing routes, following the
+  // model/permission routes' own trio (200 proving the verb ran, 409 carrying the refusal text,
+  // 400 on a malformed body) -- component tests stub `fetch` and never import these modules, so
+  // nothing else in the suite exercises the route handlers themselves (their `BODY_ERROR` branch
+  // included).
+
+  describe('PUT /api/agents/[agentId]/name', () => {
+    async function seedTwoAgents(): Promise<{ readonly aliceId: string; readonly bobId: string }> {
+      const team = await prisma.team.create({ data: { workspaceId: fixture.workspaceId, name: 'Engineering' } })
+      const alice = await prisma.agent.create({ data: { teamId: team.id, name: 'Alice', role: 'backend' } })
+      const bob = await prisma.agent.create({ data: { teamId: team.id, name: 'Bob', role: 'frontend' } })
+      return { aliceId: alice.id, bobId: bob.id }
+    }
+
+    it('renames the agent and returns 200', async (): Promise<void> => {
+      const { aliceId } = await seedTwoAgents()
+      const response = await agentNamePUT(jsonPutRequest({ name: 'Alexis' }), agentParams(aliceId))
+      expect(response.status).toBe(200)
+      const agent = await prisma.agent.findUniqueOrThrow({ where: { id: aliceId } })
+      expect(agent.name).toBe('Alexis')
+    })
+
+    it('409s with the duplicate-name refusal text when renaming onto a sibling', async (): Promise<void> => {
+      const { aliceId } = await seedTwoAgents()
+      const response = await agentNamePUT(jsonPutRequest({ name: 'Bob' }), agentParams(aliceId))
+      expect(response.status).toBe(409)
+      expect((await response.json()).error).toBe('the name "Bob" is already taken')
+      expect((await prisma.agent.findUniqueOrThrow({ where: { id: aliceId } })).name).toBe('Alice')
+    })
+
+    it('400s on a malformed body and on a missing name key', async (): Promise<void> => {
+      const { aliceId } = await seedTwoAgents()
+      const malformed = await agentNamePUT(malformedPutRequest(), agentParams(aliceId))
+      expect(malformed.status).toBe(400)
+
+      const missingKey = await agentNamePUT(jsonPutRequest({}), agentParams(aliceId))
+      expect(missingKey.status).toBe(400)
+    })
+  })
+
+  describe('PUT /api/agents/[agentId]/role', () => {
+    async function seedAgent(): Promise<string> {
+      const team = await prisma.team.create({ data: { workspaceId: fixture.workspaceId, name: 'Engineering' } })
+      const agent = await prisma.agent.create({ data: { teamId: team.id, name: 'Alice', role: 'backend' } })
+      return agent.id
+    }
+
+    it('sets the role and returns 200', async (): Promise<void> => {
+      const agentId = await seedAgent()
+      const response = await agentRolePUT(jsonPutRequest({ role: 'frontend' }), agentParams(agentId))
+      expect(response.status).toBe(200)
+      const agent = await prisma.agent.findUniqueOrThrow({ where: { id: agentId } })
+      expect(agent.role).toBe('frontend')
+    })
+
+    it('409s with the agent-run-active refusal text while a run is live', async (): Promise<void> => {
+      const agentId = await seedAgent()
+      const task = await prisma.task.create({
+        data: { workspaceId: fixture.workspaceId, title: 'Ship it', description: 'ship it', maxAttempts: 3 },
+      })
+      const run = await prisma.agentRun.create({ data: { taskId: task.id, agentId, status: 'working' } })
+
+      const response = await agentRolePUT(jsonPutRequest({ role: 'frontend' }), agentParams(agentId))
+      expect(response.status).toBe(409)
+      expect((await response.json()).error).toBe(
+        `agent ${agentId} has a live run (${run.id}); change its role when the run has ended`,
+      )
+      expect((await prisma.agent.findUniqueOrThrow({ where: { id: agentId } })).role).toBe('backend')
+    })
+
+    it('400s on a malformed body and on a missing role key', async (): Promise<void> => {
+      const agentId = await seedAgent()
+      const malformed = await agentRolePUT(malformedPutRequest(), agentParams(agentId))
+      expect(malformed.status).toBe(400)
+
+      const missingKey = await agentRolePUT(jsonPutRequest({}), agentParams(agentId))
+      expect(missingKey.status).toBe(400)
+    })
+  })
+
+  describe('DELETE /api/agents/[agentId]', () => {
+    async function seedAgent(): Promise<string> {
+      const team = await prisma.team.create({ data: { workspaceId: fixture.workspaceId, name: 'Engineering' } })
+      const agent = await prisma.agent.create({ data: { teamId: team.id, name: 'Alice', role: 'backend' } })
+      return agent.id
+    }
+
+    it('deletes the agent and returns 200', async (): Promise<void> => {
+      const agentId = await seedAgent()
+      const response = await agentDELETE(deleteRequest(), agentParams(agentId))
+      expect(response.status).toBe(200)
+      expect(await prisma.agent.findUnique({ where: { id: agentId } })).toBeNull()
+    })
+
+    it('409s with the agent-has-runs refusal text when the agent carries run history', async (): Promise<void> => {
+      const agentId = await seedAgent()
+      const task = await prisma.task.create({
+        data: { workspaceId: fixture.workspaceId, title: 'Ship it', description: 'ship it', maxAttempts: 3 },
+      })
+      await prisma.agentRun.create({ data: { taskId: task.id, agentId, status: 'succeeded' } })
+
+      const response = await agentDELETE(deleteRequest(), agentParams(agentId))
+      expect(response.status).toBe(409)
+      expect((await response.json()).error).toBe(`agent ${agentId} has 1 run(s) in history and stays (rename it or leave it idle)`)
+      expect(await prisma.agent.findUnique({ where: { id: agentId } })).not.toBeNull()
+    })
+  })
+
+  describe('PUT /api/teams/[teamId]/name', () => {
+    async function seedTwoTeams(): Promise<{ readonly engineeringId: string; readonly designId: string }> {
+      const engineering = await prisma.team.create({ data: { workspaceId: fixture.workspaceId, name: 'Engineering' } })
+      const design = await prisma.team.create({ data: { workspaceId: fixture.workspaceId, name: 'Design' } })
+      return { engineeringId: engineering.id, designId: design.id }
+    }
+
+    it('renames the team and returns 200', async (): Promise<void> => {
+      const { engineeringId } = await seedTwoTeams()
+      const response = await teamNamePUT(jsonPutRequest({ name: 'Platform' }), teamParams(engineeringId))
+      expect(response.status).toBe(200)
+      const team = await prisma.team.findUniqueOrThrow({ where: { id: engineeringId } })
+      expect(team.name).toBe('Platform')
+    })
+
+    it('409s with the duplicate-name refusal text when renaming onto a sibling', async (): Promise<void> => {
+      const { engineeringId } = await seedTwoTeams()
+      const response = await teamNamePUT(jsonPutRequest({ name: 'Design' }), teamParams(engineeringId))
+      expect(response.status).toBe(409)
+      expect((await response.json()).error).toBe('the name "Design" is already taken')
+      expect((await prisma.team.findUniqueOrThrow({ where: { id: engineeringId } })).name).toBe('Engineering')
+    })
+
+    it('400s on a malformed body and on a missing name key', async (): Promise<void> => {
+      const { engineeringId } = await seedTwoTeams()
+      const malformed = await teamNamePUT(malformedPutRequest(), teamParams(engineeringId))
+      expect(malformed.status).toBe(400)
+
+      const missingKey = await teamNamePUT(jsonPutRequest({}), teamParams(engineeringId))
+      expect(missingKey.status).toBe(400)
+    })
+  })
+
+  describe('DELETE /api/teams/[teamId]', () => {
+    it('deletes an empty team and returns 200', async (): Promise<void> => {
+      const team = await prisma.team.create({ data: { workspaceId: fixture.workspaceId, name: 'Engineering' } })
+      const response = await teamDELETE(deleteRequest(), teamParams(team.id))
+      expect(response.status).toBe(200)
+      expect(await prisma.team.findUnique({ where: { id: team.id } })).toBeNull()
+    })
+
+    it('409s with the team-not-empty refusal text while it still has agents', async (): Promise<void> => {
+      const team = await prisma.team.create({ data: { workspaceId: fixture.workspaceId, name: 'Engineering' } })
+      await prisma.agent.create({ data: { teamId: team.id, name: 'Alice', role: 'backend' } })
+
+      const response = await teamDELETE(deleteRequest(), teamParams(team.id))
+      expect(response.status).toBe(409)
+      expect((await response.json()).error).toBe(`team ${team.id} still has 1 agent(s)`)
+      expect(await prisma.team.findUnique({ where: { id: team.id } })).not.toBeNull()
     })
   })
 
