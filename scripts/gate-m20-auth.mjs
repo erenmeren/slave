@@ -1,14 +1,21 @@
-// The M20 gate (spec §5): the door has a lock. Zero spend, CI-runnable, plain `fetch` — the rules
-// are header logic, as in M15. Two real `next dev` boots, STRICTLY sequential (they share
-// apps/web/.next; gate-m15-boundary.mjs documents why two dev servers must never overlap). Both
-// bind -H 127.0.0.1; "foreign Host" is forged in the header, so this gate never opens a
-// non-loopback socket on the machine it runs on. Needs the seeded development database
-// (`--env-file=.env`, same as every other gate) and writes NOTHING to it — every request below is
-// a read, and stage 8's one POST is the cross-site write that must be refused before it lands.
+// The M20 gate (spec §5, widened to accounts by M23 spec §7 F4): the door has a lock. Zero spend,
+// CI-runnable, plain `fetch` — the rules are header logic, as in M15. Two real `next dev` boots,
+// STRICTLY sequential (they share apps/web/.next; gate-m15-boundary.mjs documents why two dev
+// servers must never overlap). Both bind -H 127.0.0.1; "foreign Host" is forged in the header, so
+// this gate never opens a non-loopback socket on the machine it runs on. Needs the seeded
+// development database (`--env-file=.env`, same as every other gate). Almost every request below
+// is a read; stage 8's one POST is the cross-site write that must be refused before it lands, and
+// stage 12's two POSTs are the one real write this gate makes — accepted while the user is still
+// valid, then reset back to unset (the seed workspace's goal; `gate-m16-chrome.mjs`'s "goal-input
+// visible" check depends on that) before the same route is tried again against the now-deleted
+// user's cookie.
 //
 // Run A proves the OLD door is unchanged: `scripts/gate-m15-boundary.mjs`, unmodified, as a child
-// process with `AITEAMOS_PASSWORD` deleted from its environment. Run B proves the NEW one, on a
-// password this gate invents per run and never writes anywhere.
+// process with both `AITEAMOS_SESSION_SECRET` and `AITEAMOS_PASSWORD` deleted from its environment.
+// Run B proves the NEW one: a signing secret this gate invents per run, and a real throwaway user
+// created through `packages/control/dist/users.js` before `next dev` boots and deleted again in
+// `finally` — neither the secret nor the user's password is ever written to `.env`, shell history
+// or the repository.
 //
 // The free-port helper, the spawn/ready-wait block, the raw `node:http` request and the teardown
 // are cribbed from `scripts/gate-m15-boundary.mjs` — COPIED, not imported: that gate is a script,
@@ -16,14 +23,16 @@
 //
 // `node:crypto` is used here to re-derive session cookies (stage 6). The Web-Crypto-only rule is a
 // rule about `apps/web/src`, which this file is not; `apps/web/src/lib/session.ts` cannot be
-// imported by an `.mjs` gate anyway, so the derivation is mirrored and stage 6 proves the mirror
-// still matches by minting a FUTURE cookie that the server must accept.
+// imported by an `.mjs` gate anyway, so the derivation is mirrored: HMAC-SHA256 over
+// `"<userId>.<expiresAt>"`, keyed by the secret's raw UTF-8 bytes — no derivation step, unlike
+// M20's retired password scheme. Stage 6 proves the mirror still matches by minting a FUTURE
+// cookie that the server must accept.
 //
 // NEVER RUN THIS WHILE A DEV SERVER IS ALREADY SERVING `apps/web` — the preflight below refuses.
 //
 //   npm run gate:m20-auth
 import { spawn, spawnSync } from 'node:child_process'
-import { createHash, createHmac, randomBytes } from 'node:crypto'
+import { createHmac, randomBytes } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { request as httpRequest } from 'node:http'
 import { createServer } from 'node:net'
@@ -31,7 +40,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url))
-const PASS_LINE = 'the door has a lock — loopback unchanged without a password, login required with one'
+const PASS_LINE = 'the door has a lock — loopback unchanged without a secret, a named login with one'
 const M15_PASS = 'PASS: the boundary holds — loopback-only, cross-site refused'
 
 const W = '00000000-0000-4000-8000-000000000001' // SEED_WORKSPACE_ID; used only in URLs
@@ -44,7 +53,8 @@ const PORT_FREE_TIMEOUT_MS = 10_000
 // now" (current max seq), so the replay is empty and the FIRST bytes on the wire are the id-only
 // heartbeat at `DEFAULT_HEARTBEAT_MS` = 15 s. The budget must therefore clear 15 s with room to
 // spare, or stage 5 would fail on the clock rather than on the boundary. Provoking an earlier
-// frame would mean writing an event to the database, which this gate does not do.
+// frame would mean writing an event to the database before stage 5 runs, which this gate does not
+// do -- its one real write (stage 12) comes later and is reset before the run ends.
 const SSE_FIRST_FRAME_TIMEOUT_MS = 25_000
 
 function assert(condition, message) {
@@ -168,6 +178,12 @@ async function ensurePortFree(port, label) {
 let exitCode = 1
 let nextServer = null
 let boundPort = null
+// Run B's throwaway user and the module handles needed to clean it up -- populated once run B's
+// setup imports packages/control/dist/users.js and packages/db/dist/client.js, read back in
+// `finally` so the user is deleted (and prisma disconnected) even when a stage throws.
+let gateUsername = null
+let deleteUserFn = null
+let prismaClient = null
 
 try {
   // ---- preflight: no next dev may already be running (shared .next) ---------------------------
@@ -179,10 +195,11 @@ try {
     console.log('preflight: no next dev and no next-server worker is holding apps/web/.next')
   }
 
-  // ---- run A: loopback mode did not move — the M15 gate, verbatim, with the password removed ---
+  // ---- run A: loopback mode did not move — the M15 gate, verbatim, with the secret removed -----
   {
     const env = { ...process.env }
     delete env.AITEAMOS_PASSWORD
+    delete env.AITEAMOS_SESSION_SECRET
     const child = spawnSync('node', ['scripts/gate-m15-boundary.mjs'], {
       cwd: repoRoot,
       env,
@@ -200,19 +217,38 @@ try {
     // machine. The port comes out of the child's own ready line.
     const m15Port = /next dev ready at http:\/\/127\.0\.0\.1:(\d+)/.exec(out)?.[1]
     if (m15Port !== undefined) await ensurePortFree(Number(m15Port), "run A's dev server")
-    console.log('run A: loopback mode unchanged -- the M15 gate passed, same script, no password')
+    console.log('run A: loopback mode unchanged -- the M15 gate passed, same script, no secret')
   }
 
-  // ---- run B: password mode -------------------------------------------------------------------
-  // Invented per run, passed to the child through its environment only: it never reaches `.env`,
-  // the shell history or the repository.
-  const PASSWORD = randomBytes(18).toString('base64url') // 24 chars
+  // ---- run B: accounts mode -----------------------------------------------------------------
+  // A signing secret invented per run, passed to the child through its environment only, and a
+  // real throwaway user created through packages/control BEFORE next dev boots -- neither reaches
+  // `.env`, the shell history or the repository. The user is deleted again in `finally`, which
+  // must tolerate `user_not_found`: stage 12 deletes it mid-run to prove the revocation path.
+  const SECRET = randomBytes(32).toString('hex')
+  const { createUser, deleteUser } = await import('../packages/control/dist/users.js')
+  ;({ prisma: prismaClient } = await import('../packages/db/dist/client.js'))
+  deleteUserFn = deleteUser
+  gateUsername = `gate-${randomBytes(4).toString('hex')}`
+  const USER_PASSWORD = randomBytes(12).toString('base64url') // 16 chars, >= MIN_PASSWORD_LENGTH
+  const created = await createUser(gateUsername, USER_PASSWORD)
+  assert(created.ok, `run B: could not create the gate user ${gateUsername}: ${created.ok ? '' : JSON.stringify(created.error)}`)
+  const userId = created.value.id
+  console.log(`run B: created throwaway user ${gateUsername} (${userId})`)
 
   const preferredPort = await findFreePort()
   nextServer = spawn(
     'node',
     ['node_modules/next/dist/bin/next', 'dev', 'apps/web', '-p', String(preferredPort), '-H', '127.0.0.1'],
-    { cwd: repoRoot, env: { ...process.env, AITEAMOS_PASSWORD: PASSWORD }, stdio: ['ignore', 'pipe', 'pipe'] },
+    {
+      cwd: repoRoot,
+      env: (() => {
+        const env = { ...process.env, AITEAMOS_SESSION_SECRET: SECRET }
+        delete env.AITEAMOS_PASSWORD // a stale .env still setting it must not matter
+        return env
+      })(),
+      stdio: ['ignore', 'pipe', 'pipe'],
+    },
   )
   let nextOutput = ''
   let nextExited = false
@@ -247,7 +283,7 @@ try {
   }
   boundPort = resolvedPort
   const baseUrl = `http://127.0.0.1:${String(resolvedPort)}`
-  console.log(`next dev ready at ${baseUrl}, loopback-bound, password mode`)
+  console.log(`next dev ready at ${baseUrl}, loopback-bound, accounts mode`)
 
   const url = (path) => `${baseUrl}${path}`
   const cookieFrom = (setCookie) => setCookie.split(';')[0] // "aiteamos_session=<value>"
@@ -294,18 +330,18 @@ try {
   {
     const res = await fetch(url(`/api/w/${W}/overview`))
     assert(res.status === 401, `headerless overview: expected 401, got ${res.status}`)
-    assert((await res.json()).error === 'authentication required', 'unexpected 401 body')
+    assert((await res.json()).error === 'sign in first', 'unexpected 401 body')
     const sse = await fetch(url(`/api/w/${W}/events`), { headers: { accept: 'text/event-stream' } })
     assert(sse.status === 401, `cookieless SSE: expected 401, got ${sse.status}`)
-    assert((await sse.json()).error === 'authentication required', 'cookieless SSE: unexpected body')
+    assert((await sse.json()).error === 'sign in first', 'cookieless SSE: unexpected body')
   }
   console.log('stage 2: the headerless escape hatch is closed, on JSON and on the event stream')
 
-  // 3. Wrong password -> slow 401, no cookie. MEASURED ON A WARM ROUTE, and that is the whole
-  // point of the throwaway request below: `next dev` compiles a route on its first request, and
-  // this stage is the first traffic `/api/auth/login` sees. A cold measurement is dominated by the
-  // compiler rather than by the product -- observed `✓ Compiled /api/auth/login in 305ms` with a
-  // `POST /api/auth/login 401 in 657ms` on one run and 149ms/508ms on another -- so a cold
+  // 3. Wrong username/password -> slow 401, no cookie. MEASURED ON A WARM ROUTE, and that is the
+  // whole point of the throwaway request below: `next dev` compiles a route on its first request,
+  // and this stage is the first traffic `/api/auth/login` sees. A cold measurement is dominated by
+  // the compiler rather than by the product -- observed `✓ Compiled /api/auth/login in 305ms` with
+  // a `POST /api/auth/login 401 in 657ms` on one run and 149ms/508ms on another -- so a cold
   // `>= 250` bound would still have passed with `FAILED_LOGIN_DELAY_MS` deleted, and its verdict
   // would swing with the machine. The first POST is asserted only for its 401 (the answer must not
   // depend on being warm); the SECOND one, on a route that is already compiled, is the one whose
@@ -314,18 +350,18 @@ try {
     const warmup = await fetch(url('/api/auth/login'), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ password: `${PASSWORD}x` }),
+      body: JSON.stringify({ username: gateUsername, password: `${USER_PASSWORD}x` }),
     })
     assert(warmup.status === 401, `wrong password (warm-up): expected 401, got ${warmup.status}`)
     const started = Date.now()
     const res = await fetch(url('/api/auth/login'), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ password: `${PASSWORD}x` }),
+      body: JSON.stringify({ username: gateUsername, password: `${USER_PASSWORD}x` }),
     })
     const elapsed = Date.now() - started
     assert(res.status === 401, `wrong password: expected 401, got ${res.status}`)
-    assert((await res.json()).error === 'wrong password', 'wrong password: unexpected body')
+    assert((await res.json()).error === 'wrong username or password', 'wrong password: unexpected body')
     assert(res.headers.get('set-cookie') === null, 'wrong password must not set a cookie')
     assert(elapsed >= 250, `wrong password answered in ${String(elapsed)}ms on a warm route -- expected >= 250`)
     console.log(`  (the warm wrong-password POST took ${String(elapsed)}ms)`)
@@ -337,7 +373,7 @@ try {
       fetch(url('/api/auth/login'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ password: `${PASSWORD}y` }),
+        body: JSON.stringify({ username: gateUsername, password: `${USER_PASSWORD}y` }),
       }).then((r) => ({ status: r.status, at: Date.now() - pairStarted }))
     const [a, b] = await Promise.all([wrong(), wrong()])
     assert(a.status === 401 && b.status === 401, 'concurrent wrong guesses: expected two 401s')
@@ -345,25 +381,27 @@ try {
     assert(later >= 550, `concurrent wrong guesses: the later one answered at ${String(later)}ms -- expected >= 550 (serialised)`)
     console.log(`  (two concurrent wrong guesses answered at ${String(Math.min(a.at, b.at))}ms and ${String(later)}ms)`)
   }
-  console.log('stage 3: on a warm route the wrong password costs 300 ms, earns no cookie, and waits its turn')
+  console.log('stage 3: on a warm route the wrong username/password costs 300 ms, earns no cookie, and waits its turn')
 
-  // 4. Right password -> 204 + cookie with the spec attributes.
+  // 4. Right username/password -> 204 + cookie with the spec attributes.
   let cookie
   {
     const res = await fetch(url('/api/auth/login'), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ password: PASSWORD }),
+      body: JSON.stringify({ username: gateUsername, password: USER_PASSWORD }),
     })
     assert(res.status === 204, `login: expected 204, got ${res.status}`)
     const setCookie = res.headers.get('set-cookie') ?? ''
+    // `<userId>.<expiresAt>.<hex hmac>` (session.ts's mintSession) -- the user id is a Prisma
+    // `@default(uuid())`, well inside session.ts's own USER_ID_RE.
     assert(
-      /^aiteamos_session=\d+\.[0-9a-f]{64}; Path=\/; HttpOnly; SameSite=Lax; Max-Age=2592000$/.test(setCookie),
+      /^aiteamos_session=[A-Za-z0-9-]{1,64}\.\d+\.[0-9a-f]{64}; Path=\/; HttpOnly; SameSite=Lax; Max-Age=2592000$/.test(setCookie),
       `unexpected Set-Cookie: ${setCookie}`,
     )
     cookie = cookieFrom(setCookie)
   }
-  console.log('stage 4: the right password mints the cookie the spec describes, no Secure over http')
+  console.log('stage 4: the right username/password mints the cookie the spec describes, no Secure over http')
 
   // 5. With the cookie: page 200, API 200, a real SSE frame.
   {
@@ -390,41 +428,48 @@ try {
   // 6. Tampered and expired cookies are refused.
   {
     const [name, value] = cookie.split('=')
+    const [origUserId, origExpiry, origSig] = value.split('.')
     const flipped = value.slice(0, -1) + (value.endsWith('0') ? '1' : '0')
     const api = await fetch(url(`/api/w/${W}/overview`), { headers: { cookie: `${name}=${flipped}` } })
-    assert(api.status === 401, `tampered cookie on API: expected 401, got ${api.status}`)
+    assert(api.status === 401, `tampered signature on API: expected 401, got ${api.status}`)
     const page = await fetch(url('/'), { headers: { cookie: `${name}=${flipped}` }, redirect: 'manual' })
-    assert(page.status === 302, `tampered cookie on page: expected 302, got ${page.status}`)
-    assertLoginRedirect(page.headers.get('location'), '/', null, 'tampered cookie on a page')
-    // The same derivation `session.ts` uses: HMAC-SHA-256 over the decimal expiry, keyed by
-    // SHA-256("aiteamos-session:v1:" + password).
-    const key = createHash('sha256').update(`aiteamos-session:v1:${PASSWORD}`).digest()
+    assert(page.status === 302, `tampered signature on page: expected 302, got ${page.status}`)
+    assertLoginRedirect(page.headers.get('location'), '/', null, 'tampered signature on a page')
+    // The signature covers BOTH halves of the payload (session.ts's `sign`), so swapping just the
+    // user id -- signature and expiry left alone -- must be refused too.
+    const swappedUserId = `${name}=${randomBytes(16).toString('hex')}.${origExpiry}.${origSig}`
+    const swapped = await fetch(url(`/api/w/${W}/overview`), { headers: { cookie: swappedUserId } })
+    assert(swapped.status === 401, `swapped user id: expected 401, got ${swapped.status}`)
+    // The same derivation `session.ts` uses: HMAC-SHA-256 over "<userId>.<expiresAt>", keyed by
+    // the secret's raw UTF-8 bytes -- `createHmac('sha256', SECRET)` defaults to that encoding for
+    // a string key, matching `crypto.subtle.importKey('raw', encoder.encode(secret), ...)`.
     const expiresAt = Math.floor(Date.now() / 1000) - 60
-    const sig = createHmac('sha256', key).update(String(expiresAt)).digest('hex')
-    const expired = await fetch(url(`/api/w/${W}/overview`), { headers: { cookie: `${name}=${expiresAt}.${sig}` } })
+    const sig = createHmac('sha256', SECRET).update(`${origUserId}.${String(expiresAt)}`).digest('hex')
+    const expired = await fetch(url(`/api/w/${W}/overview`), { headers: { cookie: `${name}=${origUserId}.${expiresAt}.${sig}` } })
     assert(expired.status === 401, `expired cookie: expected 401, got ${expired.status}`)
     // Sanity: the same derivation with a FUTURE expiry must pass, or the expired check proves nothing.
     const future = Math.floor(Date.now() / 1000) + 60
-    const futureSig = createHmac('sha256', key).update(String(future)).digest('hex')
-    const fresh = await fetch(url(`/api/w/${W}/overview`), { headers: { cookie: `${name}=${future}.${futureSig}` } })
+    const futureSig = createHmac('sha256', SECRET).update(`${origUserId}.${String(future)}`).digest('hex')
+    const fresh = await fetch(url(`/api/w/${W}/overview`), { headers: { cookie: `${name}=${origUserId}.${future}.${futureSig}` } })
     assert(
       fresh.status === 200,
       `gate-minted fresh cookie: expected 200, got ${fresh.status} -- the gate's derivation drifted from session.ts`,
     )
   }
-  console.log('stage 6: a tampered signature and a past expiry are both refused; the derivation matches')
+  console.log('stage 6: a tampered signature, a swapped user id and a past expiry are all refused; the derivation matches')
 
-  // 7. Bearer opens the API only.
+  // 7. A Bearer header opens nothing: M20's `Authorization: Bearer <password>` retired with the
+  // single shared secret (spec §7 F4) -- accounts mode reads the cookie only, so a request
+  // carrying a valid-looking Bearer header and no cookie is refused exactly like an anonymous one.
   {
-    const ok = await fetch(url(`/api/w/${W}/overview`), { headers: { authorization: `Bearer ${PASSWORD}` } })
-    assert(ok.status === 200, `bearer overview: expected 200, got ${ok.status}`)
-    const wrong = await fetch(url(`/api/w/${W}/overview`), { headers: { authorization: `Bearer ${PASSWORD}x` } })
-    assert(wrong.status === 401, `wrong bearer: expected 401, got ${wrong.status}`)
-    const page = await fetch(url('/'), { headers: { authorization: `Bearer ${PASSWORD}` }, redirect: 'manual' })
+    const api = await fetch(url(`/api/w/${W}/overview`), { headers: { authorization: `Bearer ${SECRET}` } })
+    assert(api.status === 401, `bearer overview: expected 401, got ${api.status}`)
+    assert((await api.json()).error === 'sign in first', 'bearer overview: unexpected 401 body')
+    const page = await fetch(url('/'), { headers: { authorization: `Bearer ${SECRET}` }, redirect: 'manual' })
     assert(page.status === 302, `bearer on a page: expected 302, got ${page.status}`)
     assertLoginRedirect(page.headers.get('location'), '/', null, 'bearer on a page')
   }
-  console.log('stage 7: a bearer opens the API and nothing else')
+  console.log('stage 7: a Bearer header opens nothing -- refused exactly like an anonymous request')
 
   // 8. Cross-site with a valid cookie is still refused; the workspace is not halted. The field path
   // is `overview.workspace.haltedAt` — confirmed against `apps/web/src/server/overview.ts`
@@ -475,25 +520,58 @@ try {
   }
   console.log('stage 10: logout clears the cookie and the door closes again')
 
-  // 11. Settings names the mode and offers the way out.
+  // 11. Settings names the mode, the signed-in user, and offers the way out.
+  let freshCookie
   {
     const login = await fetch(url('/api/auth/login'), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ password: PASSWORD }),
+      body: JSON.stringify({ username: gateUsername, password: USER_PASSWORD }),
     })
     assert(login.status === 204, `stage 11 login: expected 204, got ${login.status}`)
-    const fresh = cookieFrom(login.headers.get('set-cookie') ?? '')
-    const res = await fetch(url('/settings'), { headers: { cookie: fresh } })
+    freshCookie = cookieFrom(login.headers.get('set-cookie') ?? '')
+    const res = await fetch(url('/settings'), { headers: { cookie: freshCookie } })
     assert(res.status === 200, `settings: expected 200, got ${res.status}`)
     const html = await res.text()
     assert(
-      html.includes('password login · single operator · cross-site requests refused'),
-      'settings does not name the password posture',
+      html.includes(`accounts · signed in as ${gateUsername} · cross-site requests refused`),
+      'settings does not name the accounts posture with the signed-in username',
     )
     assert(html.includes('data-testid="logout"'), 'settings has no Logout button')
   }
-  console.log('stage 11: Settings tells the truth about the mode and carries Logout')
+  console.log('stage 11: Settings tells the truth about the mode, the signed-in user, and carries Logout')
+
+  // 12. An authed write succeeds while the user is real; the very same write is refused with
+  // 401 `session revoked` once the user is deleted, on the SAME cookie (task 15's principal.ts
+  // revocation story -- the middleware's stateless signature check still admits the request, so
+  // this route is the only automated proof the database-level check runs at all). The goal it
+  // sets on the seed workspace is reset to unset again right after, before the user is deleted:
+  // `gate-m16-chrome.mjs` depends on that workspace's goal form being empty.
+  {
+    const write = await fetch(url(`/api/w/${W}/goal`), {
+      method: 'POST',
+      headers: { cookie: freshCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ goal: 'gate-m20-auth probe -- reset immediately after use' }),
+    })
+    assert(write.status !== 401, `authed write: expected not-401, got ${write.status}`)
+    assert(write.status === 200, `authed write: expected 200, got ${write.status}`)
+    assert((await write.json()).ok === true, 'authed write: unexpected body')
+
+    await prismaClient.workspace.update({ where: { id: W }, data: { goal: null, goalSetByUserId: null } })
+
+    const deletion = await deleteUserFn(gateUsername)
+    assert(deletion.ok, `stage 12: could not delete ${gateUsername}: ${deletion.ok ? '' : JSON.stringify(deletion.error)}`)
+    gateUsername = null // deleted here; `finally` must not try again
+
+    const revoked = await fetch(url(`/api/w/${W}/goal`), {
+      method: 'POST',
+      headers: { cookie: freshCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ goal: 'must not land -- the user behind this cookie is gone' }),
+    })
+    assert(revoked.status === 401, `deleted user's cookie: expected 401, got ${revoked.status}`)
+    assert((await revoked.json()).error === 'session revoked', "deleted user's cookie: unexpected body")
+  }
+  console.log('stage 12: an authed write lands, then a deleted user\'s cookie is refused 401 session revoked on the same route')
 
   console.log(`PASS: ${PASS_LINE}`)
   exitCode = 0
@@ -508,6 +586,17 @@ try {
   // worker can outlive it, and a still-bound port breaks the NEXT run's preflight and free-port
   // choice. Leave the machine as this gate found it.
   if (boundPort !== null) await ensurePortFree(boundPort, "run B's dev server")
+  // The throwaway user outlives a thrown stage unless it is cleaned up here too -- stage 12
+  // deletes it itself on the happy path (and sets `gateUsername` back to null), so this is only
+  // reached for real when an earlier stage threw. `user_not_found` is expected, not an error: the
+  // gate simply cleans up whatever it left behind, whichever stage it stopped at.
+  if (gateUsername !== null && deleteUserFn !== null) {
+    const cleanup = await deleteUserFn(gateUsername)
+    if (!cleanup.ok && cleanup.error.kind !== 'user_not_found') {
+      console.error(`cleanup: could not delete ${gateUsername}: ${JSON.stringify(cleanup.error)}`)
+    }
+  }
+  if (prismaClient !== null) await prismaClient.$disconnect()
 }
 
 process.exit(exitCode)

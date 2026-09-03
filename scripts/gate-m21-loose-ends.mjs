@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url'
 const repoRoot = fileURLToPath(new URL('..', import.meta.url))
 const PASS_LINE = 'no loose ends — the gates survive a password, the door serialises its refusals, the evidence chain is typed and paired'
 const M15_PASS = 'PASS: the boundary holds — loopback-only, cross-site refused'
-const M20_PASS = 'PASS: the door has a lock — loopback unchanged without a password, login required with one'
+const M20_PASS = 'PASS: the door has a lock — loopback unchanged without a secret, a named login with one'
 const EXEMPT = new Set(['gate-m20-auth.mjs', 'web-exposed.mjs'])
 
 /** A next-dev spawner, by source text: either quote style of the argv pair, or the bare binary
@@ -52,8 +52,16 @@ try {
       else assert(uses, `check 1: ${name} spawns next dev without loopbackChildEnv`)
     }
     for (const f of EXEMPT) assert(names.includes(f), `check 1: exception ${f} not found among spawners`)
+    // The census above is a per-file grep and cannot see into `scripts/lib/child-env.mjs` itself
+    // (a spawner under `scripts/lib/` is invisible to it, by design). So this reads that module's
+    // source directly and confirms it blanks BOTH names -- M23 retired `AITEAMOS_PASSWORD`, but the
+    // census keeps proving every spawner strips it too, in case some future reader resurrects it
+    // from a stale `.env`.
+    const childEnvSource = readFileSync(`${repoRoot}scripts/lib/child-env.mjs`, 'utf8')
+    assert(childEnvSource.includes('AITEAMOS_SESSION_SECRET'), 'check 1: child-env.mjs does not mention AITEAMOS_SESSION_SECRET')
+    assert(childEnvSource.includes('AITEAMOS_PASSWORD'), 'check 1: child-env.mjs does not mention AITEAMOS_PASSWORD')
   }
-  console.log('check 1: every dev-server spawner strips the password, the two exceptions by name')
+  console.log('check 1: every dev-server spawner strips the secret and the retired password, the two exceptions by name')
 
   const PASSWORD = randomBytes(18).toString('base64url')
   const env = { ...process.env, AITEAMOS_PASSWORD: PASSWORD }
