@@ -1,13 +1,14 @@
+import { stat } from 'node:fs/promises'
+import { isAbsolute } from 'node:path'
 import { prisma } from '@ai-team-os/db/client'
 import { type Result, err, ok } from '@ai-team-os/domain'
 import { appendEvent } from '@ai-team-os/events'
-import { PROVIDER_KINDS, type ProviderKind } from '@ai-team-os/providers'
+import type { ProviderKind } from '@ai-team-os/providers'
+import { realGitProbe, type GitProbe } from './git-probe.js'
+import { isProviderKind } from './org.js'
+import type { Principal } from './principal.js'
+import { isUniqueConstraintViolation } from './prisma-errors.js'
 import type { ControlRefusal } from './refusal.js'
-
-/** Validates an UNTRUSTED provider string (a CLI flag, a web request body), like `org.ts`'s copy. */
-function isProviderKind(value: string): value is ProviderKind {
-  return (PROVIDER_KINDS as readonly string[]).includes(value)
-}
 
 /**
  * Sets (or clears) the workspace's default runtime -- the last link of `resolveRuntime`'s override
@@ -110,4 +111,79 @@ export async function setWorkspaceBudget(
     payload: { field: 'budgetUsd', from: workspace.budgetUsd, to: usd },
   })
   return ok(undefined)
+}
+
+export interface CreateWorkspaceInput {
+  readonly name: string
+  readonly repoPath: string
+  readonly baseBranch?: string
+  readonly verifyCommands: readonly string[]
+  readonly setupCommands?: readonly string[]
+  readonly budgetUsd?: number | null
+  readonly provider?: ProviderKind | null
+}
+
+let probe: GitProbe = realGitProbe
+/** Test seam only: swap the git probe. Not an operator knob. */
+export function useGitProbe(next: GitProbe): void {
+  probe = next
+}
+
+function cleanCommands(commands: readonly string[] | undefined): string[] {
+  return (commands ?? []).map((command) => command.trim()).filter((command) => command.length > 0)
+}
+
+/** Spec §2 A1. Refusals in the spec's table order; nothing is written until every check passed. */
+export async function createWorkspace(
+  input: CreateWorkspaceInput,
+  _principal?: Principal,
+): Promise<Result<{ id: string }, ControlRefusal>> {
+  const name = input.name.trim()
+  if (name.length === 0) return err({ kind: 'invalid_name' })
+  if (!isAbsolute(input.repoPath)) return err({ kind: 'repo_path_not_absolute', path: input.repoPath })
+  const info = await stat(input.repoPath).catch(() => null)
+  if (info === null || !info.isDirectory()) return err({ kind: 'repo_not_found', path: input.repoPath })
+  if (!(await probe.isRepository(input.repoPath))) return err({ kind: 'not_a_git_repository', path: input.repoPath })
+  const baseBranch = (input.baseBranch ?? 'main').trim() || 'main'
+  if (!(await probe.branchExists(input.repoPath, baseBranch))) {
+    return err({ kind: 'base_branch_not_found', path: input.repoPath, branch: baseBranch })
+  }
+  const verifyCommands = cleanCommands(input.verifyCommands)
+  if (verifyCommands.length === 0) return err({ kind: 'verify_commands_empty' })
+  const budgetUsd = input.budgetUsd
+  if (budgetUsd !== undefined && budgetUsd !== null && (!Number.isFinite(budgetUsd) || budgetUsd < 0)) {
+    return err({ kind: 'invalid_budget' })
+  }
+  const provider = input.provider ?? null
+  if (provider !== null && !isProviderKind(provider)) return err({ kind: 'invalid_provider', provider })
+
+  let id: string
+  try {
+    id = await prisma.$transaction(async (tx) => {
+      const workspace = await tx.workspace.create({
+        data: {
+          name,
+          repoPath: input.repoPath,
+          baseBranch,
+          verifyCommands,
+          setupCommands: cleanCommands(input.setupCommands),
+          ...(budgetUsd === undefined ? {} : { budgetUsd }),
+        },
+      })
+      if (provider !== null) {
+        await tx.providerConfiguration.create({ data: { workspaceId: workspace.id, kind: provider, settings: {} } })
+      }
+      return workspace.id
+    })
+  } catch (cause) {
+    if (isUniqueConstraintViolation(cause)) return err({ kind: 'duplicate_name', name })
+    throw cause
+  }
+  await appendEvent({
+    type: 'workspace.created',
+    workspaceId: id,
+    actor: 'human',
+    payload: { name, repoPath: input.repoPath, baseBranch, verifyCommands, provider },
+  })
+  return ok({ id })
 }

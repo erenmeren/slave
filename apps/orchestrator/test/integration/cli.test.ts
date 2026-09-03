@@ -70,11 +70,11 @@ interface Fixture {
 
 const repos: string[] = []
 
-async function seed(): Promise<Fixture> {
+async function seed(overrides: { readonly name?: string } = {}): Promise<Fixture> {
   const repoPath = makeRepo()
   repos.push(repoPath)
   const workspace = await prisma.workspace.create({
-    data: { name: 'Checkout Platform', repoPath, verifyCommands: ['true'], setupCommands: [] },
+    data: { name: overrides.name ?? 'Checkout Platform', repoPath, verifyCommands: ['true'], setupCommands: [] },
   })
   // M12 Task 8: no agent in this file names a model anywhere in the chain, so `resolveRuntime`
   // falls all the way to the workspace default -- which needs a `ProviderConfiguration` row to
@@ -414,7 +414,7 @@ describe('the orchestrator CLI', () => {
   })
 
   it('refuses a workspace-scoped command when the workspace is ambiguous', async (): Promise<void> => {
-    await seed()
+    await seed({ name: 'Other Workspace' })
 
     const result = await runCli(['status'])
 
@@ -504,7 +504,7 @@ describe('the orchestrator CLI', () => {
   }, 30_000)
 
   it('clears the halt on the workspace it was told, and no other', async (): Promise<void> => {
-    const other = await seed()
+    const other = await seed({ name: 'Other Workspace' })
     for (const id of [fixture.workspaceId, other.workspaceId]) {
       await prisma.workspace.update({
         where: { id },
@@ -525,7 +525,7 @@ describe('the orchestrator CLI', () => {
   }, 30_000)
 
   it('shows only the workspace it was asked about', async (): Promise<void> => {
-    const other = await seed()
+    const other = await seed({ name: 'Other Workspace' })
     await prisma.agentRun.create({
       data: { taskId: other.taskId, agentId: other.agentId, status: 'working', pid: process.pid },
     })
@@ -540,7 +540,7 @@ describe('the orchestrator CLI', () => {
   }, 30_000)
 
   it('accepts the --flag=value form rather than silently ignoring it', async (): Promise<void> => {
-    await seed()
+    await seed({ name: 'Other Workspace' })
 
     const result = await runCli(['status', `--workspace=${fixture.workspaceId}`])
 

@@ -3,29 +3,18 @@ import { type Result, err, ok } from '@ai-team-os/domain'
 import { appendEvent } from '@ai-team-os/events'
 import { PROVIDER_KINDS, type ProviderKind } from '@ai-team-os/providers'
 import { admitProvider } from './budget.js'
+import { isUniqueConstraintViolation } from './prisma-errors.js'
 import type { ControlRefusal } from './refusal.js'
 import { resolveRuntime, workspaceDefaultProvider } from './runtime.js'
 
 /**
- * `true` for Prisma's unique-constraint violation (P2002), the error every `create` below can
- * throw when it collides with a `@unique`/`@@unique` index. Checked by shape rather than
- * `instanceof PrismaClientKnownRequestError` -- the class is a runtime value the generated client
- * does not currently re-export from `@ai-team-os/db/client` -- and caught rather than
- * pre-queried: a pre-query-then-insert has a race between the two steps that the DB constraint
- * itself cannot have.
+ * Validates an UNTRUSTED provider string (a CLI flag, a web request body). `PROVIDER_KINDS`
+ * itself (M12 Task 13 fix round 1) lives in `@ai-team-os/providers` -- the one canonical,
+ * compile-time-guarded list, see that module's `types.ts` docstring -- rather than a private copy
+ * here that could drift from it. Exported (M23 A1) so `workspace.ts`'s `createWorkspace` uses
+ * this SAME definition rather than growing a second copy (the M17 census rule).
  */
-function isUniqueConstraintViolation(error: unknown): boolean {
-  return typeof error === 'object' && error !== null && 'code' in error && error.code === 'P2002'
-}
-
-/**
- * `isProviderKind` validates an UNTRUSTED provider string (a CLI flag, a web request body) --
- * this module's own write surface is the only caller that needs to. `PROVIDER_KINDS` itself (M12
- * Task 13 fix round 1) now lives in `@ai-team-os/providers` -- the one canonical, compile-time-
- * guarded list, see that module's `types.ts` docstring -- rather than a private copy here that
- * could drift from it.
- */
-function isProviderKind(value: string): value is ProviderKind {
+export function isProviderKind(value: string): value is ProviderKind {
   return (PROVIDER_KINDS as readonly string[]).includes(value)
 }
 

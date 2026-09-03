@@ -49,6 +49,7 @@ export const TYPES_BY_KIND = {
   // `guardrail.tripped` later enforces: this chip answers "what did an operator change about this
   // workspace", which is where an operator looks when a dispatch starts refusing.
   workspace: [
+    'workspace.created',
     'workspace.goal_set',
     'workspace.plan_created',
     'workspace.company_assigned',

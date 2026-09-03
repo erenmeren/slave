@@ -434,6 +434,19 @@ function settingValue(field: 'provider' | 'budgetUsd', value: string | number | 
   return field === 'budgetUsd' ? `$${value}` : String(value)
 }
 
+// M23 A1: the first event a workspace ever logs, from `createWorkspace`.
+function WorkspaceCreatedCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as { name: string; repoPath: string; verifyCommands: string[] }
+  return (
+    <ActivityCard {...props}>
+      <Transition tone="starting" label="workspace created">
+        <span data-testid="workspace-created-name">{payload.name}</span> · <span className="font-mono">{payload.repoPath}</span> ·{' '}
+        {payload.verifyCommands.length} verify command{payload.verifyCommands.length === 1 ? '' : 's'}
+      </Transition>
+    </ActivityCard>
+  )
+}
+
 // ---- interventions (schema.ts:32-39, 54-59) ----------------------------------------------------
 // `event.actor` (human/agent/system) is already on the shared shell's actor badge; these bodies
 // add the payload's own record of *who* intervened (`requestedBy`) and *what* they said
@@ -535,4 +548,5 @@ export const ACTIVITY_CARDS = {
   'workspace.plan_created': WorkspacePlanCreatedCard,
   'workspace.company_assigned': WorkspaceCompanyAssignedCard,
   'workspace.settings_changed': WorkspaceSettingsChangedCard,
+  'workspace.created': WorkspaceCreatedCard,
 } satisfies Record<DomainEventType, (props: ActivityCardProps) => ReactElement>

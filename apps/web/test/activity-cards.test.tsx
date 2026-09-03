@@ -75,6 +75,13 @@ const PAYLOAD_BY_TYPE: Record<DomainEventType, Record<string, unknown>> = {
     ],
   },
   'workspace.settings_changed': { field: 'provider', from: null, to: 'cursor' },
+  'workspace.created': {
+    name: 'Billing',
+    repoPath: '/home/eren/repos/billing',
+    baseBranch: 'main',
+    verifyCommands: ['npm test', 'npm run lint'],
+    provider: 'claude_code',
+  },
 }
 
 function fixtureFor(type: DomainEventType): ActivityEventRow {
@@ -165,6 +172,14 @@ describe('targeted card bodies', () => {
     const Card = ACTIVITY_CARDS['task.merge_failed']
     render(<Card event={fixtureFor('task.merge_failed')} {...CARD_PROPS} />)
     expect(screen.getByTestId('merge-failed-reason').textContent).toBe('conflict in package.json')
+  })
+
+  it('workspace.created shows the name, repo path and verify command count', () => {
+    const Card = ACTIVITY_CARDS['workspace.created']
+    render(<Card event={fixtureFor('workspace.created')} {...CARD_PROPS} />)
+    expect(screen.getByTestId('workspace-created-name').textContent).toBe('Billing')
+    expect(screen.getByTestId('transition-label').textContent).toBe('workspace created')
+    expect(screen.getByTestId('activity-card').textContent).toContain('2 verify commands')
   })
 
   it('workspace.goal_set shows the goal text', () => {

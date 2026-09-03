@@ -32,10 +32,10 @@ interface Fixture {
 
 const dirs: string[] = []
 
-async function seed(overrides: { readonly runTimeoutMs?: number } = {}): Promise<Fixture> {
+async function seed(overrides: { readonly runTimeoutMs?: number; readonly name?: string } = {}): Promise<Fixture> {
   const workspace = await prisma.workspace.create({
     data: {
-      name: 'Checkout Platform',
+      name: overrides.name ?? 'Checkout Platform',
       repoPath: '/tmp/checkout',
       verifyCommands: ['true'],
       setupCommands: [],
@@ -194,7 +194,7 @@ describe('sweep and reconcileOrphans', () => {
   })
 
   it("leaves another workspace's runs alone", async (): Promise<void> => {
-    const other = await seed()
+    const other = await seed({ name: 'Other Workspace' })
     await prisma.agentRun.create({
       data: { taskId: other.taskId, agentId: other.agentId, status: 'working', pid: DEAD_PID },
     })
@@ -479,7 +479,7 @@ describe('sweep and reconcileOrphans', () => {
   })
 
   it("leaves another workspace's runs out of the sweep too", async (): Promise<void> => {
-    const other = await seed()
+    const other = await seed({ name: 'Other Workspace' })
     await prisma.agentRun.create({
       data: {
         taskId: other.taskId,

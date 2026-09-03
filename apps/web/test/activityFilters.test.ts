@@ -26,11 +26,12 @@ describe('parseActivityFilters', () => {
     if (!result.ok) throw new Error(result.error)
     expect([...result.filters.types].sort()).toEqual(['run.output', 'run.tool_call', 'run.tool_denied'])
   })
-  it('expands kinds=workspace to the goal, plan, company-assigned and settings-changed event types', () => {
+  it('expands kinds=workspace to the created, goal, plan, company-assigned and settings-changed event types', () => {
     const result = parseActivityFilters(new URLSearchParams('kinds=workspace'))
     if (!result.ok) throw new Error(result.error)
     expect([...result.filters.types].sort()).toEqual([
       'workspace.company_assigned',
+      'workspace.created',
       'workspace.goal_set',
       'workspace.plan_created',
       'workspace.settings_changed',

@@ -64,6 +64,16 @@ export type ControlRefusal =
   | { readonly kind: 'invalid_tool'; readonly tool: string }
   /** A permission mode that is neither `allow` nor `deny`. */
   | { readonly kind: 'invalid_permission_mode'; readonly mode: string }
+  /** `createWorkspace`'s `repoPath` was not an absolute path (M23 A1, spec §2 A1). */
+  | { readonly kind: 'repo_path_not_absolute'; readonly path: string }
+  /** No directory exists at `createWorkspace`'s `repoPath`. */
+  | { readonly kind: 'repo_not_found'; readonly path: string }
+  /** `repoPath` exists but is not a git work tree (`GitProbe.isRepository` said so). */
+  | { readonly kind: 'not_a_git_repository'; readonly path: string }
+  /** The requested (or default `main`) base branch does not exist in the repository. */
+  | { readonly kind: 'base_branch_not_found'; readonly path: string; readonly branch: string }
+  /** Spec §10: a workspace with no verify command can never reach `done` on its own. */
+  | { readonly kind: 'verify_commands_empty' }
 
 export function refusalText(refusal: ControlRefusal): string {
   switch (refusal.kind) {
@@ -130,5 +140,15 @@ export function refusalText(refusal: ControlRefusal): string {
       return 'a permission must name one of the six tools'
     case 'invalid_permission_mode':
       return 'a permission must be allow or deny'
+    case 'repo_path_not_absolute':
+      return `the repository path must be absolute: ${refusal.path}`
+    case 'repo_not_found':
+      return `no directory at ${refusal.path}`
+    case 'not_a_git_repository':
+      return `${refusal.path} is not a git work tree`
+    case 'base_branch_not_found':
+      return `branch ${refusal.branch} does not exist in ${refusal.path}`
+    case 'verify_commands_empty':
+      return 'at least one verify command is required: a workspace with none can never reach done'
   }
 }

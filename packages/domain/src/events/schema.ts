@@ -148,6 +148,17 @@ export const executionEventSchema = z.discriminatedUnion('type', [
       to: z.union([z.string(), z.number(), z.null()]),
     }),
   }),
+  z.object({
+    ...envelope,
+    type: z.literal('workspace.created'),
+    payload: z.object({
+      name: z.string().min(1),
+      repoPath: z.string().min(1),
+      baseBranch: z.string().min(1),
+      verifyCommands: z.array(z.string().min(1)).min(1),
+      provider: z.string().nullable(),
+    }),
+  }),
 ])
 
 export type ExecutionEvent = z.infer<typeof executionEventSchema>

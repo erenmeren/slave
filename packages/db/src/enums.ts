@@ -38,6 +38,7 @@ export const EVENT_TYPE_BY_DOMAIN_TYPE = {
   'workspace.plan_created': 'workspace_plan_created',
   'workspace.company_assigned': 'workspace_company_assigned',
   'workspace.settings_changed': 'workspace_settings_changed',
+  'workspace.created': 'workspace_created',
 } as const satisfies Record<DomainEventType, string>
 
 export type DbEventType = (typeof EVENT_TYPE_BY_DOMAIN_TYPE)[DomainEventType]

@@ -48,7 +48,9 @@ enum Actor {
 /// migration for the DDL that enforces this.
 model Workspace {
   id             String    @id @default(uuid())
-  name           String
+  /// Unique as of M23 A1: a workspace is addressed by name from the CLI and the Settings form,
+  /// so two rows sharing a name would make that addressing permanently ambiguous.
+  name           String    @unique
   repoPath       String
   baseBranch     String    @default("main")
   verifyCommands String[]
@@ -531,6 +533,8 @@ enum EventType {
   workspace_plan_created     @map("workspace.plan_created")
   workspace_company_assigned @map("workspace.company_assigned")
   workspace_settings_changed @map("workspace.settings_changed")
+  /// M23 A1: the first event a workspace ever logs, from `createWorkspace`.
+  workspace_created          @map("workspace.created")
 }
 
 model ExecutionEvent {
