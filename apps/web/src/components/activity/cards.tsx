@@ -464,6 +464,35 @@ function WorkspaceCreatedCard(props: ActivityCardProps): ReactElement {
   )
 }
 
+// M23 D1: an operator edited the roster -- `org.ts`'s five control verbs (rename/re-role/delete
+// an agent, rename/delete a team) all land here, distinguished by `payload.field`. `idle` tone,
+// matching `WorkspaceSettingsChangedCard` above: an edit to configuration, not a run outcome.
+const ORG_CHANGED_LABEL: Record<'name' | 'role' | 'model' | 'deleted', string> = {
+  name: 'renamed',
+  role: 'role changed',
+  model: 'model changed',
+  deleted: 'deleted',
+}
+
+function OrgChangedCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as {
+    entity: 'agent' | 'team'
+    id: string
+    field: 'name' | 'role' | 'model' | 'deleted'
+    from: string
+    to: string | null
+  }
+  return (
+    <ActivityCard {...props}>
+      <Transition tone="idle" label={ORG_CHANGED_LABEL[payload.field]}>
+        <span data-testid="org-from">{payload.from}</span>
+        {' → '}
+        <span data-testid="org-to">{payload.to ?? '—'}</span>
+      </Transition>
+    </ActivityCard>
+  )
+}
+
 // ---- interventions (schema.ts:32-39, 54-59) ----------------------------------------------------
 // `event.actor` (human/agent/system) is already on the shared shell's actor badge; these bodies
 // add the payload's own record of *who* intervened (`requestedBy`) and *what* they said
@@ -567,4 +596,5 @@ export const ACTIVITY_CARDS = {
   'workspace.company_assigned': WorkspaceCompanyAssignedCard,
   'workspace.settings_changed': WorkspaceSettingsChangedCard,
   'workspace.created': WorkspaceCreatedCard,
+  'org.changed': OrgChangedCard,
 } satisfies Record<DomainEventType, (props: ActivityCardProps) => ReactElement>

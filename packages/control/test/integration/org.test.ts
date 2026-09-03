@@ -629,6 +629,17 @@ describe('setAgentModel', () => {
     const row = await prisma.agent.findUniqueOrThrow({ where: { id } })
     expect(row.model).toBe('claude-opus')
     expect(row.provider).toBe('claude_code')
+
+    // M23 D1: setAgentModel is the fifth site org.changed's field: 'model' covers.
+    const events = await prisma.executionEvent.findMany({ where: { agentId: id, type: 'org_changed' } })
+    expect(events).toHaveLength(1)
+    expect(events[0]?.payload).toEqual({
+      entity: 'agent',
+      id,
+      field: 'model',
+      from: '—@—',
+      to: 'claude-opus@claude_code',
+    })
   })
 
   it('refuses an unknown agent', async (): Promise<void> => {

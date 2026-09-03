@@ -1,8 +1,9 @@
-import { prisma } from '@ai-team-os/db/client'
-import { type Result, err, ok } from '@ai-team-os/domain'
+import { prisma, type Prisma } from '@ai-team-os/db/client'
+import { NON_TERMINAL_RUN_STATUSES, type Result, err, ok } from '@ai-team-os/domain'
 import { appendEvent } from '@ai-team-os/events'
 import { PROVIDER_KINDS, type ProviderKind } from '@ai-team-os/providers'
 import { admitProvider } from './budget.js'
+import type { Principal } from './principal.js'
 import { isUniqueConstraintViolation } from './prisma-errors.js'
 import type { ControlRefusal } from './refusal.js'
 import { resolveRuntime, workspaceDefaultProvider } from './runtime.js'
@@ -359,6 +360,12 @@ export async function assignCompany(
  * but nothing races it -- a budget cannot be changed by any verb in this codebase (see the
  * routing note below), and the same mismatch is re-checked at dispatch anyway.
  *
+ * M23 D1 makes the read UNCONDITIONAL rather than only when `provider !== null`: `org.changed`'s
+ * `from` is this agent's OLD model/provider pair, which only exists to read before the write
+ * overwrites it, and the event needs `workspaceId` regardless of which direction (set or clear)
+ * this call took. The same "nothing races it" reasoning still covers the wider read -- it is one
+ * more fact pulled off the same row, not a new check-then-write gap of its own.
+ *
  * Spec §6 also names a second write-time direction -- "setting a `budgetUsd` on a workspace
  * already resolved to one is refused". It has NO SITE: no verb in `packages/control`, no CLI
  * command and no route writes `Workspace.budgetUsd` anywhere in this tree; the column is set by
@@ -377,21 +384,274 @@ export async function setAgentModel(
   const pairErr = pairRefusal(model, provider)
   if (pairErr !== null) return err(pairErr)
 
+  const agent = await prisma.agent.findUnique({
+    where: { id: agentId },
+    select: {
+      model: true,
+      provider: true,
+      team: { select: { workspaceId: true, workspace: { select: { id: true, budgetUsd: true } } } },
+    },
+  })
+  if (agent === null) return err({ kind: 'agent_not_found', agentId })
+
   if (provider !== null) {
     // Only when a provider is actually being PINNED. Clearing the pair (`null, null`) pins no
     // runtime at all -- it hands the choice back to the roster, the template and the workspace
     // default below it -- so there is nothing here to admit or refuse, and refusing an operator's
     // undo would trap them in the very override they are trying to remove.
-    const agent = await prisma.agent.findUnique({
-      where: { id: agentId },
-      select: { team: { select: { workspace: { select: { id: true, budgetUsd: true } } } } },
-    })
-    if (agent === null) return err({ kind: 'agent_not_found', agentId })
     const verdict = admitProvider(agent.team.workspace, provider)
     if (!verdict.ok) return err(verdict.refusal)
   }
 
   const updated = await prisma.agent.updateMany({ where: { id: agentId }, data: { model, provider } })
   if (updated.count === 0) return err({ kind: 'agent_not_found', agentId })
+
+  await appendEvent({
+    type: 'org.changed',
+    workspaceId: agent.team.workspaceId,
+    agentId,
+    actor: 'human',
+    payload: {
+      entity: 'agent',
+      id: agentId,
+      field: 'model',
+      from: `${agent.model ?? '—'}@${agent.provider ?? '—'}`,
+      to: `${model ?? '—'}@${provider ?? '—'}`,
+    },
+  })
+
+  return ok(undefined)
+}
+
+// ---- D1: roster editing (M23 §5) ---------------------------------------------------------------
+// `createTemplate`/`createCompany`/`addCompanyTeam`/`addCompanyAgent`/`assignCompany` above only
+// ever ADD to the catalog or the roster it materializes -- Decision 9 in M10's own comments made
+// that append-only on purpose. The five verbs below are the first ones that EDIT a project team
+// or agent already on a workspace's roster: rename, re-role, or remove it. Every one of them ends
+// in exactly one `org.changed` event, `field` naming what moved -- the one new activity-log entry
+// this task adds, so an operator can see a roster edit in the same timeline as everything else
+// that happened to a workspace.
+//
+// `principal?: Principal` is accepted and ignored on all five, same as every other control verb
+// ahead of Series F: the parameter exists so Task 10's CLI/web callers compile against the real
+// signature now, not so it does anything yet.
+
+/**
+ * Locks and loads one `Agent` row for an editing verb, with exactly what every caller below
+ * needs: its team (for the workspace id an `org.changed` event carries) and its runs (for the
+ * live-run check `setAgentRole` makes and the has-history check `deleteAgent` makes) -- one
+ * shared read instead of five near-identical ones.
+ *
+ * `SELECT ... FOR UPDATE` first, not a plain `findUnique`: two operators editing the same agent
+ * at once must serialise rather than race a lost update, the same `dependency.ts`/`world.ts`
+ * idiom this package already uses for a single contested row.
+ */
+async function lockAgent(tx: Prisma.TransactionClient, agentId: string) {
+  await tx.$queryRaw`SELECT id FROM "Agent" WHERE id = ${agentId} FOR UPDATE`
+  return tx.agent.findUnique({
+    where: { id: agentId },
+    include: {
+      team: { select: { id: true, workspaceId: true } },
+      runs: { select: { id: true, status: true } },
+    },
+  })
+}
+
+/** The same lock-then-load shape as {@link lockAgent}, for `renameTeam`/`deleteTeam`'s own row --
+ *  its agents are what `deleteTeam`'s not-empty check needs. */
+async function lockTeam(tx: Prisma.TransactionClient, teamId: string) {
+  await tx.$queryRaw`SELECT id FROM "Team" WHERE id = ${teamId} FOR UPDATE`
+  return tx.team.findUnique({
+    where: { id: teamId },
+    include: { agents: { select: { id: true } } },
+  })
+}
+
+/**
+ * Renames a project agent. Sibling names are unique per TEAM, matching `addCompanyAgent`'s own
+ * rule for the roster template this agent may have been instantiated from -- but there is no
+ * unique index to lean on here (unlike that insert path): `Agent` carries no `@@unique([teamId,
+ * name])`, so the check is a `findFirst` run inside the same locked transaction as the update,
+ * not a caught constraint violation.
+ */
+export async function renameAgent(
+  agentId: string,
+  name: string,
+  _principal?: Principal,
+): Promise<Result<void, ControlRefusal>> {
+  if (name.trim() === '') return err({ kind: 'invalid_name' })
+
+  const outcome = await prisma.$transaction(async (tx) => {
+    const agent = await lockAgent(tx, agentId)
+    if (agent === null) return { ok: false as const, error: { kind: 'agent_not_found', agentId } as ControlRefusal }
+
+    const sibling = await tx.agent.findFirst({ where: { teamId: agent.teamId, name, NOT: { id: agentId } } })
+    if (sibling !== null) return { ok: false as const, error: { kind: 'duplicate_name', name } as ControlRefusal }
+
+    await tx.agent.update({ where: { id: agentId }, data: { name } })
+    return { ok: true as const, value: { workspaceId: agent.team.workspaceId, from: agent.name } }
+  })
+
+  if (!outcome.ok) return err(outcome.error)
+
+  await appendEvent({
+    type: 'org.changed',
+    workspaceId: outcome.value.workspaceId,
+    agentId,
+    actor: 'human',
+    payload: { entity: 'agent', id: agentId, field: 'name', from: outcome.value.from, to: name },
+  })
+
+  return ok(undefined)
+}
+
+/**
+ * Changes a project agent's role -- the exact-match string the scheduler's `decide()` compares
+ * against `Task.requiredRole`. Refused while the agent holds any run in a
+ * `NON_TERMINAL_RUN_STATUSES` status: re-rolling an agent mid-dispatch would silently strand the
+ * scheduler's decision, which was made against the role the run started with.
+ */
+export async function setAgentRole(
+  agentId: string,
+  role: string,
+  _principal?: Principal,
+): Promise<Result<void, ControlRefusal>> {
+  if (role.trim() === '') return err({ kind: 'invalid_role' })
+
+  const outcome = await prisma.$transaction(async (tx) => {
+    const agent = await lockAgent(tx, agentId)
+    if (agent === null) return { ok: false as const, error: { kind: 'agent_not_found', agentId } as ControlRefusal }
+
+    const activeRun = agent.runs.find((run) => (NON_TERMINAL_RUN_STATUSES as readonly string[]).includes(run.status))
+    if (activeRun !== undefined) {
+      return {
+        ok: false as const,
+        error: { kind: 'agent_run_active', agentId, runId: activeRun.id } as ControlRefusal,
+      }
+    }
+
+    await tx.agent.update({ where: { id: agentId }, data: { role } })
+    return { ok: true as const, value: { workspaceId: agent.team.workspaceId, from: agent.role } }
+  })
+
+  if (!outcome.ok) return err(outcome.error)
+
+  await appendEvent({
+    type: 'org.changed',
+    workspaceId: outcome.value.workspaceId,
+    agentId,
+    actor: 'human',
+    payload: { entity: 'agent', id: agentId, field: 'role', from: outcome.value.from, to: role },
+  })
+
+  return ok(undefined)
+}
+
+/**
+ * Removes a project agent -- refused while it carries ANY `AgentRun` history, terminal or not
+ * (not only a live one, which `setAgentRole` above already guards separately). `Agent.runs` casc-
+ * ades on delete (schema.prisma), so this refusal is the only thing standing between an operator
+ * and silently destroying a worker's whole run history along with the row; the fix the refusal
+ * text offers -- rename it, or leave it idle -- is real: a worker with history is never *forced*
+ * to run again, it just cannot be deleted out from under its own record.
+ */
+export async function deleteAgent(
+  agentId: string,
+  _principal?: Principal,
+): Promise<Result<void, ControlRefusal>> {
+  const outcome = await prisma.$transaction(async (tx) => {
+    const agent = await lockAgent(tx, agentId)
+    if (agent === null) return { ok: false as const, error: { kind: 'agent_not_found', agentId } as ControlRefusal }
+
+    if (agent.runs.length > 0) {
+      return {
+        ok: false as const,
+        error: { kind: 'agent_has_runs', agentId, runs: agent.runs.length } as ControlRefusal,
+      }
+    }
+
+    await tx.agent.delete({ where: { id: agentId } })
+    return { ok: true as const, value: { workspaceId: agent.team.workspaceId, from: agent.name } }
+  })
+
+  if (!outcome.ok) return err(outcome.error)
+
+  await appendEvent({
+    type: 'org.changed',
+    workspaceId: outcome.value.workspaceId,
+    agentId,
+    actor: 'human',
+    payload: { entity: 'agent', id: agentId, field: 'deleted', from: outcome.value.from, to: null },
+  })
+
+  return ok(undefined)
+}
+
+/** Renames a project team. Sibling names are unique per WORKSPACE, the same rule
+ *  {@link renameAgent} enforces per team -- and, as there, no unique index exists to lean on. */
+export async function renameTeam(
+  teamId: string,
+  name: string,
+  _principal?: Principal,
+): Promise<Result<void, ControlRefusal>> {
+  if (name.trim() === '') return err({ kind: 'invalid_name' })
+
+  const outcome = await prisma.$transaction(async (tx) => {
+    const team = await lockTeam(tx, teamId)
+    if (team === null) return { ok: false as const, error: { kind: 'team_not_found', teamId } as ControlRefusal }
+
+    const sibling = await tx.team.findFirst({ where: { workspaceId: team.workspaceId, name, NOT: { id: teamId } } })
+    if (sibling !== null) return { ok: false as const, error: { kind: 'duplicate_name', name } as ControlRefusal }
+
+    await tx.team.update({ where: { id: teamId }, data: { name } })
+    return { ok: true as const, value: { workspaceId: team.workspaceId, from: team.name } }
+  })
+
+  if (!outcome.ok) return err(outcome.error)
+
+  await appendEvent({
+    type: 'org.changed',
+    workspaceId: outcome.value.workspaceId,
+    actor: 'human',
+    payload: { entity: 'team', id: teamId, field: 'name', from: outcome.value.from, to: name },
+  })
+
+  return ok(undefined)
+}
+
+/**
+ * Removes a project team -- refused while it still has any agent on its roster. `deleteAgent`
+ * above already keeps a worker with run history off-limits, so a non-empty team is always exactly
+ * "agents remain that were never deleted"; there is no separate cascade concern to name here the
+ * way there is for `deleteAgent`.
+ */
+export async function deleteTeam(
+  teamId: string,
+  _principal?: Principal,
+): Promise<Result<void, ControlRefusal>> {
+  const outcome = await prisma.$transaction(async (tx) => {
+    const team = await lockTeam(tx, teamId)
+    if (team === null) return { ok: false as const, error: { kind: 'team_not_found', teamId } as ControlRefusal }
+
+    if (team.agents.length > 0) {
+      return {
+        ok: false as const,
+        error: { kind: 'team_not_empty', teamId, agents: team.agents.length } as ControlRefusal,
+      }
+    }
+
+    await tx.team.delete({ where: { id: teamId } })
+    return { ok: true as const, value: { workspaceId: team.workspaceId, from: team.name } }
+  })
+
+  if (!outcome.ok) return err(outcome.error)
+
+  await appendEvent({
+    type: 'org.changed',
+    workspaceId: outcome.value.workspaceId,
+    actor: 'human',
+    payload: { entity: 'team', id: teamId, field: 'deleted', from: outcome.value.from, to: null },
+  })
+
   return ok(undefined)
 }

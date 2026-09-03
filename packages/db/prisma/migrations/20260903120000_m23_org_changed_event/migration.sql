@@ -1,0 +1,11 @@
+-- M23 §5 D1: five roster control verbs land in `org.ts` -- rename/re-role/delete an agent,
+-- rename/delete a team -- and every one of them needs to say so in the activity log. One new
+-- event type covers all five, distinguished by the payload's `field`, rather than five near-
+-- identical enum members.
+--
+-- Additive in the sense the milestone's constraint means: one new enum member, no column touched,
+-- no existing row rewritten, nothing dropped. `IF NOT EXISTS` makes re-running it a no-op.
+--
+-- `ALTER TYPE ... ADD VALUE` runs inside Prisma's per-migration transaction, which Postgres 12+
+-- permits as long as the new value is not USED in the same transaction. Nothing here uses it.
+ALTER TYPE "EventType" ADD VALUE IF NOT EXISTS 'org.changed';

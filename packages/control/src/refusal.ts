@@ -58,6 +58,21 @@ export type ControlRefusal =
   | { readonly kind: 'unmeasurable_budget'; readonly workspaceId: string; readonly provider: string }
   | { readonly kind: 'company_already_assigned'; readonly workspaceId: string; readonly companyName: string }
   | { readonly kind: 'agent_not_found'; readonly agentId: string }
+  /** A role was set (or re-set) to blank text (M23 D1). */
+  | { readonly kind: 'invalid_role' }
+  /**
+   * `setAgentRole` on an agent that holds a run in a `NON_TERMINAL_RUN_STATUSES` status (M23 D1):
+   * the scheduler matches `Task.requiredRole` to `Agent.role` by equality, so re-rolling an agent
+   * mid-run would silently strand its dispatch decision.
+   */
+  | { readonly kind: 'agent_run_active'; readonly agentId: string; readonly runId: string }
+  /** `deleteAgent` on an agent that has any `AgentRun` history at all (M23 D1) -- terminal or
+   *  not: the row is kept as the anchor for its own past runs rather than cascade-deleting them. */
+  | { readonly kind: 'agent_has_runs'; readonly agentId: string; readonly runs: number }
+  /** `renameTeam`/`deleteTeam` on a `teamId` no `Team` row carries (M23 D1). */
+  | { readonly kind: 'team_not_found'; readonly teamId: string }
+  /** `deleteTeam` on a team that still has agents on its roster (M23 D1). */
+  | { readonly kind: 'team_not_empty'; readonly teamId: string; readonly agents: number }
   /** A skill id that no `Skill` row carries (M14 §4.3). */
   | { readonly kind: 'skill_not_found'; readonly skillId: string }
   /** A permission tool outside `PERMISSION_TOOLS` (M14 §5.7). */
@@ -145,6 +160,16 @@ export function refusalText(refusal: ControlRefusal): string {
       return `this workspace is already run by ${refusal.companyName}`
     case 'agent_not_found':
       return `no agent with id ${refusal.agentId}`
+    case 'invalid_role':
+      return 'a role must be a non-empty text'
+    case 'agent_run_active':
+      return `agent ${refusal.agentId} has a live run (${refusal.runId}); change its role when the run has ended`
+    case 'agent_has_runs':
+      return `agent ${refusal.agentId} has ${refusal.runs} run(s) in history and stays (rename it or leave it idle)`
+    case 'team_not_found':
+      return `no team with id ${refusal.teamId}`
+    case 'team_not_empty':
+      return `team ${refusal.teamId} still has ${refusal.agents} agent(s)`
     case 'skill_not_found':
       return `no skill with id ${refusal.skillId}`
     case 'invalid_tool':

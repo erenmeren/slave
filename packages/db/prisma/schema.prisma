@@ -538,6 +538,10 @@ enum EventType {
   /// M23 B2: `collectTaskWorktree` removed a terminal task's worktree -- aged out or by an
   /// operator's button.
   task_worktree_collected    @map("task.worktree_collected")
+  /// M23 D1: an operator edited the roster -- `org.ts`'s five control verbs (rename/re-role/
+  /// delete an agent, rename/delete a team) all emit this one type, distinguished by the
+  /// payload's `field`.
+  org_changed                @map("org.changed")
 }
 
 model ExecutionEvent {

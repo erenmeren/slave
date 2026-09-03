@@ -49,12 +49,16 @@ export const TYPES_BY_KIND = {
   // `workspace.settings_changed` belongs here even though the budget it can move is what
   // `guardrail.tripped` later enforces: this chip answers "what did an operator change about this
   // workspace", which is where an operator looks when a dispatch starts refusing.
+  // `org.changed` (M23 D1) joins the same chip for the same reason: the roster (a project's
+  // `Team`/`Agent` rows) is workspace configuration, not a run outcome, and it carries no taskId
+  // of its own to sort it under `tasks` instead.
   workspace: [
     'workspace.created',
     'workspace.goal_set',
     'workspace.plan_created',
     'workspace.company_assigned',
     'workspace.settings_changed',
+    'org.changed',
   ],
 } as const satisfies Record<ActivityKind, readonly DomainEventType[]>
 

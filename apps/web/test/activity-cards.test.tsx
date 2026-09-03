@@ -87,6 +87,7 @@ const PAYLOAD_BY_TYPE: Record<DomainEventType, Record<string, unknown>> = {
     verifyCommands: ['npm test', 'npm run lint'],
     provider: 'claude_code',
   },
+  'org.changed': { entity: 'agent', id: 'ag-1', field: 'name', from: 'Alex', to: 'Alexis' },
 }
 
 function fixtureFor(type: DomainEventType): ActivityEventRow {
@@ -184,6 +185,22 @@ describe('targeted card bodies', () => {
     render(<Card event={fixtureFor('task.worktree_collected')} {...CARD_PROPS} />)
     expect(screen.getByTestId('worktree-collected-path').textContent).toBe('/repo/.aiteamos/worktrees/T-abc')
     expect(screen.getByTestId('transition-label').textContent).toBe('worktree collected')
+  })
+
+  it('org.changed shows the label for its field and the from/to values', () => {
+    const Card = ACTIVITY_CARDS['org.changed']
+    render(<Card event={fixtureFor('org.changed')} {...CARD_PROPS} />)
+    expect(screen.getByTestId('transition-label').textContent).toBe('renamed')
+    expect(screen.getByTestId('org-from').textContent).toBe('Alex')
+    expect(screen.getByTestId('org-to').textContent).toBe('Alexis')
+  })
+
+  it('org.changed renders — for a null to (a delete)', () => {
+    const Card = ACTIVITY_CARDS['org.changed']
+    const event = baseEvent('org.changed', { entity: 'team', id: 't-1', field: 'deleted', from: 'Design', to: null })
+    render(<Card event={event} {...CARD_PROPS} />)
+    expect(screen.getByTestId('transition-label').textContent).toBe('deleted')
+    expect(screen.getByTestId('org-to').textContent).toBe('—')
   })
 
   it('workspace.created shows the name, repo path and verify command count', () => {
