@@ -100,6 +100,12 @@ export type ControlRefusal =
    *  inside the row-locked transaction -- the row is left untouched (nothing was written before
    *  the throw) so a retry sees the same terminal task with the same path. */
   | { readonly kind: 'worktree_remove_failed'; readonly taskId: string; readonly path: string; readonly reason: string }
+  /** `createUser`'s `username` does not match `USERNAME_RE` (M23 F3). */
+  | { readonly kind: 'invalid_username'; readonly username: string }
+  /** `createUser`/`setPassword`'s `password` is shorter than `MIN_PASSWORD_LENGTH` (M23 F3). */
+  | { readonly kind: 'weak_password'; readonly minimum: number }
+  /** `setPassword`/`deleteUser` on a `username` no `User` row carries (M23 F3). */
+  | { readonly kind: 'user_not_found'; readonly username: string }
 
 export function refusalText(refusal: ControlRefusal): string {
   switch (refusal.kind) {
@@ -197,5 +203,11 @@ export function refusalText(refusal: ControlRefusal): string {
       return `task ${refusal.taskId} has no worktree to collect`
     case 'worktree_remove_failed':
       return `could not remove the worktree at ${refusal.path}: ${refusal.reason}`
+    case 'invalid_username':
+      return 'a username is 2–32 lowercase letters, digits, dots, dashes or underscores, starting with a letter or digit'
+    case 'weak_password':
+      return `a password must be at least ${refusal.minimum} characters`
+    case 'user_not_found':
+      return `no user named ${refusal.username}`
   }
 }

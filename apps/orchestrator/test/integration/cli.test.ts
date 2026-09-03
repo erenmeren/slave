@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
+import { verifyCredentials } from '@ai-team-os/control'
 import { prisma } from '@ai-team-os/db/client'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 
@@ -45,6 +46,38 @@ async function runCli(args: readonly string[], extraEnv: NodeJS.ProcessEnv = {})
     const shaped = error as { stdout?: string; stderr?: string; code?: number }
     return { stdout: shaped.stdout ?? '', stderr: shaped.stderr ?? '', code: shaped.code ?? 1 }
   }
+}
+
+/**
+ * Runs the real built CLI with `input` written to its stdin and then closed -- `create-user` and
+ * `set-password` read a password off stdin (`readSecretLine`), and `execFile`/`execFileAsync` has
+ * no way to feed a child's stdin at all, so those two commands can only be exercised through
+ * `spawn` directly.
+ */
+async function runCliWithStdin(args: readonly string[], input: string, extraEnv: NodeJS.ProcessEnv = {}): Promise<CliResult> {
+  return new Promise((resolvePromise) => {
+    const child = spawn('node', [CLI, ...args], {
+      env: {
+        ...process.env,
+        DATABASE_URL: process.env['TEST_DATABASE_URL'] ?? '',
+        AITEAMOS_CLAUDE_BIN: 'node',
+        AITEAMOS_CLAUDE_ARGS: `${FAKE} --fixture complete`,
+        ...extraEnv,
+      },
+    })
+    let stdout = ''
+    let stderr = ''
+    child.stdout.on('data', (chunk: Buffer) => {
+      stdout += chunk.toString()
+    })
+    child.stderr.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString()
+    })
+    child.on('close', (code) => {
+      resolvePromise({ stdout, stderr, code: code ?? 1 })
+    })
+    child.stdin.end(input)
+  })
 }
 
 function makeRepo(): string {
@@ -106,7 +139,7 @@ describe('the orchestrator CLI', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace", "CompanyAgent", "CompanyTeam", "Company", "AgentTemplate" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace", "CompanyAgent", "CompanyTeam", "Company", "AgentTemplate", "User" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
   })
@@ -922,6 +955,106 @@ describe('the orchestrator CLI', () => {
       expect(result.code).toBe(1)
       expect(result.stderr).toContain(`refusing without --yes: this would delete team Design (${fixture.emptyTeamId})`)
       expect(await prisma.team.findUnique({ where: { id: fixture.emptyTeamId } })).not.toBeNull()
+    })
+  })
+
+  // M23 F3: the CLI surfaces for the local-account verbs (`packages/control/src/users.ts`). The
+  // password never appears on the command line -- it comes in over stdin, so these cases go
+  // through `runCliWithStdin` rather than `runCli`.
+  describe('users', () => {
+    it('creates a user with the password read from stdin', async () => {
+      const result = await runCliWithStdin(['create-user', '--name', 'ada'], 'a reasonably long passphrase\n')
+
+      expect(result.code).toBe(0)
+      const id = /^user (\S+) created$/m.exec(result.stdout)?.[1]
+      expect(id).toBeDefined()
+      const row = await prisma.user.findUniqueOrThrow({ where: { username: 'ada' } })
+      expect(row.id).toBe(id)
+      expect(row.passwordHash.startsWith('pbkdf2-sha256$')).toBe(true)
+    })
+
+    it('only reads the first line of stdin as the password', async () => {
+      const result = await runCliWithStdin(['create-user', '--name', 'ada'], 'first line password\nsecond line garbage\n')
+
+      expect(result.code).toBe(0)
+      expect(await verifyCredentials('ada', 'first line password')).not.toBeNull()
+    })
+
+    it('refuses an empty password with the stdin-usage error, creating nothing', async () => {
+      const result = await runCliWithStdin(['create-user', '--name', 'ada'], '')
+
+      expect(result.code).toBe(1)
+      expect(result.stderr).toContain(
+        'the password is read from stdin: printf "%s\\n" "$PW" | orchestrator create-user --name ada',
+      )
+      expect(await prisma.user.findUnique({ where: { username: 'ada' } })).toBeNull()
+    })
+
+    it('passes a real refusal through refusalText -- invalid_username', async () => {
+      const result = await runCliWithStdin(['create-user', '--name', 'Ada!'], 'a reasonably long passphrase\n')
+
+      expect(result.code).toBe(1)
+      expect(result.stderr).toContain(
+        'a username is 2–32 lowercase letters, digits, dots, dashes or underscores, starting with a letter or digit',
+      )
+    })
+
+    it('sets a new password, which then verifies and the old one does not', async () => {
+      await runCliWithStdin(['create-user', '--name', 'ada'], 'the original passphrase\n')
+
+      const result = await runCliWithStdin(['set-password', '--name', 'ada'], 'a brand new passphrase\n')
+
+      expect(result.code).toBe(0)
+      expect(result.stdout).toMatch(/^password set for ada$/m)
+      expect(await verifyCredentials('ada', 'the original passphrase')).toBeNull()
+      expect(await verifyCredentials('ada', 'a brand new passphrase')).not.toBeNull()
+    })
+
+    it('refuses set-password for an unknown user', async () => {
+      const result = await runCliWithStdin(['set-password', '--name', 'nobody'], 'a reasonably long passphrase\n')
+
+      expect(result.code).toBe(1)
+      expect(result.stderr).toContain('no user named nobody')
+    })
+
+    it('deletes a user with --yes', async () => {
+      await runCliWithStdin(['create-user', '--name', 'ada'], 'a reasonably long passphrase\n')
+
+      const result = await runCli(['delete-user', '--name', 'ada', '--yes'])
+
+      expect(result.code).toBe(0)
+      expect(result.stdout).toMatch(/^user ada deleted$/m)
+      expect(await prisma.user.findUnique({ where: { username: 'ada' } })).toBeNull()
+    })
+
+    it('refuses to delete a user without --yes', async () => {
+      await runCliWithStdin(['create-user', '--name', 'ada'], 'a reasonably long passphrase\n')
+
+      const result = await runCli(['delete-user', '--name', 'ada'])
+
+      expect(result.code).toBe(1)
+      expect(result.stderr).toContain('refusing without --yes: this would delete user ada')
+      expect(await prisma.user.findUnique({ where: { username: 'ada' } })).not.toBeNull()
+    })
+
+    it('lists users ordered by username, one per line as "username  createdAt"', async () => {
+      await runCliWithStdin(['create-user', '--name', 'zoe'], 'a reasonably long passphrase\n')
+      await runCliWithStdin(['create-user', '--name', 'ada'], 'a reasonably long passphrase\n')
+
+      const result = await runCli(['list-users'])
+
+      expect(result.code).toBe(0)
+      const lines = result.stdout.trim().split('\n')
+      expect(lines).toHaveLength(2)
+      expect(lines[0]).toMatch(/^ada {2}\S+/)
+      expect(lines[1]).toMatch(/^zoe {2}\S+/)
+    })
+
+    it('lists nothing for an empty table', async () => {
+      const result = await runCli(['list-users'])
+
+      expect(result.code).toBe(0)
+      expect(result.stdout.trim()).toBe('')
     })
   })
 })

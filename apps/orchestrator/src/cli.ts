@@ -8,10 +8,13 @@ import {
   claimResume,
   createCompany,
   createTemplate,
+  createUser,
   createWorkspace,
   deleteAgent,
   deleteTeam,
+  deleteUser,
   emergencyStop,
+  listUsers,
   refusalText,
   renameAgent,
   renameTeam,
@@ -20,6 +23,7 @@ import {
   setAgentModel,
   setAgentRole,
   setGoal,
+  setPassword,
   describeSync,
   syncSkillCatalog,
 } from '@ai-team-os/control'
@@ -86,6 +90,18 @@ const USAGE = `usage: orchestrator <command> [options]
   delete-team --team <id> --yes        remove a project team -- refused while it still has any
                                        agent on its roster. Omit --yes to see what would be
                                        deleted without doing it.
+
+  users
+  create-user --name <u>                create a local account. The password is never a
+                                       command-line argument -- it would land in shell history
+                                       and process listings -- so it is read from stdin instead,
+                                       its first line: printf "%s\\n" "$PW" | orchestrator
+                                       create-user --name ada
+  set-password --name <u>               replace a local account's password, read from stdin the
+                                       same way
+  delete-user --name <u> --yes          remove a local account. Omit --yes to see what would be
+                                       deleted without doing it.
+  list-users                            every local account, one per line: username  createdAt
 
   clear-halt and resume are different actions and it matters which you reach for.
   resume --run continues ONE paused run that is waiting to be continued.
@@ -263,6 +279,29 @@ function requireFlag(flags: Flags, name: string): string {
   if (value === undefined) throw new Error(`--${name} is required`)
   return value
 }
+
+/**
+ * A password read from stdin, never a command-line argument (M23 F3) -- a flag value lands in
+ * shell history and in `ps`'s process listing for anyone else on the machine; stdin does not.
+ * Reads only up to the first `\n` (or EOF, whichever comes first) rather than draining the whole
+ * stream, so an interactive terminal is not left waiting on a second line that will never come;
+ * a trailing `\r` is stripped so a CRLF-terminated pipe still yields a clean password.
+ */
+async function readSecretLine(): Promise<string> {
+  let buffer = ''
+  for await (const chunk of process.stdin) {
+    buffer += (chunk as Buffer).toString('utf8')
+    const newline = buffer.indexOf('\n')
+    if (newline !== -1) {
+      process.stdin.destroy()
+      return buffer.slice(0, newline).replace(/\r$/, '')
+    }
+  }
+  return buffer.replace(/\r$/, '')
+}
+
+const STDIN_PASSWORD_ERROR =
+  'the password is read from stdin: printf "%s\\n" "$PW" | orchestrator create-user --name ada'
 
 async function mustGetRun(runId: string) {
   // `agent -> team`, not `task`: a `planning` run (M8b) has no `Task` row, and `agent -> team ->
@@ -631,6 +670,49 @@ export async function main(argv: readonly string[]): Promise<number> {
       const result = await deleteTeam(teamId)
       if (!result.ok) throw new Error(refusalText(result.error))
       process.stdout.write(`team ${teamId} deleted\n`)
+      return 0
+    }
+
+    // ---- F3: local accounts (M23 §7) ------------------------------------------------------------
+    // The password is always read from stdin (`readSecretLine`), never a `--password` flag -- see
+    // `STDIN_PASSWORD_ERROR` above for why. `delete-user` takes the same `--yes` gate as
+    // `delete-agent`/`delete-team`: the username IS the identifier here, so there is no separate
+    // id to look up and name in the refusal the way those two do.
+
+    case 'create-user': {
+      const name = requireFlag(flags, 'name')
+      const password = await readSecretLine()
+      if (password.length === 0) throw new Error(STDIN_PASSWORD_ERROR)
+      const result = await createUser(name, password)
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(`user ${result.value.id} created\n`)
+      return 0
+    }
+
+    case 'set-password': {
+      const name = requireFlag(flags, 'name')
+      const password = await readSecretLine()
+      if (password.length === 0) throw new Error(STDIN_PASSWORD_ERROR)
+      const result = await setPassword(name, password)
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(`password set for ${name}\n`)
+      return 0
+    }
+
+    case 'delete-user': {
+      const name = requireFlag(flags, 'name')
+      if (!('yes' in flags)) throw new Error(`refusing without --yes: this would delete user ${name}`)
+      const result = await deleteUser(name)
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(`user ${name} deleted\n`)
+      return 0
+    }
+
+    case 'list-users': {
+      const users = await listUsers()
+      for (const user of users) {
+        process.stdout.write(`${user.username}  ${user.createdAt.toISOString()}\n`)
+      }
       return 0
     }
 

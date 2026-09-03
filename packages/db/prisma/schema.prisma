@@ -560,3 +560,13 @@ model ExecutionEvent {
   @@index([workspaceId, taskId, seq])
   @@index([runId, seq])
 }
+
+/// M23 F2: a local account -- username + PBKDF2 password hash, nothing else. The event and task
+/// columns that attribute activity to one of these rows (m23_event_user) come with a later task;
+/// this table stands alone until then.
+model User {
+  id           String   @id @default(uuid())
+  username     String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+}
