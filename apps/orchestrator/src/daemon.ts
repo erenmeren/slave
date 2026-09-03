@@ -1,10 +1,21 @@
-import { describeSync, syncSkillCatalog } from '@ai-team-os/control'
+import { describeSync, syncSkillCatalog, WORKTREE_TTL_MS } from '@ai-team-os/control'
 import { prisma } from '@ai-team-os/db/client'
 import type { WorkspaceId } from '@ai-team-os/domain'
 import { subscribeEvents, type EventSubscription } from '@ai-team-os/events'
 import type { AdapterRegistry } from '@ai-team-os/providers'
+import { collectWorktrees } from './collect.js'
 import { reconcileOrphans, sweep } from './sweep.js'
 import { activePumpRunIds, drainPumps, tick } from './tick.js'
+
+/**
+ * Spec §3 B3: ten minutes, not the coalescer's ~1 Hz sweep. Ageing is measured in days
+ * (`WORKTREE_TTL_MS`, seven of them) against a clock that only ticks forward once a task goes
+ * terminal -- there is nothing for a sub-second wake-up to find that a ten-minute one would miss,
+ * and running `collectWorktrees` on every tick would mean a `prisma.task.findMany` scan of every
+ * terminal task in the workspace once a second, for a pass whose own trigger condition changes at
+ * most once a day.
+ */
+export const COLLECT_PERIOD_MS = 10 * 60 * 1000
 
 export interface DaemonDeps {
   readonly workspaceId: WorkspaceId
@@ -93,6 +104,21 @@ export async function runDaemon(deps: DaemonDeps): Promise<void> {
     )
   }
 
+  // Spec §3 B2/B3. Never throws (`collectWorktrees` itself never does, but a daemon-lifetime
+  // closure is the last line of defense against a future change breaking that contract) -- a
+  // failed pass must not take the timer, or the daemon, down with it.
+  const runCollect = async (): Promise<void> => {
+    try {
+      const report = await collectWorktrees({ workspaceId: deps.workspaceId, now: () => new Date(), ttlMs: WORKTREE_TTL_MS })
+      for (const { taskId, path } of report.collected) {
+        process.stdout.write(`[collect] task ${taskId} worktree ${path} collected (aged)\n`)
+      }
+    } catch (error) {
+      process.stderr.write(`[collect] pass failed: ${error instanceof Error ? error.message : String(error)}\n`)
+    }
+  }
+  await runCollect()
+
   const coalescer = createCoalescer(async (): Promise<void> => {
     try {
       const report = await tick(deps)
@@ -121,6 +147,7 @@ export async function runDaemon(deps: DaemonDeps): Promise<void> {
 
   let subscription: EventSubscription | null = null
   let timer: NodeJS.Timeout | null = null
+  let collectTimer: NodeJS.Timeout | null = null
 
   try {
     // The subscription is opened *before* the timer starts. Opened after, a failure here left an
@@ -136,6 +163,7 @@ export async function runDaemon(deps: DaemonDeps): Promise<void> {
     }
 
     timer = setInterval((): void => coalescer.wake(), deps.periodMs)
+    collectTimer = setInterval((): void => void runCollect(), COLLECT_PERIOD_MS)
     coalescer.wake()
 
     await new Promise<void>((resolve) => {
@@ -158,6 +186,7 @@ export async function runDaemon(deps: DaemonDeps): Promise<void> {
     })
   } finally {
     if (timer !== null) clearInterval(timer)
+    if (collectTimer !== null) clearInterval(collectTimer)
     coalescer.stop()
 
     // Ordered, and every one of them reached. The tick in flight goes first because it may still be
