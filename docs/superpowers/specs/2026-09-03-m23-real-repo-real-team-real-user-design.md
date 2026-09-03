@@ -520,18 +520,21 @@ execution plan's, not this document's series letters.
    points for rename/re-role/delete. `TeamBlock` renders Settings' Companies panel over
    `CompanyAgent` catalog rows — identities the roster verbs (`renameAgent`, `setAgentRole`,
    `deleteAgent`, all keyed on project `Agent.id`) cannot address. The actions instead mount on
-   the Agents page: `WorkersTable.tsx` gains `AgentRowActions.tsx` per row (rename, role, delete),
-   and team rename/delete mount wherever the Agents page names a team — `TeamsTable.tsx`, with a
-   `teamId` added to `WorkerRow` so a row can name its team. Settings' Companies panel stays
-   catalog-only, exactly as before this milestone. Cost if wrong: an operator looking for these
-   controls on the Settings page first finds nothing there; the README's Web UI section says
-   where they actually are.
+   the Agents page: the new `AgentRowActions.tsx` is imported and rendered only by
+   `apps/web/src/components/RosterTable.tsx`, one per `roster-worker-row`; `WorkersTable.tsx`
+   gains no actions column. Team rename/delete need no new field — they key off
+   `apps/web/src/components/TeamsTable.tsx`'s `ProjectTeamRow.teamId`, a shape `listProjectTeams()`
+   (`apps/web/src/server/org.ts`) already returned before this milestone; `WorkerRow` gains no
+   `teamId`. Settings' Companies panel stays catalog-only, exactly as before this milestone. Cost
+   if wrong: an operator looking for these controls on the Settings page first finds nothing
+   there, or looks for the agent actions on `WorkersTable` instead of `RosterTable`; the README's
+   Web UI section says where they actually are.
 
 5. **`workspace.plan_created` gains `agentId` (T11) — amends §6 E1.** E1's derivation table
    presupposes `workspace.plan_created (agentId = planner)` to fold the planner → implementer
    edge, but `planning.ts` did not attach `agentId` to that event before this milestone. Folded
    into T11 rather than spun out as a new task (the communication graph's planner edge is dead
-   without it): `planning.ts:151` now writes `agentId: run.agentId`, and `planning.test.ts`
+   without it): `apps/orchestrator/src/planning.ts:155` now writes `agentId: run.agentId`, and `planning.test.ts`
    asserts it. Cost if wrong: one extra field on an event the Activity feed already renders; no
    consumer besides this fold reads `plan_created.agentId`.
 
@@ -556,15 +559,20 @@ execution plan's, not this document's series letters.
    accounts mode → API 401 `{ error: 'session revoked' }`, page 302 `/login`," which read together
    with F6's "the root layout calls it once for pages" could be taken as: a page read by a deleted
    user's cookie redirects to `/login` immediately, on every request. The tree does not add a
-   layout-level redirect keyed on "user no longer exists": a page read succeeds, on a
-   still-signature-valid cookie, until the cookie's own 30-day expiry — `currentPrincipal()`
-   verifies the signature and expiry only, exactly as F4's middleware paragraph specifies, and
-   does not itself probe whether the user row still exists. Every *write* is refused with 401
-   `session revoked` (`workspaceControlResponse`/`orgControlResponse` resolve the user on the
-   write path and refuse when it is gone). `gate:m23-onboarding` stage 8 therefore asserts the API
-   401 on a write, not a page redirect. Cost if wrong: a deleted user's browser keeps showing
-   pages it should not for up to 30 days; it can make no further writes from the moment of
-   deletion, which is the property the milestone's gate proves.
+   layout-level redirect keyed on "user no longer exists." The middleware (`apps/web/src/middleware.ts`)
+   is the one that checks signature and expiry only — it stays stateless because the edge runtime
+   cannot reach Postgres. `currentPrincipal()` (`apps/web/src/server/principal.ts`) is not
+   stateless: it does call `prisma.user.findUnique` and returns `null` once the row is gone, exactly
+   as F4 specifies. But no root layout calls it — only `apps/web/src/app/settings/page.tsx` does,
+   to render the posture line — so a deleted user's page reads elsewhere succeed on a
+   still-signature-valid cookie until the cookie's own 30-day expiry, because nothing on that path
+   ever asks whether the user row still exists. Every *write* goes through `requirePrincipal()`,
+   which calls `currentPrincipal()` and is refused with 401 `session revoked` the moment it returns
+   `null` (`workspaceControlResponse`/`orgControlResponse` resolve the principal on the write path
+   this way). `gate:m23-onboarding` stage 8 therefore asserts the API 401 on a write, not a page
+   redirect. Cost if wrong: a deleted user's browser keeps showing pages it should not for up to
+   30 days; it can make no further writes from the moment of deletion, which is the property the
+   milestone's gate proves.
 
 9. **`principal` reaches only the verbs that append (T15) — amends §7 F6.** F6 lists the verbs
    that gain the trailing `principal` parameter, but does not say what happens at the route layer

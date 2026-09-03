@@ -41,7 +41,7 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version-file: .nvmrc, cache: npm }
       - run: npm ci
-      - run: npx playwright install --with-deps chromium
+      - run: npx playwright@$(node -p "require('playwright-core/package.json').version") install --with-deps chromium
       - run: echo "CHROMIUM_PATH=$(node -e "console.log(require('playwright-core').chromium.executablePath())")" >> "$GITHUB_ENV"
       - run: cp .env.example .env
       - run: PGPASSWORD=aiteamos psql -h localhost -p 5433 -U aiteamos -d aiteamos -c 'CREATE DATABASE aiteamos_test OWNER aiteamos;'
