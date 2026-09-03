@@ -6,10 +6,12 @@ import {
   mintSession,
   requestIsHttps,
   sessionCookieHeader,
-  verifyBearer,
   verifySession,
 } from '../src/lib/session.js'
 
+const SECRET = '0123456789abcdef0123456789abcdef'
+const OTHER = 'fedcba9876543210fedcba9876543210'
+const USER = '3f1c9a2e-0000-4000-8000-abcdefabcdef'
 const NOW = new Date('2026-09-02T12:00:00Z')
 const LATER = new Date(NOW.getTime() + 60_000)
 
@@ -23,71 +25,74 @@ describe('digestEqual', () => {
 })
 
 describe('mintSession / verifySession', () => {
-  it('round-trips a freshly minted cookie', async () => {
-    const value = await mintSession('hunter2', NOW)
-    expect(value).toMatch(/^\d+\.[0-9a-f]{64}$/)
-    expect(await verifySession('hunter2', value, LATER)).toBe(true)
+  it('round-trips a freshly minted cookie and names the user it was minted for', async () => {
+    const value = await mintSession(SECRET, USER, NOW)
+    expect(value).toMatch(/^[A-Za-z0-9-]{1,64}\.\d+\.[0-9a-f]{64}$/)
+    expect(value.split('.')[0]).toBe(USER)
+    expect(await verifySession(SECRET, value, LATER)).toEqual({ userId: USER })
   })
 
   it('encodes an expiry exactly 30 days out', async () => {
-    const value = await mintSession('hunter2', NOW)
-    const expiresAt = Number(value.split('.')[0])
+    const value = await mintSession(SECRET, USER, NOW)
+    const expiresAt = Number(value.split('.')[1])
     expect(expiresAt).toBe(Math.floor(NOW.getTime() / 1000) + SESSION_TTL_SECONDS)
     expect(SESSION_TTL_SECONDS).toBe(30 * 24 * 60 * 60)
   })
 
   it('is expired at, and after, its own expiry second', async () => {
-    const value = await mintSession('hunter2', NOW)
-    const expiresAt = Number(value.split('.')[0])
-    expect(await verifySession('hunter2', value, new Date(expiresAt * 1000))).toBe(false)
-    expect(await verifySession('hunter2', value, new Date((expiresAt - 1) * 1000))).toBe(true)
+    const value = await mintSession(SECRET, USER, NOW)
+    const expiresAt = Number(value.split('.')[1])
+    expect(await verifySession(SECRET, value, new Date(expiresAt * 1000))).toBeNull()
+    expect(await verifySession(SECRET, value, new Date((expiresAt + 1) * 1000))).toBeNull()
+    expect(await verifySession(SECRET, value, new Date((expiresAt - 1) * 1000))).toEqual({ userId: USER })
   })
 
   it('rejects a tampered signature', async () => {
-    const value = await mintSession('hunter2', NOW)
+    const value = await mintSession(SECRET, USER, NOW)
     const flipped = value.slice(0, -1) + (value.endsWith('0') ? '1' : '0')
-    expect(await verifySession('hunter2', flipped, LATER)).toBe(false)
+    expect(await verifySession(SECRET, flipped, LATER)).toBeNull()
   })
 
-  it('rejects a tampered expiry (the signature no longer matches)', async () => {
-    const value = await mintSession('hunter2', NOW)
-    const [expiry, signature] = value.split('.')
-    expect(await verifySession('hunter2', `${Number(expiry) + 1000}.${signature}`, LATER)).toBe(false)
+  it('rejects a tampered expiry (the signature covers it)', async () => {
+    const [userId, expiry, signature] = (await mintSession(SECRET, USER, NOW)).split('.')
+    expect(await verifySession(SECRET, `${userId}.${Number(expiry) + 1000}.${signature}`, LATER)).toBeNull()
   })
 
-  it.each([[null], [''], ['nodot'], ['1.2.3'], ['abc.def'], ['1700000000.'], ['.deadbeef'], ['-5.deadbeef']])(
-    'rejects the malformed value %j',
-    async (value) => {
-      expect(await verifySession('hunter2', value, LATER)).toBe(false)
-    },
-  )
-
-  it('invalidates every session when the password changes', async () => {
-    const value = await mintSession('hunter2', NOW)
-    expect(await verifySession('hunter3', value, LATER)).toBe(false)
-  })
-})
-
-describe('verifyBearer', () => {
-  it('accepts exactly `Bearer <password>`', async () => {
-    expect(await verifyBearer('hunter2', 'Bearer hunter2')).toBe(true)
+  it('rejects a swapped user id — the signature covers it too, so no session is another user', async () => {
+    const [, expiry, signature] = (await mintSession(SECRET, USER, NOW)).split('.')
+    expect(await verifySession(SECRET, `someone-else.${expiry}.${signature}`, LATER)).toBeNull()
   })
 
-  it.each([[null], [''], ['hunter2'], ['bearer hunter2'], ['Bearer  hunter2'], ['Bearer hunter3'], ['Bearer '], ['Basic hunter2']])(
-    'refuses %j',
-    async (header) => {
-      expect(await verifyBearer('hunter2', header)).toBe(false)
-    },
-  )
+  it.each([
+    [null],
+    [''],
+    ['nodot'],
+    ['a.b'],
+    ['a.1.2.3'],
+    ['user.abc.deadbeef'],
+    ['user.1700000000.'],
+    ['.1700000000.deadbeef'],
+    ['user.-5.deadbeef'],
+    ['us er.1700000000.deadbeef'],
+    ['user_name.1700000000.deadbeef'],
+    [`${'a'.repeat(65)}.1700000000.deadbeef`],
+  ])('rejects the malformed value %j', async (value) => {
+    expect(await verifySession(SECRET, value, LATER)).toBeNull()
+  })
+
+  it('invalidates every session when the secret changes', async () => {
+    const value = await mintSession(SECRET, USER, NOW)
+    expect(await verifySession(OTHER, value, LATER)).toBeNull()
+  })
 })
 
 describe('sessionCookieHeader', () => {
   it('serialises the spec attributes, Secure only when asked', () => {
-    expect(sessionCookieHeader('123.abc', { secure: false })).toBe(
-      `${SESSION_COOKIE}=123.abc; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_TTL_SECONDS}`,
+    expect(sessionCookieHeader('u.123.abc', { secure: false })).toBe(
+      `${SESSION_COOKIE}=u.123.abc; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_TTL_SECONDS}`,
     )
-    expect(sessionCookieHeader('123.abc', { secure: true })).toBe(
-      `${SESSION_COOKIE}=123.abc; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_TTL_SECONDS}; Secure`,
+    expect(sessionCookieHeader('u.123.abc', { secure: true })).toBe(
+      `${SESSION_COOKIE}=u.123.abc; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_TTL_SECONDS}; Secure`,
     )
   })
 
@@ -101,5 +106,12 @@ describe('requestIsHttps', () => {
     expect(requestIsHttps(new Request('https://box.example/login'))).toBe(true)
     expect(requestIsHttps(new Request('http://box.example/login'))).toBe(false)
     expect(requestIsHttps(new Request('http://box.example/login', { headers: { 'x-forwarded-proto': 'https' } }))).toBe(true)
+  })
+})
+
+describe('the retired bearer', () => {
+  it('is gone from the module — accounts mode accepts the cookie only (spec §7 F4)', async () => {
+    const module: Record<string, unknown> = await import('../src/lib/session.js')
+    expect(Object.keys(module)).not.toContain('verifyBearer')
   })
 })

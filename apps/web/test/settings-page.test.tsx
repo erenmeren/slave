@@ -104,13 +104,13 @@ describe('SettingsClient', () => {
     expect(posture.textContent).toBe('loopback-only · no accounts · cross-site requests refused')
   })
 
-  it('renders whatever posture the server computed (password mode names the login)', () => {
+  it('renders whatever posture the server computed (accounts mode names the user)', () => {
     render(<SettingsClient templates={[template()]} companies={[]} roster={[]} adapters={[]} permissions={[]} workspaces={[]} showReseed={false}
-      mode="password" posture="password login · single operator · cross-site requests refused" />)
-    expect(screen.getByTestId('security-posture').textContent).toBe('password login · single operator · cross-site requests refused')
+      mode="accounts" posture="accounts · signed in as ada · cross-site requests refused" />)
+    expect(screen.getByTestId('security-posture').textContent).toBe('accounts · signed in as ada · cross-site requests refused')
   })
 
-  it('offers Logout only in password mode', () => {
+  it('offers Logout only in accounts mode', () => {
     render(<SettingsClient templates={[template()]} companies={[]} roster={[]} adapters={[]} permissions={[]} workspaces={[]} showReseed={false}
       mode="loopback-only" posture="loopback-only · no accounts · cross-site requests refused" />)
     expect(screen.queryByTestId('logout')).toBeNull()
@@ -121,13 +121,79 @@ describe('SettingsClient', () => {
     Object.defineProperty(window, 'location', { configurable: true, value: { assign, pathname: '/settings', search: '' } })
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 204 }))
     render(<SettingsClient templates={[template()]} companies={[]} roster={[]} adapters={[]} permissions={[]} workspaces={[]} showReseed={false}
-      mode="password" posture="password login · single operator · cross-site requests refused" />)
+      mode="accounts" posture="accounts · signed in as ada · cross-site requests refused" />)
     await act(async () => {
       fireEvent.click(screen.getByTestId('logout'))
     })
     expect(fetchMock).toHaveBeenCalledWith('/api/auth/logout', expect.objectContaining({ method: 'POST' }))
     expect(assign).toHaveBeenCalledWith('/login')
     vi.restoreAllMocks()
+  })
+})
+
+/**
+ * The Settings PAGE, not the client below it (M23 spec §7 F5): the one place the posture line's
+ * username is filled in. Every collaborator is stubbed — the page's own job here is that it asks
+ * `currentPrincipal()` and hands `postureFor(mode, username)` down.
+ */
+describe('SettingsPage', () => {
+  const currentPrincipal = vi.fn()
+
+  async function renderSettingsPage(): Promise<void> {
+    vi.doMock('../src/server/principal.js', () => ({ currentPrincipal }))
+    vi.doMock('../src/server/org.js', () => ({
+      listTemplates: async () => [],
+      listCompanies: async () => [],
+      listRoster: async () => [],
+      listProjects: async () => [],
+    }))
+    vi.doMock('../src/server/settings.js', () => ({
+      buildProviderAdapters: async () => [],
+      buildPermissionMatrix: async () => [],
+    }))
+    vi.doMock('../src/components/SettingsClient.js', () => ({
+      SettingsClient: ({ mode, posture }: { readonly mode: string; readonly posture: string }) => (
+        <div data-testid="settings-client-stub" data-mode={mode} data-posture={posture} />
+      ),
+    }))
+    const { default: SettingsPage } = await import('../src/app/settings/page.js')
+    render(await SettingsPage())
+  }
+
+  beforeEach(() => {
+    vi.resetModules()
+    currentPrincipal.mockReset()
+  })
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    vi.resetModules()
+  })
+
+  it('names the signed-in user in the posture line', async () => {
+    vi.stubEnv('AITEAMOS_SESSION_SECRET', '0123456789abcdef0123456789abcdef')
+    currentPrincipal.mockResolvedValue({ userId: 'ada-0001', username: 'ada' })
+    await renderSettingsPage()
+    const stub = screen.getByTestId('settings-client-stub')
+    expect(stub.getAttribute('data-mode')).toBe('accounts')
+    expect(stub.getAttribute('data-posture')).toBe('accounts · signed in as ada · cross-site requests refused')
+  })
+
+  it('says "not signed in" when the cookie names a user who is gone (the revocation story)', async () => {
+    vi.stubEnv('AITEAMOS_SESSION_SECRET', '0123456789abcdef0123456789abcdef')
+    currentPrincipal.mockResolvedValue(null)
+    await renderSettingsPage()
+    expect(screen.getByTestId('settings-client-stub').getAttribute('data-posture')).toBe(
+      'accounts · not signed in · cross-site requests refused',
+    )
+  })
+
+  it('keeps the loopback line byte for byte, with no user to name', async () => {
+    vi.stubEnv('AITEAMOS_SESSION_SECRET', '')
+    currentPrincipal.mockResolvedValue(null)
+    await renderSettingsPage()
+    const stub = screen.getByTestId('settings-client-stub')
+    expect(stub.getAttribute('data-mode')).toBe('loopback-only')
+    expect(stub.getAttribute('data-posture')).toBe('loopback-only · no accounts · cross-site requests refused')
   })
 })
 

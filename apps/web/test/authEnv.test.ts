@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { boundaryMode, configuredPassword } from '../src/lib/authEnv.js'
+import { boundaryMode, sessionSecret } from '../src/lib/authEnv.js'
 
 describe('authEnv', () => {
   afterEach(() => {
@@ -7,17 +7,24 @@ describe('authEnv', () => {
   })
 
   it('is loopback mode when the variable is absent or blank', () => {
-    vi.stubEnv('AITEAMOS_PASSWORD', undefined)
-    expect(configuredPassword()).toBeNull()
+    vi.stubEnv('AITEAMOS_SESSION_SECRET', undefined)
+    expect(sessionSecret()).toBeNull()
     expect(boundaryMode()).toBe('loopback-only')
-    vi.stubEnv('AITEAMOS_PASSWORD', '   ')
-    expect(configuredPassword()).toBeNull()
+    vi.stubEnv('AITEAMOS_SESSION_SECRET', '   ')
+    expect(sessionSecret()).toBeNull()
     expect(boundaryMode()).toBe('loopback-only')
   })
 
-  it('is password mode with the trimmed value otherwise', () => {
-    vi.stubEnv('AITEAMOS_PASSWORD', '  hunter2 \n')
-    expect(configuredPassword()).toBe('hunter2')
-    expect(boundaryMode()).toBe('password')
+  it('is accounts mode with the trimmed secret otherwise', () => {
+    vi.stubEnv('AITEAMOS_SESSION_SECRET', '  0123456789abcdef0123456789abcdef \n')
+    expect(sessionSecret()).toBe('0123456789abcdef0123456789abcdef')
+    expect(boundaryMode()).toBe('accounts')
+  })
+
+  it('does not read the retired password variable', () => {
+    vi.stubEnv('AITEAMOS_SESSION_SECRET', undefined)
+    vi.stubEnv('AITEAMOS_PASSWORD', 'hunter2')
+    expect(sessionSecret()).toBeNull()
+    expect(boundaryMode()).toBe('loopback-only')
   })
 })

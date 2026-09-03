@@ -116,7 +116,7 @@ try {
   web = spawn(
     'node',
     ['--env-file=.env', 'node_modules/next/dist/bin/next', 'dev', 'apps/web', '--port', PORT],
-    // M21 A1: the operator's AITEAMOS_PASSWORD must not reach the child, or every page is /login.
+    // M21 A1: the operator's AITEAMOS_SESSION_SECRET must not reach the child, or every page is /login.
     { env: loopbackChildEnv(), stdio: ['ignore', 'pipe', 'pipe'] },
   )
   web.stdout.on('data', (chunk) => process.stdout.write(`[web] ${chunk}`))

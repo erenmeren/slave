@@ -1,11 +1,15 @@
 import { NextResponse, type NextRequest } from 'next/server'
-import { configuredPassword, type BoundaryMode } from './lib/authEnv'
+import { sessionSecret, type BoundaryMode } from './lib/authEnv'
 import { boundaryVerdict } from './lib/boundary'
-import { SESSION_COOKIE, verifyBearer, verifySession } from './lib/session'
+import { SESSION_COOKIE, verifySession } from './lib/session'
 
 /**
- * The browser boundary (M15 spec §2.2, M20 spec §2.4). Every decision lives in `lib/boundary.ts`;
- * this file only extracts headers, asks `lib/session.ts` about the credentials, and speaks HTTP.
+ * The browser boundary (M15 spec §2.2, M23 spec §7 F4). Every decision lives in `lib/boundary.ts`;
+ * this file only extracts headers, asks `lib/session.ts` about the cookie, and speaks HTTP. It
+ * stays STATELESS on purpose — the edge runtime cannot reach Postgres, so a signature and an
+ * expiry are all it checks. Whether the user the cookie names still exists is
+ * `server/principal.ts`'s question, asked where a database is available.
+ *
  * A refused page request gets the same JSON 403 a refused API request does — a foreign-host page
  * fetch is a rebinding probe, not a person to render an error page for. An unauthenticated page
  * request IS a person: it goes to /login with the path to come back to.
@@ -19,19 +23,14 @@ import { SESSION_COOKIE, verifyBearer, verifySession } from './lib/session'
  * parses every `Location` with no base, and answers 500 `TypeError: Invalid URL`.
  * So the host the operator typed is echoed back, and the adapter leaves a non-`localhost` host
  * alone. Which hosts may reach this line is `boundary.ts`'s business, not this file's: loopback
- * mode already refused every foreign host above, and password mode answers to any host on purpose.
+ * mode already refused every foreign host above, and accounts mode answers to any host on purpose.
  * Spec §2.4: `302 to /login?next=<pathname + search>`.
  */
 export async function middleware(request: NextRequest): Promise<NextResponse> {
-  const password = configuredPassword()
-  const mode: BoundaryMode = password === null ? 'loopback-only' : 'password'
-  const [sessionValid, bearerValid] =
-    password === null
-      ? [false, false]
-      : await Promise.all([
-          verifySession(password, request.cookies.get(SESSION_COOKIE)?.value ?? null, new Date()),
-          verifyBearer(password, request.headers.get('authorization')),
-        ])
+  const secret = sessionSecret()
+  const mode: BoundaryMode = secret === null ? 'loopback-only' : 'accounts'
+  const session =
+    secret === null ? null : await verifySession(secret, request.cookies.get(SESSION_COOKIE)?.value ?? null, new Date())
 
   const verdict = boundaryVerdict({
     mode,
@@ -39,8 +38,7 @@ export async function middleware(request: NextRequest): Promise<NextResponse> {
     secFetchSite: request.headers.get('sec-fetch-site'),
     origin: request.headers.get('origin'),
     path: request.nextUrl.pathname,
-    sessionValid,
-    bearerValid,
+    sessionValid: session !== null,
   })
   if (verdict.allow) return NextResponse.next()
   if (verdict.kind === 'refused') return NextResponse.json({ error: verdict.reason }, { status: 403 })

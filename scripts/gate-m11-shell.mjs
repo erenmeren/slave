@@ -269,7 +269,7 @@ try {
   const preferredPort = await findFreePort()
   nextProc = spawn('node', ['node_modules/next/dist/bin/next', 'dev', 'apps/web', '-p', String(preferredPort)], {
     cwd: repoRoot,
-    // M21 A1: the operator's AITEAMOS_PASSWORD must not reach the child, or every page is /login.
+    // M21 A1: the operator's AITEAMOS_SESSION_SECRET must not reach the child, or every page is /login.
     env: loopbackChildEnv(),
     stdio: ['ignore', 'pipe', 'pipe'],
   })

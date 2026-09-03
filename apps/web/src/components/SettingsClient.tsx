@@ -36,9 +36,9 @@ export function SettingsClient({
   readonly workspaces: readonly { readonly id: string; readonly name: string; readonly halted: boolean }[]
   /** Computed on the SERVER from `NODE_ENV`, never guessed at here. */
   readonly showReseed: boolean
-  /** Computed on the SERVER from `AITEAMOS_PASSWORD` (`boundaryMode()`), never guessed here. */
+  /** Computed on the SERVER from `AITEAMOS_SESSION_SECRET` (`boundaryMode()`), never guessed here. */
   readonly mode: BoundaryMode
-  /** `postureFor(mode)` — the single source for the security line (M20 spec §2.3). */
+  /** `postureFor(mode, username)` — the single source for the security line (M23 spec §7 F5). */
   readonly posture: string
 }): React.JSX.Element {
   return (
@@ -53,7 +53,7 @@ export function SettingsClient({
         <p data-testid="security-posture" className="font-mono text-[10px] text-text-3">
           {posture}
         </p>
-        {mode === 'password' && <LogoutButton />}
+        {mode === 'accounts' && <LogoutButton />}
       </Panel>
       <DangerZone workspaces={workspaces} showReseed={showReseed} />
       <Panel title="Projects">

@@ -19,11 +19,11 @@ export default async function LoginPage({
     <main className="flex flex-1 items-center justify-center p-4">
       <div className="w-full max-w-sm">
         <Panel title="sign in">
-          {mode === 'password' ? (
+          {mode === 'accounts' ? (
             <LoginForm next={safeNext(next ?? null)} />
           ) : (
             <p data-testid="login-unconfigured" className="font-mono text-[10px] text-text-3">
-              password login is not configured on this instance — loopback-only.{' '}
+              accounts are not configured on this instance — loopback-only.{' '}
               <a href="/" className="underline">
                 open the app
               </a>

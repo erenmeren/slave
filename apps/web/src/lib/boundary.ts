@@ -2,10 +2,10 @@ import { assertNever } from './assertNever'
 import type { BoundaryMode } from './authEnv'
 
 /**
- * The browser boundary's decision table, in two modes (M15 spec §2.1, M20 spec §2.3). Pure on
- * purpose: no I/O, no Next imports, no env reads — the mode and the credential verdicts arrive
- * as inputs. The middleware, the Settings card and the gates all consult this one module, and
- * its unit tests are the rules' specification.
+ * The browser boundary's decision table, in two modes (M15 spec §2.1, M23 spec §7 F1/F4). Pure on
+ * purpose: no I/O, no Next imports, no env reads — the mode and the session verdict arrive as
+ * inputs. The middleware, the Settings card and the gates all consult this one module, and its
+ * unit tests are the rules' specification.
  */
 export interface BoundaryRequest {
   readonly mode: BoundaryMode
@@ -13,9 +13,10 @@ export interface BoundaryRequest {
   readonly secFetchSite: string | null
   readonly origin: string | null
   readonly path: string
-  /** Password mode only; both false in loopback mode. Computed by the middleware via session.ts. */
+  /** Accounts mode only; always false in loopback mode. Computed by the middleware via
+   *  session.ts — signature and expiry, nothing else. The cookie is the ONLY credential accounts
+   *  mode reads: M20's `Authorization: Bearer <password>` retired with the shared password. */
   readonly sessionValid: boolean
-  readonly bearerValid: boolean
 }
 
 export type BoundaryVerdict =
@@ -32,11 +33,16 @@ const ALLOWED_HOSTS: ReadonlySet<string> = new Set(['localhost', '127.0.0.1', '[
 const PUBLIC_PATHS: ReadonlySet<string> = new Set(['/favicon.ico', '/login', '/api/auth/login'])
 const PUBLIC_PREFIX = '/_next/'
 
-/** The single source for the Settings card's security line. */
-export function postureFor(mode: BoundaryMode): string {
+/** The single source for the Settings card's security line. `username` is who the reader is
+ *  signed in as — `null` in accounts mode means a cookie whose user no longer exists (or none at
+ *  all), which the line says out loud rather than hiding. Loopback mode names nobody: there is
+ *  nobody to name, and that string is M15's, byte for byte. */
+export function postureFor(mode: BoundaryMode, username: string | null = null): string {
   switch (mode) {
-    case 'password':
-      return 'password login · single operator · cross-site requests refused'
+    case 'accounts':
+      return username === null
+        ? 'accounts · not signed in · cross-site requests refused'
+        : `accounts · signed in as ${username} · cross-site requests refused`
     case 'loopback-only':
       return 'loopback-only · no accounts · cross-site requests refused'
     default:
@@ -73,7 +79,7 @@ function crossSiteRefusal(request: BoundaryRequest): BoundaryVerdict | null {
     // Older browsers without fetch metadata still send Origin on cross-origin requests. What
     // counts as same-side is per-mode (below); an unparsable Origin (including the literal
     // `null`) is refused in every mode. `URL.host` keeps the port: the loopback branch strips it
-    // with `hostOf`, the password branch compares it.
+    // with `hostOf`, the accounts branch compares it.
     let originHost: string | null = null
     try {
       originHost = new URL(request.origin).host
@@ -87,7 +93,7 @@ function crossSiteRefusal(request: BoundaryRequest): BoundaryVerdict | null {
           // The allowlist, port ignored — keeps `localhost` ↔ `127.0.0.1` allowed (M15).
           sameSide = ALLOWED_HOSTS.has(hostOf(originHost))
           break
-        case 'password':
+        case 'accounts':
           // The WHATWG host of the Origin (lowercase, default port dropped) must equal the request's
           // own Host header, lowercased, port included: a page on another port of the same tailnet
           // hostname is another site (M21 B1, closes M20 Errata 2). `Host: box:80` vs
@@ -115,7 +121,7 @@ export function boundaryVerdict(request: BoundaryRequest): BoundaryVerdict {
         return refused(`foreign host ${host ?? '<none>'} — this instance is loopback-only`)
       }
       break
-    case 'password':
+    case 'accounts':
       // Skipped: the defence is the credential now, and answering to a tailnet hostname is the point.
       break
     default:
@@ -133,14 +139,13 @@ export function boundaryVerdict(request: BoundaryRequest): BoundaryVerdict {
   // Rule 2 — public paths need no credential in either mode.
   if (PUBLIC_PATHS.has(request.path) || request.path.startsWith(PUBLIC_PREFIX)) return { allow: true }
 
-  // Rule 4 — password mode: a session opens every path, a bearer opens /api/ only. M15's
+  // Rule 4 — accounts mode: a session opens every path, and nothing else opens anything. M15's
   // "neither header — a local process is the operator" escape hatch is closed here: no
   // credential is nobody, full stop. It stays open in loopback mode (rule 5).
   switch (request.mode) {
-    case 'password':
+    case 'accounts':
       if (request.sessionValid) return { allow: true }
-      if (isApi && request.bearerValid) return { allow: true }
-      return { allow: false, kind: 'unauthenticated', reason: 'authentication required' }
+      return { allow: false, kind: 'unauthenticated', reason: 'sign in first' }
     case 'loopback-only':
       break
     default:

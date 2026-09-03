@@ -8,13 +8,16 @@ const base = {
   origin: null,
   path: '/api/w/x/overview',
   sessionValid: false,
-  bearerValid: false,
 }
 
 describe('boundaryVerdict', () => {
-  it('names both postures', () => {
+  it('names every posture', () => {
     expect(postureFor('loopback-only')).toBe('loopback-only · no accounts · cross-site requests refused')
-    expect(postureFor('password')).toBe('password login · single operator · cross-site requests refused')
+    // The loopback line never names a user: there is nobody to name.
+    expect(postureFor('loopback-only', 'ada')).toBe('loopback-only · no accounts · cross-site requests refused')
+    expect(postureFor('accounts', 'ada')).toBe('accounts · signed in as ada · cross-site requests refused')
+    expect(postureFor('accounts', null)).toBe('accounts · not signed in · cross-site requests refused')
+    expect(postureFor('accounts')).toBe('accounts · not signed in · cross-site requests refused')
   })
 
   it.each([
@@ -89,9 +92,9 @@ describe('boundaryVerdict', () => {
   })
 })
 
-describe('boundaryVerdict in password mode', () => {
-  const pw = { ...base, mode: 'password' as const }
-  const UNAUTH = { allow: false, kind: 'unauthenticated', reason: 'authentication required' }
+describe('boundaryVerdict in accounts mode', () => {
+  const pw = { ...base, mode: 'accounts' as const }
+  const UNAUTH = { allow: false, kind: 'unauthenticated', reason: 'sign in first' }
 
   it('lifts the Host allowlist (rule 1 is loopback mode only)', () => {
     expect(boundaryVerdict({ ...pw, host: 'box.tail1234.ts.net:3000', sessionValid: true }).allow).toBe(true)
@@ -122,9 +125,11 @@ describe('boundaryVerdict in password mode', () => {
     expect(boundaryVerdict({ ...pw, sessionValid: true, path: '/w/abc/tasks' })).toEqual({ allow: true })
   })
 
-  it('a valid bearer allows /api/ paths only', () => {
-    expect(boundaryVerdict({ ...pw, bearerValid: true })).toEqual({ allow: true })
-    expect(boundaryVerdict({ ...pw, bearerValid: true, path: '/w/abc/tasks' })).toEqual(UNAUTH)
+  it('has no bearer to fall back on: an Authorization header is not a session (spec §7 F4)', () => {
+    // The field is gone from the request shape; the only credential accounts mode reads is the
+    // cookie, so an /api/ call without one is unauthenticated no matter what it carries.
+    expect(boundaryVerdict({ ...pw })).toEqual(UNAUTH)
+    expect('bearerValid' in pw).toBe(false)
   })
 
   it('still refuses cross-site fetch metadata even with a session', () => {
@@ -135,7 +140,7 @@ describe('boundaryVerdict in password mode', () => {
     })
   })
 
-  it('compares an Origin against the request Host WITH its port in password mode (M21 B1)', () => {
+  it('compares an Origin against the request Host WITH its port in accounts mode (M21 B1)', () => {
     const host = 'box.tail1234.ts.net:3000'
     expect(boundaryVerdict({ ...pw, host, sessionValid: true, origin: 'http://box.tail1234.ts.net:3000' })).toEqual({ allow: true })
     expect(boundaryVerdict({ ...pw, host: 'Box.Tail1234.TS.net:3000', sessionValid: true, origin: 'http://box.tail1234.ts.net:3000' })).toEqual({ allow: true })
@@ -161,7 +166,7 @@ describe('boundaryVerdict in password mode', () => {
     })
   })
 
-  it('refuses an unparsable Origin in password mode too', () => {
+  it('refuses an unparsable Origin in accounts mode too', () => {
     for (const origin of ['null', 'not a url']) {
       expect(boundaryVerdict({ ...pw, sessionValid: true, origin })).toEqual({
         allow: false,

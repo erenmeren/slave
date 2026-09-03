@@ -1,7 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { POST as loginPOST } from '../src/app/api/auth/login/route.js'
-import { POST as logoutPOST } from '../src/app/api/auth/logout/route.js'
-import { SESSION_COOKIE, verifySession } from '../src/lib/session.js'
+
+const { verifyCredentials } = vi.hoisted(() => ({ verifyCredentials: vi.fn() }))
+
+// The route asks `packages/control` who this is; the derivation itself is that package's test's
+// business (M23 F3). Mocking it here keeps this file about the HTTP contract — and fast.
+vi.mock('@ai-team-os/control', () => ({ verifyCredentials }))
+
+const { POST: loginPOST } = await import('../src/app/api/auth/login/route.js')
+const { POST: logoutPOST } = await import('../src/app/api/auth/logout/route.js')
+const { SESSION_COOKIE, verifySession } = await import('../src/lib/session.js')
+
+const SECRET = '0123456789abcdef0123456789abcdef'
+const ADA = { id: 'ada-0001', username: 'ada' }
 
 function loginRequest(body: unknown, url = 'http://127.0.0.1:3000/api/auth/login', headers: Record<string, string> = {}): Request {
   return new Request(url, {
@@ -13,56 +23,79 @@ function loginRequest(body: unknown, url = 'http://127.0.0.1:3000/api/auth/login
 
 describe('POST /api/auth/login', () => {
   beforeEach(() => {
-    vi.stubEnv('AITEAMOS_PASSWORD', 'hunter2')
+    vi.stubEnv('AITEAMOS_SESSION_SECRET', SECRET)
+    verifyCredentials.mockReset()
+    verifyCredentials.mockImplementation(async (username: string, password: string) =>
+      username === 'ada' && password === 'hunter2-hunter2' ? ADA : null,
+    )
   })
   afterEach(() => {
     vi.unstubAllEnvs()
     vi.restoreAllMocks()
   })
 
-  it('404s when no password is configured', async () => {
-    vi.stubEnv('AITEAMOS_PASSWORD', '')
-    const response = await loginPOST(loginRequest({ password: 'anything' }))
+  it('404s when the instance has no session secret (loopback mode has no accounts)', async () => {
+    vi.stubEnv('AITEAMOS_SESSION_SECRET', '')
+    const response = await loginPOST(loginRequest({ username: 'ada', password: 'hunter2-hunter2' }))
     expect(response.status).toBe(404)
-    expect(await response.json()).toEqual({ error: 'password login is not configured on this instance' })
+    expect(await response.json()).toEqual({ error: 'accounts are not configured on this instance' })
     expect(response.headers.get('set-cookie')).toBeNull()
+    // It refuses before it ever asks the database who that is.
+    expect(verifyCredentials).not.toHaveBeenCalled()
   })
 
-  it('sets a verifiable session cookie on the right password (plain http → no Secure)', async () => {
-    const response = await loginPOST(loginRequest({ password: 'hunter2' }))
+  it('sets a session cookie bound to the user on the right credentials (plain http → no Secure)', async () => {
+    const response = await loginPOST(loginRequest({ username: 'ada', password: 'hunter2-hunter2' }))
     expect(response.status).toBe(204)
+    expect(verifyCredentials).toHaveBeenCalledWith('ada', 'hunter2-hunter2')
     const cookie = response.headers.get('set-cookie')
-    expect(cookie).toMatch(new RegExp(`^${SESSION_COOKIE}=\\d+\\.[0-9a-f]{64}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000$`))
+    expect(cookie).toMatch(
+      new RegExp(`^${SESSION_COOKIE}=[A-Za-z0-9-]+\\.\\d+\\.[0-9a-f]{64}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000$`),
+    )
     const value = cookie?.split(';')[0]?.slice(SESSION_COOKIE.length + 1) ?? null
-    expect(await verifySession('hunter2', value, new Date())).toBe(true)
+    expect(await verifySession(SECRET, value, new Date())).toEqual({ userId: ADA.id })
   })
 
   it('marks the cookie Secure over https', async () => {
-    const response = await loginPOST(loginRequest({ password: 'hunter2' }, 'https://box.example/api/auth/login'))
+    const response = await loginPOST(loginRequest({ username: 'ada', password: 'hunter2-hunter2' }, 'https://box.example/api/auth/login'))
     expect(response.headers.get('set-cookie')).toMatch(/; Secure$/)
-    const proxied = await loginPOST(loginRequest({ password: 'hunter2' }, 'http://box.example/api/auth/login', { 'x-forwarded-proto': 'https' }))
+    const proxied = await loginPOST(
+      loginRequest({ username: 'ada', password: 'hunter2-hunter2' }, 'http://box.example/api/auth/login', { 'x-forwarded-proto': 'https' }),
+    )
     expect(proxied.headers.get('set-cookie')).toMatch(/; Secure$/)
   })
 
   it('waits 300 ms, logs one line, and 401s on the wrong password — no cookie', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
     const started = performance.now()
-    const response = await loginPOST(loginRequest({ password: 'hunter3' }))
+    const response = await loginPOST(loginRequest({ username: 'ada', password: 'hunter3-hunter3' }))
     const elapsed = performance.now() - started
     expect(elapsed).toBeGreaterThanOrEqual(290)
     expect(response.status).toBe(401)
-    expect(await response.json()).toEqual({ error: 'wrong password' })
+    expect(await response.json()).toEqual({ error: 'wrong username or password' })
     expect(response.headers.get('set-cookie')).toBeNull()
     expect(warn).toHaveBeenCalledTimes(1)
     expect(warn).toHaveBeenCalledWith('[auth] failed login attempt')
   })
 
-  it.each([['not json'], [JSON.stringify({})], [JSON.stringify({ password: 42 })], [JSON.stringify(null)]])(
-    'treats a malformed body (%s) as a wrong password',
+  it('answers an unknown username exactly as it answers a wrong password — same delay, same text', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const started = performance.now()
+    const response = await loginPOST(loginRequest({ username: 'nobody', password: 'hunter2-hunter2' }))
+    expect(performance.now() - started).toBeGreaterThanOrEqual(290)
+    expect(response.status).toBe(401)
+    expect(await response.json()).toEqual({ error: 'wrong username or password' })
+    // The name the caller guessed never reaches the log or the body.
+    expect(warn).toHaveBeenCalledWith('[auth] failed login attempt')
+  })
+
+  it.each([['not json'], [JSON.stringify({})], [JSON.stringify({ username: 'ada' })], [JSON.stringify({ username: 42, password: 42 })], [JSON.stringify(null)]])(
+    'treats a malformed body (%s) as wrong credentials',
     async (body) => {
       vi.spyOn(console, 'warn').mockImplementation(() => undefined)
       const response = await loginPOST(loginRequest(body))
       expect(response.status).toBe(401)
+      expect(await response.json()).toEqual({ error: 'wrong username or password' })
     },
   )
 
@@ -70,9 +103,9 @@ describe('POST /api/auth/login', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => undefined)
     const started = performance.now()
     const [first, second, right] = await Promise.all([
-      loginPOST(loginRequest({ password: 'wrong-1' })).then((r) => ({ status: r.status, at: performance.now() - started })),
-      loginPOST(loginRequest({ password: 'wrong-2' })).then((r) => ({ status: r.status, at: performance.now() - started })),
-      loginPOST(loginRequest({ password: 'hunter2' })).then((r) => ({ status: r.status, at: performance.now() - started })),
+      loginPOST(loginRequest({ username: 'ada', password: 'wrong-1' })).then((r) => ({ status: r.status, at: performance.now() - started })),
+      loginPOST(loginRequest({ username: 'mallory', password: 'wrong-2' })).then((r) => ({ status: r.status, at: performance.now() - started })),
+      loginPOST(loginRequest({ username: 'ada', password: 'hunter2-hunter2' })).then((r) => ({ status: r.status, at: performance.now() - started })),
     ])
     expect(first.status).toBe(401)
     expect(second.status).toBe(401)

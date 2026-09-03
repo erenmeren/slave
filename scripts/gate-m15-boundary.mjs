@@ -98,7 +98,7 @@ try {
   nextServer = spawn(
     'node',
     ['node_modules/next/dist/bin/next', 'dev', 'apps/web', '-p', String(preferredPort), '-H', '127.0.0.1'],
-    // M21 A1: the operator's AITEAMOS_PASSWORD must not reach the child, or every page is /login.
+    // M21 A1: the operator's AITEAMOS_SESSION_SECRET must not reach the child, or every page is /login.
     { cwd: repoRoot, env: loopbackChildEnv(), stdio: ['ignore', 'pipe', 'pipe'] },
   )
   let nextOutput = ''

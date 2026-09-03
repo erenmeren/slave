@@ -253,27 +253,33 @@ database.
 
 ### Reaching it from another device
 
-Set `AITEAMOS_PASSWORD` in `.env` and start with `npm run web:exposed` (`-H 0.0.0.0`). With a
-password configured the app answers to any Host name and asks for the password on every page
-(a login form) and every `/api/` call (a 401 without a session cookie); `curl` and scripts send
-it as `Authorization: Bearer <password>`. The session is a signed cookie, 30 days, no table —
-changing the password logs every device out. Settings' security line reads
-`password login · single operator · cross-site requests refused` in this mode, and carries a
+Set `AITEAMOS_SESSION_SECRET` in `.env` (mint it with `openssl rand -hex 32`), create at least one
+account with `npm run orchestrator -- create-user --name <you>`, and start with
+`npm run web:exposed` (`-H 0.0.0.0`). With a secret configured the app runs in **accounts mode**: it
+answers to any Host name and asks for a username and password on every page (a login form) and
+every `/api/` call (a 401 without a session cookie). The session is a signed cookie, 30 days, no
+table — its value is `<userId>.<expiry>.<hmac>`, so rotating the secret logs every device out at
+once and deleting a user refuses that user's next write with `401 session revoked`. There is no
+bearer token: the cookie is the only credential, for browsers and scripts alike. Settings' security
+line reads `accounts · signed in as <you> · cross-site requests refused` in this mode, and carries a
 Logout button.
 
-Never run `web:exposed` without a password. The Host rule refuses every non-loopback Host name,
+Never run `web:exposed` without accounts. The Host rule refuses every non-loopback Host name,
 which stops browsers and accidents — but as the M15 spec §2.4 says in as many words, it is "not
 against a hostile LAN": a client that forges `Host: localhost` with `curl` walks straight through
 it and gets full read/write on a socket bound to every interface. `npm run web:exposed` therefore
-refuses to start when `AITEAMOS_PASSWORD` is blank or unset (`scripts/web-exposed.mjs`, one line
-on stderr and exit 2); the loopback `npm run web` is the command for a passwordless instance.
+refuses to start (`scripts/web-exposed.mjs`, one line on stderr and exit 2) when the secret is
+blank, when it is shorter than 32 characters, or when the database holds no users at all; the
+loopback `npm run web` is the command for an instance without accounts.
 
-Pick a long random password. The 300 ms delay on a failed login is a queue: one process answers
-at most ~3.3 wrong guesses a second regardless of connection count. It is not a lockout and does
-not bound a distributed attacker; the password's own entropy is the real defence (e.g.
-`openssl rand -base64 24`).
+Pick long random passwords for the accounts too — `create-user` reads the password from stdin and
+refuses anything under 12 characters. The 300 ms delay on a failed login is a queue: one process
+answers at most ~3.3 wrong guesses a second regardless of connection count, and an unknown username
+costs exactly what a wrong password does, so the door leaks no list of who exists. It is not a
+lockout and does not bound a distributed attacker; the passwords' own entropy is the real defence
+(e.g. `openssl rand -base64 24`).
 
-The password and the cookie travel in clear over plain HTTP. Use a tailnet (Tailscale — the
+The credentials and the cookie travel in clear over plain HTTP. Use a tailnet (Tailscale — the
 recommended path; the wire is already encrypted) or a LAN you trust, never the open internet;
 TLS is deliberately not this app's job.
 

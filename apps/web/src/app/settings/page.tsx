@@ -3,6 +3,7 @@ import { buildPermissionMatrix, buildProviderAdapters } from '../../server/setti
 import { SettingsClient } from '../../components/SettingsClient'
 import { boundaryMode } from '../../lib/authEnv'
 import { postureFor } from '../../lib/boundary'
+import { currentPrincipal } from '../../server/principal'
 
 export const dynamic = 'force-dynamic'
 
@@ -10,13 +11,17 @@ export const dynamic = 'force-dynamic'
  *  (resolved against the real binaries on PATH), the permission matrix grouped by workspace, and
  *  the projects the danger zone's stop can be pointed at. */
 export default async function SettingsPage(): Promise<React.JSX.Element> {
-  const [templates, companies, roster, adapters, permissions, projects] = await Promise.all([
+  const [templates, companies, roster, adapters, permissions, projects, principal] = await Promise.all([
     listTemplates(),
     listCompanies(),
     listRoster(),
     buildProviderAdapters(),
     buildPermissionMatrix(),
     listProjects(),
+    // The one page that asks WHO is reading it. `null` in accounts mode is the revoked-user case
+    // (spec §7 F4): the middleware honoured a still-valid signature, and the posture line is where
+    // the operator finds out the account behind it is gone.
+    currentPrincipal(),
   ])
   const mode = boundaryMode()
   return (
@@ -33,7 +38,7 @@ export default async function SettingsPage(): Promise<React.JSX.Element> {
       // production regardless, so hiding the button is the second lock, not the only one.
       showReseed={process.env['NODE_ENV'] !== 'production'}
       mode={mode}
-      posture={postureFor(mode)}
+      posture={postureFor(mode, principal?.username ?? null)}
     />
   )
 }

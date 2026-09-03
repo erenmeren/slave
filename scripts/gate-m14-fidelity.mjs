@@ -644,7 +644,7 @@ try {
     // `AITEAMOS_GATE_WARM=1` widens `next.config.ts`'s on-demand-entries buffer for THIS `next
     // dev` only (M17 Task 7, Flake 6 investigation) -- see that file for the mechanism. An
     // ordinary developer's `next dev` never sets this and keeps Next's defaults.
-    // M21 A1: the operator's AITEAMOS_PASSWORD must not reach the child, or every page is /login.
+    // M21 A1: the operator's AITEAMOS_SESSION_SECRET must not reach the child, or every page is /login.
     env: loopbackChildEnv({ AITEAMOS_GATE_WARM: '1' }),
     stdio: ['ignore', 'pipe', 'pipe'],
   })
