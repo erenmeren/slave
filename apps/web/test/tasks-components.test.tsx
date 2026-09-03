@@ -8,8 +8,12 @@ import { TaskDetailPanel } from '../src/components/TaskDetailPanel.js'
 import { TasksClient } from '../src/components/TasksClient.js'
 import type { TaskBoardItem, TasksSnapshot } from '../src/server/tasks.js'
 
+// Module-level so the M23 B4 collect test below can assert `router.refresh()` fired -- a fresh
+// `vi.fn()` returned from inside `useRouter` would give the assertion no stable reference to check.
+const routerRefresh = vi.fn()
+
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({ replace: vi.fn() }),
+  useRouter: () => ({ replace: vi.fn(), refresh: routerRefresh }),
   usePathname: () => '/w/w1/tasks',
   useSearchParams: () => new URLSearchParams(),
 }))
@@ -26,6 +30,7 @@ const task = (over: Partial<TaskBoardItem>): TaskBoardItem => ({
   branch: 'feature/add-the-thing',
   lastRejectionReason: null,
   runs: [],
+  collectable: false,
   ...over,
 })
 
@@ -55,6 +60,7 @@ beforeEach(() => {
     'fetch',
     vi.fn(async () => new Response(JSON.stringify(snapshot([])), { status: 200 })),
   )
+  routerRefresh.mockClear()
 })
 
 afterEach(() => {
@@ -99,6 +105,7 @@ describe('TaskDetailPanel', () => {
   it('shows description, branch, rejection reason and run rows', () => {
     render(
       <TaskDetailPanel
+        workspaceId="w1"
         task={task({
           description: 'Do the thing well',
           branch: 'feature/x',
@@ -111,6 +118,7 @@ describe('TaskDetailPanel', () => {
               toolCalls: 5,
               startedAt: new Date(0).toISOString(),
               endedAt: null,
+              worktreePath: null,
               checkpoint: null,
             },
           ],
@@ -127,6 +135,7 @@ describe('TaskDetailPanel', () => {
   it("shows 'paused at step N' for a paused run with a checkpoint", () => {
     render(
       <TaskDetailPanel
+        workspaceId="w1"
         task={task({
           runs: [
             {
@@ -136,6 +145,7 @@ describe('TaskDetailPanel', () => {
               toolCalls: 2,
               startedAt: new Date(0).toISOString(),
               endedAt: null,
+              worktreePath: null,
               checkpoint: { pausedAtStep: 4, sessionId: 's1', dirtyFileCount: 2, deniedDuringPause: [] },
             },
           ],
@@ -153,6 +163,7 @@ describe('TaskDetailPanel', () => {
     // always falls back to the truncated id -- not a gap in this test, a fact of the data.
     render(
       <TaskDetailPanel
+        workspaceId="w1"
         task={task({
           runs: [
             {
@@ -162,6 +173,7 @@ describe('TaskDetailPanel', () => {
               toolCalls: 2,
               startedAt: new Date(0).toISOString(),
               endedAt: null,
+              worktreePath: null,
               checkpoint: {
                 pausedAtStep: 4,
                 sessionId: 's1',
@@ -182,7 +194,7 @@ describe('TaskDetailPanel', () => {
 
   it('calls onClose when the close control is used', () => {
     const onClose = vi.fn()
-    render(<TaskDetailPanel task={task({})} onClose={onClose} />)
+    render(<TaskDetailPanel workspaceId="w1" task={task({})} onClose={onClose} />)
     fireEvent.click(screen.getByRole('button', { name: /close/i }))
     expect(onClose).toHaveBeenCalled()
   })
@@ -190,8 +202,76 @@ describe('TaskDetailPanel', () => {
   // Motion pass (spec §8 / M4 deferral). `TasksClient` mounts this panel fresh on card select, so
   // the slide-in class replays on every open by construction.
   it('carries the motion-safe panel slide-in animation class on its root', () => {
-    const { container } = render(<TaskDetailPanel task={task({})} onClose={() => {}} />)
+    const { container } = render(<TaskDetailPanel workspaceId="w1" task={task({})} onClose={() => {}} />)
     expect(container.querySelector('aside')?.className).toContain('motion-safe:animate-[panel-in_160ms_ease-out]')
+  })
+})
+
+describe('TaskDetailPanel worktree collection (M23 B4)', () => {
+  const runWithWorktree = (worktreePath: string | null) => ({
+    id: 'r1',
+    status: 'succeeded' as const,
+    costUsd: 0.1,
+    toolCalls: 1,
+    startedAt: new Date(0).toISOString(),
+    endedAt: new Date(1).toISOString(),
+    worktreePath,
+    checkpoint: null,
+  })
+
+  it('renders the collect control for a terminal task with a worktree still on disk', () => {
+    render(
+      <TaskDetailPanel
+        workspaceId="w1"
+        task={task({ status: 'done', collectable: true, runs: [runWithWorktree('/r/.aiteamos/worktrees/T-1')] })}
+        onClose={() => {}}
+      />,
+    )
+    expect(screen.getByTestId('collect-worktree')).toBeTruthy()
+  })
+
+  it('does not render the collect control for a still-running task', () => {
+    render(
+      <TaskDetailPanel
+        workspaceId="w1"
+        task={task({ status: 'running', collectable: false, runs: [runWithWorktree('/r/.aiteamos/worktrees/T-1')] })}
+        onClose={() => {}}
+      />,
+    )
+    expect(screen.queryByTestId('collect-worktree')).toBeNull()
+  })
+
+  it('does not render the collect control for a terminal task whose runs have no worktree left', () => {
+    render(
+      <TaskDetailPanel
+        workspaceId="w1"
+        task={task({ status: 'done', collectable: false, runs: [runWithWorktree(null)] })}
+        onClose={() => {}}
+      />,
+    )
+    expect(screen.queryByTestId('collect-worktree')).toBeNull()
+  })
+
+  it('confirms in two steps, then DELETEs the worktree route and refreshes', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(
+      <TaskDetailPanel
+        workspaceId="w1"
+        task={task({ id: 't1', status: 'done', collectable: true, runs: [runWithWorktree('/r/.aiteamos/worktrees/T-1')] })}
+        onClose={() => {}}
+      />,
+    )
+
+    expect(screen.queryByTestId('collect-worktree-confirm')).toBeNull()
+    fireEvent.click(screen.getByTestId('collect-worktree'))
+    expect(screen.getByTestId('collect-worktree-confirm')).toBeTruthy()
+
+    fireEvent.click(screen.getByTestId('collect-worktree-confirm'))
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/w/w1/tasks/t1/worktree', { method: 'DELETE' })
+    await vi.waitFor(() => expect(routerRefresh).toHaveBeenCalled())
   })
 })
 

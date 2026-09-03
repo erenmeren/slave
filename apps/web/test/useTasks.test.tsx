@@ -23,6 +23,7 @@ const SNAPSHOT: TasksSnapshot = {
       assigneeName: 'Alex',
       branch: 'feature/add-the-thing',
       lastRejectionReason: null,
+      collectable: false,
       runs: [
         {
           id: 'r1',
@@ -31,6 +32,7 @@ const SNAPSHOT: TasksSnapshot = {
           toolCalls: 2,
           startedAt: new Date(0).toISOString(),
           endedAt: null,
+          worktreePath: null,
           checkpoint: null,
         },
       ],

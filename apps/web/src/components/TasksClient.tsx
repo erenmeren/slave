@@ -71,7 +71,7 @@ export function TasksClient({
           ))}
         </main>
       </div>
-      {selectedTask !== null && <TaskDetailPanel task={selectedTask} onClose={() => setSelectedId(null)} />}
+      {selectedTask !== null && <TaskDetailPanel task={selectedTask} workspaceId={workspaceId} onClose={() => setSelectedId(null)} />}
     </>
   )
 }

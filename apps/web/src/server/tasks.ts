@@ -1,5 +1,5 @@
 import { prisma } from '@ai-team-os/db/client'
-import { NON_TERMINAL_RUN_STATUSES, type RunStatus, type TaskStatus } from '@ai-team-os/domain'
+import { NON_TERMINAL_RUN_STATUSES, TERMINAL, type RunStatus, type TaskStatus } from '@ai-team-os/domain'
 import { buildShellFacts, type ShellFacts } from './shell'
 
 export interface TaskRunSummary {
@@ -10,6 +10,8 @@ export interface TaskRunSummary {
   readonly toolCalls: number
   readonly startedAt: string
   readonly endedAt: string | null
+  /** M23 B4: null once collected. */
+  readonly worktreePath: string | null
   readonly checkpoint: {
     readonly pausedAtStep: number | null
     readonly sessionId: string
@@ -40,6 +42,12 @@ export interface TaskBoardItem {
   readonly branch: string | null
   readonly lastRejectionReason: string | null
   readonly runs: readonly TaskRunSummary[]
+  /**
+   * M23 B4 (controller ruling): computed server-side so the panel never imports `TERMINAL` from
+   * `@ai-team-os/domain` itself -- a terminal task with at least one run that still has a
+   * worktree on disk to remove.
+   */
+  readonly collectable: boolean
 }
 
 export interface TasksSnapshot {
@@ -82,6 +90,10 @@ export async function buildTasksSnapshot(workspaceId: string): Promise<TasksSnap
         assigneeName: liveRun?.agent.name ?? null,
         branch: task.branch,
         lastRejectionReason: task.lastRejectionReason,
+        // M23 B4 (controller ruling): a terminal task with a worktree still standing on at least
+        // one of its runs. Computed here, not in the panel -- the panel never imports `TERMINAL`
+        // from `@ai-team-os/domain`.
+        collectable: TERMINAL.includes(task.status) && task.runs.some((run) => run.worktreePath !== null),
         runs: task.runs.map((run) => ({
           id: run.id,
           status: run.status,
@@ -92,6 +104,8 @@ export async function buildTasksSnapshot(workspaceId: string): Promise<TasksSnap
           toolCalls: run.toolCalls,
           startedAt: run.startedAt.toISOString(),
           endedAt: run.endedAt?.toISOString() ?? null,
+          // M23 B4: null once collected.
+          worktreePath: run.worktreePath,
           checkpoint:
             run.checkpoint === null
               ? null

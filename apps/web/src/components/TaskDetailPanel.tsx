@@ -1,15 +1,39 @@
+import { useState } from 'react'
+import { useRouter } from 'next/navigation'
+import { sendControl } from '../lib/postControl'
 import type { TaskBoardItem } from '../server/tasks'
 import { TASK_STATUS_TEXT } from './TaskCard'
 import { Button } from './ui/Button'
+import { GhostButton, PrimaryButton } from './ui/FormControls'
 import { SectionLabel } from './ui/SectionLabel'
 
 export function TaskDetailPanel({
   task,
+  workspaceId,
   onClose,
 }: {
   readonly task: TaskBoardItem
+  readonly workspaceId: string
   readonly onClose: () => void
 }): React.JSX.Element {
+  const router = useRouter()
+  const [confirming, setConfirming] = useState(false)
+  const [pending, setPending] = useState(false)
+  const [collectError, setCollectError] = useState<string | null>(null)
+
+  // M23 B4 (controller ruling): `task.collectable` is computed server-side on the DTO
+  // (`buildTasksSnapshot`) -- this panel never imports `TERMINAL` from `@ai-team-os/domain`.
+  const collectable = task.collectable
+
+  const collect = async (): Promise<void> => {
+    setPending(true)
+    const error = await sendControl(`/api/w/${workspaceId}/tasks/${task.id}/worktree`, { method: 'DELETE' })
+    setPending(false)
+    setConfirming(false)
+    if (error === null) router.refresh()
+    else setCollectError(error)
+  }
+
   return (
     <aside
       aria-label="Task detail"
@@ -51,6 +75,28 @@ export function TaskDetailPanel({
           </>
         )}
       </dl>
+
+      {collectable && (
+        <div className="flex items-center gap-2">
+          {!confirming ? (
+            <GhostButton data-testid="collect-worktree" onClick={() => setConfirming(true)}>
+              Collect worktree
+            </GhostButton>
+          ) : (
+            <>
+              <PrimaryButton tone="blocked" data-testid="collect-worktree-confirm" disabled={pending} onClick={() => void collect()}>
+                remove the tree, keep the branch
+              </PrimaryButton>
+              <GhostButton onClick={() => setConfirming(false)}>cancel</GhostButton>
+            </>
+          )}
+          {collectError !== null && (
+            <span role="alert" data-testid="collect-worktree-error" className="text-xs text-tone-blocked">
+              {collectError}
+            </span>
+          )}
+        </div>
+      )}
 
       <section className="flex flex-col gap-2">
         <SectionLabel>Runs</SectionLabel>
