@@ -111,7 +111,12 @@ export function CommunicationMode({
           {errorText}
         </div>
       )}
-      {graph.agents.length === 0 && (
+      {/* Gated on `graph.edges` -- the message is about hand-offs, not the roster, so the common
+       *  real case (a seeded team with no traffic yet) still gets this explanation even though
+       *  `graph.agents` and the canvas's agent/operator nodes are non-empty. Same "gate on the
+       *  collection the sentence is actually about" idiom `DepsMode.tsx`'s own empty band uses
+       *  (`snapshot.dependencies.length === 0` for "no dependencies yet", not `snapshot.tasks`). */}
+      {graph.edges.length === 0 && (
         <div
           data-testid="comm-empty"
           className="pointer-events-none absolute inset-x-0 top-10 z-10 text-center text-xs text-text-3"

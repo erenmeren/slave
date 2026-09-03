@@ -200,6 +200,36 @@ describe('CommunicationMode', () => {
     expect(screen.getByTestId('graph-canvas-stub')).toBeTruthy()
   })
 
+  // Fix round 1: the band is about HAND-OFFS, not the roster -- a seeded team with zero traffic
+  // yet (agents present, edges empty) is exactly the state the sentence was written for, and must
+  // still show it, with the agent/operator nodes rendered right alongside it (the canvas is never
+  // omitted, same as every other empty case).
+  it('shows the empty panel for a non-empty roster with zero edges, alongside the rendered agent nodes', async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify(
+          commGraph({
+            agents: [
+              { id: 'a1', name: 'Alex', role: 'backend' },
+              { id: 'a2', name: 'Sam', role: 'reviewer' },
+            ],
+            edges: [],
+          }),
+        ),
+        { status: 200 },
+      ),
+    )
+    render(<CommunicationMode workspaceId="w1" />)
+
+    await waitFor(() => expect(screen.getByTestId('node-agent:a1')).toBeTruthy())
+
+    expect(screen.getByTestId('comm-empty').textContent).toBe('no hand-offs yet — edges appear as tasks move between agents')
+    expect(screen.getByTestId('node-agent:a1').querySelector('[data-testid="comm-agent-node"]')?.textContent).toContain('Alex')
+    expect(screen.getByTestId('node-agent:a2').querySelector('[data-testid="comm-agent-node"]')?.textContent).toContain('Sam')
+    expect(screen.getByTestId('node-operator')).toBeTruthy()
+    expect(screen.queryAllByTestId(/^edge-/)).toHaveLength(0)
+  })
+
   it('renders N agent nodes, one operator node, and one edge per fetched two-edge graph', async () => {
     fetchMock.mockResolvedValueOnce(
       new Response(
