@@ -476,3 +476,155 @@ name on the event`.
 A → B → C → G3 → D → E → F → G1/G2. Each series is mergeable alone: A–E and G3 change no
 authentication surface; F rewrites it and is reviewed on its own; G1 comes last because its
 `gates` job runs the M23 gate, whose stage 8 needs F.
+
+## 13. Errata — where execution corrected the plan
+
+Every ruling below is a controller decision made while executing this spec against the real
+tree, recorded here (Task 18) because the spec itself is now wrong on the point and this section
+is the single place to look. Numbered by the task that made the ruling; task numbers are the
+execution plan's, not this document's series letters.
+
+1. **Migrations (T1, T4, T9, T13, T15) — amends §11 Global Constraints.** §11 names three
+   migrations (`m23_workspace_name_unique`, `m23_events`, `m23_accounts`). The tree carries six:
+   `m23_workspace_name_unique` (T1/A1), `m23_workspace_created_event` (T1/A1, split out of the
+   named `m23_events`), `m23_worktree_collected_event` (T4/B2), `m23_org_changed_event` (T9/D1),
+   `m23_accounts` (T13/F2) and `m23_event_user` (T15/F6, adding `ExecutionEvent.userId` — not
+   named in §11 at all). Each series lands its own event type in its own migration rather than
+   one combined `m23_events` migration shared across series that merge independently (§12's own
+   "each series is mergeable alone" rule requires it: A, B and D each need their event type to
+   exist the moment that series merges, which a migration shared with a not-yet-merged series
+   cannot provide). Cost if wrong: none — Prisma's migration history is additive either way; a
+   reader expecting one combined migration finds six instead.
+
+2. **`task.cancelled` is not an event type (T4) — amends §3 B1.** B1 reads: "The terminal
+   timestamp is the `ts` of the task's latest `task.done | task.failed | task.cancelled` event."
+   `task.cancelled` does not exist as an `ExecutionEvent` type in this tree (cancellation is a
+   `Task.status` transition with no dedicated event). `terminalTimestamp` therefore reads
+   `task_done` and `task_failed` only; a cancelled task has no terminal event and is never aged
+   out by the daemon's timer — it stays collectable on demand only, through the operator route.
+   Cost if wrong: cancelled tasks' worktrees never age out automatically; the "Collect worktree"
+   button still reaches them, so nothing is unreachable, only unautomated.
+
+3. **`TaskBoardItem.collectable` is computed server-side (T6) — amends §3 B4.** B4 says the DTO
+   gains `worktreePath: string | null` on `TaskRunSummary` and the panel derives whether to show
+   the button from that. The tree instead adds `collectable: boolean` to the DTO itself —
+   `TERMINAL.includes(task.status) && task.runs.some((run) => run.worktreePath !== null)` —
+   computed once in `apps/web/src/server/tasks.ts` rather than re-derived in the client from an
+   imported `TERMINAL` set. This keeps `@ai-team-os/domain` out of the client bundle question
+   entirely; `worktreePath` still rides on `TaskRunSummary` as B4 specifies, for the button's own
+   read-back. Cost if wrong: one extra boolean field on a DTO that already carries the data it is
+   computed from.
+
+4. **D3's file names (T10) — amends §5 D3.** §5 D3 names
+   `apps/web/src/components/company/TeamBlock.tsx` and a new `AgentRowActions.tsx` as the mount
+   points for rename/re-role/delete. `TeamBlock` renders Settings' Companies panel over
+   `CompanyAgent` catalog rows — identities the roster verbs (`renameAgent`, `setAgentRole`,
+   `deleteAgent`, all keyed on project `Agent.id`) cannot address. The actions instead mount on
+   the Agents page: `WorkersTable.tsx` gains `AgentRowActions.tsx` per row (rename, role, delete),
+   and team rename/delete mount wherever the Agents page names a team — `TeamsTable.tsx`, with a
+   `teamId` added to `WorkerRow` so a row can name its team. Settings' Companies panel stays
+   catalog-only, exactly as before this milestone. Cost if wrong: an operator looking for these
+   controls on the Settings page first finds nothing there; the README's Web UI section says
+   where they actually are.
+
+5. **`workspace.plan_created` gains `agentId` (T11) — amends §6 E1.** E1's derivation table
+   presupposes `workspace.plan_created (agentId = planner)` to fold the planner → implementer
+   edge, but `planning.ts` did not attach `agentId` to that event before this milestone. Folded
+   into T11 rather than spun out as a new task (the communication graph's planner edge is dead
+   without it): `planning.ts:151` now writes `agentId: run.agentId`, and `planning.test.ts`
+   asserts it. Cost if wrong: one extra field on an event the Activity feed already renders; no
+   consumer besides this fold reads `plan_created.agentId`.
+
+6. **`CommunicationMode.tsx` copies `SkillMode.tsx` rather than sharing it (T12) — amends §6 E3.**
+   E3 says the new mode "copies `SkillMode.tsx`'s fetch + 2 s debounce" — read literally, a
+   second, independent implementation, and the tree does exactly that: the ~45-line fetch/debounce
+   block is duplicated rather than extracted into a shared `useDebouncedGraphFetch` hook.
+   Extracting it would touch `SkillMode.tsx`, outside this task's file list, to re-test a mode
+   that already works for no goal of this milestone. The final review triages whether the
+   duplication should be paid down. Cost if wrong: the stale-overwrite window and the
+   never-cleared `errorText` bug, if either is ever found in one copy, must be fixed in both.
+
+7. **`dummyHash` is lazily memoized, not a module-level constant (T13) — amends §7 F2.** F2's
+   `verifyCredentials` runs the PBKDF2 derivation "against a fixed dummy hash when the user is
+   missing." The tree computes that dummy hash through a memoized `dummyHash(): Promise<string>`
+   in `packages/control/src/password.ts` rather than deriving it at module load, so importing
+   `@ai-team-os/control` costs no PBKDF2 derivation up front. Cost if wrong: the first
+   missing-user login pays the derivation twice instead of once; the timing property F2 exists for
+   still holds either way (a real derivation still happens).
+
+8. **No layout-level redirect on a revoked session (T14) — amends §7 F4.** F4 reads: "`null` in
+   accounts mode → API 401 `{ error: 'session revoked' }`, page 302 `/login`," which read together
+   with F6's "the root layout calls it once for pages" could be taken as: a page read by a deleted
+   user's cookie redirects to `/login` immediately, on every request. The tree does not add a
+   layout-level redirect keyed on "user no longer exists": a page read succeeds, on a
+   still-signature-valid cookie, until the cookie's own 30-day expiry — `currentPrincipal()`
+   verifies the signature and expiry only, exactly as F4's middleware paragraph specifies, and
+   does not itself probe whether the user row still exists. Every *write* is refused with 401
+   `session revoked` (`workspaceControlResponse`/`orgControlResponse` resolve the user on the
+   write path and refuse when it is gone). `gate:m23-onboarding` stage 8 therefore asserts the API
+   401 on a write, not a page redirect. Cost if wrong: a deleted user's browser keeps showing
+   pages it should not for up to 30 days; it can make no further writes from the moment of
+   deletion, which is the property the milestone's gate proves.
+
+9. **`principal` reaches only the verbs that append (T15) — amends §7 F6.** F6 lists the verbs
+   that gain the trailing `principal` parameter, but does not say what happens at the route layer
+   to verbs it omits. Every one of the 25 control-calling routes in `apps/web` gates on
+   `requirePrincipal()` before doing anything (a no-op in loopback mode, so F4's "null in accounts
+   mode → API 401" refuses *every* write, not only the ones on F6's list) — but `principal` itself
+   is passed down into a verb only when that verb appends an event or creates a row. Verbs that
+   append nothing (budget, provider, permission, skill assignment, template and company
+   management) are not widened to take it. Cost if wrong: a later attribution need on one of those
+   verbs adds the parameter to it then; nothing is unreachable in the meantime, since the route
+   already refused an unauthenticated caller before reaching the verb.
+
+10. **The gate writes a real `User` row to the dev database (T16) — amends §7 F7.** F7 says
+    `gate:m20-auth` run B "creates a user through the control verb" without saying which database.
+    It is the *development* database — the same one every other M23 gate reads and writes — and
+    `gate:m20-auth` is therefore the one gate in the whole suite that writes to the dev database
+    (every other gate either reads it or, like `gate:m23-onboarding`, cleans up its own rows in
+    `finally`). The user is deleted in `finally` here too. Cost if wrong: a crashed gate run leaves
+    a `gate-xxxx` user behind in the dev database — harmless, and `delete-user` removes it by
+    hand.
+
+11. **Stage 8 renders a real browser instead of reading HTML (T17) — amends §9 stage 8.** §9's
+    stage 8 says the Activity page's HTML "contains `by <username>`." That assertion cannot hold:
+    the Timeline is client-virtualized, and server-side rendering emits zero timeline rows before
+    hydration (measured directly while implementing the stage). The gate instead renders the page
+    in headless Chromium via `playwright-core` — already a dependency, the same pattern
+    `gate:m14-fidelity` and `gate:m16-chrome` use, `CHROMIUM_PATH` defaulting to
+    `/usr/bin/chromium` — and asserts the DOM after hydration. This is why the CI `gates` job
+    (§13.13 below) installs a Chromium and sets `CHROMIUM_PATH` before running
+    `gate:m23-onboarding`. Cost if wrong: `gate:m23-onboarding` is unrunnable on a browserless
+    host — but so are all seven of the gate's other stages once any one of them needs a browser,
+    so this changes nothing about the gate's requirements, only how stage 8 itself is proven; CI
+    pays roughly one to two minutes more per run for the Chromium install.
+
+12. **Stage 3 drives two tasks; stage 6 asserts a third `org.changed` (T17) — amends §9 stages 3
+    and 6.** §9 stage 3 says "one task," but stage 5's operator-route worktree collection needs a
+    *second*, already-`done` task to collect, and the harness rule (one daemon session per gate,
+    stopped before the next `next dev` boots) forbids booting a second daemon mid-gate to make
+    one. Stage 3 therefore seeds and drives two tasks to `done` up front. §9 stage 6 names two
+    successful org operations (rename, re-role) but asserts "three `org.changed` events"; the gate
+    supplies the third by deleting the idle agent after the rename/re-role pair. Cost if wrong:
+    none functional — the gate proves strictly more than the prose promised, not less.
+
+13. **CI Chromium provisioning (T17/T18) — amends §8 G1.** G1's `gates` job description does not
+    mention a browser. Because of Errata 11, the job needs one: after `npm ci` it runs
+    `npx playwright install --with-deps chromium`, then sets `CHROMIUM_PATH` from
+    `playwright-core`'s own `chromium.executablePath()` and appends it to `$GITHUB_ENV` so every
+    later step in the job sees it. Cost if wrong: `gate:m23-onboarding` fails in CI with no
+    reachable Chromium, the same failure mode as any operator running it on a browserless machine.
+
+**Out of scope, recorded rather than fixed:**
+
+- **Org refusals answer 409, not 404 (T10).** The design spec's global constraints name 404 as
+  the not-found status; `orgControlResponse` maps every `agent_not_found`/`team_not_found`
+  refusal to 409 instead, and every org route shares that mapping — it is not local to this
+  milestone's new verbs. Left for the final whole-branch review to triage rather than widened
+  here, since changing it touches routes this milestone did not open.
+- **`agent.message_sent` has no production emitter (T11).** §6 E1's fourth edge kind
+  (`operator → agent`, derived from `agent.message_sent`) is real in the fold and the client, but
+  no source file in this tree ever appends that event type — `AgentMessage` is measured, not
+  assumed, to be never written. The `message` edge kind is consequently dormant: correct code
+  with no data to render it. Same gap class as Errata 5 above (a field the design presupposes and
+  the tree doesn't yet produce), left for a later task or milestone rather than invented here.

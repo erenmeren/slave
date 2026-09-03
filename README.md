@@ -21,6 +21,55 @@ real git repositories, with a human supervising rather than prompting.
 - **M7** — the Graph page: the organization hierarchy and the task dependency DAG, live status,
   edge editing, node context menus and an event-driven flow visualization. See the Web UI section
   below and `docs/architecture.md`.
+- **M8** — execution closure and the planning run: verify → review → merge, unattended (M8a), then
+  a workspace with a goal and no tasks gets a planning run whose validated output becomes the task
+  graph (M8b). See `docs/superpowers/specs/2026-08-22-m8a-execution-closure-design.md` and
+  `docs/superpowers/specs/2026-08-23-m8b-planning-design.md`.
+- **M9** — a documentation-and-review pass: the living docs (`docs/architecture.md`,
+  `docs/domain-model.md`, `docs/event-model.md`) caught up with the M8 pipeline, plus two new ADRs
+  (`docs/decisions/0005-execution-closure.md`, `docs/decisions/0006-task-less-planning-runs.md`).
+  No spec file — see the `docs(m9): ...` commits.
+- **M10** — the organization model: a global catalog of agent templates, companies whose rosters
+  are instantiated from templates, and project workspaces a company is assigned to and staffs
+  automatically. See `docs/superpowers/specs/2026-08-23-m10-org-model-design.md`.
+- **M11** — the web shell: the workspace-scoped four-page app becomes a global, sidebar-driven
+  shell in the design handoff's visual language, with Projects, Agents and Settings surfaces over
+  the M10 organization model. See `docs/superpowers/specs/2026-08-24-m11-web-shell-design.md`.
+- **M12** — provider adapters: a second runtime (Cursor) kept the same pause/resume/budget promise
+  as Claude Code, switchable per agent. See
+  `docs/superpowers/specs/2026-08-25-m12-provider-adapters-design.md`.
+- **M13** — runtime hardening: a pause is a stop and a stop is resumable, for both runtimes, from
+  the browser. See `docs/superpowers/specs/2026-08-29-m13-runtime-hardening-design.md`.
+- **M14** — design fidelity: every page of the handoff's shell rendered on real data, the README's
+  own numbers read back from computed styles, reduced motion proved. See
+  `docs/superpowers/specs/2026-08-29-m14-design-fidelity-design.md`.
+- **M15** — the boundary and its debts: foreign Host, cross-site writes and cross-site SSE reads
+  all refused by middleware in a real `next dev`, same-origin traffic untouched. See
+  `docs/superpowers/specs/2026-08-30-m15-boundary-and-debts-design.md`.
+- **M16** — Chrome: the handoff's forms — the goal form's radii, the permission matrix's cell
+  glyphs, a team-overflow pill, a bare progress bar — read back from a real rendered page. See
+  `docs/superpowers/specs/2026-08-31-m16-chrome-design.md`.
+- **M17** — stability and debt: six named flakes closed, the providers runtime consolidated in M13
+  proven with direct coverage, three unbounded queries bounded. See
+  `docs/superpowers/specs/2026-08-31-m17-stability-design.md`.
+- **M18** — skill chain and teeth: the Graph page's fourth tab gets its view, and the Settings
+  permission matrix actually denies tool calls rather than only displaying them. See
+  `docs/superpowers/specs/2026-08-31-m18-skill-and-teeth-design.md`.
+- **M19** — measure and harden: M18's assumptions checked against a real vendor CLI, its hygiene
+  backlog paid down. See `docs/superpowers/specs/2026-09-01-m19-measure-and-harden-design.md`.
+- **M20** — auth: the door has a lock — a signed session cookie gates every page and API call once
+  an `AITEAMOS_PASSWORD` secret is configured; loopback mode is untouched. See
+  `docs/superpowers/specs/2026-09-02-m20-auth-design.md`.
+- **M21** — loose ends: a census proving every dev-server spawner strips the operator's secret,
+  plus M15 and M20 re-proven under the leftover environment variable. See
+  `docs/superpowers/specs/2026-09-02-m21-loose-ends-design.md`.
+- **M22** — polish: the Minor findings M21's reviews left, closed in three lean batches — no new
+  gate. See `docs/superpowers/specs/2026-09-02-m22-polish-design.md`.
+- **M23** — real repo, real team, real user, complete: a real git repository attached and its aged
+  worktrees garbage-collected, artifacts readable from the task panel, an editable roster, the
+  communication graph named on the Agents/Teams surfaces, and local accounts (username + password,
+  `AITEAMOS_SESSION_SECRET`) replacing the single shared password. See
+  `docs/superpowers/specs/2026-09-03-m23-real-repo-real-team-real-user-design.md`.
 
 ## Setup
 
@@ -52,29 +101,29 @@ Ubuntu, `apt-get install docker-compose-plugin`) before continuing.
 
 ## Commands
 
-| Command | What it does |
-|---|---|
-| `npm test` | Both vitest projects: fast unit tests and serial database integration tests |
-| `npm run typecheck` | Builds every package and typechecks the test files too |
-| `npm run db:generate` | Generates the Prisma client into `packages/db/src/generated/` |
-| `npm run db:migrate` | Applies migrations to the development database |
-| `npm run db:migrate:test` | Applies migrations to the test database |
-| `npm run db:seed` | Truncates and reseeds the development database |
-| `npm run gate:m8a-merge` / `npm run gate:m8a-estop` | The M8a gate (spec §8): a task → merged branch, unattended; emergency stop pauses everything and clears clean |
-| `npm run gate:m8-plan` | The M8b gate: a goal → task graph → merged branches, unattended |
-| `npm run gate:m10-org` | The M10 gate: a company staffed a project from templates and shipped its goal, unattended — twice, in parallel |
-| `npm run gate:m11-shell` | The M11 gate: the shell went global — a company was staffed, assigned, and steered entirely from the browser |
-| `npm run gate:m12-providers` | The M12 gate: two runtimes kept one promise — paused, resumed, and budgeted alike (**spends real money**: it drives live Claude and Cursor accounts, so it is not CI-runnable and is run deliberately, by hand) |
-| `npm run gate:m13-runtime` | The M13 gate: a pause is a stop and a stop is resumable — both runtimes paused, refused mid-stop, resumed, and re-budgeted from the browser (**spends real money**: it drives live Claude and Cursor accounts, so it is not CI-runnable and is run deliberately, by hand). Rehearse it for free first — `AITEAMOS_CLAUDE_BIN="$PWD/scripts/gate-fakes/fake-claude.sh" AITEAMOS_CURSOR_BIN="$PWD/scripts/gate-fakes/fake-cursor-agent.sh" npm run gate:m13-runtime` — which runs every stage against fake CLIs and touches no vendor account |
-| `npm run gate:m14-fidelity` | The M14 gate: nine pages, one design — every page of the handoff's shell rendered on real data at 1440×900, the README's own numbers read back from `getComputedStyle`, reduced motion proved, and nine screenshots committed under `docs/superpowers/fidelity/m14/`. **Spends nothing**, and refuses to start without `AITEAMOS_CLAUDE_BIN` pointing at `scripts/gate-fakes/` — `AITEAMOS_CLAUDE_BIN="$PWD/scripts/gate-fakes/fake-claude.sh" npm run gate:m14-fidelity` |
-| `npm run gate:m15-boundary` | The M15 gate: the boundary holds — foreign Host, cross-site writes and cross-site SSE reads all refused by the middleware in a real `next dev`, same-origin traffic untouched. **Spends nothing**, CI-runnable. |
-| `npm run gate:m16-chrome` | The M16 gate: one tone table, the handoff's forms — the goal form's radii, the permission matrix's cell glyphs, a project card's team-overflow pill, an unmeasured Analytics row's bare progress bar, and Task 7's status-\* rename all read back from a real rendered page (`getComputedStyle` via `playwright-core`) or grepped straight from the repo. **Spends nothing**, CI-runnable. |
-| `npm run gate:m17-stability` | The M17 gate: the full suite runs five times consecutively with no red, the runtime duplication census holds (one definition site per M13-consolidated block), and the four equivalence tests that license M17's query rewrites still exist. **Spends nothing**, CI-runnable, needs the test database up, and refuses under a genuinely running orchestrator daemon (`pgrep`'s candidate PIDs are confirmed against `/proc/<pid>/cmdline` so the gate's own wrapper shell can't self-match and false-refuse). |
-| `npm run gate:m18-skill-and-teeth` | The M18 gate: a refused tool, a readable chain, and two honest chips — a permission-matrix deny survives a dispatched run (one `run.tool_denied`, zero `guardrail.tripped`, never `paused`) and the Activity page renders the denial card; the Skill chain tab's aggregate canvas, its Focus click (DOM order plus a ×N badge), the clear control, and `skill-empty` on a genuinely fresh workspace; the Activity `sse · <n>ms` chip measuring a real frame and a seeded paused checkpoint's `deniedToolUseIds` reaching the Task detail panel's reader line. **Spends nothing** (drives a fixture-replaying fake CLI for its one dispatch regardless of what `AITEAMOS_CLAUDE_BIN` names), and refuses to start without `AITEAMOS_CLAUDE_BIN` pointing at `scripts/gate-fakes/`, without the dev database carrying the two m18 migrations, or under a genuinely running orchestrator daemon — `AITEAMOS_CLAUDE_BIN="$PWD/scripts/gate-fakes/fake-claude.sh" npm run gate:m18-skill-and-teeth`. Needs the dev database and a real browser (`playwright-core` + `CHROMIUM_PATH`). |
-| `npm run gate:m19-measure-and-harden` | The M19 gate: a typed build that bites, a real capture, cables that measure, and a ledger that adds up — a typecheck bite-probe, the real matrix-deny fixture's provenance, two cables of different `stroke-width` on a live page, the C5 equivalence suite, the C1 partial index in the dev database, and the spend ledger summing under its cap. **Spends nothing** — it reads M19's recorded evidence instead of re-spending; needs the dev database and a real browser (`playwright-core` + `CHROMIUM_PATH`), refuses under a running orchestrator daemon. |
-| `npm run gate:m20-auth` | The M20 gate, widened to accounts by M23: the door has a lock — run A re-executes `gate:m15-boundary` with the signing secret removed (loopback mode did not move, proven by the same script); run B boots `next dev` with a random secret and a real throwaway user created through `packages/control`, then walks the whole accounts mode: 302 to `/login`, 401 `sign in first` for headerless API calls, a slow 401 for the wrong username/password, a cookie naming the user for the right one, SSE with it, a tampered signature, a swapped user id and an expired cookie all refused, a Bearer header opening nothing, cross-site refused even with a cookie, a tailnet Host welcome, logout, the Settings posture line naming the signed-in user, and a deleted user's cookie drawing 401 `session revoked` on a write that succeeded moments before. **Spends nothing**, CI-runnable, needs the seeded dev database. |
-| `npm run gate:m21-loose-ends` | The M21 gate: no loose ends — a census that every dev-server spawner strips both the operator's session secret and the retired password (including `scripts/lib/child-env.mjs` itself, read directly), then the M15 and M20 gates re-run as children WITH `AITEAMOS_PASSWORD` set (the breakage M20 shipped, proven fixed where it bit — and proven still irrelevant now that M23 retired it), then the six unit files that carry M21's boundary, login-queue, web-exposed, cable, parser and schema proofs. **Spends nothing**, CI-runnable, needs the seeded dev database; under a minute on a warm `.next` (three dev-server boots). |
-| `npm run gate:m23-onboarding` | The M23 gate: a repo attached, a tree collected, a log read, a roster edited, a hand-off drawn, a name on the event — a real repository created as a workspace through the CLI (with its two refusals), two backend tasks driven to `done` by a real daemon against the fake CLI, an aged worktree collected in-process and a second one through the operator route (an untouched task refused 409), a verify log listed and read back with a forged path refused 403, the communication graph naming an implementer → reviewer edge, the roster renamed/re-roled/deleted with a busy agent and a non-empty team both refused, and a local account created through the CLI, logged in, its goal post attributed on the Activity page, then deleted — the same cookie now refused 401 `session revoked`. **Spends nothing**, CI-runnable, needs the dev database and `git`; two sequential dev-server boots; needs a real browser (`playwright-core` + `CHROMIUM_PATH`) for stage 8's Activity-page check. |
+| Command | What it does | CI |
+|---|---|---|
+| `npm test` | Both vitest projects: fast unit tests and serial database integration tests | yes |
+| `npm run typecheck` | Builds every package and typechecks the test files too | yes |
+| `npm run db:generate` | Generates the Prisma client into `packages/db/src/generated/` | yes |
+| `npm run db:migrate` | Applies migrations to the development database | yes |
+| `npm run db:migrate:test` | Applies migrations to the test database | yes |
+| `npm run db:seed` | Truncates and reseeds the development database | yes |
+| `npm run gate:m8a-merge` / `npm run gate:m8a-estop` | The M8a gate (spec §8): a task → merged branch, unattended; emergency stop pauses everything and clears clean | operator |
+| `npm run gate:m8-plan` | The M8b gate: a goal → task graph → merged branches, unattended | operator |
+| `npm run gate:m10-org` | The M10 gate: a company staffed a project from templates and shipped its goal, unattended — twice, in parallel | operator |
+| `npm run gate:m11-shell` | The M11 gate: the shell went global — a company was staffed, assigned, and steered entirely from the browser | operator |
+| `npm run gate:m12-providers` | The M12 gate: two runtimes kept one promise — paused, resumed, and budgeted alike (**spends real money**: it drives live Claude and Cursor accounts, so it is not CI-runnable and is run deliberately, by hand) | no — spends real money |
+| `npm run gate:m13-runtime` | The M13 gate: a pause is a stop and a stop is resumable — both runtimes paused, refused mid-stop, resumed, and re-budgeted from the browser (**spends real money**: it drives live Claude and Cursor accounts, so it is not CI-runnable and is run deliberately, by hand). Rehearse it for free first — `AITEAMOS_CLAUDE_BIN="$PWD/scripts/gate-fakes/fake-claude.sh" AITEAMOS_CURSOR_BIN="$PWD/scripts/gate-fakes/fake-cursor-agent.sh" npm run gate:m13-runtime` — which runs every stage against fake CLIs and touches no vendor account | operator |
+| `npm run gate:m14-fidelity` | The M14 gate: nine pages, one design — every page of the handoff's shell rendered on real data at 1440×900, the README's own numbers read back from `getComputedStyle`, reduced motion proved, and nine screenshots committed under `docs/superpowers/fidelity/m14/`. **Spends nothing**, and refuses to start without `AITEAMOS_CLAUDE_BIN` pointing at `scripts/gate-fakes/` — `AITEAMOS_CLAUDE_BIN="$PWD/scripts/gate-fakes/fake-claude.sh" npm run gate:m14-fidelity` | operator |
+| `npm run gate:m15-boundary` | The M15 gate: the boundary holds — foreign Host, cross-site writes and cross-site SSE reads all refused by the middleware in a real `next dev`, same-origin traffic untouched. **Spends nothing**, CI-runnable. | yes |
+| `npm run gate:m16-chrome` | The M16 gate: one tone table, the handoff's forms — the goal form's radii, the permission matrix's cell glyphs, a project card's team-overflow pill, an unmeasured Analytics row's bare progress bar, and Task 7's status-\* rename all read back from a real rendered page (`getComputedStyle` via `playwright-core`) or grepped straight from the repo. **Spends nothing**, CI-runnable. | operator |
+| `npm run gate:m17-stability` | The M17 gate: the full suite runs five times consecutively with no red, the runtime duplication census holds (one definition site per M13-consolidated block), and the four equivalence tests that license M17's query rewrites still exist. **Spends nothing**, CI-runnable, needs the test database up, and refuses under a genuinely running orchestrator daemon (`pgrep`'s candidate PIDs are confirmed against `/proc/<pid>/cmdline` so the gate's own wrapper shell can't self-match and false-refuse). | operator |
+| `npm run gate:m18-skill-and-teeth` | The M18 gate: a refused tool, a readable chain, and two honest chips — a permission-matrix deny survives a dispatched run (one `run.tool_denied`, zero `guardrail.tripped`, never `paused`) and the Activity page renders the denial card; the Skill chain tab's aggregate canvas, its Focus click (DOM order plus a ×N badge), the clear control, and `skill-empty` on a genuinely fresh workspace; the Activity `sse · <n>ms` chip measuring a real frame and a seeded paused checkpoint's `deniedToolUseIds` reaching the Task detail panel's reader line. **Spends nothing** (drives a fixture-replaying fake CLI for its one dispatch regardless of what `AITEAMOS_CLAUDE_BIN` names), and refuses to start without `AITEAMOS_CLAUDE_BIN` pointing at `scripts/gate-fakes/`, without the dev database carrying the two m18 migrations, or under a genuinely running orchestrator daemon — `AITEAMOS_CLAUDE_BIN="$PWD/scripts/gate-fakes/fake-claude.sh" npm run gate:m18-skill-and-teeth`. Needs the dev database and a real browser (`playwright-core` + `CHROMIUM_PATH`). | operator |
+| `npm run gate:m19-measure-and-harden` | The M19 gate: a typed build that bites, a real capture, cables that measure, and a ledger that adds up — a typecheck bite-probe, the real matrix-deny fixture's provenance, two cables of different `stroke-width` on a live page, the C5 equivalence suite, the C1 partial index in the dev database, and the spend ledger summing under its cap. **Spends nothing** — it reads M19's recorded evidence instead of re-spending; needs the dev database and a real browser (`playwright-core` + `CHROMIUM_PATH`), refuses under a running orchestrator daemon. | operator |
+| `npm run gate:m20-auth` | The M20 gate, widened to accounts by M23: the door has a lock — run A re-executes `gate:m15-boundary` with the signing secret removed (loopback mode did not move, proven by the same script); run B boots `next dev` with a random secret and a real throwaway user created through `packages/control`, then walks the whole accounts mode: 302 to `/login`, 401 `sign in first` for headerless API calls, a slow 401 for the wrong username/password, a cookie naming the user for the right one, SSE with it, a tampered signature, a swapped user id and an expired cookie all refused, a Bearer header opening nothing, cross-site refused even with a cookie, a tailnet Host welcome, logout, the Settings posture line naming the signed-in user, and a deleted user's cookie drawing 401 `session revoked` on a write that succeeded moments before. **Spends nothing**, CI-runnable, needs the seeded dev database. | yes |
+| `npm run gate:m21-loose-ends` | The M21 gate: no loose ends — a census that every dev-server spawner strips both the operator's session secret and the retired password (including `scripts/lib/child-env.mjs` itself, read directly), then the M15 and M20 gates re-run as children WITH `AITEAMOS_PASSWORD` set (the breakage M20 shipped, proven fixed where it bit — and proven still irrelevant now that M23 retired it), then the six unit files that carry M21's boundary, login-queue, web-exposed, cable, parser and schema proofs. **Spends nothing**, CI-runnable, needs the seeded dev database; under a minute on a warm `.next` (three dev-server boots). | yes |
+| `npm run gate:m23-onboarding` | The M23 gate: a repo attached, a tree collected, a log read, a roster edited, a hand-off drawn, a name on the event — a real repository created as a workspace through the CLI (with its two refusals), two backend tasks driven to `done` by a real daemon against the fake CLI, an aged worktree collected in-process and a second one through the operator route (an untouched task refused 409), a verify log listed and read back with a forged path refused 403, the communication graph naming an implementer → reviewer edge, the roster renamed/re-roled/deleted with a busy agent and a non-empty team both refused, and a local account created through the CLI, logged in, its goal post attributed on the Activity page, then deleted — the same cookie now refused 401 `session revoked`. **Spends nothing**, CI-runnable, needs the dev database and `git`; two sequential dev-server boots; needs a real browser (`playwright-core` + `CHROMIUM_PATH`) for stage 8's Activity-page check. | yes |
 
 Integration tests require Postgres to be running. They **fail** rather than skip when it is not:
 a suite that skips reports success for work it did not do.
