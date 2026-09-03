@@ -31,6 +31,7 @@ const task = (over: Partial<TaskBoardItem>): TaskBoardItem => ({
   lastRejectionReason: null,
   runs: [],
   collectable: false,
+  artifacts: [],
   ...over,
 })
 
@@ -301,6 +302,86 @@ describe('TaskDetailPanel worktree collection (M23 B4)', () => {
 
     await vi.waitFor(() => expect(routerRefresh).toHaveBeenCalled())
     expect(screen.queryByTestId('collect-worktree-error')).toBeNull()
+  })
+})
+
+describe('TaskDetailPanel artifacts (M23 C1-C3)', () => {
+  it("shows 'no artifacts yet' when the task has none", () => {
+    render(<TaskDetailPanel workspaceId="w1" task={task({ artifacts: [] })} onClose={() => {}} />)
+    expect(screen.getByText('no artifacts yet')).toBeTruthy()
+  })
+
+  it('renders one row per artifact, with its label and time-of-day', () => {
+    render(
+      <TaskDetailPanel
+        workspaceId="w1"
+        task={task({
+          artifacts: [
+            { id: 'a1', kind: 'verify', label: 'attempt 1 · npm-test', createdAt: '2026-09-03T10:20:30.000Z' },
+            { id: 'a2', kind: 'verify', label: 'merge · npm-run-lint', createdAt: '2026-09-03T11:05:00.000Z' },
+          ],
+        })}
+        onClose={() => {}}
+      />,
+    )
+    const rows = screen.getAllByTestId('artifact-row')
+    expect(rows).toHaveLength(2)
+    expect(rows[0]?.textContent).toContain('attempt 1 · npm-test')
+    expect(rows[0]?.textContent).toContain('10:20:30')
+    expect(rows[1]?.textContent).toContain('merge · npm-run-lint')
+    expect(rows[1]?.textContent).toContain('11:05:00')
+  })
+
+  it('fetches the artifact text on click and renders it', async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response('npm test output\nall green\n', { status: 200, headers: { 'content-type': 'text/plain; charset=utf-8' } }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(
+      <TaskDetailPanel
+        workspaceId="w1"
+        task={task({
+          id: 't1',
+          artifacts: [{ id: 'a1', kind: 'verify', label: 'attempt 1 · npm-test', createdAt: '2026-09-03T10:20:30.000Z' }],
+        })}
+        onClose={() => {}}
+      />,
+    )
+
+    fireEvent.click(screen.getByTestId('artifact-row'))
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/w/w1/tasks/t1/artifacts/a1')
+    await vi.waitFor(() => expect(screen.getByTestId('artifact-body').textContent).toBe('npm test output\nall green\n'))
+    expect(screen.queryByTestId('artifact-truncated')).toBeNull()
+  })
+
+  it('shows the truncation notice when the response carries the truncated header', async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response('...tail only', {
+          status: 200,
+          headers: { 'content-type': 'text/plain; charset=utf-8', 'x-artifact-truncated': '1' },
+        }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(
+      <TaskDetailPanel
+        workspaceId="w1"
+        task={task({
+          id: 't1',
+          artifacts: [{ id: 'a1', kind: 'verify', label: 'attempt 1 · npm-test', createdAt: '2026-09-03T10:20:30.000Z' }],
+        })}
+        onClose={() => {}}
+      />,
+    )
+
+    fireEvent.click(screen.getByTestId('artifact-row'))
+
+    await vi.waitFor(() => expect(screen.getByTestId('artifact-truncated')).toBeTruthy())
+    expect(screen.getByTestId('artifact-truncated').textContent).toBe('truncated to the last 256 KiB')
   })
 })
 

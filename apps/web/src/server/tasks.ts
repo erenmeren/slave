@@ -1,5 +1,6 @@
 import { prisma } from '@ai-team-os/db/client'
 import { NON_TERMINAL_RUN_STATUSES, TERMINAL, type RunStatus, type TaskStatus } from '@ai-team-os/domain'
+import { artifactLabel } from '../lib/artifactLabel'
 import { buildShellFacts, type ShellFacts } from './shell'
 
 export interface TaskRunSummary {
@@ -30,6 +31,13 @@ export interface TaskRunSummary {
   } | null
 }
 
+export interface TaskArtifactSummary {
+  readonly id: string
+  readonly kind: string
+  readonly label: string
+  readonly createdAt: string
+}
+
 export interface TaskBoardItem {
   readonly id: string
   readonly title: string
@@ -48,6 +56,8 @@ export interface TaskBoardItem {
    * worktree on disk to remove.
    */
   readonly collectable: boolean
+  /** M23 C1: the verify logs `apps/orchestrator/src/verify.ts` wrote for this task, newest first. */
+  readonly artifacts: readonly TaskArtifactSummary[]
 }
 
 export interface TasksSnapshot {
@@ -68,7 +78,10 @@ export async function buildTasksSnapshot(workspaceId: string): Promise<TasksSnap
     prisma.task.findMany({
       where: { workspaceId },
       orderBy: [{ priority: 'desc' }, { createdAt: 'asc' }],
-      include: { runs: { orderBy: { startedAt: 'desc' }, include: { checkpoint: true, agent: true } } },
+      include: {
+        runs: { orderBy: { startedAt: 'desc' }, include: { checkpoint: true, agent: true } },
+        artifacts: { orderBy: { createdAt: 'desc' } },
+      },
     }),
     buildShellFacts(workspaceId),
   ])
@@ -94,6 +107,12 @@ export async function buildTasksSnapshot(workspaceId: string): Promise<TasksSnap
         // one of its runs. Computed here, not in the panel -- the panel never imports `TERMINAL`
         // from `@ai-team-os/domain`.
         collectable: TERMINAL.includes(task.status) && task.runs.some((run) => run.worktreePath !== null),
+        artifacts: task.artifacts.map((artifact) => ({
+          id: artifact.id,
+          kind: artifact.kind,
+          label: artifactLabel(artifact.path),
+          createdAt: artifact.createdAt.toISOString(),
+        })),
         runs: task.runs.map((run) => ({
           id: run.id,
           status: run.status,

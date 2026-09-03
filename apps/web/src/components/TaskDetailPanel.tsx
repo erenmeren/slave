@@ -1,11 +1,18 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { sendControl } from '../lib/postControl'
+import { onUnauthorized } from '../lib/onUnauthorized'
+import { errorMessage, sendControl } from '../lib/postControl'
 import type { TaskBoardItem } from '../server/tasks'
 import { TASK_STATUS_TEXT } from './TaskCard'
 import { Button } from './ui/Button'
 import { GhostButton, PrimaryButton } from './ui/FormControls'
 import { SectionLabel } from './ui/SectionLabel'
+
+interface OpenArtifact {
+  readonly id: string
+  readonly text: string
+  readonly truncated: boolean
+}
 
 export function TaskDetailPanel({
   task,
@@ -20,6 +27,9 @@ export function TaskDetailPanel({
   const [confirming, setConfirming] = useState(false)
   const [pending, setPending] = useState(false)
   const [collectError, setCollectError] = useState<string | null>(null)
+  const [artifact, setArtifact] = useState<OpenArtifact | null>(null)
+  const [artifactPending, setArtifactPending] = useState(false)
+  const [artifactError, setArtifactError] = useState<string | null>(null)
 
   // M23 B4 (controller ruling): `task.collectable` is computed server-side on the DTO
   // (`buildTasksSnapshot`) -- this panel never imports `TERMINAL` from `@ai-team-os/domain`.
@@ -37,6 +47,32 @@ export function TaskDetailPanel({
     setConfirming(false)
     if (error === null) router.refresh()
     else setCollectError(error)
+  }
+
+  // Reads one artifact's log text (M23 C2/C3). Not `sendControl`: a 200 body here is the raw log
+  // text, not `{ ok: true }`, so this dials `fetch` directly -- same try/catch/finally shape as
+  // `ProjectsPanel.submit` (Task 3), so `artifactPending` always clears even on a thrown fetch.
+  const openArtifact = async (artifactId: string): Promise<void> => {
+    setArtifactPending(true)
+    setArtifactError(null)
+    try {
+      const response = await fetch(`/api/w/${workspaceId}/tasks/${task.id}/artifacts/${artifactId}`)
+      if (response.status === 401) {
+        onUnauthorized()
+        return
+      }
+      if (!response.ok) {
+        const data: unknown = await response.json().catch(() => null)
+        setArtifactError(errorMessage(data, response.status))
+        return
+      }
+      const text = await response.text()
+      setArtifact({ id: artifactId, text, truncated: response.headers.get('x-artifact-truncated') === '1' })
+    } catch (cause) {
+      setArtifactError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setArtifactPending(false)
+    }
   }
 
   return (
@@ -143,6 +179,52 @@ export function TaskDetailPanel({
               </li>
             ))}
           </ul>
+        )}
+      </section>
+
+      <section className="flex flex-col gap-2">
+        <SectionLabel>Artifacts</SectionLabel>
+        {task.artifacts.length === 0 ? (
+          <p className="text-xs text-text-3">no artifacts yet</p>
+        ) : (
+          <ul className="flex flex-col gap-2">
+            {task.artifacts.map((row) => (
+              <li key={row.id}>
+                <button
+                  type="button"
+                  data-testid="artifact-row"
+                  disabled={artifactPending}
+                  onClick={() => void openArtifact(row.id)}
+                  className="w-full rounded border border-line p-2 text-left text-xs text-text-2 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <div className="flex items-center justify-between">
+                    <span>{row.label}</span>
+                    <span className="font-mono">{row.createdAt.slice(11, 19)}</span>
+                  </div>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        {artifactError !== null && (
+          <span role="alert" data-testid="artifact-error" className="text-xs text-tone-blocked">
+            {artifactError}
+          </span>
+        )}
+        {artifact !== null && (
+          <>
+            <pre
+              data-testid="artifact-body"
+              className="max-h-64 overflow-auto rounded border border-line bg-bg-2 p-2 font-mono text-[10px] text-text-2"
+            >
+              {artifact.text}
+            </pre>
+            {artifact.truncated && (
+              <span data-testid="artifact-truncated" className="text-xs text-text-3">
+                truncated to the last 256 KiB
+              </span>
+            )}
+          </>
         )}
       </section>
     </aside>

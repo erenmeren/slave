@@ -24,6 +24,7 @@ const SNAPSHOT: TasksSnapshot = {
       branch: 'feature/add-the-thing',
       lastRejectionReason: null,
       collectable: false,
+      artifacts: [],
       runs: [
         {
           id: 'r1',
