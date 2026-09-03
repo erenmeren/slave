@@ -81,6 +81,10 @@ export type ControlRefusal =
   | { readonly kind: 'run_still_alive'; readonly taskId: string; readonly runId: string }
   /** `collectTaskWorktree`: no run on this (terminal) task carries a worktree path to remove. */
   | { readonly kind: 'nothing_to_collect'; readonly taskId: string }
+  /** `collectTaskWorktree` (M23 B2 fix round 1): `git worktree remove`/`prune` itself threw,
+   *  inside the row-locked transaction -- the row is left untouched (nothing was written before
+   *  the throw) so a retry sees the same terminal task with the same path. */
+  | { readonly kind: 'worktree_remove_failed'; readonly taskId: string; readonly path: string; readonly reason: string }
 
 export function refusalText(refusal: ControlRefusal): string {
   switch (refusal.kind) {
@@ -166,5 +170,7 @@ export function refusalText(refusal: ControlRefusal): string {
       return `run ${refusal.runId} of task ${refusal.taskId} is still alive`
     case 'nothing_to_collect':
       return `task ${refusal.taskId} has no worktree to collect`
+    case 'worktree_remove_failed':
+      return `could not remove the worktree at ${refusal.path}: ${refusal.reason}`
   }
 }

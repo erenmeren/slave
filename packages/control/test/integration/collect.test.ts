@@ -197,6 +197,58 @@ describe('collectTaskWorktree', () => {
     expect(result.error).toEqual({ kind: 'nothing_to_collect', taskId: fixture.taskId })
   })
 
+  // M23 B2 fix round 1, Important 1: the aged pass and the operator button are exactly the pair
+  // of callers that can name the same terminal task at once. Before the fix the row lock released
+  // after the check, so both callers saw the same non-null path and the loser's `gitIn` threw out
+  // of a `Promise<Result<…>>` contract with no catch above it -- an unhandled rejection, not a
+  // refusal. The lock now outlives the git call and the `worktreePath` write, so the loser wakes
+  // up to a run with no path left at all: an ordinary `nothing_to_collect`.
+  it('two concurrent calls: exactly one collects, the other finds nothing left', async (): Promise<void> => {
+    const fixture = await seed()
+
+    const [a, b] = await Promise.all([
+      collectTaskWorktree(fixture.taskId, 'aged'),
+      collectTaskWorktree(fixture.taskId, 'operator'),
+    ])
+
+    const results = [a, b]
+    expect(results.filter((r) => r.ok)).toHaveLength(1)
+    const refused = results.find((r) => !r.ok)
+    if (refused === undefined || refused.ok) throw new Error('unreachable')
+    expect(refused.error).toEqual({ kind: 'nothing_to_collect', taskId: fixture.taskId })
+
+    expect(existsSync(fixture.worktreePath)).toBe(false)
+    expect(
+      await prisma.executionEvent.count({ where: { taskId: fixture.taskId, type: 'task_worktree_collected' } }),
+    ).toBe(1)
+  })
+
+  // With the "disk decides" rule (see `collect.ts`), a directory that exists but is not a
+  // worktree of this repo at all still reaches `git worktree remove --force`, which fails on it
+  // ("is not a working tree") -- asserted on the refusal kind, not git's exact wording, which is
+  // not this test's contract to pin.
+  it('a git failure refuses worktree_remove_failed, leaving the row and the log untouched', async (): Promise<void> => {
+    const fixture = await seed()
+    const strayDir = mkdtempSync(join(tmpdir(), 'aiteamos-collect-stray-'))
+    await prisma.agentRun.update({ where: { id: fixture.runId }, data: { worktreePath: strayDir } })
+
+    try {
+      const result = await collectTaskWorktree(fixture.taskId, 'operator')
+
+      expect(result.ok).toBe(false)
+      if (result.ok) throw new Error('unreachable')
+      expect(result.error.kind).toBe('worktree_remove_failed')
+      expect(
+        (await prisma.agentRun.findUniqueOrThrow({ where: { id: fixture.runId } })).worktreePath,
+      ).toBe(strayDir)
+      expect(
+        await prisma.executionEvent.count({ where: { taskId: fixture.taskId, type: 'task_worktree_collected' } }),
+      ).toBe(0)
+    } finally {
+      rmSync(strayDir, { recursive: true, force: true })
+    }
+  })
+
   it('terminalTimestamp is the latest terminal event', async (): Promise<void> => {
     const fixture = await seed()
 
