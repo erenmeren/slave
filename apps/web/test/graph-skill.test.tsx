@@ -416,6 +416,28 @@ describe('SkillMode', () => {
     expect(screen.getByTestId('graph-canvas-stub')).toBeTruthy()
   })
 
+  // Final review one-liner: `errorText` was set on a failed fetch but never cleared on a later
+  // success -- a stale error band could sit over a now-healthy graph indefinitely.
+  it('a failed fetch followed by a successful debounced refetch clears the error band', async () => {
+    fetchMock.mockResolvedValueOnce(new Response('workspace not found', { status: 404 }))
+    const { rerender } = render(<SkillMode workspaceId="w1" snapshot={SNAPSHOT} toolCallTick={0} />)
+    await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy())
+    expect(screen.getByTestId('skill-error').textContent).toContain('404')
+
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(skillGraph()), { status: 200 }))
+    vi.useFakeTimers()
+    try {
+      rerender(<SkillMode workspaceId="w1" snapshot={SNAPSHOT} toolCallTick={1} />)
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_100)
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+
+    await waitFor(() => expect(screen.queryByTestId('skill-error')).toBeNull())
+  })
+
   // ================================================================================================
   // Run selector strip (Task 12): one chip per `graph.runs` entry, live dot from `run.live`.
   // ================================================================================================

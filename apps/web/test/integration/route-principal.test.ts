@@ -24,6 +24,7 @@ vi.mock('next/headers', () => ({
 }))
 
 const { POST: goalPOST } = await import('../../src/app/api/w/[workspaceId]/goal/route.js')
+const { POST: reseedPOST } = await import('../../src/app/api/dev/reseed/route.js')
 const { mintSession } = await import('../../src/lib/session.js')
 
 const SECRET = '0123456789abcdef0123456789abcdef'
@@ -88,6 +89,18 @@ describe('route-level principal gating (M23 F6)', () => {
     const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspace.id } })
     expect(workspace.goal).toBeNull()
     expect(await prisma.executionEvent.count()).toBe(0)
+  })
+
+  // Final review Important 1: `/api/dev/reseed` was the one mutating route with no
+  // `requirePrincipal()` gate. Only the 401 path is exercised here -- the gate returns before
+  // `db:seed` ever runs, so this asserts the refusal without actually reseeding anything.
+  it('refuses POST /api/dev/reseed with 401 { error: "session revoked" } in accounts mode with no cookie', async (): Promise<void> => {
+    vi.stubEnv('AITEAMOS_SESSION_SECRET', SECRET)
+
+    const response = await reseedPOST(new Request('http://x', { method: 'POST' }))
+
+    expect(response.status).toBe(401)
+    expect(await response.json()).toEqual({ error: 'session revoked' })
   })
 
   it('attributes the resulting event and workspace column to the signed-in user with a valid cookie', async (): Promise<void> => {

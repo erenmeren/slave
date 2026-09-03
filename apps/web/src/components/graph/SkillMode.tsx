@@ -146,7 +146,10 @@ export function SkillMode({
     let cancelled = false
     void fetchSkillGraph(workspaceId)
       .then((data) => {
-        if (!cancelled) setGraph(data)
+        if (!cancelled) {
+          setGraph(data)
+          setErrorText(null)
+        }
       })
       .catch((cause: unknown) => {
         if (!cancelled) setErrorText(cause instanceof Error ? cause.message : String(cause))
@@ -170,7 +173,10 @@ export function SkillMode({
     const timer = setTimeout(() => {
       void fetchSkillGraph(workspaceId)
         .then((data) => {
-          if (!cancelled) setGraph(data)
+          if (!cancelled) {
+            setGraph(data)
+            setErrorText(null)
+          }
         })
         .catch((cause: unknown) => {
           if (!cancelled) setErrorText(cause instanceof Error ? cause.message : String(cause))

@@ -22,13 +22,14 @@ export interface CommunicationGraph {
 }
 
 export async function buildCommunicationGraph(workspaceId: string): Promise<CommunicationGraph | null> {
-  const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId } })
+  const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId }, select: { id: true } })
   if (workspace === null) return null
 
   const [agents, rows] = await Promise.all([
     prisma.agent.findMany({
       where: { team: { workspaceId } },
       select: { id: true, name: true, role: true },
+      orderBy: { name: 'asc' },
     }),
     prisma.executionEvent.findMany({
       where: { workspaceId, type: { in: [...EVENT_TYPES] } },

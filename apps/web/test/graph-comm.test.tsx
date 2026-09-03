@@ -276,6 +276,28 @@ describe('CommunicationMode', () => {
     expect(screen.getByTestId('graph-canvas-stub')).toBeTruthy()
   })
 
+  // Final review one-liner: `errorText` was set on a failed fetch but never cleared on a later
+  // success -- a stale error band could sit over a now-healthy graph indefinitely.
+  it('a failed fetch followed by a successful debounced refetch clears the error band', async () => {
+    fetchMock.mockResolvedValueOnce(new Response('workspace not found', { status: 404 }))
+    const { rerender } = render(<CommunicationMode workspaceId="w1" frameTick={0} />)
+    await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy())
+    expect(screen.getByTestId('comm-error').textContent).toContain('404')
+
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(commGraph()), { status: 200 }))
+    vi.useFakeTimers()
+    try {
+      rerender(<CommunicationMode workspaceId="w1" frameTick={1} />)
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_100)
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+
+    await waitFor(() => expect(screen.queryByTestId('comm-error')).toBeNull())
+  })
+
   // ================================================================================================
   // Refetch wiring: a `frameTick` bump debounces a re-fetch by >=2s, and never fires from the
   // tick's own starting value on first render (same shape as `graph-skill.test.tsx`'s own).

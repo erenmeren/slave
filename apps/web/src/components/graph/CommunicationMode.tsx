@@ -62,7 +62,10 @@ export function CommunicationMode({
     let cancelled = false
     void fetchCommunicationGraph(workspaceId)
       .then((data) => {
-        if (!cancelled) setGraph(data)
+        if (!cancelled) {
+          setGraph(data)
+          setErrorText(null)
+        }
       })
       .catch((cause: unknown) => {
         if (!cancelled) setErrorText(cause instanceof Error ? cause.message : String(cause))
@@ -85,7 +88,10 @@ export function CommunicationMode({
     const timer = setTimeout(() => {
       void fetchCommunicationGraph(workspaceId)
         .then((data) => {
-          if (!cancelled) setGraph(data)
+          if (!cancelled) {
+            setGraph(data)
+            setErrorText(null)
+          }
         })
         .catch((cause: unknown) => {
           if (!cancelled) setErrorText(cause instanceof Error ? cause.message : String(cause))
