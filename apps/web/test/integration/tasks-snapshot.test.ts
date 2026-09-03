@@ -237,4 +237,85 @@ describe('buildTasksSnapshot', () => {
     })
     expect(missing.status).toBe(404)
   })
+
+  // Review finding (M23 B4 fix round 1, Important 2): `TaskBoardItem.collectable` and
+  // `TaskRunSummary.worktreePath` had no DB-backed coverage -- every existing test hand-sets the
+  // literal. These three prove the real query: `AgentRun.worktreePath` (not `Checkpoint.worktreePath`,
+  // a different column on a different row) is what `collectable` and the run summary read.
+  describe('collectable (M23 B4)', () => {
+    it('is true for a done task whose run still carries a worktree path', async (): Promise<void> => {
+      const seeded = await prisma.task.create({
+        data: {
+          workspaceId: fixture.workspaceId,
+          title: 'Finished with a tree still on disk',
+          description: 'x',
+          status: 'done',
+          requiredRole: 'backend',
+          maxAttempts: 3,
+        },
+      })
+      await prisma.agentRun.create({
+        data: {
+          taskId: seeded.id,
+          agentId: fixture.agentId,
+          status: 'succeeded',
+          worktreePath: '/r/.aiteamos/worktrees/T-collectable',
+        },
+      })
+
+      const snapshot = await buildTasksSnapshot(fixture.workspaceId)
+      const task = snapshot?.tasks.find((t) => t.id === seeded.id)
+
+      expect(task?.collectable).toBe(true)
+      expect(task?.runs[0]?.worktreePath).toBe('/r/.aiteamos/worktrees/T-collectable')
+    })
+
+    it('is false once that same worktree path is nulled (already collected)', async (): Promise<void> => {
+      const seeded = await prisma.task.create({
+        data: {
+          workspaceId: fixture.workspaceId,
+          title: 'Finished and already collected',
+          description: 'x',
+          status: 'done',
+          requiredRole: 'backend',
+          maxAttempts: 3,
+        },
+      })
+      await prisma.agentRun.create({
+        data: { taskId: seeded.id, agentId: fixture.agentId, status: 'succeeded', worktreePath: null },
+      })
+
+      const snapshot = await buildTasksSnapshot(fixture.workspaceId)
+      const task = snapshot?.tasks.find((t) => t.id === seeded.id)
+
+      expect(task?.collectable).toBe(false)
+      expect(task?.runs[0]?.worktreePath).toBeNull()
+    })
+
+    it('is false for a running task even though its run carries a worktree path', async (): Promise<void> => {
+      const seeded = await prisma.task.create({
+        data: {
+          workspaceId: fixture.workspaceId,
+          title: 'Still running',
+          description: 'x',
+          status: 'running',
+          requiredRole: 'backend',
+          maxAttempts: 3,
+        },
+      })
+      await prisma.agentRun.create({
+        data: {
+          taskId: seeded.id,
+          agentId: fixture.agentId,
+          status: 'working',
+          worktreePath: '/r/.aiteamos/worktrees/T-still-running',
+        },
+      })
+
+      const snapshot = await buildTasksSnapshot(fixture.workspaceId)
+      const task = snapshot?.tasks.find((t) => t.id === seeded.id)
+
+      expect(task?.collectable).toBe(false)
+    })
+  })
 })

@@ -273,6 +273,35 @@ describe('TaskDetailPanel worktree collection (M23 B4)', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/w/w1/tasks/t1/worktree', { method: 'DELETE' })
     await vi.waitFor(() => expect(routerRefresh).toHaveBeenCalled())
   })
+
+  // Review finding (M23 B4 fix round 1, Important 1): a prior refusal's text must not survive a
+  // second attempt -- neither into that attempt's own pending state nor past a second attempt
+  // that succeeds.
+  it('clears a prior refusal band on the next attempt, once that attempt succeeds', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: 'task t1 has no worktree to collect' }), { status: 409 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(
+      <TaskDetailPanel
+        workspaceId="w1"
+        task={task({ id: 't1', status: 'done', collectable: true, runs: [runWithWorktree('/r/.aiteamos/worktrees/T-1')] })}
+        onClose={() => {}}
+      />,
+    )
+
+    fireEvent.click(screen.getByTestId('collect-worktree'))
+    fireEvent.click(screen.getByTestId('collect-worktree-confirm'))
+    await vi.waitFor(() => expect(screen.getByTestId('collect-worktree-error').textContent).toBe('task t1 has no worktree to collect'))
+
+    fireEvent.click(screen.getByTestId('collect-worktree'))
+    fireEvent.click(screen.getByTestId('collect-worktree-confirm'))
+
+    await vi.waitFor(() => expect(routerRefresh).toHaveBeenCalled())
+    expect(screen.queryByTestId('collect-worktree-error')).toBeNull()
+  })
 })
 
 describe('TasksClient', () => {

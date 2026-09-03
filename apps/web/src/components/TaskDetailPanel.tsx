@@ -27,6 +27,11 @@ export function TaskDetailPanel({
 
   const collect = async (): Promise<void> => {
     setPending(true)
+    // A retry starts clean: a prior refusal's text must not linger through a second attempt that
+    // then also fails on the same DELETE, or that then succeeds and never gets a chance to clear
+    // it before `router.refresh()` (controller ruling: `DangerZone.tsx`'s `reseed()` clears its
+    // own error the same way, at the top of its handler, not just on success).
+    setCollectError(null)
     const error = await sendControl(`/api/w/${workspaceId}/tasks/${task.id}/worktree`, { method: 'DELETE' })
     setPending(false)
     setConfirming(false)
