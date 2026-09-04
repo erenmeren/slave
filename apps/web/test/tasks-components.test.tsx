@@ -93,9 +93,9 @@ describe('TaskCard', () => {
     expect(screen.getByTestId('task-step').textContent).toBe('2/3')
   })
 
-  it("shows the task's priority as a word chip", () => {
+  it('no longer shows the priority chip — it moved to the panel (M24 §5.4)', () => {
     render(<TaskCard task={task({ priority: 9 })} onSelect={() => {}} />)
-    expect(screen.getByTestId('task-priority').textContent).toBe('URGENT')
+    expect(screen.queryByTestId('task-priority')).toBeNull()
   })
 
   it('calls onSelect with the task id when clicked', () => {
@@ -107,6 +107,18 @@ describe('TaskCard', () => {
 })
 
 describe('TaskDetailPanel', () => {
+  it('shows TASK-<id> and the priority chip in the header (M24 §5.4 — moved off the card)', () => {
+    render(
+      <TaskDetailPanel
+        workspaceId="w1"
+        task={task({ id: '3f9a21c8-0000-4000-8000-000000000000', priority: 3 })}
+        onClose={() => {}}
+      />,
+    )
+    expect(screen.getByTestId('task-panel-ref').textContent).toBe('TASK-3f9a21c8')
+    expect(screen.getByTestId('task-panel-priority').textContent).toBe('HIGH')
+  })
+
   it('shows description, branch, rejection reason and run rows', () => {
     render(
       <TaskDetailPanel
@@ -432,15 +444,15 @@ describe('the six-column board', () => {
     expect(screen.getByTestId('column-dot-Blocked').getAttribute('data-tone')).toBe('blocked')
   })
 
-  it('renders the compact card: mono id, priority chip, title, assignee chip, step counter', () => {
+  it('renders the compact card: title, status pill, assignee chip, step counter — no ref or priority chip', () => {
     render(
       <TaskCard
         task={task({ id: '3f9a21c8-0000-4000-8000-000000000000', title: 'Implement Checkout API', priority: 3, assigneeName: 'Alex Turner', status: 'running' })}
         onSelect={() => {}}
       />,
     )
-    expect(screen.getByTestId('task-ref').textContent).toBe('TASK-3f9a21c8')
-    expect(screen.getByTestId('task-priority').textContent).toBe('HIGH')
+    expect(screen.queryByTestId('task-ref')).toBeNull()
+    expect(screen.queryByTestId('task-priority')).toBeNull()
     expect(screen.getByTestId('task-title').textContent).toBe('Implement Checkout API')
     expect(screen.getByTestId('avatar-tile').textContent).toBe('AT')
     expect(screen.getByTestId('task-step').textContent).toBe('1/3')

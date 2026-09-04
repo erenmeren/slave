@@ -1,6 +1,5 @@
 import { TASK_STATUSES } from '@ai-team-os/db'
 import type { TaskStatus } from '@ai-team-os/domain'
-import { priorityChip } from '../lib/taskColumns'
 import { cardStateForTask, CARD_STATE_TONE, toneForTaskStatus } from '../lib/tones'
 import type { TaskBoardItem } from '../server/tasks'
 import { AvatarTile } from './ui/AvatarTile'
@@ -25,8 +24,9 @@ export const TASK_STATUS_FLASH_COLOR: Record<TaskStatus, string> = taskStatusTab
 export const TASK_STATUS_TEXT: Record<TaskStatus, string> = taskStatusTable(TONE_TEXT)
 
 /**
- * The handoff's compact card (design README §3a.3): mono id, priority chip, title, assignee
- * chip, step counter (`attempt/maxAttempts`). Its state — and so its dot/pill tone — comes from
+ * The handoff's compact card (design README §3a.3): title, status pill, assignee chip, step
+ * counter (`attempt/maxAttempts`) — the id and priority live in the detail panel now (M24 §5.4).
+ * Its state — and so its dot/pill tone — comes from
  * `lib/tones.ts`'s `cardStateForTask`, the ONE derivation for a card that is about a TASK
  * (Decision 2). It used to call `cardStateFor('idle', task.status)` — borrowing the agent-first
  * derivation with a fake idle agent — and so drew a grey **IDLE** pill on a `running` card sitting
@@ -40,7 +40,6 @@ export function TaskCard({
   readonly task: TaskBoardItem
   readonly onSelect: (id: string) => void
 }): React.JSX.Element {
-  const priority = priorityChip(task.priority)
   const state = cardStateForTask(task.status)
   const { tone, label, pulse } = CARD_STATE_TONE[state]
 
@@ -54,16 +53,8 @@ export function TaskCard({
         task.status === 'blocked' ? 'border-tone-blocked/30' : 'border-line'
       }`}
     >
-      <span className="flex items-baseline gap-[7px]">
-        <span data-testid="task-ref" className="font-mono text-[9.5px] font-medium text-text-3">
-          TASK-{task.id.slice(0, 8)}
-        </span>
-        <span data-testid="task-priority" className={`font-mono text-[9px] font-medium ${TONE_TEXT[priority.tone]}`}>
-          {priority.label}
-        </span>
-        <span className="ml-auto">
-          <StatusPill tone={tone} label={label} pulse={pulse} />
-        </span>
+      <span className="flex items-baseline justify-end">
+        <StatusPill tone={tone} label={label} pulse={pulse} />
       </span>
       <span data-testid="task-title" className="text-[11.5px] leading-[1.35] text-[#dbe1ea]">
         {task.title}

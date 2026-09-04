@@ -47,7 +47,7 @@ export const COLUMN_STATE: Record<BoardColumn, CardState> = {
   Done: 'completed',
 }
 
-/** `Task.priority` is an integer; the handoff's card shows a word. Four buckets, escalating tone.
+/** `Task.priority` is an integer; the detail panel's header shows a word (M24 §5.4). Four buckets, escalating tone.
  *  Anything above 4 is still `URGENT` — there is no fifth word to reach for. */
 export function priorityChip(priority: number): { readonly label: string; readonly tone: StatusTone } {
   if (priority >= 4) return { label: 'URGENT', tone: 'blocked' }

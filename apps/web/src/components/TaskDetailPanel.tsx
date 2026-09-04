@@ -2,11 +2,13 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { onUnauthorized } from '../lib/onUnauthorized'
 import { errorMessage, sendControl } from '../lib/postControl'
+import { priorityChip } from '../lib/taskColumns'
 import type { TaskBoardItem } from '../server/tasks'
 import { TASK_STATUS_TEXT } from './TaskCard'
 import { Button } from './ui/Button'
 import { GhostButton, PrimaryButton } from './ui/FormControls'
 import { SectionLabel } from './ui/SectionLabel'
+import { TONE_TEXT } from './ui/StatusPill'
 
 interface OpenArtifact {
   readonly id: string
@@ -90,6 +92,10 @@ export function TaskDetailPanel({
     >
       <header className="flex items-start justify-between gap-2">
         <div>
+          <p className="flex items-baseline gap-[7px] font-mono text-[9.5px] font-medium">
+            <span data-testid="task-panel-ref" className="text-text-3">TASK-{task.id.slice(0, 8)}</span>
+            <span data-testid="task-panel-priority" className={TONE_TEXT[priorityChip(task.priority).tone]}>{priorityChip(task.priority).label}</span>
+          </p>
           <h2 className="text-sm font-medium text-text-1">{task.title}</h2>
           <span data-testid="detail-status" className={`text-xs ${TASK_STATUS_TEXT[task.status]}`}>
             {task.status}
