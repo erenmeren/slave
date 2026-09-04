@@ -67,34 +67,34 @@ afterEach(() => {
 })
 
 describe('SettingsClient', () => {
-  it('renders both panels', () => {
+  it('renders the three panels in order, with the moved-out surfaces gone', () => {
     render(
       <SettingsClient
-        templates={[template()]}
-        companies={[{ id: 'c1', name: 'Acme Robotics' }]}
-        roster={[company()]}
         adapters={[]}
-        permissions={[]}
-        workspaces={[]}
         showReseed={false}
         mode="loopback-only"
         posture="loopback-only · no accounts · cross-site requests refused"
       />,
     )
-    expect(screen.getByText('Template catalog')).toBeTruthy()
-    expect(screen.getByText('Companies')).toBeTruthy()
-    expect(screen.getByTestId('create-workspace-form')).toBeTruthy()
+    // `Panel` renders `PanelHeader` → `SectionLabel` as its first child when it has a title —
+    // the same idiom `ProjectSettingsClient`'s "renders the four panels in order" test uses.
+    const titles = screen.getAllByTestId('panel').map((p) => p.firstElementChild?.textContent?.trim().toLowerCase())
+    expect(titles).toEqual(['provider adapters', 'security', 'danger zone'])
+
+    // The permission matrix, the workspace create form, the template/company forms and the
+    // transport chooser all left this page (M24 Task 5/6) — none of their surfaces render here.
+    expect(screen.queryByTestId('perm-caption')).toBeNull()
+    expect(screen.queryByTestId('create-workspace-form')).toBeNull()
+    expect(screen.queryByTestId('template-form')).toBeNull()
+    expect(screen.queryByTestId('company-form')).toBeNull()
+    expect(screen.queryByTestId('danger-workspace')).toBeNull()
+    expect(screen.queryByTestId('transport-sse')).toBeNull()
   })
 
   it('states the security posture, honestly and without controls', () => {
     render(
       <SettingsClient
-        templates={[template()]}
-        companies={[{ id: 'c1', name: 'Acme Robotics' }]}
-        roster={[company()]}
         adapters={[]}
-        permissions={[]}
-        workspaces={[]}
         showReseed={false}
         mode="loopback-only"
         posture="loopback-only · no accounts · cross-site requests refused"
@@ -105,13 +105,13 @@ describe('SettingsClient', () => {
   })
 
   it('renders whatever posture the server computed (accounts mode names the user)', () => {
-    render(<SettingsClient templates={[template()]} companies={[]} roster={[]} adapters={[]} permissions={[]} workspaces={[]} showReseed={false}
+    render(<SettingsClient adapters={[]} showReseed={false}
       mode="accounts" posture="accounts · signed in as ada · cross-site requests refused" />)
     expect(screen.getByTestId('security-posture').textContent).toBe('accounts · signed in as ada · cross-site requests refused')
   })
 
   it('offers Logout only in accounts mode', () => {
-    render(<SettingsClient templates={[template()]} companies={[]} roster={[]} adapters={[]} permissions={[]} workspaces={[]} showReseed={false}
+    render(<SettingsClient adapters={[]} showReseed={false}
       mode="loopback-only" posture="loopback-only · no accounts · cross-site requests refused" />)
     expect(screen.queryByTestId('logout')).toBeNull()
   })
@@ -120,7 +120,7 @@ describe('SettingsClient', () => {
     const assign = vi.fn()
     Object.defineProperty(window, 'location', { configurable: true, value: { assign, pathname: '/settings', search: '' } })
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 204 }))
-    render(<SettingsClient templates={[template()]} companies={[]} roster={[]} adapters={[]} permissions={[]} workspaces={[]} showReseed={false}
+    render(<SettingsClient adapters={[]} showReseed={false}
       mode="accounts" posture="accounts · signed in as ada · cross-site requests refused" />)
     await act(async () => {
       fireEvent.click(screen.getByTestId('logout'))
@@ -141,15 +141,8 @@ describe('SettingsPage', () => {
 
   async function renderSettingsPage(): Promise<void> {
     vi.doMock('../src/server/principal.js', () => ({ currentPrincipal }))
-    vi.doMock('../src/server/org.js', () => ({
-      listTemplates: async () => [],
-      listCompanies: async () => [],
-      listRoster: async () => [],
-      listProjects: async () => [],
-    }))
     vi.doMock('../src/server/settings.js', () => ({
       buildProviderAdapters: async () => [],
-      buildPermissionMatrix: async () => [],
     }))
     vi.doMock('../src/components/SettingsClient.js', () => ({
       SettingsClient: ({ mode, posture }: { readonly mode: string; readonly posture: string }) => (
@@ -791,69 +784,12 @@ describe('the permission matrix', () => {
   })
 })
 
-describe('realtime transport and the danger zone', () => {
-  const two = [
-    { id: 'w1', name: 'Checkout Platform', halted: false },
-    { id: 'w2', name: 'Ledger', halted: true },
-  ]
-
-  it('shows SSE selected and WebSocket disabled', () => {
-    render(<DangerZone workspaces={[]} showReseed={false} />)
-    expect(screen.getByTestId('transport-sse').getAttribute('aria-checked')).toBe('true')
-    expect((screen.getByTestId('transport-ws') as HTMLButtonElement).disabled).toBe(true)
-    expect(screen.getByTestId('transport-ws').textContent).toContain('later')
-  })
-
+describe('the danger zone', () => {
   it('offers reset demo data only when the server said it is available', () => {
-    const { rerender } = render(<DangerZone workspaces={[]} showReseed={false} />)
+    const { rerender } = render(<DangerZone showReseed={false} />)
     expect(screen.queryByTestId('reseed-button')).toBeNull()
 
-    rerender(<DangerZone workspaces={[]} showReseed />)
+    rerender(<DangerZone showReseed />)
     expect(screen.getByTestId('reseed-button')).toBeTruthy()
-  })
-
-  // Fix round 1, finding 1: the stop used to VANISH on any install with two or more projects.
-  // It now names its target through a selector, the same precedent Analytics carries (§5.7.9).
-  it('names its target with a selector when there is more than one project', () => {
-    render(<DangerZone workspaces={two} showReseed={false} />)
-
-    const select = screen.getByTestId('danger-workspace') as HTMLSelectElement
-    expect(select.getAttribute('aria-label')).toBe('danger zone workspace')
-    expect(Array.from(select.options).map((o) => o.textContent)).toEqual(['Checkout Platform', 'Ledger'])
-    // Default is the first by name -- `listProjects()` already orders them.
-    expect(select.value).toBe('w1')
-    expect(screen.getByTestId('emergency-stop')).toBeTruthy()
-    expect(screen.queryByTestId('danger-no-workspace')).toBeNull()
-  })
-
-  it("points the stop at the SELECTED workspace, with that workspace's own halted state", async (): Promise<void> => {
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }))
-    vi.stubGlobal('fetch', fetchMock)
-    try {
-      render(<DangerZone workspaces={two} showReseed={false} />)
-
-      // `w1` is not halted, so the stop is live and fires at `w1`.
-      await act(async () => {
-        fireEvent.click(screen.getByTestId('emergency-stop'))
-      })
-      await act(async () => {
-        fireEvent.click(screen.getByTestId('emergency-stop-confirm'))
-      })
-      expect(fetchMock).toHaveBeenCalledWith('/api/w/w1/emergency-stop', expect.objectContaining({ method: 'POST' }))
-
-      // Switching to `w2` -- which IS halted -- carries that workspace's real state across, so the
-      // button disables rather than offering to halt an already-halted project.
-      fireEvent.change(screen.getByTestId('danger-workspace'), { target: { value: 'w2' } })
-      expect((screen.getByTestId('emergency-stop') as HTMLButtonElement).disabled).toBe(true)
-    } finally {
-      vi.unstubAllGlobals()
-    }
-  })
-
-  it('falls back to the empty state only when there is no project at all', () => {
-    render(<DangerZone workspaces={[]} showReseed={false} />)
-    expect(screen.queryByTestId('emergency-stop')).toBeNull()
-    expect(screen.queryByTestId('danger-workspace')).toBeNull()
-    expect(screen.getByTestId('danger-no-workspace')).toBeTruthy()
   })
 })
