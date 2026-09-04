@@ -3,24 +3,23 @@
 import { useRouter } from 'next/navigation'
 import { useState } from 'react'
 import type { ProviderKind } from '@ai-team-os/control'
-import { sendControl } from '../lib/postControl'
-import { ProviderSelect } from './ProviderSelect'
-import { FieldLabel, INPUT_SHELL, PrimaryButton, TextField } from './ui/FormControls'
-import { Panel } from './ui/Panel'
+import { formatTimeout } from '../../lib/format'
+import { sendControl } from '../../lib/postControl'
+import { ProviderSelect } from '../ProviderSelect'
+import { FieldLabel, INPUT_SHELL, PrimaryButton, TextField } from '../ui/FormControls'
+import { Panel } from '../ui/Panel'
 
 /**
- * The workspace's runtime and its spend ceiling, beside `GoalCard` on `/w/[workspaceId]`.
+ * The Settings tab's runtime panel (M24 §4, moved off the Overview card of the same shape): the
+ * workspace's runtime and its spend ceiling, beside `GoalPanel`, plus the three dispatch limits
+ * (concurrency, run timeout, attempts) shown read-only underneath -- the sidebar's old format,
+ * now that Task 2 removed the sidebar row that used to carry them.
  *
  * No optimistic state: every control on this page follows M11's rule that the server's next
- * snapshot is what changes what is rendered. What actually delivers that snapshot here is the SSE
- * stream, not the router (fix round 1, Important finding 2): `setWorkspaceProvider`/`setWorkspaceBudget`
- * append `workspace.settings_changed`, `useWorkspaceStream` treats every event as a wake-up and
- * debounces a refetch of `/api/w/[workspaceId]/overview`, and the new props arrive down through
- * `OverviewClient`. A Next server re-render does NOT repaint this card, because `initial` is only
- * the `useState` seed of that hook's snapshot (`useWorkspaceStream.ts:36`) and is ignored on every
- * render after the first. `router.refresh()` is kept after each mutation anyway: it is the house
- * idiom for a mutation on this page, it costs one server render, and it is the only path left for
- * a client whose EventSource is down -- but it is not what the operator sees working.
+ * snapshot is what changes what is rendered. `router.refresh()` after a successful mutation is
+ * the ONLY path back to a new value here (unlike the Overview card this panel replaced, there is
+ * no SSE stream feeding the Settings tab) -- it costs one server render, and it is the house idiom
+ * every write on this page follows.
  *
  * A 409 keeps whatever the operator typed, so a refused write is correctable rather than lost.
  *
@@ -29,16 +28,22 @@ import { Panel } from './ui/Panel'
  * the pending selection -- the point is to tell an operator what their current configuration will
  * do at dispatch, and the pending selection has not configured anything yet.
  */
-export function RuntimeCard({
+export function RuntimePanel({
   workspaceId,
   provider,
   budgetUsd,
   costBlindBudgeted,
+  limits,
 }: {
   readonly workspaceId: string
   readonly provider: ProviderKind | null
   readonly budgetUsd: number | null
   readonly costBlindBudgeted: boolean
+  readonly limits: {
+    readonly maxConcurrentRuns: number
+    readonly runTimeoutMs: number
+    readonly maxAttempts: number
+  }
 }): React.JSX.Element {
   const router = useRouter()
   const [draftProvider, setDraftProvider] = useState<ProviderKind | ''>(provider ?? '')
@@ -132,6 +137,16 @@ export function RuntimeCard({
             set budget
           </PrimaryButton>
         </form>
+
+        <dl data-testid="runtime-limits" className="mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-[6px] border-t border-line pt-3 font-mono text-[10.5px]">
+          <dt className="text-text-faint">concurrency</dt>
+          <dd data-testid="runtime-concurrency" className="text-text-1">{limits.maxConcurrentRuns}</dd>
+          <dt className="text-text-faint">run timeout</dt>
+          <dd data-testid="runtime-timeout" className="text-text-1">{formatTimeout(limits.runTimeoutMs)}</dd>
+          <dt className="text-text-faint">attempts</dt>
+          <dd data-testid="runtime-attempts" className="text-text-1">{limits.maxAttempts}</dd>
+        </dl>
+        <p className="font-mono text-[10px] text-text-3">set in the workspace record; not editable here yet</p>
 
         {costBlindBudgeted && (
           <span data-testid="runtime-cost-blind-warning" className="text-xs text-tone-waiting">

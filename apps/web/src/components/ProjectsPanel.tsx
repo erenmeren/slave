@@ -20,7 +20,7 @@ function splitCommands(text: string): string[] {
 
 /**
  * Settings' "attach a repository" form (M23 spec §2 A3): the `CompanyManager` idiom (local state,
- * `pending`, `errorText`, `role="alert"` error span) with `RuntimeCard`'s "not budgeted" checkbox
+ * `pending`, `errorText`, `role="alert"` error span) with `RuntimePanel`'s "not budgeted" checkbox
  * pattern for the budget field.
  *
  * Not `sendControl`: `POST /api/org/workspaces` is the one org route whose success body carries an
@@ -42,7 +42,7 @@ export function ProjectsPanel(): React.JSX.Element {
   const [errorText, setErrorText] = useState<string | null>(null)
 
   const verifyCommands = splitCommands(verifyText)
-  // `required` on the budget field mirrors `RuntimeCard.tsx:96-111`'s guard: `Number('')` is
+  // `required` on the budget field mirrors `project/RuntimePanel.tsx`'s guard: `Number('')` is
   // `0`, so a cleared field with the checkbox unchecked must refuse to submit rather than
   // silently posting a real (and strictest-possible) budget the operator never typed.
   const canSubmit =

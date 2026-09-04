@@ -134,12 +134,24 @@ export interface PermissionSection {
   readonly rows: readonly PermissionRow[]
 }
 
-export async function buildPermissionMatrix(): Promise<readonly PermissionSection[]> {
+/**
+ * @param workspaceId Scopes the workspace query to that one row (M24 §4: the project Settings
+ * tab's own permission matrix) -- an empty array, not an error, when it names no workspace.
+ * Omitted, the original org-wide Settings behaviour: every workspace, in name order.
+ */
+export async function buildPermissionMatrix(workspaceId?: string): Promise<readonly PermissionSection[]> {
   // TWO queries regardless of how many workspaces exist -- the agents ride in on the workspace
   // query's `include`, and the permissions come back in one sweep keyed by agent. No per-workspace
-  // and no per-agent round trip.
+  // and no per-agent round trip. `AgentPermission` carries no `workspaceId` of its own (it is keyed
+  // by `agentId` only), so scoping the workspace query is enough: the map below only ever gets
+  // consulted for the agents `workspaces` actually returned, and a permission row for some other
+  // project's agent is fetched but never looked up.
   const [workspaces, permissions] = await Promise.all([
     prisma.workspace.findMany({
+      // `{}` rather than an omitted key -- `exactOptionalPropertyTypes` refuses a `where` typed
+      // to allow `undefined` explicitly, and an empty filter matches every row exactly as
+      // omitting `where` would.
+      where: workspaceId === undefined ? {} : { id: workspaceId },
       orderBy: { name: 'asc' },
       select: {
         id: true,
