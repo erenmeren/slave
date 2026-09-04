@@ -6,9 +6,14 @@ import type { ProjectRow } from '../src/server/org.js'
 
 const routerRefresh = vi.fn()
 const routerPush = vi.fn()
+// Backs `useSearchParams` below -- reset per test so `?new=1` in one test can't leak the drawer
+// open into the next (Step 1 brief).
+let search = ''
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ refresh: routerRefresh, push: routerPush }),
+  useSearchParams: () => new URLSearchParams(search),
+  usePathname: () => '/',
 }))
 
 function project(over: Partial<ProjectRow>): ProjectRow {
@@ -32,7 +37,13 @@ const companies = [
   { id: 'c2', name: 'Globex' },
 ]
 
+const projects = [project({})]
+
 describe('ProjectsClient', () => {
+  beforeEach(() => {
+    search = ''
+  })
+
   afterEach(() => {
     routerRefresh.mockClear()
     routerPush.mockClear()
@@ -45,8 +56,11 @@ describe('ProjectsClient', () => {
         companies={companies}
       />,
     )
-    expect(screen.getByText('Checkout Platform')).toBeTruthy()
-    expect(screen.getByText('Acme Robotics')).toBeTruthy()
+    // Scoped to the card: the team catalog below it (M24 T6) lists the same company names in
+    // `CompanyManager`'s own list, so an unscoped `getByText` now matches twice.
+    const card = screen.getByTestId('project-card')
+    expect(within(card).getByText('Checkout Platform')).toBeTruthy()
+    expect(within(card).getByText('Acme Robotics')).toBeTruthy()
     expect(screen.getAllByTestId('stat-strip-item')).toHaveLength(4)
   })
 
@@ -122,7 +136,9 @@ describe('ProjectsClient', () => {
     it('opens from the assign button and posts the chosen companyId, refreshing on ok', async () => {
       render(<ProjectsClient projects={[project({ id: 'w1', companyName: null })]} companies={companies} />)
       fireEvent.click(screen.getByTestId('assign-company-button'))
-      fireEvent.click(screen.getByText('Globex'))
+      // Scoped to the dialog: the team catalog below the cards (M24 T6) lists the same company
+      // names in `CompanyManager`'s own list, so an unscoped `getByText` now matches twice.
+      fireEvent.click(within(screen.getByTestId('assign-company-dialog')).getByText('Globex'))
 
       await act(async () => {
         fireEvent.click(screen.getByTestId('assign-confirm'))
@@ -141,7 +157,7 @@ describe('ProjectsClient', () => {
       )
       render(<ProjectsClient projects={[project({ id: 'w1', companyName: null })]} companies={companies} />)
       fireEvent.click(screen.getByTestId('assign-company-button'))
-      fireEvent.click(screen.getByText('Acme Robotics'))
+      fireEvent.click(within(screen.getByTestId('assign-company-dialog')).getByText('Acme Robotics'))
 
       await act(async () => {
         fireEvent.click(screen.getByTestId('assign-confirm'))
@@ -170,6 +186,43 @@ describe('ProjectsClient', () => {
 
       expect(screen.queryByTestId('assign-company-dialog')).toBeNull()
       expect(document.activeElement).toBe(trigger)
+    })
+  })
+
+  describe('the New project drawer and team catalog (M24 T6)', () => {
+    it('has a New project button that opens the attach-a-repo drawer', () => {
+      render(<ProjectsClient projects={projects} companies={companies} templates={[]} roster={[]} />)
+      expect(screen.queryByTestId('create-workspace-form')).toBeNull()
+      fireEvent.click(screen.getByTestId('new-project'))
+      expect(screen.getByRole('dialog', { name: /new project/i })).toBeTruthy()
+      expect(screen.getByTestId('create-workspace-form')).toBeTruthy()
+    })
+
+    it('opens the drawer on load when ?new=1 is in the URL', () => {
+      search = 'new=1'
+      render(<ProjectsClient projects={projects} companies={companies} templates={[]} roster={[]} />)
+      expect(screen.getByTestId('create-workspace-form')).toBeTruthy()
+    })
+
+    it('closes the drawer on Escape and on the close button', () => {
+      render(<ProjectsClient projects={projects} companies={companies} templates={[]} roster={[]} />)
+
+      fireEvent.click(screen.getByTestId('new-project'))
+      expect(screen.getByRole('dialog', { name: /new project/i })).toBeTruthy()
+      fireEvent.keyDown(document, { key: 'Escape' })
+      expect(screen.queryByRole('dialog', { name: /new project/i })).toBeNull()
+
+      fireEvent.click(screen.getByTestId('new-project'))
+      expect(screen.getByRole('dialog', { name: /new project/i })).toBeTruthy()
+      fireEvent.click(screen.getByTestId('new-project-close'))
+      expect(screen.queryByRole('dialog', { name: /new project/i })).toBeNull()
+    })
+
+    it('renders the team catalog below the cards', () => {
+      render(<ProjectsClient projects={projects} companies={companies} templates={[]} roster={[]} />)
+      expect(screen.getByTestId('team-catalog')).toBeTruthy()
+      expect(screen.getByTestId('template-form')).toBeTruthy()
+      expect(screen.getByTestId('company-form')).toBeTruthy()
     })
   })
 })
