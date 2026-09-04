@@ -37,12 +37,11 @@ const SNAPSHOT: OverviewSnapshot = {
     },
   ],
   tasks: { active: 1, ready: 0, blocked: 0, done: 0, failed: 0 },
-  // M14 Task 8 widened `OverviewSnapshot` with the bottom row's three panels and the goal chips;
-  // this fixture states them so it keeps type-checking, and asserts nothing new about them.
+  // M14 Task 8 widened `OverviewSnapshot` with the bottom row's three panels; this fixture states
+  // them so it keeps type-checking, and asserts nothing new about them.
   blocked: [],
   liveEvents: [],
   mergeQueue: [],
-  goalSuggestions: [],
 }
 
 /** Minimal EventSource stand-in: capture instances, let tests push messages and errors. */

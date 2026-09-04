@@ -635,12 +635,12 @@ describe('buildOverviewSnapshot', () => {
     expect(snapshot?.mergeQueue.map((t) => t.hasApproval)).toEqual([true, false])
   })
 
-  it('offers the last three distinct goals as suggestions, newest first', async (): Promise<void> => {
-    for (const goal of ['first', 'second', 'first', 'third', 'fourth']) {
-      await appendEvent({ type: 'workspace.goal_set', workspaceId: fixture.workspaceId, actor: 'human', payload: { goal } })
-    }
+  // M24 §3: the goal chips left the snapshot entirely (the goal form moved to the project
+  // Settings tab, a later task) — `goalSuggestions` is not a field a caller can read a default
+  // out of, it is simply gone.
+  it('no longer carries goalSuggestions at all (M24 §3)', async (): Promise<void> => {
     const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
-    expect(snapshot?.goalSuggestions).toEqual(['fourth', 'third', 'first'])
+    expect('goalSuggestions' in (snapshot as object)).toBe(false)
   })
 
   it('carries the guardrail columns the sidebar reads, so the page can provide them', async (): Promise<void> => {
@@ -657,19 +657,17 @@ describe('buildOverviewSnapshot', () => {
     expect(snapshot?.workspace.maxAttempts).toBe(5)
   })
 
-  it("does not leak another workspace's blocked rows, events, queue or goals", async (): Promise<void> => {
+  it("does not leak another workspace's blocked rows, events or queue", async (): Promise<void> => {
     const other = await prisma.workspace.create({
       data: { name: 'Other', repoPath: '/tmp/other-bottom-row', verifyCommands: ['true'], setupCommands: [] },
     })
     await prisma.task.create({
       data: { workspaceId: other.id, title: 'Not mine', description: 'x', status: 'blocked', requiredRole: 'backend', maxAttempts: 3 },
     })
-    await appendEvent({ type: 'workspace.goal_set', workspaceId: other.id, actor: 'human', payload: { goal: 'not mine' } })
 
     const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
     expect(snapshot?.blocked).toEqual([])
     expect(snapshot?.liveEvents).toEqual([])
     expect(snapshot?.mergeQueue).toEqual([])
-    expect(snapshot?.goalSuggestions).toEqual([])
   })
 })

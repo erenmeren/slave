@@ -9,8 +9,6 @@ import { useOverview } from '../hooks/useOverview'
 import type { OverviewSnapshot } from '../server/overview'
 import { AgentCard } from './AgentCard'
 import { AgentPanel } from './AgentPanel'
-import { GoalCard } from './GoalCard'
-import { RuntimeCard } from './RuntimeCard'
 import { HaltBanner } from './HaltBanner'
 import { postControl } from '../lib/postControl'
 import { TopStrip } from './TopStrip'
@@ -224,19 +222,6 @@ export function OverviewClient({
           </div>
         )}
         <TopStrip snapshot={view} />
-        <div className="grid grid-cols-1 gap-[11px] px-[20px] pt-[16px] md:grid-cols-2">
-          <GoalCard workspaceId={workspaceId} goal={view.workspace.goal} suggestions={view.goalSuggestions} />
-          <RuntimeCard
-            // The card's drafts are deliberately uncontrolled; a changed SAVED pair remounts it
-            // with fresh drafts, an unrelated re-render (same key) never clobbers a draft in
-            // progress (M15 spec §3 B4).
-            key={`${view.workspace.provider ?? ''}|${view.workspace.budgetUsd ?? ''}`}
-            workspaceId={workspaceId}
-            provider={view.workspace.provider}
-            budgetUsd={view.workspace.budgetUsd}
-            costBlindBudgeted={view.workspace.costBlindBudgeted}
-          />
-        </div>
         {/* The handoff's 3-column card grid at an 11px gap (design README §3a.1), narrowing to
           * two and then one rather than shrinking the cards past the anatomy they hold. */}
         <main className="grid grid-cols-1 gap-[11px] px-[20px] pt-[16px] md:grid-cols-2 xl:grid-cols-3">

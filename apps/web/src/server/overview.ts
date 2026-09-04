@@ -25,12 +25,6 @@ const RECENT_EVENTS_LIMIT = 20
 /** The 340px live-events panel shows the workspace's last 8 (design README §3a.1). */
 const LIVE_EVENTS_LIMIT = 8
 
-/** The goal form offers three chips (design README §3a.1). */
-const GOAL_SUGGESTION_LIMIT = 3
-
-/** How far back to scan `workspace.goal_set` events to find three DISTINCT ones. */
-const GOAL_HISTORY_SCAN = 20
-
 export interface AgentCardData {
   readonly id: string
   readonly name: string
@@ -147,14 +141,16 @@ export interface OverviewSnapshot {
      */
     readonly costBlindBudgeted: boolean
     /**
-     * The three guardrail columns the sidebar's bottom block reads (M14 Task 8, the
-     * `ShellFactsContext` half of the controller ruling carried from Task 3).
+     * The three guardrail columns (M14 Task 8, the `ShellFactsContext` half of the controller
+     * ruling carried from Task 3). After M24 the sidebar reads nothing per-project at all -- these
+     * columns instead feed the project header and the Tasks tab's badge, via
+     * `OverviewClient`'s `publishShellFacts` call (`hooks/useShellFacts.ts`).
      *
-     * They are here so the Overview page can PROVIDE the sidebar's facts out of the stream it
-     * already runs, instead of the root layout's `<Sidebar>` opening a second `EventSource` per
-     * workspace page. `server/shell.ts` still owns the standalone route for the pages that have
-     * no snapshot of their own (Tasks/Graph/Activity, until Tasks 10-12 provide theirs) -- this
-     * is the same four columns read once instead of twice, not a second source of truth.
+     * They are here so the Overview page can PROVIDE those facts out of the stream it already
+     * runs, instead of the header opening a second `EventSource` per workspace page.
+     * `server/shell.ts` still owns the standalone route for the pages that have no snapshot of
+     * their own (Tasks/Graph/Activity, until Tasks 10-12 provide theirs) -- this is the same four
+     * columns read once instead of twice, not a second source of truth.
      */
     readonly maxConcurrentRuns: number
     readonly runTimeoutMs: number
@@ -201,13 +197,6 @@ export interface OverviewSnapshot {
      */
     readonly hasApproval: boolean
   }[]
-  /**
-   * The last three DISTINCT goals this workspace has been set, newest first, from
-   * `workspace.goal_set` events -- the suggestion chips under an empty goal form. Real history,
-   * never invented copy. Empty for a workspace that has never had a goal, which renders no chip
-   * row at all rather than a row of placeholders.
-   */
-  readonly goalSuggestions: readonly string[]
 }
 
 // A task under review or in the merge queue is still active work, not a vanished one — widened
@@ -330,8 +319,8 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
   const countOf = (statuses: readonly string[]): number =>
     taskGroups.filter((g) => statuses.includes(g.status)).reduce((n, g) => n + g._count._all, 0)
 
-  // The bottom row's three panels plus the goal chips, in one round with everything else loaded.
-  const [blockedTasks, pausedRuns, recentForPanel, mergingTasks, goalEvents] = await Promise.all([
+  // The bottom row's three panels, in one round with everything else loaded.
+  const [blockedTasks, pausedRuns, recentForPanel, mergingTasks] = await Promise.all([
     prisma.task.findMany({ where: { workspaceId, status: 'blocked' }, orderBy: { createdAt: 'asc' } }),
     prisma.agentRun.findMany({
       where: { agent: { team: { workspaceId } }, status: { in: ['pause_requested', 'paused'] } },
@@ -340,11 +329,6 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
     }),
     prisma.executionEvent.findMany({ where: { workspaceId }, orderBy: { seq: 'desc' }, take: LIVE_EVENTS_LIMIT }),
     prisma.task.findMany({ where: { workspaceId, status: 'merging' } }),
-    prisma.executionEvent.findMany({
-      where: { workspaceId, type: 'workspace_goal_set' },
-      orderBy: { seq: 'desc' },
-      take: GOAL_HISTORY_SCAN,
-    }),
   ])
 
   const blocked = [
@@ -408,19 +392,6 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
     .filter((task) => !latestApprovalSeq.has(task.id))
     .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
     .map((task) => ({ id: task.id, title: task.title, hasApproval: false }))
-
-  // The chips under an empty goal form: real history, deduplicated, newest first. Scanned over
-  // the last `GOAL_HISTORY_SCAN` events rather than the last three, because a workspace whose
-  // goal was set to the same text repeatedly would otherwise yield one chip out of three reads.
-  const seenGoals = new Set<string>()
-  const goalSuggestions: string[] = []
-  for (const event of goalEvents) {
-    const goal = (event.payload as { goal?: string }).goal
-    if (typeof goal !== 'string' || seenGoals.has(goal)) continue
-    seenGoals.add(goal)
-    goalSuggestions.push(goal)
-    if (goalSuggestions.length === GOAL_SUGGESTION_LIMIT) break
-  }
 
   return {
     workspace: {
@@ -500,6 +471,5 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
       ),
     })),
     mergeQueue: [...approvedQueue, ...unapprovedQueue],
-    goalSuggestions,
   }
 }

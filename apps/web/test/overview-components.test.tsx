@@ -64,7 +64,6 @@ const snapshot = (agents: readonly AgentCardData[]): OverviewSnapshot => ({
   blocked: [],
   liveEvents: [],
   mergeQueue: [],
-  goalSuggestions: [],
 })
 
 describe('AgentCard provider chip', () => {
@@ -606,58 +605,6 @@ describe('Overview bottom row', () => {
   })
 })
 
-describe('RuntimeCard remount on a saved change (M15 spec \u00a73 B4)', () => {
-  /** OverviewClient's own stream (`useOverview.test.tsx`'s precedent) -- this describe never
-   *  mounts `<Sidebar>`, so it is the only `EventSource` in play. */
-  class FakeOverviewEventSource {
-    static instances: FakeOverviewEventSource[] = []
-    onmessage: ((event: { data: string }) => void) | null = null
-    onerror: (() => void) | null = null
-    onopen: (() => void) | null = null
-    constructor(public url: string) {
-      FakeOverviewEventSource.instances.push(this)
-    }
-    close(): void {}
-  }
-
-  beforeEach((): void => {
-    vi.useFakeTimers()
-    FakeOverviewEventSource.instances = []
-    vi.stubGlobal('EventSource', FakeOverviewEventSource as unknown as typeof EventSource)
-  })
-
-  afterEach((): void => {
-    vi.unstubAllGlobals()
-    vi.useRealTimers()
-  })
-
-  it('RuntimeCard drafts re-seed when the saved provider/budget pair changes', async (): Promise<void> => {
-    const view = snapshot([])
-    const initial = { ...view, workspace: { ...view.workspace, budgetUsd: 20 } }
-    const updated = { ...view, workspace: { ...view.workspace, budgetUsd: 35 } }
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(updated), { status: 200 })))
-
-    render(<OverviewClient workspaceId="w1" initial={initial} />)
-    expect((screen.getByLabelText('workspace budget') as HTMLInputElement).value).toBe('20')
-
-    // Dirty nothing on the card; simulate the snapshot moving under it via a real wake-up event
-    // and the debounced refetch it schedules (`useWorkspaceStream`'s wiring).
-    act((): void => {
-      FakeOverviewEventSource.instances[0]?.onmessage?.({
-        data: JSON.stringify({
-          seq: 1, ts: new Date(0).toISOString(), workspaceId: 'w1', actor: 'system',
-          type: 'workspace.settings_changed', payload: {},
-        }),
-      })
-    })
-    await act(async (): Promise<void> => {
-      await vi.advanceTimersByTimeAsync(300)
-    })
-
-    expect((screen.getByLabelText('workspace budget') as HTMLInputElement).value).toBe('35')
-  })
-})
-
 describe('shell facts and stream state reach the project header, never the sidebar', () => {
   // Fix round 1, Critical (carried, re-aimed by M24 §2.2). `app/w/[workspaceId]/layout.tsx`
   // renders `<ProjectHeader>`/`<ProjectTabs>` as SIBLINGS of `{children}`, so nothing a page
@@ -687,6 +634,16 @@ describe('shell facts and stream state reach the project header, never the sideb
   it('publishes its stream state on mount, for the project header’s connection chip to read', () => {
     render(<OverviewClient workspaceId="w1" initial={PUBLISHED} />)
     expect(publishStreamState).toHaveBeenCalledWith('w1', { connection: 'connected', latencyMs: null })
+  })
+
+  // M24 §3: the goal card and the runtime card left the Overview page for the project Settings
+  // tab (a later task); this page shows the strip and the agent cards, nothing above them.
+  it('renders the strip and the agent cards and nothing else above them (M24 §3)', () => {
+    render(<OverviewClient workspaceId="w1" initial={PUBLISHED} />)
+    expect(screen.queryByTestId('goal-input')).toBeNull()
+    expect(screen.queryByTestId('runtime-provider')).toBeNull()
+    expect(screen.queryByTestId('goal-suggestion')).toBeNull()
+    expect(screen.getAllByTestId('agent-card').length).toBe(PUBLISHED.agents.length)
   })
 })
 
