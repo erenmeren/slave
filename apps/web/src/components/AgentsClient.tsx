@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import type { AgentStatus } from '@ai-team-os/domain'
-import type { AllAgentRow, ProjectTeamRow } from '../server/org'
+import type { AllAgentsPage, ProjectTeamRow } from '../server/org'
 import type { AgentCardData, OverviewSnapshot } from '../server/overview'
 import type { StatusTone } from './ui/StatusPill'
 import { AgentPanel } from './AgentPanel'
@@ -51,7 +51,7 @@ export function AgentsClient({
   agents,
   teams,
 }: {
-  readonly agents: readonly AllAgentRow[]
+  readonly agents: AllAgentsPage
   readonly teams: readonly ProjectTeamRow[]
 }): React.JSX.Element {
   const [tab, setTab] = useState<Tab>('agents')

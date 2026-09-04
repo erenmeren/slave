@@ -930,10 +930,10 @@ try {
   // task/provider/cost/actions). Asserted TWICE and deliberately: `getComputedStyle` resolves
   // `grid-template-columns` to USED track sizes, so the `1fr` comes back as a pixel width and a
   // literal string comparison against the README's template could never pass. The computed read is
-  // what proves the eight fixed tracks really are 200/110/130/120/110/90/90/160 in the browser's
+  // what proves the eight fixed tracks really are 200/110/150/120/110/90/90/160 in the browser's
   // own reckoning and that the flexible track actually took the remaining space; the authored
   // inline value is what proves the template is the README's string and not eight coincidences.
-  const AGENTS_COLUMNS = '200px 110px 130px 120px 110px 1fr 90px 90px 160px'
+  const AGENTS_COLUMNS = '200px 110px 150px 120px 110px 1fr 90px 90px 160px'
   await gotoReliably(`${baseUrl}/agents`)
   // The Agents page opens on the one table now (M24 Task 7): Roster and Workers were two names for
   // the same list of agents and are gone, folded into `agents-tab-agents` (default) beside

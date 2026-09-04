@@ -392,6 +392,9 @@ export interface WorkerRow {
   readonly currentTask: CurrentTask | null
   /** The worker's team name -- the handoff's "department" column. */
   readonly department: string
+  /** The worker's own project `Team.id` (M25 Task 6) -- the department select's current value on
+   *  a project row, and the id `PUT /api/agents/:id/team` moves it away from. */
+  readonly teamId: string
   /**
    * The worker's LIVE run's provider, `null` with no live run (the `AgentCardData.provider` rule,
    * verbatim: a runtime is not decided until a run resolves it). A finished run's provider is
@@ -503,6 +506,7 @@ export async function listWorkers(): Promise<readonly WorkerRow[]> {
       status: info?.status ?? 'idle',
       currentTask: info?.currentTask ?? null,
       department: agent.team.name,
+      teamId: agent.teamId,
       provider: liveProvider,
       gate: liveProvider === null ? null : capabilitiesOf(liveProvider).gate,
       tokens: tokenTotals === undefined || !tokenTotals.reported ? null : tokenTotals.sum,
@@ -524,9 +528,24 @@ export interface AllAgentRow {
   readonly companyAgentId: string | null
   readonly name: string
   readonly role: string
-  readonly teamName: string
+  /** The row's department name -- a project row's `Team.name`, or a catalog row's
+   *  `CompanyTeam.name` (M25 Task 6: was `teamName`, renamed once the Agents table's department
+   *  column became a `<select>` that reads/writes the department, not just names it). */
+  readonly departmentName: string
   readonly projectName: string | null
   readonly workspaceId: string | null
+  /** A project row's own `Team.id` -- the department select's current value, and the id
+   *  `PUT /api/agents/:id/team` moves it away from. `null` for a catalog row, which has no
+   *  project team at all. */
+  readonly teamId: string | null
+  /** The company this agent is roster-linked to, whether the row is a project row (roster-linked
+   *  via `companyAgentId`) or a catalog row (every catalog row lives on a company). `null` for a
+   *  hand-made project agent with no roster link at all. Keys `AllAgentsPage.templatesByCompany`. */
+  readonly companyId: string | null
+  /** A catalog row's own `CompanyTeam.id` -- the department select's current value on a catalog
+   *  row, and the id `PUT /api/org/agents/:id/team` moves it away from. `null` for a project row
+   *  (materialized or not): a project row's department select reads/writes `teamId` instead. */
+  readonly companyTeamId: string | null
   readonly status: string
   readonly currentTask: CurrentTask | null
   readonly provider: ProviderKind | null
@@ -541,11 +560,30 @@ export interface AllAgentRow {
   readonly unmeasuredRuns: number
 }
 
+/** One selectable department: a project `Team`, or a catalog `CompanyTeam` (M25 Task 6). The
+ *  Agents table's department `<select>` renders a list of these -- `id` is the value it PUTs. */
+export interface DepartmentOption {
+  readonly id: string
+  readonly name: string
+}
+
+/** `listAllAgents()`'s full return shape (M25 Task 6, spec §4.1): the row union, plus the two
+ *  option lists the department select needs -- a project row's own workspace's departments, and
+ *  a catalog row's own company's templates (its `CompanyTeam`s). Keyed by `workspaceId`/
+ *  `companyId` so a row picks its own list with no per-row query: one `Team.findMany` and one
+ *  `CompanyTeam.findMany`, each grouped once, cover every row on the page. */
+export interface AllAgentsPage {
+  readonly rows: readonly AllAgentRow[]
+  readonly departmentsByWorkspace: Readonly<Record<string, readonly DepartmentOption[]>>
+  readonly templatesByCompany: Readonly<Record<string, readonly DepartmentOption[]>>
+}
+
 /**
- * The Agents page's one table (M24 §5.3): every project agent (`listWorkers`) plus every catalog
- * member no project has materialized yet (`listRoster`'s members with no workers). The two lists
- * are the inputs on purpose -- one place derives a worker's live status, one place walks the
- * model/provider chain -- and this only lines their rows up.
+ * The Agents page's one table (M24 §5.3; widened to a page object in M25 Task 6, spec §4.1):
+ * every project agent (`listWorkers`) plus every catalog member no project has materialized yet
+ * (`listRoster`'s members with no workers), plus the department select's two option lists. The
+ * two row-source lists are the inputs on purpose -- one place derives a worker's live status, one
+ * place walks the model/provider chain -- and this only lines their rows up.
  *
  * `model` on a project row is read directly off `Agent.model` (fix round 1, Important finding 2)
  * rather than through the roster loop below -- the roster loop only reaches a worker that is
@@ -556,22 +594,38 @@ export interface AllAgentRow {
  * no `model` field at all; `RosterMemberRow.workers[].model` exists but only for a roster-linked
  * worker) -- so this queries it directly rather than widening either of those two shapes for one
  * field only this table reads.
+ *
+ * `departmentsByWorkspace`/`templatesByCompany` are each ONE query, grouped once here rather than
+ * fetched per row -- `DepartmentCell` (`AllAgentsTable.tsx`) picks its own row's list straight out
+ * of the map by `workspaceId`/`companyId`, with no round trip of its own.
  */
-export async function listAllAgents(): Promise<readonly AllAgentRow[]> {
+export async function listAllAgents(): Promise<AllAgentsPage> {
   const [workers, roster] = await Promise.all([listWorkers(), listRoster()])
-  const agentModels = await prisma.agent.findMany({
-    where: { id: { in: workers.map((w) => w.agentId) } },
-    select: { id: true, model: true },
-  })
+  const [agentModels, teams, companyTeams] = await Promise.all([
+    prisma.agent.findMany({
+      where: { id: { in: workers.map((w) => w.agentId) } },
+      select: { id: true, model: true },
+    }),
+    prisma.team.findMany({ select: { id: true, name: true, workspaceId: true }, orderBy: { name: 'asc' } }),
+    prisma.companyTeam.findMany({ select: { id: true, name: true, companyId: true }, orderBy: { name: 'asc' } }),
+  ])
   const modelByAgentId = new Map(agentModels.map((a) => [a.id, a.model] as const))
+  const departmentsByWorkspace: Record<string, DepartmentOption[]> = {}
+  for (const t of teams) (departmentsByWorkspace[t.workspaceId] ??= []).push({ id: t.id, name: t.name })
+  const templatesByCompany: Record<string, DepartmentOption[]> = {}
+  for (const t of companyTeams) (templatesByCompany[t.companyId] ??= []).push({ id: t.id, name: t.name })
+
   const workerRows: AllAgentRow[] = workers.map((w) => ({
     agentId: w.agentId,
     companyAgentId: null, // filled below from the roster when the worker is roster-linked
     name: w.name,
     role: w.role,
-    teamName: w.department,
+    departmentName: w.department,
     projectName: w.projectName,
     workspaceId: w.workspaceId,
+    teamId: w.teamId,
+    companyId: null, // filled below from the roster when the worker is roster-linked
+    companyTeamId: null,
     status: w.status,
     currentTask: w.currentTask,
     provider: w.provider,
@@ -588,7 +642,9 @@ export async function listAllAgents(): Promise<readonly AllAgentRow[]> {
         if (member.workers.length === 0) {
           catalogRows.push({
             agentId: null, companyAgentId: member.companyAgentId, name: member.name, role: member.role,
-            teamName: team.teamName, projectName: null, workspaceId: null, status: 'idle', currentTask: null,
+            departmentName: team.teamName, projectName: null, workspaceId: null,
+            teamId: null, companyId: company.companyId, companyTeamId: team.companyTeamId,
+            status: 'idle', currentTask: null,
             provider: member.effectiveProvider,
             gate: member.effectiveProvider === null ? null : capabilitiesOf(member.effectiveProvider).gate,
             model: member.effectiveModel, costUsd: 0, unmeasuredRuns: 0,
@@ -596,7 +652,7 @@ export async function listAllAgents(): Promise<readonly AllAgentRow[]> {
         } else {
           for (const worker of member.workers) {
             const row = byAgentId.get(worker.agentId)
-            if (row !== undefined) byAgentId.set(worker.agentId, { ...row, companyAgentId: member.companyAgentId })
+            if (row !== undefined) byAgentId.set(worker.agentId, { ...row, companyAgentId: member.companyAgentId, companyId: company.companyId })
           }
         }
       }
@@ -604,7 +660,7 @@ export async function listAllAgents(): Promise<readonly AllAgentRow[]> {
   }
   const projectRows = [...byAgentId.values()].sort((a, b) => (a.projectName ?? '').localeCompare(b.projectName ?? '') || a.name.localeCompare(b.name))
   catalogRows.sort((a, b) => a.name.localeCompare(b.name))
-  return [...projectRows, ...catalogRows]
+  return { rows: [...projectRows, ...catalogRows], departmentsByWorkspace, templatesByCompany }
 }
 
 export async function listTemplates(): Promise<

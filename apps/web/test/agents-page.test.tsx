@@ -2,7 +2,7 @@
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AgentsClient, toneForStatus } from '../src/components/AgentsClient.js'
-import type { AllAgentRow } from '../src/server/org.js'
+import type { AllAgentRow, AllAgentsPage } from '../src/server/org.js'
 
 const routerRefresh = vi.fn()
 
@@ -16,9 +16,12 @@ function agentRow(over: Partial<AllAgentRow> = {}): AllAgentRow {
     companyAgentId: null,
     name: 'Alex',
     role: 'backend',
-    teamName: 'Engineering',
+    departmentName: 'Engineering',
     projectName: 'Checkout',
     workspaceId: 'w1',
+    teamId: 't1',
+    companyId: null,
+    companyTeamId: null,
     status: 'working',
     currentTask: { title: 'Add the thing', pct: 40 },
     provider: null,
@@ -27,6 +30,14 @@ function agentRow(over: Partial<AllAgentRow> = {}): AllAgentRow {
     costUsd: 0,
     unmeasuredRuns: 0,
     ...over,
+  }
+}
+
+function page(rows: readonly AllAgentRow[]): AllAgentsPage {
+  return {
+    rows,
+    departmentsByWorkspace: { w1: [{ id: 't1', name: 'Engineering' }, { id: 't2', name: 'QA' }] },
+    templatesByCompany: { c1: [{ id: 'ct1', name: 'Backend' }, { id: 'ct2', name: 'Design' }] },
   }
 }
 
@@ -50,7 +61,7 @@ describe('AgentsClient tabs', () => {
   // M24 Task 7: the Agents page is two tabs now -- Agents (the one table, default) and Teams.
   // Roster and Workers were two names for the same list of agents (spec §5.3) and are gone.
   it('renders the agents table by default, with Teams beside it', () => {
-    render(<AgentsClient agents={[agentRow({})]} teams={[]} />)
+    render(<AgentsClient agents={page([agentRow({})])} teams={[]} />)
     expect(screen.getByTestId('data-table')).toBeTruthy()
     expect(screen.getByTestId('worker-row-button').textContent).toContain('Alex')
     expect(screen.getByTestId('agents-tab-agents').getAttribute('aria-selected')).toBe('true')
@@ -60,7 +71,7 @@ describe('AgentsClient tabs', () => {
   it('switches to the Teams tab and renders a TeamsTable row', () => {
     render(
       <AgentsClient
-        agents={[agentRow({})]}
+        agents={page([agentRow({})])}
         teams={[{ teamId: 't1', name: 'Platform', workspaceId: 'w1', projectName: 'Checkout', agentCount: 2 }]}
       />,
     )
@@ -150,7 +161,7 @@ describe('AgentsClient row click opens the panel', () => {
     vi.stubGlobal('fetch', fetchMock)
     vi.useFakeTimers()
 
-    render(<AgentsClient agents={[agentRow({ agentId: 'a1', workspaceId: 'w1', name: 'Alex', status: 'working' })]} teams={[]} />)
+    render(<AgentsClient agents={page([agentRow({ agentId: 'a1', workspaceId: 'w1', name: 'Alex', status: 'working' })])} teams={[]} />)
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(5000)
