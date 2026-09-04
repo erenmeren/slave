@@ -39,6 +39,18 @@ const companies = [
 
 const projects = [project({})]
 
+// `templates`/`roster` are required on `ProjectsClient` -- they feed the team catalog, a real
+// feature, not test-only convenience (fix round 1). Most of this file's tests only exercise the
+// cards grid and don't care about the catalog's contents, so this wrapper defaults both to `[]`;
+// a test that does care (the M24 T6 describe block below) overrides them, since an explicit prop
+// in `props` wins over the wrapper's own default in JSX prop order.
+type ProjectsClientProps = React.ComponentProps<typeof ProjectsClient>
+function TestProjectsClient(
+  props: Omit<ProjectsClientProps, 'templates' | 'roster'> & Partial<Pick<ProjectsClientProps, 'templates' | 'roster'>>,
+): React.JSX.Element {
+  return <ProjectsClient templates={[]} roster={[]} {...props} />
+}
+
 describe('ProjectsClient', () => {
   beforeEach(() => {
     search = ''
@@ -51,7 +63,7 @@ describe('ProjectsClient', () => {
 
   it('renders one card per project with its name, company badge, and a 4-up stat strip', () => {
     render(
-      <ProjectsClient
+      <TestProjectsClient
         projects={[project({ id: 'w1', name: 'Checkout Platform', companyName: 'Acme Robotics' })]}
         companies={companies}
       />,
@@ -72,34 +84,34 @@ describe('ProjectsClient', () => {
     // where `TopStrip` has always nested its own `strip-unmeasured`. Re-pointed to assert the
     // containment -- the strip is still a fixed 4-up, and the testid is unchanged.
     const { rerender } = render(
-      <ProjectsClient projects={[project({ id: 'w1', unmeasuredRuns: 2 })]} companies={companies} />,
+      <TestProjectsClient projects={[project({ id: 'w1', unmeasuredRuns: 2 })]} companies={companies} />,
     )
     expect(screen.getAllByTestId('stat-strip-item')).toHaveLength(4)
     const spendTile = screen.getAllByTestId('stat-strip-item')[3]
     expect(spendTile?.contains(screen.getByTestId('project-unmeasured'))).toBe(true)
 
-    rerender(<ProjectsClient projects={[project({ id: 'w1', unmeasuredRuns: 0 })]} companies={companies} />)
+    rerender(<TestProjectsClient projects={[project({ id: 'w1', unmeasuredRuns: 0 })]} companies={companies} />)
     expect(screen.getAllByTestId('stat-strip-item')).toHaveLength(4)
     expect(screen.queryByTestId('project-unmeasured')).toBeNull()
   })
 
   it('shows a dim "no company" badge and an assign button when unassigned', () => {
-    render(<ProjectsClient projects={[project({ id: 'w1', companyName: null })]} companies={companies} />)
+    render(<TestProjectsClient projects={[project({ id: 'w1', companyName: null })]} companies={companies} />)
     expect(screen.getByText('no company')).toBeTruthy()
     expect(screen.getByTestId('assign-company-button')).toBeTruthy()
   })
 
   it('does not show the assign button once a company is already assigned', () => {
-    render(<ProjectsClient projects={[project({ id: 'w1', companyName: 'Acme Robotics' })]} companies={companies} />)
+    render(<TestProjectsClient projects={[project({ id: 'w1', companyName: 'Acme Robotics' })]} companies={companies} />)
     expect(screen.queryByTestId('assign-company-button')).toBeNull()
   })
 
   it('maps halted -> blocked tone, active work -> working tone, otherwise idle', () => {
-    const { rerender } = render(<ProjectsClient projects={[project({ id: 'w1', halted: true })]} companies={companies} />)
+    const { rerender } = render(<TestProjectsClient projects={[project({ id: 'w1', halted: true })]} companies={companies} />)
     expect(screen.getByTestId('status-pill').getAttribute('data-tone')).toBe('blocked')
 
     rerender(
-      <ProjectsClient
+      <TestProjectsClient
         projects={[project({ id: 'w1', halted: false, taskCounts: { done: 1, total: 4, active: 2, blocked: 0 } })]}
         companies={companies}
       />,
@@ -107,7 +119,7 @@ describe('ProjectsClient', () => {
     expect(screen.getByTestId('status-pill').getAttribute('data-tone')).toBe('working')
 
     rerender(
-      <ProjectsClient
+      <TestProjectsClient
         projects={[project({ id: 'w1', halted: false, taskCounts: { done: 4, total: 4, active: 0, blocked: 0 } })]}
         companies={companies}
       />,
@@ -116,7 +128,7 @@ describe('ProjectsClient', () => {
   })
 
   it('navigates to the workspace when the card is clicked', () => {
-    render(<ProjectsClient projects={[project({ id: 'w7', companyName: 'Acme Robotics' })]} companies={companies} />)
+    render(<TestProjectsClient projects={[project({ id: 'w7', companyName: 'Acme Robotics' })]} companies={companies} />)
     fireEvent.click(screen.getByTestId('card'))
     expect(routerPush).toHaveBeenCalledWith('/w/w7')
   })
@@ -134,7 +146,7 @@ describe('ProjectsClient', () => {
     })
 
     it('opens from the assign button and posts the chosen companyId, refreshing on ok', async () => {
-      render(<ProjectsClient projects={[project({ id: 'w1', companyName: null })]} companies={companies} />)
+      render(<TestProjectsClient projects={[project({ id: 'w1', companyName: null })]} companies={companies} />)
       fireEvent.click(screen.getByTestId('assign-company-button'))
       // Scoped to the dialog: the team catalog below the cards (M24 T6) lists the same company
       // names in `CompanyManager`'s own list, so an unscoped `getByText` now matches twice.
@@ -155,7 +167,7 @@ describe('ProjectsClient', () => {
       fetchMock.mockImplementationOnce(
         async () => new Response(JSON.stringify({ error: 'this workspace is already run by Acme Robotics' }), { status: 409 }),
       )
-      render(<ProjectsClient projects={[project({ id: 'w1', companyName: null })]} companies={companies} />)
+      render(<TestProjectsClient projects={[project({ id: 'w1', companyName: null })]} companies={companies} />)
       fireEvent.click(screen.getByTestId('assign-company-button'))
       fireEvent.click(within(screen.getByTestId('assign-company-dialog')).getByText('Acme Robotics'))
 
@@ -169,7 +181,7 @@ describe('ProjectsClient', () => {
     })
 
     it('moves focus into the dialog (the first company row) when it opens', () => {
-      render(<ProjectsClient projects={[project({ id: 'w1', companyName: null })]} companies={companies} />)
+      render(<TestProjectsClient projects={[project({ id: 'w1', companyName: null })]} companies={companies} />)
       fireEvent.click(screen.getByTestId('assign-company-button'))
 
       expect(screen.getByTestId('assign-company-dialog').contains(document.activeElement)).toBe(true)
@@ -177,7 +189,7 @@ describe('ProjectsClient', () => {
     })
 
     it('closes on Escape and returns focus to the trigger button', () => {
-      render(<ProjectsClient projects={[project({ id: 'w1', companyName: null })]} companies={companies} />)
+      render(<TestProjectsClient projects={[project({ id: 'w1', companyName: null })]} companies={companies} />)
       const trigger = screen.getByTestId('assign-company-button')
       fireEvent.click(trigger)
       expect(screen.getByTestId('assign-company-dialog')).toBeTruthy()
@@ -191,7 +203,7 @@ describe('ProjectsClient', () => {
 
   describe('the New project drawer and team catalog (M24 T6)', () => {
     it('has a New project button that opens the attach-a-repo drawer', () => {
-      render(<ProjectsClient projects={projects} companies={companies} templates={[]} roster={[]} />)
+      render(<TestProjectsClient projects={projects} companies={companies} templates={[]} roster={[]} />)
       expect(screen.queryByTestId('create-workspace-form')).toBeNull()
       fireEvent.click(screen.getByTestId('new-project'))
       expect(screen.getByRole('dialog', { name: /new project/i })).toBeTruthy()
@@ -200,12 +212,12 @@ describe('ProjectsClient', () => {
 
     it('opens the drawer on load when ?new=1 is in the URL', () => {
       search = 'new=1'
-      render(<ProjectsClient projects={projects} companies={companies} templates={[]} roster={[]} />)
+      render(<TestProjectsClient projects={projects} companies={companies} templates={[]} roster={[]} />)
       expect(screen.getByTestId('create-workspace-form')).toBeTruthy()
     })
 
     it('closes the drawer on Escape and on the close button', () => {
-      render(<ProjectsClient projects={projects} companies={companies} templates={[]} roster={[]} />)
+      render(<TestProjectsClient projects={projects} companies={companies} templates={[]} roster={[]} />)
 
       fireEvent.click(screen.getByTestId('new-project'))
       expect(screen.getByRole('dialog', { name: /new project/i })).toBeTruthy()
@@ -219,7 +231,7 @@ describe('ProjectsClient', () => {
     })
 
     it('renders the team catalog below the cards', () => {
-      render(<ProjectsClient projects={projects} companies={companies} templates={[]} roster={[]} />)
+      render(<TestProjectsClient projects={projects} companies={companies} templates={[]} roster={[]} />)
       expect(screen.getByTestId('team-catalog')).toBeTruthy()
       expect(screen.getByTestId('template-form')).toBeTruthy()
       expect(screen.getByTestId('company-form')).toBeTruthy()
@@ -229,16 +241,16 @@ describe('ProjectsClient', () => {
 
 describe('the handoff project card', () => {
   it('shows the goal as the one-line description, and says so when there is none', () => {
-    const { rerender } = render(<ProjectsClient projects={[project({ goal: 'Payments rewrite' })]} companies={companies} />)
+    const { rerender } = render(<TestProjectsClient projects={[project({ goal: 'Payments rewrite' })]} companies={companies} />)
     expect(screen.getByTestId('project-description').textContent).toBe('Payments rewrite')
 
-    rerender(<ProjectsClient projects={[project({ goal: null })]} companies={companies} />)
+    rerender(<TestProjectsClient projects={[project({ goal: null })]} companies={companies} />)
     expect(screen.getByTestId('project-description').textContent).toBe('no goal set')
   })
 
   it('renders an avatar tile per team member instead of numbered placeholders', () => {
     render(
-      <ProjectsClient
+      <TestProjectsClient
         projects={[project({ team: [{ agentId: 'a1', name: 'Alex Turner', status: 'working' }, { agentId: 'a2', name: 'Bea Ng', status: 'idle' }] })]}
         companies={companies}
       />,
@@ -248,14 +260,14 @@ describe('the handoff project card', () => {
   })
 
   it('renders a 4-up stat strip: agents, active, blocked, spend', () => {
-    render(<ProjectsClient projects={[project({})]} companies={companies} />)
+    render(<TestProjectsClient projects={[project({})]} companies={companies} />)
     expect(screen.getAllByTestId('stat-strip-item').map((i) => i.textContent?.replace(/\s+/g, ' ').trim())).toEqual([
       'agents 3', 'active 1', 'blocked 0', 'spend $12.50',
     ])
   })
 
   it('shows the unknown mark on spend rather than a total that swallows unmeasured runs', () => {
-    render(<ProjectsClient projects={[project({ spend: 4, unmeasuredRuns: 2 })]} companies={companies} />)
+    render(<TestProjectsClient projects={[project({ spend: 4, unmeasuredRuns: 2 })]} companies={companies} />)
     expect(screen.getByTestId('project-unmeasured').textContent).toBe('2 runs unmeasured')
     // Re-pointed by the M14 fix wave (queue item (f)): the caveat reads inside the tile it
     // qualifies now, so the tile's own text carries both halves.
@@ -268,7 +280,7 @@ describe('the handoff project card', () => {
   // card. The tile and the row read the same DTO's two halves; this pins that they agree.
   it('puts the same number in the AGENTS tile as it puts faces in the avatar row', () => {
     render(
-      <ProjectsClient
+      <TestProjectsClient
         projects={[
           project({
             workerCount: 2,
@@ -283,13 +295,13 @@ describe('the handoff project card', () => {
   })
 
   it('maps halted to Halted, active work to Running, and quiet to Idle', () => {
-    const { rerender } = render(<ProjectsClient projects={[project({ halted: true })]} companies={companies} />)
+    const { rerender } = render(<TestProjectsClient projects={[project({ halted: true })]} companies={companies} />)
     expect(screen.getByTestId('status-pill').textContent).toBe('HALTED')
 
-    rerender(<ProjectsClient projects={[project({ halted: false, taskCounts: { done: 0, total: 3, active: 2, blocked: 0 } })]} companies={companies} />)
+    rerender(<TestProjectsClient projects={[project({ halted: false, taskCounts: { done: 0, total: 3, active: 2, blocked: 0 } })]} companies={companies} />)
     expect(screen.getByTestId('status-pill').textContent).toBe('RUNNING')
 
-    rerender(<ProjectsClient projects={[project({ halted: false, taskCounts: { done: 3, total: 3, active: 0, blocked: 0 } })]} companies={companies} />)
+    rerender(<TestProjectsClient projects={[project({ halted: false, taskCounts: { done: 3, total: 3, active: 0, blocked: 0 } })]} companies={companies} />)
     expect(screen.getByTestId('status-pill').textContent).toBe('IDLE')
   })
 
@@ -304,7 +316,7 @@ describe('the handoff project card', () => {
       { agentId: 'a7', name: 'Grace Johnson', status: 'working' },
       { agentId: 'a8', name: 'Henry Brown', status: 'idle' },
     ]
-    render(<ProjectsClient projects={[project({ team })]} companies={companies} />)
+    render(<TestProjectsClient projects={[project({ team })]} companies={companies} />)
     const teamRow = screen.getByLabelText('team')
     expect(within(teamRow).getAllByTestId('avatar-tile')).toHaveLength(6)
     const overflow = within(teamRow).getByTestId('team-overflow')
@@ -321,7 +333,7 @@ describe('the handoff project card', () => {
       { agentId: 'a5', name: 'Eve Martin', status: 'working' },
       { agentId: 'a6', name: 'Frank Smith', status: 'idle' },
     ]
-    render(<ProjectsClient projects={[project({ team })]} companies={companies} />)
+    render(<TestProjectsClient projects={[project({ team })]} companies={companies} />)
     expect(screen.queryByTestId('team-overflow')).toBeNull()
   })
 })

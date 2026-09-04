@@ -156,19 +156,20 @@ function ProjectCard({
  * (`NewProjectDrawer`, `?new=1` opens it on load -- the project header's switcher's last row
  * links there), the project cards grid stays as it was, and the team catalog -- the template
  * catalog and the company manager, moved down from Settings by Task 5 -- sits below it.
- * `templates`/`roster` default to `[]` so the many pre-M24 tests that only care about the cards
- * grid don't have to know about the catalog.
+ * `templates`/`roster` feed that catalog and are required, the same as `companies` was on
+ * `SettingsClient` before Task 5 moved it here -- a caller with no data still passes `[]`
+ * explicitly rather than the catalog silently going empty.
  */
 export function ProjectsClient({
   projects,
   companies,
-  templates = [],
-  roster = [],
+  templates,
+  roster,
 }: {
   readonly projects: readonly ProjectRow[]
   readonly companies: readonly CompanyRow[]
-  readonly templates?: readonly TemplateRow[]
-  readonly roster?: readonly RosterCompany[]
+  readonly templates: readonly TemplateRow[]
+  readonly roster: readonly RosterCompany[]
 }): React.JSX.Element {
   const [assigningWorkspaceId, setAssigningWorkspaceId] = useState<string | null>(null)
   const [newOpen, setNewOpen] = useState(useSearchParams().get('new') === '1')
