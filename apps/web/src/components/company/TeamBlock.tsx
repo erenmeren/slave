@@ -6,6 +6,7 @@ import type { ProviderKind } from '@ai-team-os/control'
 import type { RosterMemberRow } from '../../server/org'
 import { sendControl } from '../../lib/postControl'
 import { ProviderSelect } from '../ProviderSelect'
+import { ModelSelect } from '../ModelSelect'
 import type { TemplateRow } from '../TemplateCatalog'
 import { DataTable, Row } from '../ui/DataTable'
 import { FieldLabel, GhostButton, INPUT_SHELL, SelectField, TextField } from '../ui/FormControls'
@@ -27,8 +28,9 @@ export function MemberRow({ member }: { readonly member: RosterMemberRow }): Rea
   )
 }
 
-/** One team's members plus its own "add member" form (template `<select>`, name, optional
- *  model) -- its own pending/error state so a refusal on one team never touches another. */
+/** One team's members plus its own "add member" form (template `<select>`, name, provider
+ *  `<select>`, optional model via a `ModelSelect` fed by that provider) -- its own pending/error
+ *  state so a refusal on one team never touches another. */
 export function TeamBlock({
   companyTeamId,
   teamName,
@@ -128,19 +130,6 @@ export function TeamBlock({
             } as React.InputHTMLAttributes<HTMLInputElement>
           }
         />
-        <TextField
-          label="Model"
-          inputProps={
-            {
-              'aria-label': 'member model',
-              'data-testid': 'member-model-input',
-              value: model,
-              onChange: (event) => setModel(event.target.value),
-              disabled: pending,
-              className: 'w-28 font-mono',
-            } as React.InputHTMLAttributes<HTMLInputElement>
-          }
-        />
         <label className="flex flex-col gap-1">
           <FieldLabel>Provider</FieldLabel>
           <ProviderSelect
@@ -151,6 +140,18 @@ export function TeamBlock({
             disabled={pending}
             placeholder="select a provider"
             className={`w-28 ${INPUT_SHELL}`}
+          />
+        </label>
+        <label className="flex flex-col gap-1">
+          <FieldLabel>Model</FieldLabel>
+          <ModelSelect
+            provider={provider}
+            value={model}
+            onChange={setModel}
+            disabled={pending}
+            ariaLabel="member model"
+            inputTestId="member-model-input"
+            className="w-40"
           />
         </label>
         <GhostButton type="submit" data-testid="member-submit" disabled={pending || templateId === '' || name === ''}>

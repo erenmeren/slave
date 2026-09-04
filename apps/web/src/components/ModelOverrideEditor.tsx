@@ -5,12 +5,14 @@ import { useRouter } from 'next/navigation'
 import type { ProviderKind } from '@ai-team-os/control'
 import { sendControl } from '../lib/postControl'
 import { Button } from './ui/Button'
+import { ModelSelect } from './ModelSelect'
 import { ProviderSelect } from './ProviderSelect'
 
 /**
- * The per-worker model+provider override row (M11 Task 8 brief; the pair, M12 Task 13): a plain
- * inline text input + provider `<select>` + set/clear, not a dialog -- no Escape handling or
- * focus trap (the brief: "a plain inline input row does not need a focus trap"). Truth from
+ * The per-worker model+provider override row (M11 Task 8 brief; the pair, M12 Task 13): a
+ * `ModelSelect` (the provider's list, `other…` for free text) + provider `<select>` + set/clear,
+ * not a dialog -- no Escape handling or focus trap (the brief: "a plain inline input row does not
+ * need a focus trap"). Truth from
  * snapshot: a 200 triggers `router.refresh()`; the refreshed roster/workers props are what settle
  * the displayed model and provider, not anything written here on success. A 409 (e.g. a model with
  * no provider) renders inline and leaves the inputs as the caller left them.
@@ -66,13 +68,14 @@ export function ModelOverrideEditor({
         placeholder="provider"
         className="rounded border border-line bg-bg-2 px-1.5 py-1 text-[11px] text-text-1"
       />
-      <input
-        data-testid="model-override-input"
-        aria-label="model override"
+      <ModelSelect
+        provider={providerValue}
         value={value}
-        onChange={(event) => setValue(event.target.value)}
-        placeholder="model"
-        className="w-32 rounded border border-line bg-bg-2 px-1.5 py-1 font-mono text-[11px] text-text-1"
+        onChange={setValue}
+        disabled={pending}
+        ariaLabel="model override"
+        inputTestId="model-override-input"
+        className="w-40 py-1 text-[11px]"
       />
       <Button
         variant="ghost"

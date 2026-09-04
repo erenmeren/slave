@@ -7,6 +7,7 @@ import { sendControl } from '../lib/postControl'
 import { Chip } from './ui/Chip'
 import { DataTable, Row } from './ui/DataTable'
 import { FieldLabel, INPUT_SHELL, PrimaryButton, TextField } from './ui/FormControls'
+import { ModelSelect } from './ModelSelect'
 import { ProviderSelect } from './ProviderSelect'
 
 /** A row from `listTemplates` (`server/org.ts`) -- no exported type there, so this is the one
@@ -29,10 +30,11 @@ const HEADER = ['Name', 'Role', 'Description', 'Default model', 'Default provide
 
 /**
  * Settings' template catalog (M11 Task 9 brief): the template list (name, role chip, description,
- * default model mono) plus its own creation form -- name/role/description/default model, all
- * controlled inputs. Truth from snapshot: a 200 clears the form and `router.refresh()`s (the
- * refreshed `templates` prop is what actually shows the new row); a 409/400 renders inline beside
- * the form and leaves it as typed, the `AssignCompanyDialog` refusal idiom.
+ * default model mono) plus its own creation form -- name/role/description, a default provider
+ * `<select>`, and a default model `ModelSelect` fed by that provider (M25 Task 5), all controlled
+ * inputs. Truth from snapshot: a 200 clears the form and `router.refresh()`s (the refreshed
+ * `templates` prop is what actually shows the new row); a 409/400 renders inline beside the form
+ * and leaves it as typed, the `AssignCompanyDialog` refusal idiom.
  */
 export function TemplateCatalog({ templates }: { readonly templates: readonly TemplateRow[] }): React.JSX.Element {
   const router = useRouter()
@@ -138,19 +140,6 @@ export function TemplateCatalog({ templates }: { readonly templates: readonly Te
             } as React.InputHTMLAttributes<HTMLInputElement>
           }
         />
-        <TextField
-          label="Default model"
-          inputProps={
-            {
-              'aria-label': 'template default model',
-              'data-testid': 'template-default-model-input',
-              value: defaultModel,
-              onChange: (event) => setDefaultModel(event.target.value),
-              disabled: pending,
-              className: 'w-32 font-mono',
-            } as React.InputHTMLAttributes<HTMLInputElement>
-          }
-        />
         <label className="flex flex-col gap-1">
           <FieldLabel>Default provider</FieldLabel>
           <ProviderSelect
@@ -161,6 +150,18 @@ export function TemplateCatalog({ templates }: { readonly templates: readonly Te
             disabled={pending}
             placeholder="select a provider"
             className={`w-32 ${INPUT_SHELL}`}
+          />
+        </label>
+        <label className="flex flex-col gap-1">
+          <FieldLabel>Default model</FieldLabel>
+          <ModelSelect
+            provider={defaultProvider}
+            value={defaultModel}
+            onChange={setDefaultModel}
+            disabled={pending}
+            ariaLabel="template default model"
+            inputTestId="template-default-model-input"
+            className="w-32"
           />
         </label>
         <PrimaryButton type="submit" data-testid="template-submit" disabled={pending || name === '' || role === ''}>

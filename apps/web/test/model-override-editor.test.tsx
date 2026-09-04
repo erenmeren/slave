@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ModelOverrideEditor } from '../src/components/ModelOverrideEditor.js'
+import { clearModelSelectCache } from '../src/components/ModelSelect.js'
 
 const routerRefresh = vi.fn()
 
@@ -24,8 +25,24 @@ afterEach(() => {
 describe('ModelOverrideEditor', () => {
   let fetchMock: ReturnType<typeof vi.fn>
 
+  // M25 Task 5: the model field is a `ModelSelect` now, gated on the provider being chosen --
+  // there is no free-text input to type into until a provider is picked and `other…` is chosen.
+  async function typeModel(value: string): Promise<void> {
+    fireEvent.change(screen.getByTestId('model-override-provider'), { target: { value: 'claude_code' } })
+    await waitFor(() => expect(screen.getByTestId('model-select')).toBeTruthy())
+    fireEvent.change(screen.getByTestId('model-select'), { target: { value: '__other__' } })
+    fireEvent.change(screen.getByTestId('model-override-input'), { target: { value } })
+  }
+
   beforeEach(() => {
-    fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }))
+    clearModelSelectCache()
+    fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      if (url.startsWith('/api/providers/')) {
+        return new Response(JSON.stringify({ models: [{ id: 'opus', label: 'opus' }], source: 'static' }), { status: 200 })
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 })
+    })
     vi.stubGlobal('fetch', fetchMock)
   })
 
@@ -35,7 +52,7 @@ describe('ModelOverrideEditor', () => {
 
   it('posts the typed value on Set and refreshes on 200', async () => {
     render(<ModelOverrideEditor agentId="wk1" model={null} />)
-    fireEvent.change(screen.getByTestId('model-override-input'), { target: { value: 'claude-opus-4' } })
+    await typeModel('claude-opus-4')
 
     await act(async () => {
       fireEvent.click(screen.getByTestId('model-override-set'))
@@ -43,7 +60,7 @@ describe('ModelOverrideEditor', () => {
 
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/agents/wk1/model',
-      expect.objectContaining({ method: 'POST', body: JSON.stringify({ model: 'claude-opus-4' }) }),
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({ model: 'claude-opus-4', provider: 'claude_code' }) }),
     )
     expect(routerRefresh).toHaveBeenCalled()
   })
@@ -76,17 +93,19 @@ describe('ModelOverrideEditor', () => {
     expect(routerRefresh).not.toHaveBeenCalled()
   })
 
-  it('resyncs the input from a new model prop -- the post-refresh snapshot, not a stray edit', () => {
-    const { rerender } = render(<ModelOverrideEditor agentId="wk1" model="claude-opus-4" />)
-    // A stray edit the caller never submitted (e.g. typed then navigated away without clicking
+  it('resyncs the select from a new model prop -- the post-refresh snapshot, not a stray edit', async () => {
+    const { rerender } = render(<ModelOverrideEditor agentId="wk1" model="claude-opus-4" provider="claude_code" />)
+    await waitFor(() => expect(screen.getByTestId('model-select')).toBeTruthy())
+
+    // A stray edit the caller never submitted (e.g. picked then navigated away without clicking
     // Set/Clear) must not survive the next snapshot arriving as a new `model` prop.
-    fireEvent.change(screen.getByTestId('model-override-input'), { target: { value: 'not submitted' } })
-    expect((screen.getByTestId('model-override-input') as HTMLInputElement).value).toBe('not submitted')
+    fireEvent.change(screen.getByTestId('model-select'), { target: { value: 'opus' } })
+    expect((screen.getByTestId('model-select') as HTMLSelectElement).value).toBe('opus')
 
     // Same instance (same agentId/key) re-rendered with a changed model, as router.refresh()
     // would do after a successful clear elsewhere.
-    rerender(<ModelOverrideEditor agentId="wk1" model={null} />)
+    rerender(<ModelOverrideEditor agentId="wk1" model={null} provider="claude_code" />)
 
-    expect((screen.getByTestId('model-override-input') as HTMLInputElement).value).toBe('')
+    expect((screen.getByTestId('model-select') as HTMLSelectElement).value).toBe('')
   })
 })

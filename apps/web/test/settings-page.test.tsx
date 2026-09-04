@@ -1,14 +1,30 @@
 // @vitest-environment jsdom
-import { act, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ProviderKind } from '@ai-team-os/control'
 import { CompanyManager } from '../src/components/CompanyManager.js'
 import { DangerZone } from '../src/components/DangerZone.js'
+import { clearModelSelectCache } from '../src/components/ModelSelect.js'
 import { PermissionMatrix } from '../src/components/PermissionMatrix.js'
 import { ProviderAdapterCards } from '../src/components/ProviderAdapterCards.js'
 import { SettingsClient } from '../src/components/SettingsClient.js'
 import { TemplateCatalog } from '../src/components/TemplateCatalog.js'
 import type { RosterCompany, RosterMemberRow } from '../src/server/org.js'
+
+// M25 Task 5: a fetch mock shared by the two describes below that render a `ModelSelect` --
+// branches on the URL so the same stub answers both `GET /api/providers/<kind>/models` and the
+// describe's own POST endpoint.
+function stubModelFetch(postBody: unknown): ReturnType<typeof vi.fn> {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const url = typeof input === 'string' ? input : input.toString()
+    if (url.startsWith('/api/providers/')) {
+      return new Response(JSON.stringify({ models: [{ id: 'opus', label: 'opus' }], source: 'static' }), { status: 200 })
+    }
+    return new Response(JSON.stringify(postBody), { status: 200 })
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock
+}
 
 const routerRefresh = vi.fn()
 
@@ -217,9 +233,19 @@ describe('TemplateCatalog', () => {
   describe('the creation form', () => {
     let fetchMock: ReturnType<typeof vi.fn>
 
+    // M25 Task 5: the default model field is a `ModelSelect` now -- gated on a provider being
+    // chosen first, so a caller who wants to type a free-text model must pick a provider, then
+    // `other…`, before the old `template-default-model-input` testid exists to type into.
+    async function typeTemplateModel(value: string, providerId: ProviderKind = 'claude_code'): Promise<void> {
+      fireEvent.change(screen.getByTestId('template-default-provider-select'), { target: { value: providerId } })
+      await waitFor(() => expect(screen.getByTestId('model-select')).toBeTruthy())
+      fireEvent.change(screen.getByTestId('model-select'), { target: { value: '__other__' } })
+      fireEvent.change(screen.getByTestId('template-default-model-input'), { target: { value } })
+    }
+
     beforeEach(() => {
-      fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }))
-      vi.stubGlobal('fetch', fetchMock)
+      clearModelSelectCache()
+      fetchMock = stubModelFetch({ ok: true })
     })
 
     afterEach(() => {
@@ -231,7 +257,7 @@ describe('TemplateCatalog', () => {
       fireEvent.change(screen.getByLabelText('template name'), { target: { value: 'Frontend Engineer' } })
       fireEvent.change(screen.getByLabelText('template role'), { target: { value: 'frontend' } })
       fireEvent.change(screen.getByLabelText('template description'), { target: { value: 'ships UI' } })
-      fireEvent.change(screen.getByLabelText('template default model'), { target: { value: 'claude-opus-4' } })
+      await typeTemplateModel('claude-opus-4')
 
       await act(async () => {
         fireEvent.click(screen.getByTestId('template-submit'))
@@ -241,7 +267,13 @@ describe('TemplateCatalog', () => {
         '/api/org/templates',
         expect.objectContaining({
           method: 'POST',
-          body: JSON.stringify({ name: 'Frontend Engineer', role: 'frontend', description: 'ships UI', defaultModel: 'claude-opus-4' }),
+          body: JSON.stringify({
+            name: 'Frontend Engineer',
+            role: 'frontend',
+            description: 'ships UI',
+            defaultModel: 'claude-opus-4',
+            defaultProvider: 'claude_code',
+          }),
         }),
       )
       expect(routerRefresh).toHaveBeenCalled()
@@ -284,8 +316,7 @@ describe('TemplateCatalog', () => {
       render(<TemplateCatalog templates={[]} />)
       fireEvent.change(screen.getByLabelText('template name'), { target: { value: 'Frontend Engineer' } })
       fireEvent.change(screen.getByLabelText('template role'), { target: { value: 'frontend' } })
-      fireEvent.change(screen.getByLabelText('template default model'), { target: { value: 'claude-opus-4' } })
-      fireEvent.change(screen.getByLabelText('template default provider'), { target: { value: 'cursor' } })
+      await typeTemplateModel('claude-opus-4', 'cursor')
 
       await act(async () => {
         fireEvent.click(screen.getByTestId('template-submit'))
@@ -321,13 +352,18 @@ describe('TemplateCatalog', () => {
     })
 
     it('shows the model-without-provider refusal text verbatim', async () => {
-      fetchMock.mockImplementationOnce(
-        async () => new Response(JSON.stringify({ error: 'a model must name the provider that runs it' }), { status: 409 }),
-      )
       render(<TemplateCatalog templates={[]} />)
       fireEvent.change(screen.getByLabelText('template name'), { target: { value: 'Frontend Engineer' } })
       fireEvent.change(screen.getByLabelText('template role'), { target: { value: 'frontend' } })
-      fireEvent.change(screen.getByLabelText('template default model'), { target: { value: 'claude-opus-4' } })
+      // Picking a provider is now required to reach the free-text model input at all -- typed
+      // here (consuming the provider's own listing fetch), then the provider is deselected again
+      // so the submitted body still carries a model with no provider, the scenario this refusal
+      // exists for. The 409 stub is armed only now, so it answers the POST, not that GET.
+      await typeTemplateModel('claude-opus-4')
+      fireEvent.change(screen.getByTestId('template-default-provider-select'), { target: { value: '' } })
+      fetchMock.mockImplementationOnce(
+        async () => new Response(JSON.stringify({ error: 'a model must name the provider that runs it' }), { status: 409 }),
+      )
 
       await act(async () => {
         fireEvent.click(screen.getByTestId('template-submit'))
@@ -477,9 +513,19 @@ describe('CompanyManager', () => {
   describe('the add-member form', () => {
     let fetchMock: ReturnType<typeof vi.fn>
 
+    // M25 Task 5: the model field is a `ModelSelect` now -- gated on a provider being chosen
+    // first, so a caller who wants to type a free-text model must pick a provider, then
+    // `other…`, before the old `member-model-input` testid exists to type into.
+    async function typeMemberModel(value: string, providerId: ProviderKind = 'claude_code'): Promise<void> {
+      fireEvent.change(screen.getByTestId('member-provider-select'), { target: { value: providerId } })
+      await waitFor(() => expect(screen.getByTestId('model-select')).toBeTruthy())
+      fireEvent.change(screen.getByTestId('model-select'), { target: { value: '__other__' } })
+      fireEvent.change(screen.getByTestId('member-model-input'), { target: { value } })
+    }
+
     beforeEach(() => {
-      fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }))
-      vi.stubGlobal('fetch', fetchMock)
+      clearModelSelectCache()
+      fetchMock = stubModelFetch({ ok: true })
     })
 
     afterEach(() => {
@@ -520,7 +566,7 @@ describe('CompanyManager', () => {
       fireEvent.click(screen.getByTestId('company-toggle'))
       fireEvent.change(screen.getByLabelText('member template'), { target: { value: 'tpl1' } })
       fireEvent.change(screen.getByLabelText('member name'), { target: { value: 'Blair' } })
-      fireEvent.change(screen.getByLabelText('member model'), { target: { value: 'claude-opus-4' } })
+      await typeMemberModel('claude-opus-4')
 
       await act(async () => {
         fireEvent.click(screen.getByTestId('member-submit'))
@@ -529,7 +575,7 @@ describe('CompanyManager', () => {
       expect(fetchMock).toHaveBeenCalledWith(
         '/api/org/agents',
         expect.objectContaining({
-          body: JSON.stringify({ companyTeamId: 'ct1', templateId: 'tpl1', name: 'Blair', model: 'claude-opus-4' }),
+          body: JSON.stringify({ companyTeamId: 'ct1', templateId: 'tpl1', name: 'Blair', model: 'claude-opus-4', provider: 'claude_code' }),
         }),
       )
     })
@@ -568,8 +614,7 @@ describe('CompanyManager', () => {
       fireEvent.click(screen.getByTestId('company-toggle'))
       fireEvent.change(screen.getByLabelText('member template'), { target: { value: 'tpl1' } })
       fireEvent.change(screen.getByLabelText('member name'), { target: { value: 'Blair' } })
-      fireEvent.change(screen.getByLabelText('member model'), { target: { value: 'claude-opus-4' } })
-      fireEvent.change(screen.getByLabelText('member provider'), { target: { value: 'cursor' } })
+      await typeMemberModel('claude-opus-4', 'cursor')
 
       await act(async () => {
         fireEvent.click(screen.getByTestId('member-submit'))
@@ -607,9 +652,6 @@ describe('CompanyManager', () => {
     })
 
     it('shows the model-without-provider refusal text verbatim', async () => {
-      fetchMock.mockImplementationOnce(
-        async () => new Response(JSON.stringify({ error: 'a model must name the provider that runs it' }), { status: 409 }),
-      )
       render(
         <CompanyManager
           companies={[{ id: 'c1', name: 'Acme Robotics' }]}
@@ -620,7 +662,15 @@ describe('CompanyManager', () => {
       fireEvent.click(screen.getByTestId('company-toggle'))
       fireEvent.change(screen.getByLabelText('member template'), { target: { value: 'tpl1' } })
       fireEvent.change(screen.getByLabelText('member name'), { target: { value: 'Blair' } })
-      fireEvent.change(screen.getByLabelText('member model'), { target: { value: 'claude-opus-4' } })
+      // Picking a provider is now required to reach the free-text model input at all -- typed
+      // here (consuming the provider's own listing fetch), then the provider is deselected again
+      // so the submitted body still carries a model with no provider, the scenario this refusal
+      // exists for. The 409 stub is armed only now, so it answers the POST, not that GET.
+      await typeMemberModel('claude-opus-4')
+      fireEvent.change(screen.getByTestId('member-provider-select'), { target: { value: '' } })
+      fetchMock.mockImplementationOnce(
+        async () => new Response(JSON.stringify({ error: 'a model must name the provider that runs it' }), { status: 409 }),
+      )
 
       await act(async () => {
         fireEvent.click(screen.getByTestId('member-submit'))
