@@ -3,6 +3,7 @@ import { dirname, isAbsolute, join } from 'node:path'
 import { createInterface } from 'node:readline'
 import type { RunId } from '@ai-team-os/domain'
 import { capabilitiesOf } from '../capabilities.js'
+import { listClaudeCodeModels, type ModelListing } from '../models.js'
 import { AsyncEventQueue } from '../runtime/event-queue.js'
 import { clearAndVerifyPauseFlagAbsent } from '../runtime/pause-flag.js'
 import { buildChildEnv, permissionsFilePathFor, terminateChild } from '../runtime/process.js'
@@ -110,6 +111,11 @@ export interface RunHandle {
 export interface AgentRuntimeAdapter {
   readonly id: string
   getCapabilities(): ProviderCapabilities
+  /**
+   * The models an operator can pick for this provider (M25 §5.1) -- `listProviderModels(kind)`
+   * gives the same answer without an adapter.
+   */
+  listModels(): Promise<ModelListing>
   start(input: StartRunInput): Promise<RunHandle>
   events(runId: RunId): AsyncIterable<RuntimeEvent>
   cancel(runId: RunId): Promise<void>
@@ -229,6 +235,10 @@ export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
    */
   getCapabilities(): ProviderCapabilities {
     return capabilitiesOf('claude_code')
+  }
+
+  listModels(): Promise<ModelListing> {
+    return Promise.resolve(listClaudeCodeModels())
   }
 
   /**

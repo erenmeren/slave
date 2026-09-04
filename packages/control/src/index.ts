@@ -27,6 +27,11 @@ export type { ProviderKind } from '@ai-team-os/providers'
  */
 export { capabilitiesOf } from '@ai-team-os/providers'
 export type { ProviderCapabilities } from '@ai-team-os/providers'
+/** Re-exported for the same reason as `capabilitiesOf` (M25 §5.2): `apps/web/src/server/models.ts`
+ *  asks "which models can this provider run" by KIND, which spawns the provider's CLI but never
+ *  constructs an adapter. */
+export { listProviderModels } from '@ai-team-os/providers'
+export type { ModelListing, ModelOption } from '@ai-team-os/providers'
 /**
  * Re-exported for the same reason as capabilitiesOf above (M12 Task 13 fix round 1): a SERVER
  * caller that needs every ProviderKind as data (packages/control/src/org.ts's own

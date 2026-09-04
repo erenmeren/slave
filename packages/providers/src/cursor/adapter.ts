@@ -3,6 +3,7 @@ import { dirname, isAbsolute } from 'node:path'
 import { createInterface } from 'node:readline'
 import type { RunId } from '@ai-team-os/domain'
 import { capabilitiesOf } from '../capabilities.js'
+import { listCursorModels, type ModelListing } from '../models.js'
 import { AsyncEventQueue } from '../runtime/event-queue.js'
 import { clearAndVerifyPauseFlagAbsent } from '../runtime/pause-flag.js'
 import { buildChildEnv, permissionsFilePathFor, terminateChild } from '../runtime/process.js'
@@ -140,6 +141,10 @@ export class CursorAdapter implements AgentRuntimeAdapter {
    */
   getCapabilities(): ProviderCapabilities {
     return capabilitiesOf('cursor')
+  }
+
+  listModels(): Promise<ModelListing> {
+    return listCursorModels(this.command)
   }
 
   /**

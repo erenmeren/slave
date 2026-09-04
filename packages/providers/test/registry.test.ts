@@ -36,6 +36,7 @@ function stubAdapter(capabilities: ProviderCapabilities): AgentRuntimeAdapter {
   return {
     id: 'stub',
     getCapabilities: (): ProviderCapabilities => capabilities,
+    listModels: async () => ({ models: [], source: 'static' as const }),
     start: (): never => {
       throw new Error('stubAdapter: nothing here is meant to run')
     },
