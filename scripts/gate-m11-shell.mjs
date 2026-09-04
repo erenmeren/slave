@@ -343,12 +343,12 @@ try {
   await clickUntil(companyRow.getByTestId('company-toggle'), async () => companyDetail.first().isVisible(), `expanding the "${COMPANY_NAME}" row`)
   await waitVisible(companyDetail, 'the expanded company detail')
 
-  await fillReliably(companyDetail.getByLabel('team name'), TEAM_NAME, 'the team name field')
-  const teamBlock = companyDetail.getByTestId('team-block').filter({ hasText: TEAM_NAME })
-  await clickUntil(companyDetail.getByTestId('team-submit'), async () => teamBlock.first().isVisible(), `"${TEAM_NAME}" team submit`)
-  await waitVisible(teamBlock, `the "${TEAM_NAME}" team block`)
+  await fillReliably(companyDetail.getByLabel('department name'), TEAM_NAME, 'the department template name field')
+  const teamBlock = companyDetail.getByTestId('department-template-block').filter({ hasText: TEAM_NAME })
+  await clickUntil(companyDetail.getByTestId('department-template-submit'), async () => teamBlock.first().isVisible(), `"${TEAM_NAME}" department template submit`)
+  await waitVisible(teamBlock, `the "${TEAM_NAME}" department template block`)
   const companyTeam = await prisma.companyTeam.findFirst({ where: { companyId, name: TEAM_NAME } })
-  if (companyTeam === null) await fail(`the "${TEAM_NAME}" team block appeared in the browser but is missing from the DB`)
+  if (companyTeam === null) await fail(`the "${TEAM_NAME}" department template block appeared in the browser but is missing from the DB`)
   const companyTeamId = companyTeam.id
   console.log(`team created and asserted: ${companyTeamId}`)
 
@@ -463,11 +463,20 @@ try {
   }
   console.log(`each "${MEMBER_NAME}" row's project cell now names its own project`)
 
-  const modelOverrideValue = await memberRows.first().getByTestId('model-override-input').inputValue()
-  if (modelOverrideValue !== '') {
-    await fail(`"${MEMBER_NAME}"'s model override input reads ${JSON.stringify(modelOverrideValue)}, expected "" (no override set yet)`)
+  // `ModelSelect` renders a plain (disabled) `<select data-testid="model-select">` -- not the
+  // free-text `model-override-input` -- until a provider is chosen (M25 §5.3); reading the input
+  // here, before `ModelOverrideEditor`'s own provider select has a value, would read an element
+  // that does not exist yet.
+  const modelSelectBeforeProvider = memberRows.first().getByTestId('model-select')
+  await waitVisible(modelSelectBeforeProvider, `"${MEMBER_NAME}"'s model select before any provider is chosen`)
+  if (!(await modelSelectBeforeProvider.isDisabled())) {
+    await fail(`"${MEMBER_NAME}"'s model select is not disabled before any provider is chosen`)
   }
-  console.log(`"${MEMBER_NAME}" carries no model override yet -- the model-override editor reads empty`)
+  const modelSelectValueBeforeProvider = await modelSelectBeforeProvider.inputValue()
+  if (modelSelectValueBeforeProvider !== '') {
+    await fail(`"${MEMBER_NAME}"'s model select reads ${JSON.stringify(modelSelectValueBeforeProvider)}, expected "" (no override set yet)`)
+  }
+  console.log(`"${MEMBER_NAME}" carries no model override yet -- the disabled model-select reads empty (no provider chosen)`)
   console.log('stage 3 (/agents) complete: the one table shows the member materialized in both projects, with no override set')
 
   // ---- Scenario stage 4: set gate-model-x on ONE worker via the Agents table's ModelOverrideEditor.
@@ -482,6 +491,11 @@ try {
     { value: PROVIDER_OVERRIDE },
     `the "${workspaceNameA}" worker's provider select`,
   )
+  // The model field only becomes the free-text `model-override-input` after picking `other…` in
+  // the provider's own `model-select` (M25 §5.3) -- mirrors `model-select.test.tsx`'s helper.
+  await waitVisible(targetWorkerRow.getByTestId('model-select'), `the "${workspaceNameA}" worker's model select after choosing a provider`)
+  await targetWorkerRow.getByTestId('model-select').selectOption('__other__')
+  await waitVisible(targetWorkerRow.getByTestId('model-override-input'), `the "${workspaceNameA}" worker's model override input after choosing "other…"`)
   await fillReliably(targetWorkerRow.getByTestId('model-override-input'), MODEL_OVERRIDE, `the "${workspaceNameA}" worker's model override input`)
   // The table's own row no longer carries a separate display node for the saved model (M24 Task
   // 7, Errata: the chain-source chips left with the table) -- `clickUntil`'s predicate reads
@@ -517,6 +531,32 @@ try {
     `the DB confirms model ${JSON.stringify(MODEL_OVERRIDE)} and provider ${JSON.stringify(PROVIDER_OVERRIDE)} landed on exactly the "${workspaceNameA}" worker`,
   )
   console.log('stage 4 complete: a worker model+provider override, set through the Agents table editor, verified against prisma.agent')
+
+  // ---- Scenario stage 5: move the "workspaceNameA" worker to a second department of the same
+  // project through the Agents table's own `agent-department` select (M25 §4.1). The second
+  // department is created directly with `prisma.team.create` (the row `POST /api/w/:id/teams`
+  // itself creates) rather than through the browser, then the page is reloaded so the row's
+  // options (server-rendered `departmentsByWorkspace`) include it.
+  const otherDepartment = await prisma.team.create({ data: { workspaceId: workspaceIdA, name: 'M11 Gate Other Dept' } })
+  console.log(`created a second "${workspaceNameA}" department directly: ${otherDepartment.id}`)
+  await page.reload({ waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
+  await waitVisible(memberRows, `a "${MEMBER_NAME}" row after reload`)
+  const targetDeptRow = memberRows.filter({ hasText: workspaceNameA })
+  await waitVisible(targetDeptRow, `the "${workspaceNameA}" row for "${MEMBER_NAME}" after reload`)
+  await selectReliably(
+    targetDeptRow.getByTestId('agent-department'),
+    otherDepartment.id,
+    { value: otherDepartment.id },
+    `the "${workspaceNameA}" worker's department select`,
+  )
+  const movedAgent = await prisma.agent.findFirst({ where: { team: { workspaceId: workspaceIdA }, companyAgentId, name: MEMBER_NAME } })
+  if (movedAgent === null || movedAgent.teamId !== otherDepartment.id) {
+    await fail(
+      `"${MEMBER_NAME}"'s teamId is ${JSON.stringify(movedAgent?.teamId)}, expected ${JSON.stringify(otherDepartment.id)} ` +
+        `after moving it to "M11 Gate Other Dept" through the Agents table`,
+    )
+  }
+  console.log(`stage 5 complete: "${MEMBER_NAME}" moved to a second "${workspaceNameA}" department, verified against prisma.agent`)
 
   console.log(`PASS: the shell staffed and steered ${projectNames.length} projects from the browser`)
   exitCode = 0

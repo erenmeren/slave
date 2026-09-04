@@ -286,4 +286,33 @@ Delete: nothing.
 
 ## 12. Errata — where execution corrected the plan
 
-(empty at approval; filled by the last task)
+1. The template-not-empty refusal is its own kind, `company_team_not_empty` (§3.1 wrote
+   `team_not_empty`, whose text and `teamId` field name a project department).
+2. `listProviderModels(kind)` lives in `packages/providers/src/models.ts` and is re-exported
+   through `@ai-team-os/control`; the web reads it by kind and never constructs an adapter (M12
+   R10). The adapters' `listModels()` delegate to it (§5.1's "adapter contract" holds; the web's
+   entry point is the function).
+3. `POST /api/org/teams` now answers `{ ok: true, id }` (the New agent drawer's "new
+   department…" needs the id).
+4. `AllAgentRow.teamName` became `departmentName`; `WorkerRow` gained `teamId` so the 5 s poll
+   can move a row's department; `listAllAgents()` returns a page object `{ rows,
+   departmentsByWorkspace, templatesByCompany }`.
+5. `ModelSelect`'s `other…` input keeps the old testids (`model-override-input`,
+   `member-model-input`, `template-default-model-input`); tests and gates reach it by choosing a
+   provider, then `other…`. Two model-without-provider tests pick a provider, type, then deselect
+   the provider so a bare model reaches the server.
+6. The `org.changed` Zod payload (`packages/domain/src/events/schema.ts`) admits
+   `field: 'created' | 'team'` and a null `from`; the activity card renders them ("created",
+   "moved to department"). The spec's "no schema change" is the Prisma schema.
+7. `deleteCompanyTeam` runs in a transaction behind `SELECT … FOR UPDATE` (the `deleteTeam`
+   shape); the plan's sample had an unlocked check-then-delete over a cascade.
+8. The model cache holds the promise, not the settled listing, so concurrent first callers share
+   one CLI run.
+9. `NewAgentDrawer` resets on close and after success; after the catalog agent is created its
+   submit button locks ("created"); a department template created through "new department…" is
+   remembered so a retry reuses it.
+10. Only `packages/providers/test/registry.test.ts` needed a `listModels` stub; the orchestrator
+    fakes cast with `as unknown as`.
+11. `git mv` renamed `TeamsTable` → `DepartmentsTable` (and its test); git's default similarity
+    threshold does not report them as renames because each file roughly doubled; `git log
+    --follow -M30%` does.

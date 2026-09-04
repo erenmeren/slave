@@ -937,7 +937,7 @@ try {
   await gotoReliably(`${baseUrl}/agents`)
   // The Agents page opens on the one table now (M24 Task 7): Roster and Workers were two names for
   // the same list of agents and are gone, folded into `agents-tab-agents` (default) beside
-  // `agents-tab-teams`. The `clickUntil` below is kept anyway -- it is idempotent on an
+  // `agents-tab-departments`. The `clickUntil` below is kept anyway -- it is idempotent on an
   // already-selected tab, and it is what makes this stage assert the template rather than assume
   // which tab happened to be default.
   // Keyed on the TABLE, not on its rows. `listAllAgents()` renders every project agent AND every
@@ -958,12 +958,12 @@ try {
     await fail(`stage 2 (agents): the Agents table has ${String(workerHeaderCells)} header cell(s), expected 9`)
   }
   const agentsComputed = normalize((await computed('[data-testid="data-table-header"]', 'grid-template-columns')) ?? '')
-  const agentsUsed = /^200px 110px 130px 120px 110px (\d+(?:\.\d+)?)px 90px 90px 160px$/.exec(agentsComputed)
+  const agentsUsed = /^200px 110px 150px 120px 110px (\d+(?:\.\d+)?)px 90px 90px 160px$/.exec(agentsComputed)
   if (agentsUsed === null) {
     await fail(
       `stage 2 (agents): [data-testid="data-table-header"] grid-template-columns is ${JSON.stringify(agentsComputed)}, ` +
         `expected the used form of ${JSON.stringify(AGENTS_COLUMNS)} -- ` +
-        '`200px 110px 130px 120px 110px <the 1fr track>px 90px 90px 160px`',
+        '`200px 110px 150px 120px 110px <the 1fr track>px 90px 90px 160px`',
     )
   }
   if (Number(agentsUsed[1]) <= 0) {

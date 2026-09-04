@@ -62,19 +62,20 @@ npm run orchestrator -- set-goal --workspace <id> --goal "Add rate limiting to t
 A workspace with a goal and an empty board gets a planning run on the next tick. The planner writes
 tasks; agents whose role matches pick them up. A company is a persistent roster of agents built
 from templates — manage it on the Projects page's team catalog and the Agents page, or with
-`create-company`, `add-team`, `add-agent`.
+`create-company`, `add-team`, `add-agent`. Departments are per project; the catalog holds
+department templates that `assign-company` copies.
 
 ## The web UI
 
 | Page | What it shows |
 |---|---|
-| **Projects** `/` | Every project (workspace) with its spend and team; click one to open it. **New project** attaches a repo; below the cards, the team catalog (agent templates and companies). |
+| **Projects** `/` | Every project (workspace) with its spend and team; click one to open it. **New project** attaches a repo; below the cards, the team catalog (agent templates, companies and their department templates). |
 | **Overview** `/w/<id>` | One card per agent: status, current task, live action line, spend against budget. A halt banner when the workspace is stopped. |
 | **Tasks** `/w/<id>/tasks` | The board by status. Click a task for its runs and cost, its verify logs under **Artifacts**, and a **Collect worktree** button once it has finished. |
 | **Graph** `/w/<id>/graph` | Five views: the org tree, live execution, the task dependency DAG (draw or delete an edge to change it), the skill chain, and who handed work to whom. |
 | **Activity** `/w/<id>/activity` | Every event, live, filterable by kind, agent and task; the filters live in the URL. Events made from the UI name the user who made them. |
 | **Settings** `/w/<id>/settings` | This project's goal, its runtime (provider, budget, and the read-only concurrency/timeout/attempts limits), its own agent permissions, and its emergency stop. |
-| **Agents** `/agents` | One table + Teams: every agent, project-materialized or still catalog-only, rename/re-role/delete and a model or provider override inline; a **Teams** tab beside it for team rename/delete. |
+| **Agents** `/agents` | One table + Departments: every agent, project-materialized or still catalog-only, with its department as a select, rename/re-role/delete and a model chosen from the provider's own list inline; **+ New agent** adds one to the catalog and, optionally, to a project; a **Departments** tab beside it to add, rename or delete a project's departments. |
 | **Skills** `/skills` | The skill catalog and its assignments. |
 | **Analytics** `/analytics` | Spend and throughput. |
 | **Settings** `/settings` | Provider adapters, security, and reset demo data (development only). |

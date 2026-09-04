@@ -97,8 +97,11 @@ export function NewAgentDrawer({
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `close` is recreated every render
-    // (it closes over state setters and `onClose`); only `open` changing should re-arm the
-    // listener, the same contract `NewProjectDrawer`'s Escape effect already relies on.
+    // (it closes over `reset()` and `onClose`), but omitting it here is deliberate, not the same
+    // contract `NewProjectDrawer`'s Escape effect relies on (that one lists `onClose` in its own
+    // deps): `reset()` only calls this component's own state setters and `onClose` is a prop that
+    // never does more than that either, so a stale closure over either one re-arms the exact same
+    // listener a fresh one would -- only `open` changing needs to retrigger this effect.
   }, [open])
 
   if (!open) return null
