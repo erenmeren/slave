@@ -56,4 +56,19 @@ describe('listModelsFor', () => {
     expect(listProviderModels).toHaveBeenCalledWith('cursor', { cursorCommand: '/opt/cursor-agent' })
     vi.unstubAllEnvs()
   })
+
+  it('shares one CLI run for callers that overlap before the first read settles', async () => {
+    let resolve: (value: typeof OK) => void = () => {}
+    const deferred = new Promise<typeof OK>((res) => {
+      resolve = res
+    })
+    listProviderModels.mockReturnValue(deferred)
+
+    const first = listModelsFor('cursor')
+    const second = listModelsFor('cursor')
+    resolve(OK)
+    expect(await first).toEqual(OK)
+    expect(await second).toEqual(OK)
+    expect(listProviderModels).toHaveBeenCalledTimes(1)
+  })
 })
