@@ -91,6 +91,29 @@ describe('NewAgentDrawer', () => {
     expect(screen.getByTestId('new-agent-error').textContent).toContain('reports cost')
     expect(screen.getByText(/catalog agent created; assign from the project card/)).toBeTruthy()
     expect(onClose).not.toHaveBeenCalled()
+
+    // Fix round 1, Finding 1: the catalog row already exists -- a resubmission must not
+    // re-POST /api/org/agents (it would hit `duplicate_name`, masking the real retry).
+    // `getAttribute('disabled')` rather than jest-dom's `toBeDisabled` -- this repo's vitest
+    // setup carries no jest-dom matchers (`project-settings.test.tsx` notes the same).
+    const agentCallsSoFar = fetchMock.mock.calls.filter(([url]) => url === '/api/org/agents').length
+    expect((screen.getByTestId('new-agent-submit') as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(screen.getByTestId('new-agent-submit'))
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/api/org/agents')).toHaveLength(agentCallsSoFar)
+  })
+
+  // Fix round 1, Finding 1: `AgentsClient` renders this drawer unconditionally (`!open` returns
+  // `null`, it never unmounts), so its form state must be reset on a full success -- otherwise a
+  // second "New agent" carries the last submission's values.
+  it('reopening after a success shows an empty form', async () => {
+    const { rerender } = drawer()
+    await fillCore()
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('new-agent-submit'))
+    })
+    rerender(<NewAgentDrawer open={false} onClose={vi.fn()} companies={companies} roster={roster} templates={templates} workspaces={workspaces} />)
+    rerender(<NewAgentDrawer open onClose={vi.fn()} companies={companies} roster={roster} templates={templates} workspaces={workspaces} />)
+    expect((screen.getByTestId('new-agent-name') as HTMLInputElement).value).toBe('')
   })
 
   it('"new department…" creates the template first, then the agent in it', async () => {
@@ -110,6 +133,38 @@ describe('NewAgentDrawer', () => {
     })
     expect(fetchMock).toHaveBeenCalledWith('/api/org/teams', expect.objectContaining({ body: JSON.stringify({ companyId: 'c1', name: 'Design' }) }))
     expect(fetchMock).toHaveBeenCalledWith('/api/org/agents', expect.objectContaining({ body: JSON.stringify({ companyTeamId: 'ct9', templateId: 'tpl1', name: 'Sam' }) }))
+  })
+
+  // Fix round 1, Finding 2: the department create succeeded even though the agent step after it
+  // was refused -- a retry must address the real id, not resubmit `__new__` (which would hit
+  // `duplicate_name` at the team step), and the drawer must say the department now exists.
+  it('"new department…" then a refused agent keeps the created department and lets a retry use its id', async () => {
+    fetchMock.mockImplementation(async (url: string) =>
+      String(url) === '/api/org/teams'
+        ? new Response(JSON.stringify({ ok: true, id: 'ct9' }), { status: 200 })
+        : String(url) === '/api/org/agents'
+          ? new Response(JSON.stringify({ error: 'the name "Sam" is already taken' }), { status: 409 })
+          : new Response(JSON.stringify({ ok: true }), { status: 200 }),
+    )
+    drawer()
+    fireEvent.change(screen.getByTestId('new-agent-company'), { target: { value: 'c1' } })
+    fireEvent.change(screen.getByTestId('new-agent-department'), { target: { value: '__new__' } })
+    fireEvent.change(screen.getByTestId('new-agent-department-name'), { target: { value: 'Design' } })
+    fireEvent.change(screen.getByTestId('new-agent-template'), { target: { value: 'tpl1' } })
+    fireEvent.change(screen.getByTestId('new-agent-name'), { target: { value: 'Sam' } })
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('new-agent-submit'))
+    })
+
+    expect(screen.getByTestId('new-agent-note').textContent).toBe('department template created; the agent was refused')
+    expect((screen.getByTestId('new-agent-department') as HTMLSelectElement).value).toBe('ct9')
+
+    const teamCallsSoFar = fetchMock.mock.calls.filter(([url]) => url === '/api/org/teams').length
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('new-agent-submit'))
+    })
+    expect(fetchMock).toHaveBeenCalledWith('/api/org/agents', expect.objectContaining({ body: JSON.stringify({ companyTeamId: 'ct9', templateId: 'tpl1', name: 'Sam' }) }))
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/api/org/teams')).toHaveLength(teamCallsSoFar)
   })
 
   it('closes on Escape and on the close button', () => {

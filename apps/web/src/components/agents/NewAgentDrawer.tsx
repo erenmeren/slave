@@ -18,6 +18,21 @@ const NEW_DEPARTMENT = '__new__'
  * `POST /api/org/agents`, then `POST /api/w/:id/company` when a project was chosen. If the first
  * succeeds and the second is refused, the drawer stays open showing the refusal and says the
  * catalog row exists (nothing is rolled back). `NewProjectDrawer`'s frame: scrim, dialog, Escape.
+ *
+ * Fix round 1 (Important findings): `AgentsClient` renders this unconditionally -- `!open`
+ * returns `null`, it never unmounts -- so its form state outlives a close/reopen unless reset
+ * explicitly. `reset()` clears every field; `close()` wraps it around `onClose` and is the ONLY
+ * path the scrim, the ✕ button and Escape use, plus a full success calls it instead of a bare
+ * `onClose()`. Once `POST /api/org/agents` succeeds, `createdAgent` locks the submit button
+ * (label "created") so a resubmission after a refused assign step can't re-POST the same
+ * `companyTeamId`+`name` into a `duplicate_name` refusal -- the note's "assign from the project
+ * card" and closing are the only paths forward, same as the ruling on Finding 1. A "new
+ * department…" create is different: `POST /api/org/agents` refusing it does NOT set
+ * `createdAgent` (the agent itself never got made), so a retry may still proceed -- but it must
+ * not recreate the department. `POST /api/org/teams` succeeding rewrites `companyTeamId` to the
+ * real id and clears `newDepartment`, and the id is appended to `createdDepartments` so the
+ * `<select>` has a real option to hold that value (Finding 2); `departmentJustCreatedNote` marks
+ * that this submission's refusal followed a department create, so the drawer can say so.
  */
 export function NewAgentDrawer({
   open,
@@ -46,19 +61,52 @@ export function NewAgentDrawer({
   const [pending, setPending] = useState(false)
   const [errorText, setErrorText] = useState<string | null>(null)
   const [createdButUnassigned, setCreatedButUnassigned] = useState(false)
+  const [createdAgent, setCreatedAgent] = useState(false)
+  const [createdDepartments, setCreatedDepartments] = useState<
+    readonly { readonly companyId: string; readonly companyTeamId: string; readonly teamName: string }[]
+  >([])
+  const [departmentJustCreatedNote, setDepartmentJustCreatedNote] = useState(false)
+
+  const reset = (): void => {
+    setCompanyId('')
+    setCompanyTeamId('')
+    setNewDepartment('')
+    setTemplateId('')
+    setName('')
+    setProvider('')
+    setModel('')
+    setWorkspaceId('')
+    setPending(false)
+    setErrorText(null)
+    setCreatedButUnassigned(false)
+    setCreatedAgent(false)
+    setCreatedDepartments([])
+    setDepartmentJustCreatedNote(false)
+  }
+
+  const close = (): void => {
+    reset()
+    onClose()
+  }
 
   useEffect(() => {
     if (!open) return
     const onKey = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') onClose()
+      if (event.key === 'Escape') close()
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [open, onClose])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `close` is recreated every render
+    // (it closes over state setters and `onClose`); only `open` changing should re-arm the
+    // listener, the same contract `NewProjectDrawer`'s Escape effect already relies on.
+  }, [open])
 
   if (!open) return null
 
-  const departments = roster.find((c) => c.companyId === companyId)?.teams ?? []
+  const departments = [
+    ...(roster.find((c) => c.companyId === companyId)?.teams ?? []),
+    ...createdDepartments.filter((d) => d.companyId === companyId),
+  ]
   const ready =
     companyId !== '' &&
     templateId !== '' &&
@@ -66,10 +114,13 @@ export function NewAgentDrawer({
     (companyTeamId === NEW_DEPARTMENT ? newDepartment.trim() !== '' : companyTeamId !== '')
 
   const submit = async (): Promise<void> => {
+    if (createdAgent) return
     setPending(true)
     setErrorText(null)
     setCreatedButUnassigned(false)
+    setDepartmentJustCreatedNote(false)
     let targetTeam = companyTeamId
+    let justCreatedDepartment = false
     if (companyTeamId === NEW_DEPARTMENT) {
       const created = await fetch('/api/org/teams', {
         method: 'POST',
@@ -82,7 +133,17 @@ export function NewAgentDrawer({
         setPending(false)
         return
       }
-      targetTeam = data.id
+      // A local `const` so the narrowing above (`data.id` is no longer `undefined`) survives
+      // into the `setCreatedDepartments` updater closure below -- TS does not carry a property
+      // access's narrowing into a nested function, only a plain variable's.
+      const departmentId = data.id
+      targetTeam = departmentId
+      justCreatedDepartment = true
+      // The department now exists -- a retry after the agent step below refuses must address
+      // it by its real id, not recreate it by resubmitting `__new__` (Finding 2).
+      setCompanyTeamId(departmentId)
+      setNewDepartment('')
+      setCreatedDepartments((prev) => [...prev, { companyId, companyTeamId: departmentId, teamName: newDepartment }])
     }
     const agent = await postControl('/api/org/agents', {
       companyTeamId: targetTeam,
@@ -93,9 +154,13 @@ export function NewAgentDrawer({
     })
     if (!agent.ok) {
       setErrorText(agent.error)
+      setDepartmentJustCreatedNote(justCreatedDepartment)
       setPending(false)
       return
     }
+    // The catalog row now exists -- a resubmission from here on must not repeat that POST
+    // (Finding 1): only the note's instruction or closing are the paths forward.
+    setCreatedAgent(true)
     if (workspaceId !== '') {
       const error = await sendControl(`/api/w/${workspaceId}/company`, { method: 'POST', body: { companyId } })
       if (error !== null) {
@@ -106,14 +171,13 @@ export function NewAgentDrawer({
         return
       }
     }
-    setPending(false)
     router.refresh()
-    onClose()
+    close()
   }
 
   return (
     <div className="fixed inset-0 z-30 flex justify-end">
-      <button type="button" aria-label="close" data-testid="new-agent-scrim" onClick={onClose} className="flex-1 bg-black/50" />
+      <button type="button" aria-label="close" data-testid="new-agent-scrim" onClick={close} className="flex-1 bg-black/50" />
       <aside
         role="dialog"
         aria-modal="true"
@@ -123,7 +187,7 @@ export function NewAgentDrawer({
       >
         <div className="flex items-center justify-between">
           <h2 className="text-[14.5px] font-semibold tracking-[-.2px] text-text-1">New agent</h2>
-          <button type="button" data-testid="new-agent-close" onClick={onClose} className="text-text-3 hover:text-text-1">
+          <button type="button" data-testid="new-agent-close" onClick={close} className="text-text-3 hover:text-text-1">
             ✕
           </button>
         </div>
@@ -193,12 +257,17 @@ export function NewAgentDrawer({
             ))}
           </SelectField>
           <div className="flex items-center gap-3">
-            <PrimaryButton type="submit" data-testid="new-agent-submit" disabled={pending || !ready}>
-              {pending ? 'creating…' : 'Create agent'}
+            <PrimaryButton type="submit" data-testid="new-agent-submit" disabled={pending || !ready || createdAgent}>
+              {createdAgent ? 'created' : pending ? 'creating…' : 'Create agent'}
             </PrimaryButton>
             {errorText !== null && (
               <span role="alert" data-testid="new-agent-error" className="text-xs text-tone-blocked">
                 {errorText}
+              </span>
+            )}
+            {departmentJustCreatedNote && (
+              <span data-testid="new-agent-note" className="text-xs text-text-3">
+                department template created; the agent was refused
               </span>
             )}
           </div>
