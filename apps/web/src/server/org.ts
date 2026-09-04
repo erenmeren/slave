@@ -530,6 +530,11 @@ export interface AllAgentRow {
   readonly status: string
   readonly currentTask: CurrentTask | null
   readonly provider: ProviderKind | null
+  /** The agent's own `Agent.model` column for a project row (fix round 1, Important finding 2:
+   *  every project row, roster-linked or not -- a hand-made agent's own override is a real fact,
+   *  not a gap this table papers over with `null`); `RosterMemberRow.effectiveModel`'s chain
+   *  result (roster row, then template default) for a catalog row, which has no `Agent` row of
+   *  its own to read a `model` column off. */
   readonly model: string | null
   readonly costUsd: number
   readonly unmeasuredRuns: number
@@ -540,9 +545,24 @@ export interface AllAgentRow {
  * member no project has materialized yet (`listRoster`'s members with no workers). The two lists
  * are the inputs on purpose -- one place derives a worker's live status, one place walks the
  * model/provider chain -- and this only lines their rows up.
+ *
+ * `model` on a project row is read directly off `Agent.model` (fix round 1, Important finding 2)
+ * rather than through the roster loop below -- the roster loop only reaches a worker that is
+ * roster-linked (`member.workers`), so a hand-made agent (`companyAgentId: null`) used to keep
+ * `model: null` regardless of its own real override, silently telling `ModelOverrideEditor` no
+ * override was set when one was. `listWorkers()`/`listRoster()` both already load a worker's
+ * `Agent` row for other reasons, but neither DTO exposes its raw `model` column (`WorkerRow` has
+ * no `model` field at all; `RosterMemberRow.workers[].model` exists but only for a roster-linked
+ * worker) -- so this queries it directly rather than widening either of those two shapes for one
+ * field only this table reads.
  */
 export async function listAllAgents(): Promise<readonly AllAgentRow[]> {
   const [workers, roster] = await Promise.all([listWorkers(), listRoster()])
+  const agentModels = await prisma.agent.findMany({
+    where: { id: { in: workers.map((w) => w.agentId) } },
+    select: { id: true, model: true },
+  })
+  const modelByAgentId = new Map(agentModels.map((a) => [a.id, a.model] as const))
   const workerRows: AllAgentRow[] = workers.map((w) => ({
     agentId: w.agentId,
     companyAgentId: null, // filled below from the roster when the worker is roster-linked
@@ -554,7 +574,7 @@ export async function listAllAgents(): Promise<readonly AllAgentRow[]> {
     status: w.status,
     currentTask: w.currentTask,
     provider: w.provider,
-    model: null, // filled below
+    model: modelByAgentId.get(w.agentId) ?? null,
     costUsd: w.costUsd,
     unmeasuredRuns: w.unmeasuredRuns,
   }))
@@ -572,7 +592,7 @@ export async function listAllAgents(): Promise<readonly AllAgentRow[]> {
         } else {
           for (const worker of member.workers) {
             const row = byAgentId.get(worker.agentId)
-            if (row !== undefined) byAgentId.set(worker.agentId, { ...row, companyAgentId: member.companyAgentId, model: worker.model })
+            if (row !== undefined) byAgentId.set(worker.agentId, { ...row, companyAgentId: member.companyAgentId })
           }
         }
       }

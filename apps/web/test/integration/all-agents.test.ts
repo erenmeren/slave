@@ -58,9 +58,12 @@ describe('listAllAgents', () => {
       data: { teamId: fixture.teamId, name: 'Atlas', role: 'backend', companyAgentId: materializedMember.id },
     })
     // A hand-made project agent with no companyAgentId at all -- listWorkers' "no roster filter"
-    // rule (server/org.ts, WorkerRow docstring) applies here too.
+    // rule (server/org.ts, WorkerRow docstring) applies here too. Carries its own `model`
+    // override (fix round 1, Important finding 2): a hand-made agent has no roster row for
+    // `listAllAgents` to read a chain result off, so its row's `model` must come straight off
+    // this `Agent.model` column instead of silently reading back `null`.
     await prisma.agent.create({
-      data: { teamId: fixture.teamId, name: 'Blair', role: 'frontend' },
+      data: { teamId: fixture.teamId, name: 'Blair', role: 'frontend', model: 'claude-haiku-4' },
     })
 
     const rows = await listAllAgents()
@@ -75,6 +78,7 @@ describe('listAllAgents', () => {
     expect(blair?.agentId).not.toBeNull()
     expect(blair?.companyAgentId).toBeNull()
     expect(blair?.projectName).toBe('Checkout Platform')
+    expect(blair?.model).toBe('claude-haiku-4')
 
     expect(nova?.agentId).toBeNull()
     expect(nova?.companyAgentId).toBe(catalogOnlyMember.id)
