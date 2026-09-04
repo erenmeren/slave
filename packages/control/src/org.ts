@@ -799,20 +799,36 @@ export async function renameCompanyTeam(
 }
 
 /** Deletes an EMPTY department template. Project departments copied from it survive with
- *  `companyTeamId` set to null (`onDelete: SetNull` on `Team.companyTeam`). No event. */
+ *  `companyTeamId` set to null (`onDelete: SetNull` on `Team.companyTeam`). No event.
+ *
+ *  Locked check-then-delete, the same shape as {@link deleteTeam}: `CompanyAgent.companyTeamId`
+ *  is `onDelete: Cascade` and NOT nullable, so a plain (unlocked) check racing a concurrent
+ *  `addCompanyAgent`/`moveCompanyAgent` into this template between the read and the delete would
+ *  cascade-delete that catalog agent -- exactly what `company_team_not_empty` exists to prevent.
+ *  `SELECT ... FOR UPDATE` first serialises against that race the way `lockTeam` does for
+ *  `deleteTeam`. */
 export async function deleteCompanyTeam(
   companyTeamId: string,
   _principal?: Principal,
 ): Promise<Result<void, ControlRefusal>> {
-  const team = await prisma.companyTeam.findUnique({
-    where: { id: companyTeamId },
-    select: { id: true, _count: { select: { agents: true } } },
-  })
-  if (team === null) return err({ kind: 'company_team_not_found', companyTeamId })
-  if (team._count.agents > 0) {
-    return err({ kind: 'company_team_not_empty', companyTeamId, agents: team._count.agents })
-  }
+  const outcome = await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM "CompanyTeam" WHERE id = ${companyTeamId} FOR UPDATE`
+    const team = await tx.companyTeam.findUnique({
+      where: { id: companyTeamId },
+      select: { id: true, _count: { select: { agents: true } } },
+    })
+    if (team === null) return { ok: false as const, error: { kind: 'company_team_not_found', companyTeamId } as ControlRefusal }
+    if (team._count.agents > 0) {
+      return {
+        ok: false as const,
+        error: { kind: 'company_team_not_empty', companyTeamId, agents: team._count.agents } as ControlRefusal,
+      }
+    }
 
-  await prisma.companyTeam.delete({ where: { id: companyTeamId } })
+    await tx.companyTeam.delete({ where: { id: companyTeamId } })
+    return { ok: true as const, value: undefined }
+  })
+
+  if (!outcome.ok) return err(outcome.error)
   return ok(undefined)
 }

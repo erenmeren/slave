@@ -210,6 +210,24 @@ describe('targeted card bodies', () => {
     expect(screen.getByTestId('org-to').textContent).toBe('—')
   })
 
+  it('org.changed renders — for a null from (a department created, M25)', () => {
+    const Card = ACTIVITY_CARDS['org.changed']
+    const event = baseEvent('org.changed', { entity: 'team', id: 't-1', field: 'created', from: null, to: 'Design' })
+    render(<Card event={event} {...CARD_PROPS} />)
+    expect(screen.getByTestId('transition-label').textContent).toBe('created')
+    expect(screen.getByTestId('org-from').textContent).toBe('—')
+    expect(screen.getByTestId('org-to').textContent).toBe('Design')
+  })
+
+  it('org.changed shows "moved to department" for a moved agent (M25)', () => {
+    const Card = ACTIVITY_CARDS['org.changed']
+    const event = baseEvent('org.changed', { entity: 'agent', id: 'ag-1', field: 'team', from: 'Engineering', to: 'QA' })
+    render(<Card event={event} {...CARD_PROPS} />)
+    expect(screen.getByTestId('transition-label').textContent).toBe('moved to department')
+    expect(screen.getByTestId('org-from').textContent).toBe('Engineering')
+    expect(screen.getByTestId('org-to').textContent).toBe('QA')
+  })
+
   it('workspace.created shows the name, repo path and verify command count', () => {
     const Card = ACTIVITY_CARDS['workspace.created']
     render(<Card event={fixtureFor('workspace.created')} {...CARD_PROPS} />)

@@ -464,28 +464,33 @@ function WorkspaceCreatedCard(props: ActivityCardProps): ReactElement {
   )
 }
 
-// M23 D1: an operator edited the roster -- `org.ts`'s five control verbs (rename/re-role/delete
-// an agent, rename/delete a team) all land here, distinguished by `payload.field`. `idle` tone,
+// M23 D1 / M25 §3.1: an operator edited the roster or the departments -- `org.ts`'s control verbs
+// (rename/re-role/delete an agent, rename/delete a team, create a project department, move an
+// agent to another department) all land here, distinguished by `payload.field`. `idle` tone,
 // matching `WorkspaceSettingsChangedCard` above: an edit to configuration, not a run outcome.
-const ORG_CHANGED_LABEL: Record<'name' | 'role' | 'model' | 'deleted', string> = {
+const ORG_CHANGED_LABEL: Record<'name' | 'role' | 'model' | 'deleted' | 'created' | 'team', string> = {
   name: 'renamed',
   role: 'role changed',
   model: 'model changed',
   deleted: 'deleted',
+  created: 'created',
+  team: 'moved to department',
 }
 
 function OrgChangedCard(props: ActivityCardProps): ReactElement {
   const payload = props.event.payload as {
     entity: 'agent' | 'team'
     id: string
-    field: 'name' | 'role' | 'model' | 'deleted'
-    from: string
+    field: 'name' | 'role' | 'model' | 'deleted' | 'created' | 'team'
+    // `createProjectTeam` (field: 'created') carries `from: null` -- the new department had no
+    // prior name -- the same nullable shape `to` already has for `deleted`.
+    from: string | null
     to: string | null
   }
   return (
     <ActivityCard {...props}>
       <Transition tone="idle" label={ORG_CHANGED_LABEL[payload.field]}>
-        <span data-testid="org-from">{payload.from}</span>
+        <span data-testid="org-from">{payload.from ?? '—'}</span>
         {' → '}
         <span data-testid="org-to">{payload.to ?? '—'}</span>
       </Transition>
