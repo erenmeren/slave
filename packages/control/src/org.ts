@@ -223,9 +223,10 @@ export interface AssignReport {
  * matching row there yet.
  *
  * Additive only (Decision 6): an existing project team or worker is never renamed, re-rowed, or
- * removed -- find-or-create by `companyTeamId` (teams, M11) and by `companyAgentId` (workers) is
- * the whole mechanism, so a re-run against the same company is a no-op re-sync rather than a
- * second copy. A team match falls back to name once, ONLY against a legacy row with no
+ * removed -- find-or-create by `companyTeamId` (teams, M11) and by `companyAgentId` (workers,
+ * within the workspace, whichever department it was moved to) is the whole mechanism, so a re-run
+ * against the same company is a no-op re-sync rather than a second copy. A team match falls back
+ * to name once, ONLY against a legacy row with no
  * `companyTeamId` of its own: that row is adopted (stamped with the id, not renamed or re-rowed)
  * rather than duplicated, so a hand-made team from before M10 is linked exactly once and a
  * `CompanyTeam` rename afterward no longer produces a duplicate (M11) -- id, once stamped, always
@@ -303,8 +304,14 @@ export async function assignCompany(
       }
 
       for (const companyAgent of companyTeam.agents) {
+        // Scoped to the WORKSPACE, not to this template's own copied department (M25 final
+        // review, Critical): `moveAgent` keeps `companyAgentId` and only changes `teamId`, so a
+        // worker moved to a different department of the same project is still this exact catalog
+        // row's materialization -- looking it up by `{ teamId: team.id, companyAgentId }` would
+        // miss it there and this loop would create a second `Agent` with the same name and the
+        // same `companyAgentId` (there is no unique index on that column to catch it).
         const existingWorker = await tx.agent.findFirst({
-          where: { teamId: team.id, companyAgentId: companyAgent.id },
+          where: { companyAgentId: companyAgent.id, team: { workspaceId } },
         })
         if (existingWorker !== null) continue
 
@@ -707,8 +714,15 @@ export async function createProjectTeam(
 /**
  * Moves a project agent to another department of the SAME project. `companyAgentId` is left
  * alone: the agent still knows which catalog row it came from, only its department changed, and
- * `assignCompany` run again later finds it by that id and leaves it where it is. Refused while
- * the agent holds a live run, the rule {@link setAgentRole} applies.
+ * `assignCompany` run again later finds it by that id anywhere in the project and leaves it where
+ * it is (M25 final review corrected that lookup, which used to be scoped to the template's own
+ * department -- §12 entry 13). Refused while the agent holds a live run, the rule
+ * {@link setAgentRole} applies -- and, as of the same review, while the target department already
+ * has an agent of that name, the rule {@link renameAgent} applies (M25 final review, Important:
+ * `moveAgent` was the one write path that skipped the per-department unique-name rule every
+ * sibling verb enforces). A move to the agent's CURRENT department is a no-op: nothing changes,
+ * so there is nothing to check the name clash against and nothing worth an `org.changed` event
+ * over -- the transaction returns `value: null` for that case and the event below is skipped.
  */
 export async function moveAgent(
   agentId: string,
@@ -732,6 +746,11 @@ export async function moveAgent(
       return { ok: false as const, error: { kind: 'team_workspace_mismatch', agentId, teamId } as ControlRefusal }
     }
 
+    if (agent.team.id === teamId) return { ok: true as const, value: null }
+
+    const clash = await tx.agent.findFirst({ where: { teamId, name: agent.name, NOT: { id: agentId } } })
+    if (clash !== null) return { ok: false as const, error: { kind: 'duplicate_name', name: agent.name } as ControlRefusal }
+
     const from = await tx.team.findUniqueOrThrow({ where: { id: agent.team.id }, select: { name: true } })
     await tx.agent.update({ where: { id: agentId }, data: { teamId } })
     return { ok: true as const, value: { workspaceId: target.workspaceId, from: from.name, to: target.name } }
@@ -739,14 +758,16 @@ export async function moveAgent(
 
   if (!outcome.ok) return err(outcome.error)
 
-  await appendEvent({
-    type: 'org.changed',
-    workspaceId: outcome.value.workspaceId,
-    agentId,
-    actor: 'human',
-    payload: { entity: 'agent', id: agentId, field: 'team', from: outcome.value.from, to: outcome.value.to },
-    userId: principal?.userId ?? null,
-  })
+  if (outcome.value !== null) {
+    await appendEvent({
+      type: 'org.changed',
+      workspaceId: outcome.value.workspaceId,
+      agentId,
+      actor: 'human',
+      payload: { entity: 'agent', id: agentId, field: 'team', from: outcome.value.from, to: outcome.value.to },
+      userId: principal?.userId ?? null,
+    })
+  }
 
   return ok(undefined)
 }

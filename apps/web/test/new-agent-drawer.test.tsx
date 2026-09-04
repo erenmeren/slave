@@ -102,6 +102,30 @@ describe('NewAgentDrawer', () => {
     expect(fetchMock.mock.calls.filter(([url]) => url === '/api/org/agents')).toHaveLength(agentCallsSoFar)
   })
 
+  // M25 final review, item C: a realistic second-step refusal, not a stand-in string --
+  // `workspaceControlRoute.ts` answers `{ error: refusalText(result.error) }`, and
+  // `refusalText`'s real `company_already_assigned` wording (`packages/control/src/refusal.ts`)
+  // is "this workspace is already run by <companyName>", not the drawer's own copy for anything.
+  it('shows the real company_already_assigned wording when the second step is refused', async () => {
+    const onClose = vi.fn()
+    fetchMock.mockImplementation(async (url: string) =>
+      String(url).includes('/company')
+        ? new Response(JSON.stringify({ error: 'this workspace is already run by Atlas Software' }), { status: 409 })
+        : new Response(JSON.stringify({ ok: true }), { status: 200 }),
+    )
+    drawer(onClose)
+    await fillCore()
+    fireEvent.change(screen.getByTestId('new-agent-project'), { target: { value: 'w1' } })
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('new-agent-submit'))
+    })
+
+    expect(screen.getByTestId('new-agent-error').textContent).toBe('this workspace is already run by Atlas Software')
+    expect(screen.getByText(/catalog agent created; assign from the project card/)).toBeTruthy()
+    expect((screen.getByTestId('new-agent-submit') as HTMLButtonElement).disabled).toBe(true)
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
   // Fix round 1, Finding 1: `AgentsClient` renders this drawer unconditionally (`!open` returns
   // `null`, it never unmounts), so its form state must be reset on a full success -- otherwise a
   // second "New agent" carries the last submission's values.
@@ -174,5 +198,35 @@ describe('NewAgentDrawer', () => {
     expect(onClose).toHaveBeenCalledTimes(1)
     fireEvent.click(screen.getByTestId('new-agent-close'))
     expect(onClose).toHaveBeenCalledTimes(2)
+  })
+
+  // Folded minor (M25 final review): while a submit is in flight, the scrim, the ✕ button and
+  // Escape must not tear the drawer down out from under it -- a deferred fetch stands in for a
+  // submit that has not resolved yet.
+  it('ignores the ✕ button, the scrim and Escape while a submit is pending, then closes once it resolves', async () => {
+    const onClose = vi.fn()
+    let resolveAgent: (value: Response) => void = () => {}
+    const deferred = new Promise<Response>((resolve) => {
+      resolveAgent = resolve
+    })
+    fetchMock.mockImplementation(async (url: string) =>
+      url === '/api/org/agents' ? deferred : new Response(JSON.stringify({ ok: true }), { status: 200 }),
+    )
+    drawer(onClose)
+    await fillCore()
+
+    fireEvent.click(screen.getByTestId('new-agent-submit'))
+    await waitFor(() => expect((screen.getByTestId('new-agent-submit') as HTMLButtonElement).disabled).toBe(true))
+
+    fireEvent.click(screen.getByTestId('new-agent-close'))
+    fireEvent.click(screen.getByTestId('new-agent-scrim'))
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(onClose).not.toHaveBeenCalled()
+
+    await act(async () => {
+      resolveAgent(new Response(JSON.stringify({ ok: true }), { status: 200 }))
+      await deferred
+    })
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1))
   })
 })

@@ -58,14 +58,15 @@ belongs to a workspace and the catalog has none.
 | Verb | Writes | Refusals | Event |
 |---|---|---|---|
 | `createProjectTeam(workspaceId, name, principal?)` | `Team { workspaceId, name, companyTeamId: null }` | `workspace_not_found`, `invalid_name`, `duplicate_name` (same name in that workspace, case-sensitive as today) | `org.changed` `{ entity: 'team', field: 'created', from: null, to: name }` |
-| `moveAgent(agentId, teamId, principal?)` | `Agent.teamId` | `agent_not_found`, `team_not_found`, `team_workspace_mismatch` (target team's `workspaceId` ≠ agent's), `agent_run_active` (same rule as `deleteAgent`: no move while a run is live) | `org.changed` `{ entity: 'agent', field: 'team', from: <old name>, to: <new name> }` |
+| `moveAgent(agentId, teamId, principal?)` | `Agent.teamId` | `agent_not_found`, `team_not_found`, `team_workspace_mismatch` (target team's `workspaceId` ≠ agent's), `agent_run_active` (same rule as `deleteAgent`: no move while a run is live), `duplicate_name` (target department already has that name) | `org.changed` `{ entity: 'agent', field: 'team', from: <old name>, to: <new name> }` |
 | `moveCompanyAgent(companyAgentId, companyTeamId, principal?)` | `CompanyAgent.companyTeamId` | `agent_not_found`, `company_team_not_found`, `company_mismatch` (target template belongs to another company), `duplicate_name` (`@@unique([companyTeamId, name])`) | none (catalog) |
 | `renameCompanyTeam(companyTeamId, name, principal?)` | `CompanyTeam.name` | `company_team_not_found`, `invalid_name`, `duplicate_name` (`@@unique([companyId, name])`) | none (catalog) |
 | `deleteCompanyTeam(companyTeamId, principal?)` | deletes the row; project copies keep living with `companyTeamId = null` (`onDelete: SetNull`) | `company_team_not_found`, `team_not_empty` (any `CompanyAgent` still in it) | none (catalog) |
 
 Moving a project agent leaves `companyAgentId` alone: the agent still knows which catalog row it
-came from; only its department changed. `assignCompany` run again later does not move it back
-(it finds the worker by `companyAgentId` and leaves it where it is).
+came from; only its department changed. `assignCompany` run again later finds the worker by
+`companyAgentId` anywhere in the project and leaves it where it is (M25 corrected the lookup,
+which used to be scoped to the template's own department — §12 entry 13).
 
 ### 3.2 Routes (`apps/web/src/app/api`)
 
@@ -316,3 +317,24 @@ Delete: nothing.
 11. `git mv` renamed `TeamsTable` → `DepartmentsTable` (and its test); git's default similarity
     threshold does not report them as renames because each file roughly doubled; `git log
     --follow -M30%` does.
+12. Four further spec/code divergences, all cosmetic: `departmentsByWorkspace` entries are
+    `DepartmentOption { id, name }`, not `{ teamId; name }`; `ModelSelect` takes `provider:
+    ProviderKind | ''` and `value: string`, not the plan's sketch; only the two CREATE routes
+    (`POST /api/w/[workspaceId]/teams`, `POST /api/org/teams`) answer an id, the four routes
+    behind `orgControlResponse` answer `{ ok: true }` with no id; two gate scripts needed edits
+    for this milestone's UI moves, not four.
+13. (Final review, Critical) `assignCompany`'s find-or-create looked a worker up by `{ teamId:
+    <the department the template first materialized into>, companyAgentId }` — scoped to that ONE
+    department, not the workspace. `moveAgent` keeps `companyAgentId` and only changes `teamId`,
+    so a worker moved to a different department of the same project was no longer found there, and
+    the next `assignCompany` created a second `Agent` with the same name and the same
+    `companyAgentId` (no unique index on that column catches it). The lookup is now
+    `{ companyAgentId, team: { workspaceId } }` — the whole project, whichever department the
+    worker is currently in. §3.1's own text is corrected alongside (above).
+14. (Final review, Important) `moveAgent` was the one write path that skipped the per-department
+    unique-name rule every sibling verb enforces (`renameAgent`'s own rule, restated inline: a
+    `findFirst` inside the same locked transaction, since `Agent` carries no
+    `@@unique([teamId, name])`). It now refuses `duplicate_name` when the target department
+    already has an agent of that name, and treats a move to the agent's own current department as
+    a no-op — `ok(undefined)` with no `org.changed` event, rather than a name-clash check against
+    itself or a same-department event with nothing that moved.

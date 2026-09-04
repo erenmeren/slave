@@ -14,6 +14,11 @@ export const dynamic = 'force-dynamic'
  *  load on the Settings page, loaded again here so `+ New agent` opens the form without a
  *  round trip. */
 export default async function AgentsPage(): Promise<React.JSX.Element> {
+  // `listAllAgents()` already calls `listRoster()` internally to build its rows, but its return
+  // shape has none of `RosterCompany`'s own structure -- the New agent drawer needs that shape
+  // directly (company -> department -> members), so this page runs `listRoster()` again rather
+  // than reshaping `listAllAgents()`'s output. One extra query per Agents page load; accepted
+  // (M25 final review, folded minor -- named rather than silently duplicated).
   const [agents, teams, workspaces, companies, roster, templates] = await Promise.all([
     listAllAgents(),
     listProjectTeams(),

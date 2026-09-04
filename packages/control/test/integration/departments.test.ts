@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { prisma } from '@ai-team-os/db/client'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import {
+  assignCompany,
   createProjectTeam,
   deleteCompanyTeam,
   moveAgent,
@@ -172,6 +173,64 @@ describe('moveAgent', () => {
     const team = await moveAgent(fixture.agentId, UNKNOWN)
     expect(team.ok).toBe(false)
     if (!team.ok) expect(team.error).toEqual({ kind: 'team_not_found', teamId: UNKNOWN })
+  })
+
+  // M25 final review, item B: the one write path that skipped `renameAgent`'s own per-department
+  // unique-name rule.
+  it('refuses a department that already has an agent of that name, changing nothing', async () => {
+    const clash = await prisma.agent.create({ data: { teamId: fixture.qaId, name: 'Alex', role: 'qa' } })
+
+    const result = await moveAgent(fixture.agentId, fixture.qaId)
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error).toEqual({ kind: 'duplicate_name', name: 'Alex' })
+    const row = await prisma.agent.findUniqueOrThrow({ where: { id: fixture.agentId } })
+    expect(row.teamId).toBe(fixture.engineeringId)
+    const clashRow = await prisma.agent.findUniqueOrThrow({ where: { id: clash.id } })
+    expect(clashRow.teamId).toBe(fixture.qaId)
+    expect(await orgChangedEvents(fixture.workspaceId)).toHaveLength(0)
+  })
+
+  it('moving to the current department is a no-op with no event', async () => {
+    const result = await moveAgent(fixture.agentId, fixture.engineeringId)
+
+    expect(result.ok).toBe(true)
+    const row = await prisma.agent.findUniqueOrThrow({ where: { id: fixture.agentId } })
+    expect(row.teamId).toBe(fixture.engineeringId)
+    expect(await orgChangedEvents(fixture.workspaceId)).toHaveLength(0)
+  })
+})
+
+// M25 final review, item A (Critical): `assignCompany`'s find-or-create used to look a worker up
+// by `{ teamId: <the template's own copied department>, companyAgentId }` -- scoped to the ONE
+// department that template first materialized into. A worker `moveAgent`d to a different
+// department of the same project still carries the same `companyAgentId`, so the next
+// `assignCompany` no longer found it there and created a second `Agent` with the same name and
+// the same `companyAgentId` (no unique index on that column catches it). The lookup is now scoped
+// to the workspace, not the department.
+describe('assignCompany (item A: finds a moved worker anywhere in the project)', () => {
+  it('does not duplicate a worker that moveAgent relocated to a second department', async () => {
+    const first = await assignCompany(fixture.workspaceId, fixture.companyId)
+    expect(first.ok).toBe(true)
+    if (!first.ok) return
+    expect(first.value.createdWorkers).toHaveLength(1)
+
+    const worker = await prisma.agent.findFirstOrThrow({ where: { companyAgentId: fixture.companyAgentId } })
+    const originalTeamId = worker.teamId
+    expect(originalTeamId).not.toBe(fixture.qaId)
+
+    const moved = await moveAgent(worker.id, fixture.qaId)
+    expect(moved.ok).toBe(true)
+
+    const second = await assignCompany(fixture.workspaceId, fixture.companyId)
+    expect(second.ok).toBe(true)
+    if (!second.ok) return
+    expect(second.value.createdWorkers).toEqual([])
+
+    const workers = await prisma.agent.findMany({ where: { companyAgentId: fixture.companyAgentId } })
+    expect(workers).toHaveLength(1)
+    expect(workers[0]?.id).toBe(worker.id)
+    expect(workers[0]?.teamId).toBe(fixture.qaId)
   })
 })
 

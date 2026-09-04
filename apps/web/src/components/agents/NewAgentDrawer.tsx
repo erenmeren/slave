@@ -85,6 +85,16 @@ export function NewAgentDrawer({
   }
 
   const close = (): void => {
+    // Folded minor (M25 final review): while a submit is in flight, the scrim, the ✕ button and
+    // Escape all route here -- closing mid-request would tear down state a pending `fetch` still
+    // writes into (`setPending`, `setErrorText`, ...) after the drawer looks closed, and would let
+    // an operator navigate away from a request whose result they can no longer see. This guard
+    // never blocks `submit()`'s OWN final `close()` call on success: that call runs inside the
+    // same closure `submit` captured when it started (the render where the button was clicked,
+    // `pending` still false there), so it reads that render's `pending`, not the live state --
+    // only the scrim/✕/Escape handlers, rebound fresh on the re-render that flips `pending` true,
+    // see the current value.
+    if (pending) return
     reset()
     onClose()
   }
@@ -97,12 +107,17 @@ export function NewAgentDrawer({
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `close` is recreated every render
-    // (it closes over `reset()` and `onClose`), but omitting it here is deliberate, not the same
-    // contract `NewProjectDrawer`'s Escape effect relies on (that one lists `onClose` in its own
-    // deps): `reset()` only calls this component's own state setters and `onClose` is a prop that
-    // never does more than that either, so a stale closure over either one re-arms the exact same
-    // listener a fresh one would -- only `open` changing needs to retrigger this effect.
-  }, [open])
+    // (it closes over `reset()`, `onClose` and now `pending`), but listing `close` itself here
+    // would resubscribe on every render (it has no stable identity); `pending` is listed instead
+    // of it. That is no longer optional the way it was before `close` gained its `pending` guard
+    // (M25 final review, folded minor): this effect otherwise keeps the `close` closure from
+    // whenever it last ran -- typically mount, `pending` false then -- forever, so Escape would
+    // never see a submit's `pending` become true and the guard could never fire. `reset()` and
+    // `onClose` still need no entry of their own, the same reasoning as before: `reset()` only
+    // calls this component's own state setters and `onClose` is a prop that does no more than
+    // that either, so a stale closure over either one re-arms the exact same listener a fresh one
+    // would.
+  }, [open, pending])
 
   if (!open) return null
 
