@@ -2,12 +2,15 @@
 
 import { useEffect, useState } from 'react'
 import type { AgentStatus } from '@ai-team-os/domain'
-import type { AllAgentsPage, ProjectTeamRow } from '../server/org'
+import type { AllAgentsPage, ProjectTeamRow, RosterCompany } from '../server/org'
 import type { AgentCardData, OverviewSnapshot } from '../server/overview'
 import type { StatusTone } from './ui/StatusPill'
 import { AgentPanel } from './AgentPanel'
+import { NewAgentDrawer } from './agents/NewAgentDrawer'
 import { AllAgentsTable } from './AllAgentsTable'
 import { DepartmentsTable } from './DepartmentsTable'
+import type { TemplateRow } from './TemplateCatalog'
+import { PrimaryButton } from './ui/FormControls'
 
 type Tab = 'agents' | 'departments'
 
@@ -47,18 +50,26 @@ const TABS: ReadonlyArray<{ readonly id: Tab; readonly label: string }> = [
 ]
 
 /** The Agents page's tabbed root (M11 Task 8; folded to two tabs in M24 Task 7; Departments tab
- *  in M25 Task 7): local tab state, Agents (the one table, default) and Departments as the two
- *  panels. */
+ *  in M25 Task 7; `+ New agent` in M25 Task 8): local tab state, Agents (the one table, default)
+ *  and Departments as the two panels, with a header row carrying the tablist and the `+ New
+ *  agent` button that opens `NewAgentDrawer` -- the catalog form. */
 export function AgentsClient({
   agents,
   teams,
   workspaces,
+  companies,
+  roster,
+  templates,
 }: {
   readonly agents: AllAgentsPage
   readonly teams: readonly ProjectTeamRow[]
   readonly workspaces: readonly { id: string; name: string }[]
+  readonly companies: readonly { readonly id: string; readonly name: string }[]
+  readonly roster: readonly RosterCompany[]
+  readonly templates: readonly TemplateRow[]
 }): React.JSX.Element {
   const [tab, setTab] = useState<Tab>('agents')
+  const [newOpen, setNewOpen] = useState(false)
   /**
    * Fix round 1 (Important finding): the CLICKED agent's own `agentId`/`workspaceId`, captured
    * at click time from `AllAgentsTable`'s `onOpen(row)` -- never re-derived by looking `agents`
@@ -88,22 +99,27 @@ export function AgentsClient({
 
   return (
     <div className="flex flex-col gap-4 p-4">
-      <div role="tablist" aria-label="Agents" className="flex gap-1">
-        {TABS.map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            role="tab"
-            aria-selected={tab === t.id}
-            data-testid={`agents-tab-${t.id}`}
-            onClick={() => setTab(t.id)}
-            className={`rounded-chip border px-3 py-1.5 text-xs font-medium transition-colors ${
-              tab === t.id ? 'border-line bg-bg-2 text-text-1' : 'border-transparent text-text-3 hover:text-text-2'
-            }`}
-          >
-            {t.label}
-          </button>
-        ))}
+      <div className="flex items-center justify-between">
+        <div role="tablist" aria-label="Agents" className="flex gap-1">
+          {TABS.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              role="tab"
+              aria-selected={tab === t.id}
+              data-testid={`agents-tab-${t.id}`}
+              onClick={() => setTab(t.id)}
+              className={`rounded-chip border px-3 py-1.5 text-xs font-medium transition-colors ${
+                tab === t.id ? 'border-line bg-bg-2 text-text-1' : 'border-transparent text-text-3 hover:text-text-2'
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+        <PrimaryButton data-testid="new-agent" onClick={() => setNewOpen(true)}>
+          + New agent
+        </PrimaryButton>
       </div>
       {tab === 'departments' ? (
         <DepartmentsTable teams={teams} workspaces={workspaces} />
@@ -120,6 +136,14 @@ export function AgentsClient({
           onClose={() => setSelected(null)}
         />
       )}
+      <NewAgentDrawer
+        open={newOpen}
+        onClose={() => setNewOpen(false)}
+        companies={companies}
+        roster={roster}
+        templates={templates}
+        workspaces={workspaces}
+      />
     </div>
   )
 }

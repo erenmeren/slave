@@ -62,7 +62,7 @@ describe('AgentsClient tabs', () => {
   // Departments (M25 Task 7: Teams renamed). Roster and Workers were two names for the same
   // list of agents (spec §5.3) and are gone.
   it('renders the agents table by default, with Departments beside it', () => {
-    render(<AgentsClient agents={page([agentRow({})])} teams={[]} workspaces={[]} />)
+    render(<AgentsClient agents={page([agentRow({})])} teams={[]} workspaces={[]} companies={[]} roster={[]} templates={[]} />)
     expect(screen.getByTestId('data-table')).toBeTruthy()
     expect(screen.getByTestId('worker-row-button').textContent).toContain('Alex')
     expect(screen.getByTestId('agents-tab-agents').getAttribute('aria-selected')).toBe('true')
@@ -75,6 +75,9 @@ describe('AgentsClient tabs', () => {
         agents={page([agentRow({})])}
         teams={[{ teamId: 't1', name: 'Platform', workspaceId: 'w1', projectName: 'Checkout', agentCount: 2 }]}
         workspaces={[]}
+        companies={[]}
+        roster={[]}
+        templates={[]}
       />,
     )
     expect(screen.queryByTestId('department-rename')).toBeNull()
@@ -83,6 +86,13 @@ describe('AgentsClient tabs', () => {
 
     expect(screen.getByTestId('agents-tab-departments').getAttribute('aria-selected')).toBe('true')
     expect(screen.getByTestId('department-rename').textContent).toBe('Platform')
+  })
+
+  // M25 Task 8: `+ New agent` opens the catalog form (`NewAgentDrawer`) beside the tablist.
+  it('opens the New agent drawer', () => {
+    render(<AgentsClient agents={page([agentRow({})])} teams={[]} workspaces={[]} companies={[]} roster={[]} templates={[]} />)
+    fireEvent.click(screen.getByTestId('new-agent'))
+    expect(screen.getByRole('dialog', { name: /new agent/i })).toBeTruthy()
   })
 })
 
@@ -163,7 +173,16 @@ describe('AgentsClient row click opens the panel', () => {
     vi.stubGlobal('fetch', fetchMock)
     vi.useFakeTimers()
 
-    render(<AgentsClient agents={page([agentRow({ agentId: 'a1', workspaceId: 'w1', name: 'Alex', status: 'working' })])} teams={[]} workspaces={[]} />)
+    render(
+      <AgentsClient
+        agents={page([agentRow({ agentId: 'a1', workspaceId: 'w1', name: 'Alex', status: 'working' })])}
+        teams={[]}
+        workspaces={[]}
+        companies={[]}
+        roster={[]}
+        templates={[]}
+      />,
+    )
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(5000)
