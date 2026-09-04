@@ -26,6 +26,17 @@ function stubModelFetch(postBody: unknown): ReturnType<typeof vi.fn> {
   return fetchMock
 }
 
+// M25: `ModelSelect` renders its `<select>` disabled until the models listing resolves -- a
+// `fireEvent.change` on a disabled select is silently dropped, so callers changing it must wait
+// for it to be enabled, not just present.
+async function waitForModelSelect(): Promise<HTMLSelectElement> {
+  return waitFor(() => {
+    const select = screen.getByTestId('model-select') as HTMLSelectElement
+    expect(select.disabled).toBe(false)
+    return select
+  })
+}
+
 const routerRefresh = vi.fn()
 
 vi.mock('next/navigation', () => ({
@@ -238,7 +249,7 @@ describe('TemplateCatalog', () => {
     // `other…`, before the old `template-default-model-input` testid exists to type into.
     async function typeTemplateModel(value: string, providerId: ProviderKind = 'claude_code'): Promise<void> {
       fireEvent.change(screen.getByTestId('template-default-provider-select'), { target: { value: providerId } })
-      await waitFor(() => expect(screen.getByTestId('model-select')).toBeTruthy())
+      await waitForModelSelect()
       fireEvent.change(screen.getByTestId('model-select'), { target: { value: '__other__' } })
       fireEvent.change(screen.getByTestId('template-default-model-input'), { target: { value } })
     }
@@ -567,7 +578,7 @@ describe('CompanyManager', () => {
     // `other…`, before the old `member-model-input` testid exists to type into.
     async function typeMemberModel(value: string, providerId: ProviderKind = 'claude_code'): Promise<void> {
       fireEvent.change(screen.getByTestId('member-provider-select'), { target: { value: providerId } })
-      await waitFor(() => expect(screen.getByTestId('model-select')).toBeTruthy())
+      await waitForModelSelect()
       fireEvent.change(screen.getByTestId('model-select'), { target: { value: '__other__' } })
       fireEvent.change(screen.getByTestId('member-model-input'), { target: { value } })
     }

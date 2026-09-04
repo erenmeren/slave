@@ -19,6 +19,14 @@ function drawer(onClose = vi.fn()): ReturnType<typeof render> {
   return render(<NewAgentDrawer open onClose={onClose} companies={companies} roster={roster} templates={templates} workspaces={workspaces} />)
 }
 
+async function waitForModelSelect(): Promise<HTMLSelectElement> {
+  return waitFor(() => {
+    const select = screen.getByTestId('model-select') as HTMLSelectElement
+    expect(select.disabled).toBe(false)
+    return select
+  })
+}
+
 async function fillCore(): Promise<void> {
   fireEvent.change(screen.getByTestId('new-agent-company'), { target: { value: 'c1' } })
   fireEvent.change(screen.getByTestId('new-agent-department'), { target: { value: 'ct1' } })
@@ -57,7 +65,7 @@ describe('NewAgentDrawer', () => {
     drawer()
     await fillCore()
     fireEvent.change(screen.getByTestId('new-agent-provider'), { target: { value: 'claude_code' } })
-    await waitFor(() => expect(screen.getByTestId('model-select')).toBeTruthy())
+    await waitForModelSelect()
     fireEvent.change(screen.getByTestId('model-select'), { target: { value: 'opus' } })
     await act(async () => {
       fireEvent.click(screen.getByTestId('new-agent-submit'))

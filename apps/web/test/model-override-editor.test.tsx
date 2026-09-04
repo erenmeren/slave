@@ -14,6 +14,14 @@ afterEach(() => {
   routerRefresh.mockClear()
 })
 
+async function waitForModelSelect(): Promise<HTMLSelectElement> {
+  return waitFor(() => {
+    const select = screen.getByTestId('model-select') as HTMLSelectElement
+    expect(select.disabled).toBe(false)
+    return select
+  })
+}
+
 // Recovered verbatim (M24 Task 7 fix round 1, Important finding 1) from the pre-rewrite
 // `agents-page.test.tsx` (`git show 3b43e84:apps/web/test/agents-page.test.tsx`) -- `agents-page
 // .test.tsx`'s M24 rewrite dropped this `describe` block entirely, even though `ModelOverrideEditor`
@@ -29,7 +37,7 @@ describe('ModelOverrideEditor', () => {
   // there is no free-text input to type into until a provider is picked and `other…` is chosen.
   async function typeModel(value: string): Promise<void> {
     fireEvent.change(screen.getByTestId('model-override-provider'), { target: { value: 'claude_code' } })
-    await waitFor(() => expect(screen.getByTestId('model-select')).toBeTruthy())
+    await waitForModelSelect()
     fireEvent.change(screen.getByTestId('model-select'), { target: { value: '__other__' } })
     fireEvent.change(screen.getByTestId('model-override-input'), { target: { value } })
   }
@@ -95,7 +103,7 @@ describe('ModelOverrideEditor', () => {
 
   it('resyncs the select from a new model prop -- the post-refresh snapshot, not a stray edit', async () => {
     const { rerender } = render(<ModelOverrideEditor agentId="wk1" model="claude-opus-4" provider="claude_code" />)
-    await waitFor(() => expect(screen.getByTestId('model-select')).toBeTruthy())
+    await waitForModelSelect()
 
     // A stray edit the caller never submitted (e.g. picked then navigated away without clicking
     // Set/Clear) must not survive the next snapshot arriving as a new `model` prop.
