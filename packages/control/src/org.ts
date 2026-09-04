@@ -663,3 +663,156 @@ export async function deleteTeam(
 
   return ok(undefined)
 }
+
+// ---- M25 §3.1: departments -----------------------------------------------------------------
+// A "department" is a project `Team`; a "department template" is a catalog `CompanyTeam`. The two
+// project-level verbs below emit `org.changed` like `renameTeam`; the three catalog-level verbs
+// emit nothing, the rule `addCompanyTeam`/`addCompanyAgent` already follow (no workspace, no
+// event).
+
+/** Creates a department in a project with no template link (`companyTeamId: null`). Names are
+ *  unique per workspace, the rule {@link renameTeam} enforces -- and, as there, there is no
+ *  unique index to lean on, so the check runs inside the transaction. */
+export async function createProjectTeam(
+  workspaceId: string,
+  name: string,
+  principal?: Principal,
+): Promise<Result<{ readonly id: string }, ControlRefusal>> {
+  if (name.trim() === '') return err({ kind: 'invalid_name' })
+
+  const outcome = await prisma.$transaction(async (tx) => {
+    const workspace = await tx.workspace.findUnique({ where: { id: workspaceId }, select: { id: true } })
+    if (workspace === null) return { ok: false as const, error: { kind: 'workspace_not_found', workspaceId } as ControlRefusal }
+
+    const sibling = await tx.team.findFirst({ where: { workspaceId, name } })
+    if (sibling !== null) return { ok: false as const, error: { kind: 'duplicate_name', name } as ControlRefusal }
+
+    const team = await tx.team.create({ data: { workspaceId, name, companyTeamId: null } })
+    return { ok: true as const, value: { id: team.id } }
+  })
+
+  if (!outcome.ok) return err(outcome.error)
+
+  await appendEvent({
+    type: 'org.changed',
+    workspaceId,
+    actor: 'human',
+    payload: { entity: 'team', id: outcome.value.id, field: 'created', from: null, to: name },
+    userId: principal?.userId ?? null,
+  })
+
+  return ok({ id: outcome.value.id })
+}
+
+/**
+ * Moves a project agent to another department of the SAME project. `companyAgentId` is left
+ * alone: the agent still knows which catalog row it came from, only its department changed, and
+ * `assignCompany` run again later finds it by that id and leaves it where it is. Refused while
+ * the agent holds a live run, the rule {@link setAgentRole} applies.
+ */
+export async function moveAgent(
+  agentId: string,
+  teamId: string,
+  principal?: Principal,
+): Promise<Result<void, ControlRefusal>> {
+  const outcome = await prisma.$transaction(async (tx) => {
+    const agent = await lockAgent(tx, agentId)
+    if (agent === null) return { ok: false as const, error: { kind: 'agent_not_found', agentId } as ControlRefusal }
+
+    // Copy `setAgentRole`'s live-run check here verbatim (the `agent_run_active` refusal keyed on
+    // `NON_TERMINAL_RUN_STATUSES`), so both verbs refuse on the same definition of "live".
+    const live = agent.runs.find((run) => (NON_TERMINAL_RUN_STATUSES as readonly string[]).includes(run.status))
+    if (live !== undefined) {
+      return { ok: false as const, error: { kind: 'agent_run_active', agentId, runId: live.id } as ControlRefusal }
+    }
+
+    const target = await tx.team.findUnique({ where: { id: teamId }, select: { id: true, name: true, workspaceId: true } })
+    if (target === null) return { ok: false as const, error: { kind: 'team_not_found', teamId } as ControlRefusal }
+    if (target.workspaceId !== agent.team.workspaceId) {
+      return { ok: false as const, error: { kind: 'team_workspace_mismatch', agentId, teamId } as ControlRefusal }
+    }
+
+    const from = await tx.team.findUniqueOrThrow({ where: { id: agent.team.id }, select: { name: true } })
+    await tx.agent.update({ where: { id: agentId }, data: { teamId } })
+    return { ok: true as const, value: { workspaceId: target.workspaceId, from: from.name, to: target.name } }
+  })
+
+  if (!outcome.ok) return err(outcome.error)
+
+  await appendEvent({
+    type: 'org.changed',
+    workspaceId: outcome.value.workspaceId,
+    agentId,
+    actor: 'human',
+    payload: { entity: 'agent', id: agentId, field: 'team', from: outcome.value.from, to: outcome.value.to },
+    userId: principal?.userId ?? null,
+  })
+
+  return ok(undefined)
+}
+
+/** Moves a catalog agent to another department template of the SAME company. The unique index
+ *  `@@unique([companyTeamId, name])` is what refuses a name clash, caught the way
+ *  {@link addCompanyAgent} catches it. No event: the catalog has no workspace. */
+export async function moveCompanyAgent(
+  companyAgentId: string,
+  companyTeamId: string,
+  _principal?: Principal,
+): Promise<Result<void, ControlRefusal>> {
+  const agent = await prisma.companyAgent.findUnique({
+    where: { id: companyAgentId },
+    select: { id: true, name: true, companyTeam: { select: { companyId: true } } },
+  })
+  if (agent === null) return err({ kind: 'agent_not_found', agentId: companyAgentId })
+
+  const target = await prisma.companyTeam.findUnique({ where: { id: companyTeamId }, select: { id: true, companyId: true } })
+  if (target === null) return err({ kind: 'company_team_not_found', companyTeamId })
+  if (target.companyId !== agent.companyTeam.companyId) return err({ kind: 'company_mismatch', companyAgentId, companyTeamId })
+
+  try {
+    await prisma.companyAgent.update({ where: { id: companyAgentId }, data: { companyTeamId } })
+    return ok(undefined)
+  } catch (error) {
+    if (isUniqueConstraintViolation(error)) return err({ kind: 'duplicate_name', name: agent.name })
+    throw error
+  }
+}
+
+/** Renames a department template. `@@unique([companyId, name])` refuses a sibling clash. No event. */
+export async function renameCompanyTeam(
+  companyTeamId: string,
+  name: string,
+  _principal?: Principal,
+): Promise<Result<void, ControlRefusal>> {
+  if (name.trim() === '') return err({ kind: 'invalid_name' })
+
+  const team = await prisma.companyTeam.findUnique({ where: { id: companyTeamId }, select: { id: true } })
+  if (team === null) return err({ kind: 'company_team_not_found', companyTeamId })
+
+  try {
+    await prisma.companyTeam.update({ where: { id: companyTeamId }, data: { name } })
+    return ok(undefined)
+  } catch (error) {
+    if (isUniqueConstraintViolation(error)) return err({ kind: 'duplicate_name', name })
+    throw error
+  }
+}
+
+/** Deletes an EMPTY department template. Project departments copied from it survive with
+ *  `companyTeamId` set to null (`onDelete: SetNull` on `Team.companyTeam`). No event. */
+export async function deleteCompanyTeam(
+  companyTeamId: string,
+  _principal?: Principal,
+): Promise<Result<void, ControlRefusal>> {
+  const team = await prisma.companyTeam.findUnique({
+    where: { id: companyTeamId },
+    select: { id: true, _count: { select: { agents: true } } },
+  })
+  if (team === null) return err({ kind: 'company_team_not_found', companyTeamId })
+  if (team._count.agents > 0) {
+    return err({ kind: 'company_team_not_empty', companyTeamId, agents: team._count.agents })
+  }
+
+  await prisma.companyTeam.delete({ where: { id: companyTeamId } })
+  return ok(undefined)
+}

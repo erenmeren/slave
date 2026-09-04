@@ -168,16 +168,17 @@ export const executionEventSchema = z.discriminatedUnion('type', [
     type: z.literal('task.worktree_collected'),
     payload: z.object({ path: z.string().min(1), reason: z.enum(['aged', 'operator']), branch: z.string().nullable() }),
   }),
-  // M23 D1: one of the five roster control verbs in `org.ts` edited an agent or a team.
-  // `to: null` is `deleted`'s own shape -- every other field always carries a string.
+  // M23 D1 / M25 §3.1: one of the roster and department control verbs in `org.ts` edited an
+  // agent or a team (or created/deleted one). `to: null` is `deleted`'s own shape and `from: null`
+  // is `created`'s own shape (M25) -- every other field always carries a string on both sides.
   z.object({
     ...envelope,
     type: z.literal('org.changed'),
     payload: z.object({
       entity: z.enum(['agent', 'team']),
       id: z.string().min(1),
-      field: z.enum(['name', 'role', 'model', 'deleted']),
-      from: z.string(),
+      field: z.enum(['name', 'role', 'model', 'deleted', 'created', 'team']),
+      from: z.string().nullable(),
       to: z.string().nullable(),
     }),
   }),

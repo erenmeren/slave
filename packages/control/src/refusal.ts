@@ -73,6 +73,14 @@ export type ControlRefusal =
   | { readonly kind: 'team_not_found'; readonly teamId: string }
   /** `deleteTeam` on a team that still has agents on its roster (M23 D1). */
   | { readonly kind: 'team_not_empty'; readonly teamId: string; readonly agents: number }
+  /** `moveAgent`'s target department belongs to another project than the agent (M25 §3.1). */
+  | { readonly kind: 'team_workspace_mismatch'; readonly agentId: string; readonly teamId: string }
+  /** `moveCompanyAgent`'s target department template belongs to another company than the catalog
+   *  agent (M25 §3.1). */
+  | { readonly kind: 'company_mismatch'; readonly companyAgentId: string; readonly companyTeamId: string }
+  /** `deleteCompanyTeam` on a department template that still has catalog agents on its roster
+   *  (M25 §3.1) -- the template counterpart of `team_not_empty`. */
+  | { readonly kind: 'company_team_not_empty'; readonly companyTeamId: string; readonly agents: number }
   /** A skill id that no `Skill` row carries (M14 §4.3). */
   | { readonly kind: 'skill_not_found'; readonly skillId: string }
   /** A permission tool outside `PERMISSION_TOOLS` (M14 §5.7). */
@@ -176,6 +184,12 @@ export function refusalText(refusal: ControlRefusal): string {
       return `no team with id ${refusal.teamId}`
     case 'team_not_empty':
       return `team ${refusal.teamId} still has ${refusal.agents} agent(s)`
+    case 'team_workspace_mismatch':
+      return `department ${refusal.teamId} belongs to another project than agent ${refusal.agentId}`
+    case 'company_mismatch':
+      return `department template ${refusal.companyTeamId} belongs to another company than catalog agent ${refusal.companyAgentId}`
+    case 'company_team_not_empty':
+      return `department template ${refusal.companyTeamId} still has ${refusal.agents} member(s); move them first`
     case 'skill_not_found':
       return `no skill with id ${refusal.skillId}`
     case 'invalid_tool':

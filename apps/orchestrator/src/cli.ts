@@ -7,16 +7,21 @@ import {
   assignCompany,
   claimResume,
   createCompany,
+  createProjectTeam,
   createTemplate,
   createUser,
   createWorkspace,
   deleteAgent,
+  deleteCompanyTeam,
   deleteTeam,
   deleteUser,
   emergencyStop,
   listUsers,
+  moveAgent,
+  moveCompanyAgent,
   refusalText,
   renameAgent,
+  renameCompanyTeam,
   renameTeam,
   requestPause,
   requestStop,
@@ -90,6 +95,19 @@ const USAGE = `usage: orchestrator <command> [options]
   delete-team --team <id> --yes        remove a project team -- refused while it still has any
                                        agent on its roster. Omit --yes to see what would be
                                        deleted without doing it.
+  create-team --workspace <id> --name <n>
+                                       add a department to a project (no template link)
+  move-agent --agent <id> --team <id>  move a project agent to another department of the same
+                                       project -- refused while the agent holds a live run
+  move-company-agent --agent <companyAgentId> --team <companyTeamId>
+                                       move a catalog agent to another department template of
+                                       the same company
+  rename-company-team --team <companyTeamId> --name <n>
+                                       rename a department template
+  delete-company-team --team <companyTeamId> --yes
+                                       remove an EMPTY department template; project departments
+                                       copied from it keep living. Omit --yes to see what would
+                                       be deleted without doing it.
 
   users
   create-user --name <u>                create a local account. The password is never a
@@ -670,6 +688,55 @@ export async function main(argv: readonly string[]): Promise<number> {
       const result = await deleteTeam(teamId)
       if (!result.ok) throw new Error(refusalText(result.error))
       process.stdout.write(`team ${teamId} deleted\n`)
+      return 0
+    }
+
+    // ---- M25 §3.3: departments -----------------------------------------------------------------
+    case 'create-team': {
+      const workspaceId = requireFlag(flags, 'workspace')
+      const name = requireFlag(flags, 'name')
+      const result = await createProjectTeam(workspaceId, name)
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(`department ${result.value.id} created in ${workspaceId}\n`)
+      return 0
+    }
+
+    case 'move-agent': {
+      const agentId = requireFlag(flags, 'agent')
+      const teamId = requireFlag(flags, 'team')
+      const result = await moveAgent(agentId, teamId)
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(`agent ${agentId} moved to department ${teamId}\n`)
+      return 0
+    }
+
+    case 'move-company-agent': {
+      const companyAgentId = requireFlag(flags, 'agent')
+      const companyTeamId = requireFlag(flags, 'team')
+      const result = await moveCompanyAgent(companyAgentId, companyTeamId)
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(`catalog agent ${companyAgentId} moved to department template ${companyTeamId}\n`)
+      return 0
+    }
+
+    case 'rename-company-team': {
+      const companyTeamId = requireFlag(flags, 'team')
+      const name = requireFlag(flags, 'name')
+      const result = await renameCompanyTeam(companyTeamId, name)
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(`department template ${companyTeamId} renamed\n`)
+      return 0
+    }
+
+    case 'delete-company-team': {
+      const companyTeamId = requireFlag(flags, 'team')
+      if (!('yes' in flags)) {
+        const team = await prisma.companyTeam.findUnique({ where: { id: companyTeamId }, select: { name: true } })
+        throw new Error(`refusing without --yes: this would delete department template ${team?.name ?? companyTeamId} (${companyTeamId})`)
+      }
+      const result = await deleteCompanyTeam(companyTeamId)
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(`department template ${companyTeamId} deleted\n`)
       return 0
     }
 
