@@ -89,7 +89,7 @@ export interface AgentCardData {
    *   `toolCalls: 0` makes beside it about the same absent object, and Decision 6 governs
    *   unmeasured RUNS, of which there is none here.
    * - `null` -- there is a live run and no cost is recorded for it. Rendered as `—`, the mark
-   *   `RosterTable`/`CompanyManager` already use, never `$0.00`.
+   *   `AllAgentsTable`/`CompanyManager` already use, never `$0.00`.
    *
    * A positive figure is NOT reachable on this field, and saying so is the point of this
    * paragraph: `run` here is a NON-TERMINAL run, and `pump.ts` writes `AgentRun.costUsd` only in

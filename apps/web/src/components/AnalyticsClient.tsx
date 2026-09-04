@@ -1,10 +1,9 @@
 'use client'
 
 import { useRouter } from 'next/navigation'
-import { formatDuration } from '../lib/format'
+import { formatDuration, formatTokens } from '../lib/format'
 import type { AnalyticsSnapshot } from '../server/analytics'
 import { BarChart } from './BarChart'
-import { formatTokens } from './WorkersTable'
 import { AvatarTile } from './ui/AvatarTile'
 import { DataTable, Row } from './ui/DataTable'
 import { Panel } from './ui/Panel'

@@ -170,7 +170,7 @@ describe('AgentPanel', () => {
     })
 
     it('shows the unknown mark, not $0.00, when the live run reports no cost', () => {
-      // M12 Task 9 / ruling R3. `—` is the mark `RosterTable`/`CompanyManager` already use for
+      // M12 Task 9 / ruling R3. `—` is the mark `AllAgentsTable`/`CompanyManager` already use for
       // unknown, so the surfaces agree on what "we do not know" looks like.
       render(
         <AgentPanel

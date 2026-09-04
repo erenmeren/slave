@@ -28,3 +28,13 @@ export function formatTimeout(ms: number): string {
   if (minutes === 0) return `${seconds}s`
   return seconds === 0 ? `${minutes}m` : `${minutes}m${seconds}s`
 }
+
+/** `1_400_000` → `1.4M`; `900` → `900`. The handoff's own token format -- moved here from the
+ *  old flat worker list (M24 Task 7: that table is gone, folded into `AllAgentsTable`, which has
+ *  no Tokens column; `AnalyticsClient.tsx`'s per-agent table is this function's one remaining
+ *  caller, the reason it lives in a plain module rather than back inside a deleted component). */
+export function formatTokens(tokens: number): string {
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`
+  if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1)}k`
+  return String(tokens)
+}

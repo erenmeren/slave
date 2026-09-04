@@ -9,9 +9,9 @@ type Editing = 'name' | 'role' | null
 
 /**
  * The per-worker roster-editing controls (M23 D2): rename, re-role, delete -- mounted beside
- * `ModelOverrideEditor` in `RosterTable.tsx`'s `roster-worker-row` (controller ruling: these
- * rows ARE project `Agent`s, `worker.agentId`, exactly what `renameAgent`/`setAgentRole`/
- * `deleteAgent` address).
+ * `ModelOverrideEditor` in `AllAgentsTable.tsx`'s actions cell (M24 Task 7), and only for a
+ * project row (`agentId !== null`; controller ruling: these rows ARE project `Agent`s,
+ * `worker.agentId`, exactly what `renameAgent`/`setAgentRole`/`deleteAgent` address).
  *
  * Name and role edit the same way: a plain button showing the current value swaps to a
  * `TextField` on click, committing on Enter or blur -- no separate save button, no Escape

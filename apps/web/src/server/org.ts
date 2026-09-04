@@ -512,6 +512,77 @@ export async function listWorkers(): Promise<readonly WorkerRow[]> {
   })
 }
 
+/** `AllAgentRow` (M24 §5.3): one row for every agent, whether a project has materialized it or
+ *  not. `agentId`/`companyAgentId` are the two identities `listWorkers`/`listRoster` each carry
+ *  half of -- `null` for `agentId` marks a catalog member no project has materialized yet, and
+ *  `null` for `companyAgentId` marks an agent with no roster link at all (a hand-made worker, or
+ *  a worker whose roster row has since been deleted -- the same `Agent.companyAgentId` nullable
+ *  column `listWorkers`'s own docstring explains). */
+export interface AllAgentRow {
+  /** `null` for a catalog member no project has materialized yet. */
+  readonly agentId: string | null
+  readonly companyAgentId: string | null
+  readonly name: string
+  readonly role: string
+  readonly teamName: string
+  readonly projectName: string | null
+  readonly workspaceId: string | null
+  readonly status: string
+  readonly currentTask: CurrentTask | null
+  readonly provider: ProviderKind | null
+  readonly model: string | null
+  readonly costUsd: number
+  readonly unmeasuredRuns: number
+}
+
+/**
+ * The Agents page's one table (M24 §5.3): every project agent (`listWorkers`) plus every catalog
+ * member no project has materialized yet (`listRoster`'s members with no workers). The two lists
+ * are the inputs on purpose -- one place derives a worker's live status, one place walks the
+ * model/provider chain -- and this only lines their rows up.
+ */
+export async function listAllAgents(): Promise<readonly AllAgentRow[]> {
+  const [workers, roster] = await Promise.all([listWorkers(), listRoster()])
+  const workerRows: AllAgentRow[] = workers.map((w) => ({
+    agentId: w.agentId,
+    companyAgentId: null, // filled below from the roster when the worker is roster-linked
+    name: w.name,
+    role: w.role,
+    teamName: w.department,
+    projectName: w.projectName,
+    workspaceId: w.workspaceId,
+    status: w.status,
+    currentTask: w.currentTask,
+    provider: w.provider,
+    model: null, // filled below
+    costUsd: w.costUsd,
+    unmeasuredRuns: w.unmeasuredRuns,
+  }))
+  const byAgentId = new Map(workerRows.map((r) => [r.agentId, r] as const))
+  const catalogRows: AllAgentRow[] = []
+  for (const company of roster) {
+    for (const team of company.teams) {
+      for (const member of team.members) {
+        if (member.workers.length === 0) {
+          catalogRows.push({
+            agentId: null, companyAgentId: member.companyAgentId, name: member.name, role: member.role,
+            teamName: team.teamName, projectName: null, workspaceId: null, status: 'idle', currentTask: null,
+            provider: member.effectiveProvider, model: member.effectiveModel, costUsd: 0, unmeasuredRuns: 0,
+          })
+        } else {
+          for (const worker of member.workers) {
+            const row = byAgentId.get(worker.agentId)
+            if (row !== undefined) byAgentId.set(worker.agentId, { ...row, companyAgentId: member.companyAgentId, model: worker.model })
+          }
+        }
+      }
+    }
+  }
+  const projectRows = [...byAgentId.values()].sort((a, b) => (a.projectName ?? '').localeCompare(b.projectName ?? '') || a.name.localeCompare(b.name))
+  catalogRows.sort((a, b) => a.name.localeCompare(b.name))
+  return [...projectRows, ...catalogRows]
+}
+
 export async function listTemplates(): Promise<
   readonly {
     id: string
