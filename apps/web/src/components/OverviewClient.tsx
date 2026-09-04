@@ -197,6 +197,15 @@ export function OverviewClient({
         runTimeoutMs: view.workspace.runTimeoutMs,
         maxAttempts: view.workspace.maxAttempts,
       },
+      // M24 §2.2 widening: the same four figures the header renders, already sitting on this
+      // snapshot's `workspace` -- `overview.ts` computes them the identical way `buildShellFacts`
+      // now does, so there is nothing left to derive.
+      status: {
+        goal: view.workspace.goal,
+        spentUsd: view.workspace.spentUsd,
+        unmeasuredRuns: view.workspace.unmeasuredRuns,
+        haltedReason: view.workspace.haltedReason,
+      },
     }),
     [view],
   )

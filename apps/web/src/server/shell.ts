@@ -1,15 +1,18 @@
 import { toRunState } from '@ai-team-os/db'
 import { prisma } from '@ai-team-os/db/client'
-import { deriveAgentStatus, NON_TERMINAL_RUN_STATUSES } from '@ai-team-os/domain'
+import { deriveAgentStatus, NON_TERMINAL_RUN_STATUSES, type SpendGroup } from '@ai-team-os/domain'
+import { spendOfGroups } from './org'
 
 /**
- * The shell's own tiny snapshot (M14 §3): the two live counts the sidebar's nav rows carry, and
- * the workspace's guardrail columns for the bottom block.
+ * The shell's own tiny snapshot (M14 §3, widened M24 §2.2): the two live counts the sidebar's nav
+ * rows once carried and now the project header/tab strip render, the workspace's guardrail
+ * columns for the bottom block, and the header's own figures -- the goal line, the budget bar and
+ * the halt state.
  *
- * Its own module and its own route rather than a slice of `OverviewSnapshot`, because the sidebar
- * is mounted by the ROOT LAYOUT on every page — including `/w/:id/tasks`, `/graph` and
- * `/activity`, none of which builds an overview snapshot. Reading the overview's much larger
- * snapshot from four routes to display two integers is the cost this avoids.
+ * Its own module and its own route rather than a slice of `OverviewSnapshot`, because the header
+ * and tabs are mounted by the PROJECT LAYOUT on every page — including `/w/:id/tasks`, `/graph`
+ * and `/activity`, none of which builds an overview snapshot. Reading the overview's much larger
+ * snapshot from four routes to display a handful of figures is the cost this avoids.
  */
 export interface ShellFacts {
   readonly workspace: { readonly id: string; readonly name: string }
@@ -29,6 +32,14 @@ export interface ShellFacts {
     readonly runTimeoutMs: number
     readonly maxAttempts: number
   }
+  /** The header's own figures (M24 §2.2): the goal line, the budget bar and the halt state.
+   *  Published by every workspace page alongside the counts, so the header never opens a stream. */
+  readonly status: {
+    readonly goal: string | null
+    readonly spentUsd: number
+    readonly unmeasuredRuns: number
+    readonly haltedReason: string | null
+  }
 }
 
 // Mirrors `overview.ts`'s own list (the M8a widening: a task under review or in the merge queue
@@ -40,7 +51,7 @@ export async function buildShellFacts(workspaceId: string): Promise<ShellFacts |
   const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId } })
   if (workspace === null) return null
 
-  const [runs, tasksActive] = await Promise.all([
+  const [runs, tasksActive, spendGroups] = await Promise.all([
     // No `select`: `toRunState` maps a whole `AgentRun` row, and narrowing the query to the four
     // columns it happens to read today would hand it an object the mapper's own type rejects —
     // and would have to be revisited every time the domain's `RunState` grows a field. The row
@@ -49,6 +60,17 @@ export async function buildShellFacts(workspaceId: string): Promise<ShellFacts |
       where: { agent: { team: { workspaceId } }, status: { in: [...NON_TERMINAL_RUN_STATUSES] } },
     }),
     prisma.task.count({ where: { workspaceId, status: { in: [...ACTIVE_TASK_STATUSES] } } }),
+    // Grouped by the database, exactly `listWorkers`'/`listProjects`' shape (`org.ts`), scoped to
+    // this one workspace's agents rather than every agent everywhere -- `overview.ts`'s own spend
+    // derivation, restated over `spendOfGroups` instead of the whole-history row array `sumSpend`
+    // takes, so the header and Overview cannot come to disagree about what an unmeasured run does
+    // to the total.
+    prisma.agentRun.groupBy({
+      by: ['provider', 'status'],
+      where: { agent: { team: { workspaceId } } },
+      _sum: { costUsd: true },
+      _count: { _all: true, costUsd: true },
+    }),
   ])
 
   // `deriveAgentStatus` rather than a `status === 'working'` filter on the row: the domain owns
@@ -60,6 +82,16 @@ export async function buildShellFacts(workspaceId: string): Promise<ShellFacts |
     runs.filter((run) => deriveAgentStatus(toRunState(run)) === 'working').map((run) => run.agentId),
   ).size
 
+  // Same `SpendGroup` construction as `listProjects`/`listWorkers` (`org.ts`).
+  const groups: SpendGroup[] = spendGroups.map((g) => ({
+    provider: g.provider,
+    status: g.status,
+    knownUsd: g._sum.costUsd ?? 0,
+    rowCount: g._count._all,
+    measuredCount: g._count.costUsd,
+  }))
+  const { spend, unmeasuredRuns } = spendOfGroups(groups)
+
   return {
     workspace: { id: workspace.id, name: workspace.name },
     counts: { agentsWorking, tasksActive },
@@ -68,6 +100,12 @@ export async function buildShellFacts(workspaceId: string): Promise<ShellFacts |
       maxConcurrentRuns: workspace.maxConcurrentRuns,
       runTimeoutMs: workspace.runTimeoutMs,
       maxAttempts: workspace.maxAttempts,
+    },
+    status: {
+      goal: workspace.goal,
+      spentUsd: spend,
+      unmeasuredRuns,
+      haltedReason: workspace.haltedReason,
     },
   }
 }

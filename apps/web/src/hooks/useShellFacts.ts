@@ -4,22 +4,24 @@ import { useSyncExternalStore } from 'react'
 import type { ShellFacts } from '../server/shell'
 
 /**
- * The counts and guardrails the global shell's `<Sidebar>` shows, published by whichever route
- * already streams that workspace.
+ * The counts, guardrails and header figures a workspace page publishes, read by the project
+ * header and tab strip that the project layout mounts (M24 §2.2: `ProjectHeader`/`ProjectTabs`)
+ * -- and, until this milestone's sidebar cleanup lands, by the global shell's `<Sidebar>` too.
  *
  * Deliberately NOT React context, for the reason `hooks/useProjectName.ts` states for the project
- * name: `app/layout.tsx` renders `<Sidebar />` as a SIBLING of `{children}`, so nothing a page
- * mounts is ever an ancestor of the sidebar. A provider inside a page component reaches it in a
+ * name: `ProjectHeader`/`ProjectTabs` are mounted by the PROJECT LAYOUT as siblings of the page
+ * (`{children}`), so nothing a page mounts is ever an ancestor of them -- exactly the relationship
+ * `Sidebar` already has with `app/layout.tsx`. A provider inside a page component reaches it in a
  * hand-built test tree and in no tree that actually exists. A module-level store needs no shared
- * ancestor and leaves the layout's single, unconditional `<Sidebar>` mount untouched.
+ * ancestor and leaves the layout's own unconditional mount untouched.
  *
- * Why it exists at all (M14 Task 3 controller ruling): as of Task 3 the sidebar opens its own
- * `EventSource` per workspace route to fetch these figures. On a workspace page that is a SECOND
- * stream carrying a subset of what the page's own stream already delivers -- two SSE connections
- * against one workspace, two refetch storms, and two clocks that can disagree on screen at the
- * same instant. A page that has the facts publishes them; the sidebar falls back to its own
- * stream only where nothing does. Task 12 removes the fallback once every workspace page
- * publishes.
+ * Why it exists at all (M14 Task 3 controller ruling, still the reason in M24): a component that
+ * lives outside a workspace page's own tree but needs that workspace's live figures would
+ * otherwise have to open its own `EventSource` per workspace route to fetch them. On a workspace
+ * page that is a SECOND stream carrying a subset of what the page's own stream already delivers
+ * -- two SSE connections against one workspace, two refetch storms, and two clocks that can
+ * disagree on screen at the same instant. A page that has the facts publishes them; anything else
+ * that wants them reads this store instead of opening its own stream.
  *
  * ONE workspace at a time, like `useProjectName`: only one workspace route is ever mounted, and
  * a map keyed by id would outlive the pages that filled it.
@@ -32,8 +34,9 @@ interface Publication {
 let current: Publication | null = null
 const listeners = new Set<() => void>()
 
-/** Value equality over the eight figures the sidebar renders. The publisher rebuilds the object
- *  on every snapshot, so identity would notify on every refetch that changed nothing. */
+/** Value equality over the twelve figures the header, the Tasks badge and the Settings tab
+ *  render. The publisher rebuilds the object on every snapshot, so identity would notify on
+ *  every refetch that changed nothing. */
 function sameFacts(a: ShellFacts, b: ShellFacts): boolean {
   return (
     a.workspace.id === b.workspace.id &&
@@ -43,7 +46,11 @@ function sameFacts(a: ShellFacts, b: ShellFacts): boolean {
     a.guardrails.budgetUsd === b.guardrails.budgetUsd &&
     a.guardrails.maxConcurrentRuns === b.guardrails.maxConcurrentRuns &&
     a.guardrails.runTimeoutMs === b.guardrails.runTimeoutMs &&
-    a.guardrails.maxAttempts === b.guardrails.maxAttempts
+    a.guardrails.maxAttempts === b.guardrails.maxAttempts &&
+    a.status.goal === b.status.goal &&
+    a.status.spentUsd === b.status.spentUsd &&
+    a.status.unmeasuredRuns === b.status.unmeasuredRuns &&
+    a.status.haltedReason === b.status.haltedReason
   )
 }
 
@@ -52,7 +59,8 @@ function sameFacts(a: ShellFacts, b: ShellFacts): boolean {
  * and with `null` on unmount to retract.
  *
  * A `null` retraction only ever clears THIS workspace's publication -- a page unmounting after a
- * different workspace's page has already published must not blank the new one's sidebar.
+ * different workspace's page has already published must not blank what the new one's header and
+ * tab strip show.
  */
 export function publishShellFacts(workspaceId: string, facts: ShellFacts | null): void {
   if (facts === null) {

@@ -99,6 +99,7 @@ const SHELL_FACTS: GraphSnapshot['shellFacts'] = {
   workspace: { id: 'w1', name: 'Checkout Platform' },
   counts: { agentsWorking: 1, tasksActive: 1 },
   guardrails: { budgetUsd: 100, maxConcurrentRuns: 3, runTimeoutMs: 1_800_000, maxAttempts: 3 },
+  status: { goal: null, spentUsd: 0, unmeasuredRuns: 0, haltedReason: null },
 }
 
 function agent(overrides: Partial<GraphAgent> = {}): GraphAgent {

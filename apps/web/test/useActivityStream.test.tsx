@@ -52,6 +52,7 @@ const INITIAL: ActivityPage = {
     workspace: { id: 'w1', name: 'mine' },
     counts: { agentsWorking: 0, tasksActive: 0 },
     guardrails: { budgetUsd: null, maxConcurrentRuns: 3, runTimeoutMs: 1_800_000, maxAttempts: 3 },
+    status: { goal: null, spentUsd: 0, unmeasuredRuns: 0, haltedReason: null },
   },
 }
 

@@ -44,7 +44,7 @@ const ACTIVE_TASK_STATUSES = ['ready', 'running', 'verifying', 'reviewing', 'mer
  *  below both group in SQL and share this one wrapper -- `spendOf`, the equivalent wrapper over a
  *  whole-history row array, was deleted in the M19 Task 12 rewrite once `listWorkers` stopped being
  *  its last caller). */
-function spendOfGroups(groups: readonly SpendGroup[]): { readonly spend: number; readonly unmeasuredRuns: number } {
+export function spendOfGroups(groups: readonly SpendGroup[]): { readonly spend: number; readonly unmeasuredRuns: number } {
   const { known, unknownRuns } = sumSpendFromGroups(groups)
   return { spend: known, unmeasuredRuns: unknownRuns }
 }
@@ -190,6 +190,12 @@ export async function listProjects(): Promise<readonly ProjectRow[]> {
     // spent nothing and has nothing unmeasured -- `sumSpendFromGroups([])` says exactly that.
     ...spendOfGroups(groupsByWorkspace.get(workspace.id) ?? []),
   }))
+}
+
+/** Every workspace by name, for the project header's switcher (M24 §2.2). Two columns, no joins:
+ *  `listProjects` exists for the cards and is far heavier than a dropdown needs. */
+export async function listWorkspaceNames(): Promise<readonly { readonly id: string; readonly name: string }[]> {
+  return prisma.workspace.findMany({ select: { id: true, name: true }, orderBy: { name: 'asc' } })
 }
 
 interface CurrentTask {
