@@ -8,8 +8,11 @@ export const dynamic = 'force-dynamic'
 
 /**
  * One header and one tab strip for every `/w/:id/...` page (M24 §2.2). The facts rendered here
- * are the server's snapshot at navigation time; the page's own stream publishes newer ones to the
- * same header through `hooks/useShellFacts.ts`, so the header never opens a connection of its own.
+ * are fetched once, when this layout segment MOUNTS -- not on every navigation under it: Next.js
+ * keeps a shared layout mounted across soft navigations between the sibling routes it wraps, so a
+ * Tasks→Graph→Activity→Settings hop reuses this same fetch. The page below keeps the header live
+ * from there by publishing its own snapshot to `hooks/useShellFacts.ts` (every one of the four
+ * page clients, and now the Settings tab too), so the header never opens a connection of its own.
  * An unknown workspace renders the children alone — every page already answers that case.
  */
 export default async function ProjectLayout({

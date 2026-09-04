@@ -60,9 +60,10 @@ export function AgentsClient({
    * at click time from `AllAgentsTable`'s `onOpen(row)` -- never re-derived by looking `agents`
    * (this component's prop, the Agents page's one-time server snapshot) back up by id.
    * `AllAgentsTable` polls `/api/org/workers` every 5s and keeps the refreshed rows in its own
-   * internal state, which never flows back into this prop; an agent materialized only after the
-   * page's initial load has no entry in `agents` to find, and a lookup against it was a silent
-   * no-op for exactly the row an operator can see and click.
+   * internal state, which never flows back into this prop -- `agents` stays exactly what the page
+   * rendered on load even after a poll adds a brand-new row or drops a deleted one (M24 final
+   * review, Important 4). A row an operator can see and click may therefore have no entry in
+   * `agents` at all; a lookup against it was, and remains, the wrong source for its identity.
    */
   const [selected, setSelected] = useState<{ readonly agentId: string; readonly workspaceId: string } | null>(null)
   const [panelAgent, setPanelAgent] = useState<AgentCardData | null>(null)

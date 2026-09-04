@@ -5,6 +5,7 @@ import type { AllAgentRow } from '../server/org'
 import { AgentRowActions } from './AgentRowActions'
 import { toneForStatus } from './AgentsClient'
 import { ModelOverrideEditor } from './ModelOverrideEditor'
+import { ShellOnlyMark } from './ShellOnlyMark'
 import { AvatarTile } from './ui/AvatarTile'
 import { DataTable, Row } from './ui/DataTable'
 import { ProgressBar } from './ui/ProgressBar'
@@ -15,14 +16,21 @@ import { StatusPill } from './ui/StatusPill'
 const COLUMNS = '200px 110px 130px 120px 110px 1fr 90px 90px 160px'
 const HEADER = ['Agent', 'Role', 'Team', 'Project', 'Status', 'Current task', 'Provider', 'Cost', ''] as const
 
-/** The shape `GET /api/org/workers` returns -- only the LIVE fields this table's poll merges in
- *  are read off it; the rest of a row (`role`, `teamName`, `model`, ...) comes from the server
- *  snapshot and a catalog-only row's identity, neither of which the poll ever changes. */
+/** The shape `GET /api/org/workers` returns -- a full `WorkerRow` per agent, project-wide, not
+ *  scoped to the rows this table already knows about (M24 final review, Important 4). A poll
+ *  reads every field on it: the live ones are merged into an already-known project row, and the
+ *  rest seed a brand-new row for a worker this table has never rendered before. */
 interface PolledWorker {
   readonly agentId: string
+  readonly name: string
+  readonly role: string
+  readonly workspaceId: string
+  readonly projectName: string
   readonly status: string
   readonly currentTask: AllAgentRow['currentTask']
+  readonly department: string
   readonly provider: AllAgentRow['provider']
+  readonly gate: AllAgentRow['gate']
   readonly costUsd: number
   readonly unmeasuredRuns: number
 }
@@ -37,10 +45,15 @@ interface PolledWorker {
  *
  * Kept fresh the same way the old worker list was: polling `GET /api/org/workers` every 5s via
  * `setInterval` -- cleared on unmount, skipped (not fetched, interval left running) while
- * `document.visibilityState === 'hidden'` -- and merging the LIVE fields (`status`,
- * `currentTask`, `provider`, `costUsd`, `unmeasuredRuns`) into the rows whose `agentId` matches.
- * A catalog row's `agentId` is `null`, so it never matches a polled worker and never changes from
- * the poll -- a project materializing it is a page reload, not a poll tick.
+ * `document.visibilityState === 'hidden'`. Restored to the base `WorkersTable`'s full add/remove
+ * contract (M24 final review, Important 4 -- Task 7's merge-only poll had regressed it: a worker
+ * created after load never appeared, and a deleted one never left): a project row whose `agentId`
+ * IS in the payload gets its live fields (`status`, `currentTask`, `provider`, `gate`, `costUsd`,
+ * `unmeasuredRuns`) merged in; one whose `agentId` is NOT in the payload is dropped; a payload
+ * worker matching no known row becomes a brand-new project row instead. A catalog row's `agentId`
+ * is `null`, so it never matches a polled worker, is never dropped, and never gains one --
+ * `listAllAgents()`'s catalog union runs once, at load; a project materializing a catalog member
+ * is a page reload, not a poll tick.
  *
  * A row click opens the `AgentPanel` -- `onOpen` is owned by `AgentsClient`, unchanged from the
  * old table's own contract.
@@ -66,14 +79,51 @@ export function AllAgentsTable({
         if (!response.ok) return
         const data = (await response.json()) as { readonly workers: readonly PolledWorker[] }
         const byId = new Map(data.workers.map((w) => [w.agentId, w] as const))
-        setRows((prev) =>
-          prev.map((r) => {
-            const w = r.agentId === null ? undefined : byId.get(r.agentId)
-            return w === undefined
-              ? r
-              : { ...r, status: w.status, currentTask: w.currentTask, provider: w.provider, costUsd: w.costUsd, unmeasuredRuns: w.unmeasuredRuns }
-          }),
-        )
+        setRows((prev) => {
+          // Catalog rows pass through untouched; a known project row survives only if its
+          // `agentId` is still in the payload (dropped otherwise), merging in the live fields.
+          const kept: AllAgentRow[] = []
+          const seenAgentIds = new Set<string>()
+          for (const r of prev) {
+            if (r.agentId === null) {
+              kept.push(r)
+              continue
+            }
+            const w = byId.get(r.agentId)
+            if (w === undefined) continue
+            seenAgentIds.add(r.agentId)
+            kept.push({ ...r, status: w.status, currentTask: w.currentTask, provider: w.provider, gate: w.gate, costUsd: w.costUsd, unmeasuredRuns: w.unmeasuredRuns })
+          }
+          // A payload worker this table has never rendered becomes a new project row.
+          // `companyAgentId`/`model` are `null` -- neither is knowable from this payload; a
+          // roster link and a hand-made override both stay unknown until the next full reload.
+          for (const w of data.workers) {
+            if (seenAgentIds.has(w.agentId)) continue
+            kept.push({
+              agentId: w.agentId,
+              companyAgentId: null,
+              name: w.name,
+              role: w.role,
+              teamName: w.department,
+              projectName: w.projectName,
+              workspaceId: w.workspaceId,
+              status: w.status,
+              currentTask: w.currentTask,
+              provider: w.provider,
+              gate: w.gate,
+              model: null,
+              costUsd: w.costUsd,
+              unmeasuredRuns: w.unmeasuredRuns,
+            })
+          }
+          // The table's order rule, unchanged from `listAllAgents()`: project rows sorted
+          // project-then-name, catalog rows (no `agentId`) after.
+          const projectRows = kept
+            .filter((r) => r.agentId !== null)
+            .sort((a, b) => (a.projectName ?? '').localeCompare(b.projectName ?? '') || a.name.localeCompare(b.name))
+          const catalogRows = kept.filter((r) => r.agentId === null)
+          return [...projectRows, ...catalogRows]
+        })
       } catch {
         // best-effort refresh -- keep showing the last known snapshot on a transient failure
       }
@@ -126,8 +176,9 @@ export function AllAgentsTable({
                 </>
               )}
             </div>
-            <span data-testid="worker-provider" className="font-mono text-[11px] text-text-2">
-              {row.provider ?? '—'}
+            <span className="flex items-center gap-1 font-mono text-[11px] text-text-2">
+              <span data-testid="worker-provider">{row.provider ?? '—'}</span>
+              <ShellOnlyMark gate={row.gate} />
             </span>
             {/* The KPI tile's own idiom (M14 fix wave, review I1 / Decision 4: "a sum over
               * unknowns says how many were unknown"), unchanged from the old worker list. */}

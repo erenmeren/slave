@@ -94,6 +94,7 @@ export function TaskDetailPanel({
         <div>
           <p className="flex items-baseline gap-[7px] font-mono text-[9.5px] font-medium">
             <span data-testid="task-panel-ref" className="text-text-3">TASK-{task.id.slice(0, 8)}</span>
+            <span className="text-text-faint">·</span>
             <span data-testid="task-panel-priority" className={TONE_TEXT[priorityChip(task.priority).tone]}>{priorityChip(task.priority).label}</span>
           </p>
           <h2 className="text-sm font-medium text-text-1">{task.title}</h2>

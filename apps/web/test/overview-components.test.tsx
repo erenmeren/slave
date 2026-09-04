@@ -54,9 +54,9 @@ const snapshot = (agents: readonly AgentCardData[]): OverviewSnapshot => ({
   workspace: {
     id: 'w1', name: 'W', haltedReason: null, haltedAt: null, budgetUsd: 100, spentUsd: 3, unmeasuredRuns: 0,
     goal: null, provider: 'claude_code', costBlindBudgeted: false,
-    // M14 Task 8: the three guardrail columns the sidebar's bottom block reads. They live on the
-    // overview snapshot so the page can PROVIDE `ShellFacts` from the stream it already has,
-    // rather than the sidebar opening a second `EventSource` of its own on every workspace page.
+    // M14 Task 8: the three guardrail columns the project header/tab strip read (M24 §2.2). They
+    // live on the overview snapshot so the page can PROVIDE `ShellFacts` from the stream it
+    // already has, rather than the header opening a second `EventSource` of its own.
     maxConcurrentRuns: 3, runTimeoutMs: 1_800_000, maxAttempts: 3,
   },
   agents,

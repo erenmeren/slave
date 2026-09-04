@@ -99,8 +99,8 @@ vi.mock('elkjs/lib/elk.bundled.js', () => ({
 const AGENT_EDGE: Edge = { id: 'agent:a1->activeTask:t1', source: 'agent:a1', target: 'activeTask:t1' }
 
 // Fixture widening only (M14 Task 11): `GraphSnapshot` gained `shellFacts` so `GraphClient` can
-// publish them to the global shell's sidebar instead of the sidebar opening a second EventSource.
-// Nothing in this file asserts on them.
+// publish them to the project header/tab strip (M24 §2.2) instead of either opening a second
+// EventSource of its own. Nothing in this file asserts on them.
 const SHELL_FACTS: GraphSnapshot['shellFacts'] = {
   workspace: { id: 'w1', name: 'W' },
   counts: { agentsWorking: 0, tasksActive: 0 },

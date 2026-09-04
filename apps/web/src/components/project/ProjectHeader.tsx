@@ -13,16 +13,20 @@ import { ProjectSwitcher } from './ProjectSwitcher'
 // only `tone`/`children`, has no `data-testid` passthrough (this badge's `connection` test-id must
 // stay put) and uses the 5px chip radius. The mock draws only the connected state; `reconnecting`
 // takes the same geometry in the warn tone, because a chip that keeps the live colour while the
-// stream is down is the lie Decision 3 forbids.
+// stream is down is the lie Decision 3 forbids. A third, `idle`, state takes the same geometry in
+// a faint neutral tone with no pulse: no page publishes a stream on the Settings tab (M24 final
+// review, Important 2), and a live teal pulse there would claim a connection that does not exist.
 const CONNECTION_CHIP_BASE =
   'inline-flex items-center gap-[6px] rounded-pill border px-[9px] py-[3px] font-mono text-[10px] font-medium'
 const CONNECTION_CHIP_TONE = {
   connected: 'border-tone-working/25 bg-tone-working/[0.06] text-tone-working',
   reconnecting: 'border-tone-waiting/25 bg-tone-waiting/[0.06] text-tone-waiting',
+  idle: 'border-line text-text-faint',
 } as const
 const CONNECTION_DOT_TONE = {
   connected: 'bg-tone-working motion-safe:animate-[status-pulse_1.5s_ease-in-out_infinite]',
   reconnecting: 'bg-tone-waiting',
+  idle: 'bg-text-faint',
 } as const
 
 export function ProjectHeader({
@@ -38,9 +42,9 @@ export function ProjectHeader({
   const published = useShellFacts(workspaceId)
   const facts = published ?? initial
   const stream = useStreamState(workspaceId)
-  const connection = stream?.connection ?? 'connected'
+  const connection = stream === null ? 'idle' : stream.connection
   const latencyMs = stream?.latencyMs ?? null
-  const connectionText = connection === 'connected' ? `sse · ${latencyMs === null ? '—' : `${latencyMs}ms`}` : 'reconnecting'
+  const connectionText = connection === 'reconnecting' ? 'reconnecting' : `sse · ${latencyMs === null ? '—' : `${latencyMs}ms`}`
 
   const budgetUsd = facts.guardrails.budgetUsd
   const ratio = budgetUsd === null || budgetUsd <= 0 ? 0 : facts.status.spentUsd / budgetUsd

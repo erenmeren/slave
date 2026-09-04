@@ -171,8 +171,10 @@ export function ProjectsClient({
   readonly templates: readonly TemplateRow[]
   readonly roster: readonly RosterCompany[]
 }): React.JSX.Element {
+  const router = useRouter()
+  const searchParams = useSearchParams()
   const [assigningWorkspaceId, setAssigningWorkspaceId] = useState<string | null>(null)
-  const [newOpen, setNewOpen] = useState(useSearchParams().get('new') === '1')
+  const [newOpen, setNewOpen] = useState(searchParams.get('new') === '1')
 
   return (
     <div className="flex flex-col">
@@ -202,7 +204,16 @@ export function ProjectsClient({
           <CompanyManager companies={companies} roster={roster} templates={templates} />
         </Panel>
       </section>
-      <NewProjectDrawer open={newOpen} onClose={() => setNewOpen(false)} />
+      <NewProjectDrawer
+        open={newOpen}
+        onClose={() => {
+          setNewOpen(false)
+          // Ruled minor (M24 final review): `?new=1` opened this drawer on load -- closing it
+          // without dropping the param left it in the URL to reopen the drawer on the next
+          // reload, even after the operator dismissed it on purpose.
+          if (searchParams.get('new') === '1') router.replace('/')
+        }}
+      />
     </div>
   )
 }

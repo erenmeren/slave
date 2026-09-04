@@ -117,8 +117,9 @@ const INITIAL: ActivityPage = {
   tasks: [{ id: 't1', title: 'Add the thing' }],
   users: [{ id: 'u1', username: 'ada' }],
   // M14 Task 12 widenings. `typeVolumes` feeds the right rail's 24h volume bars; `shellFacts`
-  // is what this page PUBLISHES to `hooks/useShellFacts.ts` so the sidebar opens no stream of
-  // its own (the same member `TasksSnapshot`/`GraphView` already carry).
+  // is what this page PUBLISHES to `hooks/useShellFacts.ts` so the project header/tab strip
+  // (M24 §2.2) open no stream of their own (the same member `TasksSnapshot`/`GraphView` already
+  // carry).
   typeVolumes: [],
   shellFacts: {
     workspace: { id: 'w1', name: 'Checkout Platform' },

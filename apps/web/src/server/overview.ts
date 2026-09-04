@@ -147,10 +147,10 @@ export interface OverviewSnapshot {
      * `OverviewClient`'s `publishShellFacts` call (`hooks/useShellFacts.ts`).
      *
      * They are here so the Overview page can PROVIDE those facts out of the stream it already
-     * runs, instead of the header opening a second `EventSource` per workspace page.
-     * `server/shell.ts` still owns the standalone route for the pages that have no snapshot of
-     * their own (Tasks/Graph/Activity, until Tasks 10-12 provide theirs) -- this is the same four
-     * columns read once instead of twice, not a second source of truth.
+     * runs, instead of the header opening a second `EventSource` per workspace page. Every other
+     * workspace page (Tasks, Graph, Activity, and -- with no stream of its own -- the Settings
+     * tab) now provides its own copy the same way, off `server/shell.ts`'s `buildShellFacts`:
+     * the same four columns read once per page, not a second source of truth.
      */
     readonly maxConcurrentRuns: number
     readonly runTimeoutMs: number

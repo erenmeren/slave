@@ -62,28 +62,36 @@ describe('listAllAgents', () => {
     // override (fix round 1, Important finding 2): a hand-made agent has no roster row for
     // `listAllAgents` to read a chain result off, so its row's `model` must come straight off
     // this `Agent.model` column instead of silently reading back `null`.
-    await prisma.agent.create({
+    const blair = await prisma.agent.create({
       data: { teamId: fixture.teamId, name: 'Blair', role: 'frontend', model: 'claude-haiku-4' },
     })
+    // A live run so `blair`'s row carries a resolved `gate` (M24 final review, Important 3):
+    // `listWorkers` reads a worker's gate off its LIVE run's provider, not off any finished one.
+    await prisma.agentRun.create({ data: { agentId: blair.id, status: 'working', provider: 'claude_code' } })
 
     const rows = await listAllAgents()
 
     expect(rows.map((r) => r.name)).toEqual(['Atlas', 'Blair', 'Nova'])
 
-    const [atlas, blair, nova] = rows
+    const [atlas, blairRow, nova] = rows
     expect(atlas?.agentId).not.toBeNull()
     expect(atlas?.companyAgentId).toBe(materializedMember.id)
     expect(atlas?.projectName).toBe('Checkout Platform')
+    // No live run at all -- `gate` is `null`, not a guess at what one might resolve to.
+    expect(atlas?.gate).toBeNull()
 
-    expect(blair?.agentId).not.toBeNull()
-    expect(blair?.companyAgentId).toBeNull()
-    expect(blair?.projectName).toBe('Checkout Platform')
-    expect(blair?.model).toBe('claude-haiku-4')
+    expect(blairRow?.agentId).not.toBeNull()
+    expect(blairRow?.companyAgentId).toBeNull()
+    expect(blairRow?.projectName).toBe('Checkout Platform')
+    expect(blairRow?.model).toBe('claude-haiku-4')
+    expect(blairRow?.gate).toBe('all-tools')
 
     expect(nova?.agentId).toBeNull()
     expect(nova?.companyAgentId).toBe(catalogOnlyMember.id)
     expect(nova?.projectName).toBeNull()
     expect(nova?.workspaceId).toBeNull()
     expect(nova?.status).toBe('idle')
+    // No template `provider` set -- the catalog chain resolves to no effective provider at all.
+    expect(nova?.gate).toBeNull()
   })
 })

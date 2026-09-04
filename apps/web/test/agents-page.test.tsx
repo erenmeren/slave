@@ -22,6 +22,7 @@ function agentRow(over: Partial<AllAgentRow> = {}): AllAgentRow {
     status: 'working',
     currentTask: { title: 'Add the thing', pct: 40 },
     provider: null,
+    gate: null,
     model: null,
     costUsd: 0,
     unmeasuredRuns: 0,

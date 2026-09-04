@@ -2,9 +2,11 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ProjectSettings } from '../src/server/projectSettings.js'
+import type { ShellFacts } from '../src/server/shell.js'
 import { GoalPanel } from '../src/components/project/GoalPanel.js'
 import { ProjectSettingsClient } from '../src/components/project/ProjectSettingsClient.js'
 import { RuntimePanel } from '../src/components/project/RuntimePanel.js'
+import { publishShellFacts } from '../src/hooks/useShellFacts.js'
 import { postControl, sendControl } from '../src/lib/postControl.js'
 
 const refresh = vi.fn()
@@ -15,6 +17,8 @@ vi.mock('../src/lib/postControl.js', () => ({
   postControl: vi.fn(async () => ({ ok: true as const })),
   sendControl: vi.fn(async (): Promise<string | null> => null),
 }))
+
+vi.mock('../src/hooks/useShellFacts.js', () => ({ publishShellFacts: vi.fn() }))
 
 afterEach(() => {
   vi.clearAllMocks()
@@ -173,6 +177,15 @@ describe('RuntimePanel', () => {
   })
 })
 
+function shellFacts(over: Partial<ShellFacts['status']> = {}): ShellFacts {
+  return {
+    workspace: { id: 'w1', name: 'Checkout Platform' },
+    counts: { agentsWorking: 0, tasksActive: 0 },
+    guardrails: { budgetUsd: 2, maxConcurrentRuns: 3, runTimeoutMs: 1_800_000, maxAttempts: 5 },
+    status: { goal: null, spentUsd: 0, unmeasuredRuns: 0, haltedReason: null, ...over },
+  }
+}
+
 function settings(over: Partial<ProjectSettings['workspace']> = {}): ProjectSettings {
   return {
     workspace: {
@@ -205,14 +218,14 @@ function settings(over: Partial<ProjectSettings['workspace']> = {}): ProjectSett
 
 describe('ProjectSettingsClient', () => {
   it('renders the four panels in order', () => {
-    render(<ProjectSettingsClient settings={settings()} />)
+    render(<ProjectSettingsClient settings={settings()} shellFacts={shellFacts()} />)
     // `Panel` renders `PanelHeader` → `SectionLabel` as its first child when it has a title.
     const titles = screen.getAllByTestId('panel').map((p) => p.firstElementChild?.textContent?.trim().toLowerCase())
     expect(titles).toEqual(['goal', 'runtime', 'agent permissions', 'danger zone'])
   })
 
   it("shows the three limits read-only in the sidebar's old format", () => {
-    render(<ProjectSettingsClient settings={settings()} />)
+    render(<ProjectSettingsClient settings={settings()} shellFacts={shellFacts()} />)
     expect(screen.getByTestId('runtime-concurrency').textContent).toBe('3')
     expect(screen.getByTestId('runtime-timeout').textContent).toBe('30m')
     expect(screen.getByTestId('runtime-attempts').textContent).toBe('5')
@@ -220,12 +233,12 @@ describe('ProjectSettingsClient', () => {
   })
 
   it('scopes the permission matrix to this workspace', () => {
-    render(<ProjectSettingsClient settings={settings()} />)
+    render(<ProjectSettingsClient settings={settings()} shellFacts={shellFacts()} />)
     expect(screen.getAllByTestId(/^permission-matrix-/).length).toBe(1)
   })
 
   it('sets the goal then refreshes the route instead of waiting for a stream', async () => {
-    render(<ProjectSettingsClient settings={settings()} />)
+    render(<ProjectSettingsClient settings={settings()} shellFacts={shellFacts()} />)
     fireEvent.change(screen.getByTestId('goal-input'), { target: { value: 'Ship it' } })
     fireEvent.click(screen.getByTestId('goal-submit'))
     await waitFor(() => expect(postControl).toHaveBeenCalledWith('/api/w/w1/goal', { goal: 'Ship it' }))
@@ -233,7 +246,7 @@ describe('ProjectSettingsClient', () => {
   })
 
   it('carries the emergency stop in the danger zone', () => {
-    render(<ProjectSettingsClient settings={settings()} />)
+    render(<ProjectSettingsClient settings={settings()} shellFacts={shellFacts()} />)
     expect(screen.getByTestId('emergency-stop')).toBeTruthy()
   })
 
@@ -241,11 +254,27 @@ describe('ProjectSettingsClient', () => {
     // Ported from `overview-components.test.tsx`'s pre-M24 runtime-panel remount coverage (M15
     // spec §3 B4) -- there is no stream feeding this tab any more, so the mechanism this now
     // tests is `ProjectSettingsClient`'s own `key=` on `RuntimePanel`, not a wake-up event.
-    const { rerender } = render(<ProjectSettingsClient settings={settings({ budgetUsd: 20 })} />)
+    const { rerender } = render(<ProjectSettingsClient settings={settings({ budgetUsd: 20 })} shellFacts={shellFacts()} />)
     expect((screen.getByLabelText('workspace budget') as HTMLInputElement).value).toBe('20')
 
-    rerender(<ProjectSettingsClient settings={settings({ budgetUsd: 35 })} />)
+    rerender(<ProjectSettingsClient settings={settings({ budgetUsd: 35 })} shellFacts={shellFacts()} />)
 
     expect((screen.getByLabelText('workspace budget') as HTMLInputElement).value).toBe('35')
+  })
+
+  // M24 final review, Important 1: the Settings tab published nothing, so the project header and
+  // tab strip fell back to the layout's entry-time snapshot on this one tab.
+  it('publishes ShellFacts on mount, as the four page clients do', () => {
+    const facts = shellFacts({ goal: 'Ship it' })
+    render(<ProjectSettingsClient settings={settings()} shellFacts={facts} />)
+    expect(publishShellFacts).toHaveBeenCalledWith('w1', facts)
+  })
+
+  it('shows the halt banner only when the workspace is halted', () => {
+    const { rerender } = render(<ProjectSettingsClient settings={settings()} shellFacts={shellFacts()} />)
+    expect(screen.queryByRole('alert')).toBeNull()
+
+    rerender(<ProjectSettingsClient settings={settings({ haltedReason: 'budget exceeded' })} shellFacts={shellFacts()} />)
+    expect(screen.getByRole('alert').textContent).toContain('budget exceeded')
   })
 })

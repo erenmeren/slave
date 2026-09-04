@@ -1007,10 +1007,12 @@ try {
   })
   console.log(`stage 4a: the workspace reads halted -- ${JSON.stringify(haltedReason)}`)
 
-  // Only the four workspace-scoped pages carry a `TopBar` and therefore a `HaltBanner`
-  // (`OverviewClient`, `TasksClient`, `GraphClient`, `ActivityClient`); the five global ones are
-  // not workspace-scoped and correctly show none. Both halves are asserted: a banner appearing on
-  // a global page would mean a page had guessed at a workspace it does not belong to.
+  // Only the four workspace-scoped page clients in `PAGES` render their own `HaltBanner`
+  // (`OverviewClient`, `TasksClient`, `GraphClient`, `ActivityClient` -- the project Settings tab
+  // does too since M24's final review, but `/w/<id>/settings` is not one of the pages this gate
+  // visits); the five global ones (including THIS `settings` entry, the org-wide `/settings`
+  // page) are not workspace-scoped and correctly show none. Both halves are asserted: a banner
+  // appearing on a global page would mean a page had guessed at a workspace it does not belong to.
   const SCOPED = new Set(['overview', 'tasks', 'graph', 'activity'])
   for (const target of PAGES) {
     await gotoReliably(`${baseUrl}${target.path()}`)

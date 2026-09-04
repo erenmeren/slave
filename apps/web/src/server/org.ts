@@ -530,6 +530,7 @@ export interface AllAgentRow {
   readonly status: string
   readonly currentTask: CurrentTask | null
   readonly provider: ProviderKind | null
+  readonly gate: WorkerGate | null
   /** The agent's own `Agent.model` column for a project row (fix round 1, Important finding 2:
    *  every project row, roster-linked or not -- a hand-made agent's own override is a real fact,
    *  not a gap this table papers over with `null`); `RosterMemberRow.effectiveModel`'s chain
@@ -574,6 +575,7 @@ export async function listAllAgents(): Promise<readonly AllAgentRow[]> {
     status: w.status,
     currentTask: w.currentTask,
     provider: w.provider,
+    gate: w.gate,
     model: modelByAgentId.get(w.agentId) ?? null,
     costUsd: w.costUsd,
     unmeasuredRuns: w.unmeasuredRuns,
@@ -587,7 +589,9 @@ export async function listAllAgents(): Promise<readonly AllAgentRow[]> {
           catalogRows.push({
             agentId: null, companyAgentId: member.companyAgentId, name: member.name, role: member.role,
             teamName: team.teamName, projectName: null, workspaceId: null, status: 'idle', currentTask: null,
-            provider: member.effectiveProvider, model: member.effectiveModel, costUsd: 0, unmeasuredRuns: 0,
+            provider: member.effectiveProvider,
+            gate: member.effectiveProvider === null ? null : capabilitiesOf(member.effectiveProvider).gate,
+            model: member.effectiveModel, costUsd: 0, unmeasuredRuns: 0,
           })
         } else {
           for (const worker of member.workers) {

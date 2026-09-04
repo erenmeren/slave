@@ -243,6 +243,32 @@ in the order the rulings were made.
 10. **`GoalPanel` gained an edit button (T4).** The Settings tab's `GoalPanel` — unlike the
     Overview card it replaced — offers a `goal-edit` control once a goal is set, since the
     Settings tab is where an operator is expected to go back and change one.
+11. **§3's "nothing else" is about the row above the cards, not the whole page (final review,
+    Important 6).** Overview keeps its bottom row — `BlockedPanel`, `LiveEventsPanel`,
+    `MergeQueuePanel` (m14's fidelity gate asserts `live-events` there); §3's removal list is
+    exactly `GoalCard`, `RuntimeCard` and the `goalSuggestions` they fed on, not those three panels.
+12. **The Settings tab publishes `ShellFacts` too, and the header's connection chip gets a third
+    state for it (final review, Important 1 and 2).** §4 was silent on the Settings tab feeding
+    the project header/tab strip at all: the tab now publishes on mount and on every
+    `router.refresh()`, retracting on unmount, the same two-effect pair §2.2's four page clients
+    use. Since the Settings tab publishes no stream state, `ProjectHeader`'s connection chip
+    gained a third, neutral `idle` look (no pulse, faint tone) for "nothing has published a
+    stream" — the alternative, silently reusing the live `connected` look, would have shown a
+    pulsing "sse · —" the whole time an operator was on that tab.
+13. **The Agents table's poll keeps the base `WorkersTable`'s add/remove contract, not merge-only
+    (final review, Important 4).** Task 7's port of the old worker list's poll only merged live
+    fields into rows already on the page; a worker created after load never appeared and a
+    deleted one never left. Restored: a payload worker with no matching row becomes a new project
+    row, and a known project row absent from the payload is dropped. Catalog rows (`agentId ===
+    null`) are untouched either way — `listAllAgents()`'s catalog union runs once, at load.
+14. **`Sidebar` marks Projects current on every `/w/*` route, not just `/` (§2.1).** §2.1's "the
+    current row is marked" reads as one row per path; in practice every workspace-scoped route
+    (`/w/<id>`, `/w/<id>/tasks`, `/w/<id>/graph`, `/w/<id>/activity`, `/w/<id>/settings`) marks
+    the **Projects** row current, since none of those paths is `/agents`, `/skills`, `/analytics`
+    or the global `/settings` — there is no sixth sidebar row for "inside a project."
+15. **`gate:m18-skill-and-teeth` needed no selector change (final review).** §7 expected it to
+    "update the Settings/Agents selectors it reads"; it reads only the Activity page, which this
+    milestone did not touch, so it required no changes at all.
 
 `formatTokens` moved to `lib/format.ts` in Task 7, and `formatTimeout` moved to the same file in
 Task 2 — both previously lived closer to their one caller.

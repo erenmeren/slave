@@ -34,9 +34,12 @@ interface Publication {
 let current: Publication | null = null
 const listeners = new Set<() => void>()
 
-/** Value equality over the twelve figures the header, the Tasks badge and the Settings tab
- *  render. The publisher rebuilds the object on every snapshot, so identity would notify on
- *  every refetch that changed nothing. */
+/** Value equality over the twelve figures the header and the Tasks tab's badge read off this
+ *  store. The Settings tab never reads it -- it renders its own snapshot from
+ *  `server/projectSettings.ts`'s `buildProjectSettings` -- but PUBLISHES to it, the same as the
+ *  four page clients (M24 final review, Important 1), so the header stays live on that tab too.
+ *  The publisher rebuilds the object on every snapshot, so identity would notify on every refetch
+ *  that changed nothing. */
 function sameFacts(a: ShellFacts, b: ShellFacts): boolean {
   return (
     a.workspace.id === b.workspace.id &&

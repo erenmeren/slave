@@ -6,12 +6,13 @@ import type { ProjectRow } from '../src/server/org.js'
 
 const routerRefresh = vi.fn()
 const routerPush = vi.fn()
+const routerReplace = vi.fn()
 // Backs `useSearchParams` below -- reset per test so `?new=1` in one test can't leak the drawer
 // open into the next (Step 1 brief).
 let search = ''
 
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({ refresh: routerRefresh, push: routerPush }),
+  useRouter: () => ({ refresh: routerRefresh, push: routerPush, replace: routerReplace }),
   useSearchParams: () => new URLSearchParams(search),
   usePathname: () => '/',
 }))
@@ -59,6 +60,7 @@ describe('ProjectsClient', () => {
   afterEach(() => {
     routerRefresh.mockClear()
     routerPush.mockClear()
+    routerReplace.mockClear()
   })
 
   it('renders one card per project with its name, company badge, and a 4-up stat strip', () => {
@@ -214,6 +216,21 @@ describe('ProjectsClient', () => {
       search = 'new=1'
       render(<TestProjectsClient projects={projects} companies={companies} templates={[]} roster={[]} />)
       expect(screen.getByTestId('create-workspace-form')).toBeTruthy()
+    })
+
+    // Ruled minor (M24 final review): a reload after closing the drawer must not reopen it.
+    it('clears ?new=1 on close so a reload does not reopen the drawer', () => {
+      search = 'new=1'
+      render(<TestProjectsClient projects={projects} companies={companies} templates={[]} roster={[]} />)
+      fireEvent.click(screen.getByTestId('new-project-close'))
+      expect(routerReplace).toHaveBeenCalledWith('/')
+    })
+
+    it('does not touch the URL closing the drawer when it was opened by the button, not the param', () => {
+      render(<TestProjectsClient projects={projects} companies={companies} templates={[]} roster={[]} />)
+      fireEvent.click(screen.getByTestId('new-project'))
+      fireEvent.click(screen.getByTestId('new-project-close'))
+      expect(routerReplace).not.toHaveBeenCalled()
     })
 
     it('closes the drawer on Escape and on the close button', () => {

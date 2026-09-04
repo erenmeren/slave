@@ -37,6 +37,45 @@ describe('ProjectHeader', () => {
     expect(screen.getByTestId('connection').textContent).toBe('sse · —')
   })
 
+  // Ported from `TopBar`'s own mock-geometry cases (base `test/shell.test.tsx`; M24 final review,
+  // Important 5b) -- lost in the move to `ProjectHeader`.
+  it('keeps the structural hairline under the gradient one, as the mock does', () => {
+    // `AI Team OS Web.dc.html:32-33`: the bar has BOTH a `border-bottom` and the gradient
+    // element at `bottom:-1px`, beneath it.
+    render(<ProjectHeader workspaceId="w1" initial={facts()} workspaces={workspaces} />)
+    expect(screen.getByTestId('project-header').className).toContain('border-b')
+    expect(screen.getByTestId('project-header').className).toContain('border-line')
+    expect(screen.getByTestId('project-header-hairline').className).toContain('-bottom-px')
+  })
+
+  it('gives the connection chip the mockup pill shape in the live status colour', () => {
+    // `AI Team OS Web.dc.html:38-41`: `padding:3px 9px`, `border-radius:20px`, border
+    // `rgba(46,230,207,.25)`, background `rgba(46,230,207,.06)`, `500 10px` mono `#2ee6cf`, 5px dot.
+    render(<ProjectHeader workspaceId="w1" initial={facts()} workspaces={workspaces} />)
+    act(() => publishStreamState('w1', { connection: 'connected', latencyMs: 42 }))
+    const chip = screen.getByTestId('connection')
+    expect(chip.className).toContain('rounded-pill')
+    expect(chip.className).toContain('px-[9px]')
+    expect(chip.className).toContain('py-[3px]')
+    expect(chip.className).toContain('text-[10px]')
+    expect(chip.className).toContain('border-tone-working/25')
+    expect(chip.className).toContain('bg-tone-working/[0.06]')
+    expect(chip.className).toContain('text-tone-working')
+    expect(chip.innerHTML).toContain('h-[5px]')
+  })
+
+  it('draws the budget bar at the mockup geometry, with the glow in the threshold colour', () => {
+    // `AI Team OS Web.dc.html:47`: track `width:150px; height:3px; border-radius:2px;
+    // background:rgba(255,255,255,.08)`, fill `box-shadow:0 0 8px <colour>`.
+    render(<ProjectHeader workspaceId="w1" initial={facts()} workspaces={workspaces} />)
+    const html = screen.getByTestId('budget').innerHTML
+    expect(html).toContain('w-[150px]')
+    expect(html).toContain('h-[3px]')
+    expect(html).toContain('rounded-[2px]')
+    expect(html).toContain('bg-white/[0.08]')
+    expect(html).toContain('shadow-[0_0_8px_var(--color-tone-working)]')
+  })
+
   it('shows the goal, truncated to one line, and links it to the Settings tab', () => {
     render(<ProjectHeader workspaceId="w1" initial={facts({ goal: 'Ship rate limiting' })} workspaces={workspaces} />)
     const goal = screen.getByTestId('project-goal')
@@ -62,6 +101,25 @@ describe('ProjectHeader', () => {
     act(() => publishStreamState('w1', { connection: 'reconnecting', latencyMs: 42 }))
     expect(screen.getByTestId('connection').textContent).toBe('reconnecting')
     expect(screen.getByTestId('connection').className).toContain('text-tone-waiting')
+  })
+
+  // M24 final review, Important 2: nothing publishes a stream state on the Settings tab, and the
+  // chip used to fall back to a live, pulsing "connected" look for a stream that does not exist.
+  it('shows a neutral, non-pulsing chip when nothing has published a stream state', () => {
+    render(<ProjectHeader workspaceId="w1" initial={facts()} workspaces={workspaces} />)
+    const connection = screen.getByTestId('connection')
+    expect(connection.textContent).toBe('sse · —')
+    expect(connection.className).not.toContain('bg-tone-working')
+    expect(connection.innerHTML).not.toContain('animate-[status-pulse')
+  })
+
+  it('shows the live, pulsing chip once a stream publishes connected', () => {
+    render(<ProjectHeader workspaceId="w1" initial={facts()} workspaces={workspaces} />)
+    act(() => publishStreamState('w1', { connection: 'connected', latencyMs: 12 }))
+    const connection = screen.getByTestId('connection')
+    expect(connection.textContent).toBe('sse · 12ms')
+    expect(connection.className).toContain('bg-tone-working/[0.06]')
+    expect(connection.innerHTML).toContain('animate-[status-pulse')
   })
 
   it('renders the STOP button armed by the halt state', () => {

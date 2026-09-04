@@ -80,9 +80,9 @@ from templates — manage it on the Projects page's team catalog and the Agents 
 | **Settings** `/settings` | Provider adapters, security, and reset demo data (development only). |
 
 Every page updates itself over a live event stream. Interventions — **Pause**, **Resume** (with a
-message), **Stop**, **Emergency stop** — live in the task panel and on the Overview strip. A pause
-takes effect at the agent's next tool call; a resume continues from the checkpoint in the same
-worktree.
+message), **Stop** — live in the task panel. **Emergency stop** lives in the project header (on
+every project tab) and on the project Settings tab's danger zone. A pause takes effect at the
+agent's next tool call; a resume continues from the checkpoint in the same worktree.
 
 ## CLI cheat sheet
 
@@ -146,4 +146,4 @@ they spend nothing; CI runs `gate:m15-boundary`, `gate:m20-auth`, `gate:m21-loos
 - `docs/architecture.md` — how the pieces fit: control verbs, the event log, the orchestrator, the UI
 - `docs/domain-model.md` and `docs/event-model.md` — the entities and every event type
 - `docs/decisions/` — the architecture decision records
-- `docs/superpowers/specs/` — the design spec of every milestone, M3 through M23
+- `docs/superpowers/specs/` — the design spec of every milestone, M3 through M24
