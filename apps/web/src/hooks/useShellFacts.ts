@@ -6,14 +6,14 @@ import type { ShellFacts } from '../server/shell'
 /**
  * The counts, guardrails and header figures a workspace page publishes, read by the project
  * header and tab strip that the project layout mounts (M24 §2.2: `ProjectHeader`/`ProjectTabs`)
- * -- and, until this milestone's sidebar cleanup lands, by the global shell's `<Sidebar>` too.
+ * -- the only consumers left after M24 Task 2's sidebar cleanup: `Sidebar` reads none of this.
  *
- * Deliberately NOT React context, for the reason `hooks/useProjectName.ts` states for the project
- * name: `ProjectHeader`/`ProjectTabs` are mounted by the PROJECT LAYOUT as siblings of the page
- * (`{children}`), so nothing a page mounts is ever an ancestor of them -- exactly the relationship
- * `Sidebar` already has with `app/layout.tsx`. A provider inside a page component reaches it in a
- * hand-built test tree and in no tree that actually exists. A module-level store needs no shared
- * ancestor and leaves the layout's own unconditional mount untouched.
+ * Deliberately NOT React context: `ProjectHeader`/`ProjectTabs` are mounted by the PROJECT LAYOUT
+ * as siblings of the page (`{children}`), so nothing a page mounts is ever an ancestor of them --
+ * exactly the relationship `Sidebar` already has with `app/layout.tsx`. A provider inside a page
+ * component reaches it in a hand-built test tree and in no tree that actually exists. A
+ * module-level store needs no shared ancestor and leaves the layout's own unconditional mount
+ * untouched.
  *
  * Why it exists at all (M14 Task 3 controller ruling, still the reason in M24): a component that
  * lives outside a workspace page's own tree but needs that workspace's live figures would
@@ -23,8 +23,8 @@ import type { ShellFacts } from '../server/shell'
  * disagree on screen at the same instant. A page that has the facts publishes them; anything else
  * that wants them reads this store instead of opening its own stream.
  *
- * ONE workspace at a time, like `useProjectName`: only one workspace route is ever mounted, and
- * a map keyed by id would outlive the pages that filled it.
+ * ONE workspace at a time: only one workspace route is ever mounted, and a map keyed by id would
+ * outlive the pages that filled it.
  */
 interface Publication {
   readonly workspaceId: string

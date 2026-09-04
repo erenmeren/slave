@@ -3,8 +3,9 @@ import type { ReactElement } from 'react'
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { DomainEventType } from '@ai-team-os/db'
-import { Sidebar } from '../src/components/Sidebar.js'
 import { SHELL_REFETCH_DEBOUNCE_MS } from '../src/components/activity/ActivityClient.js'
+import { publishShellFacts } from '../src/hooks/useShellFacts.js'
+import { publishStreamState } from '../src/hooks/useStreamState.js'
 import type { ActivityEventRow, ActivityPage } from '../src/server/activity.js'
 
 // ---- jsdom element-size mocks -----------------------------------------------------------------
@@ -64,6 +65,7 @@ interface StreamState {
   exhausted: boolean
   sparkline: number[]
   error: string | null
+  latencyMs: number | null
 }
 
 const streamState: StreamState = {
@@ -74,11 +76,15 @@ const streamState: StreamState = {
   exhausted: false,
   sparkline: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
   error: null,
+  latencyMs: null,
 }
 
 vi.mock('../src/hooks/useActivityStream.js', () => ({
   useActivityStream: () => streamState,
 }))
+
+vi.mock('../src/hooks/useStreamState', () => ({ publishStreamState: vi.fn() }))
+vi.mock('../src/hooks/useShellFacts', () => ({ publishShellFacts: vi.fn() }))
 
 const buildActivityPageMock = vi.fn()
 
@@ -127,19 +133,6 @@ function page(overrides: Partial<ActivityPage> = {}): ActivityPage {
   return { ...INITIAL, ...overrides }
 }
 
-/** Minimal `EventSource` stand-in (`shell.test.tsx`'s precedent). Only the Sidebar-coexistence
- *  test below needs it: nothing else in this file streams — `useActivityStream` is mocked. */
-class FakeEventSource {
-  static instances: FakeEventSource[] = []
-  onmessage: ((event: { data: string }) => void) | null = null
-  onerror: (() => void) | null = null
-  onopen: (() => void) | null = null
-  constructor(public url: string) {
-    FakeEventSource.instances.push(this)
-  }
-  close(): void {}
-}
-
 /** Sets scroll geometry on an already-rendered element and fires a `scroll` event, the same
  *  "drive the container's scrollTop" technique the brief calls out. `writable: true` matters
  *  here (unlike the other two): real DOM `scrollTop` stays assignable after being set, and the
@@ -167,13 +160,15 @@ describe('ActivityClient', () => {
     streamState.exhausted = false
     streamState.sparkline = [...INITIAL.sparkline]
     streamState.error = null
+    streamState.latencyMs = null
+    vi.mocked(publishStreamState).mockClear()
+    vi.mocked(publishShellFacts).mockClear()
     ;({ ActivityClient } = await import('../src/components/activity/ActivityClient.js'))
   })
 
   afterEach(() => {
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
-    FakeEventSource.instances = []
   })
 
   it('renders the seed events through their per-type cards, newest at the bottom', () => {
@@ -193,14 +188,16 @@ describe('ActivityClient', () => {
     expect(screen.getByTestId('task-link').textContent).toBe('Add the thing')
   })
 
-  it('wires TopBar workspace name + connection, FilterBar, and a sparkline slot', () => {
-    streamState.connection = 'reconnecting'
+  it('wires FilterBar and a sparkline slot', () => {
     render(<ActivityClient workspaceId="w1" initial={INITIAL} />)
-    expect(screen.getByText('Checkout Platform')).toBeTruthy()
-    expect(screen.getByTestId('connection').textContent).toContain('reconnecting')
     expect(screen.getByTestId('filter-bar')).toBeTruthy()
     // Task 9: the slot now mounts the Sparkline SVG rather than the raw bucket numbers as text.
     expect(screen.getByTestId('sparkline-slot').querySelector('svg[role="img"]')).toBeTruthy()
+  })
+
+  it('publishes its stream state on mount, for the project header’s connection chip to read', () => {
+    render(<ActivityClient workspaceId="w1" initial={INITIAL} />)
+    expect(publishStreamState).toHaveBeenCalledWith('w1', { connection: 'connected', latencyMs: null })
   })
 
   it('stays pinned at the bottom by default — the "new events" badge never appears as events arrive', () => {
@@ -589,13 +586,12 @@ describe('ActivityClient', () => {
     }
   })
 
-  it('Important 1: re-reads the shell facts after a live event, so the sidebar beside the river does not freeze at load time', async () => {
+  it('Important 1: re-reads the shell facts after a live event, so the header beside the river does not freeze at load time', async () => {
     // Before this fix the page published `initial.shellFacts` — frozen at server render — where
-    // `TasksClient`/`GraphClient` publish their live snapshot. Since Task 12 removed the sidebar's
-    // own fallback stream, that made `/w/:id/activity` the one page whose badges never moved.
+    // `TasksClient`/`GraphClient` publish their live snapshot. This made `/w/:id/activity` the
+    // one page whose header figures never moved.
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     try {
-      vi.stubGlobal('EventSource', FakeEventSource as unknown as typeof EventSource)
       const fetchMock = vi.fn(
         async () =>
           new Response(
@@ -613,17 +609,12 @@ describe('ActivityClient', () => {
       // A FUNCTION, not a stored element: re-rendering the identical element object lets React
       // bail out before the component body runs, and the mutated `streamState` would never be
       // read. Every other rerender in this file builds fresh JSX for the same reason.
-      const shell = (): ReactElement => (
-        <>
-          <Sidebar workspaceId="w1" />
-          <ActivityClient workspaceId="w1" initial={initial} />
-        </>
-      )
+      const shell = (): ReactElement => <ActivityClient workspaceId="w1" initial={initial} />
       const { rerender } = render(shell())
 
       // Mount publishes the server-rendered facts and asks for nothing: they came from the same
       // render as the page itself.
-      expect(screen.getByTestId('nav-badge-Tasks').textContent).toBe('12')
+      expect(publishShellFacts).toHaveBeenLastCalledWith('w1', initial.shellFacts)
       expect(fetchMock).not.toHaveBeenCalled()
 
       // Two events in one burst — the debounce must collapse them into a single request.
@@ -637,38 +628,19 @@ describe('ActivityClient', () => {
 
       expect(fetchMock).toHaveBeenCalledTimes(1)
       expect(fetchMock).toHaveBeenCalledWith('/api/w/w1/shell')
-      // Republished: the sidebar reads the refreshed counts, not the ones it opened with.
-      expect(screen.getByTestId('nav-badge-Tasks').textContent).toBe('9')
-      expect(screen.getByTestId('nav-badge-Agents').textContent).toBe('5')
-      // And still nothing streamed for it.
-      expect(FakeEventSource.instances).toHaveLength(0)
+      // Republished: the header reads the refreshed counts, not the ones it opened with.
+      expect(publishShellFacts).toHaveBeenLastCalledWith(
+        'w1',
+        expect.objectContaining({ counts: { agentsWorking: 5, tasksActive: 9 } }),
+      )
     } finally {
       vi.useRealTimers()
     }
   })
 
-  it('publishes its shell facts, so the global Sidebar opens no EventSource of its own while the page is mounted', () => {
-    // The Task 3/8 ruling, closed out here: Activity is the last of the four workspace pages, so
-    // the sidebar's standalone fallback stream is gone. Nothing streams beside this page.
-    vi.stubGlobal('EventSource', FakeEventSource as unknown as typeof EventSource)
-    const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }))
-    vi.stubGlobal('fetch', fetchMock)
-
-    render(
-      <>
-        {/* The root layout's order: `<Sidebar />` before `{children}`, which is what the
-          * one-render `mayFallBack` gate in `ProjectNav` exists to survive. */}
-        <Sidebar workspaceId="w1" />
-        <ActivityClient workspaceId="w1" initial={page({})} />
-      </>,
-    )
-
-    expect(FakeEventSource.instances).toHaveLength(0)
-    expect(fetchMock).not.toHaveBeenCalled()
-    // And the badges come from the publication, not from a fetch.
-    expect(screen.getByTestId('nav-badge-Tasks').textContent).toBe('12')
-    expect(screen.getByTestId('nav-badge-Agents').textContent).toBe('3')
-    expect(screen.getByTestId('guardrail-budget').textContent).toBe('$20.00')
+  it('publishes its shell facts on mount, for the project header and the Tasks tab’s badge to read', () => {
+    render(<ActivityClient workspaceId="w1" initial={page({})} />)
+    expect(publishShellFacts).toHaveBeenCalledWith('w1', page({}).shellFacts)
   })
 })
 
@@ -732,6 +704,6 @@ describe('the activity page route', () => {
     const { default: ActivityPageRoute } = await import('../src/app/w/[workspaceId]/activity/page.js')
     const element = await ActivityPageRoute({ params: Promise.resolve({ workspaceId: 'w1' }) })
     render(element)
-    expect(screen.getByText('Checkout Platform')).toBeTruthy()
+    expect(screen.getByTestId('filter-bar')).toBeTruthy()
   })
 })

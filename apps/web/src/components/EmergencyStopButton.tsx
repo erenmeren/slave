@@ -6,7 +6,7 @@ import { postControl } from '../lib/postControl'
 type Phase = 'idle' | 'confirm'
 
 /**
- * The TopBar's workspace-wide emergency stop: idle red `STOP` button -> inline confirm (the
+ * The project header's workspace-wide emergency stop: idle red `STOP` button -> inline confirm (the
  * `NodeMenu` confirm idiom, no dialog dependency) -> POST `/api/w/:workspaceId/emergency-stop`.
  * Success does NOT flip anything locally — the workspace-wide snapshot refetch is what flips
  * `halted` (and therefore this button back to disabled, plus the `HaltBanner`) on every page.

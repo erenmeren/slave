@@ -3,9 +3,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { publishShellFacts } from '../hooks/useShellFacts'
+import { publishStreamState } from '../hooks/useStreamState'
 import { useSelectedId } from '../hooks/useSelectedId'
 import { useOverview } from '../hooks/useOverview'
-import { announceProjectName } from '../hooks/useProjectName'
 import type { OverviewSnapshot } from '../server/overview'
 import { AgentCard } from './AgentCard'
 import { AgentPanel } from './AgentPanel'
@@ -13,7 +13,6 @@ import { GoalCard } from './GoalCard'
 import { RuntimeCard } from './RuntimeCard'
 import { HaltBanner } from './HaltBanner'
 import { postControl } from '../lib/postControl'
-import { TopBar } from './TopBar'
 import { TopStrip } from './TopStrip'
 import { Button } from './ui/Button'
 import { Panel } from './ui/Panel'
@@ -169,21 +168,15 @@ export function OverviewClient({
   const [selectedAgentId, selectAgent] = useSelectedId('agent')
   const selectedAgent = view.agents.find((agent) => agent.id === selectedAgentId) ?? null
 
-  // Fills the global shell's Sidebar project-section header with this workspace's real name
-  // (M11 Task 10 ruling 2) — the root layout mounts one <Sidebar> with no per-route params of its
-  // own, so this is how it learns the name rather than showing the bare workspaceId forever.
-  useEffect((): void => {
-    announceProjectName(workspaceId, view.workspace.name)
-  }, [workspaceId, view.workspace.name])
-
-  // Controller ruling carried from Task 3 (and fix round 1): the root layout's `<Sidebar>` opens
-  // its own `EventSource` per workspace page. This page already streams the same workspace, and
-  // every figure the sidebar shows is in the snapshot it is already holding — so it publishes
-  // them to `hooks/useShellFacts.ts` and the sidebar opens nothing. A module store, not context:
-  // `layout.tsx` renders `<Sidebar />` as a SIBLING of `{children}`, so this component can never
-  // be its ancestor (the same constraint `announceProjectName` above is solving). `agentsWorking` is the same `status === 'working'` count the
-  // strip's first tile shows, and `tasksActive` the same `tasks.active` its second one does; the
-  // sidebar and the strip cannot disagree, because there is one number.
+  // Controller ruling carried from Task 3 (and fix round 1), and re-aimed by M24 §2.2: the
+  // project layout's `<ProjectHeader>` and `<ProjectTabs>` render as SIBLINGS of `{children}`, so
+  // this component can never be their ancestor. This page already streams the workspace, and
+  // every figure the header and the Tasks tab's badge show is in the snapshot it is already
+  // holding — so it publishes them to `hooks/useShellFacts.ts` and the header opens nothing of
+  // its own. A module store, not context, for the same reason: no shared ancestor to hold it.
+  // `agentsWorking` is the same `status === 'working'` count the strip's first tile shows, and
+  // `tasksActive` the same `tasks.active` the Tasks tab's badge does; the strip and the tab strip
+  // cannot disagree, because there is one number.
   const shellFacts = useMemo(
     () => ({
       workspace: { id: view.workspace.id, name: view.workspace.name },
@@ -213,25 +206,17 @@ export function OverviewClient({
     publishShellFacts(workspaceId, shellFacts)
   }, [workspaceId, shellFacts])
   // Retraction is its OWN effect, keyed only on the workspace: folding it into the cleanup of the
-  // publish above would retract and re-publish on every snapshot, and the sidebar would flip to
-  // its fallback stream (opening a connection) between the two.
+  // publish above would retract and re-publish on every snapshot, and the header would flip to
+  // its fallback facts (this page's own SSR snapshot) between the two.
   useEffect((): (() => void) => () => publishShellFacts(workspaceId, null), [workspaceId])
+  useEffect((): void => {
+    publishStreamState(workspaceId, { connection, latencyMs })
+  }, [workspaceId, connection, latencyMs])
+  useEffect((): (() => void) => () => publishStreamState(workspaceId, null), [workspaceId])
 
   return (
     <>
       <div className={`flex flex-1 flex-col ${error !== null ? 'opacity-60' : ''}`}>
-        <TopBar
-          workspaceId={workspaceId}
-          workspaceName={view.workspace.name}
-          connection={connection}
-          latencyMs={latencyMs}
-          budget={{
-            spentUsd: view.workspace.spentUsd,
-            budgetUsd: view.workspace.budgetUsd,
-            unmeasuredRuns: view.workspace.unmeasuredRuns,
-          }}
-          halted={view.workspace.haltedReason !== null}
-        />
         {view.workspace.haltedReason !== null && <HaltBanner reason={view.workspace.haltedReason} />}
         {error !== null && (
           <div role="alert" className="border-b border-tone-waiting/40 bg-tone-waiting/10 px-4 py-1.5 text-xs text-tone-waiting">

@@ -6,7 +6,10 @@ import { TaskCard } from '../src/components/TaskCard.js'
 import { TaskColumn } from '../src/components/TaskColumn.js'
 import { TaskDetailPanel } from '../src/components/TaskDetailPanel.js'
 import { TasksClient } from '../src/components/TasksClient.js'
+import { publishStreamState } from '../src/hooks/useStreamState.js'
 import type { TaskBoardItem, TasksSnapshot } from '../src/server/tasks.js'
+
+vi.mock('../src/hooks/useStreamState', () => ({ publishStreamState: vi.fn() }))
 
 // Module-level so the M23 B4 collect test below can assert `router.refresh()` fired -- a fresh
 // `vi.fn()` returned from inside `useRouter` would give the assertion no stable reference to check.
@@ -387,6 +390,11 @@ describe('TaskDetailPanel artifacts (M23 C1-C3)', () => {
 })
 
 describe('TasksClient', () => {
+  it('publishes its stream state on mount, for the project header’s connection chip to read', () => {
+    render(<TasksClient workspaceId="w1" initial={snapshot([])} />)
+    expect(publishStreamState).toHaveBeenCalledWith('w1', { connection: 'connected', latencyMs: null })
+  })
+
   it('renders all six columns in order, empty ones included', () => {
     render(<TasksClient workspaceId="w1" initial={snapshot([task({})])} />)
     const headings = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)

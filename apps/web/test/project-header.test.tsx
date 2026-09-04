@@ -79,3 +79,50 @@ describe('ProjectHeader', () => {
     expect(screen.getByTestId('project-switcher-new').getAttribute('href')).toBe('/?new=1')
   })
 })
+
+describe('ProjectHeader budget bar (M24 §2.2)', () => {
+  function withBudget(spentUsd: number, budgetUsd: number | null, unmeasuredRuns = 0): ShellFacts {
+    return {
+      workspace: { id: 'w1', name: 'Checkout Platform' },
+      counts: { agentsWorking: 0, tasksActive: 2 },
+      guardrails: { budgetUsd, maxConcurrentRuns: 3, runTimeoutMs: 1_800_000, maxAttempts: 5 },
+      status: { goal: null, spentUsd, unmeasuredRuns, haltedReason: null },
+    }
+  }
+
+  it('turns the budget bar amber past 80% and red past 100%', () => {
+    const { rerender } = render(<ProjectHeader workspaceId="w1" initial={withBudget(85, 100)} workspaces={workspaces} />)
+    expect(screen.getByTestId('budget').innerHTML).toContain('bg-tone-waiting')
+    rerender(<ProjectHeader workspaceId="w1" initial={withBudget(101, 100)} workspaces={workspaces} />)
+    expect(screen.getByTestId('budget').innerHTML).toContain('bg-tone-blocked')
+  })
+
+  it('says how many runs went unmeasured, so known spend is not read as total spend', () => {
+    // M12 Task 9 / ruling R11. `$3.20 / $20.00` on its own claims to be the whole bill. With two
+    // runs nobody could measure, it is only the part of the bill that was measured -- and this is
+    // the highest-visibility surface in the product for that distinction to be missing from.
+    render(<ProjectHeader workspaceId="w1" initial={withBudget(3.2, 20, 2)} workspaces={workspaces} />)
+    const budget = screen.getByTestId('budget')
+    expect(budget.textContent).toContain('$3.20')
+    expect(budget.textContent).toContain('$20.00')
+    expect(budget.textContent).toContain('2 unmeasured')
+  })
+
+  it('says nothing about unmeasured runs when there are none', () => {
+    render(<ProjectHeader workspaceId="w1" initial={withBudget(3.2, 20, 0)} workspaces={workspaces} />)
+    expect(screen.getByTestId('budget').textContent).not.toContain('unmeasured')
+  })
+
+  it('shows the known spend with no ratio and no bar when the workspace has no budget', () => {
+    // M12 Task 9 / ruling R11. `guardrails.budgetUsd: null` means this workspace is not budgeted
+    // at all -- spec §6's only state in which a cost-blind runtime may run there. There is no
+    // ceiling to draw a ratio against, so showing one would be inventing a limit nobody set.
+    render(<ProjectHeader workspaceId="w1" initial={withBudget(3.2, null, 0)} workspaces={workspaces} />)
+    const budget = screen.getByTestId('budget')
+    expect(budget.textContent).toContain('$3.20')
+    expect(budget.textContent).not.toContain('/')
+    expect(budget.innerHTML).not.toContain('bg-tone-working')
+    expect(budget.innerHTML).not.toContain('bg-tone-waiting')
+    expect(budget.innerHTML).not.toContain('bg-tone-blocked')
+  })
+})

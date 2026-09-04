@@ -17,3 +17,14 @@ export function formatDuration(ms: number): string {
   const rest = seconds % 60
   return minutes === 0 ? `${rest}s` : `${minutes}m ${String(rest).padStart(2, '0')}s`
 }
+
+/** `1800000` → `30m`; `90000` → `1m30s`; `45000` → `45s`. A duration a person reads, not a
+ *  millisecond count — moved here from `Sidebar.tsx` (M24 §2.1) so Task 4's Runtime panel can
+ *  import it too. */
+export function formatTimeout(ms: number): string {
+  const totalSeconds = Math.round(ms / 1000)
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  if (minutes === 0) return `${seconds}s`
+  return seconds === 0 ? `${minutes}m` : `${minutes}m${seconds}s`
+}

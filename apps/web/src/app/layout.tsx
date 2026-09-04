@@ -24,12 +24,11 @@ const plexMono = IBM_Plex_Mono({
 
 export const metadata = { title: 'AI Team OS' }
 
-// The M11 global shell (spec §4): every page renders inside sidebar + content area. The sidebar
-// itself decides which sections to show (global always; project section on a `w/[workspaceId]`
-// route) by reading the pathname -- this root layout has no per-route params of its own to hand
-// it. Existing `w/[workspaceId]` pages still mount their own internal `<Sidebar>` too (untouched,
-// Task 7 scope); that duplication is known and left for the Task 10-12 migrations to remove as
-// each page adopts the shell directly.
+// The global shell (M11 spec §4, reduced by M24 §2.1): every page renders inside sidebar +
+// content area. The sidebar is now one unconditional list of five global rows -- it no longer
+// reads any per-route data to decide what to show (that was ProjectNav's job, removed this
+// milestone); a project's own navigation lives in `app/w/[workspaceId]/layout.tsx`'s header and
+// tab strip instead.
 export default function RootLayout({ children }: { children: React.ReactNode }): React.JSX.Element {
   return (
     <html lang="en" className={`${plexSans.variable} ${plexMono.variable}`}>

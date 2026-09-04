@@ -2,14 +2,13 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useActivityStream } from '../../hooks/useActivityStream'
-import { announceProjectName } from '../../hooks/useProjectName'
 import { publishShellFacts } from '../../hooks/useShellFacts'
+import { publishStreamState } from '../../hooks/useStreamState'
 import { useUrlFilters } from '../../hooks/useUrlFilters'
 import type { ActivityPage } from '../../server/activity'
 import type { ShellFacts } from '../../server/shell'
 import { HaltBanner } from '../HaltBanner'
 import { Sparkline } from '../Sparkline'
-import { TopBar } from '../TopBar'
 import { PanelHeader } from '../ui/PanelHeader'
 import { FilterBar } from './FilterBar'
 import { Timeline, type TimelineHandle } from './Timeline'
@@ -17,16 +16,17 @@ import { Timeline, type TimelineHandle } from './Timeline'
 /**
  * How long the page waits after the newest event before re-reading the shell facts. A burst of
  * arrivals -- which is the normal shape of this page's traffic -- therefore costs one request, not
- * one per event, and the sidebar is never more than a beat behind the river it sits beside. Longer
- * than `useWorkspaceStream`'s own 250ms notification debounce on purpose: these are two counts and
- * four guardrails on a nav, not the page's own content.
+ * one per event, and the project header is never more than a beat behind the river it sits above.
+ * Longer than `useWorkspaceStream`'s own 250ms notification debounce on purpose: these are two
+ * counts and four guardrails on a header, not the page's own content.
  */
 export const SHELL_REFETCH_DEBOUNCE_MS = 1_000
 
 /**
- * The activity page's client shell: TopBar (workspace name is static from the initial server
- * snapshot — only `connection` is live, same as `TasksClient`) + `FilterBar` + a header
- * `Sparkline` (Task 9) fed the hook's live-rotated `sparkline` + the virtualized `Timeline`.
+ * The activity page's client shell, below the project layout's header and tab strip (M24 §2.2):
+ * `FilterBar` + a header `Sparkline` (Task 9) fed the hook's live-rotated `sparkline` + the
+ * virtualized `Timeline`. The workspace name the header shows is static from the initial server
+ * snapshot — only `connection` is live, same as `TasksClient`.
  *
  * Live-follow etiquette: `pinned` starts `true` (a freshly loaded page is scrolled to the newest
  * event) and flips on `Timeline`'s `onPinnedChange` report of the viewport's own scroll position.
@@ -44,13 +44,6 @@ export function ActivityClient({
   const { filters, kinds, rawTypes, setKinds, setRawTypes, setAgents, setTasks } = useUrlFilters()
   const { events, connection, loadOlder, sparkline, latencyMs } = useActivityStream({ workspaceId, filters, initial })
 
-  // Fills the global shell's Sidebar project-section header with this workspace's real name
-  // (M11 Task 10 ruling 2) — the root layout mounts one <Sidebar> with no per-route params of its
-  // own, so this is how it learns the name rather than showing the bare workspaceId forever.
-  useEffect((): void => {
-    announceProjectName(workspaceId, initial.workspace.name)
-  }, [workspaceId, initial.workspace.name])
-
   // The newest seq the page opened with. Compared against, never updated: once anything at all has
   // arrived the newest seq has moved off it for good, and a `loadOlder` prepend cannot move it
   // back (a prepend only ever adds SMALLER seqs).
@@ -61,10 +54,10 @@ export function ActivityClient({
   //
   // Why this exists at all (fix round 1, Important 1): `useActivityStream` streams EVENTS and pages
   // history -- it never re-derives the page DTO -- so `initial.shellFacts` is frozen at server
-  // render. Publishing only that would leave the sidebar's counts and guardrails stuck at load
-  // time for the whole visit, on the very page a person watches longest, and the fallback stream
-  // that used to keep them moving was removed by this same task. `TasksClient`/`GraphClient`
-  // publish a live snapshot because their own hooks refetch one; this page has to ask for it.
+  // render. Publishing only that would leave the header's counts and guardrails stuck at load
+  // time for the whole visit, on the very page a person watches longest. `TasksClient`/
+  // `GraphClient` publish a live snapshot because their own hooks refetch one; this page has to
+  // ask for it.
   const [refetchedFacts, setRefetchedFacts] = useState<ShellFacts | null>(null)
   const newestSeq = events.at(-1)?.seq ?? null
 
@@ -94,18 +87,21 @@ export function ActivityClient({
     }
   }, [workspaceId, newestSeq])
 
-  // Controller ruling carried from Task 3/8, and CLOSED here: Activity is the last of the four
-  // workspace pages, so with this publication the sidebar has no route left that fails to publish
-  // — `Sidebar.tsx`'s standalone fallback `EventSource` is gone (a one-shot fetch remains as the
-  // belt-and-braces path for a route that somehow does not publish). Same idiom as
-  // `OverviewClient`/`TasksClient`/`GraphClient`.
+  // Controller ruling carried from Task 3/8, and re-aimed by M24 §2.2: Activity is the last of the
+  // four workspace pages, so with this publication the project header and the Tasks tab's badge
+  // have no route left that fails to publish. Same idiom as `OverviewClient`/`TasksClient`/
+  // `GraphClient`.
   useEffect((): void => {
     publishShellFacts(workspaceId, refetchedFacts ?? initial.shellFacts)
   }, [workspaceId, refetchedFacts, initial.shellFacts])
   // Retraction is its OWN effect, keyed only on the workspace: folding it into the cleanup of the
-  // publish above would retract and re-publish on every snapshot, and the sidebar would blank its
+  // publish above would retract and re-publish on every snapshot, and the header would blank its
   // figures between the two.
   useEffect((): (() => void) => () => publishShellFacts(workspaceId, null), [workspaceId])
+  useEffect((): void => {
+    publishStreamState(workspaceId, { connection, latencyMs })
+  }, [workspaceId, connection, latencyMs])
+  useEffect((): (() => void) => () => publishStreamState(workspaceId, null), [workspaceId])
 
   const agentNameById = useMemo(() => new Map(initial.agents.map((agent) => [agent.id, agent.name])), [initial.agents])
   const taskTitleById = useMemo(() => new Map(initial.tasks.map((task) => [task.id, task.title])), [initial.tasks])
@@ -176,14 +172,6 @@ export function ActivityClient({
 
   return (
     <div className="flex flex-1 flex-col">
-      <TopBar
-        workspaceId={workspaceId}
-        workspaceName={initial.workspace.name}
-        connection={connection}
-        latencyMs={latencyMs}
-        budget={null}
-        halted={initial.workspace.haltedReason !== null}
-      />
       {initial.workspace.haltedReason !== null && <HaltBanner reason={initial.workspace.haltedReason} />}
       <FilterBar
         agents={initial.agents}

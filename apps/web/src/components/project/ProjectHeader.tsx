@@ -93,6 +93,15 @@ export function ProjectHeader({
               · {facts.status.unmeasuredRuns} unmeasured
             </span>
           )}
+          {/* `ui/ProgressBar.tsx`'s exact recipe (rounded-full track, `motion-safe:` width
+           *  transition -- spec §3's `.5s ease`) satisfies this migration's "motion behind
+           *  prefers-reduced-motion" rule, not the literal component: `ProgressBar` colours its
+           *  fill from the `StatusTone` vocabulary, but `project-header.test.tsx` pins the
+           *  literal `bg-tone-waiting`/`bg-tone-blocked` class strings used directly here for
+           *  this ratio's own three-way threshold (not a status at all). */}
+          {/* No bar at all for an unbudgeted workspace: a bar is a fraction of a ceiling, and
+           *  an empty track would read as "0% of something" rather than "there is no
+           *  something" (M12 Task 9 / ruling R11). */}
           {budgetUsd !== null && (
             <span className="h-[3px] w-[150px] overflow-hidden rounded-[2px] bg-white/[0.08]">
               <span className={`block h-full motion-safe:[transition:width_.5s_ease] ${barColor}`} style={{ width: `${Math.min(100, ratio * 100)}%` }} />

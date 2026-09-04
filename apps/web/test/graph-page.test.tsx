@@ -3,6 +3,7 @@ import { StrictMode, type ReactElement } from 'react'
 import { fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Edge, Node } from 'reactflow'
+import { publishStreamState } from '../src/hooks/useStreamState.js'
 import type { GraphAgent, GraphSnapshot } from '../src/server/graph.js'
 
 // ---- jsdom element-size + ResizeObserver mocks -------------------------------------------------
@@ -57,13 +58,16 @@ interface StreamState {
   snapshot: GraphSnapshot | null
   connection: 'connected' | 'reconnecting'
   error: string | null
+  latencyMs: number | null
 }
 
-const streamState: StreamState = { snapshot: null, connection: 'connected', error: null }
+const streamState: StreamState = { snapshot: null, connection: 'connected', error: null, latencyMs: null }
 
 vi.mock('../src/hooks/useGraph.js', () => ({
   useGraph: () => streamState,
 }))
+
+vi.mock('../src/hooks/useStreamState', () => ({ publishStreamState: vi.fn() }))
 
 // The ELK adapter itself, mocked so the recompute-contract tests can count invocations without
 // depending on the real layout algorithm's output. `elkjs`'s plain-build entry point (see the
@@ -92,9 +96,9 @@ vi.mock('../src/server/graph.js', () => ({
   buildGraphSnapshot: (...args: unknown[]) => buildGraphSnapshotMock(...args),
 }))
 
-// Fixture widening only (M14 Task 11): `GraphSnapshot` gained `shellFacts` so `GraphClient` can
-// publish them to the global shell's sidebar rather than the sidebar opening a second EventSource
-// on this route. Nothing above the drawer/mode-tab blocks asserts on them.
+// Fixture widening only (M14 Task 11, re-aimed M24 §2.2): `GraphSnapshot` gained `shellFacts` so
+// `GraphClient` can publish them to the project header rather than the header opening a second
+// EventSource on this route. Nothing above the drawer/mode-tab blocks asserts on them.
 const SHELL_FACTS: GraphSnapshot['shellFacts'] = {
   workspace: { id: 'w1', name: 'Checkout Platform' },
   counts: { agentsWorking: 1, tasksActive: 1 },
@@ -158,12 +162,19 @@ describe('GraphClient', () => {
     streamState.snapshot = null
     streamState.connection = 'connected'
     streamState.error = null
+    streamState.latencyMs = null
+    vi.mocked(publishStreamState).mockClear()
     ;({ GraphClient } = await import('../src/components/graph/GraphClient.js'))
   })
 
   afterEach(() => {
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
+  })
+
+  it('publishes its stream state on mount, for the project header’s connection chip to read', () => {
+    render(<GraphClient workspaceId="w1" initial={SNAPSHOT} />)
+    expect(publishStreamState).toHaveBeenCalledWith('w1', { connection: 'connected', latencyMs: null })
   })
 
   it('renders the workspace root, team and agent nodes from the seed snapshot, with status dots and active-task lines', async () => {

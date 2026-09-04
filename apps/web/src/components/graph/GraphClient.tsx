@@ -4,12 +4,11 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Edge, NodeMouseHandler } from 'reactflow'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { useGraph } from '../../hooks/useGraph'
-import { announceProjectName } from '../../hooks/useProjectName'
 import { publishShellFacts } from '../../hooks/useShellFacts'
+import { publishStreamState } from '../../hooks/useStreamState'
 import type { StreamEvent } from '../../hooks/useWorkspaceStream'
 import type { GraphSnapshot } from '../../server/graph'
 import { HaltBanner } from '../HaltBanner'
-import { TopBar } from '../TopBar'
 import { CommunicationMode } from './CommunicationMode'
 import { DepsMode } from './DepsMode'
 import { buildExecutionGraph, EXECUTION_NODE_TYPES, placeExecutionTasks, STAGE_NODE_PREFIX } from './ExecutionNodes'
@@ -100,13 +99,14 @@ function ExecutionMode({ snapshot }: { readonly snapshot: GraphSnapshot }): Reac
 }
 
 /**
- * `/w/[workspaceId]/graph`'s client shell: TopBar plus the mode-tab strip, same house composition
- * as `ActivityClient`/`TasksClient` (M11 Task 10/11) -- the global shell's `<Sidebar>` mounts once
- * in the root layout, not here (M11 Task 10 ruling 2; `announceProjectName` below is how this
- * route hands it the workspace's display name). Organization mode's graph is built and positioned
- * right here (`buildOrgGraph` + `useLayoutedGraph`); Execution and Dependencies each own their own
- * node set (`ExecutionMode` above, `DepsMode` in its own file) -- this component only switches
- * between them on the `mode` tab, and owns the selected agent the drawer renders.
+ * `/w/[workspaceId]/graph`'s client shell: the mode-tab strip below the project layout's header
+ * and tab strip, same house composition as `ActivityClient`/`TasksClient` (M11 Task 10/11, M24
+ * §2.2) -- the project header mounts once in `app/w/[workspaceId]/layout.tsx`, not here; this
+ * component publishes to `hooks/useShellFacts.ts` and `hooks/useStreamState.ts` for it to read.
+ * Organization mode's graph is built and positioned right here (`buildOrgGraph` +
+ * `useLayoutedGraph`); Execution and Dependencies each own their own node set (`ExecutionMode`
+ * above, `DepsMode` in its own file) -- this component only switches between them on the `mode`
+ * tab, and owns the selected agent the drawer renders.
  */
 export function GraphClient({
   workspaceId,
@@ -148,24 +148,22 @@ export function GraphClient({
   const { snapshot, connection, error, latencyMs } = useGraph(workspaceId, initial, onGraphEvent)
   const view = snapshot ?? initial
 
-  // Fills the global shell's Sidebar project-section header with this workspace's real name
-  // (M11 Task 10 ruling 2) — the root layout mounts one <Sidebar> with no per-route params of its
-  // own, so this is how it learns the name rather than showing the bare workspaceId forever.
-  useEffect((): void => {
-    announceProjectName(workspaceId, view.workspace.name)
-  }, [workspaceId, view.workspace.name])
-
-  // Controller ruling carried from Task 3/8: this page already streams the workspace this
-  // snapshot's `shellFacts` describes, so it publishes them to `hooks/useShellFacts.ts` and the
-  // sidebar opens no second `EventSource` against `/api/w/:id/shell` (see `OverviewClient.tsx`/
-  // `TasksClient.tsx` for the exact idiom this mirrors).
+  // Controller ruling carried from Task 3/8, and re-aimed by M24 §2.2: this page already streams
+  // the workspace this snapshot's `shellFacts` describes, so it publishes them to
+  // `hooks/useShellFacts.ts` and the project header and the Tasks tab's badge read them there —
+  // no second `EventSource` against `/api/w/:id/shell` (see `OverviewClient.tsx`/`TasksClient.tsx`
+  // for the exact idiom this mirrors).
   useEffect((): void => {
     publishShellFacts(workspaceId, view.shellFacts)
   }, [workspaceId, view.shellFacts])
   // Retraction is its OWN effect, keyed only on the workspace: folding it into the cleanup of the
-  // publish above would retract and re-publish on every snapshot, and the sidebar would flip to
-  // its fallback stream (opening a connection) between the two.
+  // publish above would retract and re-publish on every snapshot, and the header would flip to
+  // its fallback facts (this page's own SSR snapshot) between the two.
   useEffect((): (() => void) => () => publishShellFacts(workspaceId, null), [workspaceId])
+  useEffect((): void => {
+    publishStreamState(workspaceId, { connection, latencyMs })
+  }, [workspaceId, connection, latencyMs])
+  useEffect((): (() => void) => () => publishStreamState(workspaceId, null), [workspaceId])
 
   // Sweeps expired particles on a plain interval (see `PARTICLE_SWEEP_INTERVAL_MS`'s doc comment)
   // for the component's whole lifetime -- a no-op `setState` is skipped entirely when there is
@@ -217,14 +215,6 @@ export function GraphClient({
 
   return (
     <div className={`flex flex-1 flex-col ${error !== null ? 'opacity-60' : ''}`}>
-      <TopBar
-        workspaceId={workspaceId}
-        workspaceName={view.workspace.name}
-        connection={connection}
-        latencyMs={latencyMs}
-        budget={null}
-        halted={view.workspace.haltedReason !== null}
-      />
       {view.workspace.haltedReason !== null && <HaltBanner reason={view.workspace.haltedReason} />}
       {error !== null && (
         <div role="alert" className="border-b border-tone-waiting/40 bg-tone-waiting/10 px-4 py-1.5 text-xs text-tone-waiting">
