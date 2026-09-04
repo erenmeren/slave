@@ -684,8 +684,9 @@ export async function listCompanies(): Promise<readonly { id: string; name: stri
   return prisma.company.findMany({ select: { id: true, name: true }, orderBy: { name: 'asc' } })
 }
 
-/** One project `Team` row for the Agents page's Teams tab (M23 D3) -- `agentCount` is what
- *  `TeamsTable` disables its delete button on: `deleteTeam` refuses a non-empty team. */
+/** One project `Team` row for the Agents page's Departments tab (M23 D3; renamed M25 §4.2) --
+ *  `agentCount` is what `DepartmentsTable` disables its delete button on: `deleteTeam` refuses a
+ *  non-empty team. */
 export interface ProjectTeamRow {
   readonly teamId: string
   readonly name: string
@@ -697,7 +698,7 @@ export interface ProjectTeamRow {
 /**
  * Every project TEAM, across every workspace (the `Team` row `renameTeam`/`deleteTeam`
  * address) -- ordered project then name, so a multi-project install reads as grouped even
- * though `TeamsTable` renders one flat `DataTable`.
+ * though `DepartmentsTable` renders one flat `DataTable`.
  */
 export async function listProjectTeams(): Promise<readonly ProjectTeamRow[]> {
   const teams = await prisma.team.findMany({

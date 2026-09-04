@@ -58,29 +58,31 @@ describe('toneForStatus', () => {
 })
 
 describe('AgentsClient tabs', () => {
-  // M24 Task 7: the Agents page is two tabs now -- Agents (the one table, default) and Teams.
-  // Roster and Workers were two names for the same list of agents (spec §5.3) and are gone.
-  it('renders the agents table by default, with Teams beside it', () => {
-    render(<AgentsClient agents={page([agentRow({})])} teams={[]} />)
+  // M24 Task 7: the Agents page is two tabs now -- Agents (the one table, default) and
+  // Departments (M25 Task 7: Teams renamed). Roster and Workers were two names for the same
+  // list of agents (spec §5.3) and are gone.
+  it('renders the agents table by default, with Departments beside it', () => {
+    render(<AgentsClient agents={page([agentRow({})])} teams={[]} workspaces={[]} />)
     expect(screen.getByTestId('data-table')).toBeTruthy()
     expect(screen.getByTestId('worker-row-button').textContent).toContain('Alex')
     expect(screen.getByTestId('agents-tab-agents').getAttribute('aria-selected')).toBe('true')
-    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Agents', 'Teams'])
+    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Agents', 'Departments'])
   })
 
-  it('switches to the Teams tab and renders a TeamsTable row', () => {
+  it('switches to the Departments tab and renders a DepartmentsTable row', () => {
     render(
       <AgentsClient
         agents={page([agentRow({})])}
         teams={[{ teamId: 't1', name: 'Platform', workspaceId: 'w1', projectName: 'Checkout', agentCount: 2 }]}
+        workspaces={[]}
       />,
     )
-    expect(screen.queryByTestId('team-rename')).toBeNull()
+    expect(screen.queryByTestId('department-rename')).toBeNull()
 
-    fireEvent.click(screen.getByTestId('agents-tab-teams'))
+    fireEvent.click(screen.getByTestId('agents-tab-departments'))
 
-    expect(screen.getByTestId('agents-tab-teams').getAttribute('aria-selected')).toBe('true')
-    expect(screen.getByTestId('team-rename').textContent).toBe('Platform')
+    expect(screen.getByTestId('agents-tab-departments').getAttribute('aria-selected')).toBe('true')
+    expect(screen.getByTestId('department-rename').textContent).toBe('Platform')
   })
 })
 
@@ -161,7 +163,7 @@ describe('AgentsClient row click opens the panel', () => {
     vi.stubGlobal('fetch', fetchMock)
     vi.useFakeTimers()
 
-    render(<AgentsClient agents={page([agentRow({ agentId: 'a1', workspaceId: 'w1', name: 'Alex', status: 'working' })])} teams={[]} />)
+    render(<AgentsClient agents={page([agentRow({ agentId: 'a1', workspaceId: 'w1', name: 'Alex', status: 'working' })])} teams={[]} workspaces={[]} />)
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(5000)

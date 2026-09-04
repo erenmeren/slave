@@ -424,6 +424,55 @@ describe('CompanyManager', () => {
     expect(within(detail).getByTestId('data-table').textContent).toContain('cursor')
   })
 
+  // M25 Task 7: each department template's header row (`TeamBlock`) gets inline rename and
+  // delete-when-empty, the same shape `DepartmentsTable`'s row uses. Two templates so delete has
+  // both a disabled case (has a member) and an enabled one (empty).
+  describe('a department template header row', () => {
+    let fetchMock: ReturnType<typeof vi.fn>
+    const roster = [
+      company({
+        teams: [
+          { companyTeamId: 'ct1', teamName: 'Platform', members: [member()] },
+          { companyTeamId: 'ct2', teamName: 'Design', members: [] },
+        ],
+      }),
+    ]
+    const companies = [{ id: 'c1', name: 'Acme Robotics' }]
+
+    beforeEach(() => {
+      fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }))
+      vi.stubGlobal('fetch', fetchMock)
+    })
+
+    afterEach(() => {
+      vi.unstubAllGlobals()
+    })
+
+    it('renames a department template inline and refreshes', async () => {
+      render(<CompanyManager companies={companies} roster={roster} templates={[]} />)
+      fireEvent.click(screen.getByTestId('company-toggle'))
+      fireEvent.click(screen.getAllByTestId('department-template-rename')[0] as HTMLButtonElement)
+      fireEvent.change(screen.getByTestId('department-template-rename-input'), { target: { value: 'Platform' } })
+      await act(async () => {
+        fireEvent.keyDown(screen.getByTestId('department-template-rename-input'), { key: 'Enter' })
+      })
+      expect(fetchMock).toHaveBeenCalledWith('/api/org/teams/ct1/name', expect.objectContaining({ method: 'PUT', body: JSON.stringify({ name: 'Platform' }) }))
+      expect(routerRefresh).toHaveBeenCalled()
+    })
+
+    it('disables delete while the template has members, and DELETEs an empty one', async () => {
+      render(<CompanyManager companies={companies} roster={roster} templates={[]} />)
+      fireEvent.click(screen.getByTestId('company-toggle'))
+      const buttons = screen.getAllByTestId('department-template-delete') as HTMLButtonElement[]
+      // roster fixture: ct1 has a member, ct2 is empty.
+      expect(buttons[0]?.disabled).toBe(true)
+      await act(async () => {
+        fireEvent.click(buttons[1] as HTMLButtonElement)
+      })
+      expect(fetchMock).toHaveBeenCalledWith('/api/org/teams/ct2', expect.objectContaining({ method: 'DELETE' }))
+    })
+  })
+
   describe('the company creation form', () => {
     let fetchMock: ReturnType<typeof vi.fn>
 
@@ -467,7 +516,7 @@ describe('CompanyManager', () => {
     })
   })
 
-  describe('the add-team form', () => {
+  describe('the add-department-template form', () => {
     let fetchMock: ReturnType<typeof vi.fn>
 
     beforeEach(() => {
@@ -482,10 +531,10 @@ describe('CompanyManager', () => {
     it('posts { companyId, name } and refreshes on 200', async () => {
       render(<CompanyManager companies={[{ id: 'c1', name: 'Acme Robotics' }]} roster={[company({ teams: [] })]} templates={[]} />)
       fireEvent.click(screen.getByTestId('company-toggle'))
-      fireEvent.change(screen.getByLabelText('team name'), { target: { value: 'Platform' } })
+      fireEvent.change(screen.getByLabelText('department name'), { target: { value: 'Platform' } })
 
       await act(async () => {
-        fireEvent.click(screen.getByTestId('team-submit'))
+        fireEvent.click(screen.getByTestId('department-template-submit'))
       })
 
       expect(fetchMock).toHaveBeenCalledWith(
@@ -499,10 +548,10 @@ describe('CompanyManager', () => {
       fetchMock.mockImplementationOnce(async () => new Response(JSON.stringify({ error: 'the name "Platform" is already taken' }), { status: 409 }))
       render(<CompanyManager companies={[{ id: 'c1', name: 'Acme Robotics' }]} roster={[company({ teams: [] })]} templates={[]} />)
       fireEvent.click(screen.getByTestId('company-toggle'))
-      fireEvent.change(screen.getByLabelText('team name'), { target: { value: 'Platform' } })
+      fireEvent.change(screen.getByLabelText('department name'), { target: { value: 'Platform' } })
 
       await act(async () => {
-        fireEvent.click(screen.getByTestId('team-submit'))
+        fireEvent.click(screen.getByTestId('department-template-submit'))
       })
 
       expect(screen.getByRole('alert').textContent).toContain('the name "Platform" is already taken')

@@ -7,9 +7,9 @@ import type { AgentCardData, OverviewSnapshot } from '../server/overview'
 import type { StatusTone } from './ui/StatusPill'
 import { AgentPanel } from './AgentPanel'
 import { AllAgentsTable } from './AllAgentsTable'
-import { TeamsTable } from './TeamsTable'
+import { DepartmentsTable } from './DepartmentsTable'
 
-type Tab = 'agents' | 'teams'
+type Tab = 'agents' | 'departments'
 
 /**
  * The M11 Task 8 status→tone mapping (controller ruling): every value `deriveAgentStatus`
@@ -36,23 +36,27 @@ export function toneForStatus(status: string): StatusTone {
   return (AGENT_STATUS_TONE as Record<string, StatusTone>)[status] ?? 'idle'
 }
 
-/** The Agents page's two tabs (M24 §5.3, Task 7): Agents, the one table (every project agent
- *  plus every catalog member no project has materialized yet), and Teams (M23 D3: project team
- *  rename/delete, fed by `listProjectTeams()`). Roster and Workers were two names for the same
+/** The Agents page's two tabs (M24 §5.3, Task 7; renamed in M25 §4.2 Task 7): Agents, the one
+ *  table (every project agent plus every catalog member no project has materialized yet), and
+ *  Departments (M23 D3: project team rename/delete plus a "New department" form, fed by
+ *  `listProjectTeams()`/`listWorkspaceNames()`). Roster and Workers were two names for the same
  *  list of agents and are gone. */
 const TABS: ReadonlyArray<{ readonly id: Tab; readonly label: string }> = [
   { id: 'agents', label: 'Agents' },
-  { id: 'teams', label: 'Teams' },
+  { id: 'departments', label: 'Departments' },
 ]
 
-/** The Agents page's tabbed root (M11 Task 8; folded to two tabs in M24 Task 7): local tab
- *  state, Agents (the one table, default) and Teams as the two panels. */
+/** The Agents page's tabbed root (M11 Task 8; folded to two tabs in M24 Task 7; Departments tab
+ *  in M25 Task 7): local tab state, Agents (the one table, default) and Departments as the two
+ *  panels. */
 export function AgentsClient({
   agents,
   teams,
+  workspaces,
 }: {
   readonly agents: AllAgentsPage
   readonly teams: readonly ProjectTeamRow[]
+  readonly workspaces: readonly { id: string; name: string }[]
 }): React.JSX.Element {
   const [tab, setTab] = useState<Tab>('agents')
   /**
@@ -101,8 +105,8 @@ export function AgentsClient({
           </button>
         ))}
       </div>
-      {tab === 'teams' ? (
-        <TeamsTable teams={teams} />
+      {tab === 'departments' ? (
+        <DepartmentsTable teams={teams} workspaces={workspaces} />
       ) : (
         <AllAgentsTable initial={agents} onOpen={(row) => setSelected(row)} />
       )}

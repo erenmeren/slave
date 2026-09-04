@@ -8,8 +8,8 @@ import type { TemplateRow } from '../TemplateCatalog'
 import { GhostButton, TextField } from '../ui/FormControls'
 import { TeamBlock } from './TeamBlock'
 
-/** An expanded company's teams (each with its members and add-member form) plus the company's own
- *  "add team" form (name only). */
+/** An expanded company's department templates (each with its members and add-member form) plus
+ *  the company's own "add department" form (name only). */
 export function CompanyDetail({
   companyId,
   teams,
@@ -40,14 +40,14 @@ export function CompanyDetail({
   return (
     <div data-testid="company-detail" className="flex flex-col gap-3 border-t border-white/[0.05] pt-3">
       {teams.length === 0 ? (
-        <p className="text-xs text-text-3">no teams yet.</p>
+        <p className="text-xs text-text-3">no departments yet.</p>
       ) : (
         teams.map((team) => (
           <TeamBlock key={team.companyTeamId} companyTeamId={team.companyTeamId} teamName={team.teamName} members={team.members} templates={templates} />
         ))
       )}
       <form
-        data-testid="add-team-form"
+        data-testid="department-template-form"
         className="flex flex-wrap items-end gap-2"
         onSubmit={(event) => {
           event.preventDefault()
@@ -55,11 +55,11 @@ export function CompanyDetail({
         }}
       >
         <TextField
-          label="Team name"
+          label="Department"
           inputProps={
             {
-              'aria-label': 'team name',
-              'data-testid': 'team-name-input',
+              'aria-label': 'department name',
+              'data-testid': 'department-template-name-input',
               value: teamName,
               onChange: (event) => setTeamName(event.target.value),
               disabled: pending,
@@ -67,11 +67,11 @@ export function CompanyDetail({
             } as React.InputHTMLAttributes<HTMLInputElement>
           }
         />
-        <GhostButton type="submit" data-testid="team-submit" disabled={pending || teamName === ''}>
-          Add team
+        <GhostButton type="submit" data-testid="department-template-submit" disabled={pending || teamName === ''}>
+          Add department
         </GhostButton>
         {errorText !== null && (
-          <span role="alert" data-testid="team-error" className="text-xs text-tone-blocked">
+          <span role="alert" data-testid="department-template-error" className="text-xs text-tone-blocked">
             {errorText}
           </span>
         )}
