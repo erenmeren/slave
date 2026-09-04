@@ -79,11 +79,12 @@ export interface GraphSnapshot {
   readonly tasks: readonly GraphTask[]
   readonly dependencies: readonly { readonly taskId: string; readonly dependsOnTaskId: string }[]
   /**
-   * The same counts/guardrails the global shell's `<Sidebar>` shows (M14 Task 8/10 controller
-   * ruling, carried to this route): `/w/:id/graph` already streams this workspace, so `GraphClient`
-   * publishes these to `hooks/useShellFacts.ts` rather than the sidebar opening a second
-   * `EventSource` against `/api/w/:id/shell` for the workspace already on screen. Same field, same
-   * builder and same idiom as `TasksSnapshot.shellFacts`.
+   * The same counts/guardrails the project header and the Tasks tab's badge show (M14 Task 8/10
+   * controller ruling, carried to this route; M24 Task 2 moved them off the global shell's
+   * `<Sidebar>` onto the project header/tabs): `/w/:id/graph` already streams this workspace, so
+   * `GraphClient` publishes these to `hooks/useShellFacts.ts` rather than the header/tabs opening
+   * a second `EventSource` against `/api/w/:id/shell` for the workspace already on screen. Same
+   * field, same builder and same idiom as `TasksSnapshot.shellFacts`.
    */
   readonly shellFacts: ShellFacts
 }

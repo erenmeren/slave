@@ -50,11 +50,12 @@ export interface ActivityPage extends ActivityHistoryPage {
    *  a zero bar. */
   readonly typeVolumes: readonly { readonly prefix: string; readonly count: number }[]
   /**
-   * The same counts/guardrails the global shell's `<Sidebar>` shows (M14 Task 3/8/12 controller
-   * ruling): this route already streams the workspace `/w/:id/activity` mounts, so
+   * The same counts/guardrails the project header and the Tasks tab's badge show (M14 Task 3/8/12
+   * controller ruling; M24 Task 2 moved them off the global shell's `<Sidebar>` onto the project
+   * header/tabs): this route already streams the workspace `/w/:id/activity` mounts, so
    * `ActivityClient` publishes this to `hooks/useShellFacts.ts` on every snapshot rather than the
-   * sidebar opening a second connection against `/api/w/:id/shell` for the same workspace. The
-   * same member `TasksSnapshot` and `GraphView` already carry, for the same reason.
+   * header/tabs opening a second connection against `/api/w/:id/shell` for the same workspace.
+   * The same member `TasksSnapshot` and `GraphView` already carry, for the same reason.
    */
   readonly shellFacts: ShellFacts
 }

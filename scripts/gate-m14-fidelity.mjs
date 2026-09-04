@@ -770,7 +770,11 @@ try {
     { name: 'projects', path: () => '/', testId: 'project-card' },
     { name: 'skills', path: () => '/skills', testId: 'empty-tile' },
     { name: 'analytics', path: () => `/analytics?workspace=${workspaceId}`, testId: 'kpi-tile' },
-    { name: 'settings', path: () => '/settings', testId: 'perm-caption' },
+    // The GLOBAL Settings page (M24 §4): provider adapters, security, danger zone -- the
+    // permission matrix moved to the project Settings tab, so `security-posture` is this page's
+    // own structural marker now (`perm-caption` is asserted separately, on `/w/<id>/settings`,
+    // right after the README numbers below).
+    { name: 'settings', path: () => '/settings', testId: 'security-posture' },
   ]
   /** The four pages whose content changes once a run is live; re-captured after stage 4b so the
    *  committed evidence shows the design doing its job, not an empty board. */
@@ -821,7 +825,7 @@ try {
 
   async function capture(target) {
     // The `next dev` overlay button is a fact about the dev server, not about the design under
-    // review, and it sits over the sidebar's guardrail block. Hidden in the SCREENSHOT only -- no
+    // review, and it sits over the sidebar's lower rows. Hidden in the SCREENSHOT only -- no
     // assertion in this file ever reads it, and nothing about the page's own layout changes.
     await page.addStyleTag({ content: 'nextjs-portal { display: none !important; }' }).catch(() => {})
     if (target.name === 'graph') await settleGraph()
@@ -879,7 +883,9 @@ try {
   // run, so it is asserted as stage 2b after stage 4b dispatches one.
   const NUMBERS = [
     ['overview', `/w/${workspaceId}`, 'nav[aria-label="Primary"]', 'width', '212px'],
-    ['overview', `/w/${workspaceId}`, '[data-testid="top-bar"]', 'height', '52px'],
+    // M24 §2.2: the workspace-scoped `TopBar` is gone -- `ProjectHeader` is the project layout's
+    // one header now, on every `/w/<id>/*` page, still 52px.
+    ['overview', `/w/${workspaceId}`, '[data-testid="project-header"]', 'height', '52px'],
     ['overview', `/w/${workspaceId}`, '[data-testid="agent-card"]', 'border-radius', '8px'],
     ['overview', `/w/${workspaceId}`, '[data-testid="agent-card"]', 'padding', '12px 13px'],
     ['overview', `/w/${workspaceId}`, '[data-testid="avatar-tile"]', 'width', '28px'],
@@ -912,41 +918,52 @@ try {
     await assertComputed(pageName, selector, property, expected)
   }
 
-  // The Agents table's seven columns. Asserted TWICE and deliberately: `getComputedStyle` resolves
+  // The project Settings tab (M24 §4): `perm-caption` moved here from the global `/settings`, and
+  // the read-only `runtime-timeout` figure the sidebar's old guardrail block used to carry (M24
+  // Task 2 removed that block; Task 4 re-homed the number here).
+  await gotoReliably(`${baseUrl}/w/${workspaceId}/settings`)
+  await waitVisible(page.getByTestId('perm-caption'), "the project Settings tab's permission matrix caption")
+  await assertComputed('project-settings', '[data-testid="runtime-timeout"]', 'font-size', '10.5px')
+  console.log('stage 2a: the project Settings tab carries perm-caption and a 10.5px mono runtime-timeout figure')
+
+  // The Agents table's nine columns (M24 §5.3: one table, agent/role/team/project/status/current
+  // task/provider/cost/actions). Asserted TWICE and deliberately: `getComputedStyle` resolves
   // `grid-template-columns` to USED track sizes, so the `1fr` comes back as a pixel width and a
   // literal string comparison against the README's template could never pass. The computed read is
-  // what proves the six fixed tracks really are 200/130/120/110/90/80 in the browser's own
-  // reckoning and that the flexible track actually took the remaining space; the authored inline
-  // value is what proves the template is the README's string and not six coincidences.
-  const AGENTS_COLUMNS = '200px 130px 120px 1fr 110px 90px 80px'
+  // what proves the eight fixed tracks really are 200/110/130/120/110/90/90/160 in the browser's
+  // own reckoning and that the flexible track actually took the remaining space; the authored
+  // inline value is what proves the template is the README's string and not eight coincidences.
+  const AGENTS_COLUMNS = '200px 110px 130px 120px 110px 1fr 90px 90px 160px'
   await gotoReliably(`${baseUrl}/agents`)
-  // The Agents page opens on WORKERS now (M14 fix wave, queue item (a)): the README's Agents page
-  // IS this seven-column table, and Roster is the tab beside it. The `clickUntil` below is kept
-  // anyway -- it is idempotent on an already-selected tab, and it is what makes this stage assert
-  // the template rather than assume which tab happened to be default.
-  // Keyed on the TABLE, not on its rows. `listWorkers()` no longer filters to roster-linked agents
-  // (review I4), so a seeded development database does render rows here -- but a database with no
-  // agents at all still renders the header alone, which is the same seven-column grid this stage
-  // measures, and waiting for a row would hang on a page that is rendering correctly.
+  // The Agents page opens on the one table now (M24 Task 7): Roster and Workers were two names for
+  // the same list of agents and are gone, folded into `agents-tab-agents` (default) beside
+  // `agents-tab-teams`. The `clickUntil` below is kept anyway -- it is idempotent on an
+  // already-selected tab, and it is what makes this stage assert the template rather than assume
+  // which tab happened to be default.
+  // Keyed on the TABLE, not on its rows. `listAllAgents()` renders every project agent AND every
+  // catalog member no project has materialized yet, so a seeded development database does render
+  // rows here -- but a database with no agents at all still renders the header alone, which is the
+  // same nine-column grid this stage measures, and waiting for a row would hang on a page that is
+  // rendering correctly.
   await clickUntil(
-    page.getByTestId('agents-tab-workers'),
+    page.getByTestId('agents-tab-agents'),
     async () =>
       (await page.evaluate(
         () => document.querySelector('[data-testid="data-table-header"]')?.style.gridTemplateColumns ?? null,
       )) === AGENTS_COLUMNS,
-    'the Workers tab',
+    'the Agents tab',
   )
   const workerHeaderCells = await page.getByTestId('data-table-header-cell').count()
-  if (workerHeaderCells !== 7) {
-    await fail(`stage 2 (agents): the Workers table has ${String(workerHeaderCells)} header cell(s), expected 7`)
+  if (workerHeaderCells !== 9) {
+    await fail(`stage 2 (agents): the Agents table has ${String(workerHeaderCells)} header cell(s), expected 9`)
   }
   const agentsComputed = normalize((await computed('[data-testid="data-table-header"]', 'grid-template-columns')) ?? '')
-  const agentsUsed = /^200px 130px 120px (\d+(?:\.\d+)?)px 110px 90px 80px$/.exec(agentsComputed)
+  const agentsUsed = /^200px 110px 130px 120px 110px (\d+(?:\.\d+)?)px 90px 90px 160px$/.exec(agentsComputed)
   if (agentsUsed === null) {
     await fail(
       `stage 2 (agents): [data-testid="data-table-header"] grid-template-columns is ${JSON.stringify(agentsComputed)}, ` +
         `expected the used form of ${JSON.stringify(AGENTS_COLUMNS)} -- ` +
-        '`200px 130px 120px <the 1fr track>px 110px 90px 80px`',
+        '`200px 110px 130px 120px 110px <the 1fr track>px 90px 90px 160px`',
     )
   }
   if (Number(agentsUsed[1]) <= 0) {
@@ -957,7 +974,7 @@ try {
   )
   if (normalize(agentsAuthored ?? '') !== AGENTS_COLUMNS) {
     await fail(
-      `stage 2 (agents): the Workers table is laid out on ${JSON.stringify(agentsAuthored)}, ` +
+      `stage 2 (agents): the Agents table is laid out on ${JSON.stringify(agentsAuthored)}, ` +
         `expected ${JSON.stringify(AGENTS_COLUMNS)}`,
     )
   }
@@ -965,7 +982,7 @@ try {
     `stage 2 (agents): [data-testid="data-table-header"] grid-template-columns = ${JSON.stringify(AGENTS_COLUMNS)} ` +
       `(used: ${agentsComputed})`,
   )
-  console.log(`stage 2a PASSED: ${String(NUMBERS.length + 1)} README values read back from getComputedStyle`)
+  console.log(`stage 2a PASSED: ${String(NUMBERS.length + 2)} README values read back from getComputedStyle`)
 
   // ============================================================================================
   // Stage 4a: the two-step STOP, the halt banner, and clear-halt.

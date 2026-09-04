@@ -39,8 +39,8 @@ provider account.
 
 ## Attach your repository
 
-A workspace is a local git clone you already have. Attach it from the CLI or from **Settings →
-Projects** in the UI:
+A workspace is a local git clone you already have. Attach it from the CLI or from the **Projects**
+page's **New project** button in the UI:
 
 ```bash
 npm run orchestrator -- create-workspace --name <name> --repo /abs/path/to/repo \
@@ -55,26 +55,29 @@ orchestrator keeps its worktrees and logs under `<repo>/.aiteamos/` and gitignor
 Staff it and give the team something to do:
 
 ```bash
-npm run orchestrator -- assign-company --workspace <id> --company <id>   # or from Settings
+npm run orchestrator -- assign-company --workspace <id> --company <id>   # or from the project card on the Projects page
 npm run orchestrator -- set-goal --workspace <id> --goal "Add rate limiting to the public API"
 ```
 
 A workspace with a goal and an empty board gets a planning run on the next tick. The planner writes
 tasks; agents whose role matches pick them up. A company is a persistent roster of agents built
-from templates — manage it on the Settings and Agents pages or with `create-company`, `add-team`,
-`add-agent`.
+from templates — manage it on the Projects page's team catalog and the Agents page, or with
+`create-company`, `add-team`, `add-agent`.
 
 ## The web UI
 
 | Page | What it shows |
 |---|---|
-| **Home** `/` | Every project (workspace) with its spend and team; click one to open it. |
+| **Projects** `/` | Every project (workspace) with its spend and team; click one to open it. **New project** attaches a repo; below the cards, the team catalog (agent templates and companies). |
 | **Overview** `/w/<id>` | One card per agent: status, current task, live action line, spend against budget. A halt banner when the workspace is stopped. |
 | **Tasks** `/w/<id>/tasks` | The board by status. Click a task for its runs and cost, its verify logs under **Artifacts**, and a **Collect worktree** button once it has finished. |
-| **Activity** `/w/<id>/activity` | Every event, live, filterable by kind, agent and task; the filters live in the URL. Events made from the UI name the user who made them. |
 | **Graph** `/w/<id>/graph` | Five views: the org tree, live execution, the task dependency DAG (draw or delete an edge to change it), the skill chain, and who handed work to whom. |
-| **Agents** `/agents` | The whole roster: rename, re-role or delete an agent inline; rename or delete a team. |
-| **Skills**, **Analytics**, **Settings** | Skill catalog and assignments; spend and throughput; provider, budget, goal, the company roster, Projects, and the danger zone. |
+| **Activity** `/w/<id>/activity` | Every event, live, filterable by kind, agent and task; the filters live in the URL. Events made from the UI name the user who made them. |
+| **Settings** `/w/<id>/settings` | This project's goal, its runtime (provider, budget, and the read-only concurrency/timeout/attempts limits), its own agent permissions, and its emergency stop. |
+| **Agents** `/agents` | One table + Teams: every agent, project-materialized or still catalog-only, rename/re-role/delete and a model or provider override inline; a **Teams** tab beside it for team rename/delete. |
+| **Skills** `/skills` | The skill catalog and its assignments. |
+| **Analytics** `/analytics` | Spend and throughput. |
+| **Settings** `/settings` | Provider adapters, security, and reset demo data (development only). |
 
 Every page updates itself over a live event stream. Interventions — **Pause**, **Resume** (with a
 message), **Stop**, **Emergency stop** — live in the task panel and on the Overview strip. A pause

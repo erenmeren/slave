@@ -204,4 +204,45 @@ Comments change in the same commit as the behaviour they describe. `git add` exp
 
 ## 10. Errata — where execution corrected the plan
 
-(empty at approval; filled by the last task)
+Every ruling below is a controller decision made while executing this spec against the real
+tree, recorded here (Task 9) because the spec itself is silent or wrong on the point. Numbered
+in the order the rulings were made.
+
+1. **`ShellFacts.status` is required, not optional (T1).** Task 1 widened `ShellFacts` with a
+   required `status` block and updated every test fixture that builds one (11 files), rather than
+   making the field optional — a caller that forgets to populate it fails to compile instead of
+   rendering an incomplete header.
+2. **The four operator gates were knowingly red from T2 to T9.** `gate-m14-fidelity`,
+   `gate-m16-chrome`, `gate-m11-shell` and `gate-m18-skill-and-teeth` read the old shell's
+   selectors from Task 2 (the sidebar/`TopBar` removal) until Task 9 fixed them; CI's own gates
+   were unaffected throughout.
+3. **The `RuntimeCard` remount test moved, not vanished (T3/T4).** Task 3 removed the "RuntimeCard
+   remount on a saved change" test along with the card it covered; Task 4 re-homed that coverage
+   against `ProjectSettingsClient`'s own `key=` remount.
+4. **`ProjectsClient`'s `templates`/`roster` props are required (T6).** A review fix — the first
+   cut defaulted them to `[]`, which would have silently rendered an empty catalog for a caller
+   that forgot to pass them; both are required props instead.
+5. **The roster's chain-source chips and expand-a-member rows left with the table (T7).**
+   `RosterTable`'s model/provider chain-source chips and its expand-a-member sub-rows did not
+   survive the merge into one table — spec §5.3's one table carries no chain-source indicator.
+   `ModelOverrideEditor` on every project row keeps the override entry point.
+6. **`listAllAgents` reads `Agent.model` directly for every project row (T7).** The plan's
+   `listAllAgents` sample left `model` null for a project agent with no roster link; execution
+   reads `Agent.model` directly for every project row instead (one extra query), because the table
+   exposes the model editor on every project agent, roster-linked or not.
+7. **The "poll-only" agent test now asserts the row's live fields, not its mere appearance (T7).**
+   The old "an agent appears purely via the poll" test could not survive a merge-only poll (a
+   catalog row's `agentId` is `null` and never matches a polled worker); the case now asserts that
+   a row's current status/ids reach `onOpen`.
+8. **The panel header's `·` separator needed an explicit glyph (T8).** The spec's panel header
+   separator (`·`) rendered as a bare gap under the plan's template; the final fix wave adds the
+   glyph.
+9. **The transport chooser left with the danger zone (T5).** `transport-sse`/`transport-ws` were
+   removed from the global Settings page in the same task that stripped the danger zone down to
+   reseed-only — neither survives the migration to `SettingsClient`'s three panels.
+10. **`GoalPanel` gained an edit button (T4).** The Settings tab's `GoalPanel` — unlike the
+    Overview card it replaced — offers a `goal-edit` control once a goal is set, since the
+    Settings tab is where an operator is expected to go back and change one.
+
+`formatTokens` moved to `lib/format.ts` in Task 7, and `formatTimeout` moved to the same file in
+Task 2 — both previously lived closer to their one caller.

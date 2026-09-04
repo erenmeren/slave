@@ -64,10 +64,11 @@ export interface TasksSnapshot {
   readonly workspace: { readonly id: string; readonly name: string; readonly haltedReason: string | null }
   readonly tasks: readonly TaskBoardItem[]
   /**
-   * The same counts/guardrails the global shell's `<Sidebar>` shows (M14 Task 8/10 controller
-   * ruling): this route already streams the workspace `/w/:id/tasks` mounts, so `TasksClient`
-   * publishes this to `hooks/useShellFacts.ts` on every snapshot rather than the sidebar opening
-   * a second `EventSource` against `/api/w/:id/shell` for the same workspace.
+   * The same counts/guardrails the project header and the Tasks tab's badge show (M14 Task 8/10
+   * controller ruling; M24 Task 2 moved them off the global shell's `<Sidebar>` onto the project
+   * header/tabs): this route already streams the workspace `/w/:id/tasks` mounts, so
+   * `TasksClient` publishes this to `hooks/useShellFacts.ts` on every snapshot rather than the
+   * header/tabs opening a second `EventSource` against `/api/w/:id/shell` for the same workspace.
    */
   readonly shellFacts: ShellFacts
 }

@@ -643,10 +643,11 @@ describe('buildOverviewSnapshot', () => {
     expect('goalSuggestions' in (snapshot as object)).toBe(false)
   })
 
-  it('carries the guardrail columns the sidebar reads, so the page can provide them', async (): Promise<void> => {
-    // The `ShellFactsContext` half of the controller ruling carried from Task 3: the Overview
-    // page provides the sidebar's facts from the stream it already has, instead of the sidebar
-    // opening a second `EventSource`. It can only do that if the snapshot carries them.
+  it('carries the guardrail columns the project header and Tasks tab badge read, so the page can provide them', async (): Promise<void> => {
+    // The `ShellFactsContext` half of the controller ruling carried from Task 3 (M24 Task 2 moved
+    // these onto the project header/tabs): the Overview page provides those facts from the stream
+    // it already has, instead of the header/tabs opening a second `EventSource`. It can only do
+    // that if the snapshot carries them.
     await prisma.workspace.update({
       where: { id: fixture.workspaceId },
       data: { maxConcurrentRuns: 4, runTimeoutMs: 900_000, maxAttempts: 5 },

@@ -2,8 +2,9 @@
 // steered entirely from the browser". `gate-m10-org.mjs` proves the org model's verbs the way an
 // operator running the CLI would; this script proves the SAME materialization/model-resolution
 // machinery the way an operator using the web shell actually would -- a real Chromium
-// (`playwright-core`, no test runner) driving a real `next dev` server through `/settings`, `/`
-// and `/agents`, with every assertion a direct `prisma` read, never anything the browser merely
+// (`playwright-core`, no test runner) driving a real `next dev` server through `/` (the team
+// catalog and the project cards; M24 Task 6 moved the catalog off `/settings` here) and
+// `/agents`, with every assertion a direct `prisma` read, never anything the browser merely
 // claims.
 //
 // Shape borrowed verbatim from `gate-m10-org.mjs`: dist imports, everything created inside `try`,
@@ -313,8 +314,11 @@ try {
   page.setDefaultTimeout(ACTION_TIMEOUT_MS)
   page.on('pageerror', (error) => console.error(`[browser:pageerror] ${error}`))
 
-  // ---- Scenario stage 1: /settings -- template, company, team, member, all through the forms.
-  await page.goto(`${baseUrl}/settings`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
+  // ---- Scenario stage 1: / -- template, company, team, member, all through the team-catalog
+  // forms (M24 Task 6 moved the template catalog and company manager off Settings onto the
+  // Projects page, below the project cards -- same testids, new page).
+  await page.goto(`${baseUrl}/`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
+  await waitVisible(page.getByTestId('team-catalog'), 'the Projects page team catalog')
 
   await fillReliably(page.getByLabel('template name'), TEMPLATE_NAME, 'the template name field')
   await fillReliably(page.getByLabel('template role'), 'backend', 'the template role field')
@@ -357,7 +361,23 @@ try {
   if (companyAgent === null) await fail(`the "${MEMBER_NAME}" row appeared in the browser but is missing from the DB`)
   const companyAgentId = companyAgent.id
   console.log(`member created and asserted: ${companyAgentId}`)
-  console.log('stage 1 (/settings) complete: template, company, team and member all created and asserted through the browser')
+  console.log('stage 1 (/) complete: template, company, team and member all created and asserted through the browser')
+
+  // The member is not yet materialized into any project -- the Agents page's one table (M24
+  // §5.3) shows exactly one catalog-only row for it, `agent-project` reading "—".
+  await page.goto(`${baseUrl}/agents`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
+  const catalogRow = page.getByTestId('data-table-row').filter({ hasText: MEMBER_NAME })
+  await waitVisible(catalogRow, `a catalog-only "${MEMBER_NAME}" row before any project is assigned`)
+  const catalogRowCount = await catalogRow.count()
+  if (catalogRowCount !== 1) {
+    await fail(`the Agents table shows ${catalogRowCount} "${MEMBER_NAME}" row(s) before assignment, expected exactly 1 (catalog-only)`)
+  }
+  const catalogProjectCell = catalogRow.getByTestId('agent-project')
+  const catalogProjectText = (await catalogProjectCell.first().textContent())?.trim()
+  if (catalogProjectText !== '—') {
+    await fail(`the unmaterialized "${MEMBER_NAME}" row's project cell reads ${JSON.stringify(catalogProjectText)}, expected "—"`)
+  }
+  console.log(`"${MEMBER_NAME}" shows as one catalog-only row (project "—") before any project has it`)
 
   // ---- Scenario stage 2: / -- both project cards start "no company"; assign M11 Gate Co to both.
   await page.goto(`${baseUrl}/`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
@@ -391,70 +411,71 @@ try {
 
   await assignCompanyToProject(workspaceNameA)
   await assertCardBadge(workspaceNameA, COMPANY_NAME)
-  await waitVisible(projectWrapper(workspaceNameA).getByTestId('worker-avatar'), `a worker avatar on the "${workspaceNameA}" card`)
+  await waitVisible(projectWrapper(workspaceNameA).getByTestId('avatar-tile'), `a worker avatar on the "${workspaceNameA}" card`)
   console.log(`"${workspaceNameA}" assigned "${COMPANY_NAME}" and shows a worker avatar`)
 
   await assignCompanyToProject(workspaceNameB)
   await assertCardBadge(workspaceNameB, COMPANY_NAME)
-  await waitVisible(projectWrapper(workspaceNameB).getByTestId('worker-avatar'), `a worker avatar on the "${workspaceNameB}" card`)
+  await waitVisible(projectWrapper(workspaceNameB).getByTestId('avatar-tile'), `a worker avatar on the "${workspaceNameB}" card`)
   console.log(`"${workspaceNameB}" assigned "${COMPANY_NAME}" and shows a worker avatar`)
   console.log('stage 2 (/) complete: both projects staffed by the same company, asserted through the browser')
 
-  // ---- Scenario stage 3: /agents -- Workers tab lists Gate Worker twice; Roster shows "none".
+  // The project header's `budget` chip (M24 §2.2 -- the guardrail block's old budget figure moved
+  // here): reachable on any project page now, asserted on workspace A.
+  await page.goto(`${baseUrl}/w/${workspaceIdA}`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
+  await waitVisible(page.getByTestId('project-header'), `the "${workspaceNameA}" project header`)
+  await waitVisible(page.getByTestId('budget'), "the header's budget figure")
+  console.log(`the "${workspaceNameA}" project header shows a budget figure`)
+
+  // ---- Scenario stage 3: /agents -- the one table lists Gate Worker materialized in both projects.
   await page.goto(`${baseUrl}/agents`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
 
-  // The Roster tab (the default on load) also renders a `data-table-row` for this member --
-  // `AgentsClient` mounts exactly one of `RosterTable`/`WorkersTable` at a time, so a bare
-  // `hasText: MEMBER_NAME` row locator is already satisfied before the click below ever fires,
-  // and `clickUntil`'s predicate could pass on a no-op click. Requiring the Workers tab's own
-  // `aria-selected="true"` closes that gap: that attribute only flips once the click's React
-  // handler has actually run.
-  const workersTab = page.getByTestId('agents-tab-workers')
-  const workerRows = page.getByTestId('data-table-row').filter({ hasText: MEMBER_NAME })
+  // `agents-tab-agents` is the default tab, but the click below is kept anyway (idempotent on an
+  // already-selected tab) -- requiring its own `aria-selected="true"` is what makes this stage
+  // assert the tab rather than assume which one happened to already be selected.
+  const agentsTab = page.getByTestId('agents-tab-agents')
+  const memberRows = page.getByTestId('data-table-row').filter({ hasText: MEMBER_NAME })
   await clickUntil(
-    workersTab,
-    async () => (await workersTab.getAttribute('aria-selected')) === 'true' && (await workerRows.first().isVisible()),
-    'the Workers tab',
+    agentsTab,
+    async () => (await agentsTab.getAttribute('aria-selected')) === 'true' && (await memberRows.first().isVisible()),
+    'the Agents tab',
   )
-  await waitVisible(workerRows, `a "${MEMBER_NAME}" row in the Workers tab`)
-  const workerRowCount = await workerRows.count()
-  if (workerRowCount !== 2) {
+  await waitVisible(memberRows, `a "${MEMBER_NAME}" row in the Agents table`)
+  const memberRowCount = await memberRows.count()
+  if (memberRowCount !== 2) {
     await fail(
-      `the Workers tab shows ${workerRowCount} "${MEMBER_NAME}" row(s), expected 2 (one per project) -- ` +
-        `rows=${JSON.stringify(await workerRows.allTextContents())}`,
+      `the Agents table shows ${memberRowCount} "${MEMBER_NAME}" row(s), expected 2 (one per project) -- ` +
+        `rows=${JSON.stringify(await memberRows.allTextContents())}`,
     )
   }
-  console.log(`Workers tab lists "${MEMBER_NAME}" twice, once per project`)
+  console.log(`the Agents table lists "${MEMBER_NAME}" twice, once per project`)
 
-  const rosterCompanyBlock = page.getByTestId('roster-company').filter({ hasText: COMPANY_NAME })
-  await clickUntil(page.getByTestId('agents-tab-roster'), async () => rosterCompanyBlock.first().isVisible(), 'the Roster tab')
-  await waitVisible(rosterCompanyBlock, `the "${COMPANY_NAME}" roster block`)
-  const rosterTeamBlock = rosterCompanyBlock.getByTestId('roster-team').filter({ hasText: TEAM_NAME })
-  await waitVisible(rosterTeamBlock, `the "${TEAM_NAME}" roster team block`)
-  const rosterMemberRow = rosterTeamBlock.getByTestId('roster-member').filter({ hasText: MEMBER_NAME })
-  await waitVisible(rosterMemberRow, `the "${MEMBER_NAME}" roster member row`)
-  const modelSourceChip = rosterMemberRow.getByTestId('chip').filter({ hasText: 'none' })
-  await waitVisible(modelSourceChip, `the "${MEMBER_NAME}" member's "none" modelSource chip`)
-  console.log(`Roster shows "${MEMBER_NAME}" with modelSource "none"`)
-  console.log('stage 3 (/agents) complete: Workers duplicated across both projects, Roster modelSource asserted "none"')
-
-  // ---- Scenario stage 4: set gate-model-x on ONE worker via the Roster's ModelOverrideEditor.
-  const memberWorkers = rosterMemberRow.getByTestId('member-workers')
-  await clickUntil(rosterMemberRow.getByTestId('roster-member-toggle'), async () => memberWorkers.first().isVisible(), `expanding "${MEMBER_NAME}"`)
-  await waitVisible(memberWorkers, `the expanded "${MEMBER_NAME}" workers block`)
-  const expandedWorkerRows = memberWorkers.getByTestId('roster-worker-row')
-  const expandedWorkerCount = await expandedWorkerRows.count()
-  if (expandedWorkerCount !== 2) {
-    await fail(
-      `"${MEMBER_NAME}"'s expanded workers block shows ${expandedWorkerCount} row(s), expected 2 -- ` +
-        `rows=${JSON.stringify(await expandedWorkerRows.allTextContents())}`,
-    )
+  for (const workspaceName of [workspaceNameA, workspaceNameB]) {
+    const row = memberRows.filter({ hasText: workspaceName })
+    await waitVisible(row, `the "${MEMBER_NAME}" row for project "${workspaceName}"`)
+    const projectText = (await row.getByTestId('agent-project').first().textContent())?.trim()
+    if (projectText !== workspaceName) {
+      await fail(
+        `the "${MEMBER_NAME}" row's project cell reads ${JSON.stringify(projectText)}, expected ${JSON.stringify(workspaceName)} -- ` +
+          'materialization must name the row\'s own project, not the catalog "—"',
+      )
+    }
   }
-  const targetWorkerRow = expandedWorkerRows.filter({ hasText: workspaceNameA })
-  await waitVisible(targetWorkerRow, `the "${workspaceNameA}" worker row under "${MEMBER_NAME}"`)
+  console.log(`each "${MEMBER_NAME}" row's project cell now names its own project`)
+
+  const modelOverrideValue = await memberRows.first().getByTestId('model-override-input').inputValue()
+  if (modelOverrideValue !== '') {
+    await fail(`"${MEMBER_NAME}"'s model override input reads ${JSON.stringify(modelOverrideValue)}, expected "" (no override set yet)`)
+  }
+  console.log(`"${MEMBER_NAME}" carries no model override yet -- the model-override editor reads empty`)
+  console.log('stage 3 (/agents) complete: the one table shows the member materialized in both projects, with no override set')
+
+  // ---- Scenario stage 4: set gate-model-x on ONE worker via the Agents table's ModelOverrideEditor.
+  const targetWorkerRow = memberRows.filter({ hasText: workspaceNameA })
+  await waitVisible(targetWorkerRow, `the "${workspaceNameA}" row for "${MEMBER_NAME}"`)
 
   // M12 Task 7 made a model and its provider one write; Task 13 threads the provider through this
-  // route's body and the Roster editor's own `<select>`, so both go into this worker row together.
+  // route's body and the editor's own `<select>`, so both go into this worker row together.
   await selectReliably(
     targetWorkerRow.getByLabel('provider'),
     PROVIDER_OVERRIDE,
@@ -462,13 +483,18 @@ try {
     `the "${workspaceNameA}" worker's provider select`,
   )
   await fillReliably(targetWorkerRow.getByTestId('model-override-input'), MODEL_OVERRIDE, `the "${workspaceNameA}" worker's model override input`)
-  const updatedModelText = targetWorkerRow.locator('span.font-mono.text-text-3').filter({ hasText: MODEL_OVERRIDE })
+  // The table's own row no longer carries a separate display node for the saved model (M24 Task
+  // 7, Errata: the chain-source chips left with the table) -- `clickUntil`'s predicate reads
+  // straight from Prisma instead, the same "the click actually did something" proof this gate
+  // uses everywhere else a click's visible feedback is otherwise ambiguous.
   await clickUntil(
     targetWorkerRow.getByTestId('model-override-set'),
-    async () => updatedModelText.first().isVisible(),
+    async () => {
+      const agent = await prisma.agent.findFirst({ where: { team: { workspaceId: workspaceIdA }, companyAgentId, name: MEMBER_NAME } })
+      return agent?.model === MODEL_OVERRIDE && agent?.provider === PROVIDER_OVERRIDE
+    },
     `setting "${MODEL_OVERRIDE}" on the "${workspaceNameA}" worker`,
   )
-  await waitVisible(updatedModelText, `the "${workspaceNameA}" worker row reflecting model "${MODEL_OVERRIDE}"`)
 
   const workerAgentA = await prisma.agent.findFirst({ where: { team: { workspaceId: workspaceIdA }, companyAgentId, name: MEMBER_NAME } })
   const workerAgentB = await prisma.agent.findFirst({ where: { team: { workspaceId: workspaceIdB }, companyAgentId, name: MEMBER_NAME } })
@@ -490,7 +516,7 @@ try {
   console.log(
     `the DB confirms model ${JSON.stringify(MODEL_OVERRIDE)} and provider ${JSON.stringify(PROVIDER_OVERRIDE)} landed on exactly the "${workspaceNameA}" worker`,
   )
-  console.log('stage 4 complete: a worker model+provider override, set through the Roster editor, verified against prisma.agent')
+  console.log('stage 4 complete: a worker model+provider override, set through the Agents table editor, verified against prisma.agent')
 
   console.log(`PASS: the shell staffed and steered ${projectNames.length} projects from the browser`)
   exitCode = 0
