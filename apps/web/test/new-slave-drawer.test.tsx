@@ -10,7 +10,7 @@ vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: routerRefresh }
 
 const companies = [{ id: 'c1', name: 'Atlas Software' }]
 const roster: readonly RosterCompany[] = [
-  { companyId: 'c1', companyName: 'Atlas Software', teams: [{ companyTeamId: 'ct1', teamName: 'Backend', members: [] }] },
+  { companyId: 'c1', companyName: 'Atlas Software', projectsUsing: 0, teams: [{ companyTeamId: 'ct1', teamName: 'Backend', members: [] }] },
 ]
 const templates = [{ id: 'tpl1', name: 'Backend Developer', role: 'backend', description: '', defaultModel: null, defaultProvider: null }]
 const workspaces = [{ id: 'w1', name: 'Checkout' }]

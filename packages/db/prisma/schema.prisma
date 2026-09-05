@@ -92,9 +92,10 @@ model Workspace {
 
   createdAt DateTime @default(now())
 
-  // No explicit onDelete: company deletion is out of scope for M10 (the design spec never
-  // addresses it), so this optional relation keeps Prisma's Postgres default for an optional
-  // FK -- SetNull -- rather than a Cascade that would destroy a project's history.
+  // No explicit onDelete: `deleteCompany` (M27 §5) detaches an assigned project's `companyId`
+  // itself, inside its own transaction, so it can COUNT what it detached before the row is gone --
+  // this optional relation keeps Prisma's Postgres default for an optional FK -- SetNull -- rather
+  // than a Cascade that would destroy a project's history.
   company Company? @relation(fields: [companyId], references: [id])
   goalSetByUser User? @relation(fields: [goalSetByUserId], references: [id], onDelete: SetNull)
 

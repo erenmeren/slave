@@ -115,9 +115,13 @@ describe('PUT /api/org/teams/[companyTeamId]/name and DELETE /api/org/teams/[com
     expect(row.name).toBe('Platform')
   })
 
-  it('409s deleting a template with members, 200s deleting an empty one', async () => {
+  // M27 §4.3: `deleteCompanyTeam` no longer refuses a template that still has members -- it
+  // deletes the template WITH its catalog slaves (the schema cascades `CompanySlave`).
+  it('200s deleting a template with members (cascading its catalog slaves), and an empty one', async () => {
     const full = await deleteTemplate(new Request('http://test/api', { method: 'DELETE' }), { params: Promise.resolve({ companyTeamId: fixture.templateTeamId }) })
-    expect(full.status).toBe(409)
+    expect(full.status).toBe(200)
+    expect(await prisma.companyTeam.findUnique({ where: { id: fixture.templateTeamId } })).toBeNull()
+    expect(await prisma.companySlave.findUnique({ where: { id: fixture.companySlaveId } })).toBeNull()
 
     const empty = await deleteTemplate(new Request('http://test/api', { method: 'DELETE' }), { params: Promise.resolve({ companyTeamId: fixture.emptyTemplateTeamId }) })
     expect(empty.status).toBe(200)

@@ -59,6 +59,10 @@ export const TYPES_BY_KIND = {
     'workspace.company_assigned',
     'workspace.settings_changed',
     'org.changed',
+    // M27 §3.2: archiving/restoring a project is workspace lifecycle, the same chip as
+    // `workspace.created` -- not a run outcome and not a guardrail trip.
+    'workspace.archived',
+    'workspace.restored',
   ],
 } as const satisfies Record<ActivityKind, readonly DomainEventType[]>
 

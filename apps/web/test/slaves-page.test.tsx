@@ -29,6 +29,7 @@ function slaveRow(over: Partial<AllSlaveRow> = {}): AllSlaveRow {
     model: null,
     costUsd: 0,
     unmeasuredRuns: 0,
+    runCount: 0,
     ...over,
   }
 }
@@ -73,7 +74,7 @@ describe('SlavesClient tabs', () => {
     render(
       <SlavesClient
         slaves={page([slaveRow({})])}
-        teams={[{ teamId: 't1', name: 'Platform', workspaceId: 'w1', projectName: 'Checkout', slaveCount: 2 }]}
+        teams={[{ teamId: 't1', name: 'Platform', workspaceId: 'w1', projectName: 'Checkout', slaveCount: 2, runCount: 0 }]}
         workspaces={[]}
         companies={[]}
         roster={[]}

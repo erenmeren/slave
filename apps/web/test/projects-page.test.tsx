@@ -23,6 +23,7 @@ function project(over: Partial<ProjectRow>): ProjectRow {
     name: 'Checkout Platform',
     companyName: null,
     halted: false,
+    archived: false,
     taskCounts: { done: 2, total: 5, active: 1, blocked: 0 },
     workerCount: 3,
     spend: 12.5,

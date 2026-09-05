@@ -40,6 +40,21 @@ function chainSource(hasWorkerOverride: boolean, rosterValue: unknown, templateV
 // it, and this task's scope is one new module, nothing else changes.
 const ACTIVE_TASK_STATUSES = ['ready', 'running', 'verifying', 'reviewing', 'merging', 'rework'] as const
 
+/** Every list read below's default filter (M27 §3.3): an archived project has `archivedAt !==
+ *  null` and is hidden from every list unless a caller opts in with `includeArchived: true`
+ *  (the Projects page's `show archived` toggle is the one caller that does -- every other read
+ *  keeps the default). A bare `{}` puts no constraint on `archivedAt` at all, rather than an
+ *  `{ archivedAt: { not: null } }` that would flip the toggle into an archived-ONLY view nothing
+ *  asks for. */
+const notArchived = (includeArchived?: boolean): { archivedAt?: null } => (includeArchived === true ? {} : { archivedAt: null })
+
+/** Whether a project is archived -- `ProjectHeader`'s chip and `ProjectSettingsClient`'s danger
+ *  zone both need this one flag with no other row data. */
+export async function workspaceArchived(workspaceId: string): Promise<boolean> {
+  const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId }, select: { archivedAt: true } })
+  return workspace !== null && workspace.archivedAt !== null
+}
+
 /** `sumSpendFromGroups`'s pair under this DTO's own field names (`listProjects` and `listWorkers`
  *  below both group in SQL and share this one wrapper -- `spendOf`, the equivalent wrapper over a
  *  whole-history row array, was deleted in the M19 Task 12 rewrite once `listWorkers` stopped being
@@ -54,6 +69,10 @@ export interface ProjectRow {
   readonly name: string
   readonly companyName: string | null
   readonly halted: boolean
+  /** M27 §3.3: `Workspace.archivedAt !== null`. The Projects page's `archived` chip and its
+   *  Restore button key off this; `listProjects()`'s default hides the row entirely, so a caller
+   *  that never passes `includeArchived: true` never sees `archived: true` at all. */
+  readonly archived: boolean
   readonly taskCounts: { readonly done: number; readonly total: number; readonly active: number; readonly blocked: number }
   /**
    * How many slaves this workspace has (M14 fix wave, ruling on review I4): every `Slave` row on
@@ -83,10 +102,13 @@ export interface ProjectRow {
   readonly unmeasuredRuns: number
 }
 
-export async function listProjects(): Promise<readonly ProjectRow[]> {
+/** Every project (M27 §3.3, §7): hides an archived project by default -- `options?.includeArchived`
+ *  is the Projects page's `show archived` toggle, the one caller that passes `true`. */
+export async function listProjects(options?: { readonly includeArchived?: boolean }): Promise<readonly ProjectRow[]> {
   // `teams: { include: { slaves: true } }` -- the avatar row's source. One join, not a
   // per-project query: every workspace's team roster comes back in this same round trip.
   const workspaces = await prisma.workspace.findMany({
+    where: notArchived(options?.includeArchived),
     include: { company: true, teams: { include: { slaves: true } } },
     orderBy: { name: 'asc' },
   })
@@ -167,6 +189,7 @@ export async function listProjects(): Promise<readonly ProjectRow[]> {
     name: workspace.name,
     companyName: workspace.company?.name ?? null,
     halted: workspace.haltedReason !== null,
+    archived: workspace.archivedAt !== null,
     goal: workspace.goal,
     taskCounts: {
       done: countOf(workspace.id, ['done']),
@@ -192,10 +215,19 @@ export async function listProjects(): Promise<readonly ProjectRow[]> {
   }))
 }
 
-/** Every workspace by name, for the project header's switcher (M24 §2.2). Two columns, no joins:
- *  `listProjects` exists for the cards and is far heavier than a dropdown needs. */
-export async function listWorkspaceNames(): Promise<readonly { readonly id: string; readonly name: string }[]> {
-  return prisma.workspace.findMany({ select: { id: true, name: true }, orderBy: { name: 'asc' } })
+/** Every workspace by name, for the project header's switcher (M24 §2.2), the New department and
+ *  New slave forms' project pickers, and `listWorkspaces` (`server/workspaces.ts`). Two columns,
+ *  no joins: `listProjects` exists for the cards and is far heavier than a dropdown needs. Hides
+ *  an archived project by default (M27 §3.3) -- the switcher never lists one, matching the rule
+ *  that an archived project leaves the header's world entirely. */
+export async function listWorkspaceNames(
+  options?: { readonly includeArchived?: boolean },
+): Promise<readonly { readonly id: string; readonly name: string }[]> {
+  return prisma.workspace.findMany({
+    where: notArchived(options?.includeArchived),
+    select: { id: true, name: true },
+    orderBy: { name: 'asc' },
+  })
 }
 
 interface CurrentTask {
@@ -294,6 +326,11 @@ export interface RosterMemberRow {
 export interface RosterCompany {
   readonly companyId: string
   readonly companyName: string
+  /** How many projects have this company assigned (`Workspace.companyId`) -- the Team catalog's
+   *  `company-delete` confirm (M27 §5.1) names this alongside the department-template and
+   *  catalog-slave counts a deletion would cascade, so an operator sees what survives before it
+   *  runs. One `groupBy` in `listRoster`, not a per-company query. */
+  readonly projectsUsing: number
   readonly teams: ReadonlyArray<{
     readonly companyTeamId: string
     readonly teamName: string
@@ -329,9 +366,17 @@ export async function listRoster(): Promise<readonly RosterCompany[]> {
     maxToolCallsByWorkspace,
   )
 
+  // One grouped query for every company's assigned-project count (M27 §5.1) -- not a per-company
+  // `count()` inside the `map` below.
+  const projectsUsingGroups = await prisma.workspace.groupBy({ by: ['companyId'], _count: { _all: true } })
+  const projectsUsingByCompany = new Map(
+    projectsUsingGroups.filter((g) => g.companyId !== null).map((g) => [g.companyId as string, g._count._all] as const),
+  )
+
   return companies.map((company) => ({
     companyId: company.id,
     companyName: company.name,
+    projectsUsing: projectsUsingByCompany.get(company.id) ?? 0,
     teams: company.teams.map((team) => ({
       companyTeamId: team.id,
       teamName: team.name,
@@ -421,9 +466,13 @@ export interface WorkerRow {
  * and disagreed with `listProjects`'s avatar row about how many slaves a project has.
  * `department` is the slave's TEAM name, which every slave has; `companyName` may be null, and
  * that is not a reason to hide a slave from the page that lists slaves.
+ *
+ * Hides an archived project's slaves by default (M27 §3.3) -- `options?.includeArchived` is
+ * threaded through from `listAllSlaves`, which is the Slaves page's own read.
  */
-export async function listWorkers(): Promise<readonly WorkerRow[]> {
+export async function listWorkers(options?: { readonly includeArchived?: boolean }): Promise<readonly WorkerRow[]> {
   const slaves = await prisma.slave.findMany({
+    where: { team: { workspace: notArchived(options?.includeArchived) } },
     orderBy: { name: 'asc' },
     include: { team: { include: { workspace: true } } },
   })
@@ -558,6 +607,12 @@ export interface AllSlaveRow {
   readonly model: string | null
   readonly costUsd: number
   readonly unmeasuredRuns: number
+  /** Every run this slave has ever had, live or finished; `0` for a catalog row that has no
+   *  materialized slave to have run anything (M27 §4.3's delete confirm: "deletes Alex and 14
+   *  runs of history" reads this straight off the row -- `AllSlavesTable`'s poll merge leaves it
+   *  as it was rather than re-deriving it on every poll tick; it is refreshed on the next
+   *  `router.refresh()`/reload). */
+  readonly runCount: number
 }
 
 /** One selectable department: a project `Team`, or a catalog `CompanyTeam` (M25 Task 6). The
@@ -598,18 +653,25 @@ export interface AllSlavesPage {
  * `departmentsByWorkspace`/`templatesByCompany` are each ONE query, grouped once here rather than
  * fetched per row -- `DepartmentCell` (`AllSlavesTable.tsx`) picks its own row's list straight out
  * of the map by `workspaceId`/`companyId`, with no round trip of its own.
+ *
+ * `runCount` (M27 §7) is its own `slaveRun.groupBy` by `slaveId` alone -- `listWorkers`'s own
+ * grouped query already buckets by `slaveId`/`provider`/`status` for `costUsd`/`unmeasuredRuns`,
+ * so a bucket's row count there is a PARTIAL count, not the total; this is the same "query it
+ * directly" call the `model` column above already made, for the same reason.
  */
-export async function listAllSlaves(): Promise<AllSlavesPage> {
-  const [workers, roster] = await Promise.all([listWorkers(), listRoster()])
-  const [slaveModels, teams, companyTeams] = await Promise.all([
+export async function listAllSlaves(options?: { readonly includeArchived?: boolean }): Promise<AllSlavesPage> {
+  const [workers, roster] = await Promise.all([listWorkers(options), listRoster()])
+  const [slaveModels, runCounts, teams, companyTeams] = await Promise.all([
     prisma.slave.findMany({
       where: { id: { in: workers.map((w) => w.slaveId) } },
       select: { id: true, model: true },
     }),
+    prisma.slaveRun.groupBy({ by: ['slaveId'], where: { slaveId: { in: workers.map((w) => w.slaveId) } }, _count: { _all: true } }),
     prisma.team.findMany({ select: { id: true, name: true, workspaceId: true }, orderBy: { name: 'asc' } }),
     prisma.companyTeam.findMany({ select: { id: true, name: true, companyId: true }, orderBy: { name: 'asc' } }),
   ])
   const modelBySlaveId = new Map(slaveModels.map((a) => [a.id, a.model] as const))
+  const runCountBySlaveId = new Map(runCounts.map((g) => [g.slaveId, g._count._all] as const))
   const departmentsByWorkspace: Record<string, DepartmentOption[]> = {}
   for (const t of teams) (departmentsByWorkspace[t.workspaceId] ??= []).push({ id: t.id, name: t.name })
   const templatesByCompany: Record<string, DepartmentOption[]> = {}
@@ -633,6 +695,7 @@ export async function listAllSlaves(): Promise<AllSlavesPage> {
     model: modelBySlaveId.get(w.slaveId) ?? null,
     costUsd: w.costUsd,
     unmeasuredRuns: w.unmeasuredRuns,
+    runCount: runCountBySlaveId.get(w.slaveId) ?? 0,
   }))
   const bySlaveId = new Map(workerRows.map((r) => [r.slaveId, r] as const))
   const catalogRows: AllSlaveRow[] = []
@@ -647,7 +710,7 @@ export async function listAllSlaves(): Promise<AllSlavesPage> {
             status: 'idle', currentTask: null,
             provider: member.effectiveProvider,
             gate: member.effectiveProvider === null ? null : capabilitiesOf(member.effectiveProvider).gate,
-            model: member.effectiveModel, costUsd: 0, unmeasuredRuns: 0,
+            model: member.effectiveModel, costUsd: 0, unmeasuredRuns: 0, runCount: 0,
           })
         } else {
           for (const worker of member.workers) {
@@ -684,32 +747,55 @@ export async function listCompanies(): Promise<readonly { id: string; name: stri
   return prisma.company.findMany({ select: { id: true, name: true }, orderBy: { name: 'asc' } })
 }
 
-/** One project `Team` row for the Slaves page's Departments tab (M23 D3; renamed M25 §4.2) --
- *  `slaveCount` is what `DepartmentsTable` disables its delete button on: `deleteTeam` refuses a
- *  non-empty team. */
+/** One project `Team` row for the Slaves page's Departments tab (M23 D3; renamed M25 §4.2).
+ *  `slaveCount` is display only now (M27 §4.2): `deleteTeam` no longer refuses a non-empty team --
+ *  it deletes the department WITH its slaves, refused only while one of them holds a live run.
+ *  `runCount` is `DepartmentsTable`'s delete confirm text: "deletes Engineering: 4 slaves, 31
+ *  runs" (M27 §4.3). */
 export interface ProjectTeamRow {
   readonly teamId: string
   readonly name: string
   readonly workspaceId: string
   readonly projectName: string
   readonly slaveCount: number
+  readonly runCount: number
 }
 
 /**
- * Every project TEAM, across every workspace (the `Team` row `renameTeam`/`deleteTeam`
- * address) -- ordered project then name, so a multi-project install reads as grouped even
- * though `DepartmentsTable` renders one flat `DataTable`.
+ * Every project TEAM, across every workspace (the `Team` row `renameTeam`/`deleteTeam` address)
+ * -- ordered project then name, so a multi-project install reads as grouped even though
+ * `DepartmentsTable` renders one flat `DataTable`. Hides an archived project's teams by default
+ * (M27 §3.3).
  */
-export async function listProjectTeams(): Promise<readonly ProjectTeamRow[]> {
+export async function listProjectTeams(options?: { readonly includeArchived?: boolean }): Promise<readonly ProjectTeamRow[]> {
   const teams = await prisma.team.findMany({
+    where: { workspace: notArchived(options?.includeArchived) },
     include: { workspace: { select: { name: true } }, _count: { select: { slaves: true } } },
     orderBy: [{ workspace: { name: 'asc' } }, { name: 'asc' }],
   })
+  // `runCount` per team (M27 §7): teams don't own a run directly, so this walks `Slave.teamId`
+  // then sums a `slaveRun.groupBy` by `slaveId` per team -- two bulk queries across every team,
+  // not one query per row.
+  const teamIds = teams.map((t) => t.id)
+  const slaves = await prisma.slave.findMany({ where: { teamId: { in: teamIds } }, select: { id: true, teamId: true } })
+  const teamBySlave = new Map(slaves.map((s) => [s.id, s.teamId] as const))
+  const runGroups = await prisma.slaveRun.groupBy({
+    by: ['slaveId'],
+    where: { slaveId: { in: slaves.map((s) => s.id) } },
+    _count: { _all: true },
+  })
+  const runCountByTeam = new Map<string, number>()
+  for (const g of runGroups) {
+    const teamId = teamBySlave.get(g.slaveId)
+    if (teamId === undefined) continue
+    runCountByTeam.set(teamId, (runCountByTeam.get(teamId) ?? 0) + g._count._all)
+  }
   return teams.map((team) => ({
     teamId: team.id,
     name: team.name,
     workspaceId: team.workspaceId,
     projectName: team.workspace.name,
     slaveCount: team._count.slaves,
+    runCount: runCountByTeam.get(team.id) ?? 0,
   }))
 }

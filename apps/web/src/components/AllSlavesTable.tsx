@@ -142,6 +142,9 @@ export function AllSlavesTable({
               model: null,
               costUsd: w.costUsd,
               unmeasuredRuns: w.unmeasuredRuns,
+              // Not in the poll payload, same as `model` above -- unknown until the next full
+              // reload (`AllSlaveRow.runCount`'s own docstring).
+              runCount: 0,
             })
           }
           // The table's order rule, unchanged from `listAllSlaves()`: project rows sorted

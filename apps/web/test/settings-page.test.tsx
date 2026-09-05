@@ -84,6 +84,7 @@ function company(over: Partial<RosterCompany> = {}): RosterCompany {
   return {
     companyId: 'c1',
     companyName: 'Acme Robotics',
+    projectsUsing: 0,
     teams: [{ companyTeamId: 'ct1', teamName: 'Platform', members: [member()] }],
     ...over,
   }

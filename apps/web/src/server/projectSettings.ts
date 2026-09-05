@@ -1,5 +1,5 @@
 import { prisma } from '@slave-of-ai/db/client'
-import { capabilitiesOf, workspaceDefaultProvider, type ProviderKind } from '@slave-of-ai/control'
+import { capabilitiesOf, projectFootprint, workspaceDefaultProvider, type Footprint, type ProviderKind } from '@slave-of-ai/control'
 import { buildPermissionMatrix, type PermissionSection } from './settings'
 
 export interface ProjectSettings {
@@ -15,8 +15,15 @@ export interface ProjectSettings {
     readonly runTimeoutMs: number
     readonly maxAttempts: number
     readonly haltedReason: string | null
+    /** M27 §3.3: `Workspace.archivedAt !== null`. `ProjectSettingsClient`'s danger zone shows
+     *  Restore instead of Archive when this is true. */
+    readonly archived: boolean
   }
   readonly permissions: PermissionSection | null
+  /** What this project holds (M27 §3.4, §7) -- the archive confirm's counts: "archives Checkout
+   *  Platform: 3 departments, 9 slaves, 12 tasks, 41 runs stay on record". Read even for an
+   *  already-archived project, so the danger zone can show it there too. */
+  readonly footprint: Footprint
 }
 
 /** The project Settings tab's snapshot (M24 §4). A plain row read plus the one permission
@@ -31,7 +38,10 @@ export async function buildProjectSettings(workspaceId: string): Promise<Project
   // issues its own query rather than reading `workspace.defaultProvider` -- there is no such column;
   // the default lives in a `ProviderConfiguration` row, and one row is a default, none or more than
   // one is `null`).
-  const provider = await workspaceDefaultProvider(workspaceId)
+  const [provider, footprint] = await Promise.all([
+    workspaceDefaultProvider(workspaceId),
+    projectFootprint(prisma, workspaceId),
+  ])
   return {
     workspace: {
       id: workspace.id,
@@ -44,7 +54,9 @@ export async function buildProjectSettings(workspaceId: string): Promise<Project
       runTimeoutMs: workspace.runTimeoutMs,
       maxAttempts: workspace.maxAttempts,
       haltedReason: workspace.haltedReason,
+      archived: workspace.archivedAt !== null,
     },
     permissions: sections[0] ?? null,
+    footprint,
   }
 }

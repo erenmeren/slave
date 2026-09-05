@@ -29,6 +29,7 @@ function row(over: Partial<AllSlaveRow> = {}): AllSlaveRow {
     model: null,
     costUsd: 0,
     unmeasuredRuns: 0,
+    runCount: 0,
     ...over,
   }
 }

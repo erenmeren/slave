@@ -92,6 +92,9 @@ describe('listAllSlaves', () => {
     expect(blairRow?.projectName).toBe('Checkout Platform')
     expect(blairRow?.model).toBe('claude-haiku-4')
     expect(blairRow?.gate).toBe('all-tools')
+    // M27 §7: `runCount` rides the same grouped query `costUsd`/`unmeasuredRuns` already read off
+    // -- one seeded run, no second round trip.
+    expect(blairRow?.runCount).toBe(1)
     // A hand-made slave has no roster link at all -- its `companyId`/`companyTeamId` stay null.
     expect(blairRow?.teamId).toBe(fixture.teamId)
     expect(blairRow?.companyId).toBeNull()
@@ -114,5 +117,17 @@ describe('listAllSlaves', () => {
     // on) -- one query each, read straight off the page object rather than re-derived per row.
     expect(departmentsByWorkspace[fixture.workspaceId]?.map((d) => d.name)).toEqual(['Engineering'])
     expect(templatesByCompany[company.id]?.map((t) => t.name)).toEqual(['Design', 'Eng'])
+  })
+
+  // M27 §3.3: the Slaves page hides an archived project's rows by default, the same rule every
+  // other list read follows.
+  it('hides an archived project\'s rows unless includeArchived is set', async (): Promise<void> => {
+    await prisma.slave.create({ data: { teamId: fixture.teamId, name: 'Blair', role: 'frontend' } })
+    await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { archivedAt: new Date() } })
+
+    expect((await listAllSlaves()).rows).toEqual([])
+
+    const archived = await listAllSlaves({ includeArchived: true })
+    expect(archived.rows.map((r) => r.name)).toEqual(['Blair'])
   })
 })

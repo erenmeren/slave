@@ -199,6 +199,7 @@ function settings(over: Partial<ProjectSettings['workspace']> = {}): ProjectSett
       runTimeoutMs: 1_800_000,
       maxAttempts: 5,
       haltedReason: null,
+      archived: false,
       ...over,
     },
     permissions: {
@@ -213,6 +214,7 @@ function settings(over: Partial<ProjectSettings['workspace']> = {}): ProjectSett
         },
       ],
     },
+    footprint: { departments: 1, slaves: 1, tasks: 0, runs: 0 },
   }
 }
 

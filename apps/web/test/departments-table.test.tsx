@@ -17,6 +17,7 @@ function team(over: Partial<ProjectTeamRow> = {}): ProjectTeamRow {
     workspaceId: 'w1',
     projectName: 'Checkout',
     slaveCount: 0,
+    runCount: 0,
     ...over,
   }
 }

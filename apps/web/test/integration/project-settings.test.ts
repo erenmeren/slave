@@ -65,6 +65,10 @@ describe('buildProjectSettings', () => {
     expect(settings?.workspace.runTimeoutMs).toBe(1_800_000)
     expect(settings?.workspace.maxAttempts).toBe(3)
     expect(settings?.workspace.haltedReason).toBeNull()
+    // M27 §3.3/§7: a live project reports `archived: false` and its footprint (one department,
+    // one slave, no tasks or runs -- exactly what `seed` created).
+    expect(settings?.workspace.archived).toBe(false)
+    expect(settings?.footprint).toEqual({ departments: 1, slaves: 1, tasks: 0, runs: 0 })
 
     expect(settings?.permissions?.workspaceId).toBe(fixture.workspaceId)
     expect(settings?.permissions?.rows[0]?.slaveId).toBe(fixture.slaveId)

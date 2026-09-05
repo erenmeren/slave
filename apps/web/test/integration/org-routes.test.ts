@@ -557,7 +557,9 @@ describe('the org routes', () => {
       expect(await prisma.slave.findUnique({ where: { id: slaveId } })).toBeNull()
     })
 
-    it('409s with the slave-has-runs refusal text when the slave carries run history', async (): Promise<void> => {
+    // M27 §4.1: `deleteSlave` no longer refuses on run history -- it deletes the slave WITH its
+    // runs, refused only while one of them is live.
+    it('200s deleting a slave WITH its run history', async (): Promise<void> => {
       const slaveId = await seedSlave()
       const task = await prisma.task.create({
         data: { workspaceId: fixture.workspaceId, title: 'Ship it', description: 'ship it', maxAttempts: 3 },
@@ -565,8 +567,21 @@ describe('the org routes', () => {
       await prisma.slaveRun.create({ data: { taskId: task.id, slaveId, status: 'succeeded' } })
 
       const response = await slaveDELETE(deleteRequest(), slaveParams(slaveId))
+      expect(response.status).toBe(200)
+      expect(await prisma.slave.findUnique({ where: { id: slaveId } })).toBeNull()
+      expect(await prisma.slaveRun.count({ where: { slaveId } })).toBe(0)
+    })
+
+    it('409s with the live-runs refusal text while the slave holds a live run', async (): Promise<void> => {
+      const slaveId = await seedSlave()
+      const task = await prisma.task.create({
+        data: { workspaceId: fixture.workspaceId, title: 'Ship it', description: 'ship it', maxAttempts: 3 },
+      })
+      await prisma.slaveRun.create({ data: { taskId: task.id, slaveId, status: 'working' } })
+
+      const response = await slaveDELETE(deleteRequest(), slaveParams(slaveId))
       expect(response.status).toBe(409)
-      expect((await response.json()).error).toBe(`slave ${slaveId} has 1 run(s) in history and stays (rename it or leave it idle)`)
+      expect((await response.json()).error).toBe(`slave ${slaveId} has 1 live run(s); wait for them to finish or stop them first`)
       expect(await prisma.slave.findUnique({ where: { id: slaveId } })).not.toBeNull()
     })
   })
@@ -612,13 +627,26 @@ describe('the org routes', () => {
       expect(await prisma.team.findUnique({ where: { id: team.id } })).toBeNull()
     })
 
-    it('409s with the team-not-empty refusal text while it still has slaves', async (): Promise<void> => {
+    // M27 §4.2: `deleteTeam` no longer refuses a non-empty team -- it deletes the department WITH
+    // its slaves, refused only while one of them holds a live run.
+    it('200s deleting a team WITH its slaves', async (): Promise<void> => {
       const team = await prisma.team.create({ data: { workspaceId: fixture.workspaceId, name: 'Engineering' } })
-      await prisma.slave.create({ data: { teamId: team.id, name: 'Alice', role: 'backend' } })
+      const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alice', role: 'backend' } })
+
+      const response = await teamDELETE(deleteRequest(), teamParams(team.id))
+      expect(response.status).toBe(200)
+      expect(await prisma.team.findUnique({ where: { id: team.id } })).toBeNull()
+      expect(await prisma.slave.findUnique({ where: { id: slave.id } })).toBeNull()
+    })
+
+    it('409s with the live-runs refusal text while one of its slaves holds a live run', async (): Promise<void> => {
+      const team = await prisma.team.create({ data: { workspaceId: fixture.workspaceId, name: 'Engineering' } })
+      const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alice', role: 'backend' } })
+      await prisma.slaveRun.create({ data: { slaveId: slave.id, status: 'working' } })
 
       const response = await teamDELETE(deleteRequest(), teamParams(team.id))
       expect(response.status).toBe(409)
-      expect((await response.json()).error).toBe(`team ${team.id} still has 1 slave(s)`)
+      expect((await response.json()).error).toBe(`team ${team.id} has 1 live run(s); wait for them to finish or stop them first`)
       expect(await prisma.team.findUnique({ where: { id: team.id } })).not.toBeNull()
     })
   })
