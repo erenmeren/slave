@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { prisma } from '@ai-team-os/db/client'
+import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { GET as artifactGET } from '../../src/app/api/w/[workspaceId]/tasks/[taskId]/artifacts/[artifactId]/route.js'
 import { ARTIFACT_READ_LIMIT } from '../../src/lib/artifactLimit.js'
@@ -15,7 +15,7 @@ interface Fixture {
 const repos: string[] = []
 
 async function seed(): Promise<Fixture> {
-  const repoPath = mkdtempSync(join(tmpdir(), 'aiteamos-web-artifact-'))
+  const repoPath = mkdtempSync(join(tmpdir(), 'slaveofai-web-artifact-'))
   repos.push(repoPath)
   const workspace = await prisma.workspace.create({
     data: { name: 'Checkout Platform', repoPath, verifyCommands: ['npm test'], setupCommands: [] },
@@ -55,7 +55,7 @@ describe('GET /api/w/[workspaceId]/tasks/[taskId]/artifacts/[artifactId]', () =>
 
   it('404s an artifact row that belongs to another task', async (): Promise<void> => {
     const fixture = await seed()
-    const artifactDir = join(fixture.workspace.repoPath, '.aiteamos', 'artifacts', fixture.task.id, 'attempt-01')
+    const artifactDir = join(fixture.workspace.repoPath, '.slaveofai', 'artifacts', fixture.task.id, 'attempt-01')
     mkdirSync(artifactDir, { recursive: true })
     const filePath = join(artifactDir, '00-npm-test.log')
     writeFileSync(filePath, 'ok\n')
@@ -70,7 +70,7 @@ describe('GET /api/w/[workspaceId]/tasks/[taskId]/artifacts/[artifactId]', () =>
 
   it('200s a real file under the artifact root, as text/plain', async (): Promise<void> => {
     const fixture = await seed()
-    const artifactDir = join(fixture.workspace.repoPath, '.aiteamos', 'artifacts', fixture.task.id, 'attempt-01')
+    const artifactDir = join(fixture.workspace.repoPath, '.slaveofai', 'artifacts', fixture.task.id, 'attempt-01')
     mkdirSync(artifactDir, { recursive: true })
     const filePath = join(artifactDir, '00-npm-test.log')
     writeFileSync(filePath, 'npm test output\nall green\n')
@@ -98,7 +98,7 @@ describe('GET /api/w/[workspaceId]/tasks/[taskId]/artifacts/[artifactId]', () =>
 
   it('404s a row whose file is gone from disk', async (): Promise<void> => {
     const fixture = await seed()
-    const missingPath = join(fixture.workspace.repoPath, '.aiteamos', 'artifacts', fixture.task.id, 'attempt-01', '00-missing.log')
+    const missingPath = join(fixture.workspace.repoPath, '.slaveofai', 'artifacts', fixture.task.id, 'attempt-01', '00-missing.log')
     const artifact = await prisma.artifact.create({
       data: { taskId: fixture.task.id, kind: 'verify', path: missingPath },
     })
@@ -110,7 +110,7 @@ describe('GET /api/w/[workspaceId]/tasks/[taskId]/artifacts/[artifactId]', () =>
 
   it('truncates a file over the read limit to its last 256 KiB, with the header set', async (): Promise<void> => {
     const fixture = await seed()
-    const artifactDir = join(fixture.workspace.repoPath, '.aiteamos', 'artifacts', fixture.task.id, 'attempt-01')
+    const artifactDir = join(fixture.workspace.repoPath, '.slaveofai', 'artifacts', fixture.task.id, 'attempt-01')
     mkdirSync(artifactDir, { recursive: true })
     const filePath = join(artifactDir, '00-big.log')
     // 300 KiB: filler, then a marker at the very end so the tail-bound assertion is unambiguous.

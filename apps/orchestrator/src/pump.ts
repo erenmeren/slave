@@ -1,11 +1,11 @@
 import { execFile } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { promisify } from 'node:util'
-import { killWithEscalation } from '@ai-team-os/control'
-import { toExecutionEvent } from '@ai-team-os/db'
-import { Prisma, prisma } from '@ai-team-os/db/client'
-import type { AgentId, RunId, TaskId, WorkspaceId } from '@ai-team-os/domain'
-import { appendEvent } from '@ai-team-os/events'
+import { killWithEscalation } from '@slave-of-ai/control'
+import { toExecutionEvent } from '@slave-of-ai/db'
+import { Prisma, prisma } from '@slave-of-ai/db/client'
+import type { AgentId, RunId, TaskId, WorkspaceId } from '@slave-of-ai/domain'
+import { appendEvent } from '@slave-of-ai/events'
 import {
   classifyGateEvent,
   PERMISSION_DENY_REASON_PREFIX,
@@ -13,7 +13,7 @@ import {
   type ProviderKind,
   type RunOutcome,
   type RuntimeEvent,
-} from '@ai-team-os/providers'
+} from '@slave-of-ai/providers'
 
 /**
  * The cap on a single `run.output` payload (spec §9: the agent's text output "with a truncation
@@ -709,7 +709,7 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
         // The pause protocol and the workspace-halting circuit breaker, both driven from here --
         // but by the outcome the write gate actually produced, never by which of these three
         // Claude-shaped `RuntimeEvent` variants arrived. `classifyGateEvent`
-        // (`@ai-team-os/providers`) is the one place left that still knows that mapping; everything
+        // (`@slave-of-ai/providers`) is the one place left that still knows that mapping; everything
         // below asks only `gateOutcome.kind`. This is the seam M12 Task 4 exists for: a runtime
         // whose gate produces differently-shaped events still drives both mechanisms below, as long
         // as its adapter's own `classifyGateEvent`-equivalent maps them the same way.

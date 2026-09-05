@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { prisma } from '@ai-team-os/db/client'
+import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { DELETE as collectWorktreeDELETE } from '../../src/app/api/w/[workspaceId]/tasks/[taskId]/worktree/route.js'
 
@@ -10,13 +10,13 @@ function run(command: string, args: readonly string[], cwd: string): string {
   return execFileSync(command, [...args], { cwd, encoding: 'utf8' }).trim()
 }
 
-const BRANCH = 'aiteamos/T-b4-route'
+const BRANCH = 'slaveofai/T-b4-route'
 
 // Mirrors `packages/control/test/integration/collect.test.ts`'s `makeRepo` -- this route's own
 // coverage is the 404/409/200 wiring through `workspaceControlResponse`, but "200" here still
 // runs `collectTaskWorktree` for real against a real worktree, not a stub asserting its own script.
 function makeRepo(): { repoPath: string; worktreePath: string } {
-  const repoPath = mkdtempSync(join(tmpdir(), 'aiteamos-web-worktree-route-'))
+  const repoPath = mkdtempSync(join(tmpdir(), 'slaveofai-web-worktree-route-'))
   run('git', ['init', '-q', '-b', 'main'], repoPath)
   run('git', ['config', 'user.name', 'Fixture'], repoPath)
   run('git', ['config', 'user.email', 'fixture@example.com'], repoPath)
@@ -24,11 +24,11 @@ function makeRepo(): { repoPath: string; worktreePath: string } {
   run('git', ['add', '-A'], repoPath)
   run('git', ['commit', '-q', '-m', 'initial'], repoPath)
 
-  const aiteamosRoot = join(repoPath, '.aiteamos')
-  mkdirSync(aiteamosRoot, { recursive: true })
-  writeFileSync(join(aiteamosRoot, '.gitignore'), '*\n')
+  const slaveofaiRoot = join(repoPath, '.slaveofai')
+  mkdirSync(slaveofaiRoot, { recursive: true })
+  writeFileSync(join(slaveofaiRoot, '.gitignore'), '*\n')
 
-  const worktreePath = join(aiteamosRoot, 'worktrees', 'T-b4')
+  const worktreePath = join(slaveofaiRoot, 'worktrees', 'T-b4')
   run('git', ['worktree', 'add', '-b', BRANCH, worktreePath], repoPath)
 
   return { repoPath, worktreePath }

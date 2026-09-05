@@ -1,9 +1,9 @@
-import type { AgentStatus, RunStatus, TaskStatus } from '@ai-team-os/domain'
+import type { AgentStatus, RunStatus, TaskStatus } from '@slave-of-ai/domain'
 import type { StatusTone } from '../components/ui/StatusPill'
 import { COLUMN_FOR_STATUS, COLUMN_STATE } from './taskColumns'
 
 /**
- * The handoff's ten card states (`design_handoff_ai_team_os/mockups/AI Team OS Mockups.dc.html`
+ * The handoff's ten card states (`design_handoff_ai_team_os/mockups/Slave of AI Mockups.dc.html`
  * lines 912-923, `Component.meta`). This is a DISPLAY vocabulary, not a domain one: the domain
  * has `RunStatus` (nine), `AgentStatus` (seven) and `TaskStatus` (twelve), and none of them is
  * this list. The three derivations below are the only sanctioned way into it -- a page that

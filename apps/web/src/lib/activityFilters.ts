@@ -7,7 +7,7 @@
  */
 
 import { z } from 'zod'
-import { EVENT_TYPE_BY_DOMAIN_TYPE, type DomainEventType } from '@ai-team-os/db'
+import { EVENT_TYPE_BY_DOMAIN_TYPE, type DomainEventType } from '@slave-of-ai/db'
 
 export const ACTIVITY_KINDS = ['runs', 'tool_calls', 'tasks', 'interventions', 'guardrails', 'workspace'] as const
 

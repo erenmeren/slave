@@ -1,5 +1,5 @@
-import { prisma } from '@ai-team-os/db/client'
-import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, EVENT_TYPE_BY_DOMAIN_TYPE, type DomainEventType } from '@ai-team-os/db'
+import { prisma } from '@slave-of-ai/db/client'
+import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, EVENT_TYPE_BY_DOMAIN_TYPE, type DomainEventType } from '@slave-of-ai/db'
 import { feedSummary } from '../lib/feedSummary'
 import { buildShellFacts, type ShellFacts } from './shell'
 import { EMPTY_ACTIVITY_FILTERS, type ActivityFilters } from '../lib/activityFilters'
@@ -147,7 +147,7 @@ export async function toolCallSparkline(workspaceId: string, now: Date = new Dat
 
 /**
  * Pages the workspace's execution event log newest-first for the activity timeline. Reads only —
- * every write to `ExecutionEvent` goes through `appendEvent` (`@ai-team-os/events`), never here.
+ * every write to `ExecutionEvent` goes through `appendEvent` (`@slave-of-ai/events`), never here.
  *
  * `before` is an exclusive `seq` cursor (`seq < before`); `nextBefore` is the oldest `seq` in the
  * page just returned, or `null` once a page comes back shorter than requested — the log is

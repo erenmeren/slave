@@ -1,5 +1,5 @@
-import { prisma } from '@ai-team-os/db/client'
-import { NON_TERMINAL_RUN_STATUSES, type RunStatus } from '@ai-team-os/domain'
+import { prisma } from '@slave-of-ai/db/client'
+import { NON_TERMINAL_RUN_STATUSES, type RunStatus } from '@slave-of-ai/domain'
 import { skillNameOf, UNKNOWN_SKILL_NAME } from '../lib/skillName'
 
 /** Series B (M18): how many of the workspace's most recently active Skill-calling runs feed the

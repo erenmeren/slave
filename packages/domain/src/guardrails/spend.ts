@@ -25,7 +25,7 @@ export interface SpendRow {
   readonly costUsd: number | null
   /**
    * `AgentRun.provider`, typed as a bare string because only its NULLNESS is read here and
-   * `ProviderKind` lives in `@ai-team-os/providers`, which depends on this package rather than the
+   * `ProviderKind` lives in `@slave-of-ai/providers`, which depends on this package rather than the
    * other way round.
    */
   readonly provider: string | null

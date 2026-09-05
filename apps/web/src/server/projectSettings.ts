@@ -1,5 +1,5 @@
-import { prisma } from '@ai-team-os/db/client'
-import { capabilitiesOf, workspaceDefaultProvider, type ProviderKind } from '@ai-team-os/control'
+import { prisma } from '@slave-of-ai/db/client'
+import { capabilitiesOf, workspaceDefaultProvider, type ProviderKind } from '@slave-of-ai/control'
 import { buildPermissionMatrix, type PermissionSection } from './settings'
 
 export interface ProjectSettings {

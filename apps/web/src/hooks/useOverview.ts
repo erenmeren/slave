@@ -1,7 +1,7 @@
 'use client'
 
 import { useMemo, useState } from 'react'
-// Runtime import, not `../server/overview.js`: that module pulls in `@ai-team-os/db`'s prisma
+// Runtime import, not `../server/overview.js`: that module pulls in `@slave-of-ai/db`'s prisma
 // client, which must never reach the client bundle (controller ruling R3).
 import { feedSummary, type AgentFeedEvent } from '../lib/feedSummary'
 import type { OverviewSnapshot } from '../server/overview'

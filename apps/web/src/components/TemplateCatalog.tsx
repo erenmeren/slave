@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import type { ProviderKind } from '@ai-team-os/control'
+import type { ProviderKind } from '@slave-of-ai/control'
 import { sendControl } from '../lib/postControl'
 import { Chip } from './ui/Chip'
 import { DataTable, Row } from './ui/DataTable'

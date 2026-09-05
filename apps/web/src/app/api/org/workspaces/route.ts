@@ -1,4 +1,4 @@
-import { createWorkspace, refusalText, type ProviderKind } from '@ai-team-os/control'
+import { createWorkspace, refusalText, type ProviderKind } from '@slave-of-ai/control'
 import { requirePrincipal } from '../../../../server/principal'
 
 export const dynamic = 'force-dynamic'

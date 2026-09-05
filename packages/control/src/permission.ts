@@ -1,7 +1,7 @@
 import { writeFileSync } from 'node:fs'
-import { prisma } from '@ai-team-os/db/client'
-import { type Result, err, ok } from '@ai-team-os/domain'
-import { permissionsFilePathFor } from '@ai-team-os/providers'
+import { prisma } from '@slave-of-ai/db/client'
+import { type Result, err, ok } from '@slave-of-ai/domain'
+import { permissionsFilePathFor } from '@slave-of-ai/providers'
 import type { ControlRefusal } from './refusal.js'
 
 /**
@@ -63,7 +63,7 @@ export function resolveDenyList(
 
 /**
  * Writes `permissions.json` into a run's own scratch directory (`runFilePaths`'s `runDir`) --
- * the resolved deny list `scripts/lib/permissions.sh` reads back through `AITEAMOS_PERMISSIONS_
+ * the resolved deny list `scripts/lib/permissions.sh` reads back through `SLAVEOFAI_PERMISSIONS_
  * FILE` (Task 5, spec §2). Called at every START (Task 5 dispatch sites) and every RESUME
  * (`executeResume`): a fresh snapshot each time, never merged with what was there before -- a
  * matrix edit reaches a run only the next time it starts or resumes, never one already in flight
@@ -72,7 +72,7 @@ export function resolveDenyList(
  * different case from the file being absent at all, which `read_permission_verdict` treats as "no
  * matrix in play."
  *
- * `permissionsFilePathFor` (`@ai-team-os/providers`) is the ONE definition of the `'permissions.
+ * `permissionsFilePathFor` (`@slave-of-ai/providers`) is the ONE definition of the `'permissions.
  * json'` filename convention (M18 Task 5, fix round 1 -- a divergent literal here fails OPEN, not
  * closed: `read_permission_verdict` treats a missing/wrong-path file exactly like "no matrix in
  * play" and allows). This function imports it rather than joining the literal itself; each
@@ -82,7 +82,7 @@ export function resolveDenyList(
  * from directly (deliberately; see that interface's own docstring on why it may not gain a field
  * with no matching Prisma column). The helper lives in `packages/providers`, not here, for the
  * same reason `KILL_GRACE_MS` does (M13 Decision 6, `process.ts`'s own docstring): `packages/
- * control` already depends on `@ai-team-os/providers`, never the reverse.
+ * control` already depends on `@slave-of-ai/providers`, never the reverse.
  */
 export function writePermissionsFile(
   runDir: string,

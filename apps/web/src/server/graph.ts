@@ -1,7 +1,7 @@
-import { prisma } from '@ai-team-os/db/client'
-import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, toRunState } from '@ai-team-os/db'
-import { deriveAgentStatus, NON_TERMINAL_RUN_STATUSES, type TaskStatus } from '@ai-team-os/domain'
-import type { ProviderKind } from '@ai-team-os/control'
+import { prisma } from '@slave-of-ai/db/client'
+import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, toRunState } from '@slave-of-ai/db'
+import { deriveAgentStatus, NON_TERMINAL_RUN_STATUSES, type TaskStatus } from '@slave-of-ai/domain'
+import type { ProviderKind } from '@slave-of-ai/control'
 import { feedSummary } from '../lib/feedSummary'
 import { buildShellFacts, type ShellFacts } from './shell'
 

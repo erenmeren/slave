@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import type { TaskStatus } from '@ai-team-os/domain'
+import type { TaskStatus } from '@slave-of-ai/domain'
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi, afterEach, beforeEach } from 'vitest'
 import { AgentCard } from '../src/components/AgentCard.js'

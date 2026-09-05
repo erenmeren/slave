@@ -57,15 +57,15 @@ function runVerdict(
   permissionsFile: string | undefined,
   defaultTool?: string,
 ): Promise<VerdictResult> {
-  const dir = makeTmpDir('aiteamos-permissions-lib-driver-')
+  const dir = makeTmpDir('slaveofai-permissions-lib-driver-')
   const driverPath = path.join(dir, 'driver.sh')
   writeFileSync(driverPath, DRIVER_SCRIPT)
 
   const env: Record<string, string | undefined> = { ...process.env, PERMISSIONS_LIB_PATH: libPath }
   if (permissionsFile === undefined) {
-    delete env['AITEAMOS_PERMISSIONS_FILE']
+    delete env['SLAVEOFAI_PERMISSIONS_FILE']
   } else {
-    env['AITEAMOS_PERMISSIONS_FILE'] = permissionsFile
+    env['SLAVEOFAI_PERMISSIONS_FILE'] = permissionsFile
   }
   if (defaultTool === undefined) {
     delete env['TEST_DEFAULT_TOOL']
@@ -122,7 +122,7 @@ describe('scripts/lib/permissions.sh: read_permission_verdict', () => {
   })
 
   function writePermissionsFile(content: string): string {
-    const dir = makeTmpDir('aiteamos-permissions-lib-file-')
+    const dir = makeTmpDir('slaveofai-permissions-lib-file-')
     const filePath = path.join(dir, 'permissions.json')
     writeFileSync(filePath, content)
     return filePath
@@ -209,14 +209,14 @@ describe('scripts/lib/permissions.sh: read_permission_verdict', () => {
     })
   })
 
-  it('allows when AITEAMOS_PERMISSIONS_FILE is unset -- no matrix in play', async () => {
+  it('allows when SLAVEOFAI_PERMISSIONS_FILE is unset -- no matrix in play', async () => {
     const result = await runVerdict('{"tool_name":"Bash"}', undefined)
     expect(result.code).toBe(0)
     expect(result.status).toBe(1)
   })
 
   it('allows when the permissions file path does not exist', async () => {
-    const dir = makeTmpDir('aiteamos-permissions-lib-missing-')
+    const dir = makeTmpDir('slaveofai-permissions-lib-missing-')
     const missing = path.join(dir, 'nonexistent-permissions.json')
     const result = await runVerdict('{"tool_name":"Bash"}', missing)
     expect(result.code).toBe(0)

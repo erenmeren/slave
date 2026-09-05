@@ -1,5 +1,5 @@
-import { prisma } from '@ai-team-os/db/client'
-import { appendEvent } from '@ai-team-os/events'
+import { prisma } from '@slave-of-ai/db/client'
+import { appendEvent } from '@slave-of-ai/events'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { buildSkillGraph, SKILL_GRAPH_RUN_LIMIT } from '../../src/server/skillGraph.js'
 import { GET as skillGraphGET } from '../../src/app/api/w/[workspaceId]/skill-graph/route.js'

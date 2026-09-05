@@ -1,4 +1,4 @@
-import { Prisma, prisma } from '@ai-team-os/db/client'
+import { Prisma, prisma } from '@slave-of-ai/db/client'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { buildSkillsPage } from '../../src/server/skills.js'
 import { DELETE as assignDELETE, POST as assignPOST } from '../../src/app/api/skills/assign/route.js'

@@ -3,17 +3,17 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSyn
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { refusalText } from '@ai-team-os/control'
-import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@ai-team-os/db'
-import { prisma } from '@ai-team-os/db/client'
-import { workspaceId as brandWorkspaceId } from '@ai-team-os/domain'
+import { refusalText } from '@slave-of-ai/control'
+import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@slave-of-ai/db'
+import { prisma } from '@slave-of-ai/db/client'
+import { workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
 import {
   ClaudeCodeAdapter,
   buildRegistry,
   type AdapterRegistry,
   type AgentRuntimeAdapter,
   type StartRunInput,
-} from '@ai-team-os/providers'
+} from '@slave-of-ai/providers'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { drainPumps, tick, type TickDeps } from '../../src/tick.js'
 
@@ -27,7 +27,7 @@ function git(args: readonly string[], cwd: string): string {
 
 /** A real repository, because `provisionWorktree` uses real git and this is the seam under test. */
 function makeRepo(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'aiteamos-tick-'))
+  const dir = mkdtempSync(join(tmpdir(), 'slaveofai-tick-'))
   git(['init', '-q', '-b', 'main'], dir)
   git(['config', 'user.name', 'Fixture'], dir)
   git(['config', 'user.email', 'fixture@example.com'], dir)
@@ -163,7 +163,7 @@ describe('tick', () => {
     expect(report.started).toHaveLength(1)
     const run = await prisma.agentRun.findFirstOrThrow()
     expect(run.pid).toBeGreaterThan(0)
-    expect(run.worktreePath).toContain(join('.aiteamos', 'worktrees'))
+    expect(run.worktreePath).toContain(join('.slaveofai', 'worktrees'))
   })
 
   it('writes the run its worktree and remembers the branch on the task', async (): Promise<void> => {
@@ -176,7 +176,7 @@ describe('tick', () => {
     // has to be reproducible on the task's second run, or the rework case can never match its own
     // previous worktree.
     expect(run.worktreePath).toContain(keyOf(task.id))
-    expect(task.branch).toBe(`aiteamos/${keyOf(task.id)}-add-the-thing`)
+    expect(task.branch).toBe(`slaveofai/${keyOf(task.id)}-add-the-thing`)
   })
 
   it('keeps the settings file and the pause flag out of the worktree', async (): Promise<void> => {
@@ -185,7 +185,7 @@ describe('tick', () => {
     const run = await prisma.agentRun.findFirstOrThrow()
     const worktreePath = run.worktreePath ?? ''
 
-    // Task 14 runs verify inside the worktree, and Task 11 already flagged `.aiteamos/` as
+    // Task 14 runs verify inside the worktree, and Task 11 already flagged `.slaveofai/` as
     // untracked content in the operator's own repository. A settings file or a flag written into
     // the worktree makes every verify run see a dirty tree it did not create.
     const inWorktree = readdirSync(worktreePath)
@@ -202,9 +202,9 @@ describe('tick', () => {
     await tick(deps)
 
     const run = await prisma.agentRun.findFirstOrThrow()
-    // `runFilePaths`'s own contract: `.aiteamos/runs/<runId>` under the repo root, beside
+    // `runFilePaths`'s own contract: `.slaveofai/runs/<runId>` under the repo root, beside
     // `pause.flag` -- not under the worktree (the previous test's own assertion).
-    const permissionsPath = join(fixture.repoPath, '.aiteamos', 'runs', run.id, 'permissions.json')
+    const permissionsPath = join(fixture.repoPath, '.slaveofai', 'runs', run.id, 'permissions.json')
     const written: unknown = JSON.parse(readFileSync(permissionsPath, 'utf8'))
     expect(written).toEqual({ version: 1, deny: [{ tool: 'Bash', capability: 'run tests' }] })
   })
@@ -213,7 +213,7 @@ describe('tick', () => {
     await tick(deps)
 
     const run = await prisma.agentRun.findFirstOrThrow()
-    const permissionsPath = join(fixture.repoPath, '.aiteamos', 'runs', run.id, 'permissions.json')
+    const permissionsPath = join(fixture.repoPath, '.slaveofai', 'runs', run.id, 'permissions.json')
     const written: unknown = JSON.parse(readFileSync(permissionsPath, 'utf8'))
     // Present and armed, distinct from the file being absent -- `read_permission_verdict` treats
     // those two cases differently (spec §2; `scripts/lib/permissions.sh`'s own docstring).
@@ -393,7 +393,7 @@ describe('tick', () => {
     // A `ready` task -- never provisioned -- with a directory sitting at its worktree path. That
     // is wreckage §7.4 preserved for an operator, not a rework, and handing it to an agent would
     // give the run someone else's tree.
-    mkdirSync(join(fixture.repoPath, '.aiteamos', 'worktrees', keyOf(fixture.taskId)), {
+    mkdirSync(join(fixture.repoPath, '.slaveofai', 'worktrees', keyOf(fixture.taskId)), {
       recursive: true,
     })
 
@@ -774,7 +774,7 @@ describe('tick', () => {
   it("leaves the operator's own repository clean", async (): Promise<void> => {
     await tick(deps)
 
-    // Everything the orchestrator writes lands under `.aiteamos/` in the workspace's repo -- the
+    // Everything the orchestrator writes lands under `.slaveofai/` in the workspace's repo -- the
     // worktrees, the per-run settings file, the pause flag -- and none of it belongs to the
     // operator. Left untracked it shows in every `git status` they run, and a routine
     // `git clean -fdx` deletes the worktree directories while `.git/worktrees/` metadata survives.

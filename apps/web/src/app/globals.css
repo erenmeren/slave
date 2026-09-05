@@ -13,7 +13,7 @@
   /* The rung between "muted" and "label" on the handoff's text ramp (README "Design Tokens":
    * ... muted #8a929e, dim #7c8697, faint #69727f, label #5b6472 ...). The mock uses it for
    * numbers that sit BESIDE a label rather than being one -- the sidebar's nav counts and its
-   * bottom-block row labels (`AI Team OS Mockups.dc.html:57,63,70`). */
+   * bottom-block row labels (`Slave of AI Mockups.dc.html:57,63,70`). */
   --text-faint: #69727f; /* faint */
   --text-3: #5b6472; /* label */
 
@@ -137,7 +137,7 @@ body {
 
 /* The agent card's activity sweep: a 2.2s cubic-bezier(.4,0,.2,1) gradient across the top
  * hairline while a card is `working` (design README "1a"; byte-for-byte match to
- * `mockups/AI Team OS Web.dc.html:20`, `@keyframes sweep{0%{transform:translateX(-100%)}
+ * `mockups/Slave of AI Web.dc.html:20`, `@keyframes sweep{0%{transform:translateX(-100%)}
  * 100%{transform:translateX(320%)}}`). The mockup's `.sweep` element (`Web.dc.html:151`) is
  * `width:30%` inside a 1px-tall `overflow:hidden` hairline strip, so `-100%` sits it just off the
  * strip's left edge and `320%` (320% of the element's own 30%-wide box = 96% of the strip) carries

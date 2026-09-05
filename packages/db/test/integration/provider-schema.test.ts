@@ -65,7 +65,7 @@ describe('the provider pair columns', () => {
         runId: run.id,
         sessionId: 's',
         worktreePath: '/tmp/wt',
-        pauseFlagPath: '/tmp/wt/.aiteamos-pause',
+        pauseFlagPath: '/tmp/wt/.slaveofai-pause',
         headCommit: 'abc123',
         settingsPath: '/tmp/wt/.claude/settings.json',
         hookPath: '/tmp/wt/.claude/pause-gate.sh',

@@ -1,4 +1,4 @@
-# AI Team OS
+# Slave of AI
 
 An autonomous AI engineering team for your git repositories. You attach a repo and set a goal; a
 team of agents plans the work into tasks, implements each one in its own git worktree, runs your
@@ -12,7 +12,7 @@ the model calls those CLIs already make.
 
 - Node 26 (see `.nvmrc`), git, Docker with the `docker compose` plugin
 - A logged-in agent CLI: `claude` (Claude Code) and/or `cursor-agent`. The orchestrator finds them on
-  `PATH`; set `AITEAMOS_CLAUDE_BIN` or `AITEAMOS_CURSOR_BIN` to point elsewhere.
+  `PATH`; set `SLAVEOFAI_CLAUDE_BIN` or `SLAVEOFAI_CURSOR_BIN` to point elsewhere.
 
 ## Quick start
 
@@ -50,7 +50,7 @@ npm run orchestrator -- create-workspace --name <name> --repo /abs/path/to/repo 
 
 `--repo` must be an absolute path to a git working tree, `--base` an existing branch, and at least
 one `--verify` command is required: a task is only done when your verify commands pass. The
-orchestrator keeps its worktrees and logs under `<repo>/.aiteamos/` and gitignores them for you.
+orchestrator keeps its worktrees and logs under `<repo>/.slaveofai/` and gitignores them for you.
 
 Staff it and give the team something to do:
 
@@ -111,7 +111,7 @@ By default the UI binds to loopback only and needs no login. To reach it from a 
 your tailnet:
 
 ```bash
-echo "AITEAMOS_SESSION_SECRET=$(openssl rand -hex 32)" >> .env
+echo "SLAVEOFAI_SESSION_SECRET=$(openssl rand -hex 32)" >> .env
 printf '%s\n' "$PASSWORD" | npm run orchestrator -- create-user --name <you>   # 12+ characters
 npm run web:exposed
 ```
@@ -128,8 +128,8 @@ Two things to know first:
 - **Traffic is plain HTTP.** Use it over a tailnet (Tailscale) or a LAN you trust, never the open
   internet.
 
-Upgrading from an older version: `AITEAMOS_PASSWORD` is retired and ignored; replace it with
-`AITEAMOS_SESSION_SECRET` as above.
+Upgrading from an older version: `SLAVEOFAI_PASSWORD` is retired and ignored; replace it with
+`SLAVEOFAI_SESSION_SECRET` as above.
 
 ## Tests and CI
 

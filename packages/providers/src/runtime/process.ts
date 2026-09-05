@@ -103,7 +103,7 @@ export function terminateChild(child: ChildProcess, graceMs: number): Promise<vo
  * them fails OPEN, not closed -- `read_permission_verdict` (`scripts/lib/permissions.sh`) treats a
  * missing/wrong-path file exactly like "no matrix in play" and allows. Lives here, below
  * `packages/control`, for the same reason `KILL_GRACE_MS` above does (M13 Decision 6):
- * `packages/control` already depends on `@ai-team-os/providers` (it imports `PROVIDER_KINDS` and
+ * `packages/control` already depends on `@slave-of-ai/providers` (it imports `PROVIDER_KINDS` and
  * `signalPause` from it), never the reverse, so the shared primitive belongs on this side of that
  * edge and `writePermissionsFile` imports it rather than re-deriving it.
  */
@@ -121,14 +121,14 @@ export function permissionsFilePathFor(runDir: string): string {
  * shares. Environment variables are per-process, write no file, and cannot leak to a sibling
  * worktree's run.
  *
- * `AITEAMOS_PAUSE_FLAG` is the ONE channel either gate reads the flag path on -- the same variable
+ * `SLAVEOFAI_PAUSE_FLAG` is the ONE channel either gate reads the flag path on -- the same variable
  * `scripts/pause-gate.sh` and `scripts/cursor-shell-gate.sh` read. It was measured arriving intact
  * on the Cursor side: Cursor evaluates a hook's command in a shell whose environment is its own
  * `process.env` plus Cursor's additions, so setting it on the child is sufficient and no second
  * channel is needed (M12 Task 11 §3 Q3, §8(e)). One concept, one name, whichever runtime the run
  * is on.
  *
- * `AITEAMOS_PERMISSIONS_FILE` (M18 Task 5) is the same shape of channel, for the same reason:
+ * `SLAVEOFAI_PERMISSIONS_FILE` (M18 Task 5) is the same shape of channel, for the same reason:
  * `scripts/lib/permissions.sh`'s `read_permission_verdict` is the ONE place either gate reads the
  * resolved deny list's path from. `permissionsFilePath` is required, not optional -- every start
  * and every resume writes `permissions.json` (`packages/control`'s `writePermissionsFile`) before
@@ -146,7 +146,7 @@ export function buildChildEnv(input: {
     GIT_AUTHOR_EMAIL: input.gitIdentity.email,
     GIT_COMMITTER_NAME: input.gitIdentity.name,
     GIT_COMMITTER_EMAIL: input.gitIdentity.email,
-    AITEAMOS_PAUSE_FLAG: input.pauseFlagPath,
-    AITEAMOS_PERMISSIONS_FILE: input.permissionsFilePath,
+    SLAVEOFAI_PAUSE_FLAG: input.pauseFlagPath,
+    SLAVEOFAI_PERMISSIONS_FILE: input.permissionsFilePath,
   }
 }

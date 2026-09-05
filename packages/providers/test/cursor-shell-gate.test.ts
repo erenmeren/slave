@@ -15,7 +15,7 @@ interface RunHookOptions {
   // there, exactly as `pause-gate.sh` does, so one paused run says the same thing to the
   // operator whichever runtime it happens to be running on.
   readonly reason?: string
-  // Present with value `undefined` means "unset AITEAMOS_PAUSE_FLAG entirely" -- distinct from
+  // Present with value `undefined` means "unset SLAVEOFAI_PAUSE_FLAG entirely" -- distinct from
   // omitting the key, which means "use this test's own generated flag path". Detected below via
   // `'flagVar' in options`, not via `options.flagVar === undefined`, so the two are
   // distinguishable. Mirrors `pause-gate.test.ts`.
@@ -28,7 +28,7 @@ interface RunHookOptions {
   // no `tool_name` and no `command`, so `read_permission_verdict` allows regardless of what a
   // permissions file says.
   readonly payload?: string
-  // Sets AITEAMOS_PERMISSIONS_FILE for the child. Omitted deletes it from the child's environment
+  // Sets SLAVEOFAI_PERMISSIONS_FILE for the child. Omitted deletes it from the child's environment
   // entirely (not merely "leaves it unset in this test file's own process") -- the permission
   // matrix must stay completely out of the picture for every pre-Task-4-shaped test in this file.
   readonly permissionsFile?: string
@@ -51,7 +51,7 @@ interface RunHookResult {
  * `command` string contained. Neither affects this script, which reads no argument.
  */
 function runHook(options: RunHookOptions = {}): Promise<RunHookResult> {
-  const dir = mkdtempSync(path.join(tmpdir(), 'aiteamos-cursor-gate-test-'))
+  const dir = mkdtempSync(path.join(tmpdir(), 'slaveofai-cursor-gate-test-'))
   const flagPath = path.join(dir, 'pause.flag')
   const flagExists = options.flagExists ?? true
 
@@ -62,17 +62,17 @@ function runHook(options: RunHookOptions = {}): Promise<RunHookResult> {
   const env: Record<string, string | undefined> = { ...process.env }
   if ('flagVar' in options) {
     if (options.flagVar === undefined) {
-      delete env['AITEAMOS_PAUSE_FLAG']
+      delete env['SLAVEOFAI_PAUSE_FLAG']
     } else {
-      env['AITEAMOS_PAUSE_FLAG'] = options.flagVar
+      env['SLAVEOFAI_PAUSE_FLAG'] = options.flagVar
     }
   } else {
-    env['AITEAMOS_PAUSE_FLAG'] = flagPath
+    env['SLAVEOFAI_PAUSE_FLAG'] = flagPath
   }
   if (options.permissionsFile === undefined) {
-    delete env['AITEAMOS_PERMISSIONS_FILE']
+    delete env['SLAVEOFAI_PERMISSIONS_FILE']
   } else {
-    env['AITEAMOS_PERMISSIONS_FILE'] = options.permissionsFile
+    env['SLAVEOFAI_PERMISSIONS_FILE'] = options.permissionsFile
   }
 
   return new Promise((resolve, reject) => {
@@ -115,7 +115,7 @@ function runHook(options: RunHookOptions = {}): Promise<RunHookResult> {
 
 /** Writes `{"version":1,"deny":[...]}` to a fresh temp file and returns its path. */
 function writePermissionsFile(deny: ReadonlyArray<{ readonly tool: string; readonly capability: string }>): string {
-  const dir = mkdtempSync(path.join(tmpdir(), 'aiteamos-cursor-gate-matrix-'))
+  const dir = mkdtempSync(path.join(tmpdir(), 'slaveofai-cursor-gate-matrix-'))
   const filePath = path.join(dir, 'permissions.json')
   writeFileSync(filePath, JSON.stringify({ version: 1, deny }))
   return filePath
@@ -193,14 +193,14 @@ describe('cursor-shell-gate.sh', () => {
     expect(parsed.permission).toBe('allow')
   })
 
-  it('denies loudly when AITEAMOS_PAUSE_FLAG is unset', async (): Promise<void> => {
+  it('denies loudly when SLAVEOFAI_PAUSE_FLAG is unset', async (): Promise<void> => {
     const { stdout, code } = await runHook({ flagVar: undefined })
     const parsed = JSON.parse(stdout) as { permission: string }
     expect(parsed.permission).toBe('deny')
     expect(code).toBe(0)
   })
 
-  it('denies loudly when AITEAMOS_PAUSE_FLAG is empty', async (): Promise<void> => {
+  it('denies loudly when SLAVEOFAI_PAUSE_FLAG is empty', async (): Promise<void> => {
     const { stdout, code } = await runHook({ flagVar: '' })
     const parsed = JSON.parse(stdout) as { permission: string }
     expect(parsed.permission).toBe('deny')
@@ -211,7 +211,7 @@ describe('cursor-shell-gate.sh', () => {
   // the tool call outright, while a hook that exits 1 with garbage on stdout lets it through.
   // So a gate that cannot produce a well-formed answer must exit exactly 2 and never 1.
   it('exits 2 with no stdout when the pause flag exists but cannot be read', async (): Promise<void> => {
-    const dir = mkdtempSync(path.join(tmpdir(), 'aiteamos-cursor-gate-unreadable-'))
+    const dir = mkdtempSync(path.join(tmpdir(), 'slaveofai-cursor-gate-unreadable-'))
     const flagPath = path.join(dir, 'pause.flag')
     writeFileSync(flagPath, 'secret')
     chmodSync(flagPath, 0o000)
@@ -232,7 +232,7 @@ describe('cursor-shell-gate.sh', () => {
   // exit code (measured: exit 2 stopped the command outright, while exit 1 with garbage on stdout
   // let it through).
   it('exits 2 when the flag path names a directory rather than a file', async (): Promise<void> => {
-    const dir = mkdtempSync(path.join(tmpdir(), 'aiteamos-cursor-gate-dir-'))
+    const dir = mkdtempSync(path.join(tmpdir(), 'slaveofai-cursor-gate-dir-'))
     try {
       const { stdout, code } = await runHook({ flagVar: dir })
       expect(code).toBe(2)
@@ -243,12 +243,12 @@ describe('cursor-shell-gate.sh', () => {
   })
   // M13 §4.2 moved `json_string` and the pause-flag read into `scripts/lib/pause-flag.sh`, which
   // this gate sources from a `lib/` directory beside its own resolved location. That makes the
-  // script no longer self-contained, and `AITEAMOS_CURSOR_GATE_PATH` lets an operator point this gate at any copy
+  // script no longer self-contained, and `SLAVEOFAI_CURSOR_GATE_PATH` lets an operator point this gate at any copy
   // of it. A copy made without the library must therefore REFUSE, loudly and actionably, rather
   // than gate nothing: exit 2 (fail-closed on both runtimes), nothing on stdout, and a stderr
   // message that names the exact path it looked for so the misdeployment is fixable at a glance.
   it('exits 2 and names the missing library when deployed without lib/pause-flag.sh', async (): Promise<void> => {
-    const dir = mkdtempSync(path.join(tmpdir(), 'aiteamos-cursor-gate-lonely-'))
+    const dir = mkdtempSync(path.join(tmpdir(), 'slaveofai-cursor-gate-lonely-'))
     try {
       const lonely = path.join(dir, 'cursor-shell-gate.sh')
       copyFileSync(gatePath, lonely)
@@ -274,8 +274,8 @@ describe('cursor-shell-gate.sh', () => {
   // `.claude/cursor-shell-gate.sh` link into a checkout, say) must still find its sibling, and
   // must still deny.
   it('follows a symlink to the real script and still denies', async (): Promise<void> => {
-    const realDir = mkdtempSync(path.join(tmpdir(), 'aiteamos-cursor-gate-real-'))
-    const linkDir = mkdtempSync(path.join(tmpdir(), 'aiteamos-cursor-gate-link-'))
+    const realDir = mkdtempSync(path.join(tmpdir(), 'slaveofai-cursor-gate-real-'))
+    const linkDir = mkdtempSync(path.join(tmpdir(), 'slaveofai-cursor-gate-link-'))
     try {
       const real = copyGateInto(realDir, 'cursor-shell-gate.sh')
       const link = path.join(linkDir, 'cursor-shell-gate.sh')
@@ -303,7 +303,7 @@ describe('cursor-shell-gate.sh', () => {
   // is what makes "the gate broke in a way we did not enumerate" fail closed like every other
   // failure here.
   it('exits 2 when the library defines no read_pause_reason, rather than allowing', async (): Promise<void> => {
-    const dir = mkdtempSync(path.join(tmpdir(), 'aiteamos-cursor-gate-emptylib-'))
+    const dir = mkdtempSync(path.join(tmpdir(), 'slaveofai-cursor-gate-emptylib-'))
     try {
       const gate = copyGateInto(dir, 'cursor-shell-gate.sh')
       // Sources cleanly, defines nothing.
@@ -404,7 +404,7 @@ describe('cursor-shell-gate.sh', () => {
       }
     })
 
-    it('does not consult the matrix at all when AITEAMOS_PERMISSIONS_FILE is unset', async (): Promise<void> => {
+    it('does not consult the matrix at all when SLAVEOFAI_PERMISSIONS_FILE is unset', async (): Promise<void> => {
       // No `permissionsFile` option: `read_permission_verdict`'s own first branch (unset/missing
       // file) returns allow before it ever looks at the payload -- a tool name that WOULD be
       // denied if a matrix were armed proves the matrix truly played no part.

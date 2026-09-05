@@ -15,7 +15,7 @@ describe('test database', () => {
 
   it('is reachable and reports its name', async () => {
     const result = await client.query<{ current_database: string }>('SELECT current_database()')
-    expect(result.rows[0]?.current_database).toBe('aiteamos_test')
+    expect(result.rows[0]?.current_database).toBe('slaveofai_test')
   })
 
   it('supports LISTEN/NOTIFY', async () => {

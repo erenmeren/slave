@@ -177,7 +177,7 @@ it, and `stream.test.ts` deliberately does in order to plant rows the gate would
 
 What the arrangement actually buys is that the client is absent from the barrel every other
 consumer imports, so a bypass takes a deliberate, greppable second import and is visible in
-review. There is no runtime check behind it. `grep -rn "@ai-team-os/db/client" packages` is the
+review. There is no runtime check behind it. `grep -rn "@slave-of-ai/db/client" packages` is the
 audit. See `docs/event-model.md` for the same statement at the implementation level.
 
 ---

@@ -2,9 +2,9 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { WORKTREE_TTL_MS } from '@ai-team-os/control'
-import { prisma } from '@ai-team-os/db/client'
-import { appendEvent } from '@ai-team-os/events'
+import { WORKTREE_TTL_MS } from '@slave-of-ai/control'
+import { prisma } from '@slave-of-ai/db/client'
+import { appendEvent } from '@slave-of-ai/events'
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { collectWorktrees } from '../../src/collect.js'
 
@@ -13,14 +13,14 @@ function run(command: string, args: readonly string[], cwd: string): string {
 }
 
 /**
- * A real repository with `.aiteamos/.gitignore` already in place -- the same shape
+ * A real repository with `.slaveofai/.gitignore` already in place -- the same shape
  * `packages/control/test/integration/collect.test.ts` builds for `collectTaskWorktree` itself.
  * One repo is shared by every task seeded against a workspace (mirrors production: one
  * `Workspace.repoPath`, many tasks each with their own worktree under it), so this suite proves
  * the pass picking the right candidate out of several real worktrees in the same repo.
  */
 function makeRepo(): string {
-  const repoPath = mkdtempSync(join(tmpdir(), 'aiteamos-orch-collect-'))
+  const repoPath = mkdtempSync(join(tmpdir(), 'slaveofai-orch-collect-'))
   run('git', ['init', '-q', '-b', 'main'], repoPath)
   run('git', ['config', 'user.name', 'Fixture'], repoPath)
   run('git', ['config', 'user.email', 'fixture@example.com'], repoPath)
@@ -28,16 +28,16 @@ function makeRepo(): string {
   run('git', ['add', '-A'], repoPath)
   run('git', ['commit', '-q', '-m', 'initial'], repoPath)
 
-  const aiteamosRoot = join(repoPath, '.aiteamos')
-  mkdirSync(aiteamosRoot, { recursive: true })
-  writeFileSync(join(aiteamosRoot, '.gitignore'), '*\n')
+  const slaveofaiRoot = join(repoPath, '.slaveofai')
+  mkdirSync(slaveofaiRoot, { recursive: true })
+  writeFileSync(join(slaveofaiRoot, '.gitignore'), '*\n')
 
   return repoPath
 }
 
 function addWorktree(repoPath: string, n: number): string {
-  const branch = `aiteamos/T-collect-${n}`
-  const worktreePath = join(repoPath, '.aiteamos', 'worktrees', `T-collect-${n}`)
+  const branch = `slaveofai/T-collect-${n}`
+  const worktreePath = join(repoPath, '.slaveofai', 'worktrees', `T-collect-${n}`)
   run('git', ['worktree', 'add', '-b', branch, worktreePath], repoPath)
   return worktreePath
 }
@@ -82,7 +82,7 @@ async function seedTask(
       title: `Add thing ${n}`,
       description: 'make it work',
       status: 'done' as never,
-      branch: `aiteamos/T-collect-${n}`,
+      branch: `slaveofai/T-collect-${n}`,
       requiredRole: 'backend',
       maxAttempts: 3,
     },
@@ -104,7 +104,7 @@ async function seedTask(
       agentId: agent.id,
       runId: agentRun.id,
       actor: 'agent',
-      payload: { branch: `aiteamos/T-collect-${n}` },
+      payload: { branch: `slaveofai/T-collect-${n}` },
     })
   }
   return { worktreePath, taskId: task.id, runId: agentRun.id }
@@ -193,7 +193,7 @@ describe('collectWorktrees', () => {
   // from reaching and collecting the other one.
   it('a worktree_remove_failed refusal on one candidate does not stop the pass collecting another', async (): Promise<void> => {
     const { workspaceId, repoPath } = await seedWorkspace()
-    const strayDir = mkdtempSync(join(tmpdir(), 'aiteamos-orch-collect-stray-'))
+    const strayDir = mkdtempSync(join(tmpdir(), 'slaveofai-orch-collect-stray-'))
     const stray = await seedTask(workspaceId, repoPath, 5, { worktreePath: strayDir })
     const collectable = await seedTask(workspaceId, repoPath, 6)
     await ageTerminalEvent(stray.taskId, 8)

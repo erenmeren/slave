@@ -1,5 +1,5 @@
-import { TASK_STATUSES } from '@ai-team-os/db'
-import type { TaskStatus } from '@ai-team-os/domain'
+import { TASK_STATUSES } from '@slave-of-ai/db'
+import type { TaskStatus } from '@slave-of-ai/domain'
 import { cardStateForTask, CARD_STATE_TONE, toneForTaskStatus } from '../lib/tones'
 import type { TaskBoardItem } from '../server/tasks'
 import { AvatarTile } from './ui/AvatarTile'

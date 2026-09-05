@@ -31,10 +31,10 @@ import {
   setPassword,
   describeSync,
   syncSkillCatalog,
-} from '@ai-team-os/control'
-import { prisma } from '@ai-team-os/db/client'
-import { workspaceId as brandWorkspaceId, type WorkspaceId } from '@ai-team-os/domain'
-import { buildRegistry, type AdapterRegistry, type ProviderKind } from '@ai-team-os/providers'
+} from '@slave-of-ai/control'
+import { prisma } from '@slave-of-ai/db/client'
+import { workspaceId as brandWorkspaceId, type WorkspaceId } from '@slave-of-ai/domain'
+import { buildRegistry, type AdapterRegistry, type ProviderKind } from '@slave-of-ai/providers'
 import { runDaemon } from './daemon.js'
 import { NON_TERMINAL_RUN_STATUSES } from './world.js'
 import { executeResume } from './resume.js'
@@ -189,7 +189,7 @@ function parseArgs(argv: readonly string[]): Args {
  * installed daemon's layout is not this one.
  */
 function hookPath(): string {
-  const fromEnv = process.env['AITEAMOS_HOOK_PATH']
+  const fromEnv = process.env['SLAVEOFAI_HOOK_PATH']
   if (fromEnv !== undefined && fromEnv !== '') return resolve(fromEnv)
   // dist/cli.js -> apps/orchestrator -> apps -> repo root
   return resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'scripts', 'pause-gate.sh')
@@ -204,7 +204,7 @@ function hookPath(): string {
  * gate that looks installed and blocks every tool call, or one that never blocks any.
  */
 function cursorGatePath(): string {
-  const fromEnv = process.env['AITEAMOS_CURSOR_GATE_PATH']
+  const fromEnv = process.env['SLAVEOFAI_CURSOR_GATE_PATH']
   if (fromEnv !== undefined && fromEnv !== '') return resolve(fromEnv)
   return resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'scripts', 'cursor-shell-gate.sh')
 }
@@ -230,9 +230,9 @@ function cursorGatePath(): string {
  * was never wired for that provider", and after this task it would be false.
  */
 function buildAdapterRegistry(): AdapterRegistry {
-  const command = process.env['AITEAMOS_CLAUDE_BIN'] ?? 'claude'
-  const extra = process.env['AITEAMOS_CLAUDE_ARGS']
-  const cursorExtra = process.env['AITEAMOS_CURSOR_ARGS']
+  const command = process.env['SLAVEOFAI_CLAUDE_BIN'] ?? 'claude'
+  const extra = process.env['SLAVEOFAI_CLAUDE_ARGS']
+  const cursorExtra = process.env['SLAVEOFAI_CURSOR_ARGS']
   return buildRegistry({
     claudeCode: {
       command,
@@ -243,10 +243,10 @@ function buildAdapterRegistry(): AdapterRegistry {
       hookPath: hookPath(),
     },
     cursor: {
-      // Injectable through the environment for the same reason `AITEAMOS_CLAUDE_BIN` is: the gate
+      // Injectable through the environment for the same reason `SLAVEOFAI_CLAUDE_BIN` is: the gate
       // has to drive a fake CLI and the real one down the same code path, and a flag only tests
       // pass is a flag nobody runs.
-      command: process.env['AITEAMOS_CURSOR_BIN'] ?? 'cursor-agent',
+      command: process.env['SLAVEOFAI_CURSOR_BIN'] ?? 'cursor-agent',
       ...(cursorExtra === undefined || cursorExtra === '' ? {} : { extraArgs: cursorExtra.split(' ') }),
       gatePath: cursorGatePath(),
     },

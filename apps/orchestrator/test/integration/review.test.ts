@@ -3,11 +3,11 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { refusalText } from '@ai-team-os/control'
-import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@ai-team-os/db'
-import { prisma } from '@ai-team-os/db/client'
-import { runId as brandRunId, workspaceId as brandWorkspaceId } from '@ai-team-os/domain'
-import { ClaudeCodeAdapter, type AdapterRegistry } from '@ai-team-os/providers'
+import { refusalText } from '@slave-of-ai/control'
+import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@slave-of-ai/db'
+import { prisma } from '@slave-of-ai/db/client'
+import { runId as brandRunId, workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
+import { ClaudeCodeAdapter, type AdapterRegistry } from '@slave-of-ai/providers'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { buildReviewPrompt, concludeReview, dispatchReviews } from '../../src/review.js'
 import { drainPumps, tick, type TickDeps } from '../../src/tick.js'
@@ -22,7 +22,7 @@ function git(args: readonly string[], cwd: string): string {
 
 /** A real repository, because `dispatchReviews` runs real `git diff` against it. */
 function makeRepo(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'aiteamos-review-'))
+  const dir = mkdtempSync(join(tmpdir(), 'slaveofai-review-'))
   git(['init', '-q', '-b', 'main'], dir)
   git(['config', 'user.name', 'Fixture'], dir)
   git(['config', 'user.email', 'fixture@example.com'], dir)

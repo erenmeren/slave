@@ -9,12 +9,12 @@ import {
   type CardState,
 } from '../src/lib/tones.js'
 import { COLUMN_FOR_STATUS, COLUMN_STATE } from '../src/lib/taskColumns.js'
-import type { AgentStatus, RunStatus, TaskStatus } from '@ai-team-os/domain'
-import { TASK_STATUSES } from '@ai-team-os/db'
+import type { AgentStatus, RunStatus, TaskStatus } from '@slave-of-ai/domain'
+import { TASK_STATUSES } from '@slave-of-ai/db'
 import { TASK_STATUS_BORDER, TASK_STATUS_DOT, TASK_STATUS_FLASH_COLOR, TASK_STATUS_TEXT } from '../src/components/TaskCard.js'
 import { TONE_BORDER_SOLID, TONE_DOT, TONE_FLASH_COLOR, TONE_TEXT } from '../src/components/ui/StatusPill.js'
 
-// The mockup's own table (`AI Team OS Mockups.dc.html:912-923`), transcribed. Colour is checked
+// The mockup's own table (`Slave of AI Mockups.dc.html:912-923`), transcribed. Colour is checked
 // through the tone name rather than the hex, because `globals.css` owns the hex and a tone is how
 // this codebase names one.
 const EXPECTED: Record<CardState, { tone: string; label: string; pulse: boolean }> = {
@@ -106,7 +106,7 @@ describe('cardStateFor', () => {
   })
 
   it('covers every TaskStatus', () => {
-    // `TASK_STATUSES` (`@ai-team-os/db`'s `enums.ts`) is type-pinned complete and sound against
+    // `TASK_STATUSES` (`@slave-of-ai/db`'s `enums.ts`) is type-pinned complete and sound against
     // the domain's `TaskStatus` union by its own `_TaskStatusesComplete`/`_TaskStatusesSound`
     // assertions -- iterating it here, rather than a hardcoded array of literals plus a
     // `toHaveLength`, means a thirteenth `TaskStatus` moves this test's coverage (and hits

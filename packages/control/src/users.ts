@@ -4,8 +4,8 @@
  * and a zero-row update/delete into `user_not_found` rather than pre-querying for either (the
  * same race the `isUniqueConstraintViolation` docstring in `prisma-errors.ts` argues against).
  */
-import { prisma } from '@ai-team-os/db/client'
-import { type Result, err, ok } from '@ai-team-os/domain'
+import { prisma } from '@slave-of-ai/db/client'
+import { type Result, err, ok } from '@slave-of-ai/domain'
 import { dummyHash, hashPassword, verifyPassword } from './password.js'
 import { isUniqueConstraintViolation } from './prisma-errors.js'
 import type { ControlRefusal } from './refusal.js'

@@ -66,10 +66,10 @@ describe('buildChildEnv (characterization)', () => {
       pauseFlagPath: '/tmp/x/pause.flag',
       permissionsFilePath: '/tmp/x/permissions.json',
     })
-    expect(env['AITEAMOS_PAUSE_FLAG']).toBe('/tmp/x/pause.flag')
-    // M18 Task 5 -- AITEAMOS_PERMISSIONS_FILE, the ONE channel the gates read the resolved deny
-    // list's path on, the same shape of channel AITEAMOS_PAUSE_FLAG already is.
-    expect(env['AITEAMOS_PERMISSIONS_FILE']).toBe('/tmp/x/permissions.json')
+    expect(env['SLAVEOFAI_PAUSE_FLAG']).toBe('/tmp/x/pause.flag')
+    // M18 Task 5 -- SLAVEOFAI_PERMISSIONS_FILE, the ONE channel the gates read the resolved deny
+    // list's path on, the same shape of channel SLAVEOFAI_PAUSE_FLAG already is.
+    expect(env['SLAVEOFAI_PERMISSIONS_FILE']).toBe('/tmp/x/permissions.json')
     // process.ts:120-123 -- author and committer both, not just author.
     expect(env['GIT_AUTHOR_NAME']).toBe('AI Worker')
     expect(env['GIT_AUTHOR_EMAIL']).toBe('worker@example.com')
@@ -78,16 +78,16 @@ describe('buildChildEnv (characterization)', () => {
   })
 
   it('inherits the current process env underneath the overrides (process.ts:119)', () => {
-    process.env['AITEAMOS_TEST_PROBE'] = 'inherited'
+    process.env['SLAVEOFAI_TEST_PROBE'] = 'inherited'
     try {
       const env = buildChildEnv({
         gitIdentity: { name: 'AI Worker', email: 'worker@example.com' },
         pauseFlagPath: '/tmp/x/pause.flag',
         permissionsFilePath: '/tmp/x/permissions.json',
       })
-      expect(env['AITEAMOS_TEST_PROBE']).toBe('inherited')
+      expect(env['SLAVEOFAI_TEST_PROBE']).toBe('inherited')
     } finally {
-      delete process.env['AITEAMOS_TEST_PROBE']
+      delete process.env['SLAVEOFAI_TEST_PROBE']
     }
   })
 })

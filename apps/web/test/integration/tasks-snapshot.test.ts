@@ -1,4 +1,4 @@
-import { prisma } from '@ai-team-os/db/client'
+import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { buildTasksSnapshot } from '../../src/server/tasks.js'
 import { GET as tasksGET } from '../../src/app/api/w/[workspaceId]/tasks/route.js'
@@ -71,12 +71,12 @@ describe('buildTasksSnapshot', () => {
       data: {
         runId: newerRun.id,
         sessionId: 'session-abc',
-        worktreePath: '/tmp/tasks-snapshot-fixture/.aiteamos/worktrees/T-abcdef12',
-        pauseFlagPath: '/tmp/tasks-snapshot-fixture/.aiteamos/runs/pause.flag',
-        settingsPath: '/tmp/tasks-snapshot-fixture/.aiteamos/runs/settings.json',
+        worktreePath: '/tmp/tasks-snapshot-fixture/.slaveofai/worktrees/T-abcdef12',
+        pauseFlagPath: '/tmp/tasks-snapshot-fixture/.slaveofai/runs/pause.flag',
+        settingsPath: '/tmp/tasks-snapshot-fixture/.slaveofai/runs/settings.json',
         hookPath: '/tmp/tasks-snapshot-fixture/scripts/pause-gate.sh',
         gitAuthorName: 'Alex',
-        gitAuthorEmail: 'alex@aiteamos.local',
+        gitAuthorEmail: 'alex@slaveofai.local',
         headCommit: 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678',
         dirtyFiles: ['src/index.ts', 'src/other.ts'],
       },
@@ -114,12 +114,12 @@ describe('buildTasksSnapshot', () => {
       data: {
         runId: run.id,
         sessionId: 'session-denied',
-        worktreePath: '/tmp/tasks-snapshot-fixture/.aiteamos/worktrees/T-denied123',
-        pauseFlagPath: '/tmp/tasks-snapshot-fixture/.aiteamos/runs/pause.flag',
-        settingsPath: '/tmp/tasks-snapshot-fixture/.aiteamos/runs/settings.json',
+        worktreePath: '/tmp/tasks-snapshot-fixture/.slaveofai/worktrees/T-denied123',
+        pauseFlagPath: '/tmp/tasks-snapshot-fixture/.slaveofai/runs/pause.flag',
+        settingsPath: '/tmp/tasks-snapshot-fixture/.slaveofai/runs/settings.json',
         hookPath: '/tmp/tasks-snapshot-fixture/scripts/pause-gate.sh',
         gitAuthorName: 'Alex',
-        gitAuthorEmail: 'alex@aiteamos.local',
+        gitAuthorEmail: 'alex@slaveofai.local',
         headCommit: 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678',
         dirtyFiles: [],
         deniedToolUseIds: ['toolu_01DEF', 'toolu_01GHI'],
@@ -259,7 +259,7 @@ describe('buildTasksSnapshot', () => {
           taskId: seeded.id,
           agentId: fixture.agentId,
           status: 'succeeded',
-          worktreePath: '/r/.aiteamos/worktrees/T-collectable',
+          worktreePath: '/r/.slaveofai/worktrees/T-collectable',
         },
       })
 
@@ -267,7 +267,7 @@ describe('buildTasksSnapshot', () => {
       const task = snapshot?.tasks.find((t) => t.id === seeded.id)
 
       expect(task?.collectable).toBe(true)
-      expect(task?.runs[0]?.worktreePath).toBe('/r/.aiteamos/worktrees/T-collectable')
+      expect(task?.runs[0]?.worktreePath).toBe('/r/.slaveofai/worktrees/T-collectable')
     })
 
     it('is false once that same worktree path is nulled (already collected)', async (): Promise<void> => {
@@ -308,7 +308,7 @@ describe('buildTasksSnapshot', () => {
           taskId: seeded.id,
           agentId: fixture.agentId,
           status: 'working',
-          worktreePath: '/r/.aiteamos/worktrees/T-still-running',
+          worktreePath: '/r/.slaveofai/worktrees/T-still-running',
         },
       })
 

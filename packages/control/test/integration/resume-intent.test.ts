@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { prisma } from '@ai-team-os/db/client'
+import { prisma } from '@slave-of-ai/db/client'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { refusalText } from '../../src/refusal.js'
 import { claimResume, requestResume, updateQueuedMessage } from '../../src/resume.js'
@@ -19,7 +19,7 @@ interface Fixture {
  * orphan sweep destroys, and these tests exist to prove the intent never produces it.
  */
 async function seed(): Promise<Fixture> {
-  const repoPath = mkdtempSync(join(tmpdir(), 'aiteamos-control-resume-'))
+  const repoPath = mkdtempSync(join(tmpdir(), 'slaveofai-control-resume-'))
   const workspace = await prisma.workspace.create({
     data: {
       name: 'Checkout Platform',
@@ -45,12 +45,12 @@ async function seed(): Promise<Fixture> {
     data: {
       runId: run.id,
       sessionId: 'session-123',
-      worktreePath: join(repoPath, '.aiteamos', 'worktrees', 'T-abcdef12'),
-      pauseFlagPath: join(repoPath, '.aiteamos', 'runs', run.id, 'pause.flag'),
-      settingsPath: join(repoPath, '.aiteamos', 'runs', run.id, 'settings.json'),
+      worktreePath: join(repoPath, '.slaveofai', 'worktrees', 'T-abcdef12'),
+      pauseFlagPath: join(repoPath, '.slaveofai', 'runs', run.id, 'pause.flag'),
+      settingsPath: join(repoPath, '.slaveofai', 'runs', run.id, 'settings.json'),
       hookPath: join(repoPath, 'scripts', 'pause-gate.sh'),
       gitAuthorName: 'Alex',
-      gitAuthorEmail: 'alex@aiteamos.local',
+      gitAuthorEmail: 'alex@slaveofai.local',
       lastToolUseId: 'toolu_01ABC',
       lastToolName: 'Edit',
       numTurns: 3,
@@ -232,7 +232,7 @@ describe('the resume intent', () => {
           settingsPath: '/tmp/settings.json',
           hookPath: '/tmp/pause-gate.sh',
           gitAuthorName: 'Alex',
-          gitAuthorEmail: 'alex@aiteamos.local',
+          gitAuthorEmail: 'alex@slaveofai.local',
           headCommit: 'abc123',
         },
       })

@@ -1,9 +1,9 @@
-import { isAlive } from '@ai-team-os/control'
-import { prisma as db } from '@ai-team-os/db/client'
-import { runId as brandRunId, type RunId, type RunStatus, type WorkspaceId } from '@ai-team-os/domain'
-import { appendEvent } from '@ai-team-os/events'
+import { isAlive } from '@slave-of-ai/control'
+import { prisma as db } from '@slave-of-ai/db/client'
+import { runId as brandRunId, type RunId, type RunStatus, type WorkspaceId } from '@slave-of-ai/domain'
+import { appendEvent } from '@slave-of-ai/events'
 import { NON_TERMINAL_RUN_STATUSES } from './world.js'
-import type { AdapterRegistry } from '@ai-team-os/providers'
+import type { AdapterRegistry } from '@slave-of-ai/providers'
 import { resolveAdapter } from './provider.js'
 
 export interface SweepDeps {

@@ -37,14 +37,14 @@ const FAKE_CLAUDE = join(repoRoot, 'packages/providers/test/fake-claude.mjs')
 // Every child process below (the daemon, and the CLI's own `resume`) inherits these -- set once
 // here rather than threaded through each spawn/execFileSync call, because `resume` has to reach
 // the same fake CLI the daemon used without this script repeating the wiring at every call site.
-process.env.AITEAMOS_CLAUDE_BIN = 'node'
-process.env.AITEAMOS_CLAUDE_ARGS = `${FAKE_CLAUDE} --fixture hook-deny`
+process.env.SLAVEOFAI_CLAUDE_BIN = 'node'
+process.env.SLAVEOFAI_CLAUDE_ARGS = `${FAKE_CLAUDE} --fixture hook-deny`
 process.env.FAKE_CLAUDE_LINE_DELAY_MS = '150'
 
 /** Same as `milestone-gate.test.ts`'s `makeRepo` -- a real repository, because the orchestrator's
  *  tick provisions a real worktree in it regardless of which CLI it spawns. */
 function makeRepo() {
-  const dir = mkdtempSync(join(tmpdir(), 'aiteamos-gate-m8a-estop-'))
+  const dir = mkdtempSync(join(tmpdir(), 'slaveofai-gate-m8a-estop-'))
   const git = (args) => execFileSync('git', args, { cwd: dir })
   git(['init', '-q', '-b', 'main'])
   git(['config', 'user.name', 'Gate'])

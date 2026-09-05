@@ -1,7 +1,7 @@
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { prisma } from '@ai-team-os/db/client'
+import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { POST as pausePOST } from '../../src/app/api/w/[workspaceId]/runs/[runId]/pause/route.js'
 import { POST as resumePOST } from '../../src/app/api/w/[workspaceId]/runs/[runId]/resume/route.js'
@@ -18,12 +18,12 @@ interface Fixture {
 }
 
 async function seed(): Promise<Fixture> {
-  const repoPath = mkdtempSync(join(tmpdir(), 'aiteamos-web-control-'))
+  const repoPath = mkdtempSync(join(tmpdir(), 'slaveofai-web-control-'))
   const workspace = await prisma.workspace.create({
     data: { name: 'Checkout Platform', repoPath, verifyCommands: ['npm test'], setupCommands: ['npm ci'] },
   })
   const otherWorkspace = await prisma.workspace.create({
-    data: { name: 'Other', repoPath: mkdtempSync(join(tmpdir(), 'aiteamos-web-control-other-')), verifyCommands: ['npm test'], setupCommands: [] },
+    data: { name: 'Other', repoPath: mkdtempSync(join(tmpdir(), 'slaveofai-web-control-other-')), verifyCommands: ['npm test'], setupCommands: [] },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
   const agent = await prisma.agent.create({ data: { teamId: team.id, name: 'Alex', role: 'Backend' } })
@@ -48,12 +48,12 @@ async function pauseWithCheckpoint(fixture: Fixture): Promise<void> {
     data: {
       runId: fixture.run.id,
       sessionId: 'session-123',
-      worktreePath: join(fixture.workspace.repoPath, '.aiteamos', 'worktrees', 'T-abcdef12'),
-      pauseFlagPath: join(fixture.workspace.repoPath, '.aiteamos', 'runs', fixture.run.id, 'pause.flag'),
-      settingsPath: join(fixture.workspace.repoPath, '.aiteamos', 'runs', fixture.run.id, 'settings.json'),
+      worktreePath: join(fixture.workspace.repoPath, '.slaveofai', 'worktrees', 'T-abcdef12'),
+      pauseFlagPath: join(fixture.workspace.repoPath, '.slaveofai', 'runs', fixture.run.id, 'pause.flag'),
+      settingsPath: join(fixture.workspace.repoPath, '.slaveofai', 'runs', fixture.run.id, 'settings.json'),
       hookPath: join(fixture.workspace.repoPath, 'scripts', 'pause-gate.sh'),
       gitAuthorName: 'Alex',
-      gitAuthorEmail: 'alex@aiteamos.local',
+      gitAuthorEmail: 'alex@slaveofai.local',
       lastToolUseId: 'toolu_01ABC',
       lastToolName: 'Edit',
       numTurns: 3,

@@ -21,8 +21,8 @@ const execFileAsync = promisify(execFile)
  * dependency only ever runs the other way.
  */
 export const ORCHESTRATOR_GIT_IDENTITY = {
-  name: 'AI Team OS',
-  email: 'orchestrator@aiteamos.local',
+  name: 'Slave of AI',
+  email: 'orchestrator@slaveofai.local',
 } as const
 
 /**

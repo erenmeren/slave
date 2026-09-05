@@ -1,13 +1,13 @@
 {
-  "name": "@ai-team-os/events",
+  "name": "@slave-of-ai/events",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "dependencies": {
-    "@ai-team-os/db": "*",
-    "@ai-team-os/domain": "*",
+    "@slave-of-ai/db": "*",
+    "@slave-of-ai/domain": "*",
     "pg": "^8.16.0"
   }
 }

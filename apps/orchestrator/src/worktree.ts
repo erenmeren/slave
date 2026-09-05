@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
-import { gitIn, ORCHESTRATOR_GIT_IDENTITY } from '@ai-team-os/control'
+import { gitIn, ORCHESTRATOR_GIT_IDENTITY } from '@slave-of-ai/control'
 import {
   COMMAND_OUTPUT_LIMIT,
   DEFAULT_COMMAND_TIMEOUT_MS,
@@ -21,10 +21,10 @@ export const SETUP_OUTPUT_LIMIT = COMMAND_OUTPUT_LIMIT
  * and an operator looking at why a task failed should find it next to the code, not have to be
  * told a path under `/tmp` that a reboot may already have taken away.
  */
-const WORKTREE_ROOT = join('.aiteamos', 'worktrees')
+const WORKTREE_ROOT = join('.slaveofai', 'worktrees')
 
 /**
- * Moved to `@ai-team-os/control` in M23 B2 (`packages/control/src/git.ts`): `collectTaskWorktree`
+ * Moved to `@slave-of-ai/control` in M23 B2 (`packages/control/src/git.ts`): `collectTaskWorktree`
  * needs the identical identity-scoped git wrapper this module already runs every other worktree
  * command through, and `packages/control` cannot depend on `apps/orchestrator`. Re-exported here
  * (`review.ts` and `merge.ts` still import `gitIn` from this module) so this module's own uses
@@ -42,7 +42,7 @@ export { gitIn, ORCHESTRATOR_GIT_IDENTITY }
 const SAFE_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
 
 /**
- * Makes `.aiteamos/` ignore itself inside the operator's repository.
+ * Makes `.slaveofai/` ignore itself inside the operator's repository.
  *
  * The orchestrator writes worktrees, settings files and pause flags into the workspace's own repo,
  * and nothing in that repo asks for them. Without this, `git status` there shows the orchestrator's
@@ -54,7 +54,7 @@ const SAFE_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
  * permission to edit a file the operator maintains, and it disappears with the directory.
  */
 function ensureIgnored(repoPath: string): void {
-  const root = join(repoPath, '.aiteamos')
+  const root = join(repoPath, '.slaveofai')
   mkdirSync(root, { recursive: true })
   const marker = join(root, '.gitignore')
   if (!existsSync(marker)) writeFileSync(marker, '*\n')
@@ -178,7 +178,7 @@ export async function provisionWorktree(input: ProvisionWorktreeInput): Promise<
   const repoPath = resolve(input.repoPath)
   ensureIgnored(repoPath)
   const path = join(repoPath, WORKTREE_ROOT, input.taskKey)
-  const branch = `aiteamos/${input.taskKey}-${input.slug}`
+  const branch = `slaveofai/${input.taskKey}-${input.slug}`
 
   // Checked *before* the add rather than left to git's refusal, because `worktree add -b` creates
   // the branch first and then fails on the path -- measured -- so letting git refuse leaves a

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 
-vi.mock('@ai-team-os/control', async () => {
-  const actual = await vi.importActual<typeof import('@ai-team-os/control')>('@ai-team-os/control')
+vi.mock('@slave-of-ai/control', async () => {
+  const actual = await vi.importActual<typeof import('@slave-of-ai/control')>('@slave-of-ai/control')
   return { ...actual, listProviderModels: vi.fn(async () => ({ models: [{ id: 'opus', label: 'opus' }], source: 'static' })) }
 })
 

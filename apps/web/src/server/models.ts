@@ -1,4 +1,4 @@
-import { listProviderModels, type ModelListing, type ProviderKind } from '@ai-team-os/control'
+import { listProviderModels, type ModelListing, type ProviderKind } from '@slave-of-ai/control'
 
 const FRESH_MS = 5 * 60_000
 const FAILED_MS = 30_000
@@ -35,7 +35,7 @@ export async function listModelsFor(kind: ProviderKind, options?: { readonly ref
     if (now - hit.at < ttl) return settled
   }
   const now = Date.now()
-  const cursorCommand = process.env['AITEAMOS_CURSOR_BIN']
+  const cursorCommand = process.env['SLAVEOFAI_CURSOR_BIN']
   const listing = listProviderModels(
     kind,
     cursorCommand !== undefined && cursorCommand !== '' ? { cursorCommand } : {},

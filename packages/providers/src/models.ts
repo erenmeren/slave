@@ -89,7 +89,7 @@ export async function listCursorModels(command = 'cursor-agent', timeoutMs = 10_
   }
 }
 
-/** The one entry point the web reads (through `@ai-team-os/control`'s re-export): a kind in, a
+/** The one entry point the web reads (through `@slave-of-ai/control`'s re-export): a kind in, a
  *  listing out. The adapters' `listModels()` delegate here, so a caller with an adapter and a
  *  caller with only a kind see the same list. */
 export async function listProviderModels(

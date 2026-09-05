@@ -2,7 +2,7 @@
 
 import { useRef, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
-import type { AgentStatus } from '@ai-team-os/domain'
+import type { AgentStatus } from '@slave-of-ai/domain'
 import { CARD_STATE_TONE, cardStateForAgent, type CardState } from '../lib/tones'
 import type { ProjectRow, RosterCompany } from '../server/org'
 import { AssignCompanyDialog } from './AssignCompanyDialog'

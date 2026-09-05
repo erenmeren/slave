@@ -2,7 +2,7 @@
 import type { ReactElement } from 'react'
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { DomainEventType } from '@ai-team-os/db'
+import type { DomainEventType } from '@slave-of-ai/db'
 import { SHELL_REFETCH_DEBOUNCE_MS } from '../src/components/activity/ActivityClient.js'
 import { publishShellFacts } from '../src/hooks/useShellFacts.js'
 import { publishStreamState } from '../src/hooks/useStreamState.js'

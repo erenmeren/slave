@@ -1,4 +1,4 @@
-import { classifyGateEvent, PERMISSION_DENY_REASON_PREFIX } from '@ai-team-os/providers'
+import { classifyGateEvent, PERMISSION_DENY_REASON_PREFIX } from '@slave-of-ai/providers'
 import { describe, expect, it } from 'vitest'
 
 describe('classifyGateEvent', () => {

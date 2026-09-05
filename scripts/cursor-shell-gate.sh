@@ -18,7 +18,7 @@
 #
 # It is the Cursor half of the same mechanism `scripts/pause-gate.sh` is the
 # Claude half of, and it reads the SAME file: one concept, one environment
-# variable (`AITEAMOS_PAUSE_FLAG`), one pause-flag path per run, whichever
+# variable (`SLAVEOFAI_PAUSE_FLAG`), one pause-flag path per run, whichever
 # runtime that run happens to be using.
 #
 # ---------------------------------------------------------------------------
@@ -118,11 +118,11 @@ PAUSE_GATE_NAME='cursor-shell-gate.sh'
 PAUSE_GATE_LIB_DIR="$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}" || printf '%s' "${BASH_SOURCE[0]}")")"
 # shellcheck source=lib/pause-flag.sh
 . "${PAUSE_GATE_LIB_DIR}/lib/pause-flag.sh" || {
-  # A lone copy of this script -- an AITEAMOS_CURSOR_GATE_PATH override pointing at a deployment
+  # A lone copy of this script -- an SLAVEOFAI_CURSOR_GATE_PATH override pointing at a deployment
   # that copied the gate without its library -- must refuse loudly and actionably rather than
   # silently gating nothing. Naming the exact path we looked for is what makes it fixable at a
   # glance, and stderr is where Cursor reads an exit-2 block reason from.
-  printf 'cursor-shell-gate.sh: deployed without its library -- expected to find it at %s. Copy scripts/lib/pause-flag.sh alongside this script (in a lib/ directory beside it), or point AITEAMOS_CURSOR_GATE_PATH at the repository'"'"'s own scripts/cursor-shell-gate.sh.\n' \
+  printf 'cursor-shell-gate.sh: deployed without its library -- expected to find it at %s. Copy scripts/lib/pause-flag.sh alongside this script (in a lib/ directory beside it), or point SLAVEOFAI_CURSOR_GATE_PATH at the repository'"'"'s own scripts/cursor-shell-gate.sh.\n' \
     "${PAUSE_GATE_LIB_DIR}/lib/pause-flag.sh" >&2
   exit 2
 }
@@ -132,7 +132,7 @@ PAUSE_GATE_LIB_DIR="$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}" || printf
 # skip the matrix.
 # shellcheck source=lib/permissions.sh
 . "${PAUSE_GATE_LIB_DIR}/lib/permissions.sh" || {
-  printf 'cursor-shell-gate.sh: deployed without its library -- expected to find it at %s. Copy scripts/lib/permissions.sh alongside this script (in a lib/ directory beside it), or point AITEAMOS_CURSOR_GATE_PATH at the repository'"'"'s own scripts/cursor-shell-gate.sh.\n' \
+  printf 'cursor-shell-gate.sh: deployed without its library -- expected to find it at %s. Copy scripts/lib/permissions.sh alongside this script (in a lib/ directory beside it), or point SLAVEOFAI_CURSOR_GATE_PATH at the repository'"'"'s own scripts/cursor-shell-gate.sh.\n' \
     "${PAUSE_GATE_LIB_DIR}/lib/permissions.sh" >&2
   exit 2
 }
@@ -173,7 +173,7 @@ allow() {
 }
 
 # Captured, not drained: the permission matrix's verdict (below) needs the payload's tool
-# identity. read_permission_verdict only parses it when AITEAMOS_PERMISSIONS_FILE is armed --
+# identity. read_permission_verdict only parses it when SLAVEOFAI_PERMISSIONS_FILE is armed --
 # it returns allow instantly otherwise -- so this costs nothing on the pre-M18 path.
 hook_payload=$(cat)
 

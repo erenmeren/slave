@@ -1,5 +1,5 @@
-import { prisma } from '@ai-team-os/db/client'
-import type { ProviderKind } from '@ai-team-os/providers'
+import { prisma } from '@slave-of-ai/db/client'
+import type { ProviderKind } from '@slave-of-ai/providers'
 
 /**
  * The pair a run is dispatched with (M12 §5). `resolveRuntime` replaces `resolveModel` (M10 §6):

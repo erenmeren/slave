@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
-import { verifyCredentials } from '@ai-team-os/control'
-import { prisma } from '@ai-team-os/db/client'
+import { verifyCredentials } from '@slave-of-ai/control'
+import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 
 const execFileAsync = promisify(execFile)
@@ -36,8 +36,8 @@ async function runCli(args: readonly string[], extraEnv: NodeJS.ProcessEnv = {})
       env: {
         ...process.env,
         DATABASE_URL: process.env['TEST_DATABASE_URL'] ?? '',
-        AITEAMOS_CLAUDE_BIN: 'node',
-        AITEAMOS_CLAUDE_ARGS: `${FAKE} --fixture complete`,
+        SLAVEOFAI_CLAUDE_BIN: 'node',
+        SLAVEOFAI_CLAUDE_ARGS: `${FAKE} --fixture complete`,
         ...extraEnv,
       },
     })
@@ -60,8 +60,8 @@ async function runCliWithStdin(args: readonly string[], input: string, extraEnv:
       env: {
         ...process.env,
         DATABASE_URL: process.env['TEST_DATABASE_URL'] ?? '',
-        AITEAMOS_CLAUDE_BIN: 'node',
-        AITEAMOS_CLAUDE_ARGS: `${FAKE} --fixture complete`,
+        SLAVEOFAI_CLAUDE_BIN: 'node',
+        SLAVEOFAI_CLAUDE_ARGS: `${FAKE} --fixture complete`,
         ...extraEnv,
       },
     })
@@ -81,7 +81,7 @@ async function runCliWithStdin(args: readonly string[], input: string, extraEnv:
 }
 
 function makeRepo(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'aiteamos-cli-'))
+  const dir = mkdtempSync(join(tmpdir(), 'slaveofai-cli-'))
   const git = (args: readonly string[]): void => {
     execFileSync('git', [...args], { cwd: dir })
   }
@@ -412,7 +412,7 @@ describe('the orchestrator CLI', () => {
         agentId: fixture.agentId,
         status: 'working',
         pid: process.pid,
-        worktreePath: join(fixture.repoPath, '.aiteamos', 'worktrees', 'T-abcdef12'),
+        worktreePath: join(fixture.repoPath, '.slaveofai', 'worktrees', 'T-abcdef12'),
       },
     })
     await prisma.agentRun.create({
@@ -434,7 +434,7 @@ describe('the orchestrator CLI', () => {
     }
     expect(status.runs).toHaveLength(1)
     expect(status.runs[0]?.pid).toBe(process.pid)
-    expect(status.runs[0]?.worktreePath).toContain('.aiteamos')
+    expect(status.runs[0]?.worktreePath).toContain('.slaveofai')
   }, 30_000)
 
   it('prints a workspace halt with the reason it happened', async (): Promise<void> => {
@@ -501,7 +501,7 @@ describe('the orchestrator CLI', () => {
     // separate process cannot follow the rest of the protocol -- it has no handle on the child and
     // no view of its stream -- so writing the flag is the half it can perform, and the daemon's
     // pump observes the deny.
-    expect(existsSync(join(fixture.repoPath, '.aiteamos', 'runs', run.id, 'pause.flag'))).toBe(true)
+    expect(existsSync(join(fixture.repoPath, '.slaveofai', 'runs', run.id, 'pause.flag'))).toBe(true)
 
     const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })
     expect(after.status).toBe('pause_requested')
@@ -641,7 +641,7 @@ describe('the orchestrator CLI', () => {
         settingsPath: join(fixture.repoPath, 'settings.json'),
         hookPath: join(repoRoot, 'scripts/pause-gate.sh'),
         gitAuthorName: 'Alex',
-        gitAuthorEmail: 'alex@aiteamos.local',
+        gitAuthorEmail: 'alex@slaveofai.local',
         headCommit: 'deadbeef',
       },
     })
@@ -676,7 +676,7 @@ describe('the orchestrator CLI', () => {
 
   it('resumes a paused run in its own worktree, session and identity', async (): Promise<void> => {
     // A real pause, produced by the gate denying the fake CLI's first tool call.
-    await runCli(['tick'], { AITEAMOS_CLAUDE_ARGS: `${FAKE} --fixture hook-deny` })
+    await runCli(['tick'], { SLAVEOFAI_CLAUDE_ARGS: `${FAKE} --fixture hook-deny` })
     const paused = await prisma.agentRun.findFirstOrThrow()
     expect(paused.status).toBe('paused')
     const checkpoint = await prisma.checkpoint.findUniqueOrThrow({ where: { runId: paused.id } })
@@ -685,7 +685,7 @@ describe('the orchestrator CLI', () => {
     // "does it announce itself as started again" assertion below to reach the code at all, and
     // env-echo emits none. A test that cannot reach the branch it names proves nothing about it.
     const result = await runCli(['resume', '--run', paused.id, '--message', 'try the other approach'], {
-      AITEAMOS_CLAUDE_ARGS: `${FAKE} --fixture complete`,
+      SLAVEOFAI_CLAUDE_ARGS: `${FAKE} --fixture complete`,
     })
 
     expect(result.code).toBe(0)
@@ -694,8 +694,8 @@ describe('the orchestrator CLI', () => {
     // the pump, a resumed run emits a second `run.started` -- an illegal transition from `working`
     // for anything replaying the log through the domain's state machine.
     expect(await prisma.executionEvent.count({ where: { runId: paused.id, type: 'run_started' } })).toBe(1)
-    expect(checkpoint.worktreePath).toContain('.aiteamos')
-    expect(checkpoint.gitAuthorEmail).toContain('@aiteamos.local')
+    expect(checkpoint.worktreePath).toContain('.slaveofai')
+    expect(checkpoint.gitAuthorEmail).toContain('@slaveofai.local')
   }, 60_000)
 
   it('does not hand a cancelled task straight back to a new agent', async (): Promise<void> => {
@@ -749,8 +749,8 @@ describe('the orchestrator CLI', () => {
       env: {
         ...process.env,
         DATABASE_URL: process.env['TEST_DATABASE_URL'] ?? '',
-        AITEAMOS_CLAUDE_BIN: 'node',
-        AITEAMOS_CLAUDE_ARGS: `${FAKE} --fixture complete`,
+        SLAVEOFAI_CLAUDE_BIN: 'node',
+        SLAVEOFAI_CLAUDE_ARGS: `${FAKE} --fixture complete`,
       },
     })
 
@@ -789,8 +789,8 @@ describe('the orchestrator CLI', () => {
       env: {
         ...process.env,
         DATABASE_URL: process.env['TEST_DATABASE_URL'] ?? '',
-        AITEAMOS_CLAUDE_BIN: 'node',
-        AITEAMOS_CLAUDE_ARGS: `${FAKE} --fixture hang`,
+        SLAVEOFAI_CLAUDE_BIN: 'node',
+        SLAVEOFAI_CLAUDE_ARGS: `${FAKE} --fixture hang`,
       },
     })
     try {

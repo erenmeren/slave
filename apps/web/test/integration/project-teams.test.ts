@@ -1,15 +1,15 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { prisma } from '@ai-team-os/db/client'
+import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { listProjectTeams } from '../../src/server/org.js'
 
 // A real directory, not a placeholder (M23 G3 idiom -- see `packages/control/test/integration/
 // org-edit.test.ts`'s own comment): `Workspace.repoPath` needs to exist for anything that stats
 // it, and a reboot clears /tmp.
-const repoA = mkdtempSync(join(tmpdir(), 'aiteamos-project-teams-a-'))
-const repoB = mkdtempSync(join(tmpdir(), 'aiteamos-project-teams-b-'))
+const repoA = mkdtempSync(join(tmpdir(), 'slaveofai-project-teams-a-'))
+const repoB = mkdtempSync(join(tmpdir(), 'slaveofai-project-teams-b-'))
 
 afterAll(() => {
   rmSync(repoA, { recursive: true, force: true })

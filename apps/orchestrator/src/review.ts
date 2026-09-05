@@ -5,11 +5,11 @@ import {
   taskId as brandTaskId,
   parseReviewVerdict,
   type RunId,
-} from '@ai-team-os/domain'
-import { admitProvider, refusalText, resolveDenyList, runFilePaths, writePermissionsFile } from '@ai-team-os/control'
-import { prisma } from '@ai-team-os/db/client'
-import { appendEvent } from '@ai-team-os/events'
-import type { AgentRuntimeAdapter, RunHandle } from '@ai-team-os/providers'
+} from '@slave-of-ai/domain'
+import { admitProvider, refusalText, resolveDenyList, runFilePaths, writePermissionsFile } from '@slave-of-ai/control'
+import { prisma } from '@slave-of-ai/db/client'
+import { appendEvent } from '@slave-of-ai/events'
+import type { AgentRuntimeAdapter, RunHandle } from '@slave-of-ai/providers'
 import { resolveRuntime, workspaceDefaultProvider } from './model.js'
 import { resolveAdapter } from './provider.js'
 import { pumpRun } from './pump.js'
@@ -327,7 +327,7 @@ async function dispatchReview(deps: TickDeps, task: ReviewableTask): Promise<Run
     //
     // Thrown, not returned, so it takes the SAME path the `invalid_provider` refusal above already
     // takes: the existing `catch` records an attempted run that failed (`failToStart`, spec §13).
-    // `refusalText` is imported from `@ai-team-os/control` rather than hand-copied, so the wording
+    // `refusalText` is imported from `@slave-of-ai/control` rather than hand-copied, so the wording
     // an operator sees here and the wording the write surface promises cannot drift apart.
     //
     // AFTER `resolveAdapter`, deliberately: a kind this process has no adapter for is refused as
@@ -362,7 +362,7 @@ async function dispatchReview(deps: TickDeps, task: ReviewableTask): Promise<Run
     // M18 Task 5 -- see `tick.ts`'s `startRun` for the full reasoning.
     const permissionsFilePath = writePermissionsFile(runDir, resolveDenyList(reviewer.permissions, resolved.provider))
 
-    const gitIdentity = { name: reviewer.name, email: `${emailLocalPart(reviewer)}@aiteamos.local` }
+    const gitIdentity = { name: reviewer.name, email: `${emailLocalPart(reviewer)}@slaveofai.local` }
 
     handle = await runAdapter.start({
       runId,

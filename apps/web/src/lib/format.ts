@@ -3,7 +3,7 @@
  *
  * Lives here, not in `server/analytics.ts` where it was first written, because it is also needed
  * by `AnalyticsClient.tsx` (a `'use client'` component) to render the per-agent table's average
- * duration. `server/analytics.ts` imports `@ai-team-os/db/client` at module scope, and Next's
+ * duration. `server/analytics.ts` imports `@slave-of-ai/db/client` at module scope, and Next's
  * client bundler resolves an entire module's imports before any tree-shaking of unused exports
  * happens — a client component that value-imports even one pure export from that file drags
  * `pg`'s Node-only dependency graph (`fs`, `net`, `tls`, `dns`) into the browser bundle and fails

@@ -1,14 +1,14 @@
 import { dirname } from 'node:path'
-import { resolveDenyList, writePermissionsFile } from '@ai-team-os/control'
-import { prisma } from '@ai-team-os/db/client'
+import { resolveDenyList, writePermissionsFile } from '@slave-of-ai/control'
+import { prisma } from '@slave-of-ai/db/client'
 import {
   agentId as brandAgentId,
   runId as brandRunId,
   taskId as brandTaskId,
   workspaceId as brandWorkspaceId,
-} from '@ai-team-os/domain'
-import { appendEvent } from '@ai-team-os/events'
-import type { AdapterRegistry } from '@ai-team-os/providers'
+} from '@slave-of-ai/domain'
+import { appendEvent } from '@slave-of-ai/events'
+import type { AdapterRegistry } from '@slave-of-ai/providers'
 import { resolveAdapter } from './provider.js'
 import { pumpRun } from './pump.js'
 import { verifyConcludedRun } from './verify.js'
@@ -78,7 +78,7 @@ export async function executeResume(options: ExecuteResumeOptions): Promise<void
   // `settingsPath`, which for Cursor is a hooks file in the WORKTREE, not `runDir`. Both adapters'
   // own `resume()` re-derive this SAME path independently from `checkpoint.pauseFlagPath` (see
   // `writePermissionsFile`'s docstring for why the path is a literal convention, not a field on
-  // `Checkpoint`), so what is written here is exactly what `AITEAMOS_PERMISSIONS_FILE` will point
+  // `Checkpoint`), so what is written here is exactly what `SLAVEOFAI_PERMISSIONS_FILE` will point
   // the resumed child at.
   const runDir = dirname(checkpoint.pauseFlagPath)
   writePermissionsFile(runDir, resolveDenyList(run.agent.permissions, checkpoint.provider ?? 'claude_code'))

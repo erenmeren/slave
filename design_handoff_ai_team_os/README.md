@@ -1,7 +1,7 @@
-# Handoff: AI Team OS — control surface (1a, 1b, 1c, 2a, 3a)
+# Handoff: Slave of AI — control surface (1a, 1b, 1c, 2a, 3a)
 
 ## Overview
-Design references for the operator-facing web UI of **AI Team OS**: an orchestration system that runs a
+Design references for the operator-facing web UI of **Slave of AI**: an orchestration system that runs a
 software team of real Claude Code CLI agents. The operator writes one goal sentence; the system plans
 (manager agent emits a task graph), works (developer agents in isolated git worktrees), verifies (verify
 commands), reviews (independent QA agent judges the diff), and merges (serialized queue, rebase +
@@ -18,8 +18,8 @@ component library and data layer — not to copy this HTML.
 Everything in the mocks is driven by fake in-memory state on timers. In the real app the same values
 come from Postgres snapshots + the append-only `ExecutionEvent` log, streamed over SSE.
 
-Open a file: `mockups/AI Team OS Mockups.dc.html` (all five options on one canvas — scroll/pan) and
-`mockups/AI Team OS Web.dc.html`. `support.js` must sit next to them. They are plain HTML — no build.
+Open a file: `mockups/Slave of AI Mockups.dc.html` (all five options on one canvas — scroll/pan) and
+`mockups/Slave of AI Web.dc.html`. `support.js` must sit next to them. They are plain HTML — no build.
 
 ## Fidelity
 **High fidelity.** Final colors, type, spacing, motion and interaction states. Recreate pixel-close,
@@ -111,7 +111,7 @@ One sidebar-driven shell; the routes are the product's real IA. **This is the st
    permission matrix (✓/✕ chips), realtime transport choice (SSE selected, WebSocket "later"), and a
    danger zone (stop all / reset demo data).
 
-### Bonus — `AI Team OS Web.dc.html`
+### Bonus — `Slave of AI Web.dc.html`
 A **fully working redesign of the current shipping UI** (the one in `nasil-calisir.pdf`), true to the real
 domain: goal form → planning run → task columns `RUNNING / VERIFYING / REVIEWING / MERGING / READY /
 DONE` → append-only activity log with expandable JSON payloads → org/dependency graph, plus the budget
@@ -173,8 +173,8 @@ Sans + IBM Plex Mono (Google Fonts). Swap for the codebase's own font stack if i
 
 ## Files
 ```
-mockups/AI Team OS Mockups.dc.html   1a, 1b, 1c (turn 1) · 2a (turn 2) · 3a (turn 3), one canvas
-mockups/AI Team OS Web.dc.html       redesign of the current shipping UI, behavior reference
+mockups/Slave of AI Mockups.dc.html   1a, 1b, 1c (turn 1) · 2a (turn 2) · 3a (turn 3), one canvas
+mockups/Slave of AI Web.dc.html       redesign of the current shipping UI, behavior reference
 mockups/support.js                   runtime required by both files (keep alongside)
 ```
 Each design is a single self-contained file: markup with inline styles, plus one `Component` class holding

@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const listProviderModels = vi.fn()
-vi.mock('@ai-team-os/control', async () => {
-  const actual = await vi.importActual<typeof import('@ai-team-os/control')>('@ai-team-os/control')
+vi.mock('@slave-of-ai/control', async () => {
+  const actual = await vi.importActual<typeof import('@slave-of-ai/control')>('@slave-of-ai/control')
   return { ...actual, listProviderModels }
 })
 
@@ -49,8 +49,8 @@ describe('listModelsFor', () => {
     expect(listProviderModels).toHaveBeenCalledTimes(2)
   })
 
-  it('passes the AITEAMOS_CURSOR_BIN override through', async () => {
-    vi.stubEnv('AITEAMOS_CURSOR_BIN', '/opt/cursor-agent')
+  it('passes the SLAVEOFAI_CURSOR_BIN override through', async () => {
+    vi.stubEnv('SLAVEOFAI_CURSOR_BIN', '/opt/cursor-agent')
     listProviderModels.mockResolvedValue(OK)
     await listModelsFor('cursor')
     expect(listProviderModels).toHaveBeenCalledWith('cursor', { cursorCommand: '/opt/cursor-agent' })

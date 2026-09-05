@@ -1,7 +1,7 @@
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { prisma } from '@ai-team-os/db/client'
+import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { refusalText } from '../../src/refusal.js'
 import { assignSkill, syncSkillCatalog, unassignSkill } from '../../src/skills.js'
@@ -28,7 +28,7 @@ describe('syncSkillCatalog', () => {
     await prisma.$executeRawUnsafe(TRUNCATE)
     // A temp tree, never the operator's real `~/.claude` -- `syncSkillCatalog` takes its roots as
     // an argument precisely so a test never reads (or reports on) the host it happens to run on.
-    root = mkdtempSync(join(tmpdir(), 'aiteamos-skills-'))
+    root = mkdtempSync(join(tmpdir(), 'slaveofai-skills-'))
     mkdirSync(roots().personal, { recursive: true })
     mkdirSync(roots().pluginCache, { recursive: true })
     mkdirSync(roots().project, { recursive: true })

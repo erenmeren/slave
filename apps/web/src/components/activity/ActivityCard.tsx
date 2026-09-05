@@ -197,7 +197,7 @@ function PayloadDetails({ payload }: { readonly payload: Record<string, unknown>
  * them re-implements the primitives above, and none of them had to change for this layout.
  *
  * The bordered `rounded-card` surface this used to draw is gone on purpose: the mock's stream
- * (`AI Team OS Mockups.dc.html:858`) is a river of flush rows against the page, and thirty card
+ * (`Slave of AI Mockups.dc.html:858`) is a river of flush rows against the page, and thirty card
  * borders stacked vertically is exactly what the vertical rule replaces.
  */
 export function ActivityCard({

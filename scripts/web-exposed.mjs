@@ -3,7 +3,7 @@
 //
 // M15 §2.4 is explicit about the limit of the Host rule: "A LAN client could still forge
 // `Host: localhost` with curl — the backstop is against browsers and accidents, not against a
-// hostile LAN." So a 0.0.0.0 bind with no `AITEAMOS_SESSION_SECRET` is not inert: browsers are
+// hostile LAN." So a 0.0.0.0 bind with no `SLAVEOFAI_SESSION_SECRET` is not inert: browsers are
 // refused, but any LAN/tailnet client that forges the Host header gets full read/write. That is a
 // misconfiguration, and the cheapest place to catch it is before the socket opens.
 //
@@ -26,12 +26,12 @@ function refuse(reason) {
   process.exit(2)
 }
 
-const secret = (process.env['AITEAMOS_SESSION_SECRET'] ?? '').trim()
+const secret = (process.env['SLAVEOFAI_SESSION_SECRET'] ?? '').trim()
 if (secret.length === 0) {
-  refuse('set AITEAMOS_SESSION_SECRET in .env first (openssl rand -hex 32) — without accounts this instance must stay loopback-only (see README "Reaching it from another device")')
+  refuse('set SLAVEOFAI_SESSION_SECRET in .env first (openssl rand -hex 32) — without accounts this instance must stay loopback-only (see README "Reaching it from another device")')
 }
 if (secret.length < 32) {
-  refuse('AITEAMOS_SESSION_SECRET is shorter than 32 characters — mint a real one with `openssl rand -hex 32`')
+  refuse('SLAVEOFAI_SESSION_SECRET is shorter than 32 characters — mint a real one with `openssl rand -hex 32`')
 }
 
 // The way the gates ask: the built client, not a second Prisma instance of our own. `--env-file=.env`
@@ -53,9 +53,9 @@ if (secret.length < 32) {
   }
 }
 
-// AITEAMOS_NEXT_BIN exists for apps/web/test/web-exposed.test.ts and its database-backed half in
+// SLAVEOFAI_NEXT_BIN exists for apps/web/test/web-exposed.test.ts and its database-backed half in
 // apps/web/test/integration/, which must never start the real next on 0.0.0.0; not an operator knob.
-const nextBin = process.env['AITEAMOS_NEXT_BIN'] ?? 'node_modules/next/dist/bin/next'
+const nextBin = process.env['SLAVEOFAI_NEXT_BIN'] ?? 'node_modules/next/dist/bin/next'
 
 const child = spawn('node', [nextBin, 'dev', 'apps/web', '-H', '0.0.0.0'], {
   stdio: 'inherit',

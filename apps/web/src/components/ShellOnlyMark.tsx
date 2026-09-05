@@ -1,4 +1,4 @@
-import type { ProviderCapabilities } from '@ai-team-os/control'
+import type { ProviderCapabilities } from '@slave-of-ai/control'
 import { Chip } from './ui/Chip'
 
 /**

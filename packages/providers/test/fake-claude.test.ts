@@ -134,11 +134,11 @@ describe('fake-claude', () => {
     const { stdout } = await run(
       'node',
       [FAKE, '--fixture', 'env-echo'],
-      { env: { ...process.env, AITEAMOS_PROBE_VAR: 'probe-value' } },
+      { env: { ...process.env, SLAVEOFAI_PROBE_VAR: 'probe-value' } },
     )
     const lines = parseLines(stdout)
     const result = lines.find((l) => l.type === 'result') as { env?: Record<string, string> } | undefined
-    expect(result?.env?.AITEAMOS_PROBE_VAR).toBe('probe-value')
+    expect(result?.env?.SLAVEOFAI_PROBE_VAR).toBe('probe-value')
   })
 
   it('env-echo also carries the child process cwd in the terminal result', async (): Promise<void> => {

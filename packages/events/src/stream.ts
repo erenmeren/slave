@@ -1,4 +1,4 @@
-import type { ExecutionEvent } from '@ai-team-os/domain'
+import type { ExecutionEvent } from '@slave-of-ai/domain'
 import { readEventsSince } from './read.js'
 import { subscribeEvents, type EventSubscription } from './subscribe.js'
 

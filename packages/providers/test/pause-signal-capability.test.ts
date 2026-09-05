@@ -50,7 +50,7 @@ describe('signalPause chooses its strategy by capability, not by vendor', () => 
   const spawned: ChildProcess[] = []
 
   beforeEach(() => {
-    dir = mkdtempSync(path.join(tmpdir(), 'aiteamos-pause-capability-'))
+    dir = mkdtempSync(path.join(tmpdir(), 'slaveofai-pause-capability-'))
     pauseFlagPath = path.join(dir, 'pause.flag')
   })
 

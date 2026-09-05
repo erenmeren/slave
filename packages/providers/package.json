@@ -1,15 +1,15 @@
 {
-  "name": "@ai-team-os/providers",
+  "name": "@slave-of-ai/providers",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "dependencies": {
-    "@ai-team-os/domain": "*",
+    "@slave-of-ai/domain": "*",
     "zod": "^3.24.0"
   },
   "devDependencies": {
-    "@ai-team-os/db": "*"
+    "@slave-of-ai/db": "*"
   }
 }

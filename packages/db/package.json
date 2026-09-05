@@ -1,5 +1,5 @@
 {
-  "name": "@ai-team-os/db",
+  "name": "@slave-of-ai/db",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -10,7 +10,7 @@
     "./client": { "types": "./dist/client.d.ts", "default": "./dist/client.js" }
   },
   "dependencies": {
-    "@ai-team-os/domain": "*",
+    "@slave-of-ai/domain": "*",
     "@prisma/adapter-pg": "^7.9.1",
     "@prisma/client": "^7.9.1"
   },

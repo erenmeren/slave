@@ -40,7 +40,7 @@ describe('listCursorModels', () => {
   })
 
   function script(body: string): string {
-    const dir = mkdtempSync(path.join(tmpdir(), 'aiteamos-models-'))
+    const dir = mkdtempSync(path.join(tmpdir(), 'slaveofai-models-'))
     dirs.push(dir)
     const file = path.join(dir, 'fake-cursor-agent')
     writeFileSync(file, body)

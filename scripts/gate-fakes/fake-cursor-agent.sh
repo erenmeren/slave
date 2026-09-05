@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # A zero-spend stand-in for `cursor-agent`, for rehearsing `scripts/gate-m13-runtime.mjs`.
 #
-#   AITEAMOS_CLAUDE_BIN="$PWD/scripts/gate-fakes/fake-claude.sh" \
-#   AITEAMOS_CURSOR_BIN="$PWD/scripts/gate-fakes/fake-cursor-agent.sh" \
+#   SLAVEOFAI_CLAUDE_BIN="$PWD/scripts/gate-fakes/fake-claude.sh" \
+#   SLAVEOFAI_CURSOR_BIN="$PWD/scripts/gate-fakes/fake-cursor-agent.sh" \
 #   npm run gate:m13-runtime
 #
 # See `fake-claude.sh`'s header for why this harness lives in the repository (Decision 12) and why
@@ -12,7 +12,7 @@
 # cwd the gate's preflight happened to have.
 #
 # First spawn: a `system`/`init` line, one completed `tool_call` pair, then a poll on
-# `AITEAMOS_PAUSE_FLAG`. The moment that file exists it emits a REJECTED `tool_call`/`completed`
+# `SLAVEOFAI_PAUSE_FLAG`. The moment that file exists it emits a REJECTED `tool_call`/`completed`
 # line -- the exact shape `scripts/cursor-shell-gate.sh` causes on the real binary
 # (`result.rejected.reason`, read back by `cursor/adapter.ts:observeRawLine`) -- and then waits to be
 # killed WITHOUT ever writing a `result` line. Both halves matter:
@@ -45,7 +45,7 @@ if [ -z "$session_id" ]; then
   session_id="$(cat /proc/sys/kernel/random/uuid 2>/dev/null || printf 'fake-cursor-%s-%s' "$$" "$(date +%s)")"
 fi
 
-flag="${AITEAMOS_PAUSE_FLAG:-}"
+flag="${SLAVEOFAI_PAUSE_FLAG:-}"
 
 here="$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}" || printf '%s' "${BASH_SOURCE[0]}")")"
 if [ "$resuming" = "0" ] && [ -x "${here}/fake-worker-server.sh" ]; then

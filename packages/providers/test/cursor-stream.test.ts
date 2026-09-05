@@ -427,7 +427,7 @@ describe('parseCursorLine, totality', () => {
         call_id: 'c1',
         tool_call: {
           shellToolCall: { args: { command: 'rm -rf /' } },
-          hookAdditionalContexts: [{ permission: 'deny', reason: 'Paused by AI Team OS.' }],
+          hookAdditionalContexts: [{ permission: 'deny', reason: 'Paused by Slave of AI.' }],
         },
       }),
       ...lines,

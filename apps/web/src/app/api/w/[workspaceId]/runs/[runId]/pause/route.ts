@@ -1,4 +1,4 @@
-import { requestPause } from '@ai-team-os/control'
+import { requestPause } from '@slave-of-ai/control'
 import { runControlResponse } from '../../../../../../../server/controlRoute'
 import { requirePrincipal } from '../../../../../../../server/principal'
 

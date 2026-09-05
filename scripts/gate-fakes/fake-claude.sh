@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # A zero-spend stand-in for the real `claude` CLI, for rehearsing `scripts/gate-m13-runtime.mjs`.
 #
-#   AITEAMOS_CLAUDE_BIN="$PWD/scripts/gate-fakes/fake-claude.sh" \
-#   AITEAMOS_CURSOR_BIN="$PWD/scripts/gate-fakes/fake-cursor-agent.sh" \
+#   SLAVEOFAI_CLAUDE_BIN="$PWD/scripts/gate-fakes/fake-claude.sh" \
+#   SLAVEOFAI_CURSOR_BIN="$PWD/scripts/gate-fakes/fake-cursor-agent.sh" \
 #   npm run gate:m13-runtime
 #
 # M13 Decision 12 makes "rehearses against fake CLIs before the first paid execution" a standing
 # property of this gate, not a one-time act by whoever first wrote it -- so the harness lives in the
-# repository next to the gate. It is reached ONLY through the `AITEAMOS_*_BIN` overrides the
+# repository next to the gate. It is reached ONLY through the `SLAVEOFAI_*_BIN` overrides the
 # orchestrator already honours (`apps/orchestrator/src/cli.ts:162,178`): the gate itself has no
 # fixture mode, no skip and no test-only flag, and does not know this file exists.
 #
@@ -24,7 +24,7 @@
 #     `--resume` names, exactly as the real CLI reports the same id back on a resume);
 #   - walks a few "tool calls", each an `assistant` tool_use line, a `PreToolUse` `hook_response`
 #     and a `user` tool_result echo, writing a real file into cwd (the run's worktree);
-#   - POLLS `AITEAMOS_PAUSE_FLAG` between calls. The moment that file exists it emits the
+#   - POLLS `SLAVEOFAI_PAUSE_FLAG` between calls. The moment that file exists it emits the
 #     deny-shaped `hook_response` `scripts/pause-gate.sh` really emits, then goes silent and waits
 #     to be killed -- which is what the real CLI does when its gate denies a call;
 #   - IGNORES SIGTERM, as the real `claude` does (M5's live-gate finding, quoted in `pump.ts`), so
@@ -57,7 +57,7 @@ if [ -z "$session_id" ]; then
   session_id="$(cat /proc/sys/kernel/random/uuid 2>/dev/null || printf 'fake-claude-%s-%s' "$$" "$(date +%s)")"
 fi
 
-flag="${AITEAMOS_PAUSE_FLAG:-}"
+flag="${SLAVEOFAI_PAUSE_FLAG:-}"
 # Fewer steps on a resume: the resumed run has to REACH `succeeded`, and every extra step is another
 # window in which something could interrupt it.
 if [ "$resuming" = "1" ]; then steps=2; else steps=8; fi
@@ -90,7 +90,7 @@ emit_hook_allow() {
 # §5.3's first trap, and `packages/providers/src/claude/stream.ts:extractDenyReason` is what reads
 # it back).
 emit_hook_deny() {
-  local encoded='{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"Paused by AI Team OS. Stop and wait.\"}}'
+  local encoded='{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"Paused by Slave of AI. Stop and wait.\"}}'
   printf '{"type":"system","subtype":"hook_response","hook_id":"hook-%s","hook_name":"PreToolUse:Write","hook_event":"PreToolUse","output":"%s","stdout":"%s","stderr":"","exit_code":0,"outcome":"success","session_id":"%s"}\n' \
     "$1" "$encoded" "$encoded" "$session_id"
 }
@@ -126,7 +126,7 @@ while [ "$step" -le "$steps" ]; do
   if wait_gap_or_pause; then
     emit_tool_use "$tool_use_id" "denied-${step}.txt"
     emit_hook_deny "$tool_use_id"
-    emit_tool_result "$tool_use_id" "Paused by AI Team OS. Stop and wait." "true"
+    emit_tool_result "$tool_use_id" "Paused by Slave of AI. Stop and wait." "true"
     # Silent from here, and still alive: the pump writes the checkpoint and kills the child.
     sleep 600
     exit 0

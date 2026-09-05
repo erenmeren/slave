@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { ProviderKind } from '@ai-team-os/control'
+import type { ProviderKind } from '@slave-of-ai/control'
 import { CompanyManager } from '../src/components/CompanyManager.js'
 import { DangerZone } from '../src/components/DangerZone.js'
 import { clearModelSelectCache } from '../src/components/ModelSelect.js'
@@ -190,7 +190,7 @@ describe('SettingsPage', () => {
   })
 
   it('names the signed-in user in the posture line', async () => {
-    vi.stubEnv('AITEAMOS_SESSION_SECRET', '0123456789abcdef0123456789abcdef')
+    vi.stubEnv('SLAVEOFAI_SESSION_SECRET', '0123456789abcdef0123456789abcdef')
     currentPrincipal.mockResolvedValue({ userId: 'ada-0001', username: 'ada' })
     await renderSettingsPage()
     const stub = screen.getByTestId('settings-client-stub')
@@ -199,7 +199,7 @@ describe('SettingsPage', () => {
   })
 
   it('says "not signed in" when the cookie names a user who is gone (the revocation story)', async () => {
-    vi.stubEnv('AITEAMOS_SESSION_SECRET', '0123456789abcdef0123456789abcdef')
+    vi.stubEnv('SLAVEOFAI_SESSION_SECRET', '0123456789abcdef0123456789abcdef')
     currentPrincipal.mockResolvedValue(null)
     await renderSettingsPage()
     expect(screen.getByTestId('settings-client-stub').getAttribute('data-posture')).toBe(
@@ -208,7 +208,7 @@ describe('SettingsPage', () => {
   })
 
   it('keeps the loopback line byte for byte, with no user to name', async () => {
-    vi.stubEnv('AITEAMOS_SESSION_SECRET', '')
+    vi.stubEnv('SLAVEOFAI_SESSION_SECRET', '')
     currentPrincipal.mockResolvedValue(null)
     await renderSettingsPage()
     const stub = screen.getByTestId('settings-client-stub')

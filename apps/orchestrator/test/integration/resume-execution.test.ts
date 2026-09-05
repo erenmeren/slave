@@ -3,10 +3,10 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { requestResume } from '@ai-team-os/control'
-import { prisma } from '@ai-team-os/db/client'
-import { runId as brandRunId, workspaceId as brandWorkspaceId } from '@ai-team-os/domain'
-import { ClaudeCodeAdapter, type AdapterRegistry } from '@ai-team-os/providers'
+import { requestResume } from '@slave-of-ai/control'
+import { prisma } from '@slave-of-ai/db/client'
+import { runId as brandRunId, workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
+import { ClaudeCodeAdapter, type AdapterRegistry } from '@slave-of-ai/providers'
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import { reconcileOrphans, resetTickObservation } from '../../src/sweep.js'
@@ -21,7 +21,7 @@ const REAL_GATE = join(repoRoot, 'scripts/pause-gate.sh')
 const MARKER = 'MARKER-42'
 
 function makeRepo(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'aiteamos-resume-exec-'))
+  const dir = mkdtempSync(join(tmpdir(), 'slaveofai-resume-exec-'))
   const git = (args: readonly string[]): void => {
     execFileSync('git', [...args], { cwd: dir })
   }
@@ -297,7 +297,7 @@ describe('executing a resume intent from the daemon', () => {
     /** An adapter whose configured command is not on disk, so `resume()` throws at spawn. */
     function brokenAdapter(): ClaudeCodeAdapter {
       return new ClaudeCodeAdapter({
-        command: join(tmpdir(), 'aiteamos-no-such-binary-m13'),
+        command: join(tmpdir(), 'slaveofai-no-such-binary-m13'),
         hookPath: REAL_GATE,
       })
     }

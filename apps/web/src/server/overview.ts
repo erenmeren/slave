@@ -1,6 +1,6 @@
-import { prisma } from '@ai-team-os/db/client'
-import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, toRunState } from '@ai-team-os/db'
-import { capabilitiesOf, workspaceDefaultProvider, type ProviderCapabilities, type ProviderKind } from '@ai-team-os/control'
+import { prisma } from '@slave-of-ai/db/client'
+import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, toRunState } from '@slave-of-ai/db'
+import { capabilitiesOf, workspaceDefaultProvider, type ProviderCapabilities, type ProviderKind } from '@slave-of-ai/control'
 import {
   deriveAgentStatus,
   mergeQueueOrder,
@@ -8,13 +8,13 @@ import {
   NON_TERMINAL_RUN_STATUSES,
   type AgentStatus,
   type TaskStatus,
-} from '@ai-team-os/domain'
+} from '@slave-of-ai/domain'
 import { feedSummary, type AgentFeedEvent } from '../lib/feedSummary'
 import { skillNameOf } from '../lib/skillName'
 
 // Re-exported so callers that already import from `server/overview.ts` keep working; the
 // definition itself lives in the pure `lib/feedSummary.ts` module (controller ruling R3) so the
-// client-side hook can import `feedSummary` without pulling `@ai-team-os/db`'s `prisma` client
+// client-side hook can import `feedSummary` without pulling `@slave-of-ai/db`'s `prisma` client
 // into the browser bundle. Types are erased at build, so re-exporting the interface here costs
 // nothing at runtime.
 export type { AgentFeedEvent }
@@ -405,7 +405,7 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
       goal: workspace.goal,
       provider,
       // The warning the Runtime card shows, derived SERVER-side (spec §6.3): `capabilitiesOf` is
-      // safe here and unsafe in a client component -- `@ai-team-os/providers`'s barrel imports
+      // safe here and unsafe in a client component -- `@slave-of-ai/providers`'s barrel imports
       // `node:child_process` at module scope, which is why `ProviderSelect.tsx` carries its own
       // compiler-guarded mirror of `PROVIDER_KINDS` rather than importing the list. The client gets
       // a boolean and needs no table at all.

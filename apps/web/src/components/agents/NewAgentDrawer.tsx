@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import type { ProviderKind } from '@ai-team-os/control'
+import type { ProviderKind } from '@slave-of-ai/control'
 import type { RosterCompany } from '../../server/org'
 import { postControl, sendControl } from '../../lib/postControl'
 import { ModelSelect } from '../ModelSelect'

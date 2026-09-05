@@ -1,18 +1,18 @@
-import { prisma } from '@ai-team-os/db/client'
-import { toRunState } from '@ai-team-os/db'
-import { capabilitiesOf, type ProviderCapabilities, type ProviderKind } from '@ai-team-os/control'
+import { prisma } from '@slave-of-ai/db/client'
+import { toRunState } from '@slave-of-ai/db'
+import { capabilitiesOf, type ProviderCapabilities, type ProviderKind } from '@slave-of-ai/control'
 import {
   deriveAgentStatus,
   sumSpendFromGroups,
   NON_TERMINAL_RUN_STATUSES,
   type AgentStatus,
   type SpendGroup,
-} from '@ai-team-os/domain'
+} from '@slave-of-ai/domain'
 
 /** A worker's resolved gate, from `capabilitiesOf(worker.provider).gate` (M12 Task 13) -- `null`
  *  only when the worker itself has no provider recorded, mirroring `provider: ProviderKind | null`
  *  beside it. Named off `ProviderCapabilities['gate']` rather than redeclared, so the roster can
- *  never drift from the one capability table `@ai-team-os/providers` owns. */
+ *  never drift from the one capability table `@slave-of-ai/providers` owns. */
 export type WorkerGate = ProviderCapabilities['gate']
 
 /**

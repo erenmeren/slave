@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { runId } from '@ai-team-os/domain'
+import { runId } from '@slave-of-ai/domain'
 import { describe, expect, it } from 'vitest'
 import { ClaudeCodeAdapter } from '../src/index.js'
 import { copyGateInto } from './helpers/gate-fixture.js'
@@ -15,7 +15,7 @@ describe('the Claude adapter prepares its own run files', () => {
     // is the caller's job (spec verbatim: "The orchestrator supplies a per-run scratch directory;
     // the contents are the adapter's"), so it is created here rather than left for `start()` to
     // `mkdir` itself.
-    const runDir = join(dir, '.aiteamos', 'runs', 'run-1')
+    const runDir = join(dir, '.slaveofai', 'runs', 'run-1')
     mkdirSync(runDir, { recursive: true })
 
     // A real, discriminating hook script, not a bare literal path -- `start()` (Task 6) runs the
@@ -37,7 +37,7 @@ describe('the Claude adapter prepares its own run files', () => {
       gitIdentity: { name: 'a', email: 'a@b.c' },
     })
 
-    // Byte-identical to the pre-M12 path: `.aiteamos/runs/<runId>/settings.json`, only now written
+    // Byte-identical to the pre-M12 path: `.slaveofai/runs/<runId>/settings.json`, only now written
     // by the adapter itself rather than by the orchestrator's `writeSettingsFile` call.
     const settings = join(runDir, 'settings.json')
     expect(existsSync(settings)).toBe(true)

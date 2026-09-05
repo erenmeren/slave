@@ -1,7 +1,7 @@
 'use client'
 
 import type { ReactElement } from 'react'
-import { EVENT_TYPE_BY_DOMAIN_TYPE, type DomainEventType } from '@ai-team-os/db'
+import { EVENT_TYPE_BY_DOMAIN_TYPE, type DomainEventType } from '@slave-of-ai/db'
 import { ACTIVITY_KINDS, type ActivityKind } from '../../lib/activityFilters'
 import type { UrlFilters } from '../../hooks/useUrlFilters'
 
@@ -15,7 +15,7 @@ const KIND_LABEL: Record<ActivityKind, string> = {
 }
 
 // The 20 domain event types the "Advanced" popover lists — every key of `EVENT_TYPE_BY_DOMAIN_TYPE`
-// (`@ai-team-os/db`), the same exhaustive source `TYPES_BY_KIND`'s completeness test checks against.
+// (`@slave-of-ai/db`), the same exhaustive source `TYPES_BY_KIND`'s completeness test checks against.
 const ALL_TYPES = Object.keys(EVENT_TYPE_BY_DOMAIN_TYPE) as DomainEventType[]
 
 function toggleItem<T>(list: readonly T[], value: T): readonly T[] {
@@ -27,7 +27,7 @@ export interface FilterBarProps extends UrlFilters {
   readonly tasks: readonly { readonly id: string; readonly title: string }[]
 }
 
-/** One of the six kind chips, at the handoff's own stream-chip geometry (`AI Team OS
+/** One of the six kind chips, at the handoff's own stream-chip geometry (`Slave of AI
  *  Mockups.dc.html:850`: `padding:3px 9px`, `border-radius:14px`, `500 10px` IBM Plex Mono).
  *  Selected state reuses the existing neutral tokens (no new colour — the kinds aren't
  *  status-coloured) rather than the status palette, which already means something else (a

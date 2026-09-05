@@ -1,7 +1,7 @@
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { runId as makeRunId, type RunId } from '@ai-team-os/domain'
+import { runId as makeRunId, type RunId } from '@slave-of-ai/domain'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { CursorAdapter } from '../src/cursor/adapter.js'
 import type { Checkpoint } from '../src/claude/checkpoint.js'
@@ -128,7 +128,7 @@ describe('CursorAdapter', () => {
   let input: StartRunInput
 
   beforeEach(() => {
-    worktreePath = mkdtempSync(path.join(tmpdir(), 'aiteamos-cursor-adapter-'))
+    worktreePath = mkdtempSync(path.join(tmpdir(), 'slaveofai-cursor-adapter-'))
     runDir = path.join(worktreePath, 'run')
     mkdirSync(runDir)
     // A fresh copy of the real committed gate per test -- the pre-flight spawns it for real, and
@@ -239,12 +239,12 @@ describe('CursorAdapter', () => {
     await drain(adapter, input.runId)
   })
 
-  it('sets AITEAMOS_PAUSE_FLAG on the child, which is the only channel the gate reads it on', async () => {
+  it('sets SLAVEOFAI_PAUSE_FLAG on the child, which is the only channel the gate reads it on', async () => {
     const envOut = path.join(worktreePath, 'env.txt')
     const script = writeScript(
       worktreePath,
       'env-echo.sh',
-      `#!/bin/sh\nprintf '%s\\n%s\\n%s\\n' "$AITEAMOS_PAUSE_FLAG" "$GIT_AUTHOR_NAME" "$PWD" > ${JSON.stringify(envOut)}\n`,
+      `#!/bin/sh\nprintf '%s\\n%s\\n%s\\n' "$SLAVEOFAI_PAUSE_FLAG" "$GIT_AUTHOR_NAME" "$PWD" > ${JSON.stringify(envOut)}\n`,
     )
     const adapter = adapterFor(script)
     await adapter.start(input)
@@ -253,12 +253,12 @@ describe('CursorAdapter', () => {
     expect(readFileSync(envOut, 'utf8')).toBe(`${input.pauseFlagPath}\nTest Agent\n${worktreePath}\n`)
   })
 
-  it('sets AITEAMOS_PERMISSIONS_FILE on the child (M18 Task 5)', async () => {
+  it('sets SLAVEOFAI_PERMISSIONS_FILE on the child (M18 Task 5)', async () => {
     const envOut = path.join(worktreePath, 'permissions-env.txt')
     const script = writeScript(
       worktreePath,
       'permissions-env-echo.sh',
-      `#!/bin/sh\nprintf '%s\\n' "$AITEAMOS_PERMISSIONS_FILE" > ${JSON.stringify(envOut)}\n`,
+      `#!/bin/sh\nprintf '%s\\n' "$SLAVEOFAI_PERMISSIONS_FILE" > ${JSON.stringify(envOut)}\n`,
     )
     const adapter = adapterFor(script)
     await adapter.start(input)
@@ -449,7 +449,7 @@ describe('CursorAdapter', () => {
       expect(argv).toContain('stop rewriting the tests')
     })
 
-    it('sets AITEAMOS_PERMISSIONS_FILE on the child at resume, derived from the checkpoint (M18 Task 5 fix round 1)', async () => {
+    it('sets SLAVEOFAI_PERMISSIONS_FILE on the child at resume, derived from the checkpoint (M18 Task 5 fix round 1)', async () => {
       // A `pauseFlagPath` in a DIFFERENT directory from `checkpointFor()`'s own `settingsPath`
       // (`worktreePath/.cursor/hooks.json`) and from `input.pauseFlagPath` -- in the default
       // checkpoint these all resolve to `worktreePath`, so a `permissionsFilePath` derivation
@@ -466,7 +466,7 @@ describe('CursorAdapter', () => {
       const script = writeScript(
         worktreePath,
         'resume-permissions-env-echo.sh',
-        `#!/bin/sh\nprintf '%s\\n' "$AITEAMOS_PERMISSIONS_FILE" > ${JSON.stringify(envOut)}\n`,
+        `#!/bin/sh\nprintf '%s\\n' "$SLAVEOFAI_PERMISSIONS_FILE" > ${JSON.stringify(envOut)}\n`,
       )
       const adapter = adapterFor(script)
       await adapter.resume(input.runId, checkpoint, null)

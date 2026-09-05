@@ -40,7 +40,7 @@ describe('ProjectHeader', () => {
   // Ported from `TopBar`'s own mock-geometry cases (base `test/shell.test.tsx`; M24 final review,
   // Important 5b) -- lost in the move to `ProjectHeader`.
   it('keeps the structural hairline under the gradient one, as the mock does', () => {
-    // `AI Team OS Web.dc.html:32-33`: the bar has BOTH a `border-bottom` and the gradient
+    // `Slave of AI Web.dc.html:32-33`: the bar has BOTH a `border-bottom` and the gradient
     // element at `bottom:-1px`, beneath it.
     render(<ProjectHeader workspaceId="w1" initial={facts()} workspaces={workspaces} />)
     expect(screen.getByTestId('project-header').className).toContain('border-b')
@@ -49,7 +49,7 @@ describe('ProjectHeader', () => {
   })
 
   it('gives the connection chip the mockup pill shape in the live status colour', () => {
-    // `AI Team OS Web.dc.html:38-41`: `padding:3px 9px`, `border-radius:20px`, border
+    // `Slave of AI Web.dc.html:38-41`: `padding:3px 9px`, `border-radius:20px`, border
     // `rgba(46,230,207,.25)`, background `rgba(46,230,207,.06)`, `500 10px` mono `#2ee6cf`, 5px dot.
     render(<ProjectHeader workspaceId="w1" initial={facts()} workspaces={workspaces} />)
     act(() => publishStreamState('w1', { connection: 'connected', latencyMs: 42 }))
@@ -65,7 +65,7 @@ describe('ProjectHeader', () => {
   })
 
   it('draws the budget bar at the mockup geometry, with the glow in the threshold colour', () => {
-    // `AI Team OS Web.dc.html:47`: track `width:150px; height:3px; border-radius:2px;
+    // `Slave of AI Web.dc.html:47`: track `width:150px; height:3px; border-radius:2px;
     // background:rgba(255,255,255,.08)`, fill `box-shadow:0 0 8px <colour>`.
     render(<ProjectHeader workspaceId="w1" initial={facts()} workspaces={workspaces} />)
     const html = screen.getByTestId('budget').innerHTML

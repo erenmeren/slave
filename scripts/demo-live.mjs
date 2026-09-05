@@ -5,7 +5,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { prisma } from '../packages/db/dist/client.js'
 
-const repoPath = join(homedir(), '.aiteamos', 'demo-repo')
+const repoPath = join(homedir(), '.slaveofai', 'demo-repo')
 
 // 1. A real git repository. Reset on every run: the demo must be repeatable, and stale worktrees
 // from the last demo would make the tick escalate instead of starting (M3 §7.4).
@@ -14,7 +14,7 @@ mkdirSync(repoPath, { recursive: true })
 const git = (args) => execFileSync('git', args, { cwd: repoPath })
 git(['init', '-q', '-b', 'main'])
 git(['config', 'user.name', 'Demo'])
-git(['config', 'user.email', 'demo@aiteamos.local'])
+git(['config', 'user.email', 'demo@slaveofai.local'])
 writeFileSync(join(repoPath, 'README.md'), '# demo\n')
 git(['add', '-A'])
 git(['commit', '-q', '-m', 'initial'])
@@ -48,7 +48,7 @@ await prisma.agent.create({ data: { teamId: team.id, name: 'Alex', role: 'backen
 await prisma.agent.create({ data: { teamId: team.id, name: 'Riley', role: 'reviewer' } })
 await prisma.$disconnect()
 
-// 3. The daemon, inheriting AITEAMOS_CLAUDE_BIN/ARGS so the same script smoke-tests against the
+// 3. The daemon, inheriting SLAVEOFAI_CLAUDE_BIN/ARGS so the same script smoke-tests against the
 // fake for free (spec §8).
 console.log(`workspace: ${workspace.id}`)
 console.log(`overview:  http://localhost:${process.env.PORT ?? '3000'}/w/${workspace.id}`)

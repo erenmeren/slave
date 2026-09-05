@@ -1,6 +1,6 @@
 'use client'
 
-import type { ProviderKind } from '@ai-team-os/control'
+import type { ProviderKind } from '@slave-of-ai/control'
 
 /**
  * Every `ProviderKind`, as `<option>` values -- guarded the same way
@@ -11,11 +11,11 @@ import type { ProviderKind } from '@ai-team-os/control'
  *
  * This is a SEPARATE list from that canonical one, not an import of it (M12 Task 13 fix round 1,
  * Important finding 1's remedy weighed against the client/server boundary the same review praised
- * elsewhere): `@ai-team-os/providers`'s package entry (`index.ts`) re-exports `claude/adapter.ts`
+ * elsewhere): `@slave-of-ai/providers`'s package entry (`index.ts`) re-exports `claude/adapter.ts`
  * and `cursor/adapter.ts`, both of which import `node:child_process` at module scope with no
  * `sideEffects: false` escape hatch, so a VALUE import of anything from that barrel -- even this
  * two-string list -- would force a client bundle to evaluate (and likely fail on) Node-only code.
- * `@ai-team-os/control`'s barrel re-exports the same list for exactly this reason: safe for a
+ * `@slave-of-ai/control`'s barrel re-exports the same list for exactly this reason: safe for a
  * SERVER caller, not for this file. Two independently compiler-guarded lists is the deliberate
  * trade against that risk, not an oversight.
  */

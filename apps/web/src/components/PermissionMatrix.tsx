@@ -38,7 +38,7 @@ const TITLE: Record<'allow' | 'deny' | 'unset', string> = {
  * `PERMISSION_TOOLS` promises AND a silently broken layout.
  *
  * Counted from the data rather than imported from `PERMISSION_TOOLS` directly: this is a
- * `'use client'` component, and `@ai-team-os/control`'s barrel re-exports `@ai-team-os/providers`,
+ * `'use client'` component, and `@slave-of-ai/control`'s barrel re-exports `@slave-of-ai/providers`,
  * which imports `node:child_process` at module scope (see `ProviderSelect.tsx`). The server built
  * these cells from `PERMISSION_TOOLS`, so counting them IS reading that one list.
  */

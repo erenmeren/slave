@@ -1,7 +1,7 @@
 'use client'
 
 import { Handle, Position, type Edge, type Node, type NodeProps, type NodeTypes } from 'reactflow'
-import type { TaskStatus } from '@ai-team-os/domain'
+import type { TaskStatus } from '@slave-of-ai/domain'
 import { BOARD_COLUMNS, COLUMN_FOR_STATUS, COLUMN_STATE, type BoardColumn } from '../../lib/taskColumns'
 import { CARD_STATE_TONE, cardStateForTask } from '../../lib/tones'
 import type { GraphSnapshot } from '../../server/graph'

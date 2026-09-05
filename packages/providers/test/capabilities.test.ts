@@ -3,7 +3,7 @@ import { capabilitiesOf, ClaudeCodeAdapter, type ProviderKind } from '../src/ind
 
 describe('ProviderCapabilities', () => {
   it('exposes exactly the four members the system consumes', () => {
-    const caps = new ClaudeCodeAdapter({ command: 'claude', hookPath: '/opt/aiteamos/pause-gate.sh' }).getCapabilities()
+    const caps = new ClaudeCodeAdapter({ command: 'claude', hookPath: '/opt/slaveofai/pause-gate.sh' }).getCapabilities()
     expect(Object.keys(caps).sort()).toEqual([
       'canPauseMidRun',
       'canResumeSession',
@@ -13,7 +13,7 @@ describe('ProviderCapabilities', () => {
   })
 
   it('describes the Claude runtime: mid-run pause, resumable, gates every tool, reports cost', () => {
-    const caps = new ClaudeCodeAdapter({ command: 'claude', hookPath: '/opt/aiteamos/pause-gate.sh' }).getCapabilities()
+    const caps = new ClaudeCodeAdapter({ command: 'claude', hookPath: '/opt/slaveofai/pause-gate.sh' }).getCapabilities()
     expect(caps).toEqual({
       canPauseMidRun: true,
       canResumeSession: true,
@@ -35,7 +35,7 @@ describe('capabilitiesOf', () => {
     // Identity, not equality: two frozen objects that happen to agree today would satisfy
     // `toEqual` and still drift apart on the first edit to either one, which is exactly the
     // failure this ruling exists to prevent.
-    const adapter = new ClaudeCodeAdapter({ command: 'claude', hookPath: '/opt/aiteamos/pause-gate.sh' })
+    const adapter = new ClaudeCodeAdapter({ command: 'claude', hookPath: '/opt/slaveofai/pause-gate.sh' })
     expect(adapter.getCapabilities()).toBe(capabilitiesOf('claude_code'))
   })
 

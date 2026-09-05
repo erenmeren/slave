@@ -1,8 +1,8 @@
 /**
  * Turns an artifact's absolute log path into the short label the task panel shows (M23 C1).
  * Layout written by `apps/orchestrator/src/verify.ts`:
- *   `<repo>/.aiteamos/artifacts/<taskId>/attempt-NN/MM-<slug>.log`
- *   `<repo>/.aiteamos/artifacts/<taskId>/merge/attempt-NN/MM-<slug>.log` (merge re-verify)
+ *   `<repo>/.slaveofai/artifacts/<taskId>/attempt-NN/MM-<slug>.log`
+ *   `<repo>/.slaveofai/artifacts/<taskId>/merge/attempt-NN/MM-<slug>.log` (merge re-verify)
  * `merge` wins over the attempt number when both are present -- a merge re-verify is what the
  * operator cares about, not which attempt's tree it re-ran against. Falls back to the bare
  * basename for anything that doesn't match this shape, so a future artifact `kind` never renders

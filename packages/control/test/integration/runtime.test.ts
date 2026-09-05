@@ -1,4 +1,4 @@
-import { prisma } from '@ai-team-os/db/client'
+import { prisma } from '@slave-of-ai/db/client'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { workspaceDefaultProvider } from '../../src/runtime.js'
 
@@ -7,7 +7,7 @@ import { workspaceDefaultProvider } from '../../src/runtime.js'
  * has to resolve the same chain dispatch does, and `packages/control` cannot import
  * `apps/orchestrator`). Its tests followed it here in fix round F2, importing `../../src/
  * runtime.js` DIRECTLY: left where they were, they reached the function through
- * `apps/orchestrator/src/model.ts`'s re-export and therefore through `@ai-team-os/control`'s
+ * `apps/orchestrator/src/model.ts`'s re-export and therefore through `@slave-of-ai/control`'s
  * COMPILED `dist/`, since `vitest.config.ts` declares no workspace aliases. That is a permanent
  * downgrade in what a green means -- editing the source and running the suite without a rebuild
  * would test the previous build -- and it is the shape that nearly sank Task 8.

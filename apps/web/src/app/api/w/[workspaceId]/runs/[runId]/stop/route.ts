@@ -1,4 +1,4 @@
-import { requestStop } from '@ai-team-os/control'
+import { requestStop } from '@slave-of-ai/control'
 import { runControlResponse } from '../../../../../../../server/controlRoute'
 import { requirePrincipal } from '../../../../../../../server/principal'
 

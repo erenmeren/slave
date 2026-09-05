@@ -1,4 +1,4 @@
-import { assignSkill, unassignSkill } from '@ai-team-os/control'
+import { assignSkill, unassignSkill } from '@slave-of-ai/control'
 import { orgControlResponse } from '../../../../server/orgControlRoute'
 import { requirePrincipal } from '../../../../server/principal'
 

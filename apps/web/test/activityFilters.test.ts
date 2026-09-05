@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { EVENT_TYPE_BY_DOMAIN_TYPE } from '@ai-team-os/db'
+import { EVENT_TYPE_BY_DOMAIN_TYPE } from '@slave-of-ai/db'
 import {
   ACTIVITY_KINDS, EMPTY_ACTIVITY_FILTERS, TYPES_BY_KIND,
   eventMatchesFilters, filtersToQuery, parseActivityFilters,

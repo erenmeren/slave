@@ -240,7 +240,7 @@ describe('TaskDetailPanel worktree collection (M23 B4)', () => {
     render(
       <TaskDetailPanel
         workspaceId="w1"
-        task={task({ status: 'done', collectable: true, runs: [runWithWorktree('/r/.aiteamos/worktrees/T-1')] })}
+        task={task({ status: 'done', collectable: true, runs: [runWithWorktree('/r/.slaveofai/worktrees/T-1')] })}
         onClose={() => {}}
       />,
     )
@@ -251,7 +251,7 @@ describe('TaskDetailPanel worktree collection (M23 B4)', () => {
     render(
       <TaskDetailPanel
         workspaceId="w1"
-        task={task({ status: 'running', collectable: false, runs: [runWithWorktree('/r/.aiteamos/worktrees/T-1')] })}
+        task={task({ status: 'running', collectable: false, runs: [runWithWorktree('/r/.slaveofai/worktrees/T-1')] })}
         onClose={() => {}}
       />,
     )
@@ -276,7 +276,7 @@ describe('TaskDetailPanel worktree collection (M23 B4)', () => {
     render(
       <TaskDetailPanel
         workspaceId="w1"
-        task={task({ id: 't1', status: 'done', collectable: true, runs: [runWithWorktree('/r/.aiteamos/worktrees/T-1')] })}
+        task={task({ id: 't1', status: 'done', collectable: true, runs: [runWithWorktree('/r/.slaveofai/worktrees/T-1')] })}
         onClose={() => {}}
       />,
     )
@@ -304,7 +304,7 @@ describe('TaskDetailPanel worktree collection (M23 B4)', () => {
     render(
       <TaskDetailPanel
         workspaceId="w1"
-        task={task({ id: 't1', status: 'done', collectable: true, runs: [runWithWorktree('/r/.aiteamos/worktrees/T-1')] })}
+        task={task({ id: 't1', status: 'done', collectable: true, runs: [runWithWorktree('/r/.slaveofai/worktrees/T-1')] })}
         onClose={() => {}}
       />,
     )

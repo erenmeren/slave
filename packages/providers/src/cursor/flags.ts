@@ -116,7 +116,7 @@ function requireUsable(field: string, value: string): void {
  * - flag file present -> `permission: "deny"` on stdout, exit 0
  * - flag file absent  -> `{"permission":"allow"}` on stdout, exit 0
  *
- * One direction is not enough: `cursor-shell-gate.sh` also denies when `AITEAMOS_PAUSE_FLAG` is
+ * One direction is not enough: `cursor-shell-gate.sh` also denies when `SLAVEOFAI_PAUSE_FLAG` is
  * unset -- its own deliberate loud-misconfiguration path -- so a check asserting only "flag present
  * => deny" is satisfied by a hook that denies unconditionally, which gates nothing while looking
  * armed. The second direction is what proves the script discriminates.

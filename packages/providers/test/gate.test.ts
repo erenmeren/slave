@@ -17,7 +17,7 @@ describe('parsePermissionDenyReason', () => {
   })
 
   it('returns null for a reason that does not carry the grammar at all -- an ordinary pause reason', () => {
-    expect(parsePermissionDenyReason('Paused by AI Team OS. Stop and wait.')).toBeNull()
+    expect(parsePermissionDenyReason('Paused by Slave of AI. Stop and wait.')).toBeNull()
   })
 
   it('returns null, never throws, on a reason that starts with the prefix but is malformed past it', () => {
@@ -52,7 +52,7 @@ describe('classifyGateEvent threads hookId (M21 C1, pinned in M22)', () => {
     expect(outcome !== null && 'hookId' in outcome).toBe(false)
   })
   it('never puts hookId on a non-matrix deny (the real pause reason → stopped_by_gate)', () => {
-    const outcome = classifyGateEvent({ kind: 'hook_denied', hookName: 'PreToolUse:Bash', reason: 'Paused by AI Team OS. Stop and wait.', hookId: 'hk-1' })
+    const outcome = classifyGateEvent({ kind: 'hook_denied', hookName: 'PreToolUse:Bash', reason: 'Paused by Slave of AI. Stop and wait.', hookId: 'hk-1' })
     expect(outcome?.kind).toBe('stopped_by_gate')
     expect(outcome !== null && 'hookId' in outcome).toBe(false)
   })

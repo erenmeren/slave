@@ -3,7 +3,7 @@ import { taskId } from '../../src/ids.js'
 import { nextMergeCandidate, type MergeCandidate } from '../../src/merge/queue.js'
 
 function candidate(id: string, enqueuedAt: number, blockedUntilRebase = false): MergeCandidate {
-  return { taskId: taskId(id), branch: `aiteamos/${id}`, enqueuedAt, blockedUntilRebase }
+  return { taskId: taskId(id), branch: `slaveofai/${id}`, enqueuedAt, blockedUntilRebase }
 }
 
 describe('nextMergeCandidate', () => {

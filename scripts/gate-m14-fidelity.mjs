@@ -10,10 +10,10 @@
 //
 // UNLIKE m12/m13 THIS GATE SPENDS NOTHING and is not allowed to: its behaviour stage runs the fake
 // CLI from `scripts/gate-fakes/`, and the preflight below REFUSES to start unless
-// `AITEAMOS_CLAUDE_BIN` points at an executable under that directory. A fidelity gate that could
+// `SLAVEOFAI_CLAUDE_BIN` points at an executable under that directory. A fidelity gate that could
 // reach a real account is a fidelity gate nobody will run (Decision 10).
 //
-//   AITEAMOS_CLAUDE_BIN="$PWD/scripts/gate-fakes/fake-claude.sh" npm run gate:m14-fidelity
+//   SLAVEOFAI_CLAUDE_BIN="$PWD/scripts/gate-fakes/fake-claude.sh" npm run gate:m14-fidelity
 //
 // The five stages of spec §6:
 //   1. nine pages render at 1440x900 with their structural testids, each screenshotted into
@@ -184,7 +184,7 @@ const gotoRetries = []
 /** `gate-m13-runtime.mjs`'s `makeRepo`: a real repository, because the tick provisions a real
  *  `git worktree` in it. */
 function makeRepo(suffix) {
-  const dir = mkdtempSync(join(tmpdir(), `aiteamos-gate-m14-${suffix}-`))
+  const dir = mkdtempSync(join(tmpdir(), `slaveofai-gate-m14-${suffix}-`))
   const git = (args) => execFileSync('git', args, { cwd: dir })
   git(['init', '-q', '-b', 'main'])
   git(['config', 'user.name', 'Gate'])
@@ -500,7 +500,7 @@ async function clickUntil(locator, predicate, description) {
 }
 
 try {
-  diagDir = mkdtempSync(join(tmpdir(), 'aiteamos-gate-m14-diag-'))
+  diagDir = mkdtempSync(join(tmpdir(), 'slaveofai-gate-m14-diag-'))
   console.log(`diagnostics dir: ${diagDir}`)
 
   // ---- Preflight. Every one of these fails FAST and by name: this gate never skips a stage, so an
@@ -508,21 +508,21 @@ try {
 
   // Zero spend, ENFORCED (Decision 10). This is the ONE gate in the repo that refuses to run
   // against a real binary, rather than merely offering a rehearsal mode.
-  const fakeClaude = process.env['AITEAMOS_CLAUDE_BIN']
+  const fakeClaude = process.env['SLAVEOFAI_CLAUDE_BIN']
   if (fakeClaude === undefined || fakeClaude === '') {
     throw new Error(
-      'AITEAMOS_CLAUDE_BIN is not set. This gate spends nothing and must run against the fake CLI:\n' +
-        '  AITEAMOS_CLAUDE_BIN="$PWD/scripts/gate-fakes/fake-claude.sh" npm run gate:m14-fidelity',
+      'SLAVEOFAI_CLAUDE_BIN is not set. This gate spends nothing and must run against the fake CLI:\n' +
+        '  SLAVEOFAI_CLAUDE_BIN="$PWD/scripts/gate-fakes/fake-claude.sh" npm run gate:m14-fidelity',
     )
   }
   try {
     accessSync(fakeClaude, constants.X_OK)
   } catch {
-    throw new Error(`AITEAMOS_CLAUDE_BIN=${fakeClaude} is not an executable file`)
+    throw new Error(`SLAVEOFAI_CLAUDE_BIN=${fakeClaude} is not an executable file`)
   }
   if (!fakeClaude.includes('gate-fakes')) {
     throw new Error(
-      `AITEAMOS_CLAUDE_BIN=${fakeClaude} is not one of scripts/gate-fakes/. This gate must not reach a vendor account.`,
+      `SLAVEOFAI_CLAUDE_BIN=${fakeClaude} is not one of scripts/gate-fakes/. This gate must not reach a vendor account.`,
     )
   }
 
@@ -641,11 +641,11 @@ try {
   const preferredPort = await findFreePort()
   nextServer = spawn('node', ['node_modules/next/dist/bin/next', 'dev', 'apps/web', '-p', String(preferredPort)], {
     cwd: repoRoot,
-    // `AITEAMOS_GATE_WARM=1` widens `next.config.ts`'s on-demand-entries buffer for THIS `next
+    // `SLAVEOFAI_GATE_WARM=1` widens `next.config.ts`'s on-demand-entries buffer for THIS `next
     // dev` only (M17 Task 7, Flake 6 investigation) -- see that file for the mechanism. An
     // ordinary developer's `next dev` never sets this and keeps Next's defaults.
-    // M21 A1: the operator's AITEAMOS_SESSION_SECRET must not reach the child, or every page is /login.
-    env: loopbackChildEnv({ AITEAMOS_GATE_WARM: '1' }),
+    // M21 A1: the operator's SLAVEOFAI_SESSION_SECRET must not reach the child, or every page is /login.
+    env: loopbackChildEnv({ SLAVEOFAI_GATE_WARM: '1' }),
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   // `nextOutput` itself is module-level now (see its declaration near `browserConsole`) so
@@ -1419,7 +1419,7 @@ try {
     await prisma.executionEvent.deleteMany({ where: { workspaceId } }).catch(() => {})
     await prisma.workspace.delete({ where: { id: workspaceId } }).catch(() => {})
   }
-  // The repository carries the run worktrees and the `.aiteamos` run directories -- all of it
+  // The repository carries the run worktrees and the `.slaveofai` run directories -- all of it
   // inside this tree, so nothing this gate wrote outlives it.
   if (repoPath !== null) rmSync(repoPath, { recursive: true, force: true })
   if (diagDir !== null && exitCode === 0) rmSync(diagDir, { recursive: true, force: true })

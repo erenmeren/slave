@@ -1,4 +1,4 @@
-import { prisma } from '@ai-team-os/db/client'
+import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { appendEvent } from '../../src/append.js'
 import { subscribeEvents, type EventNotification, type EventSubscription } from '../../src/subscribe.js'

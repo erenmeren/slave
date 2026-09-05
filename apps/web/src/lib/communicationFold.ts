@@ -1,4 +1,4 @@
-import type { DomainEventType } from '@ai-team-os/db'
+import type { DomainEventType } from '@slave-of-ai/db'
 
 /** The literal node every `agent.message_sent` edge with `actor: 'human'` renders from (spec §6
  *  E1): no event carries an operator id, so every human message collapses onto one node. */

@@ -3,8 +3,8 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { beforeEach, describe, expect, it } from 'vitest'
-import { prisma } from '@ai-team-os/db/client'
-import { appendEvent } from '@ai-team-os/events'
+import { prisma } from '@slave-of-ai/db/client'
+import { appendEvent } from '@slave-of-ai/events'
 import { isAlive } from '../../src/kill.js'
 import { requestStop } from '../../src/stop.js'
 
@@ -15,7 +15,7 @@ interface Fixture {
 }
 
 async function seed(): Promise<Fixture> {
-  const repoPath = mkdtempSync(join(tmpdir(), 'aiteamos-control-stop-'))
+  const repoPath = mkdtempSync(join(tmpdir(), 'slaveofai-control-stop-'))
   const workspace = await prisma.workspace.create({
     data: {
       name: 'Checkout Platform',

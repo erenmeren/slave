@@ -1,6 +1,6 @@
-import { prisma } from '@ai-team-os/db/client'
-import { SEED_WORKSPACE_ID } from '@ai-team-os/db'
-import { appendEvent } from '@ai-team-os/events'
+import { prisma } from '@slave-of-ai/db/client'
+import { SEED_WORKSPACE_ID } from '@slave-of-ai/db'
+import { appendEvent } from '@slave-of-ai/events'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { buildAnalytics } from '../../src/server/analytics.js'
 

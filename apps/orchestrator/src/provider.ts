@@ -1,10 +1,10 @@
-import { refusalText } from '@ai-team-os/control'
+import { refusalText } from '@slave-of-ai/control'
 import {
   UnknownProviderError,
   type AdapterRegistry,
   type AgentRuntimeAdapter,
   type ProviderKind,
-} from '@ai-team-os/providers'
+} from '@slave-of-ai/providers'
 
 /**
  * The single place every `deps.adapter.x(...)` call site in the orchestrator resolves a live

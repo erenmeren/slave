@@ -1,5 +1,5 @@
-import { refusalText, type ControlRefusal } from '@ai-team-os/control'
-import type { Result } from '@ai-team-os/domain'
+import { refusalText, type ControlRefusal } from '@slave-of-ai/control'
+import type { Result } from '@slave-of-ai/domain'
 
 /**
  * Route shell for the org verbs (templates/companies/teams/agents/model): the goal route's

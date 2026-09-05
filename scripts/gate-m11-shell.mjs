@@ -59,7 +59,7 @@ const PROVIDER_OVERRIDE = 'claude_code'
 /** Same as `gate-m10-org.mjs`'s `makeRepo` -- a real repository, because `Workspace.repoPath`
  *  names a real directory even though this gate never runs the orchestrator against it. */
 function makeRepo(suffix) {
-  const dir = mkdtempSync(join(tmpdir(), `aiteamos-gate-m11-shell-${suffix}-`))
+  const dir = mkdtempSync(join(tmpdir(), `slaveofai-gate-m11-shell-${suffix}-`))
   const git = (args) => execFileSync('git', args, { cwd: dir })
   git(['init', '-q', '-b', 'main'])
   git(['config', 'user.name', 'Gate'])
@@ -221,7 +221,7 @@ async function clickUntil(locator, predicate, description) {
 }
 
 try {
-  diagDir = mkdtempSync(join(tmpdir(), 'aiteamos-gate-m11-shell-diag-'))
+  diagDir = mkdtempSync(join(tmpdir(), 'slaveofai-gate-m11-shell-diag-'))
   console.log(`diagnostics dir: ${diagDir}`)
 
   const chromiumPath = process.env.CHROMIUM_PATH ?? '/usr/bin/chromium'
@@ -270,7 +270,7 @@ try {
   const preferredPort = await findFreePort()
   nextProc = spawn('node', ['node_modules/next/dist/bin/next', 'dev', 'apps/web', '-p', String(preferredPort)], {
     cwd: repoRoot,
-    // M21 A1: the operator's AITEAMOS_SESSION_SECRET must not reach the child, or every page is /login.
+    // M21 A1: the operator's SLAVEOFAI_SESSION_SECRET must not reach the child, or every page is /login.
     env: loopbackChildEnv(),
     stdio: ['ignore', 'pipe', 'pipe'],
   })

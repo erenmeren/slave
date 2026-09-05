@@ -1,4 +1,4 @@
-import type { ExecutionEvent, RunStatus, TaskStatus } from '@ai-team-os/domain'
+import type { ExecutionEvent, RunStatus, TaskStatus } from '@slave-of-ai/domain'
 
 export type DomainEventType = ExecutionEvent['type']
 

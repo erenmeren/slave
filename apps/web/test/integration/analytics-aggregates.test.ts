@@ -1,5 +1,5 @@
-import { prisma } from '@ai-team-os/db/client'
-import { sumSpend, type RunStatus } from '@ai-team-os/domain'
+import { prisma } from '@slave-of-ai/db/client'
+import { sumSpend, type RunStatus } from '@slave-of-ai/domain'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { buildAnalytics, perAgentRunAggregates } from '../../src/server/analytics.js'
 

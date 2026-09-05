@@ -2,10 +2,10 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@ai-team-os/db'
-import { prisma } from '@ai-team-os/db/client'
-import { workspaceId as brandWorkspaceId } from '@ai-team-os/domain'
-import { appendEvent } from '@ai-team-os/events'
+import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@slave-of-ai/db'
+import { prisma } from '@slave-of-ai/db/client'
+import { workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
+import { appendEvent } from '@slave-of-ai/events'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { runMergePass } from '../../src/merge.js'
 import { provisionWorktree } from '../../src/worktree.js'
@@ -16,7 +16,7 @@ function git(args: readonly string[], cwd: string): string {
 
 /** A real repository, because the merge pass runs real `git rebase`/`git merge` against it. */
 function makeRepo(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'aiteamos-merge-'))
+  const dir = mkdtempSync(join(tmpdir(), 'slaveofai-merge-'))
   git(['init', '-q', '-b', 'main'], dir)
   git(['config', 'user.name', 'Fixture'], dir)
   git(['config', 'user.email', 'fixture@example.com'], dir)
@@ -147,7 +147,7 @@ describe('runMergePass', () => {
     // layout `verifyConcludedRun` points at. Written by hand rather than by calling `runVerify`
     // itself: this test is about the merge pass's own artifact routing, not re-driving the
     // implementation phase.
-    const implArtifactDir = join(workspace.repoPath, '.aiteamos', 'artifacts', taskId)
+    const implArtifactDir = join(workspace.repoPath, '.slaveofai', 'artifacts', taskId)
     const implAttemptDir = join(implArtifactDir, 'attempt-01')
     mkdirSync(implAttemptDir, { recursive: true })
     const implLogPath = join(implAttemptDir, '01-true.log')

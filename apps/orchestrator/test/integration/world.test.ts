@@ -1,5 +1,5 @@
-import { agentId, taskId, workspaceId } from '@ai-team-os/domain'
-import { prisma } from '@ai-team-os/db/client'
+import { agentId, taskId, workspaceId } from '@slave-of-ai/domain'
+import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { loadWorld } from '../../src/world.js'
 

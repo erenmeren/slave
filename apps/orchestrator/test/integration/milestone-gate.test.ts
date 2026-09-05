@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
-import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@ai-team-os/db'
-import { prisma } from '@ai-team-os/db/client'
+import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@slave-of-ai/db'
+import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 
 const execFileAsync = promisify(execFile)
@@ -36,8 +36,8 @@ async function runCli(args: readonly string[], extraEnv: NodeJS.ProcessEnv = {})
       env: {
         ...process.env,
         DATABASE_URL: process.env['TEST_DATABASE_URL'] ?? '',
-        AITEAMOS_CLAUDE_BIN: 'node',
-        AITEAMOS_CLAUDE_ARGS: `${FAKE} --fixture complete`,
+        SLAVEOFAI_CLAUDE_BIN: 'node',
+        SLAVEOFAI_CLAUDE_ARGS: `${FAKE} --fixture complete`,
         ...extraEnv,
       },
     })
@@ -49,7 +49,7 @@ async function runCli(args: readonly string[], extraEnv: NodeJS.ProcessEnv = {})
 }
 
 function makeRepo(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'aiteamos-gate-'))
+  const dir = mkdtempSync(join(tmpdir(), 'slaveofai-gate-'))
   const git = (args: readonly string[]): void => {
     execFileSync('git', [...args], { cwd: dir })
   }
@@ -150,7 +150,7 @@ describe('the M3/M8a milestone gate', () => {
 
     // Task 4's synthetic mode: a work run leaves a real commit for the merge pass to merge, and a
     // review run replays `review-approve`. Selected the same way production would select it.
-    const m8aFlow = { AITEAMOS_CLAUDE_ARGS: `${FAKE} --fixture m8a-flow` }
+    const m8aFlow = { SLAVEOFAI_CLAUDE_ARGS: `${FAKE} --fixture m8a-flow` }
 
     // Repeated ticks, not the daemon: `dispatchReviews` and `runMergePass` (Tasks 5 and 7) each run
     // once per tick, after whatever that same tick started -- so a review or a merge only becomes
@@ -168,11 +168,11 @@ describe('the M3/M8a milestone gate', () => {
     const implRun = await prisma.agentRun.findFirstOrThrow({ where: { kind: 'implementation' } })
     expect(implRun.status).toBe('succeeded')
     expect(implRun.pid).toBeGreaterThan(0)
-    expect(implRun.worktreePath).toContain(join('.aiteamos', 'worktrees'))
+    expect(implRun.worktreePath).toContain(join('.slaveofai', 'worktrees'))
     expect(existsSync(join(implRun.worktreePath ?? '', 'setup-marker'))).toBe(true)
 
     expect(task.status).toBe('done')
-    expect(task.branch).toMatch(/^aiteamos\//)
+    expect(task.branch).toMatch(/^slaveofai\//)
     expect(task.activeRunId).toBeNull()
 
     // The M8a order (spec §3.2/§8, Tasks 5 and 7): verify strictly after the task started, review
@@ -201,7 +201,7 @@ describe('the M3/M8a milestone gate', () => {
   it('autoMerge false: the same unattended flow ends done, branch preserved, no merge commit', async (): Promise<void> => {
     const fixture = await seed({ verifyCommands: ['true'], autoMerge: false })
     await addReviewer()
-    const m8aFlow = { AITEAMOS_CLAUDE_ARGS: `${FAKE} --fixture m8a-flow` }
+    const m8aFlow = { SLAVEOFAI_CLAUDE_ARGS: `${FAKE} --fixture m8a-flow` }
 
     let task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
     for (let i = 0; i < 6 && task.status !== 'done'; i += 1) {
@@ -213,7 +213,7 @@ describe('the M3/M8a milestone gate', () => {
     // spec Decision 5: a workspace that does not trust auto-merge still wants the task marked done
     // and out of the queue -- but with the branch and worktree left for a human to merge by hand.
     expect(task.status).toBe('done')
-    expect(task.branch).toMatch(/^aiteamos\//)
+    expect(task.branch).toMatch(/^slaveofai\//)
 
     // Still the full M8a pipeline, not verify short-circuiting straight to `done`: a review really
     // ran and approved it. Without this, `autoMerge: false` landing on `done` says nothing --
@@ -264,7 +264,7 @@ describe('the M3/M8a milestone gate', () => {
 
     // A real pause, produced by the gate denying the fake CLI's tool call — the same protocol the
     // real `claude` follows, which is what lets §16 run this step against either.
-    await runCli(['tick'], { AITEAMOS_CLAUDE_ARGS: `${FAKE} --fixture hook-deny` })
+    await runCli(['tick'], { SLAVEOFAI_CLAUDE_ARGS: `${FAKE} --fixture hook-deny` })
 
     const paused = await prisma.agentRun.findFirstOrThrow()
     expect(paused.status).toBe('paused')
@@ -272,10 +272,10 @@ describe('the M3/M8a milestone gate', () => {
     // Step 4: the checkpoint written from the pause carries what a fresh process needs to resume.
     const checkpoint = await prisma.checkpoint.findUniqueOrThrow({ where: { runId: paused.id } })
     expect(checkpoint.sessionId).not.toBe('')
-    expect(checkpoint.worktreePath).toContain('.aiteamos')
+    expect(checkpoint.worktreePath).toContain('.slaveofai')
 
     const result = await runCli(['resume', '--run', paused.id], {
-      AITEAMOS_CLAUDE_ARGS: `${FAKE} --fixture complete`,
+      SLAVEOFAI_CLAUDE_ARGS: `${FAKE} --fixture complete`,
     })
 
     expect(result.code).toBe(0)

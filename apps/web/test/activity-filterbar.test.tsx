@@ -2,7 +2,7 @@
 import type { ReactElement } from 'react'
 import { fireEvent, render, renderHook, screen, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { EVENT_TYPE_BY_DOMAIN_TYPE } from '@ai-team-os/db'
+import { EVENT_TYPE_BY_DOMAIN_TYPE } from '@slave-of-ai/db'
 import { useUrlFilters } from '../src/hooks/useUrlFilters.js'
 import { FilterBar } from '../src/components/activity/FilterBar.js'
 

@@ -4,7 +4,7 @@ const { verifyCredentials } = vi.hoisted(() => ({ verifyCredentials: vi.fn() }))
 
 // The route asks `packages/control` who this is; the derivation itself is that package's test's
 // business (M23 F3). Mocking it here keeps this file about the HTTP contract — and fast.
-vi.mock('@ai-team-os/control', () => ({ verifyCredentials }))
+vi.mock('@slave-of-ai/control', () => ({ verifyCredentials }))
 
 const { POST: loginPOST } = await import('../src/app/api/auth/login/route.js')
 const { POST: logoutPOST } = await import('../src/app/api/auth/logout/route.js')
@@ -23,7 +23,7 @@ function loginRequest(body: unknown, url = 'http://127.0.0.1:3000/api/auth/login
 
 describe('POST /api/auth/login', () => {
   beforeEach(() => {
-    vi.stubEnv('AITEAMOS_SESSION_SECRET', SECRET)
+    vi.stubEnv('SLAVEOFAI_SESSION_SECRET', SECRET)
     verifyCredentials.mockReset()
     verifyCredentials.mockImplementation(async (username: string, password: string) =>
       username === 'ada' && password === 'hunter2-hunter2' ? ADA : null,
@@ -35,7 +35,7 @@ describe('POST /api/auth/login', () => {
   })
 
   it('404s when the instance has no session secret (loopback mode has no accounts)', async () => {
-    vi.stubEnv('AITEAMOS_SESSION_SECRET', '')
+    vi.stubEnv('SLAVEOFAI_SESSION_SECRET', '')
     const response = await loginPOST(loginRequest({ username: 'ada', password: 'hunter2-hunter2' }))
     expect(response.status).toBe(404)
     expect(await response.json()).toEqual({ error: 'accounts are not configured on this instance' })

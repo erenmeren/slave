@@ -2,7 +2,7 @@
 
 import { useCallback, useMemo, useState } from 'react'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
-import { EVENT_TYPE_BY_DOMAIN_TYPE, type DomainEventType } from '@ai-team-os/db'
+import { EVENT_TYPE_BY_DOMAIN_TYPE, type DomainEventType } from '@slave-of-ai/db'
 import {
   ACTIVITY_KINDS,
   EMPTY_ACTIVITY_FILTERS,

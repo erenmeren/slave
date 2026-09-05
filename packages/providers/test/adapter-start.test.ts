@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { runId, type RunId } from '@ai-team-os/domain'
+import { runId, type RunId } from '@slave-of-ai/domain'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import { ClaudeCodeAdapter, type StartRunInput } from '../src/claude/adapter.js'
@@ -35,7 +35,7 @@ describe('ClaudeCodeAdapter', () => {
   let hookPath: string
 
   beforeEach(() => {
-    worktreePath = mkdtempSync(path.join(tmpdir(), 'aiteamos-adapter-'))
+    worktreePath = mkdtempSync(path.join(tmpdir(), 'slaveofai-adapter-'))
     // start() (Task 8) now runs the Task 6 pre-flight gate against
     // hookPath before spawning anything, so every test here needs a real
     // discriminating hook script even though most of them never touch
@@ -95,16 +95,16 @@ describe('ClaudeCodeAdapter', () => {
     expect(env['GIT_AUTHOR_EMAIL']).toBe(input.gitIdentity.email)
     expect(env['GIT_COMMITTER_NAME']).toBe(input.gitIdentity.name)
     expect(env['GIT_COMMITTER_EMAIL']).toBe(input.gitIdentity.email)
-    expect(env['AITEAMOS_PAUSE_FLAG']).toBe(input.pauseFlagPath)
+    expect(env['SLAVEOFAI_PAUSE_FLAG']).toBe(input.pauseFlagPath)
   })
 
-  it('sets AITEAMOS_PERMISSIONS_FILE in the child environment (M18 Task 5)', async (): Promise<void> => {
+  it('sets SLAVEOFAI_PERMISSIONS_FILE in the child environment (M18 Task 5)', async (): Promise<void> => {
     // fixture 'env-echo' prints process.env keys as a result payload -- the same fixture and
     // pattern the git-identity/pause-flag test above uses.
     const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'env-echo'], hookPath })
     await adapter.start(input)
     const env = await collectEnvFrom(adapter, input.runId)
-    expect(env['AITEAMOS_PERMISSIONS_FILE']).toBe(input.permissionsFilePath)
+    expect(env['SLAVEOFAI_PERMISSIONS_FILE']).toBe(input.permissionsFilePath)
   })
 
   it('appends --model to the spawned args when input.model is set', async (): Promise<void> => {

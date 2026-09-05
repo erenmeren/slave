@@ -11,7 +11,7 @@
 // execution, and their evidence is RECORDED -- in the fixture, in that directory's README, and in
 // the spec's spend ledger. A gate that re-ran them would spend money every time someone checked the
 // milestone, which is the opposite of what a milestone that is about measurement should teach. So
-// m14's outer `AITEAMOS_CLAUDE_BIN` precondition is deliberately NOT enforced here: there is no
+// m14's outer `SLAVEOFAI_CLAUDE_BIN` precondition is deliberately NOT enforced here: there is no
 // dispatch for it to guard. What this gate does instead is READ the recorded evidence and refuse if
 // it has gone missing, been softened, or stopped adding up.
 //
@@ -126,7 +126,7 @@ function pushBrowserConsole(text) {
  *  repository everywhere else in this product, and a gate's fixture workspace should not be the one
  *  place it does not. */
 function makeRepo(suffix) {
-  const dir = mkdtempSync(join(tmpdir(), `aiteamos-gate-m19-${suffix}-`))
+  const dir = mkdtempSync(join(tmpdir(), `slaveofai-gate-m19-${suffix}-`))
   const git = (args) => execFileSync('git', args, { cwd: dir })
   git(['init', '-q', '-b', 'main'])
   git(['config', 'user.name', 'Gate'])
@@ -365,12 +365,12 @@ function parseSpendLedger(markdown) {
 }
 
 try {
-  diagDir = mkdtempSync(join(tmpdir(), 'aiteamos-gate-m19-diag-'))
+  diagDir = mkdtempSync(join(tmpdir(), 'slaveofai-gate-m19-diag-'))
   console.log(`diagnostics dir: ${diagDir}`)
 
   // ---- Preflight ------------------------------------------------------------------------------
   //
-  // No `AITEAMOS_CLAUDE_BIN` precondition here, and that is deliberate -- see the file header. This
+  // No `SLAVEOFAI_CLAUDE_BIN` precondition here, and that is deliberate -- see the file header. This
   // gate spawns no vendor CLI and no daemon, so there is nothing for that check to guard; requiring
   // it would be theatre, and theatre in a gate teaches an operator to set variables without knowing
   // why.
@@ -714,8 +714,8 @@ try {
   const preferredPort = await findFreePort()
   nextServer = spawn('node', ['node_modules/next/dist/bin/next', 'dev', 'apps/web', '-p', String(preferredPort)], {
     cwd: repoRoot,
-    // M21 A1: the operator's AITEAMOS_SESSION_SECRET must not reach the child, or every page is /login.
-    env: loopbackChildEnv({ AITEAMOS_GATE_WARM: '1' }),
+    // M21 A1: the operator's SLAVEOFAI_SESSION_SECRET must not reach the child, or every page is /login.
+    env: loopbackChildEnv({ SLAVEOFAI_GATE_WARM: '1' }),
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   let nextExited = false

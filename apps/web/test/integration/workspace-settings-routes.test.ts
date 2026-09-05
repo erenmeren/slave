@@ -1,4 +1,4 @@
-import { prisma } from '@ai-team-os/db/client'
+import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { PUT as providerPUT } from '../../src/app/api/w/[workspaceId]/provider/route.js'
 import { PUT as budgetPUT } from '../../src/app/api/w/[workspaceId]/budget/route.js'

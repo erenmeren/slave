@@ -1,4 +1,4 @@
-import { prisma } from '@ai-team-os/db/client'
+import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { POST as templatesPOST } from '../../src/app/api/org/templates/route.js'
 import { POST as companiesPOST } from '../../src/app/api/org/companies/route.js'

@@ -1,5 +1,5 @@
 // The M21 gate (spec §6): no loose ends. Zero spend. Checks 2 and 3 run the M15 and M20 gates as
-// children WITH a configured AITEAMOS_PASSWORD in their environment -- the breakage A1 fixed, proven
+// children WITH a configured SLAVEOFAI_PASSWORD in their environment -- the breakage A1 fixed, proven
 // where it bit. Sequential: the children boot dev servers on the shared apps/web/.next.
 import { spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
@@ -54,25 +54,25 @@ try {
     for (const f of EXEMPT) assert(names.includes(f), `check 1: exception ${f} not found among spawners`)
     // The census above is a per-file grep and cannot see into `scripts/lib/child-env.mjs` itself
     // (a spawner under `scripts/lib/` is invisible to it, by design). So this reads that module's
-    // source directly and confirms it blanks BOTH names -- M23 retired `AITEAMOS_PASSWORD`, but the
+    // source directly and confirms it blanks BOTH names -- M23 retired `SLAVEOFAI_PASSWORD`, but the
     // census keeps proving every spawner strips it too, in case some future reader resurrects it
     // from a stale `.env`.
     const childEnvSource = readFileSync(`${repoRoot}scripts/lib/child-env.mjs`, 'utf8')
-    assert(childEnvSource.includes('AITEAMOS_SESSION_SECRET'), 'check 1: child-env.mjs does not mention AITEAMOS_SESSION_SECRET')
-    assert(childEnvSource.includes('AITEAMOS_PASSWORD'), 'check 1: child-env.mjs does not mention AITEAMOS_PASSWORD')
+    assert(childEnvSource.includes('SLAVEOFAI_SESSION_SECRET'), 'check 1: child-env.mjs does not mention SLAVEOFAI_SESSION_SECRET')
+    assert(childEnvSource.includes('SLAVEOFAI_PASSWORD'), 'check 1: child-env.mjs does not mention SLAVEOFAI_PASSWORD')
   }
   console.log('check 1: every dev-server spawner strips the secret and the retired password, the two exceptions by name')
 
   const PASSWORD = randomBytes(18).toString('base64url')
-  const env = { ...process.env, AITEAMOS_PASSWORD: PASSWORD }
+  const env = { ...process.env, SLAVEOFAI_PASSWORD: PASSWORD }
 
   // 2. The M15 gate under a configured password.
   runChildGate('scripts/gate-m15-boundary.mjs', env, M15_PASS, 'm15')
-  console.log('check 2: gate-m15-boundary PASSes with AITEAMOS_PASSWORD set in its environment')
+  console.log('check 2: gate-m15-boundary PASSes with SLAVEOFAI_PASSWORD set in its environment')
 
   // 3. The M20 gate under a configured password (its own run A deletes it, run B overrides it).
   runChildGate('scripts/gate-m20-auth.mjs', env, M20_PASS, 'm20')
-  console.log('check 3: gate-m20-auth PASSes with AITEAMOS_PASSWORD set in its environment')
+  console.log('check 3: gate-m20-auth PASSes with SLAVEOFAI_PASSWORD set in its environment')
 
   // 4. The unit-level proofs, one child vitest run.
   {

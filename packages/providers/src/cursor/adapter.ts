@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { dirname, isAbsolute } from 'node:path'
 import { createInterface } from 'node:readline'
-import type { RunId } from '@ai-team-os/domain'
+import type { RunId } from '@slave-of-ai/domain'
 import { capabilitiesOf } from '../capabilities.js'
 import { listCursorModels, type ModelListing } from '../models.js'
 import { AsyncEventQueue } from '../runtime/event-queue.js'

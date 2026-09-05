@@ -2,9 +2,9 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@ai-team-os/db'
-import { prisma } from '@ai-team-os/db/client'
-import { taskId as brandTaskId } from '@ai-team-os/domain'
+import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@slave-of-ai/db'
+import { prisma } from '@slave-of-ai/db/client'
+import { taskId as brandTaskId } from '@slave-of-ai/domain'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { advance, runVerify } from '../../src/verify.js'
 import { provisionWorktree } from '../../src/worktree.js'
@@ -14,7 +14,7 @@ function git(args: readonly string[], cwd: string): string {
 }
 
 function makeRepo(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'aiteamos-verify-'))
+  const dir = mkdtempSync(join(tmpdir(), 'slaveofai-verify-'))
   git(['init', '-q', '-b', 'main'], dir)
   git(['config', 'user.name', 'Fixture'], dir)
   git(['config', 'user.email', 'fixture@example.com'], dir)
@@ -57,7 +57,7 @@ async function seed(): Promise<Fixture> {
       status: 'running',
       requiredRole: 'backend',
       maxAttempts: workspace.maxAttempts,
-      branch: 'aiteamos/TASK-001-x',
+      branch: 'slaveofai/TASK-001-x',
     },
   })
   const run = await prisma.agentRun.create({
@@ -76,7 +76,7 @@ async function seed(): Promise<Fixture> {
   return {
     repoPath,
     worktreePath: worktree.path,
-    artifactDir: join(repoPath, '.aiteamos', 'artifacts', task.id),
+    artifactDir: join(repoPath, '.slaveofai', 'artifacts', task.id),
     workspaceId: workspace.id,
     taskId: task.id,
     runId: run.id,
@@ -120,7 +120,7 @@ describe('verify and advance', () => {
     // reaches `done` without anyone or anything having looked at it.
     expect(result.passed).toBe(false)
 
-    await advance({ taskId: base.taskId, result, branch: 'aiteamos/TASK-001-x' })
+    await advance({ taskId: base.taskId, result, branch: 'slaveofai/TASK-001-x' })
 
     expect((await task()).status).not.toBe('done')
     // And it is distinguishable from an ordinary rework -- this is a misconfiguration, not a
@@ -143,7 +143,7 @@ describe('verify and advance', () => {
   it('attaches the failure output to the next run through lastRejectionReason', async (): Promise<void> => {
     const result = await runVerify({ ...base, commands: ['echo BOOM >&2; exit 1'] })
 
-    await advance({ taskId: base.taskId, result, branch: 'aiteamos/TASK-001-x' })
+    await advance({ taskId: base.taskId, result, branch: 'slaveofai/TASK-001-x' })
 
     const t = await task()
     expect(t.status).toBe('rework')
@@ -155,13 +155,13 @@ describe('verify and advance', () => {
   it('moves the task to reviewing with its branch when every command passes', async (): Promise<void> => {
     const result = await runVerify({ ...base, commands: ['true'] })
 
-    await advance({ taskId: base.taskId, result, branch: 'aiteamos/TASK-001-x' })
+    await advance({ taskId: base.taskId, result, branch: 'slaveofai/TASK-001-x' })
 
     // The pipeline flip (M8a): a green verify no longer finishes the task on its own -- it hands
     // the task to review (Task 5), which is the only path left to `done` (Task 7's merge pass).
     const t = await task()
     expect(t.status).toBe('reviewing')
-    expect(t.branch).toBe('aiteamos/TASK-001-x')
+    expect(t.branch).toBe('slaveofai/TASK-001-x')
     const types = await eventTypesFor(fixture.workspaceId)
     expect(types).toContain('task.verify_passed')
     expect(types).not.toContain('task.done')
@@ -174,7 +174,7 @@ describe('verify and advance', () => {
     await prisma.task.update({ where: { id: fixture.taskId }, data: { attempt: 4 } })
 
     const result = await runVerify({ ...base, commands: ['false'] })
-    await advance({ taskId: base.taskId, result, branch: 'aiteamos/TASK-001-x' })
+    await advance({ taskId: base.taskId, result, branch: 'slaveofai/TASK-001-x' })
 
     const t = await task()
     expect(t.attempt).toBe(5)
@@ -186,7 +186,7 @@ describe('verify and advance', () => {
     await prisma.task.update({ where: { id: fixture.taskId }, data: { attempt: 3 } })
 
     const result = await runVerify({ ...base, commands: ['false'] })
-    await advance({ taskId: base.taskId, result, branch: 'aiteamos/TASK-001-x' })
+    await advance({ taskId: base.taskId, result, branch: 'slaveofai/TASK-001-x' })
 
     // The other side of the same boundary: one attempt short of the cap must still get a turn, or
     // every task silently gets one fewer attempt than its workspace configured.
@@ -243,7 +243,7 @@ describe('verify and advance', () => {
   it('clears the finished run from the task on every terminal transition', async (): Promise<void> => {
     const result = await runVerify({ ...base, commands: ['true'] })
 
-    await advance({ taskId: base.taskId, result, branch: 'aiteamos/TASK-001-x' })
+    await advance({ taskId: base.taskId, result, branch: 'slaveofai/TASK-001-x' })
 
     // `activeRunId` points at the run currently working the task (Task 13 sets it). A task left
     // pointing at a finished run reads as busy to anything that consults it.
@@ -273,7 +273,7 @@ describe('verify and advance', () => {
   it('does not tell the next agent to fix the workspace configuration', async (): Promise<void> => {
     const result = await runVerify({ ...base, commands: [] })
 
-    await advance({ taskId: base.taskId, result, branch: 'aiteamos/TASK-001-x' })
+    await advance({ taskId: base.taskId, result, branch: 'slaveofai/TASK-001-x' })
 
     // `lastRejectionReason` reaches the next run's prompt as the thing to fix first. An unconfigured
     // verify list is not something an agent caused or can reach, and Task 13 was corrected for
@@ -284,7 +284,7 @@ describe('verify and advance', () => {
   it('does not spend an attempt, or keep scheduling, on a workspace that cannot verify', async (): Promise<void> => {
     const result = await runVerify({ ...base, commands: [] })
 
-    await advance({ taskId: base.taskId, result, branch: 'aiteamos/TASK-001-x' })
+    await advance({ taskId: base.taskId, result, branch: 'slaveofai/TASK-001-x' })
 
     // Every task in this workspace will hit the same wall, so charging each of them maxAttempts
     // full agent runs before failing is the worst available behaviour -- §13.1 says so in as many
@@ -300,8 +300,8 @@ describe('verify and advance', () => {
   it('is harmless when it runs twice for the same result', async (): Promise<void> => {
     const result = await runVerify({ ...base, commands: ['false'] })
 
-    await advance({ taskId: base.taskId, result, branch: 'aiteamos/TASK-001-x' })
-    await advance({ taskId: base.taskId, result, branch: 'aiteamos/TASK-001-x' })
+    await advance({ taskId: base.taskId, result, branch: 'slaveofai/TASK-001-x' })
+    await advance({ taskId: base.taskId, result, branch: 'slaveofai/TASK-001-x' })
 
     // "Exactly once per terminal run" at the call site is a much harder property than "harmless if
     // called twice" here, and a second call otherwise double-counts the attempt -- enough to push a
@@ -316,7 +316,7 @@ describe('verify and advance', () => {
     const result = await runVerify({ ...base, commands: ['true'] })
     await prisma.task.update({ where: { id: fixture.taskId }, data: { status: 'cancelled' } })
 
-    await advance({ taskId: base.taskId, result, branch: 'aiteamos/TASK-001-x' })
+    await advance({ taskId: base.taskId, result, branch: 'slaveofai/TASK-001-x' })
 
     // A stale verify result arriving after an operator cancelled the task must not resurrect it to
     // `done` and announce it -- the same class of thing the branch check exists for, one field over.
@@ -338,7 +338,7 @@ describe('verify and advance', () => {
   it('does not charge an attempt for a verify that could not run', async (): Promise<void> => {
     const result = await runVerify({ ...base, worktreePath: join(fixture.repoPath, 'no-such-dir'), commands: ['true'] })
 
-    await advance({ taskId: base.taskId, result, branch: 'aiteamos/TASK-001-x' })
+    await advance({ taskId: base.taskId, result, branch: 'slaveofai/TASK-001-x' })
 
     // The agent did not cause a missing worktree and cannot fix one. Charging the attempt spends
     // the task's budget on the orchestrator's own problem.
@@ -347,7 +347,7 @@ describe('verify and advance', () => {
 
   it('emits the transition sequence spec §8 names, in order', async (): Promise<void> => {
     const pass = await runVerify({ ...base, commands: ['true'] })
-    await advance({ taskId: base.taskId, result: pass, branch: 'aiteamos/TASK-001-x' })
+    await advance({ taskId: base.taskId, result: pass, branch: 'slaveofai/TASK-001-x' })
 
     // `toContain` on a single value cannot see a missing event, a reordered one, or a duplicated
     // one -- the whole catalogue this task produces could be deleted and every other assertion here
@@ -358,7 +358,7 @@ describe('verify and advance', () => {
 
   it('emits the failing transition sequence, with the command and its exit code', async (): Promise<void> => {
     const result = await runVerify({ ...base, commands: ['exit 3'] })
-    await advance({ taskId: base.taskId, result, branch: 'aiteamos/TASK-001-x' })
+    await advance({ taskId: base.taskId, result, branch: 'slaveofai/TASK-001-x' })
 
     expect(await eventTypesFor(fixture.workspaceId)).toEqual([
       'task.verifying',
@@ -373,7 +373,7 @@ describe('verify and advance', () => {
 
   it('reports a timed-out command with no exit code rather than a made-up one', async (): Promise<void> => {
     const result = await runVerify({ ...base, commands: ['sleep 30'], timeoutMs: 300 })
-    await advance({ taskId: base.taskId, result, branch: 'aiteamos/TASK-001-x' })
+    await advance({ taskId: base.taskId, result, branch: 'slaveofai/TASK-001-x' })
 
     const failed = await prisma.executionEvent.findFirstOrThrow({
       where: { workspaceId: fixture.workspaceId, type: 'task_verify_failed' },
@@ -407,11 +407,11 @@ describe('verify and advance', () => {
 
   it('clears the old rejection when the task finally passes', async (): Promise<void> => {
     const failure = await runVerify({ ...base, commands: ['echo OLDFAILURE; exit 1'] })
-    await advance({ taskId: base.taskId, result: failure, branch: 'aiteamos/TASK-001-x' })
+    await advance({ taskId: base.taskId, result: failure, branch: 'slaveofai/TASK-001-x' })
     await prisma.task.update({ where: { id: fixture.taskId }, data: { status: 'running' } })
 
     const pass = await runVerify({ ...base, commands: ['true'] })
-    await advance({ taskId: base.taskId, result: pass, branch: 'aiteamos/TASK-001-x' })
+    await advance({ taskId: base.taskId, result: pass, branch: 'slaveofai/TASK-001-x' })
 
     expect((await task()).lastRejectionReason).toBeNull()
   })
@@ -423,7 +423,7 @@ describe('verify and advance', () => {
     // agree today and nothing enforces it. The branch is what a human merges, so advancing a task
     // to `done` pointing somewhere else is how work gets merged from a branch nobody looked at.
     await expect(
-      advance({ taskId: base.taskId, result, branch: 'aiteamos/SOMETHING-ELSE' }),
+      advance({ taskId: base.taskId, result, branch: 'slaveofai/SOMETHING-ELSE' }),
     ).rejects.toThrow(/branch/)
 
     expect((await task()).status).not.toBe('done')

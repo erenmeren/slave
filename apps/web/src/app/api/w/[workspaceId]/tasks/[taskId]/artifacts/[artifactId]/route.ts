@@ -1,6 +1,6 @@
 import { readFile, stat } from 'node:fs/promises'
 import { resolve, sep } from 'node:path'
-import { prisma } from '@ai-team-os/db/client'
+import { prisma } from '@slave-of-ai/db/client'
 import { ARTIFACT_READ_LIMIT } from '../../../../../../../../lib/artifactLimit'
 
 export const dynamic = 'force-dynamic'
@@ -17,7 +17,7 @@ export async function GET(
   if (artifact === null) return Response.json({ error: 'no such artifact' }, { status: 404 })
   // The row is data, the disk is the authority (spec §4 C2): a path outside the artifact root is
   // refused before it is opened, whatever wrote the row.
-  const root = resolve(artifact.task.workspace.repoPath, '.aiteamos', 'artifacts') + sep
+  const root = resolve(artifact.task.workspace.repoPath, '.slaveofai', 'artifacts') + sep
   const path = resolve(artifact.path)
   if (!path.startsWith(root)) return Response.json({ error: 'artifact path outside the artifact root' }, { status: 403 })
   const info = await stat(path).catch(() => null)

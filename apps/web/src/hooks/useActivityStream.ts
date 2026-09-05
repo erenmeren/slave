@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import type { ExecutionEvent } from '@ai-team-os/domain'
+import type { ExecutionEvent } from '@slave-of-ai/domain'
 import { feedSummary } from '../lib/feedSummary'
 import { filtersToQuery, type ActivityFilters } from '../lib/activityFilters'
 // Type-only: `../server/activity` pulls in `prisma`, which must never reach the client bundle

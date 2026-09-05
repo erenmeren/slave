@@ -1,12 +1,12 @@
 import { join } from 'node:path'
-import { prisma } from '@ai-team-os/db/client'
+import { prisma } from '@slave-of-ai/db/client'
 import {
   nextMergeCandidate,
   taskId as brandTaskId,
   type MergeCandidate,
   type WorkspaceId,
-} from '@ai-team-os/domain'
-import { appendEvent } from '@ai-team-os/events'
+} from '@slave-of-ai/domain'
+import { appendEvent } from '@slave-of-ai/events'
 import { rejectTask, runVerify } from './verify.js'
 import { gitIn } from './worktree.js'
 
@@ -195,7 +195,7 @@ export async function runMergePass(workspaceId: WorkspaceId): Promise<void> {
     // `attempt-NN` logs (verify.ts), and this pass's post-rebase re-verify reuses the same
     // attempt number. Without the `merge` segment the two writers collide on the same paths and
     // this pass's log silently overwrites the implementation attempt's.
-    artifactDir: join(workspace.repoPath, '.aiteamos', 'artifacts', task.id, 'merge'),
+    artifactDir: join(workspace.repoPath, '.slaveofai', 'artifacts', task.id, 'merge'),
     commands: workspace.verifyCommands,
     timeoutMs: workspace.runTimeoutMs,
   })

@@ -1,21 +1,21 @@
 services:
   postgres:
     image: postgres:17-alpine
-    container_name: aiteamos-postgres
+    container_name: slaveofai-postgres
     environment:
-      POSTGRES_USER: aiteamos
-      POSTGRES_PASSWORD: aiteamos
-      POSTGRES_DB: aiteamos
+      POSTGRES_USER: slaveofai
+      POSTGRES_PASSWORD: slaveofai
+      POSTGRES_DB: slaveofai
     ports:
       - "5433:5432"
     volumes:
-      - aiteamos-pgdata:/var/lib/postgresql/data
+      - slaveofai-pgdata:/var/lib/postgresql/data
       - ./docker/initdb:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U aiteamos -d aiteamos"]
+      test: ["CMD-SHELL", "pg_isready -U slaveofai -d slaveofai"]
       interval: 2s
       timeout: 3s
       retries: 30
 
 volumes:
-  aiteamos-pgdata:
+  slaveofai-pgdata:

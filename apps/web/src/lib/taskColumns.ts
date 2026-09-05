@@ -1,4 +1,4 @@
-import type { TaskStatus } from '@ai-team-os/domain'
+import type { TaskStatus } from '@slave-of-ai/domain'
 import type { StatusTone } from '../components/ui/StatusPill'
 import type { CardState } from './tones'
 

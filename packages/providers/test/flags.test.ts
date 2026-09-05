@@ -12,7 +12,7 @@ const realGate = path.join(repoRoot, 'scripts/pause-gate.sh')
 // preflightGate mints its own temporary flag file internally (see flags.ts) rather than
 // taking a caller-supplied path, so a leftover-file check has to look at its known prefix
 // in the OS temp directory rather than at a path the tests control.
-const PREFLIGHT_TMP_PREFIX = 'aiteamos-preflight-'
+const PREFLIGHT_TMP_PREFIX = 'slaveofai-preflight-'
 
 function preflightTmpDirs(): string[] {
   return readdirSync(tmpdir()).filter((name) => name.startsWith(PREFLIGHT_TMP_PREFIX))
@@ -49,7 +49,7 @@ describe('preflightGate', () => {
 
   beforeEach(() => {
     expect(existsSync(realGate)).toBe(true)
-    dir = mkdtempSync(path.join(tmpdir(), 'aiteamos-preflight-fixture-'))
+    dir = mkdtempSync(path.join(tmpdir(), 'slaveofai-preflight-fixture-'))
 
     // A fresh executable copy of the real gate, per test -- some tests
     // mutate its permissions, and the repo's own copy of the script must
@@ -87,7 +87,7 @@ describe('preflightGate', () => {
 
   it('preflight rejects a hook that denies unconditionally', async (): Promise<void> => {
     // Both directions, not one. The real pause-gate.sh emits deny JSON and exits 0 when
-    // AITEAMOS_PAUSE_FLAG is unset -- its deliberate loud-misconfiguration path -- so a
+    // SLAVEOFAI_PAUSE_FLAG is unset -- its deliberate loud-misconfiguration path -- so a
     // check asserting only "flag present => deny" passes a hook that gates nothing through
     // by denying everything, and the run accomplishes nothing while looking armed.
     await expect(preflightGate({ hookPath: alwaysDenyHook })).rejects.toThrow()

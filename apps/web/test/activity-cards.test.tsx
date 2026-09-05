@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
-import type { DomainEventType } from '@ai-team-os/db'
+import type { DomainEventType } from '@slave-of-ai/db'
 import { ActivityCard } from '../src/components/activity/ActivityCard.js'
 import { ACTIVITY_CARDS } from '../src/components/activity/cards.js'
 import type { ActivityEventRow } from '../src/server/activity.js'
@@ -61,9 +61,9 @@ const PAYLOAD_BY_TYPE: Record<DomainEventType, Record<string, unknown>> = {
   'task.review_rejected': { reason: 'edge case unhandled', attempt: 2 },
   'task.merge_failed': { reason: 'conflict in package.json' },
   'task.worktree_collected': {
-    path: '/repo/.aiteamos/worktrees/T-abc',
+    path: '/repo/.slaveofai/worktrees/T-abc',
     reason: 'operator',
-    branch: 'aiteamos/T-abc-x',
+    branch: 'slaveofai/T-abc-x',
   },
   'workspace.goal_set': { goal: 'Ship the checkout flow' },
   'workspace.plan_created': {
@@ -190,7 +190,7 @@ describe('targeted card bodies', () => {
   it('task.worktree_collected shows the path and the reason', () => {
     const Card = ACTIVITY_CARDS['task.worktree_collected']
     render(<Card event={fixtureFor('task.worktree_collected')} {...CARD_PROPS} />)
-    expect(screen.getByTestId('worktree-collected-path').textContent).toBe('/repo/.aiteamos/worktrees/T-abc')
+    expect(screen.getByTestId('worktree-collected-path').textContent).toBe('/repo/.slaveofai/worktrees/T-abc')
     expect(screen.getByTestId('transition-label').textContent).toBe('worktree collected')
   })
 

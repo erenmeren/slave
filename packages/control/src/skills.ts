@@ -1,8 +1,8 @@
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { prisma } from '@ai-team-os/db/client'
-import { type Result, err, ok } from '@ai-team-os/domain'
+import { prisma } from '@slave-of-ai/db/client'
+import { type Result, err, ok } from '@slave-of-ai/domain'
 import type { ControlRefusal } from './refusal.js'
 
 /** Where a skill was found. `roots` defaults to the three real ones (M14 §4.3); tests pass a

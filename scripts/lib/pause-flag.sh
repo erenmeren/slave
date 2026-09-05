@@ -77,11 +77,11 @@ PAUSE_REASON=''
 # naming the misconfiguration, is the least harmful of the three -- it surfaces at the first tool
 # call instead of during an incident, and it surfaces IN THE DENY BODY, where the operator watching
 # the run is already looking.
-PAUSE_FLAG_UNSET_MESSAGE='AITEAMOS_PAUSE_FLAG is unset or empty -- refusing to fall back to a shared default path. Set AITEAMOS_PAUSE_FLAG explicitly for this run before retrying.'
+PAUSE_FLAG_UNSET_MESSAGE='SLAVEOFAI_PAUSE_FLAG is unset or empty -- refusing to fall back to a shared default path. Set SLAVEOFAI_PAUSE_FLAG explicitly for this run before retrying.'
 
 # Interrogates the pause flag. The contract both gates share (M13 section 4.2):
 #
-#   AITEAMOS_PAUSE_FLAG unset or empty        -> return 2, PAUSE_REASON = PAUSE_FLAG_UNSET_MESSAGE.
+#   SLAVEOFAI_PAUSE_FLAG unset or empty        -> return 2, PAUSE_REASON = PAUSE_FLAG_UNSET_MESSAGE.
 #                                                The caller DENIES with it, exit 0. Unchanged from
 #                                                M12 on both gates.
 #   the path does not exist                   -> return 1. No pause. The ordinary case.
@@ -104,18 +104,18 @@ PAUSE_FLAG_UNSET_MESSAGE='AITEAMOS_PAUSE_FLAG is unset or empty -- refusing to f
 read_pause_reason() {
   local name="${PAUSE_GATE_NAME:-pause gate}"
 
-  if [[ -z "${AITEAMOS_PAUSE_FLAG:-}" ]]; then
+  if [[ -z "${SLAVEOFAI_PAUSE_FLAG:-}" ]]; then
     PAUSE_REASON="$PAUSE_FLAG_UNSET_MESSAGE"
     return 2
   fi
 
-  if [[ ! -e "$AITEAMOS_PAUSE_FLAG" ]]; then
+  if [[ ! -e "$SLAVEOFAI_PAUSE_FLAG" ]]; then
     return 1
   fi
 
-  if [[ ! -f "$AITEAMOS_PAUSE_FLAG" ]]; then
+  if [[ ! -f "$SLAVEOFAI_PAUSE_FLAG" ]]; then
     printf '%s: the pause flag path %s exists but is not a regular file. A gate cannot read a pause reason out of it, and allowing on it would silently disarm this run.\n' \
-      "$name" "$AITEAMOS_PAUSE_FLAG" >&2
+      "$name" "$SLAVEOFAI_PAUSE_FLAG" >&2
     exit 2
   fi
 
@@ -126,16 +126,16 @@ read_pause_reason() {
   # trailing, then peel off exactly that one sentinel byte with a parameter expansion (not a second
   # command substitution, which would reintroduce the same stripping one layer up).
   local raw
-  raw=$(cat "$AITEAMOS_PAUSE_FLAG" && printf x)
+  raw=$(cat "$SLAVEOFAI_PAUSE_FLAG" && printf x)
   local status=$?
   if [[ $status -ne 0 ]]; then
-    printf '%s: failed to read the pause flag file at %s (exit %s)\n' "$name" "$AITEAMOS_PAUSE_FLAG" "$status" >&2
+    printf '%s: failed to read the pause flag file at %s (exit %s)\n' "$name" "$SLAVEOFAI_PAUSE_FLAG" "$status" >&2
     exit 2
   fi
   raw=${raw%x}
 
   # An empty flag file keeps the static message: that is what every caller wrote before the reason
   # channel existed, and what the pre-flight probe's own `writeFile(flagPath, '')` leaves behind.
-  PAUSE_REASON="${raw:-Paused by AI Team OS. Stop and wait.}"
+  PAUSE_REASON="${raw:-Paused by Slave of AI. Stop and wait.}"
   return 0
 }

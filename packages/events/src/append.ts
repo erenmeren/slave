@@ -1,6 +1,6 @@
-import { EVENT_TYPE_BY_DOMAIN_TYPE, toExecutionEvent, type DomainEventType } from '@ai-team-os/db'
-import { prisma, type Prisma } from '@ai-team-os/db/client'
-import type { ExecutionEvent } from '@ai-team-os/domain'
+import { EVENT_TYPE_BY_DOMAIN_TYPE, toExecutionEvent, type DomainEventType } from '@slave-of-ai/db'
+import { prisma, type Prisma } from '@slave-of-ai/db/client'
+import type { ExecutionEvent } from '@slave-of-ai/domain'
 
 export interface AppendableEvent {
   readonly type: DomainEventType

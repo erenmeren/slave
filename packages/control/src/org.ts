@@ -1,7 +1,7 @@
-import { prisma, type Prisma } from '@ai-team-os/db/client'
-import { NON_TERMINAL_RUN_STATUSES, type Result, err, ok } from '@ai-team-os/domain'
-import { appendEvent } from '@ai-team-os/events'
-import { PROVIDER_KINDS, type ProviderKind } from '@ai-team-os/providers'
+import { prisma, type Prisma } from '@slave-of-ai/db/client'
+import { NON_TERMINAL_RUN_STATUSES, type Result, err, ok } from '@slave-of-ai/domain'
+import { appendEvent } from '@slave-of-ai/events'
+import { PROVIDER_KINDS, type ProviderKind } from '@slave-of-ai/providers'
 import { admitProvider } from './budget.js'
 import type { Principal } from './principal.js'
 import { isUniqueConstraintViolation } from './prisma-errors.js'
@@ -10,7 +10,7 @@ import { resolveRuntime, workspaceDefaultProvider } from './runtime.js'
 
 /**
  * Validates an UNTRUSTED provider string (a CLI flag, a web request body). `PROVIDER_KINDS`
- * itself (M12 Task 13 fix round 1) lives in `@ai-team-os/providers` -- the one canonical,
+ * itself (M12 Task 13 fix round 1) lives in `@slave-of-ai/providers` -- the one canonical,
  * compile-time-guarded list, see that module's `types.ts` docstring -- rather than a private copy
  * here that could drift from it. Exported (M23 A1) so `workspace.ts`'s `createWorkspace` uses
  * this SAME definition rather than growing a second copy (the M17 census rule).

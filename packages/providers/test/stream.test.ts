@@ -12,7 +12,7 @@ describe('parseStreamLine', () => {
 
   it('double-parses hook_response.output, which is a JSON-encoded string', () => {
     const inner = JSON.stringify({
-      hookSpecificOutput: { permissionDecision: 'deny', permissionDecisionReason: 'Paused by AI Team OS.' },
+      hookSpecificOutput: { permissionDecision: 'deny', permissionDecisionReason: 'Paused by Slave of AI.' },
     })
     const line = JSON.stringify({
       type: 'system',
@@ -24,7 +24,7 @@ describe('parseStreamLine', () => {
     expect(parseStreamLine(line)).toEqual({
       kind: 'hook_denied',
       hookName: 'PreToolUse:Bash',
-      reason: 'Paused by AI Team OS.',
+      reason: 'Paused by Slave of AI.',
     })
   })
 
@@ -166,7 +166,7 @@ describe('parseStreamLine', () => {
   // `RuntimeEvent` declares `tool_call` and `text`, and Task 6/8's adapter tests (plan
   // §Task 6, §Task 8) rely on `parseStreamLine` producing `tool_call` from every stdout line,
   // including `assistant` lines -- the adapter maps *every* line through this function with
-  // no upstream filter. The captures at ~/.aiteamos-m3-probe/ carry these shapes on every
+  // no upstream filter. The captures at ~/.slaveofai-m3-probe/ carry these shapes on every
   // real run, so leaving them unhandled would make the capture check misreport well-formed
   // assistant output as `unparsable`.
 

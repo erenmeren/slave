@@ -65,7 +65,7 @@ export async function verifyPassword(password: string, stored: string): Promise<
  * when `username` matches no row.
  *
  * Lazy and memoized (CONTROLLER RULING): a module-level `DUMMY_HASH` promise would compute a
- * 600k-iteration derivation the moment anything imports `@ai-team-os/control` -- the daemon, the
+ * 600k-iteration derivation the moment anything imports `@slave-of-ai/control` -- the daemon, the
  * CLI, the web server -- whether or not a login ever happens. Deferring to first call, and
  * memoizing so every subsequent missing-user login reuses the same hash rather than re-deriving,
  * keeps that cost off every import path but still off every request after the first.

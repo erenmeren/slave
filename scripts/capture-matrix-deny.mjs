@@ -20,7 +20,7 @@
 //     `scripts/lib/permissions.sh` and spells the deny;
 //   - the orchestrator DAEMON dispatches, exactly as an operator's would.
 //
-// The ONLY thing this script inserts is a stdout tee: `AITEAMOS_CLAUDE_BIN` points at a two-line
+// The ONLY thing this script inserts is a stdout tee: `SLAVEOFAI_CLAUDE_BIN` points at a two-line
 // bash wrapper that runs the real binary and copies its stdout to disk. The pump persists no raw
 // stream anywhere, so the transcript has to be taken at the source or it does not exist.
 //
@@ -110,7 +110,7 @@ const TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'stopped'])
  *  a real `git worktree` in it. `target.txt` is COMMITTED rather than merely written: the run acts
  *  in a worktree checked out from `baseBranch`, so an uncommitted file would not be there to read. */
 function makeRepo(suffix) {
-  const dir = mkdtempSync(join(tmpdir(), `aiteamos-capture-matrix-deny-${suffix}-`))
+  const dir = mkdtempSync(join(tmpdir(), `slaveofai-capture-matrix-deny-${suffix}-`))
   const git = (args) => execFileSync('git', args, { cwd: dir })
   git(['init', '-q', '-b', 'main'])
   git(['config', 'user.name', 'Capture'])
@@ -303,7 +303,7 @@ try {
     throw new Error(`no orchestrator CLI at ${ORCHESTRATOR_CLI} -- run \`npx tsc --build\` first`)
   }
 
-  const claudeBinName = process.env['AITEAMOS_CLAUDE_BIN'] ?? 'claude'
+  const claudeBinName = process.env['SLAVEOFAI_CLAUDE_BIN'] ?? 'claude'
   const claudeBin = resolveOnPath(claudeBinName)
   if (claudeBin === null) {
     throw new Error(
@@ -318,7 +318,7 @@ try {
   if (claudeBin.includes('gate-fakes')) {
     throw new Error(
       `REFUSED: ${claudeBin} is a gate fake. This script records the REAL CLI; capturing a fake replaying the ` +
-        'hand-authored fixture would reproduce that fixture and call it evidence. Unset AITEAMOS_CLAUDE_BIN.',
+        'hand-authored fixture would reproduce that fixture and call it evidence. Unset SLAVEOFAI_CLAUDE_BIN.',
     )
   }
 
@@ -353,7 +353,7 @@ try {
   // ---- The tee wrapper. Kept OUTSIDE the temp repository on purpose: the `finally` removes the
   // repository (it carries the worktree and the run scratch directory), and the capture is the one
   // thing that must outlive this script.
-  captureDir = mkdtempSync(join(tmpdir(), 'aiteamos-capture-matrix-deny-out-'))
+  captureDir = mkdtempSync(join(tmpdir(), 'slaveofai-capture-matrix-deny-out-'))
   const wrapperPath = join(captureDir, 'claude-tee.sh')
   writeFileSync(
     wrapperPath,
@@ -410,11 +410,11 @@ try {
   console.log(`matrix: deny ${JSON.stringify(DENIED_CAPABILITY)} -> expected vendor tool ${EXPECTED_DENIED_TOOL}`)
 
   // ---- The real daemon, driven exactly as `gate-m12-providers.mjs:493` drives it. The ONLY
-  // override is the stdout tee; `AITEAMOS_CLAUDE_ARGS` is deliberately left untouched, so the
+  // override is the stdout tee; `SLAVEOFAI_CLAUDE_ARGS` is deliberately left untouched, so the
   // adapter builds the same argv a production dispatch builds.
   daemon = spawn('node', [ORCHESTRATOR_CLI, 'daemon', '--workspace', workspaceId, '--period', '500'], {
     cwd: repoRoot,
-    env: { ...process.env, AITEAMOS_CLAUDE_BIN: wrapperPath },
+    env: { ...process.env, SLAVEOFAI_CLAUDE_BIN: wrapperPath },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   daemon.stdout.on('data', (chunk) => {
@@ -500,7 +500,7 @@ try {
     .sort()
   if (rawFiles.length === 0) {
     await fail(
-      `no raw capture was written into ${captureDir} -- the tee wrapper never ran, so AITEAMOS_CLAUDE_BIN did not ` +
+      `no raw capture was written into ${captureDir} -- the tee wrapper never ran, so SLAVEOFAI_CLAUDE_BIN did not ` +
         'reach the adapter (or the CLI wrote nothing at all)',
     )
   }

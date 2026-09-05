@@ -1,4 +1,4 @@
-import { updateQueuedMessage } from '@ai-team-os/control'
+import { updateQueuedMessage } from '@slave-of-ai/control'
 import { runControlResponse } from '../../../../../../../server/controlRoute'
 import { requirePrincipal } from '../../../../../../../server/principal'
 

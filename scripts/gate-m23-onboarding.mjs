@@ -213,7 +213,7 @@ async function stopChild(child) {
  *  of which CLI it spawns (`gate-m8a-merge.mjs`'s `makeRepo`, widened with a real `package.json` --
  *  this gate's workspace is created with `--verify "npm test"`, which actually runs it). */
 function makeRepo() {
-  const dir = mkdtempSync(join(tmpdir(), 'aiteamos-gate-m23-onboarding-'))
+  const dir = mkdtempSync(join(tmpdir(), 'slaveofai-gate-m23-onboarding-'))
   const git = (args) => execFileSync('git', args, { cwd: dir })
   git(['init', '-q', '-b', 'main'])
   git(['config', 'user.name', 'Gate'])
@@ -405,7 +405,7 @@ try {
     })
 
     daemon = spawn('node', [ORCHESTRATOR_CLI, 'daemon', '--workspace', workspaceId, '--period', '500'], {
-      env: { ...process.env, AITEAMOS_CLAUDE_BIN: 'node', AITEAMOS_CLAUDE_ARGS: `${FAKE_CLAUDE} --fixture m8a-flow` },
+      env: { ...process.env, SLAVEOFAI_CLAUDE_BIN: 'node', SLAVEOFAI_CLAUDE_ARGS: `${FAKE_CLAUDE} --fixture m8a-flow` },
       stdio: ['ignore', 'pipe', 'pipe'],
     })
     daemon.stdout.on('data', (chunk) => process.stdout.write(`[daemon] ${chunk}`))
@@ -468,8 +468,8 @@ try {
     )
     assert(!existsSync(worktreePathA), `task A's worktree still exists at ${worktreePathA} after collection`)
 
-    const branchList = execFileSync('git', ['branch', '--list', 'aiteamos/*'], { cwd: repoPath, encoding: 'utf8' })
-    assert(branchList.includes(branchA), `git branch --list aiteamos/* does not name ${branchA}: ${branchList}`)
+    const branchList = execFileSync('git', ['branch', '--list', 'slaveofai/*'], { cwd: repoPath, encoding: 'utf8' })
+    assert(branchList.includes(branchA), `git branch --list slaveofai/* does not name ${branchA}: ${branchList}`)
 
     const runAAfter = await prisma.agentRun.findUniqueOrThrow({ where: { id: runA.id } })
     assert(runAAfter.worktreePath === null, "task A's run still carries a worktreePath after collection")
@@ -602,8 +602,8 @@ try {
 
   accountsServer = await bootNextDev(
     (() => {
-      const env = { ...process.env, AITEAMOS_SESSION_SECRET: accountsSecret }
-      delete env.AITEAMOS_PASSWORD // a stale .env still setting it must not matter
+      const env = { ...process.env, SLAVEOFAI_SESSION_SECRET: accountsSecret }
+      delete env.SLAVEOFAI_PASSWORD // a stale .env still setting it must not matter
       return env
     })(),
     'accounts',
@@ -617,7 +617,7 @@ try {
   assert(loginRes.status === 204, `login: expected 204, got ${loginRes.status}`)
   const setCookie = loginRes.headers.get('set-cookie') ?? ''
   const cookie = setCookie.split(';')[0]
-  assert(cookie.startsWith('aiteamos_session='), `login: unexpected Set-Cookie ${setCookie}`)
+  assert(cookie.startsWith('slaveofai_session='), `login: unexpected Set-Cookie ${setCookie}`)
   console.log('stage 8: logged in, cookie minted')
 
   const goalText = 'gate:m23-onboarding accounts probe -- harmless, this workspace is a throwaway'
@@ -643,7 +643,7 @@ try {
   {
     browser = await chromium.launch({ executablePath: CHROMIUM_PATH, headless: true })
     const context = await browser.newContext()
-    await context.addCookies([{ name: 'aiteamos_session', value: cookie.slice('aiteamos_session='.length), url: accountsServer.baseUrl }])
+    await context.addCookies([{ name: 'slaveofai_session', value: cookie.slice('slaveofai_session='.length), url: accountsServer.baseUrl }])
     const page = await context.newPage()
     page.setDefaultTimeout(ACTION_TIMEOUT_MS)
     await page.goto(`${accountsServer.baseUrl}/w/${workspaceId}/activity`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })

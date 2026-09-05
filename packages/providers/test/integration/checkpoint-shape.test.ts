@@ -1,11 +1,11 @@
-import { prisma } from '@ai-team-os/db/client'
+import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import type { Checkpoint } from '../../src/claude/checkpoint.js'
 
 /**
  * Pins `packages/providers`' `Checkpoint` interface against `packages/db`'s `Checkpoint` Prisma
  * model. The two shapes are deliberately duplicated (see `checkpoint.ts`'s own docstring for why
- * `src` may never import `@ai-team-os/db`) -- what is not acceptable is letting them drift apart
+ * `src` may never import `@slave-of-ai/db`) -- what is not acceptable is letting them drift apart
  * silently. This is the one place in `packages/providers` where a *test* importing `packages/db`
  * is correct rather than a violation of that boundary: it needs a real database to prove the
  * round trip, which is also why it lives in the integration project (`vitest.config.ts`'s
@@ -114,7 +114,7 @@ describe('Checkpoint shape pinning (providers interface <-> db model)', () => {
     const checkpoint: Checkpoint = {
       sessionId: 'session-pin-123',
       worktreePath: '/tmp/worktrees/pin-run-1',
-      pauseFlagPath: '/tmp/worktrees/pin-run-1/.aiteamos-pause',
+      pauseFlagPath: '/tmp/worktrees/pin-run-1/.slaveofai-pause',
       lastToolUseId: 'toolu_01PINABC',
       lastToolName: 'Edit',
       numTurns: 9,
@@ -172,7 +172,7 @@ describe('Checkpoint shape pinning (providers interface <-> db model)', () => {
     const checkpoint: Checkpoint = {
       sessionId: 'session-pin-456',
       worktreePath: '/tmp/worktrees/pin-run-2',
-      pauseFlagPath: '/tmp/worktrees/pin-run-2/.aiteamos-pause',
+      pauseFlagPath: '/tmp/worktrees/pin-run-2/.slaveofai-pause',
       lastToolUseId: null,
       lastToolName: null,
       numTurns: 0,

@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { prisma } from '@ai-team-os/db/client'
+import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import {
   assignCompany,
@@ -13,7 +13,7 @@ import {
 } from '../../src/org.js'
 
 // A real directory (M23 G3): a placeholder repo path fails runFilePaths' statSync preflight.
-const repoPath = mkdtempSync(join(tmpdir(), 'aiteamos-control-departments-'))
+const repoPath = mkdtempSync(join(tmpdir(), 'slaveofai-control-departments-'))
 afterAll(() => rmSync(repoPath, { recursive: true, force: true }))
 
 const UNKNOWN = '00000000-0000-4000-8000-000000000000'

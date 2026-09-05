@@ -40,7 +40,7 @@ describe("signalPause('cursor')", () => {
   const spawned: ChildProcess[] = []
 
   beforeEach(() => {
-    dir = mkdtempSync(path.join(tmpdir(), 'aiteamos-cursor-pause-'))
+    dir = mkdtempSync(path.join(tmpdir(), 'slaveofai-cursor-pause-'))
     pauseFlagPath = path.join(dir, 'pause.flag')
   })
 

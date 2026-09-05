@@ -11,7 +11,7 @@
 // user's cookie.
 //
 // Run A proves the OLD door is unchanged: `scripts/gate-m15-boundary.mjs`, unmodified, as a child
-// process with both `AITEAMOS_SESSION_SECRET` and `AITEAMOS_PASSWORD` deleted from its environment.
+// process with both `SLAVEOFAI_SESSION_SECRET` and `SLAVEOFAI_PASSWORD` deleted from its environment.
 // Run B proves the NEW one: a signing secret this gate invents per run, and a real throwaway user
 // created through `packages/control/dist/users.js` before `next dev` boots and deleted again in
 // `finally` — neither the secret nor the user's password is ever written to `.env`, shell history
@@ -198,8 +198,8 @@ try {
   // ---- run A: loopback mode did not move — the M15 gate, verbatim, with the secret removed -----
   {
     const env = { ...process.env }
-    delete env.AITEAMOS_PASSWORD
-    delete env.AITEAMOS_SESSION_SECRET
+    delete env.SLAVEOFAI_PASSWORD
+    delete env.SLAVEOFAI_SESSION_SECRET
     const child = spawnSync('node', ['scripts/gate-m15-boundary.mjs'], {
       cwd: repoRoot,
       env,
@@ -243,8 +243,8 @@ try {
     {
       cwd: repoRoot,
       env: (() => {
-        const env = { ...process.env, AITEAMOS_SESSION_SECRET: SECRET }
-        delete env.AITEAMOS_PASSWORD // a stale .env still setting it must not matter
+        const env = { ...process.env, SLAVEOFAI_SESSION_SECRET: SECRET }
+        delete env.SLAVEOFAI_PASSWORD // a stale .env still setting it must not matter
         return env
       })(),
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -286,7 +286,7 @@ try {
   console.log(`next dev ready at ${baseUrl}, loopback-bound, accounts mode`)
 
   const url = (path) => `${baseUrl}${path}`
-  const cookieFrom = (setCookie) => setCookie.split(';')[0] // "aiteamos_session=<value>"
+  const cookieFrom = (setCookie) => setCookie.split(';')[0] // "slaveofai_session=<value>"
 
   /** The Location of an unauthenticated page request. Asserted by PARTS, never as one string: the
    *  middleware builds an ABSOLUTE Location on the host the request asked for (a relative one
@@ -396,7 +396,7 @@ try {
     // `<userId>.<expiresAt>.<hex hmac>` (session.ts's mintSession) -- the user id is a Prisma
     // `@default(uuid())`, well inside session.ts's own USER_ID_RE.
     assert(
-      /^aiteamos_session=[A-Za-z0-9-]{1,64}\.\d+\.[0-9a-f]{64}; Path=\/; HttpOnly; SameSite=Lax; Max-Age=2592000$/.test(setCookie),
+      /^slaveofai_session=[A-Za-z0-9-]{1,64}\.\d+\.[0-9a-f]{64}; Path=\/; HttpOnly; SameSite=Lax; Max-Age=2592000$/.test(setCookie),
       `unexpected Set-Cookie: ${setCookie}`,
     )
     cookie = cookieFrom(setCookie)
@@ -513,8 +513,8 @@ try {
     const res = await fetch(url('/api/auth/logout'), { method: 'POST', headers: { cookie } })
     assert(res.status === 204, `logout: expected 204, got ${res.status}`)
     const cleared = res.headers.get('set-cookie') ?? ''
-    assert(/^aiteamos_session=; Path=\/; HttpOnly; SameSite=Lax; Max-Age=0$/.test(cleared), `unexpected clearing cookie: ${cleared}`)
-    const after = await fetch(url('/'), { headers: { cookie: 'aiteamos_session=' }, redirect: 'manual' })
+    assert(/^slaveofai_session=; Path=\/; HttpOnly; SameSite=Lax; Max-Age=0$/.test(cleared), `unexpected clearing cookie: ${cleared}`)
+    const after = await fetch(url('/'), { headers: { cookie: 'slaveofai_session=' }, redirect: 'manual' })
     assert(after.status === 302, `after logout: expected 302, got ${after.status}`)
     assertLoginRedirect(after.headers.get('location'), '/', null, 'after logout')
   }

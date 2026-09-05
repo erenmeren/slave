@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import type { ModelListing, ProviderKind } from '@ai-team-os/control'
+import type { ModelListing, ProviderKind } from '@slave-of-ai/control'
 import { INPUT_SHELL } from './ui/FormControls'
 
 const OTHER = '__other__'

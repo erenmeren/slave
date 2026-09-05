@@ -1,4 +1,4 @@
-import { moveCompanyAgent } from '@ai-team-os/control'
+import { moveCompanyAgent } from '@slave-of-ai/control'
 import { orgControlResponse } from '../../../../../../server/orgControlRoute'
 import { requirePrincipal } from '../../../../../../server/principal'
 

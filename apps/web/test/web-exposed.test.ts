@@ -27,7 +27,7 @@ afterAll(() => {
 /** A stand-in for next's bin: prints its argv as JSON. It must never be reached here — every case
  *  in this file is a refusal, and an empty stdout is how that is proven. */
 function writeStub(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'aiteamos-web-exposed-'))
+  const dir = mkdtempSync(join(tmpdir(), 'slaveofai-web-exposed-'))
   stubDirs.push(dir)
   const path = join(dir, 'fake-next.mjs')
   writeFileSync(path, "process.stdout.write(JSON.stringify(process.argv.slice(2)) + '\\n')\n")
@@ -64,10 +64,10 @@ describe('scripts/web-exposed.mjs (M23 F1)', () => {
     'refuses with exit 2 and runs nothing when the secret is %j',
     async (secret) => {
       const stub = writeStub()
-      const result = await run({ AITEAMOS_SESSION_SECRET: secret, AITEAMOS_NEXT_BIN: stub })
+      const result = await run({ SLAVEOFAI_SESSION_SECRET: secret, SLAVEOFAI_NEXT_BIN: stub })
       expect(result.code).toBe(2)
       expect(result.stderr).toContain('web:exposed refused')
-      expect(result.stderr).toContain('set AITEAMOS_SESSION_SECRET in .env first (openssl rand -hex 32)')
+      expect(result.stderr).toContain('set SLAVEOFAI_SESSION_SECRET in .env first (openssl rand -hex 32)')
       expect(result.stdout).toBe('')
     },
   )
@@ -76,22 +76,22 @@ describe('scripts/web-exposed.mjs (M23 F1)', () => {
     'refuses a secret shorter than 32 characters (%j), naming the length rule',
     async (secret) => {
       const stub = writeStub()
-      const result = await run({ AITEAMOS_SESSION_SECRET: secret, AITEAMOS_NEXT_BIN: stub })
+      const result = await run({ SLAVEOFAI_SESSION_SECRET: secret, SLAVEOFAI_NEXT_BIN: stub })
       expect(result.code).toBe(2)
-      expect(result.stderr).toContain('web:exposed refused: AITEAMOS_SESSION_SECRET is shorter than 32 characters')
+      expect(result.stderr).toContain('web:exposed refused: SLAVEOFAI_SESSION_SECRET is shorter than 32 characters')
       expect(result.stdout).toBe('')
     },
   )
 
   it('never echoes the secret it refused', async () => {
     const stub = writeStub()
-    const result = await run({ AITEAMOS_SESSION_SECRET: 'sh0rt-but-secret', AITEAMOS_NEXT_BIN: stub })
+    const result = await run({ SLAVEOFAI_SESSION_SECRET: 'sh0rt-but-secret', SLAVEOFAI_NEXT_BIN: stub })
     expect(result.stderr).not.toContain('sh0rt-but-secret')
   })
 
   it('does not resurrect password mode: the retired variable opens nothing', async () => {
     const stub = writeStub()
-    const result = await run({ AITEAMOS_SESSION_SECRET: undefined, AITEAMOS_PASSWORD: GOOD_SECRET, AITEAMOS_NEXT_BIN: stub })
+    const result = await run({ SLAVEOFAI_SESSION_SECRET: undefined, SLAVEOFAI_PASSWORD: GOOD_SECRET, SLAVEOFAI_NEXT_BIN: stub })
     expect(result.code).toBe(2)
     expect(result.stdout).toBe('')
   })

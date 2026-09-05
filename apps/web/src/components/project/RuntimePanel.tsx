@@ -2,7 +2,7 @@
 
 import { useRouter } from 'next/navigation'
 import { useState } from 'react'
-import type { ProviderKind } from '@ai-team-os/control'
+import type { ProviderKind } from '@slave-of-ai/control'
 import { formatTimeout } from '../../lib/format'
 import { sendControl } from '../../lib/postControl'
 import { ProviderSelect } from '../ProviderSelect'

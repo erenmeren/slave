@@ -1,5 +1,5 @@
-import { prisma } from '@ai-team-os/db/client'
-import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@ai-team-os/db'
+import { prisma } from '@slave-of-ai/db/client'
+import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@slave-of-ai/db'
 import { foldCommunication, type CommunicationEdge, type FoldEvent } from '../lib/communicationFold'
 
 /** The newest events (workspace-wide, across the four families the fold reads) the graph folds

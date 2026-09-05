@@ -10,6 +10,6 @@
  * The IMPLEMENTATION moved down to `packages/providers/src/runtime/process.ts` in M13 (Decision 6):
  * `packages/control` depends on `packages/providers`, so a vendor-neutral primitive both packages
  * need can only live in the lower one. This file stays so its importers do not move — `pump.ts`,
- * `sweep.ts`, the gate scripts and `emergency.ts` all reach these through `@ai-team-os/control`.
+ * `sweep.ts`, the gate scripts and `emergency.ts` all reach these through `@slave-of-ai/control`.
  */
-export { KILL_GRACE_MS, isAlive, killWithEscalation, signalRun } from '@ai-team-os/providers'
+export { KILL_GRACE_MS, isAlive, killWithEscalation, signalRun } from '@slave-of-ai/providers'

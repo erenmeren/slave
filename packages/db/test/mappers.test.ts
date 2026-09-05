@@ -1,4 +1,4 @@
-import type { AgentId } from '@ai-team-os/domain'
+import type { AgentId } from '@slave-of-ai/domain'
 import { describe, expect, it } from 'vitest'
 import type { AgentRunRow, ExecutionEventRow, TaskRow } from '../src/client.js'
 import { toExecutionEvent, toRunState, toTaskState } from '../src/mappers.js'

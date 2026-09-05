@@ -9,6 +9,6 @@ longer contains one, so there is nothing here that can drift out of sync with it
 
 ## Re-running
 
-    export SPIKE_REPO="$HOME/.aiteamos-spike/sample-repo"
+    export SPIKE_REPO="$HOME/.slaveofai-spike/sample-repo"
 
 Then follow the tasks in `docs/superpowers/plans/2026-08-17-m0-m1-foundation.md`, Part 1.

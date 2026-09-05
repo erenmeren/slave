@@ -1,6 +1,6 @@
-import { prisma } from '@ai-team-os/db/client'
-import { requestResume } from '@ai-team-os/control'
-import { appendEvent } from '@ai-team-os/events'
+import { prisma } from '@slave-of-ai/db/client'
+import { requestResume } from '@slave-of-ai/control'
+import { appendEvent } from '@slave-of-ai/events'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { buildOverviewSnapshot } from '../../src/server/overview.js'
 
@@ -346,12 +346,12 @@ describe('buildOverviewSnapshot', () => {
       data: {
         runId: run.id,
         sessionId: 'session-123',
-        worktreePath: '/tmp/overview-fixture/.aiteamos/worktrees/T-abcdef12',
-        pauseFlagPath: '/tmp/overview-fixture/.aiteamos/runs/pause.flag',
-        settingsPath: '/tmp/overview-fixture/.aiteamos/runs/settings.json',
+        worktreePath: '/tmp/overview-fixture/.slaveofai/worktrees/T-abcdef12',
+        pauseFlagPath: '/tmp/overview-fixture/.slaveofai/runs/pause.flag',
+        settingsPath: '/tmp/overview-fixture/.slaveofai/runs/settings.json',
         hookPath: '/tmp/overview-fixture/scripts/pause-gate.sh',
         gitAuthorName: 'Alex',
-        gitAuthorEmail: 'alex@aiteamos.local',
+        gitAuthorEmail: 'alex@slaveofai.local',
         headCommit: 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678',
       },
     })

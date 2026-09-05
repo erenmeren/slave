@@ -1,4 +1,4 @@
-import { createTemplate, type ProviderKind } from '@ai-team-os/control'
+import { createTemplate, type ProviderKind } from '@slave-of-ai/control'
 import { orgControlResponse } from '../../../../server/orgControlRoute'
 import { requirePrincipal } from '../../../../server/principal'
 

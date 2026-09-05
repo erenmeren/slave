@@ -3,8 +3,8 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
-import { prisma } from '@ai-team-os/db/client'
-import { appendEvent } from '@ai-team-os/events'
+import { prisma } from '@slave-of-ai/db/client'
+import { appendEvent } from '@slave-of-ai/events'
 import { collectTaskWorktree, terminalTimestamp } from '../../src/collect.js'
 import { refusalText } from '../../src/refusal.js'
 
@@ -12,17 +12,17 @@ function run(command: string, args: readonly string[], cwd: string): string {
   return execFileSync(command, [...args], { cwd, encoding: 'utf8' }).trim()
 }
 
-const BRANCH = 'aiteamos/T-abc-x'
+const BRANCH = 'slaveofai/T-abc-x'
 
 /**
- * A real repository with `.aiteamos/.gitignore` already in place (mirrors `ensureIgnored` in
+ * A real repository with `.slaveofai/.gitignore` already in place (mirrors `ensureIgnored` in
  * `apps/orchestrator/src/worktree.ts`, which this package does not depend on) and one real
  * worktree on its own branch -- exactly the shape `provisionWorktree` leaves behind, built
  * directly with git so this suite proves `collectTaskWorktree` against the real thing rather than
  * a mock asserting its own script.
  */
 function makeRepo(): { repoPath: string; worktreePath: string } {
-  const repoPath = mkdtempSync(join(tmpdir(), 'aiteamos-collect-'))
+  const repoPath = mkdtempSync(join(tmpdir(), 'slaveofai-collect-'))
   run('git', ['init', '-q', '-b', 'main'], repoPath)
   run('git', ['config', 'user.name', 'Fixture'], repoPath)
   run('git', ['config', 'user.email', 'fixture@example.com'], repoPath)
@@ -30,11 +30,11 @@ function makeRepo(): { repoPath: string; worktreePath: string } {
   run('git', ['add', '-A'], repoPath)
   run('git', ['commit', '-q', '-m', 'initial'], repoPath)
 
-  const aiteamosRoot = join(repoPath, '.aiteamos')
-  mkdirSync(aiteamosRoot, { recursive: true })
-  writeFileSync(join(aiteamosRoot, '.gitignore'), '*\n')
+  const slaveofaiRoot = join(repoPath, '.slaveofai')
+  mkdirSync(slaveofaiRoot, { recursive: true })
+  writeFileSync(join(slaveofaiRoot, '.gitignore'), '*\n')
 
-  const worktreePath = join(aiteamosRoot, 'worktrees', 'T-abc')
+  const worktreePath = join(slaveofaiRoot, 'worktrees', 'T-abc')
   run('git', ['worktree', 'add', '-b', BRANCH, worktreePath], repoPath)
 
   return { repoPath, worktreePath }
@@ -229,7 +229,7 @@ describe('collectTaskWorktree', () => {
   // not this test's contract to pin.
   it('a git failure refuses worktree_remove_failed, leaving the row and the log untouched', async (): Promise<void> => {
     const fixture = await seed()
-    const strayDir = mkdtempSync(join(tmpdir(), 'aiteamos-collect-stray-'))
+    const strayDir = mkdtempSync(join(tmpdir(), 'slaveofai-collect-stray-'))
     await prisma.agentRun.update({ where: { id: fixture.runId }, data: { worktreePath: strayDir } })
 
     try {

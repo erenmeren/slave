@@ -1,4 +1,4 @@
-import { Prisma, prisma } from '@ai-team-os/db/client'
+import { Prisma, prisma } from '@slave-of-ai/db/client'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { skillCallTotals } from '../../src/server/skills.js'
 

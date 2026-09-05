@@ -1,4 +1,4 @@
-import { capabilitiesOf, type ProviderCapabilities, type ProviderKind } from '@ai-team-os/providers'
+import { capabilitiesOf, type ProviderCapabilities, type ProviderKind } from '@slave-of-ai/providers'
 import type { ControlRefusal } from './refusal.js'
 
 /**

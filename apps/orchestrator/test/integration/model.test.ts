@@ -10,10 +10,10 @@ import {
   createCompany,
   createTemplate,
   setAgentModel,
-} from '@ai-team-os/control'
-import { prisma } from '@ai-team-os/db/client'
-import { workspaceId as brandWorkspaceId } from '@ai-team-os/domain'
-import { ClaudeCodeAdapter, type AdapterRegistry, type AgentRuntimeAdapter, type StartRunInput } from '@ai-team-os/providers'
+} from '@slave-of-ai/control'
+import { prisma } from '@slave-of-ai/db/client'
+import { workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
+import { ClaudeCodeAdapter, type AdapterRegistry, type AgentRuntimeAdapter, type StartRunInput } from '@slave-of-ai/providers'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { drainPumps, tick, type TickDeps } from '../../src/tick.js'
 
@@ -35,7 +35,7 @@ function git(args: readonly string[], cwd: string): string {
 
 /** A real repository, matching `tick.test.ts`'s own fixture -- `provisionWorktree` uses real git. */
 function makeRepo(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'aiteamos-model-'))
+  const dir = mkdtempSync(join(tmpdir(), 'slaveofai-model-'))
   git(['init', '-q', '-b', 'main'], dir)
   git(['config', 'user.name', 'Fixture'], dir)
   git(['config', 'user.email', 'fixture@example.com'], dir)

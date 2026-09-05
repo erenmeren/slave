@@ -1,5 +1,5 @@
-import { prisma } from '@ai-team-os/db/client'
-import type { ExecutionEvent } from '@ai-team-os/domain'
+import { prisma } from '@slave-of-ai/db/client'
+import type { ExecutionEvent } from '@slave-of-ai/domain'
 import { Client } from 'pg'
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { appendEvent } from '../../src/append.js'
@@ -113,7 +113,7 @@ describe('createEventStream', () => {
 
     // Written directly, bypassing appendEvent — so no NOTIFY is ever issued for this row.
     await prisma.executionEvent.create({
-      data: { type: 'task_done', workspaceId: 'w1', actor: 'system', payload: { branch: 'aiteamos/x' } },
+      data: { type: 'task_done', workspaceId: 'w1', actor: 'system', payload: { branch: 'slaveofai/x' } },
     })
 
     await expect.poll(() => seen.length, { timeout: 5000, interval: 100 }).toBeGreaterThan(0)
@@ -144,7 +144,7 @@ describe('createEventStream teardown', () => {
     // Written directly, bypassing appendEvent — no NOTIFY, so only a live poll could ever surface
     // this row. If the poll is still running after close(), it will.
     await prisma.executionEvent.create({
-      data: { type: 'task_done', workspaceId: 'w1', actor: 'system', payload: { branch: 'aiteamos/x' } },
+      data: { type: 'task_done', workspaceId: 'w1', actor: 'system', payload: { branch: 'slaveofai/x' } },
     })
 
     await wait(350) // > 2 poll intervals past close()

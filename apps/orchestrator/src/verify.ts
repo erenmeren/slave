@@ -1,8 +1,8 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { prisma } from '@ai-team-os/db/client'
-import { runId as brandRunId, taskId as brandTaskId, type RunId, type TaskId } from '@ai-team-os/domain'
-import { appendEvent } from '@ai-team-os/events'
+import { prisma } from '@slave-of-ai/db/client'
+import { runId as brandRunId, taskId as brandTaskId, type RunId, type TaskId } from '@slave-of-ai/domain'
+import { appendEvent } from '@slave-of-ai/events'
 import { concludePlanning } from './planning.js'
 import { concludeReview } from './review.js'
 import { describeOutcome, runShellCommand } from './shell.js'
@@ -225,7 +225,7 @@ export async function verifyConcludedRun(runId: RunId): Promise<void> {
     worktreePath: run.worktreePath,
     // Outside the worktree — that is what the agent commits from — and per task, the same layout
     // verify's own tests pin.
-    artifactDir: join(task.workspace.repoPath, '.aiteamos', 'artifacts', task.id),
+    artifactDir: join(task.workspace.repoPath, '.slaveofai', 'artifacts', task.id),
     commands: task.workspace.verifyCommands,
     // Spec §8 reuses the run's ceiling: the same operator's answer to the same question.
     timeoutMs: task.workspace.runTimeoutMs,

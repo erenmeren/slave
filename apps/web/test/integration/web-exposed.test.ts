@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { prisma } from '@ai-team-os/db/client'
+import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 
 /**
@@ -32,7 +32,7 @@ afterAll(async (): Promise<void> => {
  *  SIGTERM when STUB_WAIT=1 (exiting 0 on it), or STUB_SELF_KILL=1 kills itself with SIGKILL
  *  right after printing. The real next must never start on 0.0.0.0 here. */
 function writeStub(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'aiteamos-web-exposed-db-'))
+  const dir = mkdtempSync(join(tmpdir(), 'slaveofai-web-exposed-db-'))
   stubDirs.push(dir)
   const path = join(dir, 'fake-next.mjs')
   writeFileSync(
@@ -93,7 +93,7 @@ describe('scripts/web-exposed.mjs against the database (M23 F1)', () => {
 
   it('refuses with exit 2 when nobody has an account yet, and names the command that makes one', async () => {
     const stub = writeStub()
-    const result = await run({ AITEAMOS_SESSION_SECRET: SECRET, AITEAMOS_NEXT_BIN: stub })
+    const result = await run({ SLAVEOFAI_SESSION_SECRET: SECRET, SLAVEOFAI_NEXT_BIN: stub })
     expect(result.code).toBe(2)
     expect(result.stderr).toContain('web:exposed refused: no users yet: create one with npm run orchestrator -- create-user --name <you>')
     expect(result.stdout).toBe('')
@@ -102,7 +102,7 @@ describe('scripts/web-exposed.mjs against the database (M23 F1)', () => {
   it('passes exactly `dev apps/web -H 0.0.0.0` to the binary and forwards its exit code', async () => {
     await seedUser()
     const stub = writeStub()
-    const result = await run({ AITEAMOS_SESSION_SECRET: SECRET, AITEAMOS_NEXT_BIN: stub, STUB_EXIT: '7' })
+    const result = await run({ SLAVEOFAI_SESSION_SECRET: SECRET, SLAVEOFAI_NEXT_BIN: stub, STUB_EXIT: '7' })
     expect(JSON.parse(result.stdout.trim())).toEqual(['dev', 'apps/web', '-H', '0.0.0.0'])
     expect(result.code).toBe(7)
   })
@@ -110,7 +110,7 @@ describe('scripts/web-exposed.mjs against the database (M23 F1)', () => {
   it('forwards SIGTERM to the child and exits with its code', async () => {
     await seedUser()
     const stub = writeStub()
-    const result = await run({ AITEAMOS_SESSION_SECRET: SECRET, AITEAMOS_NEXT_BIN: stub, STUB_WAIT: '1' }, (child) =>
+    const result = await run({ SLAVEOFAI_SESSION_SECRET: SECRET, SLAVEOFAI_NEXT_BIN: stub, STUB_WAIT: '1' }, (child) =>
       child.kill('SIGTERM'),
     )
     expect(JSON.parse(result.stdout.trim())).toEqual(['dev', 'apps/web', '-H', '0.0.0.0'])
@@ -120,7 +120,7 @@ describe('scripts/web-exposed.mjs against the database (M23 F1)', () => {
   it('maps a signal death to 128 + the signal number (SIGKILL → 137)', async () => {
     await seedUser()
     const stub = writeStub()
-    const result = await run({ AITEAMOS_SESSION_SECRET: SECRET, AITEAMOS_NEXT_BIN: stub, STUB_SELF_KILL: '1' })
+    const result = await run({ SLAVEOFAI_SESSION_SECRET: SECRET, SLAVEOFAI_NEXT_BIN: stub, STUB_SELF_KILL: '1' })
     expect(JSON.parse(result.stdout.trim())).toEqual(['dev', 'apps/web', '-H', '0.0.0.0'])
     expect(result.code).toBe(137)
   })
@@ -129,8 +129,8 @@ describe('scripts/web-exposed.mjs against the database (M23 F1)', () => {
     await seedUser()
     const stub = writeStub()
     const result = await run({
-      AITEAMOS_SESSION_SECRET: SECRET,
-      AITEAMOS_NEXT_BIN: stub,
+      SLAVEOFAI_SESSION_SECRET: SECRET,
+      SLAVEOFAI_NEXT_BIN: stub,
       DATABASE_URL: 'postgresql://nobody:nobody@127.0.0.1:1/none',
     })
     expect(result.code).toBe(2)

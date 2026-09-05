@@ -1,5 +1,5 @@
 {
-  "name": "@ai-team-os/web",
+  "name": "@slave-of-ai/web",
   "private": true,
   "type": "module",
   "scripts": {
@@ -8,10 +8,10 @@
     "start": "next start"
   },
   "dependencies": {
-    "@ai-team-os/control": "*",
-    "@ai-team-os/db": "*",
-    "@ai-team-os/domain": "*",
-    "@ai-team-os/events": "*",
+    "@slave-of-ai/control": "*",
+    "@slave-of-ai/db": "*",
+    "@slave-of-ai/domain": "*",
+    "@slave-of-ai/events": "*",
     "@tanstack/react-virtual": "^3.14.10",
     "elkjs": "^0.11.1",
     "next": "^15.4.0",

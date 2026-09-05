@@ -9,7 +9,7 @@ const dirs: string[] = []
 afterAll(() => { for (const dir of dirs) rmSync(dir, { recursive: true, force: true }) })
 
 function repo(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'aiteamos-git-probe-'))
+  const dir = mkdtempSync(join(tmpdir(), 'slaveofai-git-probe-'))
   dirs.push(dir)
   execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: dir })
   execFileSync('git', ['-c', 'user.name=f', '-c', 'user.email=f@x', 'commit', '-q', '--allow-empty', '-m', 'init'], { cwd: dir })
@@ -24,7 +24,7 @@ describe('realGitProbe', () => {
     expect(await realGitProbe.branchExists(dir, 'develop')).toBe(false)
   })
   it('a plain directory is not a repository', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'aiteamos-git-probe-plain-'))
+    const dir = mkdtempSync(join(tmpdir(), 'slaveofai-git-probe-plain-'))
     dirs.push(dir)
     writeFileSync(join(dir, 'x'), '')
     expect(await realGitProbe.isRepository(dir)).toBe(false)

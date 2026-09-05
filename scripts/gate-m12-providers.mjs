@@ -132,7 +132,7 @@ const REQUIRED_LIFECYCLE = ['run.started', 'run.paused', 'run.resumed']
  *  against the GIT ROOT of the workspace, so a plain subdirectory of some other repository would
  *  silently disarm the gate). */
 function makeRepo(suffix) {
-  const dir = mkdtempSync(join(tmpdir(), `aiteamos-gate-m12-${suffix}-`))
+  const dir = mkdtempSync(join(tmpdir(), `slaveofai-gate-m12-${suffix}-`))
   const git = (args) => execFileSync('git', args, { cwd: dir })
   git(['init', '-q', '-b', 'main'])
   git(['config', 'user.name', 'Gate'])
@@ -152,7 +152,7 @@ function makeRepo(suffix) {
  * and one paid Claude run into an execution that could never have passed.
  */
 function resolveOnPath(name) {
-  // An override that already names a path (`AITEAMOS_CURSOR_BIN=/opt/cursor/bin/cursor-agent`) is
+  // An override that already names a path (`SLAVEOFAI_CURSOR_BIN=/opt/cursor/bin/cursor-agent`) is
   // checked where it points, not searched for on PATH -- `spawn` treats it that way too, so this
   // check has to agree with the thing it is checking for.
   if (name.includes('/')) {
@@ -319,21 +319,21 @@ try {
     throw new Error('DATABASE_URL is not set -- run this gate through `npm run gate:m12-providers`, which passes --env-file=.env')
   }
 
-  const claudeBinName = process.env['AITEAMOS_CLAUDE_BIN'] ?? 'claude'
-  const cursorBinName = process.env['AITEAMOS_CURSOR_BIN'] ?? 'cursor-agent'
+  const claudeBinName = process.env['SLAVEOFAI_CLAUDE_BIN'] ?? 'claude'
+  const cursorBinName = process.env['SLAVEOFAI_CURSOR_BIN'] ?? 'cursor-agent'
   const claudeBin = resolveOnPath(claudeBinName)
   const cursorBin = resolveOnPath(cursorBinName)
   if (claudeBin === null) {
     throw new Error(
       `no executable ${JSON.stringify(claudeBinName)} on PATH. This gate drives the REAL Claude Code CLI; ` +
-        'there is no fixture mode and no skip. Install it, or point AITEAMOS_CLAUDE_BIN at it.',
+        'there is no fixture mode and no skip. Install it, or point SLAVEOFAI_CLAUDE_BIN at it.',
     )
   }
   if (cursorBin === null) {
     throw new Error(
       `no executable ${JSON.stringify(cursorBinName)} on PATH. This gate drives the REAL Cursor CLI; ` +
         'there is no fixture mode and no skip. Install it (it lives under ~/.local/bin on a default ' +
-        'install), or point AITEAMOS_CURSOR_BIN at it.',
+        'install), or point SLAVEOFAI_CURSOR_BIN at it.',
     )
   }
   console.log(`claude:       ${claudeBin}`)
@@ -488,7 +488,7 @@ try {
   console.log(`workers: ${CLAUDE_WORKER}=${claudeAgent.id} (claude_code/${CLAUDE_MODEL}), ${CURSOR_WORKER}=${cursorAgent.id} (cursor/${CURSOR_MODEL})`)
 
   // The real daemon, in the background -- the same thing an operator leaves running. No
-  // `AITEAMOS_*_BIN` overrides: both adapters resolve the real vendor binaries the preflight
+  // `SLAVEOFAI_*_BIN` overrides: both adapters resolve the real vendor binaries the preflight
   // above just proved are on PATH.
   daemon = spawn('node', [ORCHESTRATOR_CLI, 'daemon', '--workspace', workspace.id, '--period', '500'], {
     cwd: repoRoot,
@@ -894,7 +894,7 @@ try {
       await prisma.workspace.delete({ where: { id: workspaceId } }).catch(() => {})
     }
   }
-  // The repositories carry the run worktrees, the `.aiteamos` run directories and the git exclude
+  // The repositories carry the run worktrees, the `.slaveofai` run directories and the git exclude
   // file the Cursor adapter appended to -- all of it inside these two trees, so nothing this gate
   // wrote outlives them.
   if (unbudgetedRepo !== null) rmSync(unbudgetedRepo, { recursive: true, force: true })

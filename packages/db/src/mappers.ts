@@ -9,7 +9,7 @@ import {
   type Result,
   type RunState,
   type TaskState,
-} from '@ai-team-os/domain'
+} from '@slave-of-ai/domain'
 import type { AgentRunRow, ExecutionEventRow, TaskRow } from './client.js'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE } from './enums.js'
 

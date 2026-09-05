@@ -46,7 +46,7 @@ export interface Checkpoint {
   /** `resume()` must spawn with cwd set to this, the run's original worktree directory. */
   readonly worktreePath: string
   /**
-   * The run's unique `AITEAMOS_PAUSE_FLAG` path. `resume()` must clear it and verify it is
+   * The run's unique `SLAVEOFAI_PAUSE_FLAG` path. `resume()` must clear it and verify it is
    * absent before spawning, or the hook denies every tool call the resumed run attempts.
    */
   readonly pauseFlagPath: string

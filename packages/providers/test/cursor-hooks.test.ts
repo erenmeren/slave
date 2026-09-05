@@ -5,7 +5,7 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { buildCursorHooks, cursorHooksPath, writeCursorHooksFile } from '../src/cursor/hooks.js'
 
-const GATE = '/opt/aiteamos/cursor-shell-gate.sh'
+const GATE = '/opt/slaveofai/cursor-shell-gate.sh'
 
 function git(cwd: string, args: readonly string[]): string {
   return execFileSync('git', [...args], {
@@ -26,7 +26,7 @@ describe('writeCursorHooksFile', () => {
   let repo: string
 
   beforeEach(() => {
-    root = mkdtempSync(path.join(tmpdir(), 'aiteamos-cursor-hooks-'))
+    root = mkdtempSync(path.join(tmpdir(), 'slaveofai-cursor-hooks-'))
     // A REAL repository and a REAL linked worktree, not a hand-made `.git` directory: the whole
     // point of the gitdir handling below is that `git worktree add` produces a `.git` FILE, and a
     // fixture that fakes that would be testing my own assumption rather than git's behaviour.

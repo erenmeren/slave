@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import type { AgentStatus } from '@ai-team-os/domain'
+import type { AgentStatus } from '@slave-of-ai/domain'
 import type { AllAgentsPage, ProjectTeamRow, RosterCompany } from '../server/org'
 import type { AgentCardData, OverviewSnapshot } from '../server/overview'
 import type { StatusTone } from './ui/StatusPill'

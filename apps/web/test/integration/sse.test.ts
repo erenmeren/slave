@@ -1,5 +1,5 @@
-import { prisma } from '@ai-team-os/db/client'
-import { appendEvent } from '@ai-team-os/events'
+import { prisma } from '@slave-of-ai/db/client'
+import { appendEvent } from '@slave-of-ai/events'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { createEventSse } from '../../src/server/sse.js'
 

@@ -1,7 +1,7 @@
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { prisma } from '@ai-team-os/db/client'
+import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { POST as addDependencyPOST } from '../../src/app/api/w/[workspaceId]/tasks/[taskId]/dependencies/route.js'
 import { DELETE as removeDependencyDELETE } from '../../src/app/api/w/[workspaceId]/tasks/[taskId]/dependencies/[dependsOnTaskId]/route.js'
@@ -15,12 +15,12 @@ interface Fixture {
 }
 
 async function seed(): Promise<Fixture> {
-  const repoPath = mkdtempSync(join(tmpdir(), 'aiteamos-web-dependency-'))
+  const repoPath = mkdtempSync(join(tmpdir(), 'slaveofai-web-dependency-'))
   const workspace = await prisma.workspace.create({
     data: { name: 'Checkout Platform', repoPath, verifyCommands: ['npm test'], setupCommands: ['npm ci'] },
   })
   const otherWorkspace = await prisma.workspace.create({
-    data: { name: 'Other', repoPath: mkdtempSync(join(tmpdir(), 'aiteamos-web-dependency-other-')), verifyCommands: ['npm test'], setupCommands: [] },
+    data: { name: 'Other', repoPath: mkdtempSync(join(tmpdir(), 'slaveofai-web-dependency-other-')), verifyCommands: ['npm test'], setupCommands: [] },
   })
   const task = await prisma.task.create({
     data: { workspaceId: workspace.id, title: 'Add checkout retry', description: 'Retry failed payments', maxAttempts: workspace.maxAttempts },

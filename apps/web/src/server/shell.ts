@@ -1,6 +1,6 @@
-import { toRunState } from '@ai-team-os/db'
-import { prisma } from '@ai-team-os/db/client'
-import { deriveAgentStatus, NON_TERMINAL_RUN_STATUSES, type SpendGroup } from '@ai-team-os/domain'
+import { toRunState } from '@slave-of-ai/db'
+import { prisma } from '@slave-of-ai/db/client'
+import { deriveAgentStatus, NON_TERMINAL_RUN_STATUSES, type SpendGroup } from '@slave-of-ai/domain'
 import { spendOfGroups } from './org'
 
 /**

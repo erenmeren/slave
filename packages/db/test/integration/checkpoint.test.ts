@@ -46,7 +46,7 @@ describe('Checkpoint', () => {
         runId,
         sessionId: 'session-123',
         worktreePath: '/tmp/worktrees/run-1',
-        pauseFlagPath: '/tmp/worktrees/run-1/.aiteamos-pause',
+        pauseFlagPath: '/tmp/worktrees/run-1/.slaveofai-pause',
         lastToolUseId: 'toolu_01ABC',
         lastToolName: 'Edit',
         numTurns: 7,
@@ -79,7 +79,7 @@ describe('Checkpoint', () => {
     expect(found.runId).toBe(runId)
     expect(found.sessionId).toBe('session-123')
     expect(found.worktreePath).toBe('/tmp/worktrees/run-1')
-    expect(found.pauseFlagPath).toBe('/tmp/worktrees/run-1/.aiteamos-pause')
+    expect(found.pauseFlagPath).toBe('/tmp/worktrees/run-1/.slaveofai-pause')
     expect(found.lastToolUseId).toBe('toolu_01ABC')
     expect(found.lastToolName).toBe('Edit')
     expect(found.numTurns).toBe(7)
@@ -105,7 +105,7 @@ describe('Checkpoint', () => {
         runId,
         sessionId: 'session-456',
         worktreePath: '/tmp/worktrees/run-2',
-        pauseFlagPath: '/tmp/worktrees/run-2/.aiteamos-pause',
+        pauseFlagPath: '/tmp/worktrees/run-2/.slaveofai-pause',
         deniedToolUseIds: [],
         headCommit: 'deadbeef',
         dirtyFiles: [],
@@ -132,7 +132,7 @@ describe('Checkpoint', () => {
         runId,
         sessionId: 'session-789',
         worktreePath: '/tmp/worktrees/run-3',
-        pauseFlagPath: '/tmp/worktrees/run-3/.aiteamos-pause',
+        pauseFlagPath: '/tmp/worktrees/run-3/.slaveofai-pause',
         deniedToolUseIds: [],
         headCommit: 'cafef00d',
         dirtyFiles: [],

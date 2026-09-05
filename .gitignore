@@ -1,7 +1,7 @@
 node_modules/
 dist/
 *.tsbuildinfo
-.aiteamos/
+.slaveofai/
 .env
 packages/db/src/generated/
 apps/web/.next/

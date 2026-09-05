@@ -1,6 +1,6 @@
-import { prisma } from '@ai-team-os/db/client'
-import { TERMINAL } from '@ai-team-os/domain'
-import { collectTaskWorktree, refusalText, terminalTimestamp } from '@ai-team-os/control'
+import { prisma } from '@slave-of-ai/db/client'
+import { TERMINAL } from '@slave-of-ai/domain'
+import { collectTaskWorktree, refusalText, terminalTimestamp } from '@slave-of-ai/control'
 
 export interface CollectDeps { readonly workspaceId: string; readonly now: () => Date; readonly ttlMs: number }
 export interface CollectReport { readonly collected: readonly { readonly taskId: string; readonly path: string }[]; readonly skipped: number }

@@ -1,5 +1,5 @@
 import { cookies } from 'next/headers'
-import { prisma } from '@ai-team-os/db/client'
+import { prisma } from '@slave-of-ai/db/client'
 import { sessionSecret } from '../lib/authEnv'
 import { SESSION_COOKIE, verifySession } from '../lib/session'
 

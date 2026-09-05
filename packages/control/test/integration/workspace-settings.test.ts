@@ -2,13 +2,13 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
-import { prisma } from '@ai-team-os/db/client'
+import { prisma } from '@slave-of-ai/db/client'
 import { refusalText } from '../../src/refusal.js'
 import { setWorkspaceBudget, setWorkspaceProvider } from '../../src/workspace.js'
 import { workspaceDefaultProvider } from '../../src/runtime.js'
 
 // A real directory, not a placeholder (M23 G3): runFilePaths' statSync preflight refuses a repo path that does not exist, and a reboot clears /tmp -- the trap emergency.test.ts fell into at ce48adc.
-const repoPath = mkdtempSync(join(tmpdir(), 'aiteamos-control-workspace-settings-'))
+const repoPath = mkdtempSync(join(tmpdir(), 'slaveofai-control-workspace-settings-'))
 
 afterAll(() => rmSync(repoPath, { recursive: true, force: true }))
 

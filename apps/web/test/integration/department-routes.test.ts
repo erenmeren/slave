@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { prisma } from '@ai-team-os/db/client'
+import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { POST as createTeam } from '../../src/app/api/w/[workspaceId]/teams/route.js'
 import { PUT as moveAgentRoute } from '../../src/app/api/agents/[agentId]/team/route.js'
@@ -9,7 +9,7 @@ import { PUT as moveCompanyAgentRoute } from '../../src/app/api/org/agents/[comp
 import { PUT as renameTemplate } from '../../src/app/api/org/teams/[companyTeamId]/name/route.js'
 import { DELETE as deleteTemplate } from '../../src/app/api/org/teams/[companyTeamId]/route.js'
 
-const repoPath = mkdtempSync(join(tmpdir(), 'aiteamos-web-department-routes-'))
+const repoPath = mkdtempSync(join(tmpdir(), 'slaveofai-web-department-routes-'))
 afterAll(async () => {
   rmSync(repoPath, { recursive: true, force: true })
   await prisma.$disconnect()

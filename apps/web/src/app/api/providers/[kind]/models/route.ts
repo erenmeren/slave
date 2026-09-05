@@ -1,4 +1,4 @@
-import { isProviderKind } from '@ai-team-os/control'
+import { isProviderKind } from '@slave-of-ai/control'
 import { listModelsFor } from '../../../../../server/models'
 import { requirePrincipal } from '../../../../../server/principal'
 

@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { PERMISSION_TOOLS, capabilitiesOf, type ProviderKind } from '@ai-team-os/control'
-import { prisma } from '@ai-team-os/db/client'
+import { PERMISSION_TOOLS, capabilitiesOf, type ProviderKind } from '@slave-of-ai/control'
+import { prisma } from '@slave-of-ai/db/client'
 
 const run = promisify(execFile)
 
@@ -43,11 +43,11 @@ const LATER: ReadonlyArray<{ kind: string; label: string; adapter: string }> = [
  * must not hang the Settings page, and it never throws into the page: a missing binary is a fact
  * to render, not a 500.
  *
- * Honours the same `AITEAMOS_*_BIN` overrides `apps/orchestrator/src/cli.ts` does, so a fake-CLI
+ * Honours the same `SLAVEOFAI_*_BIN` overrides `apps/orchestrator/src/cli.ts` does, so a fake-CLI
  * gate run sees the fakes rather than whatever happens to be installed on the gate machine.
  */
 export async function versionOf(bin: string): Promise<string | null> {
-  const override = bin === 'claude' ? process.env['AITEAMOS_CLAUDE_BIN'] : process.env['AITEAMOS_CURSOR_BIN']
+  const override = bin === 'claude' ? process.env['SLAVEOFAI_CLAUDE_BIN'] : process.env['SLAVEOFAI_CURSOR_BIN']
   try {
     const { stdout } = await run(override !== undefined && override !== '' ? override : bin, ['--version'], {
       timeout: 10_000,

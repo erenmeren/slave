@@ -126,7 +126,7 @@ describe('parseExecutionEvent', () => {
     }
     const cases = [
       { type: 'task.verifying', payload: { commandCount: 2 } },
-      { type: 'task.verify_passed', payload: { branch: 'aiteamos/TASK-001-x' } },
+      { type: 'task.verify_passed', payload: { branch: 'slaveofai/TASK-001-x' } },
       { type: 'task.verify_failed', payload: { command: 'npm test', exitCode: 1 } },
       { type: 'task.failed', payload: { reason: 'attempt cap reached' } },
       { type: 'run.output', payload: { text: 'hello' } },

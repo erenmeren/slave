@@ -6,7 +6,7 @@ import { signalPause } from '../src/pause-signal.js'
 
 describe('signalPause', () => {
   it('writes the reason to the pause flag path for claude_code, byte-identical to the pre-M12 direct write', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'aiteamos-signal-pause-'))
+    const dir = mkdtempSync(join(tmpdir(), 'slaveofai-signal-pause-'))
     const pauseFlagPath = join(dir, 'pause.flag')
 
     await signalPause('claude_code', { pauseFlagPath, pid: 4242 }, 'meren')
@@ -15,7 +15,7 @@ describe('signalPause', () => {
   })
 
   it('requires no adapter instance, constructor options, or prior registration -- any process can call it', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'aiteamos-signal-pause-'))
+    const dir = mkdtempSync(join(tmpdir(), 'slaveofai-signal-pause-'))
     const pauseFlagPath = join(dir, 'pause.flag')
 
     // A `pid` unrelated to any real process, and no `AgentRuntimeAdapter` in sight -- proof this

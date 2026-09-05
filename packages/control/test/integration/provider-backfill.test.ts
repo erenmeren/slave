@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { prisma } from '@ai-team-os/db/client'
+import { prisma } from '@slave-of-ai/db/client'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { workspaceDefaultProvider } from '../../src/runtime.js'
 

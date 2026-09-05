@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { admitRun, refusalText } from '@ai-team-os/control'
-import { capabilitiesOf } from '@ai-team-os/providers'
+import { admitRun, refusalText } from '@slave-of-ai/control'
+import { capabilitiesOf } from '@slave-of-ai/providers'
 
 /**
  * Spec Decision 7 as a pure function (M12 Task 9). A workspace with a `budgetUsd` will not accept

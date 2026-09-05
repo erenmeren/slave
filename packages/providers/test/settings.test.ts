@@ -28,7 +28,7 @@ describe('writeSettingsFile', () => {
   let dir: string
 
   beforeEach(() => {
-    dir = mkdtempSync(path.join(tmpdir(), 'aiteamos-settings-'))
+    dir = mkdtempSync(path.join(tmpdir(), 'slaveofai-settings-'))
   })
 
   afterEach(() => {

@@ -1,4 +1,4 @@
-import { emergencyStop } from '@ai-team-os/control'
+import { emergencyStop } from '@slave-of-ai/control'
 import { workspaceControlResponse } from '../../../../../server/workspaceControlRoute'
 import { requirePrincipal } from '../../../../../server/principal'
 

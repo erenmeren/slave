@@ -8,14 +8,14 @@ import {
   type TaskStatus,
   type WorkspaceId,
   type World,
-} from '@ai-team-os/domain'
-import { prisma, type Prisma } from '@ai-team-os/db/client'
+} from '@slave-of-ai/domain'
+import { prisma, type Prisma } from '@slave-of-ai/db/client'
 
 // Re-exported so `cli.ts` and `sweep.ts` keep importing it from here -- the statuses an
 // `AgentRun` can still leave (an agent holding one of these is busy) now live in
 // `packages/domain/src/run/state.ts`, the one place the web and the orchestrator both read them
 // from, so the two cannot drift onto different definitions of "not finished".
-export { NON_TERMINAL_RUN_STATUSES } from '@ai-team-os/domain'
+export { NON_TERMINAL_RUN_STATUSES } from '@slave-of-ai/domain'
 
 type RunStatusKind = 'non_terminal' | 'concluded' | 'terminal_uncounted'
 

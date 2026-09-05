@@ -9,7 +9,7 @@
 // Shape borrowed verbatim from `gate-m12-providers.mjs`: dist imports, everything created inside
 // one `try`, bounded `waitUntil(description, timeoutMs, probe)` whose probe reports what it last
 // SAW, preflight cleanup of prior `M13 Gate`-named rows, `dumpGateRows()` + `fail()` for the
-// diagnostic throw, `resolveOnPath` honouring `AITEAMOS_CLAUDE_BIN`/`AITEAMOS_CURSOR_BIN`,
+// diagnostic throw, `resolveOnPath` honouring `SLAVEOFAI_CLAUDE_BIN`/`SLAVEOFAI_CURSOR_BIN`,
 // FK-ordered cleanup in `finally`, `exitCode` starting at 1 and set to 0 only by falling off the
 // end of the try, `process.exit(exitCode)` as the last line. The browser half is
 // `gate-m11-shell.mjs`'s verbatim: a real `next dev` on a free port and a real Chromium from
@@ -58,8 +58,8 @@
 // before the first paid execution" a standing property of this gate rather than a one-time act by
 // whoever first wrote it, so the harness ships beside it:
 //
-//   AITEAMOS_CLAUDE_BIN="$PWD/scripts/gate-fakes/fake-claude.sh" \
-//   AITEAMOS_CURSOR_BIN="$PWD/scripts/gate-fakes/fake-cursor-agent.sh" \
+//   SLAVEOFAI_CLAUDE_BIN="$PWD/scripts/gate-fakes/fake-claude.sh" \
+//   SLAVEOFAI_CURSOR_BIN="$PWD/scripts/gate-fakes/fake-cursor-agent.sh" \
 //   npm run gate:m13-runtime
 //
 // Every stage runs, every assertion is made and the PASS line is the same one; the only difference
@@ -68,7 +68,7 @@
 // runtimes' behaviour -- see stage 3's own comment, which is explicit about which of its facts a
 // fake CLI can and cannot establish.
 //
-// This file knows nothing about those fakes. They are reached only through the `AITEAMOS_*_BIN`
+// This file knows nothing about those fakes. They are reached only through the `SLAVEOFAI_*_BIN`
 // overrides `apps/orchestrator/src/cli.ts` already honours for its own reasons, so there is no
 // fixture mode here, no skip, and no flag that only a rehearsal passes.
 
@@ -176,7 +176,7 @@ const TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'stopped'])
  *  `.cursor/hooks.json` the Cursor adapter writes to be found at all (hooks resolve against the
  *  GIT ROOT, so a plain subdirectory of some other repository silently disarms the gate). */
 function makeRepo(suffix) {
-  const dir = mkdtempSync(join(tmpdir(), `aiteamos-gate-m13-${suffix}-`))
+  const dir = mkdtempSync(join(tmpdir(), `slaveofai-gate-m13-${suffix}-`))
   const git = (args) => execFileSync('git', args, { cwd: dir })
   git(['init', '-q', '-b', 'main'])
   git(['config', 'user.name', 'Gate'])
@@ -585,7 +585,7 @@ async function runForWorker(workerName) {
 }
 
 try {
-  diagDir = mkdtempSync(join(tmpdir(), 'aiteamos-gate-m13-diag-'))
+  diagDir = mkdtempSync(join(tmpdir(), 'slaveofai-gate-m13-diag-'))
   console.log(`diagnostics dir: ${diagDir}`)
 
   // ---- Preflight. Every one of these fails FAST and by name: this gate never skips a stage, so an
@@ -603,21 +603,21 @@ try {
     )
   }
 
-  const claudeBinName = process.env['AITEAMOS_CLAUDE_BIN'] ?? 'claude'
-  const cursorBinName = process.env['AITEAMOS_CURSOR_BIN'] ?? 'cursor-agent'
+  const claudeBinName = process.env['SLAVEOFAI_CLAUDE_BIN'] ?? 'claude'
+  const cursorBinName = process.env['SLAVEOFAI_CURSOR_BIN'] ?? 'cursor-agent'
   const claudeBin = resolveOnPath(claudeBinName)
   const cursorBin = resolveOnPath(cursorBinName)
   if (claudeBin === null) {
     throw new Error(
       `no executable ${JSON.stringify(claudeBinName)} on PATH. This gate drives the REAL Claude Code CLI; ` +
-        'there is no fixture mode and no skip. Install it, or point AITEAMOS_CLAUDE_BIN at it.',
+        'there is no fixture mode and no skip. Install it, or point SLAVEOFAI_CLAUDE_BIN at it.',
     )
   }
   if (cursorBin === null) {
     throw new Error(
       `no executable ${JSON.stringify(cursorBinName)} on PATH. This gate drives the REAL Cursor CLI; ` +
         'there is no fixture mode and no skip. Install it (it lives under ~/.local/bin on a default ' +
-        'install), or point AITEAMOS_CURSOR_BIN at it.',
+        'install), or point SLAVEOFAI_CURSOR_BIN at it.',
     )
   }
   const chromiumPath = process.env['CHROMIUM_PATH'] ?? '/usr/bin/chromium'
@@ -651,7 +651,7 @@ try {
   const preferredPort = await findFreePort()
   nextServer = spawn('node', ['node_modules/next/dist/bin/next', 'dev', 'apps/web', '-p', String(preferredPort)], {
     cwd: repoRoot,
-    // M21 A1: the operator's AITEAMOS_SESSION_SECRET must not reach the child, or every page is /login.
+    // M21 A1: the operator's SLAVEOFAI_SESSION_SECRET must not reach the child, or every page is /login.
     env: loopbackChildEnv(),
     stdio: ['ignore', 'pipe', 'pipe'],
   })
@@ -1386,7 +1386,7 @@ try {
   // Mirroring that resolution rather than hardcoding the repository path is what keeps an installed
   // daemon -- whose layout is deliberately not this one -- from failing a stage it is passing.
   const configuredGatePath = (() => {
-    const fromEnv = process.env['AITEAMOS_CURSOR_GATE_PATH']
+    const fromEnv = process.env['SLAVEOFAI_CURSOR_GATE_PATH']
     return fromEnv !== undefined && fromEnv !== '' ? resolve(fromEnv) : join(repoRoot, 'scripts/cursor-shell-gate.sh')
   })()
   if (!existsSync(configuredGatePath)) await fail(`stage 3: no cursor gate script at ${configuredGatePath}`)
@@ -1463,7 +1463,7 @@ try {
       input: JSON.stringify(payload),
       encoding: 'utf8',
       timeout: 30_000,
-      env: { ...process.env, AITEAMOS_PAUSE_FLAG: pauseFlagPath },
+      env: { ...process.env, SLAVEOFAI_PAUSE_FLAG: pauseFlagPath },
     })
   }
   const cursorFlagPath = cursorPaused.checkpoint.pauseFlagPath
@@ -1642,7 +1642,7 @@ try {
     )
   }
   const deadSessionId = randomUUID()
-  const deadWorktree = join(tmpdir(), `aiteamos-gate-m13-dead-worktree-${deadSessionId}`)
+  const deadWorktree = join(tmpdir(), `slaveofai-gate-m13-dead-worktree-${deadSessionId}`)
   await prisma.checkpoint.update({
     where: { runId: attemptRunId },
     data: { sessionId: deadSessionId, worktreePath: deadWorktree },
@@ -1817,7 +1817,7 @@ try {
       await prisma.workspace.delete({ where: { id: workspaceId } }).catch(() => {})
     }
   }
-  // The repositories carry the run worktrees, the `.aiteamos` run directories and the git exclude
+  // The repositories carry the run worktrees, the `.slaveofai` run directories and the git exclude
   // file the Cursor adapter appended to -- all of it inside these two trees, so nothing this gate
   // wrote outlives them.
   if (unbudgetedRepo !== null) rmSync(unbudgetedRepo, { recursive: true, force: true })

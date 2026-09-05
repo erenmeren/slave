@@ -1,4 +1,4 @@
-import { deleteAgent } from '@ai-team-os/control'
+import { deleteAgent } from '@slave-of-ai/control'
 import { orgControlResponse } from '../../../../server/orgControlRoute'
 import { requirePrincipal } from '../../../../server/principal'
 

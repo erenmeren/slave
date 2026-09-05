@@ -1,5 +1,5 @@
 import type { ReactElement, ReactNode } from 'react'
-import type { DomainEventType } from '@ai-team-os/db'
+import type { DomainEventType } from '@slave-of-ai/db'
 import { ActivityCard, type ActivityCardProps } from './ActivityCard'
 
 // Every payload field name below is copied verbatim from `packages/domain/src/events/schema.ts`

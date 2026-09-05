@@ -1,5 +1,5 @@
-import { prisma } from '@ai-team-os/db/client'
-import { NON_TERMINAL_RUN_STATUSES, TERMINAL, type RunStatus, type TaskStatus } from '@ai-team-os/domain'
+import { prisma } from '@slave-of-ai/db/client'
+import { NON_TERMINAL_RUN_STATUSES, TERMINAL, type RunStatus, type TaskStatus } from '@slave-of-ai/domain'
 import { artifactLabel } from '../lib/artifactLabel'
 import { buildShellFacts, type ShellFacts } from './shell'
 
@@ -52,7 +52,7 @@ export interface TaskBoardItem {
   readonly runs: readonly TaskRunSummary[]
   /**
    * M23 B4 (controller ruling): computed server-side so the panel never imports `TERMINAL` from
-   * `@ai-team-os/domain` itself -- a terminal task with at least one run that still has a
+   * `@slave-of-ai/domain` itself -- a terminal task with at least one run that still has a
    * worktree on disk to remove.
    */
   readonly collectable: boolean
@@ -106,7 +106,7 @@ export async function buildTasksSnapshot(workspaceId: string): Promise<TasksSnap
         lastRejectionReason: task.lastRejectionReason,
         // M23 B4 (controller ruling): a terminal task with a worktree still standing on at least
         // one of its runs. Computed here, not in the panel -- the panel never imports `TERMINAL`
-        // from `@ai-team-os/domain`.
+        // from `@slave-of-ai/domain`.
         collectable: TERMINAL.includes(task.status) && task.runs.some((run) => run.worktreePath !== null),
         artifacts: task.artifacts.map((artifact) => ({
           id: artifact.id,

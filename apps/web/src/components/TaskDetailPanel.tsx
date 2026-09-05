@@ -34,7 +34,7 @@ export function TaskDetailPanel({
   const [artifactError, setArtifactError] = useState<string | null>(null)
 
   // M23 B4 (controller ruling): `task.collectable` is computed server-side on the DTO
-  // (`buildTasksSnapshot`) -- this panel never imports `TERMINAL` from `@ai-team-os/domain`.
+  // (`buildTasksSnapshot`) -- this panel never imports `TERMINAL` from `@slave-of-ai/domain`.
   const collectable = task.collectable
 
   const collect = async (): Promise<void> => {

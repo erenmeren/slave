@@ -45,10 +45,10 @@ PAUSE_GATE_NAME='pause-gate.sh'
 PAUSE_GATE_LIB_DIR="$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}" || printf '%s' "${BASH_SOURCE[0]}")")"
 # shellcheck source=lib/pause-flag.sh
 . "${PAUSE_GATE_LIB_DIR}/lib/pause-flag.sh" || {
-  # A lone copy of this script -- an AITEAMOS_HOOK_PATH override pointing at a deployment that
+  # A lone copy of this script -- an SLAVEOFAI_HOOK_PATH override pointing at a deployment that
   # copied the gate without its library -- must refuse loudly and actionably rather than silently
   # gating nothing. Naming the exact path we looked for is what makes it fixable at a glance.
-  printf 'pause-gate.sh: deployed without its library -- expected to find it at %s. Copy scripts/lib/pause-flag.sh alongside this script (in a lib/ directory beside it), or point AITEAMOS_HOOK_PATH at the repository'"'"'s own scripts/pause-gate.sh.\n' \
+  printf 'pause-gate.sh: deployed without its library -- expected to find it at %s. Copy scripts/lib/pause-flag.sh alongside this script (in a lib/ directory beside it), or point SLAVEOFAI_HOOK_PATH at the repository'"'"'s own scripts/pause-gate.sh.\n' \
     "${PAUSE_GATE_LIB_DIR}/lib/pause-flag.sh" >&2
   exit 2
 }
@@ -57,7 +57,7 @@ PAUSE_GATE_LIB_DIR="$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}" || printf
 # copied this script without its second library must refuse rather than silently skip the matrix.
 # shellcheck source=lib/permissions.sh
 . "${PAUSE_GATE_LIB_DIR}/lib/permissions.sh" || {
-  printf 'pause-gate.sh: deployed without its library -- expected to find it at %s. Copy scripts/lib/permissions.sh alongside this script (in a lib/ directory beside it), or point AITEAMOS_HOOK_PATH at the repository'"'"'s own scripts/pause-gate.sh.\n' \
+  printf 'pause-gate.sh: deployed without its library -- expected to find it at %s. Copy scripts/lib/permissions.sh alongside this script (in a lib/ directory beside it), or point SLAVEOFAI_HOOK_PATH at the repository'"'"'s own scripts/pause-gate.sh.\n' \
     "${PAUSE_GATE_LIB_DIR}/lib/permissions.sh" >&2
   exit 2
 }
@@ -88,7 +88,7 @@ deny() {
 }
 
 # Captured, not drained: the permission matrix's verdict (below) needs the tool name the payload
-# carries. read_permission_verdict only parses it when AITEAMOS_PERMISSIONS_FILE is armed --
+# carries. read_permission_verdict only parses it when SLAVEOFAI_PERMISSIONS_FILE is armed --
 # Task 2's helper returns allow instantly otherwise -- so this costs nothing on the pre-M18 path.
 hook_payload=$(cat)
 

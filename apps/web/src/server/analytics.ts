@@ -1,6 +1,6 @@
-import { Prisma, prisma } from '@ai-team-os/db/client'
-import { SEED_WORKSPACE_ID } from '@ai-team-os/db'
-import { NON_TERMINAL_RUN_STATUSES } from '@ai-team-os/domain'
+import { Prisma, prisma } from '@slave-of-ai/db/client'
+import { SEED_WORKSPACE_ID } from '@slave-of-ai/db'
+import { NON_TERMINAL_RUN_STATUSES } from '@slave-of-ai/domain'
 import { formatDuration } from '../lib/format'
 
 /**
@@ -128,7 +128,7 @@ function windowStart(): Date {
 }
 
 // `formatDuration` moved to `../lib/format.ts` (Task 16): this module value-imports
-// `@ai-team-os/db/client` at the top, so a client component that imported the function straight
+// `@slave-of-ai/db/client` at the top, so a client component that imported the function straight
 // from here would drag `pg`'s Node-only dependencies into the browser bundle. Re-exported below
 // so this module's own KPI computation (and any other server-side caller) still finds it here.
 export { formatDuration } from '../lib/format'

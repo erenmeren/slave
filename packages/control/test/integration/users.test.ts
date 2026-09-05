@@ -1,4 +1,4 @@
-import { prisma } from '@ai-team-os/db/client'
+import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { refusalText } from '../../src/refusal.js'
 import { MIN_PASSWORD_LENGTH, USERNAME_RE, createUser, deleteUser, listUsers, setPassword, verifyCredentials } from '../../src/users.js'

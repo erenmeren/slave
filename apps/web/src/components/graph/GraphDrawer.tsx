@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import type { AgentStatus } from '@ai-team-os/domain'
+import type { AgentStatus } from '@slave-of-ai/domain'
 import { postControl } from '../../lib/postControl'
 import { CARD_STATE_TONE, cardStateForAgent } from '../../lib/tones'
 import type { GraphAgent } from '../../server/graph'

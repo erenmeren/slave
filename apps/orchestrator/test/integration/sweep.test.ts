@@ -2,10 +2,10 @@ import { spawn } from 'node:child_process'
 import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@ai-team-os/db'
-import { prisma } from '@ai-team-os/db/client'
-import { workspaceId as brandWorkspaceId } from '@ai-team-os/domain'
-import type { AgentRuntimeAdapter } from '@ai-team-os/providers'
+import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@slave-of-ai/db'
+import { prisma } from '@slave-of-ai/db/client'
+import { workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
+import type { AgentRuntimeAdapter } from '@slave-of-ai/providers'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { noteTickRan, reconcileOrphans, resetTickObservation, sweep, type SweepDeps } from '../../src/sweep.js'
 
@@ -155,7 +155,7 @@ describe('sweep and reconcileOrphans', () => {
   })
 
   it('preserves the worktree of an orphaned run', async (): Promise<void> => {
-    const worktreePath = mkdtempSync(join(tmpdir(), 'aiteamos-sweep-'))
+    const worktreePath = mkdtempSync(join(tmpdir(), 'slaveofai-sweep-'))
     dirs.push(worktreePath)
     await givenRun({ status: 'working', worktreePath })
 

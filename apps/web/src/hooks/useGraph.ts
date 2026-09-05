@@ -1,6 +1,6 @@
 'use client'
 
-// Runtime import, not `../server/graph.js`: that module pulls in `@ai-team-os/db`'s prisma
+// Runtime import, not `../server/graph.js`: that module pulls in `@slave-of-ai/db`'s prisma
 // client, which must never reach the client bundle (controller ruling R3).
 import type { GraphSnapshot } from '../server/graph'
 import { useWorkspaceStream, type StreamEvent, type WorkspaceStreamState } from './useWorkspaceStream'

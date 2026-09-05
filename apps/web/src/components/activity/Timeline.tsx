@@ -252,7 +252,7 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
       ref={scrollRef}
       data-testid="timeline-viewport"
       onScroll={handleScroll}
-      // `pt-3` and NOT `p-3` (the mock's own `padding:12px 0 0`, `AI Team OS Mockups.dc.html:855`):
+      // `pt-3` and NOT `p-3` (the mock's own `padding:12px 0 0`, `Slave of AI Mockups.dc.html:855`):
       // a left padding here would shift every row right without moving the rule, and the dot
       // would no longer sit on it. The row's `pr-[18px]` carries the right-hand inset instead.
       className="flex-1 overflow-y-auto pt-3"
@@ -295,7 +295,7 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
               ref={virtualizer.measureElement}
               style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${virtualItem.start}px)` }}
             >
-              {/* No gap between rows: the mock's river is flush (`AI Team OS Mockups.dc.html:857`,
+              {/* No gap between rows: the mock's river is flush (`Slave of AI Mockups.dc.html:857`,
                 * a bare `flex-direction:column` with no gap); each row's own `py-[6px]` is the
                 * rhythm. `measureElement` reads the OUTER element, whose height this one sets. */}
               <div data-testid="timeline-row-rise" className={isLive ? 'motion-safe:animate-[rise_0.3s_ease-out]' : ''}>

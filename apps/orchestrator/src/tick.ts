@@ -6,8 +6,8 @@ import {
   resolveDenyList,
   runFilePaths,
   writePermissionsFile,
-} from '@ai-team-os/control'
-import { prisma } from '@ai-team-os/db/client'
+} from '@slave-of-ai/control'
+import { prisma } from '@slave-of-ai/db/client'
 import {
   decide,
   evaluateGuardrails,
@@ -18,9 +18,9 @@ import {
   type RunId,
   type TaskId,
   type WorkspaceId,
-} from '@ai-team-os/domain'
-import { appendEvent } from '@ai-team-os/events'
-import type { AdapterRegistry, AgentRuntimeAdapter, RunHandle } from '@ai-team-os/providers'
+} from '@slave-of-ai/domain'
+import { appendEvent } from '@slave-of-ai/events'
+import type { AdapterRegistry, AgentRuntimeAdapter, RunHandle } from '@slave-of-ai/providers'
 import { runMergePass } from './merge.js'
 import { resolveRuntime, workspaceDefaultProvider } from './model.js'
 import { dispatchPlanning } from './planning.js'
@@ -474,7 +474,7 @@ async function startRun(deps: TickDeps, taskId: TaskId, agentId: AgentId): Promi
   const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: task.workspaceId } })
 
   const taskKey = taskKeyFor(task.id)
-  const prefix = `aiteamos/${taskKey}-`
+  const prefix = `slaveofai/${taskKey}-`
   // The slug is read back from the branch the first attempt recorded, not re-derived from the
   // title. Re-deriving it means renaming a task between attempts computes a different branch, so
   // the worktree it already owns reports `directory` rather than `both` and an ordinary rework
@@ -564,7 +564,7 @@ async function startRun(deps: TickDeps, taskId: TaskId, agentId: AgentId): Promi
     //
     // Thrown, not returned, so it takes the SAME path the `invalid_provider` refusal above already
     // takes: the existing `catch` records an attempted run that failed (`failToStart`, spec §13).
-    // `refusalText` is imported from `@ai-team-os/control` rather than hand-copied, so the wording
+    // `refusalText` is imported from `@slave-of-ai/control` rather than hand-copied, so the wording
     // an operator sees here and the wording the write surface promises cannot drift apart.
     //
     // AFTER `resolveAdapter`, deliberately: a kind this process has no adapter for is refused as
@@ -604,7 +604,7 @@ async function startRun(deps: TickDeps, taskId: TaskId, agentId: AgentId): Promi
       pauseFlagPath,
       runDir,
       permissionsFilePath,
-      gitIdentity: { name: agent.name, email: `${emailLocalPart(agent)}@aiteamos.local` },
+      gitIdentity: { name: agent.name, email: `${emailLocalPart(agent)}@slaveofai.local` },
       // Conditional spread, not `model`, because `exactOptionalPropertyTypes` treats an explicit
       // `model: undefined` as a different (and disallowed) thing from the key being absent.
       ...(model !== undefined ? { model } : {}),
@@ -643,7 +643,7 @@ async function startRun(deps: TickDeps, taskId: TaskId, agentId: AgentId): Promi
       spawn: {
         ...handle.runFiles,
         pauseFlagPath,
-        gitIdentity: { name: agent.name, email: `${emailLocalPart(agent)}@aiteamos.local` },
+        gitIdentity: { name: agent.name, email: `${emailLocalPart(agent)}@slaveofai.local` },
         // Recorded so a pause's checkpoint carries the provider the run actually started with
         // (M12 Task 6/8; spec §4) -- `resume()` replays it verbatim, never re-resolving.
         provider: resolved.provider,

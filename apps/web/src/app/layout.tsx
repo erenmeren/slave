@@ -22,7 +22,7 @@ const plexMono = IBM_Plex_Mono({
   display: 'swap',
 })
 
-export const metadata = { title: 'AI Team OS' }
+export const metadata = { title: 'Slave of AI' }
 
 // The global shell (M11 spec §4, reduced by M24 §2.1): every page renders inside sidebar +
 // content area. The sidebar is now one unconditional list of five global rows -- it no longer

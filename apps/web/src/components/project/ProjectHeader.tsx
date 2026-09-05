@@ -7,7 +7,7 @@ import { useStreamState } from '../../hooks/useStreamState'
 import { EmergencyStopButton } from '../EmergencyStopButton'
 import { ProjectSwitcher } from './ProjectSwitcher'
 
-// The mockup's own connection chip (`AI Team OS Web.dc.html:38-41`), not `ui/Chip.tsx`'s neutral
+// The mockup's own connection chip (`Slave of AI Web.dc.html:38-41`), not `ui/Chip.tsx`'s neutral
 // recipe: a radius-20 pill, `3px 9px`, a 1px status border at 25% alpha over a 6% fill, and a
 // `500 10px` mono label in the status colour beside a 5px dot. `Chip` cannot render it -- it takes
 // only `tone`/`children`, has no `data-testid` passthrough (this badge's `connection` test-id must
@@ -48,7 +48,7 @@ export function ProjectHeader({
 
   const budgetUsd = facts.guardrails.budgetUsd
   const ratio = budgetUsd === null || budgetUsd <= 0 ? 0 : facts.status.spentUsd / budgetUsd
-  // Colour AND its `0 0 8px` glow in one lookup (`AI Team OS Web.dc.html:47`, and the README's
+  // Colour AND its `0 0 8px` glow in one lookup (`Slave of AI Web.dc.html:47`, and the README's
   // "status colour at ... `0 0 8px` for bar glow" pattern): the two must never disagree.
   const barColor =
     ratio >= 1
@@ -66,7 +66,7 @@ export function ProjectHeader({
         * .3 → transparent. Its own absolutely positioned element rather than a `border-bottom`,
         * because a border cannot carry a gradient -- and it sits at `bottom:-1px`, BENEATH the
         * structural hairline rather than replacing it, exactly as the mock stacks the two
-        * (`AI Team OS Web.dc.html:32-33`). Without the border under it the bar's bottom edge
+        * (`Slave of AI Web.dc.html:32-33`). Without the border under it the bar's bottom edge
         * would fade to nothing at both ends, where the gradient is transparent. */}
       <span
         data-testid="project-header-hairline"

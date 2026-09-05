@@ -1,6 +1,6 @@
-import { toExecutionEvent } from '@ai-team-os/db'
-import { prisma } from '@ai-team-os/db/client'
-import type { ExecutionEvent } from '@ai-team-os/domain'
+import { toExecutionEvent } from '@slave-of-ai/db'
+import { prisma } from '@slave-of-ai/db/client'
+import type { ExecutionEvent } from '@slave-of-ai/domain'
 
 export const DEFAULT_READ_LIMIT = 500
 

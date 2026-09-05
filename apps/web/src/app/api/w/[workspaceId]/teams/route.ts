@@ -1,4 +1,4 @@
-import { createProjectTeam, refusalText } from '@ai-team-os/control'
+import { createProjectTeam, refusalText } from '@slave-of-ai/control'
 import { requirePrincipal } from '../../../../../server/principal'
 
 export const dynamic = 'force-dynamic'

@@ -1,4 +1,4 @@
-import { deleteTeam } from '@ai-team-os/control'
+import { deleteTeam } from '@slave-of-ai/control'
 import { orgControlResponse } from '../../../../server/orgControlRoute'
 import { requirePrincipal } from '../../../../server/principal'
 

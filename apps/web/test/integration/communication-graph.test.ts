@@ -1,8 +1,8 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { prisma } from '@ai-team-os/db/client'
-import { appendEvent } from '@ai-team-os/events'
+import { prisma } from '@slave-of-ai/db/client'
+import { appendEvent } from '@slave-of-ai/events'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { buildCommunicationGraph, COMMUNICATION_EVENT_LIMIT } from '../../src/server/communicationGraph.js'
 import { GET as communicationGraphGET } from '../../src/app/api/w/[workspaceId]/graph/communication/route.js'
@@ -10,7 +10,7 @@ import { GET as communicationGraphGET } from '../../src/app/api/w/[workspaceId]/
 // A real directory, not a placeholder (M23 G3 idiom -- see `packages/control/test/integration/
 // org-edit.test.ts`'s own comment): a reboot clears /tmp, and `Workspace.repoPath` should point
 // at something that exists.
-const repoPath = mkdtempSync(join(tmpdir(), 'aiteamos-communication-graph-'))
+const repoPath = mkdtempSync(join(tmpdir(), 'slaveofai-communication-graph-'))
 
 afterAll(() => rmSync(repoPath, { recursive: true, force: true }))
 

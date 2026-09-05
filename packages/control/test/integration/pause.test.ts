@@ -2,8 +2,8 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { prisma } from '@ai-team-os/db/client'
-import { runId } from '@ai-team-os/domain'
+import { prisma } from '@slave-of-ai/db/client'
+import { runId } from '@slave-of-ai/domain'
 import { runFilePaths } from '../../src/paths.js'
 import { refusalText } from '../../src/refusal.js'
 import { pauseActiveRuns, requestPause } from '../../src/pause.js'
@@ -16,7 +16,7 @@ interface Fixture {
 }
 
 async function seed(): Promise<Fixture> {
-  const repoPath = mkdtempSync(join(tmpdir(), 'aiteamos-control-pause-'))
+  const repoPath = mkdtempSync(join(tmpdir(), 'slaveofai-control-pause-'))
   const workspace = await prisma.workspace.create({
     data: {
       name: 'Checkout Platform',

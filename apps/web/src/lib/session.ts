@@ -1,12 +1,12 @@
 /**
  * The session (M23 spec §7 F4): a stateless, HMAC-signed cookie that NAMES ITS USER. No table, no
- * store — rotating `AITEAMOS_SESSION_SECRET` invalidates every session at once, and deleting a
+ * store — rotating `SLAVEOFAI_SESSION_SECRET` invalidates every session at once, and deleting a
  * user is caught one layer up (`server/principal.ts` asks the database whether the id in the
  * cookie still exists). Web Crypto ONLY: the middleware runs on Next's edge runtime, the routes on
  * Node, vitest on Node, and this one module must serve all three (the built-in Node crypto module
  * is banned in `apps/web/src`). Pure: the secret arrives as an argument; nothing here reads the env.
  */
-export const SESSION_COOKIE = 'aiteamos_session'
+export const SESSION_COOKIE = 'slaveofai_session'
 export const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60
 
 const encoder = new TextEncoder()
@@ -33,7 +33,7 @@ export async function digestEqual(a: string, b: string): Promise<boolean> {
   return diff === 0
 }
 
-/** The signing key is the secret's UTF-8 bytes, used raw: `AITEAMOS_SESSION_SECRET` is already
+/** The signing key is the secret's UTF-8 bytes, used raw: `SLAVEOFAI_SESSION_SECRET` is already
  *  32+ random characters (`openssl rand -hex 32`), so a derivation step would add cost without
  *  adding entropy. Not per-boot random, on purpose: a fresh key every restart would log every
  *  device out on every `next dev` reload. */

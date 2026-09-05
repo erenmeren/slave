@@ -57,11 +57,11 @@ describe('runGateScript (characterization)', () => {
     expect(result.exitCode).toBe(0)
   }, 10_000)
 
-  it('writes the flag file first when flagPresent is true, and the child sees it via AITEAMOS_PAUSE_FLAG (gate-preflight.ts:25-33)', async () => {
+  it('writes the flag file first when flagPresent is true, and the child sees it via SLAVEOFAI_PAUSE_FLAG (gate-preflight.ts:25-33)', async () => {
     const dir = tempDir('gate-flag-')
     const flagPath = join(dir, 'pause.flag')
     const result = await runGateScript({
-      hookPath: hookWith('[ -f "$AITEAMOS_PAUSE_FLAG" ] && echo -n present || echo -n absent'),
+      hookPath: hookWith('[ -f "$SLAVEOFAI_PAUSE_FLAG" ] && echo -n present || echo -n absent'),
       flagPath,
       flagPresent: true,
     })
@@ -74,7 +74,7 @@ describe('runGateScript (characterization)', () => {
     const flagPath = join(dir, 'pause.flag')
     writeFileSync(flagPath, '')
     const result = await runGateScript({
-      hookPath: hookWith('[ -f "$AITEAMOS_PAUSE_FLAG" ] && echo -n present || echo -n absent'),
+      hookPath: hookWith('[ -f "$SLAVEOFAI_PAUSE_FLAG" ] && echo -n present || echo -n absent'),
       flagPath,
       flagPresent: false,
     })

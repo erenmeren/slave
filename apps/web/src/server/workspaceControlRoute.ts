@@ -1,6 +1,6 @@
-import { prisma } from '@ai-team-os/db/client'
-import { refusalText, type ControlRefusal } from '@ai-team-os/control'
-import type { Result } from '@ai-team-os/domain'
+import { prisma } from '@slave-of-ai/db/client'
+import { refusalText, type ControlRefusal } from '@slave-of-ai/control'
+import type { Result } from '@slave-of-ai/domain'
 
 /** Route shell: 404 unless the workspace exists, 409 on a control refusal (the M5 contract). */
 export async function workspaceControlResponse(

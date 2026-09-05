@@ -1,14 +1,14 @@
 {
-  "name": "@ai-team-os/control",
+  "name": "@slave-of-ai/control",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "dependencies": {
-    "@ai-team-os/db": "*",
-    "@ai-team-os/domain": "*",
-    "@ai-team-os/events": "*",
-    "@ai-team-os/providers": "*"
+    "@slave-of-ai/db": "*",
+    "@slave-of-ai/domain": "*",
+    "@slave-of-ai/events": "*",
+    "@slave-of-ai/providers": "*"
   }
 }

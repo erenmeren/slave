@@ -1,7 +1,7 @@
 /**
  * Which runtime a run is on. A plain string union, not a re-export of the Postgres enum
  * (`packages/db`'s generated `ProviderKind`) -- `packages/providers` does not depend on
- * `@ai-team-os/db` at runtime (it is a devDependency only, for test fixtures), and this type is
+ * `@slave-of-ai/db` at runtime (it is a devDependency only, for test fixtures), and this type is
  * the package's own vocabulary for it, kept in sync with the Prisma enum's literal spellings by
  * hand. `'cursor'` has no adapter yet (M12 Series D); it exists here because `signalPause`
  * (`pause-signal.ts`) already dispatches on it.

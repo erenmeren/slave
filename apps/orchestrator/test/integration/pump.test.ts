@@ -1,17 +1,17 @@
 import { spawn } from 'node:child_process'
 import { readFileSync } from 'node:fs'
-import { isAlive } from '@ai-team-os/control'
-import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@ai-team-os/db'
-import { prisma } from '@ai-team-os/db/client'
-import { agentId, runId, taskId, workspaceId } from '@ai-team-os/domain'
-import { appendEvent } from '@ai-team-os/events'
-import { PERMISSION_DENY_REASON_PREFIX, parseStreamLine, type RunOutcome, type RuntimeEvent } from '@ai-team-os/providers'
+import { isAlive } from '@slave-of-ai/control'
+import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@slave-of-ai/db'
+import { prisma } from '@slave-of-ai/db/client'
+import { agentId, runId, taskId, workspaceId } from '@slave-of-ai/domain'
+import { appendEvent } from '@slave-of-ai/events'
+import { PERMISSION_DENY_REASON_PREFIX, parseStreamLine, type RunOutcome, type RuntimeEvent } from '@slave-of-ai/providers'
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { OUTPUT_CAP, pumpRun } from '../../src/pump.js'
 
 /**
  * Reads one of `packages/providers/test/fixtures/*.ndjson` and runs every line through the real
- * Claude stream parser (`@ai-team-os/providers`'s `parseStreamLine`), the same function the real
+ * Claude stream parser (`@slave-of-ai/providers`'s `parseStreamLine`), the same function the real
  * adapter's `events()` uses. This is what makes the M18 Task 6 tests below a genuine end-to-end
  * proof of the fixture rather than a hand-authored stand-in for it: the matrix-prefixed reason
  * string actually round-trips through the real parser (and, for `hook_denied`, through
@@ -595,7 +595,7 @@ describe('pumpRun', () => {
           settingsPath: '/tmp/settings.json',
           pauseFlagPath: '/tmp/pause.flag',
           hookPath: '/tmp/pause-gate.sh',
-          gitIdentity: { name: 'Alex', email: 'alex@aiteamos.local' },
+          gitIdentity: { name: 'Alex', email: 'alex@slaveofai.local' },
         },
         events: fromArray([
           { kind: 'session_started', sessionId: 's-1' },
@@ -649,7 +649,7 @@ describe('pumpRun', () => {
           settingsPath: '/tmp/settings.json',
           pauseFlagPath: '/tmp/pause.flag',
           hookPath: '/tmp/pause-gate.sh',
-          gitIdentity: { name: 'Alex', email: 'alex@aiteamos.local' },
+          gitIdentity: { name: 'Alex', email: 'alex@slaveofai.local' },
         },
         events: fromArray([
           { kind: 'session_started', sessionId: 's-1' },
@@ -688,7 +688,7 @@ describe('pumpRun', () => {
         settingsPath: '/tmp/settings.json',
         pauseFlagPath: '/tmp/pause.flag',
         hookPath: '/tmp/pause-gate.sh',
-        gitIdentity: { name: 'Alex', email: 'alex@aiteamos.local' },
+        gitIdentity: { name: 'Alex', email: 'alex@slaveofai.local' },
       },
       events: fromArray([
         { kind: 'session_started', sessionId: 's-1' },
@@ -711,7 +711,7 @@ describe('pumpRun', () => {
     expect(checkpoint.settingsPath).toBe('/tmp/settings.json')
     expect(checkpoint.hookPath).toBe('/tmp/pause-gate.sh')
     expect(checkpoint.gitAuthorName).toBe('Alex')
-    expect(checkpoint.gitAuthorEmail).toBe('alex@aiteamos.local')
+    expect(checkpoint.gitAuthorEmail).toBe('alex@slaveofai.local')
     expect(checkpoint.lastToolUseId).toBe('tu_1')
     expect(checkpoint.lastToolName).toBe('Bash')
     expect(checkpoint.numTurns).toBe(1)
@@ -727,7 +727,7 @@ describe('pumpRun', () => {
         settingsPath: '/tmp/settings.json',
         pauseFlagPath: '/tmp/pause.flag',
         hookPath: '/tmp/pause-gate.sh',
-        gitIdentity: { name: 'Alex', email: 'alex@aiteamos.local' },
+        gitIdentity: { name: 'Alex', email: 'alex@slaveofai.local' },
       },
       events: fromArray([
         { kind: 'session_started', sessionId: 's-1' },
@@ -753,7 +753,7 @@ describe('pumpRun', () => {
           settingsPath: '/tmp/settings.json',
           pauseFlagPath: '/tmp/pause.flag',
           hookPath: '/tmp/pause-gate.sh',
-          gitIdentity: { name: 'Alex', email: 'alex@aiteamos.local' },
+          gitIdentity: { name: 'Alex', email: 'alex@slaveofai.local' },
         },
         events: fromArray([
           { kind: 'session_started', sessionId: 's-1' },
@@ -1240,7 +1240,7 @@ describe('pumpRun', () => {
         events: fromArray([
           { kind: 'session_started', sessionId: 's-1' },
           skillCall('t1', 'superpowers:brainstorming'),
-          { kind: 'hook_denied', hookName: 'PreToolUse:Write', reason: 'Paused by AI Team OS.' },
+          { kind: 'hook_denied', hookName: 'PreToolUse:Write', reason: 'Paused by Slave of AI.' },
         ]),
       })
 
@@ -1279,9 +1279,9 @@ describe('pumpRun', () => {
         // The PROVIDER is the discriminator, not the stream: this run's event list is identical to
         // the "invoked no skill" Claude case above, and the column must come out differently.
         spawn: {
-          settingsPath: '/tmp/aiteamos-skillcalls/.cursor/hooks.json',
-          pauseFlagPath: '/tmp/aiteamos-skillcalls/pause.flag',
-          hookPath: '/opt/aiteamos/cursor-shell-gate.sh',
+          settingsPath: '/tmp/slaveofai-skillcalls/.cursor/hooks.json',
+          pauseFlagPath: '/tmp/slaveofai-skillcalls/pause.flag',
+          hookPath: '/opt/slaveofai/cursor-shell-gate.sh',
           gitIdentity: { name: 'Alex', email: 'alex@example.com' },
           provider: 'cursor',
         },
@@ -1377,9 +1377,9 @@ describe('pumpRun', () => {
       await pumpRun({
         ...ids,
         spawn: {
-          settingsPath: '/tmp/aiteamos-tokens/.cursor/hooks.json',
-          pauseFlagPath: '/tmp/aiteamos-tokens/pause.flag',
-          hookPath: '/opt/aiteamos/cursor-shell-gate.sh',
+          settingsPath: '/tmp/slaveofai-tokens/.cursor/hooks.json',
+          pauseFlagPath: '/tmp/slaveofai-tokens/pause.flag',
+          hookPath: '/opt/slaveofai/cursor-shell-gate.sh',
           gitIdentity: { name: 'Alex', email: 'alex@example.com' },
           provider: 'cursor',
         },
@@ -1406,7 +1406,7 @@ describe('pumpRun', () => {
         ...ids,
         events: fromArray([
           { kind: 'session_started', sessionId: 's-1' },
-          { kind: 'hook_denied', hookName: 'PreToolUse:Write', reason: 'Paused by AI Team OS.' },
+          { kind: 'hook_denied', hookName: 'PreToolUse:Write', reason: 'Paused by Slave of AI.' },
         ]),
       })
 
@@ -1422,7 +1422,7 @@ describe('pumpRun', () => {
    * deny (the run stops) apart, and a matrix deny gets its own `run.tool_denied` event instead.
    *
    * Both tests here run their fixture through `eventsFromFixture` -- the REAL Claude stream parser
-   * (`@ai-team-os/providers`'s `parseStreamLine`), not a hand-authored `RuntimeEvent` array -- so
+   * (`@slave-of-ai/providers`'s `parseStreamLine`), not a hand-authored `RuntimeEvent` array -- so
    * the fixture's own reason string, prefix and all, is what proves the routing, not a stand-in
    * for it. `classifyGateEvent`'s prefix check sits between the two: the fixture's raw NDJSON goes
    * in, `pumpRun`'s observable effects come out.
@@ -1484,14 +1484,14 @@ describe('pumpRun', () => {
             settingsPath: '/tmp/settings.json',
             pauseFlagPath: '/tmp/pause.flag',
             hookPath: '/tmp/pause-gate.sh',
-            gitIdentity: { name: 'Alex', email: 'alex@aiteamos.local' },
+            gitIdentity: { name: 'Alex', email: 'alex@slaveofai.local' },
           },
           events: fromArray(eventsFromFixture('hook-deny')),
         })
 
         // Same shape `stopped_by_gate` has always produced (M13 Decisions 1-2): the pump kills the
         // still-running child and pauses the row -- byte-identical to the pre-Task-6 behaviour,
-        // because this fixture's own deny reason ("Paused by AI Team OS. Stop and wait.") carries
+        // because this fixture's own deny reason ("Paused by Slave of AI. Stop and wait.") carries
         // no matrix prefix, so `classifyGateEvent` still routes it to `stopped_by_gate`, not the
         // new `tool_denied` kind.
         expect(outcome).toBeNull()
@@ -1532,9 +1532,9 @@ describe('pumpRun', () => {
       const outcome = await pumpRun({
         ...ids,
         spawn: {
-          settingsPath: '/tmp/aiteamos-cursor-matrix/.cursor/hooks.json',
-          pauseFlagPath: '/tmp/aiteamos-cursor-matrix/pause.flag',
-          hookPath: '/opt/aiteamos/cursor-shell-gate.sh',
+          settingsPath: '/tmp/slaveofai-cursor-matrix/.cursor/hooks.json',
+          pauseFlagPath: '/tmp/slaveofai-cursor-matrix/pause.flag',
+          hookPath: '/opt/slaveofai/cursor-shell-gate.sh',
           gitIdentity: { name: 'Alex', email: 'alex@example.com' },
           provider: 'cursor',
         },
@@ -1586,7 +1586,7 @@ describe('pumpRun', () => {
             settingsPath: '/tmp/settings.json',
             pauseFlagPath: '/tmp/pause.flag',
             hookPath: '/tmp/pause-gate.sh',
-            gitIdentity: { name: 'Alex', email: 'alex@aiteamos.local' },
+            gitIdentity: { name: 'Alex', email: 'alex@slaveofai.local' },
           },
           events: fromArray([
             { kind: 'session_started', sessionId: 's-1' },
@@ -1633,7 +1633,7 @@ describe('pumpRun', () => {
      */
     it('B1: a resumed pump seeds matrixDeniedToolUseIds from the run\'s own prior run.tool_denied events, so the resumed CLI\'s echo of an already-survived matrix denial does not re-fail the run', async (): Promise<void> => {
       // Seed a REAL prior `run.tool_denied` event through the house append path (`appendEvent`,
-      // `@ai-team-os/events`'s only write path to the event log) -- exactly what a first pump on
+      // `@slave-of-ai/events`'s only write path to the event log) -- exactly what a first pump on
       // this run would have written before it paused, third payload key (`toolUseId`) included.
       await appendEvent({
         type: 'run.tool_denied',
@@ -1893,9 +1893,9 @@ describe('pumpRun', () => {
       const outcome = await pumpRun({
         ...ids,
         spawn: {
-          settingsPath: '/tmp/aiteamos-cursor-malformed/.cursor/hooks.json',
-          pauseFlagPath: '/tmp/aiteamos-cursor-malformed/pause.flag',
-          hookPath: '/opt/aiteamos/cursor-shell-gate.sh',
+          settingsPath: '/tmp/slaveofai-cursor-malformed/.cursor/hooks.json',
+          pauseFlagPath: '/tmp/slaveofai-cursor-malformed/pause.flag',
+          hookPath: '/opt/slaveofai/cursor-shell-gate.sh',
           gitIdentity: { name: 'Alex', email: 'alex@example.com' },
           provider: 'cursor',
         },

@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { PERMISSION_DENY_REASON_PREFIX } from '@ai-team-os/providers'
+import { PERMISSION_DENY_REASON_PREFIX } from '@slave-of-ai/providers'
 import { PERMISSION_TOOLS, resolveDenyList } from '../src/permission.js'
 
 const PROVIDERS = ['claude_code', 'cursor'] as const

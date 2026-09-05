@@ -1,6 +1,6 @@
 # Domain Model — `packages/domain`
 
-This document describes what exists in `@ai-team-os/domain` (kept current through M8): the
+This document describes what exists in `@slave-of-ai/domain` (kept current through M8): the
 Agent/Task/AgentRun split, both state machines, the guardrail and scheduler decision functions,
 the merge queue, the review-verdict and plan-graph contracts, and the event envelope.
 `packages/domain` is pure — it has no runtime side effects, no persistence, and no framework
@@ -31,7 +31,7 @@ packages/domain/src/
 ```
 
 `index.ts` is the package's only public entry point (`export * from ...` for each module above),
-so anything importable from `@ai-team-os/domain` is importable from that one file.
+so anything importable from `@slave-of-ai/domain` is importable from that one file.
 
 ## The Agent / Task / AgentRun split, and why Agent status is derived
 

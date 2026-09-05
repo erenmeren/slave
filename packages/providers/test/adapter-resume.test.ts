@@ -2,7 +2,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { runId as makeRunId, type RunId } from '@ai-team-os/domain'
+import { runId as makeRunId, type RunId } from '@slave-of-ai/domain'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import { ClaudeCodeAdapter, type RunHandle, type StartRunInput } from '../src/claude/adapter.js'
@@ -90,7 +90,7 @@ describe('ClaudeCodeAdapter.resume', () => {
 
   beforeEach(async (): Promise<void> => {
     expect(existsSync(realGate)).toBe(true)
-    worktreePath = mkdtempSync(path.join(tmpdir(), 'aiteamos-adapter-resume-'))
+    worktreePath = mkdtempSync(path.join(tmpdir(), 'slaveofai-adapter-resume-'))
 
     // Copies `scripts/lib/pause-flag.sh` alongside as well -- since M13 §4.2 the gate sources it
     // from a `lib/` directory beside itself, and a lone copy refuses to run.
@@ -269,11 +269,11 @@ describe('ClaudeCodeAdapter.resume', () => {
     expect(env['GIT_AUTHOR_NAME']).not.toBe(input.gitIdentity.name)
     expect(env['GIT_AUTHOR_EMAIL']).not.toBe(input.gitIdentity.email)
 
-    // M18 Task 5 fix round 1 (Important 2): AITEAMOS_PERMISSIONS_FILE on a RESUME spawn, derived
+    // M18 Task 5 fix round 1 (Important 2): SLAVEOFAI_PERMISSIONS_FILE on a RESUME spawn, derived
     // from THIS checkpoint's own `pauseFlagPath` -- not the original start()'s `input.
     // permissionsFilePath`, and not `checkpoint.settingsPath`'s directory either.
-    expect(env['AITEAMOS_PERMISSIONS_FILE']).toBe(path.join(divergentPauseDir, 'permissions.json'))
-    expect(env['AITEAMOS_PERMISSIONS_FILE']).not.toBe(input.permissionsFilePath)
+    expect(env['SLAVEOFAI_PERMISSIONS_FILE']).toBe(path.join(divergentPauseDir, 'permissions.json'))
+    expect(env['SLAVEOFAI_PERMISSIONS_FILE']).not.toBe(input.permissionsFilePath)
   })
 
   it('appends --model to the resumed spawn when checkpoint.model is set', async (): Promise<void> => {
@@ -488,7 +488,7 @@ describe('ClaudeCodeAdapter.resume', () => {
     // inherit that fd is exactly this shape in production. This throwaway script reproduces it
     // deterministically -- it spawns a detached grandchild that inherits its own stdout and
     // hangs indefinitely (holding the pipe open no matter how long anything waits), writes that
-    // grandchild's pid to AITEAMOS_TEST_ORPHAN_PID_FILE so this test can kill it explicitly
+    // grandchild's pid to SLAVEOFAI_TEST_ORPHAN_PID_FILE so this test can kill it explicitly
     // afterward, then hangs itself until signaled. Without resume()'s explicit close() call on
     // the old queue, a consumer already sitting in `for await` over it -- registered before
     // resume() is even called, matching "the orchestrator's pump" finding A describes -- would
@@ -505,7 +505,7 @@ describe('ClaudeCodeAdapter.resume', () => {
         '  detached: true,',
         '})',
         'grandchild.unref()',
-        "writeFileSync(process.env['AITEAMOS_TEST_ORPHAN_PID_FILE'], String(grandchild.pid))",
+        "writeFileSync(process.env['SLAVEOFAI_TEST_ORPHAN_PID_FILE'], String(grandchild.pid))",
         '',
         'setInterval(() => {}, 3600000)',
         '',
@@ -523,10 +523,10 @@ describe('ClaudeCodeAdapter.resume', () => {
     const resumePidFile = path.join(worktreePath, 'resume-grandchild.pid')
     const grandchildPids: number[] = []
     const immediatePids: number[] = []
-    const previousOrphanEnv = process.env['AITEAMOS_TEST_ORPHAN_PID_FILE']
+    const previousOrphanEnv = process.env['SLAVEOFAI_TEST_ORPHAN_PID_FILE']
 
     try {
-      process.env['AITEAMOS_TEST_ORPHAN_PID_FILE'] = startPidFile
+      process.env['SLAVEOFAI_TEST_ORPHAN_PID_FILE'] = startPidFile
       const handle = await orphanAdapter.start(orphanInput)
       immediatePids.push(handle.pid)
       await capturePidFile(startPidFile, grandchildPids)
@@ -555,7 +555,7 @@ describe('ClaudeCodeAdapter.resume', () => {
         settingsPath: handle.runFiles.settingsPath,
         hookPath: handle.runFiles.hookPath,
       }
-      process.env['AITEAMOS_TEST_ORPHAN_PID_FILE'] = resumePidFile
+      process.env['SLAVEOFAI_TEST_ORPHAN_PID_FILE'] = resumePidFile
       const resumedHandle = await orphanAdapter.resume(orphanRunId, orphanCheckpoint, null)
       immediatePids.push(resumedHandle.pid)
       expect(resumedHandle.runId).toBe(orphanRunId)
@@ -575,9 +575,9 @@ describe('ClaudeCodeAdapter.resume', () => {
       await orphanAdapter.cancel(orphanRunId)
     } finally {
       if (previousOrphanEnv === undefined) {
-        delete process.env['AITEAMOS_TEST_ORPHAN_PID_FILE']
+        delete process.env['SLAVEOFAI_TEST_ORPHAN_PID_FILE']
       } else {
-        process.env['AITEAMOS_TEST_ORPHAN_PID_FILE'] = previousOrphanEnv
+        process.env['SLAVEOFAI_TEST_ORPHAN_PID_FILE'] = previousOrphanEnv
       }
       // A last sweep, on top of capturePidFile's own retry above: by the time cleanup runs,
       // several more seconds have passed (the rest of the try body, including a 3s race), which
@@ -629,7 +629,7 @@ function neverStartedRunId(): RunId {
  */
 describe('ClaudeCodeAdapter.resume against a runId this adapter instance never started', () => {
   it('resumes successfully, and afterwards events()/cancel() work against the resumed run', async (): Promise<void> => {
-    const worktreePath = mkdtempSync(path.join(tmpdir(), 'aiteamos-adapter-resume-unknown-'))
+    const worktreePath = mkdtempSync(path.join(tmpdir(), 'slaveofai-adapter-resume-unknown-'))
     try {
       const hookPath = copyGateInto(worktreePath, 'pause-gate.sh')
 

@@ -1,7 +1,7 @@
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { prisma } from '@ai-team-os/db/client'
+import { prisma } from '@slave-of-ai/db/client'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { addTaskDependency, removeTaskDependency } from '../../src/dependency.js'
 
@@ -19,7 +19,7 @@ interface Fixture {
  * cases (A->B->C then C->A) and cross-workspace refusals can both be built from the same seed.
  */
 async function seed(): Promise<Fixture> {
-  const repoPath = mkdtempSync(join(tmpdir(), 'aiteamos-control-dependency-'))
+  const repoPath = mkdtempSync(join(tmpdir(), 'slaveofai-control-dependency-'))
   const workspace = await prisma.workspace.create({
     data: {
       name: 'Checkout Platform',
@@ -28,7 +28,7 @@ async function seed(): Promise<Fixture> {
       setupCommands: ['npm ci'],
     },
   })
-  const otherRepoPath = mkdtempSync(join(tmpdir(), 'aiteamos-control-dependency-other-'))
+  const otherRepoPath = mkdtempSync(join(tmpdir(), 'slaveofai-control-dependency-other-'))
   const otherWorkspace = await prisma.workspace.create({
     data: {
       name: 'Other Platform',

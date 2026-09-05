@@ -6,7 +6,7 @@
  *  deleting the key, it survives a child that re-reads `.env` itself via `--env-file` (Node's
  *  `--env-file` never overrides a key already present in the environment, only one that's absent).
  *
- *  `AITEAMOS_PASSWORD` is blanked too even though M23 retired it and nothing reads it any more:
+ *  `SLAVEOFAI_PASSWORD` is blanked too even though M23 retired it and nothing reads it any more:
  *  the census in `gate:m21` keeps proving every spawner strips both, so a stale `.env` cannot
  *  resurrect password mode through some future reader that has not been written yet.
  *
@@ -14,7 +14,7 @@
  *  blanks are unconditional. */
 export function loopbackChildEnv(extra = {}) {
   const env = { ...process.env, ...extra }
-  env.AITEAMOS_SESSION_SECRET = ''
-  env.AITEAMOS_PASSWORD = ''
+  env.SLAVEOFAI_SESSION_SECRET = ''
+  env.SLAVEOFAI_PASSWORD = ''
   return env
 }

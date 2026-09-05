@@ -1,6 +1,6 @@
-import { prisma } from '@ai-team-os/db/client'
-import { createEventStream, type EventStreamHandle } from '@ai-team-os/events'
-import type { ExecutionEvent } from '@ai-team-os/domain'
+import { prisma } from '@slave-of-ai/db/client'
+import { createEventStream, type EventStreamHandle } from '@slave-of-ai/events'
+import type { ExecutionEvent } from '@slave-of-ai/domain'
 
 export const DEFAULT_HEARTBEAT_MS = 15_000
 

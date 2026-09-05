@@ -6,7 +6,7 @@
  *
  * Deliberately NOT declared in `seed.ts` and re-exported from there: `seed.ts` value-imports
  * `./client.js`, which constructs the real `PrismaClient` at module scope. `apps/web`'s client
- * components import bare `@ai-team-os/db` (`components/activity/FilterBar.tsx`,
+ * components import bare `@slave-of-ai/db` (`components/activity/FilterBar.tsx`,
  * `hooks/useUrlFilters.ts`) for its enum tables; if the barrel re-exported `seed.ts`, that value
  * import would ride along into their browser bundle. This module has no such import, so the
  * barrel can re-export it safely.

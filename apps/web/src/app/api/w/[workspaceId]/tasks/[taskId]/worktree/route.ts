@@ -1,4 +1,4 @@
-import { collectTaskWorktree } from '@ai-team-os/control'
+import { collectTaskWorktree } from '@slave-of-ai/control'
 import { workspaceControlResponse } from '../../../../../../../server/workspaceControlRoute'
 import { requirePrincipal } from '../../../../../../../server/principal'
 

@@ -17,7 +17,7 @@ export type GateScriptName = 'pause-gate.sh' | 'cursor-shell-gate.sh'
  * `json_string` and the pause-flag read into `scripts/lib/pause-flag.sh`, which both gates now
  * `source` from a `lib/` directory beside their own resolved location, so copying the script ALONE
  * produces a gate that exits 2 on every invocation ("deployed without its library"). That is the
- * correct fail-closed behaviour -- it is what makes an `AITEAMOS_HOOK_PATH` override pointing at a
+ * correct fail-closed behaviour -- it is what makes an `SLAVEOFAI_HOOK_PATH` override pointing at a
  * lone copy refuse loudly instead of silently gating nothing -- but it means a fixture must copy
  * the pair, not the file.
  *
@@ -29,7 +29,7 @@ export type GateScriptName = 'pause-gate.sh' | 'cursor-shell-gate.sh'
  * is copied here too, for BOTH gate names, even though only `pause-gate.sh` sources it today
  * (Task 4 wires `cursor-shell-gate.sh` to the same file). Copying it unconditionally means this
  * fixture does not need to know which gate sources which library, and costs nothing: none of the
- * existing suites set `AITEAMOS_PERMISSIONS_FILE`, so `read_permission_verdict` allows instantly
+ * existing suites set `SLAVEOFAI_PERMISSIONS_FILE`, so `read_permission_verdict` allows instantly
  * (its own "no matrix in play" branch) regardless of whether the copy is present in a lib/ that
  * gets used.
  */

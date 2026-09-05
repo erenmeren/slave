@@ -22,7 +22,7 @@ export function SettingsClient({
   readonly adapters: readonly AdapterCard[]
   /** Computed on the SERVER from `NODE_ENV`, never guessed at here. */
   readonly showReseed: boolean
-  /** Computed on the SERVER from `AITEAMOS_SESSION_SECRET` (`boundaryMode()`), never guessed here. */
+  /** Computed on the SERVER from `SLAVEOFAI_SESSION_SECRET` (`boundaryMode()`), never guessed here. */
   readonly mode: BoundaryMode
   /** `postureFor(mode, username)` — the single source for the security line (M23 spec §7 F5). */
   readonly posture: string

@@ -1,4 +1,4 @@
-import { removeTaskDependency } from '@ai-team-os/control'
+import { removeTaskDependency } from '@slave-of-ai/control'
 import { taskControlResponse } from '../../../../../../../../server/taskControlRoute'
 import { requirePrincipal } from '../../../../../../../../server/principal'
 

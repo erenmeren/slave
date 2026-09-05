@@ -1,4 +1,4 @@
-import { executionEventSchema } from '@ai-team-os/domain'
+import { executionEventSchema } from '@slave-of-ai/domain'
 import { afterAll, describe, expect, it } from 'vitest'
 import { prisma } from '../../src/client.js'
 import { ACTORS, EVENT_TYPE_BY_DOMAIN_TYPE, RUN_STATUSES, TASK_STATUSES } from '../../src/enums.js'

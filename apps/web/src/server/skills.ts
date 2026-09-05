@@ -1,8 +1,8 @@
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { prisma } from '@ai-team-os/db/client'
-import { toRunState } from '@ai-team-os/db'
-import { deriveAgentStatus, NON_TERMINAL_RUN_STATUSES, type AgentStatus } from '@ai-team-os/domain'
+import { prisma } from '@slave-of-ai/db/client'
+import { toRunState } from '@slave-of-ai/db'
+import { deriveAgentStatus, NON_TERMINAL_RUN_STATUSES, type AgentStatus } from '@slave-of-ai/domain'
 
 export interface SkillRow {
   readonly id: string

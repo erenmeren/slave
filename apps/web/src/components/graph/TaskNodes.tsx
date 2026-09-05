@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type React from 'react'
 import { Handle, Position, type Edge, type Node, type NodeProps, type NodeTypes } from 'reactflow'
-import type { TaskStatus } from '@ai-team-os/domain'
+import type { TaskStatus } from '@slave-of-ai/domain'
 import { CARD_STATE_TONE, cardStateForTask } from '../../lib/tones'
 import type { GraphSnapshot } from '../../server/graph'
 import { BORDER_FLASH_MS } from '../AgentCard'

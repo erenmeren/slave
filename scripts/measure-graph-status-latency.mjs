@@ -7,7 +7,7 @@
 //
 // Driving the pause: the brief offered two routes -- the fake CLI's `hook-deny` fixture (the
 // protocol `apps/orchestrator/test/integration/milestone-gate.test.ts`'s own pause case uses), or
-// calling `requestPause` from `@ai-team-os/control` directly. `hook-deny` wins on "least
+// calling `requestPause` from `@slave-of-ai/control` directly. `hook-deny` wins on "least
 // contrived": `packages/providers/test/fake-claude.mjs` only ever replays a canned transcript, and
 // never reads the pause-flag file or invokes the real hook script (see that file's own header
 // comment) -- so `requestPause`'s write-the-flag-and-wait protocol has nothing to act on it while
@@ -45,7 +45,7 @@ const FAKE_CLAUDE = join(repoRoot, 'packages/providers/test/fake-claude.mjs')
 /** `milestone-gate.test.ts`'s own `makeRepo` -- a real repository, because the orchestrator's tick
  *  provisions a real worktree in it regardless of which CLI it spawns. */
 function makeRepo() {
-  const dir = mkdtempSync(join(tmpdir(), 'aiteamos-graph-latency-'))
+  const dir = mkdtempSync(join(tmpdir(), 'slaveofai-graph-latency-'))
   const git = (args) => execFileSync('git', args, { cwd: dir })
   git(['init', '-q', '-b', 'main'])
   git(['config', 'user.name', 'Latency'])
@@ -116,7 +116,7 @@ try {
   web = spawn(
     'node',
     ['--env-file=.env', 'node_modules/next/dist/bin/next', 'dev', 'apps/web', '--port', PORT],
-    // M21 A1: the operator's AITEAMOS_SESSION_SECRET must not reach the child, or every page is /login.
+    // M21 A1: the operator's SLAVEOFAI_SESSION_SECRET must not reach the child, or every page is /login.
     { env: loopbackChildEnv(), stdio: ['ignore', 'pipe', 'pipe'] },
   )
   web.stdout.on('data', (chunk) => process.stdout.write(`[web] ${chunk}`))
@@ -143,8 +143,8 @@ try {
   orchestrator = spawn('node', [ORCHESTRATOR_CLI, 'tick', '--workspace', workspace.id], {
     env: {
       ...process.env,
-      AITEAMOS_CLAUDE_BIN: 'node',
-      AITEAMOS_CLAUDE_ARGS: `${FAKE_CLAUDE} --fixture hook-deny`,
+      SLAVEOFAI_CLAUDE_BIN: 'node',
+      SLAVEOFAI_CLAUDE_ARGS: `${FAKE_CLAUDE} --fixture hook-deny`,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   })

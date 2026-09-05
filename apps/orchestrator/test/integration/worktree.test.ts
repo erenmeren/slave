@@ -26,7 +26,7 @@ function run(command: string, args: readonly string[], cwd: string): string {
  * setup command that commits must come out with the *orchestrator's* name, not this one.
  */
 function makeRepo(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'aiteamos-worktree-'))
+  const dir = mkdtempSync(join(tmpdir(), 'slaveofai-worktree-'))
   run('git', ['init', '-q', '-b', 'main'], dir)
   run('git', ['config', 'user.name', 'Fixture'], dir)
   run('git', ['config', 'user.email', 'fixture@example.com'], dir)
@@ -75,8 +75,8 @@ describe('provisionWorktree', () => {
   it('creates a worktree on its own branch from the base branch', async (): Promise<void> => {
     const wt = await provisionWorktree(base)
 
-    expect(wt.branch).toBe('aiteamos/TASK-001-add-thing')
-    expect(wt.path).toContain(join('.aiteamos', 'worktrees', 'TASK-001'))
+    expect(wt.branch).toBe('slaveofai/TASK-001-add-thing')
+    expect(wt.path).toContain(join('.slaveofai', 'worktrees', 'TASK-001'))
     expect(existsSync(join(wt.path, '.git'))).toBe(true)
 
     // The branch is not merely *named*: it is the one checked out in the worktree, and it starts
@@ -113,7 +113,7 @@ describe('provisionWorktree', () => {
   })
 
   it('stops at the first failing setup command and runs none after it', async (): Promise<void> => {
-    const worktreePath = join(repoPath, '.aiteamos', 'worktrees', 'TASK-001')
+    const worktreePath = join(repoPath, '.slaveofai', 'worktrees', 'TASK-001')
 
     await expect(
       provisionWorktree({ ...base, setupCommands: ['touch FIRST', 'exit 4', 'touch AFTER'] }),
@@ -149,7 +149,7 @@ describe('provisionWorktree', () => {
     // fixture's `.git/config` says `Fixture <fixture@example.com>`, so dropping any of the four
     // variables shows up here -- author and committer, name and email, are four distinct answers.
     const trailers = run('git', ['log', '-1', '--format=%an|%ae|%cn|%ce'], wt.path)
-    expect(trailers).toBe('AI Team OS|orchestrator@aiteamos.local|AI Team OS|orchestrator@aiteamos.local')
+    expect(trailers).toBe('Slave of AI|orchestrator@slaveofai.local|Slave of AI|orchestrator@slaveofai.local')
 
     // And `headCommit` is read *after* setup: it answers "what did the run start from", which is
     // this new commit, not the base branch's tip. Reading it before the setup loop passes every
@@ -159,7 +159,7 @@ describe('provisionWorktree', () => {
   })
 
   it('fails loudly when a setup command fails, and preserves the worktree', async (): Promise<void> => {
-    const expectedPath = join(repoPath, '.aiteamos', 'worktrees', 'TASK-001')
+    const expectedPath = join(repoPath, '.slaveofai', 'worktrees', 'TASK-001')
 
     await expect(
       provisionWorktree({ ...base, setupCommands: ['echo boom >&2; exit 3'] }),
@@ -253,7 +253,7 @@ describe('provisionWorktree', () => {
   })
 
   it('gives a timed-out command time to clean up before killing it outright', async (): Promise<void> => {
-    const worktreePath = join(repoPath, '.aiteamos', 'worktrees', 'TASK-001')
+    const worktreePath = join(repoPath, '.slaveofai', 'worktrees', 'TASK-001')
 
     await expect(
       provisionWorktree({
@@ -372,19 +372,19 @@ describe('provisionWorktree', () => {
   })
 
   it('refuses when the branch exists even if the worktree directory does not', async (): Promise<void> => {
-    run('git', ['branch', 'aiteamos/TASK-001-add-thing', 'main'], repoPath)
+    run('git', ['branch', 'slaveofai/TASK-001-add-thing', 'main'], repoPath)
 
     const error = await provisionWorktree(base).catch((cause: unknown): unknown => cause)
 
     // The half-state a crash between `worktree add` and `worktree remove` leaves behind. Checking
     // only the directory would let this one through to git's own refusal.
     expect(error).toBeInstanceOf(WorktreeExistsError)
-    expect((error as WorktreeExistsError).branch).toBe('aiteamos/TASK-001-add-thing')
+    expect((error as WorktreeExistsError).branch).toBe('slaveofai/TASK-001-add-thing')
     expect((error as WorktreeExistsError).reason).toBe('branch')
   })
 
   it('tells a stray directory apart from a worktree this task left behind', async (): Promise<void> => {
-    mkdirSync(join(repoPath, '.aiteamos', 'worktrees', 'TASK-001'), { recursive: true })
+    mkdirSync(join(repoPath, '.slaveofai', 'worktrees', 'TASK-001'), { recursive: true })
 
     const error = await provisionWorktree(base).catch((cause: unknown): unknown => cause)
 
@@ -399,8 +399,8 @@ describe('provisionWorktree', () => {
   it('refuses to adopt a worktree checked out on a longer-named branch', async (): Promise<void> => {
     await provisionWorktree({ ...base, slug: 'add-thing-extra' })
 
-    // `branch refs/heads/aiteamos/TASK-001-add-thing-extra` *contains*
-    // `branch refs/heads/aiteamos/TASK-001-add-thing`, so a substring test adopts the wrong branch
+    // `branch refs/heads/slaveofai/TASK-001-add-thing-extra` *contains*
+    // `branch refs/heads/slaveofai/TASK-001-add-thing`, so a substring test adopts the wrong branch
     // and then returns a handle asserting the branch it was asked about -- which the caller writes
     // onto the task. Reachable whenever the shorter branch exists (satisfying `both`) while the
     // directory is registered on the longer one.
@@ -408,10 +408,10 @@ describe('provisionWorktree', () => {
       adoptWorktree({
         repoPath,
         taskKey: 'TASK-001',
-        branch: 'aiteamos/TASK-001-add-thing',
+        branch: 'slaveofai/TASK-001-add-thing',
         setupCommands: [],
       }),
-    ).rejects.toThrow(/not on aiteamos\/TASK-001-add-thing/)
+    ).rejects.toThrow(/not on slaveofai\/TASK-001-add-thing/)
   })
 
   it('adopts a worktree it really owns, and re-runs its setup', async (): Promise<void> => {
@@ -420,7 +420,7 @@ describe('provisionWorktree', () => {
     const adopted = await adoptWorktree({
       repoPath,
       taskKey: 'TASK-001',
-      branch: 'aiteamos/TASK-001-add-thing',
+      branch: 'slaveofai/TASK-001-add-thing',
       setupCommands: ['touch SETUP_RAN_AGAIN'],
     })
 
@@ -446,7 +446,7 @@ describe('provisionWorktree', () => {
       provisionWorktree({ ...base, taskKey: 'ok/../../../../tmp/pwned' }),
     ).rejects.toThrow(/taskKey/)
 
-    expect(existsSync(join(repoPath, '.aiteamos'))).toBe(false)
+    expect(existsSync(join(repoPath, '.slaveofai'))).toBe(false)
   })
 
   it('reports an absolute path even when handed a relative repository path', async (): Promise<void> => {

@@ -7,17 +7,17 @@
 // daemon: this gate does not rehearse a LIVE-reacting fake CLI (`scripts/gate-fakes/fake-claude.sh`)
 // -- it needs one canned, deterministic transcript (`permission-matrix-deny.ndjson`, Task 6's
 // fixture) replayed byte-for-byte, which only `packages/providers/test/fake-claude.mjs --fixture
-// <name>` can do. So this gate keeps m14's OUTER precondition (`AITEAMOS_CLAUDE_BIN` must already
+// <name>` can do. So this gate keeps m14's OUTER precondition (`SLAVEOFAI_CLAUDE_BIN` must already
 // point at an executable under `scripts/gate-fakes/` -- the same zero-spend discipline check every
 // post-M14 gate enforces, proving the operator invoked this correctly) and then, ONLY for its own
-// daemon child's environment, overrides `AITEAMOS_CLAUDE_BIN`/`AITEAMOS_CLAUDE_ARGS` to the fixture
+// daemon child's environment, overrides `SLAVEOFAI_CLAUDE_BIN`/`SLAVEOFAI_CLAUDE_ARGS` to the fixture
 // player -- the exact pattern `gate-m8a-estop.mjs`/`gate-m8-plan.mjs`/`gate-m10-org.mjs`/
 // `gate-m8a-merge.mjs` already use for a deterministic scripted run. Both are zero-spend; the outer
 // check is the standing proof an operator cannot skip, the inner override is what makes the
 // specific scenario reproducible.
 //
 // UNLIKE m14 this gate spends nothing by construction on ONE additional axis: the daemon it spawns
-// itself never reaches a vendor account regardless of what `AITEAMOS_CLAUDE_BIN` names outside,
+// itself never reaches a vendor account regardless of what `SLAVEOFAI_CLAUDE_BIN` names outside,
 // because the override below always wins for the one dispatch this gate drives.
 //
 // The three proof stages (Task 13 brief):
@@ -117,7 +117,7 @@ const gotoRetries = []
 /** `gate-m14-fidelity.mjs`'s `makeRepo`, verbatim: a real repository, since the orchestrator's tick
  *  provisions a real worktree in it regardless of which CLI it spawns. */
 function makeRepo(suffix) {
-  const dir = mkdtempSync(join(tmpdir(), `aiteamos-gate-m18-${suffix}-`))
+  const dir = mkdtempSync(join(tmpdir(), `slaveofai-gate-m18-${suffix}-`))
   const git = (args) => execFileSync('git', args, { cwd: dir })
   git(['init', '-q', '-b', 'main'])
   git(['config', 'user.name', 'Gate'])
@@ -389,7 +389,7 @@ async function clickUntil(locator, predicate, description) {
 }
 
 try {
-  diagDir = mkdtempSync(join(tmpdir(), 'aiteamos-gate-m18-diag-'))
+  diagDir = mkdtempSync(join(tmpdir(), 'slaveofai-gate-m18-diag-'))
   console.log(`diagnostics dir: ${diagDir}`)
 
   // ---- Preflight ------------------------------------------------------------------------------
@@ -397,21 +397,21 @@ try {
   // The outer zero-spend precondition, `gate-m14-fidelity.mjs`'s verbatim (Decision 10): proves
   // the OPERATOR invoked this correctly, even though this gate's own daemon dispatch below never
   // actually reads this value -- see the file header for why the two are not the same check.
-  const fakeClaude = process.env['AITEAMOS_CLAUDE_BIN']
+  const fakeClaude = process.env['SLAVEOFAI_CLAUDE_BIN']
   if (fakeClaude === undefined || fakeClaude === '') {
     throw new Error(
-      'AITEAMOS_CLAUDE_BIN is not set. This gate spends nothing and must run against the fake CLI:\n' +
-        '  AITEAMOS_CLAUDE_BIN="$PWD/scripts/gate-fakes/fake-claude.sh" npm run gate:m18-skill-and-teeth',
+      'SLAVEOFAI_CLAUDE_BIN is not set. This gate spends nothing and must run against the fake CLI:\n' +
+        '  SLAVEOFAI_CLAUDE_BIN="$PWD/scripts/gate-fakes/fake-claude.sh" npm run gate:m18-skill-and-teeth',
     )
   }
   try {
     accessSync(fakeClaude, constants.X_OK)
   } catch {
-    throw new Error(`AITEAMOS_CLAUDE_BIN=${fakeClaude} is not an executable file`)
+    throw new Error(`SLAVEOFAI_CLAUDE_BIN=${fakeClaude} is not an executable file`)
   }
   if (!fakeClaude.includes('gate-fakes')) {
     throw new Error(
-      `AITEAMOS_CLAUDE_BIN=${fakeClaude} is not one of scripts/gate-fakes/. This gate must not reach a vendor account.`,
+      `SLAVEOFAI_CLAUDE_BIN=${fakeClaude} is not one of scripts/gate-fakes/. This gate must not reach a vendor account.`,
     )
   }
 
@@ -533,8 +533,8 @@ try {
   const preferredPort = await findFreePort()
   nextServer = spawn('node', ['node_modules/next/dist/bin/next', 'dev', 'apps/web', '-p', String(preferredPort)], {
     cwd: repoRoot,
-    // M21 A1: the operator's AITEAMOS_SESSION_SECRET must not reach the child, or every page is /login.
-    env: loopbackChildEnv({ AITEAMOS_GATE_WARM: '1' }),
+    // M21 A1: the operator's SLAVEOFAI_SESSION_SECRET must not reach the child, or every page is /login.
+    env: loopbackChildEnv({ SLAVEOFAI_GATE_WARM: '1' }),
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   let nextExited = false
@@ -624,13 +624,13 @@ try {
     {
       cwd: repoRoot,
       // The inner override (see file header): this dispatch always replays the matrix-deny
-      // fixture through `fake-claude.mjs`, regardless of what the outer `AITEAMOS_CLAUDE_BIN`
+      // fixture through `fake-claude.mjs`, regardless of what the outer `SLAVEOFAI_CLAUDE_BIN`
       // precondition named -- `buildAdapterRegistry` (`apps/orchestrator/src/cli.ts`) reads these
       // once, at THIS child's own start, so it never sees the outer value at all.
       env: {
         ...process.env,
-        AITEAMOS_CLAUDE_BIN: 'node',
-        AITEAMOS_CLAUDE_ARGS: `${FAKE_CLAUDE} --fixture permission-matrix-deny`,
+        SLAVEOFAI_CLAUDE_BIN: 'node',
+        SLAVEOFAI_CLAUDE_ARGS: `${FAKE_CLAUDE} --fixture permission-matrix-deny`,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     },

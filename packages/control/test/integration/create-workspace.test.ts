@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
-import { prisma } from '@ai-team-os/db/client'
+import { prisma } from '@slave-of-ai/db/client'
 import { createWorkspace } from '../../src/workspace.js'
 import { refusalText } from '../../src/refusal.js'
 
@@ -11,7 +11,7 @@ const dirs: string[] = []
 afterAll(() => { for (const dir of dirs) rmSync(dir, { recursive: true, force: true }) })
 
 function repo(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'aiteamos-create-ws-'))
+  const dir = mkdtempSync(join(tmpdir(), 'slaveofai-create-ws-'))
   dirs.push(dir)
   execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: dir })
   execFileSync('git', ['-c', 'user.name=f', '-c', 'user.email=f@x', 'commit', '-q', '--allow-empty', '-m', 'init'], { cwd: dir })
@@ -51,7 +51,7 @@ describe('createWorkspace', () => {
   it.each([
     ['relative path', (d: string) => ({ ...valid(d), repoPath: 'repo' }), 'repo_path_not_absolute'],
     ['missing dir', (d: string) => ({ ...valid(d), repoPath: join(d, 'nope') }), 'repo_not_found'],
-    ['not a repo', (d: string) => ({ ...valid(mkdtempSync(join(tmpdir(), 'aiteamos-plain-'))) }), 'not_a_git_repository'],
+    ['not a repo', (d: string) => ({ ...valid(mkdtempSync(join(tmpdir(), 'slaveofai-plain-'))) }), 'not_a_git_repository'],
     ['no base branch', (d: string) => ({ ...valid(d), baseBranch: 'develop' }), 'base_branch_not_found'],
     ['blank verify', (d: string) => ({ ...valid(d), verifyCommands: [' ', ''] }), 'verify_commands_empty'],
     ['blank name', (d: string) => ({ ...valid(d), name: '  ' }), 'invalid_name'],

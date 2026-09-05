@@ -40,7 +40,7 @@ describe('LoginPage', () => {
   })
 
   it('says there is nothing to log in to on a loopback-only instance, and offers the way back', async () => {
-    vi.stubEnv('AITEAMOS_SESSION_SECRET', '')
+    vi.stubEnv('SLAVEOFAI_SESSION_SECRET', '')
     await renderLoginPage({ next: '//evil' })
     const notice = screen.getByTestId('login-unconfigured')
     expect(notice.textContent).toContain('accounts are not configured on this instance')
@@ -49,7 +49,7 @@ describe('LoginPage', () => {
   })
 
   it('renders the form, not the notice, once a secret is configured', async () => {
-    vi.stubEnv('AITEAMOS_SESSION_SECRET', SECRET)
+    vi.stubEnv('SLAVEOFAI_SESSION_SECRET', SECRET)
     await renderLoginPage({})
     expect(screen.getByTestId('login-form')).not.toBeNull()
     expect(screen.getByTestId('login-username')).not.toBeNull()
@@ -58,13 +58,13 @@ describe('LoginPage', () => {
   })
 
   it('runs a protocol-relative `next` through safeNext before the form ever sees it', async () => {
-    vi.stubEnv('AITEAMOS_SESSION_SECRET', SECRET)
+    vi.stubEnv('SLAVEOFAI_SESSION_SECRET', SECRET)
     await renderWithStubbedForm({ next: '//evil' })
     expect(screen.getByTestId('login-form-stub').getAttribute('data-next')).toBe('/')
   })
 
   it('passes an ordinary in-app path through untouched', async () => {
-    vi.stubEnv('AITEAMOS_SESSION_SECRET', SECRET)
+    vi.stubEnv('SLAVEOFAI_SESSION_SECRET', SECRET)
     await renderWithStubbedForm({ next: '/w/abc' })
     expect(screen.getByTestId('login-form-stub').getAttribute('data-next')).toBe('/w/abc')
   })

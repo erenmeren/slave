@@ -1,4 +1,4 @@
-import { PROVIDER_KINDS, capabilitiesOf } from '@ai-team-os/providers'
+import { PROVIDER_KINDS, capabilitiesOf } from '@slave-of-ai/providers'
 import { describe, expect, it } from 'vitest'
 import { resumeRefusal } from '../src/resume.js'
 

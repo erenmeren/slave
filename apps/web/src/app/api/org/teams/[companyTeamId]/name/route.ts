@@ -1,4 +1,4 @@
-import { renameCompanyTeam } from '@ai-team-os/control'
+import { renameCompanyTeam } from '@slave-of-ai/control'
 import { orgControlResponse } from '../../../../../../server/orgControlRoute'
 import { requirePrincipal } from '../../../../../../server/principal'
 

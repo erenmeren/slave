@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { TaskStatus } from '@ai-team-os/domain'
+import type { TaskStatus } from '@slave-of-ai/domain'
 import { CARD_STATE_TONE } from '../src/lib/tones.js'
 import { BOARD_COLUMNS, COLUMN_FOR_STATUS, COLUMN_STATE, priorityChip } from '../src/lib/taskColumns.js'
 

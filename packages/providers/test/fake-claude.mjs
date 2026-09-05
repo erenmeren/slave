@@ -161,8 +161,8 @@ async function main() {
     // A work run: the m8a-flow work body verbatim -- leave a real commit in the worktree
     // (cwd), then replay success.
     writeFileSync(path.join(process.cwd(), 'm8a-work.txt'), `${prompt.slice(0, 80)}\n`)
-    execFileSync('git', ['-c', 'user.name=Fake Claude', '-c', 'user.email=fake@aiteamos.local', 'add', '-A'], { cwd: process.cwd() })
-    execFileSync('git', ['-c', 'user.name=Fake Claude', '-c', 'user.email=fake@aiteamos.local', 'commit', '-q', '-m', 'fake work'], { cwd: process.cwd() })
+    execFileSync('git', ['-c', 'user.name=Fake Claude', '-c', 'user.email=fake@slaveofai.local', 'add', '-A'], { cwd: process.cwd() })
+    execFileSync('git', ['-c', 'user.name=Fake Claude', '-c', 'user.email=fake@slaveofai.local', 'commit', '-q', '-m', 'fake work'], { cwd: process.cwd() })
     await replayFixture('complete')
     return
   }
@@ -176,8 +176,8 @@ async function main() {
     }
     // A work run: leave a real commit in the worktree (cwd), then replay success.
     writeFileSync(path.join(process.cwd(), 'm8a-work.txt'), `${prompt.slice(0, 80)}\n`)
-    execFileSync('git', ['-c', 'user.name=Fake Claude', '-c', 'user.email=fake@aiteamos.local', 'add', '-A'], { cwd: process.cwd() })
-    execFileSync('git', ['-c', 'user.name=Fake Claude', '-c', 'user.email=fake@aiteamos.local', 'commit', '-q', '-m', 'fake work'], { cwd: process.cwd() })
+    execFileSync('git', ['-c', 'user.name=Fake Claude', '-c', 'user.email=fake@slaveofai.local', 'add', '-A'], { cwd: process.cwd() })
+    execFileSync('git', ['-c', 'user.name=Fake Claude', '-c', 'user.email=fake@slaveofai.local', 'commit', '-q', '-m', 'fake work'], { cwd: process.cwd() })
     await replayFixture('complete')
     return
   }

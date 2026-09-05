@@ -1,4 +1,4 @@
-import { verifyCredentials } from '@ai-team-os/control'
+import { verifyCredentials } from '@slave-of-ai/control'
 import { sessionSecret } from '../../../../lib/authEnv'
 import { mintSession, requestIsHttps, sessionCookieHeader } from '../../../../lib/session'
 

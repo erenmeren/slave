@@ -1,1 +1,1 @@
-CREATE DATABASE aiteamos_test OWNER aiteamos;
+CREATE DATABASE slaveofai_test OWNER slaveofai;

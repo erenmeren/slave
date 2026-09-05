@@ -1,14 +1,14 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { prisma } from '@ai-team-os/db/client'
+import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { buildShellFacts } from '../../src/server/shell.js'
 
 // A real directory, not a placeholder (M23 G3 idiom -- see `packages/control/test/integration/
 // org-edit.test.ts`'s own comment): `Workspace.repoPath` needs to exist for anything that stats
 // it, and a reboot clears /tmp.
-const repoPath = mkdtempSync(join(tmpdir(), 'aiteamos-shell-facts-'))
+const repoPath = mkdtempSync(join(tmpdir(), 'slaveofai-shell-facts-'))
 
 afterAll(() => {
   rmSync(repoPath, { recursive: true, force: true })

@@ -1,4 +1,4 @@
-import { renameAgent } from '@ai-team-os/control'
+import { renameAgent } from '@slave-of-ai/control'
 import { orgControlResponse } from '../../../../../server/orgControlRoute'
 import { requirePrincipal } from '../../../../../server/principal'
 

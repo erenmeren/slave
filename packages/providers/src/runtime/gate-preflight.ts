@@ -9,7 +9,7 @@ export interface GateRunResult {
 }
 
 /**
- * Spawns the gate script directly (never through a vendor CLI) with `AITEAMOS_PAUSE_FLAG` pointing
+ * Spawns the gate script directly (never through a vendor CLI) with `SLAVEOFAI_PAUSE_FLAG` pointing
  * at `flagPath`, having first created or removed the flag file itself.
  *
  * Both gate scripts open with `cat > /dev/null`, draining what the real CLI would have piped in as
@@ -30,7 +30,7 @@ export async function runGateScript(input: {
 
   return new Promise<GateRunResult>((resolve, reject) => {
     const child = spawn(input.hookPath, [], {
-      env: { ...process.env, AITEAMOS_PAUSE_FLAG: input.flagPath },
+      env: { ...process.env, SLAVEOFAI_PAUSE_FLAG: input.flagPath },
       stdio: ['pipe', 'pipe', 'pipe'],
     })
 
@@ -78,7 +78,7 @@ export type AllowContract =
  * - flag file present -> the runtime's deny shape, exit 0
  * - flag file absent  -> the runtime's allow shape, exit 0
  *
- * One direction is not enough. Both gate scripts also deny when `AITEAMOS_PAUSE_FLAG` is unset --
+ * One direction is not enough. Both gate scripts also deny when `SLAVEOFAI_PAUSE_FLAG` is unset --
  * their deliberate loud-misconfiguration path -- so a check that only asserts "flag present =>
  * deny" is satisfied by a script that denies unconditionally, which gates nothing: the run would
  * refuse its first tool call regardless of whether pause was ever requested, while looking armed.
@@ -105,7 +105,7 @@ export async function preflightGate(input: {
   readonly expectAllow: AllowContract
 }): Promise<void> {
   const { hookPath, label, noun } = input
-  const dir = await mkdtemp(join(tmpdir(), 'aiteamos-preflight-'))
+  const dir = await mkdtemp(join(tmpdir(), 'slaveofai-preflight-'))
   const flagPath = join(dir, 'pause.flag')
 
   try {

@@ -1,13 +1,13 @@
 import { mkdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import type { RunId } from '@ai-team-os/domain'
+import type { RunId } from '@slave-of-ai/domain'
 
 /**
- * Where the run's own files live: **outside** the worktree, under the repository's `.aiteamos`.
+ * Where the run's own files live: **outside** the worktree, under the repository's `.slaveofai`.
  *
  * The pause flag must be unique per run (spec §5.2), and whatever a provider adapter keeps for a
  * run (a settings file, a hook script, or anything else) must not sit inside the worktree either,
- * because Task 14 runs verify there and Task 11 already found `.aiteamos/` showing up as untracked
+ * because Task 14 runs verify there and Task 11 already found `.slaveofai/` showing up as untracked
  * content. A run file in the worktree makes every verify see a dirty tree it did not create.
  *
  * `runDir` is this function's whole contribution: an empty, already-created scratch directory,
@@ -30,7 +30,7 @@ export function runFilePaths(repoPath: string, runId: RunId): { runDir: string; 
     throw new Error(`runFilePaths: cannot stat repo path ${repoPath} (run ${runId}): ${error instanceof Error ? error.message : String(error)}`)
   }
   if (!root.isDirectory()) throw new Error(`runFilePaths: repo path is not a directory: ${repoPath} (run ${runId})`)
-  const dir = join(repoPath, '.aiteamos', 'runs', runId)
+  const dir = join(repoPath, '.slaveofai', 'runs', runId)
   try {
     mkdirSync(dir, { recursive: true })
   } catch (error) {

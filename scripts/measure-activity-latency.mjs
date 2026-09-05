@@ -1,7 +1,7 @@
 // The gate's measured half (spec §6 / M6 design doc §6): "events appear within one second of
 // occurrence." Seeds a workspace (demo-live.mjs's seed shape, minus the git repo and the daemon —
 // this script drives appendEvent itself, so there is no `claude` process to spawn and nothing for
-// AITEAMOS_CLAUDE_BIN/AITEAMOS_CLAUDE_ARGS to wire up), starts the real web server, opens the
+// SLAVEOFAI_CLAUDE_BIN/SLAVEOFAI_CLAUDE_ARGS to wire up), starts the real web server, opens the
 // activity stream over plain `fetch` (the honest end-to-end path — hitting `createEventSse`
 // in-process would skip Next's own routing and body-streaming), appends N=50 events at 100ms
 // intervals, and for each received frame measures the gap between the event's own `ts` (assigned
@@ -72,7 +72,7 @@ async function waitForWebReady(baseUrl, timeoutMs) {
 const web = spawn(
   'node',
   ['--env-file=.env', 'node_modules/next/dist/bin/next', 'dev', 'apps/web', '--port', PORT],
-  // M21 A1: the operator's AITEAMOS_SESSION_SECRET must not reach the child, or every page is /login.
+  // M21 A1: the operator's SLAVEOFAI_SESSION_SECRET must not reach the child, or every page is /login.
   { env: loopbackChildEnv(), stdio: ['ignore', 'pipe', 'pipe'] },
 )
 web.stdout.on('data', (chunk) => process.stdout.write(`[web] ${chunk}`))

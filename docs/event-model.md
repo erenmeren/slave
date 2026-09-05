@@ -55,12 +55,12 @@ them as plain `string` — so `toExecutionEvent` re-brands `row.taskId` / `row.a
 
 `appendEvent` (`packages/events/src/append.ts`) is the only function in this codebase that writes
 an `ExecutionEvent`. `packages/db` does not export the raw Prisma client from its package root;
-the client lives behind the `@ai-team-os/db/client` subpath declared in `packages/db/package.json`'s
+the client lives behind the `@slave-of-ai/db/client` subpath declared in `packages/db/package.json`'s
 `exports` map, and `packages/events` is the one package that imports it — from `append.ts`,
 `read.ts`, and two integration tests.
 
 **This is a convention, not a barrier.** Nothing stops another package from importing
-`@ai-team-os/db/client` and calling `executionEvent.create` directly: the subpath is a declared,
+`@slave-of-ai/db/client` and calling `executionEvent.create` directly: the subpath is a declared,
 public export, and `stream.test.ts` does exactly that on purpose, to plant rows the gate would have
 refused. (`append.test.ts` imports the same subpath, but only for `TRUNCATE`, `count()`, and its
 constraint-trigger fixture — it never bypasses the gate to write an event.) It has to be
@@ -69,7 +69,7 @@ package boundary to reach it, and a package-private client would make the gate i
 unimplementable. What the arrangement actually buys is that the raw client is absent from the
 barrel every other consumer imports, so reaching it takes a deliberate, greppable import of a
 second subpath. That makes a bypass visible in review; it does not make one impossible, and there
-is no runtime check behind it either. `grep -rn "@ai-team-os/db/client" packages` is the audit.
+is no runtime check behind it either. `grep -rn "@slave-of-ai/db/client" packages` is the audit.
 
 Inside a single `prisma.$transaction`:
 

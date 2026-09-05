@@ -8,9 +8,9 @@ const { cookieValue, findUnique } = vi.hoisted(() => ({
 // `next/headers` and the Prisma client are the two things `currentPrincipal` reaches for; both are
 // stubbed so this file stays a unit test of the decision, not of Next or of Postgres.
 vi.mock('next/headers', () => ({
-  cookies: async () => ({ get: (name: string) => (name === 'aiteamos_session' && cookieValue.current !== null ? { name, value: cookieValue.current } : undefined) }),
+  cookies: async () => ({ get: (name: string) => (name === 'slaveofai_session' && cookieValue.current !== null ? { name, value: cookieValue.current } : undefined) }),
 }))
-vi.mock('@ai-team-os/db/client', () => ({ prisma: { user: { findUnique } } }))
+vi.mock('@slave-of-ai/db/client', () => ({ prisma: { user: { findUnique } } }))
 
 const { currentPrincipal, requirePrincipal } = await import('../src/server/principal.js')
 const { mintSession } = await import('../src/lib/session.js')
@@ -20,7 +20,7 @@ const ADA = { id: 'ada-0001', username: 'ada' }
 
 describe('currentPrincipal', () => {
   beforeEach(() => {
-    vi.stubEnv('AITEAMOS_SESSION_SECRET', SECRET)
+    vi.stubEnv('SLAVEOFAI_SESSION_SECRET', SECRET)
     cookieValue.current = null
     findUnique.mockReset()
     findUnique.mockResolvedValue(ADA)
@@ -36,7 +36,7 @@ describe('currentPrincipal', () => {
   })
 
   it('is null in loopback mode, and never asks the database', async () => {
-    vi.stubEnv('AITEAMOS_SESSION_SECRET', '')
+    vi.stubEnv('SLAVEOFAI_SESSION_SECRET', '')
     cookieValue.current = await mintSession(SECRET, ADA.id, new Date())
     expect(await currentPrincipal()).toBeNull()
     expect(findUnique).not.toHaveBeenCalled()
@@ -70,7 +70,7 @@ describe('currentPrincipal', () => {
 
 describe('requirePrincipal', () => {
   beforeEach(() => {
-    vi.stubEnv('AITEAMOS_SESSION_SECRET', SECRET)
+    vi.stubEnv('SLAVEOFAI_SESSION_SECRET', SECRET)
     cookieValue.current = null
     findUnique.mockReset()
     findUnique.mockResolvedValue(ADA)
@@ -85,7 +85,7 @@ describe('requirePrincipal', () => {
   })
 
   it('hands back a null principal in loopback mode — writes carry no user, as today', async () => {
-    vi.stubEnv('AITEAMOS_SESSION_SECRET', '')
+    vi.stubEnv('SLAVEOFAI_SESSION_SECRET', '')
     expect(await requirePrincipal()).toEqual({ principal: null })
   })
 

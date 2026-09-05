@@ -33,7 +33,7 @@ const FAKE_CLAUDE = join(repoRoot, 'packages/providers/test/fake-claude.mjs')
 /** Same as `milestone-gate.test.ts`'s `makeRepo` -- a real repository, because the orchestrator's
  *  tick provisions a real worktree in it regardless of which CLI it spawns. */
 function makeRepo() {
-  const dir = mkdtempSync(join(tmpdir(), 'aiteamos-gate-m8-plan-'))
+  const dir = mkdtempSync(join(tmpdir(), 'slaveofai-gate-m8-plan-'))
   const git = (args) => execFileSync('git', args, { cwd: dir })
   git(['init', '-q', '-b', 'main'])
   git(['config', 'user.name', 'Gate'])
@@ -89,8 +89,8 @@ try {
     {
       env: {
         ...process.env,
-        AITEAMOS_CLAUDE_BIN: 'node',
-        AITEAMOS_CLAUDE_ARGS: `${FAKE_CLAUDE} --fixture m8-flow`,
+        SLAVEOFAI_CLAUDE_BIN: 'node',
+        SLAVEOFAI_CLAUDE_ARGS: `${FAKE_CLAUDE} --fixture m8-flow`,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     },

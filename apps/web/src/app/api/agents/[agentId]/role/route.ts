@@ -1,4 +1,4 @@
-import { setAgentRole } from '@ai-team-os/control'
+import { setAgentRole } from '@slave-of-ai/control'
 import { orgControlResponse } from '../../../../../server/orgControlRoute'
 import { requirePrincipal } from '../../../../../server/principal'
 

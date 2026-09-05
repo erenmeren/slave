@@ -1,10 +1,10 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@ai-team-os/db'
-import { prisma } from '@ai-team-os/db/client'
-import { agentId, runId, taskId, workspaceId } from '@ai-team-os/domain'
-import type { RuntimeEvent } from '@ai-team-os/providers'
+import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@slave-of-ai/db'
+import { prisma } from '@slave-of-ai/db/client'
+import { agentId, runId, taskId, workspaceId } from '@slave-of-ai/domain'
+import type { RuntimeEvent } from '@slave-of-ai/providers'
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { pumpRun } from '../../src/pump.js'
 
@@ -89,12 +89,12 @@ describe('pumpRun, when a paused Cursor run ends', () => {
     await prisma.$executeRawUnsafe(
       'TRUNCATE TABLE "ExecutionEvent", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
-    dir = mkdtempSync(path.join(tmpdir(), 'aiteamos-cursor-pump-'))
+    dir = mkdtempSync(path.join(tmpdir(), 'slaveofai-cursor-pump-'))
     writeFileSync(path.join(dir, 'pause.flag'), 'meren\n')
     spawnFacts = {
       settingsPath: path.join(dir, '.cursor', 'hooks.json'),
       pauseFlagPath: path.join(dir, 'pause.flag'),
-      hookPath: '/opt/aiteamos/cursor-shell-gate.sh',
+      hookPath: '/opt/slaveofai/cursor-shell-gate.sh',
       gitIdentity: { name: 'Alex', email: 'alex@example.com' },
       provider: 'cursor',
     }

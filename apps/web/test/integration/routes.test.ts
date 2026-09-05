@@ -1,4 +1,4 @@
-import { prisma } from '@ai-team-os/db/client'
+import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { GET as getOverview } from '../../src/app/api/w/[workspaceId]/overview/route.js'
 import { listWorkspaces } from '../../src/server/workspaces.js'
