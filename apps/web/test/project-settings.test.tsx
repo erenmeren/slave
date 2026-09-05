@@ -10,8 +10,9 @@ import { publishShellFacts } from '../src/hooks/useShellFacts.js'
 import { postControl, sendControl } from '../src/lib/postControl.js'
 
 const refresh = vi.fn()
+const push = vi.fn()
 
-vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh }) }))
+vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh, push }) }))
 
 vi.mock('../src/lib/postControl.js', () => ({
   postControl: vi.fn(async () => ({ ok: true as const })),
@@ -214,7 +215,7 @@ function settings(over: Partial<ProjectSettings['workspace']> = {}): ProjectSett
         },
       ],
     },
-    footprint: { departments: 1, slaves: 1, tasks: 0, runs: 0 },
+    footprint: { departments: 3, slaves: 9, tasks: 12, runs: 41 },
   }
 }
 
@@ -278,5 +279,48 @@ describe('ProjectSettingsClient', () => {
 
     rerender(<ProjectSettingsClient settings={settings({ haltedReason: 'budget exceeded' })} shellFacts={shellFacts()} />)
     expect(screen.getByRole('alert').textContent).toContain('budget exceeded')
+  })
+
+  // M27 §3.4: the archive confirm's text is fully composed from the footprint -- no counting in
+  // the component itself, `DangerConfirm`'s own contract (spec §6).
+  it('opens an archive confirm naming the footprint; confirming POSTs archive and leaves for Projects', async () => {
+    render(<ProjectSettingsClient settings={settings()} shellFacts={shellFacts()} />)
+    fireEvent.click(screen.getByTestId('archive-project'))
+
+    expect(screen.getByTestId('archive-project-confirm').textContent).toBe(
+      'archives Checkout Platform: 3 departments, 9 slaves, 12 tasks, 41 runs stay on record; nothing runs until you restore it',
+    )
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('archive-project-confirm'))
+    })
+
+    expect(sendControl).toHaveBeenCalledWith('/api/w/w1/archive', { method: 'POST' })
+    expect(push).toHaveBeenCalledWith('/')
+  })
+
+  it('an archived project shows restore instead of archive, with no confirm, and hides the stop', async () => {
+    render(<ProjectSettingsClient settings={settings({ archived: true })} shellFacts={shellFacts()} />)
+    expect(screen.queryByTestId('emergency-stop')).toBeNull()
+    expect(screen.queryByTestId('archive-project')).toBeNull()
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('restore-project'))
+    })
+
+    expect(sendControl).toHaveBeenCalledWith('/api/w/w1/restore', { method: 'POST' })
+    expect(refresh).toHaveBeenCalled()
+  })
+
+  it('shows a restore refusal in restore-project-error, without refreshing', async () => {
+    vi.mocked(sendControl).mockResolvedValueOnce('project w1 is not archived')
+    render(<ProjectSettingsClient settings={settings({ archived: true })} shellFacts={shellFacts()} />)
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('restore-project'))
+    })
+
+    expect(screen.getByTestId('restore-project-error').textContent).toBe('project w1 is not archived')
+    expect(refresh).not.toHaveBeenCalled()
   })
 })

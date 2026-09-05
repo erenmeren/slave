@@ -136,6 +136,55 @@ describe('ProjectsClient', () => {
     expect(routerPush).toHaveBeenCalledWith('/w/w7')
   })
 
+  describe('show archived (M27 §3.4)', () => {
+    it('is unchecked by default, and an archived card is absent', () => {
+      render(<TestProjectsClient projects={[project({ id: 'w1', archived: false })]} companies={companies} />)
+      expect((screen.getByTestId('show-archived') as HTMLInputElement).checked).toBe(false)
+      expect(screen.queryByTestId('project-archived')).toBeNull()
+    })
+
+    it('is checked when ?archived=1, and an archived card shows the chip and a restore button', () => {
+      search = 'archived=1'
+      render(
+        <TestProjectsClient
+          projects={[project({ id: 'w1', archived: true })]}
+          companies={companies}
+        />,
+      )
+      expect((screen.getByTestId('show-archived') as HTMLInputElement).checked).toBe(true)
+      expect(screen.getByTestId('project-archived').textContent).toBe('archived')
+      expect(screen.getByTestId('restore-project')).toBeTruthy()
+    })
+
+    it('checking it replaces the URL with ?archived=1', () => {
+      render(<TestProjectsClient projects={[project({ id: 'w1' })]} companies={companies} />)
+      fireEvent.click(screen.getByTestId('show-archived'))
+      expect(routerReplace).toHaveBeenCalledWith('/?archived=1')
+    })
+
+    it('unchecking it replaces the URL with no archived param', () => {
+      search = 'archived=1'
+      render(<TestProjectsClient projects={[project({ id: 'w1' })]} companies={companies} />)
+      fireEvent.click(screen.getByTestId('show-archived'))
+      expect(routerReplace).toHaveBeenCalledWith('/')
+    })
+
+    it('clicking restore-project POSTs /api/w/w1/restore and refreshes', async () => {
+      const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }))
+      vi.stubGlobal('fetch', fetchMock)
+      search = 'archived=1'
+      render(<TestProjectsClient projects={[project({ id: 'w1', archived: true })]} companies={companies} />)
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('restore-project'))
+      })
+
+      expect(fetchMock).toHaveBeenCalledWith('/api/w/w1/restore', expect.objectContaining({ method: 'POST' }))
+      expect(routerRefresh).toHaveBeenCalled()
+      vi.unstubAllGlobals()
+    })
+  })
+
   describe('assign company dialog', () => {
     let fetchMock: ReturnType<typeof vi.fn>
 

@@ -33,11 +33,17 @@ export function ProjectHeader({
   workspaceId,
   initial,
   workspaces,
+  archived = false,
 }: {
   readonly workspaceId: string
   /** The layout's server-rendered facts: what the header shows until the page's stream publishes. */
   readonly initial: ShellFacts
   readonly workspaces: readonly { readonly id: string; readonly name: string }[]
+  /** M27 §3.3: `workspaceArchived(workspaceId)`, read once by the layout alongside `initial`. An
+   *  archived project shows a faint `archived` chip beside its name and hides STOP -- it already
+   *  runs nothing, so there is nothing left to stop. Defaults to `false` so every existing caller
+   *  that predates M27 keeps rendering exactly as it did. */
+  readonly archived?: boolean
 }): React.JSX.Element {
   const published = useShellFacts(workspaceId)
   const facts = published ?? initial
@@ -74,6 +80,11 @@ export function ProjectHeader({
         className="pointer-events-none absolute inset-x-0 -bottom-px h-px bg-[linear-gradient(90deg,transparent,rgba(46,230,207,.5),rgba(123,140,255,.3),transparent)]"
       />
       <ProjectSwitcher current={facts.workspace} workspaces={workspaces} />
+      {archived && (
+        <span data-testid="project-archived" className="rounded-pill border border-line px-[9px] py-[3px] text-[10px] text-text-faint">
+          archived
+        </span>
+      )}
       <Link
         href={`/w/${workspaceId}/settings`}
         className="min-w-0 max-w-[420px] rounded-nav px-[6px] py-[3px] hover:bg-white/[0.045]"
@@ -112,7 +123,9 @@ export function ProjectHeader({
             </span>
           )}
         </span>
-        <EmergencyStopButton key={String(facts.status.haltedReason !== null)} workspaceId={workspaceId} halted={facts.status.haltedReason !== null} />
+        {!archived && (
+          <EmergencyStopButton key={String(facts.status.haltedReason !== null)} workspaceId={workspaceId} halted={facts.status.haltedReason !== null} />
+        )}
       </span>
     </header>
   )

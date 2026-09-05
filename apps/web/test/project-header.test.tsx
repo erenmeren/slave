@@ -127,6 +127,18 @@ describe('ProjectHeader', () => {
     expect((screen.getByTestId('emergency-stop') as HTMLButtonElement).disabled).toBe(true)
   })
 
+  it('renders no archived chip by default', () => {
+    render(<ProjectHeader workspaceId="w1" initial={facts()} workspaces={workspaces} />)
+    expect(screen.queryByTestId('project-archived')).toBeNull()
+  })
+
+  // M27 §3.3: the chip beside the name, no STOP -- an archived project already runs nothing.
+  it('shows the archived chip and hides STOP when archived', () => {
+    render(<ProjectHeader workspaceId="w1" initial={facts()} workspaces={workspaces} archived />)
+    expect(screen.getByTestId('project-archived').textContent).toBe('archived')
+    expect(screen.queryByTestId('emergency-stop')).toBeNull()
+  })
+
   it('opens the switcher with every workspace and a New project row', () => {
     render(<ProjectHeader workspaceId="w1" initial={facts()} workspaces={workspaces} />)
     fireEvent.click(screen.getByTestId('project-switcher'))

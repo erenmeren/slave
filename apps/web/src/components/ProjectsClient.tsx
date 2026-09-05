@@ -4,6 +4,7 @@ import { useRef, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import type { SlaveStatus } from '@slave-of-ai/domain'
 import { CARD_STATE_TONE, cardStateForSlave, type CardState } from '../lib/tones'
+import { sendControl } from '../lib/postControl'
 import type { ProjectRow, RosterCompany } from '../server/org'
 import { AssignCompanyDialog } from './AssignCompanyDialog'
 import { CompanyManager, type CompanyRow } from './CompanyManager'
@@ -58,6 +59,16 @@ function ProjectCard({
   // return focus to on Escape (`EmergencyStopButton.tsx`'s trigger-refocus idiom), without
   // touching the shared `ui/` component to add ref forwarding it doesn't otherwise need.
   const triggerWrapRef = useRef<HTMLDivElement>(null)
+  const [restoreError, setRestoreError] = useState<string | null>(null)
+
+  // Reversible (spec §3.4), so unlike archive there is no confirm here -- posting straight from
+  // the click is the same idiom `AssignCompanyDialog` uses for its own single-POST control.
+  const restore = async (): Promise<void> => {
+    setRestoreError(null)
+    const error = await sendControl(`/api/w/${project.id}/restore`, { method: 'POST' })
+    if (error === null) router.refresh()
+    else setRestoreError(error)
+  }
 
   return (
     <div data-testid="project-card" className="flex flex-col gap-2">
@@ -67,6 +78,11 @@ function ProjectCard({
             <div className="flex items-center gap-[6px]">
               <span className="truncate text-[14px] font-semibold tracking-[-.2px]">{project.name}</span>
               <Chip>{project.companyName ?? 'no company'}</Chip>
+              {project.archived && (
+                <span data-testid="project-archived" className="rounded-pill border border-line px-[9px] py-[3px] text-[10px] text-text-faint">
+                  archived
+                </span>
+              )}
             </div>
             <div data-testid="project-description" className="mt-[2px] truncate text-[11px] text-[#7c8697]">
               {project.goal ?? 'no goal set'}
@@ -106,46 +122,68 @@ function ProjectCard({
           {/* The caveat rides INSIDE the spend tile, as `StatStripItem.note` (M14 fix wave, queue
             * item (f)) -- exactly where `TopStrip` nests its own `strip-unmeasured`. It is never
             * folded into the figure (Decision 4), and the strip stays exactly 4-up, which is the
-            * handoff's own geometry. */}
+            * handoff's own geometry -- except an archived project (M27 §3.4's "no spend bar"),
+            * which drops to 3-up: spend is a live-budget figure, and an archived project spends
+            * nothing more. `slaves`/`active`/`blocked` stay -- they are still this project's
+            * history, which an archived project keeps in full (spec §3.3). */}
           <StatStrip
             items={[
               { label: 'slaves', value: String(project.workerCount) },
               { label: 'active', value: String(project.taskCounts.active), ...(project.taskCounts.active > 0 ? { tone: 'working' as const } : {}) },
               { label: 'blocked', value: String(project.taskCounts.blocked), ...(project.taskCounts.blocked > 0 ? { tone: 'blocked' as const } : {}) },
-              {
-                label: 'spend',
-                value: `$${project.spend.toFixed(2)}`,
-                ...(project.unmeasuredRuns > 0
-                  ? {
-                      note: (
-                        <span data-testid="project-unmeasured" className="font-mono text-[9.5px] text-tone-waiting">
-                          {project.unmeasuredRuns} run{project.unmeasuredRuns === 1 ? '' : 's'} unmeasured
-                        </span>
-                      ),
-                    }
-                  : {}),
-              },
+              ...(project.archived
+                ? []
+                : [
+                    {
+                      label: 'spend',
+                      value: `$${project.spend.toFixed(2)}`,
+                      ...(project.unmeasuredRuns > 0
+                        ? {
+                            note: (
+                              <span data-testid="project-unmeasured" className="font-mono text-[9.5px] text-tone-waiting">
+                                {project.unmeasuredRuns} run{project.unmeasuredRuns === 1 ? '' : 's'} unmeasured
+                              </span>
+                            ),
+                          }
+                        : {}),
+                    },
+                  ]),
             ]}
           />
         </div>
       </Card>
-      {project.companyName === null && (
-        <div ref={triggerWrapRef} className="w-full">
-          <Button
-            variant="ghost"
-            className="w-full"
-            data-testid="assign-company-button"
-            onClick={(event) => {
-              event.stopPropagation()
-              onAssign()
-            }}
-          >
-            Assign company
-          </Button>
+      {project.archived ? (
+        <div className="flex flex-col gap-1">
+          <PrimaryButton data-testid="restore-project" className="w-full" onClick={(event) => { event.stopPropagation(); void restore() }}>
+            restore
+          </PrimaryButton>
+          {restoreError !== null && (
+            <span role="alert" data-testid="restore-project-error" className="text-xs text-tone-blocked">
+              {restoreError}
+            </span>
+          )}
         </div>
-      )}
-      {assigning && (
-        <AssignCompanyDialog workspaceId={project.id} companies={companies} onClose={onCloseAssign} triggerRef={triggerWrapRef} />
+      ) : (
+        <>
+          {project.companyName === null && (
+            <div ref={triggerWrapRef} className="w-full">
+              <Button
+                variant="ghost"
+                className="w-full"
+                data-testid="assign-company-button"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  onAssign()
+                }}
+              >
+                Assign company
+              </Button>
+            </div>
+          )}
+          {assigning && (
+            <AssignCompanyDialog workspaceId={project.id} companies={companies} onClose={onCloseAssign} triggerRef={triggerWrapRef} />
+          )}
+        </>
       )}
     </div>
   )
@@ -159,6 +197,15 @@ function ProjectCard({
  * `templates`/`roster` feed that catalog and are required, the same as `companies` was on
  * `SettingsClient` before Task 5 moved it here -- a caller with no data still passes `[]`
  * explicitly rather than the catalog silently going empty.
+ *
+ * M27 §3.4: `show archived` round-trips through `?archived=1` (`page.tsx` reads the same param to
+ * decide whether `listProjects` includes archived rows at all) rather than filtering `projects`
+ * client-side -- an archived project's card needs the server's archived-row fields anyway, and
+ * there is no reason to fetch a row this page would only throw away. The checkbox sits grouped
+ * with the New project button at the row's right end (the header's own `ml-auto flex ... gap-3`
+ * idiom, `project/ProjectHeader.tsx`) with the button LAST in that group, so the button keeps the
+ * exact position it already had -- the M14 fidelity gate screenshots this row, and a checkbox
+ * placed after the button would shift it.
  */
 export function ProjectsClient({
   projects,
@@ -175,14 +222,26 @@ export function ProjectsClient({
   const searchParams = useSearchParams()
   const [assigningWorkspaceId, setAssigningWorkspaceId] = useState<string | null>(null)
   const [newOpen, setNewOpen] = useState(searchParams.get('new') === '1')
+  const showArchived = searchParams.get('archived') === '1'
 
   return (
     <div className="flex flex-col">
       <div className="flex items-center justify-between px-[20px] pt-[18px]">
         <SectionLabel>Projects</SectionLabel>
-        <PrimaryButton data-testid="new-project" onClick={() => setNewOpen(true)}>
-          + New project
-        </PrimaryButton>
+        <span className="flex items-center gap-3">
+          <label className="flex items-center gap-[6px] text-xs text-text-2">
+            <input
+              type="checkbox"
+              data-testid="show-archived"
+              checked={showArchived}
+              onChange={(event) => router.replace(event.target.checked ? '/?archived=1' : '/')}
+            />
+            show archived
+          </label>
+          <PrimaryButton data-testid="new-project" onClick={() => setNewOpen(true)}>
+            + New project
+          </PrimaryButton>
+        </span>
       </div>
       <div className="grid grid-cols-1 gap-[14px] p-[18px_20px] md:grid-cols-3">
         {projects.map((project) => (

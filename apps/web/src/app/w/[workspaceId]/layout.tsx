@@ -1,6 +1,6 @@
 import type React from 'react'
 import { buildShellFacts } from '../../../server/shell'
-import { listWorkspaceNames } from '../../../server/org'
+import { listWorkspaceNames, workspaceArchived } from '../../../server/org'
 import { ProjectHeader } from '../../../components/project/ProjectHeader'
 import { ProjectTabs } from '../../../components/project/ProjectTabs'
 
@@ -14,6 +14,11 @@ export const dynamic = 'force-dynamic'
  * from there by publishing its own snapshot to `hooks/useShellFacts.ts` (every one of the four
  * page clients, and now the Settings tab too), so the header never opens a connection of its own.
  * An unknown workspace renders the children alone — every page already answers that case.
+ *
+ * M27 §3.3 adds one more read alongside the other two: `workspaceArchived`, passed straight
+ * through to `ProjectHeader`'s `archived` chip. It rides in the same `Promise.all` rather than a
+ * fourth roundtrip after the fact -- this project's archived state is as much a part of "what the
+ * header shows once this layout mounts" as its name or its goal.
  */
 export default async function ProjectLayout({
   params,
@@ -23,11 +28,15 @@ export default async function ProjectLayout({
   children: React.ReactNode
 }): Promise<React.JSX.Element> {
   const { workspaceId } = await params
-  const [facts, workspaces] = await Promise.all([buildShellFacts(workspaceId), listWorkspaceNames()])
+  const [facts, workspaces, archived] = await Promise.all([
+    buildShellFacts(workspaceId),
+    listWorkspaceNames(),
+    workspaceArchived(workspaceId),
+  ])
   if (facts === null) return <>{children}</>
   return (
     <div className="flex min-h-screen flex-1 flex-col">
-      <ProjectHeader workspaceId={workspaceId} initial={facts} workspaces={workspaces} />
+      <ProjectHeader workspaceId={workspaceId} initial={facts} workspaces={workspaces} archived={archived} />
       <ProjectTabs workspaceId={workspaceId} initialTasksActive={facts.counts.tasksActive} />
       {children}
     </div>

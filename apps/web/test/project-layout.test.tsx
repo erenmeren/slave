@@ -5,9 +5,9 @@ import { describe, expect, it, vi } from 'vitest'
 vi.mock('next/navigation', () => ({ usePathname: () => '/w/w1/tasks', useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }) }))
 vi.mock('../src/server/shell', () => ({
   buildShellFacts: vi.fn(async (id: string) =>
-    id === 'w1'
+    id === 'w1' || id === 'archived-w'
       ? {
-          workspace: { id: 'w1', name: 'Checkout Platform' },
+          workspace: { id, name: 'Checkout Platform' },
           counts: { slavesWorking: 0, tasksActive: 3 },
           guardrails: { budgetUsd: 2, maxConcurrentRuns: 3, runTimeoutMs: 1_800_000, maxAttempts: 5 },
           status: { goal: 'Ship it', spentUsd: 0, unmeasuredRuns: 0, haltedReason: null },
@@ -15,7 +15,10 @@ vi.mock('../src/server/shell', () => ({
       : null,
   ),
 }))
-vi.mock('../src/server/org', () => ({ listWorkspaceNames: vi.fn(async () => [{ id: 'w1', name: 'Checkout Platform' }]) }))
+vi.mock('../src/server/org', () => ({
+  listWorkspaceNames: vi.fn(async () => [{ id: 'w1', name: 'Checkout Platform' }]),
+  workspaceArchived: vi.fn(async (id: string) => id === 'archived-w'),
+}))
 
 import ProjectLayout from '../src/app/w/[workspaceId]/layout'
 
@@ -28,6 +31,7 @@ describe('the project layout', () => {
     expect(screen.getByTestId('project-tab-tasks').getAttribute('aria-current')).toBe('page')
     expect(screen.getByTestId('project-tab-badge-tasks').textContent).toBe('3')
     expect(screen.getByTestId('page')).toBeTruthy()
+    expect(screen.queryByTestId('project-archived')).toBeNull()
   })
 
   it('renders only the page for an unknown workspace (the page says so itself)', async () => {
@@ -35,5 +39,13 @@ describe('the project layout', () => {
     render(tree)
     expect(screen.queryByTestId('project-header')).toBeNull()
     expect(screen.getByTestId('page')).toBeTruthy()
+  })
+
+  // M27 §3.3: `workspaceArchived` rides the same `Promise.all` as `buildShellFacts` and
+  // `listWorkspaceNames`, and its result reaches `ProjectHeader` as the `archived` prop.
+  it('passes workspaceArchived through to the header as the archived chip', async () => {
+    const tree = await ProjectLayout({ params: Promise.resolve({ workspaceId: 'archived-w' }), children: <div data-testid="page">page</div> })
+    render(tree)
+    expect(screen.getByTestId('project-archived').textContent).toBe('archived')
   })
 })
