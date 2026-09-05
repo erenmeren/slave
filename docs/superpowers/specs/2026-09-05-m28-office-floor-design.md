@@ -148,4 +148,34 @@ Global office; office-side editing; sound; touch; persisted camera; the other tw
 
 ## 13. Errata — where execution corrected the plan
 
-(empty at approval; filled by the last task)
+Controller rulings made while executing Tasks 1–4, in order:
+
+- **R1** — the running demo `next dev` (:3000) is stopped right before Task 3's `web:build` (a build clobbers a live dev server) and restarted for the user at the end of the branch; costs one restart, not a design change.
+- **R2** — Task 1's engine test gained an empty-roster case (`new WorldF({ departments: [] })` ticks and renders without throwing), since §5 requires an empty project to draw and the vendored engine had never been asked to before.
+- **R3** — one more listed vendor edit beyond §4.1's set: the `World` constructor's initial `spawnTask` loop now runs only when `this.departments.length > 0`. The design never had an empty office; §5 does. Recorded in the engine header as well as here.
+- **R4** — `blocked` is derived from `card.taskStatus === 'blocked'` only; the design's blocked-run-ids branch (`liveStatusOf(card)`) is dropped, because `overview.blocked`'s `kind: 'run'` rows are paused runs, not blocked ones, and reading them as blocked would invent a status the stream never claims.
+- **R5** — the task and the progress bar follow the live entry, not the task's own title: non-idle sets `task = { key: stepLabel ?? '', title: taskTitle ?? '—' }` and `progress = progressPct`; idle sets both to null/0. Set in `apply()` and re-asserted (re-locked) in `tick()` so the engine's own idle-wander never overwrites a real task with cosmetic state.
+- **R6** — no confetti trigger in M28: the overview stream carries neither a per-slave event type nor a success signal (`liveEvents` are summaries, not events), so nothing in `liveOffice.ts` can detect a "run succeeded" transition. The engine's confetti/coin machinery stays vendored and unused; the design's "working → idle at 100" trigger and its test are dropped. See also §8's reduced-motion note below — moot without a trigger, but recorded as deferred rather than silently dropped.
+- **R7** — board `doing = max(0, tasks.active - tasks.ready)`, so ready tasks are not drawn twice on the wall board; the resulting overlap with the merge queue is accepted as decorative (the wall board was never the queue of record).
+- **R8** — Task 3's engine edit at the bottom export block is eight `export const X = OfficeEngine.X` lines rather than one destructuring `export const { X, Y, ... } = OfficeEngine` statement, because Next's webpack build dropped the destructured bindings (every import read `undefined`) while the flat form survives the same build unchanged. Syntax only, not behaviour; the engine header's edit list carries this line per R8's own instruction.
+- **R9** — the roster-change rebuild in `OfficeClient` carries the camera forward as `{ li, ox, oy }` in a ref applied on the first frame after the new world's engine-created `view` exists, rather than copying the old `view` object onto the new world (the new world's `levels`/`base`/`w`/`h` must come from itself, not the previous roster's layout). No engine edit; costs a ref and four lines.
+- **R10** — that same rebuild effect applies the current overview to the new world immediately (`world.apply(liveSlavesOf(overview), boardFromOverview(overview))`) instead of waiting for the next stream tick, so a roster change never shows a frame of stale (pre-rebuild) slave state.
+- **R11** — the HUD's `hour` reads `world.hourLock ?? round(world.hour * 4) / 4` so the controlled range input follows the lock exactly (a lock value the engine's own tick already rounds to quarter-hours) instead of drifting from it by a rounding step.
+
+Divergences the plan itself predicted (plan T5 Step 3), all confirmed as-is:
+
+- The vocabulary gate needed no exclusion for the handoff copies — `docs/superpowers` was already excluded, so §7's planned `scripts/gate-m26-vocabulary.mjs` edit was never made.
+- Confetti: no trigger at all in M28 (R6 above supersedes the plan's "working → idle at 100" note).
+- The HUD's stream badge (`office-stream`: `● LIVE` / `● RECONNECTING`, following `useWorkspaceStream`'s `connection`) replaced the design's static `● LIVE`.
+- Reduced-motion confetti/coin skip (§8) is not implemented: the engine's confetti and the boss's coin throw live inside `WorldE.tick`, and skipping them under `prefers-reduced-motion` needs a vendor flag the constraints forbid beyond the listed §4.1 edits (plus R3, R8 above). Deferred, not silently dropped — moot in practice since R6 means nothing fires the confetti this milestone anyway.
+
+Task 4 deviations from the brief's literal code (from its report):
+
+- A test-only `WorldF` stub in `office-client.test.tsx`, needed for the `importOriginal`/full-mock interaction the client test's mocking strategy required.
+- `useFakeTimers` with a narrowed `toFake` list, to avoid a Vitest/sinon `requestAnimationFrame`-fake collision.
+- An off-by-one fix in `onNext`: the brief's literal code made the first click a no-op (the initial `focusId` already matched the first slave, so the first `Next` press advanced the index but not the rendered focus); corrected so the first click moves off the first slave.
+
+Anything else that diverged, found while executing Task 5:
+
+- The m11 gate's stage 7 brief code reads `office-focus`'s text unconditionally before checking the roster size, and only guards the `Next`-cycle assertion behind `officeSlaves > 1`. At HEAD, project A's roster at the point stage 7 runs is 1 department and **0** slaves (stage 6a deletes the one slave that stage 5 had moved into the second department; stage 6b then deletes that now-slave-less department, leaving only the original "Crew" department, empty). With zero slaves `OfficeClient` renders no focus card at all (§5's "empty project" case in `OfficeClient.tsx`'s `focused` computation applies to any zero-slave roster, not only a zero-department one), so stage 7 as implemented reads both counts from `prisma` and branches three ways: zero slaves asserts the focus card is absent, exactly one slave asserts it renders but does not assert `Next` changes anything (nothing to cycle to), and two or more asserts the cycle. This is the gate script only; no product code changed.
+

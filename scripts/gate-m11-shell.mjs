@@ -25,6 +25,11 @@
 // `department-delete`, `archive-project` and `restore-project` are all driven the same way every
 // earlier stage drives a control -- a real click through `DangerConfirm` where one applies, then a
 // direct `prisma` read, never the browser's own claim.
+//
+// Stage 7 (M28 Task 5): `/w/<A>/office`, the Office tab. Same discipline as every stage before it
+// -- the HUD counts and the roster both come from a direct `prisma` read taken right before the
+// navigation, never a number this script assumes, because stage 6's deletes leave project A with
+// whatever roster they left it with (a department survives, its one slave does not).
 
 import { execFileSync, spawn } from 'node:child_process'
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -687,6 +692,86 @@ try {
   console.log(
     'stage 6 complete: slave-delete (+ its run history), department-delete, archive-project and restore-project all verified against prisma',
   )
+
+  // ---- Scenario stage 7: /w/<A>/office -- the Office tab (M28 §9) draws project A's departments
+  // and slaves from the same rows the Slaves table showed, the HUD counts match prisma, the canvas
+  // has painted, and the focus card cycles through the roster.
+  //
+  // Project A's roster at this point (stage 6 deleted one slave and one department): the
+  // materialized "Crew" department survives everything above, but the one slave ever in it
+  // ("Gate Worker") was deleted in stage 6a after being moved into "M11 Gate Other Dept", which
+  // stage 6b then deleted too -- so `officeDepartments` is 1 and `officeSlaves` is 0 here, not 1.
+  // With zero slaves `OfficeClient` renders no focus card at all (`focused` falls through to
+  // `null` whenever `world.slaves.length === 0`, same as the empty-roster case `office-client.
+  // test.tsx` covers) -- so this stage reads the counts from prisma at runtime and branches on
+  // them rather than assuming a specific roster size: zero slaves asserts the focus card is
+  // absent, one slave asserts it renders but skips the Next-cycle (nothing to cycle to), and two
+  // or more asserts the Next click actually changes who is focused.
+  const officeDepartments = await prisma.team.count({ where: { workspaceId: workspaceIdA } })
+  const officeSlaves = await prisma.slave.count({ where: { team: { workspaceId: workspaceIdA } } })
+  await page.goto(`${baseUrl}/w/${workspaceIdA}/office`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
+  await waitVisible(page.getByTestId('office-canvas'), 'the office canvas')
+  const expectedCounts = `${officeDepartments} department${officeDepartments === 1 ? '' : 's'} · ${officeSlaves} slave${officeSlaves === 1 ? '' : 's'} · 0 working`
+  {
+    const deadline = Date.now() + ACTION_TIMEOUT_MS
+    let counts = await page.getByTestId('office-hud-counts').textContent()
+    while (counts !== expectedCounts && Date.now() < deadline) {
+      await delay(100)
+      counts = await page.getByTestId('office-hud-counts').textContent()
+    }
+    if (counts !== expectedCounts) await fail(`office HUD counts read ${JSON.stringify(counts)}, expected ${JSON.stringify(expectedCounts)}`)
+  }
+  console.log(`the office HUD counts read "${expectedCounts}" -- verified against prisma`)
+
+  // The office draws the floor only after `document.fonts.load` resolves, so poll `getImageData`
+  // for the painted state within `ACTION_TIMEOUT_MS` rather than sampling the canvas once.
+  let painted = { width: 0, height: 0, painted: false }
+  {
+    const deadline = Date.now() + ACTION_TIMEOUT_MS
+    while (!painted.painted && Date.now() < deadline) {
+      painted = await page.evaluate(() => {
+        const canvas = document.querySelector('[data-testid="office-canvas"]')
+        if (!(canvas instanceof HTMLCanvasElement) || canvas.width === 0 || canvas.height === 0) return { width: 0, height: 0, painted: false }
+        const ctx = canvas.getContext('2d')
+        if (ctx === null) return { width: canvas.width, height: canvas.height, painted: false }
+        const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height)
+        let lit = 0
+        for (let i = 0; i < data.length; i += 4 * 97) if (data[i] + data[i + 1] + data[i + 2] > 60) lit++
+        return { width: canvas.width, height: canvas.height, painted: lit > 20 }
+      })
+      if (!painted.painted) await delay(100)
+    }
+  }
+  if (!painted.painted) await fail(`the office canvas (${painted.width}x${painted.height}) has not painted the floor`)
+  console.log(`the office canvas (${painted.width}x${painted.height}) painted the floor`)
+
+  if (officeSlaves === 0) {
+    const focusCardCount = await page.getByTestId('office-focus').count()
+    if (focusCardCount !== 0) await fail(`the office focus card is present with zero slaves in "${workspaceNameA}" -- expected none`)
+    console.log(
+      `stage 7 complete: /w/${workspaceIdA}/office painted ${officeDepartments} department(s) and 0 slaves, counts matched prisma; no focus ` +
+        'card with an empty roster, so the Next-cycle was not asserted',
+    )
+  } else {
+    await waitVisible(page.getByTestId('office-focus'), 'the office focus card')
+    const firstFocus = await page.getByTestId('office-focus').textContent()
+    if (officeSlaves > 1) {
+      await clickUntil(
+        page.getByTestId('office-focus-next'),
+        async () => (await page.getByTestId('office-focus').textContent()) !== firstFocus,
+        'cycling the office focus card with Next',
+      )
+      console.log(
+        `stage 7 complete: /w/${workspaceIdA}/office painted ${officeDepartments} department(s) and ${officeSlaves} slaves, counts matched ` +
+          'prisma, the focus card cycled',
+      )
+    } else {
+      console.log(
+        `stage 7 complete: /w/${workspaceIdA}/office painted ${officeDepartments} department(s) and 1 slave, counts matched prisma; only one ` +
+          'slave, so Next has nowhere to cycle to and was not asserted to change the focus',
+      )
+    }
+  }
 
   console.log(`PASS: the shell staffed and steered ${projectNames.length} projects from the browser, then deleted and archived/restored through it`)
   exitCode = 0
