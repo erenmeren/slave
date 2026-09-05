@@ -49,27 +49,38 @@ afterEach(() => vi.restoreAllMocks())
 
 describe('liveStatusOf', () => {
   it.each(['idle', 'starting', 'working', 'pausing', 'paused', 'resuming', 'stopping'] as const)('passes %s through', (status) => {
-    expect(liveStatusOf(card({ status }), new Set())).toBe(status)
+    expect(liveStatusOf(card({ status }))).toBe(status)
   })
-  it('is blocked when the task is blocked or the run is in the blocked list', () => {
-    expect(liveStatusOf(card({ status: 'working', taskStatus: 'blocked' }), new Set())).toBe('blocked')
-    expect(liveStatusOf(card({ status: 'working', runId: 'r1' }), new Set(['r1']))).toBe('blocked')
-    expect(liveStatusOf(card({ status: 'working', runId: 'r2' }), new Set(['r1']))).toBe('working')
+  it('is blocked only when the task itself is blocked — the blocked list holds paused runs, not blocked ones (R4)', () => {
+    expect(liveStatusOf(card({ status: 'working', taskStatus: 'blocked' }))).toBe('blocked')
+    // A paused run sits in `overview.blocked` under `kind: 'run'` too (that is what makes it
+    // resumable from the panel); the run's own status carries here undisturbed by that.
+    expect(liveStatusOf(card({ status: 'paused', runId: 'r1' }))).toBe('paused')
   })
 })
 
 describe('liveSlavesOf / boardFromOverview', () => {
-  it('keys cards by slave id, reading the blocked run rows', () => {
+  it('keys cards by slave id; a run in the blocked list does not make the slave blocked', () => {
     const o = overview({
-      slaves: [card({ id: 's1', status: 'working', runId: 'r1', taskTitle: 'Ship it', stepLabel: 'verifying', progressPct: 55 }), card({ id: 's2' })],
+      slaves: [card({ id: 's1', status: 'paused', runId: 'r1', taskTitle: 'Ship it', stepLabel: 'verifying', progressPct: 55 }), card({ id: 's2' })],
       blocked: [{ kind: 'run', id: 'r1', title: 'x', detail: 'y', action: 'resume', runId: 'r1' }] as OverviewSnapshot['blocked'],
     })
     const m = liveSlavesOf(o)
-    expect(m.get('s1')).toEqual({ slaveId: 's1', status: 'blocked', taskTitle: 'Ship it', stepLabel: 'verifying', progressPct: 55, runId: 'r1' })
+    expect(m.get('s1')).toEqual({ slaveId: 's1', status: 'paused', taskTitle: 'Ship it', stepLabel: 'verifying', progressPct: 55, runId: 'r1' })
     expect(m.get('s2')?.status).toBe('idle')
   })
-  it('maps the task counts onto the board columns', () => {
-    expect(boardFromOverview(overview({ mergeQueue: [{ id: 'm1', title: 't', hasApproval: false }] as OverviewSnapshot['mergeQueue'] }))).toEqual({ todo: 3, doing: 2, review: 1, done: 4 })
+  it('reads the task status, not the blocked list, for the blocked signal', () => {
+    const o = overview({ slaves: [card({ id: 's1', status: 'working', taskStatus: 'blocked' })] })
+    expect(liveSlavesOf(o).get('s1')?.status).toBe('blocked')
+  })
+  it('maps the task counts onto the board columns, without double-counting ready into doing (R7)', () => {
+    const base = { mergeQueue: [{ id: 'm1', title: 't', hasApproval: false }] as OverviewSnapshot['mergeQueue'] }
+    expect(boardFromOverview(overview({ ...base, tasks: { active: 2, ready: 3, blocked: 1, done: 4, failed: 0 } as OverviewSnapshot['tasks'] }))).toEqual({
+      todo: 3, doing: 0, review: 1, done: 4,
+    })
+    expect(boardFromOverview(overview({ ...base, tasks: { active: 5, ready: 3, blocked: 1, done: 4, failed: 0 } as OverviewSnapshot['tasks'] }))).toEqual({
+      todo: 3, doing: 2, review: 1, done: 4,
+    })
   })
 })
 
@@ -102,6 +113,17 @@ describe('LiveOffice', () => {
       expect(alex.task).toEqual(expect.objectContaining({ key: 'verifying', title: 'Add the thing' }))
       expect(alex.progress).toBe(40)
     }
+  })
+
+  it('shows a task-less (goal-directed) run\'s real progress and step, title as an em dash (R5)', () => {
+    const o = office()
+    o.apply(new Map([['s1', live('working', { taskTitle: null, stepLabel: 'thinking', progressPct: 30 })]]), { todo: 0, doing: 0, review: 0, done: 0 })
+    const alex = o.slaves[0]!
+    expect(alex.task).toEqual(expect.objectContaining({ key: 'thinking', title: '—' }))
+    expect(alex.progress).toBe(30)
+    for (let i = 0; i < 10; i++) o.tick(0.05)
+    expect(alex.task).toEqual(expect.objectContaining({ key: 'thinking', title: '—' }))
+    expect(alex.progress).toBe(30)
   })
 
   it('never advances progress on its own', () => {
@@ -175,11 +197,23 @@ describe('LiveOffice', () => {
     expect(o.hour).toBe(14.5)
   })
 
-  it('celebrates a slave whose task finished', () => {
+  it('holds an hourLock of 0 (falsy is still a lock)', () => {
     const o = office()
-    o.apply(new Map([['s1', live('working', { progressPct: 100 })]]), { todo: 0, doing: 0, review: 0, done: 0 })
+    o.setWallClock(14.5)
+    o.hourLock = 0
     o.tick(0.05)
-    o.apply(new Map([['s1', live('idle')]]), { todo: 0, doing: 0, review: 0, done: 0 })
-    expect(o.events[0]).toEqual(expect.objectContaining({ type: 'task.done', slave: 'Alex' }))
+    expect(o.hour).toBe(0)
+  })
+
+  it('never lets a blocked or paused slave leave the desk, under the same wander conditions', () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0.1) // < .18 → the arcade, if idle wander applied
+    const o = office()
+    o.apply(new Map([['s1', live('blocked')], ['s2', live('paused', { slaveId: 's2' })]]), { todo: 0, doing: 0, review: 0, done: 0 })
+    settle(o, 30)
+    const [alex, maya] = o.slaves as [typeof o.slaves[0], typeof o.slaves[0]]
+    expect(alex.state).toBe('blocked')
+    expect(maya.state).toBe('paused')
+    expect([alex.x, alex.y]).toEqual([o.seat(alex).x, o.seat(alex).y])
+    expect([maya.x, maya.y]).toEqual([o.seat(maya).x, o.seat(maya).y])
   })
 })

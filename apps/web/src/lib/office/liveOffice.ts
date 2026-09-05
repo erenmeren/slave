@@ -35,21 +35,22 @@ export interface OfficeRosterDepartment {
   readonly slaves: readonly OfficeRosterSlave[]
 }
 
-/** Blocked wins over the run's own status: a slave whose task is blocked, or whose run sits in the
- *  overview's blocked list, shows the red bubble whatever the run is doing. */
-export function liveStatusOf(card: SlaveCardData, blockedRunIds: ReadonlySet<string>): LiveStatus {
-  if (card.taskStatus === 'blocked' || (card.runId !== null && blockedRunIds.has(card.runId))) return 'blocked'
+/** Blocked wins over the run's own status: a slave whose task is blocked shows the red bubble
+ *  whatever the run is doing. (R4: the overview's `blocked` list holds PAUSED runs under
+ *  `kind: 'run'`, not blocked ones — a paused slave's own `runId` is exactly that row, so reading
+ *  it here made every paused slave render as blocked. The task status is the one blocked signal.) */
+export function liveStatusOf(card: SlaveCardData): LiveStatus {
+  if (card.taskStatus === 'blocked') return 'blocked'
   return card.status
 }
 
 export function liveSlavesOf(overview: OverviewSnapshot): ReadonlyMap<string, LiveSlave> {
-  const blockedRunIds = new Set(overview.blocked.filter((b) => b.kind === 'run' && b.runId !== null).map((b) => b.runId as string))
   return new Map(
     overview.slaves.map((card) => [
       card.id,
       {
         slaveId: card.id,
-        status: liveStatusOf(card, blockedRunIds),
+        status: liveStatusOf(card),
         taskTitle: card.taskTitle,
         stepLabel: card.stepLabel,
         progressPct: card.progressPct,
@@ -60,9 +61,15 @@ export function liveSlavesOf(overview: OverviewSnapshot): ReadonlyMap<string, Li
 }
 
 /** The wall board's four columns from the counts the stream already carries (M28 §2): ready → todo,
- *  active → doing, the merge queue → review, done → done. */
+ *  `active` minus `ready` (R7: `tasks.active` already includes `ready`, and `merging`, so counting
+ *  both would double them onto the wall) → doing, the merge queue → review, done → done. */
 export function boardFromOverview(overview: OverviewSnapshot): LiveBoard {
-  return { todo: overview.tasks.ready, doing: overview.tasks.active, review: overview.mergeQueue.length, done: overview.tasks.done }
+  return {
+    todo: overview.tasks.ready,
+    doing: Math.max(0, overview.tasks.active - overview.tasks.ready),
+    review: overview.mergeQueue.length,
+    done: overview.tasks.done,
+  }
 }
 
 /** The design's board draws at most this many cards per column before they run off the wall. */
@@ -96,7 +103,10 @@ function cards(count: number): WorldTask[] {
  * this class replaces `simulate` so a slave's state comes from `apply()` — the stream's status per
  * slave — instead of the engine's own task board and dice. What stays from the design: the walk to
  * the board when a run starts, the walk with the finished work when it stops, the idle wander to
- * the arcade and the coffee machine, the cat, the roomba, the boss, the confetti.
+ * the arcade and the coffee machine, the cat, the roomba, the boss. The engine's confetti machinery
+ * also stays (R6), but nothing in this adapter fires it: `progressPct` is a tool-call ratio, not a
+ * finish line (a normal success ends well under 100), and the stream's `liveEvents` do not carry a
+ * per-slave `run.succeeded` — there is no live signal to build a trigger from.
  */
 export class LiveOffice extends WorldF {
   private live: ReadonlyMap<string, LiveSlave> = new Map()
@@ -130,15 +140,17 @@ export class LiveOffice extends WorldF {
   /** One stream snapshot: the status, task and progress of every slave, and the board counts. */
   apply(live: ReadonlyMap<string, LiveSlave>, board: LiveBoard): void {
     for (const slave of this.slaves) {
-      const before = this.live.get(slave.id)
       const after = live.get(slave.id)
-      if (before !== undefined && before.status === 'working' && before.progressPct >= 100 && (after === undefined || after.status === 'idle')) {
-        this.ev('task.done', slave, slave.task, 'run succeeded')
+      // R5: a task-less (goal-directed) run still has a real progress and step; the task line and
+      // the progress bar follow the live entry's status, not `taskTitle` — a null title just means
+      // the board shows an em dash instead of no task at all.
+      if (after !== undefined && after.status !== 'idle') {
+        slave.task = { key: after.stepLabel ?? '', title: after.taskTitle ?? '—', color: slave.color, deptColor: null, status: 'doing', blockedBy: null }
+        slave.progress = Math.max(0, Math.min(100, after.progressPct))
+      } else {
+        slave.task = null
+        slave.progress = 0
       }
-      slave.task =
-        after !== undefined && after.taskTitle !== null
-          ? { key: after.stepLabel ?? '', title: after.taskTitle, color: slave.color, deptColor: null, status: 'doing', blockedBy: null }
-          : null
     }
     this.live = live
     this.board = { todo: cards(board.todo), doing: cards(board.doing), review: cards(board.review), done: cards(board.done) }
@@ -247,10 +259,11 @@ export class LiveOffice extends WorldF {
   override tick(dt: number): void {
     super.tick(dt)
     this.hour = this.hourLock ?? this.wallHour
-    // Progress is the stream's number, whatever the boss did this frame.
+    // Progress is the stream's number, whatever the boss did this frame (same rule as `apply()`:
+    // the live entry's status decides, not its title — R5).
     for (const slave of this.slaves) {
       const l = this.live.get(slave.id)
-      slave.progress = l !== undefined && l.taskTitle !== null ? Math.max(0, Math.min(100, l.progressPct)) : 0
+      slave.progress = l !== undefined && l.status !== 'idle' ? Math.max(0, Math.min(100, l.progressPct)) : 0
     }
   }
 }
