@@ -698,26 +698,42 @@ export async function listAllSlaves(options?: { readonly includeArchived?: boole
     runCount: runCountBySlaveId.get(w.slaveId) ?? 0,
   }))
   const bySlaveId = new Map(workerRows.map((r) => [r.slaveId, r] as const))
+  // A catalog member's row (fix round 1, Important finding 1): built once, used both when the
+  // member has never been materialized at all AND when every worker it WAS materialized into
+  // belongs to a project this read is currently hiding (an archived project, unless
+  // `includeArchived` was passed). Without the second case, a slave whose only project went
+  // archived produced neither a project row (filtered by `listWorkers`) nor a catalog row (its
+  // `member.workers.length` is not `0`), vanishing from the table entirely -- including its
+  // `catalog-slave-delete` action, which this table is the only place that offers it.
+  const catalogRowFor = (
+    company: (typeof roster)[number],
+    team: (typeof roster)[number]['teams'][number],
+    member: (typeof roster)[number]['teams'][number]['members'][number],
+  ): AllSlaveRow => ({
+    slaveId: null, companySlaveId: member.companySlaveId, name: member.name, role: member.role,
+    departmentName: team.teamName, projectName: null, workspaceId: null,
+    teamId: null, companyId: company.companyId, companyTeamId: team.companyTeamId,
+    status: 'idle', currentTask: null,
+    provider: member.effectiveProvider,
+    gate: member.effectiveProvider === null ? null : capabilitiesOf(member.effectiveProvider).gate,
+    model: member.effectiveModel, costUsd: 0, unmeasuredRuns: 0, runCount: 0,
+  })
   const catalogRows: AllSlaveRow[] = []
   for (const company of roster) {
     for (const team of company.teams) {
       for (const member of team.members) {
         if (member.workers.length === 0) {
-          catalogRows.push({
-            slaveId: null, companySlaveId: member.companySlaveId, name: member.name, role: member.role,
-            departmentName: team.teamName, projectName: null, workspaceId: null,
-            teamId: null, companyId: company.companyId, companyTeamId: team.companyTeamId,
-            status: 'idle', currentTask: null,
-            provider: member.effectiveProvider,
-            gate: member.effectiveProvider === null ? null : capabilitiesOf(member.effectiveProvider).gate,
-            model: member.effectiveModel, costUsd: 0, unmeasuredRuns: 0, runCount: 0,
-          })
-        } else {
-          for (const worker of member.workers) {
-            const row = bySlaveId.get(worker.slaveId)
-            if (row !== undefined) bySlaveId.set(worker.slaveId, { ...row, companySlaveId: member.companySlaveId, companyId: company.companyId })
-          }
+          catalogRows.push(catalogRowFor(company, team, member))
+          continue
         }
+        let anyResolved = false
+        for (const worker of member.workers) {
+          const row = bySlaveId.get(worker.slaveId)
+          if (row === undefined) continue
+          anyResolved = true
+          bySlaveId.set(worker.slaveId, { ...row, companySlaveId: member.companySlaveId, companyId: company.companyId })
+        }
+        if (!anyResolved) catalogRows.push(catalogRowFor(company, team, member))
       }
     }
   }

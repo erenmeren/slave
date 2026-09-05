@@ -130,4 +130,22 @@ describe('listAllSlaves', () => {
     const archived = await listAllSlaves({ includeArchived: true })
     expect(archived.rows.map((r) => r.name)).toEqual(['Blair'])
   })
+
+  // Fix round 1, Important finding 1: a roster-linked slave whose ONLY project is archived used
+  // to vanish entirely -- filtered out of `listWorkers`' project rows, and never falling into the
+  // catalog branch because `member.workers.length !== 0`. It must fall back to a catalog row
+  // instead, carrying `catalog-slave-delete` the way an unmaterialized member does.
+  it('falls back to the catalog row when every project a roster member was materialized into is archived', async (): Promise<void> => {
+    const company = await prisma.company.create({ data: { name: 'Acme Robotics' } })
+    const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Eng' } })
+    const template = await prisma.slaveTemplate.create({ data: { name: 'Backend Engineer', role: 'backend' } })
+    const member = await prisma.companySlave.create({ data: { companyTeamId: companyTeam.id, templateId: template.id, name: 'Atlas' } })
+    await prisma.slave.create({ data: { teamId: fixture.teamId, name: 'Atlas', role: 'backend', companySlaveId: member.id } })
+
+    await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { archivedAt: new Date() } })
+
+    const { rows } = await listAllSlaves()
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ slaveId: null, companySlaveId: member.id, name: 'Atlas', runCount: 0 })
+  })
 })
