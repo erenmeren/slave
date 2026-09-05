@@ -451,6 +451,38 @@ function settingValue(field: 'provider' | 'budgetUsd', value: string | number | 
   return field === 'budgetUsd' ? `$${value}` : String(value)
 }
 
+// M27 §3.2: `archiveWorkspace` sets `archivedAt` -- the payload is the footprint the confirm
+// showed, so the timeline says exactly what stayed on record. `warn` tone: the project stops
+// scheduling from this moment on.
+function WorkspaceArchivedCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as {
+    name: string
+    departments: number
+    slaves: number
+    tasks: number
+    runs: number
+  }
+  return (
+    <ActivityCard {...props}>
+      <Transition tone="warn" label="project archived">
+        <span data-testid="archived-footprint">
+          {payload.departments} departments, {payload.slaves} slaves, {payload.tasks} tasks, {payload.runs} runs stay on record
+        </span>
+      </Transition>
+    </ActivityCard>
+  )
+}
+
+// M27 §3.2: `restoreWorkspace` clears `archivedAt`. `starting` tone, mirroring `WorkspaceCreatedCard`
+// -- the project is scheduleable again.
+function WorkspaceRestoredCard(props: ActivityCardProps): ReactElement {
+  return (
+    <ActivityCard {...props}>
+      <Transition tone="starting" label="project restored" />
+    </ActivityCard>
+  )
+}
+
 // M23 A1: the first event a workspace ever logs, from `createWorkspace`.
 function WorkspaceCreatedCard(props: ActivityCardProps): ReactElement {
   const payload = props.event.payload as { name: string; repoPath: string; verifyCommands: string[] }
@@ -601,5 +633,7 @@ export const ACTIVITY_CARDS = {
   'workspace.company_assigned': WorkspaceCompanyAssignedCard,
   'workspace.settings_changed': WorkspaceSettingsChangedCard,
   'workspace.created': WorkspaceCreatedCard,
+  'workspace.archived': WorkspaceArchivedCard,
+  'workspace.restored': WorkspaceRestoredCard,
   'org.changed': OrgChangedCard,
 } satisfies Record<DomainEventType, (props: ActivityCardProps) => ReactElement>

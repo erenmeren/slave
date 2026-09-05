@@ -240,6 +240,14 @@ describe('tick', () => {
     expect(await eventTypesFor(fixture.workspaceId)).toContain('guardrail.tripped')
   })
 
+  it('skips an archived workspace without loading the world', async (): Promise<void> => {
+    await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { archivedAt: new Date() } })
+    const report = await tick(deps)
+    expect(report.skipped).toBe('archived')
+    expect(report.started).toEqual([])
+    expect(await prisma.slaveRun.count()).toBe(0)
+  })
+
   it('does not repeat guardrail.tripped on a second tick while still halted', async (): Promise<void> => {
     await prisma.slaveRun.create({
       data: {

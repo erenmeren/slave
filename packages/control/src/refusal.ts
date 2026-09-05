@@ -16,6 +16,15 @@ export type ControlRefusal =
       readonly needed: readonly string[]
     }
   | { readonly kind: 'workspace_halted'; readonly workspaceId: string; readonly reason: string }
+  /** `admitRun` on an archived project (M27 §3.3): nothing dispatches for it until `restore-workspace`. */
+  | { readonly kind: 'workspace_archived'; readonly workspaceId: string }
+  /** `archiveWorkspace` on a project that is already archived (M27 §3.2). */
+  | { readonly kind: 'already_archived'; readonly workspaceId: string }
+  /** `restoreWorkspace` on a project that is not archived (M27 §3.2). */
+  | { readonly kind: 'not_archived'; readonly workspaceId: string }
+  /** M27 §2: every destructive verb refuses while a run is live. `entity` names what was being
+   *  archived or deleted; `runs` how many non-terminal runs stood in the way. */
+  | { readonly kind: 'live_runs'; readonly entity: 'workspace' | 'team' | 'slave'; readonly id: string; readonly runs: number }
   | { readonly kind: 'no_checkpoint'; readonly runId: string }
   /**
    * The run's row says `paused` but its process is still alive (M13 §3.2). The pump's ordering
@@ -126,6 +135,14 @@ export function refusalText(refusal: ControlRefusal): string {
         `this workspace is halted (${refusal.reason}). Nothing will run until an operator retracts ` +
         `it with: clear-halt --workspace ${refusal.workspaceId}`
       )
+    case 'workspace_archived':
+      return `project ${refusal.workspaceId} is archived; restore it first`
+    case 'already_archived':
+      return `project ${refusal.workspaceId} is already archived`
+    case 'not_archived':
+      return `project ${refusal.workspaceId} is not archived`
+    case 'live_runs':
+      return `${refusal.entity} ${refusal.id} has ${refusal.runs} live run(s); wait for them to finish or stop them first`
     case 'no_checkpoint':
       return `run ${refusal.runId} has no checkpoint: there is nothing to resume it from`
     case 'run_still_stopping':

@@ -162,6 +162,19 @@ export const executionEventSchema = z.discriminatedUnion('type', [
       provider: z.string().nullable(),
     }),
   }),
+  // M27 §3: archived keeps every row; the payload is the footprint the confirm showed.
+  z.object({
+    ...envelope,
+    type: z.literal('workspace.archived'),
+    payload: z.object({
+      name: z.string().min(1),
+      departments: z.number().int().nonnegative(),
+      slaves: z.number().int().nonnegative(),
+      tasks: z.number().int().nonnegative(),
+      runs: z.number().int().nonnegative(),
+    }),
+  }),
+  z.object({ ...envelope, type: z.literal('workspace.restored'), payload: z.object({ name: z.string().min(1) }) }),
   // M23 B2: `collectTaskWorktree` removed a terminal task's worktree.
   z.object({
     ...envelope,

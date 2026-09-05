@@ -89,6 +89,8 @@ const PAYLOAD_BY_TYPE: Record<DomainEventType, Record<string, unknown>> = {
     provider: 'claude_code',
   },
   'org.changed': { entity: 'slave', id: 'ag-1', field: 'name', from: 'Alex', to: 'Alexis' },
+  'workspace.archived': { name: 'Billing', departments: 2, slaves: 5, tasks: 8, runs: 22 },
+  'workspace.restored': { name: 'Billing' },
 }
 
 function fixtureFor(type: DomainEventType): ActivityEventRow {
@@ -234,6 +236,21 @@ describe('targeted card bodies', () => {
     expect(screen.getByTestId('workspace-created-name').textContent).toBe('Billing')
     expect(screen.getByTestId('transition-label').textContent).toBe('workspace created')
     expect(screen.getByTestId('activity-card').textContent).toContain('2 verify commands')
+  })
+
+  it('workspace.archived shows the footprint that stays on record', () => {
+    const Card = ACTIVITY_CARDS['workspace.archived']
+    render(<Card event={fixtureFor('workspace.archived')} {...CARD_PROPS} />)
+    expect(screen.getByTestId('transition-label').textContent).toBe('project archived')
+    expect(screen.getByTestId('archived-footprint').textContent).toBe(
+      '2 departments, 5 slaves, 8 tasks, 22 runs stay on record',
+    )
+  })
+
+  it('workspace.restored shows the transition label', () => {
+    const Card = ACTIVITY_CARDS['workspace.restored']
+    render(<Card event={fixtureFor('workspace.restored')} {...CARD_PROPS} />)
+    expect(screen.getByTestId('transition-label').textContent).toBe('project restored')
   })
 
   it('workspace.goal_set shows the goal text', () => {

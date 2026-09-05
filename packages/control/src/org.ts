@@ -183,7 +183,7 @@ export async function addCompanySlave(
  * every such workspace unassignable.
  */
 async function admitRoster(
-  workspace: { readonly id: string; readonly budgetUsd: number | null },
+  workspace: { readonly id: string; readonly budgetUsd: number | null; readonly archivedAt: Date | null },
   companyId: string,
 ): Promise<ControlRefusal | null> {
   if (workspace.budgetUsd === null) return null
@@ -399,7 +399,7 @@ export async function setSlaveModel(
     select: {
       model: true,
       provider: true,
-      team: { select: { workspaceId: true, workspace: { select: { id: true, budgetUsd: true } } } },
+      team: { select: { workspaceId: true, workspace: { select: { id: true, budgetUsd: true, archivedAt: true } } } },
     },
   })
   if (slave === null) return err({ kind: 'slave_not_found', slaveId })

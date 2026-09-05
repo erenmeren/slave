@@ -17,7 +17,7 @@ describe('admitRun', () => {
 
   it('refuses to dispatch a cost-blind provider into a budgeted workspace', () => {
     const result = admitRun({
-      workspace: { id: WORKSPACE_ID, budgetUsd: 20 },
+      workspace: { id: WORKSPACE_ID, budgetUsd: 20, archivedAt: null },
       provider: 'cursor',
       capabilities: { reportsCost: false },
     })
@@ -32,7 +32,7 @@ describe('admitRun', () => {
     // -- and asserted on the TEXT rather than only on `ok: false`, because a check that
     // `throw new Error('boom')` would satisfy is not a check (Task 8's fix round F3).
     const result = admitRun({
-      workspace: { id: WORKSPACE_ID, budgetUsd: 0.01 },
+      workspace: { id: WORKSPACE_ID, budgetUsd: 0.01, archivedAt: null },
       provider: 'cursor',
       capabilities: { reportsCost: false },
     })
@@ -43,7 +43,7 @@ describe('admitRun', () => {
 
   it('admits a cost-blind provider when the workspace has no budget', () => {
     const result = admitRun({
-      workspace: { id: WORKSPACE_ID, budgetUsd: null },
+      workspace: { id: WORKSPACE_ID, budgetUsd: null, archivedAt: null },
       provider: 'cursor',
       capabilities: { reportsCost: false },
     })
@@ -52,7 +52,7 @@ describe('admitRun', () => {
 
   it('admits a cost-reporting provider into a budgeted workspace', () => {
     const result = admitRun({
-      workspace: { id: WORKSPACE_ID, budgetUsd: 20 },
+      workspace: { id: WORKSPACE_ID, budgetUsd: 20, archivedAt: null },
       provider: 'claude_code',
       capabilities: { reportsCost: true },
     })
@@ -63,7 +63,7 @@ describe('admitRun', () => {
     // `0` is a budget an operator set, not an absent one. Only `null` is absent -- conflating the
     // two would let a cost-blind runtime into the most tightly budgeted workspace there is.
     const result = admitRun({
-      workspace: { id: WORKSPACE_ID, budgetUsd: 0 },
+      workspace: { id: WORKSPACE_ID, budgetUsd: 0, archivedAt: null },
       provider: 'cursor',
       capabilities: { reportsCost: false },
     })
@@ -75,14 +75,14 @@ describe('admitRun', () => {
     // is what proves the two real call sites are asking the same question this test asks.
     expect(
       admitRun({
-        workspace: { id: WORKSPACE_ID, budgetUsd: 20 },
+        workspace: { id: WORKSPACE_ID, budgetUsd: 20, archivedAt: null },
         provider: 'cursor',
         capabilities: capabilitiesOf('cursor'),
       }),
     ).toMatchObject({ ok: false })
     expect(
       admitRun({
-        workspace: { id: WORKSPACE_ID, budgetUsd: 20 },
+        workspace: { id: WORKSPACE_ID, budgetUsd: 20, archivedAt: null },
         provider: 'claude_code',
         capabilities: capabilitiesOf('claude_code'),
       }),

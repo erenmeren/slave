@@ -39,6 +39,8 @@ export const EVENT_TYPE_BY_DOMAIN_TYPE = {
   'workspace.company_assigned': 'workspace_company_assigned',
   'workspace.settings_changed': 'workspace_settings_changed',
   'workspace.created': 'workspace_created',
+  'workspace.archived': 'workspace_archived',
+  'workspace.restored': 'workspace_restored',
   'task.worktree_collected': 'task_worktree_collected',
   'org.changed': 'org_changed',
 } as const satisfies Record<DomainEventType, string>

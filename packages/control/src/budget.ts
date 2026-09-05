@@ -4,6 +4,10 @@ import type { ControlRefusal } from './refusal.js'
 /**
  * May a run on this provider start in this workspace? (spec §6, Decision 7; M12 Task 9.)
  *
+ * M27 §3.3: an archived project refuses first, ahead of the budget rule below -- once a project is
+ * archived nothing may dispatch into it, budgeted or not, so there is no ordering in which the
+ * budget check would ever need to be reached.
+ *
  * A budgeted workspace will not accept a runtime that cannot report what it spends. The guardrail
  * is real or it is absent, never silently inert: a `budgetUsd` that no run can ever move is worse
  * than no budget at all, because an operator reads it as protection they do not have.
@@ -27,10 +31,15 @@ import type { ControlRefusal } from './refusal.js'
  * unexamined.
  */
 export function admitRun(input: {
-  readonly workspace: { readonly id: string; readonly budgetUsd: number | null }
+  readonly workspace: { readonly id: string; readonly budgetUsd: number | null; readonly archivedAt: Date | null }
   readonly provider: ProviderKind
   readonly capabilities: Pick<ProviderCapabilities, 'reportsCost'>
 }): { readonly ok: true } | { readonly ok: false; readonly refusal: ControlRefusal } {
+  // M27 §3.3/§8: checked before the budget rule -- a tick that loaded the world just before an
+  // archive must not be able to dispatch into it after.
+  if (input.workspace.archivedAt !== null) {
+    return { ok: false, refusal: { kind: 'workspace_archived', workspaceId: input.workspace.id } }
+  }
   if (input.workspace.budgetUsd === null) return { ok: true }
   if (input.capabilities.reportsCost) return { ok: true }
   return {
@@ -47,7 +56,7 @@ export function admitRun(input: {
  * table currently says about any particular kind.
  */
 export function admitProvider(
-  workspace: { readonly id: string; readonly budgetUsd: number | null },
+  workspace: { readonly id: string; readonly budgetUsd: number | null; readonly archivedAt: Date | null },
   provider: ProviderKind,
 ): { readonly ok: true } | { readonly ok: false; readonly refusal: ControlRefusal } {
   return admitRun({ workspace, provider, capabilities: capabilitiesOf(provider) })

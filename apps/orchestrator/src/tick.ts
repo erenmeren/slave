@@ -56,6 +56,10 @@ export interface TickReport {
   /** The planning run this tick started, or `null` when none did (M8b). */
   readonly planningStarted: RunId | null
   readonly reviewsStarted: readonly RunId[]
+  /** `'archived'` when this tick did nothing because the project is archived (M27 §3.3); `null`
+   *  otherwise. Set before anything else is decided -- the rest of the report is meaningless when
+   *  this is set, since the world was never loaded. */
+  readonly skipped: 'archived' | null
 }
 
 /**
@@ -202,6 +206,13 @@ export async function tick(deps: TickDeps): Promise<TickReport> {
   // so a reconcile racing a tick fails a live run and hands its task to a second slave.
   noteTickRan()
 
+  // M27 §3.3: an archived project is invisible to the scheduler -- decided from one cheap read,
+  // before the world is loaded, so nothing under it can be dispatched.
+  const archived = await prisma.workspace.findUnique({ where: { id: deps.workspaceId }, select: { archivedAt: true } })
+  if (archived?.archivedAt != null) {
+    return { started: [], halted: null, skippedNoRole: 0, planningStarted: null, reviewsStarted: [], skipped: 'archived' }
+  }
+
   const { world, skippedNoRole } = await loadWorld(deps.workspaceId)
   const commands = decide(world)
 
@@ -224,7 +235,7 @@ export async function tick(deps: TickDeps): Promise<TickReport> {
         await pauseActiveRuns(deps.workspaceId, 'budget guardrail', 'guardrail')
       }
     }
-    return { started: [], halted: halt.reason, skippedNoRole, planningStarted: null, reviewsStarted: [] }
+    return { started: [], halted: halt.reason, skippedNoRole, planningStarted: null, reviewsStarted: [], skipped: null }
   }
   haltAnnounced.set(deps.workspaceId, false)
 
@@ -282,7 +293,7 @@ export async function tick(deps: TickDeps): Promise<TickReport> {
   // `runMergePass` itself.
   await runMergePass(deps.workspaceId)
 
-  return { started, halted: null, skippedNoRole, planningStarted, reviewsStarted }
+  return { started, halted: null, skippedNoRole, planningStarted, reviewsStarted, skipped: null }
 }
 
 /**

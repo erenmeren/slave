@@ -1,7 +1,7 @@
 import { stat } from 'node:fs/promises'
 import { isAbsolute } from 'node:path'
-import { prisma } from '@slave-of-ai/db/client'
-import { type Result, err, ok } from '@slave-of-ai/domain'
+import { Prisma, prisma } from '@slave-of-ai/db/client'
+import { NON_TERMINAL_RUN_STATUSES, type Result, err, ok } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import type { ProviderKind } from '@slave-of-ai/providers'
 import { realGitProbe, type GitProbe } from './git-probe.js'
@@ -191,4 +191,82 @@ export async function createWorkspace(
     userId: principal?.userId ?? null,
   })
   return ok({ id })
+}
+
+export interface Footprint {
+  readonly departments: number
+  readonly slaves: number
+  readonly tasks: number
+  readonly runs: number
+}
+
+/** What a project holds (M27 §3.4's confirm text, §7's `ProjectSettings.footprint`). Four counts,
+ *  one round trip each; `db` is a transaction client inside the verbs and `prisma` for reads. */
+export async function projectFootprint(db: Prisma.TransactionClient | typeof prisma, workspaceId: string): Promise<Footprint> {
+  const [departments, slaves, tasks, runs] = await Promise.all([
+    db.team.count({ where: { workspaceId } }),
+    db.slave.count({ where: { team: { workspaceId } } }),
+    db.task.count({ where: { workspaceId } }),
+    db.slaveRun.count({ where: { slave: { team: { workspaceId } } } }),
+  ])
+  return { departments, slaves, tasks, runs }
+}
+
+/** Non-terminal runs anywhere in the project -- the one definition every M27 verb refuses on. */
+export async function liveRunCount(db: Prisma.TransactionClient | typeof prisma, where: { workspaceId: string } | { teamId: string } | { slaveId: string }): Promise<number> {
+  const status = { in: [...NON_TERMINAL_RUN_STATUSES] }
+  if ('slaveId' in where) return db.slaveRun.count({ where: { slaveId: where.slaveId, status } })
+  if ('teamId' in where) return db.slaveRun.count({ where: { slave: { teamId: where.teamId }, status } })
+  return db.slaveRun.count({ where: { slave: { team: { workspaceId: where.workspaceId } }, status } })
+}
+
+/**
+ * Archives a project (M27 §3): every row stays, `archivedAt` is set, and from then on `tick()`
+ * skips it, `admitRun` refuses it and every list hides it. Refused while a run is live -- an
+ * archived project must have nothing in flight. A halt already in place is left alone.
+ */
+export async function archiveWorkspace(
+  workspaceId: string,
+  principal?: Principal,
+): Promise<Result<{ readonly footprint: Footprint }, ControlRefusal>> {
+  const outcome = await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM "Workspace" WHERE id = ${workspaceId} FOR UPDATE`
+    const workspace = await tx.workspace.findUnique({ where: { id: workspaceId }, select: { id: true, name: true, archivedAt: true } })
+    if (workspace === null) return { ok: false as const, error: { kind: 'workspace_not_found', workspaceId } as ControlRefusal }
+    if (workspace.archivedAt !== null) return { ok: false as const, error: { kind: 'already_archived', workspaceId } as ControlRefusal }
+    const runs = await liveRunCount(tx, { workspaceId })
+    if (runs > 0) return { ok: false as const, error: { kind: 'live_runs', entity: 'workspace', id: workspaceId, runs } as ControlRefusal }
+    const footprint = await projectFootprint(tx, workspaceId)
+    await tx.workspace.update({ where: { id: workspaceId }, data: { archivedAt: new Date() } })
+    return { ok: true as const, value: { name: workspace.name, footprint } }
+  })
+  if (!outcome.ok) return err(outcome.error)
+
+  await appendEvent({
+    type: 'workspace.archived',
+    workspaceId,
+    actor: 'human',
+    payload: { name: outcome.value.name, ...outcome.value.footprint },
+    userId: principal?.userId ?? null,
+  })
+  return ok({ footprint: outcome.value.footprint })
+}
+
+/** Undoes {@link archiveWorkspace}. A halt that predates the archive stays. */
+export async function restoreWorkspace(
+  workspaceId: string,
+  principal?: Principal,
+): Promise<Result<void, ControlRefusal>> {
+  const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId }, select: { id: true, name: true, archivedAt: true } })
+  if (workspace === null) return err({ kind: 'workspace_not_found', workspaceId })
+  if (workspace.archivedAt === null) return err({ kind: 'not_archived', workspaceId })
+  await prisma.workspace.update({ where: { id: workspaceId }, data: { archivedAt: null } })
+  await appendEvent({
+    type: 'workspace.restored',
+    workspaceId,
+    actor: 'human',
+    payload: { name: workspace.name },
+    userId: principal?.userId ?? null,
+  })
+  return ok(undefined)
 }

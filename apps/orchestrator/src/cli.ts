@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 import {
   addCompanySlave,
   addCompanyTeam,
+  archiveWorkspace,
   assignCompany,
   claimResume,
   createCompany,
@@ -25,6 +26,7 @@ import {
   renameTeam,
   requestPause,
   requestStop,
+  restoreWorkspace,
   setSlaveModel,
   setSlaveRole,
   setGoal,
@@ -64,6 +66,10 @@ const USAGE = `usage: orchestrator <command> [options]
                                        exist, and at least one verify command is required -- a
                                        workspace with none can never reach done. --verify and
                                        --setup repeat, one command each, run in the order given.
+  archive-workspace --workspace <id>   archive a project: every row stays, nothing runs until
+                                       restore-workspace. Refused while a run is live.
+  restore-workspace --workspace <id>   bring an archived project back
+  list-workspaces                      every project, archived ones marked
   skills sync                          rescan the skill catalog from this host's disk:
                                        ~/.claude/skills, the plugin cache, and <repo>/.claude/skills
   create-template --name <n> --role <r> [--model <m> --provider <p>] [--description <d>]
@@ -264,7 +270,9 @@ async function resolveWorkspace(flags: Flags): Promise<WorkspaceId> {
   const given = flagText(flags, 'workspace')
   if (given !== undefined) return brandWorkspaceId(given)
 
-  const all = await prisma.workspace.findMany({ select: { id: true, name: true } })
+  // M27 §3.3: the auto-pick only ever considers a project that is not archived -- an explicit
+  // `--workspace` may still name an archived one, and `tick`/`status` handle that themselves.
+  const all = await prisma.workspace.findMany({ where: { archivedAt: null }, select: { id: true, name: true } })
   if (all.length === 1 && all[0] !== undefined) return brandWorkspaceId(all[0].id)
   if (all.length === 0) throw new Error('there are no workspaces: seed one first')
   throw new Error(
@@ -370,6 +378,7 @@ export async function main(argv: readonly string[]): Promise<number> {
     case 'status': {
       const workspaceId = await resolveWorkspace(flags)
       const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: workspaceId } })
+      if (workspace.archivedAt !== null) process.stdout.write(`archived: ${workspace.archivedAt.toISOString()}\n`)
       const runs = await prisma.slaveRun.findMany({
         // On the status column, not on `endedAt`: the two can disagree, and everything else in the
         // system -- `loadWorld`'s busy check, the sweep, the orphan pass -- asks the status.
@@ -608,6 +617,29 @@ export async function main(argv: readonly string[]): Promise<number> {
       })
       if (!result.ok) throw new Error(refusalText(result.error))
       process.stdout.write(`workspace ${result.value.id} created\n`)
+      return 0
+    }
+
+    case 'archive-workspace': {
+      const workspaceId = requireFlag(flags, 'workspace')
+      const result = await archiveWorkspace(workspaceId)
+      if (!result.ok) throw new Error(refusalText(result.error))
+      const f = result.value.footprint
+      process.stdout.write(`project ${workspaceId} archived: ${f.departments} departments, ${f.slaves} slaves, ${f.tasks} tasks, ${f.runs} runs stay on record\n`)
+      return 0
+    }
+
+    case 'restore-workspace': {
+      const workspaceId = requireFlag(flags, 'workspace')
+      const result = await restoreWorkspace(workspaceId)
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(`project ${workspaceId} restored\n`)
+      return 0
+    }
+
+    case 'list-workspaces': {
+      const all = await prisma.workspace.findMany({ select: { id: true, name: true, archivedAt: true }, orderBy: { name: 'asc' } })
+      for (const w of all) process.stdout.write(`${w.id}  ${w.name}${w.archivedAt === null ? '' : `  (archived ${w.archivedAt.toISOString()})`}\n`)
       return 0
     }
 

@@ -58,6 +58,8 @@ model Workspace {
   autoMerge      Boolean   @default(false)
   haltedReason   String?
   haltedAt       DateTime?
+  /// M27: an archived project keeps every row but leaves every list and the scheduler (spec §3).
+  archivedAt     DateTime?
   /// The operator's standing instruction for what this workspace's slaves are working toward
   /// (M8b). Read by the planner (Task 4) and written by the workspace settings UI (Task 6) --
   /// unlike `verifyCommands`/`setupCommands` above, an unset goal is a perfectly ordinary state
@@ -546,6 +548,9 @@ enum EventType {
   workspace_settings_changed @map("workspace.settings_changed")
   /// M23 A1: the first event a workspace ever logs, from `createWorkspace`.
   workspace_created          @map("workspace.created")
+  /// M27 §3: the project was archived / restored; the archive payload carries the footprint.
+  workspace_archived         @map("workspace.archived")
+  workspace_restored         @map("workspace.restored")
   /// M23 B2: `collectTaskWorktree` removed a terminal task's worktree -- aged out or by an
   /// operator's button.
   task_worktree_collected    @map("task.worktree_collected")
