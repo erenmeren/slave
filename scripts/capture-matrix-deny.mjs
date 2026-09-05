@@ -12,7 +12,7 @@
 //
 // WHAT MAKES THE DENY REAL. Everything in the enforcement chain is the repo's own, unfaked:
 //
-//   - the deny is an `SlavePermission` row (`{ tool: 'run tests', mode: 'deny' }`) --
+//   - the deny is a `SlavePermission` row (`{ tool: 'run tests', mode: 'deny' }`) --
 //     `gate-m18-skill-and-teeth.mjs:504`'s seed;
 //   - `apps/orchestrator/src/tick.ts` resolves it through `packages/control`'s `resolveDenyList`
 //     and writes the run's own `permissions.json` at dispatch;

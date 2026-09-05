@@ -88,7 +88,7 @@ function singleAdapterRegistry(adapter: ClaudeCodeAdapter): AdapterRegistry {
  * Drives a real `tick` with the `complete` fixture to give the seeded task a real worktree, branch
  * and a `succeeded` implementation run -- landing it in `reviewing` the way production does since
  * Task 8's flip (verify green enters review directly; nothing here parks it there by hand anymore).
- * Cheaper and more real than hand-provisioning a worktree and forging an `SlaveRun` row: this is the
+ * Cheaper and more real than hand-provisioning a worktree and forging a `SlaveRun` row: this is the
  * exact shape `dispatchReviews` will actually see in production.
  */
 async function seedReviewingTask(fixture: Fixture, reviewFixture = 'review-approve'): Promise<TickDeps> {

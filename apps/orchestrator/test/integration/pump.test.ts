@@ -1491,9 +1491,8 @@ describe('pumpRun', () => {
 
         // Same shape `stopped_by_gate` has always produced (M13 Decisions 1-2): the pump kills the
         // still-running child and pauses the row -- byte-identical to the pre-Task-6 behaviour,
-        // because this fixture's own deny reason ("Paused by Slave of AI. Stop and wait.") carries
-        // no matrix prefix, so `classifyGateEvent` still routes it to `stopped_by_gate`, not the
-        // new `tool_denied` kind.
+        // because this fixture's own deny reason is a bare pause reason, no matrix prefix, so
+        // `classifyGateEvent` still routes it to `stopped_by_gate`, not the new `tool_denied` kind.
         expect(outcome).toBeNull()
         const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
         expect(run.status).toBe('paused')

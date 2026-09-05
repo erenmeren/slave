@@ -457,7 +457,7 @@ model Checkpoint {
   gitAuthorName     String
   gitAuthorEmail    String
   /// Free text: the operator-supplied reason that went into the hook's deny message, not the
-  /// SlaveRun.pauseReason category enum. Never assign an SlaveRun.pauseReason enum member's
+  /// SlaveRun.pauseReason category enum. Never assign a SlaveRun.pauseReason enum member's
   /// literal spelling here — that would read as this field being the same enum when it is not.
   pauseReason       String?
   requestedBy       String?

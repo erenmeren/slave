@@ -21,7 +21,7 @@
 // because the override below always wins for the one dispatch this gate drives.
 //
 // The three proof stages (Task 13 brief):
-//   1. Enforcement: an `SlavePermission` deny on 'run tests', a dispatched run that replays the
+//   1. Enforcement: a `SlavePermission` deny on 'run tests', a dispatched run that replays the
 //      matrix-deny fixture, and the database proving the run survived it -- one `run.tool_denied`,
 //      zero `guardrail.tripped`, never `paused` -- plus the Activity page rendering the denial card.
 //   2. Skill tab: two runs' worth of ordered `Skill` events, the aggregate canvas, the Focus click

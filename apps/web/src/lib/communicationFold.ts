@@ -35,7 +35,7 @@ export interface CommunicationEdge {
  *   implementer -> `implementer -> reviewer, 'review'`.
  * - `task.review_rejected` names a reviewer; the next `run.started` on the same task names the
  *   slave sent back to rework it -> `reviewer -> implementer, 'rework'`.
- * - `slave.message_sent` with `actor: 'human'` and an `slaveId` -> `operator -> slaveId,
+ * - `slave.message_sent` with `actor: 'human'` and a `slaveId` -> `operator -> slaveId,
  *   'message'`.
  *
  * `events` must already be in `seq` order -- the fold is a single forward pass with no look-ahead

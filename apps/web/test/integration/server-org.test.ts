@@ -419,7 +419,7 @@ describe('org query module', () => {
       expect(atlas?.projectName).toBe('Checkout Platform')
     })
 
-    // Review I4, the ruling stated positively: a slave is an `Slave` row on a workspace's team.
+    // Review I4, the ruling stated positively: a slave is a `Slave` row on a workspace's team.
     // `department` is the team name (which every slave has); the company is optional.
     it('lists a slave that was never staffed from a company, under its team name', async (): Promise<void> => {
       const workers = await listWorkers()

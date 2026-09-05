@@ -52,8 +52,8 @@ refuses at pre-flight) — and relays its stdout and exit status verbatim:
 
 ```bash
 #!/usr/bin/env bash
-LOG="${AITEAMOS_GATE_LOG:-}"
-if [[ -z "$LOG" ]]; then printf 'gate-wrapper.sh: AITEAMOS_GATE_LOG is unset\n' >&2; exit 2; fi
+LOG="${SLAVEOFAI_GATE_LOG:-}"
+if [[ -z "$LOG" ]]; then printf 'gate-wrapper.sh: SLAVEOFAI_GATE_LOG is unset\n' >&2; exit 2; fi
 payload=$(cat)
 printf '>>> stdin: %s\n' "$payload" >> "$LOG"
 out=$(printf '%s' "$payload" | /home/fixture-user/projects/slave-of-ai/scripts/cursor-shell-gate.sh)
@@ -81,9 +81,9 @@ read as "the agent never tried".
 
 ```bash
 cd /tmp/m13-cursor-gate/run-1
-export AITEAMOS_PAUSE_FLAG=/tmp/m13-cursor-gate/run-1.flag
-export AITEAMOS_GATE_LOG=/tmp/m13-cursor-gate/run-1-hook.log
-rm -f "$AITEAMOS_PAUSE_FLAG" "$AITEAMOS_GATE_LOG"
+export SLAVEOFAI_PAUSE_FLAG=/tmp/m13-cursor-gate/run-1.flag
+export SLAVEOFAI_GATE_LOG=/tmp/m13-cursor-gate/run-1-hook.log
+rm -f "$SLAVEOFAI_PAUSE_FLAG" "$SLAVEOFAI_GATE_LOG"
 cursor-agent --print --output-format stream-json --trust --force \
   'Run the shell command `echo m13-shell-ok > shell.txt`, then write a file named write.txt whose only content is the word ok. Do both, then stop.' \
   > /tmp/m13-cursor-gate/run-1-flag-absent.ndjson 2> /tmp/m13-cursor-gate/run-1.stderr
@@ -104,9 +104,9 @@ cursor-agent --print --output-format stream-json --trust --force \
 
 ```bash
 cd /tmp/m13-cursor-gate/run-2
-export AITEAMOS_PAUSE_FLAG=/tmp/m13-cursor-gate/run-2.flag
-export AITEAMOS_GATE_LOG=/tmp/m13-cursor-gate/run-2-hook.log
-printf 'Paused by the M13 gate evidence run.' > "$AITEAMOS_PAUSE_FLAG"
+export SLAVEOFAI_PAUSE_FLAG=/tmp/m13-cursor-gate/run-2.flag
+export SLAVEOFAI_GATE_LOG=/tmp/m13-cursor-gate/run-2-hook.log
+printf 'Paused by the M13 gate evidence run.' > "$SLAVEOFAI_PAUSE_FLAG"
 cursor-agent --print --output-format stream-json --trust --force \
   'Run the shell command `echo m13-shell-ok > shell.txt`, then write a file named write.txt whose only content is the word ok. Do both, then stop.' \
   > /tmp/m13-cursor-gate/run-2-flag-present.ndjson 2> /tmp/m13-cursor-gate/run-2.stderr

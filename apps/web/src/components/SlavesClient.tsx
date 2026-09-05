@@ -89,7 +89,7 @@ export function SlavesClient({
       return
     }
     // The panel renders from the OVERVIEW snapshot of the slave's own workspace -- the one place
-    // an `SlaveCardData` is built. Fetching it here rather than widening `AllSlaveRow` into an
+    // a `SlaveCardData` is built. Fetching it here rather than widening `AllSlaveRow` into an
     // `SlaveCardData` keeps one builder for that shape.
     void fetch(`/api/w/${selected.workspaceId}/overview`)
       .then(async (response) => (response.ok ? ((await response.json()) as OverviewSnapshot) : null))

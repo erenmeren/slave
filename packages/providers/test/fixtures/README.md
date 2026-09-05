@@ -117,10 +117,10 @@ link of the enforcement chain in the recording is the product's, not the script'
 - the task, verbatim: *"Read `target.txt`, then run the test suite with `npm test`, then report what
   target.txt contains."*
 
-The **only** thing the script inserts is a stdout tee: `AITEAMOS_CLAUDE_BIN` points at a generated
+The **only** thing the script inserts is a stdout tee: `SLAVEOFAI_CLAUDE_BIN` points at a generated
 bash wrapper whose whole body is `"$CLAUDE" "$@" | tee <out>` followed by `exit ${PIPESTATUS[0]}`
 — it runs the real binary, copies its stdout to disk, and hands the adapter the CLI's own exit
-status rather than `tee`'s. `AITEAMOS_CLAUDE_ARGS` is left untouched, so the adapter built
+status rather than `tee`'s. `SLAVEOFAI_CLAUDE_ARGS` is left untouched, so the adapter built
 the same argv a production dispatch builds — recorded in the capture directory's `invocations.log`:
 
 ```

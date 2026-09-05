@@ -180,3 +180,63 @@ reviewer can bisect a mistake to a layer.
     was removed (`git rm`) rather than left stale once `gate:m14-fidelity` started writing
     `slaves.png` for the renamed `/slaves` page; nothing else Step 3's gates exercised needed a
     hand fix.
+12. Final review fix wave (2026-09-05, HEAD 9d9e3e4): `ARTICLE_RULES` rewritten from a literal
+    `an slave`/`An slave` match to a lookahead with an optional backtick between the article and
+    the noun (`/\ban (?=`?(?:[Ss]lave|SLAVE))/g` and its `An` counterpart), so a compound in code
+    font (`` `SlavePermission` ``, `` `slaveId` ``, `` `SlaveRun` ``) gets the article fix too, not
+    only the bare word. Self-test grew from 22 to 23 cases (one new backtick-compound case). A
+    `--phase words` re-run over `packages/`, `apps/`, `scripts/` then caught seven residues the
+    tightened rule fixes: `packages/db/prisma/schema.prisma`, `apps/web/src/components/SlavesClient.tsx`,
+    `apps/web/src/lib/communicationFold.ts`, `apps/orchestrator/test/integration/review.test.ts`,
+    `apps/web/test/integration/server-org.test.ts`, `scripts/capture-matrix-deny.mjs`,
+    `scripts/gate-m18-skill-and-teeth.mjs` — plus one residue the rule found beyond the known list:
+    `packages/providers/test/helpers/gate-fixture.ts`'s "an `SLAVEOFAI_HOOK_PATH`" (a stale article
+    left over from an earlier scope rename, now `a `SLAVEOFAI_HOOK_PATH``, since the lookahead's
+    `SLAVE` branch also matches as a literal prefix of the all-caps scope token). The `--phase
+    words` run also touched `scripts/gate-m26-vocabulary.mjs`, rewriting its own `git grep` search
+    target from `agent` to `slave` — a real behaviour change to the gate's own logic (it exists to
+    search for `agent`, not to have `agent` renamed inside it, the same way
+    `scripts/rename-agent-to-slave.mjs` protects itself in `PROTECTED_PATHS`); that file's content
+    was reverted to `HEAD` before its own hand-edit below, and no functional change resulted from
+    the words-phase run touching it. The two mockup files were `git mv`'d to the names the
+    handoff's own `README.md` (and `tones.ts`, `globals.css`, `ActivityCard.tsx`, `FilterBar.tsx`,
+    `Timeline.tsx`, `ProjectHeader.tsx` and their tests) already cited: `Slave of AI Mockups.dc.html`
+    and `Slave of AI Web.dc.html`; the directory keeps its name. The `pump.test.ts:1494` comment
+    that misquoted the protected `hook-deny.ndjson` fixture's deny reason as "Paused by Slave of
+    AI. Stop and wait." (the fixture, protected, still says "Paused by AI Team OS…") was reworded
+    to describe the reason's shape ("a bare pause reason, no matrix prefix") without quoting the
+    product name. `packages/providers/test/fixtures/README.md:120-123` and
+    `packages/providers/test/fixtures/cursor/gate/README.md:55-109` — prose re-capture recipes, not
+    captured vendor output — had their dead `AITEAMOS_CLAUDE_BIN` / `AITEAMOS_CLAUDE_ARGS` /
+    `AITEAMOS_GATE_LOG` / `AITEAMOS_PAUSE_FLAG` env names renamed to `SLAVEOFAI_*` by a plain
+    `sed` on those two files only; the captured `.ndjson` fixtures stay byte-identical.
+    `scripts/gate-m26-vocabulary.mjs` was widened to also guard the scope tokens (`aiteamos`,
+    `ai-team-os`, `AITEAMOS_`, `AI Team OS`) alongside bare `agent`, sharing one `PATTERN` constant
+    between the `git grep` invocation and the post-`PROTECTED`-strip offender re-check so the
+    widening is actually enforced, not merely a wider search that never fails; the `PROTECTED`
+    regex and `EXCLUDE` list are unchanged, per the ruling. Running the widened gate surfaced one
+    offender this task did not resolve: `packages/domain/src/docs/superpowers/specs/2026-08-18-m2-
+    persistence-and-events-design.md`'s live "Parent spec" cross-reference to the real, protected,
+    unrenamed filename `docs/superpowers/specs/2026-08-17-ai-team-os-design.md` (entry 10 above
+    predates the widening and said this file needed no protecting — true only while the gate
+    searched for `agent` alone). This is the same shape as entry 9's ADR-0002 cross-reference, and
+    the same fix would apply (add the parent spec's filename to `PROTECTED_TOKENS`/`PROTECTED`) —
+    but this task's ruling holds the `PROTECTED` regex unchanged, so the gate is left FAILING on
+    this one line pending a controller decision, rather than silently excluded or hand-edited.
+    `SCOPE_RULES` gained one more rule, `[/ai-team-os/g, 'slave-of-ai']`, placed after the
+    `@ai-team-os/` and `"ai-team-os"` rules so those specific forms still apply first; it catches
+    the bare form Task 2 hand-fixed. Self-test gained one `scope`-phase case for it
+    (`'x ai-team-os y'` → `'x slave-of-ai y'`).
+
+    **Round 2 (controller ruling on both open concerns):** the parent-spec cross-reference is
+    legitimate, same shape as entry 9's ADR-0002 case — the reference line itself was never
+    rewritten (confirmed: `docs/superpowers/specs/2026-08-17-ai-team-os-design.md` still exists
+    under its real name, and the citing line still names it), so no text restore was needed.
+    `/2026-08-17-ai-team-os-design/g` was added to the codemod's `PROTECTED_TOKENS`, and
+    `2026-08-17-ai-team-os-design` to the vocabulary gate's `PROTECTED` alternation, right after
+    `0002-derived-agent-status` in both files; the gate's `EXCLUDE` list stays as it is.
+    `scripts/gate-m26-vocabulary.mjs` was added to the codemod's `PROTECTED_PATHS` — it names the
+    word it hunts, so its own source must never be rewritten by a future `--phase words` run over
+    `scripts/`, the same reasoning that already protects `rename-agent-to-slave.mjs` itself; it was
+    already in the gate's own `EXCLUDE`. No new self-test path/`planMoves` case was needed for the
+    `PROTECTED_PATHS` addition, per the ruling. `npm run gate:m26-vocabulary` now PASSes.

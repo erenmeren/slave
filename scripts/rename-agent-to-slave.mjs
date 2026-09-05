@@ -13,6 +13,10 @@ const PROTECTED_PATHS = [
   'docs/superpowers/', 'docs/decisions/', 'node_modules/', '.git/',
   'packages/db/prisma/migrations/', 'packages/providers/test/fixtures/',
   'package-lock.json', 'scripts/rename-agent-to-slave.mjs', 'docs/nasil-calisir.pdf',
+  // The vocabulary gate names the word it hunts (controller ruling, final review round 2): its
+  // own source must keep saying `agent`, `aiteamos`, etc. as its search target, not have them
+  // renamed away by this codemod. It is already in the gate's own EXCLUDE.
+  'scripts/gate-m26-vocabulary.mjs',
   // The design handoff is a historical deliverable (controller ruling, Task 5): its scope words
   // (`AI Team OS` -> `Slave of AI`) were already renamed by hand in Task 2, but the directory, the
   // two `AI Team OS *.dc.html` mockup filenames, and the `agent`/`Agent` vocabulary throughout stay
@@ -34,6 +38,11 @@ const PROTECTED_TOKENS = [
   // the file itself was never renamed on disk -- a live doc's cross-reference to it must keep the
   // real name it points at, or the link breaks.
   /0002-derived-agent-status/g,
+  // The M26 parent spec's own filename (final review round 2, controller ruling): same shape as
+  // ADR 0002 above -- docs/superpowers/ is a protected path, so this file was never renamed on
+  // disk, and packages/domain/src/docs/superpowers/specs/2026-08-18-m2-persistence-and-events-
+  // design.md's "Parent spec" cross-reference must keep citing its real, un-renamed name.
+  /2026-08-17-ai-team-os-design/g,
 ]
 
 // Fix round 1 (Task 3 review Minor, folded): the word rules alone turn "an agent" into "an slave"
@@ -41,11 +50,14 @@ const PROTECTED_TOKENS = [
 // on their output, so it only ever sees a `slave` the rules just produced, never an unrelated
 // "an slave" some caller passed in as already-renamed text. `\b` so "clean slave" (no article) is
 // untouched -- these two patterns match only the article immediately before the word.
+// Final review (Important 1, controller ruling): a lookahead, not a literal match, with an
+// optional backtick between the article and the noun -- so "an `slave`" and "an `SlavePermission`"
+// (a compound in code font) get the same fix as bare "an slave". The lookahead only checks that
+// the noun starts right there (with an optional backtick first); it doesn't consume it, so the
+// noun -- and any backtick -- is left exactly as it was.
 const ARTICLE_RULES = [
-  [/\ban slave/g, 'a slave'],
-  [/\bAn slave/g, 'A slave'],
-  [/\ban SLAVE/g, 'a SLAVE'],
-  [/\bAn SLAVE/g, 'A SLAVE'],
+  [/\ban (?=`?(?:[Ss]lave|SLAVE))/g, 'a '],
+  [/\bAn (?=`?(?:[Ss]lave|SLAVE))/g, 'A '],
 ]
 
 const SCOPE_RULES = [
@@ -54,6 +66,9 @@ const SCOPE_RULES = [
   [/"ai-team-os"/g, '"slave-of-ai"'],
   [/AITEAMOS_/g, 'SLAVEOFAI_'],
   [/aiteamos/g, 'slaveofai'],
+  // Folded minor (final review, Task 5): the specific forms above still apply first; this bare
+  // rule catches the case Task 2 hand-fixed (a plain `ai-team-os` with no `@`/quotes around it).
+  [/ai-team-os/g, 'slave-of-ai'],
 ]
 // `Agent` followed by anything but a lowercase letter other than `s` (so Agents, AgentRun,
 // AgentId, Agent. all match; Agentic, Agenda do not); `agent` must start at a non-letter (so
@@ -179,8 +194,16 @@ function selfTest() {
     // Controller ruling (Task 5): the article post-pass also covers the ALL-CAPS noun the WORD
     // RULES' AGENT->SLAVE rule can produce.
     ['words', 'an AGENT; An AGENT', 'a SLAVE; A SLAVE'],
+    // Final review (Important 1, controller ruling): the article rule sees an optional backtick
+    // between "an"/"An" and the noun, so a compound in code font (`SlavePermission`, `slaveId`,
+    // `SlaveRun`) gets the article fix too; "than slave" (no article boundary) and "a clean slave"
+    // (already the right article) stay untouched.
+    ['words', 'an `SlavePermission` row; an `slaveId`; An `SlaveRun`; than slave; a clean slave', 'a `SlavePermission` row; a `slaveId`; A `SlaveRun`; than slave; a clean slave'],
     ['scope', '@ai-team-os/control "ai-team-os" AITEAMOS_CLAUDE_BIN aiteamos-postgres AI Team OS', '@slave-of-ai/control "slave-of-ai" SLAVEOFAI_CLAUDE_BIN slaveofai-postgres Slave of AI'],
     ['scope', 'import x from "@anthropic-ai/sdk"', 'import x from "@anthropic-ai/sdk"'],
+    // Folded minor (final review, Task 5): a bare `ai-team-os` with no `@`/quotes around it, the
+    // shape Task 2 hand-fixed instead of the codemod catching it.
+    ['scope', 'x ai-team-os y', 'x slave-of-ai y'],
   ]
   let failed = 0
   for (const [phase, input, expected] of cases) {
