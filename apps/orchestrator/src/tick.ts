@@ -121,7 +121,7 @@ function slugify(title: string): string {
 }
 
 /**
- * An slave's git email local part. Falls back to the id rather than to `slugify`'s generic default,
+ * A slave's git email local part. Falls back to the id rather than to `slugify`'s generic default,
  * which would put the same address on commits by two different slaves whose names carry no ASCII.
  *
  * Exported for Task 5's review dispatch, which gives a reviewer slave the same git identity
@@ -296,7 +296,7 @@ export async function tick(deps: TickDeps): Promise<TickReport> {
  *
  * Deliberately placed *after* the halt bail above rather than beside it: a halt is raised by a gate
  * failure or an unverifiable workspace, and picking up a queued resume while one stands relaunches
- * an slave whose gate may still be broken. The intent is left untouched -- visible, unconsumed, and
+ * a slave whose gate may still be broken. The intent is left untouched -- visible, unconsumed, and
  * waiting for the operator who clears the halt -- rather than refused, because the request was
  * legitimate when it was made.
  *
@@ -668,7 +668,7 @@ async function startRun(deps: TickDeps, taskId: TaskId, slaveId: SlaveId): Promi
 
     return runId
   } catch (error) {
-    // Kill what was spawned before recording anything. An slave nobody can find is worse than a
+    // Kill what was spawned before recording anything. A slave nobody can find is worse than a
     // failed run, and this is the only moment its pid is still known.
     let cancelError: unknown = null
     // `adapter !== null` is implied by `handle !== null` (nothing spawns before it resolves), but
@@ -690,7 +690,7 @@ async function startRun(deps: TickDeps, taskId: TaskId, slaveId: SlaveId): Promi
  * Records a run that never got going, and puts the task somewhere it can be retried — or stops it.
  *
  * The attempt counts (spec §13), which is the whole reason this path is not silent: a task whose
- * worktree can never be provisioned would otherwise be handed to an slave every tick forever. The
+ * worktree can never be provisioned would otherwise be handed to a slave every tick forever. The
  * cap is checked here rather than left to Task 14's verify loop, because a run that never started
  * never reaches verify, and "the attempt counts" is only true if something eventually reads it.
  */

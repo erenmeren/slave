@@ -413,7 +413,7 @@ export async function main(argv: readonly string[]): Promise<number> {
       const run = await mustGetRun(requireFlag(flags, 'run'))
       const explicit = flagText(flags, 'message')
       // A halt is raised by a pause-gate failure or an unverifiable workspace (§13.1, §8), so
-      // resuming into one relaunches an slave whose gate may still be broken -- the recurrence the
+      // resuming into one relaunches a slave whose gate may still be broken -- the recurrence the
       // halt exists to bound. The help text promises this; it has to be true.
       //
       // Checked here rather than by calling `requestResume`: this command is synchronous and

@@ -221,7 +221,7 @@ describe('executing a resume intent from the daemon', () => {
     await drainPumps()
 
     const after = await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId } })
-    // A halt is raised by a gate failure; relaunching an slave whose gate may still be broken is
+    // A halt is raised by a gate failure; relaunching a slave whose gate may still be broken is
     // the recurrence the halt exists to bound.
     expect(after.status).toBe('paused')
     expect(after.resumeRequestedAt).not.toBeNull() // still visible, still waiting
@@ -351,7 +351,7 @@ describe('executing a resume intent from the daemon', () => {
         registry: singleAdapterRegistry(fakeAdapter('complete')),
       })
       await drainPumps()
-      // A `failed` task is not startable: the next tick must not hand it to an slave again.
+      // A `failed` task is not startable: the next tick must not hand it to a slave again.
       expect(await prisma.slaveRun.count({ where: { taskId: fixture.taskId } })).toBe(runsBefore)
     }, 60_000)
   })

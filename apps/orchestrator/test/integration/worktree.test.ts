@@ -22,7 +22,7 @@ function run(command: string, args: readonly string[], cwd: string): string {
  *
  * The fixture writes its identity into its own `.git/config`, which is what makes the
  * common-directory test meaningful: the file is non-empty and already contains exactly the keys
- * the M0 spike saw an slave overwrite. It is also what makes the identity test meaningful -- a
+ * the M0 spike saw a slave overwrite. It is also what makes the identity test meaningful -- a
  * setup command that commits must come out with the *orchestrator's* name, not this one.
  */
 function makeRepo(): string {

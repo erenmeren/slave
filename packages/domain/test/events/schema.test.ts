@@ -47,7 +47,7 @@ describe('parseExecutionEvent', () => {
     if (result.ok && result.value.type === 'run.tool_denied') expect(result.value.payload.toolUseId).toBeUndefined()
   })
 
-  it('accepts an slave.message_sent event with a category', () => {
+  it('accepts a slave.message_sent event with a category', () => {
     const result = parseExecutionEvent({
       ...BASE,
       type: 'slave.message_sent',

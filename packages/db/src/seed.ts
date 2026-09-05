@@ -126,7 +126,7 @@ export async function seed(): Promise<void> {
   // One task per status, so every state has a real example on screen when M4 arrives.
   // maxAttempts is copied from the workspace guardrail configuration — the only correct source.
   // Deliberately NO `requiredRole` on any seeded task: `decide()` cannot match a roleless task to
-  // an slave, so a daemon pointed at freshly-seeded data starts nothing and spends nothing -- the
+  // a slave, so a daemon pointed at freshly-seeded data starts nothing and spends nothing -- the
   // tick's `skippedNoRole: 12` on this workspace is that invariant showing, not a bug (M15 spec
   // §3 B5). The seed demonstrates the UI's states; it must never be dispatchable demo data,
   // because this workspace carries a live ProviderConfiguration and real runs cost real money.

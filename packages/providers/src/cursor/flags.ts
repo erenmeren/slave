@@ -160,6 +160,6 @@ function permissionOf(stdout: string): string | undefined {
 }
 
 // Only `permission` is read. The binary's own response validator accepts `permission`,
-// `user_message` and `slave_message` (Task 11 §3 Q4); the operator message is the gate's business
+// `user_message` and `agent_message` (Task 11 §3 Q4); the operator message is the gate's business
 // and this probe has no opinion on its wording.
 const hookResponseSchema = z.object({ permission: z.string() })

@@ -61,12 +61,12 @@ export type ControlRefusal =
   /** A role was set (or re-set) to blank text (M23 D1). */
   | { readonly kind: 'invalid_role' }
   /**
-   * `setSlaveRole` on an slave that holds a run in a `NON_TERMINAL_RUN_STATUSES` status (M23 D1):
-   * the scheduler matches `Task.requiredRole` to `Slave.role` by equality, so re-rolling an slave
+   * `setSlaveRole` on a slave that holds a run in a `NON_TERMINAL_RUN_STATUSES` status (M23 D1):
+   * the scheduler matches `Task.requiredRole` to `Slave.role` by equality, so re-rolling a slave
    * mid-run would silently strand its dispatch decision.
    */
   | { readonly kind: 'slave_run_active'; readonly slaveId: string; readonly runId: string }
-  /** `deleteSlave` on an slave that has any `SlaveRun` history at all (M23 D1) -- terminal or
+  /** `deleteSlave` on a slave that has any `SlaveRun` history at all (M23 D1) -- terminal or
    *  not: the row is kept as the anchor for its own past runs rather than cascade-deleting them. */
   | { readonly kind: 'slave_has_runs'; readonly slaveId: string; readonly runs: number }
   /** `renameTeam`/`deleteTeam` on a `teamId` no `Team` row carries (M23 D1). */

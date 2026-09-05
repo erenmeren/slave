@@ -192,7 +192,7 @@ describe('org-edit verbs', () => {
       expect(events[0]?.payload).toEqual({ entity: 'slave', id: slaveNoRuns.id, field: 'deleted', from: 'Sam', to: null })
     })
 
-    it('refuses an slave with run history, even terminal, leaving it in place', async () => {
+    it('refuses a slave with run history, even terminal, leaving it in place', async () => {
       const { slaveWithRun, workspaceId } = fixture
 
       const result = await deleteSlave(slaveWithRun.id)

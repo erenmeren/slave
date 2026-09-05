@@ -11,7 +11,7 @@ describe('deriveSlaveStatus', () => {
     expect(deriveSlaveStatus(null)).toBe('idle')
   })
 
-  it('maps each active run status to an slave status', () => {
+  it('maps each active run status to a slave status', () => {
     expect(deriveSlaveStatus(runWith('starting'))).toBe('starting')
     expect(deriveSlaveStatus(runWith('working'))).toBe('working')
     expect(deriveSlaveStatus(runWith('pause_requested'))).toBe('pausing')

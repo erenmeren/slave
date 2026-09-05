@@ -519,7 +519,7 @@ export async function renameSlave(
 /**
  * Changes a project slave's role -- the exact-match string the scheduler's `decide()` compares
  * against `Task.requiredRole`. Refused while the slave holds any run in a
- * `NON_TERMINAL_RUN_STATUSES` status: re-rolling an slave mid-dispatch would silently strand the
+ * `NON_TERMINAL_RUN_STATUSES` status: re-rolling a slave mid-dispatch would silently strand the
  * scheduler's decision, which was made against the role the run started with.
  */
 export async function setSlaveRole(
@@ -718,7 +718,7 @@ export async function createProjectTeam(
  * it is (M25 final review corrected that lookup, which used to be scoped to the template's own
  * department -- §12 entry 13). Refused while the slave holds a live run, the rule
  * {@link setSlaveRole} applies -- and, as of the same review, while the target department already
- * has an slave of that name, the rule {@link renameSlave} applies (M25 final review, Important:
+ * has a slave of that name, the rule {@link renameSlave} applies (M25 final review, Important:
  * `moveSlave` was the one write path that skipped the per-department unique-name rule every
  * sibling verb enforces). A move to the slave's CURRENT department is a no-op: nothing changes,
  * so there is nothing to check the name clash against and nothing worth an `org.changed` event

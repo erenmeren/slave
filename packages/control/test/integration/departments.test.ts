@@ -177,7 +177,7 @@ describe('moveSlave', () => {
 
   // M25 final review, item B: the one write path that skipped `renameSlave`'s own per-department
   // unique-name rule.
-  it('refuses a department that already has an slave of that name, changing nothing', async () => {
+  it('refuses a department that already has a slave of that name, changing nothing', async () => {
     const clash = await prisma.slave.create({ data: { teamId: fixture.qaId, name: 'Alex', role: 'qa' } })
 
     const result = await moveSlave(fixture.slaveId, fixture.qaId)

@@ -286,8 +286,8 @@ describe('pumpRun', () => {
     })
 
     // A permission-mode denial and a hook deny are different shapes with different meanings
-    // (spec §5.3): only the second is a pause. Conflating them reports an slave that was refused
-    // one tool as an slave that was deliberately paused.
+    // (spec §5.3): only the second is a pause. Conflating them reports a slave that was refused
+    // one tool as a slave that was deliberately paused.
     const types = await eventTypesFor(ids.runId)
     expect(types).toContain('guardrail.tripped')
     expect(types).not.toContain('run.paused')
@@ -487,7 +487,7 @@ describe('pumpRun', () => {
       ]),
     })
 
-    // The worst state the system can reach: an slave running with no gate, a kill that did not
+    // The worst state the system can reach: a slave running with no gate, a kill that did not
     // land, and -- if the cancel's rejection escaped -- no halt, so the scheduler keeps starting
     // more of them. A failed cancel is the case where the halt matters MOST, and it must not be
     // the one case where the halt does not happen (spec §13's opening rule).
@@ -519,7 +519,7 @@ describe('pumpRun', () => {
       ]),
     })
 
-    // Spec §13.1 behaviour 1 is first for a reason: an slave that cannot be paused must not be
+    // Spec §13.1 behaviour 1 is first for a reason: a slave that cannot be paused must not be
     // left running while the orchestrator writes paperwork. `expect(cancel).toHaveBeenCalled()`
     // cannot tell an awaited cancel from a fired-and-forgotten one -- this can.
     await new Promise((res) => setTimeout(res, 50))

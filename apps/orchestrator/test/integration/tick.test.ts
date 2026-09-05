@@ -391,7 +391,7 @@ describe('tick', () => {
 
   it("escalates leftovers that are not this task's own previous attempt", async (): Promise<void> => {
     // A `ready` task -- never provisioned -- with a directory sitting at its worktree path. That
-    // is wreckage §7.4 preserved for an operator, not a rework, and handing it to an slave would
+    // is wreckage §7.4 preserved for an operator, not a rework, and handing it to a slave would
     // give the run someone else's tree.
     mkdirSync(join(fixture.repoPath, '.slaveofai', 'worktrees', keyOf(fixture.taskId)), {
       recursive: true,
@@ -763,7 +763,7 @@ describe('tick', () => {
 
     await tick(deps)
 
-    // The attempt cap is what stops a permanently unprovisionable task being handed to an slave
+    // The attempt cap is what stops a permanently unprovisionable task being handed to a slave
     // every second forever. Off by one here gives every task one extra start and nothing notices.
     const task = await prisma.task.findFirstOrThrow()
     expect(task.attempt).toBe(3)

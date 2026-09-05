@@ -18,6 +18,20 @@ const PROTECTED_PATHS = [
 const PROTECTED_TOKENS = [
   /fake-cursor-agent/g, /cursor-agent/g, /--agents\b/g, /user-agent/gi, /agentic/gi,
   /AGENTS\.md/g, /claude-agent-sdk/g, /@anthropic-ai\/[a-z-]+/g,
+  // Cursor's own response-validator field name (fix round 1, Task 3 review Important 1): its
+  // binary's real, external API accepts exactly `permission`, `user_message`, `agent_message` --
+  // vendor vocabulary we document, not ours to rename, the same way `cursor-agent` survives.
+  /agent_message/g,
+]
+
+// Fix round 1 (Task 3 review Minor, folded): the word rules alone turn "an agent" into "an slave"
+// -- correct for the noun, wrong for the article that agrees with it. Applied AFTER WORD_RULES,
+// on their output, so it only ever sees a `slave` the rules just produced, never an unrelated
+// "an slave" some caller passed in as already-renamed text. `\b` so "clean slave" (no article) is
+// untouched -- these two patterns match only the article immediately before the word.
+const ARTICLE_RULES = [
+  [/\ban slave/g, 'a slave'],
+  [/\bAn slave/g, 'A slave'],
 ]
 
 const SCOPE_RULES = [
@@ -53,6 +67,16 @@ export function renameText(text, phase) {
       count += 1
       return to
     })
+  }
+  // Fix round 1: the article post-pass runs AFTER the word rules, on their own output, and only
+  // in the `words` phase -- see ARTICLE_RULES' docstring.
+  if (phase === 'words') {
+    for (const [re, to] of ARTICLE_RULES) {
+      out = out.replace(re, () => {
+        count += 1
+        return to
+      })
+    }
   }
   out = out.replace(/ P(\d+) /g, (_, i) => saved[Number(i)])
   return { text: out, count, protectedMatches: saved }
@@ -131,6 +155,10 @@ function selfTest() {
     ['words', "actor: 'agent'; type: 'agent.message_sent'; @map(\"agent.message_sent\")", "actor: 'slave'; type: 'slave.message_sent'; @map(\"slave.message_sent\")"],
     ['words', 'fake-cursor-agent.sh spawns cursor-agent --agents', 'fake-cursor-agent.sh spawns cursor-agent --agents'],
     ['words', 'AgentRuntimeAdapter implements agentRuntime; New agent; agents working', 'SlaveRuntimeAdapter implements slaveRuntime; New slave; slaves working'],
+    // Fix round 1 (Task 3 review): agent_message is Cursor's own vendor field name, protected
+    // like cursor-agent; the article post-pass fixes "an/An slave" produced by the word rules,
+    // leaving an unrelated "clean slave" (no article immediately before) untouched.
+    ['words', 'user_message and agent_message; an agent; An agent; clean agent', 'user_message and agent_message; a slave; A slave; clean slave'],
     ['scope', '@ai-team-os/control "ai-team-os" AITEAMOS_CLAUDE_BIN aiteamos-postgres AI Team OS', '@slave-of-ai/control "slave-of-ai" SLAVEOFAI_CLAUDE_BIN slaveofai-postgres Slave of AI'],
     ['scope', 'import x from "@anthropic-ai/sdk"', 'import x from "@anthropic-ai/sdk"'],
   ]

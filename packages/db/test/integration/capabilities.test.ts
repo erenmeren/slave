@@ -35,7 +35,7 @@ describe('slave capabilities', () => {
     ).rejects.toThrow()
   })
 
-  it('links an slave to skills through the join table', async () => {
+  it('links a slave to skills through the join table', async () => {
     const { slaveId } = await seedSlave()
     const provider = await prisma.skillProvider.create({ data: { name: 'superpowers' } })
     const skill = await prisma.skill.create({

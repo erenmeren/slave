@@ -276,7 +276,7 @@ describe('verify and advance', () => {
     await advance({ taskId: base.taskId, result, branch: 'slaveofai/TASK-001-x' })
 
     // `lastRejectionReason` reaches the next run's prompt as the thing to fix first. An unconfigured
-    // verify list is not something an slave caused or can reach, and Task 13 was corrected for
+    // verify list is not something a slave caused or can reach, and Task 13 was corrected for
     // exactly this: nothing but what a verify command actually printed belongs in this field.
     expect((await task()).lastRejectionReason).toBeNull()
   })

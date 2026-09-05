@@ -173,13 +173,13 @@ describe('loadWorld', () => {
     expect(skippedNoRole).toBe(1)
   })
 
-  it('reports an slave busy only while it holds a non-terminal run', async (): Promise<void> => {
+  it('reports a slave busy only while it holds a non-terminal run', async (): Promise<void> => {
     const { world } = await loadWorld(workspaceId(fixture.workspaceId))
 
     expect(world.slaves.find((a) => a.id === slaveId(fixture.slaveWithRunId))?.busy).toBe(true)
     expect(world.slaves.find((a) => a.id === slaveId(fixture.idleSlaveId))?.busy).toBe(false)
     // Held a run once, but it finished. "Busy" can't be implemented as "has any SlaveRun row" --
-    // that would trap an slave as permanently busy after its first completed run.
+    // that would trap a slave as permanently busy after its first completed run.
     expect(world.slaves.find((a) => a.id === slaveId(fixture.retiredRunSlaveId))?.busy).toBe(false)
   })
 

@@ -284,7 +284,7 @@ export function describeSync(result: SyncResult): string {
   return `${head}skipped ${result.skippedRoots.length} unreadable root(s), nothing marked missing under them: ${detail}\n`
 }
 
-/** Gives an slave a skill. Idempotent: the composite primary key `(slaveId, skillId)` makes a
+/** Gives a slave a skill. Idempotent: the composite primary key `(slaveId, skillId)` makes a
  *  second call a no-op rather than a duplicate row. */
 export async function assignSkill(slaveId: string, skillId: string): Promise<Result<void, ControlRefusal>> {
   const skill = await prisma.skill.findUnique({ where: { id: skillId }, select: { id: true } })

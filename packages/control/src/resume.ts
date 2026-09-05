@@ -62,7 +62,7 @@ export async function requestResume(
   if (run === null) return err({ kind: 'run_not_found', runId })
 
   // A halt is raised by a pause-gate failure or an unverifiable workspace (spec §13.1, §8), so
-  // resuming into one relaunches an slave whose gate may still be broken -- the recurrence the halt
+  // resuming into one relaunches a slave whose gate may still be broken -- the recurrence the halt
   // exists to bound. Refused here rather than only at the daemon, because an intent recorded now
   // would be picked up the instant an operator cleared the halt, by which time nobody remembers
   // this request was made against a halted workspace.

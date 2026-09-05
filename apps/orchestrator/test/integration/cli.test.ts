@@ -668,7 +668,7 @@ describe('the orchestrator CLI', () => {
 
     const result = await runCli(['resume', '--run', run.id])
 
-    // A halt is raised by a gate failure, so resuming into one relaunches an slave whose gate may
+    // A halt is raised by a gate failure, so resuming into one relaunches a slave whose gate may
     // still be broken -- the recurrence §13.1 exists to bound. The help text promises this.
     expect(result.code).not.toBe(0)
     expect(`${result.stdout}${result.stderr}`).toMatch(/clear-halt/)
@@ -723,7 +723,7 @@ describe('the orchestrator CLI', () => {
   it('defaults to help rather than to doing something', async (): Promise<void> => {
     const result = await runCli([])
 
-    // A bare invocation that silently ran a tick would start an slave for an operator who typed
+    // A bare invocation that silently ran a tick would start a slave for an operator who typed
     // the command name to see what it does.
     expect(result.code).toBe(0)
     expect(result.stdout).toMatch(/usage/i)
@@ -883,7 +883,7 @@ describe('the orchestrator CLI', () => {
 
   // M23 D2: the CLI surfaces for the five roster-editing verbs (`packages/control/src/org.ts`).
   describe('roster editing', () => {
-    it('renames an slave', async () => {
+    it('renames a slave', async () => {
       const result = await runCli(['rename-slave', '--slave', fixture.slaveId, '--name', 'Jordan'])
 
       expect(result.code).toBe(0)
@@ -891,7 +891,7 @@ describe('the orchestrator CLI', () => {
       expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId } })).name).toBe('Jordan')
     })
 
-    it('sets an slave role', async () => {
+    it('sets a slave role', async () => {
       const result = await runCli(['set-role', '--slave', fixture.slaveId, '--role', 'frontend'])
 
       expect(result.code).toBe(0)
@@ -899,7 +899,7 @@ describe('the orchestrator CLI', () => {
       expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId } })).role).toBe('frontend')
     })
 
-    it('deletes an slave with --yes', async () => {
+    it('deletes a slave with --yes', async () => {
       const result = await runCli(['delete-slave', '--slave', fixture.slaveId, '--yes'])
 
       expect(result.code).toBe(0)
@@ -907,7 +907,7 @@ describe('the orchestrator CLI', () => {
       expect(await prisma.slave.findUnique({ where: { id: fixture.slaveId } })).toBeNull()
     })
 
-    it('refuses to delete an slave without --yes, naming what it would have deleted', async () => {
+    it('refuses to delete a slave without --yes, naming what it would have deleted', async () => {
       const result = await runCli(['delete-slave', '--slave', fixture.slaveId])
 
       expect(result.code).toBe(1)

@@ -12,7 +12,7 @@ import {
 import { prisma, type Prisma } from '@slave-of-ai/db/client'
 
 // Re-exported so `cli.ts` and `sweep.ts` keep importing it from here -- the statuses an
-// `SlaveRun` can still leave (an slave holding one of these is busy) now live in
+// `SlaveRun` can still leave (a slave holding one of these is busy) now live in
 // `packages/domain/src/run/state.ts`, the one place the web and the orchestrator both read them
 // from, so the two cannot drift onto different definitions of "not finished".
 export { NON_TERMINAL_RUN_STATUSES } from '@slave-of-ai/domain'
@@ -62,7 +62,7 @@ export interface LoadedWorld {
   readonly world: World
   /**
    * Tasks excluded from `world.tasks` because `Task.requiredRole` is `null`. Spec §4: a task
-   * with no required role cannot be matched to an slave by `decide()`, whose `SchedulableTask`
+   * with no required role cannot be matched to a slave by `decide()`, whose `SchedulableTask`
    * makes `requiredRole` non-nullable by design. The exclusion is real (the domain type leaves
    * no other way to represent "no role"), but it must never be *silent* -- an operator needs to
    * see that a task is stuck outside the schedulable set for a reason that has nothing to do
@@ -115,9 +115,9 @@ interface SlaveWorldRow {
 }
 
 /**
- * An slave is busy when it holds any `SlaveRun` in a non-terminal status -- not when it has ever
+ * A slave is busy when it holds any `SlaveRun` in a non-terminal status -- not when it has ever
  * held one. `take: 1` on the filtered relation is enough to answer "any?" without pulling every
- * run an slave has accumulated over its lifetime.
+ * run a slave has accumulated over its lifetime.
  */
 async function loadSlaveRows(
   tx: Prisma.TransactionClient,
@@ -269,7 +269,7 @@ export async function loadWorld(workspaceId: WorkspaceId): Promise<LoadedWorld> 
   //
   // Atomicity matters here because `loadWorld`'s whole contract is *the snapshot the scheduler
   // decides from*. A torn read -- `slaves` from one instant, `stats` from another -- lets
-  // `decide()` emit a `start_run` for an slave that became busy between two of the reads, and
+  // `decide()` emit a `start_run` for a slave that became busy between two of the reads, and
   // that spawns a real `claude` process spending real money.
   const { workspace, taskRows, slaveRows, runStats } = await prisma.$transaction(
     async (tx) => {

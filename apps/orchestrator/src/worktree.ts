@@ -224,7 +224,7 @@ export interface AdoptWorktreeInput {
   /**
    * Re-run on adoption, not skipped. The commonest route to an adoptable worktree is a setup
    * command that *failed* -- that is exactly what leaves a half-provisioned tree behind for §7.4 to
-   * preserve -- so adopting without re-running setup starts an slave in a tree with no
+   * preserve -- so adopting without re-running setup starts a slave in a tree with no
    * `node_modules`, which then fails verify for reasons that have nothing to do with its work.
    * Setup lists are expected to be idempotent (`npm ci` is), which is what makes re-running safe.
    */

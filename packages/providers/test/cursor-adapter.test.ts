@@ -110,7 +110,7 @@ function rejectedCompletedLine(callId: string): string {
  * The recording already caught one way that self-agreement goes stale. `rejectedCompletedLine`'s
  * reason text (`'Command execution was blocked by a hook: ...'`) is M12's, measured against
  * `cursor-agent` 2026.08.11-e8db854; under 2026.08.25-3e8eec8 the recorded reason is instead the
- * gate's own `user_message` verbatim followed by an slave-facing note. The adapter is indifferent
+ * gate's own `user_message` verbatim followed by a slave-facing note. The adapter is indifferent
  * to that -- it keys on the PRESENCE of `result.rejected` and never on the reason's wording -- and
  * these two tests exist to keep it that way by pinning it to bytes the binary actually emitted.
  */

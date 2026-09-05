@@ -619,7 +619,7 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
         // `increment`, never an absolute local count. A resumed run is a *second* `pumpRun` on the
         // same row -- the adapter closes the old queue and `events()` hands out a new one (Task
         // 6/9) -- so writing a count that starts at zero refunds the tool-call budget every time
-        // an slave pauses. Task 15's §3.3 ceiling reads this column.
+        // a slave pauses. Task 15's §3.3 ceiling reads this column.
         toolCalls += 1
         if (event.toolName === 'Skill') {
           // `summary` is `"Skill <name>"` (`summaryFor` with `CLAUDE_SUMMARY_ARG_KEYS`'s leading
@@ -795,7 +795,7 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
             //
             // A cancel that *rejects* must make this louder, never quieter. Letting it propagate --
             // which it did until this was measured -- skipped behaviours 2 to 4 entirely: no halt,
-            // no events, an attempt uncounted and the row still reading `working`. That is an slave
+            // no events, an attempt uncounted and the row still reading `working`. That is a slave
             // running with no gate, a kill that did not land, and a scheduler still free to start
             // more of them; the one case where the halt matters most was the one case it did not
             // happen.

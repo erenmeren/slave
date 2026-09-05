@@ -152,7 +152,7 @@ describe('cursor-shell-gate.sh', () => {
 
   // MEASURED, and the reason the key is snake_case: the binary reads
   // `response.user_message` (and its own validator accepts exactly
-  // `permission` / `user_message` / `slave_message`). A `userMessage` key is
+  // `permission` / `user_message` / `agent_message`). A `userMessage` key is
   // simply not read, which would still deny but would throw the operator's
   // message away silently.
   it('names the operator message user_message, not userMessage', async (): Promise<void> => {

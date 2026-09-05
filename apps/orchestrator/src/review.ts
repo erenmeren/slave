@@ -419,7 +419,7 @@ async function dispatchReview(deps: TickDeps, task: ReviewableTask): Promise<Run
     return runId
   } catch (error) {
     // Kill what was spawned before recording anything -- the same discipline `startRun` applies,
-    // for the same reason: an slave nobody can find is worse than a failed run.
+    // for the same reason: a slave nobody can find is worse than a failed run.
     let cancelError: unknown = null
     // `adapter !== null` is implied by `handle !== null`, but a resolution failure (a
     // misconfigured provider, above) is precisely the case where `adapter` is still `null` here.
