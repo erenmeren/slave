@@ -4,20 +4,23 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import type { ProjectTeamRow } from '../server/org'
 import { sendControl } from '../lib/postControl'
+import { DangerConfirm } from './ui/DangerConfirm'
 import { DataTable, Row } from './ui/DataTable'
 import { PrimaryButton, SelectField, TextField } from './ui/FormControls'
 
 const COLUMNS = '1fr 1fr 90px 170px'
 const HEADER = ['Project', 'Department', 'Slaves', ''] as const
 
-/** One project department: project + inline-renamable name + slave count + a two-step delete,
- *  disabled (with `title="department has slaves"`) while `slaveCount > 0` -- `deleteTeam`'s own
- *  `team_not_empty` refusal, named on the button before an operator can even try it. */
+/** One project department: project + inline-renamable name + slave count + a `DangerConfirm`
+ *  delete (M27 spec §4.3). `deleteTeam` no longer refuses `team_not_empty` -- a department with
+ *  slaves deletes them along with it -- so the delete is always enabled; the confirm names the
+ *  cascade instead of a disabled button naming a refusal that no longer exists ("deletes
+ *  Engineering: 4 slaves, 31 runs", `team.slaveCount`/`team.runCount`). A live run is the one
+ *  refusal left, shown by `DangerConfirm` itself in `department-delete-error`. */
 function DepartmentRow({ team }: { readonly team: ProjectTeamRow }): React.JSX.Element {
   const router = useRouter()
   const [renaming, setRenaming] = useState(false)
   const [draft, setDraft] = useState(team.name)
-  const [confirmingDelete, setConfirmingDelete] = useState(false)
   const [pending, setPending] = useState(false)
   const [errorText, setErrorText] = useState<string | null>(null)
 
@@ -31,19 +34,6 @@ function DepartmentRow({ team }: { readonly team: ProjectTeamRow }): React.JSX.E
     setPending(false)
     if (error === null) {
       setRenaming(false)
-      router.refresh()
-    } else {
-      setErrorText(error)
-    }
-  }
-
-  const remove = async (): Promise<void> => {
-    setPending(true)
-    setErrorText(null)
-    const error = await sendControl(`/api/teams/${team.teamId}`, { method: 'DELETE' })
-    setPending(false)
-    setConfirmingDelete(false)
-    if (error === null) {
       router.refresh()
     } else {
       setErrorText(error)
@@ -86,31 +76,16 @@ function DepartmentRow({ team }: { readonly team: ProjectTeamRow }): React.JSX.E
       )}
       <span className="text-text-2">{team.slaveCount}</span>
       <div className="flex items-center gap-2">
-        {confirmingDelete ? (
-          <>
-            <PrimaryButton tone="blocked" data-testid="department-delete-confirm" disabled={pending} onClick={() => void remove()}>
-              {pending ? 'deleting…' : 'confirm delete'}
-            </PrimaryButton>
-            <button
-              type="button"
-              data-testid="department-delete-cancel"
-              onClick={() => setConfirmingDelete(false)}
-              className="text-xs text-text-3"
-            >
-              cancel
-            </button>
-          </>
-        ) : (
-          <PrimaryButton
-            tone="blocked"
-            data-testid="department-delete"
-            disabled={team.slaveCount > 0}
-            title={team.slaveCount > 0 ? 'department has slaves' : undefined}
-            onClick={() => setConfirmingDelete(true)}
-          >
-            delete
-          </PrimaryButton>
-        )}
+        <DangerConfirm
+          label="delete"
+          testId="department-delete"
+          confirmText={`deletes ${team.name}: ${team.slaveCount} slaves, ${team.runCount} runs`}
+          onConfirm={async () => {
+            const error = await sendControl(`/api/teams/${team.teamId}`, { method: 'DELETE' })
+            if (error === null) router.refresh()
+            return error
+          }}
+        />
         {errorText !== null && (
           <span role="alert" data-testid="department-actions-error" className="text-xs text-tone-blocked">
             {errorText}

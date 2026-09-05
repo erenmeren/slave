@@ -98,7 +98,7 @@ describe('AllSlavesTable', () => {
     expect(screen.getByTestId('model-override-editor')).toBeTruthy()
   })
 
-  it('shows "—" for a catalog member\'s project and no row actions', () => {
+  it('shows "—" for a catalog member\'s project, no rename/re-role, and a catalog-slave-delete (not slave-delete)', () => {
     render(
       <AllSlavesTable
         initial={page([row({ slaveId: null, companySlaveId: 'ca1', name: 'Nova', projectName: null, workspaceId: null })])}
@@ -109,6 +109,8 @@ describe('AllSlavesTable', () => {
     expect(screen.getByTestId('slave-project').getAttribute('aria-label')).toBe('project —')
     expect(screen.queryByTestId('slave-name-edit')).toBeNull()
     expect(screen.queryByTestId('model-override-editor')).toBeNull()
+    expect(screen.getByTestId('catalog-slave-delete')).toBeTruthy()
+    expect(screen.queryByTestId('slave-delete')).toBeNull()
   })
 
   it("calls onOpen with the clicked project row's own slaveId and workspaceId", () => {

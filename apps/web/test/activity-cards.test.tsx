@@ -325,7 +325,7 @@ describe('targeted card bodies', () => {
     expect(screen.getByTestId('company-no-workers').textContent).toBe('no new workers')
   })
 
-  it('falls back to the bare id when slaveName/taskTitle are null', () => {
+  it('falls back to the bare id for taskTitle, and renders no slave-link at all when slaveName is null', () => {
     const Card = ACTIVITY_CARDS['task.started']
     render(
       <Card
@@ -337,8 +337,19 @@ describe('targeted card bodies', () => {
         dimmed={false}
       />,
     )
-    expect(screen.getByTestId('slave-link').textContent).toBe('a1')
+    expect(screen.queryByTestId('slave-link')).toBeNull()
     expect(screen.getByTestId('task-link').textContent).toBe('t1')
+  })
+
+  // R5 (spec §8): every old event of a deleted slave now carries `slaveName: null` alongside a
+  // still-set `slaveId` (`ExecutionEvent.slaveId` has no FK and keeps its value) -- the card must
+  // render no link for a slave that no longer exists, while the rest of the row (its body text,
+  // read straight from the payload) renders exactly as it would for a live slave.
+  it('renders no slave-link for a deleted slave (slaveId set, slaveName null), and the card still renders', () => {
+    const Card = ACTIVITY_CARDS['task.done']
+    render(<Card event={fixtureFor('task.done')} workspaceId="w1" slaveName={null} taskTitle="Add the thing" userName={null} dimmed={false} />)
+    expect(screen.queryByTestId('slave-link')).toBeNull()
+    expect(screen.getByTestId('task-branch').textContent).toBe('feature/add-the-thing')
   })
 
   it('links to the overview panel and the tasks board with the right ids', () => {

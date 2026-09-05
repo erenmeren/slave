@@ -117,7 +117,10 @@ function ActorBadge({ actor }: { readonly actor: string }): ReactElement {
 }
 
 /** Links to the Overview panel's `?slave=` param (spec surface — no slave detail route exists
- *  outside it). Renders nothing when the event carries no `slaveId`. */
+ *  outside it). Renders nothing when the event carries no `slaveId`, and nothing when the slave
+ *  itself is gone (M27 spec §8: `slaveName === null` on an event that DOES carry a `slaveId` means
+ *  a deleted slave, not an unresolved name -- `deleteSlave` keeps `ExecutionEvent.slaveId` as-is
+ *  but the row it once pointed at is gone, so there is nothing left to link to or name). */
 function SlaveLink({
   workspaceId,
   slaveId,
@@ -131,14 +134,14 @@ function SlaveLink({
    *  from the same `e.color`). */
   readonly tone: StatusTone
 }): ReactElement | null {
-  if (slaveId === null) return null
+  if (slaveId === null || slaveName === null) return null
   return (
     <Link
       href={`/w/${workspaceId}?slave=${slaveId}`}
       data-testid="slave-link"
       className={`text-[12px] font-semibold hover:underline ${TONE_TEXT[tone]}`}
     >
-      {slaveName ?? slaveId}
+      {slaveName}
     </Link>
   )
 }

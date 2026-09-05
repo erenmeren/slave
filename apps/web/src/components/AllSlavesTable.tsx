@@ -47,9 +47,11 @@ interface PolledWorker {
  * The Slaves page's one table (M24 §5.3, Task 7): the old grouped company -> team roster (with
  * its expandable worker sub-rows) and the old flat, self-polling worker list were two names for
  * the same list of slaves -- this is the one of them. `listAllSlaves()`'s union feeds it: a
- * `null` `slaveId` marks a catalog member no project has materialized yet, shown with
- * `project —` and no row actions (spec §5.3: rename/re-role/delete act on a project `Slave`,
- * which a catalog member is not).
+ * `null` `slaveId` marks a catalog member no project has materialized yet, shown with `project —`
+ * and no rename/re-role/model-override (those act on a project `Slave`, which a catalog member
+ * is not) -- but it still gets a delete (M27 §4.3): `SlaveRowActions`' `catalog` prop renders
+ * only `catalog-slave-delete`, which goes through `deleteCompanySlave` and never touches the
+ * project copies `assignCompany` already made.
  *
  * Kept fresh the same way the old worker list was: polling `GET /api/org/workers` every 5s via
  * `setInterval` -- cleared on unmount, skipped (not fetched, interval left running) while
@@ -223,11 +225,21 @@ export function AllSlavesTable({
               )}
             </span>
             <div className="flex flex-wrap items-center gap-1">
-              {slaveId !== null && (
+              {slaveId !== null ? (
                 <>
                   <ModelOverrideEditor slaveId={slaveId} model={row.model} provider={row.provider} />
-                  <SlaveRowActions slaveId={slaveId} name={row.name} role={row.role} />
+                  <SlaveRowActions slaveId={slaveId} name={row.name} role={row.role} runCount={row.runCount} />
                 </>
+              ) : (
+                row.companySlaveId !== null && (
+                  <SlaveRowActions
+                    slaveId={row.companySlaveId}
+                    name={row.name}
+                    role={row.role}
+                    runCount={0}
+                    catalog={{ companySlaveId: row.companySlaveId }}
+                  />
+                )
               )}
             </div>
           </Row>

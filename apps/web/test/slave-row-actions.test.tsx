@@ -23,7 +23,7 @@ describe('SlaveRowActions', () => {
   })
 
   it('PUTs the new name on blur and refreshes on success', async () => {
-    render(<SlaveRowActions slaveId="wk1" name="Alex" role="backend" />)
+    render(<SlaveRowActions slaveId="wk1" name="Alex" role="backend" runCount={0} />)
 
     fireEvent.click(screen.getByTestId('slave-name-edit'))
     fireEvent.change(screen.getByTestId('slave-name-input'), { target: { value: 'Jordan' } })
@@ -41,7 +41,7 @@ describe('SlaveRowActions', () => {
   })
 
   it('PUTs the new name on Enter, without waiting for blur', async () => {
-    render(<SlaveRowActions slaveId="wk1" name="Alex" role="backend" />)
+    render(<SlaveRowActions slaveId="wk1" name="Alex" role="backend" runCount={0} />)
 
     fireEvent.click(screen.getByTestId('slave-name-edit'))
     fireEvent.change(screen.getByTestId('slave-name-input'), { target: { value: 'Jordan' } })
@@ -56,7 +56,7 @@ describe('SlaveRowActions', () => {
   })
 
   it('PUTs the new role on blur and refreshes on success', async () => {
-    render(<SlaveRowActions slaveId="wk1" name="Alex" role="backend" />)
+    render(<SlaveRowActions slaveId="wk1" name="Alex" role="backend" runCount={0} />)
 
     fireEvent.click(screen.getByTestId('slave-role-edit'))
     fireEvent.change(screen.getByTestId('slave-role-input'), { target: { value: 'frontend' } })
@@ -71,12 +71,12 @@ describe('SlaveRowActions', () => {
     expect(routerRefresh).toHaveBeenCalled()
   })
 
-  it('deletes only after a second click -- the DangerZone two-step', async () => {
-    render(<SlaveRowActions slaveId="wk1" name="Alex" role="backend" />)
+  it('deletes only after a second click -- the DangerConfirm two-step, naming the run count', async () => {
+    render(<SlaveRowActions slaveId="wk1" name="Alex" role="backend" runCount={14} />)
 
     fireEvent.click(screen.getByTestId('slave-delete'))
     expect(fetchMock).not.toHaveBeenCalled()
-    expect(screen.getByTestId('slave-delete-confirm')).toBeTruthy()
+    expect(screen.getByTestId('slave-delete-confirm').textContent).toBe('deletes Alex and 14 runs of history')
 
     await act(async () => {
       fireEvent.click(screen.getByTestId('slave-delete-confirm'))
@@ -87,7 +87,7 @@ describe('SlaveRowActions', () => {
   })
 
   it('cancels the delete confirm without ever calling fetch', () => {
-    render(<SlaveRowActions slaveId="wk1" name="Alex" role="backend" />)
+    render(<SlaveRowActions slaveId="wk1" name="Alex" role="backend" runCount={0} />)
 
     fireEvent.click(screen.getByTestId('slave-delete'))
     fireEvent.click(screen.getByTestId('slave-delete-cancel'))
@@ -100,7 +100,7 @@ describe('SlaveRowActions', () => {
     fetchMock.mockImplementationOnce(
       async () => new Response(JSON.stringify({ error: 'the name "Jordan" is already taken' }), { status: 409 }),
     )
-    render(<SlaveRowActions slaveId="wk1" name="Alex" role="backend" />)
+    render(<SlaveRowActions slaveId="wk1" name="Alex" role="backend" runCount={0} />)
 
     fireEvent.click(screen.getByTestId('slave-name-edit'))
     fireEvent.change(screen.getByTestId('slave-name-input'), { target: { value: 'Jordan' } })
@@ -115,20 +115,34 @@ describe('SlaveRowActions', () => {
   it('shows a refusal on a blocked delete, and leaves the row in place', async () => {
     fetchMock.mockImplementationOnce(
       async () =>
-        new Response(JSON.stringify({ error: 'slave wk1 has 2 run(s) in history and stays (rename it or leave it idle)' }), {
+        new Response(JSON.stringify({ error: 'slave wk1 has 1 live run(s); wait for them to finish or stop them first' }), {
           status: 409,
         }),
     )
-    render(<SlaveRowActions slaveId="wk1" name="Alex" role="backend" />)
+    render(<SlaveRowActions slaveId="wk1" name="Alex" role="backend" runCount={2} />)
 
     fireEvent.click(screen.getByTestId('slave-delete'))
     await act(async () => {
       fireEvent.click(screen.getByTestId('slave-delete-confirm'))
     })
 
-    expect(screen.getByTestId('slave-actions-error').textContent).toBe(
-      'slave wk1 has 2 run(s) in history and stays (rename it or leave it idle)',
+    expect(screen.getByTestId('slave-delete-error').textContent).toBe(
+      'slave wk1 has 1 live run(s); wait for them to finish or stop them first',
     )
     expect(routerRefresh).not.toHaveBeenCalled()
+  })
+
+  it('a catalog row deletes through /api/org/slaves/:id', async () => {
+    render(<SlaveRowActions slaveId="wk1" name="Sam" role="backend" runCount={0} catalog={{ companySlaveId: 'cs1' }} />)
+
+    fireEvent.click(screen.getByTestId('catalog-slave-delete'))
+    expect(screen.getByTestId('catalog-slave-delete-confirm').textContent).toBe('deletes Sam from the catalog; project copies stay')
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('catalog-slave-delete-confirm'))
+    })
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/org/slaves/cs1', expect.objectContaining({ method: 'DELETE' }))
+    expect(routerRefresh).toHaveBeenCalled()
   })
 })

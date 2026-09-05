@@ -141,21 +141,20 @@ describe('DepartmentsTable', () => {
       expect(fetchMock).not.toHaveBeenCalled()
     })
 
-    it('disables delete with a title when the department still has slaves', () => {
-      render(<DepartmentsTable teams={[team({ teamId: 't1', slaveCount: 2 })]} workspaces={WORKSPACES} />)
+    it('is enabled with slaves, and the confirm names the slave and run counts', () => {
+      render(<DepartmentsTable teams={[team({ teamId: 't1', name: 'Engineering', slaveCount: 4, runCount: 31 })]} workspaces={WORKSPACES} />)
 
       const button = screen.getByTestId('department-delete') as HTMLButtonElement
-      expect(button.disabled).toBe(true)
-      expect(button.title).toBe('department has slaves')
+      expect(button.disabled).toBe(false)
 
       fireEvent.click(button)
-      expect(screen.queryByTestId('department-delete-confirm')).toBeNull()
+      expect(screen.getByTestId('department-delete-confirm').textContent).toBe('deletes Engineering: 4 slaves, 31 runs')
       expect(fetchMock).not.toHaveBeenCalled()
     })
 
     it('shows the refusal on a blocked delete', async () => {
       fetchMock.mockImplementationOnce(
-        async () => new Response(JSON.stringify({ error: 'team t1 still has 1 slave(s)' }), { status: 409 }),
+        async () => new Response(JSON.stringify({ error: 'team t1 has 1 live run(s); wait for them to finish or stop them first' }), { status: 409 }),
       )
       render(<DepartmentsTable teams={[team({ teamId: 't1', slaveCount: 0 })]} workspaces={WORKSPACES} />)
 
@@ -164,7 +163,9 @@ describe('DepartmentsTable', () => {
         fireEvent.click(screen.getByTestId('department-delete-confirm'))
       })
 
-      expect(screen.getByTestId('department-actions-error').textContent).toBe('team t1 still has 1 slave(s)')
+      expect(screen.getByTestId('department-delete-error').textContent).toBe(
+        'team t1 has 1 live run(s); wait for them to finish or stop them first',
+      )
       expect(routerRefresh).not.toHaveBeenCalled()
     })
   })

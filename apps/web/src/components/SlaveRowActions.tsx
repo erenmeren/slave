@@ -3,35 +3,44 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { sendControl } from '../lib/postControl'
-import { PrimaryButton, TextField } from './ui/FormControls'
+import { DangerConfirm } from './ui/DangerConfirm'
+import { TextField } from './ui/FormControls'
 
 type Editing = 'name' | 'role' | null
 
 /**
  * The per-worker roster-editing controls (M23 D2): rename, re-role, delete -- mounted beside
- * `ModelOverrideEditor` in `AllSlavesTable.tsx`'s actions cell (M24 Task 7), and only for a
- * project row (`slaveId !== null`; controller ruling: these rows ARE project `Slave`s,
- * `worker.slaveId`, exactly what `renameSlave`/`setSlaveRole`/`deleteSlave` address).
+ * `ModelOverrideEditor` in `AllSlavesTable.tsx`'s actions cell (M24 Task 7). A project row
+ * (`catalog` undefined) renders all three; a catalog row (`catalog: { companySlaveId }` set,
+ * `AllSlaveRow.slaveId === null`) renders only the delete -- rename/re-role act on a project
+ * `Slave`, which a catalog member is not.
  *
  * Name and role edit the same way: a plain button showing the current value swaps to a
  * `TextField` on click, committing on Enter or blur -- no separate save button, no Escape
  * handling or focus trap, the same "a plain inline input row does not need a focus trap" call
- * `ModelOverrideEditor` already made. Delete is the one action here with no undo, so it keeps
- * `DangerZone`'s two-step confirm instead.
+ * `ModelOverrideEditor` already made.
+ *
+ * Delete is `DangerConfirm` (M27 spec §6): `deleteSlave`/`deleteCompanySlave` no longer refuse on
+ * run history, so there is no disabled-with-title treatment to keep -- the confirm just names
+ * what goes (`runCount` for a project row's history, "project copies stay" for a catalog row,
+ * since `assignCompany` re-materializes from the template) and a live run is the only refusal left.
  */
 export function SlaveRowActions({
   slaveId,
   name,
   role,
+  runCount,
+  catalog,
 }: {
   readonly slaveId: string
   readonly name: string
   readonly role: string
+  readonly runCount: number
+  readonly catalog?: { readonly companySlaveId: string }
 }): React.JSX.Element {
   const router = useRouter()
   const [editing, setEditing] = useState<Editing>(null)
   const [draft, setDraft] = useState('')
-  const [confirmingDelete, setConfirmingDelete] = useState(false)
   const [pending, setPending] = useState(false)
   const [errorText, setErrorText] = useState<string | null>(null)
 
@@ -59,17 +68,21 @@ export function SlaveRowActions({
     }
   }
 
-  const remove = async (): Promise<void> => {
-    setPending(true)
-    setErrorText(null)
-    const error = await sendControl(`/api/slaves/${slaveId}`, { method: 'DELETE' })
-    setPending(false)
-    setConfirmingDelete(false)
-    if (error === null) {
-      router.refresh()
-    } else {
-      setErrorText(error)
-    }
+  if (catalog !== undefined) {
+    return (
+      <div data-testid="slave-row-actions" className="flex flex-wrap items-center gap-1">
+        <DangerConfirm
+          label="delete"
+          testId="catalog-slave-delete"
+          confirmText={`deletes ${name} from the catalog; project copies stay`}
+          onConfirm={async () => {
+            const error = await sendControl(`/api/org/slaves/${catalog.companySlaveId}`, { method: 'DELETE' })
+            if (error === null) router.refresh()
+            return error
+          }}
+        />
+      </div>
+    )
   }
 
   return (
@@ -130,25 +143,16 @@ export function SlaveRowActions({
           {role}
         </button>
       )}
-      {confirmingDelete ? (
-        <>
-          <PrimaryButton tone="blocked" data-testid="slave-delete-confirm" disabled={pending} onClick={() => void remove()}>
-            {pending ? 'deleting…' : 'confirm delete'}
-          </PrimaryButton>
-          <button
-            type="button"
-            data-testid="slave-delete-cancel"
-            onClick={() => setConfirmingDelete(false)}
-            className="text-xs text-text-3"
-          >
-            cancel
-          </button>
-        </>
-      ) : (
-        <PrimaryButton tone="blocked" data-testid="slave-delete" disabled={pending} onClick={() => setConfirmingDelete(true)}>
-          delete
-        </PrimaryButton>
-      )}
+      <DangerConfirm
+        label="delete"
+        testId="slave-delete"
+        confirmText={`deletes ${name} and ${runCount} runs of history`}
+        onConfirm={async () => {
+          const error = await sendControl(`/api/slaves/${slaveId}`, { method: 'DELETE' })
+          if (error === null) router.refresh()
+          return error
+        }}
+      />
       {errorText !== null && (
         <span role="alert" data-testid="slave-actions-error" className="text-xs text-tone-blocked">
           {errorText}
