@@ -7,7 +7,9 @@
  * `next/font` serves Silkscreen under a hashed family name; the palettes are exported; the M26
  * word codemod renamed this file's pre-rename noun to `slave` throughout; the constructor's
  * initial task spawn and `simulate`'s periodic task spawn are both skipped for an empty office —
- * the design never had one, spec §5 requires it. Pixel-art code keeps its own style.
+ * the design never had one, spec §5 requires it; the export block is eight named `export const X`
+ * lines, not one destructuring export, because Next's webpack build dropped the destructured
+ * bindings. Pixel-art code keeps its own style.
  */
 const OfficeEngine = {}
 let PIXEL_FONT = 'Silkscreen'
