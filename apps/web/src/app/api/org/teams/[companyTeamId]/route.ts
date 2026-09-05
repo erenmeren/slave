@@ -4,8 +4,9 @@ import { requirePrincipal } from '../../../../../server/principal'
 
 export const dynamic = 'force-dynamic'
 
-/** `TeamBlock`'s delete of an EMPTY department template (M25 §4.3); the verb refuses a
- *  template that still has members. */
+/** `TeamBlock`'s delete of a department template (M25 §4.3; M27 §5). `deleteCompanyTeam` now
+ *  deletes the template WITH its catalog slaves -- refusing only on an unknown `companyTeamId`,
+ *  not on the template still having members. */
 export async function DELETE(
   _request: Request,
   context: { params: Promise<{ companyTeamId: string }> },

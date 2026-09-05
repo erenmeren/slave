@@ -157,8 +157,9 @@ model Slave {
 /// The global catalog (M10 §3): role-shaped cookie cutters a company's roster is instantiated
 /// from. `role` is the SAME exact-match string the scheduler, review pass and planning pass
 /// already key on -- a template whose role is `reviewer` produces workers the review pass can
-/// staff. No new role machinery. Template deletion is out of scope in M10 (Decision 9,
-/// referential simplicity); templates are append-only.
+/// staff. No new role machinery. Templates can be deleted (M27 §5, `deleteSlaveTemplate`) -- the
+/// verb removes its `CompanySlave`s first (the relation below has no cascade); project slaves
+/// keep the role they were materialized with.
 model SlaveTemplate {
   id            String         @id @default(uuid())
   name          String         @unique
@@ -216,8 +217,9 @@ model CompanySlave {
   provider      ProviderKind?
 
   companyTeam CompanyTeam   @relation(fields: [companyTeamId], references: [id], onDelete: Cascade)
-  /// Deliberately NOT cascading: templates are append-only (Decision 9), so a roster member never
-  /// loses its template out from under it via deletion -- there is nothing to delete.
+  /// Deliberately NOT cascading: a template CAN be deleted now (M27 §5), and this relation carries
+  /// no `onDelete` rule for it, so `deleteSlaveTemplate` must delete every `CompanySlave` of the
+  /// template explicitly, in the same transaction, before deleting the template row itself.
   template    SlaveTemplate @relation(fields: [templateId], references: [id])
   workers     Slave[]
 

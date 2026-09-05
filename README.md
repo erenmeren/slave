@@ -69,13 +69,13 @@ department templates that `assign-company` copies.
 
 | Page | What it shows |
 |---|---|
-| **Projects** `/` | Every project (workspace) with its spend and team; click one to open it. **New project** attaches a repo; below the cards, the team catalog (slave templates, companies and their department templates). |
+| **Projects** `/` | Every active project (workspace) with its spend and team; click one to open it. **New project** attaches a repo; **show archived** also lists archived projects (an "archived" chip, no spend bar, a **restore** button); below the cards, the team catalog (slave templates, companies and their department templates — every row there can be deleted, down to the company or template itself). |
 | **Overview** `/w/<id>` | One card per slave: status, current task, live action line, spend against budget. A halt banner when the workspace is stopped. |
 | **Tasks** `/w/<id>/tasks` | The board by status. Click a task for its runs and cost, its verify logs under **Artifacts**, and a **Collect worktree** button once it has finished. |
 | **Graph** `/w/<id>/graph` | Five views: the org tree, live execution, the task dependency DAG (draw or delete an edge to change it), the skill chain, and who handed work to whom. |
 | **Activity** `/w/<id>/activity` | Every event, live, filterable by kind, slave and task; the filters live in the URL. Events made from the UI name the user who made them. |
-| **Settings** `/w/<id>/settings` | This project's goal, its runtime (provider, budget, and the read-only concurrency/timeout/attempts limits), its own slave permissions, and its emergency stop. |
-| **Slaves** `/slaves` | One table + Departments: every slave, project-materialized or still catalog-only, with its department as a select, rename/re-role/delete and a model chosen from the provider's own list inline; **+ New slave** adds one to the catalog and, optionally, to a project; a **Departments** tab beside it to add, rename or delete a project's departments. |
+| **Settings** `/w/<id>/settings` | This project's goal, its runtime (provider, budget, and the read-only concurrency/timeout/attempts limits), its own slave permissions, its emergency stop, and its danger zone to archive/restore the project. |
+| **Slaves** `/slaves` | One table + Departments: every slave, project-materialized or still catalog-only, with its department as a select, rename/re-role/delete a slave with its history and a model chosen from the provider's own list inline; **+ New slave** adds one to the catalog and, optionally, to a project; a **Departments** tab beside it to add, rename or delete a project's department, along with the slaves on it. |
 | **Skills** `/skills` | The skill catalog and its assignments. |
 | **Analytics** `/analytics` | Spend and throughput. |
 | **Settings** `/settings` | Provider adapters, security, and reset demo data (development only). |
@@ -96,12 +96,23 @@ npm run orchestrator -- resume --run <id> --message "try the other approach"
 npm run orchestrator -- cancel --run <id>
 npm run orchestrator -- emergency-stop --workspace <id> --by <name>
 npm run orchestrator -- clear-halt --workspace <id>         # lift a workspace halt (starts nothing)
+npm run orchestrator -- archive-workspace --workspace <id>  # nothing runs until restored; refused while a run is live
+npm run orchestrator -- restore-workspace --workspace <id>
+npm run orchestrator -- list-workspaces                     # every project, archived ones marked
 npm run orchestrator -- rename-slave --slave <id> --name <n>
 npm run orchestrator -- set-role --slave <id> --role <r>
 npm run orchestrator -- delete-slave --slave <id> --yes
+npm run orchestrator -- delete-company --company <id> --yes
+npm run orchestrator -- delete-company-slave --slave <companySlaveId> --yes
+npm run orchestrator -- delete-template --template <id> --yes
 npm run orchestrator -- create-user --name <u>              # password read from stdin
 npm run orchestrator -- list-users
 ```
+
+Every `delete-*` verb deletes what it names WITH everything under it (a slave's run history, a
+department's slaves, a company's roster, a template's catalog slaves) and is refused only while a
+live run is in the way. Omit `--yes` on any of them to preview the footprint it would delete
+without deleting it.
 
 `--workspace <id>` can be left out while there is exactly one workspace.
 

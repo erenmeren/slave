@@ -173,4 +173,31 @@ Hard purge of an archived project; undo for deletes; bulk selection; a retention
 
 ## 13. Errata — where execution corrected the plan
 
-(empty at approval; filled by the last task)
+Every controller ruling made while executing Tasks 1–6, in order, one line each:
+
+- **R1** — commit trailers use the harness's own attribution block (session URL included), not the literal URL the plan text carried; costs nothing.
+- **R2** — `ProjectRow.archived` / `ProjectSettings.workspace.archived` are booleans, not spec §7's `archivedAt` timestamp: a boolean crosses the server/client boundary and fixtures cleanly, and no surface needs the date; costs a field rename later if one ever does.
+- **R3** — the archive/restore routes (§3.5) answer inline rather than through `workspaceControlResponse`: archive must return the footprint and restore must bypass the archived guard, which that shared helper doesn't accommodate; costs one more envelope shape.
+- **R4** — the catalog-slave delete confirm text ("deletes Sam from the catalog; project copies stay") omits §5.1's copy count: no `§7` read supplies it; costs one `groupBy` if the count is later wanted.
+- **R5** — spec §9's activity test (an event whose `slaveId` resolves to no slave renders the payload's name with no link) was added to Task 4's scope; the plan had dropped a spec-required test. Detail: `ActivityCard.tsx`'s `SlaveLink` used to render the raw `slaveId` as link text pointing at a slave that no longer exists — it now returns `null` when `slaveName` is `null`, so the card body carries whatever name the payload has.
+- **R6** — `deleteCompanySlave` runs in a transaction behind `SELECT … FOR UPDATE`, matching its sibling catalog verbs (spec §5); the plan's bare find-then-delete would race a concurrent delete into a `P2025` throw.
+- **R7** — Task 2 also updated `scripts/gate-m23-onboarding.mjs` stage 6 and `apps/orchestrator/test/integration/cli.test.ts`'s `slave_has_runs` case to the new cascade behaviour — both asserted text the behaviour change removed, and the plan missed them.
+- **R8** — Task 4 rewrote the `DepartmentsTable.tsx:15` comment that named `team_not_empty`, a refusal that no longer exists; comments change with the behaviour they describe.
+- **R9** — a stray `next dev` left over from an earlier screenshot session was killed before Task 3's `web:build` (pid 1190846) — the build clobbers a running dev server.
+- **R10** — the `danger-confirm` "cancels on Escape" test was rewritten to actually press Escape and assert the confirm closes; a test that asserts less than its own name is a rubric defect.
+- **R11** — `deleteTeam` locks the department's `Slave` rows (`SELECT id FROM "Slave" WHERE "teamId" = $1 FOR UPDATE`) before counting live runs, which the brief's block did not call for: the spec's "checked inside the row-locked transaction" only holds if the lock covers the rows a `SlaveRun` insert takes `FOR KEY SHARE` on, and `lockTeam`'s lock on the `Team` row alone does not.
+- **R12** — the final review's minor #7 was reclassified as a spec gap: §3.3 names `teams` and task-dependency edits among the writes that must 409 on an archived project, and those routes built their envelopes inline, bypassing `workspaceControlResponse`. Fix round 1 added the same archived guard to `POST teams`, `POST tasks` and the dependency routes through one shared helper; the run routes (pause/resume/stop/message) stay unguarded because archive already refuses while any non-terminal run exists.
+- **R13** — the `show-archived` toggle merges `archived` into the current search params instead of replacing the URL wholesale: spec §3.4 says "persisted in the URL as `?archived=1`," not "the only param," and the brief's expected `router.replace('/?archived=1')` / `('/')` still hold when no other param is present.
+- **R14** — the closing run (this task) adds `npm run gate:m23-onboarding` to the plan's eight gates, run right after `m21-loose-ends`: Task 2 changed stage 6's assertions and nothing had executed them until now. It ran unchanged and passed (see the closing run below) — no further gate fix was needed.
+
+Divergences the plan itself predicted (T7 Step 3), both confirmed as intentional:
+
+- The `archived` chip is asserted by `gate-m11-shell.mjs`'s new stage 6, not `gate-m14-fidelity`: m14 re-screenshots and commits its nine PNGs on every run with no pixel-diff against a prior baseline (a human reviews them), so nothing there would have caught a missing chip anyway — the assertion belongs on the gate whose own dedicated project already carries an archived state to check, not on the one whose committed images would gain an unrelated visual change with nothing to verify it.
+- `TemplateRow.catalogSlaveCount` was added in Task 6 for the `template-delete` confirm's "and its 3 catalog slaves" text (§5.1); §7's read list did not name it.
+
+Comment-only fixes carried by this task (stale since Task 2's behaviour change; no schema or behaviour change):
+
+- `apps/web/src/app/api/org/teams/[companyTeamId]/route.ts`'s docstring still said the template delete refuses while it has members — it now deletes the template WITH its catalog slaves, refusing only on an unknown id.
+- `packages/db/prisma/schema.prisma:159-160` and `:219-220` still said template/company deletion was out of scope — both are deletable now (catalog slaves go with their template).
+
+No further divergence surfaced while executing Task 7 itself: the closing run's nine gates (§9's eight plus `gate:m23-onboarding` per R14) all passed unchanged, and `gate-m11-shell.mjs`'s stage 6 needed one self-correction during authoring (a DOM row-count assertion checked before the client's `router.refresh()` had landed; replaced with the same bounded poll every other assertion in that file already uses) — a gate-authoring fix, not a product or spec divergence.

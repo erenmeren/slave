@@ -20,6 +20,11 @@
 // and a full-page screenshot into a scratch directory this script creates and prints the path to
 // -- the `gate-m8a-estop.mjs` idiom of a thrown error carrying the state that made the call, not
 // just "it timed out".
+//
+// Stage 6 (M27 Task 7): the deletes and the archive/restore cycle. `slave-delete`,
+// `department-delete`, `archive-project` and `restore-project` are all driven the same way every
+// earlier stage drives a control -- a real click through `DangerConfirm` where one applies, then a
+// direct `prisma` read, never the browser's own claim.
 
 import { execFileSync, spawn } from 'node:child_process'
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -558,7 +563,132 @@ try {
   }
   console.log(`stage 5 complete: "${MEMBER_NAME}" moved to a second "${workspaceNameA}" department, verified against prisma.slave`)
 
-  console.log(`PASS: the shell staffed and steered ${projectNames.length} projects from the browser`)
+  // ---- Scenario stage 6a: delete the moved slave through the Slaves table's `slave-delete` ->
+  // `slave-delete-confirm` (M27 §4.1). A terminal `SlaveRun` fixture is created directly (this
+  // gate never runs the orchestrator, so the worker otherwise carries no run history) so "its
+  // runs are gone" below proves the delete's cascade rather than a count that was already zero.
+  const movedSlaveRun = await prisma.slaveRun.create({ data: { slaveId: movedSlave.id, status: 'succeeded' } })
+  console.log(`created a terminal run fixture directly for "${MEMBER_NAME}" (${workspaceNameA}): ${movedSlaveRun.id}`)
+
+  const deleteSlaveRow = memberRows.filter({ hasText: workspaceNameA })
+  await waitVisible(deleteSlaveRow, `the "${workspaceNameA}" row for "${MEMBER_NAME}" before deleting it`)
+  await clickUntil(
+    deleteSlaveRow.getByTestId('slave-delete'),
+    async () => deleteSlaveRow.getByTestId('slave-delete-confirm').isVisible(),
+    `opening the delete confirm on the "${workspaceNameA}" "${MEMBER_NAME}" row`,
+  )
+  await clickUntil(
+    deleteSlaveRow.getByTestId('slave-delete-confirm'),
+    async () => (await prisma.slave.findUnique({ where: { id: movedSlave.id } })) === null,
+    `confirming the delete of the "${workspaceNameA}" "${MEMBER_NAME}" row`,
+  )
+  const deletedSlave = await prisma.slave.findUnique({ where: { id: movedSlave.id } })
+  if (deletedSlave !== null) await fail(`"${MEMBER_NAME}"'s slave row (${movedSlave.id}) still exists after slave-delete-confirm`)
+  const deletedSlaveRuns = await prisma.slaveRun.findMany({ where: { slaveId: movedSlave.id } })
+  if (deletedSlaveRuns.length !== 0) {
+    await fail(`"${MEMBER_NAME}"'s runs were not deleted along with its slave row -- ${JSON.stringify(deletedSlaveRuns)}`)
+  }
+  // The DB delete is already committed (asserted above) by the time `router.refresh()`'s own RSC
+  // round trip lands in the DOM -- a bounded poll, not a bare count, the same hydration-race
+  // shape every `clickUntil` predicate in this file already accounts for.
+  let remainingMemberRowCount = await memberRows.count()
+  {
+    const deadline = Date.now() + ACTION_TIMEOUT_MS
+    while (remainingMemberRowCount !== 1 && Date.now() < deadline) {
+      await delay(100)
+      remainingMemberRowCount = await memberRows.count()
+    }
+  }
+  if (remainingMemberRowCount !== 1) {
+    await fail(
+      `the Slaves table shows ${remainingMemberRowCount} "${MEMBER_NAME}" row(s) after deleting the "${workspaceNameA}" one, expected exactly 1 (the "${workspaceNameB}" row)`,
+    )
+  }
+  console.log(`deleted "${MEMBER_NAME}"'s "${workspaceNameA}" slave row and its run history through slave-delete -- verified against prisma`)
+
+  // ---- Scenario stage 6b: delete the second department through the Departments tab's
+  // `department-delete` -> `department-delete-confirm` (M27 §4.2). Its one slave is already gone
+  // (deleted above), so this is a plain cascade with no live-run refusal to work around.
+  const departmentsTab = page.getByTestId('slaves-tab-departments')
+  const otherDeptRow = page.getByTestId('data-table-row').filter({ hasText: 'M11 Gate Other Dept' })
+  await clickUntil(
+    departmentsTab,
+    async () => (await departmentsTab.getAttribute('aria-selected')) === 'true' && (await otherDeptRow.first().isVisible()),
+    'the Departments tab',
+  )
+  await waitVisible(otherDeptRow, 'the "M11 Gate Other Dept" department row')
+  await clickUntil(
+    otherDeptRow.getByTestId('department-delete'),
+    async () => otherDeptRow.getByTestId('department-delete-confirm').isVisible(),
+    'opening the delete confirm on "M11 Gate Other Dept"',
+  )
+  await clickUntil(
+    otherDeptRow.getByTestId('department-delete-confirm'),
+    async () => (await prisma.team.findUnique({ where: { id: otherDepartment.id } })) === null,
+    'confirming the delete of "M11 Gate Other Dept"',
+  )
+  const deletedDepartment = await prisma.team.findUnique({ where: { id: otherDepartment.id } })
+  if (deletedDepartment !== null) await fail(`"M11 Gate Other Dept" (${otherDepartment.id}) still exists after department-delete-confirm`)
+  console.log('deleted the "M11 Gate Other Dept" department through department-delete -- verified against prisma')
+
+  // ---- Scenario stage 6c: archive project A through its own Settings danger zone
+  // (`archive-project` -> `archive-project-confirm`, landing back on "/"), confirm the card
+  // disappears from the default (no `?archived=1`) list, reappears with the `project-archived`
+  // chip once `show-archived` is checked, then restore it from that same card (M27 spec §§3.3-3.4).
+  await page.goto(`${baseUrl}/w/${workspaceIdA}/settings`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
+  await waitVisible(page.getByTestId('archive-project'), `the "${workspaceNameA}" project's archive-project button`)
+  await clickUntil(
+    page.getByTestId('archive-project'),
+    async () => page.getByTestId('archive-project-confirm').isVisible(),
+    `opening the archive confirm for "${workspaceNameA}"`,
+  )
+  await clickUntil(
+    page.getByTestId('archive-project-confirm'),
+    async () => page.url() === `${baseUrl}/`,
+    `confirming the archive of "${workspaceNameA}"`,
+  )
+  const archivedWorkspaceA = await prisma.workspace.findUnique({ where: { id: workspaceIdA }, select: { archivedAt: true } })
+  if (archivedWorkspaceA === null || archivedWorkspaceA.archivedAt === null) {
+    await fail(`"${workspaceNameA}"'s archivedAt is still null after archive-project-confirm -- ${JSON.stringify(archivedWorkspaceA)}`)
+  }
+  console.log(`archived "${workspaceNameA}" through archive-project-confirm and landed back on "/" -- verified against prisma`)
+
+  await waitVisible(projectWrapper(workspaceNameB), `the still-active "${workspaceNameB}" card`)
+  const hiddenCardCount = await projectWrapper(workspaceNameA).count()
+  if (hiddenCardCount !== 0) {
+    await fail(`the archived "${workspaceNameA}" card is still visible on "/" with ?archived=1 not set -- count=${hiddenCardCount}`)
+  }
+  console.log(`the archived "${workspaceNameA}" card is absent from "/" with ?archived=1 not set`)
+
+  await clickUntil(
+    page.getByTestId('show-archived'),
+    async () => projectWrapper(workspaceNameA).first().isVisible(),
+    'the "show archived" checkbox',
+  )
+  await waitVisible(
+    projectWrapper(workspaceNameA).getByTestId('project-archived'),
+    `the "${workspaceNameA}" card's "archived" chip after checking "show archived"`,
+  )
+  console.log(`checking "show archived" reveals the "${workspaceNameA}" card with its "archived" chip`)
+
+  await clickUntil(
+    projectWrapper(workspaceNameA).getByTestId('restore-project'),
+    async () => {
+      const workspace = await prisma.workspace.findUnique({ where: { id: workspaceIdA }, select: { archivedAt: true } })
+      return workspace?.archivedAt === null
+    },
+    `restoring "${workspaceNameA}" from its project card`,
+  )
+  const restoredWorkspaceA = await prisma.workspace.findUnique({ where: { id: workspaceIdA }, select: { archivedAt: true } })
+  if (restoredWorkspaceA === null || restoredWorkspaceA.archivedAt !== null) {
+    await fail(`"${workspaceNameA}"'s archivedAt is not null after restore-project -- ${JSON.stringify(restoredWorkspaceA)}`)
+  }
+  console.log(`restored "${workspaceNameA}" through restore-project on its card -- verified against prisma`)
+  console.log(
+    'stage 6 complete: slave-delete (+ its run history), department-delete, archive-project and restore-project all verified against prisma',
+  )
+
+  console.log(`PASS: the shell staffed and steered ${projectNames.length} projects from the browser, then deleted and archived/restored through it`)
   exitCode = 0
 } finally {
   if (browser !== null) {
