@@ -104,9 +104,11 @@ function cards(count: number): WorldTask[] {
  * slave — instead of the engine's own task board and dice. What stays from the design: the walk to
  * the board when a run starts, the walk with the finished work when it stops, the idle wander to
  * the arcade and the coffee machine, the cat, the roomba, the boss. The engine's confetti machinery
- * also stays (R6), but nothing in this adapter fires it: `progressPct` is a tool-call ratio, not a
- * finish line (a normal success ends well under 100), and the stream's `liveEvents` do not carry a
- * per-slave `run.succeeded` — there is no live signal to build a trigger from.
+ * also stays (R6), but nothing in this adapter fires it: confetti is deferred, not impossible.
+ * `progressPct` is a tool-call ratio, not a finish line (a normal success ends well under 100), and
+ * this snapshot alone cannot tell who succeeded — the trigger would read `useOverview`'s
+ * `liveEvents[slaveId]` for a `run.succeeded` type, which is a client-side wiring this milestone
+ * does not do.
  */
 export class LiveOffice extends WorldF {
   private live: ReadonlyMap<string, LiveSlave> = new Map()
@@ -133,8 +135,12 @@ export class LiveOffice extends WorldF {
     return this.live.get(slaveId) ?? null
   }
 
+  /** The wall clock the floor follows. It lands on `hour` straight away (not only at the next
+   *  `tick`) so a world built but not yet ticked — the client's font-load window (R16) — reads the
+   *  real time instead of the engine's initial 09:00; `tick` re-applies the same rule every frame. */
   setWallClock(hour: number): void {
     this.wallHour = hour
+    this.hour = this.hourLock ?? hour
   }
 
   /** One stream snapshot: the status, task and progress of every slave, and the board counts. */
@@ -208,7 +214,11 @@ export class LiveOffice extends WorldF {
           break
         case 'coffee':
         case 'arcade':
-          if (slave.timer <= 0) {
+          // R13: the break ends when it is over *or* when the stream says the slave has work to do
+          // again — `reconcile` below only runs for seated states, so without this second test a
+          // slave that goes `blocked` (or `starting`, or `paused`) mid-break stands at the arcade
+          // with no bubble until the whole 3.5 s / 5 s break plus the walk home has run out.
+          if (slave.timer <= 0 || this.statusOf(slave) !== 'idle') {
             this.goTo(slave, this.seat(slave), 'sit')
             slave.timer = 3
           }
@@ -220,7 +230,9 @@ export class LiveOffice extends WorldF {
     }
   }
 
-  /** A seated slave adopts the live status; a walking one finishes its walk first. */
+  /** A seated slave adopts the live status; a walking one finishes its walk first. (A slave on a
+   *  lounge break is not seated, so `simulate` above cuts the break short the moment the stream
+   *  stops calling it idle — R13.) */
   private reconcile(slave: WorldSlave): void {
     if (!SEATED.has(slave.state)) return
     const status = this.statusOf(slave)

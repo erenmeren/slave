@@ -26,10 +26,13 @@
 // earlier stage drives a control -- a real click through `DangerConfirm` where one applies, then a
 // direct `prisma` read, never the browser's own claim.
 //
-// Stage 7 (M28 Task 5): `/w/<A>/office`, the Office tab. Same discipline as every stage before it
-// -- the HUD counts and the roster both come from a direct `prisma` read taken right before the
-// navigation, never a number this script assumes, because stage 6's deletes leave project A with
-// whatever roster they left it with (a department survives, its one slave does not).
+// Stage 7 (M28 Task 5): `/w/<B>/office`, the Office tab. Project B, not A: stage 6's deletes leave
+// project A with a department and no slaves at all, so an office opened on it draws an empty floor
+// and never renders the focus card. B still holds its materialized worker, and this stage adds one
+// more slave row directly with prisma (a fixture, like stage 6a's run fixture) so the floor has two
+// slaves -- enough for the focus card's `Next` to actually change who is focused. Same discipline
+// as every stage before it: the HUD counts come from a direct `prisma` read taken right before the
+// navigation, never a number this script assumes.
 
 import { execFileSync, spawn } from 'node:child_process'
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -693,23 +696,37 @@ try {
     'stage 6 complete: slave-delete (+ its run history), department-delete, archive-project and restore-project all verified against prisma',
   )
 
-  // ---- Scenario stage 7: /w/<A>/office -- the Office tab (M28 §9) draws project A's departments
+  // ---- Scenario stage 7: /w/<B>/office -- the Office tab (M28 §9) draws project B's departments
   // and slaves from the same rows the Slaves table showed, the HUD counts match prisma, the canvas
   // has painted, and the focus card cycles through the roster.
   //
-  // Project A's roster at this point (stage 6 deleted one slave and one department): the
-  // materialized "Crew" department survives everything above, but the one slave ever in it
-  // ("Gate Worker") was deleted in stage 6a after being moved into "M11 Gate Other Dept", which
-  // stage 6b then deleted too -- so `officeDepartments` is 1 and `officeSlaves` is 0 here, not 1.
-  // With zero slaves `OfficeClient` renders no focus card at all (`focused` falls through to
-  // `null` whenever `world.slaves.length === 0`, same as the empty-roster case `office-client.
-  // test.tsx` covers) -- so this stage reads the counts from prisma at runtime and branches on
-  // them rather than assuming a specific roster size: zero slaves asserts the focus card is
-  // absent, one slave asserts it renders but skips the Next-cycle (nothing to cycle to), and two
-  // or more asserts the Next click actually changes who is focused.
-  const officeDepartments = await prisma.team.count({ where: { workspaceId: workspaceIdA } })
-  const officeSlaves = await prisma.slave.count({ where: { team: { workspaceId: workspaceIdA } } })
-  await page.goto(`${baseUrl}/w/${workspaceIdA}/office`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
+  // Project B, not A. Project A's roster at this point is a department with nothing in it: the
+  // materialized "Crew" department survives stage 6, but the one slave ever in it ("Gate Worker")
+  // was deleted in stage 6a after being moved into "M11 Gate Other Dept", which stage 6b then
+  // deleted too. An empty floor draws (that is `office-client.test.tsx`'s empty-roster case) but
+  // renders no focus card and nothing to click Next on, so the browser gate would never exercise
+  // either. Project B is still active and still holds its materialized "Gate Worker"; one more
+  // slave row is created here directly with prisma -- a fixture, exactly like stage 6a's
+  // `prisma.slaveRun.create` -- so the floor carries two slaves and the Next click has somewhere
+  // to go. Workspace B is deleted (cascading Team/Slave) by this script's own cleanup, so the
+  // fixture needs no cleanup of its own.
+  const officeDepartmentB = await prisma.team.findFirst({ where: { workspaceId: workspaceIdB } })
+  if (officeDepartmentB === null) await fail(`"${workspaceNameB}" has no department to add the office fixture slave to`)
+  const officeFixtureSlave = await prisma.slave.create({
+    data: { teamId: officeDepartmentB.id, name: 'M11 Gate Second Slave', role: 'qa' },
+  })
+  console.log(`created a second "${workspaceNameB}" slave directly for the office floor: ${officeFixtureSlave.id}`)
+
+  const officeDepartments = await prisma.team.count({ where: { workspaceId: workspaceIdB } })
+  const officeSlaves = await prisma.slave.count({ where: { team: { workspaceId: workspaceIdB } } })
+  // The branches below still cover every roster size (this script never assumes a count it did not
+  // read), but with the fixture above the run must take the `> 1` one -- anything less means the
+  // fixture or the materialization did not land, and the Next-cycle assertion would be skipped
+  // silently rather than failing.
+  if (officeSlaves < 2) {
+    await fail(`"${workspaceNameB}" has ${officeSlaves} slave(s) on the office floor, expected at least 2 (its worker plus the fixture)`)
+  }
+  await page.goto(`${baseUrl}/w/${workspaceIdB}/office`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
   await waitVisible(page.getByTestId('office-canvas'), 'the office canvas')
   const expectedCounts = `${officeDepartments} department${officeDepartments === 1 ? '' : 's'} · ${officeSlaves} slave${officeSlaves === 1 ? '' : 's'} · 0 working`
   {
@@ -747,9 +764,9 @@ try {
 
   if (officeSlaves === 0) {
     const focusCardCount = await page.getByTestId('office-focus').count()
-    if (focusCardCount !== 0) await fail(`the office focus card is present with zero slaves in "${workspaceNameA}" -- expected none`)
+    if (focusCardCount !== 0) await fail(`the office focus card is present with zero slaves in "${workspaceNameB}" -- expected none`)
     console.log(
-      `stage 7 complete: /w/${workspaceIdA}/office painted ${officeDepartments} department(s) and 0 slaves, counts matched prisma; no focus ` +
+      `stage 7 complete: /w/${workspaceIdB}/office painted ${officeDepartments} department(s) and 0 slaves, counts matched prisma; no focus ` +
         'card with an empty roster, so the Next-cycle was not asserted',
     )
   } else {
@@ -762,12 +779,12 @@ try {
         'cycling the office focus card with Next',
       )
       console.log(
-        `stage 7 complete: /w/${workspaceIdA}/office painted ${officeDepartments} department(s) and ${officeSlaves} slaves, counts matched ` +
-          'prisma, the focus card cycled',
+        `stage 7 complete: /w/${workspaceIdB}/office painted ${officeDepartments} department(s) and ${officeSlaves} slaves (the materialized ` +
+          'worker plus the fixture), counts matched prisma, the focus card cycled with Next',
       )
     } else {
       console.log(
-        `stage 7 complete: /w/${workspaceIdA}/office painted ${officeDepartments} department(s) and 1 slave, counts matched prisma; only one ` +
+        `stage 7 complete: /w/${workspaceIdB}/office painted ${officeDepartments} department(s) and 1 slave, counts matched prisma; only one ` +
           'slave, so Next has nowhere to cycle to and was not asserted to change the focus',
       )
     }

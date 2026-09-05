@@ -33,7 +33,10 @@ export function FocusCard({
 }): React.JSX.Element {
   const [error, setError] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
-  const paused = view.status === 'paused' || view.status === 'pausing'
+  // R16: Resume is offered only while the run is actually `paused` (spec §5). While `pausing` the
+  // pause has been asked for but not taken effect — the button keeps saying Pause and goes
+  // disabled, so the card never invites a resume of a run that is still stopping work.
+  const paused = view.status === 'paused'
   const runAction = async (action: 'pause' | 'resume' | 'stop'): Promise<void> => {
     if (view.runId === null) return
     setPending(true)
@@ -71,7 +74,7 @@ export function FocusCard({
       </div>
       <div className="flex gap-[5px]">
         {!archived && (
-          <button type="button" data-testid="office-focus-pause" disabled={pending || view.runId === null} onClick={() => void runAction(paused ? 'resume' : 'pause')} className={button}>
+          <button type="button" data-testid="office-focus-pause" disabled={pending || view.runId === null || view.status === 'pausing'} onClick={() => void runAction(paused ? 'resume' : 'pause')} className={button}>
             {paused ? 'Resume' : 'Pause'}
           </button>
         )}

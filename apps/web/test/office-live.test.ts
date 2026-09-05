@@ -175,6 +175,25 @@ describe('LiveOffice', () => {
     expect(maya.state).toBe('work')
   })
 
+  it('cuts a lounge break short when the stream stops calling the slave idle (R13)', () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0.1) // < .18 -> the arcade
+    const o = office()
+    o.apply(new Map([['s1', live('idle')]]), { todo: 0, doing: 0, review: 0, done: 0 })
+    const alex = o.slaves[0]!
+    for (let i = 0; i < 20 * 20 && alex.state !== 'arcade'; i++) o.tick(0.05)
+    expect(alex.state).toBe('arcade')
+
+    // The break has just started (5 s on the machine): without R13 the slave would stand here with
+    // no bubble for the rest of it, plus the walk home, before the red blocked state ever showed.
+    o.apply(new Map([['s1', live('blocked')]]), { todo: 0, doing: 0, review: 0, done: 0 })
+    for (let i = 0; i < 5; i++) o.tick(0.05)
+    expect(alex.state).toBe('walk')
+    expect(alex.next).toBe('sit')
+    settle(o)
+    expect(alex.state).toBe('blocked')
+    expect([alex.x, alex.y]).toEqual([o.seat(alex).x, o.seat(alex).y])
+  })
+
   it('draws the board from the counts, capped at six cards a column', () => {
     const o = office()
     o.apply(new Map(), { todo: 9, doing: 2, review: 0, done: 4 })

@@ -142,6 +142,20 @@ describe('OfficeClient', () => {
     expect(screen.getByTestId('office-stream').textContent).toContain('LIVE')
   })
 
+  // R12: `working` is the stream's word, not the sprite's. A slave the stream reports `working`
+  // counts while it is still walking back from the arcade (state `walk`) — otherwise the HUD
+  // disagrees with the Overview tab for the length of every walk.
+  it('counts a working slave that is still walking, not only one sitting in state work', async () => {
+    const before = stubSlaves[0]!.state
+    stubSlaves[0]!.state = 'walk'
+    try {
+      await mount()
+      expect(screen.getByTestId('office-hud-counts').textContent).toBe('2 departments · 3 slaves · 1 working')
+    } finally {
+      stubSlaves[0]!.state = before
+    }
+  })
+
   it('locks the hour from the slider and LIVE clears it', async () => {
     await mount()
     fireEvent.change(screen.getByTestId('office-hour'), { target: { value: '21' } })
@@ -193,7 +207,25 @@ describe('OfficeClient', () => {
     expect(screen.getByTestId('office-focus-error').textContent).toBe('run r3 is not paused')
   })
 
-  it('disables the run controls for a slave without a run and hides them on an archived project', async () => {
+  // R16: spec §5 offers Resume only while the run is `paused`. `pausing` is the pause in flight —
+  // the button still says Pause and is disabled, rather than inviting a resume of a run that has
+  // not stopped working yet.
+  it('keeps the label Pause, disabled, while a run is still pausing', async () => {
+    const before = liveById.s3!.status
+    liveById.s3!.status = 'pausing'
+    try {
+      await mount()
+      stubWorld.focusId = 's3'
+      await act(async () => { vi.advanceTimersByTime(320) })
+      const pause = screen.getByTestId('office-focus-pause') as HTMLButtonElement
+      expect(pause.textContent).toBe('Pause')
+      expect(pause.disabled).toBe(true)
+    } finally {
+      liveById.s3!.status = before
+    }
+  })
+
+  it('disables the run controls for a slave without a run', async () => {
     await mount()
     stubWorld.focusId = 's2'
     await act(async () => { vi.advanceTimersByTime(320) })

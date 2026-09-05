@@ -63,6 +63,10 @@ export function OfficeClient({
     // R10: a rebuilt world otherwise runs idle (every slave's live status blank) until the next
     // stream tick — the effect below keys on `overview`, whose identity does not change just
     // because the roster did. Seed it here with the snapshot already in hand.
+    // R16: seed the clock too. The loop below only starts once the pixel font has loaded, and the
+    // engine's own `hour` starts at 09:00 — without this the HUD reads 09:00 (and the wrong
+    // time-of-day label) for the whole font-load window. `tick` keeps it current every frame after.
+    world.setWallClock(wallHour())
     world.apply(liveSlavesOf(overviewRef.current), boardFromOverview(overviewRef.current))
     worldRef.current = world
     setFrame((f) => f + 1)
@@ -84,6 +88,14 @@ export function OfficeClient({
     let last = performance.now()
     let acc = 0
     let stopped = false
+    // R16: a tick or a render that throws throws every frame (60 times a second) — log the first
+    // one and stay quiet after it, so one broken frame does not bury the console it landed in.
+    let reported = false
+    const report = (error: unknown): void => {
+      if (reported) return
+      reported = true
+      console.error(error)
+    }
     const size = (): void => {
       const r = wrap.getBoundingClientRect()
       const w = Math.max(200, Math.round(r.width))
@@ -105,14 +117,14 @@ export function OfficeClient({
         try {
           world.tick(dt)
         } catch (error) {
-          console.error(error)
+          report(error)
         }
         const ctx = canvas.getContext('2d')
         if (ctx !== null) {
           try {
             renderIsoE(ctx, world, { viewKey: 'view', tod: true, fun: true, autofit: true, deptSigns: 'banner' })
           } catch (error) {
-            console.error(error)
+            report(error)
           }
         }
         // R9: apply a carried camera once the (possibly just-rebuilt) world actually has a view
@@ -139,8 +151,13 @@ export function OfficeClient({
     const start = (): void => {
       raf = requestAnimationFrame(loop)
     }
-    // Canvas text asks for the pixel font by family; wait for it so the first frame is not monospace.
-    document.fonts.load(`9px ${pixelFontFamily}`).then(start, start)
+    // Canvas text asks for the pixel font by family; wait for it so the first frame is not
+    // monospace. R16: `document.fonts` is optional (older browsers, and a jsdom without the
+    // FontFace shim) — without a font set to wait on, start the loop right away rather than
+    // throwing on `undefined.load` and never drawing at all.
+    const fonts: FontFaceSet | undefined = document.fonts
+    if (fonts === undefined) start()
+    else fonts.load(`9px ${pixelFontFamily}`).then(start, start)
     return () => {
       stopped = true
       cancelAnimationFrame(raf)
@@ -227,8 +244,15 @@ export function OfficeClient({
   const hud: HudView = {
     connection,
     departments: world?.departments.length ?? initial.departments.length,
-    slaves: world?.slaves.length ?? 0,
-    working: world?.slaves.filter((s) => world.status(s) === 'working').length ?? 0,
+    // R16: before the build effect has run there is no world, and the roster the server already
+    // sent is the honest answer for both counts — a first paint of "0 slaves" contradicts the
+    // floor the very next frame draws.
+    slaves: world?.slaves.length ?? initial.departments.reduce((n, d) => n + d.slaves.length, 0),
+    // R12: `working` is the stream's status, not the sprite's state. `world.status(s)` reads the
+    // floor — a live-working slave still walking back from the arcade, or a `starting` one walking
+    // to the board, is not in state `work` — so counting sprites left the HUD disagreeing with the
+    // Overview tab for the length of every walk.
+    working: world === null ? 0 : world.slaves.filter((s) => world.liveOf(s.id)?.status === 'working').length,
     todLabel: world === null ? '' : tod(world.hour).label.toUpperCase(),
     clock: world?.clock() ?? '--:--',
     // R11: the slider's own lock, when set, wins over the world's clock straight away — reading
