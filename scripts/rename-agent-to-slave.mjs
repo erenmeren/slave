@@ -5,7 +5,7 @@
 //   files — git mv for paths that carry the word (spec §2 row 11)
 // Protected tokens (spec §2) are swapped for placeholders before the rules run and restored
 // after, so `cursor-agent` survives a pass that turns `agent` into `slave`.
-import { readFileSync, writeFileSync, appendFileSync, existsSync, statSync } from 'node:fs'
+import { readFileSync, writeFileSync, appendFileSync, existsSync, statSync, mkdirSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import path from 'node:path'
 
@@ -64,6 +64,16 @@ export function renamePath(p) {
   return p.split('/').map((seg) => renameText(seg, 'words').text).join('/')
 }
 
+/** [from, to] for every path in `paths` whose name changes; protected paths are dropped. */
+export function planMoves(paths) {
+  const moves = []
+  for (const p of paths) {
+    const next = renamePath(p)
+    if (next !== p) moves.push([p, next])
+  }
+  return moves
+}
+
 function isProtectedPath(p) {
   return PROTECTED_PATHS.some((prefix) => p === prefix || p.startsWith(prefix))
 }
@@ -98,23 +108,20 @@ function runPhase(phase, roots, dry, report) {
 }
 
 function runFiles(roots, dry, report) {
-  // Deepest paths first so a directory rename never invalidates a child's old path.
-  const files = trackedFiles(roots).sort((a, b) => b.split('/').length - a.split('/').length)
-  const moved = new Set()
-  for (const file of files) {
-    const next = renamePath(file)
-    if (next === file) continue
-    // Move the topmost differing directory once, not every file under it.
-    const a = file.split('/'), b = next.split('/')
-    let i = 0
-    while (i < a.length && a[i] === b[i]) i += 1
-    const from = a.slice(0, i + 1).join('/'), to = b.slice(0, i + 1).join('/')
-    if (moved.has(from)) continue
-    moved.add(from)
+  // One git mv per file (not per topmost differing directory), so a nested rename inside an
+  // already-renamed directory — [agentId] under api/agents, NewAgentDrawer under components/agents
+  // — is never lost.
+  let moved = 0
+  for (const [from, to] of planMoves(trackedFiles(roots))) {
+    if (!existsSync(from) || !statSync(from).isFile()) continue
+    moved += 1
     if (report !== null) appendFileSync(report, `${from} -> ${to}\n`)
-    if (!dry) execFileSync('git', ['mv', from, to], { stdio: 'inherit' })
+    if (!dry) {
+      mkdirSync(path.dirname(to), { recursive: true })
+      execFileSync('git', ['mv', from, to], { stdio: 'inherit' })
+    }
   }
-  console.log(`files: ${moved.size} moves${dry ? ' (dry run)' : ''}`)
+  console.log(`files: ${moved} moves${dry ? ' (dry run)' : ''}`)
 }
 
 function selfTest() {
@@ -151,7 +158,24 @@ function selfTest() {
       console.error(`FAIL (path)\n  in:  ${from}\n  got: ${got}\n  exp: ${to}`)
     }
   }
-  console.log(failed === 0 ? `self-test: ${cases.length + paths.length} cases pass` : `self-test: ${failed} failed`)
+  // planMoves must move every nested renamed segment (not just the topmost differing one), and
+  // must drop a protected path entirely rather than emitting a no-op pair.
+  const moveCases = [
+    ['apps/web/src/app/api/agents/[agentId]/route.ts', 'apps/web/src/app/api/slaves/[slaveId]/route.ts'],
+    ['apps/web/src/app/api/org/agents/[companyAgentId]/team/route.ts', 'apps/web/src/app/api/org/slaves/[companySlaveId]/team/route.ts'],
+    ['apps/web/src/components/agents/NewAgentDrawer.tsx', 'apps/web/src/components/slaves/NewSlaveDrawer.tsx'],
+    ['scripts/gate-fakes/fake-cursor-agent.sh', null],
+  ]
+  for (const [from, to] of moveCases) {
+    const got = planMoves([from])
+    const expected = to === null ? [] : [[from, to]]
+    if (JSON.stringify(got) !== JSON.stringify(expected)) {
+      failed += 1
+      console.error(`FAIL (planMoves)\n  in:  ${from}\n  got: ${JSON.stringify(got)}\n  exp: ${JSON.stringify(expected)}`)
+    }
+  }
+  const total = cases.length + paths.length + moveCases.length
+  console.log(failed === 0 ? `self-test: ${total} cases pass` : `self-test: ${failed} failed`)
   process.exit(failed === 0 ? 0 : 1)
 }
 
