@@ -206,6 +206,11 @@ function ProjectCard({
  * idiom, `project/ProjectHeader.tsx`) with the button LAST in that group, so the button keeps the
  * exact position it already had -- the M14 fidelity gate screenshots this row, and a checkbox
  * placed after the button would shift it.
+ *
+ * Toggling it MERGES into the current query rather than replacing the URL wholesale (controller
+ * ruling R13, fix round 1): it builds `new URLSearchParams(searchParams)`, sets or deletes just
+ * `archived`, and keeps every other param (`?new=1`, say) intact -- a hard-coded `'/?archived=1'`
+ * would have clobbered them.
  */
 export function ProjectsClient({
   projects,
@@ -234,7 +239,13 @@ export function ProjectsClient({
               type="checkbox"
               data-testid="show-archived"
               checked={showArchived}
-              onChange={(event) => router.replace(event.target.checked ? '/?archived=1' : '/')}
+              onChange={(event) => {
+                const query = new URLSearchParams(searchParams)
+                if (event.target.checked) query.set('archived', '1')
+                else query.delete('archived')
+                const search = query.toString()
+                router.replace(search === '' ? '/' : `/?${search}`)
+              }}
             />
             show archived
           </label>

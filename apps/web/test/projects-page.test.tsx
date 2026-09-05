@@ -156,6 +156,29 @@ describe('ProjectsClient', () => {
       expect(screen.getByTestId('restore-project')).toBeTruthy()
     })
 
+    // Fix round 1, finding 1(a): the 4-up strip (`slaves`/`active`/`blocked`/`spend`) drops its
+    // `spend` tile for an archived card -- spend is a live-budget figure an archived project no
+    // longer accrues, per spec §3.4's "no spend bar". `stat-strip-item` at index 3 -- `spend` on
+    // an active card (pinned by the "4-up stat strip" test above) -- must not exist here.
+    it('drops the spend tile for an archived card (3-up, not 4-up)', () => {
+      render(<TestProjectsClient projects={[project({ id: 'w1', archived: true, spend: 12.5 })]} companies={companies} />)
+      const items = screen.getAllByTestId('stat-strip-item')
+      expect(items).toHaveLength(3)
+      expect(items.map((item) => item.textContent?.replace(/\s+/g, ' ').trim())).toEqual([
+        'slaves 3', 'active 1', 'blocked 0',
+      ])
+      expect(screen.queryByText(/\$12\.50/)).toBeNull()
+    })
+
+    // Fix round 1, finding 1(b): `project()`'s default `companyName: null` is exactly the
+    // combination that renders `assign-company-button` for an active card (the "shows a dim 'no
+    // company' badge..." test above) -- an archived card must hide it regardless.
+    it('hides assign-company-button on an archived card even with no company assigned', () => {
+      render(<TestProjectsClient projects={[project({ id: 'w1', archived: true, companyName: null })]} companies={companies} />)
+      expect(screen.queryByTestId('assign-company-button')).toBeNull()
+      expect(screen.getByTestId('restore-project')).toBeTruthy()
+    })
+
     it('checking it replaces the URL with ?archived=1', () => {
       render(<TestProjectsClient projects={[project({ id: 'w1' })]} companies={companies} />)
       fireEvent.click(screen.getByTestId('show-archived'))
@@ -167,6 +190,23 @@ describe('ProjectsClient', () => {
       render(<TestProjectsClient projects={[project({ id: 'w1' })]} companies={companies} />)
       fireEvent.click(screen.getByTestId('show-archived'))
       expect(routerReplace).toHaveBeenCalledWith('/')
+    })
+
+    // Fix round 1, finding 3 / ruling R13: the toggle must MERGE into the current query, not
+    // replace the URL wholesale -- otherwise checking it from `?new=1` would silently close the
+    // New project drawer's own param.
+    it('checking it from another param merges rather than replacing (?new=1 -> ?new=1&archived=1)', () => {
+      search = 'new=1'
+      render(<TestProjectsClient projects={[project({ id: 'w1' })]} companies={companies} />)
+      fireEvent.click(screen.getByTestId('show-archived'))
+      expect(routerReplace).toHaveBeenCalledWith('/?new=1&archived=1')
+    })
+
+    it('unchecking it keeps the other param (?new=1&archived=1 -> ?new=1)', () => {
+      search = 'new=1&archived=1'
+      render(<TestProjectsClient projects={[project({ id: 'w1' })]} companies={companies} />)
+      fireEvent.click(screen.getByTestId('show-archived'))
+      expect(routerReplace).toHaveBeenCalledWith('/?new=1')
     })
 
     it('clicking restore-project POSTs /api/w/w1/restore and refreshes', async () => {
@@ -181,6 +221,26 @@ describe('ProjectsClient', () => {
 
       expect(fetchMock).toHaveBeenCalledWith('/api/w/w1/restore', expect.objectContaining({ method: 'POST' }))
       expect(routerRefresh).toHaveBeenCalled()
+      vi.unstubAllGlobals()
+    })
+
+    // Fix round 1, finding 2: only the success path was covered -- a refusal must show inline
+    // (the Settings-page danger zone's `restore-project-error` idiom) rather than silently
+    // refreshing.
+    it('shows a restore refusal in restore-project-error, without refreshing', async () => {
+      const fetchMock = vi.fn(
+        async () => new Response(JSON.stringify({ error: 'project w1 is not archived' }), { status: 409 }),
+      )
+      vi.stubGlobal('fetch', fetchMock)
+      search = 'archived=1'
+      render(<TestProjectsClient projects={[project({ id: 'w1', archived: true })]} companies={companies} />)
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('restore-project'))
+      })
+
+      expect(screen.getByTestId('restore-project-error').textContent).toBe('project w1 is not archived')
+      expect(routerRefresh).not.toHaveBeenCalled()
       vi.unstubAllGlobals()
     })
   })
