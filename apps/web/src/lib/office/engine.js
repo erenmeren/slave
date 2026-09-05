@@ -429,5 +429,18 @@ E.makeDepartments=function(deptCount,perDept){deptCount=Math.max(1,Math.min(12,d
 E.DEPT_COLORS=DEPT_POOL.map((d)=>d[1]);
 }
 
-export const { World, WorldF, renderIsoE, tod, STATUS, makeDepartments, DEPT_COLORS, SLAVE_COLORS } = OfficeEngine
+// Named `export const X = OfficeEngine.X` rather than one destructuring `export const {...} =
+// OfficeEngine`: Next's production webpack build cannot trace a destructured export declaration's
+// bindings back to real module exports (it warns "not exported" and, worse, drops the bindings
+// from the compiled module's exports object entirely, so every named import reads `undefined`);
+// Vite/esbuild (the test runner) has no such limitation, which is why this only showed up at
+// `npm run web:build` (M28 T3 build gate).
+export const World = OfficeEngine.World
+export const WorldF = OfficeEngine.WorldF
+export const renderIsoE = OfficeEngine.renderIsoE
+export const tod = OfficeEngine.tod
+export const STATUS = OfficeEngine.STATUS
+export const makeDepartments = OfficeEngine.makeDepartments
+export const DEPT_COLORS = OfficeEngine.DEPT_COLORS
+export const SLAVE_COLORS = OfficeEngine.SLAVE_COLORS
 export function setPixelFont(family) { PIXEL_FONT = family }

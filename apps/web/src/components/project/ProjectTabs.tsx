@@ -8,11 +8,12 @@ const TABS = [
   { id: 'overview', label: 'Overview', path: (id: string) => `/w/${id}`, exact: true },
   { id: 'tasks', label: 'Tasks', path: (id: string) => `/w/${id}/tasks`, exact: false },
   { id: 'graph', label: 'Graph', path: (id: string) => `/w/${id}/graph`, exact: false },
+  { id: 'office', label: 'Office', path: (id: string) => `/w/${id}/office`, exact: false },
   { id: 'activity', label: 'Activity', path: (id: string) => `/w/${id}/activity`, exact: false },
   { id: 'settings', label: 'Settings', path: (id: string) => `/w/${id}/settings`, exact: false },
 ] as const
 
-/** The project's tab strip (M24 §2.2): five route links in the Slaves page's tab idiom. Overview
+/** The project's tab strip (M24 §2.2): six route links (Office joined in M28) in the Slaves page's tab idiom. Overview
  *  matches its route exactly (it is the prefix of every other tab); the rest match by prefix so a
  *  Graph mode in the query string still lights Graph. Only Tasks carries a badge. */
 export function ProjectTabs({

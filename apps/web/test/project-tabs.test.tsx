@@ -9,14 +9,14 @@ vi.mock('next/navigation', () => ({ usePathname: () => pathname }))
 
 afterEach(() => publishShellFacts('w1', null))
 
-const TAB_HREFS = ['/w/w1', '/w/w1/tasks', '/w/w1/graph', '/w/w1/activity', '/w/w1/settings']
+const TAB_HREFS = ['/w/w1', '/w/w1/tasks', '/w/w1/graph', '/w/w1/office', '/w/w1/activity', '/w/w1/settings']
 
 describe('ProjectTabs', () => {
-  it('renders the five tabs in order with their hrefs', () => {
+  it('renders the six tabs in order with their hrefs', () => {
     pathname = '/w/w1'
     render(<ProjectTabs workspaceId="w1" initialTasksActive={2} />)
     const tabs = screen.getAllByRole('tab')
-    expect(tabs.map((t) => t.textContent?.replace(/\d+$/, '').trim())).toEqual(['Overview', 'Tasks', 'Graph', 'Activity', 'Settings'])
+    expect(tabs.map((t) => t.textContent?.replace(/\d+$/, '').trim())).toEqual(['Overview', 'Tasks', 'Graph', 'Office', 'Activity', 'Settings'])
     expect(tabs.map((t) => t.getAttribute('href'))).toEqual(TAB_HREFS)
   })
 
@@ -32,6 +32,13 @@ describe('ProjectTabs', () => {
     render(<ProjectTabs workspaceId="w1" initialTasksActive={0} />)
     expect(screen.getByTestId('project-tab-graph').getAttribute('aria-current')).toBe('page')
     expect(screen.getByTestId('project-tab-overview').getAttribute('aria-current')).toBeNull()
+  })
+
+  it('marks Office current on the office route', () => {
+    pathname = '/w/w1/office'
+    render(<ProjectTabs workspaceId="w1" initialTasksActive={0} />)
+    expect(screen.getByTestId('project-tab-office').getAttribute('aria-current')).toBe('page')
+    expect(screen.getByTestId('project-tab-graph').getAttribute('aria-current')).toBeNull()
   })
 
   it('carries the active-task badge on Tasks only, from the initial value and then from publications', () => {
