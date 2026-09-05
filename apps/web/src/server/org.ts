@@ -742,6 +742,10 @@ export async function listAllSlaves(options?: { readonly includeArchived?: boole
   return { rows: [...projectRows, ...catalogRows], departmentsByWorkspace, templatesByCompany }
 }
 
+/** Every slave template, `catalogSlaveCount` (M27 §5.1) added beside the rest: how many catalog
+ *  slaves (`CompanySlave.templateId`) a `deleteSlaveTemplate` on this row would cascade --
+ *  `TemplateCatalog`'s `template-delete` confirm names it. One `companySlave.groupBy`, not a
+ *  per-row query. */
 export async function listTemplates(): Promise<
   readonly {
     id: string
@@ -750,13 +754,22 @@ export async function listTemplates(): Promise<
     description: string
     defaultModel: string | null
     defaultProvider: ProviderKind | null
+    catalogSlaveCount: number
   }[]
 > {
-  const templates = await prisma.slaveTemplate.findMany({
-    select: { id: true, name: true, role: true, description: true, defaultModel: true, provider: true },
-    orderBy: { name: 'asc' },
-  })
-  return templates.map(({ provider, ...rest }) => ({ ...rest, defaultProvider: provider }))
+  const [templates, catalogSlaveGroups] = await Promise.all([
+    prisma.slaveTemplate.findMany({
+      select: { id: true, name: true, role: true, description: true, defaultModel: true, provider: true },
+      orderBy: { name: 'asc' },
+    }),
+    prisma.companySlave.groupBy({ by: ['templateId'], _count: { _all: true } }),
+  ])
+  const catalogSlaveCountByTemplate = new Map(catalogSlaveGroups.map((g) => [g.templateId, g._count._all] as const))
+  return templates.map(({ provider, ...rest }) => ({
+    ...rest,
+    defaultProvider: provider,
+    catalogSlaveCount: catalogSlaveCountByTemplate.get(rest.id) ?? 0,
+  }))
 }
 
 export async function listCompanies(): Promise<readonly { id: string; name: string }[]> {

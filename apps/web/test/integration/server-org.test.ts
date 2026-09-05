@@ -511,7 +511,8 @@ describe('org query module', () => {
 
       // `defaultProvider: null` (M12 Task 13): `listTemplates` now carries the pair's other half
       // beside `defaultModel`, `null` here because this fixture's `slaveTemplate.create` above
-      // sets no `provider`.
+      // sets no `provider`. `catalogSlaveCount: 0` (M27 §5.1): no `CompanySlave` uses this
+      // template, the case the next test's `1` contrasts with.
       expect(templates).toEqual([
         {
           id: expect.any(String),
@@ -520,9 +521,30 @@ describe('org query module', () => {
           description: 'ships backend code',
           defaultModel: 'sonnet',
           defaultProvider: null,
+          catalogSlaveCount: 0,
         },
       ])
       expect(companies).toEqual([{ id: expect.any(String), name: 'Acme Robotics' }])
+    })
+
+    // M27 §5.1: `catalogSlaveCount` comes from a `companySlave.groupBy` keyed by `templateId` --
+    // this is the one case that exercises it against a real `CompanySlave` row rather than the
+    // zero-row default above.
+    it('counts a catalog slave against its template', async (): Promise<void> => {
+      const template = await prisma.slaveTemplate.create({
+        data: { name: 'Backend Engineer', role: 'backend', defaultModel: 'sonnet' },
+      })
+      const company = await prisma.company.create({ data: { name: 'Acme Robotics' } })
+      const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Platform' } })
+      await prisma.companySlave.create({
+        data: { companyTeamId: companyTeam.id, templateId: template.id, name: 'Atlas' },
+      })
+
+      const templates = await listTemplates()
+
+      expect(templates).toEqual([
+        expect.objectContaining({ id: template.id, name: 'Backend Engineer', catalogSlaveCount: 1 }),
+      ])
     })
   })
 })

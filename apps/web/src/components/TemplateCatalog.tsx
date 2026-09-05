@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import type { ProviderKind } from '@slave-of-ai/control'
 import { sendControl } from '../lib/postControl'
 import { Chip } from './ui/Chip'
+import { DangerConfirm } from './ui/DangerConfirm'
 import { DataTable, Row } from './ui/DataTable'
 import { FieldLabel, INPUT_SHELL, PrimaryButton, TextField } from './ui/FormControls'
 import { ModelSelect } from './ModelSelect'
@@ -23,14 +24,18 @@ export interface TemplateRow {
   // this field (M12 Task 13) and are not this task's to rewrite (Series A freeze) -- `undefined`
   // reads the same as "no default provider recorded" everywhere this is consumed.
   readonly defaultProvider?: ProviderKind | null
+  /** How many catalog slaves use this template (M27 §5.1) -- this row's `template-delete` confirm
+   *  names it before `deleteSlaveTemplate` cascades them. */
+  readonly catalogSlaveCount: number
 }
 
-const COLUMNS = '1fr 110px 2fr 140px 120px'
-const HEADER = ['Name', 'Role', 'Description', 'Default model', 'Default provider'] as const
+const COLUMNS = '1fr 110px 2fr 140px 120px 120px'
+const HEADER = ['Name', 'Role', 'Description', 'Default model', 'Default provider', ''] as const
 
 /**
  * Settings' template catalog (M11 Task 9 brief): the template list (name, role chip, description,
- * default model mono) plus its own creation form -- name/role/description, a default provider
+ * default model mono, a `template-delete` `DangerConfirm` naming the template's catalog-slave
+ * count -- M27 §5.1) plus its own creation form -- name/role/description, a default provider
  * `<select>`, and a default model `ModelSelect` fed by that provider (M25 Task 5), all controlled
  * inputs. Truth from snapshot: a 200 clears the form and `router.refresh()`s (the refreshed
  * `templates` prop is what actually shows the new row); a 409/400 renders inline beside the form
@@ -89,6 +94,16 @@ export function TemplateCatalog({ templates }: { readonly templates: readonly Te
               {/* M12 Task 13 fix round 1, Important finding 3: half a pair was legible, half was
                *  not -- `defaultProvider` had no reader anywhere on this surface. */}
               <span className="font-mono text-xs text-text-2">{template.defaultProvider ?? '—'}</span>
+              <DangerConfirm
+                label="delete"
+                testId="template-delete"
+                confirmText={`deletes ${template.name} and its ${template.catalogSlaveCount} catalog slave${template.catalogSlaveCount === 1 ? '' : 's'}; project slaves keep their role`}
+                onConfirm={async () => {
+                  const error = await sendControl(`/api/org/templates/${template.id}`, { method: 'DELETE' })
+                  if (error === null) router.refresh()
+                  return error
+                }}
+              />
             </Row>
           ))}
         </DataTable>

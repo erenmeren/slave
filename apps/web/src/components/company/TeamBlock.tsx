@@ -7,14 +7,21 @@ import type { RosterMemberRow } from '../../server/org'
 import { sendControl } from '../../lib/postControl'
 import { ProviderSelect } from '../ProviderSelect'
 import { ModelSelect } from '../ModelSelect'
+import { SlaveRowActions } from '../SlaveRowActions'
 import type { TemplateRow } from '../TemplateCatalog'
+import { DangerConfirm } from '../ui/DangerConfirm'
 import { DataTable, Row } from '../ui/DataTable'
 import { FieldLabel, GhostButton, INPUT_SHELL, SelectField, TextField } from '../ui/FormControls'
 import { SectionLabel } from '../ui/SectionLabel'
 
-export const MEMBER_COLUMNS = '1fr 110px 160px 140px 120px'
-export const MEMBER_HEADER = ['Name', 'Role', 'Template', 'Model', 'Provider'] as const
+export const MEMBER_COLUMNS = '1fr 110px 160px 140px 120px 120px'
+export const MEMBER_HEADER = ['Name', 'Role', 'Template', 'Model', 'Provider', ''] as const
 
+/** One catalog slave's row: name/role/template/model/provider, then a `catalog-slave-delete`
+ *  (M27 §5.1) -- `SlaveRowActions`' `catalog` branch, the same one `AllSlavesTable`'s catalog row
+ *  renders, so this reuses it rather than hand-rolling a second `DangerConfirm` for the same
+ *  delete. `slaveId`/`role`/`runCount` are unused by that branch (see its own docstring); this
+ *  passes `member.companySlaveId` as the dummy `slaveId` the same way `AllSlavesTable` does. */
 export function MemberRow({ member }: { readonly member: RosterMemberRow }): React.JSX.Element {
   return (
     <Row columns={MEMBER_COLUMNS}>
@@ -24,14 +31,25 @@ export function MemberRow({ member }: { readonly member: RosterMemberRow }): Rea
       <span className="font-mono text-xs text-text-2">{member.effectiveModel ?? '—'}</span>
       {/* M12 Task 13 fix round 1, Important finding 3: `effectiveProvider` had no reader here. */}
       <span className="font-mono text-xs text-text-2">{member.effectiveProvider ?? '—'}</span>
+      <SlaveRowActions
+        slaveId={member.companySlaveId}
+        name={member.name}
+        role={member.role}
+        runCount={0}
+        catalog={{ companySlaveId: member.companySlaveId }}
+      />
     </Row>
   )
 }
 
-/** One department template's header (inline rename, delete-when-empty -- M25 §4.3) plus its
- *  members and its own "add member" form (template `<select>`, name, provider `<select>`,
- *  optional model via a `ModelSelect` fed by that provider) -- its own pending/error state so a
- *  refusal on one department template never touches another. */
+/** One department template's header (inline rename; delete -- M27 §5.1) plus its members and its
+ *  own "add member" form (template `<select>`, name, provider `<select>`, optional model via a
+ *  `ModelSelect` fed by that provider) -- its own pending/error state so a refusal on one
+ *  department template's RENAME never touches another (the delete's pending/error is
+ *  `DangerConfirm`'s own). `deleteCompanyTeam` no longer refuses a non-empty department template
+ *  -- it cascades the template's catalog slaves along with it -- so the delete is always enabled;
+ *  its confirm names that cascade instead of a disabled button naming a refusal that no longer
+ *  exists. */
 export function TeamBlock({
   companyTeamId,
   teamName,
@@ -65,18 +83,6 @@ export function TeamBlock({
     setPending(false)
     if (error === null) {
       setRenaming(false)
-      router.refresh()
-    } else {
-      setErrorText(error)
-    }
-  }
-
-  const remove = async (): Promise<void> => {
-    setPending(true)
-    setErrorText(null)
-    const error = await sendControl(`/api/org/teams/${companyTeamId}`, { method: 'DELETE' })
-    setPending(false)
-    if (error === null) {
       router.refresh()
     } else {
       setErrorText(error)
@@ -144,15 +150,16 @@ export function TeamBlock({
             <SectionLabel>{teamName}</SectionLabel>
           </button>
         )}
-        <GhostButton
-          type="button"
-          data-testid="department-template-delete"
-          disabled={pending || members.length > 0}
-          title={members.length > 0 ? 'department template has members' : undefined}
-          onClick={() => void remove()}
-        >
-          delete
-        </GhostButton>
+        <DangerConfirm
+          label="delete"
+          testId="department-template-delete"
+          confirmText={`deletes ${teamName} and its ${members.length} catalog slave${members.length === 1 ? '' : 's'}; project departments stay`}
+          onConfirm={async () => {
+            const error = await sendControl(`/api/org/teams/${companyTeamId}`, { method: 'DELETE' })
+            if (error === null) router.refresh()
+            return error
+          }}
+        />
         {errorText !== null && (
           <span role="alert" data-testid="department-template-error" className="text-xs text-tone-blocked">
             {errorText}

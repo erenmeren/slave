@@ -51,6 +51,7 @@ function template(
     description: string
     defaultModel: string | null
     defaultProvider: ProviderKind | null
+    catalogSlaveCount: number
   }> = {},
 ) {
   return {
@@ -59,6 +60,7 @@ function template(
     role: 'backend',
     description: 'ships the API',
     defaultModel: 'claude-sonnet-4',
+    catalogSlaveCount: 0,
     ...over,
   }
 }
@@ -240,6 +242,38 @@ describe('TemplateCatalog', () => {
     // Scoped to the table, not the form: the creation form's own provider `<select>` also
     // renders a `cursor` `<option>`.
     expect(within(screen.getByTestId('data-table')).getByText('cursor')).toBeTruthy()
+  })
+
+  // M27 §5.1: a slave template's row gets its own `DangerConfirm` -- the confirm names the
+  // catalog-slave count `deleteSlaveTemplate` would cascade (`TemplateRow.catalogSlaveCount`).
+  describe('a slave template row', () => {
+    let fetchMock: ReturnType<typeof vi.fn>
+
+    beforeEach(() => {
+      fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }))
+      vi.stubGlobal('fetch', fetchMock)
+    })
+
+    afterEach(() => {
+      vi.unstubAllGlobals()
+    })
+
+    it('asks twice, naming the catalog-slave count, then DELETEs and refreshes', async () => {
+      render(
+        <TemplateCatalog
+          templates={[template({ id: 'tpl1', name: 'Backend Developer', catalogSlaveCount: 3 })]}
+        />,
+      )
+      fireEvent.click(screen.getByTestId('template-delete'))
+      expect(screen.getByTestId('template-delete-confirm').textContent).toBe(
+        'deletes Backend Developer and its 3 catalog slaves; project slaves keep their role',
+      )
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('template-delete-confirm'))
+      })
+      expect(fetchMock).toHaveBeenCalledWith('/api/org/templates/tpl1', expect.objectContaining({ method: 'DELETE' }))
+      expect(routerRefresh).toHaveBeenCalled()
+    })
   })
 
   describe('the creation form', () => {
@@ -436,16 +470,94 @@ describe('CompanyManager', () => {
     expect(within(detail).getByTestId('data-table').textContent).toContain('cursor')
   })
 
-  // M25 Task 7: each department template's header row (`TeamBlock`) gets inline rename and
-  // delete-when-empty, the same shape `DepartmentsTable`'s row uses. Two templates so delete has
-  // both a disabled case (has a member) and an enabled one (empty).
+  // M27 §5.1, R4: a catalog slave's row (`MemberRow`) reuses `SlaveRowActions`' `catalog` branch --
+  // the same `catalog-slave-delete` `AllSlavesTable`'s catalog row already uses, with the same
+  // fixed confirm text (no copy count -- no read provides it).
+  describe('a catalog slave row', () => {
+    let fetchMock: ReturnType<typeof vi.fn>
+
+    beforeEach(() => {
+      fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }))
+      vi.stubGlobal('fetch', fetchMock)
+    })
+
+    afterEach(() => {
+      vi.unstubAllGlobals()
+    })
+
+    it('asks twice with the fixed confirm text, then DELETEs and refreshes', async () => {
+      const m = member({ companySlaveId: 'cs1', name: 'Sam' })
+      render(
+        <CompanyManager
+          companies={[{ id: 'c1', name: 'Acme Robotics' }]}
+          roster={[company({ teams: [{ companyTeamId: 'ct1', teamName: 'Platform', members: [m] }] })]}
+          templates={[template()]}
+        />,
+      )
+      fireEvent.click(screen.getByTestId('company-toggle'))
+      fireEvent.click(screen.getByTestId('catalog-slave-delete'))
+      expect(screen.getByTestId('catalog-slave-delete-confirm').textContent).toBe(
+        'deletes Sam from the catalog; project copies stay',
+      )
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('catalog-slave-delete-confirm'))
+      })
+      expect(fetchMock).toHaveBeenCalledWith('/api/org/slaves/cs1', expect.objectContaining({ method: 'DELETE' }))
+      expect(routerRefresh).toHaveBeenCalled()
+    })
+  })
+
+  // M27 §5.1: a company row gets its own `DangerConfirm` beside the toggle -- the confirm names
+  // the department-template and catalog-slave counts (`listRoster`) and the assigned-project count
+  // (`RosterCompany.projectsUsing`) `deleteCompany` would cascade or clear.
+  describe('a company row', () => {
+    let fetchMock: ReturnType<typeof vi.fn>
+    const roster = [
+      company({
+        companyId: 'c1',
+        companyName: 'Atlas Software',
+        projectsUsing: 1,
+        teams: [
+          { companyTeamId: 'ct1', teamName: 'Backend', members: [member(), member({ companySlaveId: 'ca2', name: 'Jess' })] },
+          { companyTeamId: 'ct2', teamName: 'Design', members: [member({ companySlaveId: 'ca3', name: 'Robin' })] },
+        ],
+      }),
+    ]
+    const companies = [{ id: 'c1', name: 'Atlas Software' }]
+
+    beforeEach(() => {
+      fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }))
+      vi.stubGlobal('fetch', fetchMock)
+    })
+
+    afterEach(() => {
+      vi.unstubAllGlobals()
+    })
+
+    it('asks twice naming the counts, then DELETEs and refreshes', async () => {
+      render(<CompanyManager companies={companies} roster={roster} templates={[]} />)
+      fireEvent.click(screen.getByTestId('company-delete'))
+      expect(screen.getByTestId('company-delete-confirm').textContent).toBe(
+        'deletes Atlas Software: 2 department templates, 3 catalog slaves; 1 project keeps its copies',
+      )
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('company-delete-confirm'))
+      })
+      expect(fetchMock).toHaveBeenCalledWith('/api/org/companies/c1', expect.objectContaining({ method: 'DELETE' }))
+      expect(routerRefresh).toHaveBeenCalled()
+    })
+  })
+
+  // M25 Task 7 (inline rename); M27 §5.1 (delete): `deleteCompanyTeam` no longer refuses a
+  // non-empty department template -- it cascades the template's catalog slaves along with it --
+  // so `department-template-delete` is always enabled, and its `DangerConfirm` names that cascade
+  // instead of a disabled button naming a refusal that no longer exists.
   describe('a department template header row', () => {
     let fetchMock: ReturnType<typeof vi.fn>
     const roster = [
       company({
         teams: [
-          { companyTeamId: 'ct1', teamName: 'Platform', members: [member()] },
-          { companyTeamId: 'ct2', teamName: 'Design', members: [] },
+          { companyTeamId: 'ct1', teamName: 'Backend', members: [member(), member({ companySlaveId: 'ca2', name: 'Jess' })] },
         ],
       }),
     ]
@@ -472,16 +584,20 @@ describe('CompanyManager', () => {
       expect(routerRefresh).toHaveBeenCalled()
     })
 
-    it('disables delete while the template has members, and DELETEs an empty one', async () => {
+    it('is enabled with members, asks twice naming the catalog-slave count, then DELETEs and refreshes', async () => {
       render(<CompanyManager companies={companies} roster={roster} templates={[]} />)
       fireEvent.click(screen.getByTestId('company-toggle'))
-      const buttons = screen.getAllByTestId('department-template-delete') as HTMLButtonElement[]
-      // roster fixture: ct1 has a member, ct2 is empty.
-      expect(buttons[0]?.disabled).toBe(true)
+      const button = screen.getByTestId('department-template-delete') as HTMLButtonElement
+      expect(button.disabled).toBe(false)
+      fireEvent.click(button)
+      expect(screen.getByTestId('department-template-delete-confirm').textContent).toBe(
+        'deletes Backend and its 2 catalog slaves; project departments stay',
+      )
       await act(async () => {
-        fireEvent.click(buttons[1] as HTMLButtonElement)
+        fireEvent.click(screen.getByTestId('department-template-delete-confirm'))
       })
-      expect(fetchMock).toHaveBeenCalledWith('/api/org/teams/ct2', expect.objectContaining({ method: 'DELETE' }))
+      expect(fetchMock).toHaveBeenCalledWith('/api/org/teams/ct1', expect.objectContaining({ method: 'DELETE' }))
+      expect(routerRefresh).toHaveBeenCalled()
     })
   })
 

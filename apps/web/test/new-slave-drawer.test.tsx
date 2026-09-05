@@ -12,7 +12,9 @@ const companies = [{ id: 'c1', name: 'Atlas Software' }]
 const roster: readonly RosterCompany[] = [
   { companyId: 'c1', companyName: 'Atlas Software', projectsUsing: 0, teams: [{ companyTeamId: 'ct1', teamName: 'Backend', members: [] }] },
 ]
-const templates = [{ id: 'tpl1', name: 'Backend Developer', role: 'backend', description: '', defaultModel: null, defaultProvider: null }]
+const templates = [
+  { id: 'tpl1', name: 'Backend Developer', role: 'backend', description: '', defaultModel: null, defaultProvider: null, catalogSlaveCount: 0 },
+]
 const workspaces = [{ id: 'w1', name: 'Checkout' }]
 
 function drawer(onClose = vi.fn()): ReturnType<typeof render> {
