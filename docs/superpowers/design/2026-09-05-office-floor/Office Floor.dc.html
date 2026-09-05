@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&family=Silkscreen&display=swap" rel="stylesheet">
+<script src="./office-engine.js"></script>
+<style>html,body,#root{margin:0;height:100%;background:#07080b;color:#c8cfda;font-family:'IBM Plex Sans',sans-serif}a{color:#f5b34a}a:hover{color:#ffd88a}input[type=range]{margin:0}</style>
+</helmet>
+<div style="position:relative;width:100%;height:100%;min-height:360px;background:#07080b;overflow:hidden;font-family:'IBM Plex Sans',sans-serif">
+  <div id="office-floor-wrap" style="position:absolute;inset:0"><canvas id="office-floor" style="display:block;width:100%;height:100%;cursor:grab"></canvas></div>
+  <div style="position:absolute;left:50%;top:12px;transform:translateX(-50%);display:flex;gap:10px;align-items:center;background:rgba(8,9,12,.78);padding:5px 10px;border-radius:6px;font:9px Silkscreen,monospace;color:#c8cfda;max-width:calc(100% - 24px);box-sizing:border-box"><span style="color:#f5b34a;white-space:nowrap">{{ todLabel }} · {{ clock }}</span><input type="range" min="0" max="24" step="0.25" value="{{ hour }}" onChange="{{ setHour }}" style="width:clamp(90px,22vw,200px);accent-color:#f5b34a;cursor:pointer"><button onClick="{{ liveHour }}" style="font:9px Silkscreen,monospace;padding:3px 8px;border-radius:4px;background:{{ liveBg }};border:1px solid rgba(255,255,255,.12);color:{{ liveFg }};cursor:pointer">LIVE</button></div>
+  <div style="position:absolute;top:12px;left:12px;display:flex;gap:8px;align-items:center;font:9px Silkscreen,monospace;color:#c8cfda;background:rgba(8,9,12,.7);padding:4px 8px;border-radius:4px"><span style="color:#4ade80">● LIVE</span><span style="color:#5b6472">{{ deptCount }} depts · {{ agentCount }} agents · {{ workingCount }} working</span></div>
+  <div style="position:absolute;left:12px;bottom:12px;display:flex;gap:10px;flex-wrap:wrap;font:9px Silkscreen,monospace;color:#5b6472;background:rgba(8,9,12,.7);padding:4px 8px;border-radius:4px"><span style="color:#2ee6cf">■ working</span><span style="color:#f87171">■ blocked</span><span style="color:#8a929e">■ paused</span><span>· scroll zoom · drag pan · click focus</span></div>
+  <div style="position:absolute;right:12px;bottom:12px;display:flex;gap:4px;align-items:center;background:rgba(8,9,12,.7);padding:4px;border-radius:5px"><button onClick="{{ zoomOut }}" style="width:24px;height:22px;border-radius:4px;background:transparent;border:1px solid rgba(255,255,255,.12);color:#c8cfda;font:500 13px 'IBM Plex Mono';cursor:pointer">−</button><span style="min-width:30px;text-align:center;font:9px Silkscreen,monospace;color:#c8cfda">{{ zoom }}</span><button onClick="{{ zoomIn }}" style="width:24px;height:22px;border-radius:4px;background:transparent;border:1px solid rgba(255,255,255,.12);color:#c8cfda;font:500 13px 'IBM Plex Mono';cursor:pointer">+</button></div>
+  <sc-if value="{{ showFocus }}" hint-placeholder-val="{{ true }}">
+  <div style="position:absolute;right:12px;top:12px;width:min(236px,calc(100% - 24px));background:rgba(10,12,16,.86);backdrop-filter:blur(6px);border:1px solid rgba(255,255,255,.1);border-radius:8px;padding:10px 12px;display:flex;flex-direction:column;gap:6px;box-sizing:border-box">
+    <div style="display:flex;gap:8px;align-items:center"><div style="width:26px;height:26px;border-radius:6px;background:{{ focus.bgTint }};border:1px solid {{ focus.borderTint }};display:grid;place-items:center;font:600 10px 'IBM Plex Mono';color:{{ focus.color }};flex:none">{{ focus.initials }}</div><div style="min-width:0"><div style="font:600 12.5px 'IBM Plex Sans';white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ focus.name }}</div><div style="font:400 10px 'IBM Plex Sans';color:#7c8697;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ focus.role }} · {{ focus.dept }}</div></div><span style="margin-left:auto;font:500 9.5px 'IBM Plex Mono';color:{{ focus.statusColor }};white-space:nowrap">● {{ focus.status }}</span></div>
+    <div style="font:400 11px 'IBM Plex Sans';color:#c8cfda;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><span style="font:400 10px 'IBM Plex Mono';color:#5b6472">{{ focus.taskKey }}</span> {{ focus.taskTitle }}</div>
+    <div style="height:3px;background:rgba(255,255,255,.06);border-radius:2px"><div style="height:100%;border-radius:2px;width:{{ focus.pct }};background:{{ focus.statusColor }};box-shadow:0 0 8px {{ focus.statusColor }};transition:width .5s ease"></div></div>
+    <div style="display:flex;gap:5px"><button onClick="{{ focus.toggle }}" style="flex:1;font:500 10.5px 'IBM Plex Sans';padding:4px 0;border-radius:5px;background:transparent;border:1px solid rgba(255,255,255,.12);color:#c8cfda;cursor:pointer">{{ focus.toggleLabel }}</button><button onClick="{{ cycleFocus }}" style="flex:1;font:500 10.5px 'IBM Plex Sans';padding:4px 0;border-radius:5px;background:transparent;border:1px solid rgba(255,255,255,.12);color:#c8cfda;cursor:pointer">Next ⇄</button><button onClick="{{ focus.stop }}" style="font:500 10.5px 'IBM Plex Sans';padding:4px 9px;border-radius:5px;background:transparent;border:1px solid #f871713d;color:#f87171;cursor:pointer">Stop</button></div>
+  </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;deptCount&quot;:{&quot;editor&quot;:&quot;int&quot;,&quot;default&quot;:8,&quot;min&quot;:1,&quot;max&quot;:12,&quot;tsType&quot;:&quot;number&quot;,&quot;section&quot;:&quot;Team&quot;},&quot;agentsPerDept&quot;:{&quot;editor&quot;:&quot;int&quot;,&quot;default&quot;:4,&quot;min&quot;:1,&quot;max&quot;:8,&quot;tsType&quot;:&quot;number&quot;,&quot;section&quot;:&quot;Team&quot;},&quot;departments&quot;:{&quot;editor&quot;:null,&quot;default&quot;:null,&quot;tsType&quot;:&quot;{name:string;color:string;agents:{name:string;role:string}[]}[] | null&quot;,&quot;section&quot;:&quot;Team&quot;},&quot;deptSigns&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;default&quot;:&quot;banner&quot;,&quot;options&quot;:[&quot;banner&quot;,&quot;pole&quot;],&quot;tsType&quot;:&quot;'banner'|'pole'&quot;,&quot;section&quot;:&quot;Look&quot;},&quot;fun&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Look&quot;},&quot;showFocusCard&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Look&quot;},&quot;speed&quot;:{&quot;editor&quot;:&quot;range&quot;,&quot;default&quot;:1,&quot;min&quot;:0.25,&quot;max&quot;:3,&quot;step&quot;:0.25,&quot;tsType&quot;:&quot;number&quot;,&quot;section&quot;:&quot;Simulation&quot;}}">
+class Component extends DCLogic {
+  state={tick:0};
+  depts(){const p=this.props;if(Array.isArray(p.departments)&&p.departments.length)return p.departments;return window.OfficeEngine.makeDepartments(p.deptCount??8,p.agentsPerDept??4)}
+  cfgKey(){const p=this.props;return JSON.stringify([p.departments,p.deptCount??8,p.agentsPerDept??4])}
+  build(){const E=window.OfficeEngine;this.world=new E.WorldF({departments:this.depts()});this.key=this.cfgKey()}
+  componentDidMount(){
+    const start=()=>{const E=window.OfficeEngine;if(!E||!E.WorldF){setTimeout(start,50);return}
+      this.build();const c=document.getElementById('office-floor'),wrap=document.getElementById('office-floor-wrap');
+      const size=()=>{const r=wrap.getBoundingClientRect();const w=Math.max(200,Math.round(r.width)),h=Math.max(160,Math.round(r.height));if(c.width!==w||c.height!==h){c.width=w;c.height=h}};size();
+      this.ro=new ResizeObserver(size);this.ro.observe(wrap);
+      const pt=e=>{const r=c.getBoundingClientRect();return[(e.clientX-r.left)*(c.width/r.width),(e.clientY-r.top)*(c.height/r.height)]};let drag=null;
+      c.addEventListener('wheel',e=>{e.preventDefault();const [mx,my]=pt(e);this.zoom(e.deltaY<0?1:-1,mx,my)},{passive:false});
+      c.addEventListener('mousedown',e=>{const v=this.world.view;if(!v)return;e.preventDefault();drag={x:e.clientX,y:e.clientY,ox:v.ox,oy:v.oy,moved:false};c.style.cursor='grabbing'});
+      this.mm=e=>{if(!drag)return;const v=this.world.view,r=c.getBoundingClientRect(),k=c.width/r.width,dx=(e.clientX-drag.x)*k,dy=(e.clientY-drag.y)*k;if(Math.abs(dx)+Math.abs(dy)>3)drag.moved=true;v.ox=Math.round(drag.ox+dx);v.oy=Math.round(drag.oy+dy)};
+      this.mu=e=>{if(!drag)return;c.style.cursor='grab';if(!drag.moved){const [x,y]=pt(e),h=(this.world.viewHits||[]).find(o=>x>=o.x&&x<=o.x+o.w&&y>=o.y&&y<=o.y+o.h);if(h){this.world.focusId=h.id;this.forceUpdate()}}drag=null};
+      window.addEventListener('mousemove',this.mm);window.addEventListener('mouseup',this.mu);
+      let last=performance.now(),acc=0;
+      const loop=now=>{if(this.cfgKey()!==this.key)this.build();const dt=Math.min(.05,(now-last)/1000)*(this.props.speed??1);last=now;try{this.world.tick(dt)}catch(e){console.error(e)}acc+=dt;
+        try{E.renderIsoE(c.getContext('2d'),this.world,{viewKey:'view',tod:true,fun:this.props.fun??true,autofit:true,deptSigns:this.props.deptSigns??'banner'})}catch(e){console.error(e)}
+        if(acc>.25){acc=0;this.setState(s=>({tick:s.tick+1}))}this.raf=requestAnimationFrame(loop)};this.raf=requestAnimationFrame(loop)};start()}
+  componentWillUnmount(){cancelAnimationFrame(this.raf);if(this.ro)this.ro.disconnect();window.removeEventListener('mousemove',this.mm);window.removeEventListener('mouseup',this.mu)}
+  zoom(dir,mx,my){const w=this.world,v=w&&w.view,c=document.getElementById('office-floor');if(!v||!v.levels)return;const ni=Math.max(0,Math.min(v.levels.length-1,(v.li||0)+dir));if(ni===(v.li||0))return;if(mx==null){mx=c.width/2;my=c.height/2}const nS=v.levels[ni];v.ox=Math.round(mx-(mx-v.ox)*nS/v.S);v.oy=Math.round(my-(my-v.oy)*nS/v.S);v.S=nS;v.li=ni;this.forceUpdate()}
+  agentView(a){const w=this.world,E=window.OfficeEngine,st=w.status(a),col=E.STATUS[st],paused=a.state==='paused'||a.state==='pausing',dept=w.departments[a.dept];
+    return{id:a.id,name:a.name,role:a.role,color:a.color,dept:dept.name,initials:a.name.slice(0,2).toUpperCase(),bgTint:a.color+'1a',borderTint:a.color+'3d',status:st,statusColor:col,taskKey:a.task?a.task.key:'',taskTitle:a.task?a.task.title:'—',pct:Math.round(a.progress)+'%',toggleLabel:paused?'Resume':'Pause',toggle:()=>{paused?w.resume(a.id):w.pause(a.id);this.forceUpdate()},stop:()=>{w.stop(a.id);this.forceUpdate()}}}
+  renderVals(){const w=this.world,E=window.OfficeEngine;const li=w&&w.view?(w.view.li||0)+1:1;
+    if(!w)return{focus:{},showFocus:false,clock:'--:--',todLabel:'',hour:9,deptCount:0,agentCount:0,workingCount:0,zoom:'1x',liveBg:'transparent',liveFg:'#5b6472',cycleFocus:()=>{},setHour:()=>{},liveHour:()=>{},zoomIn:()=>{},zoomOut:()=>{}};
+    const fa=w.agents.find(a=>a.id===w.focusId)||w.agents[0],live=w.hourLock==null;
+    return{focus:fa?this.agentView(fa):{},showFocus:!!fa&&(this.props.showFocusCard??true),deptCount:w.departments.length,agentCount:w.agents.length,workingCount:w.agents.filter(a=>w.status(a)==='working').length,clock:w.clock(),todLabel:E.tod(w.hour).label.toUpperCase(),hour:Math.round(w.hour*4)/4,
+      setHour:e=>{w.hourLock=parseFloat(e.target.value);this.forceUpdate()},liveHour:()=>{w.hourLock=null;this.forceUpdate()},liveBg:live?'#4ade8022':'transparent',liveFg:live?'#4ade80':'#5b6472',
+      cycleFocus:()=>{const i=w.agents.findIndex(a=>a.id===w.focusId);w.focusId=w.agents[(i+1)%w.agents.length].id;this.forceUpdate()},zoom:li+'x',zoomIn:()=>this.zoom(1),zoomOut:()=>this.zoom(-1)}}
+}
+</script>
+</body>
+</html>
