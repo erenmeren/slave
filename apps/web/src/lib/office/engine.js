@@ -5,8 +5,9 @@
  * bottom; `World.tick` split into `tick` (the clock) + `simulate` (the design's state machine,
  * which `liveOffice.ts` overrides); the pixel font name is settable (`setPixelFont`) because
  * `next/font` serves Silkscreen under a hashed family name; the palettes are exported; the M26
- * word codemod renamed this file's pre-rename noun to `slave` throughout. Pixel-art code keeps
- * its own style.
+ * word codemod renamed this file's pre-rename noun to `slave` throughout; the constructor's
+ * initial task spawn and `simulate`'s periodic task spawn are both skipped for an empty office —
+ * the design never had one, spec §5 requires it. Pixel-art code keeps its own style.
  */
 const OfficeEngine = {}
 let PIXEL_FONT = 'Silkscreen'
@@ -50,7 +51,7 @@ class World{
       this.slaves.push({id:'a'+idx,name:ag.name,role:ag.role,color:ag.color||d.color,dept:di,hair:HAIR[idx%HAIR.length],x:x-13,y:30,deskIdx:idx,state:'sit',dir:1,path:[],timer:1+idx*1.1,task:null,progress:0,frame:0,sw:0});x+=step});
       this.departments[di].x0=x0-6;this.departments[di].x1=x-step+30;x+=legacy?0:30});
     this.W=legacy?320:Math.max(320,x+30);this.boardPos={x:34,y:6};this.coffeePos={x:this.W-26,y:22};
-    for(let i=0;i<Math.max(3,Math.ceil(this.slaves.length*.6));i++)this.spawnTask();
+    if(this.departments.length>0)for(let i=0;i<Math.max(3,Math.ceil(this.slaves.length*.6));i++)this.spawnTask();
   }
   ev(type,a,task,text){this.events.unshift({seq:++this.seq,t:this.t,type,slave:a?a.name:'system',slaveColor:a?a.color:'#8a929e',task:task?task.key:'',text});if(this.events.length>80)this.events.pop()}
   spawnTask(){const d=this.departments[Math.floor(Math.random()*this.departments.length)];const t={key:'T-'+(this.taskId++),title:TASKS[this.taskId%TASKS.length],color:null,deptColor:this.legacy?null:d.color,dept:d.index,status:'todo',blockedBy:null};
@@ -68,7 +69,7 @@ class World{
   /** The design's state machine: invents tasks, moves slaves, blocks them at random. `liveOffice.ts`
    *  overrides this whole method; nothing else in the engine calls it. */
   simulate(dt){const T=this.t;
-    this.nextTaskAt-=dt;if(this.nextTaskAt<=0&&this.board.todo.length<Math.max(4,this.slaves.length)){this.spawnTask();this.nextTaskAt=(6+Math.random()*8)*5/this.slaves.length}
+    this.nextTaskAt-=dt;if(this.departments.length>0&&this.nextTaskAt<=0&&this.board.todo.length<Math.max(4,this.slaves.length)){this.spawnTask();this.nextTaskAt=(6+Math.random()*8)*5/this.slaves.length}
     // review→done
     this.board.review.forEach(t=>{t.rt-=dt;if(t.rt<=0){this.board.review=this.board.review.filter(x=>x!==t);t.status='done';this.board.done.push(t);if(this.board.done.length>6)this.board.done.shift();this.ev('task.done',null,t,'merged --no-ff')}});
     for(const a of this.slaves){
