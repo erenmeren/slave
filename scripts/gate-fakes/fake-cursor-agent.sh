@@ -90,10 +90,10 @@ if [ "$resuming" = "1" ]; then
   exit 0
 fi
 
-# Wait to be paused, and model what a real agent does when it is: `signalPause('cursor')` writes the
+# Wait to be paused, and model what a real slave does when it is: `signalPause('cursor')` writes the
 # flag and THEN ends the process, so the flag is already on disk when SIGTERM lands, and whatever
-# call the agent had in flight at that moment is what `scripts/cursor-shell-gate.sh` refuses. That
-# is the sequence `pause-signal.ts` describes in as many words ("the agent can still start a shell
+# call the slave had in flight at that moment is what `scripts/cursor-shell-gate.sh` refuses. That
+# is the sequence `pause-signal.ts` describes in as many words ("the slave can still start a shell
 # command ... writing the flag first closes that window"), and reproducing it here is what makes the
 # rehearsal exercise stage 3's "calls were attempted inside the pause window" branch rather than its
 # "nothing landed" one.

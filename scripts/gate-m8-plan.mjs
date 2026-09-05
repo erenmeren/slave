@@ -69,9 +69,9 @@ try {
     data: { workspaceId: workspace.id, kind: 'claude_code', settings: {} },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Gate Team' } })
-  await prisma.agent.create({ data: { teamId: team.id, name: 'Manager', role: 'manager' } })
-  await prisma.agent.create({ data: { teamId: team.id, name: 'Worker', role: 'backend' } })
-  await prisma.agent.create({ data: { teamId: team.id, name: 'Reviewer', role: 'reviewer' } })
+  await prisma.slave.create({ data: { teamId: team.id, name: 'Manager', role: 'manager' } })
+  await prisma.slave.create({ data: { teamId: team.id, name: 'Worker', role: 'backend' } })
+  await prisma.slave.create({ data: { teamId: team.id, name: 'Reviewer', role: 'reviewer' } })
   console.log(`workspace: ${workspace.id}`)
 
   // 2. Set the goal via the real CLI, the human's own path -- and the one that emits the
@@ -126,8 +126,8 @@ try {
     // the planning run(s) this workspace actually produced (id, status, pauseReason) and every
     // event type recorded so far, so a real failure here (vs. this gate's own flakiness) is
     // diagnosable from the log alone.
-    const planningRuns = await prisma.agentRun.findMany({
-      where: { agent: { team: { workspaceId: workspace.id } }, kind: 'planning' },
+    const planningRuns = await prisma.slaveRun.findMany({
+      where: { slave: { team: { workspaceId: workspace.id } }, kind: 'planning' },
     })
     const eventRowsSoFar = await prisma.executionEvent.findMany({
       where: { workspaceId: workspace.id },
@@ -208,7 +208,7 @@ try {
   if (workspaceId !== null) {
     // No FK from `ExecutionEvent` to `Workspace` (M2's append-only log outlives entity lifecycles
     // by design) -- deleted explicitly, before the workspace delete cascades everything else
-    // (`Team`/`Agent`/`Task`/`AgentRun`/`Checkpoint`/`TaskDependency`/`Artifact`).
+    // (`Team`/`Slave`/`Task`/`SlaveRun`/`Checkpoint`/`TaskDependency`/`Artifact`).
     await prisma.executionEvent.deleteMany({ where: { workspaceId } }).catch(() => {})
     await prisma.workspace.delete({ where: { id: workspaceId } }).catch(() => {})
   }

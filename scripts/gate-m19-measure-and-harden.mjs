@@ -186,9 +186,9 @@ async function dumpGateRows() {
   })
   const dump = []
   for (const workspace of workspaces) {
-    const runs = await prisma.agentRun.findMany({
-      where: { agent: { team: { workspaceId: workspace.id } } },
-      include: { agent: { select: { name: true } } },
+    const runs = await prisma.slaveRun.findMany({
+      where: { slave: { team: { workspaceId: workspace.id } } },
+      include: { slave: { select: { name: true } } },
       orderBy: { startedAt: 'asc' },
     })
     const events = await prisma.executionEvent.findMany({
@@ -198,7 +198,7 @@ async function dumpGateRows() {
     })
     dump.push({
       workspace,
-      runs: runs.map((run) => ({ id: run.id, agent: run.agent.name, status: run.status })),
+      runs: runs.map((run) => ({ id: run.id, slave: run.slave.name, status: run.status })),
       events: events.map((event) => ({ seq: event.seq, runId: event.runId, type: event.type, payload: event.payload })),
     })
   }
@@ -681,12 +681,12 @@ try {
   })
   workspaceId = workspace.id
   const teamId = (await prisma.team.create({ data: { workspaceId, name: 'Engineering' } })).id
-  const agentId = (
-    await prisma.agent.create({
+  const slaveId = (
+    await prisma.slave.create({
       data: { teamId, name: WORKER_NAME, role: 'backend', provider: WORKER_PROVIDER, model: WORKER_MODEL },
     })
   ).id
-  console.log(`workspace ${workspaceId}; team ${teamId}; agent ${agentId}`)
+  console.log(`workspace ${workspaceId}; team ${teamId}; slave ${slaveId}`)
 
   // Seeded through the real production write path (`appendEvent`), so `seq`/`ts` come from the
   // database in the same order a real run would have written them -- the aggregate builder's edge
@@ -695,18 +695,18 @@ try {
     await appendEvent({
       type: 'run.tool_call',
       workspaceId,
-      agentId,
+      slaveId,
       runId,
-      actor: 'agent',
+      actor: 'slave',
       payload: { name: 'Skill', summary: `Skill ${name}` },
     })
   }
   for (let i = 0; i < 3; i += 1) {
-    const run = await prisma.agentRun.create({ data: { agentId, status: 'succeeded' } })
+    const run = await prisma.slaveRun.create({ data: { slaveId, status: 'succeeded' } })
     await skillCall(run.id, HEAVY_FROM)
     await skillCall(run.id, HEAVY_TO)
   }
-  const lightRun = await prisma.agentRun.create({ data: { agentId, status: 'succeeded' } })
+  const lightRun = await prisma.slaveRun.create({ data: { slaveId, status: 'succeeded' } })
   await skillCall(lightRun.id, LIGHT_FROM)
   await skillCall(lightRun.id, LIGHT_TO)
   console.log(`check 3: seeded three runs of ${HEAVY_FROM}->${HEAVY_TO} (succession count 3) and one of ${LIGHT_FROM}->${LIGHT_TO} (count 1)`)
@@ -877,7 +877,7 @@ try {
     if (nextServer.exitCode === null) nextServer.kill('SIGKILL')
   }
   // FK-ordered: `ExecutionEvent` has no FK to `Workspace`, so it is deleted explicitly first; the
-  // workspace delete then cascades Team/Agent/AgentRun.
+  // workspace delete then cascades Team/Slave/SlaveRun.
   if (workspaceId !== null) {
     await prisma.executionEvent.deleteMany({ where: { workspaceId } }).catch(() => {})
     await prisma.workspace.delete({ where: { id: workspaceId } }).catch(() => {})

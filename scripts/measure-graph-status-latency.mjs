@@ -2,7 +2,7 @@
 // the same one-second budget M6's activity latency measured. `measure-activity-latency.mjs`'s
 // sibling, reusing its shape (seed, start the real web server, clean up on every path) with one
 // structural difference: that script drives events itself with no process behind them (nothing to
-// spawn, nothing to observe transitioning); this one has to put a *real* `AgentRun` through
+// spawn, nothing to observe transitioning); this one has to put a *real* `SlaveRun` through
 // `starting -> working -> paused`, which only the orchestrator's own tick can do.
 //
 // Driving the pause: the brief offered two routes -- the fake CLI's `hook-deny` fixture (the
@@ -82,7 +82,7 @@ let web = null
 let orchestrator = null
 
 try {
-  // 1. Seed: workspace, team, agent, one ready task -- the same shape
+  // 1. Seed: workspace, team, slave, one ready task -- the same shape
   // `milestone-gate.test.ts`'s `seed()` uses, with a real git repository underneath it.
   repoPath = makeRepo()
   const workspace = await prisma.workspace.create({
@@ -99,7 +99,7 @@ try {
     data: { workspaceId: workspace.id, kind: 'claude_code', settings: {} },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Latency Team' } })
-  const agent = await prisma.agent.create({ data: { teamId: team.id, name: 'Lex', role: 'backend' } })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Lex', role: 'backend' } })
   const task = await prisma.task.create({
     data: {
       workspaceId: workspace.id,
@@ -162,7 +162,7 @@ try {
   // 4. Poll the read model until it reflects each transition. `atLeastWorking`/`paused` (rather
   // than an exact `=== 'working'` match for the first one) makes this robust to the two
   // transitions landing inside the same poll interval: if a poll's first-ever sighting of this
-  // agent is already `paused`, `working` must have been reflected no later than that same poll,
+  // slave is already `paused`, `working` must have been reflected no later than that same poll,
   // so that poll's arrival is still a valid (if slightly conservative) upper bound on the first
   // transition's latency -- never an unmeasured gap.
   const ORDER = ['idle', 'starting', 'working', 'paused']
@@ -173,11 +173,11 @@ try {
   const deadline = Date.now() + TRANSITION_TIMEOUT_MS
   while ((workingReflectedAt === null || pausedReflectedAt === null) && Date.now() < deadline) {
     const graph = await fetchGraph(workspace.id)
-    const graphAgent = graph.agents.find((a) => a.id === agent.id)
+    const graphSlave = graph.slaves.find((a) => a.id === slave.id)
     const now = Date.now()
-    if (graphAgent !== undefined) {
-      if (workingReflectedAt === null && atLeast(graphAgent.status, 'working')) workingReflectedAt = now
-      if (pausedReflectedAt === null && graphAgent.status === 'paused') pausedReflectedAt = now
+    if (graphSlave !== undefined) {
+      if (workingReflectedAt === null && atLeast(graphSlave.status, 'working')) workingReflectedAt = now
+      if (pausedReflectedAt === null && graphSlave.status === 'paused') pausedReflectedAt = now
     }
     await delay(POLL_INTERVAL_MS)
   }
@@ -201,7 +201,7 @@ try {
 
   // 6. Each transition's own event, read straight from the log -- `ts` is assigned by Postgres at
   // INSERT, the same authority `measure-activity-latency.mjs` uses.
-  const run = await prisma.agentRun.findFirstOrThrow({ where: { taskId: task.id } })
+  const run = await prisma.slaveRun.findFirstOrThrow({ where: { taskId: task.id } })
   const eventRows = await prisma.executionEvent.findMany({ where: { runId: run.id }, orderBy: { seq: 'asc' } })
   const eventsByType = new Map(eventRows.map((row) => [DOMAIN_EVENT_TYPE_BY_DB_VALUE[row.type], row]))
 
@@ -216,7 +216,7 @@ try {
   ]
 
   // A negative gap is a legitimate reading, not a bug: the graph route derives status straight
-  // from `AgentRun.status`, which `pump.ts` writes to the database *before* it appends the
+  // from `SlaveRun.status`, which `pump.ts` writes to the database *before* it appends the
   // corresponding domain event (see each case's own ordering) -- so a poll can observe the new
   // status before the event that names the transition has even been written. Reported as measured
   // either way; the bar below is about magnitude, not sign.
@@ -240,7 +240,7 @@ try {
   if (workspaceId !== null) {
     // No FK from `ExecutionEvent` to `Workspace` (M2's append-only log outlives entity lifecycles
     // by design) -- deleted explicitly, same as `measure-activity-latency.mjs`, before the
-    // workspace delete cascades everything else (`Team`/`Agent`/`Task`/`AgentRun`/`Checkpoint`/
+    // workspace delete cascades everything else (`Team`/`Slave`/`Task`/`SlaveRun`/`Checkpoint`/
     // `TaskDependency`/`Artifact`).
     await prisma.executionEvent.deleteMany({ where: { workspaceId } }).catch(() => {})
     await prisma.workspace.delete({ where: { id: workspaceId } }).catch(() => {})

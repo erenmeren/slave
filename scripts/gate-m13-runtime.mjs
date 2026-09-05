@@ -18,7 +18,7 @@
 // WHAT THIS ADDS TO THAT SKELETON, and must not omit:
 //
 //   - VENDOR CHILDREN DIE TOO (Decision 12). M12's `finally` killed only the daemon. This one also
-//     kills every `claude` and `cursor-agent` this gate caused, by pid off the `AgentRun` rows,
+//     kills every `claude` and `cursor-agent` this gate caused, by pid off the `SlaveRun` rows,
 //     BEFORE those rows are deleted. A gate that exits leaving a paid vendor process running is a
 //     gate that keeps spending after it has reported.
 //   - A BROWSER. Stages 1 and 4 drive the real Runtime card, not the control verbs behind it.
@@ -252,7 +252,7 @@ async function findFreePort() {
 /**
  * SIGKILLs every process still running out of one of this gate's own temporary repositories.
  *
- * The record-based kill -- every `AgentRun.pid` -- is the primary one and reaches every vendor child
+ * The record-based kill -- every `SlaveRun.pid` -- is the primary one and reaches every vendor child
  * the orchestrator itself spawned. It cannot reach what those children spawn: `cursor-agent` leaves
  * a detached per-repository `worker-server` (and a `tsserver` family) behind, documented at
  * `packages/providers/src/cursor/adapter.ts:355-360`, and none of them is on any row. Nor can it
@@ -260,7 +260,7 @@ async function findFreePort() {
  *
  * So the second sweep is by LOCATION, not by record: `/proc/<pid>/cwd` and `/proc/<pid>/cmdline`,
  * matched against the two `mkdtemp` roots this gate created. Scoped to those two paths on purpose
- * -- an operator's own editor, daemon or agent working in some other checkout is none of this
+ * -- an operator's own editor, daemon or slave working in some other checkout is none of this
  * gate's business, and a `pkill -f cursor-agent` would take it out.
  *
  * `pgrep -f` is the fallback for a platform with no readable `/proc`; it matches the command line
@@ -323,7 +323,7 @@ function sweepStrayChildren(roots) {
 
 /** Removes any `M13 Gate`-named rows a prior interrupted run left behind, in the same FK order the
  *  `finally` block below uses: the append-only events first (no FK to `Workspace`), then the
- *  workspace, which cascades Team/Agent/Task/AgentRun/Checkpoint/ProviderConfiguration. */
+ *  workspace, which cascades Team/Slave/Task/SlaveRun/Checkpoint/ProviderConfiguration. */
 async function preflightCleanup() {
   const stale = await prisma.workspace.findMany({
     where: { name: { startsWith: WORKSPACE_PREFIX } },
@@ -334,8 +334,8 @@ async function preflightCleanup() {
     // A leftover workspace can still own a LIVE vendor child if a prior execution was killed
     // before its own `finally` ran. Deleting the row would lose the only record of that pid, so
     // the kill comes first here for the same reason it comes first in `finally` (Decision 12).
-    const runs = await prisma.agentRun
-      .findMany({ where: { agent: { team: { workspaceId: workspace.id } } }, select: { id: true, pid: true } })
+    const runs = await prisma.slaveRun
+      .findMany({ where: { slave: { team: { workspaceId: workspace.id } } }, select: { id: true, pid: true } })
       .catch(() => [])
     for (const run of runs) {
       if (run.pid === null || !isAlive(run.pid)) continue
@@ -394,9 +394,9 @@ async function dumpGateRows() {
       where: { workspaceId: workspace.id },
       select: { id: true, title: true, status: true, attempt: true, maxAttempts: true, activeRunId: true },
     })
-    const runs = await prisma.agentRun.findMany({
-      where: { agent: { team: { workspaceId: workspace.id } } },
-      include: { agent: { select: { name: true } }, checkpoint: true },
+    const runs = await prisma.slaveRun.findMany({
+      where: { slave: { team: { workspaceId: workspace.id } } },
+      include: { slave: { select: { name: true } }, checkpoint: true },
       orderBy: { startedAt: 'asc' },
     })
     const events = await prisma.executionEvent.findMany({
@@ -410,7 +410,7 @@ async function dumpGateRows() {
       tasks,
       runs: runs.map((run) => ({
         id: run.id,
-        agent: run.agent.name,
+        slave: run.slave.name,
         provider: run.provider,
         status: run.status,
         pid: run.pid,
@@ -578,8 +578,8 @@ async function assertCardShowsNoError(stage) {
 
 /** The run row for one of this gate's workers in the unbudgeted workspace, or `null`. */
 async function runForWorker(workerName) {
-  return prisma.agentRun.findFirst({
-    where: { agent: { name: workerName, team: { workspaceId: unbudgetedWorkspaceId } } },
+  return prisma.slaveRun.findFirst({
+    where: { slave: { name: workerName, team: { workspaceId: unbudgetedWorkspaceId } } },
     orderBy: { startedAt: 'asc' },
   })
 }
@@ -721,7 +721,7 @@ try {
     await fail(`${BUDGETED_WORKSPACE} was created with a null budget: stage 4 cannot test a budgeted workspace with no budget`)
   }
   const budgetedTeam = await prisma.team.create({ data: { workspaceId: budgeted.id, name: 'Gate Team' } })
-  await prisma.agent.create({
+  await prisma.slave.create({
     data: { teamId: budgetedTeam.id, name: CURSOR_WORKER, role: 'backend', model: CURSOR_MODEL, provider: 'cursor' },
   })
   const budgetedTask = await prisma.task.create({
@@ -750,7 +750,7 @@ try {
     stdio: ['ignore', 'inherit', 'inherit'],
   })
 
-  const refusedRuns = await prisma.agentRun.findMany({ where: { agent: { team: { workspaceId: budgeted.id } } } })
+  const refusedRuns = await prisma.slaveRun.findMany({ where: { slave: { team: { workspaceId: budgeted.id } } } })
   if (refusedRuns.length !== 1) {
     await fail(`stage 4: expected exactly 1 attempted run in the budgeted workspace, found ${String(refusedRuns.length)}`)
   }
@@ -817,8 +817,8 @@ try {
     'the unbudgeted-by-the-card workspace to dispatch its cursor run with a pid and a provider',
     DISPATCH_TIMEOUT_MS,
     async () => {
-      const rows = await prisma.agentRun.findMany({
-        where: { agent: { team: { workspaceId: budgeted.id } }, id: { not: refusedRun.id } },
+      const rows = await prisma.slaveRun.findMany({
+        where: { slave: { team: { workspaceId: budgeted.id } }, id: { not: refusedRun.id } },
         orderBy: { startedAt: 'asc' },
       })
       const admitted = rows.find((row) => row.pid !== null && row.provider !== null)
@@ -927,10 +927,10 @@ try {
   // that NAMES a model, so a worker with a null model would fall through to the workspace default
   // (now `cursor`, thanks to stage 1) and both runs would land on the same runtime -- which is the
   // one thing this stage cannot afford.
-  const claudeAgent = await prisma.agent.create({
+  const claudeSlave = await prisma.slave.create({
     data: { teamId: team.id, name: CLAUDE_WORKER, role: 'backend', model: CLAUDE_MODEL, provider: 'claude_code' },
   })
-  const cursorAgent = await prisma.agent.create({
+  const cursorSlave = await prisma.slave.create({
     data: { teamId: team.id, name: CURSOR_WORKER, role: 'backend', model: CURSOR_MODEL, provider: 'cursor' },
   })
   for (const suffix of ['A', 'B']) {
@@ -946,8 +946,8 @@ try {
     })
   }
   console.log(
-    `workers: ${CLAUDE_WORKER}=${claudeAgent.id} (claude_code/${CLAUDE_MODEL}), ` +
-      `${CURSOR_WORKER}=${cursorAgent.id} (cursor/${CURSOR_MODEL})`,
+    `workers: ${CLAUDE_WORKER}=${claudeSlave.id} (claude_code/${CLAUDE_MODEL}), ` +
+      `${CURSOR_WORKER}=${cursorSlave.id} (cursor/${CURSOR_MODEL})`,
   )
 
   // The real daemon, in the background -- the same thing an operator leaves running.
@@ -1012,7 +1012,7 @@ try {
    * really is the one an operator would get.
    */
   async function proveLockTwo(label, runId) {
-    const before = await prisma.agentRun.findUniqueOrThrow({ where: { id: runId } })
+    const before = await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId } })
     if (before.status !== 'paused') {
       await fail(`stage 2: ${label} is ${before.status}, not paused, when the second lock was probed`)
     }
@@ -1021,12 +1021,12 @@ try {
     if (sleeperPid === null) await fail('stage 2: could not spawn the live process the second lock is probed with')
     liveSleeperPids.add(sleeperPid)
     try {
-      await prisma.agentRun.update({ where: { id: runId }, data: { pid: sleeperPid } })
+      await prisma.slaveRun.update({ where: { id: runId }, data: { pid: sleeperPid } })
       const refused = await requestResume(runId, null, PAUSE_REQUESTER)
       if (refused.ok) {
         await fail(
           `stage 2: ${label} accepted a resume while its recorded pid (${String(sleeperPid)}) was ALIVE. ` +
-            'Decision 3\'s second lock is not holding: this is the state that puts two agents on one branch.',
+            'Decision 3\'s second lock is not holding: this is the state that puts two slaves on one branch.',
         )
       }
       if (refused.error.kind !== 'run_still_stopping') {
@@ -1040,14 +1040,14 @@ try {
       }
       // The refusal must have recorded NOTHING: a lock that refuses and still arms the intent has
       // only postponed the failure it was there to prevent.
-      const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: runId } })
+      const after = await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId } })
       if (after.resumeRequestedAt !== null) {
         await fail(`stage 2: ${label}'s refused resume still wrote resumeRequestedAt=${String(after.resumeRequestedAt)}`)
       }
     } finally {
       // The row goes back exactly as it was found, before anything else can read the borrowed pid
       // -- including this script's own `finally`, which kills vendor children BY pid.
-      await prisma.agentRun.update({ where: { id: runId }, data: { pid: before.pid } }).catch(() => {})
+      await prisma.slaveRun.update({ where: { id: runId }, data: { pid: before.pid } }).catch(() => {})
       try {
         sleeper.kill('SIGKILL')
       } catch {
@@ -1094,7 +1094,7 @@ try {
     const before = await prisma.task.findUniqueOrThrow({ where: { id: taskId } })
 
     await waitUntil(`${label} to be working with at least one tool call recorded`, WORKING_TIMEOUT_MS, async () => {
-      const row = await prisma.agentRun.findUniqueOrThrow({ where: { id: runId } })
+      const row = await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId } })
       if (row.status === 'working' && row.toolCalls >= 1) return { done: true, value: row }
       if (TERMINAL_STATUSES.has(row.status)) {
         await fail(
@@ -1109,7 +1109,7 @@ try {
     // Cursor run the ENTIRE pause window lies before `run.pause_requested` is appended (that append
     // is the last thing `requestPause` does, after `killWithEscalation` has already returned), so
     // the event log cannot bound the window and this counter is what does.
-    const beforePauseRow = await prisma.agentRun.findUniqueOrThrow({ where: { id: runId } })
+    const beforePauseRow = await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId } })
     const toolCallsBeforePause = beforePauseRow.toolCalls
 
     const requested = await requestPause(runId, PAUSE_REQUESTER, 'human')
@@ -1128,15 +1128,15 @@ try {
     // milliseconds, so the post-verb read can already say `resuming`, and an assertion written
     // against it fails a run that did nothing wrong. The pre-verb sample cannot drift the dangerous
     // way either -- a pid that was dead before the call cannot be alive during it.
-    const beforeProbe = await prisma.agentRun.findUnique({ where: { id: runId }, include: { checkpoint: true } })
+    const beforeProbe = await prisma.slaveRun.findUnique({ where: { id: runId }, include: { checkpoint: true } })
     if (beforeProbe === null) await fail(`stage 2: ${label}'s run row disappeared before its stopping window was probed`)
     const beforeProbeAlive = isAlive(beforeProbe.pid)
     const early = await requestResume(runId, null, PAUSE_REQUESTER)
-    const afterProbe = await prisma.agentRun.findUnique({ where: { id: runId }, include: { checkpoint: true } })
+    const afterProbe = await prisma.slaveRun.findUnique({ where: { id: runId }, include: { checkpoint: true } })
     if (afterProbe === null) await fail(`stage 2: ${label}'s run row disappeared while its stopping window was probed`)
     if (early.ok) {
       // The one unrecoverable answer, and it is about the CHILD, not about the status column: a
-      // resume handed out while the paused run's process is still alive puts two agents on one
+      // resume handed out while the paused run's process is still alive puts two slaves on one
       // branch. Asserted against the pre-verb liveness sample, which is the operating system's
       // answer and not the product's own bookkeeping.
       if (beforeProbeAlive) {
@@ -1225,7 +1225,7 @@ try {
     }
     if (!early.ok) {
       paused = await waitUntil(`${label} to settle on paused with a dead process`, PAUSE_SETTLE_TIMEOUT_MS, async () => {
-        const row = await prisma.agentRun.findUnique({ where: { id: runId }, include: { checkpoint: true } })
+        const row = await prisma.slaveRun.findUnique({ where: { id: runId }, include: { checkpoint: true } })
         if (row === null) return { done: false, detail: 'the run row disappeared' }
         if (TERMINAL_STATUSES.has(row.status)) {
           await fail(
@@ -1265,7 +1265,7 @@ try {
     }
 
     await waitUntil(`${label} to succeed after its resume`, RESUME_TERMINAL_TIMEOUT_MS, async () => {
-      const row = await prisma.agentRun.findUniqueOrThrow({ where: { id: runId } })
+      const row = await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId } })
       if (row.status === 'succeeded') return { done: true, value: row }
       if (row.terminalAt !== null) {
         await fail(
@@ -1505,13 +1505,13 @@ try {
   // THE EVENT LOG CANNOT BOUND THIS WINDOW, and the first version of this check was wrong for
   // exactly that reason. On a Cursor run `requestPause` writes the flag, calls `killWithEscalation`,
   // waits for the child to be dead, and only THEN appends `run.pause_requested` -- so every call the
-  // agent attempted with the flag in place has a LOWER `seq` than the pause's own announcement, and
+  // slave attempted with the flag in place has a LOWER `seq` than the pause's own announcement, and
   // a window measured between `run.pause_requested` and `run.paused` is empty by construction. It
   // reported "nothing landed" on every rehearsal, including ones where a call demonstrably had.
   //
   // So the window is bounded by the pump's own COUNTER: `toolCallsBeforePause` is the run's
   // `toolCalls` read at the last instant before the flag existed, `Checkpoint.numTurns` is the same
-  // counter at the moment the pause was recorded, and their difference is what the agent attempted
+  // counter at the moment the pause was recorded, and their difference is what the slave attempted
   // in between.
   //
   // WHAT `Checkpoint.deniedToolUseIds` IS, AND IS NOT, ON A CURSOR RUN. It is written from the
@@ -1585,7 +1585,7 @@ try {
   // vocabulary. Nothing else is touched: `requestResume` is the real verb, the daemon's own resume
   // pass is what claims it, and `concludeFailedResume` is what has to count the attempt.
   // ============================================================================================
-  const attemptAgent = await prisma.agent.create({
+  const attemptSlave = await prisma.slave.create({
     data: { teamId: team.id, name: ATTEMPT_WORKER, role: 'stage5', model: CLAUDE_MODEL, provider: 'claude_code' },
   })
   const attemptTask = await prisma.task.create({
@@ -1604,8 +1604,8 @@ try {
     `${ATTEMPT_WORKER} to be dispatched and working with at least one tool call recorded`,
     WORKING_TIMEOUT_MS,
     async () => {
-      const row = await prisma.agentRun.findFirst({
-        where: { agentId: attemptAgent.id },
+      const row = await prisma.slaveRun.findFirst({
+        where: { slaveId: attemptSlave.id },
         orderBy: { startedAt: 'asc' },
       })
       if (row === null) return { done: false, detail: 'no run row yet' }
@@ -1623,7 +1623,7 @@ try {
     `${ATTEMPT_WORKER}'s run to settle on paused with a dead process and a checkpoint`,
     PAUSE_SETTLE_TIMEOUT_MS,
     async () => {
-      const row = await prisma.agentRun.findUniqueOrThrow({ where: { id: attemptRunId }, include: { checkpoint: true } })
+      const row = await prisma.slaveRun.findUniqueOrThrow({ where: { id: attemptRunId }, include: { checkpoint: true } })
       if (TERMINAL_STATUSES.has(row.status)) await fail(`stage 5: the run went ${row.status} instead of paused`)
       if (row.status !== 'paused') return { done: false, detail: `status ${row.status}` }
       if (row.checkpoint === null) return { done: false, detail: 'paused with no checkpoint' }
@@ -1661,7 +1661,7 @@ try {
     'the failed resume to be concluded and counted against the task',
     RESUME_TERMINAL_TIMEOUT_MS,
     async () => {
-      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: attemptRunId } })
+      const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: attemptRunId } })
       const task = await prisma.task.findUniqueOrThrow({ where: { id: attemptTask.id } })
       if (run.status !== 'failed') return { done: false, detail: `run ${run.status}, task ${task.status}` }
       if (task.attempt === beforeFailedResume.attempt) {
@@ -1717,11 +1717,11 @@ try {
 
   // ...and the next tick starts no run. Watched for six daemon periods, because "nothing happened"
   // is only a fact if something had time to happen.
-  const runsAfterFailure = await prisma.agentRun.count({ where: { agent: { team: { workspaceId: workspace.id } } } })
+  const runsAfterFailure = await prisma.slaveRun.count({ where: { slave: { team: { workspaceId: workspace.id } } } })
   const quietDeadline = Date.now() + QUIET_WINDOW_MS
   while (Date.now() < quietDeadline) {
     if (daemonExited) await fail('stage 5: the daemon exited while the gate was watching it do nothing')
-    const now = await prisma.agentRun.count({ where: { agent: { team: { workspaceId: workspace.id } } } })
+    const now = await prisma.slaveRun.count({ where: { slave: { team: { workspaceId: workspace.id } } } })
     if (now !== runsAfterFailure) {
       await fail(
         `stage 5: the daemon started a new run after the task was exhausted (${String(runsAfterFailure)} -> ${String(now)} ` +
@@ -1770,8 +1770,8 @@ try {
   // it has reported.
   for (const workspaceId of [unbudgetedWorkspaceId, budgetedWorkspaceId]) {
     if (workspaceId === null) continue
-    const runs = await prisma.agentRun
-      .findMany({ where: { agent: { team: { workspaceId } } }, select: { id: true, pid: true } })
+    const runs = await prisma.slaveRun
+      .findMany({ where: { slave: { team: { workspaceId } } }, select: { id: true, pid: true } })
       .catch(() => [])
     for (const run of runs) {
       if (run.pid === null || !isAlive(run.pid)) continue
@@ -1805,7 +1805,7 @@ try {
   }
   // FK-ordered cleanup, the same order `gate-m12-providers.mjs` uses: `ExecutionEvent` has no FK to
   // `Workspace` (M2's append-only log outlives entity lifecycles by design) so it is deleted
-  // explicitly first, then the workspace delete cascades Team/Agent/Task/AgentRun/Checkpoint/
+  // explicitly first, then the workspace delete cascades Team/Slave/Task/SlaveRun/Checkpoint/
   // ProviderConfiguration.
   for (const workspaceId of [unbudgetedWorkspaceId, budgetedWorkspaceId]) {
     if (workspaceId !== null) {

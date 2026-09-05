@@ -118,7 +118,7 @@ PAUSE_GATE_NAME='cursor-shell-gate.sh'
 PAUSE_GATE_LIB_DIR="$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}" || printf '%s' "${BASH_SOURCE[0]}")")"
 # shellcheck source=lib/pause-flag.sh
 . "${PAUSE_GATE_LIB_DIR}/lib/pause-flag.sh" || {
-  # A lone copy of this script -- an SLAVEOFAI_CURSOR_GATE_PATH override pointing at a deployment
+  # A lone copy of this script -- a SLAVEOFAI_CURSOR_GATE_PATH override pointing at a deployment
   # that copied the gate without its library -- must refuse loudly and actionably rather than
   # silently gating nothing. Naming the exact path we looked for is what makes it fixable at a
   # glance, and stderr is where Cursor reads an exit-2 block reason from.

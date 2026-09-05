@@ -124,4 +124,59 @@ reviewer can bisect a mistake to a layer.
 
 ## 8. Errata — where execution corrected the plan
 
-(empty at approval; filled by the last task)
+1. The `words` phase is three boundary-aware regexes (`Agent`/`agent`/`AGENT`, each with a
+   lookahead that keeps `Agents`/`AgentRun`/`agentic`/`reagent` sorted correctly) plus an article
+   post-pass (`an slave` → `a slave`, and the ALL-CAPS counterpart), not the spec's "longest-first
+   table" — every compound (`AgentRun`, `companyAgentId`, `AGENTS_TAB`, …) falls out of the plain
+   `Agent`→`Slave` rule for free, so no compound-specific entries were ever needed.
+2. `planMoves` moves file by file, not by topmost differing directory — the plan's directory
+   collapsing would have lost a nested rename inside an already-renamed directory (`[agentId]`
+   under `api/agents`, `NewAgentDrawer.tsx` under `components/agents`). Fixed in Task 3's review
+   round and self-tested (`rename-agent-to-slave.mjs`'s `moveCases`).
+3. The dry-run reports (`--report`) are workspace artifacts for review while the codemod runs —
+   never committed.
+4. The migration renames three unique keys — `AgentTemplate_name_key`, `AgentPermission_agentId_tool_key`,
+   `CompanyAgent_companyTeamId_name_key` — with `ALTER INDEX`, not `ALTER TABLE … RENAME CONSTRAINT`:
+   `\d` on the live schema showed them as bare `CREATE UNIQUE INDEX`s, never registered in
+   `pg_constraint`, so they rename the same way the plain indexes below them do (Task 3's oracle
+   step caught this against the real schema, not the plan's assumption).
+5. The deny-reason seam is why `scripts/cursor-shell-gate.sh`, `scripts/pause-gate.sh`, and the
+   phrase-only edit of `packages/providers/test/fixtures/permission-matrix-deny.ndjson` +
+   `README.md` were renamed in Task 3, ahead of this task's `words` pass over the rest of
+   `scripts/`: `gate.ts` reads the literal deny-reason text those files carry, so the phrase had to
+   move with the schema/package rename or the gate's own assertions would have gone stale between
+   tasks.
+6. `agent_message` is Cursor's own response-validator field name (its binary's real, external API),
+   protected like `cursor-agent` — never ours to rename. Tightened in this task
+   (`agent_message(?!_sent)`) because our own `EventType`/`Actor` literal `agent_message_sent` must
+   still rename to `slave_message_sent`; Cursor's field is never suffixed, so the two never
+   collide. The vocabulary gate's `PROTECTED` regex mirrors the same tightened token. Self-test:
+   `'agent_message_sent and agent_message'` → `'slave_message_sent and agent_message'`. The article
+   post-pass was extended the same way, for the ALL-CAPS noun the `AGENT`→`SLAVE` word rule can
+   produce: `[/\ban SLAVE/g, 'a SLAVE']`, `[/\bAn SLAVE/g, 'A SLAVE']`, self-tested against
+   `'an AGENT; An AGENT'` → `'a SLAVE; A SLAVE'`. Self-test count: 21 (19 before this task's two
+   additions).
+7. `apps/web/src/lib/communicationGraph.ts`'s `agent_message_sent` literal and
+   `GraphClient.tsx`'s "an SLAVE" copy were hand-fixed in Task 4, ahead of this task tightening the
+   codemod's own protected token and article rules to cover both cases mechanically going forward.
+8. `design_handoff_ai_team_os/` and its two `AI Team OS *.dc.html` mockup filenames are not
+   renamed — they are handoff deliverables, kept exactly as received, directory name, filenames and
+   `agent` vocabulary throughout. Their scope-level text (`AI Team OS` → `Slave of AI`) was already
+   hand-renamed in Task 2; that pass missed one bare `"ai-team-os"` occurrence, hand-fixed there.
+   Added to `PROTECTED_PATHS` (codemod) and `EXCLUDE` (vocabulary gate) in this task so both stay
+   silent on it going forward, matching `docs/superpowers/` and `docs/decisions/`'s treatment.
+9. `docs/decisions/0001-pause-semantics.md` still names `AITEAMOS_PAUSE_FLAG` — history, untouched
+   (a protected path). `docs/domain-model.md`'s live cross-reference to ADR 0002
+   (`docs/decisions/0002-derived-agent-status.md`, also a protected, unrenamed path) was rewritten
+   to `…-derived-slave-status.md` by this task's mechanical `words` pass over plain document text —
+   a broken link, since no file by that name exists. Hand-fixed back to the real filename, and
+   `0002-derived-agent-status` added to both the codemod's `PROTECTED_TOKENS` and the vocabulary
+   gate's `PROTECTED` regex, so a live document may cite this historical filename without tripping
+   either.
+10. `packages/domain/src/docs/superpowers/specs/2026-08-18-m2-persistence-and-events-design.md` is
+    a nested historical copy of an early design doc — untouched; it happens to carry zero `agent`
+    mentions already, so nothing needed protecting there.
+11. `docs/superpowers/fidelity/m14/agents.png` — the tracked screenshot of the old `/agents` page —
+    was removed (`git rm`) rather than left stale once `gate:m14-fidelity` started writing
+    `slaves.png` for the renamed `/slaves` page; nothing else Step 3's gates exercised needed a
+    hand fix.

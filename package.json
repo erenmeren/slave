@@ -38,7 +38,8 @@
     "gate:m19-measure-and-harden": "tsc --build && node --env-file=.env scripts/gate-m19-measure-and-harden.mjs",
     "gate:m20-auth": "tsc --build && node --env-file=.env scripts/gate-m20-auth.mjs",
     "gate:m21-loose-ends": "tsc --build && node --env-file=.env scripts/gate-m21-loose-ends.mjs",
-    "gate:m23-onboarding": "tsc --build && node --env-file=.env scripts/gate-m23-onboarding.mjs"
+    "gate:m23-onboarding": "tsc --build && node --env-file=.env scripts/gate-m23-onboarding.mjs",
+    "gate:m26-vocabulary": "node scripts/gate-m26-vocabulary.mjs"
   },
   "devDependencies": {
     "@testing-library/react": "^16.0.0",

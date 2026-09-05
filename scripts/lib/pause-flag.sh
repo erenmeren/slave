@@ -5,7 +5,7 @@
 #
 # SECURITY NOTE, not an issue today: because both gates `source` this file from a path derived
 # from their own resolved location, a gate script's LOCATION now determines what bash code it
-# executes -- so a hook path that resolves inside a run's worktree would let the agent choose this
+# executes -- so a hook path that resolves inside a run's worktree would let the slave choose this
 # library's contents, and Claude's `hookPath` must stay an absolute path into the daemon's own
 # checkout (Cursor's `.cursor/hooks.json` already lives in the gated worktree, which spec section
 # 7.1 states as the milestone's named limitation).
@@ -71,8 +71,8 @@ PAUSE_REASON=''
 # unchanged handling: the caller denies with it at exit 0.
 #
 # There is deliberately no shared-default fallback path. In an autonomous system running several
-# agents concurrently, pause is the operator's only intervention lever: silently falling back to one
-# hardcoded path would let pausing one agent inadvertently freeze an unrelated one sharing that
+# slaves concurrently, pause is the operator's only intervention lever: silently falling back to one
+# hardcoded path would let pausing one slave inadvertently freeze an unrelated one sharing that
 # default, and silently allowing would disable the lever without anyone noticing. Denying loudly,
 # naming the misconfiguration, is the least harmful of the three -- it surfaces at the first tool
 # call instead of during an incident, and it surfaces IN THE DENY BODY, where the operator watching

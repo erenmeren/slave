@@ -13,6 +13,11 @@ const PROTECTED_PATHS = [
   'docs/superpowers/', 'docs/decisions/', 'node_modules/', '.git/',
   'packages/db/prisma/migrations/', 'packages/providers/test/fixtures/',
   'package-lock.json', 'scripts/rename-agent-to-slave.mjs', 'docs/nasil-calisir.pdf',
+  // The design handoff is a historical deliverable (controller ruling, Task 5): its scope words
+  // (`AI Team OS` -> `Slave of AI`) were already renamed by hand in Task 2, but the directory, the
+  // two `AI Team OS *.dc.html` mockup filenames, and the `agent`/`Agent` vocabulary throughout stay
+  // exactly as handed off.
+  'design_handoff_ai_team_os/',
 ]
 // Order matters only in that each is restored exactly as matched.
 const PROTECTED_TOKENS = [
@@ -21,7 +26,14 @@ const PROTECTED_TOKENS = [
   // Cursor's own response-validator field name (fix round 1, Task 3 review Important 1): its
   // binary's real, external API accepts exactly `permission`, `user_message`, `agent_message` --
   // vendor vocabulary we document, not ours to rename, the same way `cursor-agent` survives.
-  /agent_message/g,
+  // Tightened (controller ruling, Task 5): Cursor's field is never suffixed, but our own
+  // `EventType` literal `agent_message_sent` must still rename -- so protect `agent_message` only
+  // when it is NOT followed by `_sent`.
+  /agent_message(?!_sent)/g,
+  // ADR 0002's own filename (Task 5 docs read-through): docs/decisions/ is a protected path, so
+  // the file itself was never renamed on disk -- a live doc's cross-reference to it must keep the
+  // real name it points at, or the link breaks.
+  /0002-derived-agent-status/g,
 ]
 
 // Fix round 1 (Task 3 review Minor, folded): the word rules alone turn "an agent" into "an slave"
@@ -32,6 +44,8 @@ const PROTECTED_TOKENS = [
 const ARTICLE_RULES = [
   [/\ban slave/g, 'a slave'],
   [/\bAn slave/g, 'A slave'],
+  [/\ban SLAVE/g, 'a SLAVE'],
+  [/\bAn SLAVE/g, 'A SLAVE'],
 ]
 
 const SCOPE_RULES = [
@@ -159,6 +173,12 @@ function selfTest() {
     // like cursor-agent; the article post-pass fixes "an/An slave" produced by the word rules,
     // leaving an unrelated "clean slave" (no article immediately before) untouched.
     ['words', 'user_message and agent_message; an agent; An agent; clean agent', 'user_message and agent_message; a slave; A slave; clean slave'],
+    // Controller ruling (Task 5): agent_message is protected only when not suffixed with
+    // `_sent` -- our own EventType literal `agent_message_sent` must rename.
+    ['words', 'agent_message_sent and agent_message', 'slave_message_sent and agent_message'],
+    // Controller ruling (Task 5): the article post-pass also covers the ALL-CAPS noun the WORD
+    // RULES' AGENT->SLAVE rule can produce.
+    ['words', 'an AGENT; An AGENT', 'a SLAVE; A SLAVE'],
     ['scope', '@ai-team-os/control "ai-team-os" AITEAMOS_CLAUDE_BIN aiteamos-postgres AI Team OS', '@slave-of-ai/control "slave-of-ai" SLAVEOFAI_CLAUDE_BIN slaveofai-postgres Slave of AI'],
     ['scope', 'import x from "@anthropic-ai/sdk"', 'import x from "@anthropic-ai/sdk"'],
   ]

@@ -11,7 +11,7 @@
 //   2. CLI            -- `create-workspace` through `apps/orchestrator/dist/cli.js`, plus its two
 //                        negative controls (a relative `--repo`, no `--verify`).
 //   3. daemon to done -- two ready `backend` tasks (one for 4/5a/7, one for 5b), a `backend` worker,
-//                        a `reviewer`, and an unrelated idle agent, driven by a real daemon
+//                        a `reviewer`, and an unrelated idle slave, driven by a real daemon
 //                        subprocess against the fake CLI until BOTH tasks reach `done`. The daemon
 //                        is then stopped -- everything from here on is reads plus one `next dev`.
 //   5a. GC (aged)     -- in-process, no web needed: age the first task's `task.done` event past the
@@ -23,9 +23,9 @@
 //   5b. GC (operator) -- the second task's worktree collected through the DELETE route; an
 //                        untouched non-terminal task refused 409.
 //   7. communication  -- the graph names an implementer -> reviewer `review` edge.
-//   6. org            -- `rename-agent`/`set-role`/`delete-agent` on an idle agent (all ok, three
-//                        `org.changed` events), then `delete-agent` on the busy worker
-//                        (`agent_has_runs`) and `delete-team` on the still non-empty team
+//   6. org            -- `rename-slave`/`set-role`/`delete-slave` on an idle slave (all ok, three
+//                        `org.changed` events), then `delete-slave` on the busy worker
+//                        (`slave_has_runs`) and `delete-team` on the still non-empty team
 //                        (`team_not_empty`), both refused.
 //   [next dev, accounts mode, boot #2 of 2]
 //   8. accounts       -- `create-user` through the CLI (stdin password), login, a goal posted with
@@ -59,7 +59,7 @@
 // `playwright-core` driving a real Chromium at `CHROMIUM_PATH`. Nothing else in this file needed it.
 //
 // `finally` teardown, in order: kill whatever is still running (daemon, both `next dev` boots, the
-// browser) -- then, if a workspace was ever created, delete events -> tasks -> runs -> agents ->
+// browser) -- then, if a workspace was ever created, delete events -> tasks -> runs -> slaves ->
 // teams -> provider config -> workspace (mirrors cascade already covers most of this; the explicit
 // order is kept anyway so a partial run leaves nothing behind even if a single step's filter turns
 // out to miss something) -- then the stage 8 user, if it still exists -- then `rmSync` the repo, then
@@ -367,7 +367,7 @@ try {
   // ============================================================================================
   // 3. Seed the roster and two tasks, drive both to `done` with a real daemon against the fake
   //    `m8a-flow` fixture. Two tasks, not one: stage 5 needs a SECOND terminal task to collect
-  //    through the operator route once the web app is up. The idle agent's role ('analyst') is
+  //    through the operator route once the web app is up. The idle slave's role ('analyst') is
   //    deliberately not 'backend' or 'reviewer' -- it must never be eligible for dispatch, or it
   //    would gain run history and stop being "idle" by the time stage 6 needs it.
   // ============================================================================================
@@ -379,9 +379,9 @@ try {
   let taskB
   {
     team = await prisma.team.create({ data: { workspaceId, name: 'Gate Team' } })
-    worker = await prisma.agent.create({ data: { teamId: team.id, name: 'Worker', role: 'backend' } })
-    reviewer = await prisma.agent.create({ data: { teamId: team.id, name: 'Reviewer', role: 'reviewer' } })
-    idle = await prisma.agent.create({ data: { teamId: team.id, name: 'Idle', role: 'analyst' } })
+    worker = await prisma.slave.create({ data: { teamId: team.id, name: 'Worker', role: 'backend' } })
+    reviewer = await prisma.slave.create({ data: { teamId: team.id, name: 'Reviewer', role: 'reviewer' } })
+    idle = await prisma.slave.create({ data: { teamId: team.id, name: 'Idle', role: 'analyst' } })
     const workspaceRow = await prisma.workspace.findUniqueOrThrow({ where: { id: workspaceId } })
     taskA = await prisma.task.create({
       data: {
@@ -449,7 +449,7 @@ try {
   // ============================================================================================
   let branchA
   {
-    const runA = await prisma.agentRun.findFirstOrThrow({ where: { taskId: taskA.id, worktreePath: { not: null } } })
+    const runA = await prisma.slaveRun.findFirstOrThrow({ where: { taskId: taskA.id, worktreePath: { not: null } } })
     const worktreePathA = runA.worktreePath
     assert(worktreePathA !== null, "task A's run carries no worktreePath")
     assert(existsSync(worktreePathA), `task A's worktree does not exist at ${worktreePathA}`)
@@ -471,7 +471,7 @@ try {
     const branchList = execFileSync('git', ['branch', '--list', 'slaveofai/*'], { cwd: repoPath, encoding: 'utf8' })
     assert(branchList.includes(branchA), `git branch --list slaveofai/* does not name ${branchA}: ${branchList}`)
 
-    const runAAfter = await prisma.agentRun.findUniqueOrThrow({ where: { id: runA.id } })
+    const runAAfter = await prisma.slaveRun.findUniqueOrThrow({ where: { id: runA.id } })
     assert(runAAfter.worktreePath === null, "task A's run still carries a worktreePath after collection")
 
     const collectedEvent = await prisma.executionEvent.findFirst({
@@ -557,21 +557,21 @@ try {
 
   // ---- 6. Org. --------------------------------------------------------------------------------
   {
-    const rename = runCli(['rename-agent', '--agent', idle.id, '--name', 'Idle Renamed'])
-    assert(rename.status === 0, `rename-agent: expected exit 0, got ${String(rename.status)} -- stderr: ${rename.stderr}`)
-    assert(rename.stdout.includes(`agent ${idle.id} renamed`), `rename-agent: unexpected stdout ${rename.stdout}`)
+    const rename = runCli(['rename-slave', '--slave', idle.id, '--name', 'Idle Renamed'])
+    assert(rename.status === 0, `rename-slave: expected exit 0, got ${String(rename.status)} -- stderr: ${rename.stderr}`)
+    assert(rename.stdout.includes(`slave ${idle.id} renamed`), `rename-slave: unexpected stdout ${rename.stdout}`)
 
-    const setRole = runCli(['set-role', '--agent', idle.id, '--role', 'qa'])
+    const setRole = runCli(['set-role', '--slave', idle.id, '--role', 'qa'])
     assert(setRole.status === 0, `set-role: expected exit 0, got ${String(setRole.status)} -- stderr: ${setRole.stderr}`)
     assert(setRole.stdout.includes(`role set to qa on ${idle.id}`), `set-role: unexpected stdout ${setRole.stdout}`)
 
-    const deleteIdle = runCli(['delete-agent', '--agent', idle.id, '--yes'])
-    assert(deleteIdle.status === 0, `delete-agent (idle): expected exit 0, got ${String(deleteIdle.status)} -- stderr: ${deleteIdle.stderr}`)
-    assert(deleteIdle.stdout.includes(`agent ${idle.id} deleted`), `delete-agent (idle): unexpected stdout ${deleteIdle.stdout}`)
+    const deleteIdle = runCli(['delete-slave', '--slave', idle.id, '--yes'])
+    assert(deleteIdle.status === 0, `delete-slave (idle): expected exit 0, got ${String(deleteIdle.status)} -- stderr: ${deleteIdle.stderr}`)
+    assert(deleteIdle.stdout.includes(`slave ${idle.id} deleted`), `delete-slave (idle): unexpected stdout ${deleteIdle.stdout}`)
 
-    const deleteWorker = runCli(['delete-agent', '--agent', worker.id, '--yes'])
-    assert(deleteWorker.status === 1, `delete-agent (worker, has runs): expected exit 1, got ${String(deleteWorker.status)}`)
-    assert(deleteWorker.stderr.includes('run(s) in history'), `delete-agent (worker): expected agent_has_runs text, got ${deleteWorker.stderr}`)
+    const deleteWorker = runCli(['delete-slave', '--slave', worker.id, '--yes'])
+    assert(deleteWorker.status === 1, `delete-slave (worker, has runs): expected exit 1, got ${String(deleteWorker.status)}`)
+    assert(deleteWorker.stderr.includes('run(s) in history'), `delete-slave (worker): expected slave_has_runs text, got ${deleteWorker.stderr}`)
 
     const deleteTeamRes = runCli(['delete-team', '--team', team.id, '--yes'])
     assert(deleteTeamRes.status === 1, `delete-team (non-empty): expected exit 1, got ${String(deleteTeamRes.status)}`)
@@ -580,7 +580,7 @@ try {
     const orgEvents = await prisma.executionEvent.findMany({ where: { workspaceId, type: 'org_changed' } })
     assert(orgEvents.length === 3, `expected exactly 3 org.changed events, got ${String(orgEvents.length)}`)
   }
-  console.log('stage 6: the roster was renamed, re-roled and deleted (idle); a busy agent and a non-empty team both refused')
+  console.log('stage 6: the roster was renamed, re-roled and deleted (idle); a busy slave and a non-empty team both refused')
 
   await stopNextDev(loopbackServer, 'loopback')
   loopbackServer = null
@@ -690,8 +690,8 @@ try {
     // behind even if some future schema change narrows a cascade this gate is relying on today.
     await prisma.executionEvent.deleteMany({ where: { workspaceId } }).catch(() => {})
     await prisma.task.deleteMany({ where: { workspaceId } }).catch(() => {})
-    await prisma.agentRun.deleteMany({ where: { agent: { team: { workspaceId } } } }).catch(() => {})
-    await prisma.agent.deleteMany({ where: { team: { workspaceId } } }).catch(() => {})
+    await prisma.slaveRun.deleteMany({ where: { slave: { team: { workspaceId } } } }).catch(() => {})
+    await prisma.slave.deleteMany({ where: { team: { workspaceId } } }).catch(() => {})
     await prisma.team.deleteMany({ where: { workspaceId } }).catch(() => {})
     await prisma.providerConfiguration.deleteMany({ where: { workspaceId } }).catch(() => {})
     await prisma.workspace.delete({ where: { id: workspaceId } }).catch(() => {})

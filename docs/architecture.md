@@ -23,7 +23,7 @@ apps/web            the part that watches: reads Postgres through a snapshot rea
 
 The adapter's vocabulary is `RuntimeEvent` — a normalized shape with no provider-specific fields and
 no rows in it. The orchestrator is what turns a `RuntimeEvent` into an `ExecutionEvent` and an
-`AgentRun` update. That boundary is what makes a second provider possible without touching the
+`SlaveRun` update. That boundary is what makes a second provider possible without touching the
 schema, and what keeps the adapter testable against a fake CLI with no database anywhere.
 
 The consequence is visible in `Checkpoint`: the adapter defines its own interface for it, and
@@ -38,8 +38,8 @@ only through `packages/control`** — direct Prisma writes from `apps/web` remai
 the CLI equivalence bar the M3/M4 gates already set. `packages/control` holds the intervention
 claim semantics (`requestPause`, `requestStop`, `requestResume`, `updateQueuedMessage`) that both
 the CLI and the web's POST routes call; it is itself bound by the same rule the adapter follows —
-it never imports `packages/providers` and never spawns an agent process. `resume` makes this
-concrete: a web POST only ever records an intent (`AgentRun.resumeRequestedAt`/`queuedMessage`,
+it never imports `packages/providers` and never spawns a slave process. `resume` makes this
+concrete: a web POST only ever records an intent (`SlaveRun.resumeRequestedAt`/`queuedMessage`,
 still `paused`) — it is the daemon's tick, in the same process that will own the child, that
 claims `paused → resuming` and spawns. The web is never in the business of holding a claim across
 a request boundary with no process behind it, because that shape is exactly what the orphan sweep
@@ -57,8 +57,8 @@ row hasn't touched yet.
 |---|---|---|
 | what should happen next | nowhere — it is derived | `decide()`, every tick |
 | the scheduling decision's inputs | `World` | `loadWorld`, every tick |
-| the run's process | `AgentRun.pid` | the tick, at spawn |
-| the run's progress | `AgentRun.sessionId`/`toolCalls`/`status` | the pump, from the stream |
+| the run's process | `SlaveRun.pid` | the tick, at spawn |
+| the run's progress | `SlaveRun.sessionId`/`toolCalls`/`status` | the pump, from the stream |
 | what the run did | the event log | `appendEvent`, serialised process-wide |
 | what a resumed run needs | `Checkpoint` | the pump, when it records a pause |
 | the workspace being stopped | `Workspace.haltedReason` | the pump on a gate failure; verify on a misconfiguration |
@@ -87,20 +87,20 @@ is schedule first, then resume, then plan, review, merge (tick.ts:239-257):
    `resume` left as an intent (`paused`, `resumeRequestedAt` set), the same claim-then-spawn split
    §3.4's orphan pass depends on.
 3. **Plan** (`dispatchPlanning`, `planning.ts`) — when the workspace has a `goal` and an empty
-   board, starts a planning run for the `manager`-role agent **in the primary checkout**
+   board, starts a planning run for the `manager`-role slave **in the primary checkout**
    (`workspace.repoPath`), not a worktree: there is no task yet, so there is nothing to provision.
-   The run has no `Task` row at all (M8b's task-less run, `AgentRun.taskId: null`); its prompt asks
+   The run has no `Task` row at all (M8b's task-less run, `SlaveRun.taskId: null`); its prompt asks
    for a JSON task graph, and a valid one becomes tasks + dependencies in one transaction
    (`concludePlanning`). Bounded by a 2-failed-runs-per-goal-set retry cap; a goal with no `manager`
-   agent escalates once via `guardrail.tripped` (`no_planner`).
+   slave escalates once via `guardrail.tripped` (`no_planner`).
 4. **Verify** — chained onto each run's pump (`verifyConcludedRun`, not a separate tick pass): on
    green, the task moves to `reviewing` and stops there; it no longer advances straight to `done`.
 5. **Review** (`dispatchReviews`, `review.ts`) — starts a QA review run for every `reviewing` task
-   that needs one, staffed by a `reviewer`-role agent, in the **preserved implementation
+   that needs one, staffed by a `reviewer`-role slave, in the **preserved implementation
    worktree** (judging the diff, not rebuilding). The run's final output must be a Zod-validated
    `{ verdict: "approve" | "reject", reason }`; `approve` moves the task to `merging` in every
    case, `reject` reuses the ordinary rework path. `autoMerge` is **not** consulted here — see the
-   merge pass below. Capped at 2 review attempts per implementation attempt; no `reviewer` agent
+   merge pass below. Capped at 2 review attempts per implementation attempt; no `reviewer` slave
    escalates once via `guardrail.tripped` (`no_reviewer`).
 6. **Merge** (`runMergePass`, `merge.ts`) — serialized: claims at most one `merging` task per tick
    via a conditioned `updateMany` on a claim column (`Task.mergeClaimedAt`, null → set), so
@@ -136,7 +136,7 @@ persists because its *input* persists, not because the command does.
 **Emergency stop** (M8a) is a fourth way the workspace-halt column gets set, alongside a
 pause-gate failure, an unverifiable workspace, and a repeated merge failure (`merge.ts`): `packages/control`'s `emergencyStop(workspaceId,
 requestedBy)` sets `haltedReason` first-writer-wins, then fans `requestPause` out to every active
-run in the workspace (scoped through `agent -> team`, so a task-less planning run is reached too;
+run in the workspace (scoped through `slave -> team`, so a task-less planning run is reached too;
 partial refusal is tolerated, the halt stands regardless). It is reachable from two callers over
 the one control operation: the orchestrator's `emergency-stop --workspace` CLI command, and
 `POST /api/w/[workspaceId]/emergency-stop`, wired to a confirm-dialog STOP button in the web
@@ -157,7 +157,7 @@ clearing path.
   (`activeRuns >= maxConcurrentRuns`, default 3) and a cross-workspace cap
   (`globalActiveRuns >= maxGlobalConcurrentRuns`, default 6) as independent breaches, either of
   which halts scheduling. `loadWorld` computes both every tick — the global count is a plain
-  workspace-unscoped `AgentRun` count, the per-workspace one scoped through `agent -> team` so a
+  workspace-unscoped `SlaveRun` count, the per-workspace one scoped through `slave -> team` so a
   planning run occupies a slot in each exactly like an implementation or review run does.
 
 ## The web app's hybrid liveness rule
@@ -184,7 +184,7 @@ does on the orchestrator side.
 M6's `/api/w/<workspaceId>/activity/stream` is not a second SSE implementation: it calls the same
 `createEventSse` (`packages/events`' `createEventStream` underneath) as `/api/w/<workspaceId>/events`,
 with one addition — an optional per-connection `filter` predicate built from the request's parsed
-`ActivityFilters` (`?kinds=`/`?types=`/`?agents=`/`?tasks=`). A rejected event is simply never
+`ActivityFilters` (`?kinds=`/`?types=`/`?slaves=`/`?tasks=`). A rejected event is simply never
 written to the response body; the watermark (`lastSeen`, the id the next heartbeat and any
 `Last-Event-ID` reconnect carries) still advances past it exactly as it advances past another
 workspace's events on the unfiltered route, so a client that narrows its filters mid-connection
@@ -192,5 +192,5 @@ loses nothing on reconnect — it resumes from the same `seq` a filtered gap wou
 regardless. Unlike the Overview page's SSE connection, the activity stream's frames *are* the
 delivered state (each frame is one `ExecutionEvent`, appended to the client's own buffer) rather
 than a wake-up for a snapshot refetch — the hybrid liveness rule above still holds for structural
-state (task/agent rosters, filter options), which the Activity page still reads from a server-side
+state (task/slave rosters, filter options), which the Activity page still reads from a server-side
 snapshot on load and on history paging, never from the stream.

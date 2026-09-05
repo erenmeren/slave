@@ -32,12 +32,12 @@
 // Executed as: 1, 2a, 4a, 4b(dispatch), 3b, 2b, 3a, 4b(pause), 4c, 5. Three of the spec's own
 // facts are only observable while a run is LIVE, and the seeded development database has no runs:
 //
-//   - 3b (the sweep and the pulse) needs a card whose state is `working`. `AgentCard` renders
+//   - 3b (the sweep and the pulse) needs a card whose state is `working`. `SlaveCard` renders
 //     `card-sweep` ONLY in that state, and `CARD_STATE_TONE.working.pulse` is what puts the
 //     keyframe on the pill's dot. Neither element exists on an idle board at all.
 //   - 2b (the cable's `stroke-dasharray`) needs an ACTIVE edge. `CableEdge` draws
 //     `path[data-cable="flow"]` only when `data.active` is true, and `buildOrgGraph` sets that
-//     from `agent.status !== 'idle'`. An idle org graph has no dashed cable to measure.
+//     from `slave.status !== 'idle'`. An idle org graph has no dashed cable to measure.
 //   - 3a (reduced motion) is worth far more AFTER 3b than before it: run first, it proves that a
 //     page with nothing animating has nothing animating. Run second, against the very card and
 //     pill 3b just measured, it proves the media block actually kills live motion.
@@ -50,7 +50,7 @@
 //
 // One workspace (`M14 Gate Project <iso>`), one team, one worker, one task, and THREE historical
 // terminal runs. The historical rows exist for stage 5: a brand-new workspace has an empty
-// seven-day series, and `0 === 0` is not a test of an aggregation. They are ordinary `AgentRun`
+// seven-day series, and `0 === 0` is not a test of an aggregation. They are ordinary `SlaveRun`
 // rows on real days with real terminal statuses -- the same rows a week of work would leave -- and
 // the SQL in stage 5 counts them independently of the page that draws them. Everything is deleted
 // in `finally`, in FK order.
@@ -130,7 +130,7 @@ let exitCode = 1
 let repoPath = null
 let workspaceId = null
 let teamId = null
-let agentId = null
+let slaveId = null
 let taskId = null
 let daemon = null
 let daemonOutput = ''
@@ -270,7 +270,7 @@ function sweepStrayChildren(roots) {
 
 /** Removes any `M14 Gate`-named rows a prior interrupted run left behind, in the same FK order the
  *  `finally` block below uses: the append-only events first (no FK to `Workspace`), then the
- *  workspace, which cascades Team/Agent/Task/AgentRun/Checkpoint/ProviderConfiguration. */
+ *  workspace, which cascades Team/Slave/Task/SlaveRun/Checkpoint/ProviderConfiguration. */
 async function preflightCleanup() {
   const stale = await prisma.workspace.findMany({
     where: { name: { startsWith: WORKSPACE_PREFIX } },
@@ -281,8 +281,8 @@ async function preflightCleanup() {
     // A leftover workspace can still own a LIVE child if a prior execution was killed before its
     // own `finally` ran. Deleting the row would lose the only record of that pid, so the kill comes
     // first here for the same reason it comes first in `finally`.
-    const runs = await prisma.agentRun
-      .findMany({ where: { agent: { team: { workspaceId: workspace.id } } }, select: { id: true, pid: true } })
+    const runs = await prisma.slaveRun
+      .findMany({ where: { slave: { team: { workspaceId: workspace.id } } }, select: { id: true, pid: true } })
       .catch(() => [])
     for (const run of runs) {
       if (run.pid === null || !isAlive(run.pid)) continue
@@ -312,9 +312,9 @@ async function dumpGateRows() {
       where: { workspaceId: workspace.id },
       select: { id: true, title: true, status: true, attempt: true, maxAttempts: true, activeRunId: true },
     })
-    const runs = await prisma.agentRun.findMany({
-      where: { agent: { team: { workspaceId: workspace.id } } },
-      include: { agent: { select: { name: true } } },
+    const runs = await prisma.slaveRun.findMany({
+      where: { slave: { team: { workspaceId: workspace.id } } },
+      include: { slave: { select: { name: true } } },
       orderBy: { startedAt: 'asc' },
     })
     const events = await prisma.executionEvent.findMany({
@@ -327,7 +327,7 @@ async function dumpGateRows() {
       tasks,
       runs: runs.map((run) => ({
         id: run.id,
-        agent: run.agent.name,
+        slave: run.slave.name,
         provider: run.provider,
         status: run.status,
         pid: run.pid,
@@ -575,8 +575,8 @@ try {
   })
   workspaceId = workspace.id
   teamId = (await prisma.team.create({ data: { workspaceId, name: 'Engineering' } })).id
-  agentId = (
-    await prisma.agent.create({
+  slaveId = (
+    await prisma.slave.create({
       data: { teamId, name: WORKER_NAME, role: 'backend', provider: WORKER_PROVIDER, model: WORKER_MODEL },
     })
   ).id
@@ -595,7 +595,7 @@ try {
       },
     })
   ).id
-  console.log(`workspace ${workspaceId}; team ${teamId}; worker ${agentId}; task ${taskId}`)
+  console.log(`workspace ${workspaceId}; team ${teamId}; worker ${slaveId}; task ${taskId}`)
 
   // Three historical terminal runs, on three different days inside the seven-day window, so stage
   // 5 has a real series to compare against SQL and the Analytics screenshot shows a real chart.
@@ -612,9 +612,9 @@ try {
     day.setUTCHours(12, 0, 0, 0)
     day.setUTCDate(day.getUTCDate() - historical.daysAgo)
     const ended = new Date(day.getTime() + 4 * 60_000)
-    await prisma.agentRun.create({
+    await prisma.slaveRun.create({
       data: {
-        agentId,
+        slaveId,
         status: historical.status,
         provider: WORKER_PROVIDER,
         costUsd: historical.costUsd,
@@ -727,7 +727,7 @@ try {
     headless: true,
     args: ['--no-sandbox', '--disable-dev-shm-usage'],
   })
-  // 1440x900 (spec §6 stage 1), wider than m11/m13's 1280 -- the Agents grid's `1fr` column needs
+  // 1440x900 (spec §6 stage 1), wider than m11/m13's 1280 -- the Slaves grid's `1fr` column needs
   // the room, and a screenshot taken at a narrower width is not the design being reviewed.
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } })
   page = await context.newPage()
@@ -758,7 +758,7 @@ try {
   // ============================================================================================
   const PAGES = [
     { name: 'overview', path: () => `/w/${workspaceId}`, testId: 'strip' },
-    { name: 'agents', path: () => '/agents', testId: 'data-table' },
+    { name: 'slaves', path: () => '/slaves', testId: 'data-table' },
     { name: 'tasks', path: () => `/w/${workspaceId}/tasks`, testId: 'column' },
     { name: 'graph', path: () => `/w/${workspaceId}/graph`, testId: 'graph-canvas' },
     // `timeline-viewport`, not `timeline-rule`: the rule is absolutely positioned inside the
@@ -886,11 +886,11 @@ try {
     // M24 §2.2: the workspace-scoped `TopBar` is gone -- `ProjectHeader` is the project layout's
     // one header now, on every `/w/<id>/*` page, still 52px.
     ['overview', `/w/${workspaceId}`, '[data-testid="project-header"]', 'height', '52px'],
-    ['overview', `/w/${workspaceId}`, '[data-testid="agent-card"]', 'border-radius', '8px'],
-    ['overview', `/w/${workspaceId}`, '[data-testid="agent-card"]', 'padding', '12px 13px'],
+    ['overview', `/w/${workspaceId}`, '[data-testid="slave-card"]', 'border-radius', '8px'],
+    ['overview', `/w/${workspaceId}`, '[data-testid="slave-card"]', 'padding', '12px 13px'],
     ['overview', `/w/${workspaceId}`, '[data-testid="avatar-tile"]', 'width', '28px'],
     ['overview', `/w/${workspaceId}`, '[data-testid="avatar-tile"]', 'height', '28px'],
-    ['overview', `/w/${workspaceId}`, '[data-testid="agent-card"] [data-testid="status-pill"]', 'border-radius', '20px'],
+    ['overview', `/w/${workspaceId}`, '[data-testid="slave-card"] [data-testid="status-pill"]', 'border-radius', '20px'],
     ['overview', `/w/${workspaceId}`, '[data-testid="live-events"]', 'width', '340px'],
     ['activity', `/w/${workspaceId}/activity`, '[data-testid="timeline-rule"]', 'left', '88px'],
     ['graph', `/w/${workspaceId}/graph`, '[data-testid="graph-drawer"]', 'width', '352px'],
@@ -905,13 +905,13 @@ try {
       // first paint would be reading a page React has not finished with.
       const marker = PAGES.find((target) => target.name === pageName)
       if (marker !== undefined) await waitVisible(page.getByTestId(marker.testId), `${pageName} before its numbers are read`)
-      // The drawer needs a selected agent: only an agent node opens it (`GraphClient.onNodeClick`).
+      // The drawer needs a selected slave: only a slave node opens it (`GraphClient.onNodeClick`).
       if (pageName === 'graph') {
-        await waitVisible(page.getByTestId('agent-node'), "the graph's agent node")
+        await waitVisible(page.getByTestId('slave-node'), "the graph's slave node")
         await clickUntil(
-          page.getByTestId('agent-node').first(),
+          page.getByTestId('slave-node').first(),
           async () => page.getByTestId('graph-drawer').first().isVisible(),
-          'the agent node',
+          'the slave node',
         )
       }
     }
@@ -926,61 +926,61 @@ try {
   await assertComputed('project-settings', '[data-testid="runtime-timeout"]', 'font-size', '10.5px')
   console.log('stage 2a: the project Settings tab carries perm-caption and a 10.5px mono runtime-timeout figure')
 
-  // The Agents table's nine columns (M24 §5.3: one table, agent/role/team/project/status/current
+  // The Slaves table's nine columns (M24 §5.3: one table, slave/role/team/project/status/current
   // task/provider/cost/actions). Asserted TWICE and deliberately: `getComputedStyle` resolves
   // `grid-template-columns` to USED track sizes, so the `1fr` comes back as a pixel width and a
   // literal string comparison against the README's template could never pass. The computed read is
   // what proves the eight fixed tracks really are 200/110/150/120/110/90/90/160 in the browser's
   // own reckoning and that the flexible track actually took the remaining space; the authored
   // inline value is what proves the template is the README's string and not eight coincidences.
-  const AGENTS_COLUMNS = '200px 110px 150px 120px 110px 1fr 90px 90px 160px'
-  await gotoReliably(`${baseUrl}/agents`)
-  // The Agents page opens on the one table now (M24 Task 7): Roster and Workers were two names for
-  // the same list of agents and are gone, folded into `agents-tab-agents` (default) beside
-  // `agents-tab-departments`. The `clickUntil` below is kept anyway -- it is idempotent on an
+  const SLAVES_COLUMNS = '200px 110px 150px 120px 110px 1fr 90px 90px 160px'
+  await gotoReliably(`${baseUrl}/slaves`)
+  // The Slaves page opens on the one table now (M24 Task 7): Roster and Workers were two names for
+  // the same list of slaves and are gone, folded into `slaves-tab-slaves` (default) beside
+  // `slaves-tab-departments`. The `clickUntil` below is kept anyway -- it is idempotent on an
   // already-selected tab, and it is what makes this stage assert the template rather than assume
   // which tab happened to be default.
-  // Keyed on the TABLE, not on its rows. `listAllAgents()` renders every project agent AND every
+  // Keyed on the TABLE, not on its rows. `listAllSlaves()` renders every project slave AND every
   // catalog member no project has materialized yet, so a seeded development database does render
-  // rows here -- but a database with no agents at all still renders the header alone, which is the
+  // rows here -- but a database with no slaves at all still renders the header alone, which is the
   // same nine-column grid this stage measures, and waiting for a row would hang on a page that is
   // rendering correctly.
   await clickUntil(
-    page.getByTestId('agents-tab-agents'),
+    page.getByTestId('slaves-tab-slaves'),
     async () =>
       (await page.evaluate(
         () => document.querySelector('[data-testid="data-table-header"]')?.style.gridTemplateColumns ?? null,
-      )) === AGENTS_COLUMNS,
-    'the Agents tab',
+      )) === SLAVES_COLUMNS,
+    'the Slaves tab',
   )
   const workerHeaderCells = await page.getByTestId('data-table-header-cell').count()
   if (workerHeaderCells !== 9) {
-    await fail(`stage 2 (agents): the Agents table has ${String(workerHeaderCells)} header cell(s), expected 9`)
+    await fail(`stage 2 (slaves): the Slaves table has ${String(workerHeaderCells)} header cell(s), expected 9`)
   }
-  const agentsComputed = normalize((await computed('[data-testid="data-table-header"]', 'grid-template-columns')) ?? '')
-  const agentsUsed = /^200px 110px 150px 120px 110px (\d+(?:\.\d+)?)px 90px 90px 160px$/.exec(agentsComputed)
-  if (agentsUsed === null) {
+  const slavesComputed = normalize((await computed('[data-testid="data-table-header"]', 'grid-template-columns')) ?? '')
+  const slavesUsed = /^200px 110px 150px 120px 110px (\d+(?:\.\d+)?)px 90px 90px 160px$/.exec(slavesComputed)
+  if (slavesUsed === null) {
     await fail(
-      `stage 2 (agents): [data-testid="data-table-header"] grid-template-columns is ${JSON.stringify(agentsComputed)}, ` +
-        `expected the used form of ${JSON.stringify(AGENTS_COLUMNS)} -- ` +
+      `stage 2 (slaves): [data-testid="data-table-header"] grid-template-columns is ${JSON.stringify(slavesComputed)}, ` +
+        `expected the used form of ${JSON.stringify(SLAVES_COLUMNS)} -- ` +
         '`200px 110px 150px 120px 110px <the 1fr track>px 90px 90px 160px`',
     )
   }
-  if (Number(agentsUsed[1]) <= 0) {
-    await fail(`stage 2 (agents): the \`1fr\` column resolved to ${agentsUsed[1]}px at 1440x900 -- it has no room at all`)
+  if (Number(slavesUsed[1]) <= 0) {
+    await fail(`stage 2 (slaves): the \`1fr\` column resolved to ${slavesUsed[1]}px at 1440x900 -- it has no room at all`)
   }
-  const agentsAuthored = await page.evaluate(
+  const slavesAuthored = await page.evaluate(
     () => document.querySelector('[data-testid="data-table-header"]')?.style.gridTemplateColumns ?? null,
   )
-  if (normalize(agentsAuthored ?? '') !== AGENTS_COLUMNS) {
+  if (normalize(slavesAuthored ?? '') !== SLAVES_COLUMNS) {
     await fail(
-      `stage 2 (agents): the Agents table is laid out on ${JSON.stringify(agentsAuthored)}, ` +
-        `expected ${JSON.stringify(AGENTS_COLUMNS)}`,
+      `stage 2 (slaves): the Slaves table is laid out on ${JSON.stringify(slavesAuthored)}, ` +
+        `expected ${JSON.stringify(SLAVES_COLUMNS)}`,
     )
   }
   console.log(
-    `stage 2 (agents): [data-testid="data-table-header"] grid-template-columns = ${JSON.stringify(AGENTS_COLUMNS)} ` +
-      `(used: ${agentsComputed})`,
+    `stage 2 (slaves): [data-testid="data-table-header"] grid-template-columns = ${JSON.stringify(SLAVES_COLUMNS)} ` +
+      `(used: ${slavesComputed})`,
   )
   console.log(`stage 2a PASSED: ${String(NUMBERS.length + 2)} README values read back from getComputedStyle`)
 
@@ -1076,7 +1076,7 @@ try {
   })
 
   const dispatched = await waitUntil('the worker to be dispatched with a pid and a provider', DISPATCH_TIMEOUT_MS, async () => {
-    const row = await prisma.agentRun.findFirst({ where: { agentId, taskId }, orderBy: { startedAt: 'desc' } })
+    const row = await prisma.slaveRun.findFirst({ where: { slaveId, taskId }, orderBy: { startedAt: 'desc' } })
     if (row === null) return { done: false, detail: 'no run row yet' }
     if (row.pid === null || row.provider === null) {
       return { done: false, detail: `${row.status} pid=${String(row.pid)} provider=${String(row.provider)}` }
@@ -1087,7 +1087,7 @@ try {
     await fail(`stage 4b: the run resolved to provider ${JSON.stringify(dispatched.provider)}, expected ${JSON.stringify(WORKER_PROVIDER)}`)
   }
   const run = await waitUntil('the run to reach working', WORKING_TIMEOUT_MS, async () => {
-    const row = await prisma.agentRun.findUniqueOrThrow({ where: { id: dispatched.id } })
+    const row = await prisma.slaveRun.findUniqueOrThrow({ where: { id: dispatched.id } })
     return row.status === 'working' ? { done: true, value: row } : { done: false, detail: `run is ${row.status}` }
   })
   console.log(`stage 4b: run ${run.id} is working (pid ${String(run.pid)}, provider ${String(run.provider)})`)
@@ -1097,7 +1097,7 @@ try {
   // the label the SERVER derived, not for anything a click set locally.
   await waitUntil('the card to show WORKING', 30_000, async () => {
     const text = await page
-      .locator('[data-testid="agent-card"] [data-testid="status-pill"]')
+      .locator('[data-testid="slave-card"] [data-testid="status-pill"]')
       .first()
       .textContent()
       .catch(() => null)
@@ -1134,8 +1134,8 @@ try {
   await assertComputed('overview', '[data-testid="card-sweep"]', 'animation-duration', '2.2s')
   await assertComputed('overview', '[data-testid="card-sweep"]', 'animation-timing-function', 'cubic-bezier(0.4, 0, 0.2, 1)')
   await assertComputed('overview', '[data-testid="card-sweep"]', 'animation-name', 'card-sweep')
-  await assertComputed('overview', '[data-testid="agent-card"] [data-testid="status-pill"] span', 'animation-duration', '1.5s')
-  await assertComputed('overview', '[data-testid="agent-card"] [data-testid="status-pill"] span', 'animation-name', 'status-pulse')
+  await assertComputed('overview', '[data-testid="slave-card"] [data-testid="status-pill"] span', 'animation-duration', '1.5s')
+  await assertComputed('overview', '[data-testid="slave-card"] [data-testid="status-pill"] span', 'animation-name', 'status-pulse')
   console.log('stage 3b PASSED: a working card sweeps at 2.2s cubic-bezier(.4,0,.2,1) and its pill dot pulses at 1.5s')
 
   // ============================================================================================
@@ -1193,7 +1193,7 @@ try {
   await clickUntil(
     page.getByTestId('card-pause'),
     async () => {
-      const row = await prisma.agentRun.findUnique({ where: { id: run.id } })
+      const row = await prisma.slaveRun.findUnique({ where: { id: run.id } })
       if (row === null) return false
       if (row.status === 'pause_requested') sawPauseRequested = true
       return row.status === 'pause_requested' || row.status === 'paused'
@@ -1201,7 +1201,7 @@ try {
     "the card's Pause button",
   )
   const settled = await waitUntil('the run to settle on paused', PAUSE_SETTLE_TIMEOUT_MS, async () => {
-    const row = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })
+    const row = await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })
     if (row.status === 'pause_requested') sawPauseRequested = true
     return row.status === 'paused' ? { done: true, value: row } : { done: false, detail: `run is ${row.status}` }
   })
@@ -1225,7 +1225,7 @@ try {
   }
   await waitUntil('the card to show PAUSED', 30_000, async () => {
     const text = await page
-      .locator('[data-testid="agent-card"] [data-testid="status-pill"]')
+      .locator('[data-testid="slave-card"] [data-testid="status-pill"]')
       .first()
       .textContent()
       .catch(() => null)
@@ -1246,16 +1246,16 @@ try {
   if (beforeDim !== 0) {
     await fail(`stage 4c: ${String(beforeDim)} card(s) were already dimmed before any roster row was clicked`)
   }
-  // The run has appended events with no `agentId` of their own (task and workspace transitions),
+  // The run has appended events with no `slaveId` of their own (task and workspace transitions),
   // so selecting the one worker must dim SOMETHING -- "dim, never hide" (design README
   // "Filtering") is only observable if the river keeps every row.
   const totalCards = await page.locator('[data-testid="activity-card"]').count()
   await clickUntil(
-    page.getByTestId(`roster-row-${agentId}`),
-    async () => (await page.getByTestId(`roster-row-${agentId}`).getAttribute('aria-pressed')) === 'true',
+    page.getByTestId(`roster-row-${slaveId}`),
+    async () => (await page.getByTestId(`roster-row-${slaveId}`).getAttribute('aria-pressed')) === 'true',
     'the roster row',
   )
-  const afterDim = await waitUntil('the stream to dim the rows this agent did not cause', 30_000, async () => {
+  const afterDim = await waitUntil('the stream to dim the rows this slave did not cause', 30_000, async () => {
     const dimmed = await countDimmed()
     return dimmed > 0 ? { done: true, value: dimmed } : { done: false, detail: `0 of ${String(totalCards)} cards are dimmed` }
   })
@@ -1267,7 +1267,7 @@ try {
     )
   }
   console.log(
-    `stage 4c PASSED: a roster click selected the agent and dimmed ${String(afterDim)} of ${String(totalCards)} rows ` +
+    `stage 4c PASSED: a roster click selected the slave and dimmed ${String(afterDim)} of ${String(totalCards)} rows ` +
       'without removing one',
   )
 
@@ -1315,15 +1315,15 @@ try {
   // is exactly what is under test, so the check cannot go through it. The window is
   // `server/analytics.ts`'s own: UTC midnight of (today - 6), inclusive.
   const succeededRows = await prisma.$queryRaw`
-    SELECT count(*)::int AS n FROM "AgentRun" r
-    JOIN "Agent" a ON a.id = r."agentId"
+    SELECT count(*)::int AS n FROM "SlaveRun" r
+    JOIN "Slave" a ON a.id = r."slaveId"
     JOIN "Team" t ON t.id = a."teamId"
     WHERE t."workspaceId" = ${workspaceId}
       AND r.status = 'succeeded'
       AND r."terminalAt" >= date_trunc('day', now() at time zone 'utc') - interval '6 days'`
   const failedRows = await prisma.$queryRaw`
-    SELECT count(*)::int AS n FROM "AgentRun" r
-    JOIN "Agent" a ON a.id = r."agentId"
+    SELECT count(*)::int AS n FROM "SlaveRun" r
+    JOIN "Slave" a ON a.id = r."slaveId"
     JOIN "Team" t ON t.id = a."teamId"
     WHERE t."workspaceId" = ${workspaceId}
       AND r.status = 'failed'
@@ -1386,8 +1386,8 @@ try {
   // Then the fake children by pid off the rows, before the rows are deleted. `fake-claude.sh`
   // ignores SIGTERM on purpose, so this is SIGKILL.
   if (workspaceId !== null) {
-    const runs = await prisma.agentRun
-      .findMany({ where: { agent: { team: { workspaceId } } }, select: { id: true, pid: true } })
+    const runs = await prisma.slaveRun
+      .findMany({ where: { slave: { team: { workspaceId } } }, select: { id: true, pid: true } })
       .catch(() => [])
     for (const row of runs) {
       if (row.pid === null || !isAlive(row.pid)) continue
@@ -1413,7 +1413,7 @@ try {
   }
   // FK-ordered: `ExecutionEvent` has no FK to `Workspace` (M2's append-only log outlives entity
   // lifecycles by design) so it is deleted explicitly first, then the workspace delete cascades
-  // Team/Agent/Task/AgentRun/Checkpoint/ProviderConfiguration. The `SkillProvider`/`Skill` rows
+  // Team/Slave/Task/SlaveRun/Checkpoint/ProviderConfiguration. The `SkillProvider`/`Skill` rows
   // stay: they describe the host's disk, not this workspace, and Decision 6 never deletes them.
   if (workspaceId !== null) {
     await prisma.executionEvent.deleteMany({ where: { workspaceId } }).catch(() => {})

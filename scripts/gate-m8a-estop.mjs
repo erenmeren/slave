@@ -83,11 +83,11 @@ try {
     data: { workspaceId: workspace.id, kind: 'claude_code', settings: {} },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Gate Team' } })
-  await prisma.agent.create({ data: { teamId: team.id, name: 'Worker', role: 'backend' } })
-  // A second, idle worker: step 6 seeds a fresh ready task AFTER the halt engages, and this agent
+  await prisma.slave.create({ data: { teamId: team.id, name: 'Worker', role: 'backend' } })
+  // A second, idle worker: step 6 seeds a fresh ready task AFTER the halt engages, and this slave
   // is who a broken halt would hand it to. With one worker (busy, paused) the no-new-run check
   // could never fail -- there would be nobody to start work for even with scheduling wide open.
-  await prisma.agent.create({ data: { teamId: team.id, name: 'Idle Worker', role: 'backend' } })
+  await prisma.slave.create({ data: { teamId: team.id, name: 'Idle Worker', role: 'backend' } })
   const task = await prisma.task.create({
     data: {
       workspaceId: workspace.id,
@@ -115,14 +115,14 @@ try {
     console.error('[daemon] failed to start:', error)
   })
 
-  // 3. Poll -- zero writes -- until one AgentRun for this task is non-terminal, catching it
+  // 3. Poll -- zero writes -- until one SlaveRun for this task is non-terminal, catching it
   // mid-flight rather than after the fixture's own deny has already concluded it.
   let activeRun = null
   {
     const deadline = Date.now() + ACTIVE_RUN_TIMEOUT_MS
     while (activeRun === null && Date.now() < deadline) {
       if (daemonExited) throw new Error('the daemon exited before starting a run')
-      const run = await prisma.agentRun.findFirst({ where: { taskId: task.id } })
+      const run = await prisma.slaveRun.findFirst({ where: { taskId: task.id } })
       if (run !== null && ACTIVE_STATUSES.has(run.status)) activeRun = run
       await delay(POLL_INTERVAL_MS)
     }
@@ -140,7 +140,7 @@ try {
   {
     const deadline = Date.now() + HALT_SETTLE_TIMEOUT_MS
     for (;;) {
-      const runs = await prisma.agentRun.findMany({ where: { task: { workspaceId: workspace.id } } })
+      const runs = await prisma.slaveRun.findMany({ where: { task: { workspaceId: workspace.id } } })
       const workspaceRow = await prisma.workspace.findUniqueOrThrow({ where: { id: workspace.id } })
       const allSettled = runs.length > 0 && runs.every((run) => SETTLED_STATUSES.has(run.status))
       const found = runs.find((run) => run.status === 'paused' && run.pauseReason === 'emergency_stop')
@@ -178,11 +178,11 @@ try {
     },
   })
   {
-    const before = await prisma.agentRun.count({ where: { task: { workspaceId: workspace.id } } })
+    const before = await prisma.slaveRun.count({ where: { task: { workspaceId: workspace.id } } })
     const deadline = Date.now() + STABLE_WINDOW_MS
     while (Date.now() < deadline) {
       await delay(POLL_INTERVAL_MS)
-      const now = await prisma.agentRun.count({ where: { task: { workspaceId: workspace.id } } })
+      const now = await prisma.slaveRun.count({ where: { task: { workspaceId: workspace.id } } })
       if (now !== before) {
         throw new Error(`a new run appeared while the workspace was halted (was ${before}, now ${now})`)
       }
@@ -226,7 +226,7 @@ try {
   if (workspaceId !== null) {
     // No FK from `ExecutionEvent` to `Workspace` (M2's append-only log outlives entity lifecycles
     // by design) -- deleted explicitly, before the workspace delete cascades everything else
-    // (`Team`/`Agent`/`Task`/`AgentRun`/`Checkpoint`/`TaskDependency`/`Artifact`).
+    // (`Team`/`Slave`/`Task`/`SlaveRun`/`Checkpoint`/`TaskDependency`/`Artifact`).
     await prisma.executionEvent.deleteMany({ where: { workspaceId } }).catch(() => {})
     await prisma.workspace.delete({ where: { id: workspaceId } }).catch(() => {})
   }

@@ -64,8 +64,8 @@ try {
     data: { workspaceId: workspace.id, kind: 'claude_code', settings: {} },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Gate Team' } })
-  await prisma.agent.create({ data: { teamId: team.id, name: 'Worker', role: 'backend' } })
-  await prisma.agent.create({ data: { teamId: team.id, name: 'Reviewer', role: 'reviewer' } })
+  await prisma.slave.create({ data: { teamId: team.id, name: 'Worker', role: 'backend' } })
+  await prisma.slave.create({ data: { teamId: team.id, name: 'Reviewer', role: 'reviewer' } })
   const task = await prisma.task.create({
     data: {
       workspaceId: workspace.id,
@@ -149,7 +149,7 @@ try {
   if (workspaceId !== null) {
     // No FK from `ExecutionEvent` to `Workspace` (M2's append-only log outlives entity lifecycles
     // by design) -- deleted explicitly, before the workspace delete cascades everything else
-    // (`Team`/`Agent`/`Task`/`AgentRun`/`Checkpoint`/`TaskDependency`/`Artifact`).
+    // (`Team`/`Slave`/`Task`/`SlaveRun`/`Checkpoint`/`TaskDependency`/`Artifact`).
     await prisma.executionEvent.deleteMany({ where: { workspaceId } }).catch(() => {})
     await prisma.workspace.delete({ where: { id: workspaceId } }).catch(() => {})
   }

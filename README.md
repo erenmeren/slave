@@ -1,9 +1,9 @@
 # Slave of AI
 
 An autonomous AI engineering team for your git repositories. You attach a repo and set a goal; a
-team of agents plans the work into tasks, implements each one in its own git worktree, runs your
+team of slaves plans the work into tasks, implements each one in its own git worktree, runs your
 verify commands, reviews the diff and merges the branch. You supervise from a web UI: watch every
-agent live, pause or redirect a run, read every event, and stop everything with one button.
+slave live, pause or redirect a run, read every event, and stop everything with one button.
 
 It runs on your machine against your own Claude Code or Cursor CLI. Nothing leaves the host except
 the model calls those CLIs already make.
@@ -11,7 +11,7 @@ the model calls those CLIs already make.
 ## What you need
 
 - Node 26 (see `.nvmrc`), git, Docker with the `docker compose` plugin
-- A logged-in agent CLI: `claude` (Claude Code) and/or `cursor-agent`. The orchestrator finds them on
+- A logged-in slave CLI: `claude` (Claude Code) and/or `cursor-agent`. The orchestrator finds them on
   `PATH`; set `SLAVEOFAI_CLAUDE_BIN` or `SLAVEOFAI_CURSOR_BIN` to point elsewhere.
 
 ## Quick start
@@ -30,11 +30,11 @@ git config core.hooksPath .githooks  # pre-push runs typecheck + tests
 Then, in two terminals:
 
 ```bash
-npm run orchestrator -- daemon       # the scheduler: picks up ready tasks, runs agents
+npm run orchestrator -- daemon       # the scheduler: picks up ready tasks, runs slaves
 npm run web                          # the UI at http://127.0.0.1:3000
 ```
 
-Everything uses the development database named in `.env`. Running agents spend real money on your
+Everything uses the development database named in `.env`. Running slaves spend real money on your
 provider account.
 
 ## Attach your repository
@@ -60,22 +60,22 @@ npm run orchestrator -- set-goal --workspace <id> --goal "Add rate limiting to t
 ```
 
 A workspace with a goal and an empty board gets a planning run on the next tick. The planner writes
-tasks; agents whose role matches pick them up. A company is a persistent roster of agents built
-from templates — manage it on the Projects page's team catalog and the Agents page, or with
-`create-company`, `add-team`, `add-agent`. Departments are per project; the catalog holds
+tasks; slaves whose role matches pick them up. A company is a persistent roster of slaves built
+from templates — manage it on the Projects page's team catalog and the Slaves page, or with
+`create-company`, `add-team`, `add-slave`. Departments are per project; the catalog holds
 department templates that `assign-company` copies.
 
 ## The web UI
 
 | Page | What it shows |
 |---|---|
-| **Projects** `/` | Every project (workspace) with its spend and team; click one to open it. **New project** attaches a repo; below the cards, the team catalog (agent templates, companies and their department templates). |
-| **Overview** `/w/<id>` | One card per agent: status, current task, live action line, spend against budget. A halt banner when the workspace is stopped. |
+| **Projects** `/` | Every project (workspace) with its spend and team; click one to open it. **New project** attaches a repo; below the cards, the team catalog (slave templates, companies and their department templates). |
+| **Overview** `/w/<id>` | One card per slave: status, current task, live action line, spend against budget. A halt banner when the workspace is stopped. |
 | **Tasks** `/w/<id>/tasks` | The board by status. Click a task for its runs and cost, its verify logs under **Artifacts**, and a **Collect worktree** button once it has finished. |
 | **Graph** `/w/<id>/graph` | Five views: the org tree, live execution, the task dependency DAG (draw or delete an edge to change it), the skill chain, and who handed work to whom. |
-| **Activity** `/w/<id>/activity` | Every event, live, filterable by kind, agent and task; the filters live in the URL. Events made from the UI name the user who made them. |
-| **Settings** `/w/<id>/settings` | This project's goal, its runtime (provider, budget, and the read-only concurrency/timeout/attempts limits), its own agent permissions, and its emergency stop. |
-| **Agents** `/agents` | One table + Departments: every agent, project-materialized or still catalog-only, with its department as a select, rename/re-role/delete and a model chosen from the provider's own list inline; **+ New agent** adds one to the catalog and, optionally, to a project; a **Departments** tab beside it to add, rename or delete a project's departments. |
+| **Activity** `/w/<id>/activity` | Every event, live, filterable by kind, slave and task; the filters live in the URL. Events made from the UI name the user who made them. |
+| **Settings** `/w/<id>/settings` | This project's goal, its runtime (provider, budget, and the read-only concurrency/timeout/attempts limits), its own slave permissions, and its emergency stop. |
+| **Slaves** `/slaves` | One table + Departments: every slave, project-materialized or still catalog-only, with its department as a select, rename/re-role/delete and a model chosen from the provider's own list inline; **+ New slave** adds one to the catalog and, optionally, to a project; a **Departments** tab beside it to add, rename or delete a project's departments. |
 | **Skills** `/skills` | The skill catalog and its assignments. |
 | **Analytics** `/analytics` | Spend and throughput. |
 | **Settings** `/settings` | Provider adapters, security, and reset demo data (development only). |
@@ -83,7 +83,7 @@ department templates that `assign-company` copies.
 Every page updates itself over a live event stream. Interventions — **Pause**, **Resume** (with a
 message), **Stop** — live in the task panel. **Emergency stop** lives in the project header (on
 every project tab) and on the project Settings tab's danger zone. A pause takes effect at the
-agent's next tool call; a resume continues from the checkpoint in the same worktree.
+slave's next tool call; a resume continues from the checkpoint in the same worktree.
 
 ## CLI cheat sheet
 
@@ -96,9 +96,9 @@ npm run orchestrator -- resume --run <id> --message "try the other approach"
 npm run orchestrator -- cancel --run <id>
 npm run orchestrator -- emergency-stop --workspace <id> --by <name>
 npm run orchestrator -- clear-halt --workspace <id>         # lift a workspace halt (starts nothing)
-npm run orchestrator -- rename-agent --agent <id> --name <n>
-npm run orchestrator -- set-role --agent <id> --role <r>
-npm run orchestrator -- delete-agent --agent <id> --yes
+npm run orchestrator -- rename-slave --slave <id> --name <n>
+npm run orchestrator -- set-role --slave <id> --role <r>
+npm run orchestrator -- delete-slave --slave <id> --yes
 npm run orchestrator -- create-user --name <u>              # password read from stdin
 npm run orchestrator -- list-users
 ```
@@ -138,7 +138,7 @@ npm test               # unit + database integration tests (Postgres must be up)
 npm run typecheck
 ```
 
-The `npm run gate:*` scripts are end-to-end proofs of each milestone against fake agent CLIs, so
+The `npm run gate:*` scripts are end-to-end proofs of each milestone against fake slave CLIs, so
 they spend nothing; CI runs `gate:m15-boundary`, `gate:m20-auth`, `gate:m21-loose-ends` and
 `gate:m23-onboarding` on every push. Tests and gates share one Postgres — run one at a time.
 

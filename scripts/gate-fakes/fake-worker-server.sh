@@ -2,9 +2,9 @@
 # A stand-in for the DETACHED background process a real vendor CLI leaves behind.
 #
 # `cursor-agent` spawns a per-repository `worker-server` (plus a `tsserver` family) that outlives
-# the run and is on no `AgentRun` row -- documented at
+# the run and is on no `SlaveRun` row -- documented at
 # `packages/providers/src/cursor/adapter.ts:355-360`. Nothing in the orchestrator records its pid,
-# so the gate's record-based kill (every `AgentRun.pid`, Decision 12) cannot reach it: the only
+# so the gate's record-based kill (every `SlaveRun.pid`, Decision 12) cannot reach it: the only
 # thing that can is the sweep that looks for processes still living inside the gate's own temporary
 # repositories.
 #

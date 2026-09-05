@@ -26,16 +26,16 @@
 //      `goal-submit` at 5px. (M24 Task 4 moved `GoalPanel` off Overview onto this tab.)
 //   2. Project Settings `/w/<seed>/settings`: the permission matrix's cell glyphs -- at least two
 //      distinct glyphs, and `–` (unset) distinct from `✕` (denied), whenever both exist. The
-//      seeded database has NO `AgentPermission` rows, so every cell is unset and this check is
+//      seeded database has NO `SlavePermission` rows, so every cell is unset and this check is
 //      vacuous-but-stated: it prints the one glyph found and passes rather than silently skipping.
 //      (M24 Task 4 moved the permission matrix off the global `/settings` onto this same tab, so
 //      checks 1 and 2 now share one page visit.)
 //   3. Projects `/`: a workspace card's `team-overflow` pill iff its TRUE team size (read straight
-//      from Prisma, an independent oracle) is over six -- and the seed's own 9-agent workspace
+//      from Prisma, an independent oracle) is over six -- and the seed's own 9-slave workspace
 //      proves the tile genuinely reachable (fix round 1: `server/org.ts` no longer caps
 //      `ProjectRow.team` server-side).
 //   4. Repo hygiene (no browser): Task 7's own clean-check grep, expected empty.
-//   5. Analytics `/analytics`: a per-agent row whose success cell reads `—` has a progress bar with
+//   5. Analytics `/analytics`: a per-slave row whose success cell reads `—` has a progress bar with
 //      no `aria-valuenow`; if no such row exists in the seed, the fallback proves the wiring exists
 //      the other way -- at least one progress bar DOES carry `aria-valuenow`.
 //
@@ -283,7 +283,7 @@ try {
     console.log(
       `check 2: every one of the ${String(glyphs.length)} matrix cell(s) shares one mode -- glyph ${JSON.stringify(
         [...distinctGlyphs][0],
-      )} -- vacuous-but-stated pass (the seeded database has no AgentPermission rows)`,
+      )} -- vacuous-but-stated pass (the seeded database has no SlavePermission rows)`,
     )
   } else {
     // Bind the assert to the page's own mode->glyph mapping (`data-mode`) rather than two glyph
@@ -316,20 +316,20 @@ try {
   // whatever the page itself renders) is over six.
   //
   // Fix round 1 (controller ruling): `server/org.ts`'s `listProjects` USED to cap `ProjectRow.team`
-  // at 6 agents server-side, on top of the six-avatar cap `ProjectsClient.tsx` already owns --
+  // at 6 slaves server-side, on top of the six-avatar cap `ProjectsClient.tsx` already owns --
   // which made `team-overflow` structurally unreachable no matter how large a workspace's real
   // roster was. That server-side `.slice(0, 6)` is gone: `ProjectRow.team` now carries the FULL
   // team, so this check asserts the genuine oracle (the raw roster size) with no accommodation for
   // a cap that no longer exists.
   // ============================================================================================
   const workspacesByName = await prisma.workspace.findMany({
-    include: { teams: { include: { agents: true } } },
+    include: { teams: { include: { slaves: true } } },
     orderBy: { name: 'asc' },
   })
   const trueTeamSizes = workspacesByName.map((workspace) => ({
     id: workspace.id,
     name: workspace.name,
-    size: workspace.teams.reduce((n, team) => n + team.agents.length, 0),
+    size: workspace.teams.reduce((n, team) => n + team.slaves.length, 0),
   }))
 
   await page.goto(url('/'), { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
@@ -404,7 +404,7 @@ try {
       .filter((row) => row !== null),
   )
   if (rows.length === 0) {
-    await fail('check 5 (analytics): no per-agent performance rows rendered at all')
+    await fail('check 5 (analytics): no per-slave performance rows rendered at all')
   }
   const unmeasuredRows = rows.filter((row) => row.success === '—')
   if (unmeasuredRows.length === 0) {

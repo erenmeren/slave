@@ -178,7 +178,7 @@ function resolveOnPath(name) {
 
 /** Removes any `M12 Gate`-named rows a prior interrupted run left behind, in the same FK order the
  *  `finally` block below uses: the append-only events first (no FK to `Workspace`), then the
- *  workspace itself, which cascades Team/Agent/Task/AgentRun/Checkpoint/ProviderConfiguration. */
+ *  workspace itself, which cascades Team/Slave/Task/SlaveRun/Checkpoint/ProviderConfiguration. */
 async function preflightCleanup() {
   const stale = await prisma.workspace.findMany({
     where: { name: { startsWith: WORKSPACE_PREFIX } },
@@ -210,9 +210,9 @@ async function dumpGateRows() {
   })
   const dump = []
   for (const workspace of workspaces) {
-    const runs = await prisma.agentRun.findMany({
-      where: { agent: { team: { workspaceId: workspace.id } } },
-      include: { agent: { select: { name: true } }, checkpoint: true },
+    const runs = await prisma.slaveRun.findMany({
+      where: { slave: { team: { workspaceId: workspace.id } } },
+      include: { slave: { select: { name: true } }, checkpoint: true },
       orderBy: { startedAt: 'asc' },
     })
     const events = await prisma.executionEvent.findMany({
@@ -224,7 +224,7 @@ async function dumpGateRows() {
       workspace,
       runs: runs.map((run) => ({
         id: run.id,
-        agent: run.agent.name,
+        slave: run.slave.name,
         provider: run.provider,
         status: run.status,
         pid: run.pid,
@@ -299,8 +299,8 @@ async function waitUntil(description, timeoutMs, probe) {
 
 /** The run row for one of the two gate workers, or `null` while the tick has not created it yet. */
 async function runForWorker(workerName) {
-  return prisma.agentRun.findFirst({
-    where: { agent: { name: workerName, team: { workspaceId: unbudgetedWorkspaceId } } },
+  return prisma.slaveRun.findFirst({
+    where: { slave: { name: workerName, team: { workspaceId: unbudgetedWorkspaceId } } },
     orderBy: { startedAt: 'asc' },
   })
 }
@@ -374,7 +374,7 @@ try {
     await fail(`${BUDGETED_WORKSPACE} was created with a null budget: stage 4 cannot test a budgeted workspace with no budget`)
   }
   const budgetedTeam = await prisma.team.create({ data: { workspaceId: budgeted.id, name: 'Gate Team' } })
-  await prisma.agent.create({
+  await prisma.slave.create({
     data: { teamId: budgetedTeam.id, name: CURSOR_WORKER, role: 'backend', model: CURSOR_MODEL, provider: 'cursor' },
   })
   const budgetedTask = await prisma.task.create({
@@ -398,8 +398,8 @@ try {
     stdio: ['ignore', 'inherit', 'inherit'],
   })
 
-  const refusedRuns = await prisma.agentRun.findMany({
-    where: { agent: { team: { workspaceId: budgeted.id } } },
+  const refusedRuns = await prisma.slaveRun.findMany({
+    where: { slave: { team: { workspaceId: budgeted.id } } },
   })
   if (refusedRuns.length !== 1) {
     await fail(`stage 4: expected exactly 1 attempted run in the budgeted workspace, found ${refusedRuns.length}`)
@@ -465,10 +465,10 @@ try {
   // Both workers carry an explicit pair. `resolveRuntime` only consults a level that NAMES a model,
   // so a worker with a null model would fall through to the workspace default and both would
   // resolve to `claude_code` -- the seam this stage exists to prove would be invisible.
-  const claudeAgent = await prisma.agent.create({
+  const claudeSlave = await prisma.slave.create({
     data: { teamId: team.id, name: CLAUDE_WORKER, role: 'backend', model: CLAUDE_MODEL, provider: 'claude_code' },
   })
-  const cursorAgent = await prisma.agent.create({
+  const cursorSlave = await prisma.slave.create({
     data: { teamId: team.id, name: CURSOR_WORKER, role: 'backend', model: CURSOR_MODEL, provider: 'cursor' },
   })
   // Two tasks, one per worker, both `maxAttempts: 1` for the spend reason stage 4's task gives.
@@ -485,7 +485,7 @@ try {
     })
   }
   console.log(`unbudgeted workspace: ${workspace.id} (budgetUsd=${workspace.budgetUsd})`)
-  console.log(`workers: ${CLAUDE_WORKER}=${claudeAgent.id} (claude_code/${CLAUDE_MODEL}), ${CURSOR_WORKER}=${cursorAgent.id} (cursor/${CURSOR_MODEL})`)
+  console.log(`workers: ${CLAUDE_WORKER}=${claudeSlave.id} (claude_code/${CLAUDE_MODEL}), ${CURSOR_WORKER}=${cursorSlave.id} (cursor/${CURSOR_MODEL})`)
 
   // The real daemon, in the background -- the same thing an operator leaves running. No
   // `SLAVEOFAI_*_BIN` overrides: both adapters resolve the real vendor binaries the preflight
@@ -566,7 +566,7 @@ try {
    */
   async function pauseAndSettle(label, runId) {
     await waitUntil(`${label} to be working with at least one tool call recorded`, WORKING_TIMEOUT_MS, async () => {
-      const row = await prisma.agentRun.findUniqueOrThrow({ where: { id: runId } })
+      const row = await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId } })
       if (row.status === 'working' && row.toolCalls >= 1) return { done: true }
       if (TERMINAL_STATUSES.has(row.status)) {
         await fail(
@@ -600,7 +600,7 @@ try {
     // the point. See this report's finding on the window itself: an operator who clicks Resume in
     // those two seconds loses the run the same way this script did.
     return waitUntil(`${label} to settle on paused with a checkpoint, a run.paused event and a stopped process`, PAUSE_SETTLE_TIMEOUT_MS, async () => {
-      const row = await prisma.agentRun.findUniqueOrThrow({ where: { id: runId } })
+      const row = await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId } })
       if (TERMINAL_STATUSES.has(row.status)) {
         await fail(
           `stage 3: ${label} went ${row.status} instead of paused after requestPause -- the pause signal did not ` +
@@ -665,7 +665,7 @@ try {
 
   async function waitForTerminal(label, runId) {
     return waitUntil(`${label} to reach a terminal state after its resume`, RESUME_TERMINAL_TIMEOUT_MS, async () => {
-      const row = await prisma.agentRun.findUniqueOrThrow({ where: { id: runId } })
+      const row = await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId } })
       if (TERMINAL_STATUSES.has(row.status)) return { done: true, value: row }
       return { done: false, detail: `status=${row.status} toolCalls=${row.toolCalls}` }
     })
@@ -794,10 +794,10 @@ try {
   )
 
   // ============================================================================================
-  // Stage 5: `AgentRun.costUsd` is `null` for the Cursor run and a real number for the Claude run.
+  // Stage 5: `SlaveRun.costUsd` is `null` for the Cursor run and a real number for the Claude run.
   // Not coalesced, on purpose: `0` would be a lie a budget guardrail believes.
   //
-  // READ THE ANNOUNCEMENT, NOT ONLY THE COLUMN. A null in `AgentRun.costUsd` has two completely
+  // READ THE ANNOUNCEMENT, NOT ONLY THE COLUMN. A null in `SlaveRun.costUsd` has two completely
   // different meanings and this stage exists to keep them apart. `pump.ts` writes the column only
   // on the path that HAD a terminal result to write it from; a run whose stream ends without one
   // is concluded `failed` with the column never touched (`pump.ts:667-681`), and an untouched
@@ -882,7 +882,7 @@ try {
   }
   // FK-ordered cleanup, the same order `gate-m11-shell.mjs` uses: `ExecutionEvent` has no FK to
   // `Workspace` (M2's append-only log outlives entity lifecycles by design) so it is deleted
-  // explicitly first, then the workspace delete cascades Team/Agent/Task/AgentRun/Checkpoint/
+  // explicitly first, then the workspace delete cascades Team/Slave/Task/SlaveRun/Checkpoint/
   // ProviderConfiguration.
   for (const workspaceId of [unbudgetedWorkspaceId, budgetedWorkspaceId]) {
     if (workspaceId !== null) {

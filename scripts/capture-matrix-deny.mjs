@@ -12,7 +12,7 @@
 //
 // WHAT MAKES THE DENY REAL. Everything in the enforcement chain is the repo's own, unfaked:
 //
-//   - the deny is an `AgentPermission` row (`{ tool: 'run tests', mode: 'deny' }`) --
+//   - the deny is an `SlavePermission` row (`{ tool: 'run tests', mode: 'deny' }`) --
 //     `gate-m18-skill-and-teeth.mjs:504`'s seed;
 //   - `apps/orchestrator/src/tick.ts` resolves it through `packages/control`'s `resolveDenyList`
 //     and writes the run's own `permissions.json` at dispatch;
@@ -97,7 +97,7 @@ const DENIED_CAPABILITY = 'run tests'
 const EXPECTED_DENIED_TOOL = 'Bash'
 
 // The scenario, mirroring the hand-authored fixture it replaces: one allowed `Read` of a known
-// file, then a `Bash` call the matrix refuses, then the agent reporting what it found instead of
+// file, then a `Bash` call the matrix refuses, then the slave reporting what it found instead of
 // retrying. The file's single line is what makes the third step checkable in the transcript.
 const TARGET_FILE = 'target.txt'
 const TARGET_LINE = 'line one: alpha\n'
@@ -184,7 +184,7 @@ function isRealDaemonProcess(pid) {
 
 /** Removes any `M19 A1 Capture`-named rows a prior interrupted run left behind, in the FK order the
  *  `finally` below uses: the append-only events first (no FK to `Workspace`), then the workspace,
- *  which cascades Team/Agent/AgentPermission/Task/AgentRun/Checkpoint. */
+ *  which cascades Team/Slave/SlavePermission/Task/SlaveRun/Checkpoint. */
 async function preflightCleanup() {
   const stale = await prisma.workspace.findMany({
     where: { name: { startsWith: WORKSPACE_PREFIX } },
@@ -216,8 +216,8 @@ async function dumpRows() {
   })
   const dump = []
   for (const workspace of workspaces) {
-    const runs = await prisma.agentRun.findMany({
-      where: { agent: { team: { workspaceId: workspace.id } } },
+    const runs = await prisma.slaveRun.findMany({
+      where: { slave: { team: { workspaceId: workspace.id } } },
       orderBy: { startedAt: 'asc' },
     })
     const events = await prisma.executionEvent.findMany({
@@ -373,7 +373,7 @@ try {
   chmodSync(wrapperPath, 0o755)
   console.log(`capture dir: ${captureDir}`)
 
-  // ---- One workspace, one team, one agent carrying the matrix deny, one task ----------------
+  // ---- One workspace, one team, one slave carrying the matrix deny, one task ----------------
   repoPath = makeRepo('repo')
   const workspace = await prisma.workspace.create({
     data: {
@@ -388,12 +388,12 @@ try {
   })
   workspaceId = workspace.id
   const team = await prisma.team.create({ data: { workspaceId, name: 'Engineering' } })
-  const agent = await prisma.agent.create({
+  const slave = await prisma.slave.create({
     data: { teamId: team.id, name: WORKER_NAME, role: 'backend', provider: WORKER_PROVIDER, model: WORKER_MODEL },
   })
   // `gate-m18-skill-and-teeth.mjs:504`'s seed, verbatim: 'run tests' resolves to `Bash` for
   // `claude_code` (`CAPABILITY_TOOLS`), which is exactly the tool the task below is certain to try.
-  await prisma.agentPermission.create({ data: { agentId: agent.id, tool: DENIED_CAPABILITY, mode: 'deny' } })
+  await prisma.slavePermission.create({ data: { slaveId: slave.id, tool: DENIED_CAPABILITY, mode: 'deny' } })
   const task = await prisma.task.create({
     data: {
       workspaceId,
@@ -406,7 +406,7 @@ try {
       maxAttempts: 1,
     },
   })
-  console.log(`workspace ${workspaceId}; agent ${agent.id}; task ${task.id}`)
+  console.log(`workspace ${workspaceId}; slave ${slave.id}; task ${task.id}`)
   console.log(`matrix: deny ${JSON.stringify(DENIED_CAPABILITY)} -> expected vendor tool ${EXPECTED_DENIED_TOOL}`)
 
   // ---- The real daemon, driven exactly as `gate-m12-providers.mjs:493` drives it. The ONLY
@@ -435,7 +435,7 @@ try {
   })
 
   const dispatched = await waitUntil('the worker to be dispatched with a pid and a provider', DISPATCH_TIMEOUT_MS, async () => {
-    const row = await prisma.agentRun.findFirst({ where: { agentId: agent.id }, orderBy: { startedAt: 'desc' } })
+    const row = await prisma.slaveRun.findFirst({ where: { slaveId: slave.id }, orderBy: { startedAt: 'desc' } })
     if (row === null) return { done: false, detail: 'no run row yet' }
     if (row.pid === null || row.provider === null) {
       return { done: false, detail: `${row.status} pid=${String(row.pid)} provider=${String(row.provider)}` }
@@ -445,7 +445,7 @@ try {
   console.log(`dispatched run ${dispatched.id} (pid ${String(dispatched.pid)}, provider ${String(dispatched.provider)})`)
 
   const concluded = await waitUntil('the run to reach a terminal state', RUN_CONCLUDE_TIMEOUT_MS, async () => {
-    const row = await prisma.agentRun.findUniqueOrThrow({ where: { id: dispatched.id } })
+    const row = await prisma.slaveRun.findUniqueOrThrow({ where: { id: dispatched.id } })
     if (TERMINAL_STATUSES.has(row.status)) return { done: true, value: row }
     return { done: false, detail: `run is ${row.status} (toolCalls=${row.toolCalls})` }
   })
@@ -465,7 +465,7 @@ try {
 
   if (toolDenied.length === 0) {
     note(
-      'the run emitted NO run.tool_denied event -- the agent never attempted a matrix-denied tool, or the deny ' +
+      'the run emitted NO run.tool_denied event -- the slave never attempted a matrix-denied tool, or the deny ' +
         'did not reach the stream. This capture does not record a matrix deny.',
     )
   } else if (toolDenied.length !== 1) {
@@ -528,7 +528,7 @@ try {
   const raw = readFileSync(rawPath, 'utf8')
   const lines = raw.split('\n').filter((line) => line.trim() !== '')
   // `Buffer.byteLength`, not `raw.length`: the latter counts UTF-16 code units, and this stream
-  // carries non-ASCII (the agent's own report uses an em dash), so the two disagree by exactly the
+  // carries non-ASCII (the slave's own report uses an em dash), so the two disagree by exactly the
   // multi-byte characters -- which reads like a truncated capture when it is nothing of the kind.
   console.log(`capture: ${rawPath} (${lines.length} lines, ${Buffer.byteLength(raw, 'utf8')} bytes)`)
 
@@ -605,7 +605,7 @@ try {
   }
   // FK-ordered, the same order the gates use: `ExecutionEvent` has no FK to `Workspace` (M2's
   // append-only log outlives entity lifecycles by design), so it goes first; the workspace delete
-  // then cascades Team/Agent/AgentPermission/Task/AgentRun/Checkpoint.
+  // then cascades Team/Slave/SlavePermission/Task/SlaveRun/Checkpoint.
   if (workspaceId !== null) {
     await prisma.executionEvent.deleteMany({ where: { workspaceId } }).catch(() => {})
     await prisma.workspace.delete({ where: { id: workspaceId } }).catch(() => {})

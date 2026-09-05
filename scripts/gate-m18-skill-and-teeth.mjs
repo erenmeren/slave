@@ -21,7 +21,7 @@
 // because the override below always wins for the one dispatch this gate drives.
 //
 // The three proof stages (Task 13 brief):
-//   1. Enforcement: an `AgentPermission` deny on 'run tests', a dispatched run that replays the
+//   1. Enforcement: an `SlavePermission` deny on 'run tests', a dispatched run that replays the
 //      matrix-deny fixture, and the database proving the run survived it -- one `run.tool_denied`,
 //      zero `guardrail.tripped`, never `paused` -- plus the Activity page rendering the denial card.
 //   2. Skill tab: two runs' worth of ordered `Skill` events, the aggregate canvas, the Focus click
@@ -90,7 +90,7 @@ let repoPath = null
 let workspaceId = null
 let emptyWorkspaceId = null
 let teamId = null
-let agentId = null
+let slaveId = null
 let daemon = null
 let daemonOutput = ''
 /** Append-only for the life of one gate run -- see `gate-m14-fidelity.mjs`'s identical field for
@@ -223,8 +223,8 @@ async function preflightCleanup() {
   })
   for (const workspace of stale) {
     console.log(`preflight: removing leftover workspace ${workspace.id} (${workspace.name})`)
-    const runs = await prisma.agentRun
-      .findMany({ where: { agent: { team: { workspaceId: workspace.id } } }, select: { id: true, pid: true } })
+    const runs = await prisma.slaveRun
+      .findMany({ where: { slave: { team: { workspaceId: workspace.id } } }, select: { id: true, pid: true } })
       .catch(() => [])
     for (const run of runs) {
       if (run.pid === null || !isAlive(run.pid)) continue
@@ -251,9 +251,9 @@ async function dumpGateRows() {
       where: { workspaceId: workspace.id },
       select: { id: true, title: true, status: true, attempt: true, maxAttempts: true, activeRunId: true },
     })
-    const runs = await prisma.agentRun.findMany({
-      where: { agent: { team: { workspaceId: workspace.id } } },
-      include: { agent: { select: { name: true } } },
+    const runs = await prisma.slaveRun.findMany({
+      where: { slave: { team: { workspaceId: workspace.id } } },
+      include: { slave: { select: { name: true } } },
       orderBy: { startedAt: 'asc' },
     })
     const events = await prisma.executionEvent.findMany({
@@ -266,7 +266,7 @@ async function dumpGateRows() {
       tasks,
       runs: runs.map((run) => ({
         id: run.id,
-        agent: run.agent.name,
+        slave: run.slave.name,
         provider: run.provider,
         status: run.status,
         pid: run.pid,
@@ -480,7 +480,7 @@ try {
 
   await preflightCleanup()
 
-  // ---- One workspace, one team, one agent with a matrix deny, one task ----------------------
+  // ---- One workspace, one team, one slave with a matrix deny, one task ----------------------
   repoPath = makeRepo('repo')
   const workspace = await prisma.workspace.create({
     data: {
@@ -494,15 +494,15 @@ try {
   })
   workspaceId = workspace.id
   teamId = (await prisma.team.create({ data: { workspaceId, name: 'Engineering' } })).id
-  agentId = (
-    await prisma.agent.create({
+  slaveId = (
+    await prisma.slave.create({
       data: { teamId, name: WORKER_NAME, role: 'backend', provider: WORKER_PROVIDER, model: WORKER_MODEL },
     })
   ).id
   // Stage 1's deny: 'run tests' maps to Bash for claude_code (`CAPABILITY_TOOLS` in
   // `packages/control/src/permission.ts`) -- exactly the tool/capability pair the fixture's own
   // canned `hook_response` reason names.
-  await prisma.agentPermission.create({ data: { agentId, tool: 'run tests', mode: 'deny' } })
+  await prisma.slavePermission.create({ data: { slaveId, tool: 'run tests', mode: 'deny' } })
   const enforcementTask = await prisma.task.create({
     data: {
       workspaceId,
@@ -513,10 +513,10 @@ try {
       maxAttempts: 2,
     },
   })
-  console.log(`workspace ${workspaceId}; team ${teamId}; agent ${agentId}; enforcement task ${enforcementTask.id}`)
+  console.log(`workspace ${workspaceId}; team ${teamId}; slave ${slaveId}; enforcement task ${enforcementTask.id}`)
 
   // A second, genuinely fresh, empty workspace for stage 2's `skill-empty` proof -- no team, no
-  // agent, no events: the honest zero state a workspace looks like before anything has ever run.
+  // slave, no events: the honest zero state a workspace looks like before anything has ever run.
   const emptyWorkspace = await prisma.workspace.create({
     data: {
       name: EMPTY_WORKSPACE_NAME,
@@ -653,7 +653,7 @@ try {
   })
 
   const dispatched = await waitUntil('the worker to be dispatched with a pid and a provider', DISPATCH_TIMEOUT_MS, async () => {
-    const row = await prisma.agentRun.findFirst({ where: { agentId, taskId: enforcementTask.id }, orderBy: { startedAt: 'desc' } })
+    const row = await prisma.slaveRun.findFirst({ where: { slaveId, taskId: enforcementTask.id }, orderBy: { startedAt: 'desc' } })
     if (row === null) return { done: false, detail: 'no run row yet' }
     if (row.pid === null || row.provider === null) {
       return { done: false, detail: `${row.status} pid=${String(row.pid)} provider=${String(row.provider)}` }
@@ -663,7 +663,7 @@ try {
   console.log(`stage 1: run ${dispatched.id} dispatched (pid ${String(dispatched.pid)}, provider ${String(dispatched.provider)})`)
 
   const enforcementRun = await waitUntil('the run to conclude succeeded', RUN_CONCLUDE_TIMEOUT_MS, async () => {
-    const row = await prisma.agentRun.findUniqueOrThrow({ where: { id: dispatched.id } })
+    const row = await prisma.slaveRun.findUniqueOrThrow({ where: { id: dispatched.id } })
     if (row.status === 'paused') {
       await fail('stage 1: the run reached `paused` -- a matrix deny must never pause the run (Task 6\'s routing)')
     }
@@ -742,16 +742,16 @@ try {
   // Two runs, ordered Skill events seeded directly via the real production write path
   // (`appendEvent` -- the same helper `apps/web/test/integration/skill-graph.test.ts` seeds
   // through), so `seq`/`ts` come from the database rather than being hand-assigned.
-  const skillRunAlpha = await prisma.agentRun.create({ data: { agentId, status: 'succeeded' } })
-  const skillRunBeta = await prisma.agentRun.create({ data: { agentId, status: 'working' } })
+  const skillRunAlpha = await prisma.slaveRun.create({ data: { slaveId, status: 'succeeded' } })
+  const skillRunBeta = await prisma.slaveRun.create({ data: { slaveId, status: 'working' } })
 
   async function skillCall(runId, name) {
     await appendEvent({
       type: 'run.tool_call',
       workspaceId,
-      agentId,
+      slaveId,
       runId,
-      actor: 'agent',
+      actor: 'slave',
       payload: { name: 'Skill', summary: `Skill ${name}` },
     })
   }
@@ -837,15 +837,15 @@ try {
 
   // One more real event, appended through the production write path (`pg_notify('events', ...)`
   // inside `appendEvent`) while the page's SSE connection is open -- the frame that gives the
-  // chip something to measure. Tied to the concluded enforcement run/agent; `ExecutionEvent.runId`
+  // chip something to measure. Tied to the concluded enforcement run/slave; `ExecutionEvent.runId`
   // carries no foreign key, so appending against an already-terminal run is inert to everything
   // but this one read.
   await appendEvent({
     type: 'run.tool_call',
     workspaceId,
-    agentId,
+    slaveId,
     runId: enforcementRun.id,
-    actor: 'agent',
+    actor: 'slave',
     payload: { name: 'Bash', summary: 'gate stage 3 -- sse tick' },
   })
   await waitUntil('the connection chip to read sse · <n>ms once the stream ticks', ACTION_TIMEOUT_MS, async () => {
@@ -865,10 +865,10 @@ try {
       maxAttempts: 2,
     },
   })
-  const readerRun = await prisma.agentRun.create({
+  const readerRun = await prisma.slaveRun.create({
     data: {
       taskId: readerTask.id,
-      agentId,
+      slaveId,
       status: 'paused',
       pausedAtStep: 3,
       pauseReason: 'human',
@@ -920,8 +920,8 @@ try {
     if (daemon.exitCode === null) daemon.kill('SIGKILL')
   }
   if (workspaceId !== null) {
-    const runs = await prisma.agentRun
-      .findMany({ where: { agent: { team: { workspaceId } } }, select: { id: true, pid: true } })
+    const runs = await prisma.slaveRun
+      .findMany({ where: { slave: { team: { workspaceId } } }, select: { id: true, pid: true } })
       .catch(() => [])
     for (const row of runs) {
       if (row.pid === null || !isAlive(row.pid)) continue
@@ -943,7 +943,7 @@ try {
     if (nextServer.exitCode === null) nextServer.kill('SIGKILL')
   }
   // FK-ordered: `ExecutionEvent` has no FK to `Workspace`, deleted explicitly first; the workspace
-  // delete then cascades Team/Agent/Task/AgentRun/Checkpoint/AgentPermission. Both workspaces this
+  // delete then cascades Team/Slave/Task/SlaveRun/Checkpoint/SlavePermission. Both workspaces this
   // gate created share the `M18 Gate` prefix, so this also serves as belt-and-braces cleanup for
   // the empty one even though nothing but the workspace row itself was ever written there.
   for (const id of [workspaceId, emptyWorkspaceId]) {

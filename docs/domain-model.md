@@ -1,7 +1,7 @@
 # Domain Model — `packages/domain`
 
 This document describes what exists in `@slave-of-ai/domain` (kept current through M8): the
-Agent/Task/AgentRun split, both state machines, the guardrail and scheduler decision functions,
+Slave/Task/SlaveRun split, both state machines, the guardrail and scheduler decision functions,
 the merge queue, the review-verdict and plan-graph contracts, and the event envelope.
 `packages/domain` is pure — it has no runtime side effects, no persistence, and no framework
 dependency. It defines the contract the persistence, adapter, orchestrator, and web layers
@@ -15,13 +15,13 @@ path referenced here exists in the code as written.
 ```
 packages/domain/src/
   result.ts              Result<T, E> — the shared success/error convention
-  ids.ts                 Branded id types: AgentId, TaskId, RunId, WorkspaceId
+  ids.ts                 Branded id types: SlaveId, TaskId, RunId, WorkspaceId
   task/state.ts           TaskStatus, TaskState, TaskEvent, applyTaskEvent, initialTaskState
   run/state.ts             RunStatus, RunState, RunEvent, applyRunEvent, initialRunState
-  agent/derived.ts         AgentStatus, deriveAgentStatus
+  slave/derived.ts         SlaveStatus, deriveSlaveStatus
   guardrails/evaluate.ts   GuardrailLimits, WorkspaceStats, GuardrailBreach, evaluateGuardrails,
                            DEFAULT_GUARDRAIL_LIMITS
-  scheduler/decide.ts      SchedulableTask, SchedulableAgent, World, Command, decide
+  scheduler/decide.ts      SchedulableTask, SchedulableSlave, World, Command, decide
   merge/queue.ts           MergeCandidate, nextMergeCandidate
   review/verdict.ts        ReviewVerdict, reviewVerdictSchema, parseReviewVerdict
   planning/graph.ts        PlanTask, PlanGraph, planGraphSchema, parsePlanGraph
@@ -33,38 +33,38 @@ packages/domain/src/
 `index.ts` is the package's only public entry point (`export * from ...` for each module above),
 so anything importable from `@slave-of-ai/domain` is importable from that one file.
 
-## The Agent / Task / AgentRun split, and why Agent status is derived
+## The Slave / Task / SlaveRun split, and why Slave status is derived
 
 Three concepts, three files, three purposes:
 
 - **`Task`** (`task/state.ts`) is the unit of work. Its status (`TaskState.status`) tracks
   progress through review and merge — `backlog`, `ready`, `blocked`, `assigned`, `running`,
   `verifying`, `reviewing`, `merging`, `rework`, `done`, `failed`, `cancelled`.
-- **`AgentRun`** (`run/state.ts`, exported as `RunState`) is one execution attempt by an agent
+- **`SlaveRun`** (`run/state.ts`, exported as `RunState`) is one execution attempt by a slave
   process. Its status (`RunState.status`) tracks the mechanics of a live process —
   `starting`, `working`, `pause_requested`, `paused`, `resuming`, `stopping`, `stopped`,
   `succeeded`, `failed`.
-- **`Agent`** has no persisted status field at all. `agent/derived.ts` computes
-  `AgentStatus` — `idle`, `starting`, `working`, `pausing`, `paused`, `resuming`, `stopping` —
-  by calling `deriveAgentStatus(activeRun: RunState | null)`, a pure mapping from the agent's
+- **`Slave`** has no persisted status field at all. `slave/derived.ts` computes
+  `SlaveStatus` — `idle`, `starting`, `working`, `pausing`, `paused`, `resuming`, `stopping` —
+  by calling `deriveSlaveStatus(activeRun: RunState | null)`, a pure mapping from the slave's
   active run's status (or `idle` when there is no active run).
 
 This is ADR 0002 (`docs/decisions/0002-derived-agent-status.md`): three independently writable
 status fields for one underlying truth drift apart under concurrency, and the observable failure
-is an agent shown "working" on a task that is actually blocked. Collapsing agent status to a pure
+is a slave shown "working" on a task that is actually blocked. Collapsing slave status to a pure
 function of run status removes the drift by removing the second writable copy. Statuses that
 belong to the work itself (`blocked`, `reviewing`, `done`, ...) live on `Task`; statuses that
-belong to the mechanics of execution (`paused`, `stopping`, ...) live on `AgentRun`. Adding a new
-run status requires updating exactly one mapping function, `deriveAgentStatus`.
+belong to the mechanics of execution (`paused`, `stopping`, ...) live on `SlaveRun`. Adding a new
+run status requires updating exactly one mapping function, `deriveSlaveStatus`.
 
 ### Why exhaustiveness here is load-bearing, not a style rule
 
-`deriveAgentStatus`, `applyTaskEvent`, and `applyRunEvent` each `switch` over a closed status
+`deriveSlaveStatus`, `applyTaskEvent`, and `applyRunEvent` each `switch` over a closed status
 union with no `default` case. That relies on TypeScript's control-flow exhaustiveness check
 (TS2366, "function lacks ending return statement") to catch an unhandled case at compile time —
 but **`tsconfig.base.json` does not set `noImplicitReturns`.** The exhaustiveness guarantee holds
 only because each of these three functions carries an **explicit return-type annotation that
-excludes `undefined`** (`AgentStatus`, `Result<TaskState, IllegalTransition>`,
+excludes `undefined`** (`SlaveStatus`, `Result<TaskState, IllegalTransition>`,
 `Result<RunState, IllegalRunTransition>`). That explicit annotation is what makes TS2366 fire for
 a missing case. If someone drops the explicit return type from one of these functions "for
 brevity," exhaustiveness checking silently stops working: TypeScript infers a return type that
@@ -178,12 +178,12 @@ scheduling by default.
 
 ## Scheduler decision
 
-`scheduler/decide.ts` defines `SchedulableTask`, `SchedulableAgent`, `World`, `Command`
+`scheduler/decide.ts` defines `SchedulableTask`, `SchedulableSlave`, `World`, `Command`
 (`start_run` | `halt`), and `decide(world: World): readonly Command[]`. It is a pure function:
 no I/O, no side effects, and the same `World` always produces the same `Command[]`. After the
 guardrail halt check above, it filters tasks to `STARTABLE` statuses (`ready`, `rework`) with
 `dependenciesDone`, sorts by priority (ties broken by task id for determinism), and greedily
-assigns the highest-priority startable task to an available agent matching `requiredRole`, up to
+assigns the highest-priority startable task to an available slave matching `requiredRole`, up to
 the remaining concurrency slots (`limits.maxConcurrentRuns - stats.activeRuns`).
 
 ## Merge queue — serialized by design
@@ -215,11 +215,11 @@ Two parsers, both Zod-validated and both built on one shared scan:
   planning run's output. Beyond the Zod shape (1–20 tasks), `parsePlanGraph` checks structure a
   schema alone cannot: unique keys, every `dependsOn` naming a key that exists, no
   self-dependency, and no cycle (Kahn's algorithm over the plan-local keys). `role` is free-form
-  text — the schema does not restrict it to a role any agent in the workspace actually has.
+  text — the schema does not restrict it to a role any slave in the workspace actually has.
 
 Both scan `jsonObjectsLastToFirst` (`json/last-object.ts`) — a shared helper extracted from the
 verdict parser's original last-object-wins scan — for the **last** JSON object in the text that
-satisfies the relevant schema, because agents wrap their JSON answer in prose and code fences.
+satisfies the relevant schema, because slaves wrap their JSON answer in prose and code fences.
 Once a candidate passes the shape check it is taken as final: a structural violation (e.g. a
 graph's dangling dependency) rejects that candidate outright rather than falling back to an
 earlier one, since silently executing an earlier draft nobody signed off on would be worse than
@@ -228,7 +228,7 @@ failing loudly.
 ## Event envelope
 
 `events/schema.ts` defines a shared envelope (`seq`, `ts`, `workspaceId`, optional `taskId` /
-`agentId` / `runId`, `actor: 'human' | 'agent' | 'system'`) and `executionEventSchema`, a Zod
+`slaveId` / `runId`, `actor: 'human' | 'slave' | 'system'`) and `executionEventSchema`, a Zod
 `discriminatedUnion('type', [...])` binding each event type to its own payload shape by
 construction. The current representative subset (Task 14; spec §6.2's full catalogue is
 completed in M2 as the orchestrator starts emitting more types) is:
@@ -243,7 +243,7 @@ completed in M2 as the orchestrator starts emitting more types) is:
 | `run.tool_call` | `{ name: string, summary: string }` |
 | `run.paused` | `{ atStep: number (int) }` |
 | `run.resumed` | `{ sessionId: string }` |
-| `agent.message_sent` | `{ category: 'instruction' \| 'feedback' \| 'context' \| 'priority_change' \| 'question_response', body: string (min 1) }` |
+| `slave.message_sent` | `{ category: 'instruction' \| 'feedback' \| 'context' \| 'priority_change' \| 'question_response', body: string (min 1) }` |
 | `guardrail.tripped` | `{ guardrail: string, detail: string }` |
 
 `ExecutionEvent = z.infer<typeof executionEventSchema>` is the exported type.
@@ -253,13 +253,13 @@ package's own `Result` convention rather than throwing on invalid input, returni
 
 ## Ids
 
-`ids.ts` defines four branded string types — `AgentId`, `TaskId`, `RunId`, `WorkspaceId` — via a
-shared `Brand<T, B>` helper, with one constructor each (`agentId`, `taskId`, `runId`,
+`ids.ts` defines four branded string types — `SlaveId`, `TaskId`, `RunId`, `WorkspaceId` — via a
+shared `Brand<T, B>` helper, with one constructor each (`slaveId`, `taskId`, `runId`,
 `workspaceId`) that casts a plain `string` into the branded type. These prevent, at the type
 level, passing e.g. a `TaskId` where a `RunId` is expected, without adding any runtime
 representation beyond a string.
 
-Branding stops at the event boundary: `events/schema.ts` types `taskId`/`agentId`/`runId`/
+Branding stops at the event boundary: `events/schema.ts` types `taskId`/`slaveId`/`runId`/
 `workspaceId` as plain `string` (so, for example, `ExecutionEvent['taskId']` is
 `string | undefined`, not `TaskId | undefined`), meaning M2 consumers reading events back out
 will need to re-brand these fields before passing them to functions that expect the branded
@@ -268,11 +268,11 @@ types.
 ## Persistence (M2)
 
 These domain types are now backed by real tables in `packages/db`. `TaskState` maps to the `Task`
-table via `toTaskState`, and `RunState` maps to the `AgentRun` table via `toRunState` — both in
+table via `toTaskState`, and `RunState` maps to the `SlaveRun` table via `toRunState` — both in
 `packages/db/src/mappers.ts`. Branded ids, which stop at the event boundary per the section above,
 are restored at this same layer: `toTaskState` re-brands `row.assigneeId` and `row.activeRunId`
-with `agentId()` / `runId()`, and the event-log mapper (`toExecutionEvent`, same file) re-brands
-`taskId` / `agentId` / `runId` on the way out of the `ExecutionEvent` table.
+with `slaveId()` / `runId()`, and the event-log mapper (`toExecutionEvent`, same file) re-brands
+`taskId` / `slaveId` / `runId` on the way out of the `ExecutionEvent` table.
 
 The event log itself — its envelope, the single write gate, the single-writer assumption the read
 path depends on, and the notification model — is documented separately in
@@ -284,11 +284,11 @@ mapping.
 - **`Workspace.goal String?`** — the operator's standing instruction a planning run decomposes
   (M8b). An unset goal is ordinary, not an error state; the planning pass simply never fires.
 - **`Task.mergeClaimedAt DateTime?`** — the merge queue's claim column, described above.
-- **`AgentRun.taskId` is now nullable** (`String?`). A `kind: 'planning'` run has no `Task` row at
+- **`SlaveRun.taskId` is now nullable** (`String?`). A `kind: 'planning'` run has no `Task` row at
   all: it works toward `Workspace.goal`, not a task, so there is nothing to attach one to.
 
 That nullability is a one-way door with a binding consequence, stated plainly because it is easy
-to get wrong by habit: **a run's workspace must be derived through `agent.team.workspaceId`, never
+to get wrong by habit: **a run's workspace must be derived through `slave.team.workspaceId`, never
 through `task.workspaceId`.** A query scoped through `task` silently drops every planning run —
 exactly the run an emergency stop, the global concurrency count, or the budget guardrail most
 needs to reach, since it is still spending money and still occupying a concurrency slot. M8b's own
@@ -296,7 +296,7 @@ implementation carries this through fifteen call sites (nine plan-named, six com
 `packages/control` (the orphan sweep, the per-tick sweep, `loadWorld`'s active-run and spend
 counts, the resume-intent scan, `pauseActiveRuns`, the planning dispatch's own live-run and
 retry-cap queries, and the CLI `status` command's active-run listing) — every one of them
-re-scoped from `task: { workspaceId }` to `agent: { team: { workspaceId } }` in the same change
+re-scoped from `task: { workspaceId }` to `slave: { team: { workspaceId } }` in the same change
 that made `taskId` nullable.
 
 ### The retry-cap convention: escalation by `run.failed`, not a new guardrail type

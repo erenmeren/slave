@@ -30,7 +30,7 @@ const P95_BAR_MS = 1000
 const WARMUP_TIMEOUT_MS = 5000
 const DRAIN_TIMEOUT_MS = 5000
 
-// 1. Seed a workspace, team, agent and task — demo-live.mjs's seed shape. No git repo: nothing
+// 1. Seed a workspace, team, slave and task — demo-live.mjs's seed shape. No git repo: nothing
 // here ever reads `repoPath` off disk, because no orchestrator runs against this workspace.
 const workspace = await prisma.workspace.create({
   data: {
@@ -42,7 +42,7 @@ const workspace = await prisma.workspace.create({
   },
 })
 const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Latency Team' } })
-const agent = await prisma.agent.create({ data: { teamId: team.id, name: 'Lex', role: 'backend' } })
+const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Lex', role: 'backend' } })
 const task = await prisma.task.create({
   data: {
     workspaceId: workspace.id,
@@ -128,7 +128,7 @@ try {
   await appendEvent({
     type: 'run.started',
     workspaceId: workspace.id,
-    agentId: agent.id,
+    slaveId: slave.id,
     taskId: task.id,
     actor: 'system',
     payload: { sessionId: 'warmup' },
@@ -144,9 +144,9 @@ try {
     await appendEvent({
       type: 'run.tool_call',
       workspaceId: workspace.id,
-      agentId: agent.id,
+      slaveId: slave.id,
       taskId: task.id,
-      actor: 'agent',
+      actor: 'slave',
       payload: { name: 'Bash', summary: `measurement event ${i}` },
     })
     await delay(INTERVAL_MS)

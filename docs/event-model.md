@@ -1,6 +1,6 @@
 # The Event Log
 
-M2's event log is the audit trail of everything the system does: task and run lifecycle, agent
+M2's event log is the audit trail of everything the system does: task and run lifecycle, slave
 messages, guardrail trips. This document describes what was actually built — the envelope shape,
 the single write gate, the notification model, and the assumption the read path depends on but
 never checks.
@@ -24,14 +24,14 @@ Design context: `packages/domain/src/docs/superpowers/specs/2026-08-18-m2-persis
 
 `ExecutionEvent` (`packages/domain/src/events/schema.ts`) is a Zod discriminated union on `type`,
 one member per event type, each with its own `payload` shape. Every member shares an envelope of
-`seq`, `ts`, `workspaceId`, optional `taskId` / `agentId` / `runId`, and `actor`.
+`seq`, `ts`, `workspaceId`, optional `taskId` / `slaveId` / `runId`, and `actor`.
 
 `taskId` was optional in the schema from the start, and workspace-scoped events have always
 omitted it — the halt announcement's and budget warning's `guardrail.tripped`, M8a's emergency
 stop. What M8b's planning run changed is that a whole RUN's event stream now carries no `taskId`:
-the run has no `Task` row (`AgentRun.taskId: null`, see `docs/domain-model.md`'s
+the run has no `Task` row (`SlaveRun.taskId: null`, see `docs/domain-model.md`'s
 scoping-invariant section), so its `run.started`, `run.output`, `run.failed`,
-`workspace.plan_created` and so on carry `workspaceId`/`agentId`/`runId` only. A consumer that
+`workspace.plan_created` and so on carry `workspaceId`/`slaveId`/`runId` only. A consumer that
 assumed run-scoped events always name a task would break on the first planning run it observed.
 
 At write time the fields come from two different places:
@@ -47,9 +47,9 @@ At write time the fields come from two different places:
 `Number(row.seq)`, which is exact only below 2^53 — nine quadrillion events, recorded there as the
 place to revisit if that ceiling ever stops being absurd.
 
-Branded ids (`TaskId`, `AgentId`, `RunId`) do not survive the event boundary — the schema types
-them as plain `string` — so `toExecutionEvent` re-brands `row.taskId` / `row.agentId` /
-`row.runId` with `taskId()` / `agentId()` / `runId()` on the way out.
+Branded ids (`TaskId`, `SlaveId`, `RunId`) do not survive the event boundary — the schema types
+them as plain `string` — so `toExecutionEvent` re-brands `row.taskId` / `row.slaveId` /
+`row.runId` with `taskId()` / `slaveId()` / `runId()` on the way out.
 
 ## `appendEvent`: the single write gate
 
