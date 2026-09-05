@@ -36,7 +36,19 @@ export function OfficeClient({
   const wrapRef = useRef<HTMLDivElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const worldRef = useRef<LiveOffice | null>(null)
-  const [frame, setFrame] = useState(0)
+  // Read inside the rebuild effect below without adding `overview` to its deps (R10) — the
+  // rebuild fires on a roster change, not on every stream tick, and always wants the *current*
+  // snapshot, not the one from whenever the roster last changed. Kept current every render, not
+  // in its own effect, so it is already fresh by the time the rebuild effect below runs.
+  const overviewRef = useRef(overview)
+  overviewRef.current = overview
+  // A camera carried across a rebuild (R9): `renderIsoE` sizes a *new* `view` from the new
+  // world's own floor dimensions the first time it sees one missing, so copying the old `view`
+  // object wholesale would carry stale `w`/`h` (and `autofit`'s fit) onto a floor of a different
+  // size. This ref holds just `{ li, ox, oy }` until the loop below has let the engine build the
+  // new view, then applies them onto it and clears the ref.
+  const pendingCameraRef = useRef<{ li: number; ox: number; oy: number } | null>(null)
+  const [, setFrame] = useState(0)
   const rosterKey = useMemo(() => JSON.stringify(initial.departments), [initial.departments])
 
   // Build (and rebuild on a roster change), carrying the camera and the focus over.
@@ -44,10 +56,14 @@ export function OfficeClient({
     const previous = worldRef.current
     const world = new LiveOffice(initial.departments)
     if (previous !== null) {
-      if (previous.view !== undefined) world.view = { ...previous.view }
+      if (previous.view !== undefined) pendingCameraRef.current = { li: previous.view.li, ox: previous.view.ox, oy: previous.view.oy }
       world.hourLock = previous.hourLock
       if (previous.focusId !== null && world.slaves.some((s) => s.id === previous.focusId)) world.focusId = previous.focusId
     }
+    // R10: a rebuilt world otherwise runs idle (every slave's live status blank) until the next
+    // stream tick — the effect below keys on `overview`, whose identity does not change just
+    // because the roster did. Seed it here with the snapshot already in hand.
+    world.apply(liveSlavesOf(overviewRef.current), boardFromOverview(overviewRef.current))
     worldRef.current = world
     setFrame((f) => f + 1)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the key is the roster's identity
@@ -98,6 +114,18 @@ export function OfficeClient({
           } catch (error) {
             console.error(error)
           }
+        }
+        // R9: apply a carried camera once the (possibly just-rebuilt) world actually has a view
+        // to apply it onto — `renderIsoE` is what creates one (with fresh `w`/`h`/`levels` for
+        // this world's own floor), so this has to wait for that, not run inside the rebuild effect.
+        const pending = pendingCameraRef.current
+        const v = world.view
+        if (pending !== null && v?.levels !== undefined) {
+          v.li = Math.min(pending.li, v.levels.length - 1)
+          v.S = v.levels[v.li] as number
+          v.ox = pending.ox
+          v.oy = pending.oy
+          pendingCameraRef.current = null
         }
         acc += now - last
         if (acc > OVERLAY_MS) {
@@ -203,7 +231,10 @@ export function OfficeClient({
     working: world?.slaves.filter((s) => world.status(s) === 'working').length ?? 0,
     todLabel: world === null ? '' : tod(world.hour).label.toUpperCase(),
     clock: world?.clock() ?? '--:--',
-    hour: world === null ? 9 : Math.round(world.hour * 4) / 4,
+    // R11: the slider's own lock, when set, wins over the world's clock straight away — reading
+    // `world.hour` unconditionally left the controlled range fighting the pointer, snapping back
+    // to the old value until the next 250 ms repaint caught up with the lock it had just set.
+    hour: world === null ? 9 : (world.hourLock ?? Math.round(world.hour * 4) / 4),
     live: world === null || world.hourLock === null,
     zoom: `${(world?.view?.li ?? 0) + 1}x`,
   }
@@ -231,7 +262,7 @@ export function OfficeClient({
         })()
 
   return (
-    <div ref={wrapRef} data-frame={frame} className="relative h-[calc(100vh-52px-41px)] min-h-[360px] w-full overflow-hidden bg-[#07080b]">
+    <div ref={wrapRef} className="relative h-[calc(100vh-52px-41px)] min-h-[360px] w-full overflow-hidden bg-[#07080b]">
       <canvas ref={canvasRef} data-testid="office-canvas" className="block h-full w-full cursor-grab" />
       <OfficeHud
         view={hud}

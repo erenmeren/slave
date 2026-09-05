@@ -109,6 +109,9 @@ beforeEach(() => {
   Object.defineProperty(document, 'fonts', { value: { load: () => Promise.resolve([]) }, configurable: true })
   stubWorld.focusId = null
   stubWorld.hourLock = null
+  // The zoom test mutates `view` in place (`v.li`/`v.S`/`v.ox`/`v.oy`) — a fresh object every test
+  // keeps that from leaking into whichever test runs next.
+  stubWorld.view = { S: 1, ox: 0, oy: 0, w: 100, h: 100, levels: [1, 2, 3, 4], li: 0 }
   applied.length = 0
 })
 afterEach(() => {
@@ -143,6 +146,9 @@ describe('OfficeClient', () => {
     await mount()
     fireEvent.change(screen.getByTestId('office-hour'), { target: { value: '21' } })
     expect(stubWorld.hourLock).toBe(21)
+    // R11: the controlled range has to show the lock immediately, not the world's own clock —
+    // otherwise it snaps back to the old value until the next 250 ms repaint catches up.
+    expect((screen.getByTestId('office-hour') as HTMLInputElement).value).toBe('21')
     fireEvent.click(screen.getByTestId('office-live'))
     expect(stubWorld.hourLock).toBeNull()
   })
@@ -237,8 +243,12 @@ describe('OfficeClient', () => {
       worlds[0]!.view.li = 2
       worlds[0]!.focusId = 's2'
 
+      // Reuses `first.overview` (not a fresh `snapshot()`) so the stream's identity does not
+      // change alongside the roster — R10's assertion below needs the rebuilt world's own
+      // `apply()` to be the *only* one that fires, not a second one from the separate
+      // "every stream snapshot lands on the floor" effect reacting to an unrelated new snapshot.
       const grown: OfficeSnapshot = {
-        ...snapshot(),
+        ...first,
         departments: [
           { ...first.departments[0]!, slaves: [...first.departments[0]!.slaves, { slaveId: 's4', name: 'New', role: 'backend', color: '#f5b34a' }] },
           first.departments[1]!,
@@ -250,10 +260,44 @@ describe('OfficeClient', () => {
         vi.advanceTimersByTime(320)
       })
       expect(worlds).toHaveLength(2)
+      // R9: the camera carries as `{ li, ox, oy }`, applied once the loop lets the (stub, but
+      // already-viewed) new world's `view` receive it — not by copying the view object itself.
       expect(worlds[1]!.view.li).toBe(2)
       expect(worlds[1]!.focusId).toBe('s2')
+      // R10: seeded with the current snapshot's live map before any stream change, not left idle
+      // until the next tick — exactly once, from the rebuild itself.
+      expect(worlds[1]!.apply).toHaveBeenCalledTimes(1)
+      const [live] = worlds[1]!.apply.mock.calls[0] as [Map<string, { status: string }>, unknown]
+      expect(live.get('s1')?.status).toBe('working')
     } finally {
       vi.mocked(LiveOffice).mockImplementation(() => stubWorld as unknown as LiveOffice)
     }
+  })
+
+  // Spec §5: a project with no departments yet still draws (the empty floor and lounge) and the
+  // HUD says so plainly — no focus card, since there is nobody to focus.
+  it('shows an empty project as zero counts with no focus card', async () => {
+    const emptyOverview = {
+      workspace: { id: 'w1', name: 'Checkout', haltedReason: null, haltedAt: null, budgetUsd: null, spentUsd: 0, unmeasuredRuns: 0, goal: null, provider: null, costBlindBudgeted: false, maxConcurrentRuns: 3, runTimeoutMs: 1000, maxAttempts: 3 },
+      slaves: [],
+      tasks: { active: 0, ready: 0, blocked: 0, done: 0, failed: 0 },
+      blocked: [],
+      liveEvents: [],
+      mergeQueue: [],
+    } as unknown as OverviewSnapshot
+    streamSnapshot = emptyOverview
+    const empty: OfficeSnapshot = { workspace: { id: 'w1', name: 'Checkout', archived: false }, departments: [], overview: emptyOverview }
+    const emptyWorld = { ...stubWorld, slaves: [], departments: [], view: { ...stubWorld.view }, apply: vi.fn() }
+    // `Once`: this test never rerenders, so the one `new LiveOffice(...)` call at mount is the
+    // only call this queue needs to cover — later tests still get the file-wide `stubWorld`.
+    vi.mocked(LiveOffice).mockImplementationOnce(() => emptyWorld as unknown as LiveOffice)
+
+    render(<OfficeClient workspaceId="w1" initial={empty} pixelFontFamily="__Silkscreen_test" />)
+    await act(async () => {
+      await Promise.resolve()
+      vi.advanceTimersByTime(320)
+    })
+    expect(screen.getByTestId('office-hud-counts').textContent).toBe('0 departments · 0 slaves · 0 working')
+    expect(screen.queryByTestId('office-focus')).toBeNull()
   })
 })
