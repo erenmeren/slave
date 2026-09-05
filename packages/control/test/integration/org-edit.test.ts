@@ -23,8 +23,9 @@ interface Fixture {
 
 /**
  * One team, two slaves: `slaveWithRun` carries a `succeeded` (terminal) `SlaveRun` against a real
- * task -- exercises `deleteSlave`'s `slave_has_runs` refusal, which fires on ANY run history, not
- * only a live one. `slaveNoRuns` is the clean roster member every ordinary edit lands on.
+ * task -- exercises `deleteSlave`'s cascade of a terminal run into the delete (M27 §4.1);
+ * `deleteSlave` refuses only a LIVE run, so this history goes with the row. `slaveNoRuns` is the
+ * clean roster member every ordinary edit lands on.
  */
 async function seed(): Promise<Fixture> {
   const workspace = await prisma.workspace.create({
@@ -189,18 +190,23 @@ describe('org-edit verbs', () => {
       const events = await orgChangedEvents(workspaceId)
       expect(events).toHaveLength(1)
       expect(events[0]?.slaveId).toBe(slaveNoRuns.id)
-      expect(events[0]?.payload).toEqual({ entity: 'slave', id: slaveNoRuns.id, field: 'deleted', from: 'Sam', to: null })
+      expect(events[0]?.payload).toEqual({ entity: 'slave', id: slaveNoRuns.id, field: 'deleted', from: 'Sam', to: null, runs: 0 })
     })
 
-    it('refuses a slave with run history, even terminal, leaving it in place', async () => {
-      const { slaveWithRun, workspaceId } = fixture
+    it('deletes a slave with terminal run history and says how many runs went', async () => {
+      const { slaveWithRun, runId, workspaceId } = fixture
 
       const result = await deleteSlave(slaveWithRun.id)
 
-      expect(result.ok).toBe(false)
-      if (!result.ok) expect(result.error).toEqual({ kind: 'slave_has_runs', slaveId: slaveWithRun.id, runs: 1 })
-      expect(await prisma.slave.findUnique({ where: { id: slaveWithRun.id } })).not.toBeNull()
-      expect(await orgChangedEvents(workspaceId)).toHaveLength(0)
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect(result.value).toEqual({ runs: 1 })
+      expect(await prisma.slave.findUnique({ where: { id: slaveWithRun.id } })).toBeNull()
+      expect(await prisma.slaveRun.findUnique({ where: { id: runId } })).toBeNull()
+
+      const events = await orgChangedEvents(workspaceId)
+      expect(events).toHaveLength(1)
+      expect(events[0]?.payload).toEqual({ entity: 'slave', id: slaveWithRun.id, field: 'deleted', from: 'Alex', to: null, runs: 1 })
     })
 
     it('refuses an unknown slave', async () => {
@@ -259,15 +265,21 @@ describe('org-edit verbs', () => {
   })
 
   describe('deleteTeam', () => {
-    it('refuses a team that still has slaves, deleting nothing', async () => {
+    it('deletes the department with its slaves and their runs, and says the counts', async () => {
       const { teamId, workspaceId } = fixture
 
       const result = await deleteTeam(teamId)
 
-      expect(result.ok).toBe(false)
-      if (!result.ok) expect(result.error).toEqual({ kind: 'team_not_empty', teamId, slaves: 2 })
-      expect(await prisma.team.findUnique({ where: { id: teamId } })).not.toBeNull()
-      expect(await orgChangedEvents(workspaceId)).toHaveLength(0)
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect(result.value).toEqual({ slaves: 2, runs: 1 })
+      expect(await prisma.team.findUnique({ where: { id: teamId } })).toBeNull()
+      expect(await prisma.slave.count()).toBe(0)
+      expect(await prisma.slaveRun.count()).toBe(0)
+
+      const events = await orgChangedEvents(workspaceId)
+      expect(events).toHaveLength(1)
+      expect(events[0]?.payload).toEqual({ entity: 'team', id: teamId, field: 'deleted', from: 'Engineering', to: null, slaves: 2, runs: 1 })
     })
 
     it('deletes an empty team and emits one org.changed event with to: null', async () => {
@@ -282,7 +294,7 @@ describe('org-edit verbs', () => {
       const events = await orgChangedEvents(workspaceId)
       expect(events).toHaveLength(1)
       expect(events[0]?.slaveId).toBeNull()
-      expect(events[0]?.payload).toEqual({ entity: 'team', id: emptyTeam.id, field: 'deleted', from: 'Design', to: null })
+      expect(events[0]?.payload).toEqual({ entity: 'team', id: emptyTeam.id, field: 'deleted', from: 'Design', to: null, slaves: 0, runs: 0 })
     })
 
     it('refuses an unknown team', async () => {

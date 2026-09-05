@@ -12,8 +12,11 @@ import {
   createTemplate,
   createUser,
   createWorkspace,
+  deleteCompany,
+  deleteCompanySlave,
   deleteSlave,
   deleteCompanyTeam,
+  deleteSlaveTemplate,
   deleteTeam,
   deleteUser,
   emergencyStop,
@@ -94,13 +97,14 @@ const USAGE = `usage: orchestrator <command> [options]
   rename-slave --slave <id> --name <n> rename a project slave
   set-role --slave <id> --role <r>     change a project slave's role -- refused while the slave
                                        holds a live run
-  delete-slave --slave <id> --yes      remove a project slave -- refused while it carries any run
-                                       history, terminal or not. Omit --yes to see what would be
-                                       deleted without doing it.
+  delete-slave --slave <id> --yes      remove a project slave WITH its run history -- refused
+                                       only while it holds a live run. Omit --yes to see what
+                                       would be deleted without doing it.
   rename-team --team <id> --name <n>   rename a project team
-  delete-team --team <id> --yes        remove a project team -- refused while it still has any
-                                       slave on its roster. Omit --yes to see what would be
-                                       deleted without doing it.
+  delete-team --team <id> --yes        remove a project team WITH its slaves and their run
+                                       history -- refused only while any of its slaves holds a
+                                       live run. Omit --yes to see what would be deleted without
+                                       doing it.
   create-team --workspace <id> --name <n>
                                        add a department to a project (no template link)
   move-slave --slave <id> --team <id>  move a project slave to another department of the same
@@ -111,9 +115,16 @@ const USAGE = `usage: orchestrator <command> [options]
   rename-company-team --team <companyTeamId> --name <n>
                                        rename a department template
   delete-company-team --team <companyTeamId> --yes
-                                       remove an EMPTY department template; project departments
-                                       copied from it keep living. Omit --yes to see what would
-                                       be deleted without doing it.
+                                       remove a department template WITH its catalog slaves;
+                                       project departments copied from it keep living. Omit --yes
+                                       to see what would be deleted without doing it.
+  delete-company --company <id> --yes  remove a company with its department templates and catalog
+                                       slaves; projects keep their copies. Omit --yes to preview.
+  delete-company-slave --slave <companySlaveId> --yes
+                                       remove a catalog slave; project copies survive
+  delete-template --template <id> --yes
+                                       remove a slave template with the catalog slaves made from
+                                       it; project slaves keep their role
 
   users
   create-user --name <u>                create a local account. The password is never a
@@ -694,11 +705,12 @@ export async function main(argv: readonly string[]): Promise<number> {
       // `--clear` above -- a bare `--yes` records `undefined` as its value, not the string `true`.
       if (!('yes' in flags)) {
         const slave = await prisma.slave.findUnique({ where: { id: slaveId }, select: { name: true } })
-        throw new Error(`refusing without --yes: this would delete slave ${slave?.name ?? slaveId} (${slaveId})`)
+        const runs = await prisma.slaveRun.count({ where: { slaveId } })
+        throw new Error(`refusing without --yes: this would delete slave ${slave?.name ?? slaveId} (${slaveId}) and ${runs} run(s)`)
       }
       const result = await deleteSlave(slaveId)
       if (!result.ok) throw new Error(refusalText(result.error))
-      process.stdout.write(`slave ${slaveId} deleted\n`)
+      process.stdout.write(`slave ${slaveId} deleted; ${result.value.runs} run(s) went with it\n`)
       return 0
     }
 
@@ -715,11 +727,13 @@ export async function main(argv: readonly string[]): Promise<number> {
       const teamId = requireFlag(flags, 'team')
       if (!('yes' in flags)) {
         const team = await prisma.team.findUnique({ where: { id: teamId }, select: { name: true } })
-        throw new Error(`refusing without --yes: this would delete team ${team?.name ?? teamId} (${teamId})`)
+        const slaves = await prisma.slave.count({ where: { teamId } })
+        const runs = await prisma.slaveRun.count({ where: { slave: { teamId } } })
+        throw new Error(`refusing without --yes: this would delete team ${team?.name ?? teamId} (${teamId}) and ${slaves} slave(s), ${runs} run(s)`)
       }
       const result = await deleteTeam(teamId)
       if (!result.ok) throw new Error(refusalText(result.error))
-      process.stdout.write(`team ${teamId} deleted\n`)
+      process.stdout.write(`team ${teamId} deleted; ${result.value.slaves} slave(s) and ${result.value.runs} run(s) went with it\n`)
       return 0
     }
 
@@ -764,11 +778,59 @@ export async function main(argv: readonly string[]): Promise<number> {
       const companyTeamId = requireFlag(flags, 'team')
       if (!('yes' in flags)) {
         const team = await prisma.companyTeam.findUnique({ where: { id: companyTeamId }, select: { name: true } })
-        throw new Error(`refusing without --yes: this would delete department template ${team?.name ?? companyTeamId} (${companyTeamId})`)
+        const catalogSlaves = await prisma.companySlave.count({ where: { companyTeamId } })
+        throw new Error(
+          `refusing without --yes: this would delete department template ${team?.name ?? companyTeamId} (${companyTeamId}) and ${catalogSlaves} catalog slave(s)`,
+        )
       }
       const result = await deleteCompanyTeam(companyTeamId)
       if (!result.ok) throw new Error(refusalText(result.error))
-      process.stdout.write(`department template ${companyTeamId} deleted\n`)
+      process.stdout.write(`department template ${companyTeamId} deleted; ${result.value.catalogSlaves} catalog slave(s) went with it\n`)
+      return 0
+    }
+
+    case 'delete-company': {
+      const companyId = requireFlag(flags, 'company')
+      if (!('yes' in flags)) {
+        const company = await prisma.company.findUnique({ where: { id: companyId }, select: { name: true } })
+        const templates = await prisma.companyTeam.count({ where: { companyId } })
+        const catalogSlaves = await prisma.companySlave.count({ where: { companyTeam: { companyId } } })
+        throw new Error(
+          `refusing without --yes: this would delete company ${company?.name ?? companyId} (${companyId}) and ${templates} department template(s), ${catalogSlaves} catalog slave(s)`,
+        )
+      }
+      const result = await deleteCompany(companyId)
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(
+        `company ${companyId} deleted; ${result.value.templates} department template(s) and ${result.value.catalogSlaves} catalog slave(s) went with it, ${result.value.projectsDetached} project(s) detached\n`,
+      )
+      return 0
+    }
+
+    case 'delete-company-slave': {
+      const companySlaveId = requireFlag(flags, 'slave')
+      if (!('yes' in flags)) {
+        const slave = await prisma.companySlave.findUnique({ where: { id: companySlaveId }, select: { name: true } })
+        throw new Error(`refusing without --yes: this would delete catalog slave ${slave?.name ?? companySlaveId} (${companySlaveId})`)
+      }
+      const result = await deleteCompanySlave(companySlaveId)
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(`catalog slave ${companySlaveId} deleted\n`)
+      return 0
+    }
+
+    case 'delete-template': {
+      const templateId = requireFlag(flags, 'template')
+      if (!('yes' in flags)) {
+        const template = await prisma.slaveTemplate.findUnique({ where: { id: templateId }, select: { name: true } })
+        const catalogSlaves = await prisma.companySlave.count({ where: { templateId } })
+        throw new Error(
+          `refusing without --yes: this would delete template ${template?.name ?? templateId} (${templateId}) and ${catalogSlaves} catalog slave(s)`,
+        )
+      }
+      const result = await deleteSlaveTemplate(templateId)
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(`template ${templateId} deleted; ${result.value.catalogSlaves} catalog slave(s) went with it\n`)
       return 0
     }
 

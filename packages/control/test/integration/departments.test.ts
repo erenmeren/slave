@@ -307,14 +307,14 @@ describe('renameCompanyTeam', () => {
 })
 
 describe('deleteCompanyTeam', () => {
-  it('refuses a template that still has a member, deleting nothing', async () => {
+  it('deletes a template with its member', async () => {
     const result = await deleteCompanyTeam(fixture.backendTemplateTeamId)
 
-    expect(result.ok).toBe(false)
-    if (!result.ok) {
-      expect(result.error).toEqual({ kind: 'company_team_not_empty', companyTeamId: fixture.backendTemplateTeamId, slaves: 1 })
-    }
-    expect(await prisma.companyTeam.findUnique({ where: { id: fixture.backendTemplateTeamId } })).not.toBeNull()
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value).toEqual({ catalogSlaves: 1 })
+    expect(await prisma.companyTeam.findUnique({ where: { id: fixture.backendTemplateTeamId } })).toBeNull()
+    expect(await prisma.companySlave.findUnique({ where: { id: fixture.companySlaveId } })).toBeNull()
   })
 
   it('deletes an empty template; a project department copied from it survives with companyTeamId null', async () => {

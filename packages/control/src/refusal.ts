@@ -52,6 +52,8 @@ export type ControlRefusal =
   | { readonly kind: 'template_not_found'; readonly templateId: string }
   | { readonly kind: 'company_not_found'; readonly companyId: string }
   | { readonly kind: 'company_team_not_found'; readonly companyTeamId: string }
+  /** `deleteCompanySlave` on a `companySlaveId` no `CompanySlave` row carries (M27 §5). */
+  | { readonly kind: 'company_slave_not_found'; readonly companySlaveId: string }
   | { readonly kind: 'invalid_name' }
   | { readonly kind: 'invalid_model' }
   /** A budget was set to something that is neither a non-negative number nor `null` (M13 §6.1). */
@@ -75,21 +77,13 @@ export type ControlRefusal =
    * mid-run would silently strand its dispatch decision.
    */
   | { readonly kind: 'slave_run_active'; readonly slaveId: string; readonly runId: string }
-  /** `deleteSlave` on a slave that has any `SlaveRun` history at all (M23 D1) -- terminal or
-   *  not: the row is kept as the anchor for its own past runs rather than cascade-deleting them. */
-  | { readonly kind: 'slave_has_runs'; readonly slaveId: string; readonly runs: number }
   /** `renameTeam`/`deleteTeam` on a `teamId` no `Team` row carries (M23 D1). */
   | { readonly kind: 'team_not_found'; readonly teamId: string }
-  /** `deleteTeam` on a team that still has slaves on its roster (M23 D1). */
-  | { readonly kind: 'team_not_empty'; readonly teamId: string; readonly slaves: number }
   /** `moveSlave`'s target department belongs to another project than the slave (M25 §3.1). */
   | { readonly kind: 'team_workspace_mismatch'; readonly slaveId: string; readonly teamId: string }
   /** `moveCompanySlave`'s target department template belongs to another company than the catalog
    *  slave (M25 §3.1). */
   | { readonly kind: 'company_mismatch'; readonly companySlaveId: string; readonly companyTeamId: string }
-  /** `deleteCompanyTeam` on a department template that still has catalog slaves on its roster
-   *  (M25 §3.1) -- the template counterpart of `team_not_empty`. */
-  | { readonly kind: 'company_team_not_empty'; readonly companyTeamId: string; readonly slaves: number }
   /** A skill id that no `Skill` row carries (M14 §4.3). */
   | { readonly kind: 'skill_not_found'; readonly skillId: string }
   /** A permission tool outside `PERMISSION_TOOLS` (M14 §5.7). */
@@ -175,6 +169,8 @@ export function refusalText(refusal: ControlRefusal): string {
       return `no company with id ${refusal.companyId}`
     case 'company_team_not_found':
       return `no company team with id ${refusal.companyTeamId}`
+    case 'company_slave_not_found':
+      return `no catalog slave with id ${refusal.companySlaveId}`
     case 'invalid_name':
       return 'a name must be a non-empty text'
     case 'invalid_model':
@@ -195,18 +191,12 @@ export function refusalText(refusal: ControlRefusal): string {
       return 'a role must be a non-empty text'
     case 'slave_run_active':
       return `slave ${refusal.slaveId} has a live run (${refusal.runId}); change its role when the run has ended`
-    case 'slave_has_runs':
-      return `slave ${refusal.slaveId} has ${refusal.runs} run(s) in history and stays (rename it or leave it idle)`
     case 'team_not_found':
       return `no team with id ${refusal.teamId}`
-    case 'team_not_empty':
-      return `team ${refusal.teamId} still has ${refusal.slaves} slave(s)`
     case 'team_workspace_mismatch':
       return `department ${refusal.teamId} belongs to another project than slave ${refusal.slaveId}`
     case 'company_mismatch':
       return `department template ${refusal.companyTeamId} belongs to another company than catalog slave ${refusal.companySlaveId}`
-    case 'company_team_not_empty':
-      return `department template ${refusal.companyTeamId} still has ${refusal.slaves} member(s); move them first`
     case 'skill_not_found':
       return `no skill with id ${refusal.skillId}`
     case 'invalid_tool':

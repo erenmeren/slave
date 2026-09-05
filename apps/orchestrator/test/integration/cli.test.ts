@@ -99,8 +99,9 @@ interface Fixture {
   readonly taskId: string
   readonly slaveId: string
   readonly teamId: string
-  /** A second, empty team on the same workspace -- `delete-team` succeeds only against a team
-   *  with no slaves on it, and `fixture.teamId` always has `slaveId` on its roster. */
+  /** A second, empty team on the same workspace -- kept separate from `fixture.teamId` (which
+   *  always has `slaveId` on its roster) so `delete-team` here never touches the slave other
+   *  cases in this file depend on. */
   readonly emptyTeamId: string
   readonly repoPath: string
 }
@@ -903,19 +904,19 @@ describe('the orchestrator CLI', () => {
       const result = await runCli(['delete-slave', '--slave', fixture.slaveId, '--yes'])
 
       expect(result.code).toBe(0)
-      expect(result.stdout).toMatch(new RegExp(`^slave ${fixture.slaveId} deleted$`, 'm'))
+      expect(result.stdout).toContain(`slave ${fixture.slaveId} deleted`)
       expect(await prisma.slave.findUnique({ where: { id: fixture.slaveId } })).toBeNull()
     })
 
-    it('refuses to delete a slave without --yes, naming what it would have deleted', async () => {
+    it('refuses to delete a slave without --yes, naming the footprint it would have deleted', async () => {
       const result = await runCli(['delete-slave', '--slave', fixture.slaveId])
 
       expect(result.code).toBe(1)
-      expect(result.stderr).toContain(`refusing without --yes: this would delete slave Alex (${fixture.slaveId})`)
+      expect(result.stderr).toContain(`refusing without --yes: this would delete slave Alex (${fixture.slaveId}) and 0 run(s)`)
       expect(await prisma.slave.findUnique({ where: { id: fixture.slaveId } })).not.toBeNull()
     })
 
-    it('passes a real refusal through refusalText -- slave_has_runs', async () => {
+    it('deletes a slave WITH its terminal run history with --yes', async () => {
       const task = await prisma.task.create({
         data: {
           workspaceId: fixture.workspaceId,
@@ -928,9 +929,10 @@ describe('the orchestrator CLI', () => {
 
       const result = await runCli(['delete-slave', '--slave', fixture.slaveId, '--yes'])
 
-      expect(result.code).toBe(1)
-      expect(result.stderr).toContain(`slave ${fixture.slaveId} has 1 run(s) in history and stays (rename it or leave it idle)`)
-      expect(await prisma.slave.findUnique({ where: { id: fixture.slaveId } })).not.toBeNull()
+      expect(result.code).toBe(0)
+      expect(result.stdout).toContain(`slave ${fixture.slaveId} deleted; 1 run(s) went with it`)
+      expect(await prisma.slave.findUnique({ where: { id: fixture.slaveId } })).toBeNull()
+      expect(await prisma.slaveRun.count({ where: { slaveId: fixture.slaveId } })).toBe(0)
     })
 
     it('renames a team', async () => {
@@ -945,15 +947,15 @@ describe('the orchestrator CLI', () => {
       const result = await runCli(['delete-team', '--team', fixture.emptyTeamId, '--yes'])
 
       expect(result.code).toBe(0)
-      expect(result.stdout).toMatch(new RegExp(`^team ${fixture.emptyTeamId} deleted$`, 'm'))
+      expect(result.stdout).toContain(`team ${fixture.emptyTeamId} deleted`)
       expect(await prisma.team.findUnique({ where: { id: fixture.emptyTeamId } })).toBeNull()
     })
 
-    it('refuses to delete a team without --yes, naming what it would have deleted', async () => {
+    it('refuses to delete a team without --yes, naming the footprint it would have deleted', async () => {
       const result = await runCli(['delete-team', '--team', fixture.emptyTeamId])
 
       expect(result.code).toBe(1)
-      expect(result.stderr).toContain(`refusing without --yes: this would delete team Design (${fixture.emptyTeamId})`)
+      expect(result.stderr).toContain(`refusing without --yes: this would delete team Design (${fixture.emptyTeamId}) and 0 slave(s), 0 run(s)`)
       expect(await prisma.team.findUnique({ where: { id: fixture.emptyTeamId } })).not.toBeNull()
     })
   })

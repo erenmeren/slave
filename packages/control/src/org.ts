@@ -7,6 +7,7 @@ import type { Principal } from './principal.js'
 import { isUniqueConstraintViolation } from './prisma-errors.js'
 import type { ControlRefusal } from './refusal.js'
 import { resolveRuntime, workspaceDefaultProvider } from './runtime.js'
+import { liveRunCount } from './workspace.js'
 
 /**
  * Validates an UNTRUSTED provider string (a CLI flag, a web request body). `PROVIDER_KINDS`
@@ -449,8 +450,8 @@ export async function setSlaveModel(
 /**
  * Locks and loads one `Slave` row for an editing verb, with exactly what every caller below
  * needs: its team (for the workspace id an `org.changed` event carries) and its runs (for the
- * live-run check `setSlaveRole` makes and the has-history check `deleteSlave` makes) -- one
- * shared read instead of five near-identical ones.
+ * live-run check `setSlaveRole` makes and the run count `deleteSlave` reports) -- one shared read
+ * instead of five near-identical ones.
  *
  * `SELECT ... FOR UPDATE` first, not a plain `findUnique`: two operators editing the same slave
  * at once must serialise rather than race a lost update, the same `dependency.ts`/`world.ts`
@@ -468,7 +469,7 @@ async function lockSlave(tx: Prisma.TransactionClient, slaveId: string) {
 }
 
 /** The same lock-then-load shape as {@link lockSlave}, for `renameTeam`/`deleteTeam`'s own row --
- *  its slaves are what `deleteTeam`'s not-empty check needs. */
+ *  its slaves are what `deleteTeam` counts and cascades into. */
 async function lockTeam(tx: Prisma.TransactionClient, teamId: string) {
   await tx.$queryRaw`SELECT id FROM "Team" WHERE id = ${teamId} FOR UPDATE`
   return tx.team.findUnique({
@@ -560,30 +561,25 @@ export async function setSlaveRole(
 }
 
 /**
- * Removes a project slave -- refused while it carries ANY `SlaveRun` history, terminal or not
- * (not only a live one, which `setSlaveRole` above already guards separately). `Slave.runs` casc-
- * ades on delete (schema.prisma), so this refusal is the only thing standing between an operator
- * and silently destroying a worker's whole run history along with the row; the fix the refusal
- * text offers -- rename it, or leave it idle -- is real: a worker with history is never *forced*
- * to run again, it just cannot be deleted out from under its own record.
+ * Removes a project slave WITH its run history; refused only while a run is live (M27 §4.1).
+ * `Slave.runs` cascades on delete (schema.prisma) -- and everything under a run (`Checkpoint`),
+ * plus `SlavePermission`, `SlaveSkill`, `SlaveMessage`. `ExecutionEvent.slaveId` has no FK and
+ * keeps its value; the activity feed already renders past events from their payload and tolerates
+ * a slave it can no longer resolve.
  */
 export async function deleteSlave(
   slaveId: string,
   principal?: Principal,
-): Promise<Result<void, ControlRefusal>> {
+): Promise<Result<{ readonly runs: number }, ControlRefusal>> {
   const outcome = await prisma.$transaction(async (tx) => {
     const slave = await lockSlave(tx, slaveId)
     if (slave === null) return { ok: false as const, error: { kind: 'slave_not_found', slaveId } as ControlRefusal }
 
-    if (slave.runs.length > 0) {
-      return {
-        ok: false as const,
-        error: { kind: 'slave_has_runs', slaveId, runs: slave.runs.length } as ControlRefusal,
-      }
-    }
-
-    await tx.slave.delete({ where: { id: slaveId } })
-    return { ok: true as const, value: { workspaceId: slave.team.workspaceId, from: slave.name } }
+    const live = await liveRunCount(tx, { slaveId })
+    if (live > 0) return { ok: false as const, error: { kind: 'live_runs', entity: 'slave', id: slaveId, runs: live } as ControlRefusal }
+    const runs = slave.runs.length
+    await tx.slave.delete({ where: { id: slaveId } })   // cascades SlaveRun (+Checkpoint), SlavePermission, SlaveSkill, SlaveMessage
+    return { ok: true as const, value: { workspaceId: slave.team.workspaceId, from: slave.name, runs } }
   })
 
   if (!outcome.ok) return err(outcome.error)
@@ -593,11 +589,11 @@ export async function deleteSlave(
     workspaceId: outcome.value.workspaceId,
     slaveId,
     actor: 'human',
-    payload: { entity: 'slave', id: slaveId, field: 'deleted', from: outcome.value.from, to: null },
+    payload: { entity: 'slave', id: slaveId, field: 'deleted', from: outcome.value.from, to: null, runs: outcome.value.runs },
     userId: principal?.userId ?? null,
   })
 
-  return ok(undefined)
+  return ok({ runs: outcome.value.runs })
 }
 
 /** Renames a project team. Sibling names are unique per WORKSPACE, the same rule
@@ -634,28 +630,23 @@ export async function renameTeam(
 }
 
 /**
- * Removes a project team -- refused while it still has any slave on its roster. `deleteSlave`
- * above already keeps a worker with run history off-limits, so a non-empty team is always exactly
- * "slaves remain that were never deleted"; there is no separate cascade concern to name here the
- * way there is for `deleteSlave`.
+ * Removes a project team WITH its slaves and everything under them; refused only while any slave
+ * of the department holds a live run (M27 §4.2).
  */
 export async function deleteTeam(
   teamId: string,
   principal?: Principal,
-): Promise<Result<void, ControlRefusal>> {
+): Promise<Result<{ readonly slaves: number; readonly runs: number }, ControlRefusal>> {
   const outcome = await prisma.$transaction(async (tx) => {
     const team = await lockTeam(tx, teamId)
     if (team === null) return { ok: false as const, error: { kind: 'team_not_found', teamId } as ControlRefusal }
 
-    if (team.slaves.length > 0) {
-      return {
-        ok: false as const,
-        error: { kind: 'team_not_empty', teamId, slaves: team.slaves.length } as ControlRefusal,
-      }
-    }
-
-    await tx.team.delete({ where: { id: teamId } })
-    return { ok: true as const, value: { workspaceId: team.workspaceId, from: team.name } }
+    const live = await liveRunCount(tx, { teamId })
+    if (live > 0) return { ok: false as const, error: { kind: 'live_runs', entity: 'team', id: teamId, runs: live } as ControlRefusal }
+    const slaves = team.slaves.length
+    const runs = await tx.slaveRun.count({ where: { slave: { teamId } } })
+    await tx.team.delete({ where: { id: teamId } })   // cascades Slave and everything under it
+    return { ok: true as const, value: { workspaceId: team.workspaceId, from: team.name, slaves, runs } }
   })
 
   if (!outcome.ok) return err(outcome.error)
@@ -664,11 +655,11 @@ export async function deleteTeam(
     type: 'org.changed',
     workspaceId: outcome.value.workspaceId,
     actor: 'human',
-    payload: { entity: 'team', id: teamId, field: 'deleted', from: outcome.value.from, to: null },
+    payload: { entity: 'team', id: teamId, field: 'deleted', from: outcome.value.from, to: null, slaves: outcome.value.slaves, runs: outcome.value.runs },
     userId: principal?.userId ?? null,
   })
 
-  return ok(undefined)
+  return ok({ slaves: outcome.value.slaves, runs: outcome.value.runs })
 }
 
 // ---- M25 §3.1: departments -----------------------------------------------------------------
@@ -819,19 +810,18 @@ export async function renameCompanyTeam(
   }
 }
 
-/** Deletes an EMPTY department template. Project departments copied from it survive with
- *  `companyTeamId` set to null (`onDelete: SetNull` on `Team.companyTeam`). No event.
+/**
+ * Deletes a department template WITH its catalog slaves; project departments copied from it
+ * survive (`onDelete: SetNull` on `Team.companyTeam`). No event.
  *
- *  Locked check-then-delete, the same shape as {@link deleteTeam}: `CompanySlave.companyTeamId`
- *  is `onDelete: Cascade` and NOT nullable, so a plain (unlocked) check racing a concurrent
- *  `addCompanySlave`/`moveCompanySlave` into this template between the read and the delete would
- *  cascade-delete that catalog slave -- exactly what `company_team_not_empty` exists to prevent.
- *  `SELECT ... FOR UPDATE` first serialises against that race the way `lockTeam` does for
- *  `deleteTeam`. */
+ * Locked check-then-delete, the same shape as {@link deleteTeam}: `SELECT ... FOR UPDATE` first
+ * serialises against a concurrent `addCompanySlave`/`moveCompanySlave` into this template, the same
+ * `lockTeam` idiom.
+ */
 export async function deleteCompanyTeam(
   companyTeamId: string,
   _principal?: Principal,
-): Promise<Result<void, ControlRefusal>> {
+): Promise<Result<{ readonly catalogSlaves: number }, ControlRefusal>> {
   const outcome = await prisma.$transaction(async (tx) => {
     await tx.$queryRaw`SELECT id FROM "CompanyTeam" WHERE id = ${companyTeamId} FOR UPDATE`
     const team = await tx.companyTeam.findUnique({
@@ -839,17 +829,74 @@ export async function deleteCompanyTeam(
       select: { id: true, _count: { select: { slaves: true } } },
     })
     if (team === null) return { ok: false as const, error: { kind: 'company_team_not_found', companyTeamId } as ControlRefusal }
-    if (team._count.slaves > 0) {
-      return {
-        ok: false as const,
-        error: { kind: 'company_team_not_empty', companyTeamId, slaves: team._count.slaves } as ControlRefusal,
-      }
-    }
+    const catalogSlaves = team._count.slaves
 
     await tx.companyTeam.delete({ where: { id: companyTeamId } })
-    return { ok: true as const, value: undefined }
+    return { ok: true as const, value: { catalogSlaves } }
   })
 
-  if (!outcome.ok) return err(outcome.error)
-  return ok(undefined)
+  return outcome.ok ? ok(outcome.value) : err(outcome.error)
+}
+
+/**
+ * Removes a catalog slave (M27 §5). The project slaves materialized from it survive with
+ * `companySlaveId` null (`SetNull`). No event: the catalog has no workspace.
+ *
+ * Locked check-then-delete, the same shape as {@link deleteSlaveTemplate} and {@link deleteCompany}
+ * below (spec §5: every catalog verb locks the row it deletes).
+ */
+export async function deleteCompanySlave(
+  companySlaveId: string,
+  _principal?: Principal,
+): Promise<Result<void, ControlRefusal>> {
+  const outcome = await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM "CompanySlave" WHERE id = ${companySlaveId} FOR UPDATE`
+    const row = await tx.companySlave.findUnique({ where: { id: companySlaveId }, select: { id: true } })
+    if (row === null) return { ok: false as const, error: { kind: 'company_slave_not_found', companySlaveId } as ControlRefusal }
+    await tx.companySlave.delete({ where: { id: companySlaveId } })
+    return { ok: true as const, value: undefined }
+  })
+  return outcome.ok ? ok(undefined) : err(outcome.error)
+}
+
+/**
+ * Removes a slave template WITH the catalog slaves instantiated from it (M27 §5): the schema says
+ * nothing about `CompanySlave.template` (Restrict), so the verb deletes them first, in the same
+ * transaction behind a row lock. Project slaves keep the role that was copied at
+ * materialization. No event.
+ */
+export async function deleteSlaveTemplate(
+  templateId: string,
+  _principal?: Principal,
+): Promise<Result<{ readonly catalogSlaves: number }, ControlRefusal>> {
+  const outcome = await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM "SlaveTemplate" WHERE id = ${templateId} FOR UPDATE`
+    const row = await tx.slaveTemplate.findUnique({ where: { id: templateId }, select: { id: true } })
+    if (row === null) return { ok: false as const, error: { kind: 'template_not_found', templateId } as ControlRefusal }
+    const { count: catalogSlaves } = await tx.companySlave.deleteMany({ where: { templateId } })
+    await tx.slaveTemplate.delete({ where: { id: templateId } })
+    return { ok: true as const, value: { catalogSlaves } }
+  })
+  return outcome.ok ? ok(outcome.value) : err(outcome.error)
+}
+
+/**
+ * Removes a company WITH its department templates and catalog slaves (the schema cascades both).
+ * Projects that had the company assigned are detached first (`Workspace.companyId` has no rule)
+ * and keep every department and slave they copied. No event.
+ */
+export async function deleteCompany(
+  companyId: string,
+  _principal?: Principal,
+): Promise<Result<{ readonly templates: number; readonly catalogSlaves: number; readonly projectsDetached: number }, ControlRefusal>> {
+  const outcome = await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM "Company" WHERE id = ${companyId} FOR UPDATE`
+    const row = await tx.company.findUnique({ where: { id: companyId }, select: { id: true, _count: { select: { teams: true } } } })
+    if (row === null) return { ok: false as const, error: { kind: 'company_not_found', companyId } as ControlRefusal }
+    const catalogSlaves = await tx.companySlave.count({ where: { companyTeam: { companyId } } })
+    const { count: projectsDetached } = await tx.workspace.updateMany({ where: { companyId }, data: { companyId: null } })
+    await tx.company.delete({ where: { id: companyId } })
+    return { ok: true as const, value: { templates: row._count.teams, catalogSlaves, projectsDetached } }
+  })
+  return outcome.ok ? ok(outcome.value) : err(outcome.error)
 }

@@ -24,9 +24,11 @@
 //                        untouched non-terminal task refused 409.
 //   7. communication  -- the graph names an implementer -> reviewer `review` edge.
 //   6. org            -- `rename-slave`/`set-role`/`delete-slave` on an idle slave (all ok, three
-//                        `org.changed` events), then `delete-slave` on the busy worker
-//                        (`slave_has_runs`) and `delete-team` on the still non-empty team
-//                        (`team_not_empty`), both refused.
+//                        `org.changed` events), then `delete-slave --yes` on the busy worker
+//                        deletes it WITH its terminal run history, and `delete-team --yes`
+//                        deletes the department WITH its remaining slave (M27 §4: both refuse
+//                        only a LIVE run, and there is none by this point) -- five `org.changed`
+//                        events in all.
 //   [next dev, accounts mode, boot #2 of 2]
 //   8. accounts       -- `create-user` through the CLI (stdin password), login, a goal posted with
 //                        the cookie (the event carries the user's id), the Activity page naming the
@@ -570,17 +572,25 @@ try {
     assert(deleteIdle.stdout.includes(`slave ${idle.id} deleted`), `delete-slave (idle): unexpected stdout ${deleteIdle.stdout}`)
 
     const deleteWorker = runCli(['delete-slave', '--slave', worker.id, '--yes'])
-    assert(deleteWorker.status === 1, `delete-slave (worker, has runs): expected exit 1, got ${String(deleteWorker.status)}`)
-    assert(deleteWorker.stderr.includes('run(s) in history'), `delete-slave (worker): expected slave_has_runs text, got ${deleteWorker.stderr}`)
+    assert(deleteWorker.status === 0, `delete-slave (worker, terminal run history): expected exit 0, got ${String(deleteWorker.status)} -- stderr: ${deleteWorker.stderr}`)
+    assert(deleteWorker.stdout.includes(`slave ${worker.id} deleted`), `delete-slave (worker): unexpected stdout ${deleteWorker.stdout}`)
+    assert(
+      (await prisma.slaveRun.count({ where: { slaveId: worker.id } })) === 0,
+      'delete-slave (worker): its runs should be gone along with the row',
+    )
 
     const deleteTeamRes = runCli(['delete-team', '--team', team.id, '--yes'])
-    assert(deleteTeamRes.status === 1, `delete-team (non-empty): expected exit 1, got ${String(deleteTeamRes.status)}`)
-    assert(deleteTeamRes.stderr.includes('still has'), `delete-team: expected team_not_empty text, got ${deleteTeamRes.stderr}`)
+    assert(deleteTeamRes.status === 0, `delete-team: expected exit 0, got ${String(deleteTeamRes.status)} -- stderr: ${deleteTeamRes.stderr}`)
+    assert(deleteTeamRes.stdout.includes(`team ${team.id} deleted`), `delete-team: unexpected stdout ${deleteTeamRes.stdout}`)
+    assert(
+      (await prisma.team.findUnique({ where: { id: team.id } })) === null,
+      'delete-team: the department row should be gone',
+    )
 
     const orgEvents = await prisma.executionEvent.findMany({ where: { workspaceId, type: 'org_changed' } })
-    assert(orgEvents.length === 3, `expected exactly 3 org.changed events, got ${String(orgEvents.length)}`)
+    assert(orgEvents.length === 5, `expected exactly 5 org.changed events, got ${String(orgEvents.length)}`)
   }
-  console.log('stage 6: the roster was renamed, re-roled and deleted (idle); a busy slave and a non-empty team both refused')
+  console.log('stage 6: the roster was renamed and re-roled; the idle slave, the busy worker with its run history, and the department were all deleted with --yes')
 
   await stopNextDev(loopbackServer, 'loopback')
   loopbackServer = null
