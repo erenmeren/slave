@@ -1,5 +1,6 @@
 import type { ReactElement, ReactNode } from 'react'
 import type { DomainEventType } from '@slave-of-ai/db'
+import { plural } from '../../lib/plural'
 import { ActivityCard, type ActivityCardProps } from './ActivityCard'
 
 // Every payload field name below is copied verbatim from `packages/domain/src/events/schema.ts`
@@ -518,13 +519,27 @@ function OrgChangedCard(props: ActivityCardProps): ReactElement {
     // prior name -- the same nullable shape `to` already has for `deleted`.
     from: string | null
     to: string | null
+    // M27 §4.1/§4.2 (ruling R16): the cascade counts `deleteSlave`/`deleteTeam` put on the payload
+    // so the timeline says what went down with the row. Both optional in the domain schema, and
+    // both absent here on every other field and on every row written before M27 — so the counts
+    // line only renders when the event actually carries one.
+    runs?: number
+    slaves?: number
   }
+  const counts =
+    payload.field === 'deleted'
+      ? [
+          payload.slaves === undefined ? null : plural(payload.slaves, 'slave'),
+          payload.runs === undefined ? null : plural(payload.runs, 'run'),
+        ].filter((part): part is string => part !== null)
+      : []
   return (
     <ActivityCard {...props}>
       <Transition tone="idle" label={ORG_CHANGED_LABEL[payload.field]}>
         <span data-testid="org-from">{payload.from ?? '—'}</span>
         {' → '}
         <span data-testid="org-to">{payload.to ?? '—'}</span>
+        {counts.length > 0 && <span data-testid="org-counts"> · {counts.join(', ')}</span>}
       </Transition>
     </ActivityCard>
   )

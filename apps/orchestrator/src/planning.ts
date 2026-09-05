@@ -12,6 +12,7 @@ import type { SlaveRuntimeAdapter, RunHandle } from '@slave-of-ai/providers'
 import { resolveRuntime, workspaceDefaultProvider } from './model.js'
 import { resolveAdapter } from './provider.js'
 import { pumpRun } from './pump.js'
+import { createRunUnlessArchived } from './runs.js'
 import { activePumpRunIds, emailLocalPart, pumps, type TickDeps } from './tick.js'
 import { verifyConcludedRun } from './verify.js'
 
@@ -272,9 +273,12 @@ export async function dispatchPlanning(deps: TickDeps): Promise<RunId | null> {
   // Dispatch -- the `dispatchReview` shape minus a diff and minus a task: run row first, NO
   // taskId, so a data-corruption null-task check downstream never has to wonder whether this row
   // was supposed to have one.
-  const run = await prisma.slaveRun.create({
-    data: { slaveId: manager.id, kind: 'planning', status: 'starting' },
-  })
+  // M27 §8 (ruling R15): the insert re-reads `Workspace.archivedAt` under `FOR SHARE`, so an
+  // archive that commits between this dispatch's own read of the workspace (above) and the write
+  // is seen. `null` is "planning did not start" -- the same silent outcome as every manager being
+  // busy, and deliberately not a failure: nothing was attempted, so nothing feeds the retry cap.
+  const run = await createRunUnlessArchived(workspace.id, { slaveId: manager.id, kind: 'planning', status: 'starting' })
+  if (run === null) return null
   const runId = brandRunId(run.id)
 
   // Declared outside the `try` for the same reason `dispatchReview` does: the catch below needs to

@@ -212,6 +212,31 @@ describe('targeted card bodies', () => {
     expect(screen.getByTestId('org-to').textContent).toBe('—')
   })
 
+  // M27 §4.1/§4.2 (ruling R16). Two counts on the department delete, one on the slave delete, and
+  // `1 run` rather than `1 runs` — the whole point of the counts is that a person reads them.
+  it('org.changed appends the cascade counts on a delete (M27)', () => {
+    const Card = ACTIVITY_CARDS['org.changed']
+    const team = baseEvent('org.changed', { entity: 'team', id: 't-1', field: 'deleted', from: 'Design', to: null, slaves: 2, runs: 3 })
+    const { unmount } = render(<Card event={team} {...CARD_PROPS} />)
+    expect(screen.getByTestId('org-counts').textContent).toBe(' · 2 slaves, 3 runs')
+    unmount()
+
+    const slave = baseEvent('org.changed', { entity: 'slave', id: 'ag-1', field: 'deleted', from: 'Alex', to: null, runs: 1 })
+    render(<Card event={slave} {...CARD_PROPS} />)
+    expect(screen.getByTestId('org-counts').textContent).toBe(' · 1 run')
+  })
+
+  it('org.changed renders no counts for a rename, or for a pre-M27 delete that carries none', () => {
+    const Card = ACTIVITY_CARDS['org.changed']
+    const { unmount } = render(<Card event={fixtureFor('org.changed')} {...CARD_PROPS} />)
+    expect(screen.queryByTestId('org-counts')).toBeNull()
+    unmount()
+
+    const old = baseEvent('org.changed', { entity: 'slave', id: 'ag-1', field: 'deleted', from: 'Alex', to: null })
+    render(<Card event={old} {...CARD_PROPS} />)
+    expect(screen.queryByTestId('org-counts')).toBeNull()
+  })
+
   it('org.changed renders — for a null from (a department created, M25)', () => {
     const Card = ACTIVITY_CARDS['org.changed']
     const event = baseEvent('org.changed', { entity: 'team', id: 't-1', field: 'created', from: null, to: 'Design' })

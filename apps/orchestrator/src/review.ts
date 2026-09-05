@@ -13,6 +13,7 @@ import type { SlaveRuntimeAdapter, RunHandle } from '@slave-of-ai/providers'
 import { resolveRuntime, workspaceDefaultProvider } from './model.js'
 import { resolveAdapter } from './provider.js'
 import { pumpRun } from './pump.js'
+import { createRunUnlessArchived } from './runs.js'
 import { activePumpRunIds, emailLocalPart, pumps, type TickDeps } from './tick.js'
 import { rejectTask, verifyConcludedRun } from './verify.js'
 import { gitIn } from './worktree.js'
@@ -289,9 +290,12 @@ async function dispatchReview(deps: TickDeps, task: ReviewableTask): Promise<Run
   // worktree the implementation run left, so there is nothing to provision.
   const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: task.workspaceId } })
 
-  const run = await prisma.slaveRun.create({
-    data: { taskId: task.id, slaveId: reviewer.id, kind: 'review', status: 'starting' },
-  })
+  // M27 §8 (ruling R15): the insert re-reads `Workspace.archivedAt` under `FOR SHARE`, so an
+  // archive that commits between the read just above and this write is seen. `null` is "no review
+  // dispatched" -- the same silent outcome as every reviewer being busy, and deliberately not a
+  // failure: nothing was attempted, so nothing feeds `REVIEW_RETRY_CAP`.
+  const run = await createRunUnlessArchived(workspace.id, { taskId: task.id, slaveId: reviewer.id, kind: 'review', status: 'starting' })
+  if (run === null) return null
   const runId = brandRunId(run.id)
 
   // Declared outside the `try` for the same reason `startRun` does: the catch below needs to tell

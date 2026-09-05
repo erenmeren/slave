@@ -92,8 +92,9 @@ describe('listAllSlaves', () => {
     expect(blairRow?.projectName).toBe('Checkout Platform')
     expect(blairRow?.model).toBe('claude-haiku-4')
     expect(blairRow?.gate).toBe('all-tools')
-    // M27 §7: `runCount` rides the same grouped query `costUsd`/`unmeasuredRuns` already read off
-    // -- one seeded run, no second round trip.
+    // M27 §7: `runCount` is `listAllSlaves`'s OWN `slaveRun.groupBy` by `slaveId` alone -- not a
+    // field read off `listWorkers`'s grouped query, which buckets by `slaveId`/`provider`/`status`
+    // and so counts a bucket, not a slave (see `server/org.ts`'s docstring). One seeded run here.
     expect(blairRow?.runCount).toBe(1)
     // A hand-made slave has no roster link at all -- its `companyId`/`companyTeamId` stay null.
     expect(blairRow?.teamId).toBe(fixture.teamId)

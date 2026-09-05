@@ -904,7 +904,7 @@ describe('the orchestrator CLI', () => {
       const result = await runCli(['delete-slave', '--slave', fixture.slaveId, '--yes'])
 
       expect(result.code).toBe(0)
-      expect(result.stdout).toContain(`slave ${fixture.slaveId} deleted`)
+      expect(result.stdout).toContain(`slave ${fixture.slaveId} deleted; 0 run(s) went with it`)
       expect(await prisma.slave.findUnique({ where: { id: fixture.slaveId } })).toBeNull()
     })
 
@@ -947,7 +947,7 @@ describe('the orchestrator CLI', () => {
       const result = await runCli(['delete-team', '--team', fixture.emptyTeamId, '--yes'])
 
       expect(result.code).toBe(0)
-      expect(result.stdout).toContain(`department ${fixture.emptyTeamId} deleted`)
+      expect(result.stdout).toContain(`department ${fixture.emptyTeamId} deleted; 0 slave(s) and 0 run(s) went with it`)
       expect(await prisma.team.findUnique({ where: { id: fixture.emptyTeamId } })).toBeNull()
     })
 
@@ -958,6 +958,146 @@ describe('the orchestrator CLI', () => {
       expect(result.stderr).toContain(`refusing without --yes: this would delete department Design (${fixture.emptyTeamId}) and 0 slave(s), 0 run(s)`)
       expect(await prisma.team.findUnique({ where: { id: fixture.emptyTeamId } })).not.toBeNull()
     })
+  })
+
+  // M27 §3.5/§5.2: the six CLI verbs this milestone added, none of which had a case here (final
+  // review, Important 4). Each asserts the preview text a bare invocation prints (the deletes) or
+  // the success line (archive/restore/list), plus the database state after `--yes` — the shape the
+  // `delete-slave`/`delete-team` cases above already use.
+  describe('archive, restore and the catalog deletes', () => {
+    interface Catalog {
+      readonly companyId: string
+      readonly companyTeamId: string
+      readonly companySlaveId: string
+      readonly templateId: string
+    }
+
+    /** One company, one department template, one catalog slave on one slave template — with the
+     *  project's own slave linked to that catalog slave, so the previews have a copy to count and
+     *  the deletes have a `SetNull` survivor to leave behind. */
+    async function seedCatalog(): Promise<Catalog> {
+      const template = await prisma.slaveTemplate.create({ data: { name: 'Backend Developer', role: 'backend', description: '' } })
+      const company = await prisma.company.create({ data: { name: 'Atlas Software' } })
+      const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Backend' } })
+      const companySlave = await prisma.companySlave.create({
+        data: { companyTeamId: companyTeam.id, templateId: template.id, name: 'Sam' },
+      })
+      await prisma.slave.update({ where: { id: fixture.slaveId }, data: { companySlaveId: companySlave.id } })
+      await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { companyId: company.id } })
+      return { companyId: company.id, companyTeamId: companyTeam.id, companySlaveId: companySlave.id, templateId: template.id }
+    }
+
+    it('archives a project, naming what stays, and status carries the date inside its JSON', async () => {
+      const result = await runCli(['archive-workspace', '--workspace', fixture.workspaceId])
+
+      expect(result.code).toBe(0)
+      expect(result.stdout).toContain(
+        `project ${fixture.workspaceId} archived: 2 departments, 1 slaves, 1 tasks, 0 runs stay on record`,
+      )
+      expect((await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspaceId } })).archivedAt).not.toBeNull()
+
+      // Final review, minor 6: `archived` rides INSIDE the JSON document. It used to be printed as
+      // a bare line ahead of it, which made `status` unparseable for exactly the projects it was
+      // added to describe — including for the two `JSON.parse(stdout)` cases in this file.
+      // Named explicitly: `resolveWorkspace`'s auto-pick deliberately ignores archived projects
+      // (§3.3), so the only way to ask `status` about one is to say which one.
+      const status = await runCli(['status', '--workspace', fixture.workspaceId])
+      expect(status.code).toBe(0)
+      const parsed = JSON.parse(status.stdout) as { archived: string | null; runs: readonly unknown[] }
+      expect(parsed.archived).toMatch(/^\d{4}-\d{2}-\d{2}T/)
+    }, 30_000)
+
+    it('refuses to archive while a run is live, calling it a project rather than a workspace', async () => {
+      await prisma.slaveRun.create({ data: { taskId: fixture.taskId, slaveId: fixture.slaveId, status: 'working' } })
+
+      const result = await runCli(['archive-workspace', '--workspace', fixture.workspaceId])
+
+      expect(result.code).toBe(1)
+      expect(result.stderr).toContain(`project ${fixture.workspaceId} has 1 live run(s)`)
+      expect((await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspaceId } })).archivedAt).toBeNull()
+    }, 30_000)
+
+    it('restores an archived project, and status reports it unarchived', async () => {
+      await runCli(['archive-workspace', '--workspace', fixture.workspaceId])
+
+      const result = await runCli(['restore-workspace', '--workspace', fixture.workspaceId])
+
+      expect(result.code).toBe(0)
+      expect(result.stdout).toMatch(new RegExp(`^project ${fixture.workspaceId} restored$`, 'm'))
+      expect((await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspaceId } })).archivedAt).toBeNull()
+      const parsed = JSON.parse((await runCli(['status', '--workspace', fixture.workspaceId])).stdout) as { archived: string | null }
+      expect(parsed.archived).toBeNull()
+    }, 30_000)
+
+    it('lists every project and marks the archived ones', async () => {
+      await seed({ name: 'Billing' })
+      await runCli(['archive-workspace', '--workspace', fixture.workspaceId])
+
+      const result = await runCli(['list-workspaces'])
+
+      expect(result.code).toBe(0)
+      expect(result.stdout).toMatch(/^\S+ {2}Billing$/m)
+      expect(result.stdout).toMatch(new RegExp(`^${fixture.workspaceId} {2}Checkout Platform {2}\\(archived \\S+\\)$`, 'm'))
+    }, 30_000)
+
+    it('delete-company names its templates and catalog slaves without --yes, and detaches the project with it', async () => {
+      const catalog = await seedCatalog()
+
+      const preview = await runCli(['delete-company', '--company', catalog.companyId])
+      expect(preview.code).toBe(1)
+      expect(preview.stderr).toContain(
+        `refusing without --yes: this would delete company Atlas Software (${catalog.companyId}) and 1 department template(s), 1 catalog slave(s)`,
+      )
+      expect(await prisma.company.count()).toBe(1)
+
+      const result = await runCli(['delete-company', '--company', catalog.companyId, '--yes'])
+      expect(result.code).toBe(0)
+      expect(result.stdout).toContain(
+        `company ${catalog.companyId} deleted; 1 department template(s) and 1 catalog slave(s) went with it, 1 project(s) detached`,
+      )
+      expect(await prisma.company.count()).toBe(0)
+      expect(await prisma.companyTeam.count()).toBe(0)
+      expect(await prisma.companySlave.count()).toBe(0)
+      expect((await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspaceId } })).companyId).toBeNull()
+      // The project's own rows are untouched by a catalog delete — that is the whole contract.
+      expect(await prisma.slave.count({ where: { id: fixture.slaveId } })).toBe(1)
+    }, 30_000)
+
+    it('delete-company-slave prints how many project copies stay, then leaves them behind', async () => {
+      const catalog = await seedCatalog()
+
+      const preview = await runCli(['delete-company-slave', '--slave', catalog.companySlaveId])
+      expect(preview.code).toBe(1)
+      expect(preview.stderr).toContain(
+        `refusing without --yes: this would delete catalog slave Sam (${catalog.companySlaveId}); 1 project copy(ies) stay`,
+      )
+      expect(await prisma.companySlave.count()).toBe(1)
+
+      const result = await runCli(['delete-company-slave', '--slave', catalog.companySlaveId, '--yes'])
+      expect(result.code).toBe(0)
+      expect(result.stdout).toMatch(new RegExp(`^catalog slave ${catalog.companySlaveId} deleted$`, 'm'))
+      expect(await prisma.companySlave.findUnique({ where: { id: catalog.companySlaveId } })).toBeNull()
+      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId } })).companySlaveId).toBeNull()
+    }, 30_000)
+
+    it('delete-template names its catalog slaves without --yes, and takes them with it', async () => {
+      const catalog = await seedCatalog()
+
+      const preview = await runCli(['delete-template', '--template', catalog.templateId])
+      expect(preview.code).toBe(1)
+      expect(preview.stderr).toContain(
+        `refusing without --yes: this would delete template Backend Developer (${catalog.templateId}) and 1 catalog slave(s)`,
+      )
+      expect(await prisma.slaveTemplate.count()).toBe(1)
+
+      const result = await runCli(['delete-template', '--template', catalog.templateId, '--yes'])
+      expect(result.code).toBe(0)
+      expect(result.stdout).toContain(`template ${catalog.templateId} deleted; 1 catalog slave(s) went with it`)
+      expect(await prisma.slaveTemplate.count()).toBe(0)
+      expect(await prisma.companySlave.count()).toBe(0)
+      // The project slave keeps the role the template gave it.
+      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId } })).role).toBe('backend')
+    }, 30_000)
   })
 
   // M23 F3: the CLI surfaces for the local-account verbs (`packages/control/src/users.ts`). The

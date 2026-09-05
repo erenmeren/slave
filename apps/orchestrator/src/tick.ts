@@ -27,6 +27,7 @@ import { dispatchPlanning } from './planning.js'
 import { resolveAdapter } from './provider.js'
 import { pumpRun } from './pump.js'
 import { executeResume } from './resume.js'
+import { createRunUnlessArchived } from './runs.js'
 import { dispatchReviews } from './review.js'
 import { noteTickRan } from './sweep.js'
 import { verifyConcludedRun } from './verify.js'
@@ -494,9 +495,12 @@ async function startRun(deps: TickDeps, taskId: TaskId, slaveId: SlaveId): Promi
     task.branch !== null && task.branch.startsWith(prefix) ? task.branch.slice(prefix.length) : slugify(task.title)
   const branch = `${prefix}${slug}`
 
-  const run = await prisma.slaveRun.create({
-    data: { taskId: task.id, slaveId: slave.id, status: 'starting' },
-  })
+  // M27 §8 (ruling R15): the insert re-reads `Workspace.archivedAt` under `FOR SHARE` in its own
+  // transaction, so an archive that commits between the read above and this write is seen. `null`
+  // means the project was archived out from under this dispatch -- nothing was attempted, so this
+  // returns like the lost claim race below rather than recording a failed run against the task.
+  const run = await createRunUnlessArchived(workspace.id, { taskId: task.id, slaveId: slave.id, status: 'starting' })
+  if (run === null) return null
   const runId = brandRunId(run.id)
 
   // The task leaves the startable set now, not after the run finishes: `decide()` treats `ready`

@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { publishShellFacts } from '../../hooks/useShellFacts'
 import type { ShellFacts } from '../../server/shell'
 import type { ProjectSettings } from '../../server/projectSettings'
+import { plural } from '../../lib/plural'
 import { sendControl } from '../../lib/postControl'
 import { EmergencyStopButton } from '../EmergencyStopButton'
 import { HaltBanner } from '../HaltBanner'
@@ -88,7 +89,10 @@ export function ProjectSettingsClient({
                 <DangerConfirm
                   label="archive project"
                   testId="archive-project"
-                  confirmText={`archives ${workspace.name}: ${footprint.departments} departments, ${footprint.slaves} slaves, ${footprint.tasks} tasks, ${footprint.runs} runs stay on record; nothing runs until you restore it`}
+                  confirmText={
+                    `archives ${workspace.name}: ${plural(footprint.departments, 'department')}, ${plural(footprint.slaves, 'slave')}, ` +
+                    `${plural(footprint.tasks, 'task')}, ${plural(footprint.runs, 'run')} stay on record; nothing runs until you restore it`
+                  }
                   onConfirm={async () => {
                     const error = await sendControl(`/api/w/${workspace.id}/archive`, { method: 'POST' })
                     if (error === null) router.push('/')

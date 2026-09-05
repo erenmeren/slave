@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import type { ProviderKind } from '@slave-of-ai/control'
+import { plural } from '../lib/plural'
 import { sendControl } from '../lib/postControl'
 import { Chip } from './ui/Chip'
 import { DangerConfirm } from './ui/DangerConfirm'
@@ -97,7 +98,7 @@ export function TemplateCatalog({ templates }: { readonly templates: readonly Te
               <DangerConfirm
                 label="delete"
                 testId="template-delete"
-                confirmText={`deletes ${template.name} and its ${template.catalogSlaveCount} catalog slave${template.catalogSlaveCount === 1 ? '' : 's'}; project slaves keep their role`}
+                confirmText={`deletes ${template.name} and its ${plural(template.catalogSlaveCount, 'catalog slave')}; project slaves keep their role`}
                 onConfirm={async () => {
                   const error = await sendControl(`/api/org/templates/${template.id}`, { method: 'DELETE' })
                   if (error === null) router.refresh()

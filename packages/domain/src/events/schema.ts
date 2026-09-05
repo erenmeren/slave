@@ -184,6 +184,13 @@ export const executionEventSchema = z.discriminatedUnion('type', [
   // M23 D1 / M25 §3.1: one of the roster and department control verbs in `org.ts` edited an
   // slave or a team (or created/deleted one). `to: null` is `deleted`'s own shape and `from: null`
   // is `created`'s own shape (M25) -- every other field always carries a string on both sides.
+  //
+  // M27 §4.1/§4.2 (controller ruling R16): `deleteSlave` writes `runs` and `deleteTeam` writes
+  // `slaves` + `runs` "so the timeline says what went". Both OPTIONAL, for two reasons: every
+  // `org.changed` row written before M27 -- and every one written by the six non-delete fields --
+  // carries neither, and `z.object` STRIPS keys it does not declare, so leaving them out here
+  // silently deleted the counts from `parseExecutionEvent` and every `ExecutionEvent`-typed
+  // reader downstream of it.
   z.object({
     ...envelope,
     type: z.literal('org.changed'),
@@ -193,6 +200,10 @@ export const executionEventSchema = z.discriminatedUnion('type', [
       field: z.enum(['name', 'role', 'model', 'deleted', 'created', 'team']),
       from: z.string().nullable(),
       to: z.string().nullable(),
+      /** `deleteSlave`/`deleteTeam` only (M27): runs the cascade took with the row. */
+      runs: z.number().int().nonnegative().optional(),
+      /** `deleteTeam` only (M27): slaves the cascade took with the department. */
+      slaves: z.number().int().nonnegative().optional(),
     }),
   }),
 ])

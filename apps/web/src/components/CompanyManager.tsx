@@ -3,6 +3,7 @@
 import { useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import type { RosterCompany } from '../server/org'
+import { plural } from '../lib/plural'
 import { sendControl } from '../lib/postControl'
 import type { TemplateRow } from './TemplateCatalog'
 import { CompanyDetail } from './company/CompanyDetail'
@@ -91,9 +92,11 @@ export function CompanyManager({
                     label="delete"
                     testId="company-delete"
                     confirmText={
-                      `deletes ${company.name}: ${teamCount} department template${teamCount === 1 ? '' : 's'}, ` +
-                      `${catalogSlaveCount} catalog slave${catalogSlaveCount === 1 ? '' : 's'}; ` +
-                      `${projectsUsing} project${projectsUsing === 1 ? '' : 's'} ${projectsUsing === 1 ? 'keeps its' : 'keep their'} copies`
+                      `deletes ${company.name}: ${plural(teamCount, 'department template')}, ` +
+                      `${plural(catalogSlaveCount, 'catalog slave')}; ` +
+                      // `plural` handles the noun; the VERB still has to agree with it, and one
+                      // helper for both would be a conjugation table nothing else in the app needs.
+                      `${plural(projectsUsing, 'project')} ${projectsUsing === 1 ? 'keeps its' : 'keep their'} copies`
                     }
                     onConfirm={async () => {
                       const error = await sendControl(`/api/org/companies/${company.id}`, { method: 'DELETE' })

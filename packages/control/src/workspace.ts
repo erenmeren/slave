@@ -224,6 +224,15 @@ export async function liveRunCount(db: Prisma.TransactionClient | typeof prisma,
  * Archives a project (M27 §3): every row stays, `archivedAt` is set, and from then on `tick()`
  * skips it, `admitRun` refuses it and every list hides it. Refused while a run is live -- an
  * archived project must have nothing in flight. A halt already in place is left alone.
+ *
+ * "Nothing in flight" holds against a concurrent dispatch only because of what the other side
+ * does (final review, ruling R15). The `FOR UPDATE` below locks the `Workspace` row; a `SlaveRun`
+ * insert takes `FOR KEY SHARE` on the `Slave` row it references, which does not conflict with it,
+ * so this lock on its own could not serialise the pair. The orchestrator's
+ * `createRunUnlessArchived` re-reads `archivedAt` under `FOR SHARE` on THIS row inside the
+ * transaction that inserts the run -- and `FOR SHARE` does conflict with `FOR UPDATE`. Either the
+ * run commits first and the live-run count below sees it and refuses, or this commits first and
+ * the dispatch reads `archivedAt` set and starts nothing.
  */
 export async function archiveWorkspace(
   workspaceId: string,

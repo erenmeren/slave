@@ -118,6 +118,21 @@ export type ControlRefusal =
   /** `setPassword`/`deleteUser` on a `username` no `User` row carries (M23 F3). */
   | { readonly kind: 'user_not_found'; readonly username: string }
 
+/**
+ * The word a person reads for `live_runs`'s `entity` (M27 final review, Important finding 3).
+ *
+ * The refusal carries the IDENTIFIER's vocabulary -- `Workspace`, `Team`, `Slave` are what the
+ * schema and the verbs are named -- and `refusalText` used to interpolate it straight into the
+ * sentence, so an operator was told "team 7f3a… has 1 live run(s)". The product's own words are
+ * project and department; `refusalText` is the boundary where the two vocabularies meet, so the
+ * translation belongs here rather than in every caller that renders a refusal.
+ */
+const LIVE_RUNS_NOUN: Record<'workspace' | 'team' | 'slave', string> = {
+  workspace: 'project',
+  team: 'department',
+  slave: 'slave',
+}
+
 export function refusalText(refusal: ControlRefusal): string {
   switch (refusal.kind) {
     case 'run_not_found':
@@ -136,7 +151,7 @@ export function refusalText(refusal: ControlRefusal): string {
     case 'not_archived':
       return `project ${refusal.workspaceId} is not archived`
     case 'live_runs':
-      return `${refusal.entity} ${refusal.id} has ${refusal.runs} live run(s); wait for them to finish or stop them first`
+      return `${LIVE_RUNS_NOUN[refusal.entity]} ${refusal.id} has ${refusal.runs} live run(s); wait for them to finish or stop them first`
     case 'no_checkpoint':
       return `run ${refusal.runId} has no checkpoint: there is nothing to resume it from`
     case 'run_still_stopping':

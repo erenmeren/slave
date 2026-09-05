@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { plural } from '../lib/plural'
 import { sendControl } from '../lib/postControl'
 import { DangerConfirm } from './ui/DangerConfirm'
 import { TextField } from './ui/FormControls'
@@ -146,7 +147,7 @@ export function SlaveRowActions({
       <DangerConfirm
         label="delete"
         testId="slave-delete"
-        confirmText={`deletes ${name} and ${runCount} runs of history`}
+        confirmText={`deletes ${name} and ${plural(runCount, 'run')} of history`}
         onConfirm={async () => {
           const error = await sendControl(`/api/slaves/${slaveId}`, { method: 'DELETE' })
           if (error === null) router.refresh()

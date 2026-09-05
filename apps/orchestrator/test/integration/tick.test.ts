@@ -15,6 +15,7 @@ import {
   type StartRunInput,
 } from '@slave-of-ai/providers'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createRunUnlessArchived } from '../../src/runs.js'
 import { drainPumps, tick, type TickDeps } from '../../src/tick.js'
 
 const repoRoot = fileURLToPath(new URL('../../../../', import.meta.url))
@@ -245,6 +246,43 @@ describe('tick', () => {
     const report = await tick(deps)
     expect(report.skipped).toBe('archived')
     expect(report.started).toEqual([])
+    expect(await prisma.slaveRun.count()).toBe(0)
+  })
+
+  // M27 final review, ruling R15. The tick above never reaches the insert -- it skips an archived
+  // project before `loadWorld` -- so it cannot cover the window the fix is for: a dispatch that
+  // already read an unarchived workspace and is about to write the run. The helper IS that window,
+  // so it is called directly against a workspace archived under it, which is what an archive
+  // committing mid-dispatch looks like from the insert's side.
+  it('createRunUnlessArchived writes no run once the project is archived (M27 §8)', async (): Promise<void> => {
+    const started = await createRunUnlessArchived(fixture.workspaceId, {
+      taskId: fixture.taskId,
+      slaveId: fixture.slaveId,
+      status: 'starting',
+    })
+    expect(started).not.toBeNull()
+    expect(await prisma.slaveRun.count()).toBe(1)
+
+    await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { archivedAt: new Date() } })
+
+    const refused = await createRunUnlessArchived(fixture.workspaceId, {
+      taskId: fixture.taskId,
+      slaveId: fixture.slaveId,
+      status: 'starting',
+    })
+    expect(refused).toBeNull()
+    // Still the one row from before the archive: the refusal is the absence of a write, not a
+    // failed run recorded against the task.
+    expect(await prisma.slaveRun.count()).toBe(1)
+  })
+
+  it('createRunUnlessArchived writes no run for a workspace that is gone', async (): Promise<void> => {
+    const refused = await createRunUnlessArchived('00000000-0000-4000-8000-000000000000', {
+      taskId: fixture.taskId,
+      slaveId: fixture.slaveId,
+      status: 'starting',
+    })
+    expect(refused).toBeNull()
     expect(await prisma.slaveRun.count()).toBe(0)
   })
 

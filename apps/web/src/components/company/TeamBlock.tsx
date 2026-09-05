@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import type { ProviderKind } from '@slave-of-ai/control'
 import type { RosterMemberRow } from '../../server/org'
+import { plural } from '../../lib/plural'
 import { sendControl } from '../../lib/postControl'
 import { ProviderSelect } from '../ProviderSelect'
 import { ModelSelect } from '../ModelSelect'
@@ -153,7 +154,7 @@ export function TeamBlock({
         <DangerConfirm
           label="delete"
           testId="department-template-delete"
-          confirmText={`deletes ${teamName} and its ${members.length} catalog slave${members.length === 1 ? '' : 's'}; project departments stay`}
+          confirmText={`deletes ${teamName} and its ${plural(members.length, 'catalog slave')}; project departments stay`}
           onConfirm={async () => {
             const error = await sendControl(`/api/org/teams/${companyTeamId}`, { method: 'DELETE' })
             if (error === null) router.refresh()

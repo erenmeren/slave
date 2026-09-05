@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { prisma } from '@slave-of-ai/db/client'
+import { readEventsSince } from '@slave-of-ai/events'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { deleteCompany, deleteCompanySlave, deleteCompanyTeam, deleteSlave, deleteSlaveTemplate, deleteTeam } from '../../src/org.js'
 
@@ -104,6 +105,27 @@ describe('deleteTeam', () => {
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.error).toEqual({ kind: 'live_runs', entity: 'team', id: f.teamId, runs: 1 })
     expect(await prisma.slave.count()).toBe(2)
+  })
+})
+
+// M27 final review, ruling R16. Every other assertion in this file reads `ExecutionEvent.payload`
+// straight off the row, which is the ONE path that cannot see the bug: the counts are written to
+// the row either way. `readEventsSince` goes through `parseExecutionEvent`, and `z.object` strips
+// every key the payload schema does not declare -- so before `org.changed` was widened, the
+// timeline, the SSE stream and every other `ExecutionEvent`-typed reader got the event with the
+// counts silently gone. This is the assertion that fails if the schema narrows again.
+describe('the org.changed counts through the parsed reader', () => {
+  it('survives parseExecutionEvent for both project deletes', async () => {
+    await deleteSlave(f.slaveId)
+    await deleteTeam(f.teamId)
+
+    const payloads = (await readEventsSince(0)).flatMap((event) => (event.type === 'org.changed' ? [event.payload] : []))
+
+    expect(payloads).toEqual([
+      { entity: 'slave', id: f.slaveId, field: 'deleted', from: 'Sam', to: null, runs: 2 },
+      // The department is down to `other` and its one run by the time it is deleted.
+      { entity: 'team', id: f.teamId, field: 'deleted', from: 'Backend', to: null, slaves: 1, runs: 1 },
+    ])
   })
 })
 

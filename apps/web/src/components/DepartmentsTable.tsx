@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import type { ProjectTeamRow } from '../server/org'
+import { plural } from '../lib/plural'
 import { sendControl } from '../lib/postControl'
 import { DangerConfirm } from './ui/DangerConfirm'
 import { DataTable, Row } from './ui/DataTable'
@@ -79,7 +80,7 @@ function DepartmentRow({ team }: { readonly team: ProjectTeamRow }): React.JSX.E
         <DangerConfirm
           label="delete"
           testId="department-delete"
-          confirmText={`deletes ${team.name}: ${team.slaveCount} slaves, ${team.runCount} runs`}
+          confirmText={`deletes ${team.name}: ${plural(team.slaveCount, 'slave')}, ${plural(team.runCount, 'run')}`}
           onConfirm={async () => {
             const error = await sendControl(`/api/teams/${team.teamId}`, { method: 'DELETE' })
             if (error === null) router.refresh()

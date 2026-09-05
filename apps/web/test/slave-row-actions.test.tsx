@@ -86,6 +86,16 @@ describe('SlaveRowActions', () => {
     expect(routerRefresh).toHaveBeenCalled()
   })
 
+  // M27 final review, ruling R17. Every other confirm assertion in the suite uses a count of 14,
+  // 3 or 4 — none of which can tell `${n} runs` from a pluralisation rule. One is the count that
+  // can, and a confirm that says "1 runs" reads like a bug in the thing about to delete your data.
+  it('says "1 run", not "1 runs", when exactly one run would go', () => {
+    render(<SlaveRowActions slaveId="wk1" name="Alex" role="backend" runCount={1} />)
+
+    fireEvent.click(screen.getByTestId('slave-delete'))
+    expect(screen.getByTestId('slave-delete-confirm').textContent).toBe('deletes Alex and 1 run of history')
+  })
+
   it('cancels the delete confirm without ever calling fetch', () => {
     render(<SlaveRowActions slaveId="wk1" name="Alex" role="backend" runCount={0} />)
 

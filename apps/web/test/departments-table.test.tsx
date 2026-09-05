@@ -154,7 +154,7 @@ describe('DepartmentsTable', () => {
 
     it('shows the refusal on a blocked delete', async () => {
       fetchMock.mockImplementationOnce(
-        async () => new Response(JSON.stringify({ error: 'team t1 has 1 live run(s); wait for them to finish or stop them first' }), { status: 409 }),
+        async () => new Response(JSON.stringify({ error: 'department t1 has 1 live run(s); wait for them to finish or stop them first' }), { status: 409 }),
       )
       render(<DepartmentsTable teams={[team({ teamId: 't1', slaveCount: 0 })]} workspaces={WORKSPACES} />)
 
@@ -164,7 +164,7 @@ describe('DepartmentsTable', () => {
       })
 
       expect(screen.getByTestId('department-delete-error').textContent).toBe(
-        'team t1 has 1 live run(s); wait for them to finish or stop them first',
+        'department t1 has 1 live run(s); wait for them to finish or stop them first',
       )
       expect(routerRefresh).not.toHaveBeenCalled()
     })

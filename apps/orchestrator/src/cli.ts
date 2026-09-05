@@ -121,7 +121,8 @@ const USAGE = `usage: orchestrator <command> [options]
   delete-company --company <id> --yes  remove a company with its department templates and catalog
                                        slaves; projects keep their copies. Omit --yes to preview.
   delete-company-slave --slave <companySlaveId> --yes
-                                       remove a catalog slave; project copies survive
+                                       remove a catalog slave; project copies survive. Omit --yes
+                                       to see how many of them stay.
   delete-template --template <id> --yes
                                        remove a slave template with the catalog slaves made from
                                        it; project slaves keep their role
@@ -389,7 +390,6 @@ export async function main(argv: readonly string[]): Promise<number> {
     case 'status': {
       const workspaceId = await resolveWorkspace(flags)
       const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: workspaceId } })
-      if (workspace.archivedAt !== null) process.stdout.write(`archived: ${workspace.archivedAt.toISOString()}\n`)
       const runs = await prisma.slaveRun.findMany({
         // On the status column, not on `endedAt`: the two can disagree, and everything else in the
         // system -- `loadWorld`'s busy check, the sweep, the orphan pass -- asks the status.
@@ -400,6 +400,11 @@ export async function main(argv: readonly string[]): Promise<number> {
       process.stdout.write(
         `${JSON.stringify(
           {
+            // M27 §3, and inside the object deliberately (final review, minor 6): `status`'s whole
+            // output is one JSON document -- every caller, this repo's own tests included, reads it
+            // with `JSON.parse(stdout)` -- so a bare `archived: …` line printed before it made the
+            // command unparseable for exactly the projects it was added to describe.
+            archived: workspace.archivedAt === null ? null : workspace.archivedAt.toISOString(),
             // The *reason*, not just that it is halted: `decide()` surfaces only the guardrail name
             // (`emergency_stop`), which says nothing about the hook path that caused it.
             halt:
@@ -811,7 +816,14 @@ export async function main(argv: readonly string[]): Promise<number> {
       const companySlaveId = requireFlag(flags, 'slave')
       if (!('yes' in flags)) {
         const slave = await prisma.companySlave.findUnique({ where: { id: companySlaveId }, select: { name: true } })
-        throw new Error(`refusing without --yes: this would delete catalog slave ${slave?.name ?? companySlaveId} (${companySlaveId})`)
+        // Spec §5.2: every preview prints the footprint. This verb's footprint is what SURVIVES
+        // rather than what goes -- `Slave.companySlaveId` is `SetNull`, so each project copy stays
+        // and is simply unlinked -- and saying so is the whole point of the preview here: the
+        // number an operator is deciding against is "how many working slaves does this touch".
+        const copies = await prisma.slave.count({ where: { companySlaveId } })
+        throw new Error(
+          `refusing without --yes: this would delete catalog slave ${slave?.name ?? companySlaveId} (${companySlaveId}); ${copies} project copy(ies) stay`,
+        )
       }
       const result = await deleteCompanySlave(companySlaveId)
       if (!result.ok) throw new Error(refusalText(result.error))

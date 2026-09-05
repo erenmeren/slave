@@ -37,6 +37,13 @@ export function admitRun(input: {
 }): { readonly ok: true } | { readonly ok: false; readonly refusal: ControlRefusal } {
   // M27 §3.3/§8: checked before the budget rule -- a tick that loaded the world just before an
   // archive must not be able to dispatch into it after.
+  //
+  // This check alone cannot promise that, and never could: it reads the `Workspace` row the caller
+  // loaded, so an archive committing after that load is invisible to it. What closes the window is
+  // the orchestrator's `createRunUnlessArchived` (ruling R15), which re-reads `archivedAt` under
+  // `FOR SHARE` in the transaction that inserts the `SlaveRun` row -- a lock that DOES conflict
+  // with `archiveWorkspace`'s `FOR UPDATE`. This stays as the cheap in-memory refusal in front of
+  // it, and as the rule the write surfaces share.
   if (input.workspace.archivedAt !== null) {
     return { ok: false, refusal: { kind: 'workspace_archived', workspaceId: input.workspace.id } }
   }
