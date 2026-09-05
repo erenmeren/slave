@@ -76,11 +76,11 @@ describe('the shell', () => {
     pathname = '/w/w1'
   })
 
-  it('renders the five global rows in the handoff order: Projects, Agents, Skills, Analytics, Settings (M24 §2.1)', () => {
+  it('renders the five global rows in the handoff order: Projects, Slaves, Skills, Analytics, Settings (M24 §2.1)', () => {
     render(<Sidebar />)
     const labels = screen.getAllByTestId('nav-row').map((row) => row.getAttribute('data-nav'))
-    expect(labels).toEqual(['Projects', 'Agents', 'Skills', 'Analytics', 'Settings'])
-    expect(navRow('Agents').getAttribute('href')).toBe('/agents')
+    expect(labels).toEqual(['Projects', 'Slaves', 'Skills', 'Analytics', 'Settings'])
+    expect(navRow('Slaves').getAttribute('href')).toBe('/slaves')
     expect(navRow('Skills').getAttribute('href')).toBe('/skills')
     expect(navRow('Analytics').getAttribute('href')).toBe('/analytics')
     expect(navRow('Settings').getAttribute('href')).toBe('/settings')
@@ -100,7 +100,7 @@ describe('the shell', () => {
     pathname = '/w/w1/tasks'
     rerender(<Sidebar />)
     expect(navRow('Projects')).toHaveProperty('ariaCurrent', 'page')
-    expect(navRow('Agents')).not.toHaveProperty('ariaCurrent', 'page')
+    expect(navRow('Slaves')).not.toHaveProperty('ariaCurrent', 'page')
   })
 
   it('marks Settings current on the settings route', () => {
@@ -117,7 +117,7 @@ describe('the shell', () => {
     render(<Sidebar />)
     expect(navRow('Projects').className).toContain('bg-[#151a21]')
     expect(navRow('Projects').className).toContain('inset_2px_0_0')
-    expect(navRow('Agents').className).not.toContain('bg-[#151a21]')
+    expect(navRow('Slaves').className).not.toContain('bg-[#151a21]')
   })
 
   it('renders no project section, no nav badges and no guardrail figures — those live in the project header and tabs now (M24 §2.2)', () => {
@@ -158,7 +158,7 @@ describe('the halt banner shows on every page', () => {
       workspace: { id: 'w1', name: 'W', haltedReason: HALT_REASON },
       shellFacts: {
         workspace: { id: 'w1', name: 'W' },
-        counts: { agentsWorking: 0, tasksActive: 0 },
+        counts: { slavesWorking: 0, tasksActive: 0 },
         guardrails: { budgetUsd: 20, maxConcurrentRuns: 3, runTimeoutMs: 3_600_000, maxAttempts: 3 },
         status: { goal: null, spentUsd: 0, unmeasuredRuns: 0, haltedReason: HALT_REASON },
       },
@@ -177,7 +177,7 @@ describe('the halt banner shows on every page', () => {
       events: [],
       nextBefore: null,
       sparkline: new Array(10).fill(0),
-      agents: [],
+      slaves: [],
       tasks: [],
       users: [],
       // M14 Task 12 widenings: the right rail's 24h volumes, and the shell facts this page
@@ -185,7 +185,7 @@ describe('the halt banner shows on every page', () => {
       typeVolumes: [],
       shellFacts: {
         workspace: { id: 'w1', name: 'W' },
-        counts: { agentsWorking: 0, tasksActive: 0 },
+        counts: { slavesWorking: 0, tasksActive: 0 },
         guardrails: { budgetUsd: 20, maxConcurrentRuns: 3, runTimeoutMs: 3_600_000, maxAttempts: 3 },
         status: { goal: null, spentUsd: 0, unmeasuredRuns: 0, haltedReason: HALT_REASON },
       },

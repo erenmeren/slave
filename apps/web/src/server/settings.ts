@@ -20,7 +20,7 @@ export interface AdapterCard {
     readonly reportsCost: boolean
     readonly canPauseMidRun: boolean
   } | null
-  readonly agentsBound: number
+  readonly slavesBound: number
 }
 
 /**
@@ -68,7 +68,7 @@ export async function versionOf(bin: string): Promise<string | null> {
 export async function buildProviderAdapters(
   resolveVersion: (bin: string) => Promise<string | null> = versionOf,
 ): Promise<readonly AdapterCard[]> {
-  const bound = await prisma.agentRun.groupBy({ by: ['provider'], _count: { _all: true } })
+  const bound = await prisma.slaveRun.groupBy({ by: ['provider'], _count: { _all: true } })
   const countFor = (kind: string): number => bound.find((row) => row.provider === kind)?._count._all ?? 0
 
   const real = await Promise.all(
@@ -88,7 +88,7 @@ export async function buildProviderAdapters(
           reportsCost: capabilities.reportsCost,
           canPauseMidRun: capabilities.canPauseMidRun,
         },
-        agentsBound: countFor(adapter.kind),
+        slavesBound: countFor(adapter.kind),
       }
     }),
   )
@@ -103,18 +103,18 @@ export async function buildProviderAdapters(
         version: null,
         adapter: adapter.adapter,
         capabilities: null,
-        agentsBound: 0,
+        slavesBound: 0,
       }),
     ),
   ]
 }
 
 export interface PermissionRow {
-  readonly agentId: string
+  readonly slaveId: string
   readonly name: string
   readonly role: string
   /** One entry per `PERMISSION_TOOLS` member, in that order. `mode` is `null` when no
-   *  `AgentPermission` row exists -- unset, which the matrix shows as `✕` and an operator can
+   *  `SlavePermission` row exists -- unset, which the matrix shows as `✕` and an operator can
    *  change; it is NOT the same as an explicit deny, and the cell says which it is. */
   readonly cells: readonly { readonly tool: string; readonly mode: 'allow' | 'deny' | null }[]
 }
@@ -122,7 +122,7 @@ export interface PermissionRow {
 /**
  * One workspace's slice of the matrix (fix round 1, finding 2).
  *
- * The matrix used to be a flat list of EVERY `Agent` row in the database. Two projects
+ * The matrix used to be a flat list of EVERY `Slave` row in the database. Two projects
  * materialized from the same roster then produced indistinguishable duplicate rows -- "Alex ·
  * backend" twice, with nothing on either to say which project it governed -- and the query was
  * unbounded besides. Grouping by workspace makes the row's owner part of the structure rather
@@ -140,12 +140,12 @@ export interface PermissionSection {
  * Omitted, the original org-wide Settings behaviour: every workspace, in name order.
  */
 export async function buildPermissionMatrix(workspaceId?: string): Promise<readonly PermissionSection[]> {
-  // TWO queries regardless of how many workspaces exist -- the agents ride in on the workspace
-  // query's `include`, and the permissions come back in one sweep keyed by agent. No per-workspace
-  // and no per-agent round trip. `AgentPermission` carries no `workspaceId` of its own (it is keyed
-  // by `agentId` only), so scoping the workspace query is enough: the map below only ever gets
-  // consulted for the agents `workspaces` actually returned, and a permission row for some other
-  // project's agent is fetched but never looked up.
+  // TWO queries regardless of how many workspaces exist -- the slaves ride in on the workspace
+  // query's `include`, and the permissions come back in one sweep keyed by slave. No per-workspace
+  // and no per-slave round trip. `SlavePermission` carries no `workspaceId` of its own (it is keyed
+  // by `slaveId` only), so scoping the workspace query is enough: the map below only ever gets
+  // consulted for the slaves `workspaces` actually returned, and a permission row for some other
+  // project's slave is fetched but never looked up.
   const [workspaces, permissions] = await Promise.all([
     prisma.workspace.findMany({
       // `{}` rather than an omitted key -- `exactOptionalPropertyTypes` refuses a `where` typed
@@ -156,17 +156,17 @@ export async function buildPermissionMatrix(workspaceId?: string): Promise<reado
       select: {
         id: true,
         name: true,
-        teams: { select: { agents: { select: { id: true, name: true, role: true } } } },
+        teams: { select: { slaves: { select: { id: true, name: true, role: true } } } },
       },
     }),
-    prisma.agentPermission.findMany(),
+    prisma.slavePermission.findMany(),
   ])
 
-  const byAgent = new Map<string, Map<string, 'allow' | 'deny'>>()
+  const bySlave = new Map<string, Map<string, 'allow' | 'deny'>>()
   for (const row of permissions) {
-    const map = byAgent.get(row.agentId) ?? new Map<string, 'allow' | 'deny'>()
+    const map = bySlave.get(row.slaveId) ?? new Map<string, 'allow' | 'deny'>()
     map.set(row.tool, row.mode)
-    byAgent.set(row.agentId, map)
+    bySlave.set(row.slaveId, map)
   }
 
   return workspaces.map((workspace) => ({
@@ -176,16 +176,16 @@ export async function buildPermissionMatrix(workspaceId?: string): Promise<reado
     // within each team, so a two-team workspace would come back as two separately-sorted runs
     // concatenated rather than one roster in name order.
     rows: workspace.teams
-      .flatMap((team) => team.agents)
+      .flatMap((team) => team.slaves)
       .sort((a, b) => a.name.localeCompare(b.name))
-      .map((agent) => ({
-        agentId: agent.id,
-        name: agent.name,
-        role: agent.role,
-        // `null` is UNSET, and the cell says so: an agent nobody has decided about is not the
+      .map((slave) => ({
+        slaveId: slave.id,
+        name: slave.name,
+        role: slave.role,
+        // `null` is UNSET, and the cell says so: a slave nobody has decided about is not the
         // same as one explicitly denied, and collapsing them would make the matrix claim a
         // decision that was never taken.
-        cells: PERMISSION_TOOLS.map((tool) => ({ tool, mode: byAgent.get(agent.id)?.get(tool) ?? null })),
+        cells: PERMISSION_TOOLS.map((tool) => ({ tool, mode: bySlave.get(slave.id)?.get(tool) ?? null })),
       })),
   }))
 }

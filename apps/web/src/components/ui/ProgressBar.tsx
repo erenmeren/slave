@@ -6,7 +6,7 @@ import { TONE_DOT, TONE_GLOW, type StatusTone } from './StatusPill'
  * global motion rule. `pct` is clamped to [0, 100] so a caller passing an out-of-range value (a
  * stale snapshot, a rounding overshoot) never renders an overflowing or negative-width bar.
  *
- * `size` is the handoff's one thickness difference and nothing else: the agent card's bar is 3px
+ * `size` is the handoff's one thickness difference and nothing else: the slave card's bar is 3px
  * (design README "1a — Control Room"), every table row's is the 6px `h-1.5` this component has
  * always drawn. A prop rather than a second component, because a copy would be the same fill, the
  * same clamp, the same glow and the same transition with one number changed.

@@ -5,8 +5,8 @@
  *
  * Points are scaled against `max(buckets, 1)` so an all-zero window still divides cleanly — every
  * point lands on the baseline (y = height), rendering a flat line along the bottom edge rather
- * than collapsing to nothing. That flat baseline is deliberate: it is the "stuck agent" cue (an
- * agent with zero tool calls for the last 10 minutes), so it must render as a visible line, not
+ * than collapsing to nothing. That flat baseline is deliberate: it is the "stuck slave" cue (an
+ * slave with zero tool calls for the last 10 minutes), so it must render as a visible line, not
  * an empty svg.
  *
  * Stroke is `currentColor` — no new colour tokens. The parent sets the text colour (a muted token

@@ -4,7 +4,7 @@ import { fireEvent, render, renderHook, screen, waitFor, within } from '@testing
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Edge, Node } from 'reactflow'
 import { publishStreamState } from '../src/hooks/useStreamState.js'
-import type { GraphAgent, GraphSnapshot } from '../src/server/graph.js'
+import type { GraphSlave, GraphSnapshot } from '../src/server/graph.js'
 
 // ---- jsdom element-size + ResizeObserver mocks -------------------------------------------------
 // React Flow measures its wrapper pane and every node via `ResizeObserver` (no `offsetWidth`/
@@ -101,12 +101,12 @@ vi.mock('../src/server/graph.js', () => ({
 // EventSource on this route. Nothing above the drawer/mode-tab blocks asserts on them.
 const SHELL_FACTS: GraphSnapshot['shellFacts'] = {
   workspace: { id: 'w1', name: 'Checkout Platform' },
-  counts: { agentsWorking: 1, tasksActive: 1 },
+  counts: { slavesWorking: 1, tasksActive: 1 },
   guardrails: { budgetUsd: 100, maxConcurrentRuns: 3, runTimeoutMs: 1_800_000, maxAttempts: 3 },
   status: { goal: null, spentUsd: 0, unmeasuredRuns: 0, haltedReason: null },
 }
 
-function agent(overrides: Partial<GraphAgent> = {}): GraphAgent {
+function slave(overrides: Partial<GraphSlave> = {}): GraphSlave {
   return {
     id: 'a1',
     name: 'Alex',
@@ -129,9 +129,9 @@ function agent(overrides: Partial<GraphAgent> = {}): GraphAgent {
 const SNAPSHOT: GraphSnapshot = {
   workspace: { id: 'w1', name: 'Checkout Platform', haltedReason: null },
   teams: [{ id: 'team1', name: 'Engineering' }],
-  agents: [
-    agent({ id: 'a1', name: 'Alex', role: 'backend', status: 'idle' }),
-    agent({
+  slaves: [
+    slave({ id: 'a1', name: 'Alex', role: 'backend', status: 'idle' }),
+    slave({
       id: 'a2',
       name: 'Sam',
       role: 'frontend',
@@ -177,22 +177,22 @@ describe('GraphClient', () => {
     expect(publishStreamState).toHaveBeenCalledWith('w1', { connection: 'connected', latencyMs: null })
   })
 
-  it('renders the workspace root, team and agent nodes from the seed snapshot, with status dots and active-task lines', async () => {
+  it('renders the workspace root, team and slave nodes from the seed snapshot, with status dots and active-task lines', async () => {
     render(<GraphClient workspaceId="w1" initial={SNAPSHOT} />)
     await waitFor(() => expect(elkLayoutSpy).toHaveBeenCalled())
 
     expect(screen.getByTestId('workspace-node').textContent).toContain('Checkout Platform')
     expect(screen.getByTestId('team-node').textContent).toContain('Engineering')
 
-    const agentNodes = screen.getAllByTestId('agent-node')
-    expect(agentNodes).toHaveLength(2)
+    const slaveNodes = screen.getAllByTestId('slave-node')
+    expect(slaveNodes).toHaveLength(2)
 
-    const alexNode = agentNodes.find((node) => node.textContent?.includes('Alex'))!
+    const alexNode = slaveNodes.find((node) => node.textContent?.includes('Alex'))!
     expect(alexNode.textContent).toContain('backend')
     expect(within(alexNode).getByTestId('status-dot').className).toContain('bg-tone-idle')
     expect(alexNode.textContent).toContain('idle')
 
-    const samNode = agentNodes.find((node) => node.textContent?.includes('Sam'))!
+    const samNode = slaveNodes.find((node) => node.textContent?.includes('Sam'))!
     expect(samNode.textContent).toContain('frontend')
     expect(within(samNode).getByTestId('status-dot').className).toContain('bg-tone-working')
     expect(samNode.textContent).toContain('Ship the thing')
@@ -219,18 +219,18 @@ describe('GraphClient', () => {
 
   // ---- active-task satellite (spec §6's particle track) ----------------------------------------
 
-  it('a working agent with a live run gets an active-task satellite node and an agent→task edge', async () => {
+  it('a working slave with a live run gets an active-task satellite node and a slave→task edge', async () => {
     render(<GraphClient workspaceId="w1" initial={SNAPSHOT} />)
     await waitFor(() => expect(elkLayoutSpy).toHaveBeenCalled())
 
     const satellites = screen.getAllByTestId('active-task-node')
     expect(satellites).toHaveLength(1)
     expect(satellites[0]?.textContent).toContain('Ship the thing')
-    expect(screen.getByTestId('rf__edge-agent:a2->activeTask:t1')).toBeTruthy()
+    expect(screen.getByTestId('rf__edge-slave:a2->activeTask:t1')).toBeTruthy()
   })
 
-  it('an idle agent (no live run) gets no satellite node or edge', async () => {
-    const idleOnly: GraphSnapshot = { ...SNAPSHOT, agents: [SNAPSHOT.agents[0]!] } // only Alex, idle
+  it('an idle slave (no live run) gets no satellite node or edge', async () => {
+    const idleOnly: GraphSnapshot = { ...SNAPSHOT, slaves: [SNAPSHOT.slaves[0]!] } // only Alex, idle
     render(<GraphClient workspaceId="w1" initial={idleOnly} />)
     await waitFor(() => expect(elkLayoutSpy).toHaveBeenCalled())
 
@@ -279,26 +279,26 @@ describe('GraphClient', () => {
     const { rerender } = render(<GraphClient workspaceId="w1" initial={SNAPSHOT} />)
     await waitFor(() => expect(elkLayoutSpy).toHaveBeenCalledTimes(1))
 
-    // Status-only change: Sam goes from working to paused, same agent/team/task ids.
+    // Status-only change: Sam goes from working to paused, same slave/team/task ids.
     streamState.snapshot = {
       ...SNAPSHOT,
-      agents: [SNAPSHOT.agents[0]!, { ...SNAPSHOT.agents[1]!, status: 'paused' }],
+      slaves: [SNAPSHOT.slaves[0]!, { ...SNAPSHOT.slaves[1]!, status: 'paused' }],
     }
     rerender(<GraphClient workspaceId="w1" initial={SNAPSHOT} />)
     await Promise.resolve()
     expect(elkLayoutSpy).toHaveBeenCalledTimes(1)
 
-    // Node-set change: a third agent joins the roster.
+    // Node-set change: a third slave joins the roster.
     streamState.snapshot = {
       ...SNAPSHOT,
-      agents: [...SNAPSHOT.agents, agent({ id: 'a3', name: 'Jo', role: 'ops' })],
+      slaves: [...SNAPSHOT.slaves, slave({ id: 'a3', name: 'Jo', role: 'ops' })],
     }
     rerender(<GraphClient workspaceId="w1" initial={SNAPSHOT} />)
     await waitFor(() => expect(elkLayoutSpy).toHaveBeenCalledTimes(2))
   })
 
   it('re-invokes the ELK adapter when the active-task satellite appears (the run starting is a node-set change)', async () => {
-    const idleOnly: GraphSnapshot = { ...SNAPSHOT, agents: [SNAPSHOT.agents[0]!] }
+    const idleOnly: GraphSnapshot = { ...SNAPSHOT, slaves: [SNAPSHOT.slaves[0]!] }
     const { rerender } = render(<GraphClient workspaceId="w1" initial={idleOnly} />)
     await waitFor(() => expect(elkLayoutSpy).toHaveBeenCalledTimes(1))
 
@@ -325,8 +325,8 @@ describe('GraphClient', () => {
     })
   })
 
-  it('fix-round-1 finding 3: does not dangle the new agent→task edge while its satellite node\'s layout is still pending', async () => {
-    const idleOnly: GraphSnapshot = { ...SNAPSHOT, agents: [SNAPSHOT.agents[0]!] }
+  it('fix-round-1 finding 3: does not dangle the new slave→task edge while its satellite node\'s layout is still pending', async () => {
+    const idleOnly: GraphSnapshot = { ...SNAPSHOT, slaves: [SNAPSHOT.slaves[0]!] }
     const { rerender } = render(<GraphClient workspaceId="w1" initial={idleOnly} />)
     await waitFor(() => expect(elkLayoutSpy).toHaveBeenCalledTimes(1))
 
@@ -342,18 +342,18 @@ describe('GraphClient', () => {
         }),
     )
 
-    streamState.snapshot = SNAPSHOT // Sam starts a run — the satellite + its agent→task edge appear
+    streamState.snapshot = SNAPSHOT // Sam starts a run — the satellite + its slave→task edge appear
     rerender(<GraphClient workspaceId="w1" initial={idleOnly} />)
     await waitFor(() => expect(elkLayoutSpy).toHaveBeenCalledTimes(2))
 
     // Mid-flight: the new nodes (Sam, the satellite) are not yet in the positioned set, so any
     // edge touching them must not render either — React Flow's error #008 (a dangling endpoint)
     // otherwise fires on every run start.
-    expect(screen.queryByTestId('rf__edge-agent:a2->activeTask:t1')).toBeNull()
+    expect(screen.queryByTestId('rf__edge-slave:a2->activeTask:t1')).toBeNull()
     expect(screen.queryByTestId('active-task-node')).toBeNull()
 
     resolvePending?.()
-    await waitFor(() => expect(screen.getByTestId('rf__edge-agent:a2->activeTask:t1')).toBeTruthy())
+    await waitFor(() => expect(screen.getByTestId('rf__edge-slave:a2->activeTask:t1')).toBeTruthy())
     expect(screen.getByTestId('active-task-node')).toBeTruthy()
   })
 
@@ -363,8 +363,8 @@ describe('GraphClient', () => {
   // two-word initials the handoff specifies, and 'run1' so the run-scoped controls are live.
   const DRAWER_SNAPSHOT: GraphSnapshot = {
     ...SNAPSHOT,
-    agents: [
-      agent({
+    slaves: [
+      slave({
         id: 'a1',
         name: 'Alex Turner',
         role: 'backend',
@@ -402,7 +402,7 @@ describe('GraphClient', () => {
 
     // `hasSkillData` stays what the M14 ruling made it: a reachability signal only, not what
     // gates this tab (the tab is unconditionally enabled either way).
-    streamState.snapshot = { ...SNAPSHOT, agents: SNAPSHOT.agents.map((a) => ({ ...a, hasSkillData: true })) }
+    streamState.snapshot = { ...SNAPSHOT, slaves: SNAPSHOT.slaves.map((a) => ({ ...a, hasSkillData: true })) }
     rerender(<GraphClient workspaceId="w1" initial={SNAPSHOT} />)
 
     expect((screen.getByTestId('graph-mode-skill') as HTMLButtonElement).disabled).toBe(false)
@@ -444,7 +444,7 @@ describe('GraphClient', () => {
   // Task 12 (M23 E3): the fifth mode, Communication -- its own `?mode=comm` round trip and its own
   // sibling DTO route, same shape as the Skill chain tests just above.
   it('writes ?mode=comm when Communication is clicked, and renders its own canvas', async () => {
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ agents: [], edges: [] }), { status: 200 }))
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ slaves: [], edges: [] }), { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)
     render(<GraphClient workspaceId="w1" initial={SNAPSHOT} />)
     await waitFor(() => expect(elkLayoutSpy).toHaveBeenCalled())
@@ -458,7 +458,7 @@ describe('GraphClient', () => {
   })
 
   it('opens Communication mode directly for a hand-typed ?mode=comm', async () => {
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ agents: [], edges: [] }), { status: 200 }))
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ slaves: [], edges: [] }), { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)
     searchParams = new URLSearchParams('mode=comm')
     render(<GraphClient workspaceId="w1" initial={SNAPSHOT} />)
@@ -483,10 +483,10 @@ describe('GraphClient', () => {
 
   it('opens the 352px drawer on a node click and closes it again', async () => {
     render(<GraphClient workspaceId="w1" initial={DRAWER_SNAPSHOT} />)
-    await waitFor(() => expect(screen.getByTestId('rf__node-agent:a1')).toBeTruthy())
+    await waitFor(() => expect(screen.getByTestId('rf__node-slave:a1')).toBeTruthy())
     expect(screen.queryByTestId('graph-drawer')).toBeNull()
 
-    fireEvent.click(screen.getByTestId('rf__node-agent:a1'))
+    fireEvent.click(screen.getByTestId('rf__node-slave:a1'))
 
     const drawer = screen.getByTestId('graph-drawer')
     expect(drawer.className).toContain('w-[352px]')
@@ -505,7 +505,7 @@ describe('GraphClient', () => {
     expect(screen.queryByTestId('graph-drawer')).toBeNull()
   })
 
-  it('does not open the drawer for a non-agent node', async () => {
+  it('does not open the drawer for a non-slave node', async () => {
     render(<GraphClient workspaceId="w1" initial={DRAWER_SNAPSHOT} />)
     await waitFor(() => expect(screen.getByTestId('rf__node-team:team1')).toBeTruthy())
 
@@ -518,8 +518,8 @@ describe('GraphClient', () => {
     const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => new Response(JSON.stringify({ ok: true }), { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)
     render(<GraphClient workspaceId="w1" initial={DRAWER_SNAPSHOT} />)
-    await waitFor(() => expect(screen.getByTestId('rf__node-agent:a1')).toBeTruthy())
-    fireEvent.click(screen.getByTestId('rf__node-agent:a1'))
+    await waitFor(() => expect(screen.getByTestId('rf__node-slave:a1')).toBeTruthy())
+    fireEvent.click(screen.getByTestId('rf__node-slave:a1'))
 
     // A quick-instruction chip fills the box; Enter is what actually sends.
     fireEvent.click(screen.getAllByTestId('drawer-quick')[0]!)
@@ -540,8 +540,8 @@ describe('GraphClient', () => {
     const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => new Response(JSON.stringify({ ok: true }), { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)
     render(<GraphClient workspaceId="w1" initial={DRAWER_SNAPSHOT} />)
-    await waitFor(() => expect(screen.getByTestId('rf__node-agent:a1')).toBeTruthy())
-    fireEvent.click(screen.getByTestId('rf__node-agent:a1'))
+    await waitFor(() => expect(screen.getByTestId('rf__node-slave:a1')).toBeTruthy())
+    fireEvent.click(screen.getByTestId('rf__node-slave:a1'))
 
     fireEvent.click(screen.getByTestId('drawer-pause'))
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
@@ -556,8 +556,8 @@ describe('GraphClient', () => {
     const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => new Response(JSON.stringify({ error: 'run is not pausable' }), { status: 409 }))
     vi.stubGlobal('fetch', fetchMock)
     render(<GraphClient workspaceId="w1" initial={DRAWER_SNAPSHOT} />)
-    await waitFor(() => expect(screen.getByTestId('rf__node-agent:a1')).toBeTruthy())
-    fireEvent.click(screen.getByTestId('rf__node-agent:a1'))
+    await waitFor(() => expect(screen.getByTestId('rf__node-slave:a1')).toBeTruthy())
+    fireEvent.click(screen.getByTestId('rf__node-slave:a1'))
 
     fireEvent.click(screen.getByTestId('drawer-pause'))
 

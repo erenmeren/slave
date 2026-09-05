@@ -1,0 +1,27 @@
+import { renameSlave } from '@slave-of-ai/control'
+import { orgControlResponse } from '../../../../../server/orgControlRoute'
+import { requirePrincipal } from '../../../../../server/principal'
+
+export const dynamic = 'force-dynamic'
+
+const BODY_ERROR = 'the body must be { "name": string }'
+
+/** `SlaveRowActions`'s rename write (M23 D2). A PUT, the same idiom as `permission/route.ts`:
+ *  the slave's name is SET to the given value, not appended to. */
+export async function PUT(
+  request: Request,
+  context: { params: Promise<{ slaveId: string }> },
+): Promise<Response> {
+  const gate = await requirePrincipal()
+  if ('response' in gate) return gate.response
+  const { slaveId } = await context.params
+  const body: unknown = await request.json().catch(() => null)
+  if (body === null || typeof body !== 'object') {
+    return Response.json({ error: BODY_ERROR }, { status: 400 })
+  }
+  const { name } = body as { name?: unknown }
+  if (typeof name !== 'string') {
+    return Response.json({ error: BODY_ERROR }, { status: 400 })
+  }
+  return orgControlResponse(() => renameSlave(slaveId, name, gate.principal ?? undefined))
+}

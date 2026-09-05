@@ -78,7 +78,7 @@ export function ProviderAdapterCards({ adapters }: { readonly adapters: readonly
 
           <div className="mt-1 flex items-center justify-between gap-2">
             <span data-testid={`adapter-bound-${adapter.kind}`} className="font-mono text-[10px] text-text-3">
-              {adapter.agentsBound} {adapter.agentsBound === 1 ? 'run bound' : 'runs bound'}
+              {adapter.slavesBound} {adapter.slavesBound === 1 ? 'run bound' : 'runs bound'}
             </span>
             <button
               type="button"

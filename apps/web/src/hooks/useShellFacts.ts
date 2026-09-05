@@ -44,7 +44,7 @@ function sameFacts(a: ShellFacts, b: ShellFacts): boolean {
   return (
     a.workspace.id === b.workspace.id &&
     a.workspace.name === b.workspace.name &&
-    a.counts.agentsWorking === b.counts.agentsWorking &&
+    a.counts.slavesWorking === b.counts.slavesWorking &&
     a.counts.tasksActive === b.counts.tasksActive &&
     a.guardrails.budgetUsd === b.guardrails.budgetUsd &&
     a.guardrails.maxConcurrentRuns === b.guardrails.maxConcurrentRuns &&

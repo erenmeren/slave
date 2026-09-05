@@ -62,12 +62,12 @@ const COMM_FRAME_TYPES: ReadonlySet<string> = new Set([
   'run.started',
   'task.review_started',
   'task.review_rejected',
-  'agent.message_sent',
+  'slave.message_sent',
   'workspace.plan_created',
 ])
 
-/** `agent:<id>` — `buildOrgGraph`'s node-id prefix, and the one node kind the drawer opens for. */
-const AGENT_NODE_PREFIX = 'agent:'
+/** `slave:<id>` — `buildOrgGraph`'s node-id prefix, and the one node kind the drawer opens for. */
+const SLAVE_NODE_PREFIX = 'slave:'
 
 /**
  * Execution mode (design README "1b — Modes"): its OWN node set, built by `ExecutionNodes.tsx`.
@@ -106,7 +106,7 @@ function ExecutionMode({ snapshot }: { readonly snapshot: GraphSnapshot }): Reac
  * Organization mode's graph is built and positioned right here (`buildOrgGraph` +
  * `useLayoutedGraph`); Execution and Dependencies each own their own node set (`ExecutionMode`
  * above, `DepsMode` in its own file) -- this component only switches between them on the `mode`
- * tab, and owns the selected agent the drawer renders.
+ * tab, and owns the selected slave the drawer renders.
  */
 export function GraphClient({
   workspaceId,
@@ -115,7 +115,7 @@ export function GraphClient({
   readonly workspaceId: string
   readonly initial: GraphSnapshot
 }): React.JSX.Element {
-  // Org mode's particle track (spec §6): the agent -> active-task edge to spawn a `run.tool_call`
+  // Org mode's particle track (spec §6): the slave -> active-task edge to spawn a `run.tool_call`
   // particle on. A ref, not `orgEdges` closed over directly -- `onEvent` below is created once per
   // render and handed straight to `useGraph`'s third argument (a raw-frame pass-through, Task 4's
   // interface), but the edge list it needs is computed *after* this call in the same render; the
@@ -203,14 +203,14 @@ export function GraphClient({
   // tick before its layout resolves) -- see `layout.ts`'s doc comment.
   const { nodes: positionedOrgNodes, edges: visibleOrgEdges } = useLayoutedGraph(orgNodes, orgEdges, 'mrtree')
 
-  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null)
-  const selectedAgent = view.agents.find((agent) => agent.id === selectedAgentId) ?? null
+  const [selectedSlaveId, setSelectedSlaveId] = useState<string | null>(null)
+  const selectedSlave = view.slaves.find((slave) => slave.id === selectedSlaveId) ?? null
 
   const onNodeClick: NodeMouseHandler = (_event, node): void => {
-    // Only an agent node opens the drawer -- it is an AGENT detail panel, and a team or workspace
+    // Only a slave node opens the drawer -- it is a SLAVE detail panel, and a team or workspace
     // node has no drawer's worth of facts behind it (the same reason neither carries a NodeMenu).
-    if (!node.id.startsWith(AGENT_NODE_PREFIX)) return
-    setSelectedAgentId(node.id.slice(AGENT_NODE_PREFIX.length))
+    if (!node.id.startsWith(SLAVE_NODE_PREFIX)) return
+    setSelectedSlaveId(node.id.slice(SLAVE_NODE_PREFIX.length))
   }
 
   return (
@@ -253,8 +253,8 @@ export function GraphClient({
           {mode === 'skill' && <SkillMode workspaceId={workspaceId} snapshot={view} toolCallTick={skillFrameTick} />}
           {mode === 'comm' && <CommunicationMode workspaceId={workspaceId} frameTick={commFrameTick} />}
         </div>
-        {selectedAgent !== null && (
-          <GraphDrawer workspaceId={workspaceId} agent={selectedAgent} onClose={() => setSelectedAgentId(null)} />
+        {selectedSlave !== null && (
+          <GraphDrawer workspaceId={workspaceId} slave={selectedSlave} onClose={() => setSelectedSlaveId(null)} />
         )}
       </div>
     </div>

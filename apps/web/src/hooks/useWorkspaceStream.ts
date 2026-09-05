@@ -7,7 +7,7 @@ export const REFETCH_DEBOUNCE_MS = 250
 export interface StreamEvent {
   readonly seq?: number
   readonly type?: string
-  readonly agentId?: string
+  readonly slaveId?: string
   readonly runId?: string
   readonly ts?: string
   readonly payload?: Record<string, unknown>

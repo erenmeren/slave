@@ -7,8 +7,8 @@ import { GET as getActivity } from '../../src/app/api/w/[workspaceId]/activity/r
 
 interface Fixture {
   readonly workspaceId: string
-  readonly agentId1: string
-  readonly agentId2: string
+  readonly slaveId1: string
+  readonly slaveId2: string
   readonly taskId1: string
   readonly taskId2: string
 }
@@ -24,8 +24,8 @@ async function seed(): Promise<Fixture> {
     },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const agent1 = await prisma.agent.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
-  const agent2 = await prisma.agent.create({ data: { teamId: team.id, name: 'Bianca', role: 'frontend' } })
+  const slave1 = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
+  const slave2 = await prisma.slave.create({ data: { teamId: team.id, name: 'Bianca', role: 'frontend' } })
   const task1 = await prisma.task.create({
     data: {
       workspaceId: workspace.id,
@@ -46,7 +46,7 @@ async function seed(): Promise<Fixture> {
       maxAttempts: 3,
     },
   })
-  return { workspaceId: workspace.id, agentId1: agent1.id, agentId2: agent2.id, taskId1: task1.id, taskId2: task2.id }
+  return { workspaceId: workspace.id, slaveId1: slave1.id, slaveId2: slave2.id, taskId1: task1.id, taskId2: task2.id }
 }
 
 describe('buildActivityHistory', () => {
@@ -54,7 +54,7 @@ describe('buildActivityHistory', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace", "User" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace", "User" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
   })
@@ -69,8 +69,8 @@ describe('buildActivityHistory', () => {
         type: 'run.tool_call',
         workspaceId: fixture.workspaceId,
         taskId: fixture.taskId1,
-        agentId: fixture.agentId1,
-        actor: 'agent',
+        slaveId: fixture.slaveId1,
+        actor: 'slave',
         payload: { name: 'Write', summary: `call ${i}` },
       })
     }
@@ -92,8 +92,8 @@ describe('buildActivityHistory', () => {
         type: 'run.tool_call',
         workspaceId: fixture.workspaceId,
         taskId: fixture.taskId1,
-        agentId: fixture.agentId1,
-        actor: 'agent',
+        slaveId: fixture.slaveId1,
+        actor: 'slave',
         payload: { name: 'Write', summary: `call ${i}` },
       })
     }
@@ -118,12 +118,12 @@ describe('buildActivityHistory', () => {
     expect(page3?.nextBefore).toBeNull()
   })
 
-  it('applies the filter union — agent AND (types ∪ kinds)', async (): Promise<void> => {
+  it('applies the filter union — slave AND (types ∪ kinds)', async (): Promise<void> => {
     await appendEvent({
       type: 'task.created',
       workspaceId: fixture.workspaceId,
       taskId: fixture.taskId1,
-      agentId: fixture.agentId1,
+      slaveId: fixture.slaveId1,
       actor: 'human',
       payload: { title: 'Add the thing' },
     })
@@ -131,38 +131,38 @@ describe('buildActivityHistory', () => {
       type: 'run.started',
       workspaceId: fixture.workspaceId,
       taskId: fixture.taskId1,
-      agentId: fixture.agentId1,
-      actor: 'agent',
+      slaveId: fixture.slaveId1,
+      actor: 'slave',
       payload: { sessionId: 'sess-1' },
     })
-    // Wrong agent — excluded even though the type matches.
+    // Wrong slave — excluded even though the type matches.
     await appendEvent({
       type: 'task.created',
       workspaceId: fixture.workspaceId,
       taskId: fixture.taskId1,
-      agentId: fixture.agentId2,
+      slaveId: fixture.slaveId2,
       actor: 'human',
-      payload: { title: 'Wrong agent' },
+      payload: { title: 'Wrong slave' },
     })
-    // Right agent, wrong type — excluded even though the agent matches.
+    // Right slave, wrong type — excluded even though the slave matches.
     await appendEvent({
       type: 'guardrail.tripped',
       workspaceId: fixture.workspaceId,
       taskId: fixture.taskId2,
-      agentId: fixture.agentId1,
+      slaveId: fixture.slaveId1,
       actor: 'system',
       payload: { guardrail: 'budget', detail: 'over budget' },
     })
 
     const filters: ActivityFilters = {
-      agents: [fixture.agentId1],
+      slaves: [fixture.slaveId1],
       tasks: [],
       types: ['task.created', 'run.started'],
     }
     const page = await buildActivityHistory(fixture.workspaceId, filters, { limit: 100 })
 
     expect(page?.events).toHaveLength(2)
-    expect(page?.events.every((e) => e.agentId === fixture.agentId1)).toBe(true)
+    expect(page?.events.every((e) => e.slaveId === fixture.slaveId1)).toBe(true)
     expect(page?.events.map((e) => e.type).sort()).toEqual(['run.started', 'task.created'])
   })
 
@@ -173,8 +173,8 @@ describe('buildActivityHistory', () => {
           type: 'run.tool_call',
           workspaceId: fixture.workspaceId,
           taskId: fixture.taskId1,
-          agentId: fixture.agentId1,
-          actor: 'agent',
+          slaveId: fixture.slaveId1,
+          actor: 'slave',
           payload: { name: 'Write', summary: `call ${i}` },
         }),
       ),
@@ -196,8 +196,8 @@ describe('buildActivityHistory', () => {
       type: 'run.tool_call',
       workspaceId: fixture.workspaceId,
       taskId: fixture.taskId1,
-      agentId: fixture.agentId1,
-      actor: 'agent',
+      slaveId: fixture.slaveId1,
+      actor: 'slave',
       payload: { name: 'Write', summary: 'Write note.txt' },
     })
 
@@ -219,16 +219,16 @@ describe('buildActivityHistory', () => {
       await prisma.executionEvent.createMany({
         data: [
           // Current minute: two tool calls.
-          { type: 'run_tool_call', workspaceId: fixture.workspaceId, taskId: fixture.taskId1, agentId: fixture.agentId1, actor: 'agent', payload: {}, ts: at(0) },
-          { type: 'run_tool_call', workspaceId: fixture.workspaceId, taskId: fixture.taskId1, agentId: fixture.agentId1, actor: 'agent', payload: {}, ts: at(0) },
+          { type: 'run_tool_call', workspaceId: fixture.workspaceId, taskId: fixture.taskId1, slaveId: fixture.slaveId1, actor: 'slave', payload: {}, ts: at(0) },
+          { type: 'run_tool_call', workspaceId: fixture.workspaceId, taskId: fixture.taskId1, slaveId: fixture.slaveId1, actor: 'slave', payload: {}, ts: at(0) },
           // 3 minutes ago: one tool call.
-          { type: 'run_tool_call', workspaceId: fixture.workspaceId, taskId: fixture.taskId1, agentId: fixture.agentId1, actor: 'agent', payload: {}, ts: at(3) },
+          { type: 'run_tool_call', workspaceId: fixture.workspaceId, taskId: fixture.taskId1, slaveId: fixture.slaveId1, actor: 'slave', payload: {}, ts: at(3) },
           // 9 minutes ago: still inside the 10-minute window, one tool call.
-          { type: 'run_tool_call', workspaceId: fixture.workspaceId, taskId: fixture.taskId1, agentId: fixture.agentId1, actor: 'agent', payload: {}, ts: at(9) },
+          { type: 'run_tool_call', workspaceId: fixture.workspaceId, taskId: fixture.taskId1, slaveId: fixture.slaveId1, actor: 'slave', payload: {}, ts: at(9) },
           // 11 minutes ago: outside the window, must not count.
-          { type: 'run_tool_call', workspaceId: fixture.workspaceId, taskId: fixture.taskId1, agentId: fixture.agentId1, actor: 'agent', payload: {}, ts: at(11) },
+          { type: 'run_tool_call', workspaceId: fixture.workspaceId, taskId: fixture.taskId1, slaveId: fixture.slaveId1, actor: 'slave', payload: {}, ts: at(11) },
           // Same minute as the current bucket, but not a tool call — must not count.
-          { type: 'task_created', workspaceId: fixture.workspaceId, taskId: fixture.taskId1, agentId: fixture.agentId1, actor: 'human', payload: {}, ts: at(0) },
+          { type: 'task_created', workspaceId: fixture.workspaceId, taskId: fixture.taskId1, slaveId: fixture.slaveId1, actor: 'human', payload: {}, ts: at(0) },
         ],
       })
 
@@ -246,7 +246,7 @@ describe('buildActivityHistory', () => {
         type: 'task.created',
         workspaceId: fixture.workspaceId,
         taskId: fixture.taskId1,
-        agentId: fixture.agentId1,
+        slaveId: fixture.slaveId1,
         actor: 'human',
         payload: { title: 'Add the thing' },
       })
@@ -277,8 +277,8 @@ describe('buildActivityHistory', () => {
           type: 'run.tool_call',
           workspaceId: fixture.workspaceId,
           taskId: fixture.taskId1,
-          agentId: fixture.agentId1,
-          actor: 'agent',
+          slaveId: fixture.slaveId1,
+          actor: 'slave',
           payload: { name: 'Write', summary: `call ${i}` },
         })
       }
@@ -286,8 +286,8 @@ describe('buildActivityHistory', () => {
         type: 'task.started',
         workspaceId: fixture.workspaceId,
         taskId: fixture.taskId1,
-        agentId: fixture.agentId1,
-        actor: 'agent',
+        slaveId: fixture.slaveId1,
+        actor: 'slave',
         payload: { title: 'Add the thing' },
       })
       // `createMany`, not `appendEvent`: only a direct insert can backdate `ts`.
@@ -297,7 +297,7 @@ describe('buildActivityHistory', () => {
             type: 'guardrail_tripped',
             workspaceId: fixture.workspaceId,
             taskId: fixture.taskId1,
-            agentId: fixture.agentId1,
+            slaveId: fixture.slaveId1,
             actor: 'system',
             payload: {},
             ts: new Date(Date.now() - 25 * 60 * 60 * 1000),
@@ -321,12 +321,12 @@ describe('buildActivityHistory', () => {
       expect(page?.shellFacts.counts.tasksActive).toBe(2)
     })
 
-    it('carries the workspace agent/task rosters for the FilterBar and card name resolution', async (): Promise<void> => {
+    it('carries the workspace slave/task rosters for the FilterBar and card name resolution', async (): Promise<void> => {
       const page = await buildActivityPage(fixture.workspaceId)
 
-      expect(page?.agents).toEqual([
-        { id: fixture.agentId1, name: 'Alex' },
-        { id: fixture.agentId2, name: 'Bianca' },
+      expect(page?.slaves).toEqual([
+        { id: fixture.slaveId1, name: 'Alex' },
+        { id: fixture.slaveId2, name: 'Bianca' },
       ])
       expect(page?.tasks).toEqual([
         { id: fixture.taskId1, title: 'Add the thing' },
@@ -357,8 +357,8 @@ describe('buildActivityHistory', () => {
       type: 'run.tool_call',
       workspaceId: fixture.workspaceId,
       taskId: fixture.taskId1,
-      agentId: fixture.agentId1,
-      actor: 'agent',
+      slaveId: fixture.slaveId1,
+      actor: 'slave',
       payload: { name: 'Write', summary: 'call' },
     })
 
@@ -374,7 +374,7 @@ describe('buildActivityHistory', () => {
 
     // A filter that excludes every event in the log still reports the true workspace-wide rate —
     // the sparkline is never filtered, only `events` is (review finding 3).
-    const filtered = await getActivity(new Request('http://test/api?agents=' + fixture.agentId2), {
+    const filtered = await getActivity(new Request('http://test/api?slaves=' + fixture.slaveId2), {
       params: Promise.resolve({ workspaceId: fixture.workspaceId }),
     })
     const filteredBody = (await filtered.json()) as { events: unknown[]; sparkline: number[] }

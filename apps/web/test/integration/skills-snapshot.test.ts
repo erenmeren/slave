@@ -7,11 +7,11 @@ import { DELETE as assignDELETE, POST as assignPOST } from '../../src/app/api/sk
  * The Skills DTO against the real database (M14 Task 15), plus the assign route's round trip —
  * the house pattern `settings-snapshot.test.ts` / `org-routes.test.ts` set.
  *
- * The point of seeding `AgentRun.skillCalls` here rather than stubbing it is Decision 3: the run
+ * The point of seeding `SlaveRun.skillCalls` here rather than stubbing it is Decision 3: the run
  * counts on this page are a SUM of a real column, and the only way to prove `0` is a measured
  * zero (and not a placeholder) is to read it back out of Postgres.
  */
-let agentId: string
+let slaveId: string
 let skillId: string
 let providerId: string
 
@@ -25,13 +25,13 @@ function malformedRequest(method: 'POST' | 'DELETE'): Request {
 
 beforeEach(async (): Promise<void> => {
   await prisma.$executeRawUnsafe(
-    'TRUNCATE TABLE "ExecutionEvent", "AgentSkill", "Skill", "SkillProvider", "AgentPermission", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
+    'TRUNCATE TABLE "ExecutionEvent", "SlaveSkill", "Skill", "SkillProvider", "SlavePermission", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
   )
   const workspace = await prisma.workspace.create({
     data: { name: 'W', repoPath: '/tmp/skills-page', verifyCommands: ['true'], setupCommands: [] },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'T' } })
-  agentId = (await prisma.agent.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })).id
+  slaveId = (await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })).id
   const provider = await prisma.skillProvider.create({ data: { name: 'plugin:superpowers' } })
   providerId = provider.id
   skillId = (await prisma.skill.create({ data: { providerId: provider.id, name: 'writing-plans', description: 'plans things' } })).id
@@ -53,16 +53,16 @@ describe('buildSkillsPage', () => {
     // The keys are what the pump really writes for a `plugin:superpowers` skill --
     // `{"skill": "superpowers:writing-plans"}` (`packages/providers/test/stream.test.ts:512`).
     // `brainstorming` is in the tally but not in the catalog, and simply has no row to land on.
-    await prisma.agentRun.create({
-      data: { agentId, status: 'succeeded', provider: 'claude_code', skillCalls: { 'superpowers:writing-plans': 2, brainstorming: 5 } },
+    await prisma.slaveRun.create({
+      data: { slaveId, status: 'succeeded', provider: 'claude_code', skillCalls: { 'superpowers:writing-plans': 2, brainstorming: 5 } },
     })
-    await prisma.agentRun.create({
-      data: { agentId, status: 'failed', provider: 'claude_code', skillCalls: { 'superpowers:writing-plans': 1 } },
+    await prisma.slaveRun.create({
+      data: { slaveId, status: 'failed', provider: 'claude_code', skillCalls: { 'superpowers:writing-plans': 1 } },
     })
     // A run that reported nothing contributes nothing, and does not become a zero. `Prisma.DbNull`
     // is the sentinel the pump itself writes for exactly this (`apps/orchestrator/src/pump.ts:174`)
     // -- a nullable Json column rejects a bare `null` as ambiguous.
-    await prisma.agentRun.create({ data: { agentId, status: 'succeeded', provider: 'cursor', skillCalls: Prisma.DbNull } })
+    await prisma.slaveRun.create({ data: { slaveId, status: 'succeeded', provider: 'cursor', skillCalls: Prisma.DbNull } })
 
     const page = await buildSkillsPage()
     expect(page.providers[0]?.skills.find((s) => s.name === 'writing-plans')?.runs).toBe(3)
@@ -74,8 +74,8 @@ describe('buildSkillsPage', () => {
     // sit in the same tally and must not be added to the plugin row's total.
     const personal = await prisma.skillProvider.create({ data: { name: 'personal' } })
     await prisma.skill.create({ data: { providerId: personal.id, name: 'writing-plans', description: 'mine' } })
-    await prisma.agentRun.create({
-      data: { agentId, status: 'succeeded', provider: 'claude_code', skillCalls: { 'superpowers:writing-plans': 4, 'writing-plans': 9 } },
+    await prisma.slaveRun.create({
+      data: { slaveId, status: 'succeeded', provider: 'claude_code', skillCalls: { 'superpowers:writing-plans': 4, 'writing-plans': 9 } },
     })
 
     const page = await buildSkillsPage()
@@ -94,8 +94,8 @@ describe('buildSkillsPage', () => {
     const plugin = await prisma.skillProvider.create({ data: { name: 'plugin:code-review' } })
     await prisma.skill.create({ data: { providerId: personal.id, name: 'code-review', description: 'mine' } })
     await prisma.skill.create({ data: { providerId: plugin.id, name: 'code-review', description: 'theirs' } })
-    await prisma.agentRun.create({
-      data: { agentId, status: 'succeeded', provider: 'claude_code', skillCalls: { 'code-review': 9 } },
+    await prisma.slaveRun.create({
+      data: { slaveId, status: 'succeeded', provider: 'claude_code', skillCalls: { 'code-review': 9 } },
     })
 
     const page = await buildSkillsPage()
@@ -111,16 +111,16 @@ describe('buildSkillsPage', () => {
     expect(page.providers[0]?.skills[0]?.state).toBe('missing')
   })
 
-  it('lists the agents a skill is assigned to', async (): Promise<void> => {
-    await prisma.agentSkill.create({ data: { agentId, skillId } })
+  it('lists the slaves a skill is assigned to', async (): Promise<void> => {
+    await prisma.slaveSkill.create({ data: { slaveId, skillId } })
     const page = await buildSkillsPage()
-    expect(page.providers[0]?.skills[0]?.agentIds).toEqual([agentId])
+    expect(page.providers[0]?.skills[0]?.slaveIds).toEqual([slaveId])
   })
 
-  it('reports each agent with the status derived from its live run', async (): Promise<void> => {
-    await prisma.agentRun.create({ data: { agentId, status: 'working', provider: 'claude_code' } })
+  it('reports each slave with the status derived from its live run', async (): Promise<void> => {
+    await prisma.slaveRun.create({ data: { slaveId, status: 'working', provider: 'claude_code' } })
     const page = await buildSkillsPage()
-    expect(page.agents).toEqual([{ id: agentId, name: 'Alex', status: 'working' }])
+    expect(page.slaves).toEqual([{ id: slaveId, name: 'Alex', status: 'working' }])
   })
 
   it('names the three scanned roots without offering to change them', async (): Promise<void> => {
@@ -132,32 +132,32 @@ describe('buildSkillsPage', () => {
 
 describe('the /api/skills/assign route', () => {
   it('assigns and unassigns, and the DTO shows both ends of the round trip', async (): Promise<void> => {
-    const assigned = await assignPOST(jsonRequest('POST', { agentId, skillId }))
+    const assigned = await assignPOST(jsonRequest('POST', { slaveId, skillId }))
     expect(assigned.status).toBe(200)
     expect(await assigned.json()).toEqual({ ok: true })
-    expect((await buildSkillsPage()).providers[0]?.skills[0]?.agentIds).toEqual([agentId])
+    expect((await buildSkillsPage()).providers[0]?.skills[0]?.slaveIds).toEqual([slaveId])
 
-    const removed = await assignDELETE(jsonRequest('DELETE', { agentId, skillId }))
+    const removed = await assignDELETE(jsonRequest('DELETE', { slaveId, skillId }))
     expect(removed.status).toBe(200)
-    expect((await buildSkillsPage()).providers[0]?.skills[0]?.agentIds).toEqual([])
+    expect((await buildSkillsPage()).providers[0]?.skills[0]?.slaveIds).toEqual([])
   })
 
   it('refuses an unknown skill with the control layer’s own words', async (): Promise<void> => {
-    const response = await assignPOST(jsonRequest('POST', { agentId, skillId: 'nope' }))
+    const response = await assignPOST(jsonRequest('POST', { slaveId, skillId: 'nope' }))
     expect(response.status).toBe(409)
     expect(await response.json()).toEqual({ error: 'no skill with id nope' })
   })
 
-  it('refuses an unknown agent on the DELETE too', async (): Promise<void> => {
-    const response = await assignDELETE(jsonRequest('DELETE', { agentId: 'nope', skillId }))
+  it('refuses an unknown slave on the DELETE too', async (): Promise<void> => {
+    const response = await assignDELETE(jsonRequest('DELETE', { slaveId: 'nope', skillId }))
     expect(response.status).toBe(409)
-    expect(await response.json()).toEqual({ error: 'no agent with id nope' })
+    expect(await response.json()).toEqual({ error: 'no slave with id nope' })
   })
 
   it('calls a malformed body a 400, not a refusal', async (): Promise<void> => {
     expect((await assignPOST(malformedRequest('POST'))).status).toBe(400)
     expect((await assignDELETE(malformedRequest('DELETE'))).status).toBe(400)
-    expect((await assignPOST(jsonRequest('POST', { agentId: 1, skillId }))).status).toBe(400)
+    expect((await assignPOST(jsonRequest('POST', { slaveId: 1, skillId }))).status).toBe(400)
     // `providerId` is seeded but never a valid body field — the guard is on shape, not on ids.
     expect((await assignPOST(jsonRequest('POST', { providerId }))).status).toBe(400)
   })

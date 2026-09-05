@@ -92,7 +92,7 @@ export interface GraphCanvasProps {
  * batch) so callers don't each re-derive that translation.
  *
  * `onNodeContextMenu` is always wired (unlike the other, purely optional passthrough props): a
- * node with its own menu (`OrgNodes.tsx`'s `AgentNode`/`ActiveTaskNode`, `TaskNodes.tsx`'s
+ * node with its own menu (`OrgNodes.tsx`'s `SlaveNode`/`ActiveTaskNode`, `TaskNodes.tsx`'s
  * `TaskNode` -- Task 7) opens it from its own `onContextMenu` and stops the event there, so this
  * only ever fires for a node with no menu of its own (`WorkspaceNode`/`TeamNode`) -- there this
  * unconditional `preventDefault` is what makes right-clicking one of those a clean no-op instead

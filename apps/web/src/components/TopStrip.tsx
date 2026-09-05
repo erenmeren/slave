@@ -3,21 +3,21 @@ import { CARD_STATE_TONE } from '../lib/tones'
 import { TONE_TEXT, type StatusTone } from './ui/StatusPill'
 
 /**
- * The handoff's 6-up summary strip (design README "1a" / §3a.1): **agents working · tasks active ·
+ * The handoff's 6-up summary strip (design README "1a" / §3a.1): **slaves working · tasks active ·
  * tasks ready · tasks done · blocked · spend**, in that order, over 1px gutters so the section's
  * own `bg-line` shows THROUGH the grid as the hairline between tiles. `22px` mono numerals at
  * `letter-spacing: -1px`, an 11px label beneath.
  *
- * This replaces the M11 strip's three agent buckets (working / paused / idle). `paused` and
- * `idle` are not among the handoff's six, and a paused agent already says so on its own card's
- * pill -- the strip answers "how much work is moving", not "what is each agent doing".
+ * This replaces the M11 strip's three slave buckets (working / paused / idle). `paused` and
+ * `idle` are not among the handoff's six, and a paused slave already says so on its own card's
+ * pill -- the strip answers "how much work is moving", not "what is each slave doing".
  *
  * Tones come from `lib/tones.ts`'s `CARD_STATE_TONE`, never a second hand-written map (Decision
  * 2), and only ever light up a NON-ZERO count: zero is not a state worth colouring, and a red
  * `0` beside the word "blocked" reads as an alarm about nothing.
  */
 export function TopStrip({ snapshot }: { readonly snapshot: OverviewSnapshot }): React.JSX.Element {
-  const working = snapshot.agents.filter((a) => a.status === 'working').length
+  const working = snapshot.slaves.filter((a) => a.status === 'working').length
   const { active, ready, done, blocked } = snapshot.tasks
   const tiles: ReadonlyArray<{
     readonly key: string
@@ -25,7 +25,7 @@ export function TopStrip({ snapshot }: { readonly snapshot: OverviewSnapshot }):
     readonly label: string
     readonly tone?: StatusTone
   }> = [
-    { key: 'agents-working', value: String(working), label: 'agents working', ...(working > 0 ? { tone: CARD_STATE_TONE.working.tone } : {}) },
+    { key: 'slaves-working', value: String(working), label: 'slaves working', ...(working > 0 ? { tone: CARD_STATE_TONE.working.tone } : {}) },
     { key: 'tasks-active', value: String(active), label: 'tasks active', ...(active > 0 ? { tone: CARD_STATE_TONE.working.tone } : {}) },
     // `ready` carries no tone: a queued task is neither in flight nor a problem, and the handoff
     // gives it the same neutral numeral the spend tile has.

@@ -13,11 +13,11 @@ const EVENT_TYPES = [
   'run_started',
   'task_review_started',
   'task_review_rejected',
-  'agent_message_sent',
+  'slave_message_sent',
 ] as const
 
 export interface CommunicationGraph {
-  readonly agents: readonly { readonly id: string; readonly name: string; readonly role: string }[]
+  readonly slaves: readonly { readonly id: string; readonly name: string; readonly role: string }[]
   readonly edges: readonly CommunicationEdge[]
 }
 
@@ -25,8 +25,8 @@ export async function buildCommunicationGraph(workspaceId: string): Promise<Comm
   const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId }, select: { id: true } })
   if (workspace === null) return null
 
-  const [agents, rows] = await Promise.all([
-    prisma.agent.findMany({
+  const [slaves, rows] = await Promise.all([
+    prisma.slave.findMany({
       where: { team: { workspaceId } },
       select: { id: true, name: true, role: true },
       orderBy: { name: 'asc' },
@@ -35,7 +35,7 @@ export async function buildCommunicationGraph(workspaceId: string): Promise<Comm
       where: { workspaceId, type: { in: [...EVENT_TYPES] } },
       orderBy: { seq: 'desc' },
       take: COMMUNICATION_EVENT_LIMIT,
-      select: { type: true, agentId: true, taskId: true, actor: true, payload: true, seq: true },
+      select: { type: true, slaveId: true, taskId: true, actor: true, payload: true, seq: true },
     }),
   ])
 
@@ -47,7 +47,7 @@ export async function buildCommunicationGraph(workspaceId: string): Promise<Comm
     .reverse()
     .map((row) => ({
       type: DOMAIN_EVENT_TYPE_BY_DB_VALUE[row.type] ?? (row.type as DomainEventType),
-      agentId: row.agentId,
+      slaveId: row.slaveId,
       taskId: row.taskId,
       actor: row.actor,
       payload: row.payload,
@@ -55,5 +55,5 @@ export async function buildCommunicationGraph(workspaceId: string): Promise<Comm
     }))
 
   const { edges } = foldCommunication(events)
-  return { agents, edges }
+  return { slaves, edges }
 }

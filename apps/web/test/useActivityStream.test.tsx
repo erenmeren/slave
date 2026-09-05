@@ -26,7 +26,7 @@ function row(seq: number, overrides: Partial<ActivityEventRow> = {}): ActivityEv
     ts: new Date(seq * 1000).toISOString(),
     type: 'task.created',
     actor: 'system',
-    agentId: null,
+    slaveId: null,
     taskId: null,
     runId: null,
     userId: null,
@@ -42,7 +42,7 @@ const INITIAL: ActivityPage = {
   events: [row(3), row(2), row(1)],
   nextBefore: 1,
   sparkline: [0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-  agents: [],
+  slaves: [],
   tasks: [],
   users: [],
   // M14 Task 12 widenings — neither member is read by this hook, which pages `events`/`sparkline`
@@ -50,7 +50,7 @@ const INITIAL: ActivityPage = {
   typeVolumes: [],
   shellFacts: {
     workspace: { id: 'w1', name: 'mine' },
-    counts: { agentsWorking: 0, tasksActive: 0 },
+    counts: { slavesWorking: 0, tasksActive: 0 },
     guardrails: { budgetUsd: null, maxConcurrentRuns: 3, runTimeoutMs: 1_800_000, maxAttempts: 3 },
     status: { goal: null, spentUsd: 0, unmeasuredRuns: 0, haltedReason: null },
   },
@@ -109,7 +109,7 @@ describe('useActivityStream', () => {
     const { result } = renderHook(() =>
       useActivityStream({
         workspaceId: 'w1',
-        filters: { agents: ['a1'], tasks: [], types: [] },
+        filters: { slaves: ['a1'], tasks: [], types: [] },
         initial: INITIAL, // unfiltered — must NOT be what lands in the buffer
       }),
     )
@@ -121,14 +121,14 @@ describe('useActivityStream', () => {
       await vi.advanceTimersByTimeAsync(0)
     })
 
-    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/api/w/w1/activity?agents=a1'))
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/api/w/w1/activity?slaves=a1'))
     // The buffer is the filtered page (7, 9), not INITIAL's unfiltered (1, 2, 3).
     expect(result.current.events.map((e) => e.seq)).toEqual([7, 9])
 
     const url = FakeEventSource.instances[0]?.url ?? ''
     expect(url.startsWith('/api/w/w1/activity/stream?')).toBe(true)
     const params = new URLSearchParams(url.split('?')[1])
-    expect(params.get('agents')).toBe('a1')
+    expect(params.get('slaves')).toBe('a1')
     expect(params.get('from')).toBe('9')
   })
 
@@ -163,15 +163,15 @@ describe('useActivityStream', () => {
       seq: 4,
       ts: new Date().toISOString(),
       type: 'run.tool_call',
-      actor: 'agent',
+      actor: 'slave',
       workspaceId: 'w1',
-      agentId: 'a1',
+      slaveId: 'a1',
       payload: { name: 'Write', summary: 'Write x.txt' },
     })
 
     const appended = result.current.events.find((e) => e.seq === 4)
     expect(appended?.summary).toBe('Write x.txt')
-    expect(appended?.agentId).toBe('a1')
+    expect(appended?.slaveId).toBe('a1')
     expect(appended?.taskId).toBeNull()
   })
 
@@ -191,7 +191,7 @@ describe('useActivityStream', () => {
     expect(FakeEventSource.instances).toHaveLength(1)
     const first = FakeEventSource.instances[0]
 
-    rerender({ filters: { agents: ['a1'], tasks: [], types: [] } })
+    rerender({ filters: { slaves: ['a1'], tasks: [], types: [] } })
 
     expect(first?.closed).toBe(true)
 
@@ -209,7 +209,7 @@ describe('useActivityStream', () => {
   it('does not tear down the stream when the same filter set arrives in a different order', async () => {
     const { rerender } = renderHook(
       ({ filters }: { filters: ActivityFilters }) => useActivityStream({ workspaceId: 'w1', filters, initial: INITIAL }),
-      { initialProps: { filters: { agents: ['a1', 'a2'], tasks: [], types: [] } } },
+      { initialProps: { filters: { slaves: ['a1', 'a2'], tasks: [], types: [] } } },
     )
 
     // A non-empty filter set is present at mount, so this takes the refetch branch (Finding 1)
@@ -220,7 +220,7 @@ describe('useActivityStream', () => {
 
     expect(FakeEventSource.instances).toHaveLength(1)
 
-    rerender({ filters: { agents: ['a2', 'a1'], tasks: [], types: [] } })
+    rerender({ filters: { slaves: ['a2', 'a1'], tasks: [], types: [] } })
 
     expect(FakeEventSource.instances).toHaveLength(1)
     expect(FakeEventSource.instances[0]?.closed).toBe(false)
@@ -234,7 +234,7 @@ describe('useActivityStream', () => {
 
     expect(FakeEventSource.instances).toHaveLength(1)
 
-    rerender({ filters: { agents: [], tasks: [], types: [] } })
+    rerender({ filters: { slaves: [], tasks: [], types: [] } })
 
     expect(FakeEventSource.instances).toHaveLength(1)
     expect(FakeEventSource.instances[0]?.closed).toBe(false)
@@ -332,7 +332,7 @@ describe('useActivityStream', () => {
     })
     expect(result.current.loadingOlder).toBe(true)
 
-    rerender({ filters: { agents: ['a1'], tasks: [], types: [] } })
+    rerender({ filters: { slaves: ['a1'], tasks: [], types: [] } })
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0)
@@ -381,9 +381,9 @@ describe('useActivityStream', () => {
       seq: 4,
       ts: new Date().toISOString(),
       type: 'run.tool_call',
-      actor: 'agent',
+      actor: 'slave',
       workspaceId: 'w1',
-      agentId: 'a1',
+      slaveId: 'a1',
       payload: { name: 'Write', summary: 'Write x.txt' },
     })
 
@@ -501,7 +501,7 @@ describe('useActivityStream', () => {
     renderHook(() =>
       useActivityStream({
         workspaceId: 'w1',
-        filters: { agents: ['a1'], tasks: [], types: [] },
+        filters: { slaves: ['a1'], tasks: [], types: [] },
         initial: INITIAL,
       }),
     )
@@ -532,7 +532,7 @@ describe('useActivityStream', () => {
     // Seeded from `initial.sparkline` at mount (unfiltered — no refetch involved).
     expect(result.current.sparkline).toEqual(INITIAL.sparkline)
 
-    rerender({ filters: { agents: ['a1'], tasks: [], types: [] } })
+    rerender({ filters: { slaves: ['a1'], tasks: [], types: [] } })
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0)
@@ -554,7 +554,7 @@ describe('useActivityStream', () => {
 
     expect(FakeEventSource.instances).toHaveLength(1) // unfiltered mount: no fetch involved yet
 
-    rerender({ filters: { agents: ['a1'], tasks: [], types: [] } })
+    rerender({ filters: { slaves: ['a1'], tasks: [], types: [] } })
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0)

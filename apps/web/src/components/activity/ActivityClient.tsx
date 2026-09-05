@@ -41,7 +41,7 @@ export function ActivityClient({
   readonly workspaceId: string
   readonly initial: ActivityPage
 }): React.JSX.Element {
-  const { filters, kinds, rawTypes, setKinds, setRawTypes, setAgents, setTasks } = useUrlFilters()
+  const { filters, kinds, rawTypes, setKinds, setRawTypes, setSlaves, setTasks } = useUrlFilters()
   const { events, connection, loadOlder, sparkline, latencyMs } = useActivityStream({ workspaceId, filters, initial })
 
   // The newest seq the page opened with. Compared against, never updated: once anything at all has
@@ -103,16 +103,16 @@ export function ActivityClient({
   }, [workspaceId, connection, latencyMs])
   useEffect((): (() => void) => () => publishStreamState(workspaceId, null), [workspaceId])
 
-  const agentNameById = useMemo(() => new Map(initial.agents.map((agent) => [agent.id, agent.name])), [initial.agents])
+  const slaveNameById = useMemo(() => new Map(initial.slaves.map((slave) => [slave.id, slave.name])), [initial.slaves])
   const taskTitleById = useMemo(() => new Map(initial.tasks.map((task) => [task.id, task.title])), [initial.tasks])
   const userNameById = useMemo(() => new Map(initial.users.map((user) => [user.id, user.username])), [initial.users])
 
   // The roster row a click has selected, or `null`. Design README "Filtering": clicking a roster
   // row filters the stream — as a DIM (opacity .35), not a removal, so the river keeps its shape
-  // and its timestamps stay comparable. Deliberately NOT `useUrlFilters`' `?agents=`: that one
-  // re-queries the server and drops every other agent's rows outright, which is exactly the
+  // and its timestamps stay comparable. Deliberately NOT `useUrlFilters`' `?slaves=`: that one
+  // re-queries the server and drops every other slave's rows outright, which is exactly the
   // behaviour this one exists not to be.
-  const [rosterAgentId, setRosterAgentId] = useState<string | null>(null)
+  const [rosterSlaveId, setRosterSlaveId] = useState<string | null>(null)
 
   const [pinned, setPinned] = useState(true)
   const [pendingCount, setPendingCount] = useState(0)
@@ -174,14 +174,14 @@ export function ActivityClient({
     <div className="flex flex-1 flex-col">
       {initial.workspace.haltedReason !== null && <HaltBanner reason={initial.workspace.haltedReason} />}
       <FilterBar
-        agents={initial.agents}
+        slaves={initial.slaves}
         tasks={initial.tasks}
         filters={filters}
         kinds={kinds}
         rawTypes={rawTypes}
         setKinds={setKinds}
         setRawTypes={setRawTypes}
-        setAgents={setAgents}
+        setSlaves={setSlaves}
         setTasks={setTasks}
       />
       <div data-testid="sparkline-slot" className="border-b border-line px-3 py-2 text-text-3">
@@ -193,10 +193,10 @@ export function ActivityClient({
             ref={timelineRef}
             events={events}
             workspaceId={workspaceId}
-            agentNameById={agentNameById}
+            slaveNameById={slaveNameById}
             taskTitleById={taskTitleById}
             userNameById={userNameById}
-            dimmedAgentId={rosterAgentId}
+            dimmedSlaveId={rosterSlaveId}
             onPinnedChange={handlePinnedChange}
             onNearTop={loadOlder}
           />
@@ -208,7 +208,7 @@ export function ActivityClient({
               // Spec §4.6: the badge fades in on appearance — reuses the M5 `action-line-in`
               // opacity keyframe (it's conditionally rendered, so each appearance is already a
               // fresh DOM node; no key trick needed to make the fade replay). It has no explicit
-              // fade-*out*: like `AgentPanel`'s `panel-in`, this codebase's motion pass has no
+              // fade-*out*: like `SlavePanel`'s `panel-in`, this codebase's motion pass has no
               // exit-animation mechanism, so disappearing (pendingCount back to 0) stays an
               // instant unmount, same as before this change. NOT the rows' `rise`: this is a
               // control appearing, not an event arriving.
@@ -253,21 +253,21 @@ export function ActivityClient({
           <div className="mt-6">
             <PanelHeader title="roster" />
             <ul className="mt-[11px] flex flex-col gap-1">
-              {initial.agents.map((agent) => (
-                <li key={agent.id}>
+              {initial.slaves.map((slave) => (
+                <li key={slave.id}>
                   <button
                     type="button"
-                    data-testid={`roster-row-${agent.id}`}
+                    data-testid={`roster-row-${slave.id}`}
                     // A toggle, not a radio: clicking the selected row again clears the filter,
                     // which is the only way back to the undimmed river without a reload.
-                    aria-pressed={rosterAgentId === agent.id}
-                    onClick={() => setRosterAgentId((current) => (current === agent.id ? null : agent.id))}
+                    aria-pressed={rosterSlaveId === slave.id}
+                    onClick={() => setRosterSlaveId((current) => (current === slave.id ? null : slave.id))}
                     // The mockup's roster row is 7px (rounded-tile per the radius scale).
                     className={`w-full truncate rounded-tile px-2 py-1 text-left text-[12.5px] transition-colors ${
-                      rosterAgentId === agent.id ? 'bg-[#151a21] text-text-1' : 'text-text-2 hover:text-text-1'
+                      rosterSlaveId === slave.id ? 'bg-[#151a21] text-text-1' : 'text-text-2 hover:text-text-1'
                     }`}
                   >
-                    {agent.name}
+                    {slave.name}
                   </button>
                 </li>
               ))}

@@ -4,7 +4,7 @@ import { skillNameOf, UNKNOWN_SKILL_NAME } from '../lib/skillName'
 
 /** Series B (M18): how many of the workspace's most recently active Skill-calling runs feed the
  *  chain view. "Most recently active" is defined by the MAX `seq` among a run's own Skill events
- *  (a run whose latest Skill call is the most recent one, workspace-wide), not `AgentRun.startedAt`
+ *  (a run whose latest Skill call is the most recent one, workspace-wide), not `SlaveRun.startedAt`
  *  -- chosen because it is the same table and the same query that finds the candidate runIds in
  *  the first place (`executionEvent.groupBy`), so the bound applies in ONE query rather than an
  *  unbounded id list handed to a second, separately-sorted one. */
@@ -13,7 +13,7 @@ export const SKILL_GRAPH_RUN_LIMIT = 50
 export interface SkillGraphRun {
   readonly runId: string
   readonly taskTitle: string | null
-  readonly agentName: string
+  readonly slaveName: string
   readonly live: boolean
   readonly startedAt: string
   readonly chain: readonly { readonly name: string; readonly count: number }[]
@@ -79,13 +79,13 @@ export async function buildSkillGraph(workspaceId: string): Promise<SkillGraph |
   const runIds = grouped.map((row) => row.runId).filter((id): id is string => id !== null)
   if (runIds.length === 0) return { skills: [], edges: [], runs: [] }
 
-  // Run metadata (task title, agent name, live status, startedAt) for exactly those runs, one
+  // Run metadata (task title, slave name, live status, startedAt) for exactly those runs, one
   // query. Ordered newest-`startedAt`-first for the `runs` list a reader sees -- distinct from,
   // but not in conflict with, the `_max seq` order that bounded the SET of runs above.
-  const runRows = await prisma.agentRun.findMany({
+  const runRows = await prisma.slaveRun.findMany({
     where: { id: { in: runIds } },
     orderBy: { startedAt: 'desc' },
-    include: { task: true, agent: true },
+    include: { task: true, slave: true },
   })
 
   // Step 2: the ordered event fetch, bounded to exactly those runs -- rides the `(runId, seq)`
@@ -140,7 +140,7 @@ export async function buildSkillGraph(workspaceId: string): Promise<SkillGraph |
   const runs: SkillGraphRun[] = runRows.map((run) => ({
     runId: run.id,
     taskTitle: run.task?.title ?? null,
-    agentName: run.agent.name,
+    slaveName: run.slave.name,
     live: (NON_TERMINAL_RUN_STATUSES as readonly RunStatus[]).includes(run.status),
     startedAt: run.startedAt.toISOString(),
     chain: chainByRun.get(run.id) ?? [],

@@ -180,7 +180,7 @@ describe('RuntimePanel', () => {
 function shellFacts(over: Partial<ShellFacts['status']> = {}): ShellFacts {
   return {
     workspace: { id: 'w1', name: 'Checkout Platform' },
-    counts: { agentsWorking: 0, tasksActive: 0 },
+    counts: { slavesWorking: 0, tasksActive: 0 },
     guardrails: { budgetUsd: 2, maxConcurrentRuns: 3, runTimeoutMs: 1_800_000, maxAttempts: 5 },
     status: { goal: null, spentUsd: 0, unmeasuredRuns: 0, haltedReason: null, ...over },
   }
@@ -206,7 +206,7 @@ function settings(over: Partial<ProjectSettings['workspace']> = {}): ProjectSett
       workspaceName: 'Checkout Platform',
       rows: [
         {
-          agentId: 'a1',
+          slaveId: 'a1',
           name: 'Alex',
           role: 'backend',
           cells: [{ tool: 'repo read', mode: 'allow' as const }],
@@ -221,7 +221,7 @@ describe('ProjectSettingsClient', () => {
     render(<ProjectSettingsClient settings={settings()} shellFacts={shellFacts()} />)
     // `Panel` renders `PanelHeader` → `SectionLabel` as its first child when it has a title.
     const titles = screen.getAllByTestId('panel').map((p) => p.firstElementChild?.textContent?.trim().toLowerCase())
-    expect(titles).toEqual(['goal', 'runtime', 'agent permissions', 'danger zone'])
+    expect(titles).toEqual(['goal', 'runtime', 'slave permissions', 'danger zone'])
   })
 
   it("shows the three limits read-only in the sidebar's old format", () => {

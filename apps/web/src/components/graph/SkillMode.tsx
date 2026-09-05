@@ -28,7 +28,7 @@ async function fetchSkillGraph(workspaceId: string): Promise<SkillGraph> {
 }
 
 /** `taskTitle ?? runId-prefix` -- the same 8-char id-prefix convention `TaskCard.tsx`/
- *  `AgentCard.tsx` use for `TASK-{id.slice(0, 8)}`, reused here for a run with no task title
+ *  `SlaveCard.tsx` use for `TASK-{id.slice(0, 8)}`, reused here for a run with no task title
  *  (a directly-dispatched run, or a task whose title hasn't loaded) rather than showing the full
  *  UUID or nothing at all. */
 function runChipLabel(run: SkillGraphRun): string {
@@ -37,10 +37,10 @@ function runChipLabel(run: SkillGraphRun): string {
 
 /**
  * The run-selector strip (Task 12, M18 design doc §6's "Focus" half): one mono chip per
- * `graph.runs` entry, `taskTitle ?? runId-prefix · agentName` plus a live dot -- the same
- * `agentDot`/`DOT` idiom `OrgNodes.tsx`'s `AgentNode`/`AgentPanel.tsx` already render a status dot
+ * `graph.runs` entry, `taskTitle ?? runId-prefix · slaveName` plus a live dot -- the same
+ * `slaveDot`/`DOT` idiom `OrgNodes.tsx`'s `SlaveNode`/`SlavePanel.tsx` already render a status dot
  * with (`inline-block h-2 w-2 rounded-full`, pulsing only while genuinely live), reused here off
- * `SkillGraphRun.live` directly rather than a full `AgentStatus` (this DTO carries only the
+ * `SkillGraphRun.live` directly rather than a full `SlaveStatus` (this DTO carries only the
  * boolean -- `NON_TERMINAL_RUN_STATUSES.includes(run.status)`, computed server-side).
  *
  * A horizontally-scrolling strip (not a wrap) -- `SKILL_GRAPH_RUN_LIMIT` (50) runs could otherwise
@@ -89,7 +89,7 @@ function RunSelectorStrip({
               className={`inline-block h-1.5 w-1.5 shrink-0 rounded-full ${run.live ? `${TONE_DOT.working} animate-pulse` : TONE_DOT.idle}`}
             />
             <span className="truncate">{runChipLabel(run)}</span>
-            <span className="text-text-3">· {run.agentName}</span>
+            <span className="text-text-3">· {run.slaveName}</span>
           </button>
         )
       })}

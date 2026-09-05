@@ -1,6 +1,6 @@
 import type { DomainEventType } from '@slave-of-ai/db'
 
-/** The literal node every `agent.message_sent` edge with `actor: 'human'` renders from (spec §6
+/** The literal node every `slave.message_sent` edge with `actor: 'human'` renders from (spec §6
  *  E1): no event carries an operator id, so every human message collapses onto one node. */
 export const OPERATOR = 'operator'
 
@@ -8,7 +8,7 @@ export const OPERATOR = 'operator'
  *  row shape on purpose -- this is the fold's own contract, not a reflection of either. */
 export interface FoldEvent {
   readonly type: DomainEventType
-  readonly agentId: string | null
+  readonly slaveId: string | null
   readonly taskId: string | null
   readonly actor: string
   readonly payload: unknown
@@ -26,7 +26,7 @@ export interface CommunicationEdge {
 
 /**
  * Derives who-talked-to-whom edges from task co-participation in the log (spec §6 E1 -- no event
- * carries a target agent, so an edge is never read off a single event, only inferred from two
+ * carries a target slave, so an edge is never read off a single event, only inferred from two
  * events sharing a `taskId`):
  *
  * - `workspace.plan_created` names a planner and lists task ids; the first `run.started` on each
@@ -34,15 +34,15 @@ export interface CommunicationEdge {
  * - `task.review_started` names a reviewer on a task whose latest `run.started` named an
  *   implementer -> `implementer -> reviewer, 'review'`.
  * - `task.review_rejected` names a reviewer; the next `run.started` on the same task names the
- *   agent sent back to rework it -> `reviewer -> implementer, 'rework'`.
- * - `agent.message_sent` with `actor: 'human'` and an `agentId` -> `operator -> agentId,
+ *   slave sent back to rework it -> `reviewer -> implementer, 'rework'`.
+ * - `slave.message_sent` with `actor: 'human'` and an `slaveId` -> `operator -> slaveId,
  *   'message'`.
  *
  * `events` must already be in `seq` order -- the fold is a single forward pass with no look-ahead
  * (a task's planner/reviewer state is only ever set from an event already seen).
  */
 export function foldCommunication(events: readonly FoldEvent[]): { edges: CommunicationEdge[] } {
-  // Latest `run.started`'s agentId per task -- who `task.review_started` credits as implementer.
+  // Latest `run.started`'s slaveId per task -- who `task.review_started` credits as implementer.
   const implementerByTask = new Map<string, string>()
   // Set by `workspace.plan_created`, consumed (deleted) by that task's first `run.started`.
   const plannedBy = new Map<string, string>()
@@ -61,8 +61,8 @@ export function foldCommunication(events: readonly FoldEvent[]): { edges: Commun
   for (const event of events) {
     switch (event.type) {
       case 'workspace.plan_created': {
-        if (event.agentId === null) break
-        const planner = event.agentId
+        if (event.slaveId === null) break
+        const planner = event.slaveId
         const tasks = (event.payload as { tasks?: readonly { id?: unknown }[] } | null)?.tasks ?? []
         for (const task of tasks) {
           if (typeof task?.id === 'string') plannedBy.set(task.id, planner)
@@ -70,9 +70,9 @@ export function foldCommunication(events: readonly FoldEvent[]): { edges: Commun
         break
       }
       case 'run.started': {
-        if (event.taskId === null || event.agentId === null) break
+        if (event.taskId === null || event.slaveId === null) break
         const taskId = event.taskId
-        const implementer = event.agentId
+        const implementer = event.slaveId
         const planner = plannedBy.get(taskId)
         if (planner !== undefined) {
           bump(planner, implementer, 'plan')
@@ -87,18 +87,18 @@ export function foldCommunication(events: readonly FoldEvent[]): { edges: Commun
         break
       }
       case 'task.review_started': {
-        if (event.taskId === null || event.agentId === null) break
+        if (event.taskId === null || event.slaveId === null) break
         const implementer = implementerByTask.get(event.taskId)
-        if (implementer !== undefined) bump(implementer, event.agentId, 'review')
+        if (implementer !== undefined) bump(implementer, event.slaveId, 'review')
         break
       }
       case 'task.review_rejected': {
-        if (event.taskId === null || event.agentId === null) break
-        pendingRework.set(event.taskId, event.agentId)
+        if (event.taskId === null || event.slaveId === null) break
+        pendingRework.set(event.taskId, event.slaveId)
         break
       }
-      case 'agent.message_sent': {
-        if (event.actor === 'human' && event.agentId !== null) bump(OPERATOR, event.agentId, 'message')
+      case 'slave.message_sent': {
+        if (event.actor === 'human' && event.slaveId !== null) bump(OPERATOR, event.slaveId, 'message')
         break
       }
       default:

@@ -27,11 +27,11 @@ function snapshot(over: Partial<AnalyticsSnapshot> = {}): AnalyticsSnapshot {
       { label: 'Spend', value: '$8.43', note: '2 runs unmeasured' },
       { label: 'Tool calls', value: '482', note: null },
       { label: 'Pauses', value: '7', note: null },
-      { label: 'Active agents', value: '3', note: null },
+      { label: 'Active slaves', value: '3', note: null },
     ],
-    perAgent: [
-      { agentId: 'a1', name: 'Alex Turner', role: 'backend', runs: 42, successPct: 95, avgDurationMs: 760_000, tokens: 1_400_000, costUsd: 3.02, unmeasuredRuns: 0 },
-      { agentId: 'a2', name: 'Bea Ng', role: 'qa', runs: 0, successPct: null, avgDurationMs: null, tokens: null, costUsd: 0, unmeasuredRuns: 0 },
+    perSlave: [
+      { slaveId: 'a1', name: 'Alex Turner', role: 'backend', runs: 42, successPct: 95, avgDurationMs: 760_000, tokens: 1_400_000, costUsd: 3.02, unmeasuredRuns: 0 },
+      { slaveId: 'a2', name: 'Bea Ng', role: 'qa', runs: 0, successPct: null, avgDurationMs: null, tokens: null, costUsd: 0, unmeasuredRuns: 0 },
     ],
     ...over,
   }
@@ -67,7 +67,7 @@ describe('AnalyticsClient', () => {
     expect(screen.queryByTestId('kpi-note-Pauses')).toBeNull()
   })
 
-  it('renders the per-agent table with unknown marks where nothing was measured', () => {
+  it('renders the per-slave table with unknown marks where nothing was measured', () => {
     render(<AnalyticsClient snapshot={snapshot()} workspaces={workspaces} seeded={false} />)
     expect(screen.getByTestId('perf-tokens-a1').textContent).toBe('1.4M')
     expect(screen.getByTestId('perf-tokens-a2').textContent).toBe('—')
@@ -76,16 +76,16 @@ describe('AnalyticsClient', () => {
   })
 
   // M14 fix wave, review I1: `unmeasuredRuns` reached this row's DTO and was rendered nowhere.
-  it('says how many of an agent runs went unmeasured, beside the cost', () => {
-    const rows = snapshot().perAgent.map((r) => (r.agentId === 'a1' ? { ...r, unmeasuredRuns: 3 } : r))
-    render(<AnalyticsClient snapshot={snapshot({ perAgent: rows })} workspaces={workspaces} seeded={false} />)
+  it('says how many of a slave runs went unmeasured, beside the cost', () => {
+    const rows = snapshot().perSlave.map((r) => (r.slaveId === 'a1' ? { ...r, unmeasuredRuns: 3 } : r))
+    render(<AnalyticsClient snapshot={snapshot({ perSlave: rows })} workspaces={workspaces} seeded={false} />)
     expect(screen.getByTestId('perf-unmeasured-a1').textContent?.replace(/\s+/g, ' ').trim()).toBe('· 3 unmeasured')
     expect(screen.queryByTestId('perf-unmeasured-a2')).toBeNull()
   })
 
   // M14 fix wave, review I5: the page returned a bare `flex flex-col gap-4`, so the `analytics`
   // h1 was clipped against the sidebar edge and both panels ran flush into the viewport. `p-4` is
-  // the padding Settings and Agents already use.
+  // the padding Settings and Slaves already use.
   it('pads the page the way the other global pages do', () => {
     const { container } = render(<AnalyticsClient snapshot={snapshot()} workspaces={workspaces} seeded={false} />)
     expect(container.firstElementChild?.className).toContain('p-4')

@@ -31,13 +31,13 @@ function leniently<T extends string>(raw: string | null, known: ReadonlySet<stri
 }
 
 function buildParams(dimensions: {
-  readonly agents: readonly string[]
+  readonly slaves: readonly string[]
   readonly tasks: readonly string[]
   readonly kinds: readonly string[]
   readonly types: readonly string[]
 }): URLSearchParams {
   const params = new URLSearchParams()
-  if (dimensions.agents.length > 0) params.set('agents', [...dimensions.agents].sort().join(','))
+  if (dimensions.slaves.length > 0) params.set('slaves', [...dimensions.slaves].sort().join(','))
   if (dimensions.tasks.length > 0) params.set('tasks', [...dimensions.tasks].sort().join(','))
   if (dimensions.kinds.length > 0) params.set('kinds', [...dimensions.kinds].sort().join(','))
   if (dimensions.types.length > 0) params.set('types', [...dimensions.types].sort().join(','))
@@ -50,12 +50,12 @@ export interface UrlFilters {
   readonly rawTypes: readonly DomainEventType[]
   readonly setKinds: (kinds: readonly ActivityKind[]) => void
   readonly setRawTypes: (types: readonly DomainEventType[]) => void
-  readonly setAgents: (ids: readonly string[]) => void
+  readonly setSlaves: (ids: readonly string[]) => void
   readonly setTasks: (ids: readonly string[]) => void
 }
 
 /**
- * URL-carried state for the activity timeline's four filter dimensions (`?agents=`, `?tasks=`,
+ * URL-carried state for the activity timeline's four filter dimensions (`?slaves=`, `?tasks=`,
  * `?kinds=`, `?types=`) — the same idiom as `useSelectedId`: each dimension lives in local React
  * state, seeded once from `useSearchParams()`, so a chip toggle re-renders synchronously;
  * `router.replace` is the side effect that keeps a refresh or a shared link able to restore it,
@@ -74,7 +74,7 @@ export function useUrlFilters(): UrlFilters {
   const pathname = usePathname()
   const searchParams = useSearchParams()
 
-  const [agents, setAgentsState] = useState<readonly string[]>(() => splitList(searchParams.get('agents')))
+  const [slaves, setSlavesState] = useState<readonly string[]>(() => splitList(searchParams.get('slaves')))
   const [tasks, setTasksState] = useState<readonly string[]>(() => splitList(searchParams.get('tasks')))
   const [kinds, setKindsState] = useState<readonly ActivityKind[]>(() =>
     leniently<ActivityKind>(searchParams.get('kinds'), KNOWN_KINDS),
@@ -85,7 +85,7 @@ export function useUrlFilters(): UrlFilters {
 
   const replaceUrl = useCallback(
     (next: {
-      readonly agents: readonly string[]
+      readonly slaves: readonly string[]
       readonly tasks: readonly string[]
       readonly kinds: readonly ActivityKind[]
       readonly types: readonly DomainEventType[]
@@ -96,10 +96,10 @@ export function useUrlFilters(): UrlFilters {
     [router, pathname],
   )
 
-  const setAgents = useCallback(
+  const setSlaves = useCallback(
     (ids: readonly string[]): void => {
-      setAgentsState(ids)
-      replaceUrl({ agents: ids, tasks, kinds, types: rawTypes })
+      setSlavesState(ids)
+      replaceUrl({ slaves: ids, tasks, kinds, types: rawTypes })
     },
     [replaceUrl, tasks, kinds, rawTypes],
   )
@@ -107,31 +107,31 @@ export function useUrlFilters(): UrlFilters {
   const setTasks = useCallback(
     (ids: readonly string[]): void => {
       setTasksState(ids)
-      replaceUrl({ agents, tasks: ids, kinds, types: rawTypes })
+      replaceUrl({ slaves, tasks: ids, kinds, types: rawTypes })
     },
-    [replaceUrl, agents, kinds, rawTypes],
+    [replaceUrl, slaves, kinds, rawTypes],
   )
 
   const setKinds = useCallback(
     (next: readonly ActivityKind[]): void => {
       setKindsState(next)
-      replaceUrl({ agents, tasks, kinds: next, types: rawTypes })
+      replaceUrl({ slaves, tasks, kinds: next, types: rawTypes })
     },
-    [replaceUrl, agents, tasks, rawTypes],
+    [replaceUrl, slaves, tasks, rawTypes],
   )
 
   const setRawTypes = useCallback(
     (next: readonly DomainEventType[]): void => {
       setRawTypesState(next)
-      replaceUrl({ agents, tasks, kinds, types: next })
+      replaceUrl({ slaves, tasks, kinds, types: next })
     },
-    [replaceUrl, agents, tasks, kinds],
+    [replaceUrl, slaves, tasks, kinds],
   )
 
   const filters = useMemo((): ActivityFilters => {
-    const result = parseActivityFilters(buildParams({ agents, tasks, kinds, types: rawTypes }))
+    const result = parseActivityFilters(buildParams({ slaves, tasks, kinds, types: rawTypes }))
     return result.ok ? result.filters : EMPTY_ACTIVITY_FILTERS
-  }, [agents, tasks, kinds, rawTypes])
+  }, [slaves, tasks, kinds, rawTypes])
 
-  return { filters, kinds, rawTypes, setKinds, setRawTypes, setAgents, setTasks }
+  return { filters, kinds, rawTypes, setKinds, setRawTypes, setSlaves, setTasks }
 }

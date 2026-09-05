@@ -11,7 +11,7 @@ import { buildCommunicationGraph, COMM_NODE_TYPES } from './CommunicationNodes'
  *  zero hand-offs and one that simply hasn't answered yet render identically for that one gap: the
  *  same panel a moment later either stays (truly empty) or gives way to the real graph. Same idiom
  *  as `SkillMode.tsx`'s own `EMPTY_GRAPH`. */
-const EMPTY_GRAPH: CommunicationGraph = { agents: [], edges: [] }
+const EMPTY_GRAPH: CommunicationGraph = { slaves: [], edges: [] }
 
 /** Debounce window for the stream-driven refetch below (Task 12, M23 E3) -- the same 2s window
  *  `SkillMode.tsx`'s `SKILL_REFETCH_DEBOUNCE_MS` uses, and for the same reason: `GraphClient`'s
@@ -28,7 +28,7 @@ async function fetchCommunicationGraph(workspaceId: string): Promise<Communicati
 
 /**
  * Communication mode (Task 12, M23 E3, spec §6 E1): who-talked-to-whom, folded from the event log
- * into agent nodes, one always-present operator node, and cable edges (`buildCommunicationGraph`).
+ * into slave nodes, one always-present operator node, and cable edges (`buildCommunicationGraph`).
  * `SkillMode.tsx` minus its run-selector strip -- this view has no per-run "Focus" half, only the
  * one aggregate canvas -- on the same `DepsMode.tsx:52-162` template every sibling mode follows: an
  * absolute error band (`role="alert"`) and an absolute empty-state hint stack over an
@@ -41,7 +41,7 @@ async function fetchCommunicationGraph(workspaceId: string): Promise<Communicati
  *
  * `frameTick` is `GraphClient`'s own debounced-refetch signal, bumped once per raw frame whose
  * `type` is one of the five domain events `communicationFold.ts` reads
- * (`run.started`/`task.review_started`/`task.review_rejected`/`agent.message_sent`/
+ * (`run.started`/`task.review_started`/`task.review_rejected`/`slave.message_sent`/
  * `workspace.plan_created`) -- the same "reuse the raw-frame path already threaded through
  * `onGraphEvent`" shape `SkillMode`'s own `toolCallTick` prop takes, not a second `EventSource`.
  */
@@ -119,7 +119,7 @@ export function CommunicationMode({
       )}
       {/* Gated on `graph.edges` -- the message is about hand-offs, not the roster, so the common
        *  real case (a seeded team with no traffic yet) still gets this explanation even though
-       *  `graph.agents` and the canvas's agent/operator nodes are non-empty. Same "gate on the
+       *  `graph.slaves` and the canvas's slave/operator nodes are non-empty. Same "gate on the
        *  collection the sentence is actually about" idiom `DepsMode.tsx`'s own empty band uses
        *  (`snapshot.dependencies.length === 0` for "no dependencies yet", not `snapshot.tasks`). */}
       {graph.edges.length === 0 && (
@@ -127,7 +127,7 @@ export function CommunicationMode({
           data-testid="comm-empty"
           className="pointer-events-none absolute inset-x-0 top-10 z-10 text-center text-xs text-text-3"
         >
-          no hand-offs yet — edges appear as tasks move between agents
+          no hand-offs yet — edges appear as tasks move between slaves
         </div>
       )}
       <GraphCanvas nodes={positioned} edges={visibleEdges} nodeTypes={COMM_NODE_TYPES} />

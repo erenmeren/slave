@@ -2,7 +2,7 @@
  * `860000` → `14m 20s`; `45000` → `45s`.
  *
  * Lives here, not in `server/analytics.ts` where it was first written, because it is also needed
- * by `AnalyticsClient.tsx` (a `'use client'` component) to render the per-agent table's average
+ * by `AnalyticsClient.tsx` (a `'use client'` component) to render the per-slave table's average
  * duration. `server/analytics.ts` imports `@slave-of-ai/db/client` at module scope, and Next's
  * client bundler resolves an entire module's imports before any tree-shaking of unused exports
  * happens — a client component that value-imports even one pure export from that file drags
@@ -30,8 +30,8 @@ export function formatTimeout(ms: number): string {
 }
 
 /** `1_400_000` → `1.4M`; `900` → `900`. The handoff's own token format -- moved here from the
- *  old flat worker list (M24 Task 7: that table is gone, folded into `AllAgentsTable`, which has
- *  no Tokens column; `AnalyticsClient.tsx`'s per-agent table is this function's one remaining
+ *  old flat worker list (M24 Task 7: that table is gone, folded into `AllSlavesTable`, which has
+ *  no Tokens column; `AnalyticsClient.tsx`'s per-slave table is this function's one remaining
  *  caller, the reason it lives in a plain module rather than back inside a deleted component). */
 export function formatTokens(tokens: number): string {
   if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`

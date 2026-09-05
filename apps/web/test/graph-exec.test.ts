@@ -13,7 +13,7 @@ import {
 
 const SHELL_FACTS: GraphSnapshot['shellFacts'] = {
   workspace: { id: 'w1', name: 'W' },
-  counts: { agentsWorking: 0, tasksActive: 0 },
+  counts: { slavesWorking: 0, tasksActive: 0 },
   guardrails: { budgetUsd: null, maxConcurrentRuns: 3, runTimeoutMs: 1_800_000, maxAttempts: 3 },
   status: { goal: null, spentUsd: 0, unmeasuredRuns: 0, haltedReason: null },
 }
@@ -22,7 +22,7 @@ function snapshot(tasks: GraphSnapshot['tasks']): GraphSnapshot {
   return {
     workspace: { id: 'w1', name: 'W', haltedReason: null },
     teams: [],
-    agents: [],
+    slaves: [],
     tasks,
     dependencies: [],
     shellFacts: SHELL_FACTS,

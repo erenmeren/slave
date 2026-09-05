@@ -2,10 +2,10 @@ import { prisma } from '@slave-of-ai/db/client'
 import { toRunState } from '@slave-of-ai/db'
 import { capabilitiesOf, type ProviderCapabilities, type ProviderKind } from '@slave-of-ai/control'
 import {
-  deriveAgentStatus,
+  deriveSlaveStatus,
   sumSpendFromGroups,
   NON_TERMINAL_RUN_STATUSES,
-  type AgentStatus,
+  type SlaveStatus,
   type SpendGroup,
 } from '@slave-of-ai/domain'
 
@@ -56,11 +56,11 @@ export interface ProjectRow {
   readonly halted: boolean
   readonly taskCounts: { readonly done: number; readonly total: number; readonly active: number; readonly blocked: number }
   /**
-   * How many agents this workspace has (M14 fix wave, ruling on review I4): every `Agent` row on
-   * one of its teams, staffed from a company or not. ONE definition of "agent", shared with
+   * How many slaves this workspace has (M14 fix wave, ruling on review I4): every `Slave` row on
+   * one of its teams, staffed from a company or not. ONE definition of "slave", shared with
    * `listWorkers` below and with the `team` avatar row on this very same DTO -- the card used to
-   * show `AGENTS 0` above six avatar tiles because the tile counted `companyAgentId != null` and
-   * the row counted team membership. Company staffing is optional metadata about an agent, never
+   * show `SLAVES 0` above six avatar tiles because the tile counted `companySlaveId != null` and
+   * the row counted team membership. Company staffing is optional metadata about a slave, never
    * what makes one.
    */
   readonly workerCount: number
@@ -70,7 +70,7 @@ export interface ProjectRow {
   /** The project's workers, for the avatar row: name and the tone their derived status resolves
    *  to. The FULL team, uncapped -- `ProjectsClient.tsx` owns the six-avatar cap and the `+N`
    *  overflow tile that reads past it (fix round 1). */
-  readonly team: readonly { readonly agentId: string; readonly name: string; readonly status: string }[]
+  readonly team: readonly { readonly slaveId: string; readonly name: string; readonly status: string }[]
   /** KNOWN spend: every run of this project that reported a cost, summed. */
   readonly spend: number
   /**
@@ -84,27 +84,27 @@ export interface ProjectRow {
 }
 
 export async function listProjects(): Promise<readonly ProjectRow[]> {
-  // `teams: { include: { agents: true } }` -- the avatar row's source. One join, not a
+  // `teams: { include: { slaves: true } }` -- the avatar row's source. One join, not a
   // per-project query: every workspace's team roster comes back in this same round trip.
   const workspaces = await prisma.workspace.findMany({
-    include: { company: true, teams: { include: { agents: true } } },
+    include: { company: true, teams: { include: { slaves: true } } },
     orderBy: { name: 'asc' },
   })
 
-  const [taskGroups, agentRows, spendGroups] = await Promise.all([
+  const [taskGroups, slaveRows, spendGroups] = await Promise.all([
     prisma.task.groupBy({ by: ['workspaceId', 'status'], _count: { _all: true } }),
-    // `agent -> team -> workspaceId`, matching overview.ts's budget-bar spend source exactly (Task
+    // `slave -> team -> workspaceId`, matching overview.ts's budget-bar spend source exactly (Task
     // 13, M17): a `planning` run (no Task row) still counts toward the workspace it ran under.
     // Prisma's `groupBy` cannot traverse a relation for its `by` columns, so the workspace each
-    // agent belongs to is resolved with this separate, cheap query instead.
-    prisma.agent.findMany({ select: { id: true, team: { select: { workspaceId: true } } } }),
+    // slave belongs to is resolved with this separate, cheap query instead.
+    prisma.slave.findMany({ select: { id: true, team: { select: { workspaceId: true } } } }),
     // Grouped by the database rather than pulled row-by-row: `provider` and `status` alongside the
     // summed/counted cost are what tell an unmeasured run from a null cost (`sumSpend`'s doc
     // comment carries the rule and the column facts; `sumSpendFromGroups` restates it over
     // buckets). Not filtered in SQL -- a pre-M12 row has a real cost and a null `provider`, so a
     // `WHERE` would drop its money out of `spend` in order to fix `unmeasuredRuns` beside it.
-    prisma.agentRun.groupBy({
-      by: ['agentId', 'provider', 'status'],
+    prisma.slaveRun.groupBy({
+      by: ['slaveId', 'provider', 'status'],
       _sum: { costUsd: true },
       _count: { _all: true, costUsd: true },
     }),
@@ -121,10 +121,10 @@ export async function listProjects(): Promise<readonly ProjectRow[]> {
   // and its query runs inside `loadWorld`'s cumulative-15s transaction on the tick's hot path,
   // where `_sum` transfers one row instead of one float per run of the workspace's history. The
   // difference between these sites is the CONSUMER, not the arithmetic.
-  const workspaceByAgent = new Map(agentRows.map((agent) => [agent.id, agent.team.workspaceId]))
+  const workspaceBySlave = new Map(slaveRows.map((slave) => [slave.id, slave.team.workspaceId]))
   const groupsByWorkspace = new Map<string, SpendGroup[]>()
   for (const g of spendGroups) {
-    const workspaceId = workspaceByAgent.get(g.agentId)
+    const workspaceId = workspaceBySlave.get(g.slaveId)
     if (workspaceId === undefined) continue
     const group: SpendGroup = {
       provider: g.provider,
@@ -141,17 +141,17 @@ export async function listProjects(): Promise<readonly ProjectRow[]> {
     else list.push(group)
   }
 
-  // The avatar row's live status, via the SAME `deriveAgentStatus` translator every other status
-  // dot in the app uses (`loadAgentLiveInfo`, below) -- not a hand-rolled second read of the run
+  // The avatar row's live status, via the SAME `deriveSlaveStatus` translator every other status
+  // dot in the app uses (`loadSlaveLiveInfo`, below) -- not a hand-rolled second read of the run
   // table. One call over every team member across every workspace, not one per project.
-  const teamAgents = workspaces.flatMap((workspace) =>
-    workspace.teams.flatMap((team) => team.agents.map((agent) => ({ agent, workspaceId: workspace.id }))),
+  const teamSlaves = workspaces.flatMap((workspace) =>
+    workspace.teams.flatMap((team) => team.slaves.map((slave) => ({ slave, workspaceId: workspace.id }))),
   )
-  const workspaceIdByTeamAgent = new Map(teamAgents.map(({ agent, workspaceId }) => [agent.id, workspaceId] as const))
+  const workspaceIdByTeamSlave = new Map(teamSlaves.map(({ slave, workspaceId }) => [slave.id, workspaceId] as const))
   const maxToolCallsByWorkspace = new Map(workspaces.map((w) => [w.id, w.maxToolCallsPerRun] as const))
-  const teamAgentLiveInfo = await loadAgentLiveInfo(
-    teamAgents.map(({ agent }) => agent.id),
-    workspaceIdByTeamAgent,
+  const teamSlaveLiveInfo = await loadSlaveLiveInfo(
+    teamSlaves.map(({ slave }) => slave.id),
+    workspaceIdByTeamSlave,
     maxToolCallsByWorkspace,
   )
 
@@ -174,18 +174,18 @@ export async function listProjects(): Promise<readonly ProjectRow[]> {
       active: countOf(workspace.id, [...ACTIVE_TASK_STATUSES]),
       blocked: countOf(workspace.id, ['blocked']),
     },
-    // Counted off the SAME `workspace.teams[].agents` array the avatar row below is built from, so
-    // the `AGENTS` tile and the row of faces beside it cannot disagree (review I4). No separate
+    // Counted off the SAME `workspace.teams[].slaves` array the avatar row below is built from, so
+    // the `SLAVES` tile and the row of faces beside it cannot disagree (review I4). No separate
     // query: a second read is a second chance to answer the same question differently.
-    workerCount: workspace.teams.reduce((n, team) => n + team.agents.length, 0),
+    workerCount: workspace.teams.reduce((n, team) => n + team.slaves.length, 0),
     // The FULL team, uncapped (fix round 1: the six-avatar cap moved client-side in
     // `ProjectsClient.tsx` back in Task 4, and a server-side `.slice(0, 6)` on top of it made the
     // `+N` overflow tile structurally unreachable -- the client never saw a team longer than six to
-    // know it was showing a prefix. Bounded by the workspace's own agent count, which is never
+    // know it was showing a prefix. Bounded by the workspace's own slave count, which is never
     // unbounded in practice.
     team: workspace.teams
-      .flatMap((team) => team.agents)
-      .map((agent) => ({ agentId: agent.id, name: agent.name, status: teamAgentLiveInfo.get(agent.id)?.status ?? 'idle' })),
+      .flatMap((team) => team.slaves)
+      .map((slave) => ({ slaveId: slave.id, name: slave.name, status: teamSlaveLiveInfo.get(slave.id)?.status ?? 'idle' })),
     // `?? []` here is the case `?? 0` was always right about: a workspace with no runs at all has
     // spent nothing and has nothing unmeasured -- `sumSpendFromGroups([])` says exactly that.
     ...spendOfGroups(groupsByWorkspace.get(workspace.id) ?? []),
@@ -203,53 +203,53 @@ interface CurrentTask {
   readonly pct: number
 }
 
-interface AgentLiveInfo {
-  readonly status: AgentStatus
+interface SlaveLiveInfo {
+  readonly status: SlaveStatus
   readonly currentTask: CurrentTask | null
 }
 
 /**
- * Status + current task for a set of worker agents, derived the same way overview.ts derives an
- * agent card's status and task title: the agent's one non-terminal run, via `deriveAgentStatus`
+ * Status + current task for a set of worker slaves, derived the same way overview.ts derives an
+ * slave card's status and task title: the slave's one non-terminal run, via `deriveSlaveStatus`
  * (ADR 0002's only translator -- never re-derived from the raw run status here).
  *
- * `currentTask.pct` has no analogue in overview.ts (`AgentCardData` carries no per-agent progress
+ * `currentTask.pct` has no analogue in overview.ts (`SlaveCardData` carries no per-slave progress
  * figure) -- there is no other progress signal already stored for a run, so this reuses the run's
  * `toolCalls` against its *workspace's* `maxToolCallsPerRun` budget, clamped to [0, 100]. A `null`
  * `currentTask` also covers a live `planning` run, which has no `Task` row (M8b).
  */
-async function loadAgentLiveInfo(
-  agentIds: readonly string[],
-  workspaceIdByAgent: ReadonlyMap<string, string>,
+async function loadSlaveLiveInfo(
+  slaveIds: readonly string[],
+  workspaceIdBySlave: ReadonlyMap<string, string>,
   maxToolCallsByWorkspace: ReadonlyMap<string, number>,
-): Promise<Map<string, AgentLiveInfo>> {
-  const liveRuns = await prisma.agentRun.findMany({
-    where: { agentId: { in: [...agentIds] }, status: { in: [...NON_TERMINAL_RUN_STATUSES] } },
+): Promise<Map<string, SlaveLiveInfo>> {
+  const liveRuns = await prisma.slaveRun.findMany({
+    where: { slaveId: { in: [...slaveIds] }, status: { in: [...NON_TERMINAL_RUN_STATUSES] } },
     orderBy: { startedAt: 'desc' },
     include: { task: true },
   })
-  const liveRunByAgent = new Map<string, (typeof liveRuns)[number]>()
+  const liveRunBySlave = new Map<string, (typeof liveRuns)[number]>()
   for (const run of liveRuns) {
-    if (!liveRunByAgent.has(run.agentId)) liveRunByAgent.set(run.agentId, run)
+    if (!liveRunBySlave.has(run.slaveId)) liveRunBySlave.set(run.slaveId, run)
   }
 
-  const result = new Map<string, AgentLiveInfo>()
-  for (const agentId of agentIds) {
-    const run = liveRunByAgent.get(agentId) ?? null
-    const status = deriveAgentStatus(run === null ? null : toRunState(run))
+  const result = new Map<string, SlaveLiveInfo>()
+  for (const slaveId of slaveIds) {
+    const run = liveRunBySlave.get(slaveId) ?? null
+    const status = deriveSlaveStatus(run === null ? null : toRunState(run))
     let currentTask: CurrentTask | null = null
     if (run !== null && run.task !== null) {
-      const maxToolCalls = maxToolCallsByWorkspace.get(workspaceIdByAgent.get(agentId) ?? '') ?? 0
+      const maxToolCalls = maxToolCallsByWorkspace.get(workspaceIdBySlave.get(slaveId) ?? '') ?? 0
       const pct = maxToolCalls > 0 ? Math.min(100, Math.max(0, Math.round((run.toolCalls / maxToolCalls) * 100))) : 0
       currentTask = { title: run.task.title, pct }
     }
-    result.set(agentId, { status, currentTask })
+    result.set(slaveId, { status, currentTask })
   }
   return result
 }
 
 export interface RosterMemberRow {
-  readonly companyAgentId: string
+  readonly companySlaveId: string
   readonly name: string
   readonly role: string
   readonly templateName: string
@@ -265,10 +265,10 @@ export interface RosterMemberRow {
    *  provider columns via `chainSource` above instead of the model columns. */
   readonly providerSource: ChainSource
   readonly workers: ReadonlyArray<{
-    readonly agentId: string
-    /** The worker's OWN `Agent.name`/`Agent.role` (M23 D2) -- distinct from this roster member's
+    readonly slaveId: string
+    /** The worker's OWN `Slave.name`/`Slave.role` (M23 D2) -- distinct from this roster member's
      *  `name`/`role` above, which are the CATALOG identity a worker starts from at materialization
-     *  and can since have drifted from via `renameAgent`/`setAgentRole`. `AgentRowActions` edits
+     *  and can since have drifted from via `renameSlave`/`setSlaveRole`. `SlaveRowActions` edits
      *  these two, not the roster row. */
     readonly name: string
     readonly role: string
@@ -308,7 +308,7 @@ export async function listRoster(): Promise<readonly RosterCompany[]> {
       teams: {
         orderBy: { name: 'asc' },
         include: {
-          agents: {
+          slaves: {
             orderBy: { name: 'asc' },
             include: {
               template: true,
@@ -320,12 +320,12 @@ export async function listRoster(): Promise<readonly RosterCompany[]> {
     },
   })
 
-  const allWorkers = companies.flatMap((c) => c.teams.flatMap((t) => t.agents.flatMap((a) => a.workers)))
-  const workspaceIdByAgent = new Map(allWorkers.map((w) => [w.id, w.team.workspaceId] as const))
+  const allWorkers = companies.flatMap((c) => c.teams.flatMap((t) => t.slaves.flatMap((a) => a.workers)))
+  const workspaceIdBySlave = new Map(allWorkers.map((w) => [w.id, w.team.workspaceId] as const))
   const maxToolCallsByWorkspace = new Map(allWorkers.map((w) => [w.team.workspaceId, w.team.workspace.maxToolCallsPerRun] as const))
-  const liveInfo = await loadAgentLiveInfo(
+  const liveInfo = await loadSlaveLiveInfo(
     allWorkers.map((w) => w.id),
-    workspaceIdByAgent,
+    workspaceIdBySlave,
     maxToolCallsByWorkspace,
   )
 
@@ -335,11 +335,11 @@ export async function listRoster(): Promise<readonly RosterCompany[]> {
     teams: company.teams.map((team) => ({
       companyTeamId: team.id,
       teamName: team.name,
-      members: team.agents.map((member) => {
+      members: team.slaves.map((member) => {
         const workers = member.workers.map((worker) => {
           const info = liveInfo.get(worker.id)
           return {
-            agentId: worker.id,
+            slaveId: worker.id,
             name: worker.name,
             role: worker.role,
             workspaceId: worker.team.workspaceId,
@@ -363,7 +363,7 @@ export async function listRoster(): Promise<readonly RosterCompany[]> {
         )
 
         return {
-          companyAgentId: member.id,
+          companySlaveId: member.id,
           name: member.name,
           role: member.template.role,
           templateName: member.template.name,
@@ -383,7 +383,7 @@ export async function listRoster(): Promise<readonly RosterCompany[]> {
 }
 
 export interface WorkerRow {
-  readonly agentId: string
+  readonly slaveId: string
   readonly name: string
   readonly role: string
   readonly workspaceId: string
@@ -393,12 +393,12 @@ export interface WorkerRow {
   /** The worker's team name -- the handoff's "department" column. */
   readonly department: string
   /** The worker's own project `Team.id` (M25 Task 6) -- the department select's current value on
-   *  a project row, and the id `PUT /api/agents/:id/team` moves it away from. */
+   *  a project row, and the id `PUT /api/slaves/:id/team` moves it away from. */
   readonly teamId: string
   /**
-   * The worker's LIVE run's provider, `null` with no live run (the `AgentCardData.provider` rule,
+   * The worker's LIVE run's provider, `null` with no live run (the `SlaveCardData.provider` rule,
    * verbatim: a runtime is not decided until a run resolves it). A finished run's provider is
-   * deliberately NOT read here -- it would keep naming a runtime after the agent went idle.
+   * deliberately NOT read here -- it would keep naming a runtime after the slave went idle.
    */
   readonly provider: ProviderKind | null
   readonly gate: WorkerGate | null
@@ -411,59 +411,59 @@ export interface WorkerRow {
 }
 
 /**
- * Every agent, across every workspace, as the Agents page's seven-column table (design README
+ * Every slave, across every workspace, as the Slaves page's seven-column table (design README
  * §3a.2).
  *
- * NO `companyAgentId` filter (M14 fix wave, ruling on review I4): an agent is any `Agent` row on
+ * NO `companySlaveId` filter (M14 fix wave, ruling on review I4): a slave is any `Slave` row on
  * a workspace's team, and being staffed from a company roster is optional. The old
- * `where: { companyAgentId: { not: null } }` made "worker" mean "roster-linked", which rendered
- * the table as a bare header on any development database whose agents were created by hand --
- * and disagreed with `listProjects`'s avatar row about how many agents a project has.
- * `department` is the agent's TEAM name, which every agent has; `companyName` may be null, and
- * that is not a reason to hide an agent from the page that lists agents.
+ * `where: { companySlaveId: { not: null } }` made "worker" mean "roster-linked", which rendered
+ * the table as a bare header on any development database whose slaves were created by hand --
+ * and disagreed with `listProjects`'s avatar row about how many slaves a project has.
+ * `department` is the slave's TEAM name, which every slave has; `companyName` may be null, and
+ * that is not a reason to hide a slave from the page that lists slaves.
  */
 export async function listWorkers(): Promise<readonly WorkerRow[]> {
-  const agents = await prisma.agent.findMany({
+  const slaves = await prisma.slave.findMany({
     orderBy: { name: 'asc' },
     include: { team: { include: { workspace: true } } },
   })
-  const agentIds = agents.map((a) => a.id)
+  const slaveIds = slaves.map((a) => a.id)
 
-  const workspaceIdByAgent = new Map(agents.map((a) => [a.id, a.team.workspaceId] as const))
-  const maxToolCallsByWorkspace = new Map(agents.map((a) => [a.team.workspaceId, a.team.workspace.maxToolCallsPerRun] as const))
+  const workspaceIdBySlave = new Map(slaves.map((a) => [a.id, a.team.workspaceId] as const))
+  const maxToolCallsByWorkspace = new Map(slaves.map((a) => [a.team.workspaceId, a.team.workspace.maxToolCallsPerRun] as const))
 
   const [liveInfo, runGroups, liveRuns] = await Promise.all([
-    loadAgentLiveInfo(agentIds, workspaceIdByAgent, maxToolCallsByWorkspace),
+    loadSlaveLiveInfo(slaveIds, workspaceIdBySlave, maxToolCallsByWorkspace),
     // Grouped by the database (M19 Task 12; the same move `listProjects`' spend groups made in M17
     // Task 13), now also carrying `tokensIn`/`tokensOut` so `tokens` can be summed without pulling
     // every run into memory. `_count.tokensIn`/`_count.tokensOut` count only the bucket's non-null
     // values -- exactly what `tokens`'s null rule needs: a bucket where NEITHER column was ever
     // reported still has a `_sum` of `null` (indistinguishable from "summed to zero"), so the count
     // beside it is what tells the two apart.
-    prisma.agentRun.groupBy({
-      by: ['agentId', 'provider', 'status'],
-      where: { agentId: { in: agentIds } },
+    prisma.slaveRun.groupBy({
+      by: ['slaveId', 'provider', 'status'],
+      where: { slaveId: { in: slaveIds } },
       _sum: { costUsd: true, tokensIn: true, tokensOut: true },
       _count: { _all: true, costUsd: true, tokensIn: true, tokensOut: true },
     }),
     // The live provider, as a SEPARATE bounded query rather than read off the grouped rows above --
     // `groupBy` can only aggregate a bucket, never return "the newest row in it". In-flight runs
-    // are few by construction (at most one non-terminal run per agent in the steady state), so this
+    // are few by construction (at most one non-terminal run per slave in the steady state), so this
     // stays cheap while preserving today's newest-first pick exactly.
-    prisma.agentRun.findMany({
-      where: { agentId: { in: agentIds }, status: { in: [...NON_TERMINAL_RUN_STATUSES] } },
-      select: { agentId: true, provider: true, startedAt: true },
+    prisma.slaveRun.findMany({
+      where: { slaveId: { in: slaveIds }, status: { in: [...NON_TERMINAL_RUN_STATUSES] } },
+      select: { slaveId: true, provider: true, startedAt: true },
       orderBy: { startedAt: 'desc' },
     }),
   ])
 
-  // Same `SpendGroup` construction as `listProjects` above, keyed by agent instead of workspace.
-  // `tokenTotalsByAgent` is `spendGroupsByAgent`'s token-side twin: `sum` accumulates unconditionally
+  // Same `SpendGroup` construction as `listProjects` above, keyed by slave instead of workspace.
+  // `tokenTotalsBySlave` is `spendGroupsBySlave`'s token-side twin: `sum` accumulates unconditionally
   // (a group nobody reported tokens in has a `_sum` of `null`, so `?? 0` contributes nothing),
-  // `reported` is set the moment ANY group of the agent shows a non-zero token count -- the null
-  // rule is about whether the agent EVER reported, not whether any one bucket did.
-  const spendGroupsByAgent = new Map<string, SpendGroup[]>()
-  const tokenTotalsByAgent = new Map<string, { sum: number; reported: boolean }>()
+  // `reported` is set the moment ANY group of the slave shows a non-zero token count -- the null
+  // rule is about whether the slave EVER reported, not whether any one bucket did.
+  const spendGroupsBySlave = new Map<string, SpendGroup[]>()
+  const tokenTotalsBySlave = new Map<string, { sum: number; reported: boolean }>()
   for (const g of runGroups) {
     const spendGroup: SpendGroup = {
       provider: g.provider,
@@ -472,41 +472,41 @@ export async function listWorkers(): Promise<readonly WorkerRow[]> {
       rowCount: g._count._all,
       measuredCount: g._count.costUsd,
     }
-    const spendList = spendGroupsByAgent.get(g.agentId)
-    if (spendList === undefined) spendGroupsByAgent.set(g.agentId, [spendGroup])
+    const spendList = spendGroupsBySlave.get(g.slaveId)
+    if (spendList === undefined) spendGroupsBySlave.set(g.slaveId, [spendGroup])
     else spendList.push(spendGroup)
 
-    const totals = tokenTotalsByAgent.get(g.agentId) ?? { sum: 0, reported: false }
+    const totals = tokenTotalsBySlave.get(g.slaveId) ?? { sum: 0, reported: false }
     totals.sum += (g._sum.tokensIn ?? 0) + (g._sum.tokensOut ?? 0)
     if (g._count.tokensIn > 0 || g._count.tokensOut > 0) totals.reported = true
-    tokenTotalsByAgent.set(g.agentId, totals)
+    tokenTotalsBySlave.set(g.slaveId, totals)
   }
 
-  // First row per agent wins -- `liveRuns` is ordered newest-first, so this is the newer of an
-  // agent's non-terminal runs when it has more than one. (Review Minor: `orderBy` here is a single
-  // key, `startedAt` -- two non-terminal runs of the same agent with an EXACTLY equal `startedAt`
+  // First row per slave wins -- `liveRuns` is ordered newest-first, so this is the newer of an
+  // slave's non-terminal runs when it has more than one. (Review Minor: `orderBy` here is a single
+  // key, `startedAt` -- two non-terminal runs of the same slave with an EXACTLY equal `startedAt`
   // tie-break in whatever order Postgres returns them, which is unspecified. Pre-existing: the
   // prior whole-history `findMany` this replaced ordered by the same single `startedAt` key.)
-  const liveProviderByAgent = new Map<string, (typeof liveRuns)[number]['provider']>()
+  const liveProviderBySlave = new Map<string, (typeof liveRuns)[number]['provider']>()
   for (const run of liveRuns) {
-    if (!liveProviderByAgent.has(run.agentId)) liveProviderByAgent.set(run.agentId, run.provider)
+    if (!liveProviderBySlave.has(run.slaveId)) liveProviderBySlave.set(run.slaveId, run.provider)
   }
 
-  return agents.map((agent) => {
-    const info = liveInfo.get(agent.id)
-    const liveProvider = liveProviderByAgent.get(agent.id) ?? null
-    const { spend, unmeasuredRuns } = spendOfGroups(spendGroupsByAgent.get(agent.id) ?? [])
-    const tokenTotals = tokenTotalsByAgent.get(agent.id)
+  return slaves.map((slave) => {
+    const info = liveInfo.get(slave.id)
+    const liveProvider = liveProviderBySlave.get(slave.id) ?? null
+    const { spend, unmeasuredRuns } = spendOfGroups(spendGroupsBySlave.get(slave.id) ?? [])
+    const tokenTotals = tokenTotalsBySlave.get(slave.id)
     return {
-      agentId: agent.id,
-      name: agent.name,
-      role: agent.role,
-      workspaceId: agent.team.workspaceId,
-      projectName: agent.team.workspace.name,
+      slaveId: slave.id,
+      name: slave.name,
+      role: slave.role,
+      workspaceId: slave.team.workspaceId,
+      projectName: slave.team.workspace.name,
       status: info?.status ?? 'idle',
       currentTask: info?.currentTask ?? null,
-      department: agent.team.name,
-      teamId: agent.teamId,
+      department: slave.team.name,
+      teamId: slave.teamId,
       provider: liveProvider,
       gate: liveProvider === null ? null : capabilitiesOf(liveProvider).gate,
       tokens: tokenTotals === undefined || !tokenTotals.reported ? null : tokenTotals.sum,
@@ -516,44 +516,44 @@ export async function listWorkers(): Promise<readonly WorkerRow[]> {
   })
 }
 
-/** `AllAgentRow` (M24 §5.3): one row for every agent, whether a project has materialized it or
- *  not. `agentId`/`companyAgentId` are the two identities `listWorkers`/`listRoster` each carry
- *  half of -- `null` for `agentId` marks a catalog member no project has materialized yet, and
- *  `null` for `companyAgentId` marks an agent with no roster link at all (a hand-made worker, or
- *  a worker whose roster row has since been deleted -- the same `Agent.companyAgentId` nullable
+/** `AllSlaveRow` (M24 §5.3): one row for every slave, whether a project has materialized it or
+ *  not. `slaveId`/`companySlaveId` are the two identities `listWorkers`/`listRoster` each carry
+ *  half of -- `null` for `slaveId` marks a catalog member no project has materialized yet, and
+ *  `null` for `companySlaveId` marks a slave with no roster link at all (a hand-made worker, or
+ *  a worker whose roster row has since been deleted -- the same `Slave.companySlaveId` nullable
  *  column `listWorkers`'s own docstring explains). */
-export interface AllAgentRow {
+export interface AllSlaveRow {
   /** `null` for a catalog member no project has materialized yet. */
-  readonly agentId: string | null
-  readonly companyAgentId: string | null
+  readonly slaveId: string | null
+  readonly companySlaveId: string | null
   readonly name: string
   readonly role: string
   /** The row's department name -- a project row's `Team.name`, or a catalog row's
-   *  `CompanyTeam.name` (M25 Task 6: was `teamName`, renamed once the Agents table's department
+   *  `CompanyTeam.name` (M25 Task 6: was `teamName`, renamed once the Slaves table's department
    *  column became a `<select>` that reads/writes the department, not just names it). */
   readonly departmentName: string
   readonly projectName: string | null
   readonly workspaceId: string | null
   /** A project row's own `Team.id` -- the department select's current value, and the id
-   *  `PUT /api/agents/:id/team` moves it away from. `null` for a catalog row, which has no
+   *  `PUT /api/slaves/:id/team` moves it away from. `null` for a catalog row, which has no
    *  project team at all. */
   readonly teamId: string | null
-  /** The company this agent is roster-linked to, whether the row is a project row (roster-linked
-   *  via `companyAgentId`) or a catalog row (every catalog row lives on a company). `null` for a
-   *  hand-made project agent with no roster link at all. Keys `AllAgentsPage.templatesByCompany`. */
+  /** The company this slave is roster-linked to, whether the row is a project row (roster-linked
+   *  via `companySlaveId`) or a catalog row (every catalog row lives on a company). `null` for a
+   *  hand-made project slave with no roster link at all. Keys `AllSlavesPage.templatesByCompany`. */
   readonly companyId: string | null
   /** A catalog row's own `CompanyTeam.id` -- the department select's current value on a catalog
-   *  row, and the id `PUT /api/org/agents/:id/team` moves it away from. `null` for a project row
+   *  row, and the id `PUT /api/org/slaves/:id/team` moves it away from. `null` for a project row
    *  (materialized or not): a project row's department select reads/writes `teamId` instead. */
   readonly companyTeamId: string | null
   readonly status: string
   readonly currentTask: CurrentTask | null
   readonly provider: ProviderKind | null
   readonly gate: WorkerGate | null
-  /** The agent's own `Agent.model` column for a project row (fix round 1, Important finding 2:
-   *  every project row, roster-linked or not -- a hand-made agent's own override is a real fact,
+  /** The slave's own `Slave.model` column for a project row (fix round 1, Important finding 2:
+   *  every project row, roster-linked or not -- a hand-made slave's own override is a real fact,
    *  not a gap this table papers over with `null`); `RosterMemberRow.effectiveModel`'s chain
-   *  result (roster row, then template default) for a catalog row, which has no `Agent` row of
+   *  result (roster row, then template default) for a catalog row, which has no `Slave` row of
    *  its own to read a `model` column off. */
   readonly model: string | null
   readonly costUsd: number
@@ -561,63 +561,63 @@ export interface AllAgentRow {
 }
 
 /** One selectable department: a project `Team`, or a catalog `CompanyTeam` (M25 Task 6). The
- *  Agents table's department `<select>` renders a list of these -- `id` is the value it PUTs. */
+ *  Slaves table's department `<select>` renders a list of these -- `id` is the value it PUTs. */
 export interface DepartmentOption {
   readonly id: string
   readonly name: string
 }
 
-/** `listAllAgents()`'s full return shape (M25 Task 6, spec §4.1): the row union, plus the two
+/** `listAllSlaves()`'s full return shape (M25 Task 6, spec §4.1): the row union, plus the two
  *  option lists the department select needs -- a project row's own workspace's departments, and
  *  a catalog row's own company's templates (its `CompanyTeam`s). Keyed by `workspaceId`/
  *  `companyId` so a row picks its own list with no per-row query: one `Team.findMany` and one
  *  `CompanyTeam.findMany`, each grouped once, cover every row on the page. */
-export interface AllAgentsPage {
-  readonly rows: readonly AllAgentRow[]
+export interface AllSlavesPage {
+  readonly rows: readonly AllSlaveRow[]
   readonly departmentsByWorkspace: Readonly<Record<string, readonly DepartmentOption[]>>
   readonly templatesByCompany: Readonly<Record<string, readonly DepartmentOption[]>>
 }
 
 /**
- * The Agents page's one table (M24 §5.3; widened to a page object in M25 Task 6, spec §4.1):
- * every project agent (`listWorkers`) plus every catalog member no project has materialized yet
+ * The Slaves page's one table (M24 §5.3; widened to a page object in M25 Task 6, spec §4.1):
+ * every project slave (`listWorkers`) plus every catalog member no project has materialized yet
  * (`listRoster`'s members with no workers), plus the department select's two option lists. The
  * two row-source lists are the inputs on purpose -- one place derives a worker's live status, one
  * place walks the model/provider chain -- and this only lines their rows up.
  *
- * `model` on a project row is read directly off `Agent.model` (fix round 1, Important finding 2)
+ * `model` on a project row is read directly off `Slave.model` (fix round 1, Important finding 2)
  * rather than through the roster loop below -- the roster loop only reaches a worker that is
- * roster-linked (`member.workers`), so a hand-made agent (`companyAgentId: null`) used to keep
+ * roster-linked (`member.workers`), so a hand-made slave (`companySlaveId: null`) used to keep
  * `model: null` regardless of its own real override, silently telling `ModelOverrideEditor` no
  * override was set when one was. `listWorkers()`/`listRoster()` both already load a worker's
- * `Agent` row for other reasons, but neither DTO exposes its raw `model` column (`WorkerRow` has
+ * `Slave` row for other reasons, but neither DTO exposes its raw `model` column (`WorkerRow` has
  * no `model` field at all; `RosterMemberRow.workers[].model` exists but only for a roster-linked
  * worker) -- so this queries it directly rather than widening either of those two shapes for one
  * field only this table reads.
  *
  * `departmentsByWorkspace`/`templatesByCompany` are each ONE query, grouped once here rather than
- * fetched per row -- `DepartmentCell` (`AllAgentsTable.tsx`) picks its own row's list straight out
+ * fetched per row -- `DepartmentCell` (`AllSlavesTable.tsx`) picks its own row's list straight out
  * of the map by `workspaceId`/`companyId`, with no round trip of its own.
  */
-export async function listAllAgents(): Promise<AllAgentsPage> {
+export async function listAllSlaves(): Promise<AllSlavesPage> {
   const [workers, roster] = await Promise.all([listWorkers(), listRoster()])
-  const [agentModels, teams, companyTeams] = await Promise.all([
-    prisma.agent.findMany({
-      where: { id: { in: workers.map((w) => w.agentId) } },
+  const [slaveModels, teams, companyTeams] = await Promise.all([
+    prisma.slave.findMany({
+      where: { id: { in: workers.map((w) => w.slaveId) } },
       select: { id: true, model: true },
     }),
     prisma.team.findMany({ select: { id: true, name: true, workspaceId: true }, orderBy: { name: 'asc' } }),
     prisma.companyTeam.findMany({ select: { id: true, name: true, companyId: true }, orderBy: { name: 'asc' } }),
   ])
-  const modelByAgentId = new Map(agentModels.map((a) => [a.id, a.model] as const))
+  const modelBySlaveId = new Map(slaveModels.map((a) => [a.id, a.model] as const))
   const departmentsByWorkspace: Record<string, DepartmentOption[]> = {}
   for (const t of teams) (departmentsByWorkspace[t.workspaceId] ??= []).push({ id: t.id, name: t.name })
   const templatesByCompany: Record<string, DepartmentOption[]> = {}
   for (const t of companyTeams) (templatesByCompany[t.companyId] ??= []).push({ id: t.id, name: t.name })
 
-  const workerRows: AllAgentRow[] = workers.map((w) => ({
-    agentId: w.agentId,
-    companyAgentId: null, // filled below from the roster when the worker is roster-linked
+  const workerRows: AllSlaveRow[] = workers.map((w) => ({
+    slaveId: w.slaveId,
+    companySlaveId: null, // filled below from the roster when the worker is roster-linked
     name: w.name,
     role: w.role,
     departmentName: w.department,
@@ -630,18 +630,18 @@ export async function listAllAgents(): Promise<AllAgentsPage> {
     currentTask: w.currentTask,
     provider: w.provider,
     gate: w.gate,
-    model: modelByAgentId.get(w.agentId) ?? null,
+    model: modelBySlaveId.get(w.slaveId) ?? null,
     costUsd: w.costUsd,
     unmeasuredRuns: w.unmeasuredRuns,
   }))
-  const byAgentId = new Map(workerRows.map((r) => [r.agentId, r] as const))
-  const catalogRows: AllAgentRow[] = []
+  const bySlaveId = new Map(workerRows.map((r) => [r.slaveId, r] as const))
+  const catalogRows: AllSlaveRow[] = []
   for (const company of roster) {
     for (const team of company.teams) {
       for (const member of team.members) {
         if (member.workers.length === 0) {
           catalogRows.push({
-            agentId: null, companyAgentId: member.companyAgentId, name: member.name, role: member.role,
+            slaveId: null, companySlaveId: member.companySlaveId, name: member.name, role: member.role,
             departmentName: team.teamName, projectName: null, workspaceId: null,
             teamId: null, companyId: company.companyId, companyTeamId: team.companyTeamId,
             status: 'idle', currentTask: null,
@@ -651,14 +651,14 @@ export async function listAllAgents(): Promise<AllAgentsPage> {
           })
         } else {
           for (const worker of member.workers) {
-            const row = byAgentId.get(worker.agentId)
-            if (row !== undefined) byAgentId.set(worker.agentId, { ...row, companyAgentId: member.companyAgentId, companyId: company.companyId })
+            const row = bySlaveId.get(worker.slaveId)
+            if (row !== undefined) bySlaveId.set(worker.slaveId, { ...row, companySlaveId: member.companySlaveId, companyId: company.companyId })
           }
         }
       }
     }
   }
-  const projectRows = [...byAgentId.values()].sort((a, b) => (a.projectName ?? '').localeCompare(b.projectName ?? '') || a.name.localeCompare(b.name))
+  const projectRows = [...bySlaveId.values()].sort((a, b) => (a.projectName ?? '').localeCompare(b.projectName ?? '') || a.name.localeCompare(b.name))
   catalogRows.sort((a, b) => a.name.localeCompare(b.name))
   return { rows: [...projectRows, ...catalogRows], departmentsByWorkspace, templatesByCompany }
 }
@@ -673,7 +673,7 @@ export async function listTemplates(): Promise<
     defaultProvider: ProviderKind | null
   }[]
 > {
-  const templates = await prisma.agentTemplate.findMany({
+  const templates = await prisma.slaveTemplate.findMany({
     select: { id: true, name: true, role: true, description: true, defaultModel: true, provider: true },
     orderBy: { name: 'asc' },
   })
@@ -684,15 +684,15 @@ export async function listCompanies(): Promise<readonly { id: string; name: stri
   return prisma.company.findMany({ select: { id: true, name: true }, orderBy: { name: 'asc' } })
 }
 
-/** One project `Team` row for the Agents page's Departments tab (M23 D3; renamed M25 §4.2) --
- *  `agentCount` is what `DepartmentsTable` disables its delete button on: `deleteTeam` refuses a
+/** One project `Team` row for the Slaves page's Departments tab (M23 D3; renamed M25 §4.2) --
+ *  `slaveCount` is what `DepartmentsTable` disables its delete button on: `deleteTeam` refuses a
  *  non-empty team. */
 export interface ProjectTeamRow {
   readonly teamId: string
   readonly name: string
   readonly workspaceId: string
   readonly projectName: string
-  readonly agentCount: number
+  readonly slaveCount: number
 }
 
 /**
@@ -702,7 +702,7 @@ export interface ProjectTeamRow {
  */
 export async function listProjectTeams(): Promise<readonly ProjectTeamRow[]> {
   const teams = await prisma.team.findMany({
-    include: { workspace: { select: { name: true } }, _count: { select: { agents: true } } },
+    include: { workspace: { select: { name: true } }, _count: { select: { slaves: true } } },
     orderBy: [{ workspace: { name: 'asc' } }, { name: 'asc' }],
   })
   return teams.map((team) => ({
@@ -710,6 +710,6 @@ export async function listProjectTeams(): Promise<readonly ProjectTeamRow[]> {
     name: team.name,
     workspaceId: team.workspaceId,
     projectName: team.workspace.name,
-    agentCount: team._count.agents,
+    slaveCount: team._count.slaves,
   }))
 }

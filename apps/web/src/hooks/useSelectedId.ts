@@ -5,7 +5,7 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 
 /**
  * Shared "which thing is open in the side panel" state for a single `?<param>=<id>` query
- * param — used by the tasks board's `?task=` and the overview's `?agent=` (Task 9) alike.
+ * param — used by the tasks board's `?task=` and the overview's `?slave=` (Task 9) alike.
  *
  * The selection lives in local React state (not derived fresh from `useSearchParams()` on every
  * render) so opening/closing the panel re-renders synchronously; `router.replace` is a side

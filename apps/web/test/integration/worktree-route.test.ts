@@ -51,7 +51,7 @@ async function seed(taskStatus: 'running' | 'done'): Promise<Fixture> {
     data: { name: `Checkout ${repos.length}`, repoPath, verifyCommands: ['true'], setupCommands: [] },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const agent = await prisma.agent.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
   const task = await prisma.task.create({
     data: {
       workspaceId: workspace.id,
@@ -63,21 +63,21 @@ async function seed(taskStatus: 'running' | 'done'): Promise<Fixture> {
       maxAttempts: workspace.maxAttempts,
     },
   })
-  const agentRun = await prisma.agentRun.create({
+  const slaveRun = await prisma.slaveRun.create({
     data: {
       taskId: task.id,
-      agentId: agent.id,
+      slaveId: slave.id,
       status: taskStatus === 'done' ? 'succeeded' : 'working',
       worktreePath,
     },
   })
-  return { repoPath, worktreePath, workspaceId: workspace.id, taskId: task.id, runId: agentRun.id }
+  return { repoPath, worktreePath, workspaceId: workspace.id, taskId: task.id, runId: slaveRun.id }
 }
 
 describe('DELETE /api/w/[workspaceId]/tasks/[taskId]/worktree', () => {
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Approval", "AgentMessage", "Artifact", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "ProviderConfiguration", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Approval", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "ProviderConfiguration", "Workspace" RESTART IDENTITY CASCADE',
     )
   })
 
@@ -115,6 +115,6 @@ describe('DELETE /api/w/[workspaceId]/tasks/[taskId]/worktree', () => {
     expect(response.status).toBe(200)
     expect(await response.json()).toEqual({ ok: true })
     expect(existsSync(fixture.worktreePath)).toBe(false)
-    expect((await prisma.agentRun.findUniqueOrThrow({ where: { id: fixture.runId } })).worktreePath).toBeNull()
+    expect((await prisma.slaveRun.findUniqueOrThrow({ where: { id: fixture.runId } })).worktreePath).toBeNull()
   })
 })

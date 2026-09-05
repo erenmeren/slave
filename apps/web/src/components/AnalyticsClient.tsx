@@ -10,13 +10,13 @@ import { Panel } from './ui/Panel'
 import { ProgressBar } from './ui/ProgressBar'
 
 const PERF_COLUMNS = '1fr 46px 80px 70px 90px 60px'
-const PERF_HEADER = ['Agent', 'Runs', 'Success', 'Avg', 'Tokens', 'Cost']
+const PERF_HEADER = ['Slave', 'Runs', 'Success', 'Avg', 'Tokens', 'Cost']
 
 /**
  * The Analytics page (spec §5.9, design README "3a — Analytics"): a workspace selector, six
- * ALL-TIME KPI tiles, the 7-day stacked bar chart, and the ALL-TIME per-agent performance table.
+ * ALL-TIME KPI tiles, the 7-day stacked bar chart, and the ALL-TIME per-slave performance table.
  *
- * Controller ruling (Task 7): the KPIs and per-agent rows summarize this scope's ENTIRE history,
+ * Controller ruling (Task 7): the KPIs and per-slave rows summarize this scope's ENTIRE history,
  * not the 7-day window — an average duration or a success rate over the last week alone would
  * swing wildly on a quiet workspace, and the day-by-day trend already exists for the windowed
  * view. The "Last 7 days" caption is therefore CHART-scoped, not a page-wide claim: it sits on the
@@ -42,7 +42,7 @@ export function AnalyticsClient({
   }
 
   return (
-    // `p-4`, the same page padding `SettingsClient` and `AgentsClient` use (M14 fix wave, review
+    // `p-4`, the same page padding `SettingsClient` and `SlavesClient` use (M14 fix wave, review
     // I5). Without it the `analytics` h1 was clipped mid-glyph against the sidebar's edge and the
     // KPI strip ran flush into both viewport edges -- visible in the committed `analytics.png`.
     <div className="flex flex-col gap-4 p-4">
@@ -86,14 +86,14 @@ export function AnalyticsClient({
           <BarChart series={snapshot.series} height={180} label="tasks completed, last 7 days" />
         </Panel>
 
-        <Panel title="agent performance">
+        <Panel title="slave performance">
           <DataTable columns={PERF_COLUMNS} header={PERF_HEADER}>
-            {snapshot.perAgent.map((row) => (
-              <Row key={row.agentId} columns={PERF_COLUMNS}>
+            {snapshot.perSlave.map((row) => (
+              <Row key={row.slaveId} columns={PERF_COLUMNS}>
                 <span className="flex min-w-0 items-center gap-[9px]">
                   {/* `idle`, fixed: this row summarizes ALL-TIME performance, not a live run --
-                      there is no status on `AgentPerformanceRow` to derive a tone from, and
-                      borrowing one from the agent's CURRENT run would tie a history table to a
+                      there is no status on `SlavePerformanceRow` to derive a tone from, and
+                      borrowing one from the slave's CURRENT run would tie a history table to a
                       fact it does not describe. */}
                   <AvatarTile name={row.name} tone="idle" />
                   <span className="min-w-0">
@@ -106,23 +106,23 @@ export function AnalyticsClient({
                   <span className="w-[34px]">
                     <ProgressBar pct={row.successPct} />
                   </span>
-                  <span data-testid={`perf-success-${row.agentId}`} className="font-mono text-[11px] text-text-2">
+                  <span data-testid={`perf-success-${row.slaveId}`} className="font-mono text-[11px] text-text-2">
                     {row.successPct === null ? '—' : `${row.successPct}%`}
                   </span>
                 </span>
-                <span data-testid={`perf-avg-${row.agentId}`} className="font-mono text-[11px] text-text-2">
+                <span data-testid={`perf-avg-${row.slaveId}`} className="font-mono text-[11px] text-text-2">
                   {row.avgDurationMs === null ? '—' : formatDuration(row.avgDurationMs)}
                 </span>
-                <span data-testid={`perf-tokens-${row.agentId}`} className="font-mono text-[11px] text-text-2">
+                <span data-testid={`perf-tokens-${row.slaveId}`} className="font-mono text-[11px] text-text-2">
                   {row.tokens === null ? '—' : formatTokens(row.tokens)}
                 </span>
-                {/* The Spend KPI tile's own idiom, on the per-agent row (M14 fix wave, review
-                  * I1): a cost that hides how many of the agent's runs were never measured
+                {/* The Spend KPI tile's own idiom, on the per-slave row (M14 fix wave, review
+                  * I1): a cost that hides how many of the slave's runs were never measured
                   * presents the measured part of a bill as the whole of it. */}
                 <span className="font-mono text-[11px] text-text-1">
                   ${row.costUsd.toFixed(2)}
                   {row.unmeasuredRuns > 0 && (
-                    <span data-testid={`perf-unmeasured-${row.agentId}`} className="text-text-3">
+                    <span data-testid={`perf-unmeasured-${row.slaveId}`} className="text-text-3">
                       {' '}
                       · {row.unmeasuredRuns} unmeasured
                     </span>

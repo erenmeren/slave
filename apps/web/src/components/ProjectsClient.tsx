@@ -2,8 +2,8 @@
 
 import { useRef, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
-import type { AgentStatus } from '@slave-of-ai/domain'
-import { CARD_STATE_TONE, cardStateForAgent, type CardState } from '../lib/tones'
+import type { SlaveStatus } from '@slave-of-ai/domain'
+import { CARD_STATE_TONE, cardStateForSlave, type CardState } from '../lib/tones'
 import type { ProjectRow, RosterCompany } from '../server/org'
 import { AssignCompanyDialog } from './AssignCompanyDialog'
 import { CompanyManager, type CompanyRow } from './CompanyManager'
@@ -24,7 +24,7 @@ import { StatusPill } from './ui/StatusPill'
  *  vocabulary for the handoff card (M14 Task 13): halted overrides everything else, then any
  *  in-flight task work reads as "working" (RUNNING), and an assigned-but-quiet project reads as
  *  idle. Only three of `CardState`'s ten members are ever reachable from a project -- the other
- *  seven describe an individual agent's run, which a project has none of itself. */
+ *  seven describe an individual slave's run, which a project has none of itself. */
 function statusOf(project: ProjectRow): CardState {
   if (project.halted) return 'blocked'
   if (project.taskCounts.active > 0) return 'working'
@@ -78,9 +78,9 @@ function ProjectCard({
         <div aria-label="team" className="mt-[13px] flex flex-wrap items-center gap-1">
           {project.team.slice(0, 6).map((member) => (
             <AvatarTile
-              key={member.agentId}
+              key={member.slaveId}
               name={member.name}
-              tone={CARD_STATE_TONE[cardStateForAgent(member.status as AgentStatus)].tone}
+              tone={CARD_STATE_TONE[cardStateForSlave(member.status as SlaveStatus)].tone}
             />
           ))}
           {project.team.length > 6 && (
@@ -109,7 +109,7 @@ function ProjectCard({
             * handoff's own geometry. */}
           <StatStrip
             items={[
-              { label: 'agents', value: String(project.workerCount) },
+              { label: 'slaves', value: String(project.workerCount) },
               { label: 'active', value: String(project.taskCounts.active), ...(project.taskCounts.active > 0 ? { tone: 'working' as const } : {}) },
               { label: 'blocked', value: String(project.taskCounts.blocked), ...(project.taskCounts.blocked > 0 ? { tone: 'blocked' as const } : {}) },
               {

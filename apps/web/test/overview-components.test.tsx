@@ -2,12 +2,12 @@
 import type { TaskStatus } from '@slave-of-ai/domain'
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi, afterEach, beforeEach } from 'vitest'
-import { AgentCard } from '../src/components/AgentCard.js'
+import { SlaveCard } from '../src/components/SlaveCard.js'
 import { HaltBanner } from '../src/components/HaltBanner.js'
 import { BlockedPanel, LiveEventsPanel, MergeQueuePanel, OverviewClient } from '../src/components/OverviewClient.js'
 import { TopStrip } from '../src/components/TopStrip.js'
 import { publishStreamState } from '../src/hooks/useStreamState.js'
-import type { AgentCardData, OverviewSnapshot } from '../src/server/overview.js'
+import type { SlaveCardData, OverviewSnapshot } from '../src/server/overview.js'
 
 // `OverviewClient`'s `useSelectedId` reads the router.
 vi.mock('next/navigation', () => ({
@@ -18,7 +18,7 @@ vi.mock('next/navigation', () => ({
 
 vi.mock('../src/hooks/useStreamState', () => ({ publishStreamState: vi.fn() }))
 
-const agent = (over: Partial<AgentCardData>): AgentCardData => ({
+const slave = (over: Partial<SlaveCardData>): SlaveCardData => ({
   id: 'a1',
   name: 'Alex',
   role: 'backend',
@@ -27,8 +27,8 @@ const agent = (over: Partial<AgentCardData>): AgentCardData => ({
   // `overview.ts` had a real column to read.
   provider: 'claude_code',
   // `capabilitiesOf('claude_code').gate` (M12 Task 13 fix round 1, spec §8 / finding 4a) --
-  // paired with the default `provider` above the same way `AgentCardData.gate` is server-derived
-  // from `AgentCardData.provider`, never a second table.
+  // paired with the default `provider` above the same way `SlaveCardData.gate` is server-derived
+  // from `SlaveCardData.provider`, never a second table.
   gate: 'all-tools',
   status: 'idle',
   taskTitle: null,
@@ -50,7 +50,7 @@ const agent = (over: Partial<AgentCardData>): AgentCardData => ({
   ...over,
 })
 
-const snapshot = (agents: readonly AgentCardData[]): OverviewSnapshot => ({
+const snapshot = (slaves: readonly SlaveCardData[]): OverviewSnapshot => ({
   workspace: {
     id: 'w1', name: 'W', haltedReason: null, haltedAt: null, budgetUsd: 100, spentUsd: 3, unmeasuredRuns: 0,
     goal: null, provider: 'claude_code', costBlindBudgeted: false,
@@ -59,22 +59,22 @@ const snapshot = (agents: readonly AgentCardData[]): OverviewSnapshot => ({
     // already has, rather than the header opening a second `EventSource` of its own.
     maxConcurrentRuns: 3, runTimeoutMs: 1_800_000, maxAttempts: 3,
   },
-  agents,
+  slaves,
   tasks: { active: 2, ready: 3, blocked: 1, done: 4, failed: 0 },
   blocked: [],
   liveEvents: [],
   mergeQueue: [],
 })
 
-describe('AgentCard provider chip', () => {
+describe('SlaveCard provider chip', () => {
   it("renders the run's own provider kind, and the unknown mark when no run has resolved one", () => {
     // M12 Task 9 / ruling R10. The bare kind: the human-readable label and the shell-only gate
     // mark belong to Task 13 (spec §8), and inventing either here would be that task's decision
     // taken by the wrong task.
-    const { rerender } = render(<AgentCard agent={agent({ provider: 'cursor', gate: 'all-tools' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
+    const { rerender } = render(<SlaveCard slave={slave({ provider: 'cursor', gate: 'all-tools' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
     expect(screen.getByTestId('provider-chip').textContent).toBe('cursor')
 
-    rerender(<AgentCard agent={agent({ provider: null, gate: null })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
+    rerender(<SlaveCard slave={slave({ provider: null, gate: null })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
     expect(screen.getByTestId('provider-chip').textContent).toBe('—')
   })
 
@@ -86,26 +86,26 @@ describe('AgentCard provider chip', () => {
     // provider reports `shell-only` -- Cursor's gate was proven to cover writes too -- so this
     // fixture is hand-written: the MARK is still part of the contract, and a third runtime that
     // gates only shells must light it up on day one.
-    const { rerender } = render(<AgentCard agent={agent({ provider: 'cursor', gate: 'shell-only' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
+    const { rerender } = render(<SlaveCard slave={slave({ provider: 'cursor', gate: 'shell-only' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
     expect(screen.getByText(/shell only/i)).toBeTruthy()
 
-    rerender(<AgentCard agent={agent({ provider: 'cursor', gate: 'all-tools' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
+    rerender(<SlaveCard slave={slave({ provider: 'cursor', gate: 'all-tools' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
     expect(screen.queryByText(/shell only/i)).toBeNull()
   })
 })
 
-// The M11 strip's three agent buckets (`count-working` / `count-paused` / `count-idle`) are GONE
-// as of M14 Task 8: the handoff's 1a strip is a fixed 6-up — agents working · tasks active ·
+// The M11 strip's three slave buckets (`count-working` / `count-paused` / `count-idle`) are GONE
+// as of M14 Task 8: the handoff's 1a strip is a fixed 6-up — slaves working · tasks active ·
 // tasks ready · tasks done · blocked · spend — and `paused`/`idle` are not among its six. A
-// paused agent still says so on its own card's pill (the ten states above), which is where the
-// handoff puts that fact; the strip answers "how much work is moving", not "what is each agent
+// paused slave still says so on its own card's pill (the ten states above), which is where the
+// handoff puts that fact; the strip answers "how much work is moving", not "what is each slave
 // doing". So this replaces the old bucket assertions rather than sitting beside them.
 describe('TopStrip \u2014 the handoff 6-up', () => {
   it('renders six tiles in the README order with 1px gutters', () => {
-    render(<TopStrip snapshot={snapshot([agent({ status: 'working' })])} />)
+    render(<TopStrip snapshot={snapshot([slave({ status: 'working' })])} />)
     const tiles = screen.getAllByTestId('strip-tile')
     expect(tiles.map((t) => t.getAttribute('data-strip'))).toEqual([
-      'agents-working', 'tasks-active', 'tasks-ready', 'tasks-done', 'blocked', 'spend',
+      'slaves-working', 'tasks-active', 'tasks-ready', 'tasks-done', 'blocked', 'spend',
     ])
     // jsdom loads no CSS: the class is the assertion. `gap-px` over a `bg-line` section is what
     // makes the hairline show THROUGH the grid rather than being drawn per tile.
@@ -114,17 +114,17 @@ describe('TopStrip \u2014 the handoff 6-up', () => {
     expect(screen.getByTestId('strip').className).toContain('bg-line')
   })
 
-  it('counts agents, tasks and spend into their own tiles', () => {
+  it('counts slaves, tasks and spend into their own tiles', () => {
     render(
       <TopStrip
         snapshot={snapshot([
-          agent({ id: 'a1', status: 'working' }),
-          agent({ id: 'a2', status: 'working' }),
-          agent({ id: 'a3', status: 'paused' }),
+          slave({ id: 'a1', status: 'working' }),
+          slave({ id: 'a2', status: 'working' }),
+          slave({ id: 'a3', status: 'paused' }),
         ])}
       />,
     )
-    expect(screen.getByTestId('strip-value-agents-working').textContent).toBe('2')
+    expect(screen.getByTestId('strip-value-slaves-working').textContent).toBe('2')
     expect(screen.getByTestId('strip-value-tasks-active').textContent).toBe('2')
     expect(screen.getByTestId('strip-value-tasks-ready').textContent).toBe('3')
     expect(screen.getByTestId('strip-value-tasks-done').textContent).toBe('4')
@@ -145,12 +145,12 @@ describe('TopStrip \u2014 the handoff 6-up', () => {
   })
 
   it('tones a non-zero count and leaves a zero neutral', () => {
-    const view = snapshot([agent({ status: 'working' })])
+    const view = snapshot([slave({ status: 'working' })])
     render(<TopStrip snapshot={view} />)
-    expect(screen.getByTestId('strip-value-agents-working').className).toContain('text-tone-working')
+    expect(screen.getByTestId('strip-value-slaves-working').className).toContain('text-tone-working')
     expect(screen.getByTestId('strip-value-blocked').className).toContain('text-tone-blocked')
 
-    const quiet = { ...view, agents: [], tasks: { active: 0, ready: 0, blocked: 0, done: 0, failed: 0 } }
+    const quiet = { ...view, slaves: [], tasks: { active: 0, ready: 0, blocked: 0, done: 0, failed: 0 } }
     render(<TopStrip snapshot={quiet} />)
     // Two strips are mounted now; the second one's tiles are the later half of the query.
     const blocked = screen.getAllByTestId('strip-value-blocked').at(-1)
@@ -159,11 +159,11 @@ describe('TopStrip \u2014 the handoff 6-up', () => {
   })
 })
 
-describe('AgentCard', () => {
-  it('shows a working agent with its task and live action line', () => {
+describe('SlaveCard', () => {
+  it('shows a working slave with its task and live action line', () => {
     render(
-      <AgentCard
-        agent={agent({ status: 'working', taskTitle: 'Add the thing', actionLine: 'Read a.ts' })}
+      <SlaveCard
+        slave={slave({ status: 'working', taskTitle: 'Add the thing', actionLine: 'Read a.ts' })}
         liveActionLine="Write note3.txt"
         workspaceId="w1" onOpen={() => {}}
       />,
@@ -172,12 +172,12 @@ describe('AgentCard', () => {
     expect(screen.getByTestId('action-line').textContent).toBe('Write note3.txt')
     expect(screen.getByText('Add the thing')).toBeTruthy()
     // M14 Task 2: the card says its state in the handoff's `StatusPill` vocabulary now, not the
-    // raw `AgentStatus` word the M5 card printed into `status-label`.
+    // raw `SlaveStatus` word the M5 card printed into `status-label`.
     expect(screen.getByTestId('status-pill').textContent).toBe('WORKING')
   })
 
   it('falls back to the snapshot action line when no live one has arrived', () => {
-    render(<AgentCard agent={agent({ status: 'working', actionLine: 'Read a.ts' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
+    render(<SlaveCard slave={slave({ status: 'working', actionLine: 'Read a.ts' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
     expect(screen.getByTestId('action-line').textContent).toBe('Read a.ts')
   })
 
@@ -185,16 +185,16 @@ describe('AgentCard', () => {
     // M14 Task 2: the dot moved inside `StatusPill` (its first child) and the keyframe is the
     // shared `status-pulse` one, not Tailwind's `animate-pulse`. The rule is unchanged.
     const dot = (): Element => screen.getByTestId('status-pill').firstElementChild as Element
-    const { rerender } = render(<AgentCard agent={agent({ status: 'working' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
+    const { rerender } = render(<SlaveCard slave={slave({ status: 'working' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
     expect(dot().className).toContain('motion-safe:animate-[status-pulse_1.5s_ease-in-out_infinite]')
-    rerender(<AgentCard agent={agent({ status: 'paused' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
-    // Motion carries information (spec §7): a pulsing paused agent is a lie on screen.
+    rerender(<SlaveCard slave={slave({ status: 'paused' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
+    // Motion carries information (spec §7): a pulsing paused slave is a lie on screen.
     expect(dot().className).not.toContain('status-pulse')
   })
 
   it('opens the detail panel via onOpen when the header is clicked — no more disabled M4 buttons', () => {
     const onOpen = vi.fn()
-    render(<AgentCard agent={agent({ id: 'a9', status: 'working' })} liveActionLine={null} workspaceId="w1" onOpen={onOpen} />)
+    render(<SlaveCard slave={slave({ id: 'a9', status: 'working' })} liveActionLine={null} workspaceId="w1" onOpen={onOpen} />)
     fireEvent.click(screen.getByRole('button', { name: /open alex's detail panel/i }))
     expect(onOpen).toHaveBeenCalledWith('a9')
     // The M5 controls live in the panel now (spec §6) — the card carries no pause/stop of its own.
@@ -215,13 +215,13 @@ describe('AgentCard', () => {
   describe('motion (spec §8)', () => {
     it("cross-fades the action line via a key that remounts when the line's text changes", () => {
       const { container, rerender } = render(
-        <AgentCard agent={agent({ status: 'working', actionLine: 'Read a.ts' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />,
+        <SlaveCard slave={slave({ status: 'working', actionLine: 'Read a.ts' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />,
       )
       const first = container.querySelector('[data-testid="action-line"] > span')
       expect(first).toBeTruthy()
       expect(first?.className).toContain('motion-safe:animate-[action-line-in_120ms_ease-out]')
 
-      rerender(<AgentCard agent={agent({ status: 'working', actionLine: 'Write b.ts' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
+      rerender(<SlaveCard slave={slave({ status: 'working', actionLine: 'Write b.ts' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
       const second = container.querySelector('[data-testid="action-line"] > span')
       // A different key means React unmounts the old span and mounts a new DOM node — that
       // remount is what makes the cross-fade keyframe run again on every text change.
@@ -230,7 +230,7 @@ describe('AgentCard', () => {
     })
 
     it('carries data-status and a transition-colors border, ready for the flash to animate against', () => {
-      const { container } = render(<AgentCard agent={agent({ status: 'working' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
+      const { container } = render(<SlaveCard slave={slave({ status: 'working' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
       const card = container.querySelector('article')
       expect(card?.getAttribute('data-status')).toBe('working')
       expect(card?.className).toContain('transition-colors')
@@ -239,12 +239,12 @@ describe('AgentCard', () => {
     it('flashes the border motion-safe class on a status change and clears it after 800ms', () => {
       vi.useFakeTimers()
       try {
-        const { container, rerender } = render(<AgentCard agent={agent({ status: 'working' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
+        const { container, rerender } = render(<SlaveCard slave={slave({ status: 'working' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
         const card = () => container.querySelector('article')!
         // No status change yet (this is the initial mount) — no flash.
         expect(card().className).not.toContain('motion-safe:animate-[border-flash_800ms_ease-out]')
 
-        rerender(<AgentCard agent={agent({ status: 'paused' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
+        rerender(<SlaveCard slave={slave({ status: 'paused' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
         expect(card().className).toContain('motion-safe:animate-[border-flash_800ms_ease-out]')
         expect(card().getAttribute('style') ?? '').toContain('--flash-color')
 
@@ -267,7 +267,7 @@ describe('HaltBanner', () => {
   })
 })
 
-describe('AgentCard — the handoff anatomy', () => {
+describe('SlaveCard — the handoff anatomy', () => {
   let fetchMock: ReturnType<typeof vi.fn>
 
   beforeEach(() => {
@@ -281,8 +281,8 @@ describe('AgentCard — the handoff anatomy', () => {
 
   it('renders the header: avatar tile, name, role, status pill', () => {
     render(
-      <AgentCard
-        agent={agent({ name: 'Alex Turner', role: 'backend', status: 'working', taskStatus: 'running' })}
+      <SlaveCard
+        slave={slave({ name: 'Alex Turner', role: 'backend', status: 'working', taskStatus: 'running' })}
         liveActionLine={null}
         workspaceId="w1"
         onOpen={() => {}}
@@ -293,8 +293,8 @@ describe('AgentCard — the handoff anatomy', () => {
     expect(screen.getByTestId('status-pill').getAttribute('data-tone')).toBe('working')
   })
 
-  // The ten states, exhaustively — spec §3's "AgentCard renders all ten states in one it.each".
-  const TEN: ReadonlyArray<readonly [AgentCardData['status'], TaskStatus | null, string, string]> = [
+  // The ten states, exhaustively — spec §3's "SlaveCard renders all ten states in one it.each".
+  const TEN: ReadonlyArray<readonly [SlaveCardData['status'], TaskStatus | null, string, string]> = [
     ['working', 'running', 'WORKING', 'working'],
     ['starting', 'assigned', 'PLANNING', 'planning'],
     ['stopping', 'running', 'WAITING', 'waiting'],
@@ -309,8 +309,8 @@ describe('AgentCard — the handoff anatomy', () => {
 
   it.each(TEN)('renders %s + task %s as the %s pill in the %s tone', (status, taskStatus, label, tone) => {
     render(
-      <AgentCard
-        agent={agent({ status, taskStatus, taskTitle: 'Add the thing' })}
+      <SlaveCard
+        slave={slave({ status, taskStatus, taskTitle: 'Add the thing' })}
         liveActionLine={null}
         workspaceId="w1"
         onOpen={() => {}}
@@ -322,8 +322,8 @@ describe('AgentCard — the handoff anatomy', () => {
   })
 
   it('carries the handoff surface recipe: radius 8, padding 12/13, hover border', () => {
-    render(<AgentCard agent={agent({})} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
-    const card = screen.getByTestId('agent-card')
+    render(<SlaveCard slave={slave({})} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
+    const card = screen.getByTestId('slave-card')
     // Class strings, not computed style: jsdom loads no CSS in this suite. The gate reads
     // `border-radius: 8px` and `padding: 12px 13px` back off the real page.
     expect(card.className).toContain('rounded-card')
@@ -336,18 +336,18 @@ describe('AgentCard — the handoff anatomy', () => {
 
   it('sweeps the top hairline only while working', () => {
     const { rerender } = render(
-      <AgentCard agent={agent({ status: 'working', taskStatus: 'running' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />,
+      <SlaveCard slave={slave({ status: 'working', taskStatus: 'running' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />,
     )
     expect(screen.getByTestId('card-sweep').className).toContain('motion-safe:animate-[card-sweep_2.2s_cubic-bezier(.4,0,.2,1)_infinite]')
 
-    rerender(<AgentCard agent={agent({ status: 'paused', taskStatus: 'running' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
+    rerender(<SlaveCard slave={slave({ status: 'paused', taskStatus: 'running' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
     expect(screen.queryByTestId('card-sweep')).toBeNull()
   })
 
   it('renders the task line as a mono reference plus an ellipsised title', () => {
     render(
-      <AgentCard
-        agent={agent({ taskId: '3f9a21c8-0000-4000-8000-000000000000', taskTitle: 'Implement Checkout API', taskStatus: 'running', status: 'working' })}
+      <SlaveCard
+        slave={slave({ taskId: '3f9a21c8-0000-4000-8000-000000000000', taskTitle: 'Implement Checkout API', taskStatus: 'running', status: 'working' })}
         liveActionLine={null}
         workspaceId="w1"
         onOpen={() => {}}
@@ -359,20 +359,20 @@ describe('AgentCard — the handoff anatomy', () => {
 
   it('shows the step counter and percent from the run, and — with no run', () => {
     const { rerender } = render(
-      <AgentCard agent={agent({ status: 'working', taskStatus: 'running', progressPct: 64, stepLabel: '7/11' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />,
+      <SlaveCard slave={slave({ status: 'working', taskStatus: 'running', progressPct: 64, stepLabel: '7/11' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />,
     )
     expect(screen.getByTestId('card-step').textContent).toBe('7/11')
     expect(screen.getByTestId('card-percent').textContent).toBe('64%')
     expect(screen.getByTestId('progress-bar-fill').style.width).toBe('64%')
 
-    rerender(<AgentCard agent={agent({ status: 'idle' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
+    rerender(<SlaveCard slave={slave({ status: 'idle' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
     expect(screen.getByTestId('card-step').textContent).toBe('—')
   })
 
   it('renders the three chips: skill, queue, provider — each with its own unknown mark', () => {
     const { rerender } = render(
-      <AgentCard
-        agent={agent({ skill: 'superpowers:test-driven-development', queuedMessage: 'rebase first', provider: 'cursor' })}
+      <SlaveCard
+        slave={slave({ skill: 'superpowers:test-driven-development', queuedMessage: 'rebase first', provider: 'cursor' })}
         liveActionLine={null}
         workspaceId="w1"
         onOpen={() => {}}
@@ -382,7 +382,7 @@ describe('AgentCard — the handoff anatomy', () => {
     expect(screen.getByTestId('card-queue-chip').textContent).toBe('queued')
     expect(screen.getByTestId('provider-chip').textContent).toBe('cursor')
 
-    rerender(<AgentCard agent={agent({ skill: null, queuedMessage: null, provider: null })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
+    rerender(<SlaveCard slave={slave({ skill: null, queuedMessage: null, provider: null })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
     expect(screen.getByTestId('card-skill-chip').textContent).toBe('—')
     expect(screen.getByTestId('card-queue-chip').textContent).toBe('—')
     expect(screen.getByTestId('provider-chip').textContent).toBe('—')
@@ -390,8 +390,8 @@ describe('AgentCard — the handoff anatomy', () => {
 
   it('POSTs pause to the run route the panel already uses', async (): Promise<void> => {
     render(
-      <AgentCard
-        agent={agent({ status: 'working', taskStatus: 'running', runId: 'r1' })}
+      <SlaveCard
+        slave={slave({ status: 'working', taskStatus: 'running', runId: 'r1' })}
         liveActionLine={null}
         workspaceId="w1"
         onOpen={() => {}}
@@ -405,7 +405,7 @@ describe('AgentCard — the handoff anatomy', () => {
 
   it('swaps pause for resume once the run is paused', async (): Promise<void> => {
     render(
-      <AgentCard agent={agent({ status: 'paused', taskStatus: 'running', runId: 'r1' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />,
+      <SlaveCard slave={slave({ status: 'paused', taskStatus: 'running', runId: 'r1' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />,
     )
     expect(screen.queryByTestId('card-pause')).toBeNull()
     await act(async () => {
@@ -415,11 +415,11 @@ describe('AgentCard — the handoff anatomy', () => {
   })
 
   it('cannot ask for the same resume twice: a pending request disables Resume and says so', () => {
-    // `AgentPanel.tsx`'s guard, mirrored: the intent is a single `resumeRequestedAt` column, so a
+    // `SlavePanel.tsx`'s guard, mirrored: the intent is a single `resumeRequestedAt` column, so a
     // second click cannot mean anything the first did not already say. Same wording as the panel.
     const { rerender } = render(
-      <AgentCard
-        agent={agent({ status: 'paused', taskStatus: 'running', runId: 'r1', resumeRequestedAt: '2026-08-29T09:00:00.000Z' })}
+      <SlaveCard
+        slave={slave({ status: 'paused', taskStatus: 'running', runId: 'r1', resumeRequestedAt: '2026-08-29T09:00:00.000Z' })}
         liveActionLine={null}
         workspaceId="w1"
         onOpen={() => {}}
@@ -429,8 +429,8 @@ describe('AgentCard — the handoff anatomy', () => {
     expect(screen.getByTestId('card-resume-requested').textContent).toBe('resume requested — waiting for the daemon')
 
     rerender(
-      <AgentCard
-        agent={agent({ status: 'paused', taskStatus: 'running', runId: 'r1', resumeRequestedAt: null })}
+      <SlaveCard
+        slave={slave({ status: 'paused', taskStatus: 'running', runId: 'r1', resumeRequestedAt: null })}
         liveActionLine={null}
         workspaceId="w1"
         onOpen={() => {}}
@@ -443,7 +443,7 @@ describe('AgentCard — the handoff anatomy', () => {
   it('POSTs stop, and opens the panel for Message rather than inventing a second textarea', async (): Promise<void> => {
     const onOpen = vi.fn()
     render(
-      <AgentCard agent={agent({ status: 'working', taskStatus: 'running', runId: 'r1' })} liveActionLine={null} workspaceId="w1" onOpen={onOpen} />,
+      <SlaveCard slave={slave({ status: 'working', taskStatus: 'running', runId: 'r1' })} liveActionLine={null} workspaceId="w1" onOpen={onOpen} />,
     )
     await act(async () => {
       fireEvent.click(screen.getByTestId('card-stop'))
@@ -455,7 +455,7 @@ describe('AgentCard — the handoff anatomy', () => {
   })
 
   it('disables every footer control when there is no run to control', () => {
-    render(<AgentCard agent={agent({ status: 'idle', runId: null })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
+    render(<SlaveCard slave={slave({ status: 'idle', runId: null })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
     expect((screen.getByTestId('card-pause') as HTMLButtonElement).disabled).toBe(true)
     expect((screen.getByTestId('card-stop') as HTMLButtonElement).disabled).toBe(true)
   })
@@ -465,7 +465,7 @@ describe('AgentCard — the handoff anatomy', () => {
       async () => new Response(JSON.stringify({ error: 'the run is still stopping; retry in a moment' }), { status: 409 }),
     )
     render(
-      <AgentCard agent={agent({ status: 'paused', taskStatus: 'running', runId: 'r1' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />,
+      <SlaveCard slave={slave({ status: 'paused', taskStatus: 'running', runId: 'r1' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />,
     )
     await act(async () => {
       fireEvent.click(screen.getByTestId('card-resume'))
@@ -637,18 +637,18 @@ describe('shell facts and stream state reach the project header, never the sideb
   })
 
   // M24 §3: the goal card and the runtime card left the Overview page for the project Settings
-  // tab (a later task); this page shows the strip and the agent cards, nothing above them.
-  it('renders the strip and the agent cards and nothing else above them (M24 §3)', () => {
+  // tab (a later task); this page shows the strip and the slave cards, nothing above them.
+  it('renders the strip and the slave cards and nothing else above them (M24 §3)', () => {
     render(<OverviewClient workspaceId="w1" initial={PUBLISHED} />)
     expect(screen.queryByTestId('goal-input')).toBeNull()
     expect(screen.queryByTestId('runtime-provider')).toBeNull()
     expect(screen.queryByTestId('goal-suggestion')).toBeNull()
-    expect(screen.getAllByTestId('agent-card').length).toBe(PUBLISHED.agents.length)
+    expect(screen.getAllByTestId('slave-card').length).toBe(PUBLISHED.slaves.length)
   })
 })
 
-/** The snapshot the mount test publishes from: two working agents, two active tasks. */
+/** The snapshot the mount test publishes from: two working slaves, two active tasks. */
 const PUBLISHED: OverviewSnapshot = snapshot([
-  agent({ id: 'a1', status: 'working' }),
-  agent({ id: 'a2', name: 'Sam Yates', status: 'working' }),
+  slave({ id: 'a1', status: 'working' }),
+  slave({ id: 'a2', name: 'Sam Yates', status: 'working' }),
 ])

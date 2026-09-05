@@ -25,8 +25,8 @@ interface Fixture {
 /**
  * Two workspaces ("Checkout", "Billing" -- alphabetical by workspace name, exercising
  * `listProjectTeams`'s `orderBy: [{ workspace: { name: 'asc' } }, { name: 'asc' }]`): Checkout
- * gets two teams, one with two agents and one empty, to prove `agentCount` and the per-workspace
- * secondary sort both come out right; Billing gets one team with a single agent.
+ * gets two teams, one with two slaves and one empty, to prove `slaveCount` and the per-workspace
+ * secondary sort both come out right; Billing gets one team with a single slave.
  */
 async function seed(): Promise<Fixture> {
   const checkout = await prisma.workspace.create({
@@ -41,9 +41,9 @@ async function seed(): Promise<Fixture> {
   const engineering = await prisma.team.create({ data: { workspaceId: checkout.id, name: 'Engineering' } })
   const billingTeam = await prisma.team.create({ data: { workspaceId: billing.id, name: 'Finance' } })
 
-  await prisma.agent.create({ data: { teamId: engineering.id, name: 'Alex', role: 'backend' } })
-  await prisma.agent.create({ data: { teamId: engineering.id, name: 'Sam', role: 'frontend' } })
-  await prisma.agent.create({ data: { teamId: billingTeam.id, name: 'Riley', role: 'backend' } })
+  await prisma.slave.create({ data: { teamId: engineering.id, name: 'Alex', role: 'backend' } })
+  await prisma.slave.create({ data: { teamId: engineering.id, name: 'Sam', role: 'frontend' } })
+  await prisma.slave.create({ data: { teamId: billingTeam.id, name: 'Riley', role: 'backend' } })
 
   return { checkoutTeamId: engineering.id, checkoutEmptyTeamId: widgets.id, billingTeamId: billingTeam.id }
 }
@@ -53,7 +53,7 @@ describe('listProjectTeams', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace", "CompanyAgent", "CompanyTeam", "Company", "AgentTemplate" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
   })
@@ -62,13 +62,13 @@ describe('listProjectTeams', () => {
     await prisma.$disconnect()
   })
 
-  it('lists every team across every workspace, ordered by project then name, with each team\'s agent count', async (): Promise<void> => {
+  it('lists every team across every workspace, ordered by project then name, with each team\'s slave count', async (): Promise<void> => {
     const teams = await listProjectTeams()
 
-    expect(teams.map((t) => ({ project: t.projectName, name: t.name, agentCount: t.agentCount }))).toEqual([
-      { project: 'Billing', name: 'Finance', agentCount: 1 },
-      { project: 'Checkout Platform', name: 'Engineering', agentCount: 2 },
-      { project: 'Checkout Platform', name: 'Widgets', agentCount: 0 },
+    expect(teams.map((t) => ({ project: t.projectName, name: t.name, slaveCount: t.slaveCount }))).toEqual([
+      { project: 'Billing', name: 'Finance', slaveCount: 1 },
+      { project: 'Checkout Platform', name: 'Engineering', slaveCount: 2 },
+      { project: 'Checkout Platform', name: 'Widgets', slaveCount: 0 },
     ])
   })
 
@@ -77,12 +77,12 @@ describe('listProjectTeams', () => {
 
     const engineering = teams.find((t) => t.teamId === fixture.checkoutTeamId)
     expect(engineering?.name).toBe('Engineering')
-    expect(engineering?.agentCount).toBe(2)
+    expect(engineering?.slaveCount).toBe(2)
 
     const widgets = teams.find((t) => t.teamId === fixture.checkoutEmptyTeamId)
-    expect(widgets?.agentCount).toBe(0)
+    expect(widgets?.slaveCount).toBe(0)
 
     const finance = teams.find((t) => t.teamId === fixture.billingTeamId)
-    expect(finance?.agentCount).toBe(1)
+    expect(finance?.slaveCount).toBe(1)
   })
 })

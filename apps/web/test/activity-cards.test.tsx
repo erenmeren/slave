@@ -11,8 +11,8 @@ function baseEvent(type: DomainEventType, payload: Record<string, unknown>): Act
     seq: 1,
     ts: '2026-08-22T10:00:00.000Z',
     type,
-    actor: 'agent',
-    agentId: 'a1',
+    actor: 'slave',
+    slaveId: 'a1',
     taskId: 't1',
     runId: 'r1',
     userId: null,
@@ -34,7 +34,7 @@ const PAYLOAD_BY_TYPE: Record<DomainEventType, Record<string, unknown>> = {
   'run.tool_denied': { tool: 'Bash', capability: 'run tests' },
   'run.paused': { atStep: 4 },
   'run.resumed': { sessionId: 's1' },
-  'agent.message_sent': { category: 'instruction', body: 'Please retry with the other approach.' },
+  'slave.message_sent': { category: 'instruction', body: 'Please retry with the other approach.' },
   'guardrail.tripped': { guardrail: 'budget_exhausted', detail: 'Spent $20 of $20.' },
   'task.verifying': { commandCount: 3 },
   'task.verify_passed': { branch: 'feature/add-the-thing' },
@@ -76,8 +76,8 @@ const PAYLOAD_BY_TYPE: Record<DomainEventType, Record<string, unknown>> = {
   'workspace.company_assigned': {
     company: 'Acme Corp',
     workers: [
-      { companyAgentId: 'ca-1', name: 'Alex', role: 'backend' },
-      { companyAgentId: 'ca-2', name: 'Sam', role: 'frontend' },
+      { companySlaveId: 'ca-1', name: 'Alex', role: 'backend' },
+      { companySlaveId: 'ca-2', name: 'Sam', role: 'frontend' },
     ],
   },
   'workspace.settings_changed': { field: 'provider', from: null, to: 'cursor' },
@@ -88,7 +88,7 @@ const PAYLOAD_BY_TYPE: Record<DomainEventType, Record<string, unknown>> = {
     verifyCommands: ['npm test', 'npm run lint'],
     provider: 'claude_code',
   },
-  'org.changed': { entity: 'agent', id: 'ag-1', field: 'name', from: 'Alex', to: 'Alexis' },
+  'org.changed': { entity: 'slave', id: 'ag-1', field: 'name', from: 'Alex', to: 'Alexis' },
 }
 
 function fixtureFor(type: DomainEventType): ActivityEventRow {
@@ -100,7 +100,7 @@ function fixtureFor(type: DomainEventType): ActivityEventRow {
 // every existing assertion in this file was written against.
 const CARD_PROPS = {
   workspaceId: 'w1',
-  agentName: 'Alex',
+  slaveName: 'Alex',
   taskTitle: 'Add the thing',
   userName: null,
   dimmed: false,
@@ -154,10 +154,10 @@ describe('targeted card bodies', () => {
     expect(screen.getByTestId('resume-message').textContent).toBe('go ahead')
   })
 
-  it('agent.message_sent shows the actor and the message body', () => {
-    const Card = ACTIVITY_CARDS['agent.message_sent']
-    render(<Card event={fixtureFor('agent.message_sent')} {...CARD_PROPS} />)
-    expect(screen.getByTestId('actor-badge').textContent).toBe('agent')
+  it('slave.message_sent shows the actor and the message body', () => {
+    const Card = ACTIVITY_CARDS['slave.message_sent']
+    render(<Card event={fixtureFor('slave.message_sent')} {...CARD_PROPS} />)
+    expect(screen.getByTestId('actor-badge').textContent).toBe('slave')
     expect(screen.getByTestId('message-body').textContent).toBe('Please retry with the other approach.')
   })
 
@@ -219,9 +219,9 @@ describe('targeted card bodies', () => {
     expect(screen.getByTestId('org-to').textContent).toBe('Design')
   })
 
-  it('org.changed shows "moved to department" for a moved agent (M25)', () => {
+  it('org.changed shows "moved to department" for a moved slave (M25)', () => {
     const Card = ACTIVITY_CARDS['org.changed']
-    const event = baseEvent('org.changed', { entity: 'agent', id: 'ag-1', field: 'team', from: 'Engineering', to: 'QA' })
+    const event = baseEvent('org.changed', { entity: 'slave', id: 'ag-1', field: 'team', from: 'Engineering', to: 'QA' })
     render(<Card event={event} {...CARD_PROPS} />)
     expect(screen.getByTestId('transition-label').textContent).toBe('moved to department')
     expect(screen.getByTestId('org-from').textContent).toBe('Engineering')
@@ -267,7 +267,7 @@ describe('targeted card bodies', () => {
     expect(items[1]?.textContent).toContain('frontend')
   })
 
-  it('workspace.company_assigned renders legacy workers missing companyAgentId without duplicate-key warnings', () => {
+  it('workspace.company_assigned renders legacy workers missing companySlaveId without duplicate-key warnings', () => {
     const Card = ACTIVITY_CARDS['workspace.company_assigned']
     render(
       <Card
@@ -308,26 +308,26 @@ describe('targeted card bodies', () => {
     expect(screen.getByTestId('company-no-workers').textContent).toBe('no new workers')
   })
 
-  it('falls back to the bare id when agentName/taskTitle are null', () => {
+  it('falls back to the bare id when slaveName/taskTitle are null', () => {
     const Card = ACTIVITY_CARDS['task.started']
     render(
       <Card
         event={fixtureFor('task.started')}
         workspaceId="w1"
-        agentName={null}
+        slaveName={null}
         taskTitle={null}
         userName={null}
         dimmed={false}
       />,
     )
-    expect(screen.getByTestId('agent-link').textContent).toBe('a1')
+    expect(screen.getByTestId('slave-link').textContent).toBe('a1')
     expect(screen.getByTestId('task-link').textContent).toBe('t1')
   })
 
   it('links to the overview panel and the tasks board with the right ids', () => {
     const Card = ACTIVITY_CARDS['task.started']
     render(<Card event={fixtureFor('task.started')} {...CARD_PROPS} />)
-    expect(screen.getByTestId('agent-link').getAttribute('href')).toBe('/w/w1?agent=a1')
+    expect(screen.getByTestId('slave-link').getAttribute('href')).toBe('/w/w1?slave=a1')
     expect(screen.getByTestId('task-link').getAttribute('href')).toBe('/w/w1/tasks?task=t1')
   })
 })
@@ -376,8 +376,8 @@ describe('the river row', () => {
       seq: 1,
       ts: '2026-08-29T10:00:00.000Z',
       type: 'run.tool_call' as const,
-      actor: 'agent',
-      agentId: 'a1',
+      actor: 'slave',
+      slaveId: 'a1',
       taskId: null,
       runId: 'r1',
       userId: null,
@@ -385,7 +385,7 @@ describe('the river row', () => {
       summary: 'Write a.txt',
     },
     workspaceId: 'w1',
-    agentName: 'Alex',
+    slaveName: 'Alex',
     taskTitle: null,
     userName: null,
     dimmed: false,

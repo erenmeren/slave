@@ -4,7 +4,7 @@ import { requirePrincipal } from '../../../../server/principal'
 export const dynamic = 'force-dynamic'
 
 /** M25 Task 8: answers the new department's id, the way `POST /api/w/:id/teams` (Task 2) does --
- *  the "new department…" step of the New agent drawer needs it to place the agent it creates
+ *  the "new department…" step of the New slave drawer needs it to place the slave it creates
  *  next without a second read. */
 export async function POST(request: Request): Promise<Response> {
   const gate = await requirePrincipal()

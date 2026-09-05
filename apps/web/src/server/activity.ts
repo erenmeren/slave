@@ -9,7 +9,7 @@ export interface ActivityEventRow {
   readonly ts: string
   readonly type: DomainEventType
   readonly actor: string
-  readonly agentId: string | null
+  readonly slaveId: string | null
   readonly taskId: string | null
   readonly runId: string | null
   /** M23 F6: who caused this event, or null -- the CLI/orchestrator write no user, and every
@@ -32,16 +32,16 @@ export interface ActivityHistoryPage {
 
 export interface ActivityPage extends ActivityHistoryPage {
   readonly workspace: { readonly id: string; readonly name: string; readonly haltedReason: string | null }
-  /** The workspace's agent/task rosters, `{id, name|title}[]` only — everything the page needs
-   *  for the FilterBar's two multi-selects and for resolving a card's `agentName`/`taskTitle`
-   *  from an event's bare `agentId`/`taskId`. Two lightweight selects (no `include`, no run/task
+  /** The workspace's slave/task rosters, `{id, name|title}[]` only — everything the page needs
+   *  for the FilterBar's two multi-selects and for resolving a card's `slaveName`/`taskTitle`
+   *  from an event's bare `slaveId`/`taskId`. Two lightweight selects (no `include`, no run/task
    *  rows) alongside the existing history + sparkline queries, so the page still costs one server
    *  round-trip; deliberately not a third snapshot builder (`buildOverviewSnapshot` and
-   *  `buildTasksSnapshot` already own the *full* agent/task shapes their own pages need). */
-  readonly agents: readonly { readonly id: string; readonly name: string }[]
+   *  `buildTasksSnapshot` already own the *full* slave/task shapes their own pages need). */
+  readonly slaves: readonly { readonly id: string; readonly name: string }[]
   readonly tasks: readonly { readonly id: string; readonly title: string }[]
   /** Every local account (M23 F6), for resolving an event's bare `userId` to a username the same
-   *  way `agents`/`tasks` resolve `agentId`/`taskId`. The whole table, unfiltered -- there is no
+   *  way `slaves`/`tasks` resolve `slaveId`/`taskId`. The whole table, unfiltered -- there is no
    *  per-workspace scoping for a `User` row, and this table is small (bound assumption: an
    *  operator's local accounts, not a multi-tenant user base). */
   readonly users: readonly { readonly id: string; readonly username: string }[]
@@ -172,7 +172,7 @@ export async function buildActivityHistory(
     prisma.executionEvent.findMany({
       where: {
         workspaceId,
-        ...(filters.agents.length > 0 ? { agentId: { in: [...filters.agents] } } : {}),
+        ...(filters.slaves.length > 0 ? { slaveId: { in: [...filters.slaves] } } : {}),
         ...(filters.tasks.length > 0 ? { taskId: { in: [...filters.tasks] } } : {}),
         ...(filters.types.length > 0
           ? { type: { in: filters.types.map((type) => EVENT_TYPE_BY_DOMAIN_TYPE[type]) } }
@@ -193,7 +193,7 @@ export async function buildActivityHistory(
       ts: row.ts.toISOString(),
       type: domainType,
       actor: row.actor,
-      agentId: row.agentId,
+      slaveId: row.slaveId,
       taskId: row.taskId,
       runId: row.runId,
       userId: row.userId,
@@ -211,15 +211,15 @@ export async function buildActivityHistory(
 /**
  * The activity page's initial load: workspace identity, the unfiltered first history page (which
  * now carries its own workspace-wide sparkline — see `buildActivityHistory`), and the workspace's
- * agent/task rosters. Composed from `buildActivityHistory` rather than a duplicate sparkline query.
+ * slave/task rosters. Composed from `buildActivityHistory` rather than a duplicate sparkline query.
  */
 export async function buildActivityPage(workspaceId: string): Promise<ActivityPage | null> {
   const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId } })
   if (workspace === null) return null
 
-  const [history, agents, tasks, users, typeVolumes, shellFacts] = await Promise.all([
+  const [history, slaves, tasks, users, typeVolumes, shellFacts] = await Promise.all([
     buildActivityHistory(workspaceId, EMPTY_ACTIVITY_FILTERS, {}),
-    prisma.agent.findMany({ where: { team: { workspaceId } }, select: { id: true, name: true }, orderBy: { name: 'asc' } }),
+    prisma.slave.findMany({ where: { team: { workspaceId } }, select: { id: true, name: true }, orderBy: { name: 'asc' } }),
     prisma.task.findMany({ where: { workspaceId }, select: { id: true, title: true }, orderBy: { title: 'asc' } }),
     prisma.user.findMany({ select: { id: true, username: true }, orderBy: { username: 'asc' } }),
     eventTypeVolumes(workspaceId),
@@ -232,7 +232,7 @@ export async function buildActivityPage(workspaceId: string): Promise<ActivityPa
     events: history!.events,
     nextBefore: history!.nextBefore,
     sparkline: history!.sparkline,
-    agents,
+    slaves,
     tasks,
     users,
     typeVolumes,

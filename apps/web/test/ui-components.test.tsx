@@ -138,7 +138,7 @@ describe('StatStrip', () => {
     render(
       <StatStrip
         items={[
-          { label: 'agents', value: '6' },
+          { label: 'slaves', value: '6' },
           { label: 'active', value: '3', tone: 'working' },
           { label: 'blocked', value: '1', tone: 'blocked' },
         ]}
@@ -146,7 +146,7 @@ describe('StatStrip', () => {
     )
     const items = screen.getAllByTestId('stat-strip-item')
     expect(items).toHaveLength(3)
-    expect(items[0]?.textContent).toContain('agents')
+    expect(items[0]?.textContent).toContain('slaves')
     expect(items[0]?.textContent).toContain('6')
   })
 })
@@ -176,7 +176,7 @@ describe('ProgressBar', () => {
   })
 
   it('is 6px by default and 3px in the card size', () => {
-    // The handoff gives the agent card a 3px bar (README "1a") and every table row the 6px one
+    // The handoff gives the slave card a 3px bar (README "1a") and every table row the 6px one
     // this component has always drawn; `size` is that one difference, not a second component.
     const { rerender } = render(<ProgressBar pct={42} />)
     expect(screen.getByTestId('progress-bar').className).toContain('h-1.5')

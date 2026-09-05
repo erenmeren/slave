@@ -42,20 +42,20 @@ async function readFrames(response: Response, count: number, timeoutMs = 5_000):
 
 interface Fixture {
   readonly workspaceId: string
-  readonly agentId1: string
-  readonly agentId2: string
+  readonly slaveId1: string
+  readonly slaveId2: string
 }
 
 async function seed(): Promise<Fixture> {
   const workspace = await prisma.workspace.create({
     data: { name: 'mine', repoPath: '/tmp/mine', verifyCommands: ['true'], setupCommands: [] },
   })
-  // ExecutionEvent.agentId carries no FK — any string identifies "the agent" for filtering.
-  return { workspaceId: workspace.id, agentId1: 'agent-1', agentId2: 'agent-2' }
+  // ExecutionEvent.slaveId carries no FK — any string identifies "the slave" for filtering.
+  return { workspaceId: workspace.id, slaveId1: 'slave-1', slaveId2: 'slave-2' }
 }
 
-const emit = async (workspaceId: string, agentId: string, title: string): Promise<void> => {
-  await appendEvent({ type: 'task.created', workspaceId, agentId, actor: 'system', payload: { title } })
+const emit = async (workspaceId: string, slaveId: string, title: string): Promise<void> => {
+  await appendEvent({ type: 'task.created', workspaceId, slaveId, actor: 'system', payload: { title } })
 }
 
 describe('the activity SSE stream', () => {
@@ -63,7 +63,7 @@ describe('the activity SSE stream', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
   })
@@ -74,13 +74,13 @@ describe('the activity SSE stream', () => {
 
   it('streams only events matching the filters, and heartbeats advance the watermark past filtered spans', async (): Promise<void> => {
     const response = await getActivityStream(
-      new Request(`http://test/api?agents=${fixture.agentId1}`),
+      new Request(`http://test/api?slaves=${fixture.slaveId1}`),
       { params: Promise.resolve({ workspaceId: fixture.workspaceId }) },
     )
 
-    await emit(fixture.workspaceId, fixture.agentId2, 'not-mine')
+    await emit(fixture.workspaceId, fixture.slaveId2, 'not-mine')
     const other = await prisma.executionEvent.findFirst({ orderBy: { seq: 'desc' } })
-    await emit(fixture.workspaceId, fixture.agentId1, 'mine')
+    await emit(fixture.workspaceId, fixture.slaveId1, 'mine')
 
     const frames = await readFrames(response, 1)
 
@@ -94,12 +94,12 @@ describe('the activity SSE stream', () => {
   }, 15_000)
 
   it('replays from Last-Event-ID across a filtered gap with no duplicate and no gap', async (): Promise<void> => {
-    await emit(fixture.workspaceId, fixture.agentId2, 'filtered-1')
-    await emit(fixture.workspaceId, fixture.agentId1, 'kept-1')
-    await emit(fixture.workspaceId, fixture.agentId2, 'filtered-2')
-    await emit(fixture.workspaceId, fixture.agentId1, 'kept-2')
+    await emit(fixture.workspaceId, fixture.slaveId2, 'filtered-1')
+    await emit(fixture.workspaceId, fixture.slaveId1, 'kept-1')
+    await emit(fixture.workspaceId, fixture.slaveId2, 'filtered-2')
+    await emit(fixture.workspaceId, fixture.slaveId1, 'kept-2')
 
-    const request = new Request(`http://test/api?agents=${fixture.agentId1}`, {
+    const request = new Request(`http://test/api?slaves=${fixture.slaveId1}`, {
       headers: { 'last-event-id': '0' },
     })
     const response = await getActivityStream(request, {
@@ -127,7 +127,7 @@ describe('the activity SSE stream', () => {
       params: Promise.resolve({ workspaceId: fixture.workspaceId }),
     })
 
-    await emit(fixture.workspaceId, fixture.agentId2, 'unfiltered')
+    await emit(fixture.workspaceId, fixture.slaveId2, 'unfiltered')
     const [frame] = await readFrames(response, 1)
 
     expect(frame?.data).toContain('unfiltered')

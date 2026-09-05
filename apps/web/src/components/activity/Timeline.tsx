@@ -20,16 +20,16 @@ export interface TimelineProps {
    *  (newest at the bottom). */
   readonly events: readonly ActivityEventRow[]
   readonly workspaceId: string
-  readonly agentNameById: ReadonlyMap<string, string>
+  readonly slaveNameById: ReadonlyMap<string, string>
   readonly taskTitleById: ReadonlyMap<string, string>
   /** M23 F6: resolves an event's bare `userId` to the username the header's "by <username>" chip
-   *  shows -- mirrors `agentNameById`/`taskTitleById`. */
+   *  shows -- mirrors `slaveNameById`/`taskTitleById`. */
   readonly userNameById: ReadonlyMap<string, string>
-  /** The agent whose roster row is selected, or `null` for no roster filter. Every row that is
-   *  NOT that agent's renders dimmed (design README "Filtering": dim, never hide). Optional so a
+  /** The slave whose roster row is selected, or `null` for no roster filter. Every row that is
+   *  NOT that slave's renders dimmed (design README "Filtering": dim, never hide). Optional so a
    *  caller with no roster beside it -- and this file's own scroll-anchoring test -- can leave it
    *  off entirely. */
-  readonly dimmedAgentId?: string | null
+  readonly dimmedSlaveId?: string | null
   /** Fires whenever the viewport's distance from the bottom crosses the "pinned" threshold —
    *  both from an actual scroll and from a row's measured height changing (e.g. a payload
    *  `<details>` expanding), since the latter moves the true bottom with no scroll event of its
@@ -51,7 +51,7 @@ export interface TimelineProps {
  * prepend.
  */
 export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timeline(
-  { events, workspaceId, agentNameById, taskTitleById, userNameById, dimmedAgentId = null, onPinnedChange, onNearTop },
+  { events, workspaceId, slaveNameById, taskTitleById, userNameById, dimmedSlaveId = null, onPinnedChange, onNearTop },
   ref,
 ): React.JSX.Element {
   const scrollRef = useRef<HTMLDivElement | null>(null)
@@ -302,10 +302,10 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
                 <Card
                   event={event}
                   workspaceId={workspaceId}
-                  agentName={event.agentId !== null ? (agentNameById.get(event.agentId) ?? null) : null}
+                  slaveName={event.slaveId !== null ? (slaveNameById.get(event.slaveId) ?? null) : null}
                   taskTitle={event.taskId !== null ? (taskTitleById.get(event.taskId) ?? null) : null}
                   userName={event.userId !== null ? (userNameById.get(event.userId) ?? null) : null}
-                  dimmed={dimmedAgentId !== null && event.agentId !== dimmedAgentId}
+                  dimmed={dimmedSlaveId !== null && event.slaveId !== dimmedSlaveId}
                 />
               </div>
             </div>

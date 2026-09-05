@@ -1,6 +1,6 @@
 import { toRunState } from '@slave-of-ai/db'
 import { prisma } from '@slave-of-ai/db/client'
-import { deriveAgentStatus, NON_TERMINAL_RUN_STATUSES, type SpendGroup } from '@slave-of-ai/domain'
+import { deriveSlaveStatus, NON_TERMINAL_RUN_STATUSES, type SpendGroup } from '@slave-of-ai/domain'
 import { spendOfGroups } from './org'
 
 /**
@@ -17,11 +17,11 @@ import { spendOfGroups } from './org'
 export interface ShellFacts {
   readonly workspace: { readonly id: string; readonly name: string }
   readonly counts: {
-    /** Distinct AGENTS whose derived status is `working` — the handoff's "agents working" badge.
-     *  Agents, never runs: one agent with two live runs is one agent working (M14 fix wave,
-     *  review Minor 2 — the badge disagreed with Overview's per-agent strip on the same
+    /** Distinct SLAVES whose derived status is `working` — the handoff's "slaves working" badge.
+     *  Slaves, never runs: one slave with two live runs is one slave working (M14 fix wave,
+     *  review Minor 2 — the badge disagreed with Overview's per-slave strip on the same
      *  workspace). */
-    readonly agentsWorking: number
+    readonly slavesWorking: number
     /** Tasks in the six statuses `overview.ts` counts as active work. */
     readonly tasksActive: number
   }
@@ -52,34 +52,34 @@ export async function buildShellFacts(workspaceId: string): Promise<ShellFacts |
   if (workspace === null) return null
 
   const [runs, tasksActive, spendGroups] = await Promise.all([
-    // No `select`: `toRunState` maps a whole `AgentRun` row, and narrowing the query to the four
+    // No `select`: `toRunState` maps a whole `SlaveRun` row, and narrowing the query to the four
     // columns it happens to read today would hand it an object the mapper's own type rejects —
     // and would have to be revisited every time the domain's `RunState` grows a field. The row
     // set is bounded by `maxConcurrentRuns`-ish live runs, not by history.
-    prisma.agentRun.findMany({
-      where: { agent: { team: { workspaceId } }, status: { in: [...NON_TERMINAL_RUN_STATUSES] } },
+    prisma.slaveRun.findMany({
+      where: { slave: { team: { workspaceId } }, status: { in: [...NON_TERMINAL_RUN_STATUSES] } },
     }),
     prisma.task.count({ where: { workspaceId, status: { in: [...ACTIVE_TASK_STATUSES] } } }),
     // Grouped by the database, exactly `listWorkers`'/`listProjects`' shape (`org.ts`), scoped to
-    // this one workspace's agents rather than every agent everywhere -- `overview.ts`'s own spend
+    // this one workspace's slaves rather than every slave everywhere -- `overview.ts`'s own spend
     // derivation, restated over `spendOfGroups` instead of the whole-history row array `sumSpend`
     // takes, so the header and Overview cannot come to disagree about what an unmeasured run does
     // to the total.
-    prisma.agentRun.groupBy({
+    prisma.slaveRun.groupBy({
       by: ['provider', 'status'],
-      where: { agent: { team: { workspaceId } } },
+      where: { slave: { team: { workspaceId } } },
       _sum: { costUsd: true },
       _count: { _all: true, costUsd: true },
     }),
   ])
 
-  // `deriveAgentStatus` rather than a `status === 'working'` filter on the row: the domain owns
-  // that mapping, and this badge must agree with the pill on every card that shows the same agent.
-  // Deduped by `agentId` (review Minor 2): the badge counts AGENTS, and `agentRun` can hold more
-  // than one live row for one agent, which made the same workspace's badge read differently
+  // `deriveSlaveStatus` rather than a `status === 'working'` filter on the row: the domain owns
+  // that mapping, and this badge must agree with the pill on every card that shows the same slave.
+  // Deduped by `slaveId` (review Minor 2): the badge counts SLAVES, and `slaveRun` can hold more
+  // than one live row for one slave, which made the same workspace's badge read differently
   // depending on which page happened to be publishing.
-  const agentsWorking = new Set(
-    runs.filter((run) => deriveAgentStatus(toRunState(run)) === 'working').map((run) => run.agentId),
+  const slavesWorking = new Set(
+    runs.filter((run) => deriveSlaveStatus(toRunState(run)) === 'working').map((run) => run.slaveId),
   ).size
 
   // Same `SpendGroup` construction as `listProjects`/`listWorkers` (`org.ts`).
@@ -94,7 +94,7 @@ export async function buildShellFacts(workspaceId: string): Promise<ShellFacts |
 
   return {
     workspace: { id: workspace.id, name: workspace.name },
-    counts: { agentsWorking, tasksActive },
+    counts: { slavesWorking, tasksActive },
     guardrails: {
       budgetUsd: workspace.budgetUsd,
       maxConcurrentRuns: workspace.maxConcurrentRuns,

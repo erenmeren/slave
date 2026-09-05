@@ -8,10 +8,10 @@ import { DataTable, Row } from './ui/DataTable'
 import { PrimaryButton, SelectField, TextField } from './ui/FormControls'
 
 const COLUMNS = '1fr 1fr 90px 170px'
-const HEADER = ['Project', 'Department', 'Agents', ''] as const
+const HEADER = ['Project', 'Department', 'Slaves', ''] as const
 
-/** One project department: project + inline-renamable name + agent count + a two-step delete,
- *  disabled (with `title="department has agents"`) while `agentCount > 0` -- `deleteTeam`'s own
+/** One project department: project + inline-renamable name + slave count + a two-step delete,
+ *  disabled (with `title="department has slaves"`) while `slaveCount > 0` -- `deleteTeam`'s own
  *  `team_not_empty` refusal, named on the button before an operator can even try it. */
 function DepartmentRow({ team }: { readonly team: ProjectTeamRow }): React.JSX.Element {
   const router = useRouter()
@@ -21,7 +21,7 @@ function DepartmentRow({ team }: { readonly team: ProjectTeamRow }): React.JSX.E
   const [pending, setPending] = useState(false)
   const [errorText, setErrorText] = useState<string | null>(null)
 
-  // Guarded by `pending`, the same reason `AgentRowActions.commit` is: Enter and blur each call
+  // Guarded by `pending`, the same reason `SlaveRowActions.commit` is: Enter and blur each call
   // this independently, and a field that fails to commit stays open for a retry.
   const commitRename = async (): Promise<void> => {
     if (pending) return
@@ -84,7 +84,7 @@ function DepartmentRow({ team }: { readonly team: ProjectTeamRow }): React.JSX.E
           {team.name}
         </button>
       )}
-      <span className="text-text-2">{team.agentCount}</span>
+      <span className="text-text-2">{team.slaveCount}</span>
       <div className="flex items-center gap-2">
         {confirmingDelete ? (
           <>
@@ -104,8 +104,8 @@ function DepartmentRow({ team }: { readonly team: ProjectTeamRow }): React.JSX.E
           <PrimaryButton
             tone="blocked"
             data-testid="department-delete"
-            disabled={team.agentCount > 0}
-            title={team.agentCount > 0 ? 'department has agents' : undefined}
+            disabled={team.slaveCount > 0}
+            title={team.slaveCount > 0 ? 'department has slaves' : undefined}
             onClick={() => setConfirmingDelete(true)}
           >
             delete
@@ -195,8 +195,8 @@ function NewDepartmentForm({ workspaces }: { readonly workspaces: readonly { id:
   )
 }
 
-/** The Agents page's Departments tab (M23 D3, renamed in M25 §4.2): the "New department" form
- *  above every project `Team` row, one `DataTable` row per -- project, name, agent count -- fed
+/** The Slaves page's Departments tab (M23 D3, renamed in M25 §4.2): the "New department" form
+ *  above every project `Team` row, one `DataTable` row per -- project, name, slave count -- fed
  *  by `listProjectTeams()`. */
 export function DepartmentsTable({
   teams,

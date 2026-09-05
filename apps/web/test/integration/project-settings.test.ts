@@ -4,7 +4,7 @@ import { buildProjectSettings } from '../../src/server/projectSettings.js'
 
 interface Fixture {
   readonly workspaceId: string
-  readonly agentId: string
+  readonly slaveId: string
 }
 
 /** `name` unique per test so two workspaces in the same `it` never collide on `Workspace`'s
@@ -21,14 +21,14 @@ async function seed(name: string, over: Partial<{ goal: string | null; budgetUsd
     },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const agent = await prisma.agent.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
-  return { workspaceId: workspace.id, agentId: agent.id }
+  const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
+  return { workspaceId: workspace.id, slaveId: slave.id }
 }
 
 describe('buildProjectSettings', () => {
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "AgentPermission", "Checkpoint", "AgentRun", "TaskDependency", "Task", "ProviderConfiguration", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "SlavePermission", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "ProviderConfiguration", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
   })
 
@@ -45,8 +45,8 @@ describe('buildProjectSettings', () => {
     await prisma.providerConfiguration.create({
       data: { workspaceId: fixture.workspaceId, kind: 'cursor', settings: {} },
     })
-    await prisma.agentPermission.create({
-      data: { agentId: fixture.agentId, tool: 'repo read', mode: 'allow' },
+    await prisma.slavePermission.create({
+      data: { slaveId: fixture.slaveId, tool: 'repo read', mode: 'allow' },
     })
 
     const settings = await buildProjectSettings(fixture.workspaceId)
@@ -67,23 +67,23 @@ describe('buildProjectSettings', () => {
     expect(settings?.workspace.haltedReason).toBeNull()
 
     expect(settings?.permissions?.workspaceId).toBe(fixture.workspaceId)
-    expect(settings?.permissions?.rows[0]?.agentId).toBe(fixture.agentId)
+    expect(settings?.permissions?.rows[0]?.slaveId).toBe(fixture.slaveId)
     expect(settings?.permissions?.rows[0]?.cells.find((c) => c.tool === 'repo read')?.mode).toBe('allow')
   })
 
   it('never leaks a second workspace’s permissions into this one’s section', async (): Promise<void> => {
     const fixtureA = await seed('Checkout Platform')
     const fixtureB = await seed('Billing Platform')
-    await prisma.agentPermission.create({ data: { agentId: fixtureB.agentId, tool: 'deploy prod', mode: 'deny' } })
+    await prisma.slavePermission.create({ data: { slaveId: fixtureB.slaveId, tool: 'deploy prod', mode: 'deny' } })
 
     const settings = await buildProjectSettings(fixtureA.workspaceId)
 
     expect(settings?.permissions?.workspaceId).toBe(fixtureA.workspaceId)
-    expect(settings?.permissions?.rows.map((r) => r.agentId)).toEqual([fixtureA.agentId])
-    expect(settings?.permissions?.rows.some((r) => r.agentId === fixtureB.agentId)).toBe(false)
+    expect(settings?.permissions?.rows.map((r) => r.slaveId)).toEqual([fixtureA.slaveId])
+    expect(settings?.permissions?.rows.some((r) => r.slaveId === fixtureB.slaveId)).toBe(false)
   })
 
-  it('gives a workspace with no agents an empty section, not a missing one', async (): Promise<void> => {
+  it('gives a workspace with no slaves an empty section, not a missing one', async (): Promise<void> => {
     // `sections[0] ?? null` in `buildProjectSettings` guards the case `buildPermissionMatrix`
     // finds no matching workspace row at all -- which cannot happen here, since this workspace
     // was just read successfully above it. An empty roster is a section with no rows, not null.

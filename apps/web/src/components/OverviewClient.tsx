@@ -7,8 +7,8 @@ import { publishStreamState } from '../hooks/useStreamState'
 import { useSelectedId } from '../hooks/useSelectedId'
 import { useOverview } from '../hooks/useOverview'
 import type { OverviewSnapshot } from '../server/overview'
-import { AgentCard } from './AgentCard'
-import { AgentPanel } from './AgentPanel'
+import { SlaveCard } from './SlaveCard'
+import { SlavePanel } from './SlavePanel'
 import { HaltBanner } from './HaltBanner'
 import { postControl } from '../lib/postControl'
 import { TopStrip } from './TopStrip'
@@ -163,8 +163,8 @@ export function OverviewClient({
 }): React.JSX.Element {
   const { snapshot, actionLines, liveEvents, connection, error, latencyMs } = useOverview(workspaceId, initial)
   const view = snapshot ?? initial
-  const [selectedAgentId, selectAgent] = useSelectedId('agent')
-  const selectedAgent = view.agents.find((agent) => agent.id === selectedAgentId) ?? null
+  const [selectedSlaveId, selectSlave] = useSelectedId('slave')
+  const selectedSlave = view.slaves.find((slave) => slave.id === selectedSlaveId) ?? null
 
   // Controller ruling carried from Task 3 (and fix round 1), and re-aimed by M24 §2.2: the
   // project layout's `<ProjectHeader>` and `<ProjectTabs>` render as SIBLINGS of `{children}`, so
@@ -172,14 +172,14 @@ export function OverviewClient({
   // every figure the header and the Tasks tab's badge show is in the snapshot it is already
   // holding — so it publishes them to `hooks/useShellFacts.ts` and the header opens nothing of
   // its own. A module store, not context, for the same reason: no shared ancestor to hold it.
-  // `agentsWorking` is the same `status === 'working'` count the strip's first tile shows, and
+  // `slavesWorking` is the same `status === 'working'` count the strip's first tile shows, and
   // `tasksActive` the same `tasks.active` the Tasks tab's badge does; the strip and the tab strip
   // cannot disagree, because there is one number.
   const shellFacts = useMemo(
     () => ({
       workspace: { id: view.workspace.id, name: view.workspace.name },
       counts: {
-        agentsWorking: view.agents.filter((a) => a.status === 'working').length,
+        slavesWorking: view.slaves.filter((a) => a.status === 'working').length,
         tasksActive: view.tasks.active,
       },
       guardrails: {
@@ -225,13 +225,13 @@ export function OverviewClient({
         {/* The handoff's 3-column card grid at an 11px gap (design README §3a.1), narrowing to
           * two and then one rather than shrinking the cards past the anatomy they hold. */}
         <main className="grid grid-cols-1 gap-[11px] px-[20px] pt-[16px] md:grid-cols-2 xl:grid-cols-3">
-          {view.agents.map((agent) => (
-            <AgentCard
-              key={agent.id}
-              agent={agent}
-              liveActionLine={actionLines[agent.id] ?? null}
+          {view.slaves.map((slave) => (
+            <SlaveCard
+              key={slave.id}
+              slave={slave}
+              liveActionLine={actionLines[slave.id] ?? null}
               workspaceId={workspaceId}
-              onOpen={selectAgent}
+              onOpen={selectSlave}
             />
           ))}
         </main>
@@ -245,19 +245,19 @@ export function OverviewClient({
           <MergeQueuePanel queue={view.mergeQueue} />
         </div>
       </div>
-      {selectedAgent !== null && (
-        <AgentPanel
-          // Keyed on the agent id so switching `?agent=` unmounts the old panel instance instead
-          // of reusing it with new props: a control POST still in flight for the agent just
-          // switched away from must not paint its late error/pending state onto the next agent's
+      {selectedSlave !== null && (
+        <SlavePanel
+          // Keyed on the slave id so switching `?slave=` unmounts the old panel instance instead
+          // of reusing it with new props: a control POST still in flight for the slave just
+          // switched away from must not paint its late error/pending state onto the next slave's
           // panel — React drops a state update against an unmounted component instead of
           // delivering it (fix round 2, Finding 2).
-          key={selectedAgent.id}
-          agent={selectedAgent}
-          liveEvents={liveEvents[selectedAgent.id] ?? []}
+          key={selectedSlave.id}
+          slave={selectedSlave}
+          liveEvents={liveEvents[selectedSlave.id] ?? []}
           workspaceId={workspaceId}
           haltedReason={view.workspace.haltedReason}
-          onClose={() => selectAgent(null)}
+          onClose={() => selectSlave(null)}
         />
       )}
     </>

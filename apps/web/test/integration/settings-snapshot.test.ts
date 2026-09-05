@@ -21,7 +21,7 @@ async function seedWorkspace(name: string): Promise<{ workspaceId: string; teamI
 describe('the Settings query module', () => {
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "AgentPermission", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace", "CompanyAgent", "CompanyTeam", "Company", "AgentTemplate" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "SlavePermission", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
     )
   })
 
@@ -70,35 +70,35 @@ describe('the Settings query module', () => {
         expect(card?.state).toBe('later')
         expect(card?.version).toBeNull()
         expect(card?.capabilities).toBeNull()
-        expect(card?.agentsBound).toBe(0)
+        expect(card?.slavesBound).toBe(0)
       }
     })
 
     it('counts the runs bound to each real adapter', async (): Promise<void> => {
       const { teamId } = await seedWorkspace('Checkout Platform')
-      const agent = await prisma.agent.create({ data: { teamId, name: 'Alex', role: 'backend' } })
-      await prisma.agentRun.createMany({
+      const slave = await prisma.slave.create({ data: { teamId, name: 'Alex', role: 'backend' } })
+      await prisma.slaveRun.createMany({
         data: [
-          { agentId: agent.id, provider: 'claude_code', status: 'succeeded' },
-          { agentId: agent.id, provider: 'claude_code', status: 'failed' },
-          { agentId: agent.id, provider: 'cursor', status: 'succeeded' },
+          { slaveId: slave.id, provider: 'claude_code', status: 'succeeded' },
+          { slaveId: slave.id, provider: 'claude_code', status: 'failed' },
+          { slaveId: slave.id, provider: 'cursor', status: 'succeeded' },
         ],
       })
 
       const adapters = await buildProviderAdapters(async () => null)
-      expect(adapters.find((a) => a.kind === 'claude_code')?.agentsBound).toBe(2)
-      expect(adapters.find((a) => a.kind === 'cursor')?.agentsBound).toBe(1)
+      expect(adapters.find((a) => a.kind === 'claude_code')?.slavesBound).toBe(2)
+      expect(adapters.find((a) => a.kind === 'cursor')?.slavesBound).toBe(1)
     })
   })
 
   describe('buildPermissionMatrix', () => {
     it('maps unset to null, and allow/deny to themselves', async (): Promise<void> => {
       const { teamId } = await seedWorkspace('Checkout Platform')
-      const agent = await prisma.agent.create({ data: { teamId, name: 'Alex', role: 'backend' } })
-      await prisma.agentPermission.createMany({
+      const slave = await prisma.slave.create({ data: { teamId, name: 'Alex', role: 'backend' } })
+      await prisma.slavePermission.createMany({
         data: [
-          { agentId: agent.id, tool: 'repo read', mode: 'allow' },
-          { agentId: agent.id, tool: 'source write', mode: 'deny' },
+          { slaveId: slave.id, tool: 'repo read', mode: 'allow' },
+          { slaveId: slave.id, tool: 'source write', mode: 'deny' },
         ],
       })
 
@@ -118,37 +118,37 @@ describe('the Settings query module', () => {
       expect(cells.map((c) => c.mode)).toEqual(['allow', 'deny', null, null, null, null])
     })
 
-    it('groups the rows by workspace, so same-named agents in two projects stay apart', async (): Promise<void> => {
+    it('groups the rows by workspace, so same-named slaves in two projects stay apart', async (): Promise<void> => {
       const checkout = await seedWorkspace('Checkout Platform')
       const ledger = await seedWorkspace('Ledger')
-      const here = await prisma.agent.create({ data: { teamId: checkout.teamId, name: 'Alex', role: 'backend' } })
-      const there = await prisma.agent.create({ data: { teamId: ledger.teamId, name: 'Alex', role: 'backend' } })
-      await prisma.agentPermission.create({ data: { agentId: here.id, tool: 'repo read', mode: 'allow' } })
+      const here = await prisma.slave.create({ data: { teamId: checkout.teamId, name: 'Alex', role: 'backend' } })
+      const there = await prisma.slave.create({ data: { teamId: ledger.teamId, name: 'Alex', role: 'backend' } })
+      await prisma.slavePermission.create({ data: { slaveId: here.id, tool: 'repo read', mode: 'allow' } })
 
       const sections = await buildPermissionMatrix()
 
-      // Ordered by workspace name, and each section holds only its own workspace's agents.
+      // Ordered by workspace name, and each section holds only its own workspace's slaves.
       expect(sections.map((s) => s.workspaceName)).toEqual(['Checkout Platform', 'Ledger'])
-      expect(sections[0]?.rows.map((r) => r.agentId)).toEqual([here.id])
-      expect(sections[1]?.rows.map((r) => r.agentId)).toEqual([there.id])
+      expect(sections[0]?.rows.map((r) => r.slaveId)).toEqual([here.id])
+      expect(sections[1]?.rows.map((r) => r.slaveId)).toEqual([there.id])
 
-      // The permission belongs to one of the two identically-named agents, not to both.
+      // The permission belongs to one of the two identically-named slaves, not to both.
       expect(sections[0]?.rows[0]?.cells[0]?.mode).toBe('allow')
       expect(sections[1]?.rows[0]?.cells[0]?.mode).toBeNull()
     })
 
-    it("orders a workspace's agents by name across all of its teams", async (): Promise<void> => {
+    it("orders a workspace's slaves by name across all of its teams", async (): Promise<void> => {
       const { workspaceId, teamId } = await seedWorkspace('Checkout Platform')
       const other = await prisma.team.create({ data: { workspaceId, name: 'Platform' } })
-      await prisma.agent.create({ data: { teamId, name: 'Zoe', role: 'backend' } })
-      await prisma.agent.create({ data: { teamId: other.id, name: 'Alex', role: 'frontend' } })
+      await prisma.slave.create({ data: { teamId, name: 'Zoe', role: 'backend' } })
+      await prisma.slave.create({ data: { teamId: other.id, name: 'Alex', role: 'frontend' } })
 
       const sections = await buildPermissionMatrix()
       // Sorted across the two teams, not concatenated team by team.
       expect(sections[0]?.rows.map((r) => r.name)).toEqual(['Alex', 'Zoe'])
     })
 
-    it('keeps a workspace with no agents as an empty section rather than dropping it', async (): Promise<void> => {
+    it('keeps a workspace with no slaves as an empty section rather than dropping it', async (): Promise<void> => {
       const { workspaceId } = await seedWorkspace('Fresh')
       const sections = await buildPermissionMatrix()
       expect(sections).toHaveLength(1)

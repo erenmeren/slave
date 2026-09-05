@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ReactFlowProvider, type Node, type NodeProps, type NodeTypes } from 'reactflow'
 import { NodeMenu } from '../src/components/graph/NodeMenu.js'
-import { AgentNode, ActiveTaskNode, TeamNode, WorkspaceNode, type AgentNodeData, type ActiveTaskNodeData, type TeamNodeData, type WorkspaceNodeData } from '../src/components/graph/OrgNodes.js'
+import { SlaveNode, ActiveTaskNode, TeamNode, WorkspaceNode, type SlaveNodeData, type ActiveTaskNodeData, type TeamNodeData, type WorkspaceNodeData } from '../src/components/graph/OrgNodes.js'
 import { TaskNode, type TaskNodeData } from '../src/components/graph/TaskNodes.js'
 
 /** Same shape `graph-deps.test.tsx` builds by hand to drive a node renderer directly, without
@@ -31,14 +31,14 @@ function withProvider(children: React.ReactNode): React.ReactElement {
 }
 
 describe('NodeMenu', () => {
-  // ---- agent links --------------------------------------------------------------------------
+  // ---- slave links --------------------------------------------------------------------------
 
-  it('renders an agent menu\'s two links: Open panel and Show in Activity, scoped to the workspace and agent id', () => {
-    render(<NodeMenu kind="agent" workspaceId="w1" id="a1" open onOpenChange={() => {}} />)
+  it('renders a slave menu\'s two links: Open panel and Show in Activity, scoped to the workspace and slave id', () => {
+    render(<NodeMenu kind="slave" workspaceId="w1" id="a1" open onOpenChange={() => {}} />)
 
     const items = within(screen.getByTestId('node-menu')).getAllByTestId('node-menu-item')
     expect(items.map((item) => item.textContent)).toEqual(['Open panel', 'Show in Activity'])
-    expect(items.map((item) => item.getAttribute('href'))).toEqual(['/w/w1?agent=a1', '/w/w1/activity?agents=a1'])
+    expect(items.map((item) => item.getAttribute('href'))).toEqual(['/w/w1?slave=a1', '/w/w1/activity?slaves=a1'])
   })
 
   // ---- task links (also used by the activeTask satellite -- "same target surface") -----------
@@ -54,7 +54,7 @@ describe('NodeMenu', () => {
   // ---- trigger: keyboard-reachable, opens the menu -----------------------------------------
 
   it('renders no menu when closed, but keeps the "..." trigger a real, enabled, tab-reachable button', () => {
-    render(<NodeMenu kind="agent" workspaceId="w1" id="a1" open={false} onOpenChange={() => {}} />)
+    render(<NodeMenu kind="slave" workspaceId="w1" id="a1" open={false} onOpenChange={() => {}} />)
 
     expect(screen.queryByTestId('node-menu')).toBeNull()
     const trigger = screen.getByTestId('node-menu-trigger')
@@ -65,7 +65,7 @@ describe('NodeMenu', () => {
 
   it('clicking the trigger opens the menu (onOpenChange(true))', () => {
     const onOpenChange = vi.fn()
-    render(<NodeMenu kind="agent" workspaceId="w1" id="a1" open={false} onOpenChange={onOpenChange} />)
+    render(<NodeMenu kind="slave" workspaceId="w1" id="a1" open={false} onOpenChange={onOpenChange} />)
 
     fireEvent.click(screen.getByTestId('node-menu-trigger'))
 
@@ -76,7 +76,7 @@ describe('NodeMenu', () => {
 
   it('closes on Escape', () => {
     const onOpenChange = vi.fn()
-    render(<NodeMenu kind="agent" workspaceId="w1" id="a1" open onOpenChange={onOpenChange} />)
+    render(<NodeMenu kind="slave" workspaceId="w1" id="a1" open onOpenChange={onOpenChange} />)
 
     fireEvent.keyDown(document, { key: 'Escape' })
 
@@ -90,7 +90,7 @@ describe('NodeMenu', () => {
         <button type="button" data-testid="outside">
           elsewhere
         </button>
-        <NodeMenu kind="agent" workspaceId="w1" id="a1" open onOpenChange={onOpenChange} />
+        <NodeMenu kind="slave" workspaceId="w1" id="a1" open onOpenChange={onOpenChange} />
       </div>,
     )
 
@@ -101,7 +101,7 @@ describe('NodeMenu', () => {
 
   it('does not close on a click inside the menu itself', () => {
     const onOpenChange = vi.fn()
-    render(<NodeMenu kind="agent" workspaceId="w1" id="a1" open onOpenChange={onOpenChange} />)
+    render(<NodeMenu kind="slave" workspaceId="w1" id="a1" open onOpenChange={onOpenChange} />)
 
     fireEvent.mouseDown(screen.getByTestId('node-menu'))
 
@@ -110,7 +110,7 @@ describe('NodeMenu', () => {
 
   it('does not close while closed (no listeners attached, no spurious calls)', () => {
     const onOpenChange = vi.fn()
-    render(<NodeMenu kind="agent" workspaceId="w1" id="a1" open={false} onOpenChange={onOpenChange} />)
+    render(<NodeMenu kind="slave" workspaceId="w1" id="a1" open={false} onOpenChange={onOpenChange} />)
 
     fireEvent.keyDown(document, { key: 'Escape' })
     fireEvent.mouseDown(document.body)
@@ -122,7 +122,7 @@ describe('NodeMenu', () => {
 
   it('fix-round-1: returns focus to the "..." trigger on Escape, when focus was on a menu item', () => {
     const onOpenChange = vi.fn()
-    render(<NodeMenu kind="agent" workspaceId="w1" id="a1" open onOpenChange={onOpenChange} />)
+    render(<NodeMenu kind="slave" workspaceId="w1" id="a1" open onOpenChange={onOpenChange} />)
 
     const [firstItem] = screen.getAllByTestId('node-menu-item')
     firstItem!.focus()
@@ -137,21 +137,21 @@ describe('NodeMenu', () => {
 // ---- wiring into each node type -------------------------------------------------------------
 
 describe('node context menus wired per node type', () => {
-  it('an agent node\'s trigger opens a menu targeting /w/<ws>?agent=<id> and /w/<ws>/activity?agents=<id>', () => {
-    const data: AgentNodeData = { kind: 'agent', name: 'Alex', role: 'backend', status: 'idle', activeTaskTitle: null, workspaceId: 'w1' }
-    render(withProvider(<AgentNode {...nodeProps('agent:a1', data)} />))
+  it('a slave node\'s trigger opens a menu targeting /w/<ws>?slave=<id> and /w/<ws>/activity?slaves=<id>', () => {
+    const data: SlaveNodeData = { kind: 'slave', name: 'Alex', role: 'backend', status: 'idle', activeTaskTitle: null, workspaceId: 'w1' }
+    render(withProvider(<SlaveNode {...nodeProps('slave:a1', data)} />))
 
     fireEvent.click(screen.getByTestId('node-menu-trigger'))
 
     const items = screen.getAllByTestId('node-menu-item')
-    expect(items.map((item) => item.getAttribute('href'))).toEqual(['/w/w1?agent=a1', '/w/w1/activity?agents=a1'])
+    expect(items.map((item) => item.getAttribute('href'))).toEqual(['/w/w1?slave=a1', '/w/w1/activity?slaves=a1'])
   })
 
-  it('right-clicking an agent node opens its menu', () => {
-    const data: AgentNodeData = { kind: 'agent', name: 'Alex', role: 'backend', status: 'idle', activeTaskTitle: null, workspaceId: 'w1' }
-    render(withProvider(<AgentNode {...nodeProps('agent:a1', data)} />))
+  it('right-clicking a slave node opens its menu', () => {
+    const data: SlaveNodeData = { kind: 'slave', name: 'Alex', role: 'backend', status: 'idle', activeTaskTitle: null, workspaceId: 'w1' }
+    render(withProvider(<SlaveNode {...nodeProps('slave:a1', data)} />))
 
-    fireEvent.contextMenu(screen.getByTestId('agent-node'))
+    fireEvent.contextMenu(screen.getByTestId('slave-node'))
 
     expect(screen.getByTestId('node-menu')).toBeTruthy()
   })
@@ -202,7 +202,7 @@ describe('node context menus wired per node type', () => {
 })
 
 // ---- GraphCanvas's own onNodeContextMenu default -------------------------------------------
-// A node with its own menu (agent/task/activeTask) stops the event before it reaches here (see
+// A node with its own menu (slave/task/activeTask) stops the event before it reaches here (see
 // each renderer's `onContextMenu`) -- these tests drive a node type with no menu of its own
 // (`workspace`), the only case that actually reaches `GraphCanvas`'s default handler, to pin the
 // "right-click on a no-menu node is a clean no-op" decision (Task 7 brief).

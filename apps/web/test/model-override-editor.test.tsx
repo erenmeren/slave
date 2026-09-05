@@ -23,12 +23,12 @@ async function waitForModelSelect(): Promise<HTMLSelectElement> {
 }
 
 // Recovered verbatim (M24 Task 7 fix round 1, Important finding 1) from the pre-rewrite
-// `agents-page.test.tsx` (`git show 3b43e84:apps/web/test/agents-page.test.tsx`) -- `agents-page
+// `slaves-page.test.tsx` (`git show 3b43e84:apps/web/test/slaves-page.test.tsx`) -- `slaves-page
 // .test.tsx`'s M24 rewrite dropped this `describe` block entirely, even though `ModelOverrideEditor`
-// itself is untouched by M24 and is still mounted (by `AllAgentsTable.tsx` now, not `RosterTable
+// itself is untouched by M24 and is still mounted (by `AllSlavesTable.tsx` now, not `RosterTable
 // .tsx`/`WorkersTable.tsx`) on every project row. Moved to its own file, not restored into
-// `agents-page.test.tsx`, because it tests the shared component directly rather than anything
-// `AgentsClient`/`AllAgentsTable`-specific -- the same reason `agent-row-actions.test.tsx` (its
+// `slaves-page.test.tsx`, because it tests the shared component directly rather than anything
+// `SlavesClient`/`AllSlavesTable`-specific -- the same reason `slave-row-actions.test.tsx` (its
 // sibling row-action component) already lives on its own.
 describe('ModelOverrideEditor', () => {
   let fetchMock: ReturnType<typeof vi.fn>
@@ -59,7 +59,7 @@ describe('ModelOverrideEditor', () => {
   })
 
   it('posts the typed value on Set and refreshes on 200', async () => {
-    render(<ModelOverrideEditor agentId="wk1" model={null} />)
+    render(<ModelOverrideEditor slaveId="wk1" model={null} />)
     await typeModel('claude-opus-4')
 
     await act(async () => {
@@ -67,21 +67,21 @@ describe('ModelOverrideEditor', () => {
     })
 
     expect(fetchMock).toHaveBeenCalledWith(
-      '/api/agents/wk1/model',
+      '/api/slaves/wk1/model',
       expect.objectContaining({ method: 'POST', body: JSON.stringify({ model: 'claude-opus-4', provider: 'claude_code' }) }),
     )
     expect(routerRefresh).toHaveBeenCalled()
   })
 
   it('posts null on Clear and refreshes on 200', async () => {
-    render(<ModelOverrideEditor agentId="wk1" model="claude-opus-4" />)
+    render(<ModelOverrideEditor slaveId="wk1" model="claude-opus-4" />)
 
     await act(async () => {
       fireEvent.click(screen.getByTestId('model-override-clear'))
     })
 
     expect(fetchMock).toHaveBeenCalledWith(
-      '/api/agents/wk1/model',
+      '/api/slaves/wk1/model',
       expect.objectContaining({ method: 'POST', body: JSON.stringify({ model: null }) }),
     )
     expect(routerRefresh).toHaveBeenCalled()
@@ -91,7 +91,7 @@ describe('ModelOverrideEditor', () => {
     fetchMock.mockImplementationOnce(
       async () => new Response(JSON.stringify({ error: 'a model must be a non-empty text' }), { status: 409 }),
     )
-    render(<ModelOverrideEditor agentId="wk1" model={null} />)
+    render(<ModelOverrideEditor slaveId="wk1" model={null} />)
 
     await act(async () => {
       fireEvent.click(screen.getByTestId('model-override-set'))
@@ -102,7 +102,7 @@ describe('ModelOverrideEditor', () => {
   })
 
   it('resyncs the select from a new model prop -- the post-refresh snapshot, not a stray edit', async () => {
-    const { rerender } = render(<ModelOverrideEditor agentId="wk1" model="claude-opus-4" provider="claude_code" />)
+    const { rerender } = render(<ModelOverrideEditor slaveId="wk1" model="claude-opus-4" provider="claude_code" />)
     await waitForModelSelect()
 
     // A stray edit the caller never submitted (e.g. picked then navigated away without clicking
@@ -110,9 +110,9 @@ describe('ModelOverrideEditor', () => {
     fireEvent.change(screen.getByTestId('model-select'), { target: { value: 'opus' } })
     expect((screen.getByTestId('model-select') as HTMLSelectElement).value).toBe('opus')
 
-    // Same instance (same agentId/key) re-rendered with a changed model, as router.refresh()
+    // Same instance (same slaveId/key) re-rendered with a changed model, as router.refresh()
     // would do after a successful clear elsewhere.
-    rerender(<ModelOverrideEditor agentId="wk1" model={null} provider="claude_code" />)
+    rerender(<ModelOverrideEditor slaveId="wk1" model={null} provider="claude_code" />)
 
     expect((screen.getByTestId('model-select') as HTMLSelectElement).value).toBe('')
   })

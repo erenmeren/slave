@@ -86,7 +86,7 @@ export function TeamBlock({
   const submit = async (): Promise<void> => {
     setMemberPending(true)
     setMemberErrorText(null)
-    const error = await sendControl('/api/org/agents', {
+    const error = await sendControl('/api/org/slaves', {
       method: 'POST',
       body: {
         companyTeamId,
@@ -164,7 +164,7 @@ export function TeamBlock({
       ) : (
         <DataTable columns={MEMBER_COLUMNS} header={[...MEMBER_HEADER]}>
           {members.map((member) => (
-            <MemberRow key={member.companyAgentId} member={member} />
+            <MemberRow key={member.companySlaveId} member={member} />
           ))}
         </DataTable>
       )}

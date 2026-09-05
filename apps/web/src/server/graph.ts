@@ -1,6 +1,6 @@
 import { prisma } from '@slave-of-ai/db/client'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, toRunState } from '@slave-of-ai/db'
-import { deriveAgentStatus, NON_TERMINAL_RUN_STATUSES, type TaskStatus } from '@slave-of-ai/domain'
+import { deriveSlaveStatus, NON_TERMINAL_RUN_STATUSES, type TaskStatus } from '@slave-of-ai/domain'
 import type { ProviderKind } from '@slave-of-ai/control'
 import { feedSummary } from '../lib/feedSummary'
 import { buildShellFacts, type ShellFacts } from './shell'
@@ -13,7 +13,7 @@ export interface GraphCheckpoint {
 }
 
 /** One line of the drawer's event tail. Deliberately narrower than `lib/feedSummary.ts`'s
- *  `AgentFeedEvent` (no `type`): the drawer renders a clock and a sentence, and a raw event type
+ *  `SlaveFeedEvent` (no `type`): the drawer renders a clock and a sentence, and a raw event type
  *  beside an already-summarized line says nothing the summary does not. */
 export interface GraphEvent {
   readonly seq: number
@@ -32,31 +32,31 @@ export interface GraphEvent {
  * The six fields below `activeRunId` are the M14 Task 11 drawer's facts, and every one of them has
  * a renderer in `components/graph/GraphDrawer.tsx` -- the same rule that deleted `costUsd`.
  */
-export interface GraphAgent {
+export interface GraphSlave {
   readonly id: string
   readonly name: string
   readonly role: string
   readonly teamId: string
-  readonly status: string // the M4 derived status vocabulary (AgentStatus, widened per spec §3.1)
+  readonly status: string // the M4 derived status vocabulary (SlaveStatus, widened per spec §3.1)
   readonly activeTaskId: string | null
   readonly activeTaskTitle: string | null
   readonly activeRunId: string | null
-  /** The runtime this agent's live run is on, falling back to the agent row's own override --
+  /** The runtime this slave's live run is on, falling back to the slave row's own override --
    *  `null` when neither is recorded (every run before M12 Task 8). */
   readonly provider: ProviderKind | null
   /** The model the live run STARTED with (`Checkpoint.model`, which resume replays), falling back
-   *  to the agent row's override. `null` when neither is recorded. */
+   *  to the slave row's override. `null` when neither is recorded. */
   readonly model: string | null
   /** `toolCalls / Workspace.maxToolCallsPerRun`, clamped to [0,100] -- the same ceiling `sweep.ts`
    *  enforces, so the bar measures the run against the limit that will actually stop it. `0` with
    *  no live run. */
   readonly progressPct: number
   /** `✓` done / `●` current / `○` pending, from this run's `Checkpoint` row and its tool-call
-   *  count. Empty for an agent with no live run. */
+   *  count. Empty for a slave with no live run. */
   readonly checkpoints: readonly GraphCheckpoint[]
   /** This run's most recent events, newest first, capped at 8 -- the drawer's tail. */
   readonly recentEvents: readonly GraphEvent[]
-  /** `true` when the agent's live or most recent run has a non-null `skillCalls` -- what makes the
+  /** `true` when the slave's live or most recent run has a non-null `skillCalls` -- what makes the
    *  "Skill chain" mode reachable rather than a disabled `later`. `{}` counts: it is a
    *  MEASUREMENT (a Claude run that invoked no skill), not an absence. */
   readonly hasSkillData: boolean
@@ -75,7 +75,7 @@ export interface GraphTask {
 export interface GraphSnapshot {
   readonly workspace: { readonly id: string; readonly name: string; readonly haltedReason: string | null }
   readonly teams: readonly { readonly id: string; readonly name: string }[]
-  readonly agents: readonly GraphAgent[]
+  readonly slaves: readonly GraphSlave[]
   readonly tasks: readonly GraphTask[]
   readonly dependencies: readonly { readonly taskId: string; readonly dependsOnTaskId: string }[]
   /**
@@ -158,44 +158,44 @@ export async function buildGraphSnapshot(workspaceId: string): Promise<GraphSnap
 
   const teams = await prisma.team.findMany({ where: { workspaceId }, orderBy: { name: 'asc' } })
 
-  const agents = await prisma.agent.findMany({
+  const slaves = await prisma.slave.findMany({
     where: { team: { workspaceId } },
     orderBy: { name: 'asc' },
   })
-  const agentIds = agents.map((agent) => agent.id)
+  const slaveIds = slaves.map((slave) => slave.id)
 
-  // One live run per agent at most (the scheduler enforces it); latest by startedAt breaks any
+  // One live run per slave at most (the scheduler enforces it); latest by startedAt breaks any
   // fixture-made tie deterministically. Mirrors `buildOverviewSnapshot`'s own wiring so the two
-  // read models cannot derive "which run is this agent's live one" differently.
+  // read models cannot derive "which run is this slave's live one" differently.
   //
   // `checkpoint` joins in here (M14 Task 11) because both the drawer's checkpoint list and the
-  // model it displays come off that row -- `AgentRun` has no `model` column at all; the checkpoint
+  // model it displays come off that row -- `SlaveRun` has no `model` column at all; the checkpoint
   // is where the model a run STARTED with is recorded, which is the one resume replays.
-  const liveRuns = await prisma.agentRun.findMany({
+  const liveRuns = await prisma.slaveRun.findMany({
     where: {
-      agentId: { in: agentIds },
+      slaveId: { in: slaveIds },
       status: { in: [...NON_TERMINAL_RUN_STATUSES] },
     },
     orderBy: { startedAt: 'desc' },
     include: { task: true, checkpoint: true },
   })
-  const liveRunByAgent = new Map<string, (typeof liveRuns)[number]>()
+  const liveRunBySlave = new Map<string, (typeof liveRuns)[number]>()
   for (const run of liveRuns) {
-    if (!liveRunByAgent.has(run.agentId)) liveRunByAgent.set(run.agentId, run)
+    if (!liveRunBySlave.has(run.slaveId)) liveRunBySlave.set(run.slaveId, run)
   }
 
-  // Whether the "Skill chain" mode is reachable at all, per agent: the MOST RECENT run of any
+  // Whether the "Skill chain" mode is reachable at all, per slave: the MOST RECENT run of any
   // status, not just a live one -- a finished run's tally is exactly the data that mode would
-  // draw. `distinct` + `orderBy` is one row per agent out of Postgres, not the agent's history.
-  const latestRuns = await prisma.agentRun.findMany({
-    where: { agentId: { in: agentIds } },
-    orderBy: [{ agentId: 'asc' }, { startedAt: 'desc' }],
-    distinct: ['agentId'],
-    select: { agentId: true, skillCalls: true },
+  // draw. `distinct` + `orderBy` is one row per slave out of Postgres, not the slave's history.
+  const latestRuns = await prisma.slaveRun.findMany({
+    where: { slaveId: { in: slaveIds } },
+    orderBy: [{ slaveId: 'asc' }, { startedAt: 'desc' }],
+    distinct: ['slaveId'],
+    select: { slaveId: true, skillCalls: true },
   })
-  const hasSkillDataByAgent = new Map(latestRuns.map((run) => [run.agentId, run.skillCalls !== null]))
+  const hasSkillDataBySlave = new Map(latestRuns.map((run) => [run.slaveId, run.skillCalls !== null]))
 
-  const liveRunIds = [...liveRunByAgent.values()].map((run) => run.id)
+  const liveRunIds = [...liveRunBySlave.values()].map((run) => run.id)
   // One query for every live run's tail rather than one per run (the M4 review flagged per-run
   // queries as the first scaling cliff). The `take` bound is generous enough that an even spread
   // leaves each run its own eight; a single very chatty run can still crowd out a quiet one within
@@ -239,23 +239,23 @@ export async function buildGraphSnapshot(workspaceId: string): Promise<GraphSnap
     workspace: { id: workspace.id, name: workspace.name, haltedReason: workspace.haltedReason },
     teams: teams.map((team) => ({ id: team.id, name: team.name })),
     shellFacts,
-    agents: agents.map((agent) => {
-      const run = liveRunByAgent.get(agent.id) ?? null
+    slaves: slaves.map((slave) => {
+      const run = liveRunBySlave.get(slave.id) ?? null
       return {
-        id: agent.id,
-        name: agent.name,
-        role: agent.role,
-        teamId: agent.teamId,
-        // The one translator (ADR 0002): never re-derive the run→agent status mapping here.
-        status: deriveAgentStatus(run === null ? null : toRunState(run)),
+        id: slave.id,
+        name: slave.name,
+        role: slave.role,
+        teamId: slave.teamId,
+        // The one translator (ADR 0002): never re-derive the run→slave status mapping here.
+        status: deriveSlaveStatus(run === null ? null : toRunState(run)),
         activeTaskId: run?.taskId ?? null,
         activeTaskTitle: run?.task?.title ?? null,
         activeRunId: run?.id ?? null,
-        // The run's own column first, the agent row's override second -- the same precedence
+        // The run's own column first, the slave row's override second -- the same precedence
         // `resolveProvider`/`resolveModel` apply, read from the bottom of the chain up: what this
         // run actually IS beats what the worker is configured to be next time.
-        provider: run?.provider ?? agent.provider ?? null,
-        model: run?.checkpoint?.model ?? agent.model ?? null,
+        provider: run?.provider ?? slave.provider ?? null,
+        model: run?.checkpoint?.model ?? slave.model ?? null,
         // A workspace configured with a non-positive ceiling has no scale to measure against, and
         // 0% is the only honest reading of an undefined denominator (same rule as `overview.ts`).
         progressPct:
@@ -264,7 +264,7 @@ export async function buildGraphSnapshot(workspaceId: string): Promise<GraphSnap
             : Math.min(100, Math.round((run.toolCalls / workspace.maxToolCallsPerRun) * 100)),
         checkpoints: checkpointsFor(run),
         recentEvents: run === null ? [] : (eventsByRun.get(run.id) ?? []),
-        hasSkillData: hasSkillDataByAgent.get(agent.id) ?? false,
+        hasSkillData: hasSkillDataBySlave.get(slave.id) ?? false,
       }
     }),
     tasks: taskRows.map((row) => ({

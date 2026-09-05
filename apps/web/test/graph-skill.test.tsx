@@ -86,12 +86,12 @@ vi.mock('elkjs/lib/elk.bundled.js', () => ({
 const SNAPSHOT: GraphSnapshot = {
   workspace: { id: 'w1', name: 'W', haltedReason: null },
   teams: [],
-  agents: [],
+  slaves: [],
   tasks: [],
   dependencies: [],
   shellFacts: {
     workspace: { id: 'w1', name: 'W' },
-    counts: { agentsWorking: 0, tasksActive: 0 },
+    counts: { slavesWorking: 0, tasksActive: 0 },
     guardrails: { budgetUsd: null, maxConcurrentRuns: 3, runTimeoutMs: 1_800_000, maxAttempts: 3 },
     status: { goal: null, spentUsd: 0, unmeasuredRuns: 0, haltedReason: null },
   },
@@ -107,7 +107,7 @@ function skillGraphRun(overrides: Partial<SkillGraphRun> = {}): SkillGraphRun {
   return {
     runId: 'run-1',
     taskTitle: 'Ship the thing',
-    agentName: 'builder',
+    slaveName: 'builder',
     live: false,
     startedAt: '2026-08-31T00:00:00.000Z',
     chain: [],
@@ -443,7 +443,7 @@ describe('SkillMode', () => {
   // Run selector strip (Task 12): one chip per `graph.runs` entry, live dot from `run.live`.
   // ================================================================================================
 
-  it('renders one run chip per graph.runs entry — taskTitle (or the runId prefix) · agentName, plus a live dot', async () => {
+  it('renders one run chip per graph.runs entry — taskTitle (or the runId prefix) · slaveName, plus a live dot', async () => {
     fetchMock.mockResolvedValueOnce(
       new Response(
         JSON.stringify(
@@ -453,14 +453,14 @@ describe('SkillMode', () => {
               skillGraphRun({
                 runId: 'run-live-1',
                 taskTitle: 'Ship it',
-                agentName: 'builder',
+                slaveName: 'builder',
                 live: true,
                 chain: [{ name: 'brainstorming', count: 1 }],
               }),
               skillGraphRun({
                 runId: 'run-done1',
                 taskTitle: null,
-                agentName: 'reviewer',
+                slaveName: 'reviewer',
                 live: false,
                 chain: [{ name: 'brainstorming', count: 1 }],
               }),
@@ -510,7 +510,7 @@ describe('SkillMode', () => {
               skillGraphRun({
                 runId: 'run-1',
                 taskTitle: 'Ship it',
-                agentName: 'builder',
+                slaveName: 'builder',
                 chain: [
                   { name: 'brainstorming', count: 2 },
                   { name: 'writing-plans', count: 1 },

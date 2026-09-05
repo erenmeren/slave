@@ -4,8 +4,8 @@ import { join } from 'node:path'
 import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { POST as createTeam } from '../../src/app/api/w/[workspaceId]/teams/route.js'
-import { PUT as moveAgentRoute } from '../../src/app/api/agents/[agentId]/team/route.js'
-import { PUT as moveCompanyAgentRoute } from '../../src/app/api/org/agents/[companyAgentId]/team/route.js'
+import { PUT as moveSlaveRoute } from '../../src/app/api/slaves/[slaveId]/team/route.js'
+import { PUT as moveCompanySlaveRoute } from '../../src/app/api/org/slaves/[companySlaveId]/team/route.js'
 import { PUT as renameTemplate } from '../../src/app/api/org/teams/[companyTeamId]/name/route.js'
 import { DELETE as deleteTemplate } from '../../src/app/api/org/teams/[companyTeamId]/route.js'
 
@@ -23,10 +23,10 @@ interface Fixture {
   readonly workspaceId: string
   readonly engineeringId: string
   readonly qaId: string
-  readonly agentId: string
+  readonly slaveId: string
   readonly templateTeamId: string
   readonly emptyTemplateTeamId: string
-  readonly companyAgentId: string
+  readonly companySlaveId: string
 }
 
 async function seed(): Promise<Fixture> {
@@ -35,22 +35,22 @@ async function seed(): Promise<Fixture> {
   })
   const engineering = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
   const qa = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'QA' } })
-  const agent = await prisma.agent.create({ data: { teamId: engineering.id, name: 'Alex', role: 'backend' } })
-  const template = await prisma.agentTemplate.create({ data: { name: 'Backend Developer', role: 'backend', description: '' } })
+  const slave = await prisma.slave.create({ data: { teamId: engineering.id, name: 'Alex', role: 'backend' } })
+  const template = await prisma.slaveTemplate.create({ data: { name: 'Backend Developer', role: 'backend', description: '' } })
   const company = await prisma.company.create({ data: { name: 'Atlas Software' } })
   const templateTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Backend' } })
   const emptyTemplateTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Design' } })
-  const companyAgent = await prisma.companyAgent.create({
+  const companySlave = await prisma.companySlave.create({
     data: { companyTeamId: templateTeam.id, templateId: template.id, name: 'Sam' },
   })
   return {
     workspaceId: workspace.id,
     engineeringId: engineering.id,
     qaId: qa.id,
-    agentId: agent.id,
+    slaveId: slave.id,
     templateTeamId: templateTeam.id,
     emptyTemplateTeamId: emptyTemplateTeam.id,
-    companyAgentId: companyAgent.id,
+    companySlaveId: companySlave.id,
   }
 }
 
@@ -58,7 +58,7 @@ let fixture: Fixture
 
 beforeEach(async () => {
   await prisma.$executeRawUnsafe(
-    'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace", "CompanyAgent", "CompanyTeam", "Company", "AgentTemplate" RESTART IDENTITY CASCADE',
+    'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
   )
   fixture = await seed()
 })
@@ -82,27 +82,27 @@ describe('POST /api/w/[workspaceId]/teams', () => {
   })
 })
 
-describe('PUT /api/agents/[agentId]/team', () => {
-  it('moves the agent', async () => {
-    const response = await moveAgentRoute(json({ teamId: fixture.qaId }, 'PUT'), { params: Promise.resolve({ agentId: fixture.agentId }) })
+describe('PUT /api/slaves/[slaveId]/team', () => {
+  it('moves the slave', async () => {
+    const response = await moveSlaveRoute(json({ teamId: fixture.qaId }, 'PUT'), { params: Promise.resolve({ slaveId: fixture.slaveId }) })
     expect(response.status).toBe(200)
-    const row = await prisma.agent.findUniqueOrThrow({ where: { id: fixture.agentId } })
+    const row = await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId } })
     expect(row.teamId).toBe(fixture.qaId)
   })
 
   it('400s without a teamId', async () => {
-    const response = await moveAgentRoute(json({}, 'PUT'), { params: Promise.resolve({ agentId: fixture.agentId }) })
+    const response = await moveSlaveRoute(json({}, 'PUT'), { params: Promise.resolve({ slaveId: fixture.slaveId }) })
     expect(response.status).toBe(400)
   })
 })
 
-describe('PUT /api/org/agents/[companyAgentId]/team', () => {
-  it('moves the catalog agent', async () => {
-    const response = await moveCompanyAgentRoute(json({ companyTeamId: fixture.emptyTemplateTeamId }, 'PUT'), {
-      params: Promise.resolve({ companyAgentId: fixture.companyAgentId }),
+describe('PUT /api/org/slaves/[companySlaveId]/team', () => {
+  it('moves the catalog slave', async () => {
+    const response = await moveCompanySlaveRoute(json({ companyTeamId: fixture.emptyTemplateTeamId }, 'PUT'), {
+      params: Promise.resolve({ companySlaveId: fixture.companySlaveId }),
     })
     expect(response.status).toBe(200)
-    const row = await prisma.companyAgent.findUniqueOrThrow({ where: { id: fixture.companyAgentId } })
+    const row = await prisma.companySlave.findUniqueOrThrow({ where: { id: fixture.companySlaveId } })
     expect(row.companyTeamId).toBe(fixture.emptyTemplateTeamId)
   })
 })

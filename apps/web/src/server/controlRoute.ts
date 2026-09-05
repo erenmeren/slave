@@ -8,13 +8,13 @@ export async function runControlResponse(
   runId: string,
   operate: () => Promise<Result<void, ControlRefusal>>,
 ): Promise<Response> {
-  // `agent -> team`, not `task`: a `planning` run (M8b) has no `Task` row, and `agent -> team ->
+  // `slave -> team`, not `task`: a `planning` run (M8b) has no `Task` row, and `slave -> team ->
   // workspace` is the only linkage such a run has to a workspace.
-  const run = await prisma.agentRun.findUnique({
+  const run = await prisma.slaveRun.findUnique({
     where: { id: runId },
-    select: { agent: { select: { team: { select: { workspaceId: true } } } } },
+    select: { slave: { select: { team: { select: { workspaceId: true } } } } },
   })
-  if (run === null || run.agent.team.workspaceId !== workspaceId) {
+  if (run === null || run.slave.team.workspaceId !== workspaceId) {
     return Response.json({ error: 'no such run in this workspace' }, { status: 404 })
   }
   const result = await operate()

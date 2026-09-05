@@ -12,7 +12,7 @@ import type { GraphCanvasProps } from '../src/components/graph/GraphCanvas.js'
 // not this task's. This stub captures exactly what `DepsMode` hands `GraphCanvas` (nodes, edges,
 // `onConnect`, `onEdgeDelete`) and renders two test-only affordances that call those handlers
 // directly with an already-formed `Connection` / edge id -- the same "unit test our own logic,
-// don't re-verify the library" split `AgentPanel.tsx`'s tests take for its POST handlers.
+// don't re-verify the library" split `SlavePanel.tsx`'s tests take for its POST handlers.
 const graphCanvasCalls: GraphCanvasProps[] = []
 let pendingConnection: { source: string; target: string; sourceHandle: null; targetHandle: null } | null = null
 
@@ -99,7 +99,7 @@ function task(overrides: Partial<GraphSnapshot['tasks'][number]>): GraphSnapshot
 // `shellFacts` gained `status`. Nothing here reads either.
 const SHELL_FACTS: GraphSnapshot['shellFacts'] = {
   workspace: { id: 'w1', name: 'W' },
-  counts: { agentsWorking: 0, tasksActive: 0 },
+  counts: { slavesWorking: 0, tasksActive: 0 },
   guardrails: { budgetUsd: null, maxConcurrentRuns: 3, runTimeoutMs: 1_800_000, maxAttempts: 3 },
   status: { goal: null, spentUsd: 0, unmeasuredRuns: 0, haltedReason: null },
 }
@@ -108,7 +108,7 @@ const SNAPSHOT: GraphSnapshot = {
   shellFacts: SHELL_FACTS,
   workspace: { id: 'w1', name: 'W', haltedReason: null },
   teams: [],
-  agents: [],
+  slaves: [],
   tasks: [
     task({ id: 't1', title: 'Set up DB schema', status: 'done', attempt: 1, maxAttempts: 3, dependenciesDone: true }),
     task({ id: 't2', title: 'Write the API', status: 'running', attempt: 1, maxAttempts: 3, dependenciesDone: true }),

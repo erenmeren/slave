@@ -6,7 +6,7 @@ import { buildAnalytics } from '../../src/server/analytics.js'
 
 interface Fixture {
   readonly workspaceId: string
-  readonly agentId: string
+  readonly slaveId: string
 }
 
 async function seed(): Promise<Fixture> {
@@ -14,8 +14,8 @@ async function seed(): Promise<Fixture> {
     data: { name: 'Checkout', repoPath: '/tmp/analytics-fixture', verifyCommands: ['true'], setupCommands: [] },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const agent = await prisma.agent.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
-  return { workspaceId: workspace.id, agentId: agent.id }
+  const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
+  return { workspaceId: workspace.id, slaveId: slave.id }
 }
 
 function daysAgo(n: number): Date {
@@ -29,7 +29,7 @@ describe('buildAnalytics', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
   })
@@ -54,8 +54,8 @@ describe('buildAnalytics', () => {
       ['succeeded', daysAgo(3)],
       ['succeeded', daysAgo(30)], // outside the window
     ] as const) {
-      await prisma.agentRun.create({
-        data: { agentId: fixture.agentId, status, provider: 'claude_code', terminalAt, endedAt: terminalAt },
+      await prisma.slaveRun.create({
+        data: { slaveId: fixture.slaveId, status, provider: 'claude_code', terminalAt, endedAt: terminalAt },
       })
     }
     const snapshot = await buildAnalytics(fixture.workspaceId)
@@ -74,7 +74,7 @@ describe('buildAnalytics', () => {
       'Spend',
       'Tool calls',
       'Pauses',
-      'Active agents',
+      'Active slaves',
     ])
   })
 
@@ -101,11 +101,11 @@ describe('buildAnalytics', () => {
   })
 
   it('reports known spend and says how many runs nobody could measure', async (): Promise<void> => {
-    await prisma.agentRun.create({
-      data: { agentId: fixture.agentId, status: 'succeeded', provider: 'claude_code', costUsd: 1.5, terminalAt: new Date(), endedAt: new Date() },
+    await prisma.slaveRun.create({
+      data: { slaveId: fixture.slaveId, status: 'succeeded', provider: 'claude_code', costUsd: 1.5, terminalAt: new Date(), endedAt: new Date() },
     })
-    await prisma.agentRun.create({
-      data: { agentId: fixture.agentId, status: 'succeeded', provider: 'cursor', costUsd: null, terminalAt: new Date(), endedAt: new Date() },
+    await prisma.slaveRun.create({
+      data: { slaveId: fixture.slaveId, status: 'succeeded', provider: 'cursor', costUsd: null, terminalAt: new Date(), endedAt: new Date() },
     })
     const snapshot = await buildAnalytics(fixture.workspaceId)
     const spend = snapshot.kpis.find((k) => k.label === 'Spend')
@@ -114,12 +114,12 @@ describe('buildAnalytics', () => {
   })
 
   it('counts pauses from the event log, not from a run column', async (): Promise<void> => {
-    const run = await prisma.agentRun.create({ data: { agentId: fixture.agentId, status: 'paused', provider: 'claude_code' } })
+    const run = await prisma.slaveRun.create({ data: { slaveId: fixture.slaveId, status: 'paused', provider: 'claude_code' } })
     for (let i = 0; i < 2; i += 1) {
       await appendEvent({
         type: 'run.paused',
         workspaceId: fixture.workspaceId,
-        agentId: fixture.agentId,
+        slaveId: fixture.slaveId,
         runId: run.id,
         actor: 'system',
         payload: { atStep: 1 },
@@ -129,28 +129,28 @@ describe('buildAnalytics', () => {
     expect(snapshot.kpis.find((k) => k.label === 'Pauses')?.value).toBe('2')
   })
 
-  it('counts active agents, not their runs: one agent with two non-terminal runs reads 1', async (): Promise<void> => {
-    await prisma.agentRun.create({ data: { agentId: fixture.agentId, status: 'working', provider: 'claude_code' } })
-    await prisma.agentRun.create({ data: { agentId: fixture.agentId, status: 'paused', provider: 'claude_code' } })
+  it('counts active slaves, not their runs: one slave with two non-terminal runs reads 1', async (): Promise<void> => {
+    await prisma.slaveRun.create({ data: { slaveId: fixture.slaveId, status: 'working', provider: 'claude_code' } })
+    await prisma.slaveRun.create({ data: { slaveId: fixture.slaveId, status: 'paused', provider: 'claude_code' } })
     const snapshot = await buildAnalytics(fixture.workspaceId)
-    expect(snapshot.kpis.find((k) => k.label === 'Active agents')?.value).toBe('1')
+    expect(snapshot.kpis.find((k) => k.label === 'Active slaves')?.value).toBe('1')
   })
 
-  it('sums an agent tokens only over runs that reported them, and says null when none did', async (): Promise<void> => {
-    await prisma.agentRun.create({
-      data: { agentId: fixture.agentId, status: 'succeeded', provider: 'claude_code', tokensIn: 10, tokensOut: 90, terminalAt: new Date(), endedAt: new Date() },
+  it('sums a slave tokens only over runs that reported them, and says null when none did', async (): Promise<void> => {
+    await prisma.slaveRun.create({
+      data: { slaveId: fixture.slaveId, status: 'succeeded', provider: 'claude_code', tokensIn: 10, tokensOut: 90, terminalAt: new Date(), endedAt: new Date() },
     })
-    expect((await buildAnalytics(fixture.workspaceId)).perAgent[0]?.tokens).toBe(100)
+    expect((await buildAnalytics(fixture.workspaceId)).perSlave[0]?.tokens).toBe(100)
 
-    await prisma.agentRun.deleteMany({})
-    await prisma.agentRun.create({
-      data: { agentId: fixture.agentId, status: 'succeeded', provider: 'cursor', tokensIn: null, tokensOut: null, terminalAt: new Date(), endedAt: new Date() },
+    await prisma.slaveRun.deleteMany({})
+    await prisma.slaveRun.create({
+      data: { slaveId: fixture.slaveId, status: 'succeeded', provider: 'cursor', tokensIn: null, tokensOut: null, terminalAt: new Date(), endedAt: new Date() },
     })
-    expect((await buildAnalytics(fixture.workspaceId)).perAgent[0]?.tokens).toBeNull()
+    expect((await buildAnalytics(fixture.workspaceId)).perSlave[0]?.tokens).toBeNull()
   })
 
-  it('reports a null success rate and duration for an agent with no terminal run', async (): Promise<void> => {
-    const row = (await buildAnalytics(fixture.workspaceId)).perAgent[0]
+  it('reports a null success rate and duration for a slave with no terminal run', async (): Promise<void> => {
+    const row = (await buildAnalytics(fixture.workspaceId)).perSlave[0]
     expect(row?.runs).toBe(0)
     expect(row?.successPct).toBeNull()
     expect(row?.avgDurationMs).toBeNull()
@@ -161,13 +161,13 @@ describe('buildAnalytics', () => {
       data: { name: 'Other', repoPath: '/tmp/other', verifyCommands: ['true'], setupCommands: [] },
     })
     const otherTeam = await prisma.team.create({ data: { workspaceId: other.id, name: 'T' } })
-    const otherAgent = await prisma.agent.create({ data: { teamId: otherTeam.id, name: 'Bea', role: 'qa' } })
-    await prisma.agentRun.create({
-      data: { agentId: otherAgent.id, status: 'succeeded', provider: 'claude_code', terminalAt: new Date(), endedAt: new Date() },
+    const otherSlave = await prisma.slave.create({ data: { teamId: otherTeam.id, name: 'Bea', role: 'qa' } })
+    await prisma.slaveRun.create({
+      data: { slaveId: otherSlave.id, status: 'succeeded', provider: 'claude_code', terminalAt: new Date(), endedAt: new Date() },
     })
 
-    expect((await buildAnalytics(fixture.workspaceId)).perAgent.map((r) => r.name)).toEqual(['Alex'])
-    expect((await buildAnalytics(null)).perAgent.map((r) => r.name).sort()).toEqual(['Alex', 'Bea'])
+    expect((await buildAnalytics(fixture.workspaceId)).perSlave.map((r) => r.name)).toEqual(['Alex'])
+    expect((await buildAnalytics(null)).perSlave.map((r) => r.name).sort()).toEqual(['Alex', 'Bea'])
   })
 
   it('marks only the seeded workspace as seeded, never a fresh workspace or the all-workspaces view', async (): Promise<void> => {

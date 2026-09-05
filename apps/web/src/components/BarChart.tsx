@@ -6,7 +6,7 @@ const GAP = 14
 /**
  * The 7-day stacked bar chart, hand-rolled SVG — no chart library (spec §5.9). Named `BarChart`
  * rather than folded into `Sparkline`: `Sparkline` draws ONE polyline from a bucket array and is
- * consumed by the agent card and the activity header; a stacked two-series bar chart with day
+ * consumed by the slave card and the activity header; a stacked two-series bar chart with day
  * labels and value captions shares none of that geometry, and widening `Sparkline` to cover both
  * would leave every existing caller passing flags it does not use.
  *

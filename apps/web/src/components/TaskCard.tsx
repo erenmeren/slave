@@ -28,8 +28,8 @@ export const TASK_STATUS_TEXT: Record<TaskStatus, string> = taskStatusTable(TONE
  * counter (`attempt/maxAttempts`) — the id and priority live in the detail panel now (M24 §5.4).
  * Its state — and so its dot/pill tone — comes from
  * `lib/tones.ts`'s `cardStateForTask`, the ONE derivation for a card that is about a TASK
- * (Decision 2). It used to call `cardStateFor('idle', task.status)` — borrowing the agent-first
- * derivation with a fake idle agent — and so drew a grey **IDLE** pill on a `running` card sitting
+ * (Decision 2). It used to call `cardStateFor('idle', task.status)` — borrowing the slave-first
+ * derivation with a fake idle slave — and so drew a grey **IDLE** pill on a `running` card sitting
  * under the teal **IN PROGRESS** column head (M14 fix wave, review I2). `cardStateForTask` reads
  * the card's own column state instead, so the pill and the column head cannot disagree.
  */

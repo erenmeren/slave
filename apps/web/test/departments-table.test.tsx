@@ -16,7 +16,7 @@ function team(over: Partial<ProjectTeamRow> = {}): ProjectTeamRow {
     name: 'Platform',
     workspaceId: 'w1',
     projectName: 'Checkout',
-    agentCount: 0,
+    slaveCount: 0,
     ...over,
   }
 }
@@ -33,8 +33,8 @@ describe('DepartmentsTable', () => {
     expect(screen.getByText('no departments yet.')).toBeTruthy()
   })
 
-  it('renders one row per department: project, name, agent count', () => {
-    render(<DepartmentsTable teams={[team({ projectName: 'Checkout', name: 'Platform', agentCount: 3 })]} workspaces={WORKSPACES} />)
+  it('renders one row per department: project, name, slave count', () => {
+    render(<DepartmentsTable teams={[team({ projectName: 'Checkout', name: 'Platform', slaveCount: 3 })]} workspaces={WORKSPACES} />)
     // Scoped to the data table: the form above it also renders a "Checkout" `<option>` (the
     // project select), so an unscoped `getByText('Checkout')` matches both.
     const table = within(screen.getByTestId('data-table'))
@@ -116,7 +116,7 @@ describe('DepartmentsTable', () => {
     })
 
     it('deletes only after a second click, DELETEing the team', async () => {
-      render(<DepartmentsTable teams={[team({ teamId: 't1', agentCount: 0 })]} workspaces={WORKSPACES} />)
+      render(<DepartmentsTable teams={[team({ teamId: 't1', slaveCount: 0 })]} workspaces={WORKSPACES} />)
 
       fireEvent.click(screen.getByTestId('department-delete'))
       expect(fetchMock).not.toHaveBeenCalled()
@@ -131,7 +131,7 @@ describe('DepartmentsTable', () => {
     })
 
     it('cancels the delete confirm without calling fetch', () => {
-      render(<DepartmentsTable teams={[team({ teamId: 't1', agentCount: 0 })]} workspaces={WORKSPACES} />)
+      render(<DepartmentsTable teams={[team({ teamId: 't1', slaveCount: 0 })]} workspaces={WORKSPACES} />)
 
       fireEvent.click(screen.getByTestId('department-delete'))
       fireEvent.click(screen.getByTestId('department-delete-cancel'))
@@ -140,12 +140,12 @@ describe('DepartmentsTable', () => {
       expect(fetchMock).not.toHaveBeenCalled()
     })
 
-    it('disables delete with a title when the department still has agents', () => {
-      render(<DepartmentsTable teams={[team({ teamId: 't1', agentCount: 2 })]} workspaces={WORKSPACES} />)
+    it('disables delete with a title when the department still has slaves', () => {
+      render(<DepartmentsTable teams={[team({ teamId: 't1', slaveCount: 2 })]} workspaces={WORKSPACES} />)
 
       const button = screen.getByTestId('department-delete') as HTMLButtonElement
       expect(button.disabled).toBe(true)
-      expect(button.title).toBe('department has agents')
+      expect(button.title).toBe('department has slaves')
 
       fireEvent.click(button)
       expect(screen.queryByTestId('department-delete-confirm')).toBeNull()
@@ -154,16 +154,16 @@ describe('DepartmentsTable', () => {
 
     it('shows the refusal on a blocked delete', async () => {
       fetchMock.mockImplementationOnce(
-        async () => new Response(JSON.stringify({ error: 'team t1 still has 1 agent(s)' }), { status: 409 }),
+        async () => new Response(JSON.stringify({ error: 'team t1 still has 1 slave(s)' }), { status: 409 }),
       )
-      render(<DepartmentsTable teams={[team({ teamId: 't1', agentCount: 0 })]} workspaces={WORKSPACES} />)
+      render(<DepartmentsTable teams={[team({ teamId: 't1', slaveCount: 0 })]} workspaces={WORKSPACES} />)
 
       fireEvent.click(screen.getByTestId('department-delete'))
       await act(async () => {
         fireEvent.click(screen.getByTestId('department-delete-confirm'))
       })
 
-      expect(screen.getByTestId('department-actions-error').textContent).toBe('team t1 still has 1 agent(s)')
+      expect(screen.getByTestId('department-actions-error').textContent).toBe('team t1 still has 1 slave(s)')
       expect(routerRefresh).not.toHaveBeenCalled()
     })
   })

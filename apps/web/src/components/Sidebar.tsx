@@ -6,7 +6,7 @@ import { usePathname } from 'next/navigation'
 /** The five global pages, in the handoff's order with Projects first (M24 §2.1). */
 const ROWS = [
   { label: 'Projects', href: '/' },
-  { label: 'Agents', href: '/agents' },
+  { label: 'Slaves', href: '/slaves' },
   { label: 'Skills', href: '/skills' },
   { label: 'Analytics', href: '/analytics' },
   { label: 'Settings', href: '/settings' },

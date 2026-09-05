@@ -5,7 +5,7 @@ import { onUnauthorized } from './onUnauthorized'
  * single `sendControl` covering every verb this app's control surfaces use -- POST, PUT, and
  * DELETE -- with `postControl` kept as a POST-shaped convenience wrapping it).
  *
- * `AgentPanel.tsx`, `project/GoalPanel.tsx`, `EmergencyStopButton.tsx`, `project/RuntimePanel.tsx`, and
+ * `SlavePanel.tsx`, `project/GoalPanel.tsx`, `EmergencyStopButton.tsx`, `project/RuntimePanel.tsx`, and
  * `graph/DepsMode.tsx` (`postDependency`) each carried their own small copy of this fetch-and-decode
  * logic before Task 9 wired all five to call `sendControl`/`postControl` here instead. Task 10 (M19
  * Series C) finished the sweep -- `PermissionMatrix`, `SkillsClient`, `ModelOverrideEditor`,

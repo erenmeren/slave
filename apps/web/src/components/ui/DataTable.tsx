@@ -3,7 +3,7 @@ import { SECTION_LABEL_CLASS } from './SectionLabel'
 /**
  * The handoff data table (spec §3): an explicit `grid-template-columns` shared between the header
  * and every row rather than an actual `<table>` — matches the mockups' grid-row layouts (e.g. the
- * agents table's `200px 130px 120px 1fr 110px 90px 80px`). `columns` is passed straight through to
+ * slaves table's `200px 130px 120px 1fr 110px 90px 80px`). `columns` is passed straight through to
  * both `DataTable` and each `Row` so they line up.
  */
 export function DataTable({

@@ -28,7 +28,7 @@ export async function GET(
     connectionString,
     filter: (event) =>
       eventMatchesFilters(
-        { agentId: event.agentId ?? null, taskId: event.taskId ?? null, type: event.type },
+        { slaveId: event.slaveId ?? null, taskId: event.taskId ?? null, type: event.type },
         parsedFilters.filters,
       ),
   })

@@ -6,7 +6,7 @@ import { buildOverviewSnapshot } from '../../src/server/overview.js'
 
 interface Fixture {
   readonly workspaceId: string
-  readonly agentId: string
+  readonly slaveId: string
   readonly taskId: string
 }
 
@@ -21,7 +21,7 @@ async function seed(): Promise<Fixture> {
     },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const agent = await prisma.agent.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
   const task = await prisma.task.create({
     data: {
       workspaceId: workspace.id,
@@ -32,7 +32,7 @@ async function seed(): Promise<Fixture> {
       maxAttempts: 3,
     },
   })
-  return { workspaceId: workspace.id, agentId: agent.id, taskId: task.id }
+  return { workspaceId: workspace.id, slaveId: slave.id, taskId: task.id }
 }
 
 describe('buildOverviewSnapshot', () => {
@@ -40,7 +40,7 @@ describe('buildOverviewSnapshot', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Approval", "Artifact", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Approval", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
   })
@@ -53,9 +53,9 @@ describe('buildOverviewSnapshot', () => {
     expect(await buildOverviewSnapshot('nope')).toBeNull()
   })
 
-  it('derives the agent status from its active run with the domain function', async (): Promise<void> => {
-    const run = await prisma.agentRun.create({
-      data: { taskId: fixture.taskId, agentId: fixture.agentId, status: 'pause_requested' },
+  it('derives the slave status from its active run with the domain function', async (): Promise<void> => {
+    const run = await prisma.slaveRun.create({
+      data: { taskId: fixture.taskId, slaveId: fixture.slaveId, status: 'pause_requested' },
     })
     await prisma.task.update({ where: { id: fixture.taskId }, data: { activeRunId: run.id } })
 
@@ -63,16 +63,16 @@ describe('buildOverviewSnapshot', () => {
 
     // 'pausing', not 'pause_requested': ADR 0002's derivation is the only translator, and the UI
     // rendering raw run statuses would drift the moment the domain adds a status.
-    expect(snapshot?.agents[0]?.status).toBe('pausing')
-    expect(snapshot?.agents[0]?.taskTitle).toBe('Add the thing')
-    expect(snapshot?.agents[0]?.runId).toBe(run.id)
+    expect(snapshot?.slaves[0]?.status).toBe('pausing')
+    expect(snapshot?.slaves[0]?.taskTitle).toBe('Add the thing')
+    expect(snapshot?.slaves[0]?.runId).toBe(run.id)
   })
 
-  it('reports an agent with no live run as idle with no task', async (): Promise<void> => {
-    await prisma.agentRun.create({
+  it('reports a slave with no live run as idle with no task', async (): Promise<void> => {
+    await prisma.slaveRun.create({
       data: {
         taskId: fixture.taskId,
-        agentId: fixture.agentId,
+        slaveId: fixture.slaveId,
         status: 'succeeded',
         terminalAt: new Date(),
         endedAt: new Date(),
@@ -81,21 +81,21 @@ describe('buildOverviewSnapshot', () => {
 
     const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
 
-    // A finished run must not keep its agent looking busy — the derivation maps terminal to idle,
+    // A finished run must not keep its slave looking busy — the derivation maps terminal to idle,
     // and the card must not resurrect the dead run's task title either.
-    expect(snapshot?.agents[0]?.status).toBe('idle')
-    expect(snapshot?.agents[0]?.taskTitle).toBeNull()
-    expect(snapshot?.agents[0]?.actionLine).toBeNull()
+    expect(snapshot?.slaves[0]?.status).toBe('idle')
+    expect(snapshot?.slaves[0]?.taskTitle).toBeNull()
+    expect(snapshot?.slaves[0]?.actionLine).toBeNull()
   })
 
   it('sums budget spend across every run regardless of status', async (): Promise<void> => {
-    await prisma.agentRun.create({
-      data: { taskId: fixture.taskId, agentId: fixture.agentId, status: 'working', costUsd: 1.5 },
+    await prisma.slaveRun.create({
+      data: { taskId: fixture.taskId, slaveId: fixture.slaveId, status: 'working', costUsd: 1.5 },
     })
-    await prisma.agentRun.create({
+    await prisma.slaveRun.create({
       data: {
         taskId: fixture.taskId,
-        agentId: fixture.agentId,
+        slaveId: fixture.slaveId,
         status: 'failed',
         costUsd: 2.5,
         terminalAt: new Date(),
@@ -116,16 +116,16 @@ describe('buildOverviewSnapshot', () => {
     // M12 Task 9 / ruling R3. `?? 0` on a SUM is right for "no rows at all" and wrong for "rows
     // whose cost is unknown" -- and the old code could not tell those apart, so a workspace whose
     // every run went unmeasured looked identical to one that had spent nothing.
-    await prisma.agentRun.create({
-      data: { taskId: fixture.taskId, agentId: fixture.agentId, status: 'succeeded', costUsd: 1.5 },
+    await prisma.slaveRun.create({
+      data: { taskId: fixture.taskId, slaveId: fixture.slaveId, status: 'succeeded', costUsd: 1.5 },
     })
     // `provider` set on both, because that column is what proves a runtime actually ran this row
     // -- see the three F1 tests below for the cases it excludes.
-    await prisma.agentRun.create({
-      data: { taskId: fixture.taskId, agentId: fixture.agentId, status: 'succeeded', costUsd: null, provider: 'cursor' },
+    await prisma.slaveRun.create({
+      data: { taskId: fixture.taskId, slaveId: fixture.slaveId, status: 'succeeded', costUsd: null, provider: 'cursor' },
     })
-    await prisma.agentRun.create({
-      data: { taskId: fixture.taskId, agentId: fixture.agentId, status: 'failed', costUsd: null, provider: 'cursor' },
+    await prisma.slaveRun.create({
+      data: { taskId: fixture.taskId, slaveId: fixture.slaveId, status: 'failed', costUsd: null, provider: 'cursor' },
     })
 
     const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
@@ -136,11 +136,11 @@ describe('buildOverviewSnapshot', () => {
 
   it('does not count a run that is merely in flight as unmeasured -- unfinished is not unmeasured', async (): Promise<void> => {
     // Fix round F1. `pump.ts` writes `costUsd` only at terminal conclusion, so a `working` run
-    // ALWAYS has a null cost. Counting it made a healthy workspace with three agents working read
+    // ALWAYS has a null cost. Counting it made a healthy workspace with three slaves working read
     // `$0.00 · 3 unmeasured` -- Decision 6's lie in a new hat, at the surface R11 exists to make
     // honest.
-    await prisma.agentRun.create({
-      data: { taskId: fixture.taskId, agentId: fixture.agentId, status: 'working', provider: 'claude_code' },
+    await prisma.slaveRun.create({
+      data: { taskId: fixture.taskId, slaveId: fixture.slaveId, status: 'working', provider: 'claude_code' },
     })
 
     const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
@@ -152,10 +152,10 @@ describe('buildOverviewSnapshot', () => {
     // `failToStart`'s exact signature: terminal, no `costUsd`, and no `provider` -- because
     // `provider` is written in the same statement as `pid`, after the spawn. This is what an
     // `unmeasurable_budget` or `invalid_provider` refusal leaves behind, and it is permanent.
-    await prisma.agentRun.create({
+    await prisma.slaveRun.create({
       data: {
         taskId: fixture.taskId,
-        agentId: fixture.agentId,
+        slaveId: fixture.slaveId,
         status: 'failed',
         provider: null,
         terminalAt: new Date(),
@@ -173,10 +173,10 @@ describe('buildOverviewSnapshot', () => {
     // status with no cost recorded: an operator stop, the sweep, or a runtime that reports no
     // spend. Whatever it spent is unrecoverable, and the operator must be told the total has a
     // hole in it.
-    await prisma.agentRun.create({
+    await prisma.slaveRun.create({
       data: {
         taskId: fixture.taskId,
-        agentId: fixture.agentId,
+        slaveId: fixture.slaveId,
         status: 'stopped',
         provider: 'claude_code',
         terminalAt: new Date(),
@@ -213,8 +213,8 @@ describe('buildOverviewSnapshot', () => {
   })
 
   it('seeds the action line from the latest run.tool_call event', async (): Promise<void> => {
-    const run = await prisma.agentRun.create({
-      data: { taskId: fixture.taskId, agentId: fixture.agentId, status: 'working' },
+    const run = await prisma.slaveRun.create({
+      data: { taskId: fixture.taskId, slaveId: fixture.slaveId, status: 'working' },
     })
     await prisma.task.update({ where: { id: fixture.taskId }, data: { activeRunId: run.id } })
     for (const summary of ['Read README.md', 'Write note1.txt']) {
@@ -222,9 +222,9 @@ describe('buildOverviewSnapshot', () => {
         type: 'run.tool_call',
         workspaceId: fixture.workspaceId,
         taskId: fixture.taskId,
-        agentId: fixture.agentId,
+        slaveId: fixture.slaveId,
         runId: run.id,
-        actor: 'agent',
+        actor: 'slave',
         payload: { name: summary.split(' ')[0] ?? '', summary },
       })
     }
@@ -233,7 +233,7 @@ describe('buildOverviewSnapshot', () => {
 
     // The latest one, not the first: a card that opens on a stale line contradicts the live line
     // the stream is about to draw over it.
-    expect(snapshot?.agents[0]?.actionLine).toBe('Write note1.txt')
+    expect(snapshot?.slaves[0]?.actionLine).toBe('Write note1.txt')
   })
 
   it('counts tasks into the strip buckets', async (): Promise<void> => {
@@ -292,23 +292,23 @@ describe('buildOverviewSnapshot', () => {
   })
 
   it('caps recentEvents at the last 20, oldest first, each with a non-empty summary', async (): Promise<void> => {
-    const run = await prisma.agentRun.create({
-      data: { taskId: fixture.taskId, agentId: fixture.agentId, status: 'working' },
+    const run = await prisma.slaveRun.create({
+      data: { taskId: fixture.taskId, slaveId: fixture.slaveId, status: 'working' },
     })
     for (let i = 0; i < 25; i += 1) {
       await appendEvent({
         type: 'run.tool_call',
         workspaceId: fixture.workspaceId,
         taskId: fixture.taskId,
-        agentId: fixture.agentId,
+        slaveId: fixture.slaveId,
         runId: run.id,
-        actor: 'agent',
+        actor: 'slave',
         payload: { name: 'Write', summary: `Write note${i}.txt` },
       })
     }
 
     const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
-    const recentEvents = snapshot?.agents[0]?.recentEvents ?? []
+    const recentEvents = snapshot?.slaves[0]?.recentEvents ?? []
 
     // The oldest of the last 20 is event #5 (0-indexed: 25 events, keep the newest 20 -> #5..#24);
     // the newest is #24, and the list must already be oldest-first for the feed to render top-down.
@@ -323,11 +323,11 @@ describe('buildOverviewSnapshot', () => {
     }
   })
 
-  it('exposes the queued message from the agent\'s live run', async (): Promise<void> => {
-    await prisma.agentRun.create({
+  it('exposes the queued message from the slave\'s live run', async (): Promise<void> => {
+    await prisma.slaveRun.create({
       data: {
         taskId: fixture.taskId,
-        agentId: fixture.agentId,
+        slaveId: fixture.slaveId,
         status: 'paused',
         queuedMessage: 'also update the README',
       },
@@ -335,12 +335,12 @@ describe('buildOverviewSnapshot', () => {
 
     const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
 
-    expect(snapshot?.agents[0]?.queuedMessage).toBe('also update the README')
+    expect(snapshot?.slaves[0]?.queuedMessage).toBe('also update the README')
   })
 
   it('carries resumeRequestedAt once a resume intent is recorded, and null before/after', async (): Promise<void> => {
-    const run = await prisma.agentRun.create({
-      data: { taskId: fixture.taskId, agentId: fixture.agentId, status: 'paused' },
+    const run = await prisma.slaveRun.create({
+      data: { taskId: fixture.taskId, slaveId: fixture.slaveId, status: 'paused' },
     })
     await prisma.checkpoint.create({
       data: {
@@ -357,20 +357,20 @@ describe('buildOverviewSnapshot', () => {
     })
 
     const before = await buildOverviewSnapshot(fixture.workspaceId)
-    expect(before?.agents[0]?.resumeRequestedAt).toBeNull()
+    expect(before?.slaves[0]?.resumeRequestedAt).toBeNull()
 
     const requested = await requestResume(run.id, null, 'meren')
     expect(requested.ok).toBe(true)
 
     const after = await buildOverviewSnapshot(fixture.workspaceId)
-    expect(after?.agents[0]?.resumeRequestedAt).not.toBeNull()
+    expect(after?.slaves[0]?.resumeRequestedAt).not.toBeNull()
   })
 
-  it("exposes cost so far, tool calls, and paused-at step from the agent's live run", async (): Promise<void> => {
-    await prisma.agentRun.create({
+  it("exposes cost so far, tool calls, and paused-at step from the slave's live run", async (): Promise<void> => {
+    await prisma.slaveRun.create({
       data: {
         taskId: fixture.taskId,
-        agentId: fixture.agentId,
+        slaveId: fixture.slaveId,
         status: 'paused',
         costUsd: 1.25,
         toolCalls: 7,
@@ -380,22 +380,22 @@ describe('buildOverviewSnapshot', () => {
 
     const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
 
-    expect(snapshot?.agents[0]?.costUsd).toBe(1.25)
-    expect(snapshot?.agents[0]?.toolCalls).toBe(7)
-    expect(snapshot?.agents[0]?.pausedAtStep).toBe(4)
+    expect(snapshot?.slaves[0]?.costUsd).toBe(1.25)
+    expect(snapshot?.slaves[0]?.toolCalls).toBe(7)
+    expect(snapshot?.slaves[0]?.pausedAtStep).toBe(4)
   })
 
   it("keeps a live run's unknown cost unknown rather than reporting it as zero", async (): Promise<void> => {
     // M12 Task 9 / ruling R3, the per-run half. A run on a runtime that reports no spend has a
     // null `costUsd`, and `$0.00` would be a measurement it never made.
-    await prisma.agentRun.create({
-      data: { taskId: fixture.taskId, agentId: fixture.agentId, status: 'working', costUsd: null, toolCalls: 3 },
+    await prisma.slaveRun.create({
+      data: { taskId: fixture.taskId, slaveId: fixture.slaveId, status: 'working', costUsd: null, toolCalls: 3 },
     })
 
     const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
 
-    expect(snapshot?.agents[0]?.costUsd).toBeNull()
-    expect(snapshot?.agents[0]?.toolCalls).toBe(3)
+    expect(snapshot?.slaves[0]?.costUsd).toBeNull()
+    expect(snapshot?.slaves[0]?.toolCalls).toBe(3)
     // Asserted here too, because this exact fixture read `unmeasuredRuns: 1` when the field
     // shipped and no test looked. A per-run null and a hole in the workspace's total are
     // different claims; this row makes only the first.
@@ -405,78 +405,78 @@ describe('buildOverviewSnapshot', () => {
   it("reports the live run's OWN provider, not a hardcoded one", async (): Promise<void> => {
     // M12 Task 9 / ruling R10. This field was `'claude-code' as const` -- the adapter ID, not even
     // the `ProviderKind` spelling -- from before a run had a provider column to read.
-    await prisma.agentRun.create({
-      data: { taskId: fixture.taskId, agentId: fixture.agentId, status: 'working', provider: 'cursor' },
+    await prisma.slaveRun.create({
+      data: { taskId: fixture.taskId, slaveId: fixture.slaveId, status: 'working', provider: 'cursor' },
     })
 
     const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
 
-    expect(snapshot?.agents[0]?.provider).toBe('cursor')
+    expect(snapshot?.slaves[0]?.provider).toBe('cursor')
   })
 
-  it('reports zero cost, zero tool calls, and no paused-at step for an idle agent with no live run', async (): Promise<void> => {
+  it('reports zero cost, zero tool calls, and no paused-at step for an idle slave with no live run', async (): Promise<void> => {
     const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
 
-    expect(snapshot?.agents[0]?.costUsd).toBe(0)
-    expect(snapshot?.agents[0]?.toolCalls).toBe(0)
-    expect(snapshot?.agents[0]?.pausedAtStep).toBeNull()
-    // No live run means no runtime has been resolved for this agent yet -- we do not know one
+    expect(snapshot?.slaves[0]?.costUsd).toBe(0)
+    expect(snapshot?.slaves[0]?.toolCalls).toBe(0)
+    expect(snapshot?.slaves[0]?.pausedAtStep).toBeNull()
+    // No live run means no runtime has been resolved for this slave yet -- we do not know one
     // until a run resolves it, so `null` rather than a guess (M12 Task 9, ruling R10).
-    expect(snapshot?.agents[0]?.provider).toBeNull()
+    expect(snapshot?.slaves[0]?.provider).toBeNull()
   })
 
-  // The per-agent sparkline is GONE from this snapshot as of M14 Task 2 fix round 1: the rebuilt
+  // The per-slave sparkline is GONE from this snapshot as of M14 Task 2 fix round 1: the rebuilt
   // card draws a progress bar and a step counter where the M11 mini-histogram used to sit, and
-  // nothing else ever read `AgentCardData.sparkline`. `ui/Sparkline.tsx` and the workspace-wide
+  // nothing else ever read `SlaveCardData.sparkline`. `ui/Sparkline.tsx` and the workspace-wide
   // sparkline on the Activity page are untouched (`integration/activity-history.test.ts` covers
   // that one), so what went away is a grouped query nobody's pixels depended on.
 
-  it('does not leak another workspace\'s agents or tasks', async (): Promise<void> => {
+  it('does not leak another workspace\'s slaves or tasks', async (): Promise<void> => {
     const other = await prisma.workspace.create({
       data: { name: 'Other', repoPath: '/tmp/other', verifyCommands: ['true'], setupCommands: [] },
     })
     const otherTeam = await prisma.team.create({ data: { workspaceId: other.id, name: 'T' } })
-    await prisma.agent.create({ data: { teamId: otherTeam.id, name: 'Zoe', role: 'backend' } })
+    await prisma.slave.create({ data: { teamId: otherTeam.id, name: 'Zoe', role: 'backend' } })
 
     const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
 
-    expect(snapshot?.agents.map((a) => a.name)).toEqual(['Alex'])
+    expect(snapshot?.slaves.map((a) => a.name)).toEqual(['Alex'])
   })
 
   it('carries the live run task id, its status, and the progress the tool-call ceiling defines', async (): Promise<void> => {
     await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { maxToolCallsPerRun: 20 } })
-    await prisma.agentRun.create({
-      data: { agentId: fixture.agentId, taskId: fixture.taskId, status: 'working', toolCalls: 5, provider: 'claude_code' },
+    await prisma.slaveRun.create({
+      data: { slaveId: fixture.slaveId, taskId: fixture.taskId, status: 'working', toolCalls: 5, provider: 'claude_code' },
     })
 
     const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
-    expect(snapshot?.agents[0]?.taskId).toBe(fixture.taskId)
-    expect(snapshot?.agents[0]?.taskStatus).toBe('running')
-    expect(snapshot?.agents[0]?.progressPct).toBe(25)
-    expect(snapshot?.agents[0]?.stepLabel).toBe('5/20')
+    expect(snapshot?.slaves[0]?.taskId).toBe(fixture.taskId)
+    expect(snapshot?.slaves[0]?.taskStatus).toBe('running')
+    expect(snapshot?.slaves[0]?.progressPct).toBe(25)
+    expect(snapshot?.slaves[0]?.stepLabel).toBe('5/20')
   })
 
-  it('reports zero progress and no step label for an agent with no live run', async (): Promise<void> => {
+  it('reports zero progress and no step label for a slave with no live run', async (): Promise<void> => {
     const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
-    expect(snapshot?.agents[0]?.progressPct).toBe(0)
-    expect(snapshot?.agents[0]?.stepLabel).toBeNull()
-    expect(snapshot?.agents[0]?.taskId).toBeNull()
-    expect(snapshot?.agents[0]?.taskStatus).toBeNull()
+    expect(snapshot?.slaves[0]?.progressPct).toBe(0)
+    expect(snapshot?.slaves[0]?.stepLabel).toBeNull()
+    expect(snapshot?.slaves[0]?.taskId).toBeNull()
+    expect(snapshot?.slaves[0]?.taskStatus).toBeNull()
   })
 
   it("names the skill from the live run's most recent Skill tool call, and null when it has invoked none", async (): Promise<void> => {
-    const run = await prisma.agentRun.create({
-      data: { agentId: fixture.agentId, taskId: fixture.taskId, status: 'working', provider: 'claude_code' },
+    const run = await prisma.slaveRun.create({
+      data: { slaveId: fixture.slaveId, taskId: fixture.taskId, status: 'working', provider: 'claude_code' },
     })
     await appendEvent({
       type: 'run.tool_call',
       workspaceId: fixture.workspaceId,
-      agentId: fixture.agentId,
+      slaveId: fixture.slaveId,
       runId: run.id,
-      actor: 'agent',
+      actor: 'slave',
       payload: { name: 'Write', summary: 'Write a.txt' },
     })
-    expect((await buildOverviewSnapshot(fixture.workspaceId))?.agents[0]?.skill).toBeNull()
+    expect((await buildOverviewSnapshot(fixture.workspaceId))?.slaves[0]?.skill).toBeNull()
 
     // `Skill <name>` is the shape Task 4's parser emits once `skill` joins
     // `CLAUDE_SUMMARY_ARG_KEYS` -- the summary `summaryFor` writes for a `Skill` tool call. The
@@ -484,35 +484,35 @@ describe('buildOverviewSnapshot', () => {
     await appendEvent({
       type: 'run.tool_call',
       workspaceId: fixture.workspaceId,
-      agentId: fixture.agentId,
+      slaveId: fixture.slaveId,
       runId: run.id,
-      actor: 'agent',
+      actor: 'slave',
       payload: { name: 'Skill', summary: 'Skill superpowers:writing-plans' },
     })
-    expect((await buildOverviewSnapshot(fixture.workspaceId))?.agents[0]?.skill).toBe('superpowers:writing-plans')
+    expect((await buildOverviewSnapshot(fixture.workspaceId))?.slaves[0]?.skill).toBe('superpowers:writing-plans')
   })
 
   it('reports no skill for a bare `Skill` summary that names none', async (): Promise<void> => {
     // A pre-Task-4 event, or a call whose arguments the parser could not read: the tool fired, but
     // nothing on the row says WHICH skill. `—` on the chip, never the word `Skill` standing in for
     // a name (Decision 6: an unknown is marked, not filled).
-    const run = await prisma.agentRun.create({
-      data: { agentId: fixture.agentId, taskId: fixture.taskId, status: 'working', provider: 'claude_code' },
+    const run = await prisma.slaveRun.create({
+      data: { slaveId: fixture.slaveId, taskId: fixture.taskId, status: 'working', provider: 'claude_code' },
     })
     await appendEvent({
       type: 'run.tool_call',
       workspaceId: fixture.workspaceId,
-      agentId: fixture.agentId,
+      slaveId: fixture.slaveId,
       runId: run.id,
-      actor: 'agent',
+      actor: 'slave',
       payload: { name: 'Skill', summary: 'Skill' },
     })
-    expect((await buildOverviewSnapshot(fixture.workspaceId))?.agents[0]?.skill).toBeNull()
+    expect((await buildOverviewSnapshot(fixture.workspaceId))?.slaves[0]?.skill).toBeNull()
   })
   it('lists blocked tasks and paused runs together, with resume offered only on the runs', async (): Promise<void> => {
     await prisma.task.update({ where: { id: fixture.taskId }, data: { status: 'blocked' } })
-    const run = await prisma.agentRun.create({
-      data: { agentId: fixture.agentId, status: 'paused', pausedAtStep: 7, provider: 'claude_code' },
+    const run = await prisma.slaveRun.create({
+      data: { slaveId: fixture.slaveId, status: 'paused', pausedAtStep: 7, provider: 'claude_code' },
     })
     const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
     expect(snapshot?.blocked.map((b) => b.kind).sort()).toEqual(['run', 'task'])
@@ -525,8 +525,8 @@ describe('buildOverviewSnapshot', () => {
   it('reports a run that has only been ASKED to pause, and offers it no resume', async (): Promise<void> => {
     // `requestResume` refuses a `pause_requested` run — no checkpoint exists yet. The panel names
     // the state and waits; a button that always refuses is worse than none.
-    await prisma.agentRun.create({
-      data: { agentId: fixture.agentId, status: 'pause_requested', provider: 'claude_code' },
+    await prisma.slaveRun.create({
+      data: { slaveId: fixture.slaveId, status: 'pause_requested', provider: 'claude_code' },
     })
     const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
     const row = snapshot?.blocked.find((b) => b.kind === 'run')
@@ -549,8 +549,8 @@ describe('buildOverviewSnapshot', () => {
       await appendEvent({
         type: 'run.tool_call',
         workspaceId: fixture.workspaceId,
-        agentId: fixture.agentId,
-        actor: 'agent',
+        slaveId: fixture.slaveId,
+        actor: 'slave',
         payload: { name: 'Write', summary: `Write ${i}.txt` },
       })
     }
@@ -576,14 +576,14 @@ describe('buildOverviewSnapshot', () => {
       type: 'task.review_approved',
       workspaceId: fixture.workspaceId,
       taskId: second.id,
-      actor: 'agent',
+      actor: 'slave',
       payload: { reason: 'looks good' },
     })
     await appendEvent({
       type: 'task.review_approved',
       workspaceId: fixture.workspaceId,
       taskId: fixture.taskId,
-      actor: 'agent',
+      actor: 'slave',
       payload: { reason: 'looks good' },
     })
     await prisma.task.create({
@@ -608,7 +608,7 @@ describe('buildOverviewSnapshot', () => {
         type: 'task.review_approved',
         workspaceId: fixture.workspaceId,
         taskId,
-        actor: 'agent',
+        actor: 'slave',
         payload: { reason: 'looks good' },
       })
     }
@@ -627,7 +627,7 @@ describe('buildOverviewSnapshot', () => {
       type: 'task.review_approved',
       workspaceId: fixture.workspaceId,
       taskId: fixture.taskId,
-      actor: 'agent',
+      actor: 'slave',
       payload: { reason: 'looks good' },
     })
     const snapshot = await buildOverviewSnapshot(fixture.workspaceId)

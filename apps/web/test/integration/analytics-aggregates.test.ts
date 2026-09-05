@@ -1,21 +1,21 @@
 import { prisma } from '@slave-of-ai/db/client'
 import { sumSpend, type RunStatus } from '@slave-of-ai/domain'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
-import { buildAnalytics, perAgentRunAggregates } from '../../src/server/analytics.js'
+import { buildAnalytics, perSlaveRunAggregates } from '../../src/server/analytics.js'
 
 /**
- * Equivalence test for Task 12 (M17): `perAgentRunAggregates` (one grouped SQL query) must produce
+ * Equivalence test for Task 12 (M17): `perSlaveRunAggregates` (one grouped SQL query) must produce
  * exactly what the OLD `allRuns` findMany + JS reduce pass produced, for every rule branch that pass
- * had to distinguish. `oldPerAgent` below is a VERBATIM copy of the old computation (analytics.ts
- * :99-113 for the `allRuns` select, :194-218 for the `agents.map` body) frozen here as the oracle —
+ * had to distinguish. `oldPerSlave` below is a VERBATIM copy of the old computation (analytics.ts
+ * :99-113 for the `allRuns` select, :194-218 for the `slaves.map` body) frozen here as the oracle —
  * it must never be "improved" to match the new code; if it drifts from what analytics.ts used to do,
  * the test stops proving anything.
  */
 
 interface Fixture {
   readonly workspaceId: string
-  readonly agentAId: string
-  readonly agentBId: string
+  readonly slaveAId: string
+  readonly slaveBId: string
   readonly otherWorkspaceId: string
 }
 
@@ -24,17 +24,17 @@ async function seed(): Promise<Fixture> {
     data: { name: 'Checkout', repoPath: '/tmp/analytics-agg-fixture', verifyCommands: ['true'], setupCommands: [] },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const agentA = await prisma.agent.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
-  const agentB = await prisma.agent.create({ data: { teamId: team.id, name: 'Bea', role: 'qa' } })
+  const slaveA = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
+  const slaveB = await prisma.slave.create({ data: { teamId: team.id, name: 'Bea', role: 'qa' } })
 
   const other = await prisma.workspace.create({
     data: { name: 'Other', repoPath: '/tmp/analytics-agg-other', verifyCommands: ['true'], setupCommands: [] },
   })
   const otherTeam = await prisma.team.create({ data: { workspaceId: other.id, name: 'T' } })
-  const otherAgent = await prisma.agent.create({ data: { teamId: otherTeam.id, name: 'Cam', role: 'qa' } })
-  await prisma.agentRun.create({
+  const otherSlave = await prisma.slave.create({ data: { teamId: otherTeam.id, name: 'Cam', role: 'qa' } })
+  await prisma.slaveRun.create({
     data: {
-      agentId: otherAgent.id,
+      slaveId: otherSlave.id,
       status: 'succeeded',
       provider: 'claude_code',
       costUsd: 5,
@@ -47,19 +47,19 @@ async function seed(): Promise<Fixture> {
     },
   })
 
-  return { workspaceId: workspace.id, agentAId: agentA.id, agentBId: agentB.id, otherWorkspaceId: other.id }
+  return { workspaceId: workspace.id, slaveAId: slaveA.id, slaveBId: slaveB.id, otherWorkspaceId: other.id }
 }
 
 const t0 = new Date('2026-02-01T00:00:00Z')
 const plusMs = (ms: number): Date => new Date(t0.getTime() + ms)
 
-/** The seven rule-branch rows the brief lists, split across the two agents. */
+/** The seven rule-branch rows the brief lists, split across the two slaves. */
 async function seedRuleBranchRuns(fixture: Fixture): Promise<void> {
-  await prisma.agentRun.createMany({
+  await prisma.slaveRun.createMany({
     data: [
       // 1. succeeded terminal run with cost, tokens, sane duration.
       {
-        agentId: fixture.agentAId,
+        slaveId: fixture.slaveAId,
         status: 'succeeded',
         provider: 'claude_code',
         costUsd: 2.5,
@@ -72,7 +72,7 @@ async function seedRuleBranchRuns(fixture: Fixture): Promise<void> {
       },
       // 2. failed terminal run with no cost, provider set -> unmeasured.
       {
-        agentId: fixture.agentAId,
+        slaveId: fixture.slaveAId,
         status: 'failed',
         provider: 'claude_code',
         costUsd: null,
@@ -85,7 +85,7 @@ async function seedRuleBranchRuns(fixture: Fixture): Promise<void> {
       },
       // 3. in-flight `working` run, null cost -> NOT unmeasured, no duration, tokens if reported.
       {
-        agentId: fixture.agentBId,
+        slaveId: fixture.slaveBId,
         status: 'working',
         provider: 'claude_code',
         costUsd: null,
@@ -98,7 +98,7 @@ async function seedRuleBranchRuns(fixture: Fixture): Promise<void> {
       },
       // 4. pre-M12-shaped row: real costUsd, provider: null -> money in known, never unmeasured.
       {
-        agentId: fixture.agentBId,
+        slaveId: fixture.slaveBId,
         status: 'succeeded',
         provider: null,
         costUsd: 3,
@@ -111,7 +111,7 @@ async function seedRuleBranchRuns(fixture: Fixture): Promise<void> {
       },
       // 5. terminal run with costUsd: 0 -> measured zero.
       {
-        agentId: fixture.agentAId,
+        slaveId: fixture.slaveAId,
         status: 'failed',
         provider: 'claude_code',
         costUsd: 0,
@@ -124,7 +124,7 @@ async function seedRuleBranchRuns(fixture: Fixture): Promise<void> {
       },
       // 6. run with only tokensOut set -> counts as reported.
       {
-        agentId: fixture.agentBId,
+        slaveId: fixture.slaveBId,
         status: 'succeeded',
         provider: 'claude_code',
         costUsd: 1.25,
@@ -137,7 +137,7 @@ async function seedRuleBranchRuns(fixture: Fixture): Promise<void> {
       },
       // 7. terminal run with endedAt < startedAt -> excluded from durations by both paths.
       {
-        agentId: fixture.agentAId,
+        slaveId: fixture.slaveAId,
         status: 'succeeded',
         provider: 'claude_code',
         costUsd: 0.5,
@@ -153,7 +153,7 @@ async function seedRuleBranchRuns(fixture: Fixture): Promise<void> {
 }
 
 interface OldRun {
-  readonly agentId: string
+  readonly slaveId: string
   readonly status: RunStatus
   readonly provider: string | null
   readonly costUsd: number | null
@@ -173,8 +173,8 @@ interface KpiIngredients {
 }
 
 interface OldResult {
-  readonly perAgent: ReadonlyArray<{
-    readonly agentId: string
+  readonly perSlave: ReadonlyArray<{
+    readonly slaveId: string
     readonly name: string
     readonly role: string
     readonly runs: number
@@ -187,21 +187,21 @@ interface OldResult {
   readonly kpiIngredients: KpiIngredients
 }
 
-/** Verbatim oracle: analytics.ts :99-113 (the `allRuns` select) + :194-218 (the `agents.map` body),
+/** Verbatim oracle: analytics.ts :99-113 (the `allRuns` select) + :194-218 (the `slaves.map` body),
  *  frozen as it stood before Task 12's rewrite. */
-async function oldPerAgent(workspaceId: string | null): Promise<OldResult> {
-  const agentWhere = workspaceId === null ? {} : { team: { workspaceId } }
-  const runWhere = workspaceId === null ? {} : { agent: { team: { workspaceId } } }
+async function oldPerSlave(workspaceId: string | null): Promise<OldResult> {
+  const slaveWhere = workspaceId === null ? {} : { team: { workspaceId } }
+  const runWhere = workspaceId === null ? {} : { slave: { team: { workspaceId } } }
 
-  const agents = await prisma.agent.findMany({
-    where: agentWhere,
+  const slaves = await prisma.slave.findMany({
+    where: slaveWhere,
     orderBy: { name: 'asc' },
     select: { id: true, name: true, role: true },
   })
-  const allRuns: OldRun[] = await prisma.agentRun.findMany({
+  const allRuns: OldRun[] = await prisma.slaveRun.findMany({
     where: runWhere,
     select: {
-      agentId: true,
+      slaveId: true,
       status: true,
       provider: true,
       costUsd: true,
@@ -222,40 +222,40 @@ async function oldPerAgent(workspaceId: string | null): Promise<OldResult> {
   const spend = sumSpend(allRuns.map((run) => ({ costUsd: run.costUsd, provider: run.provider, status: run.status })))
   const toolCalls = allRuns.reduce((n, run) => n + run.toolCalls, 0)
 
-  // ---- per-agent performance (old path) ----
-  const runsByAgent = new Map<string, OldRun[]>()
+  // ---- per-slave performance (old path) ----
+  const runsBySlave = new Map<string, OldRun[]>()
   for (const run of allRuns) {
-    const list = runsByAgent.get(run.agentId)
-    if (list === undefined) runsByAgent.set(run.agentId, [run])
+    const list = runsBySlave.get(run.slaveId)
+    if (list === undefined) runsBySlave.set(run.slaveId, [run])
     else list.push(run)
   }
 
-  const perAgent = agents.map((agent) => {
-    const runs = runsByAgent.get(agent.id) ?? []
+  const perSlave = slaves.map((slave) => {
+    const runs = runsBySlave.get(slave.id) ?? []
     const terminal = runs.filter((run) => run.terminalAt !== null)
     const succeeded = terminal.filter((run) => run.status === 'succeeded').length
-    const agentDurations = terminal
+    const slaveDurations = terminal
       .filter((run) => run.endedAt !== null)
       .map((run) => (run.endedAt as Date).getTime() - run.startedAt.getTime())
       .filter((ms) => ms >= 0)
     const reported = runs.filter((run) => run.tokensIn !== null || run.tokensOut !== null)
-    const agentSpend = sumSpend(runs.map((run) => ({ costUsd: run.costUsd, provider: run.provider, status: run.status })))
+    const slaveSpend = sumSpend(runs.map((run) => ({ costUsd: run.costUsd, provider: run.provider, status: run.status })))
 
     return {
-      agentId: agent.id,
-      name: agent.name,
-      role: agent.role,
+      slaveId: slave.id,
+      name: slave.name,
+      role: slave.role,
       runs: terminal.length,
       successPct: terminal.length === 0 ? null : Math.round((succeeded / terminal.length) * 100),
-      avgDurationMs: agentDurations.length === 0 ? null : agentDurations.reduce((a, b) => a + b, 0) / agentDurations.length,
+      avgDurationMs: slaveDurations.length === 0 ? null : slaveDurations.reduce((a, b) => a + b, 0) / slaveDurations.length,
       tokens: reported.length === 0 ? null : reported.reduce((n, run) => n + (run.tokensIn ?? 0) + (run.tokensOut ?? 0), 0),
-      costUsd: agentSpend.known,
-      unmeasuredRuns: agentSpend.unknownRuns,
+      costUsd: slaveSpend.known,
+      unmeasuredRuns: slaveSpend.unknownRuns,
     }
   })
 
   return {
-    perAgent,
+    perSlave,
     kpiIngredients: {
       durationSum: durations.reduce((a, b) => a + b, 0),
       durationCount: durations.length,
@@ -265,10 +265,10 @@ async function oldPerAgent(workspaceId: string | null): Promise<OldResult> {
   }
 }
 
-/** Sums `perAgentRunAggregates`' rows into the same KPI ingredients the old `allRuns` reduce
- *  produced, so the two paths can be compared at the KPI level too, not just per-agent. */
+/** Sums `perSlaveRunAggregates`' rows into the same KPI ingredients the old `allRuns` reduce
+ *  produced, so the two paths can be compared at the KPI level too, not just per-slave. */
 async function newKpiIngredients(workspaceId: string | null): Promise<KpiIngredients> {
-  const aggRows = await perAgentRunAggregates(workspaceId)
+  const aggRows = await perSlaveRunAggregates(workspaceId)
   let durationSum = 0
   let durationCount = 0
   let known = 0
@@ -284,12 +284,12 @@ async function newKpiIngredients(workspaceId: string | null): Promise<KpiIngredi
   return { durationSum, durationCount, spend: { known, unknownRuns }, toolCalls }
 }
 
-describe('perAgentRunAggregates equivalence with the old allRuns + JS reduce path', () => {
+describe('perSlaveRunAggregates equivalence with the old allRuns + JS reduce path', () => {
   let fixture: Fixture
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
     await seedRuleBranchRuns(fixture)
@@ -299,35 +299,35 @@ describe('perAgentRunAggregates equivalence with the old allRuns + JS reduce pat
     await prisma.$disconnect()
   })
 
-  it('matches the old per-agent rows and KPI ingredients, scoped to the seeded workspace', async (): Promise<void> => {
-    const old = await oldPerAgent(fixture.workspaceId)
+  it('matches the old per-slave rows and KPI ingredients, scoped to the seeded workspace', async (): Promise<void> => {
+    const old = await oldPerSlave(fixture.workspaceId)
     const snapshot = await buildAnalytics(fixture.workspaceId)
-    expect(snapshot.perAgent).toEqual(old.perAgent)
+    expect(snapshot.perSlave).toEqual(old.perSlave)
 
     const newKpis = await newKpiIngredients(fixture.workspaceId)
     expect(newKpis).toEqual(old.kpiIngredients)
   })
 
-  it('matches the old per-agent rows and KPI ingredients across every workspace (workspaceId: null)', async (): Promise<void> => {
-    const old = await oldPerAgent(null)
+  it('matches the old per-slave rows and KPI ingredients across every workspace (workspaceId: null)', async (): Promise<void> => {
+    const old = await oldPerSlave(null)
     const snapshot = await buildAnalytics(null)
-    expect(snapshot.perAgent).toEqual(old.perAgent)
+    expect(snapshot.perSlave).toEqual(old.perSlave)
 
     const newKpis = await newKpiIngredients(null)
     expect(newKpis).toEqual(old.kpiIngredients)
   })
 
-  it('scopes perAgentRunAggregates rows to the given workspace, and to every agent when null', async (): Promise<void> => {
-    const scoped = await perAgentRunAggregates(fixture.workspaceId)
-    expect(scoped.map((r) => r.agentId).sort()).toEqual([fixture.agentAId, fixture.agentBId].sort())
+  it('scopes perSlaveRunAggregates rows to the given workspace, and to every slave when null', async (): Promise<void> => {
+    const scoped = await perSlaveRunAggregates(fixture.workspaceId)
+    expect(scoped.map((r) => r.slaveId).sort()).toEqual([fixture.slaveAId, fixture.slaveBId].sort())
 
-    const global = await perAgentRunAggregates(null)
-    expect(global.length).toBe(3) // Alex, Bea, Cam (the other workspace's agent)
+    const global = await perSlaveRunAggregates(null)
+    expect(global.length).toBe(3) // Alex, Bea, Cam (the other workspace's slave)
   })
 
   it('never counts an in-flight run as unmeasured even with a null cost (rule branch 3)', async (): Promise<void> => {
     const snapshot = await buildAnalytics(fixture.workspaceId)
-    const bea = snapshot.perAgent.find((r) => r.name === 'Bea')
+    const bea = snapshot.perSlave.find((r) => r.name === 'Bea')
     // Bea's runs: working (null cost, in-flight -> not unmeasured), pre-M12 costUsd:3/provider:null
     // (money known, never unmeasured), and a costUsd:1.25 run. None of Bea's runs is unmeasured.
     expect(bea?.unmeasuredRuns).toBe(0)
@@ -335,13 +335,13 @@ describe('perAgentRunAggregates equivalence with the old allRuns + JS reduce pat
 
   it('counts pre-M12-shaped money (real costUsd, null provider) as known, never unmeasured (rule branch 4)', async (): Promise<void> => {
     const snapshot = await buildAnalytics(fixture.workspaceId)
-    const bea = snapshot.perAgent.find((r) => r.name === 'Bea')
+    const bea = snapshot.perSlave.find((r) => r.name === 'Bea')
     expect(bea?.costUsd).toBeCloseTo(3 + 1.25, 6)
   })
 
   it('excludes an endedAt < startedAt row from durations while still counting it as terminal (rule branch 7)', async (): Promise<void> => {
     const snapshot = await buildAnalytics(fixture.workspaceId)
-    const alex = snapshot.perAgent.find((r) => r.name === 'Alex')
+    const alex = snapshot.perSlave.find((r) => r.name === 'Alex')
     // Alex has 4 terminal runs (rows 1, 2, 5, 7) but only rows 1, 2, 5 have a valid duration.
     expect(alex?.runs).toBe(4)
     expect(alex?.avgDurationMs).toBeCloseTo((60_000 + 30_000 + 5_000) / 3, 6)

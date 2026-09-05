@@ -87,11 +87,11 @@ describe('useWorkspaceStream', () => {
       }),
     )
 
-    push({ seq: 1, type: 'run.tool_call', agentId: 'a1', runId: 'r1', payload: { summary: 'Write x.txt' } })
+    push({ seq: 1, type: 'run.tool_call', slaveId: 'a1', runId: 'r1', payload: { summary: 'Write x.txt' } })
 
     expect(onEvent).toHaveBeenCalledTimes(1)
     expect(onEvent).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'run.tool_call', agentId: 'a1', runId: 'r1' }),
+      expect.objectContaining({ type: 'run.tool_call', slaveId: 'a1', runId: 'r1' }),
     )
     // No timer advance: onEvent must not wait for the debounce.
     expect(fetchMock).not.toHaveBeenCalled()

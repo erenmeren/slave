@@ -72,11 +72,11 @@ export function canSpawnParticles(): boolean {
   return true
 }
 
-/** The agent → active-task satellite edge for `agentId` (org mode's particle track, spec §6) --
- *  `OrgNodes.buildOrgGraph`'s own id convention (`agent:<id>` source, `activeTask:<id>` target).
- *  `null` when the agent has no live run right now (no satellite, no edge to travel on). */
-export function edgeIdForAgent(edges: readonly Edge[], agentId: string): string | null {
-  const source = `agent:${agentId}`
+/** The slave → active-task satellite edge for `slaveId` (org mode's particle track, spec §6) --
+ *  `OrgNodes.buildOrgGraph`'s own id convention (`slave:<id>` source, `activeTask:<id>` target).
+ *  `null` when the slave has no live run right now (no satellite, no edge to travel on). */
+export function edgeIdForSlave(edges: readonly Edge[], slaveId: string): string | null {
+  const source = `slave:${slaveId}`
   const match = edges.find((edge) => edge.source === source && edge.target.startsWith('activeTask:'))
   return match?.id ?? null
 }
@@ -88,15 +88,15 @@ export function edgeIdForAgent(edges: readonly Edge[], agentId: string): string 
  *  argument -- no React, no module-level mutable state beyond the id counter above.
  */
 export function handleToolCallFrame(
-  event: { readonly type?: string; readonly agentId?: string },
+  event: { readonly type?: string; readonly slaveId?: string },
   edges: readonly Edge[],
   particles: readonly Particle[],
   now: number,
 ): readonly Particle[] {
   if (event.type !== 'run.tool_call') return particles
-  if (typeof event.agentId !== 'string') return particles
+  if (typeof event.slaveId !== 'string') return particles
   if (!canSpawnParticles()) return particles
-  const edgeId = edgeIdForAgent(edges, event.agentId)
+  const edgeId = edgeIdForSlave(edges, event.slaveId)
   if (edgeId === null) return particles
   return spawnParticle(particles, edgeId, now)
 }
@@ -104,7 +104,7 @@ export function handleToolCallFrame(
 // ---- completion wave (deps mode) ---------------------------------------------------------------
 
 /** ~800ms decay window for the completion-wave edge flash -- same duration as the M5 border-flash
- *  idiom (`BORDER_FLASH_MS` in `AgentCard.tsx`), reused here as a literal so `flow.ts` stays
+ *  idiom (`BORDER_FLASH_MS` in `SlaveCard.tsx`), reused here as a literal so `flow.ts` stays
  *  dependency-free of that component. */
 export const EDGE_FLASH_MS = 800
 

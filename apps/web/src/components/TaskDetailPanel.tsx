@@ -171,7 +171,7 @@ export function TaskDetailPanel({
                   // `summary` is always `null` today (see `TaskRunSummary.checkpoint`'s own
                   // comment: no join key exists), so this always renders the id-prefix fallback --
                   // not a bug, a fact of the data. Same 8-char id-prefix convention as
-                  // `TaskCard`/`AgentCard`'s `TASK-{id.slice(0, 8)}`; unlike a task's random UUID
+                  // `TaskCard`/`SlaveCard`'s `TASK-{id.slice(0, 8)}`; unlike a task's random UUID
                   // this can render two Claude `toolu_01…` ids identically (they share that fixed
                   // vendor prefix) -- an accepted limit of a best-effort display, not a bug to fix
                   // here. `font-mono text-[10px] text-text-3`, adjacent to `SECTION_LABEL_CLASS`

@@ -11,7 +11,7 @@ import type { CommunicationGraph } from '../src/server/communicationGraph.js'
 // Same split `graph-skill.test.tsx` takes for `SkillMode`: `CommunicationMode` renders through the
 // real `GraphCanvas` in production, but that component is just a thin passthrough onto React Flow
 // -- this stub captures exactly what `CommunicationMode` hands it (nodes, edges, `nodeTypes`) and
-// renders each node type's own component directly, so this file exercises `CommAgentNode`/
+// renders each node type's own component directly, so this file exercises `CommSlaveNode`/
 // `OperatorNode`'s real markup without needing jsdom's `ResizeObserver`/`DOMMatrixReadOnly` shims.
 const graphCanvasCalls: GraphCanvasProps[] = []
 
@@ -68,7 +68,7 @@ vi.mock('elkjs/lib/elk.bundled.js', () => ({
 
 // Same small-factory fixture idiom every graph test file uses.
 function commGraph(overrides: Partial<CommunicationGraph> = {}): CommunicationGraph {
-  return { agents: [], edges: [], ...overrides }
+  return { slaves: [], edges: [], ...overrides }
 }
 
 // ==================================================================================================
@@ -78,7 +78,7 @@ function commGraph(overrides: Partial<CommunicationGraph> = {}): CommunicationGr
 
 describe('buildCommunicationGraph', () => {
   const GRAPH: CommunicationGraph = commGraph({
-    agents: [
+    slaves: [
       { id: 'a1', name: 'Alex', role: 'backend' },
       { id: 'a2', name: 'Sam', role: 'reviewer' },
     ],
@@ -88,18 +88,18 @@ describe('buildCommunicationGraph', () => {
     ],
   })
 
-  it('emits one agent:<id>-prefixed node per agent, plus one operator node, always', () => {
+  it('emits one slave:<id>-prefixed node per slave, plus one operator node, always', () => {
     const { nodes } = buildCommunicationGraph(GRAPH)
-    expect(nodes.map((node) => node.id)).toEqual(['agent:a1', 'agent:a2', 'operator'])
-    expect(nodes.find((node) => node.id === 'agent:a1')?.type).toBe('commAgent')
+    expect(nodes.map((node) => node.id)).toEqual(['slave:a1', 'slave:a2', 'operator'])
+    expect(nodes.find((node) => node.id === 'slave:a1')?.type).toBe('commSlave')
     expect(nodes.find((node) => node.id === 'operator')?.type).toBe('operator')
   })
 
-  it("stamps each agent node's name and role on its data", () => {
+  it("stamps each slave node's name and role on its data", () => {
     const { nodes } = buildCommunicationGraph(GRAPH)
-    const a1 = nodes.find((node) => node.id === 'agent:a1')!
+    const a1 = nodes.find((node) => node.id === 'slave:a1')!
     expect(a1.data).toMatchObject({ name: 'Alex', role: 'backend' })
-    const a2 = nodes.find((node) => node.id === 'agent:a2')!
+    const a2 = nodes.find((node) => node.id === 'slave:a2')!
     expect(a2.data).toMatchObject({ name: 'Sam', role: 'reviewer' })
   })
 
@@ -116,11 +116,11 @@ describe('buildCommunicationGraph', () => {
 
   it('builds one cable edge per graph.edges entry, id `<source>-><target>:<kind>`, type cable', () => {
     const { edges } = buildCommunicationGraph(GRAPH)
-    expect(edges.map((edge) => edge.id)).toEqual(['agent:a1->agent:a2:plan', 'operator->agent:a1:message'])
+    expect(edges.map((edge) => edge.id)).toEqual(['slave:a1->slave:a2:plan', 'operator->slave:a1:message'])
     expect(edges.every((edge) => edge.type === 'cable')).toBe(true)
     expect(edges.map((edge) => [edge.source, edge.target])).toEqual([
-      ['agent:a1', 'agent:a2'],
-      ['operator', 'agent:a1'],
+      ['slave:a1', 'slave:a2'],
+      ['operator', 'slave:a1'],
     ])
   })
 
@@ -136,7 +136,7 @@ describe('buildCommunicationGraph', () => {
 
   it('maps each CommunicationEdgeKind to its StatusTone: plan -> planning, review -> working, rework -> waiting, message -> idle', () => {
     const graph = commGraph({
-      agents: [
+      slaves: [
         { id: 'a1', name: 'Alex', role: 'backend' },
         { id: 'a2', name: 'Sam', role: 'reviewer' },
       ],
@@ -193,23 +193,23 @@ describe('CommunicationMode', () => {
     render(<CommunicationMode workspaceId="w1" />)
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalled())
-    expect(screen.getByTestId('comm-empty').textContent).toBe('no hand-offs yet — edges appear as tasks move between agents')
-    // The canvas itself is still there (real, just empty of agent nodes) -- the stub's own
+    expect(screen.getByTestId('comm-empty').textContent).toBe('no hand-offs yet — edges appear as tasks move between slaves')
+    // The canvas itself is still there (real, just empty of slave nodes) -- the stub's own
     // container always renders, matching every sibling mode's "hint stacks over an always-present
     // canvas" idiom.
     expect(screen.getByTestId('graph-canvas-stub')).toBeTruthy()
   })
 
   // Fix round 1: the band is about HAND-OFFS, not the roster -- a seeded team with zero traffic
-  // yet (agents present, edges empty) is exactly the state the sentence was written for, and must
-  // still show it, with the agent/operator nodes rendered right alongside it (the canvas is never
+  // yet (slaves present, edges empty) is exactly the state the sentence was written for, and must
+  // still show it, with the slave/operator nodes rendered right alongside it (the canvas is never
   // omitted, same as every other empty case).
-  it('shows the empty panel for a non-empty roster with zero edges, alongside the rendered agent nodes', async () => {
+  it('shows the empty panel for a non-empty roster with zero edges, alongside the rendered slave nodes', async () => {
     fetchMock.mockResolvedValueOnce(
       new Response(
         JSON.stringify(
           commGraph({
-            agents: [
+            slaves: [
               { id: 'a1', name: 'Alex', role: 'backend' },
               { id: 'a2', name: 'Sam', role: 'reviewer' },
             ],
@@ -221,21 +221,21 @@ describe('CommunicationMode', () => {
     )
     render(<CommunicationMode workspaceId="w1" />)
 
-    await waitFor(() => expect(screen.getByTestId('node-agent:a1')).toBeTruthy())
+    await waitFor(() => expect(screen.getByTestId('node-slave:a1')).toBeTruthy())
 
-    expect(screen.getByTestId('comm-empty').textContent).toBe('no hand-offs yet — edges appear as tasks move between agents')
-    expect(screen.getByTestId('node-agent:a1').querySelector('[data-testid="comm-agent-node"]')?.textContent).toContain('Alex')
-    expect(screen.getByTestId('node-agent:a2').querySelector('[data-testid="comm-agent-node"]')?.textContent).toContain('Sam')
+    expect(screen.getByTestId('comm-empty').textContent).toBe('no hand-offs yet — edges appear as tasks move between slaves')
+    expect(screen.getByTestId('node-slave:a1').querySelector('[data-testid="comm-slave-node"]')?.textContent).toContain('Alex')
+    expect(screen.getByTestId('node-slave:a2').querySelector('[data-testid="comm-slave-node"]')?.textContent).toContain('Sam')
     expect(screen.getByTestId('node-operator')).toBeTruthy()
     expect(screen.queryAllByTestId(/^edge-/)).toHaveLength(0)
   })
 
-  it('renders N agent nodes, one operator node, and one edge per fetched two-edge graph', async () => {
+  it('renders N slave nodes, one operator node, and one edge per fetched two-edge graph', async () => {
     fetchMock.mockResolvedValueOnce(
       new Response(
         JSON.stringify(
           commGraph({
-            agents: [
+            slaves: [
               { id: 'a1', name: 'Alex', role: 'backend' },
               { id: 'a2', name: 'Sam', role: 'reviewer' },
             ],
@@ -250,20 +250,20 @@ describe('CommunicationMode', () => {
     )
     render(<CommunicationMode workspaceId="w1" />)
 
-    await waitFor(() => expect(screen.getByTestId('node-agent:a1')).toBeTruthy())
+    await waitFor(() => expect(screen.getByTestId('node-slave:a1')).toBeTruthy())
 
-    expect(screen.getByTestId('node-agent:a1').querySelector('[data-testid="comm-agent-node"]')?.textContent).toContain('Alex')
-    expect(screen.getByTestId('node-agent:a1').querySelector('[data-testid="comm-agent-node"]')?.textContent).toContain('backend')
-    expect(screen.getByTestId('node-agent:a2').querySelector('[data-testid="comm-agent-node"]')?.textContent).toContain('Sam')
+    expect(screen.getByTestId('node-slave:a1').querySelector('[data-testid="comm-slave-node"]')?.textContent).toContain('Alex')
+    expect(screen.getByTestId('node-slave:a1').querySelector('[data-testid="comm-slave-node"]')?.textContent).toContain('backend')
+    expect(screen.getByTestId('node-slave:a2').querySelector('[data-testid="comm-slave-node"]')?.textContent).toContain('Sam')
     expect(screen.getByTestId('node-operator').querySelector('[data-testid="operator-node"]')?.textContent).toContain('operator')
 
-    expect(screen.queryAllByTestId(/^node-/)).toHaveLength(3) // two agents + the always-present operator
-    expect(screen.getByTestId('edge-agent:a1->agent:a2:review')).toBeTruthy()
-    expect(screen.getByTestId('edge-operator->agent:a1:message')).toBeTruthy()
+    expect(screen.queryAllByTestId(/^node-/)).toHaveLength(3) // two slaves + the always-present operator
+    expect(screen.getByTestId('edge-slave:a1->slave:a2:review')).toBeTruthy()
+    expect(screen.getByTestId('edge-operator->slave:a1:message')).toBeTruthy()
     expect(screen.queryAllByTestId(/^edge-/)).toHaveLength(2)
 
     expect(screen.queryByTestId('comm-empty')).toBeNull()
-    expect(graphCanvasCalls.at(-1)!.nodeTypes.commAgent).toBeDefined()
+    expect(graphCanvasCalls.at(-1)!.nodeTypes.commSlave).toBeDefined()
     expect(graphCanvasCalls.at(-1)!.nodeTypes.operator).toBeDefined()
   })
 

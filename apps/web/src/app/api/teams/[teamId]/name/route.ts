@@ -7,7 +7,7 @@ export const dynamic = 'force-dynamic'
 const BODY_ERROR = 'the body must be { "name": string }'
 
 /** `DepartmentsTable`'s rename write (M23 D3; renamed M25 §4.2), the same PUT shape as
- *  `agents/[agentId]/name/route.ts`. */
+ *  `slaves/[slaveId]/name/route.ts`. */
 export async function PUT(
   request: Request,
   context: { params: Promise<{ teamId: string }> },

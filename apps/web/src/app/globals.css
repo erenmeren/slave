@@ -135,7 +135,7 @@ body {
   }
 }
 
-/* The agent card's activity sweep: a 2.2s cubic-bezier(.4,0,.2,1) gradient across the top
+/* The slave card's activity sweep: a 2.2s cubic-bezier(.4,0,.2,1) gradient across the top
  * hairline while a card is `working` (design README "1a"; byte-for-byte match to
  * `mockups/Slave of AI Web.dc.html:20`, `@keyframes sweep{0%{transform:translateX(-100%)}
  * 100%{transform:translateX(320%)}}`). The mockup's `.sweep` element (`Web.dc.html:151`) is

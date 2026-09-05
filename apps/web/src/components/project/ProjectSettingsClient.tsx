@@ -45,7 +45,7 @@ export function ProjectSettingsClient({
         costBlindBudgeted={workspace.costBlindBudgeted}
         limits={{ maxConcurrentRuns: workspace.maxConcurrentRuns, runTimeoutMs: workspace.runTimeoutMs, maxAttempts: workspace.maxAttempts }}
       />
-      <Panel title="agent permissions">
+      <Panel title="slave permissions">
         <PermissionMatrix sections={permissions === null ? [] : [permissions]} />
       </Panel>
       <Panel title="danger zone">

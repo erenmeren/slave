@@ -3,10 +3,10 @@
 import { useEffect, useRef, useState } from 'react'
 import type React from 'react'
 import { Handle, Position, type Edge, type Node, type NodeProps, type NodeTypes } from 'reactflow'
-import type { AgentStatus, TaskStatus } from '@slave-of-ai/domain'
-import { CARD_STATE_TONE, cardStateFor, cardStateForAgent } from '../../lib/tones'
+import type { SlaveStatus, TaskStatus } from '@slave-of-ai/domain'
+import { CARD_STATE_TONE, cardStateFor, cardStateForSlave } from '../../lib/tones'
 import type { GraphSnapshot } from '../../server/graph'
-import { BORDER_FLASH_MS, DOT, FLASH_COLOR } from '../AgentCard'
+import { BORDER_FLASH_MS, DOT, FLASH_COLOR } from '../SlaveCard'
 import { TASK_STATUS_BORDER, TASK_STATUS_DOT, TASK_STATUS_FLASH_COLOR } from '../TaskCard'
 import { NodeMenu } from './NodeMenu'
 
@@ -23,11 +23,11 @@ export interface TeamNodeData {
   readonly name: string
 }
 
-export interface AgentNodeData {
-  readonly kind: 'agent'
+export interface SlaveNodeData {
+  readonly kind: 'slave'
   readonly name: string
   readonly role: string
-  readonly status: AgentStatus
+  readonly status: SlaveStatus
   readonly activeTaskTitle: string | null
   /** Carried on the node data (rather than threaded through `GraphCanvas`/React Flow itself)
    *  purely so this renderer can build its `NodeMenu`'s workspace-scoped hrefs -- see the Task 7
@@ -36,8 +36,8 @@ export interface AgentNodeData {
   readonly workspaceId: string
 }
 
-/** The active-task satellite (spec §6's particle track: "along the agent → active-task edge") --
- *  appears only while the agent has a live run, small and title-only (its full detail lives on
+/** The active-task satellite (spec §6's particle track: "along the slave → active-task edge") --
+ *  appears only while the slave has a live run, small and title-only (its full detail lives on
  *  the Tasks board / Task 6's deps-mode node, one click away via the node context menu). */
 export interface ActiveTaskNodeData {
   readonly kind: 'activeTask'
@@ -46,13 +46,13 @@ export interface ActiveTaskNodeData {
   readonly workspaceId: string
 }
 
-// `GraphAgent.status` is typed `string` (a deliberately widened field -- see `server/graph.ts`'s
-// own comment) even though `deriveAgentStatus` only ever produces one of the seven `AgentStatus`
+// `GraphSlave.status` is typed `string` (a deliberately widened field -- see `server/graph.ts`'s
+// own comment) even though `deriveSlaveStatus` only ever produces one of the seven `SlaveStatus`
 // literals at runtime. `DOT` is keyed by the narrow union; this guards the lookup so an
 // unrecognized value (a future status this component hasn't been told about yet, or a fixture
 // typo) reads as idle rather than `undefined` reaching a className.
-function agentDot(status: string): string {
-  return DOT[status as AgentStatus] ?? DOT.idle
+function slaveDot(status: string): string {
+  return DOT[status as SlaveStatus] ?? DOT.idle
 }
 
 // Same shape of guard for `GraphTask.status` reuse -- `TASK_STATUS_DOT`/`TASK_STATUS_BORDER` are
@@ -66,8 +66,8 @@ function taskBorder(status: TaskStatus): string {
   return TASK_STATUS_BORDER[status] ?? TASK_STATUS_BORDER.backlog
 }
 
-function agentFlashColor(status: string): string {
-  return FLASH_COLOR[status as AgentStatus] ?? FLASH_COLOR.idle
+function slaveFlashColor(status: string): string {
+  return FLASH_COLOR[status as SlaveStatus] ?? FLASH_COLOR.idle
 }
 
 function taskFlashColor(status: TaskStatus): string {
@@ -75,10 +75,10 @@ function taskFlashColor(status: TaskStatus): string {
 }
 
 /**
- * The M5 border-flash idiom (`AgentCard.tsx`), copied rather than shared as a hook (spec §6: "a
+ * The M5 border-flash idiom (`SlaveCard.tsx`), copied rather than shared as a hook (spec §6: "a
  * node whose status changes flashes its border in the M5 border-flash language ... and decays back"
  * -- the brief names this file as the place to copy it into, not to abstract it). `T` is whatever
- * status type the caller's node data carries (`AgentStatus`-as-`string`, `TaskStatus`); only a
+ * status type the caller's node data carries (`SlaveStatus`-as-`string`, `TaskStatus`); only a
  * *change* flashes -- the ref seeds to the first-rendered status, so mount never flashes.
  */
 function useStatusFlash<T>(status: T): boolean {
@@ -123,21 +123,21 @@ export function TeamNode({ data }: NodeProps<TeamNodeData>): React.JSX.Element {
   )
 }
 
-/** `agent:<id>` -> `<id>` -- the inverse of `buildOrgGraph`'s node-id prefix, needed only for the
+/** `slave:<id>` -> `<id>` -- the inverse of `buildOrgGraph`'s node-id prefix, needed only for the
  *  `NodeMenu`'s hrefs (the React Flow node id, not the bare domain id). */
-const AGENT_NODE_PREFIX = 'agent:'
+const SLAVE_NODE_PREFIX = 'slave:'
 const ACTIVE_TASK_NODE_PREFIX = 'activeTask:'
 
-export function AgentNode({ id, data }: NodeProps<AgentNodeData>): React.JSX.Element {
+export function SlaveNode({ id, data }: NodeProps<SlaveNodeData>): React.JSX.Element {
   const [menuOpen, setMenuOpen] = useState(false)
-  const agentId = id.startsWith(AGENT_NODE_PREFIX) ? id.slice(AGENT_NODE_PREFIX.length) : id
+  const slaveId = id.startsWith(SLAVE_NODE_PREFIX) ? id.slice(SLAVE_NODE_PREFIX.length) : id
   const flashing = useStatusFlash(data.status)
   return (
     <div
-      data-testid="agent-node"
+      data-testid="slave-node"
       data-status={data.status}
       className={`group relative rounded border border-line bg-bg-1 px-3 py-2 ${flashing ? FLASH_CLASS : ''}`}
-      style={flashing ? ({ '--flash-color': agentFlashColor(data.status) } as React.CSSProperties) : undefined}
+      style={flashing ? ({ '--flash-color': slaveFlashColor(data.status) } as React.CSSProperties) : undefined}
       onContextMenu={(event) => {
         event.preventDefault()
         setMenuOpen(true)
@@ -147,14 +147,14 @@ export function AgentNode({ id, data }: NodeProps<AgentNodeData>): React.JSX.Ele
       <div className="flex items-center gap-1.5">
         <span
           data-testid="status-dot"
-          className={`inline-block h-2 w-2 rounded-full ${agentDot(data.status)} ${data.status === 'working' ? 'animate-pulse' : ''}`}
+          className={`inline-block h-2 w-2 rounded-full ${slaveDot(data.status)} ${data.status === 'working' ? 'animate-pulse' : ''}`}
         />
         <span className="text-sm text-text-1">{data.name}</span>
         <span className="text-xs text-text-3">{data.role}</span>
       </div>
       <div className="mt-1 truncate text-xs text-text-2">{data.activeTaskTitle ?? 'idle'}</div>
       <Handle type="source" position={Position.Bottom} />
-      <NodeMenu kind="agent" workspaceId={data.workspaceId} id={agentId} open={menuOpen} onOpenChange={setMenuOpen} />
+      <NodeMenu kind="slave" workspaceId={data.workspaceId} id={slaveId} open={menuOpen} onOpenChange={setMenuOpen} />
     </div>
   )
 }
@@ -186,15 +186,15 @@ export function ActiveTaskNode({ id, data }: NodeProps<ActiveTaskNodeData>): Rea
 export const ORG_NODE_TYPES: NodeTypes = {
   workspace: WorkspaceNode,
   team: TeamNode,
-  agent: AgentNode,
+  slave: SlaveNode,
   activeTask: ActiveTaskNode,
 } as NodeTypes
 
 // ---- graph builder ------------------------------------------------------------------------
 
 /**
- * The workspace → team → agent hierarchy (spec §4.3), plus one active-task satellite + agent→task
- * edge per agent currently on a live run (spec §6). Every edge is a `cable` (M14 Task 11 --
+ * The workspace → team → slave hierarchy (spec §4.3), plus one active-task satellite + slave→task
+ * edge per slave currently on a live run (spec §6). Every edge is a `cable` (M14 Task 11 --
  * `CableEdge.tsx`) carrying its TARGET's tone, lit only where something is actually happening.
  * Every node starts at `{x: 0, y: 0}` --
  * `layout.ts`'s `useLayoutedGraph` positions them; this function only owns topology and node
@@ -234,58 +234,58 @@ export function buildOrgGraph(snapshot: GraphSnapshot): { readonly nodes: Node[]
 
   const taskStatusById = new Map(snapshot.tasks.map((task) => [task.id, task.status]))
 
-  for (const agent of snapshot.agents) {
-    const agentNodeId = `agent:${agent.id}`
-    const teamNodeId = `team:${agent.teamId}`
+  for (const slave of snapshot.slaves) {
+    const slaveNodeId = `slave:${slave.id}`
+    const teamNodeId = `team:${slave.teamId}`
     nodes.push({
-      id: agentNodeId,
-      type: 'agent',
+      id: slaveNodeId,
+      type: 'slave',
       position: origin,
       data: {
-        kind: 'agent',
-        name: agent.name,
-        role: agent.role,
-        status: agent.status as AgentStatus,
-        activeTaskTitle: agent.activeTaskTitle,
+        kind: 'slave',
+        name: slave.name,
+        role: slave.role,
+        status: slave.status as SlaveStatus,
+        activeTaskTitle: slave.activeTaskTitle,
         workspaceId: snapshot.workspace.id,
-      } satisfies AgentNodeData,
+      } satisfies SlaveNodeData,
     })
     edges.push({
-      id: `${teamNodeId}->${agentNodeId}`,
+      id: `${teamNodeId}->${slaveNodeId}`,
       source: teamNodeId,
-      target: agentNodeId,
+      target: slaveNodeId,
       type: 'cable',
       // The TARGET's tone (design README "1b -- Cables": "in the target's status colour"), and
       // "active" means the target is doing something -- an idle branch of the org tree is
       // structure, not traffic.
       data: {
-        tone: CARD_STATE_TONE[cardStateForAgent(agent.status as AgentStatus)].tone,
-        active: agent.status !== 'idle',
+        tone: CARD_STATE_TONE[cardStateForSlave(slave.status as SlaveStatus)].tone,
+        active: slave.status !== 'idle',
       },
     })
 
-    if (agent.activeTaskId !== null) {
-      const taskNodeId = `activeTask:${agent.activeTaskId}`
+    if (slave.activeTaskId !== null) {
+      const taskNodeId = `activeTask:${slave.activeTaskId}`
       nodes.push({
         id: taskNodeId,
         type: 'activeTask',
         position: origin,
         data: {
           kind: 'activeTask',
-          title: agent.activeTaskTitle ?? '',
-          status: taskStatusById.get(agent.activeTaskId) ?? 'running',
+          title: slave.activeTaskTitle ?? '',
+          status: taskStatusById.get(slave.activeTaskId) ?? 'running',
           workspaceId: snapshot.workspace.id,
         } satisfies ActiveTaskNodeData,
       })
-      // The particle track (spec §6). Always lit: this edge exists only while the agent HAS a live
+      // The particle track (spec §6). Always lit: this edge exists only while the slave HAS a live
       // run, which is exactly what "active" means -- and the particle rides its core path.
       edges.push({
-        id: `${agentNodeId}->${taskNodeId}`,
-        source: agentNodeId,
+        id: `${slaveNodeId}->${taskNodeId}`,
+        source: slaveNodeId,
         target: taskNodeId,
         type: 'cable',
         data: {
-          tone: CARD_STATE_TONE[cardStateFor(agent.status as AgentStatus, taskStatusById.get(agent.activeTaskId) ?? null)].tone,
+          tone: CARD_STATE_TONE[cardStateFor(slave.status as SlaveStatus, taskStatusById.get(slave.activeTaskId) ?? null)].tone,
           active: true,
         },
       })

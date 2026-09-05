@@ -52,7 +52,7 @@ const PROMINENCE_TEXT_CLASS: Record<SkillProminence, string> = {
  * The chip-styled skill node (M18 design doc §6 / the drawer mockup's "SKILL CHAIN · SUPERPOWERS"
  * chain-pill: mono, `border-radius: 5px`, `padding: 4px 8px`, tone-tinted border/background/text
  * -- reused here verbatim as `rounded-chip` / `TONE_*[planning]`, no new colour tokens). Skills
- * carry no live status of their own (no agent/task tone applies), so every skill node rides the
+ * carry no live status of their own (no slave/task tone applies), so every skill node rides the
  * same `planning` tone the mockup's chain pill already used (`#7b8cff`, this codebase's
  * `--color-tone-planning`) -- a fixed, honest choice rather than inventing a "skill" tone.
  *

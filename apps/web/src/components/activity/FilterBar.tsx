@@ -23,7 +23,7 @@ function toggleItem<T>(list: readonly T[], value: T): readonly T[] {
 }
 
 export interface FilterBarProps extends UrlFilters {
-  readonly agents: readonly { readonly id: string; readonly name: string }[]
+  readonly slaves: readonly { readonly id: string; readonly name: string }[]
   readonly tasks: readonly { readonly id: string; readonly title: string }[]
 }
 
@@ -91,7 +91,7 @@ function AdvancedTypesPopover({
   )
 }
 
-/** A native `<select multiple>` for the agent/task roster — no new dependency, and the roster is
+/** A native `<select multiple>` for the slave/task roster — no new dependency, and the roster is
  *  small enough (spec doesn't project it growing beyond a page of options) that a dropdown scan
  *  beats a searchable widget. */
 function RosterSelect({
@@ -131,7 +131,7 @@ function RosterSelect({
  * caller passes down, so this component owns no state of its own.
  */
 export function FilterBar(props: FilterBarProps): ReactElement {
-  const { agents, tasks, filters, kinds, rawTypes, setKinds, setRawTypes, setAgents, setTasks } = props
+  const { slaves, tasks, filters, kinds, rawTypes, setKinds, setRawTypes, setSlaves, setTasks } = props
   return (
     <div className="flex flex-wrap items-center gap-2 border-b border-line bg-bg-1 p-3" data-testid="filter-bar">
       <div className="flex flex-wrap gap-1.5">
@@ -141,10 +141,10 @@ export function FilterBar(props: FilterBarProps): ReactElement {
       </div>
       <AdvancedTypesPopover rawTypes={rawTypes} setRawTypes={setRawTypes} />
       <RosterSelect
-        label="Agents"
-        options={agents.map((agent) => ({ id: agent.id, label: agent.name }))}
-        selected={filters.agents}
-        onChange={setAgents}
+        label="Slaves"
+        options={slaves.map((slave) => ({ id: slave.id, label: slave.name }))}
+        selected={filters.slaves}
+        onChange={setSlaves}
       />
       <RosterSelect
         label="Tasks"

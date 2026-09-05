@@ -2,14 +2,14 @@ import { describe, expect, it } from 'vitest'
 import {
   CARD_STATE_TONE,
   cardStateFor,
-  cardStateForAgent,
+  cardStateForSlave,
   cardStateForRun,
   cardStateForTask,
   toneForTaskStatus,
   type CardState,
 } from '../src/lib/tones.js'
 import { COLUMN_FOR_STATUS, COLUMN_STATE } from '../src/lib/taskColumns.js'
-import type { AgentStatus, RunStatus, TaskStatus } from '@slave-of-ai/domain'
+import type { SlaveStatus, RunStatus, TaskStatus } from '@slave-of-ai/domain'
 import { TASK_STATUSES } from '@slave-of-ai/db'
 import { TASK_STATUS_BORDER, TASK_STATUS_DOT, TASK_STATUS_FLASH_COLOR, TASK_STATUS_TEXT } from '../src/components/TaskCard.js'
 import { TONE_BORDER_SOLID, TONE_DOT, TONE_FLASH_COLOR, TONE_TEXT } from '../src/components/ui/StatusPill.js'
@@ -65,8 +65,8 @@ describe('cardStateForRun', () => {
   })
 })
 
-describe('cardStateForAgent', () => {
-  const cases: ReadonlyArray<readonly [AgentStatus, CardState]> = [
+describe('cardStateForSlave', () => {
+  const cases: ReadonlyArray<readonly [SlaveStatus, CardState]> = [
     ['idle', 'idle'],
     ['starting', 'planning'],
     ['working', 'working'],
@@ -77,20 +77,20 @@ describe('cardStateForAgent', () => {
   ]
 
   it.each(cases)('maps %s to %s', (status, expected) => {
-    expect(cardStateForAgent(status)).toBe(expected)
+    expect(cardStateForSlave(status)).toBe(expected)
   })
 
-  it('covers every AgentStatus', () => {
+  it('covers every SlaveStatus', () => {
     expect(new Set(cases.map(([s]) => s)).size).toBe(7)
   })
 })
 
 describe('cardStateFor', () => {
-  it("lets a blocked task override the agent's own idleness", () => {
+  it("lets a blocked task override the slave's own idleness", () => {
     expect(cardStateFor('idle', 'blocked')).toBe('blocked')
   })
 
-  it('reads a task under review or in the merge queue as review, whatever the agent is doing', () => {
+  it('reads a task under review or in the merge queue as review, whatever the slave is doing', () => {
     expect(cardStateFor('working', 'reviewing')).toBe('review')
     expect(cardStateFor('idle', 'merging')).toBe('review')
   })
@@ -99,7 +99,7 @@ describe('cardStateFor', () => {
     expect(cardStateFor('idle', 'done')).toBe('completed')
   })
 
-  it('defers to the agent everywhere else', () => {
+  it('defers to the slave everywhere else', () => {
     expect(cardStateFor('working', 'running')).toBe('working')
     expect(cardStateFor('paused', 'running')).toBe('paused')
     expect(cardStateFor('idle', null)).toBe('idle')
@@ -118,7 +118,7 @@ describe('cardStateFor', () => {
 
 // M14 fix wave, review I2. The defect this pins: a card in the teal IN PROGRESS column whose own
 // pill read a grey IDLE, because every task-only surface went through `cardStateFor('idle', s)`
-// and five statuses fell through that to the agent's own idleness.
+// and five statuses fell through that to the slave's own idleness.
 describe('cardStateForTask', () => {
   const cases: ReadonlyArray<readonly [TaskStatus, CardState]> = [
     ['backlog', 'idle'],

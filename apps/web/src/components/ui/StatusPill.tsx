@@ -1,6 +1,6 @@
 /**
- * The handoff status vocabulary (spec §3) — independent of the older M4 `AgentCardData['status']`
- * / `TaskStatus` vocabularies (`AgentCard.tsx`'s `DOT`, `TaskCard.tsx`'s `TASK_STATUS_DOT`, etc.):
+ * The handoff status vocabulary (spec §3) — independent of the older M4 `SlaveCardData['status']`
+ * / `TaskStatus` vocabularies (`SlaveCard.tsx`'s `DOT`, `TaskCard.tsx`'s `TASK_STATUS_DOT`, etc.):
  * this is the tone set the `ui/` component library itself renders. Every `ui/` component that
  * takes a `tone` prop imports this type (and, where it needs the class-per-tone pattern below,
  * the `TONE_*` maps) from here rather than redefining it.
@@ -81,7 +81,7 @@ export const TONE_DOT: Record<StatusTone, string> = {
 /**
  * The border-flash's `--flash-color` source per `StatusTone` (M19 C7) -- an inline CSS custom
  * property value, not a class, so the Tailwind literal-scan rule above does not apply here; it
- * mirrors `AgentCard.tsx`'s own `FLASH_COLOR` pattern, and is what `TaskCard.tsx`'s
+ * mirrors `SlaveCard.tsx`'s own `FLASH_COLOR` pattern, and is what `TaskCard.tsx`'s
  * `TASK_STATUS_FLASH_COLOR` (M7 task 8, spec §6's status-flash signal) now derives off.
  */
 export const TONE_FLASH_COLOR: Record<StatusTone, string> = {
@@ -128,7 +128,7 @@ export function StatusPill({
    * because pulse is a fact about the STATE and two states can share one tone: `pause_requested`
    * ("PAUSING") rides the amber `waiting` tone and pulses, while plain `waiting` does not.
    * Omitted, the pre-M14 `IN_FLIGHT_TONES` rule applies unchanged, so every M11/M12 call site
-   * (`AllAgentsTable`, `ProjectsClient`) keeps exactly the behaviour it has.
+   * (`AllSlavesTable`, `ProjectsClient`) keeps exactly the behaviour it has.
    */
   readonly pulse?: boolean
 }): React.JSX.Element {

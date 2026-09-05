@@ -9,7 +9,7 @@ import { skillCallTotals } from '../../src/server/skills.js'
  * SQL is proven against.
  */
 async function oldTotals(): Promise<Map<string, number>> {
-  const runs = await prisma.agentRun.findMany({ where: { skillCalls: { not: Prisma.DbNull } }, select: { skillCalls: true } })
+  const runs = await prisma.slaveRun.findMany({ where: { skillCalls: { not: Prisma.DbNull } }, select: { skillCalls: true } })
   const totals = new Map<string, number>()
   for (const run of runs) {
     for (const [name, count] of Object.entries((run.skillCalls as Record<string, unknown> | null) ?? {})) {
@@ -20,17 +20,17 @@ async function oldTotals(): Promise<Map<string, number>> {
   return totals
 }
 
-let agentId: string
+let slaveId: string
 
 beforeEach(async (): Promise<void> => {
   await prisma.$executeRawUnsafe(
-    'TRUNCATE TABLE "ExecutionEvent", "AgentSkill", "Skill", "SkillProvider", "AgentPermission", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
+    'TRUNCATE TABLE "ExecutionEvent", "SlaveSkill", "Skill", "SkillProvider", "SlavePermission", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
   )
   const workspace = await prisma.workspace.create({
     data: { name: 'W', repoPath: '/tmp/skill-call-totals', verifyCommands: ['true'], setupCommands: [] },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'T' } })
-  agentId = (await prisma.agent.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })).id
+  slaveId = (await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })).id
 })
 
 afterAll(async (): Promise<void> => {
@@ -39,22 +39,22 @@ afterAll(async (): Promise<void> => {
 
 describe('skillCallTotals equivalence', () => {
   it('matches the in-memory sum on every skillCalls shape the writer produces', async () => {
-    await prisma.agentRun.create({
+    await prisma.slaveRun.create({
       data: {
-        agentId,
+        slaveId,
         status: 'succeeded',
         provider: 'claude_code',
         skillCalls: { 'superpowers:writing-plans': 2, brainstorming: 5 },
       },
     })
-    await prisma.agentRun.create({
-      data: { agentId, status: 'succeeded', provider: 'claude_code', skillCalls: { brainstorming: 1, '<unnamed>': 3 } },
+    await prisma.slaveRun.create({
+      data: { slaveId, status: 'succeeded', provider: 'claude_code', skillCalls: { brainstorming: 1, '<unnamed>': 3 } },
     })
-    await prisma.agentRun.create({
-      data: { agentId, status: 'failed', provider: 'claude_code', skillCalls: { broken: 'not-a-number', fine: 2 } },
+    await prisma.slaveRun.create({
+      data: { slaveId, status: 'failed', provider: 'claude_code', skillCalls: { broken: 'not-a-number', fine: 2 } },
     })
     // A Cursor run: `Prisma.DbNull` is SQL NULL on the nullable Json column, and contributes nothing.
-    await prisma.agentRun.create({ data: { agentId, status: 'succeeded', provider: 'cursor', skillCalls: Prisma.DbNull } })
+    await prisma.slaveRun.create({ data: { slaveId, status: 'succeeded', provider: 'cursor', skillCalls: Prisma.DbNull } })
 
     const expected = await oldTotals()
     const actual = await skillCallTotals()

@@ -8,13 +8,13 @@ import { formatDuration } from '../lib/format'
  * workspace, or to every workspace when `workspaceId` is `null` (the global `/analytics` route).
  *
  * **Stated limits, because the page shows figures an operator will act on:**
- * - Skill counts are END-OF-RUN facts (`AgentRun.skillCalls`, M14 §4.1). A run in flight
+ * - Skill counts are END-OF-RUN facts (`SlaveRun.skillCalls`, M14 §4.1). A run in flight
  *   contributes nothing, so "skills used today" trails the live board by one run.
- * - Token counts are CLAUDE-ONLY. Cursor reports none, and `tokens` is `null` for an agent whose
+ * - Token counts are CLAUDE-ONLY. Cursor reports none, and `tokens` is `null` for a slave whose
  *   runs are all on Cursor — not zero.
  * - Cost is KNOWN cost. `unmeasuredRuns` beside it is how many runs really ran, finished, and
  *   left no figure; it is never folded into the total.
- * - The KPI tiles and per-agent table are computed over ALL of this scope's runs, not just the
+ * - The KPI tiles and per-slave table are computed over ALL of this scope's runs, not just the
  *   7-day window the series and the seeded caption describe -- an average duration or a success
  *   rate over the last week alone would swing wildly on a quiet workspace, and the day-by-day
  *   trend already exists for the windowed view. Only `series` is window-bound.
@@ -36,12 +36,12 @@ export interface Kpi {
   readonly note: string | null
 }
 
-export interface AgentPerformanceRow {
-  readonly agentId: string
+export interface SlavePerformanceRow {
+  readonly slaveId: string
   readonly name: string
   readonly role: string
   readonly runs: number
-  /** `null` when the agent has no terminal run at all — no denominator, no rate. */
+  /** `null` when the slave has no terminal run at all — no denominator, no rate. */
   readonly successPct: number | null
   /** Mean `endedAt − startedAt` in ms over terminal runs, `null` with none. */
   readonly avgDurationMs: number | null
@@ -61,15 +61,15 @@ export interface AnalyticsSnapshot {
   readonly series: readonly DayCount[]
   /** Exactly six, in the order the page renders them. */
   readonly kpis: readonly Kpi[]
-  readonly perAgent: readonly AgentPerformanceRow[]
+  readonly perSlave: readonly SlavePerformanceRow[]
 }
 
-/** One row per agent that has ever run, from `perAgentRunAggregates` — every JS reduce the old
- *  `allRuns` + per-agent pass used to do, expressed as a SQL `FILTER` instead. `bigint` on the
+/** One row per slave that has ever run, from `perSlaveRunAggregates` — every JS reduce the old
+ *  `allRuns` + per-slave pass used to do, expressed as a SQL `FILTER` instead. `bigint` on the
  *  COUNT/SUM-of-integer columns is `pg`'s driver behaviour for those aggregates; every consumer
  *  converts with `Number()` at the point it reads the field, never earlier. */
-interface AgentAggRow {
-  readonly agentId: string
+interface SlaveAggRow {
+  readonly slaveId: string
   readonly terminal: bigint
   readonly succeeded: bigint
   readonly durationMsSum: number | null
@@ -82,19 +82,19 @@ interface AgentAggRow {
 }
 
 /**
- * One row per agent that has ever run in this scope, grouped in SQL rather than fetched as
- * `AgentRun` rows and reduced in JS (Task 12, M17): the old `allRuns` findMany pulled every run in
+ * One row per slave that has ever run in this scope, grouped in SQL rather than fetched as
+ * `SlaveRun` rows and reduced in JS (Task 12, M17): the old `allRuns` findMany pulled every run in
  * the database on the global (`workspaceId: null`) route. Every branch below is the same rule the
  * old JS reduce applied, restated as a `FILTER` clause — see `apps/web/test/integration/
  * analytics-aggregates.test.ts` for the equivalence proof against that old computation.
  */
-export async function perAgentRunAggregates(workspaceId: string | null): Promise<readonly AgentAggRow[]> {
+export async function perSlaveRunAggregates(workspaceId: string | null): Promise<readonly SlaveAggRow[]> {
   const scopeJoin =
     workspaceId === null
       ? Prisma.empty
-      : Prisma.sql`JOIN "Agent" a ON a."id" = r."agentId" JOIN "Team" t ON t."id" = a."teamId" WHERE t."workspaceId" = ${workspaceId}`
-  return prisma.$queryRaw<AgentAggRow[]>(Prisma.sql`
-    SELECT r."agentId" AS "agentId",
+      : Prisma.sql`JOIN "Slave" a ON a."id" = r."slaveId" JOIN "Team" t ON t."id" = a."teamId" WHERE t."workspaceId" = ${workspaceId}`
+  return prisma.$queryRaw<SlaveAggRow[]>(Prisma.sql`
+    SELECT r."slaveId" AS "slaveId",
       COUNT(*) FILTER (WHERE r."terminalAt" IS NOT NULL) AS terminal,
       COUNT(*) FILTER (WHERE r."terminalAt" IS NOT NULL AND r."status"::text = 'succeeded') AS succeeded,
       (SUM(EXTRACT(EPOCH FROM (r."endedAt" - r."startedAt")) * 1000)
@@ -107,9 +107,9 @@ export async function perAgentRunAggregates(workspaceId: string | null): Promise
       COUNT(*) FILTER (WHERE r."costUsd" IS NULL AND r."provider" IS NOT NULL
         AND r."status"::text NOT IN (${Prisma.join([...NON_TERMINAL_RUN_STATUSES])})) AS unmeasured,
       SUM(r."toolCalls") AS "toolCalls"
-    FROM "AgentRun" r
+    FROM "SlaveRun" r
     ${scopeJoin}
-    GROUP BY r."agentId"`)
+    GROUP BY r."slaveId"`)
 }
 
 const WINDOW_DAYS = 7
@@ -134,28 +134,28 @@ function windowStart(): Date {
 export { formatDuration } from '../lib/format'
 
 export async function buildAnalytics(workspaceId: string | null): Promise<AnalyticsSnapshot> {
-  const agentWhere = workspaceId === null ? {} : { team: { workspaceId } }
-  const runWhere = workspaceId === null ? {} : { agent: { team: { workspaceId } } }
+  const slaveWhere = workspaceId === null ? {} : { team: { workspaceId } }
+  const runWhere = workspaceId === null ? {} : { slave: { team: { workspaceId } } }
   const from = windowStart()
 
-  const [agents, windowRuns, aggRows, pauses, activeAgentRows, tasks] = await Promise.all([
-    prisma.agent.findMany({ where: agentWhere, orderBy: { name: 'asc' }, select: { id: true, name: true, role: true } }),
-    prisma.agentRun.findMany({
+  const [slaves, windowRuns, aggRows, pauses, activeSlaveRows, tasks] = await Promise.all([
+    prisma.slave.findMany({ where: slaveWhere, orderBy: { name: 'asc' }, select: { id: true, name: true, role: true } }),
+    prisma.slaveRun.findMany({
       where: { ...runWhere, terminalAt: { gte: from } },
       select: { status: true, terminalAt: true },
     }),
-    perAgentRunAggregates(workspaceId),
+    perSlaveRunAggregates(workspaceId),
     prisma.executionEvent.count({
       where: { type: 'run_paused', ...(workspaceId === null ? {} : { workspaceId }) },
     }),
-    // Agents, not runs: the scheduler enforces at most one non-terminal run per agent, but
+    // Slaves, not runs: the scheduler enforces at most one non-terminal run per slave, but
     // this query does not lean on that invariant staying true -- it names its unit directly
-    // (`distinct: ['agentId']`) rather than counting rows and hoping they never double up, the
-    // way `overview.ts`'s `liveRunByAgent` dedupes explicitly instead of trusting the same rule.
-    prisma.agentRun.findMany({
+    // (`distinct: ['slaveId']`) rather than counting rows and hoping they never double up, the
+    // way `overview.ts`'s `liveRunBySlave` dedupes explicitly instead of trusting the same rule.
+    prisma.slaveRun.findMany({
       where: { ...runWhere, status: { in: [...NON_TERMINAL_RUN_STATUSES] } },
-      distinct: ['agentId'],
-      select: { agentId: true },
+      distinct: ['slaveId'],
+      select: { slaveId: true },
     }),
     prisma.task.groupBy({
       by: ['status'],
@@ -189,9 +189,9 @@ export async function buildAnalytics(workspaceId: string | null): Promise<Analyt
   const failedTasks = countOf(['failed'])
   const successDenominator = done + failedTasks
 
-  // Every ingredient below is a straight sum across `aggRows` (one row per agent) of the exact
-  // figure the old per-agent `FILTER`-equivalent JS reduce produced for that agent — see
-  // `perAgentRunAggregates`'s doc comment and the equivalence test it points to.
+  // Every ingredient below is a straight sum across `aggRows` (one row per slave) of the exact
+  // figure the old per-slave `FILTER`-equivalent JS reduce produced for that slave — see
+  // `perSlaveRunAggregates`'s doc comment and the equivalence test it points to.
   let durationMsSum = 0
   let durationCount = 0
   let knownUsd = 0
@@ -225,22 +225,22 @@ export async function buildAnalytics(workspaceId: string | null): Promise<Analyt
     },
     { label: 'Tool calls', value: String(toolCallsTotal), note: null },
     { label: 'Pauses', value: String(pauses), note: null },
-    { label: 'Active agents', value: String(activeAgentRows.length), note: null },
+    { label: 'Active slaves', value: String(activeSlaveRows.length), note: null },
   ]
 
-  // ---- per-agent performance -------------------------------------------------------------
-  const aggByAgent = new Map(aggRows.map((row) => [row.agentId, row]))
+  // ---- per-slave performance -------------------------------------------------------------
+  const aggBySlave = new Map(aggRows.map((row) => [row.slaveId, row]))
 
-  const perAgent: readonly AgentPerformanceRow[] = agents.map((agent) => {
-    const agg = aggByAgent.get(agent.id)
+  const perSlave: readonly SlavePerformanceRow[] = slaves.map((slave) => {
+    const agg = aggBySlave.get(slave.id)
     const terminal = agg === undefined ? 0 : Number(agg.terminal)
 
     return {
-      agentId: agent.id,
-      name: agent.name,
-      role: agent.role,
+      slaveId: slave.id,
+      name: slave.name,
+      role: slave.role,
       runs: terminal,
-      // `null` when the agent has no terminal run at all — no denominator, no rate.
+      // `null` when the slave has no terminal run at all — no denominator, no rate.
       successPct: terminal === 0 || agg === undefined ? null : Math.round((Number(agg.succeeded) / terminal) * 100),
       // Mean `endedAt − startedAt` in ms over terminal runs, `null` with none.
       avgDurationMs:
@@ -254,5 +254,5 @@ export async function buildAnalytics(workspaceId: string | null): Promise<Analyt
     }
   })
 
-  return { workspaceId, seeded: workspaceId === SEED_WORKSPACE_ID, series, kpis, perAgent }
+  return { workspaceId, seeded: workspaceId === SEED_WORKSPACE_ID, series, kpis, perSlave }
 }

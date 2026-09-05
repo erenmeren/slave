@@ -5,7 +5,7 @@ import { listProjects } from '../../src/server/org.js'
 /**
  * Equivalence test for Task 13 (M17): `listProjects`' spend path must produce the SAME `spend` /
  * `unmeasuredRuns` numbers whether it is computed from the whole-table `findMany` + `sumSpend`
- * pass (the pre-rewrite implementation) or from `agentRun.groupBy` + `sumSpendFromGroups` (the
+ * pass (the pre-rewrite implementation) or from `slaveRun.groupBy` + `sumSpendFromGroups` (the
  * rewrite). This file is run TWICE against the same fixture -- once before the rewrite (the
  * equivalence claim) and once after -- and must pass unchanged both times.
  *
@@ -18,7 +18,7 @@ import { listProjects } from '../../src/server/org.js'
 interface Fixture {
   readonly workspaceId: string
   readonly teamId: string
-  readonly agentId: string
+  readonly slaveId: string
 }
 
 async function seed(): Promise<Fixture> {
@@ -33,8 +33,8 @@ async function seed(): Promise<Fixture> {
     },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const agent = await prisma.agent.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
-  return { workspaceId: workspace.id, teamId: team.id, agentId: agent.id }
+  const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
+  return { workspaceId: workspace.id, teamId: team.id, slaveId: slave.id }
 }
 
 const t0 = new Date('2026-02-01T00:00:00Z')
@@ -42,12 +42,12 @@ const plusMs = (ms: number): Date => new Date(t0.getTime() + ms)
 
 /** The five rule-branch rows, hand-mapped to their contribution below. */
 async function seedRuleBranchRuns(fixture: Fixture): Promise<void> {
-  await prisma.agentRun.createMany({
+  await prisma.slaveRun.createMany({
     data: [
       // 1. Unmeasured: spawned (provider set), finished (terminal status), no cost reported.
       //    -> known += 0, unmeasuredRuns += 1
       {
-        agentId: fixture.agentId,
+        slaveId: fixture.slaveId,
         status: 'failed',
         provider: 'claude_code',
         costUsd: null,
@@ -58,7 +58,7 @@ async function seedRuleBranchRuns(fixture: Fixture): Promise<void> {
       // 2. In flight: non-terminal status, no cost yet. Unfinished is not unmeasured.
       //    -> known += 0, unmeasuredRuns += 0
       {
-        agentId: fixture.agentId,
+        slaveId: fixture.slaveId,
         status: 'working',
         provider: 'claude_code',
         costUsd: null,
@@ -68,7 +68,7 @@ async function seedRuleBranchRuns(fixture: Fixture): Promise<void> {
       //    Its money stays in `known`; the null provider means it can never qualify as unmeasured.
       //    -> known += 2.00, unmeasuredRuns += 0
       {
-        agentId: fixture.agentId,
+        slaveId: fixture.slaveId,
         status: 'succeeded',
         provider: null,
         costUsd: 2.0,
@@ -79,7 +79,7 @@ async function seedRuleBranchRuns(fixture: Fixture): Promise<void> {
       // 4. Measured zero: a run that genuinely cost nothing is a MEASURED zero, not a hole.
       //    -> known += 0, unmeasuredRuns += 0
       {
-        agentId: fixture.agentId,
+        slaveId: fixture.slaveId,
         status: 'succeeded',
         provider: 'claude_code',
         costUsd: 0,
@@ -90,7 +90,7 @@ async function seedRuleBranchRuns(fixture: Fixture): Promise<void> {
       // 5. Ordinary measured cost.
       //    -> known += 1.25, unmeasuredRuns += 0
       {
-        agentId: fixture.agentId,
+        slaveId: fixture.slaveId,
         status: 'succeeded',
         provider: 'claude_code',
         costUsd: 1.25,
@@ -112,7 +112,7 @@ describe('listProjects spend groups equivalence', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace", "CompanyAgent", "CompanyTeam", "Company", "AgentTemplate" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
     await seedRuleBranchRuns(fixture)

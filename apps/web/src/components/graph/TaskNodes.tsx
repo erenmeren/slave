@@ -6,7 +6,7 @@ import { Handle, Position, type Edge, type Node, type NodeProps, type NodeTypes 
 import type { TaskStatus } from '@slave-of-ai/domain'
 import { CARD_STATE_TONE, cardStateForTask } from '../../lib/tones'
 import type { GraphSnapshot } from '../../server/graph'
-import { BORDER_FLASH_MS } from '../AgentCard'
+import { BORDER_FLASH_MS } from '../SlaveCard'
 import { TASK_STATUS_BORDER, TASK_STATUS_DOT, TASK_STATUS_FLASH_COLOR } from '../TaskCard'
 import { NodeMenu } from './NodeMenu'
 
@@ -23,7 +23,7 @@ export interface TaskNodeData {
    *  unmet prerequisite, not every task with a dependency). `null` for every other status,
    *  including `ready` tasks whose dependencies are already all done. */
   readonly waitingOn: number | null
-  /** Same "carried on node data" reasoning as `OrgNodes.tsx`'s `AgentNodeData.workspaceId` --
+  /** Same "carried on node data" reasoning as `OrgNodes.tsx`'s `SlaveNodeData.workspaceId` --
    *  needed for this node's `NodeMenu` hrefs. */
   readonly workspaceId: string
 }
@@ -42,7 +42,7 @@ function taskFlashColor(status: TaskStatus): string {
   return TASK_STATUS_FLASH_COLOR[status] ?? TASK_STATUS_FLASH_COLOR.backlog
 }
 
-/** The M5 border-flash idiom (`AgentCard.tsx`), copied into this file the same way `OrgNodes.tsx`'s
+/** The M5 border-flash idiom (`SlaveCard.tsx`), copied into this file the same way `OrgNodes.tsx`'s
  *  own copy is (spec §6) -- only a status *change* flashes, never the initial mount. */
 function useStatusFlash(status: TaskStatus): boolean {
   const previous = useRef(status)
@@ -159,7 +159,7 @@ export function buildDepsGraph(snapshot: GraphSnapshot): { readonly nodes: Node[
     const target = `task:${dependency.taskId}`
     // The TARGET's own state, through `cardStateForTask` -- the task-only derivation (M14 fix
     // wave, review I2). This used to be `cardStateFor('idle', status)`, which handed the
-    // AGENT-first derivation a fake idle agent and drew every cable into a `running`, `assigned`
+    // SLAVE-first derivation a fake idle slave and drew every cable into a `running`, `assigned`
     // or `verifying` task in the grey idle tone. `undefined` only for a dependency row pointing
     // outside the snapshot's own task set; `idle` is the honest tone for a target we cannot see.
     const targetStatus = statusById.get(dependency.taskId)

@@ -6,11 +6,11 @@ import { listWorkers } from '../../src/server/org.js'
  * Equivalence test for Task 12 (M19, C5): `listWorkers`' derived facts (`costUsd`/`unmeasuredRuns`,
  * `tokens`, live `provider`) must come out the SAME whether they are computed from the
  * whole-history `findMany` + in-memory reduce (the pre-rewrite implementation) or from
- * `agentRun.groupBy` + a separate bounded live-run query (the rewrite). This file is run TWICE
+ * `slaveRun.groupBy` + a separate bounded live-run query (the rewrite). This file is run TWICE
  * against the same fixture -- once before the rewrite (the equivalence claim) and once after -- and
  * must pass unchanged both times, the same method `org-spend-groups.test.ts` (M17 Task 13) used.
  *
- * Three agents, one per group of rule branches the task brief lists:
+ * Three slaves, one per group of rule branches the task brief lists:
  *
  * - Alex: (a) an unmeasured terminal run, (b) an in-flight run with a provider, (c) a pre-M12 row
  *   (real cost, null provider), (d) a measured zero, (e) an ordinary measured run with tokens, and
@@ -20,9 +20,9 @@ import { listWorkers } from '../../src/server/org.js'
  *   treating the pair as one unit) is actually exercised. Branches (a)-(e) are the same five
  *   `org-spend-groups.test.ts` seeds for `listProjects`; (e) and (e2) between them give `tokens`
  *   and live `provider` (read off (b), Alex's only non-terminal run) something to compute over.
- * - Blake: (f) an agent whose runs ALL omit tokens -- `tokens` must be `null`, not `0`.
- * - Casey: (g) an agent with TWO non-terminal runs at different `startedAt` -- live `provider`
- *   must be the NEWER one's, proving the "first row per agent, ordered by startedAt desc" rule
+ * - Blake: (f) a slave whose runs ALL omit tokens -- `tokens` must be `null`, not `0`.
+ * - Casey: (g) a slave with TWO non-terminal runs at different `startedAt` -- live `provider`
+ *   must be the NEWER one's, proving the "first row per slave, ordered by startedAt desc" rule
  *   rather than an incidental array-order artifact.
  *
  * Expected values below are computed BY HAND from the seeded rows, not derived from either
@@ -49,9 +49,9 @@ async function seed(): Promise<Fixture> {
     },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const alex = await prisma.agent.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
-  const blake = await prisma.agent.create({ data: { teamId: team.id, name: 'Blake', role: 'backend' } })
-  const casey = await prisma.agent.create({ data: { teamId: team.id, name: 'Casey', role: 'backend' } })
+  const alex = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
+  const blake = await prisma.slave.create({ data: { teamId: team.id, name: 'Blake', role: 'backend' } })
+  const casey = await prisma.slave.create({ data: { teamId: team.id, name: 'Casey', role: 'backend' } })
   return { workspaceId: workspace.id, teamId: team.id, alexId: alex.id, blakeId: blake.id, caseyId: casey.id }
 }
 
@@ -59,12 +59,12 @@ const t0 = new Date('2026-02-01T00:00:00Z')
 const plusMs = (ms: number): Date => new Date(t0.getTime() + ms)
 
 async function seedRuleBranchRuns(fixture: Fixture): Promise<void> {
-  await prisma.agentRun.createMany({
+  await prisma.slaveRun.createMany({
     data: [
       // Alex (a): unmeasured -- spawned (provider set), finished (terminal), no cost reported.
       //   -> known += 0, unmeasuredRuns += 1; does not report tokens.
       {
-        agentId: fixture.alexId,
+        slaveId: fixture.alexId,
         status: 'failed',
         provider: 'claude_code',
         costUsd: null,
@@ -78,7 +78,7 @@ async function seedRuleBranchRuns(fixture: Fixture): Promise<void> {
       //   live `provider` must read off this one.
       //   -> known += 0, unmeasuredRuns += 0
       {
-        agentId: fixture.alexId,
+        slaveId: fixture.alexId,
         status: 'working',
         provider: 'claude_code',
         costUsd: null,
@@ -90,7 +90,7 @@ async function seedRuleBranchRuns(fixture: Fixture): Promise<void> {
       //   Its money stays in `known`; the null provider means it can never qualify as unmeasured.
       //   -> known += 2.00, unmeasuredRuns += 0
       {
-        agentId: fixture.alexId,
+        slaveId: fixture.alexId,
         status: 'succeeded',
         provider: null,
         costUsd: 2.0,
@@ -103,7 +103,7 @@ async function seedRuleBranchRuns(fixture: Fixture): Promise<void> {
       // Alex (d): measured zero -- a run that genuinely cost nothing is a MEASURED zero, not a hole.
       //   -> known += 0, unmeasuredRuns += 0
       {
-        agentId: fixture.alexId,
+        slaveId: fixture.alexId,
         status: 'succeeded',
         provider: 'claude_code',
         costUsd: 0,
@@ -116,7 +116,7 @@ async function seedRuleBranchRuns(fixture: Fixture): Promise<void> {
       // Alex (e): ordinary measured run, reporting both token columns.
       //   -> known += 1.25, unmeasuredRuns += 0; tokens += 1000 + 500 = 1500
       {
-        agentId: fixture.alexId,
+        slaveId: fixture.alexId,
         status: 'succeeded',
         provider: 'claude_code',
         costUsd: 1.25,
@@ -131,7 +131,7 @@ async function seedRuleBranchRuns(fixture: Fixture): Promise<void> {
       //   `unmeasuredRuns` (it carries a real cost, so it is a measured run, not a hole).
       //   -> known += 0.75, unmeasuredRuns += 0; tokens += 300 + 0 = 300
       {
-        agentId: fixture.alexId,
+        slaveId: fixture.alexId,
         status: 'succeeded',
         provider: 'claude_code',
         costUsd: 0.75,
@@ -144,7 +144,7 @@ async function seedRuleBranchRuns(fixture: Fixture): Promise<void> {
       // Blake (f): two measured runs, NEITHER reports tokens -- `tokens` must be `null`, never `0`.
       //   -> known += 5.00 + 3.50 = 8.50, unmeasuredRuns += 0
       {
-        agentId: fixture.blakeId,
+        slaveId: fixture.blakeId,
         status: 'succeeded',
         provider: 'claude_code',
         costUsd: 5.0,
@@ -155,7 +155,7 @@ async function seedRuleBranchRuns(fixture: Fixture): Promise<void> {
         terminalAt: plusMs(60_000),
       },
       {
-        agentId: fixture.blakeId,
+        slaveId: fixture.blakeId,
         status: 'succeeded',
         provider: 'claude_code',
         costUsd: 3.5,
@@ -170,7 +170,7 @@ async function seedRuleBranchRuns(fixture: Fixture): Promise<void> {
       //   `provider` must be the NEWER row's ('cursor'), not the older one's ('claude_code') and
       //   not whichever happens to insert first.
       {
-        agentId: fixture.caseyId,
+        slaveId: fixture.caseyId,
         status: 'working',
         provider: 'claude_code',
         costUsd: null,
@@ -179,7 +179,7 @@ async function seedRuleBranchRuns(fixture: Fixture): Promise<void> {
         startedAt: t0,
       },
       {
-        agentId: fixture.caseyId,
+        slaveId: fixture.caseyId,
         status: 'starting',
         provider: 'cursor',
         costUsd: null,
@@ -211,7 +211,7 @@ describe('listWorkers derived-facts equivalence', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace", "CompanyAgent", "CompanyTeam", "Company", "AgentTemplate" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
     await seedRuleBranchRuns(fixture)
@@ -223,9 +223,9 @@ describe('listWorkers derived-facts equivalence', () => {
 
   it('computes the exact hand-computed costUsd, unmeasuredRuns, tokens and live provider over every rule branch', async (): Promise<void> => {
     const workers = await listWorkers()
-    const alex = workers.find((w) => w.agentId === fixture.alexId)
-    const blake = workers.find((w) => w.agentId === fixture.blakeId)
-    const casey = workers.find((w) => w.agentId === fixture.caseyId)
+    const alex = workers.find((w) => w.slaveId === fixture.alexId)
+    const blake = workers.find((w) => w.slaveId === fixture.blakeId)
+    const casey = workers.find((w) => w.slaveId === fixture.caseyId)
 
     expect(alex?.costUsd).toBeCloseTo(ALEX_EXPECTED.costUsd)
     expect(alex?.unmeasuredRuns).toBe(ALEX_EXPECTED.unmeasuredRuns)

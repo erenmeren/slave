@@ -26,12 +26,12 @@ async function seed(): Promise<Fixture> {
     data: { name: 'Other', repoPath: mkdtempSync(join(tmpdir(), 'slaveofai-web-control-other-')), verifyCommands: ['npm test'], setupCommands: [] },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const agent = await prisma.agent.create({ data: { teamId: team.id, name: 'Alex', role: 'Backend' } })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'Backend' } })
   const task = await prisma.task.create({
     data: { workspaceId: workspace.id, title: 'Add checkout retry', description: 'Retry failed payments', maxAttempts: workspace.maxAttempts },
   })
-  const run = await prisma.agentRun.create({
-    data: { taskId: task.id, agentId: agent.id, status: 'working' },
+  const run = await prisma.slaveRun.create({
+    data: { taskId: task.id, slaveId: slave.id, status: 'working' },
   })
   return {
     workspace: { id: workspace.id, repoPath },
@@ -43,7 +43,7 @@ async function seed(): Promise<Fixture> {
 
 /** Mirrors the checkpoint a real pause leaves behind (see packages/control's resume-intent fixture). */
 async function pauseWithCheckpoint(fixture: Fixture): Promise<void> {
-  await prisma.agentRun.update({ where: { id: fixture.run.id }, data: { status: 'paused', pauseReason: 'human' } })
+  await prisma.slaveRun.update({ where: { id: fixture.run.id }, data: { status: 'paused', pauseReason: 'human' } })
   await prisma.checkpoint.create({
     data: {
       runId: fixture.run.id,
@@ -71,7 +71,7 @@ describe('the control routes', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Approval", "AgentMessage", "Artifact", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Approval", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
   })
@@ -87,12 +87,12 @@ describe('the control routes', () => {
       })
       expect(response.status).toBe(200)
       expect(await response.json()).toEqual({ ok: true })
-      const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: fixture.run.id } })
+      const after = await prisma.slaveRun.findUniqueOrThrow({ where: { id: fixture.run.id } })
       expect(after.status).toBe('pause_requested')
     })
 
     it('maps a control refusal to 409 with the refusal text', async (): Promise<void> => {
-      await prisma.agentRun.update({ where: { id: fixture.run.id }, data: { status: 'succeeded' } })
+      await prisma.slaveRun.update({ where: { id: fixture.run.id }, data: { status: 'succeeded' } })
       const response = await pausePOST(new Request('http://x', { method: 'POST' }), {
         params: Promise.resolve({ workspaceId: fixture.workspace.id, runId: fixture.run.id }),
       })
@@ -128,7 +128,7 @@ describe('the control routes', () => {
         { params: Promise.resolve({ workspaceId: fixture.workspace.id, runId: fixture.run.id }) },
       )
       expect(response.status).toBe(200)
-      const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: fixture.run.id } })
+      const after = await prisma.slaveRun.findUniqueOrThrow({ where: { id: fixture.run.id } })
       expect(after.queuedMessage).toBe('EXTRA.md please')
       expect(after.status).toBe('paused')
     })
@@ -140,7 +140,7 @@ describe('the control routes', () => {
         params: Promise.resolve({ workspaceId: fixture.workspace.id, runId: fixture.run.id }),
       })
       expect(response.status).toBe(200)
-      const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: fixture.run.id } })
+      const after = await prisma.slaveRun.findUniqueOrThrow({ where: { id: fixture.run.id } })
       expect(after.queuedMessage).toBeNull()
       expect(after.resumeRequestedAt).not.toBeNull()
     })
@@ -153,12 +153,12 @@ describe('the control routes', () => {
         { params: Promise.resolve({ workspaceId: fixture.workspace.id, runId: fixture.run.id }) },
       )
       expect(response.status).toBe(200)
-      const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: fixture.run.id } })
+      const after = await prisma.slaveRun.findUniqueOrThrow({ where: { id: fixture.run.id } })
       expect(after.queuedMessage).toBeNull()
     })
 
     it('maps a control refusal (no checkpoint) to 409', async (): Promise<void> => {
-      await prisma.agentRun.update({ where: { id: fixture.run.id }, data: { status: 'paused' } })
+      await prisma.slaveRun.update({ where: { id: fixture.run.id }, data: { status: 'paused' } })
       const response = await resumePOST(new Request('http://x', { method: 'POST' }), {
         params: Promise.resolve({ workspaceId: fixture.workspace.id, runId: fixture.run.id }),
       })
@@ -169,7 +169,7 @@ describe('the control routes', () => {
 
   describe('message', () => {
     it('updates the queued instruction while paused and 409s otherwise', async (): Promise<void> => {
-      await prisma.agentRun.update({ where: { id: fixture.run.id }, data: { status: 'paused' } })
+      await prisma.slaveRun.update({ where: { id: fixture.run.id }, data: { status: 'paused' } })
       const post = (body: unknown): Promise<Response> =>
         messagePOST(
           new Request('http://x', { method: 'POST', body: JSON.stringify(body), headers: { 'content-type': 'application/json' } }),
@@ -177,16 +177,16 @@ describe('the control routes', () => {
         )
 
       expect((await post({ message: 'queued while paused' })).status).toBe(200)
-      expect((await prisma.agentRun.findUniqueOrThrow({ where: { id: fixture.run.id } })).queuedMessage).toBe(
+      expect((await prisma.slaveRun.findUniqueOrThrow({ where: { id: fixture.run.id } })).queuedMessage).toBe(
         'queued while paused',
       )
 
-      await prisma.agentRun.update({ where: { id: fixture.run.id }, data: { status: 'working' } })
+      await prisma.slaveRun.update({ where: { id: fixture.run.id }, data: { status: 'working' } })
       expect((await post({ message: 'too late' })).status).toBe(409)
     })
 
     it('400s when the body has no message string', async (): Promise<void> => {
-      await prisma.agentRun.update({ where: { id: fixture.run.id }, data: { status: 'paused' } })
+      await prisma.slaveRun.update({ where: { id: fixture.run.id }, data: { status: 'paused' } })
       const response = await messagePOST(
         new Request('http://x', { method: 'POST', body: '{}', headers: { 'content-type': 'application/json' } }),
         { params: Promise.resolve({ workspaceId: fixture.workspace.id, runId: fixture.run.id }) },
@@ -195,7 +195,7 @@ describe('the control routes', () => {
     })
 
     it('400s on a malformed body', async (): Promise<void> => {
-      await prisma.agentRun.update({ where: { id: fixture.run.id }, data: { status: 'paused' } })
+      await prisma.slaveRun.update({ where: { id: fixture.run.id }, data: { status: 'paused' } })
       const response = await messagePOST(
         new Request('http://x', { method: 'POST', body: 'not json', headers: { 'content-type': 'application/json' } }),
         { params: Promise.resolve({ workspaceId: fixture.workspace.id, runId: fixture.run.id }) },
@@ -211,7 +211,7 @@ describe('the control routes', () => {
         params: Promise.resolve({ workspaceId: fixture.workspace.id, runId: fixture.run.id }),
       })
       expect(response.status).toBe(200)
-      expect((await prisma.agentRun.findUniqueOrThrow({ where: { id: fixture.run.id } })).status).toBe('stopped')
+      expect((await prisma.slaveRun.findUniqueOrThrow({ where: { id: fixture.run.id } })).status).toBe('stopped')
       expect((await prisma.task.findUniqueOrThrow({ where: { id: fixture.task.id } })).status).toBe('blocked')
     })
 
@@ -232,7 +232,7 @@ describe('the control routes', () => {
       expect(await response.json()).toEqual({ ok: true })
       const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspace.id } })
       expect(workspace.haltedReason).not.toBeNull()
-      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: fixture.run.id } })
+      const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: fixture.run.id } })
       expect(run.status).toBe('pause_requested')
     })
 

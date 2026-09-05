@@ -22,9 +22,9 @@ beforeEach(() => {
 
 describe('useUrlFilters', () => {
   it('parses the URL through parseActivityFilters — kinds expand, types union', () => {
-    params = new URLSearchParams('agents=a1,a2&kinds=guardrails&types=run.output')
+    params = new URLSearchParams('slaves=a1,a2&kinds=guardrails&types=run.output')
     const { result } = renderHook(() => useUrlFilters())
-    expect(result.current.filters.agents).toEqual(['a1', 'a2'])
+    expect(result.current.filters.slaves).toEqual(['a1', 'a2'])
     expect([...result.current.filters.types].sort()).toEqual(['guardrail.tripped', 'run.output'])
   })
 
@@ -56,10 +56,10 @@ describe('useUrlFilters', () => {
     expect(replace).toHaveBeenCalledWith('/w/w1/activity?types=run.output', { scroll: false })
   })
 
-  it('setAgents writes sorted ids to ?agents=', () => {
+  it('setSlaves writes sorted ids to ?slaves=', () => {
     const { result } = renderHook(() => useUrlFilters())
-    result.current.setAgents(['a2', 'a1'])
-    expect(replace).toHaveBeenCalledWith('/w/w1/activity?agents=a1%2Ca2', { scroll: false })
+    result.current.setSlaves(['a2', 'a1'])
+    expect(replace).toHaveBeenCalledWith('/w/w1/activity?slaves=a1%2Ca2', { scroll: false })
   })
 
   it('setTasks writes sorted ids to ?tasks=, preserving the other dimensions already in the URL', () => {
@@ -77,15 +77,15 @@ describe('useUrlFilters', () => {
   })
 })
 
-const agents = [
-  { id: 'a1', name: 'Agent One' },
-  { id: 'a2', name: 'Agent Two' },
+const slaves = [
+  { id: 'a1', name: 'Slave One' },
+  { id: 'a2', name: 'Slave Two' },
 ]
 const tasks = [{ id: 't1', title: 'Task One' }]
 
 function Harness(): ReactElement {
   const urlFilters = useUrlFilters()
-  return <FilterBar agents={agents} tasks={tasks} {...urlFilters} />
+  return <FilterBar slaves={slaves} tasks={tasks} {...urlFilters} />
 }
 
 describe('FilterBar', () => {
@@ -125,17 +125,17 @@ describe('FilterBar', () => {
     expect(replace).toHaveBeenCalledWith('/w/w1/activity?types=run.output', { scroll: false })
   })
 
-  it('the agent select renders the roster and writes the chosen id on change', () => {
+  it('the slave select renders the roster and writes the chosen id on change', () => {
     render(<Harness />)
-    const select = screen.getByTestId('select-agents') as HTMLSelectElement
+    const select = screen.getByTestId('select-slaves') as HTMLSelectElement
     expect(within(select).getAllByRole('option').map((option) => option.textContent)).toEqual([
-      'Agent One',
-      'Agent Two',
+      'Slave One',
+      'Slave Two',
     ])
-    const option = within(select).getByText('Agent Two') as HTMLOptionElement
+    const option = within(select).getByText('Slave Two') as HTMLOptionElement
     option.selected = true
     fireEvent.change(select)
-    expect(replace).toHaveBeenCalledWith('/w/w1/activity?agents=a2', { scroll: false })
+    expect(replace).toHaveBeenCalledWith('/w/w1/activity?slaves=a2', { scroll: false })
   })
 
   it('the task select renders the roster and writes the chosen id on change', () => {

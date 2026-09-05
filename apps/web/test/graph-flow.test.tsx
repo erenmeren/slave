@@ -3,11 +3,11 @@ import type { ReactElement } from 'react'
 import { act, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Position, ReactFlowProvider, type Edge, type EdgeProps, type NodeProps } from 'reactflow'
-import type { GraphAgent, GraphSnapshot } from '../src/server/graph.js'
+import type { GraphSlave, GraphSnapshot } from '../src/server/graph.js'
 import type { StreamEvent } from '../src/hooks/useWorkspaceStream.js'
 import {
   canSpawnParticles,
-  edgeIdForAgent,
+  edgeIdForSlave,
   handleToolCallFrame,
   outgoingEdgeIds,
   prefersReducedMotion,
@@ -18,7 +18,7 @@ import {
 } from '../src/components/graph/flow.js'
 import { CableEdge, type CableEdgeData } from '../src/components/graph/CableEdge.js'
 import { Particles } from '../src/components/graph/Particles.js'
-import { AgentNode, ActiveTaskNode, type AgentNodeData, type ActiveTaskNodeData } from '../src/components/graph/OrgNodes.js'
+import { SlaveNode, ActiveTaskNode, type SlaveNodeData, type ActiveTaskNodeData } from '../src/components/graph/OrgNodes.js'
 import { TaskNode, type TaskNodeData } from '../src/components/graph/TaskNodes.js'
 
 // ---- jsdom React Flow measurement shims ---------------------------------------------------------
@@ -96,14 +96,14 @@ vi.mock('elkjs/lib/elk.bundled.js', () => ({
   },
 }))
 
-const AGENT_EDGE: Edge = { id: 'agent:a1->activeTask:t1', source: 'agent:a1', target: 'activeTask:t1' }
+const SLAVE_EDGE: Edge = { id: 'slave:a1->activeTask:t1', source: 'slave:a1', target: 'activeTask:t1' }
 
 // Fixture widening only (M14 Task 11): `GraphSnapshot` gained `shellFacts` so `GraphClient` can
 // publish them to the project header/tab strip (M24 §2.2) instead of either opening a second
 // EventSource of its own. Nothing in this file asserts on them.
 const SHELL_FACTS: GraphSnapshot['shellFacts'] = {
   workspace: { id: 'w1', name: 'W' },
-  counts: { agentsWorking: 0, tasksActive: 0 },
+  counts: { slavesWorking: 0, tasksActive: 0 },
   guardrails: { budgetUsd: null, maxConcurrentRuns: 3, runTimeoutMs: 1_800_000, maxAttempts: 3 },
   status: { goal: null, spentUsd: 0, unmeasuredRuns: 0, haltedReason: null },
 }
@@ -174,44 +174,44 @@ describe('flow.ts', () => {
     })
   })
 
-  describe('edgeIdForAgent', () => {
-    it('finds the agent -> active-task edge for a given agent id', () => {
-      expect(edgeIdForAgent([AGENT_EDGE], 'a1')).toBe('agent:a1->activeTask:t1')
+  describe('edgeIdForSlave', () => {
+    it('finds the slave -> active-task edge for a given slave id', () => {
+      expect(edgeIdForSlave([SLAVE_EDGE], 'a1')).toBe('slave:a1->activeTask:t1')
     })
 
-    it('returns null when the agent has no active-task edge (idle, or an unrelated edge)', () => {
-      expect(edgeIdForAgent([AGENT_EDGE], 'a2')).toBeNull()
-      expect(edgeIdForAgent([{ id: 'team:t->agent:a1', source: 'team:t', target: 'agent:a1' }], 'a1')).toBeNull()
+    it('returns null when the slave has no active-task edge (idle, or an unrelated edge)', () => {
+      expect(edgeIdForSlave([SLAVE_EDGE], 'a2')).toBeNull()
+      expect(edgeIdForSlave([{ id: 'team:t->slave:a1', source: 'team:t', target: 'slave:a1' }], 'a1')).toBeNull()
     })
   })
 
   describe('handleToolCallFrame', () => {
-    it('spawns a particle for a run.tool_call frame naming an agent with a live edge', () => {
-      const result = handleToolCallFrame({ type: 'run.tool_call', agentId: 'a1' }, [AGENT_EDGE], [], 1_000)
+    it('spawns a particle for a run.tool_call frame naming a slave with a live edge', () => {
+      const result = handleToolCallFrame({ type: 'run.tool_call', slaveId: 'a1' }, [SLAVE_EDGE], [], 1_000)
       expect(result).toHaveLength(1)
-      expect(result[0]?.edgeId).toBe('agent:a1->activeTask:t1')
+      expect(result[0]?.edgeId).toBe('slave:a1->activeTask:t1')
     })
 
     it('ignores a frame of a different type', () => {
-      expect(handleToolCallFrame({ type: 'run.started', agentId: 'a1' }, [AGENT_EDGE], [], 1_000)).toEqual([])
+      expect(handleToolCallFrame({ type: 'run.started', slaveId: 'a1' }, [SLAVE_EDGE], [], 1_000)).toEqual([])
     })
 
-    it('ignores a frame missing agentId (StreamEvent fields are optional -- the M6 rule)', () => {
-      expect(handleToolCallFrame({ type: 'run.tool_call' }, [AGENT_EDGE], [], 1_000)).toEqual([])
+    it('ignores a frame missing slaveId (StreamEvent fields are optional -- the M6 rule)', () => {
+      expect(handleToolCallFrame({ type: 'run.tool_call' }, [SLAVE_EDGE], [], 1_000)).toEqual([])
     })
 
-    it('ignores a frame for an agent with no active-task edge', () => {
-      expect(handleToolCallFrame({ type: 'run.tool_call', agentId: 'nope' }, [AGENT_EDGE], [], 1_000)).toEqual([])
+    it('ignores a frame for a slave with no active-task edge', () => {
+      expect(handleToolCallFrame({ type: 'run.tool_call', slaveId: 'nope' }, [SLAVE_EDGE], [], 1_000)).toEqual([])
     })
 
     it('does not spawn while document.visibilityState is hidden', () => {
       stubVisibility('hidden')
-      expect(handleToolCallFrame({ type: 'run.tool_call', agentId: 'a1' }, [AGENT_EDGE], [], 1_000)).toEqual([])
+      expect(handleToolCallFrame({ type: 'run.tool_call', slaveId: 'a1' }, [SLAVE_EDGE], [], 1_000)).toEqual([])
     })
 
     it('does not spawn under prefers-reduced-motion', () => {
       stubMatchMedia(true)
-      expect(handleToolCallFrame({ type: 'run.tool_call', agentId: 'a1' }, [AGENT_EDGE], [], 1_000)).toEqual([])
+      expect(handleToolCallFrame({ type: 'run.tool_call', slaveId: 'a1' }, [SLAVE_EDGE], [], 1_000)).toEqual([])
     })
   })
 
@@ -308,21 +308,21 @@ function withProvider(children: React.ReactNode): ReactElement {
 }
 
 describe('node status flash (M5 border-flash idiom)', () => {
-  it('AgentNode: no flash class on initial mount', () => {
-    const data: AgentNodeData = { kind: 'agent', name: 'Alex', role: 'backend', status: 'idle', activeTaskTitle: null, workspaceId: 'w1' }
-    render(withProvider(<AgentNode {...nodeProps('agent:a1', data)} />))
+  it('SlaveNode: no flash class on initial mount', () => {
+    const data: SlaveNodeData = { kind: 'slave', name: 'Alex', role: 'backend', status: 'idle', activeTaskTitle: null, workspaceId: 'w1' }
+    render(withProvider(<SlaveNode {...nodeProps('slave:a1', data)} />))
 
-    expect(screen.getByTestId('agent-node').className).not.toContain('animate-[border-flash')
+    expect(screen.getByTestId('slave-node').className).not.toContain('animate-[border-flash')
   })
 
-  it('AgentNode: flashes its border on a status change, and carries the status colour as --flash-color', () => {
-    const data: AgentNodeData = { kind: 'agent', name: 'Alex', role: 'backend', status: 'idle', activeTaskTitle: null, workspaceId: 'w1' }
-    const { rerender } = render(withProvider(<AgentNode {...nodeProps('agent:a1', data)} />))
+  it('SlaveNode: flashes its border on a status change, and carries the status colour as --flash-color', () => {
+    const data: SlaveNodeData = { kind: 'slave', name: 'Alex', role: 'backend', status: 'idle', activeTaskTitle: null, workspaceId: 'w1' }
+    const { rerender } = render(withProvider(<SlaveNode {...nodeProps('slave:a1', data)} />))
 
-    const changed: AgentNodeData = { ...data, status: 'working' }
-    rerender(withProvider(<AgentNode {...nodeProps('agent:a1', changed)} />))
+    const changed: SlaveNodeData = { ...data, status: 'working' }
+    rerender(withProvider(<SlaveNode {...nodeProps('slave:a1', changed)} />))
 
-    const node = screen.getByTestId('agent-node')
+    const node = screen.getByTestId('slave-node')
     expect(node.className).toContain('motion-safe:animate-[border-flash_800ms_ease-out]')
     expect(node.style.getPropertyValue('--flash-color')).toBe('var(--color-tone-working)')
   })
@@ -387,7 +387,7 @@ describe('DepsMode: completion wave', () => {
     const before: GraphSnapshot = {
       workspace: { id: 'w1', name: 'W', haltedReason: null },
       teams: [],
-      agents: [],
+      slaves: [],
       tasks: [task({ id: 't1', status: 'running' }), task({ id: 't2', status: 'ready', dependenciesDone: false })],
       dependencies: [{ taskId: 't2', dependsOnTaskId: 't1' }],
       shellFacts: SHELL_FACTS,
@@ -418,7 +418,7 @@ describe('DepsMode: completion wave', () => {
     const snapshot: GraphSnapshot = {
       workspace: { id: 'w1', name: 'W', haltedReason: null },
       teams: [],
-      agents: [],
+      slaves: [],
       tasks: [task({ id: 't1', status: 'done' }), task({ id: 't2', status: 'ready' })],
       dependencies: [{ taskId: 't2', dependsOnTaskId: 't1' }],
       shellFacts: SHELL_FACTS,
@@ -433,7 +433,7 @@ describe('DepsMode: completion wave', () => {
     const before: GraphSnapshot = {
       workspace: { id: 'w1', name: 'W', haltedReason: null },
       teams: [],
-      agents: [],
+      slaves: [],
       tasks: [task({ id: 't1', status: 'running' }), task({ id: 't2', status: 'ready', dependenciesDone: false })],
       dependencies: [{ taskId: 't2', dependsOnTaskId: 't1' }],
       shellFacts: SHELL_FACTS,
@@ -489,7 +489,7 @@ describe('DepsMode: completion wave', () => {
 // pass-through, spec §6's particle track), through a real React Flow tree.
 // ==================================================================================================
 
-function agent(overrides: Partial<GraphAgent> = {}): GraphAgent {
+function slave(overrides: Partial<GraphSlave> = {}): GraphSlave {
   return {
     id: 'a1',
     name: 'Alex',
@@ -512,7 +512,7 @@ function agent(overrides: Partial<GraphAgent> = {}): GraphAgent {
 const GRAPH_CLIENT_SNAPSHOT: GraphSnapshot = {
   workspace: { id: 'w1', name: 'W', haltedReason: null },
   teams: [{ id: 'team1', name: 'Eng' }],
-  agents: [agent({ id: 'a1', name: 'Alex', status: 'working', activeTaskId: 't1', activeTaskTitle: 'Ship it', activeRunId: 'run1' })],
+  slaves: [slave({ id: 'a1', name: 'Alex', status: 'working', activeTaskId: 't1', activeTaskTitle: 'Ship it', activeRunId: 'run1' })],
   tasks: [{ id: 't1', title: 'Ship it', status: 'running', priority: 1, attempt: 1, maxAttempts: 3, dependenciesDone: true }],
   dependencies: [],
   shellFacts: SHELL_FACTS,
@@ -540,12 +540,12 @@ describe('GraphClient: particle wiring end-to-end', () => {
     vi.unstubAllGlobals()
   })
 
-  it('a run.tool_call frame for the agent spawns exactly one motion-safe:-classed particle on its agent -> active-task edge', async () => {
+  it('a run.tool_call frame for the slave spawns exactly one motion-safe:-classed particle on its slave -> active-task edge', async () => {
     render(<GraphClient workspaceId="w1" initial={GRAPH_CLIENT_SNAPSHOT} />)
-    await waitFor(() => expect(screen.getByTestId('rf__edge-agent:a1->activeTask:t1')).toBeTruthy())
+    await waitFor(() => expect(screen.getByTestId('rf__edge-slave:a1->activeTask:t1')).toBeTruthy())
 
     act(() => {
-      capturedOnEvent?.({ type: 'run.tool_call', agentId: 'a1', runId: 'run1' })
+      capturedOnEvent?.({ type: 'run.tool_call', slaveId: 'a1', runId: 'run1' })
     })
 
     const particle = await waitFor(() => screen.getByTestId('particle'))
@@ -555,10 +555,10 @@ describe('GraphClient: particle wiring end-to-end', () => {
 
   it('caps concurrent particles per edge at 5 under a burst of 6 run.tool_call frames', async () => {
     render(<GraphClient workspaceId="w1" initial={GRAPH_CLIENT_SNAPSHOT} />)
-    await waitFor(() => expect(screen.getByTestId('rf__edge-agent:a1->activeTask:t1')).toBeTruthy())
+    await waitFor(() => expect(screen.getByTestId('rf__edge-slave:a1->activeTask:t1')).toBeTruthy())
 
     act(() => {
-      for (let i = 0; i < 6; i += 1) capturedOnEvent?.({ type: 'run.tool_call', agentId: 'a1', runId: 'run1' })
+      for (let i = 0; i < 6; i += 1) capturedOnEvent?.({ type: 'run.tool_call', slaveId: 'a1', runId: 'run1' })
     })
 
     await waitFor(() => expect(screen.getAllByTestId('particle')).toHaveLength(5))
@@ -567,10 +567,10 @@ describe('GraphClient: particle wiring end-to-end', () => {
   it('does not spawn a particle while document.visibilityState is hidden', async () => {
     stubVisibility('hidden')
     render(<GraphClient workspaceId="w1" initial={GRAPH_CLIENT_SNAPSHOT} />)
-    await waitFor(() => expect(screen.getByTestId('rf__edge-agent:a1->activeTask:t1')).toBeTruthy())
+    await waitFor(() => expect(screen.getByTestId('rf__edge-slave:a1->activeTask:t1')).toBeTruthy())
 
     act(() => {
-      capturedOnEvent?.({ type: 'run.tool_call', agentId: 'a1', runId: 'run1' })
+      capturedOnEvent?.({ type: 'run.tool_call', slaveId: 'a1', runId: 'run1' })
     })
 
     expect(screen.queryByTestId('particle')).toBeNull()
@@ -579,10 +579,10 @@ describe('GraphClient: particle wiring end-to-end', () => {
   it('under prefers-reduced-motion, no particle ever renders even after a run.tool_call frame', async () => {
     stubMatchMedia(true)
     render(<GraphClient workspaceId="w1" initial={GRAPH_CLIENT_SNAPSHOT} />)
-    await waitFor(() => expect(screen.getByTestId('rf__edge-agent:a1->activeTask:t1')).toBeTruthy())
+    await waitFor(() => expect(screen.getByTestId('rf__edge-slave:a1->activeTask:t1')).toBeTruthy())
 
     act(() => {
-      capturedOnEvent?.({ type: 'run.tool_call', agentId: 'a1', runId: 'run1' })
+      capturedOnEvent?.({ type: 'run.tool_call', slaveId: 'a1', runId: 'run1' })
     })
 
     expect(screen.queryByTestId('particle-layer')).toBeNull()
@@ -591,10 +591,10 @@ describe('GraphClient: particle wiring end-to-end', () => {
 
   it("portals the particle into its edge's own DOM group and sets its offset-path from that edge's rendered path", async () => {
     render(<GraphClient workspaceId="w1" initial={GRAPH_CLIENT_SNAPSHOT} />)
-    await waitFor(() => expect(screen.getByTestId('rf__edge-agent:a1->activeTask:t1')).toBeTruthy())
+    await waitFor(() => expect(screen.getByTestId('rf__edge-slave:a1->activeTask:t1')).toBeTruthy())
 
     act(() => {
-      capturedOnEvent?.({ type: 'run.tool_call', agentId: 'a1', runId: 'run1' })
+      capturedOnEvent?.({ type: 'run.tool_call', slaveId: 'a1', runId: 'run1' })
     })
 
     // Re-queries the edge group fresh on every poll rather than reusing a captured reference: React
@@ -606,7 +606,7 @@ describe('GraphClient: particle wiring end-to-end', () => {
     // keeps this from racing the sweep interval on a slow machine.
     await waitFor(
       () => {
-        const liveEdgeGroup = screen.getByTestId('rf__edge-agent:a1->activeTask:t1')
+        const liveEdgeGroup = screen.getByTestId('rf__edge-slave:a1->activeTask:t1')
         const particle = within(liveEdgeGroup).queryByTestId('particle')
         expect(particle).not.toBeNull()
         expect(particle!.style.getPropertyValue('offset-path')).toMatch(/^path\(/)
@@ -751,7 +751,7 @@ describe('CableEdge', () => {
 })
 
 // ==================================================================================================
-// The cable and the particle, together, through a real React Flow tree: org mode's agent -> active-
+// The cable and the particle, together, through a real React Flow tree: org mode's slave -> active-
 // task edge is now a `cable`, and `Particles.tsx` (NOT modified by this task) must still find its
 // curve on `path.react-flow__edge-path` inside that edge's own `<g>`.
 // ==================================================================================================
@@ -778,9 +778,9 @@ describe('GraphClient: cables carry particles', () => {
     vi.unstubAllGlobals()
   })
 
-  it("renders org mode's live agent -> active-task edge as a cable, with the particle riding its core path", async () => {
+  it("renders org mode's live slave -> active-task edge as a cable, with the particle riding its core path", async () => {
     render(<GraphClient workspaceId="w1" initial={GRAPH_CLIENT_SNAPSHOT} />)
-    const edgeGroup = await waitFor(() => screen.getByTestId('rf__edge-agent:a1->activeTask:t1'))
+    const edgeGroup = await waitFor(() => screen.getByTestId('rf__edge-slave:a1->activeTask:t1'))
 
     expect(within(edgeGroup).getByTestId('cable-edge')).toBeTruthy()
     expect(edgeGroup.querySelectorAll('path[data-cable="halo"]')).toHaveLength(1)
@@ -789,12 +789,12 @@ describe('GraphClient: cables carry particles', () => {
     expect(core).toHaveLength(1)
 
     act(() => {
-      capturedOnEvent?.({ type: 'run.tool_call', agentId: 'a1', runId: 'run1' })
+      capturedOnEvent?.({ type: 'run.tool_call', slaveId: 'a1', runId: 'run1' })
     })
 
     await waitFor(
       () => {
-        const liveEdgeGroup = screen.getByTestId('rf__edge-agent:a1->activeTask:t1')
+        const liveEdgeGroup = screen.getByTestId('rf__edge-slave:a1->activeTask:t1')
         const particle = within(liveEdgeGroup).queryByTestId('particle')
         expect(particle).not.toBeNull()
         expect(particle!.style.getPropertyValue('offset-path')).toBe(

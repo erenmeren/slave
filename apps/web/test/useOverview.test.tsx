@@ -10,7 +10,7 @@ const SNAPSHOT: OverviewSnapshot = {
     goal: null, provider: 'claude_code', costBlindBudgeted: false,
     maxConcurrentRuns: 3, runTimeoutMs: 1_800_000, maxAttempts: 3,
   },
-  agents: [
+  slaves: [
     {
       id: 'a1',
       name: 'Alex',
@@ -19,7 +19,7 @@ const SNAPSHOT: OverviewSnapshot = {
       gate: 'all-tools',
       status: 'working',
       taskTitle: 'Add the thing',
-      // M14 Task 2 widened `AgentCardData` with the card's five handoff fields; this fixture
+      // M14 Task 2 widened `SlaveCardData` with the card's five handoff fields; this fixture
       // states them so it keeps type-checking, and asserts nothing new about them.
       taskId: null,
       taskStatus: null,
@@ -114,7 +114,7 @@ describe('useOverview', () => {
   it('drops a live action line once the snapshot shows that run is over', async (): Promise<void> => {
     const idle: OverviewSnapshot = {
       ...SNAPSHOT,
-      agents: [{ ...SNAPSHOT.agents[0]!, status: 'idle', taskTitle: null, actionLine: null, runId: null }],
+      slaves: [{ ...SNAPSHOT.slaves[0]!, status: 'idle', taskTitle: null, actionLine: null, runId: null }],
     }
     fetchMock.mockImplementation(async () => new Response(JSON.stringify(idle), { status: 200 }))
     const { result } = renderHook(() => useOverview('w1', SNAPSHOT))
@@ -123,9 +123,9 @@ describe('useOverview', () => {
       seq: 1,
       ts: new Date(0).toISOString(),
       workspaceId: 'w1',
-      agentId: 'a1',
+      slaveId: 'a1',
       runId: 'r1',
-      actor: 'agent',
+      actor: 'slave',
       type: 'run.tool_call',
       payload: { name: 'Write', summary: 'Write note3.txt' },
     })
@@ -136,14 +136,14 @@ describe('useOverview', () => {
     })
 
     // The live overlay always beats the snapshot's line, so the refetch cannot "overwrite" it —
-    // it has to evict it. Otherwise an idle agent keeps showing its last tool call forever.
+    // it has to evict it. Otherwise an idle slave keeps showing its last tool call forever.
     expect(result.current.actionLines['a1']).toBeUndefined()
   })
 
   it('drops a live action line from a previous run when a new run takes over', async (): Promise<void> => {
     const newRun: OverviewSnapshot = {
       ...SNAPSHOT,
-      agents: [{ ...SNAPSHOT.agents[0]!, runId: 'r2' }],
+      slaves: [{ ...SNAPSHOT.slaves[0]!, runId: 'r2' }],
     }
     fetchMock.mockImplementation(async () => new Response(JSON.stringify(newRun), { status: 200 }))
     const { result } = renderHook(() => useOverview('w1', SNAPSHOT))
@@ -152,9 +152,9 @@ describe('useOverview', () => {
       seq: 1,
       ts: new Date(0).toISOString(),
       workspaceId: 'w1',
-      agentId: 'a1',
+      slaveId: 'a1',
       runId: 'r1',
-      actor: 'agent',
+      actor: 'slave',
       type: 'run.tool_call',
       payload: { name: 'Write', summary: 'Write note3.txt' },
     })
@@ -174,9 +174,9 @@ describe('useOverview', () => {
       seq: 1,
       ts: new Date(0).toISOString(),
       workspaceId: 'w1',
-      agentId: 'a1',
+      slaveId: 'a1',
       runId: 'r1',
-      actor: 'agent',
+      actor: 'slave',
       type: 'run.tool_call',
       payload: { name: 'Write', summary: 'Write note3.txt' },
     })
@@ -287,7 +287,7 @@ describe('useOverview', () => {
     expect(FakeEventSource.instances[0]?.closed).toBe(true)
   })
 
-  // Additive from here down — Task 9's per-agent live feed (spec §6). The 11 tests above are M4's
+  // Additive from here down — Task 9's per-slave live feed (spec §6). The 11 tests above are M4's
   // and stay untouched.
   describe('liveEvents', () => {
     it('appends a pushed run.tool_call with its seq and derived summary', (): void => {
@@ -297,9 +297,9 @@ describe('useOverview', () => {
         seq: 7,
         ts: new Date(0).toISOString(),
         workspaceId: 'w1',
-        agentId: 'a1',
+        slaveId: 'a1',
         runId: 'r1',
-        actor: 'agent',
+        actor: 'slave',
         type: 'run.tool_call',
         payload: { name: 'Write', summary: 'Write note3.txt' },
       })
@@ -316,7 +316,7 @@ describe('useOverview', () => {
         seq: 8,
         ts: new Date(0).toISOString(),
         workspaceId: 'w1',
-        agentId: 'a1',
+        slaveId: 'a1',
         runId: 'r1',
         actor: 'system',
         type: 'run.failed',
@@ -328,7 +328,7 @@ describe('useOverview', () => {
       ])
     })
 
-    it('caps the per-agent buffer at 50 events, dropping the oldest', (): void => {
+    it('caps the per-slave buffer at 50 events, dropping the oldest', (): void => {
       const { result } = renderHook(() => useOverview('w1', SNAPSHOT))
 
       for (let i = 1; i <= 55; i += 1) {
@@ -336,9 +336,9 @@ describe('useOverview', () => {
           seq: i,
           ts: new Date(0).toISOString(),
           workspaceId: 'w1',
-          agentId: 'a1',
+          slaveId: 'a1',
           runId: 'r1',
-          actor: 'agent',
+          actor: 'slave',
           type: 'run.tool_call',
           payload: { name: 'Write', summary: `Write note${i}.txt` },
         })
@@ -350,7 +350,7 @@ describe('useOverview', () => {
       expect(events.at(-1)?.seq).toBe(55)
     })
 
-    it('ignores an event without an agentId', (): void => {
+    it('ignores an event without a slaveId', (): void => {
       const { result } = renderHook(() => useOverview('w1', SNAPSHOT))
 
       push({

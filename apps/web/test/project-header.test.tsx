@@ -11,7 +11,7 @@ vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: vi.fn(), push: 
 function facts(over: Partial<ShellFacts['status']> = {}): ShellFacts {
   return {
     workspace: { id: 'w1', name: 'Checkout Platform' },
-    counts: { agentsWorking: 0, tasksActive: 2 },
+    counts: { slavesWorking: 0, tasksActive: 2 },
     guardrails: { budgetUsd: 2, maxConcurrentRuns: 3, runTimeoutMs: 1_800_000, maxAttempts: 5 },
     status: { goal: null, spentUsd: 0.5, unmeasuredRuns: 0, haltedReason: null, ...over },
   }
@@ -142,7 +142,7 @@ describe('ProjectHeader budget bar (M24 §2.2)', () => {
   function withBudget(spentUsd: number, budgetUsd: number | null, unmeasuredRuns = 0): ShellFacts {
     return {
       workspace: { id: 'w1', name: 'Checkout Platform' },
-      counts: { agentsWorking: 0, tasksActive: 2 },
+      counts: { slavesWorking: 0, tasksActive: 2 },
       guardrails: { budgetUsd, maxConcurrentRuns: 3, runTimeoutMs: 1_800_000, maxAttempts: 5 },
       status: { goal: null, spentUsd, unmeasuredRuns, haltedReason: null },
     }

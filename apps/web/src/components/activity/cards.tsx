@@ -320,7 +320,7 @@ function RunOutputCard(props: ActivityCardProps): ReactElement {
 }
 
 // ---- run.tool_denied (schema.ts, M18 §2) --------------------------------------------------------
-// A per-call refusal the agent is expected to route around -- the run continues -- so this reads
+// A per-call refusal the slave is expected to route around -- the run continues -- so this reads
 // as a warning, not a failure: `warn` is the tone the guardrail/rework/review-rejected cards
 // already use for "something was refused but nothing stopped".
 
@@ -395,11 +395,11 @@ function WorkspacePlanCreatedCard(props: ActivityCardProps): ReactElement {
 function WorkspaceCompanyAssignedCard(props: ActivityCardProps): ReactElement {
   const payload = props.event.payload as {
     company: string
-    // `companyAgentId` is optional here even though the write path (schema.ts) always emits it:
+    // `companySlaveId` is optional here even though the write path (schema.ts) always emits it:
     // pre-M11 rows already stored in the DB have workers without it, and this read path does not
     // schema-validate stored payloads, so the fallback below keeps those legacy rows rendering
     // without duplicate-key warnings.
-    workers: ReadonlyArray<{ companyAgentId?: string; name: string; role: string }>
+    workers: ReadonlyArray<{ companySlaveId?: string; name: string; role: string }>
   }
   return (
     <ActivityCard {...props}>
@@ -409,7 +409,7 @@ function WorkspaceCompanyAssignedCard(props: ActivityCardProps): ReactElement {
       {payload.workers.length > 0 ? (
         <ul className="mt-1 space-y-0.5 text-text-3">
           {payload.workers.map((worker, index) => (
-            <li key={worker.companyAgentId ?? `${worker.name}-${index}`} data-testid="company-worker-item">
+            <li key={worker.companySlaveId ?? `${worker.name}-${index}`} data-testid="company-worker-item">
               {worker.name} <span className="text-text-3">({worker.role})</span>
             </li>
           ))}
@@ -465,8 +465,8 @@ function WorkspaceCreatedCard(props: ActivityCardProps): ReactElement {
 }
 
 // M23 D1 / M25 §3.1: an operator edited the roster or the departments -- `org.ts`'s control verbs
-// (rename/re-role/delete an agent, rename/delete a team, create a project department, move an
-// agent to another department) all land here, distinguished by `payload.field`. `idle` tone,
+// (rename/re-role/delete a slave, rename/delete a team, create a project department, move an
+// slave to another department) all land here, distinguished by `payload.field`. `idle` tone,
 // matching `WorkspaceSettingsChangedCard` above: an edit to configuration, not a run outcome.
 const ORG_CHANGED_LABEL: Record<'name' | 'role' | 'model' | 'deleted' | 'created' | 'team', string> = {
   name: 'renamed',
@@ -479,7 +479,7 @@ const ORG_CHANGED_LABEL: Record<'name' | 'role' | 'model' | 'deleted' | 'created
 
 function OrgChangedCard(props: ActivityCardProps): ReactElement {
   const payload = props.event.payload as {
-    entity: 'agent' | 'team'
+    entity: 'slave' | 'team'
     id: string
     field: 'name' | 'role' | 'model' | 'deleted' | 'created' | 'team'
     // `createProjectTeam` (field: 'created') carries `from: null` -- the new department had no
@@ -499,7 +499,7 @@ function OrgChangedCard(props: ActivityCardProps): ReactElement {
 }
 
 // ---- interventions (schema.ts:32-39, 54-59) ----------------------------------------------------
-// `event.actor` (human/agent/system) is already on the shared shell's actor badge; these bodies
+// `event.actor` (human/slave/system) is already on the shared shell's actor badge; these bodies
 // add the payload's own record of *who* intervened (`requestedBy`) and *what* they said
 // (`message`/`body`) — the two things the envelope's actor alone doesn't carry.
 
@@ -541,7 +541,7 @@ function RunStoppedCard(props: ActivityCardProps): ReactElement {
   )
 }
 
-function AgentMessageSentCard(props: ActivityCardProps): ReactElement {
+function SlaveMessageSentCard(props: ActivityCardProps): ReactElement {
   const payload = props.event.payload as {
     category: 'instruction' | 'feedback' | 'context' | 'priority_change' | 'question_response'
     body: string
@@ -577,7 +577,7 @@ export const ACTIVITY_CARDS = {
   'run.tool_denied': RunToolDeniedCard,
   'run.paused': RunPausedCard,
   'run.resumed': RunResumedCard,
-  'agent.message_sent': AgentMessageSentCard,
+  'slave.message_sent': SlaveMessageSentCard,
   'guardrail.tripped': GuardrailTrippedCard,
   'task.verifying': TaskVerifyingCard,
   'task.verify_passed': TaskVerifyPassedCard,

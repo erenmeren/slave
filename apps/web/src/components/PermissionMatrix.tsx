@@ -7,7 +7,7 @@ import { SECTION_LABEL_CLASS, SectionLabel } from './ui/SectionLabel'
 import type { PermissionSection } from '../server/settings'
 
 /**
- * The Settings permission matrix (M14 §5.7): a row per agent, a column per README tool, a cell
+ * The Settings permission matrix (M14 §5.7): a row per slave, a column per README tool, a cell
  * per pair.
  *
  * Denials ARE enforced at dispatch snapshot through the gate scripts (spec §2): the resolved deny
@@ -18,7 +18,7 @@ import type { PermissionSection } from '../server/settings'
  * because an undecided permission is distinct from a decision to refuse.
  *
  * One grid PER WORKSPACE (fix round 1, finding 2), because two projects built from the same roster
- * hold different agents with identical names, and a flat list of them is unreadable: the section
+ * hold different slaves with identical names, and a flat list of them is unreadable: the section
  * header is what says whose "Alex · backend" a row governs.
  */
 type Mode = 'allow' | 'deny' | null
@@ -57,10 +57,10 @@ export function PermissionMatrix({ sections }: { readonly sections: readonly Per
   const [errorText, setErrorText] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
 
-  const write = async (agentId: string, tool: string, mode: 'allow' | 'deny'): Promise<void> => {
+  const write = async (slaveId: string, tool: string, mode: 'allow' | 'deny'): Promise<void> => {
     setPending(true)
     setErrorText(null)
-    const error = await sendControl(`/api/agents/${agentId}/permission`, { method: 'PUT', body: { tool, mode } })
+    const error = await sendControl(`/api/slaves/${slaveId}/permission`, { method: 'PUT', body: { tool, mode } })
     if (error === null) {
       router.refresh()
     } else {
@@ -89,13 +89,13 @@ export function PermissionMatrix({ sections }: { readonly sections: readonly Per
             // worth showing, and dropping it would make the page look like the project does not
             // exist.
             <p data-testid="perm-empty" className="text-xs text-text-3">
-              no agents yet
+              no slaves yet
             </p>
           ) : (
             <div className="overflow-x-auto">
               <div className="min-w-[560px]">
                 <div style={grid(section.rows[0]?.cells.length ?? 0)} className="grid items-end gap-y-1 border-b border-line pb-1.5">
-                  <span className={SECTION_LABEL_CLASS}>agent</span>
+                  <span className={SECTION_LABEL_CLASS}>slave</span>
                   {/* The columns come from the row's own cells rather than a second copy of the
                       list: the server built them from `PERMISSION_TOOLS`, so this renders that one
                       list, and `grid()` sizes itself from the same count. */}
@@ -112,7 +112,7 @@ export function PermissionMatrix({ sections }: { readonly sections: readonly Per
 
                 {section.rows.map((row) => (
                   <div
-                    key={row.agentId}
+                    key={row.slaveId}
                     data-testid="perm-row"
                     style={grid(row.cells.length)}
                     className="grid items-center gap-y-1 border-b border-line/60 py-1.5"
@@ -148,12 +148,12 @@ export function PermissionMatrix({ sections }: { readonly sections: readonly Per
                         <span key={cell.tool} className="flex justify-center">
                           <button
                             type="button"
-                            data-testid={`perm-cell-${row.agentId}-${cell.tool}`}
+                            data-testid={`perm-cell-${row.slaveId}-${cell.tool}`}
                             data-mode={cell.mode ?? 'unset'}
                             disabled={pending}
                             title={TITLE[cell.mode ?? 'unset']}
                             aria-label={`${row.name} · ${cell.tool} · ${TITLE[cell.mode ?? 'unset']}`}
-                            onClick={() => void write(row.agentId, cell.tool, flip(cell.mode))}
+                            onClick={() => void write(row.slaveId, cell.tool, flip(cell.mode))}
                             className={`h-5 w-5 rounded-chip border text-[11px] leading-none disabled:cursor-not-allowed disabled:opacity-50 ${colorClass} ${bgBorderClass}`}
                           >
                             {glyph}

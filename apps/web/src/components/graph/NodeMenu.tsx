@@ -9,7 +9,7 @@ import Link from 'next/link'
  *  have no menu at all (M5's "controls live in the panel" decision, plus neither has a detail
  *  surface to deep-link to) -- see `OrgNodes.tsx`'s `WorkspaceNode`/`TeamNode`, which render no
  *  `NodeMenu`. */
-export type NodeMenuKind = 'agent' | 'task'
+export type NodeMenuKind = 'slave' | 'task'
 
 interface MenuLink {
   readonly label: string
@@ -18,13 +18,13 @@ interface MenuLink {
 
 /** The four navigation targets from the Task 7 brief, two per kind -- pure so the href shape is
  *  directly testable without mounting anything. `id` is the bare domain id (already stripped of
- *  the node-id prefix, e.g. `agent:`/`task:`/`activeTask:` -- see each node renderer's own
+ *  the node-id prefix, e.g. `slave:`/`task:`/`activeTask:` -- see each node renderer's own
  *  stripping in `OrgNodes.tsx`/`TaskNodes.tsx`), never the React Flow node id. */
 function menuLinks(kind: NodeMenuKind, workspaceId: string, id: string): readonly MenuLink[] {
-  if (kind === 'agent') {
+  if (kind === 'slave') {
     return [
-      { label: 'Open panel', href: `/w/${workspaceId}?agent=${id}` },
-      { label: 'Show in Activity', href: `/w/${workspaceId}/activity?agents=${id}` },
+      { label: 'Open panel', href: `/w/${workspaceId}?slave=${id}` },
+      { label: 'Show in Activity', href: `/w/${workspaceId}/activity?slaves=${id}` },
     ]
   }
   return [

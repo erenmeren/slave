@@ -5,7 +5,7 @@ import { GET as tasksGET } from '../../src/app/api/w/[workspaceId]/tasks/route.j
 
 interface Fixture {
   readonly workspaceId: string
-  readonly agentId: string
+  readonly slaveId: string
 }
 
 async function seed(): Promise<Fixture> {
@@ -19,8 +19,8 @@ async function seed(): Promise<Fixture> {
     },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const agent = await prisma.agent.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
-  return { workspaceId: workspace.id, agentId: agent.id }
+  const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
+  return { workspaceId: workspace.id, slaveId: slave.id }
 }
 
 describe('buildTasksSnapshot', () => {
@@ -28,7 +28,7 @@ describe('buildTasksSnapshot', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
   })
@@ -48,20 +48,20 @@ describe('buildTasksSnapshot', () => {
         maxAttempts: 3,
       },
     })
-    const olderRun = await prisma.agentRun.create({
+    const olderRun = await prisma.slaveRun.create({
       data: {
         taskId: seeded.id,
-        agentId: fixture.agentId,
+        slaveId: fixture.slaveId,
         status: 'failed',
         startedAt: new Date('2026-08-01T00:00:00.000Z'),
         terminalAt: new Date('2026-08-01T01:00:00.000Z'),
         endedAt: new Date('2026-08-01T01:00:00.000Z'),
       },
     })
-    const newerRun = await prisma.agentRun.create({
+    const newerRun = await prisma.slaveRun.create({
       data: {
         taskId: seeded.id,
-        agentId: fixture.agentId,
+        slaveId: fixture.slaveId,
         status: 'paused',
         startedAt: new Date('2026-08-02T00:00:00.000Z'),
         pausedAtStep: 3,
@@ -107,8 +107,8 @@ describe('buildTasksSnapshot', () => {
         maxAttempts: 3,
       },
     })
-    const run = await prisma.agentRun.create({
-      data: { taskId: seeded.id, agentId: fixture.agentId, status: 'paused', pausedAtStep: 2 },
+    const run = await prisma.slaveRun.create({
+      data: { taskId: seeded.id, slaveId: fixture.slaveId, status: 'paused', pausedAtStep: 2 },
     })
     await prisma.checkpoint.create({
       data: {
@@ -149,13 +149,13 @@ describe('buildTasksSnapshot', () => {
         maxAttempts: 3,
       },
     })
-    await prisma.agentRun.create({
-      data: { taskId: seeded.id, agentId: fixture.agentId, status: 'succeeded', costUsd: null },
+    await prisma.slaveRun.create({
+      data: { taskId: seeded.id, slaveId: fixture.slaveId, status: 'succeeded', costUsd: null },
     })
-    await prisma.agentRun.create({
+    await prisma.slaveRun.create({
       data: {
         taskId: seeded.id,
-        agentId: fixture.agentId,
+        slaveId: fixture.slaveId,
         status: 'succeeded',
         costUsd: 0.42,
         startedAt: new Date('2026-08-01T00:00:00.000Z'),
@@ -168,7 +168,7 @@ describe('buildTasksSnapshot', () => {
     expect(task?.runs.map((r) => r.costUsd)).toEqual([null, 0.42])
   })
 
-  it('names the live run agent as assignee and leaves finished tasks unassigned', async (): Promise<void> => {
+  it('names the live run slave as assignee and leaves finished tasks unassigned', async (): Promise<void> => {
     const runningTask = await prisma.task.create({
       data: {
         workspaceId: fixture.workspaceId,
@@ -179,8 +179,8 @@ describe('buildTasksSnapshot', () => {
         maxAttempts: 3,
       },
     })
-    const liveRun = await prisma.agentRun.create({
-      data: { taskId: runningTask.id, agentId: fixture.agentId, status: 'working' },
+    const liveRun = await prisma.slaveRun.create({
+      data: { taskId: runningTask.id, slaveId: fixture.slaveId, status: 'working' },
     })
     await prisma.task.update({ where: { id: runningTask.id }, data: { activeRunId: liveRun.id } })
 
@@ -194,10 +194,10 @@ describe('buildTasksSnapshot', () => {
         maxAttempts: 3,
       },
     })
-    await prisma.agentRun.create({
+    await prisma.slaveRun.create({
       data: {
         taskId: doneTask.id,
-        agentId: fixture.agentId,
+        slaveId: fixture.slaveId,
         status: 'succeeded',
         terminalAt: new Date(),
         endedAt: new Date(),
@@ -240,7 +240,7 @@ describe('buildTasksSnapshot', () => {
 
   // Review finding (M23 B4 fix round 1, Important 2): `TaskBoardItem.collectable` and
   // `TaskRunSummary.worktreePath` had no DB-backed coverage -- every existing test hand-sets the
-  // literal. These three prove the real query: `AgentRun.worktreePath` (not `Checkpoint.worktreePath`,
+  // literal. These three prove the real query: `SlaveRun.worktreePath` (not `Checkpoint.worktreePath`,
   // a different column on a different row) is what `collectable` and the run summary read.
   describe('collectable (M23 B4)', () => {
     it('is true for a done task whose run still carries a worktree path', async (): Promise<void> => {
@@ -254,10 +254,10 @@ describe('buildTasksSnapshot', () => {
           maxAttempts: 3,
         },
       })
-      await prisma.agentRun.create({
+      await prisma.slaveRun.create({
         data: {
           taskId: seeded.id,
-          agentId: fixture.agentId,
+          slaveId: fixture.slaveId,
           status: 'succeeded',
           worktreePath: '/r/.slaveofai/worktrees/T-collectable',
         },
@@ -281,8 +281,8 @@ describe('buildTasksSnapshot', () => {
           maxAttempts: 3,
         },
       })
-      await prisma.agentRun.create({
-        data: { taskId: seeded.id, agentId: fixture.agentId, status: 'succeeded', worktreePath: null },
+      await prisma.slaveRun.create({
+        data: { taskId: seeded.id, slaveId: fixture.slaveId, status: 'succeeded', worktreePath: null },
       })
 
       const snapshot = await buildTasksSnapshot(fixture.workspaceId)
@@ -303,10 +303,10 @@ describe('buildTasksSnapshot', () => {
           maxAttempts: 3,
         },
       })
-      await prisma.agentRun.create({
+      await prisma.slaveRun.create({
         data: {
           taskId: seeded.id,
-          agentId: fixture.agentId,
+          slaveId: fixture.slaveId,
           status: 'working',
           worktreePath: '/r/.slaveofai/worktrees/T-still-running',
         },

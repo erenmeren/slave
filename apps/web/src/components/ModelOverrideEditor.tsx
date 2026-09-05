@@ -23,11 +23,11 @@ import { ProviderSelect } from './ProviderSelect'
  * `model_without_provider` refusal (controller resolution 1: this is not client-validated away).
  */
 export function ModelOverrideEditor({
-  agentId,
+  slaveId,
   model,
   provider,
 }: {
-  readonly agentId: string
+  readonly slaveId: string
   readonly model: string | null
   readonly provider?: ProviderKind | null | undefined
 }): React.JSX.Element {
@@ -37,7 +37,7 @@ export function ModelOverrideEditor({
   const [pending, setPending] = useState(false)
   const [errorText, setErrorText] = useState<string | null>(null)
 
-  // This instance survives a `router.refresh()` re-render (its parent keys rows by `agentId`,
+  // This instance survives a `router.refresh()` re-render (its parent keys rows by `slaveId`,
   // which doesn't change) -- resync both inputs from the incoming props so a successful set/clear
   // actually shows the refreshed snapshot's truth, not whatever was last typed/selected.
   useEffect(() => {
@@ -48,7 +48,7 @@ export function ModelOverrideEditor({
   const post = async (body: { readonly model: string | null; readonly provider?: ProviderKind }): Promise<void> => {
     setPending(true)
     setErrorText(null)
-    const error = await sendControl(`/api/agents/${agentId}/model`, { method: 'POST', body: { ...body } })
+    const error = await sendControl(`/api/slaves/${slaveId}/model`, { method: 'POST', body: { ...body } })
     if (error === null) {
       router.refresh()
     } else {

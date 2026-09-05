@@ -1,11 +1,11 @@
-import type { AgentStatus, RunStatus, TaskStatus } from '@slave-of-ai/domain'
+import type { SlaveStatus, RunStatus, TaskStatus } from '@slave-of-ai/domain'
 import type { StatusTone } from '../components/ui/StatusPill'
 import { COLUMN_FOR_STATUS, COLUMN_STATE } from './taskColumns'
 
 /**
  * The handoff's ten card states (`design_handoff_ai_team_os/mockups/Slave of AI Mockups.dc.html`
  * lines 912-923, `Component.meta`). This is a DISPLAY vocabulary, not a domain one: the domain
- * has `RunStatus` (nine), `AgentStatus` (seven) and `TaskStatus` (twelve), and none of them is
+ * has `RunStatus` (nine), `SlaveStatus` (seven) and `TaskStatus` (twelve), and none of them is
  * this list. The three derivations below are the only sanctioned way into it -- a page that
  * hand-maps a status to a tone is the defect Decision 2 forbids.
  */
@@ -46,7 +46,7 @@ export const CARD_STATE_TONE: Record<CardState, ToneSpec> = {
 }
 
 /** A run's own status. `null` means "no live run", which is `idle` -- the same statement
- *  `deriveAgentStatus(null)` makes. */
+ *  `deriveSlaveStatus(null)` makes. */
 export function cardStateForRun(status: RunStatus | null): CardState {
   if (status === null) return 'idle'
   switch (status) {
@@ -71,9 +71,9 @@ export function cardStateForRun(status: RunStatus | null): CardState {
   }
 }
 
-/** `deriveAgentStatus`'s output. Exhaustive over all seven members -- a new one is a build error
+/** `deriveSlaveStatus`'s output. Exhaustive over all seven members -- a new one is a build error
  *  here, not a silent fall-through to `idle` at render time. */
-export function cardStateForAgent(status: AgentStatus): CardState {
+export function cardStateForSlave(status: SlaveStatus): CardState {
   switch (status) {
     case 'idle':
       return 'idle'
@@ -93,14 +93,14 @@ export function cardStateForAgent(status: AgentStatus): CardState {
 }
 
 /**
- * The full card state: the agent's own status, with three task facts layered over it.
+ * The full card state: the slave's own status, with three task facts layered over it.
  *
- * `blocked`, `review` and `completed` are unreachable from `AgentStatus` alone -- an agent whose
+ * `blocked`, `review` and `completed` are unreachable from `SlaveStatus` alone -- a slave whose
  * task is blocked is simply `idle`, and `idle` is what the card would say without this. The three
- * overrides are exactly the states the handoff's card set has and the agent vocabulary does not.
+ * overrides are exactly the states the handoff's card set has and the slave vocabulary does not.
  */
-export function cardStateFor(agent: AgentStatus, task: TaskStatus | null): CardState {
-  if (task === null) return cardStateForAgent(agent)
+export function cardStateFor(slave: SlaveStatus, task: TaskStatus | null): CardState {
+  if (task === null) return cardStateForSlave(slave)
   switch (task) {
     case 'blocked':
       return 'blocked'
@@ -111,22 +111,22 @@ export function cardStateFor(agent: AgentStatus, task: TaskStatus | null): CardS
     case 'cancelled':
       return 'blocked'
     case 'done':
-      // Only when nobody is still working on it: a `done` task whose agent is mid-run means the
-      // agent has moved on and the snapshot has not caught up, and the AGENT is what this card
+      // Only when nobody is still working on it: a `done` task whose slave is mid-run means the
+      // slave has moved on and the snapshot has not caught up, and the SLAVE is what this card
       // is about.
-      return agent === 'idle' ? 'completed' : cardStateForAgent(agent)
+      return slave === 'idle' ? 'completed' : cardStateForSlave(slave)
     case 'backlog':
     case 'ready':
     case 'assigned':
     case 'running':
     case 'verifying':
     case 'rework':
-      return cardStateForAgent(agent)
+      return cardStateForSlave(slave)
     default: {
       // The `capabilitiesOf` idiom (`packages/providers/src/capabilities.ts:29-38`). `tsconfig.base`
       // sets `strict` but not `noImplicitReturns`, so a thirteenth `TaskStatus` added later would
       // otherwise fall out of this switch with no compile error, silently landing on whatever
-      // `cardStateForAgent(agent)` returns -- exactly the "a status silently defaults" failure this
+      // `cardStateForSlave(slave)` returns -- exactly the "a status silently defaults" failure this
       // file exists to rule out. Binding `task` to `never` makes that a BUILD failure naming the
       // unhandled member.
       const unhandled: never = task
@@ -136,13 +136,13 @@ export function cardStateFor(agent: AgentStatus, task: TaskStatus | null): CardS
 }
 
 /**
- * A TASK's own card state, with no agent in play (M14 fix wave, review I2).
+ * A TASK's own card state, with no slave in play (M14 fix wave, review I2).
  *
  * `COLUMN_STATE[COLUMN_FOR_STATUS[status]]` -- the state of the board column the task sits in,
  * which is the one thing a task card, a dependency node and an execution node all already agree
- * on. Every task-only surface used to call `cardStateFor('idle', status)`, borrowing the AGENT
- * derivation and passing a fake idle agent; for `running`, `assigned`, `verifying`, `ready` and
- * `backlog` that fell through to `cardStateForAgent('idle')` and painted a grey **IDLE** pill on a
+ * on. Every task-only surface used to call `cardStateFor('idle', status)`, borrowing the SLAVE
+ * derivation and passing a fake idle slave; for `running`, `assigned`, `verifying`, `ready` and
+ * `backlog` that fell through to `cardStateForSlave('idle')` and painted a grey **IDLE** pill on a
  * card sitting under the teal **IN PROGRESS** column head. One card, two answers.
  *
  * `failed` and `cancelled` are the two exceptions, and they are deliberate: `COLUMN_FOR_STATUS`
@@ -150,9 +150,9 @@ export function cardStateFor(agent: AgentStatus, task: TaskStatus | null): CardS
  * task is not a completed one -- they keep the `blocked` state `cardStateFor` already gave them,
  * so the card says what happened while the board still files it where it belongs.
  *
- * `cardStateFor(agent, task)` is untouched and stays the AGENT-first derivation: `AgentCard` is
- * about an agent that happens to hold a task, and this function is about a task that may have no
- * agent at all.
+ * `cardStateFor(slave, task)` is untouched and stays the SLAVE-first derivation: `SlaveCard` is
+ * about a slave that happens to hold a task, and this function is about a task that may have no
+ * slave at all.
  */
 export function cardStateForTask(status: TaskStatus): CardState {
   switch (status) {

@@ -39,7 +39,7 @@ export interface StageTaskNodeData {
  */
 const LIVE_STATUSES: ReadonlySet<TaskStatus> = new Set<TaskStatus>(['running', 'verifying', 'reviewing', 'merging'])
 
-/** The `TASK-<8 chars>` reference the board card and the agent card already render. */
+/** The `TASK-<8 chars>` reference the board card and the slave card already render. */
 const TASK_REF_LENGTH = 8
 
 /** Node-id prefixes. Exported because `GraphClient`'s `ExecutionMode` splits the graph on them:
@@ -170,8 +170,8 @@ export function buildExecutionGraph(snapshot: GraphSnapshot): { readonly nodes: 
           title: task.title,
           ref: `TASK-${task.id.slice(0, TASK_REF_LENGTH)}`,
           // `cardStateForTask` is the board card's own derivation: this node is about the TASK,
-          // and no agent status is in play here (M14 fix wave, review I2 — this used to pass a
-          // fake idle agent through `cardStateFor` and paint a live task's node grey).
+          // and no slave status is in play here (M14 fix wave, review I2 — this used to pass a
+          // fake idle slave through `cardStateFor` and paint a live task's node grey).
           tone: CARD_STATE_TONE[cardStateForTask(task.status)].tone,
           column,
         } satisfies StageTaskNodeData,

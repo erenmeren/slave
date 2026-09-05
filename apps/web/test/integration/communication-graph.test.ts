@@ -29,11 +29,11 @@ async function seed(): Promise<Fixture> {
     data: { name: 'Checkout Platform', repoPath, verifyCommands: ['true'], setupCommands: [] },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const mgr = await prisma.agent.create({ data: { teamId: team.id, name: 'Mgr', role: 'planner' } })
-  const alex = await prisma.agent.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
-  const maya = await prisma.agent.create({ data: { teamId: team.id, name: 'Maya', role: 'reviewer' } })
-  // Never emits an event -- proves an agent with no edges still appears as a node.
-  const sam = await prisma.agent.create({ data: { teamId: team.id, name: 'Sam', role: 'backend' } })
+  const mgr = await prisma.slave.create({ data: { teamId: team.id, name: 'Mgr', role: 'planner' } })
+  const alex = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
+  const maya = await prisma.slave.create({ data: { teamId: team.id, name: 'Maya', role: 'reviewer' } })
+  // Never emits an event -- proves a slave with no edges still appears as a node.
+  const sam = await prisma.slave.create({ data: { teamId: team.id, name: 'Sam', role: 'backend' } })
   const task = await prisma.task.create({
     data: {
       workspaceId: workspace.id,
@@ -60,7 +60,7 @@ describe('buildCommunicationGraph', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
   })
@@ -74,22 +74,22 @@ describe('buildCommunicationGraph', () => {
   })
 
   it(
-    'lists every workspace agent as a node (even one with no edges) and derives one edge of each kind from real events',
+    'lists every workspace slave as a node (even one with no edges) and derives one edge of each kind from real events',
     async (): Promise<void> => {
       // planner -> implementer: a plan naming t1, then t1's first run.started.
       await appendEvent({
         type: 'workspace.plan_created',
         workspaceId: fixture.workspaceId,
-        agentId: fixture.mgrId,
-        actor: 'agent',
+        slaveId: fixture.mgrId,
+        actor: 'slave',
         payload: { goal: 'ship it', tasks: [{ id: fixture.taskId, title: 'Add the thing', role: 'backend' }] },
       })
       await appendEvent({
         type: 'run.started',
         workspaceId: fixture.workspaceId,
         taskId: fixture.taskId,
-        agentId: fixture.alexId,
-        actor: 'agent',
+        slaveId: fixture.alexId,
+        actor: 'slave',
         payload: { sessionId: 's1' },
       })
       // implementer -> reviewer: review_started on t1, whose latest run.started named alex.
@@ -97,8 +97,8 @@ describe('buildCommunicationGraph', () => {
         type: 'task.review_started',
         workspaceId: fixture.workspaceId,
         taskId: fixture.taskId,
-        agentId: fixture.mayaId,
-        actor: 'agent',
+        slaveId: fixture.mayaId,
+        actor: 'slave',
         payload: { title: 'Add the thing' },
       })
       // reviewer -> implementer: review_rejected, then the next run.started on the same task.
@@ -106,31 +106,31 @@ describe('buildCommunicationGraph', () => {
         type: 'task.review_rejected',
         workspaceId: fixture.workspaceId,
         taskId: fixture.taskId,
-        agentId: fixture.mayaId,
-        actor: 'agent',
+        slaveId: fixture.mayaId,
+        actor: 'slave',
         payload: { reason: 'missing tests', attempt: 1 },
       })
       await appendEvent({
         type: 'run.started',
         workspaceId: fixture.workspaceId,
         taskId: fixture.taskId,
-        agentId: fixture.alexId,
-        actor: 'agent',
+        slaveId: fixture.alexId,
+        actor: 'slave',
         payload: { sessionId: 's2' },
       })
-      // operator -> agent: a human message naming alex.
+      // operator -> slave: a human message naming alex.
       await appendEvent({
-        type: 'agent.message_sent',
+        type: 'slave.message_sent',
         workspaceId: fixture.workspaceId,
         taskId: fixture.taskId,
-        agentId: fixture.alexId,
+        slaveId: fixture.alexId,
         actor: 'human',
         payload: { category: 'instruction', body: 'ship it' },
       })
 
       const graph = await buildCommunicationGraph(fixture.workspaceId)
 
-      expect(graph?.agents.map((a) => a.id).sort()).toEqual(
+      expect(graph?.slaves.map((a) => a.id).sort()).toEqual(
         [fixture.mgrId, fixture.alexId, fixture.mayaId, fixture.samId].sort(),
       )
       // Sam has no events at all -- still a node, no edge touches it.
@@ -153,8 +153,8 @@ describe('buildCommunicationGraph', () => {
       params: Promise.resolve({ workspaceId: fixture.workspaceId }),
     })
     expect(ok.status).toBe(200)
-    const body = (await ok.json()) as { agents: readonly { id: string }[]; edges: readonly unknown[] }
-    expect(body.agents.map((a) => a.id).sort()).toEqual(
+    const body = (await ok.json()) as { slaves: readonly { id: string }[]; edges: readonly unknown[] }
+    expect(body.slaves.map((a) => a.id).sort()).toEqual(
       [fixture.mgrId, fixture.alexId, fixture.mayaId, fixture.samId].sort(),
     )
     expect(body.edges).toEqual([])
@@ -186,8 +186,8 @@ describe('buildCommunicationGraph', () => {
         appendEvent({
           type: 'workspace.plan_created',
           workspaceId: fixture.workspaceId,
-          agentId: fixture.mgrId,
-          actor: 'agent',
+          slaveId: fixture.mgrId,
+          actor: 'slave',
           payload: { goal: 'old', tasks: [{ id: oldTaskId, title: 'Old', role: 'backend' }] },
         }),
       )
@@ -196,8 +196,8 @@ describe('buildCommunicationGraph', () => {
           type: 'run.started',
           workspaceId: fixture.workspaceId,
           taskId: oldTaskId,
-          agentId: fixture.alexId,
-          actor: 'agent',
+          slaveId: fixture.alexId,
+          actor: 'slave',
           payload: { sessionId: 'old' },
         }),
       )
@@ -209,8 +209,8 @@ describe('buildCommunicationGraph', () => {
             type: 'task.review_started',
             workspaceId: fixture.workspaceId,
             taskId: fillerTaskId,
-            agentId: fixture.mayaId,
-            actor: 'agent',
+            slaveId: fixture.mayaId,
+            actor: 'slave',
             payload: { title: 'filler' },
           }),
         )
@@ -221,8 +221,8 @@ describe('buildCommunicationGraph', () => {
         appendEvent({
           type: 'workspace.plan_created',
           workspaceId: fixture.workspaceId,
-          agentId: fixture.mayaId,
-          actor: 'agent',
+          slaveId: fixture.mayaId,
+          actor: 'slave',
           payload: { goal: 'new', tasks: [{ id: newTaskId, title: 'New', role: 'backend' }] },
         }),
       )
@@ -231,8 +231,8 @@ describe('buildCommunicationGraph', () => {
           type: 'run.started',
           workspaceId: fixture.workspaceId,
           taskId: newTaskId,
-          agentId: fixture.samId,
-          actor: 'agent',
+          slaveId: fixture.samId,
+          actor: 'slave',
           payload: { sessionId: 'new' },
         }),
       )

@@ -98,7 +98,7 @@ function row(seq: number, overrides: Partial<ActivityEventRow> = {}): ActivityEv
     ts: `2026-08-22T10:00:${String(seq).padStart(2, '0')}.000Z`,
     type: 'task.created' as DomainEventType,
     actor: 'human',
-    agentId: null,
+    slaveId: null,
     taskId: null,
     runId: null,
     userId: null,
@@ -113,7 +113,7 @@ const INITIAL: ActivityPage = {
   events: [row(3), row(2), row(1)], // descending, as the server page returns it
   nextBefore: null,
   sparkline: [0, 0, 0, 0, 0, 0, 0, 0, 0, 3],
-  agents: [{ id: 'a1', name: 'Alex' }],
+  slaves: [{ id: 'a1', name: 'Alex' }],
   tasks: [{ id: 't1', title: 'Add the thing' }],
   users: [{ id: 'u1', username: 'ada' }],
   // M14 Task 12 widenings. `typeVolumes` feeds the right rail's 24h volume bars; `shellFacts`
@@ -123,7 +123,7 @@ const INITIAL: ActivityPage = {
   typeVolumes: [],
   shellFacts: {
     workspace: { id: 'w1', name: 'Checkout Platform' },
-    counts: { agentsWorking: 3, tasksActive: 12 },
+    counts: { slavesWorking: 3, tasksActive: 12 },
     guardrails: { budgetUsd: 20, maxConcurrentRuns: 3, runTimeoutMs: 1_800_000, maxAttempts: 3 },
     status: { goal: null, spentUsd: 0, unmeasuredRuns: 0, haltedReason: null },
   },
@@ -182,10 +182,10 @@ describe('ActivityClient', () => {
     expect(cards[2]?.textContent).toContain('10:00:03')
   })
 
-  it('resolves agentName/taskTitle from the page roster for cards that carry an agent/task id', () => {
-    streamState.events = [row(1, { agentId: 'a1', taskId: 't1' })]
+  it('resolves slaveName/taskTitle from the page roster for cards that carry a slave/task id', () => {
+    streamState.events = [row(1, { slaveId: 'a1', taskId: 't1' })]
     render(<ActivityClient workspaceId="w1" initial={INITIAL} />)
-    expect(screen.getByTestId('agent-link').textContent).toBe('Alex')
+    expect(screen.getByTestId('slave-link').textContent).toBe('Alex')
     expect(screen.getByTestId('task-link').textContent).toBe('Add the thing')
   })
 
@@ -521,12 +521,12 @@ describe('ActivityClient', () => {
     expect(screen.queryAllByTestId('volume-bar')).toHaveLength(0)
   })
 
-  it('filtering to a roster row dims every card that is not that agent', () => {
+  it('filtering to a roster row dims every card that is not that slave', () => {
     render(
       <ActivityClient
         workspaceId="w1"
         initial={page({
-          agents: [
+          slaves: [
             { id: 'a1', name: 'Alex' },
             { id: 'a2', name: 'Bea' },
           ],
@@ -539,12 +539,12 @@ describe('ActivityClient', () => {
   })
 
   it('clicking the selected roster row again clears the filter, undimming every card', () => {
-    streamState.events = [row(1, { agentId: 'a1' }), row(2, { agentId: 'a2' })]
+    streamState.events = [row(1, { slaveId: 'a1' }), row(2, { slaveId: 'a2' })]
     render(
       <ActivityClient
         workspaceId="w1"
         initial={page({
-          agents: [
+          slaves: [
             { id: 'a1', name: 'Alex' },
             { id: 'a2', name: 'Bea' },
           ],
@@ -553,7 +553,7 @@ describe('ActivityClient', () => {
     )
     fireEvent.click(screen.getByTestId('roster-row-a1'))
     expect(screen.getByTestId('roster-row-a1').getAttribute('aria-pressed')).toBe('true')
-    // Only the OTHER agent's row dims — the selected agent's own row stays at full opacity.
+    // Only the OTHER slave's row dims — the selected slave's own row stays at full opacity.
     expect(screen.getAllByTestId('activity-card').filter((c) => c.className.includes('opacity-[.35]'))).toHaveLength(1)
 
     fireEvent.click(screen.getByTestId('roster-row-a1'))
@@ -598,7 +598,7 @@ describe('ActivityClient', () => {
           new Response(
             JSON.stringify({
               workspace: { id: 'w1', name: 'Checkout Platform' },
-              counts: { agentsWorking: 5, tasksActive: 9 },
+              counts: { slavesWorking: 5, tasksActive: 9 },
               guardrails: { budgetUsd: 20, maxConcurrentRuns: 3, runTimeoutMs: 1_800_000, maxAttempts: 3 },
             }),
             { status: 200 },
@@ -632,7 +632,7 @@ describe('ActivityClient', () => {
       // Republished: the header reads the refreshed counts, not the ones it opened with.
       expect(publishShellFacts).toHaveBeenLastCalledWith(
         'w1',
-        expect.objectContaining({ counts: { agentsWorking: 5, tasksActive: 9 } }),
+        expect.objectContaining({ counts: { slavesWorking: 5, tasksActive: 9 } }),
       )
     } finally {
       vi.useRealTimers()
@@ -655,7 +655,7 @@ describe('Timeline scroll anchoring', () => {
       <Timeline
         events={initialEvents}
         workspaceId="w1"
-        agentNameById={new Map()}
+        slaveNameById={new Map()}
         taskTitleById={new Map()}
         userNameById={new Map()}
         onPinnedChange={vi.fn()}
@@ -671,7 +671,7 @@ describe('Timeline scroll anchoring', () => {
         <Timeline
           events={[row(-1), row(0), ...initialEvents]}
           workspaceId="w1"
-          agentNameById={new Map()}
+          slaveNameById={new Map()}
           taskTitleById={new Map()}
           userNameById={new Map()}
           onPinnedChange={vi.fn()}

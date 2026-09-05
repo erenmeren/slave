@@ -1,10 +1,10 @@
 'use client'
 
 import { useState } from 'react'
-import type { AgentStatus } from '@slave-of-ai/domain'
+import type { SlaveStatus } from '@slave-of-ai/domain'
 import { postControl } from '../../lib/postControl'
-import { CARD_STATE_TONE, cardStateForAgent } from '../../lib/tones'
-import type { GraphAgent } from '../../server/graph'
+import { CARD_STATE_TONE, cardStateForSlave } from '../../lib/tones'
+import type { GraphSlave } from '../../server/graph'
 import { AvatarTile } from '../ui/AvatarTile'
 import { Button } from '../ui/Button'
 import { Chip } from '../ui/Chip'
@@ -20,7 +20,7 @@ const QUICK_INSTRUCTIONS = ['rebase onto main first', 'add a test for this', 'st
 
 /** `✓` done / `●` current / `○` pending (design README "1b — Drawer"). `server/graph.ts` decides
  *  which state each checkpoint is in; this table is only the glyph. */
-const CHECKPOINT_GLYPH: Record<GraphAgent['checkpoints'][number]['state'], string> = {
+const CHECKPOINT_GLYPH: Record<GraphSlave['checkpoints'][number]['state'], string> = {
   done: '✓',
   current: '●',
   pending: '○',
@@ -32,33 +32,33 @@ function clockOf(iso: string): string {
 }
 
 /**
- * The 352px right drawer (design README §3a.4 / "1b — Drawer"): who the selected agent is, what
+ * The 352px right drawer (design README §3a.4 / "1b — Drawer"): who the selected slave is, what
  * runtime it is on, what it is doing and how far through, its checkpoint list, the instruct box,
  * the three run controls, and the event tail.
  *
  * Every piece of anatomy comes from `ui/` (`AvatarTile`, `StatusPill`, `ProgressBar`,
  * `PanelHeader`, `Chip`) and every mutation goes through `lib/postControl.ts` at the SAME routes
- * `AgentPanel.tsx` already drives — Decision 2's "anatomy is written once", and no second control
+ * `SlavePanel.tsx` already drives — Decision 2's "anatomy is written once", and no second control
  * vocabulary for the same three verbs.
  */
 export function GraphDrawer({
   workspaceId,
-  agent,
+  slave,
   onClose,
 }: {
   readonly workspaceId: string
-  readonly agent: GraphAgent
+  readonly slave: GraphSlave
   readonly onClose: () => void
 }): React.JSX.Element {
-  const { tone, label, pulse } = CARD_STATE_TONE[cardStateForAgent(agent.status as AgentStatus)]
+  const { tone, label, pulse } = CARD_STATE_TONE[cardStateForSlave(slave.status as SlaveStatus)]
   const [draft, setDraft] = useState('')
   const [errorText, setErrorText] = useState<string | null>(null)
-  const runId = agent.activeRunId
+  const runId = slave.activeRunId
 
   const send = async (): Promise<void> => {
     if (runId === null || draft.trim() === '') return
     setErrorText(null)
-    // The SAME route `AgentPanel`'s save button uses: the message is queued on the run and
+    // The SAME route `SlavePanel`'s save button uses: the message is queued on the run and
     // consumed on its next resume. No second message vocabulary for the graph.
     const result = await postControl(`/api/w/${workspaceId}/runs/${runId}/message`, { message: draft })
     if (result.ok) setDraft('')
@@ -75,19 +75,19 @@ export function GraphDrawer({
   return (
     <aside
       data-testid="graph-drawer"
-      aria-label="Agent detail"
+      aria-label="Slave detail"
       className="flex w-[352px] shrink-0 flex-col gap-4 overflow-y-auto border-l border-line bg-bg-1 p-4"
     >
       <header className="flex items-start gap-[9px]">
-        <AvatarTile name={agent.name} tone={tone} />
+        <AvatarTile name={slave.name} tone={tone} />
         <div className="min-w-0 flex-1">
           <div data-testid="drawer-name" className="truncate text-[13px] font-semibold text-text-1">
-            {agent.name}
+            {slave.name}
           </div>
-          <div className="truncate text-[10.5px] text-text-2">{agent.role}</div>
+          <div className="truncate text-[10.5px] text-text-2">{slave.role}</div>
         </div>
         <StatusPill tone={tone} label={label} pulse={pulse} />
-        <Button variant="ghost" data-testid="drawer-close" onClick={onClose} aria-label="Close agent detail" className="px-2 py-1">
+        <Button variant="ghost" data-testid="drawer-close" onClick={onClose} aria-label="Close slave detail" className="px-2 py-1">
           ✕
         </Button>
       </header>
@@ -98,13 +98,13 @@ export function GraphDrawer({
         <div className="bg-bg-2 p-[10px]">
           <div className={SECTION_LABEL_CLASS}>provider</div>
           <div data-testid="drawer-provider" className="truncate font-mono text-[11px] text-text-1">
-            {agent.provider ?? '—'}
+            {slave.provider ?? '—'}
           </div>
         </div>
         <div className="bg-bg-2 p-[10px]">
           <div className={SECTION_LABEL_CLASS}>model</div>
           <div data-testid="drawer-model" className="truncate font-mono text-[11px] text-text-1">
-            {agent.model ?? '—'}
+            {slave.model ?? '—'}
           </div>
         </div>
       </div>
@@ -112,18 +112,18 @@ export function GraphDrawer({
       <section className="flex flex-col gap-1.5">
         <PanelHeader title="current task" />
         <p data-testid="drawer-task" className="truncate text-[11.5px] text-text-1">
-          {agent.activeTaskTitle ?? 'no task'}
+          {slave.activeTaskTitle ?? 'no task'}
         </p>
-        <ProgressBar pct={agent.progressPct} tone={tone} size="card" />
+        <ProgressBar pct={slave.progressPct} tone={tone} size="card" />
       </section>
 
       <section className="flex flex-col gap-1.5">
         <PanelHeader title="checkpoints" />
-        {agent.checkpoints.length === 0 ? (
+        {slave.checkpoints.length === 0 ? (
           <p className="text-[11px] text-text-3">none yet</p>
         ) : (
           <ul className="flex flex-col gap-1">
-            {agent.checkpoints.map((checkpoint) => (
+            {slave.checkpoints.map((checkpoint) => (
               <li
                 key={checkpoint.label}
                 data-testid="drawer-checkpoint"
@@ -158,7 +158,7 @@ export function GraphDrawer({
         </div>
         <input
           data-testid="drawer-instruct"
-          aria-label="instruct the agent"
+          aria-label="instruct the slave"
           value={draft}
           disabled={runId === null}
           placeholder={runId === null ? 'no live run' : 'type an instruction, Enter to send'}
@@ -193,11 +193,11 @@ export function GraphDrawer({
 
       <section className="flex flex-col gap-1.5">
         <PanelHeader title="recent events" />
-        {agent.recentEvents.length === 0 ? (
+        {slave.recentEvents.length === 0 ? (
           <p className="text-[11px] text-text-3">nothing yet</p>
         ) : (
           <ul className="flex flex-col gap-1">
-            {agent.recentEvents.map((event) => (
+            {slave.recentEvents.map((event) => (
               <li key={event.seq} data-testid="drawer-event" className="flex items-baseline gap-2 font-mono text-[10px] text-text-2">
                 <span className="shrink-0 text-text-3">{clockOf(event.ts)}</span>
                 <span className="min-w-0 truncate">{event.summary}</span>

@@ -2,7 +2,7 @@
  * The activity timeline's filter vocabulary: the six user-facing "kinds" that group the 29
  * `DomainEventType`s, the `ActivityFilters` shape parsed from a URL's query params, and the
  * predicate that decides whether one event matches those filters. Pure — no `prisma`, no React —
- * so it is importable from both server routes (`?agents=`, `?tasks=`, `?types=`, `?kinds=` parsing)
+ * so it is importable from both server routes (`?slaves=`, `?tasks=`, `?types=`, `?kinds=` parsing)
  * and client hooks, exactly like `feedSummary` (ruling R3 precedent).
  */
 
@@ -40,7 +40,7 @@ export const TYPES_BY_KIND = {
     'task.merge_failed',
     'task.worktree_collected',
   ],
-  interventions: ['run.pause_requested', 'run.resume_requested', 'run.stopped', 'agent.message_sent'],
+  interventions: ['run.pause_requested', 'run.resume_requested', 'run.stopped', 'slave.message_sent'],
   guardrails: ['guardrail.tripped'],
   // The workspace's own lifecycle -- the goal, the plan it became, the company later assigned to
   // run it (M10), and a change to its runtime or budget (M13). Not under `guardrails`: the kinds
@@ -50,7 +50,7 @@ export const TYPES_BY_KIND = {
   // `guardrail.tripped` later enforces: this chip answers "what did an operator change about this
   // workspace", which is where an operator looks when a dispatch starts refusing.
   // `org.changed` (M23 D1) joins the same chip for the same reason: the roster (a project's
-  // `Team`/`Agent` rows) is workspace configuration, not a run outcome, and it carries no taskId
+  // `Team`/`Slave` rows) is workspace configuration, not a run outcome, and it carries no taskId
   // of its own to sort it under `tasks` instead.
   workspace: [
     'workspace.created',
@@ -63,13 +63,13 @@ export const TYPES_BY_KIND = {
 } as const satisfies Record<ActivityKind, readonly DomainEventType[]>
 
 export interface ActivityFilters {
-  readonly agents: readonly string[] // empty = all
+  readonly slaves: readonly string[] // empty = all
   readonly tasks: readonly string[]
   readonly types: readonly DomainEventType[] // ALREADY the union of ?types and expanded ?kinds
 }
 
 export const EMPTY_ACTIVITY_FILTERS: ActivityFilters = {
-  agents: [],
+  slaves: [],
   tasks: [],
   types: [],
 }
@@ -99,22 +99,22 @@ const typesList = z
 
 const activityFiltersSchema = z
   .object({
-    agents: commaList,
+    slaves: commaList,
     tasks: commaList,
     types: typesList,
     kinds: kindsList,
   })
-  .transform(({ agents, tasks, types, kinds }): ActivityFilters => {
+  .transform(({ slaves, tasks, types, kinds }): ActivityFilters => {
     const expanded = kinds.flatMap((kind) => TYPES_BY_KIND[kind as ActivityKind])
     const union = new Set<DomainEventType>([...types, ...expanded] as DomainEventType[])
-    return { agents, tasks, types: [...union] }
+    return { slaves, tasks, types: [...union] }
   })
 
 export function parseActivityFilters(
   params: URLSearchParams,
 ): { ok: true; filters: ActivityFilters } | { ok: false; error: string } {
   const result = activityFiltersSchema.safeParse({
-    agents: params.get('agents'),
+    slaves: params.get('slaves'),
     tasks: params.get('tasks'),
     types: params.get('types'),
     kinds: params.get('kinds'),
@@ -139,17 +139,17 @@ export function parseActivityFilters(
  */
 export function filtersToQuery(filters: ActivityFilters): string {
   const params = new URLSearchParams()
-  if (filters.agents.length > 0) params.set('agents', [...filters.agents].sort().join(','))
+  if (filters.slaves.length > 0) params.set('slaves', [...filters.slaves].sort().join(','))
   if (filters.tasks.length > 0) params.set('tasks', [...filters.tasks].sort().join(','))
   if (filters.types.length > 0) params.set('types', [...filters.types].sort().join(','))
   return params.toString()
 }
 
 export function eventMatchesFilters(
-  event: { readonly agentId: string | null; readonly taskId: string | null; readonly type: string },
+  event: { readonly slaveId: string | null; readonly taskId: string | null; readonly type: string },
   filters: ActivityFilters,
 ): boolean {
-  if (filters.agents.length > 0 && (event.agentId === null || !filters.agents.includes(event.agentId))) {
+  if (filters.slaves.length > 0 && (event.slaveId === null || !filters.slaves.includes(event.slaveId))) {
     return false
   }
   if (filters.tasks.length > 0 && (event.taskId === null || !filters.tasks.includes(event.taskId))) {

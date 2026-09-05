@@ -35,7 +35,7 @@ describe('layoutGraph / getElk retry after a failed elkjs load', () => {
 
     const { layoutGraph } = await import('../src/components/graph/layout.js')
 
-    const nodes: Node[] = [{ id: 'n1', type: 'agent', position: { x: 0, y: 0 }, data: {} }]
+    const nodes: Node[] = [{ id: 'n1', type: 'slave', position: { x: 0, y: 0 }, data: {} }]
     const edges: Edge[] = []
 
     // First attempt: the mocked ELK constructor throws -- `layoutGraph` must reject (not silently

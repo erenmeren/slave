@@ -7,7 +7,7 @@ import { INPUT_SHELL } from './ui/FormControls'
 const OTHER = '__other__'
 
 // One in-flight/settled request per provider kind, shared by every instance on the page (three
-// editors in the Agents table are one `GET`, not three). `clearModelSelectCache` is the test seam.
+// editors in the Slaves table are one `GET`, not three). `clearModelSelectCache` is the test seam.
 const listings = new Map<ProviderKind, Promise<ModelListing>>()
 
 export function clearModelSelectCache(): void {

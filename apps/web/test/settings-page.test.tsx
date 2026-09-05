@@ -65,7 +65,7 @@ function template(
 
 function member(over: Partial<RosterMemberRow> = {}): RosterMemberRow {
   return {
-    companyAgentId: 'ca1',
+    companySlaveId: 'ca1',
     name: 'Alex',
     role: 'backend',
     templateName: 'Backend Engineer',
@@ -609,7 +609,7 @@ describe('CompanyManager', () => {
       })
 
       expect(fetchMock).toHaveBeenCalledWith(
-        '/api/org/agents',
+        '/api/org/slaves',
         expect.objectContaining({ method: 'POST', body: JSON.stringify({ companyTeamId: 'ct1', templateId: 'tpl1', name: 'Blair' }) }),
       )
       expect(routerRefresh).toHaveBeenCalled()
@@ -633,7 +633,7 @@ describe('CompanyManager', () => {
       })
 
       expect(fetchMock).toHaveBeenCalledWith(
-        '/api/org/agents',
+        '/api/org/slaves',
         expect.objectContaining({
           body: JSON.stringify({ companyTeamId: 'ct1', templateId: 'tpl1', name: 'Blair', model: 'claude-opus-4', provider: 'claude_code' }),
         }),
@@ -681,7 +681,7 @@ describe('CompanyManager', () => {
       })
 
       expect(fetchMock).toHaveBeenCalledWith(
-        '/api/org/agents',
+        '/api/org/slaves',
         expect.objectContaining({
           body: JSON.stringify({ companyTeamId: 'ct1', templateId: 'tpl1', name: 'Blair', model: 'claude-opus-4', provider: 'cursor' }),
         }),
@@ -706,7 +706,7 @@ describe('CompanyManager', () => {
       })
 
       expect(fetchMock).toHaveBeenCalledWith(
-        '/api/org/agents',
+        '/api/org/slaves',
         expect.objectContaining({ body: JSON.stringify({ companyTeamId: 'ct1', templateId: 'tpl1', name: 'Blair' }) }),
       )
     })
@@ -747,8 +747,8 @@ describe('provider adapter cards', () => {
     render(
       <ProviderAdapterCards
         adapters={[
-          { kind: 'claude_code', label: 'Claude Code', state: 'connected', version: '2.1.234', adapter: 'ClaudeCodeAdapter', capabilities: { gate: 'all-tools', reportsCost: true, canPauseMidRun: true }, agentsBound: 5 },
-          { kind: 'codex', label: 'OpenAI Codex', state: 'later', version: null, adapter: 'CodexAdapter — planned', capabilities: null, agentsBound: 0 },
+          { kind: 'claude_code', label: 'Claude Code', state: 'connected', version: '2.1.234', adapter: 'ClaudeCodeAdapter', capabilities: { gate: 'all-tools', reportsCost: true, canPauseMidRun: true }, slavesBound: 5 },
+          { kind: 'codex', label: 'OpenAI Codex', state: 'later', version: null, adapter: 'CodexAdapter — planned', capabilities: null, slavesBound: 0 },
         ]}
       />,
     )
@@ -761,7 +761,7 @@ describe('provider adapter cards', () => {
   it('says a real adapter is not found rather than pretending it is connected', () => {
     render(
       <ProviderAdapterCards
-        adapters={[{ kind: 'cursor', label: 'Cursor', state: 'not found', version: null, adapter: 'CursorAdapter', capabilities: { gate: 'all-tools', reportsCost: false, canPauseMidRun: false }, agentsBound: 0 }]}
+        adapters={[{ kind: 'cursor', label: 'Cursor', state: 'not found', version: null, adapter: 'CursorAdapter', capabilities: { gate: 'all-tools', reportsCost: false, canPauseMidRun: false }, slavesBound: 0 }]}
       />,
     )
     expect(screen.getByTestId('adapter-state-cursor').textContent).toBe('not found on PATH')
@@ -782,7 +782,7 @@ describe('the permission matrix', () => {
       workspaceName: 'Checkout Platform',
       rows: [
         {
-          agentId: 'a1',
+          slaveId: 'a1',
           name: 'Alex',
           role: 'backend',
           cells: cells({ 'repo read': 'allow', 'source write': 'deny' }),
@@ -812,15 +812,15 @@ describe('the permission matrix', () => {
     expect(screen.getByTestId('perm-caption').textContent).toBe('not yet enforced at runtime')
   })
 
-  // Fix round 1, finding 2: the matrix used to list every Agent in the database with nothing to
+  // Fix round 1, finding 2: the matrix used to list every Slave in the database with nothing to
   // say which project each belonged to -- two projects materialized from one roster produced
   // indistinguishable duplicate "Alex · backend" rows.
-  it('renders one section per workspace, so same-named agents in two projects stay apart', () => {
+  it('renders one section per workspace, so same-named slaves in two projects stay apart', () => {
     render(
       <PermissionMatrix
         sections={[
-          { workspaceId: 'w1', workspaceName: 'Checkout Platform', rows: [{ agentId: 'a1', name: 'Alex', role: 'backend', cells: cells({ 'repo read': 'allow' }) }] },
-          { workspaceId: 'w2', workspaceName: 'Ledger', rows: [{ agentId: 'a2', name: 'Alex', role: 'backend', cells: cells({ 'repo read': 'deny' }) }] },
+          { workspaceId: 'w1', workspaceName: 'Checkout Platform', rows: [{ slaveId: 'a1', name: 'Alex', role: 'backend', cells: cells({ 'repo read': 'allow' }) }] },
+          { workspaceId: 'w2', workspaceName: 'Ledger', rows: [{ slaveId: 'a2', name: 'Alex', role: 'backend', cells: cells({ 'repo read': 'deny' }) }] },
         ]}
       />,
     )
@@ -830,17 +830,17 @@ describe('the permission matrix', () => {
     expect(within(first).getByText('Checkout Platform')).toBeTruthy()
     expect(within(second).getByText('Ledger')).toBeTruthy()
 
-    // The two same-named agents are distinct rows under distinct sections, and each cell carries
-    // its OWN agent's mode.
+    // The two same-named slaves are distinct rows under distinct sections, and each cell carries
+    // its OWN slave's mode.
     expect(within(first).getByTestId('perm-cell-a1-repo read').textContent).toBe('✓')
     expect(within(second).getByTestId('perm-cell-a2-repo read').textContent).toBe('✕')
     expect(within(first).queryByTestId('perm-cell-a2-repo read')).toBeNull()
   })
 
-  it('says which workspace has no agents rather than dropping its section', () => {
+  it('says which workspace has no slaves rather than dropping its section', () => {
     render(<PermissionMatrix sections={[{ workspaceId: 'w9', workspaceName: 'Fresh', rows: [] }]} />)
     expect(screen.getByTestId('permission-matrix-w9')).toBeTruthy()
-    expect(screen.getByTestId('perm-empty').textContent).toBe('no agents yet')
+    expect(screen.getByTestId('perm-empty').textContent).toBe('no slaves yet')
     expect(screen.getByTestId('perm-caption').textContent).toBe('not yet enforced at runtime')
   })
 
@@ -862,7 +862,7 @@ describe('the permission matrix', () => {
         fireEvent.click(screen.getByTestId('perm-cell-a1-repo read'))
       })
       expect(fetchMock).toHaveBeenCalledWith(
-        '/api/agents/a1/permission',
+        '/api/slaves/a1/permission',
         expect.objectContaining({ method: 'PUT', body: JSON.stringify({ tool: 'repo read', mode: 'deny' }) }),
       )
     })
@@ -875,7 +875,7 @@ describe('the permission matrix', () => {
         fireEvent.click(screen.getByTestId('perm-cell-a1-run tests'))
       })
       expect(fetchMock).toHaveBeenCalledWith(
-        '/api/agents/a1/permission',
+        '/api/slaves/a1/permission',
         expect.objectContaining({ body: JSON.stringify({ tool: 'run tests', mode: 'allow' }) }),
       )
     })

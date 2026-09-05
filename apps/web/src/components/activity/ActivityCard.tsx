@@ -12,20 +12,20 @@ import type { ActivityEventRow } from '../../server/activity'
 const ACTOR_CHIP_CLASS = 'inline-flex items-center rounded-chip border border-line bg-bg-2 px-1.5 py-0.5 font-mono text-[10px] text-text-3'
 
 /**
- * The one prop shape every card in `ACTIVITY_CARDS` (`cards.tsx`) takes. `agentName`/`taskTitle`
+ * The one prop shape every card in `ACTIVITY_CARDS` (`cards.tsx`) takes. `slaveName`/`taskTitle`
  * are resolved by the page from its roster — `null` means "not found" (or the event carries no
  * id at all), in which case the shared shell falls back to the bare id.
  */
 export interface ActivityCardProps {
   readonly event: ActivityEventRow
   readonly workspaceId: string
-  readonly agentName: string | null
+  readonly slaveName: string | null
   readonly taskTitle: string | null
   /** The web session's username that produced this event, or null (M23 F6): the CLI and the
    *  orchestrator write no user, and a run whose event predates this column reads back null too.
-   *  Resolved by the page from `ActivityPage.users`, the same way `agentName`/`taskTitle` are. */
+   *  Resolved by the page from `ActivityPage.users`, the same way `slaveName`/`taskTitle` are. */
   readonly userName: string | null
-  /** Dimmed to opacity .35 because a roster row is selected and this event is not that agent's
+  /** Dimmed to opacity .35 because a roster row is selected and this event is not that slave's
    *  (design README "Filtering"). Widened onto the SHARED prop shape, not onto each card, so
    *  every entry in `ACTIVITY_CARDS` forwards it through its existing `{...props}` spread with
    *  no per-card edit. */
@@ -50,7 +50,7 @@ export function toneForEventType(type: string): StatusTone {
       return 'blocked'
     case 'workspace.':
       return 'review'
-    case 'agent.':
+    case 'slave.':
       return 'waiting'
     default:
       return 'idle'
@@ -106,7 +106,7 @@ function EventDot({ type }: { readonly type: string }): ReactElement {
   )
 }
 
-/** The envelope's `actor` (`human` / `agent` / `system`) — distinct from a payload's
+/** The envelope's `actor` (`human` / `slave` / `system`) — distinct from a payload's
  *  `requestedBy`/`category`, which some intervention cards show in the body alongside this. */
 function ActorBadge({ actor }: { readonly actor: string }): ReactElement {
   return (
@@ -116,29 +116,29 @@ function ActorBadge({ actor }: { readonly actor: string }): ReactElement {
   )
 }
 
-/** Links to the Overview panel's `?agent=` param (spec surface — no agent detail route exists
- *  outside it). Renders nothing when the event carries no `agentId`. */
-function AgentLink({
+/** Links to the Overview panel's `?slave=` param (spec surface — no slave detail route exists
+ *  outside it). Renders nothing when the event carries no `slaveId`. */
+function SlaveLink({
   workspaceId,
-  agentId,
-  agentName,
+  slaveId,
+  slaveName,
   tone,
 }: {
   readonly workspaceId: string
-  readonly agentId: string | null
-  readonly agentName: string | null
+  readonly slaveId: string | null
+  readonly slaveName: string | null
   /** The row's own dot tone, so "who" and its dot read as one statement (the mock paints both
    *  from the same `e.color`). */
   readonly tone: StatusTone
 }): ReactElement | null {
-  if (agentId === null) return null
+  if (slaveId === null) return null
   return (
     <Link
-      href={`/w/${workspaceId}?agent=${agentId}`}
-      data-testid="agent-link"
+      href={`/w/${workspaceId}?slave=${slaveId}`}
+      data-testid="slave-link"
       className={`text-[12px] font-semibold hover:underline ${TONE_TEXT[tone]}`}
     >
-      {agentName ?? agentId}
+      {slaveName ?? slaveId}
     </Link>
   )
 }
@@ -203,7 +203,7 @@ function PayloadDetails({ payload }: { readonly payload: Record<string, unknown>
 export function ActivityCard({
   event,
   workspaceId,
-  agentName,
+  slaveName,
   taskTitle,
   userName,
   dimmed,
@@ -222,15 +222,15 @@ export function ActivityCard({
       <EventDot type={event.type} />
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-baseline gap-2">
-          {/* "who": the agent when the event names one (still a link to its Overview panel), the
+          {/* "who": the slave when the event names one (still a link to its Overview panel), the
             * envelope's bare actor otherwise. Tone-coloured at 12px/600, as the mock's own
             * `e.who` is. */}
-          {event.agentId === null ? (
+          {event.slaveId === null ? (
             <span data-testid="event-who" className={`text-[12px] font-semibold ${TONE_TEXT[tone]}`}>
-              {agentName ?? event.actor}
+              {slaveName ?? event.actor}
             </span>
           ) : (
-            <AgentLink workspaceId={workspaceId} agentId={event.agentId} agentName={agentName} tone={tone} />
+            <SlaveLink workspaceId={workspaceId} slaveId={event.slaveId} slaveName={slaveName} tone={tone} />
           )}
           <ActorBadge actor={event.actor} />
           {/* Who, by name (M23 F6) -- only when the event carries an attributed user; the CLI and

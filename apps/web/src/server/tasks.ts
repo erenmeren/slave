@@ -80,7 +80,7 @@ export async function buildTasksSnapshot(workspaceId: string): Promise<TasksSnap
       where: { workspaceId },
       orderBy: [{ priority: 'desc' }, { createdAt: 'asc' }],
       include: {
-        runs: { orderBy: { startedAt: 'desc' }, include: { checkpoint: true, agent: true } },
+        runs: { orderBy: { startedAt: 'desc' }, include: { checkpoint: true, slave: true } },
         artifacts: { orderBy: { createdAt: 'desc' } },
       },
     }),
@@ -101,7 +101,7 @@ export async function buildTasksSnapshot(workspaceId: string): Promise<TasksSnap
         priority: task.priority,
         attempt: task.attempt,
         maxAttempts: task.maxAttempts,
-        assigneeName: liveRun?.agent.name ?? null,
+        assigneeName: liveRun?.slave.name ?? null,
         branch: task.branch,
         lastRejectionReason: task.lastRejectionReason,
         // M23 B4 (controller ruling): a terminal task with a worktree still standing on at least

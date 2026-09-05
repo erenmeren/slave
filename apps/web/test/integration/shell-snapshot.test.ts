@@ -4,7 +4,7 @@ import { buildShellFacts } from '../../src/server/shell.js'
 
 interface Fixture {
   readonly workspaceId: string
-  readonly agentId: string
+  readonly slaveId: string
 }
 
 async function seed(): Promise<Fixture> {
@@ -21,8 +21,8 @@ async function seed(): Promise<Fixture> {
     },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const agent = await prisma.agent.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
-  return { workspaceId: workspace.id, agentId: agent.id }
+  const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
+  return { workspaceId: workspace.id, slaveId: slave.id }
 }
 
 describe('buildShellFacts', () => {
@@ -30,7 +30,7 @@ describe('buildShellFacts', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
   })
@@ -53,31 +53,31 @@ describe('buildShellFacts', () => {
     expect((await buildShellFacts(fixture.workspaceId))?.guardrails.budgetUsd).toBeNull()
   })
 
-  it('counts only agents the domain derives as working', async (): Promise<void> => {
-    await prisma.agentRun.create({ data: { agentId: fixture.agentId, status: 'working' } })
-    expect((await buildShellFacts(fixture.workspaceId))?.counts.agentsWorking).toBe(1)
+  it('counts only slaves the domain derives as working', async (): Promise<void> => {
+    await prisma.slaveRun.create({ data: { slaveId: fixture.slaveId, status: 'working' } })
+    expect((await buildShellFacts(fixture.workspaceId))?.counts.slavesWorking).toBe(1)
 
-    await prisma.agentRun.updateMany({ where: { agentId: fixture.agentId }, data: { status: 'paused' } })
-    expect((await buildShellFacts(fixture.workspaceId))?.counts.agentsWorking).toBe(0)
+    await prisma.slaveRun.updateMany({ where: { slaveId: fixture.slaveId }, data: { status: 'paused' } })
+    expect((await buildShellFacts(fixture.workspaceId))?.counts.slavesWorking).toBe(0)
   })
 
-  // M14 fix wave, review Minor 2: the badge says "agents working", and it counted live RUNS. One
-  // agent that happens to hold two live rows is one agent working -- otherwise the same workspace
+  // M14 fix wave, review Minor 2: the badge says "slaves working", and it counted live RUNS. One
+  // slave that happens to hold two live rows is one slave working -- otherwise the same workspace
   // shows a different number depending on which page last published it.
-  it('counts an agent with two live runs once, because the badge counts agents', async (): Promise<void> => {
-    await prisma.agentRun.create({ data: { agentId: fixture.agentId, status: 'working' } })
-    await prisma.agentRun.create({ data: { agentId: fixture.agentId, status: 'working' } })
+  it('counts a slave with two live runs once, because the badge counts slaves', async (): Promise<void> => {
+    await prisma.slaveRun.create({ data: { slaveId: fixture.slaveId, status: 'working' } })
+    await prisma.slaveRun.create({ data: { slaveId: fixture.slaveId, status: 'working' } })
 
-    expect((await buildShellFacts(fixture.workspaceId))?.counts.agentsWorking).toBe(1)
+    expect((await buildShellFacts(fixture.workspaceId))?.counts.slavesWorking).toBe(1)
   })
 
-  it('still counts two DIFFERENT agents as two', async (): Promise<void> => {
+  it('still counts two DIFFERENT slaves as two', async (): Promise<void> => {
     const team = await prisma.team.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })
-    const second = await prisma.agent.create({ data: { teamId: team.id, name: 'Bea', role: 'qa' } })
-    await prisma.agentRun.create({ data: { agentId: fixture.agentId, status: 'working' } })
-    await prisma.agentRun.create({ data: { agentId: second.id, status: 'working' } })
+    const second = await prisma.slave.create({ data: { teamId: team.id, name: 'Bea', role: 'qa' } })
+    await prisma.slaveRun.create({ data: { slaveId: fixture.slaveId, status: 'working' } })
+    await prisma.slaveRun.create({ data: { slaveId: second.id, status: 'working' } })
 
-    expect((await buildShellFacts(fixture.workspaceId))?.counts.agentsWorking).toBe(2)
+    expect((await buildShellFacts(fixture.workspaceId))?.counts.slavesWorking).toBe(2)
   })
 
   it('counts a task under review and one in the merge queue as active', async (): Promise<void> => {

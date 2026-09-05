@@ -5,7 +5,7 @@ import { requirePrincipal } from '../../../../server/principal'
 export const dynamic = 'force-dynamic'
 
 /** `DepartmentsTable`'s delete write (M23 D3; renamed M25 §4.2) -- no body, `teamId` from the
- *  path. `deleteTeam` refuses while the team still has any agent on its roster. */
+ *  path. `deleteTeam` refuses while the team still has any slave on its roster. */
 export async function DELETE(
   _request: Request,
   context: { params: Promise<{ teamId: string }> },

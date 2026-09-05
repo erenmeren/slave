@@ -8,19 +8,19 @@ import type { StatusTone } from '../ui/StatusPill'
 // ---- node data shapes -------------------------------------------------------------------------
 
 /**
- * The minimal node this mode needs (Task 12, M23 E3): `OrgNodes.tsx`'s `AgentNodeData` requires
+ * The minimal node this mode needs (Task 12, M23 E3): `OrgNodes.tsx`'s `SlaveNodeData` requires
  * `status`/`activeTaskTitle`/`workspaceId` (it renders a status pill and a context menu) -- the
  * communication graph carries none of that (`server/communicationGraph.ts`'s `CommunicationGraph`
- * is `{ agents: {id,name,role}[]; edges: CommunicationEdge[] }`), so this is a SEPARATE, smaller
- * node kind rather than a widening of `AgentNodeData` for a shape it doesn't have.
+ * is `{ slaves: {id,name,role}[]; edges: CommunicationEdge[] }`), so this is a SEPARATE, smaller
+ * node kind rather than a widening of `SlaveNodeData` for a shape it doesn't have.
  */
-export interface CommAgentNodeData {
-  readonly kind: 'commAgent'
+export interface CommSlaveNodeData {
+  readonly kind: 'commSlave'
   readonly name: string
   readonly role: string
 }
 
-/** The literal human node every `agent.message_sent` edge with `actor: 'human'` renders from
+/** The literal human node every `slave.message_sent` edge with `actor: 'human'` renders from
  *  (`communicationFold.ts`'s `OPERATOR` constant) -- carries no data of its own beyond its kind. */
 export interface OperatorNodeData {
   readonly kind: 'operator'
@@ -28,21 +28,21 @@ export interface OperatorNodeData {
 
 // ---- node renderers ------------------------------------------------------------------------
 
-/** `agent:<id>` -- distinct from every other mode's node-id space, same prefix `OrgNodes.tsx`
- *  uses for its own (unrelated) agent node kind. */
-export const COMM_AGENT_NODE_PREFIX = 'agent:'
+/** `slave:<id>` -- distinct from every other mode's node-id space, same prefix `OrgNodes.tsx`
+ *  uses for its own (unrelated) slave node kind. */
+export const COMM_SLAVE_NODE_PREFIX = 'slave:'
 
 /** The one node every human-originated edge collapses onto (`communicationFold.ts`'s `OPERATOR`). */
 export const OPERATOR_NODE_ID = 'operator'
 
 /**
- * The chip-styled agent node: name + role, nothing else -- this graph has no live status to show
- * (spec §6 E1: the graph is folded from a bounded event window, not a live agent snapshot), so
- * unlike `OrgNodes.tsx`'s `AgentNode` this renders no status pill and opens no context menu.
+ * The chip-styled slave node: name + role, nothing else -- this graph has no live status to show
+ * (spec §6 E1: the graph is folded from a bounded event window, not a live slave snapshot), so
+ * unlike `OrgNodes.tsx`'s `SlaveNode` this renders no status pill and opens no context menu.
  */
-export function CommAgentNode({ data }: NodeProps<CommAgentNodeData>): React.JSX.Element {
+export function CommSlaveNode({ data }: NodeProps<CommSlaveNodeData>): React.JSX.Element {
   return (
-    <div data-testid="comm-agent-node" className="rounded border border-line bg-bg-1 px-3 py-2 text-center">
+    <div data-testid="comm-slave-node" className="rounded border border-line bg-bg-1 px-3 py-2 text-center">
       <Handle type="target" position={Position.Left} />
       <div className="truncate text-sm text-text-1">{data.name}</div>
       <div className="truncate text-xs text-text-3">{data.role}</div>
@@ -64,7 +64,7 @@ export function OperatorNode(_props: NodeProps<OperatorNodeData>): React.JSX.Ele
 }
 
 export const COMM_NODE_TYPES: NodeTypes = {
-  commAgent: CommAgentNode,
+  commSlave: CommSlaveNode,
   operator: OperatorNode,
 } as NodeTypes
 
@@ -83,14 +83,14 @@ const TONE_BY_KIND: Record<CommunicationEdgeKind, StatusTone> = {
   message: 'idle',
 }
 
-/** `CommunicationEdge.from`/`.to` are either an agent id or the literal `'operator'`
+/** `CommunicationEdge.from`/`.to` are either a slave id or the literal `'operator'`
  *  (`communicationFold.ts`'s `OPERATOR`) -- this maps either to the node id space above. */
 function commNodeId(rawId: string): string {
-  return rawId === OPERATOR_NODE_ID ? OPERATOR_NODE_ID : `${COMM_AGENT_NODE_PREFIX}${rawId}`
+  return rawId === OPERATOR_NODE_ID ? OPERATOR_NODE_ID : `${COMM_SLAVE_NODE_PREFIX}${rawId}`
 }
 
 /**
- * The Communication tab's graph (Task 12, M23 E3): one `agent:<id>` node per `graph.agents` entry
+ * The Communication tab's graph (Task 12, M23 E3): one `slave:<id>` node per `graph.slaves` entry
  * plus one ALWAYS-present `operator` node (whether or not this fetch's edges touch it -- a stable
  * landmark on the canvas, not something that pops in and out as hand-offs come and go), and one
  * cable edge per `graph.edges` entry. Every node starts at `{x: 0, y: 0}` -- `layout.ts`'s
@@ -101,7 +101,7 @@ function commNodeId(rawId: string): string {
  * -- the same convention `buildSkillAggregateGraph`'s `${source}->${target}` uses, with `:<kind>`
  * appended because, unlike the skill graph, two DIFFERENT edges can share one `(from, to)` pair
  * here (`communicationFold.ts`'s `bump` keys its own map by `from|to|kind` for exactly this
- * reason) -- e.g. one agent plans for another AND later reworks something for them.
+ * reason) -- e.g. one slave plans for another AND later reworks something for them.
  *
  * Every edge is a `cable` (`CableEdge.tsx`) at the kind's fixed tone (`TONE_BY_KIND` above) and
  * `active: false` -- this view has no notion of an edge currently "in flight", the same honesty
@@ -112,11 +112,11 @@ function commNodeId(rawId: string): string {
 export function buildCommunicationGraph(graph: CommunicationGraph): { readonly nodes: Node[]; readonly edges: Edge[] } {
   const origin = { x: 0, y: 0 }
 
-  const agentNodes: Node[] = graph.agents.map((agent) => ({
-    id: `${COMM_AGENT_NODE_PREFIX}${agent.id}`,
-    type: 'commAgent',
+  const slaveNodes: Node[] = graph.slaves.map((slave) => ({
+    id: `${COMM_SLAVE_NODE_PREFIX}${slave.id}`,
+    type: 'commSlave',
     position: origin,
-    data: { kind: 'commAgent', name: agent.name, role: agent.role } satisfies CommAgentNodeData,
+    data: { kind: 'commSlave', name: slave.name, role: slave.role } satisfies CommSlaveNodeData,
   }))
 
   const operatorNode: Node = {
@@ -138,5 +138,5 @@ export function buildCommunicationGraph(graph: CommunicationGraph): { readonly n
     }
   })
 
-  return { nodes: [...agentNodes, operatorNode], edges }
+  return { nodes: [...slaveNodes, operatorNode], edges }
 }

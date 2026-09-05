@@ -5,7 +5,7 @@ import { AnalyticsClient } from '../../components/AnalyticsClient'
 export const dynamic = 'force-dynamic'
 
 /** `/analytics` is GLOBAL, with an optional `?workspace=` scope (M14 §5, routes note) -- the
- *  same shell idiom `app/agents/page.tsx` uses. */
+ *  same shell idiom `app/slaves/page.tsx` uses. */
 export default async function AnalyticsPage({
   searchParams,
 }: {

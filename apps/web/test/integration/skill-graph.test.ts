@@ -7,8 +7,8 @@ import { GET as skillGraphGET } from '../../src/app/api/w/[workspaceId]/skill-gr
 interface Fixture {
   readonly workspaceId: string
   readonly teamId: string
-  readonly agentAId: string
-  readonly agentBId: string
+  readonly slaveAId: string
+  readonly slaveBId: string
   readonly taskId: string
 }
 
@@ -22,8 +22,8 @@ async function seed(): Promise<Fixture> {
     },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const agentA = await prisma.agent.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
-  const agentB = await prisma.agent.create({ data: { teamId: team.id, name: 'Sam', role: 'backend' } })
+  const slaveA = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
+  const slaveB = await prisma.slave.create({ data: { teamId: team.id, name: 'Sam', role: 'backend' } })
   const task = await prisma.task.create({
     data: {
       workspaceId: workspace.id,
@@ -34,14 +34,14 @@ async function seed(): Promise<Fixture> {
       maxAttempts: 3,
     },
   })
-  return { workspaceId: workspace.id, teamId: team.id, agentAId: agentA.id, agentBId: agentB.id, taskId: task.id }
+  return { workspaceId: workspace.id, teamId: team.id, slaveAId: slaveA.id, slaveBId: slaveB.id, taskId: task.id }
 }
 
 /** A `run.tool_call` event whose summary is a Skill call (`Skill <name>`) or, for the unparsable
  *  case, the bare word the parser could not fill in. */
 async function skillCall(opts: {
   readonly workspaceId: string
-  readonly agentId: string
+  readonly slaveId: string
   readonly runId: string
   readonly taskId?: string
   readonly summary: string
@@ -50,16 +50,16 @@ async function skillCall(opts: {
     type: 'run.tool_call',
     workspaceId: opts.workspaceId,
     ...(opts.taskId !== undefined ? { taskId: opts.taskId } : {}),
-    agentId: opts.agentId,
+    slaveId: opts.slaveId,
     runId: opts.runId,
-    actor: 'agent',
+    actor: 'slave',
     payload: { name: 'Skill', summary: opts.summary },
   })
 }
 
 async function noiseCall(opts: {
   readonly workspaceId: string
-  readonly agentId: string
+  readonly slaveId: string
   readonly runId: string
   readonly taskId?: string
 }): Promise<void> {
@@ -67,9 +67,9 @@ async function noiseCall(opts: {
     type: 'run.tool_call',
     workspaceId: opts.workspaceId,
     ...(opts.taskId !== undefined ? { taskId: opts.taskId } : {}),
-    agentId: opts.agentId,
+    slaveId: opts.slaveId,
     runId: opts.runId,
-    actor: 'agent',
+    actor: 'slave',
     payload: { name: 'Write', summary: 'Write a.txt' },
   })
 }
@@ -79,7 +79,7 @@ describe('buildSkillGraph', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
   })
@@ -93,10 +93,10 @@ describe('buildSkillGraph', () => {
   })
 
   it('returns the empty shape for a workspace with no Skill calls at all', async (): Promise<void> => {
-    const run = await prisma.agentRun.create({
-      data: { taskId: fixture.taskId, agentId: fixture.agentAId, status: 'working' },
+    const run = await prisma.slaveRun.create({
+      data: { taskId: fixture.taskId, slaveId: fixture.slaveAId, status: 'working' },
     })
-    await noiseCall({ workspaceId: fixture.workspaceId, agentId: fixture.agentAId, runId: run.id, taskId: fixture.taskId })
+    await noiseCall({ workspaceId: fixture.workspaceId, slaveId: fixture.slaveAId, runId: run.id, taskId: fixture.taskId })
 
     expect(await buildSkillGraph(fixture.workspaceId)).toEqual({ skills: [], edges: [], runs: [] })
   })
@@ -105,25 +105,25 @@ describe('buildSkillGraph', () => {
     'orders each run\'s chain by seq, collapses consecutive repeats, and aggregates skills/edges across runs',
     async (): Promise<void> => {
       // Run A is live (non-terminal), attached to the fixture task. Run B is a finished,
-      // task-less run (a planning-style run has none) on a second agent -- exercising both the
+      // task-less run (a planning-style run has none) on a second slave -- exercising both the
       // `live` boolean and a null `taskTitle` in the same fixture.
-      const runA = await prisma.agentRun.create({
-        data: { taskId: fixture.taskId, agentId: fixture.agentAId, status: 'working' },
+      const runA = await prisma.slaveRun.create({
+        data: { taskId: fixture.taskId, slaveId: fixture.slaveAId, status: 'working' },
       })
-      const runB = await prisma.agentRun.create({
-        data: { agentId: fixture.agentBId, status: 'succeeded' },
+      const runB = await prisma.slaveRun.create({
+        data: { slaveId: fixture.slaveBId, status: 'succeeded' },
       })
 
       // Interleaved seq, on purpose: the two-step query orders `[runId asc, seq asc]`, not
       // insertion order, so this proves the per-run chain comes out right even though the calls
       // arrived interleaved across runs, with a non-Skill call mixed in to prove it's excluded.
-      await skillCall({ workspaceId: fixture.workspaceId, agentId: fixture.agentAId, runId: runA.id, taskId: fixture.taskId, summary: 'Skill alpha' })
-      await noiseCall({ workspaceId: fixture.workspaceId, agentId: fixture.agentBId, runId: runB.id })
-      await skillCall({ workspaceId: fixture.workspaceId, agentId: fixture.agentAId, runId: runA.id, taskId: fixture.taskId, summary: 'Skill alpha' })
-      await skillCall({ workspaceId: fixture.workspaceId, agentId: fixture.agentBId, runId: runB.id, summary: 'Skill beta' })
-      await skillCall({ workspaceId: fixture.workspaceId, agentId: fixture.agentAId, runId: runA.id, taskId: fixture.taskId, summary: 'Skill beta' })
-      await skillCall({ workspaceId: fixture.workspaceId, agentId: fixture.agentBId, runId: runB.id, summary: 'Skill beta' })
-      await skillCall({ workspaceId: fixture.workspaceId, agentId: fixture.agentBId, runId: runB.id, summary: 'Skill alpha' })
+      await skillCall({ workspaceId: fixture.workspaceId, slaveId: fixture.slaveAId, runId: runA.id, taskId: fixture.taskId, summary: 'Skill alpha' })
+      await noiseCall({ workspaceId: fixture.workspaceId, slaveId: fixture.slaveBId, runId: runB.id })
+      await skillCall({ workspaceId: fixture.workspaceId, slaveId: fixture.slaveAId, runId: runA.id, taskId: fixture.taskId, summary: 'Skill alpha' })
+      await skillCall({ workspaceId: fixture.workspaceId, slaveId: fixture.slaveBId, runId: runB.id, summary: 'Skill beta' })
+      await skillCall({ workspaceId: fixture.workspaceId, slaveId: fixture.slaveAId, runId: runA.id, taskId: fixture.taskId, summary: 'Skill beta' })
+      await skillCall({ workspaceId: fixture.workspaceId, slaveId: fixture.slaveBId, runId: runB.id, summary: 'Skill beta' })
+      await skillCall({ workspaceId: fixture.workspaceId, slaveId: fixture.slaveBId, runId: runB.id, summary: 'Skill alpha' })
 
       const graph = await buildSkillGraph(fixture.workspaceId)
 
@@ -132,7 +132,7 @@ describe('buildSkillGraph', () => {
       expect(runAOut?.chain).toEqual([{ name: 'alpha', count: 2 }, { name: 'beta', count: 1 }])
       expect(runAOut?.live).toBe(true)
       expect(runAOut?.taskTitle).toBe('Add the thing')
-      expect(runAOut?.agentName).toBe('Alex')
+      expect(runAOut?.slaveName).toBe('Alex')
       expect(typeof runAOut?.startedAt).toBe('string')
 
       // Run B's raw call order (Skill events only, the Write noise excluded) is beta, beta, alpha
@@ -141,7 +141,7 @@ describe('buildSkillGraph', () => {
       expect(runBOut?.chain).toEqual([{ name: 'beta', count: 2 }, { name: 'alpha', count: 1 }])
       expect(runBOut?.live).toBe(false)
       expect(runBOut?.taskTitle).toBeNull()
-      expect(runBOut?.agentName).toBe('Sam')
+      expect(runBOut?.slaveName).toBe('Sam')
 
       // Aggregate `skills`: alpha = 2 (run A) + 1 (run B) = 3; beta = 1 (run A) + 2 (run B) = 3.
       expect(graph?.skills).toEqual([{ name: 'alpha', calls: 3 }, { name: 'beta', calls: 3 }])
@@ -166,12 +166,12 @@ describe('buildSkillGraph', () => {
       // what unparsable becomes -- the em dash the chip already renders for the same case, `—`,
       // written directly into the chain rather than the tool's own name (`'Skill'`) standing in
       // for it.
-      const run = await prisma.agentRun.create({
-        data: { taskId: fixture.taskId, agentId: fixture.agentAId, status: 'working' },
+      const run = await prisma.slaveRun.create({
+        data: { taskId: fixture.taskId, slaveId: fixture.slaveAId, status: 'working' },
       })
-      await skillCall({ workspaceId: fixture.workspaceId, agentId: fixture.agentAId, runId: run.id, taskId: fixture.taskId, summary: 'Skill' })
-      await skillCall({ workspaceId: fixture.workspaceId, agentId: fixture.agentAId, runId: run.id, taskId: fixture.taskId, summary: 'Skill' })
-      await skillCall({ workspaceId: fixture.workspaceId, agentId: fixture.agentAId, runId: run.id, taskId: fixture.taskId, summary: 'Skill gamma' })
+      await skillCall({ workspaceId: fixture.workspaceId, slaveId: fixture.slaveAId, runId: run.id, taskId: fixture.taskId, summary: 'Skill' })
+      await skillCall({ workspaceId: fixture.workspaceId, slaveId: fixture.slaveAId, runId: run.id, taskId: fixture.taskId, summary: 'Skill' })
+      await skillCall({ workspaceId: fixture.workspaceId, slaveId: fixture.slaveAId, runId: run.id, taskId: fixture.taskId, summary: 'Skill gamma' })
 
       const graph = await buildSkillGraph(fixture.workspaceId)
       const runOut = graph?.runs.find((r) => r.runId === run.id)
@@ -188,9 +188,9 @@ describe('buildSkillGraph', () => {
       data: { name: 'Other', repoPath: '/tmp/other-skill-graph', verifyCommands: ['true'], setupCommands: [] },
     })
     const otherTeam = await prisma.team.create({ data: { workspaceId: other.id, name: 'T' } })
-    const otherAgent = await prisma.agent.create({ data: { teamId: otherTeam.id, name: 'Zoe', role: 'backend' } })
-    const otherRun = await prisma.agentRun.create({ data: { agentId: otherAgent.id, status: 'working' } })
-    await skillCall({ workspaceId: other.id, agentId: otherAgent.id, runId: otherRun.id, summary: 'Skill delta' })
+    const otherSlave = await prisma.slave.create({ data: { teamId: otherTeam.id, name: 'Zoe', role: 'backend' } })
+    const otherRun = await prisma.slaveRun.create({ data: { slaveId: otherSlave.id, status: 'working' } })
+    await skillCall({ workspaceId: other.id, slaveId: otherSlave.id, runId: otherRun.id, summary: 'Skill delta' })
 
     expect(await buildSkillGraph(fixture.workspaceId)).toEqual({ skills: [], edges: [], runs: [] })
   })
@@ -201,10 +201,10 @@ describe('buildSkillGraph', () => {
   // bound rides on, so a change that drops or loosens the `take` fails this test without needing
   // fifty-plus fixture rows.
   it('bounds the run-selection query to SKILL_GRAPH_RUN_LIMIT, newest by each run\'s latest Skill call', async (): Promise<void> => {
-    const run = await prisma.agentRun.create({
-      data: { taskId: fixture.taskId, agentId: fixture.agentAId, status: 'working' },
+    const run = await prisma.slaveRun.create({
+      data: { taskId: fixture.taskId, slaveId: fixture.slaveAId, status: 'working' },
     })
-    await skillCall({ workspaceId: fixture.workspaceId, agentId: fixture.agentAId, runId: run.id, taskId: fixture.taskId, summary: 'Skill alpha' })
+    await skillCall({ workspaceId: fixture.workspaceId, slaveId: fixture.slaveAId, runId: run.id, taskId: fixture.taskId, summary: 'Skill alpha' })
 
     // Prisma's `groupBy` overload set is too intricate to name from outside the client, and
     // `vi.spyOn`'s callthrough does not survive the model delegate's own Proxy indirection (the
@@ -235,10 +235,10 @@ describe('buildSkillGraph', () => {
   })
 
   it('the route serves the graph and 404s an unknown workspace', async (): Promise<void> => {
-    const run = await prisma.agentRun.create({
-      data: { taskId: fixture.taskId, agentId: fixture.agentAId, status: 'working' },
+    const run = await prisma.slaveRun.create({
+      data: { taskId: fixture.taskId, slaveId: fixture.slaveAId, status: 'working' },
     })
-    await skillCall({ workspaceId: fixture.workspaceId, agentId: fixture.agentAId, runId: run.id, taskId: fixture.taskId, summary: 'Skill alpha' })
+    await skillCall({ workspaceId: fixture.workspaceId, slaveId: fixture.slaveAId, runId: run.id, taskId: fixture.taskId, summary: 'Skill alpha' })
 
     const ok = await skillGraphGET(new Request('http://x'), {
       params: Promise.resolve({ workspaceId: fixture.workspaceId }),

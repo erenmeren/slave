@@ -1,12 +1,12 @@
 /**
- * The agent detail panel's live feed line, derived once and shared by both the snapshot side
+ * The slave detail panel's live feed line, derived once and shared by both the snapshot side
  * (`server/overview.ts`, which reads `ExecutionEvent` rows out of Postgres) and the client hook
  * (`hooks/useOverview.ts`, which reads `StreamEvent`s off the SSE stream). Pure — no `prisma`
  * import — so the hook can import it without pulling `@slave-of-ai/db` into the client bundle
  * (controller ruling R3).
  */
 
-export interface AgentFeedEvent {
+export interface SlaveFeedEvent {
   readonly seq: number
   readonly ts: string
   readonly type: string

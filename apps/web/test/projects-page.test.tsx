@@ -268,7 +268,7 @@ describe('the handoff project card', () => {
   it('renders an avatar tile per team member instead of numbered placeholders', () => {
     render(
       <TestProjectsClient
-        projects={[project({ team: [{ agentId: 'a1', name: 'Alex Turner', status: 'working' }, { agentId: 'a2', name: 'Bea Ng', status: 'idle' }] })]}
+        projects={[project({ team: [{ slaveId: 'a1', name: 'Alex Turner', status: 'working' }, { slaveId: 'a2', name: 'Bea Ng', status: 'idle' }] })]}
         companies={companies}
       />,
     )
@@ -276,10 +276,10 @@ describe('the handoff project card', () => {
     expect(screen.getAllByTestId('avatar-tile')[0]?.getAttribute('data-tone')).toBe('working')
   })
 
-  it('renders a 4-up stat strip: agents, active, blocked, spend', () => {
+  it('renders a 4-up stat strip: slaves, active, blocked, spend', () => {
     render(<TestProjectsClient projects={[project({})]} companies={companies} />)
     expect(screen.getAllByTestId('stat-strip-item').map((i) => i.textContent?.replace(/\s+/g, ' ').trim())).toEqual([
-      'agents 3', 'active 1', 'blocked 0', 'spend $12.50',
+      'slaves 3', 'active 1', 'blocked 0', 'spend $12.50',
     ])
   })
 
@@ -293,21 +293,21 @@ describe('the handoff project card', () => {
     )
   })
 
-  // M14 fix wave, review I4: `projects.png` showed `AGENTS 0` above six avatar tiles on the same
+  // M14 fix wave, review I4: `projects.png` showed `SLAVES 0` above six avatar tiles on the same
   // card. The tile and the row read the same DTO's two halves; this pins that they agree.
-  it('puts the same number in the AGENTS tile as it puts faces in the avatar row', () => {
+  it('puts the same number in the SLAVES tile as it puts faces in the avatar row', () => {
     render(
       <TestProjectsClient
         projects={[
           project({
             workerCount: 2,
-            team: [{ agentId: 'a1', name: 'Alex Turner', status: 'working' }, { agentId: 'a2', name: 'Bea Ng', status: 'idle' }],
+            team: [{ slaveId: 'a1', name: 'Alex Turner', status: 'working' }, { slaveId: 'a2', name: 'Bea Ng', status: 'idle' }],
           }),
         ]}
         companies={companies}
       />,
     )
-    expect(screen.getAllByTestId('stat-strip-item')[0]?.textContent?.replace(/\s+/g, ' ').trim()).toBe('agents 2')
+    expect(screen.getAllByTestId('stat-strip-item')[0]?.textContent?.replace(/\s+/g, ' ').trim()).toBe('slaves 2')
     expect(screen.getAllByTestId('avatar-tile')).toHaveLength(2)
   })
 
@@ -324,14 +324,14 @@ describe('the handoff project card', () => {
 
   it('caps the avatar row at six and says how many more', () => {
     const team = [
-      { agentId: 'a1', name: 'Alex Turner', status: 'working' },
-      { agentId: 'a2', name: 'Bea Ng', status: 'idle' },
-      { agentId: 'a3', name: 'Chen Lee', status: 'working' },
-      { agentId: 'a4', name: 'Dana Fox', status: 'idle' },
-      { agentId: 'a5', name: 'Eve Martin', status: 'working' },
-      { agentId: 'a6', name: 'Frank Smith', status: 'idle' },
-      { agentId: 'a7', name: 'Grace Johnson', status: 'working' },
-      { agentId: 'a8', name: 'Henry Brown', status: 'idle' },
+      { slaveId: 'a1', name: 'Alex Turner', status: 'working' },
+      { slaveId: 'a2', name: 'Bea Ng', status: 'idle' },
+      { slaveId: 'a3', name: 'Chen Lee', status: 'working' },
+      { slaveId: 'a4', name: 'Dana Fox', status: 'idle' },
+      { slaveId: 'a5', name: 'Eve Martin', status: 'working' },
+      { slaveId: 'a6', name: 'Frank Smith', status: 'idle' },
+      { slaveId: 'a7', name: 'Grace Johnson', status: 'working' },
+      { slaveId: 'a8', name: 'Henry Brown', status: 'idle' },
     ]
     render(<TestProjectsClient projects={[project({ team })]} companies={companies} />)
     const teamRow = screen.getByLabelText('team')
@@ -343,12 +343,12 @@ describe('the handoff project card', () => {
 
   it('renders no overflow tile at six or fewer', () => {
     const team = [
-      { agentId: 'a1', name: 'Alex Turner', status: 'working' },
-      { agentId: 'a2', name: 'Bea Ng', status: 'idle' },
-      { agentId: 'a3', name: 'Chen Lee', status: 'working' },
-      { agentId: 'a4', name: 'Dana Fox', status: 'idle' },
-      { agentId: 'a5', name: 'Eve Martin', status: 'working' },
-      { agentId: 'a6', name: 'Frank Smith', status: 'idle' },
+      { slaveId: 'a1', name: 'Alex Turner', status: 'working' },
+      { slaveId: 'a2', name: 'Bea Ng', status: 'idle' },
+      { slaveId: 'a3', name: 'Chen Lee', status: 'working' },
+      { slaveId: 'a4', name: 'Dana Fox', status: 'idle' },
+      { slaveId: 'a5', name: 'Eve Martin', status: 'working' },
+      { slaveId: 'a6', name: 'Frank Smith', status: 'idle' },
     ]
     render(<TestProjectsClient projects={[project({ team })]} companies={companies} />)
     expect(screen.queryByTestId('team-overflow')).toBeNull()

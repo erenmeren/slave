@@ -12,7 +12,7 @@ const TABS = [
   { id: 'settings', label: 'Settings', path: (id: string) => `/w/${id}/settings`, exact: false },
 ] as const
 
-/** The project's tab strip (M24 §2.2): five route links in the Agents page's tab idiom. Overview
+/** The project's tab strip (M24 §2.2): five route links in the Slaves page's tab idiom. Overview
  *  matches its route exactly (it is the prefix of every other tab); the rest match by prefix so a
  *  Graph mode in the query string still lights Graph. Only Tasks carries a badge. */
 export function ProjectTabs({

@@ -16,7 +16,7 @@ afterAll(() => {
 
 interface Fixture {
   readonly workspaceId: string
-  readonly agentId: string
+  readonly slaveId: string
 }
 
 async function seed(overrides: { readonly goal?: string | null; readonly haltedReason?: string | null } = {}): Promise<Fixture> {
@@ -32,14 +32,14 @@ async function seed(overrides: { readonly goal?: string | null; readonly haltedR
     },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const agent = await prisma.agent.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
-  return { workspaceId: workspace.id, agentId: agent.id }
+  const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
+  return { workspaceId: workspace.id, slaveId: slave.id }
 }
 
 describe('buildShellFacts status block', () => {
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "AgentRun", "Task", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "SlaveRun", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
   })
 
@@ -49,11 +49,11 @@ describe('buildShellFacts status block', () => {
 
   it('sums known spend, counts the unmeasured run, and carries the goal and halt state through', async (): Promise<void> => {
     const fixture = await seed()
-    await prisma.agentRun.create({
-      data: { agentId: fixture.agentId, status: 'succeeded', provider: 'claude_code', costUsd: 0.25 },
+    await prisma.slaveRun.create({
+      data: { slaveId: fixture.slaveId, status: 'succeeded', provider: 'claude_code', costUsd: 0.25 },
     })
-    await prisma.agentRun.create({
-      data: { agentId: fixture.agentId, status: 'succeeded', provider: 'claude_code', costUsd: null },
+    await prisma.slaveRun.create({
+      data: { slaveId: fixture.slaveId, status: 'succeeded', provider: 'claude_code', costUsd: null },
     })
 
     const facts = await buildShellFacts(fixture.workspaceId)

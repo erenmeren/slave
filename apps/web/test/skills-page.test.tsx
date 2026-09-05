@@ -15,13 +15,13 @@ function page(over: Partial<SkillsPage> = {}): SkillsPage {
         id: 'p1',
         name: 'plugin:superpowers',
         skills: [
-          { id: 's1', name: 'writing-plans', description: 'plans things', runs: 18, state: 'ready', agentIds: [] },
-          { id: 's2', name: 'brainstorming', description: 'explores intent', runs: 24, state: 'ready', agentIds: ['a1'] },
-          { id: 's3', name: 'gone', description: 'was here once', runs: 2, state: 'missing', agentIds: [] },
+          { id: 's1', name: 'writing-plans', description: 'plans things', runs: 18, state: 'ready', slaveIds: [] },
+          { id: 's2', name: 'brainstorming', description: 'explores intent', runs: 24, state: 'ready', slaveIds: ['a1'] },
+          { id: 's3', name: 'gone', description: 'was here once', runs: 2, state: 'missing', slaveIds: [] },
         ],
       },
     ],
-    agents: [{ id: 'a1', name: 'Alex Turner', status: 'working' }],
+    slaves: [{ id: 'a1', name: 'Alex Turner', status: 'working' }],
     scannedRoots: ['/home/x/.claude/skills', '/home/x/.claude/plugins/cache', '/repo/.claude/skills'],
     ...over,
   }
@@ -57,7 +57,7 @@ describe('SkillsClient', () => {
             {
               id: 'p1',
               name: 'personal',
-              skills: [{ id: 's1', name: 'quiet', description: 'never called', runs: 0, state: 'ready', agentIds: [] }],
+              skills: [{ id: 's1', name: 'quiet', description: 'never called', runs: 0, state: 'ready', slaveIds: [] }],
             },
           ],
         })}
@@ -86,15 +86,15 @@ describe('SkillsClient', () => {
     expect(screen.queryByRole('textbox')).toBeNull()
   })
 
-  it('assigns a skill to the chosen agent and unassigns it again', async (): Promise<void> => {
+  it('assigns a skill to the chosen slave and unassigns it again', async (): Promise<void> => {
     render(<SkillsClient page={page()} />)
     await act(async () => {
-      fireEvent.change(screen.getByTestId('skill-agent-s1'), { target: { value: 'a1' } })
+      fireEvent.change(screen.getByTestId('skill-slave-s1'), { target: { value: 'a1' } })
       fireEvent.click(screen.getByTestId('skill-assign-s1'))
     })
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/skills/assign',
-      expect.objectContaining({ method: 'POST', body: JSON.stringify({ agentId: 'a1', skillId: 's1' }) }),
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({ slaveId: 'a1', skillId: 's1' }) }),
     )
 
     await act(async () => {
@@ -102,7 +102,7 @@ describe('SkillsClient', () => {
     })
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/skills/assign',
-      expect.objectContaining({ method: 'DELETE', body: JSON.stringify({ agentId: 'a1', skillId: 's2' }) }),
+      expect.objectContaining({ method: 'DELETE', body: JSON.stringify({ slaveId: 'a1', skillId: 's2' }) }),
     )
     // The refetch loop owns truth: nothing is written into local state from a 200.
     expect(routerRefresh).toHaveBeenCalledTimes(2)
@@ -112,18 +112,18 @@ describe('SkillsClient', () => {
     fetchMock.mockImplementationOnce(async () => new Response(JSON.stringify({ error: 'no skill with id s1' }), { status: 409 }))
     render(<SkillsClient page={page()} />)
     await act(async () => {
-      fireEvent.change(screen.getByTestId('skill-agent-s1'), { target: { value: 'a1' } })
+      fireEvent.change(screen.getByTestId('skill-slave-s1'), { target: { value: 'a1' } })
       fireEvent.click(screen.getByTestId('skill-assign-s1'))
     })
     expect(screen.getByTestId('skills-error').textContent).toBe('no skill with id s1')
   })
 
-  it('refuses to assign when there is no agent to assign to, and says why', () => {
-    render(<SkillsClient page={page({ agents: [] })} />)
+  it('refuses to assign when there is no slave to assign to, and says why', () => {
+    render(<SkillsClient page={page({ slaves: [] })} />)
     // `getAttribute` rather than jest-dom's `toBeDisabled` -- this repo carries no jest-dom
     // matchers (`runtime-card.test.tsx:84`).
     expect(screen.getByTestId('skill-assign-s1').getAttribute('disabled')).not.toBeNull()
-    expect(screen.getByTestId('skills-no-agents').textContent).toBe('no agents yet')
+    expect(screen.getByTestId('skills-no-slaves').textContent).toBe('no slaves yet')
   })
 
   it('says the catalog is empty rather than drawing an empty frame', () => {

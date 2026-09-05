@@ -2,14 +2,14 @@ import { prisma } from '@slave-of-ai/db/client'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, toRunState } from '@slave-of-ai/db'
 import { capabilitiesOf, workspaceDefaultProvider, type ProviderCapabilities, type ProviderKind } from '@slave-of-ai/control'
 import {
-  deriveAgentStatus,
+  deriveSlaveStatus,
   mergeQueueOrder,
   sumSpend,
   NON_TERMINAL_RUN_STATUSES,
-  type AgentStatus,
+  type SlaveStatus,
   type TaskStatus,
 } from '@slave-of-ai/domain'
-import { feedSummary, type AgentFeedEvent } from '../lib/feedSummary'
+import { feedSummary, type SlaveFeedEvent } from '../lib/feedSummary'
 import { skillNameOf } from '../lib/skillName'
 
 // Re-exported so callers that already import from `server/overview.ts` keep working; the
@@ -17,21 +17,21 @@ import { skillNameOf } from '../lib/skillName'
 // client-side hook can import `feedSummary` without pulling `@slave-of-ai/db`'s `prisma` client
 // into the browser bundle. Types are erased at build, so re-exporting the interface here costs
 // nothing at runtime.
-export type { AgentFeedEvent }
+export type { SlaveFeedEvent }
 
-/** How many of an agent's most recent events seed the panel's live feed (spec §6). */
+/** How many of a slave's most recent events seed the panel's live feed (spec §6). */
 const RECENT_EVENTS_LIMIT = 20
 
 /** The 340px live-events panel shows the workspace's last 8 (design README §3a.1). */
 const LIVE_EVENTS_LIMIT = 8
 
-export interface AgentCardData {
+export interface SlaveCardData {
   readonly id: string
   readonly name: string
   readonly role: string
   /**
-   * The runtime this agent's LIVE run resolved (M12 Task 9, ruling R10), replacing a hardcoded
-   * `'claude-code'` from before `AgentRun.provider` existed. `null` with no live run: a worker's
+   * The runtime this slave's LIVE run resolved (M12 Task 9, ruling R10), replacing a hardcoded
+   * `'claude-code'` from before `SlaveRun.provider` existed. `null` with no live run: a worker's
    * runtime is not decided until a run resolves it -- the override chain crosses four levels and
    * a workspace default, and naming one here in advance would be a guess the surface presents as
    * a fact. Note the spelling: `'claude_code'` is the `ProviderKind`, `'claude-code'` was the
@@ -45,13 +45,13 @@ export interface AgentCardData {
    * `listRoster` derives a worker's gate -- one capability table, never recomputed per renderer.
    */
   readonly gate: ProviderCapabilities['gate'] | null
-  readonly status: AgentStatus
+  readonly status: SlaveStatus
   readonly taskTitle: string | null
   /** The live run's task id — the card renders `TASK-<first 8 chars>` from it (the handoff's mono
    *  task reference). `null` with no live run or a task-less `planning` run (M8b). */
   readonly taskId: string | null
   /** The live run's task status, feeding `lib/tones.ts`'s `cardStateFor` so the card can reach
-   *  `blocked`/`review`/`completed` — three states `AgentStatus` alone cannot express. */
+   *  `blocked`/`review`/`completed` — three states `SlaveStatus` alone cannot express. */
   readonly taskStatus: TaskStatus | null
   /**
    * The run's progress as a percentage of the workspace's own tool-call ceiling
@@ -66,20 +66,20 @@ export interface AgentCardData {
   /**
    * The skill this run most recently invoked — the `summary` of its latest `run.tool_call` event
    * whose payload `name` is `Skill`. `null` when the run has invoked none, or on a runtime whose
-   * parser never sees a `Skill` tool (Cursor). A LIVE fact, distinct from `AgentRun.skillCalls`
+   * parser never sees a `Skill` tool (Cursor). A LIVE fact, distinct from `SlaveRun.skillCalls`
    * (M14 §4.1), which is an end-of-run tally and does not exist while the run is in flight.
    */
   readonly skill: string | null
   readonly actionLine: string | null
   readonly runId: string | null
-  /** The instruction queued for this agent's live run, consumed on resume (Checkpoint semantics). */
+  /** The instruction queued for this slave's live run, consumed on resume (Checkpoint semantics). */
   readonly queuedMessage: string | null
   /** Set once a resume intent has been recorded for this run (`requestResume`), cleared the moment
    *  the daemon or CLI claims it (`claimResume`) — the panel's own visible record that the click
    *  landed while the run is still `paused` (spec §3.3). */
   readonly resumeRequestedAt: string | null
-  /** Last 20 execution events for this agent, oldest first — seeds the panel's live feed. */
-  readonly recentEvents: readonly AgentFeedEvent[]
+  /** Last 20 execution events for this slave, oldest first — seeds the panel's live feed. */
+  readonly recentEvents: readonly SlaveFeedEvent[]
   /**
    * The live run's spend so far. Panel's current-run block (spec §6).
    *
@@ -89,10 +89,10 @@ export interface AgentCardData {
    *   `toolCalls: 0` makes beside it about the same absent object, and Decision 6 governs
    *   unmeasured RUNS, of which there is none here.
    * - `null` -- there is a live run and no cost is recorded for it. Rendered as `—`, the mark
-   *   `AllAgentsTable`/`CompanyManager` already use, never `$0.00`.
+   *   `AllSlavesTable`/`CompanyManager` already use, never `$0.00`.
    *
    * A positive figure is NOT reachable on this field, and saying so is the point of this
-   * paragraph: `run` here is a NON-TERMINAL run, and `pump.ts` writes `AgentRun.costUsd` only in
+   * paragraph: `run` here is a NON-TERMINAL run, and `pump.ts` writes `SlaveRun.costUsd` only in
    * the same statement that makes a run terminal. So a live run's cost is always null today. The
    * field is nullable because that is what it means, not because a figure is expected -- and if a
    * later task starts writing cost mid-run, this comment is what tells the next reader that the
@@ -156,7 +156,7 @@ export interface OverviewSnapshot {
     readonly runTimeoutMs: number
     readonly maxAttempts: number
   }
-  readonly agents: readonly AgentCardData[]
+  readonly slaves: readonly SlaveCardData[]
   readonly tasks: {
     readonly active: number
     /** Its own tile in the handoff's 6-up strip (M14 Task 8), as well as part of `active`. */
@@ -216,37 +216,37 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
   // second copy of the two-row branch is how the surface and dispatch drift apart.
   const provider = await workspaceDefaultProvider(workspaceId)
 
-  const agents = await prisma.agent.findMany({
+  const slaves = await prisma.slave.findMany({
     where: { team: { workspaceId } },
     orderBy: { name: 'asc' },
   })
 
-  // One live run per agent at most (the scheduler enforces it); latest by startedAt breaks any
+  // One live run per slave at most (the scheduler enforces it); latest by startedAt breaks any
   // fixture-made tie deterministically.
-  const liveRuns = await prisma.agentRun.findMany({
+  const liveRuns = await prisma.slaveRun.findMany({
     where: {
-      agentId: { in: agents.map((a) => a.id) },
+      slaveId: { in: slaves.map((a) => a.id) },
       status: { in: [...NON_TERMINAL_RUN_STATUSES] },
     },
     orderBy: { startedAt: 'desc' },
     include: { task: true },
   })
-  const liveRunByAgent = new Map<string, (typeof liveRuns)[number]>()
+  const liveRunBySlave = new Map<string, (typeof liveRuns)[number]>()
   for (const run of liveRuns) {
-    if (!liveRunByAgent.has(run.agentId)) liveRunByAgent.set(run.agentId, run)
+    if (!liveRunBySlave.has(run.slaveId)) liveRunBySlave.set(run.slaveId, run)
   }
 
   // Initial action lines: the latest run.tool_call per live run, so a freshly opened page is not
   // blank until the next event. DB enum value is `run_tool_call`.
   const lines = new Map<string, string>()
-  for (const run of liveRunByAgent.values()) {
+  for (const run of liveRunBySlave.values()) {
     const event = await prisma.executionEvent.findFirst({
       where: { runId: run.id, type: 'run_tool_call' },
       orderBy: { seq: 'desc' },
     })
     if (event !== null) {
       const summary = (event.payload as { summary?: string }).summary
-      if (typeof summary === 'string') lines.set(run.agentId, summary)
+      if (typeof summary === 'string') lines.set(run.slaveId, summary)
     }
   }
 
@@ -257,46 +257,46 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
   // 20260831190100) and serves the per-run read; the remaining cost is the type/payload filter
   // (the functional-index follow-up is M19 backlog).
   const skills = new Map<string, string>()
-  for (const run of liveRunByAgent.values()) {
+  for (const run of liveRunBySlave.values()) {
     const event = await prisma.executionEvent.findFirst({
       where: { runId: run.id, type: 'run_tool_call', payload: { path: ['name'], equals: 'Skill' } },
       orderBy: { seq: 'desc' },
     })
     if (event !== null) {
       const skill = skillNameOf((event.payload as { summary?: unknown }).summary)
-      if (skill !== null) skills.set(run.agentId, skill)
+      if (skill !== null) skills.set(run.slaveId, skill)
     }
   }
 
-  // One query for every agent's recent events, not one per agent (the M4 review flagged
+  // One query for every slave's recent events, not one per slave (the M4 review flagged
   // per-run queries as the first scaling cliff). `take` is generous enough that an even spread of
-  // activity across agents leaves each with its own last 20; a single very chatty agent can still
+  // activity across slaves leaves each with its own last 20; a single very chatty slave can still
   // crowd out a quiet one within this bound — accepted for M5, the brief's own reference query.
   const recentEventRows = await prisma.executionEvent.findMany({
-    where: { agentId: { in: agents.map((a) => a.id) } },
+    where: { slaveId: { in: slaves.map((a) => a.id) } },
     orderBy: { seq: 'desc' },
-    take: RECENT_EVENTS_LIMIT * agents.length,
+    take: RECENT_EVENTS_LIMIT * slaves.length,
   })
-  const recentEventsByAgent = new Map<string, AgentFeedEvent[]>()
+  const recentEventsBySlave = new Map<string, SlaveFeedEvent[]>()
   for (const row of recentEventRows) {
-    if (row.agentId === null) continue
-    const forAgent = recentEventsByAgent.get(row.agentId)
-    if (forAgent !== undefined && forAgent.length >= RECENT_EVENTS_LIMIT) continue
+    if (row.slaveId === null) continue
+    const forSlave = recentEventsBySlave.get(row.slaveId)
+    if (forSlave !== undefined && forSlave.length >= RECENT_EVENTS_LIMIT) continue
     const domainType = DOMAIN_EVENT_TYPE_BY_DB_VALUE[row.type] ?? row.type
-    const feedEvent: AgentFeedEvent = {
+    const feedEvent: SlaveFeedEvent = {
       seq: Number(row.seq),
       ts: row.ts.toISOString(),
       type: domainType,
       summary: feedSummary(domainType, row.payload as Record<string, unknown>),
     }
-    if (forAgent === undefined) recentEventsByAgent.set(row.agentId, [feedEvent])
-    else forAgent.push(feedEvent)
+    if (forSlave === undefined) recentEventsBySlave.set(row.slaveId, [feedEvent])
+    else forSlave.push(feedEvent)
   }
-  // Rows arrived newest-first (capped per agent while iterating that order); the panel wants
+  // Rows arrived newest-first (capped per slave while iterating that order); the panel wants
   // oldest-first, newest at the bottom.
-  for (const events of recentEventsByAgent.values()) events.reverse()
+  for (const events of recentEventsBySlave.values()) events.reverse()
 
-  // `agent: { team: { workspaceId } }`, not `task: { workspaceId }`: a `planning` run (M8b) has no
+  // `slave: { team: { workspaceId } }`, not `task: { workspaceId }`: a `planning` run (M8b) has no
   // `Task` row, and its cost still counts toward the budget shown here.
   // Rows rather than a `_sum` (M12 Task 9, ruling R3): an aggregate can only return a number, and
   // a number cannot also say how many of the rows behind it reported nothing. `world.ts`'s budget
@@ -309,8 +309,8 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
   // a null `provider`, so a `WHERE` would take its money out of `spentUsd` in order to fix the
   // count beside it.
   const [spendRows, taskGroups] = await Promise.all([
-    prisma.agentRun.findMany({
-      where: { agent: { team: { workspaceId } } },
+    prisma.slaveRun.findMany({
+      where: { slave: { team: { workspaceId } } },
       select: { costUsd: true, provider: true, status: true },
     }),
     prisma.task.groupBy({ by: ['status'], where: { workspaceId }, _count: { _all: true } }),
@@ -322,10 +322,10 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
   // The bottom row's three panels, in one round with everything else loaded.
   const [blockedTasks, pausedRuns, recentForPanel, mergingTasks] = await Promise.all([
     prisma.task.findMany({ where: { workspaceId, status: 'blocked' }, orderBy: { createdAt: 'asc' } }),
-    prisma.agentRun.findMany({
-      where: { agent: { team: { workspaceId } }, status: { in: ['pause_requested', 'paused'] } },
+    prisma.slaveRun.findMany({
+      where: { slave: { team: { workspaceId } }, status: { in: ['pause_requested', 'paused'] } },
       orderBy: { startedAt: 'asc' },
-      include: { agent: true },
+      include: { slave: true },
     }),
     prisma.executionEvent.findMany({ where: { workspaceId }, orderBy: { seq: 'desc' }, take: LIVE_EVENTS_LIMIT }),
     prisma.task.findMany({ where: { workspaceId, status: 'merging' } }),
@@ -343,7 +343,7 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
     ...pausedRuns.map((run) => ({
       kind: 'run' as const,
       id: run.id,
-      title: run.agent.name,
+      title: run.slave.name,
       detail: run.status === 'paused' ? `paused at step ${run.pausedAtStep ?? 0}` : 'pause requested',
       // Only a run that has actually landed on `paused` can be resumed -- `requestResume` refuses
       // a `pause_requested` one, and offering a button that always refuses is worse than none.
@@ -414,19 +414,19 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
       runTimeoutMs: workspace.runTimeoutMs,
       maxAttempts: workspace.maxAttempts,
     },
-    agents: agents.map((agent) => {
-      const run = liveRunByAgent.get(agent.id) ?? null
+    slaves: slaves.map((slave) => {
+      const run = liveRunBySlave.get(slave.id) ?? null
       return {
-        id: agent.id,
-        name: agent.name,
-        role: agent.role,
-        // The run's own column, not a constant (M12 Task 9, ruling R10). `AgentRun.provider` has
+        id: slave.id,
+        name: slave.name,
+        role: slave.role,
+        // The run's own column, not a constant (M12 Task 9, ruling R10). `SlaveRun.provider` has
         // been written by every dispatch since Task 8, so the surface finally has real data where
         // it used to have `'claude-code' as const` -- which was not even the `ProviderKind`
         // spelling, but `ClaudeCodeAdapter.id`.
         provider: run?.provider ?? null,
         gate: run === null || run.provider === null ? null : capabilitiesOf(run.provider).gate,
-        status: deriveAgentStatus(run === null ? null : toRunState(run)),
+        status: deriveSlaveStatus(run === null ? null : toRunState(run)),
         taskTitle: run?.task?.title ?? null,
         taskId: run?.taskId ?? null,
         taskStatus: (run?.task?.status as TaskStatus | undefined) ?? null,
@@ -438,12 +438,12 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
             ? 0
             : Math.min(100, Math.round((run.toolCalls / workspace.maxToolCallsPerRun) * 100)),
         stepLabel: run === null ? null : `${run.toolCalls}/${workspace.maxToolCallsPerRun}`,
-        skill: skills.get(agent.id) ?? null,
-        actionLine: lines.get(agent.id) ?? null,
+        skill: skills.get(slave.id) ?? null,
+        actionLine: lines.get(slave.id) ?? null,
         runId: run?.id ?? null,
         queuedMessage: run?.queuedMessage ?? null,
         resumeRequestedAt: run?.resumeRequestedAt?.toISOString() ?? null,
-        recentEvents: recentEventsByAgent.get(agent.id) ?? [],
+        recentEvents: recentEventsBySlave.get(slave.id) ?? [],
         // `run === null ? 0 : run.costUsd`, not `run?.costUsd ?? 0` (M12 Task 9, ruling R3). The
         // coalesce collapsed two different facts into one number: "no live run" (nothing has been
         // spent, a measured zero, the same claim `toolCalls: 0` makes on the next line) and "a

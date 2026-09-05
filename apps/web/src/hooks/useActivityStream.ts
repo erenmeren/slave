@@ -30,7 +30,7 @@ function rowFromEnvelope(event: ExecutionEvent): ActivityEventRow {
     ts: event.ts,
     type: event.type,
     actor: event.actor,
-    agentId: event.agentId ?? null,
+    slaveId: event.slaveId ?? null,
     taskId: event.taskId ?? null,
     runId: event.runId ?? null,
     userId: event.userId ?? null,
@@ -49,7 +49,7 @@ function appendRow(events: readonly ActivityEventRow[], row: ActivityEventRow): 
  * `fromSeq: null` means "from now" — omit `?from` entirely rather than sending `from=0`.
  * `parseFromSeq` (server/fromSeq.ts) treats `"0"` as a real watermark, not as "no watermark", so
  * a literal 0 here would replay the *entire* event log through the route's filter predicate
- * (review finding 2) — the situation an empty page 1 (a quiet agent, no tripped guardrails) hits
+ * (review finding 2) — the situation an empty page 1 (a quiet slave, no tripped guardrails) hits
  * on every filtered mount/switch if this falls back to 0 instead of omitting the param.
  */
 function streamUrl(workspaceId: string, filters: ActivityFilters, fromSeq: number | null): string {

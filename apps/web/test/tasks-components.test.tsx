@@ -42,7 +42,7 @@ const snapshot = (tasks: readonly TaskBoardItem[]): TasksSnapshot => ({
   workspace: { id: 'w1', name: 'W', haltedReason: null },
   shellFacts: {
     workspace: { id: 'w1', name: 'W' },
-    counts: { agentsWorking: 0, tasksActive: 0 },
+    counts: { slavesWorking: 0, tasksActive: 0 },
     guardrails: { budgetUsd: 20, maxConcurrentRuns: 3, runTimeoutMs: 3_600_000, maxAttempts: 3 },
     status: { goal: null, spentUsd: 0, unmeasuredRuns: 0, haltedReason: null },
   },
@@ -464,7 +464,7 @@ describe('the six-column board', () => {
     expect(screen.queryByTestId('avatar-tile')).toBeNull()
   })
 
-  // M14 fix wave, review I2: the card used to pass a fake idle agent through `cardStateFor`, so a
+  // M14 fix wave, review I2: the card used to pass a fake idle slave through `cardStateFor`, so a
   // `running` task under the teal IN PROGRESS head wore a grey IDLE pill. It reads its column now.
   it('gives a running task the working pill its own column head wears, not IDLE', () => {
     render(<TaskCard task={task({ status: 'running' })} onSelect={() => {}} />)
