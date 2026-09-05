@@ -629,8 +629,9 @@ async function startRun(deps: TickDeps, taskId: TaskId, slaveId: SlaveId): Promi
       where: { id: run.id },
       // `provider` (M12 Task 8): the schema comment on `SlaveRun.provider` names Tasks 7/8 as the
       // ones that resolve and write it -- Task 7 covered the org-level pair; this is the run-level
-      // write. Written here, alongside `pid`, rather than at `slaveRun.create` above, because
-      // `resolved` is not known until the chain (and the registry) have both been consulted.
+      // write. Written here, alongside `pid`, rather than in `createRunUnlessArchived`'s insert
+      // above (`runs.js`), because `resolved` is not known until the chain (and the registry)
+      // have both been consulted.
       data: { pid: handle.pid, worktreePath: worktree.path, provider: resolved.provider },
     })
 
