@@ -581,7 +581,7 @@ try {
 
     const deleteTeamRes = runCli(['delete-team', '--team', team.id, '--yes'])
     assert(deleteTeamRes.status === 0, `delete-team: expected exit 0, got ${String(deleteTeamRes.status)} -- stderr: ${deleteTeamRes.stderr}`)
-    assert(deleteTeamRes.stdout.includes(`team ${team.id} deleted`), `delete-team: unexpected stdout ${deleteTeamRes.stdout}`)
+    assert(deleteTeamRes.stdout.includes(`department ${team.id} deleted`), `delete-team: unexpected stdout ${deleteTeamRes.stdout}`)
     assert(
       (await prisma.team.findUnique({ where: { id: team.id } })) === null,
       'delete-team: the department row should be gone',

@@ -101,7 +101,7 @@ const USAGE = `usage: orchestrator <command> [options]
                                        only while it holds a live run. Omit --yes to see what
                                        would be deleted without doing it.
   rename-team --team <id> --name <n>   rename a project team
-  delete-team --team <id> --yes        remove a project team WITH its slaves and their run
+  delete-team --team <id> --yes        remove a department WITH its slaves and their run
                                        history -- refused only while any of its slaves holds a
                                        live run. Omit --yes to see what would be deleted without
                                        doing it.
@@ -729,11 +729,11 @@ export async function main(argv: readonly string[]): Promise<number> {
         const team = await prisma.team.findUnique({ where: { id: teamId }, select: { name: true } })
         const slaves = await prisma.slave.count({ where: { teamId } })
         const runs = await prisma.slaveRun.count({ where: { slave: { teamId } } })
-        throw new Error(`refusing without --yes: this would delete team ${team?.name ?? teamId} (${teamId}) and ${slaves} slave(s), ${runs} run(s)`)
+        throw new Error(`refusing without --yes: this would delete department ${team?.name ?? teamId} (${teamId}) and ${slaves} slave(s), ${runs} run(s)`)
       }
       const result = await deleteTeam(teamId)
       if (!result.ok) throw new Error(refusalText(result.error))
-      process.stdout.write(`team ${teamId} deleted; ${result.value.slaves} slave(s) and ${result.value.runs} run(s) went with it\n`)
+      process.stdout.write(`department ${teamId} deleted; ${result.value.slaves} slave(s) and ${result.value.runs} run(s) went with it\n`)
       return 0
     }
 

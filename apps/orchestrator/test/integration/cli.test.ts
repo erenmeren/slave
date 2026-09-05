@@ -947,7 +947,7 @@ describe('the orchestrator CLI', () => {
       const result = await runCli(['delete-team', '--team', fixture.emptyTeamId, '--yes'])
 
       expect(result.code).toBe(0)
-      expect(result.stdout).toContain(`team ${fixture.emptyTeamId} deleted`)
+      expect(result.stdout).toContain(`department ${fixture.emptyTeamId} deleted`)
       expect(await prisma.team.findUnique({ where: { id: fixture.emptyTeamId } })).toBeNull()
     })
 
@@ -955,7 +955,7 @@ describe('the orchestrator CLI', () => {
       const result = await runCli(['delete-team', '--team', fixture.emptyTeamId])
 
       expect(result.code).toBe(1)
-      expect(result.stderr).toContain(`refusing without --yes: this would delete team Design (${fixture.emptyTeamId}) and 0 slave(s), 0 run(s)`)
+      expect(result.stderr).toContain(`refusing without --yes: this would delete department Design (${fixture.emptyTeamId}) and 0 slave(s), 0 run(s)`)
       expect(await prisma.team.findUnique({ where: { id: fixture.emptyTeamId } })).not.toBeNull()
     })
   })

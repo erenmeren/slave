@@ -632,6 +632,15 @@ export async function renameTeam(
 /**
  * Removes a project team WITH its slaves and everything under them; refused only while any slave
  * of the department holds a live run (M27 §4.2).
+ *
+ * `lockTeam`'s `FOR UPDATE` on the `Team` row alone is not enough (fix round 1, controller ruling
+ * R11): it blocks a concurrent `Slave` insert into this team (an insert takes `FOR KEY SHARE` on
+ * the `Team` row it references), but a `SlaveRun` insert against a slave THIS team already has
+ * takes `FOR KEY SHARE` on that `Slave` row, not `Team` -- untouched by `lockTeam`. Without also
+ * locking every `Slave` row of this team, the scheduler could start a run between the live-run
+ * count below and the delete, which the cascade would then silently take down along with its slave.
+ * `SELECT ... FOR UPDATE` on the slave rows closes that window the same way `lockTeam`/`lockSlave`
+ * close it for their own row.
  */
 export async function deleteTeam(
   teamId: string,
@@ -640,6 +649,7 @@ export async function deleteTeam(
   const outcome = await prisma.$transaction(async (tx) => {
     const team = await lockTeam(tx, teamId)
     if (team === null) return { ok: false as const, error: { kind: 'team_not_found', teamId } as ControlRefusal }
+    await tx.$queryRaw`SELECT id FROM "Slave" WHERE "teamId" = ${teamId} FOR UPDATE`
 
     const live = await liveRunCount(tx, { teamId })
     if (live > 0) return { ok: false as const, error: { kind: 'live_runs', entity: 'team', id: teamId, runs: live } as ControlRefusal }
@@ -882,8 +892,11 @@ export async function deleteSlaveTemplate(
 
 /**
  * Removes a company WITH its department templates and catalog slaves (the schema cascades both).
- * Projects that had the company assigned are detached first (`Workspace.companyId` has no rule)
- * and keep every department and slave they copied. No event.
+ * `Workspace.companyId` is an optional FK with no explicit `onDelete`, which Prisma emits as
+ * `ON DELETE SET NULL` -- the database would clear it on its own -- but the verb detaches assigned
+ * projects itself first, with an explicit `updateMany`, so it can COUNT what was detached
+ * (`projectsDetached`) before the row is gone. Every department and slave those projects copied
+ * survives. No event.
  */
 export async function deleteCompany(
   companyId: string,
