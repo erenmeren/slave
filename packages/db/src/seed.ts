@@ -7,7 +7,7 @@ export { SEED_WORKSPACE_ID }
 const TEAMS = ['Management', 'Engineering', 'Security', 'Product', 'Marketing'] as const
 
 /**
- * The reusable agent templates (M10 §4) a company's roster instantiates from. `defaultModel` is
+ * The reusable slave templates (M10 §4) a company's roster instantiates from. `defaultModel` is
  * `null` for every one -- a model choice is an operator decision (set later via `set-model` /
  * `assignCompany`'s roster override), never a seed opinion. Java Developer and Backend Developer
  * deliberately share a `role`: the canonical example of two templates being distinct catalog
@@ -32,7 +32,7 @@ const ROSTER: readonly { name: string; template: string }[] = [
   { name: 'Riley', template: 'QA Reviewer' },
 ]
 
-const AGENTS: readonly { name: string; role: string; team: (typeof TEAMS)[number] }[] = [
+const SLAVES: readonly { name: string; role: string; team: (typeof TEAMS)[number] }[] = [
   // Lowercase, matching the M8b planning dispatch's exact-match `role === 'manager'` -- the same
   // convention `dispatchReview` uses for `role === 'reviewer'`.
   { name: 'Atlas', role: 'manager', team: 'Management' },
@@ -54,7 +54,7 @@ const AGENTS: readonly { name: string; role: string; team: (typeof TEAMS)[number
  */
 export async function seed(): Promise<void> {
   await prisma.$executeRawUnsafe(
-    'TRUNCATE TABLE "ExecutionEvent", "Approval", "AgentMessage", "Artifact", "Checkpoint", "AgentRun", "TaskDependency", "Task", "AgentSkill", "Skill", "SkillProvider", "AgentPermission", "ProviderConfiguration", "Agent", "Team", "Workspace", "CompanyAgent", "CompanyTeam", "Company", "AgentTemplate" RESTART IDENTITY CASCADE',
+    'TRUNCATE TABLE "ExecutionEvent", "Approval", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "SlaveSkill", "Skill", "SkillProvider", "SlavePermission", "ProviderConfiguration", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
   )
 
   const workspace = await prisma.workspace.create({
@@ -87,25 +87,25 @@ export async function seed(): Promise<void> {
     (await prisma.team.findMany()).map((team) => [team.name, team.id] as const),
   )
 
-  for (const agent of AGENTS) {
-    const teamId = teamsByName.get(agent.team)
+  for (const slave of SLAVES) {
+    const teamId = teamsByName.get(slave.team)
     if (teamId === undefined) {
-      throw new Error(`seed is inconsistent: no team named ${agent.team}`)
+      throw new Error(`seed is inconsistent: no team named ${slave.team}`)
     }
-    await prisma.agent.create({ data: { teamId, name: agent.name, role: agent.role } })
+    await prisma.slave.create({ data: { teamId, name: slave.name, role: slave.role } })
   }
 
   // The reusable template catalog and Atlas Software's roster (M10 §4-5) -- written directly with
   // prisma, the same style as the legacy workspace above, not through the `packages/control`
-  // verbs. The legacy workspace's hand-made teams/agents above are left untouched and the
+  // verbs. The legacy workspace's hand-made teams/slaves above are left untouched and the
   // workspace is never assigned to Atlas Software (spec Decision 7 -- legacy stays legacy;
   // assignment is the operator's first act).
   for (const template of TEMPLATES) {
-    await prisma.agentTemplate.create({ data: { name: template.name, role: template.role, defaultModel: null } })
+    await prisma.slaveTemplate.create({ data: { name: template.name, role: template.role, defaultModel: null } })
   }
 
   const templatesByName = new Map(
-    (await prisma.agentTemplate.findMany()).map((template) => [template.name, template.id] as const),
+    (await prisma.slaveTemplate.findMany()).map((template) => [template.name, template.id] as const),
   )
 
   const company = await prisma.company.create({ data: { name: COMPANY_NAME } })
@@ -118,7 +118,7 @@ export async function seed(): Promise<void> {
     if (templateId === undefined) {
       throw new Error(`seed is inconsistent: no template named ${member.template}`)
     }
-    await prisma.companyAgent.create({
+    await prisma.companySlave.create({
       data: { companyTeamId: companyTeam.id, templateId, name: member.name },
     })
   }
@@ -126,7 +126,7 @@ export async function seed(): Promise<void> {
   // One task per status, so every state has a real example on screen when M4 arrives.
   // maxAttempts is copied from the workspace guardrail configuration — the only correct source.
   // Deliberately NO `requiredRole` on any seeded task: `decide()` cannot match a roleless task to
-  // an agent, so a daemon pointed at freshly-seeded data starts nothing and spends nothing -- the
+  // an slave, so a daemon pointed at freshly-seeded data starts nothing and spends nothing -- the
   // tick's `skippedNoRole: 12` on this workspace is that invariant showing, not a bug (M15 spec
   // §3 B5). The seed demonstrates the UI's states; it must never be dispatchable demo data,
   // because this workspace carries a live ProviderConfiguration and real runs cost real money.

@@ -306,7 +306,7 @@ describe('pause-gate.sh', () => {
         // PERMISSION_DENY_REASON_PREFIX by packages/control/test/permission-mapping.test.ts --
         // this assertion is deliberately exact, not `.toContain`, so a drift here is caught here.
         expect(parsed.hookSpecificOutput.permissionDecisionReason).toBe(
-          "permission matrix denies 'run tests' (Bash) for this agent",
+          "permission matrix denies 'run tests' (Bash) for this slave",
         )
       } finally {
         rmSync(path.dirname(permissionsFile), { recursive: true, force: true })

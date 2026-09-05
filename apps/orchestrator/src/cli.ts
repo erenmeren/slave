@@ -2,7 +2,7 @@ import { realpathSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
-  addCompanyAgent,
+  addCompanySlave,
   addCompanyTeam,
   assignCompany,
   claimResume,
@@ -11,22 +11,22 @@ import {
   createTemplate,
   createUser,
   createWorkspace,
-  deleteAgent,
+  deleteSlave,
   deleteCompanyTeam,
   deleteTeam,
   deleteUser,
   emergencyStop,
   listUsers,
-  moveAgent,
-  moveCompanyAgent,
+  moveSlave,
+  moveCompanySlave,
   refusalText,
-  renameAgent,
+  renameSlave,
   renameCompanyTeam,
   renameTeam,
   requestPause,
   requestStop,
-  setAgentModel,
-  setAgentRole,
+  setSlaveModel,
+  setSlaveRole,
   setGoal,
   setPassword,
   describeSync,
@@ -56,7 +56,7 @@ const USAGE = `usage: orchestrator <command> [options]
                                        active run in it -- the operator's stop-everything button
   set-goal --workspace <id> --goal "<text>"
                                        set the operator's standing instruction for what this
-                                       workspace's agents are working toward
+                                       workspace's slaves are working toward
   create-workspace --name <n> --repo <abs path> [--base main] --verify "<cmd>" [--verify "<cmd>" ...]
                    [--setup "<cmd>" ...] [--budget <usd> | --no-budget] [--provider claude_code|cursor]
                                        attach an existing local clone as a workspace. The path
@@ -67,11 +67,11 @@ const USAGE = `usage: orchestrator <command> [options]
   skills sync                          rescan the skill catalog from this host's disk:
                                        ~/.claude/skills, the plugin cache, and <repo>/.claude/skills
   create-template --name <n> --role <r> [--model <m> --provider <p>] [--description <d>]
-                                       add a reusable agent template to the catalog. --model and
+                                       add a reusable slave template to the catalog. --model and
                                        --provider are a pair: give both or neither.
   create-company --name <n>            add a company (a persistent roster) to the catalog
   add-team --company <id> --name <n>   add a team to a company's roster
-  add-agent --team <companyTeamId> --template <id> --name <n> [--model <m> --provider <p>]
+  add-slave --team <companyTeamId> --template <id> --name <n> [--model <m> --provider <p>]
                                        add a roster member to a company team, instantiated from a
                                        template. --model and --provider are a pair: give both or
                                        neither.
@@ -79,28 +79,28 @@ const USAGE = `usage: orchestrator <command> [options]
                                        assign a company's roster to a workspace, materializing a
                                        project team/worker for every roster member with no
                                        matching row there yet
-  set-model --agent <workerId> --model <m> --provider <p>
-  set-model --agent <workerId> --clear
+  set-model --slave <workerId> --model <m> --provider <p>
+  set-model --slave <workerId> --clear
                                        set or clear a worker's own model+provider override -- the
                                        top of the resolution chain, above its roster row and its
                                        template's default. A model only means something inside the
                                        provider that runs it, so --model requires --provider.
-  rename-agent --agent <id> --name <n> rename a project agent
-  set-role --agent <id> --role <r>     change a project agent's role -- refused while the agent
+  rename-slave --slave <id> --name <n> rename a project slave
+  set-role --slave <id> --role <r>     change a project slave's role -- refused while the slave
                                        holds a live run
-  delete-agent --agent <id> --yes      remove a project agent -- refused while it carries any run
+  delete-slave --slave <id> --yes      remove a project slave -- refused while it carries any run
                                        history, terminal or not. Omit --yes to see what would be
                                        deleted without doing it.
   rename-team --team <id> --name <n>   rename a project team
   delete-team --team <id> --yes        remove a project team -- refused while it still has any
-                                       agent on its roster. Omit --yes to see what would be
+                                       slave on its roster. Omit --yes to see what would be
                                        deleted without doing it.
   create-team --workspace <id> --name <n>
                                        add a department to a project (no template link)
-  move-agent --agent <id> --team <id>  move a project agent to another department of the same
-                                       project -- refused while the agent holds a live run
-  move-company-agent --agent <companyAgentId> --team <companyTeamId>
-                                       move a catalog agent to another department template of
+  move-slave --slave <id> --team <id>  move a project slave to another department of the same
+                                       project -- refused while the slave holds a live run
+  move-company-slave --slave <companySlaveId> --team <companyTeamId>
+                                       move a catalog slave to another department template of
                                        the same company
   rename-company-team --team <companyTeamId> --name <n>
                                        rename a department template
@@ -322,12 +322,12 @@ const STDIN_PASSWORD_ERROR =
   'the password is read from stdin: printf "%s\\n" "$PW" | orchestrator create-user --name ada'
 
 async function mustGetRun(runId: string) {
-  // `agent -> team`, not `task`: a `planning` run (M8b) has no `Task` row, and `agent -> team ->
+  // `slave -> team`, not `task`: a `planning` run (M8b) has no `Task` row, and `slave -> team ->
   // workspace` is the only linkage such a run has to a workspace -- the only thing this helper's
   // callers read off the include.
-  const run = await prisma.agentRun.findUnique({
+  const run = await prisma.slaveRun.findUnique({
     where: { id: runId },
-    include: { agent: { include: { team: true } } },
+    include: { slave: { include: { team: true } } },
   })
   if (run === null) throw new Error(`no run with id ${runId}`)
   return run
@@ -349,7 +349,7 @@ export async function main(argv: readonly string[]): Promise<number> {
 
       // The command waits for what it started, even though the *function* deliberately does not.
       // A daemon keeps running and its pumps outlive each tick by design (spec §5.6); a one-shot
-      // command's process is about to exit, and exiting would leave a live agent with nobody
+      // command's process is about to exit, and exiting would leave a live slave with nobody
       // reading its stream -- every event it produced from that moment lost, and the run left for
       // Task 15's orphan pass to fail on some later startup. The distinction is between a tick and
       // a process that only runs one.
@@ -370,11 +370,11 @@ export async function main(argv: readonly string[]): Promise<number> {
     case 'status': {
       const workspaceId = await resolveWorkspace(flags)
       const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: workspaceId } })
-      const runs = await prisma.agentRun.findMany({
+      const runs = await prisma.slaveRun.findMany({
         // On the status column, not on `endedAt`: the two can disagree, and everything else in the
         // system -- `loadWorld`'s busy check, the sweep, the orphan pass -- asks the status.
-        // Scoped through `agent -> team`, not `task`: a `planning` run (M8b) has no `Task` row.
-        where: { agent: { team: { workspaceId } }, status: { in: [...NON_TERMINAL_RUN_STATUSES] } },
+        // Scoped through `slave -> team`, not `task`: a `planning` run (M8b) has no `Task` row.
+        where: { slave: { team: { workspaceId } }, status: { in: [...NON_TERMINAL_RUN_STATUSES] } },
         orderBy: { startedAt: 'desc' },
       })
       process.stdout.write(
@@ -413,14 +413,14 @@ export async function main(argv: readonly string[]): Promise<number> {
       const run = await mustGetRun(requireFlag(flags, 'run'))
       const explicit = flagText(flags, 'message')
       // A halt is raised by a pause-gate failure or an unverifiable workspace (§13.1, §8), so
-      // resuming into one relaunches an agent whose gate may still be broken -- the recurrence the
+      // resuming into one relaunches an slave whose gate may still be broken -- the recurrence the
       // halt exists to bound. The help text promises this; it has to be true.
       //
       // Checked here rather than by calling `requestResume`: this command is synchronous and
       // continues the run itself, so recording an intent on the way to a failure would leave a
       // resume queued for the next daemon tick to execute -- an operator whose command errored out
       // would find the run resumed anyway, minutes later.
-      const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: run.agent.team.workspaceId } })
+      const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: run.slave.team.workspaceId } })
       if (workspace.haltedReason !== null) {
         throw new Error(
           `this workspace is halted (${workspace.haltedReason}). ` +
@@ -435,9 +435,9 @@ export async function main(argv: readonly string[]): Promise<number> {
 
       // Claimed before anything irreversible happens, mirroring the domain's own edge
       // (`resume_requested` is legal only from `paused`). Without it, `resume` re-spawns a
-      // *terminal* run -- measured: a second agent in the finished run's worktree, `terminalAt`
+      // *terminal* run -- measured: a second slave in the finished run's worktree, `terminalAt`
       // rewritten, a second `run.succeeded` in the log -- and against a live daemon it puts two
-      // agents on one branch while overwriting the pid that could have killed the first. The
+      // slaves on one branch while overwriting the pid that could have killed the first. The
       // adapter's live-child guard cannot help: a CLI invocation is always the cross-process case
       // its registry is empty for.
       //
@@ -446,7 +446,7 @@ export async function main(argv: readonly string[]): Promise<number> {
       // so a run nobody asked about falls through to the plain claim this command has always made.
       const intent = await claimResume(run.id)
       if (!intent.claimed) {
-        const claimed = await prisma.agentRun.updateMany({
+        const claimed = await prisma.slaveRun.updateMany({
           where: { id: run.id, status: 'paused' },
           // Clears any intent columns too, closing the window where a web `requestResume` lands
           // between `claimResume`'s check and this fallback write: without this, that intent would
@@ -566,18 +566,18 @@ export async function main(argv: readonly string[]): Promise<number> {
       return 0
     }
 
-    case 'add-agent': {
+    case 'add-slave': {
       const companyTeamId = requireFlag(flags, 'team')
       const templateId = requireFlag(flags, 'template')
       const name = requireFlag(flags, 'name')
       const model = flagText(flags, 'model')
       const provider = flagText(flags, 'provider')
-      const result = await addCompanyAgent(companyTeamId, templateId, name, {
+      const result = await addCompanySlave(companyTeamId, templateId, name, {
         ...(model !== undefined ? { model } : {}),
         ...(provider !== undefined ? { provider: provider as ProviderKind } : {}),
       })
       if (!result.ok) throw new Error(refusalText(result.error))
-      process.stdout.write(`agent ${result.value.id} created\n`)
+      process.stdout.write(`slave ${result.value.id} created\n`)
       return 0
     }
 
@@ -612,7 +612,7 @@ export async function main(argv: readonly string[]): Promise<number> {
     }
 
     case 'set-model': {
-      const agentId = requireFlag(flags, 'agent')
+      const slaveId = requireFlag(flags, 'slave')
       // `'clear' in flags`, not `flags['clear'] !== undefined`: a bare `--clear` (no value
       // following it) is exactly how `parseArgs` records a flag with no argument -- it sets the
       // key to `undefined` rather than leaving it absent, so `!== undefined` can never see it.
@@ -620,53 +620,53 @@ export async function main(argv: readonly string[]): Promise<number> {
       const model = flagText(flags, 'model')
       const provider = flagText(flags, 'provider')
       if (!clear && model === undefined) throw new Error('--model or --clear is required')
-      const result = await setAgentModel(
-        agentId,
+      const result = await setSlaveModel(
+        slaveId,
         clear ? null : (model as string),
         clear ? null : ((provider as ProviderKind | undefined) ?? null),
       )
       if (!result.ok) throw new Error(refusalText(result.error))
-      process.stdout.write(clear ? `model cleared on ${agentId}\n` : `model set to ${model} on ${agentId}\n`)
+      process.stdout.write(clear ? `model cleared on ${slaveId}\n` : `model set to ${model} on ${slaveId}\n`)
       return 0
     }
 
     // ---- D2: CLI surfaces for the roster editing verbs (M23 §5) --------------------------------
-    // `rename-agent`/`set-role`/`delete-agent`/`rename-team`/`delete-team` mirror `set-model`'s
+    // `rename-slave`/`set-role`/`delete-slave`/`rename-team`/`delete-team` mirror `set-model`'s
     // shape: resolve the flags, call the verb, print its refusal text through `refusalText` on
     // failure. The two deletes add one thing `set-model` doesn't need -- a `--yes` gate. Deleting
-    // is the one edit here with no undo (`renameAgent`/`setAgentRole`/`renameTeam` can all be
-    // pointed back), so a bare `delete-agent --agent <id>` names what it WOULD have deleted and
+    // is the one edit here with no undo (`renameSlave`/`setSlaveRole`/`renameTeam` can all be
+    // pointed back), so a bare `delete-slave --slave <id>` names what it WOULD have deleted and
     // stops, rather than doing it on the strength of the command alone.
 
-    case 'rename-agent': {
-      const agentId = requireFlag(flags, 'agent')
+    case 'rename-slave': {
+      const slaveId = requireFlag(flags, 'slave')
       const name = requireFlag(flags, 'name')
-      const result = await renameAgent(agentId, name)
+      const result = await renameSlave(slaveId, name)
       if (!result.ok) throw new Error(refusalText(result.error))
-      process.stdout.write(`agent ${agentId} renamed\n`)
+      process.stdout.write(`slave ${slaveId} renamed\n`)
       return 0
     }
 
     case 'set-role': {
-      const agentId = requireFlag(flags, 'agent')
+      const slaveId = requireFlag(flags, 'slave')
       const role = requireFlag(flags, 'role')
-      const result = await setAgentRole(agentId, role)
+      const result = await setSlaveRole(slaveId, role)
       if (!result.ok) throw new Error(refusalText(result.error))
-      process.stdout.write(`role set to ${role} on ${agentId}\n`)
+      process.stdout.write(`role set to ${role} on ${slaveId}\n`)
       return 0
     }
 
-    case 'delete-agent': {
-      const agentId = requireFlag(flags, 'agent')
+    case 'delete-slave': {
+      const slaveId = requireFlag(flags, 'slave')
       // `'yes' in flags`, not `flags['yes'] !== undefined`: same reasoning as `set-model`'s
       // `--clear` above -- a bare `--yes` records `undefined` as its value, not the string `true`.
       if (!('yes' in flags)) {
-        const agent = await prisma.agent.findUnique({ where: { id: agentId }, select: { name: true } })
-        throw new Error(`refusing without --yes: this would delete agent ${agent?.name ?? agentId} (${agentId})`)
+        const slave = await prisma.slave.findUnique({ where: { id: slaveId }, select: { name: true } })
+        throw new Error(`refusing without --yes: this would delete slave ${slave?.name ?? slaveId} (${slaveId})`)
       }
-      const result = await deleteAgent(agentId)
+      const result = await deleteSlave(slaveId)
       if (!result.ok) throw new Error(refusalText(result.error))
-      process.stdout.write(`agent ${agentId} deleted\n`)
+      process.stdout.write(`slave ${slaveId} deleted\n`)
       return 0
     }
 
@@ -701,21 +701,21 @@ export async function main(argv: readonly string[]): Promise<number> {
       return 0
     }
 
-    case 'move-agent': {
-      const agentId = requireFlag(flags, 'agent')
+    case 'move-slave': {
+      const slaveId = requireFlag(flags, 'slave')
       const teamId = requireFlag(flags, 'team')
-      const result = await moveAgent(agentId, teamId)
+      const result = await moveSlave(slaveId, teamId)
       if (!result.ok) throw new Error(refusalText(result.error))
-      process.stdout.write(`agent ${agentId} moved to department ${teamId}\n`)
+      process.stdout.write(`slave ${slaveId} moved to department ${teamId}\n`)
       return 0
     }
 
-    case 'move-company-agent': {
-      const companyAgentId = requireFlag(flags, 'agent')
+    case 'move-company-slave': {
+      const companySlaveId = requireFlag(flags, 'slave')
       const companyTeamId = requireFlag(flags, 'team')
-      const result = await moveCompanyAgent(companyAgentId, companyTeamId)
+      const result = await moveCompanySlave(companySlaveId, companyTeamId)
       if (!result.ok) throw new Error(refusalText(result.error))
-      process.stdout.write(`catalog agent ${companyAgentId} moved to department template ${companyTeamId}\n`)
+      process.stdout.write(`catalog slave ${companySlaveId} moved to department template ${companyTeamId}\n`)
       return 0
     }
 
@@ -743,7 +743,7 @@ export async function main(argv: readonly string[]): Promise<number> {
     // ---- F3: local accounts (M23 §7) ------------------------------------------------------------
     // The password is always read from stdin (`readSecretLine`), never a `--password` flag -- see
     // `STDIN_PASSWORD_ERROR` above for why. `delete-user` takes the same `--yes` gate as
-    // `delete-agent`/`delete-team`: the username IS the identifier here, so there is no separate
+    // `delete-slave`/`delete-team`: the username IS the identifier here, so there is no separate
     // id to look up and name in the refusal the way those two do.
 
     case 'create-user': {

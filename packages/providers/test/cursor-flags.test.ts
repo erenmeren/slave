@@ -13,7 +13,7 @@ describe('cursorFlags', () => {
   })
 
   // `--output-format` "only works with --print" (help text), and without
-  // `--print` the agent runs interactively and the stream parser is handed
+  // `--print` the slave runs interactively and the stream parser is handed
   // nothing it can read.
   it('always prints, because --output-format only works with --print', () => {
     expect(cursorFlags()).toContain('--print')

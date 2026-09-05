@@ -84,7 +84,7 @@ export async function collectTaskWorktree(
         return { refusal: { kind: 'worktree_remove_failed', taskId, path, reason } as const }
       }
 
-      await tx.agentRun.updateMany({ where: { taskId, worktreePath: path }, data: { worktreePath: null } })
+      await tx.slaveRun.updateMany({ where: { taskId, worktreePath: path }, data: { worktreePath: null } })
       return { task, path }
     },
     { timeout: 30_000 },

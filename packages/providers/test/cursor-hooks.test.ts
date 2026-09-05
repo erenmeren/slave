@@ -102,7 +102,7 @@ describe('writeCursorHooksFile', () => {
     mkdirSync(path.dirname(hooksPath), { recursive: true })
     // A project that ships its own Cursor hooks is a configuration, not debris. Overwriting it
     // silently would disarm whatever the user actually configured AND show up as a modified
-    // tracked file in the agent's own working tree, which the agent may then commit.
+    // tracked file in the slave's own working tree, which the slave may then commit.
     writeFileSync(hooksPath, '{"version":1,"hooks":{"afterFileEdit":[{"command":"./ours.sh"}]}}')
 
     expect(() => writeCursorHooksFile({ hooksPath, gatePath: GATE })).toThrow(/already has a .cursor\/hooks.json/)

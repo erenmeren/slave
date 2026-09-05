@@ -1,6 +1,6 @@
 import {
   NON_TERMINAL_RUN_STATUSES,
-  agentId as brandAgentId,
+  slaveId as brandSlaveId,
   runId as brandRunId,
   taskId as brandTaskId,
   parseReviewVerdict,
@@ -9,7 +9,7 @@ import {
 import { admitProvider, refusalText, resolveDenyList, runFilePaths, writePermissionsFile } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import { appendEvent } from '@slave-of-ai/events'
-import type { AgentRuntimeAdapter, RunHandle } from '@slave-of-ai/providers'
+import type { SlaveRuntimeAdapter, RunHandle } from '@slave-of-ai/providers'
 import { resolveRuntime, workspaceDefaultProvider } from './model.js'
 import { resolveAdapter } from './provider.js'
 import { pumpRun } from './pump.js'
@@ -70,7 +70,7 @@ export function buildReviewPrompt(
  * parseable must not be retried forever.
  */
 export async function concludeReview(runId: RunId): Promise<void> {
-  const run = await prisma.agentRun.findUniqueOrThrow({
+  const run = await prisma.slaveRun.findUniqueOrThrow({
     where: { id: runId },
     include: { task: { include: { workspace: true } } },
   })
@@ -89,7 +89,7 @@ export async function concludeReview(runId: RunId): Promise<void> {
   const parsed = parseReviewVerdict(text)
 
   if (!parsed.ok) {
-    await prisma.agentRun.updateMany({
+    await prisma.slaveRun.updateMany({
       where: { id: runId, status: 'succeeded' },
       data: { status: 'failed' },
     })
@@ -97,7 +97,7 @@ export async function concludeReview(runId: RunId): Promise<void> {
       type: 'run.failed',
       workspaceId: task.workspaceId,
       taskId: task.id,
-      agentId: run.agentId,
+      slaveId: run.slaveId,
       runId: run.id,
       actor: 'system',
       payload: { reason: `review run produced no valid verdict: ${parsed.error}` },
@@ -198,7 +198,7 @@ interface ReviewableTask {
 async function dispatchReview(deps: TickDeps, task: ReviewableTask): Promise<RunId | null> {
   // 1. Skip if a review run is already live for this task -- the ordinary case on every tick after
   // the first, since a review run routinely outlives the tick that started it.
-  const liveReviews = await prisma.agentRun.count({
+  const liveReviews = await prisma.slaveRun.count({
     where: { taskId: task.id, kind: 'review', status: { in: [...NON_TERMINAL_RUN_STATUSES] } },
   })
   if (liveReviews > 0) return null
@@ -208,7 +208,7 @@ async function dispatchReview(deps: TickDeps, task: ReviewableTask): Promise<Run
   // state does not support review" rather than "review it later" -- warned, not silent, because an
   // operator needs to know a `reviewing` task is stuck for a reason that has nothing to do with
   // reviewer staffing.
-  const latestImpl = await prisma.agentRun.findFirst({
+  const latestImpl = await prisma.slaveRun.findFirst({
     where: { taskId: task.id, kind: 'implementation' },
     orderBy: { startedAt: 'desc' },
   })
@@ -223,7 +223,7 @@ async function dispatchReview(deps: TickDeps, task: ReviewableTask): Promise<Run
     return null
   }
 
-  const reviewAttempts = await prisma.agentRun.count({
+  const reviewAttempts = await prisma.slaveRun.count({
     where: { taskId: task.id, kind: 'review', startedAt: { gt: latestImpl.startedAt } },
   })
   // Silent: the two `run.failed` events those review attempts already wrote are the escalation.
@@ -232,15 +232,15 @@ async function dispatchReview(deps: TickDeps, task: ReviewableTask): Promise<Run
 
   // 3. Reviewer staffing. `role === 'reviewer'` is an exact match -- the same convention
   // `decide()` uses for `requiredRole`, and Task 8's seed data uses the same spelling.
-  // `companyAgent -> template` included so `resolveRuntime` (M12 Task 8) can walk the whole override
+  // `companySlave -> template` included so `resolveRuntime` (M12 Task 8) can walk the whole override
   // chain for whichever reviewer is actually picked below.
-  // `permissions` included alongside `companyAgent -> template` (M18 Task 5) -- see `tick.ts`'s
+  // `permissions` included alongside `companySlave -> template` (M18 Task 5) -- see `tick.ts`'s
   // own `startRun` for why: the resolved deny list is snapshotted at dispatch, from this run's own
-  // agent row.
-  const reviewers = await prisma.agent.findMany({
+  // slave row.
+  const reviewers = await prisma.slave.findMany({
     where: { role: 'reviewer', team: { workspaceId: task.workspaceId } },
     orderBy: { id: 'asc' },
-    include: { companyAgent: { include: { template: true } }, permissions: true },
+    include: { companySlave: { include: { template: true } }, permissions: true },
   })
 
   if (reviewers.length === 0) {
@@ -264,44 +264,44 @@ async function dispatchReview(deps: TickDeps, task: ReviewableTask): Promise<Run
         actor: 'system',
         payload: {
           guardrail: 'no_reviewer',
-          detail: `task "${task.title}" is waiting in reviewing: no reviewer-role agent in this workspace`,
+          detail: `task "${task.title}" is waiting in reviewing: no reviewer-role slave in this workspace`,
         },
       })
     }
     return null
   }
 
-  const busyAgentIds = new Set(
+  const busySlaveIds = new Set(
     (
-      await prisma.agentRun.findMany({
-        where: { agentId: { in: reviewers.map((reviewer) => reviewer.id) }, status: { in: [...NON_TERMINAL_RUN_STATUSES] } },
-        select: { agentId: true },
+      await prisma.slaveRun.findMany({
+        where: { slaveId: { in: reviewers.map((reviewer) => reviewer.id) }, status: { in: [...NON_TERMINAL_RUN_STATUSES] } },
+        select: { slaveId: true },
       })
-    ).map((run) => run.agentId),
+    ).map((run) => run.slaveId),
   )
-  const reviewer = reviewers.find((candidate) => !busyAgentIds.has(candidate.id))
+  const reviewer = reviewers.find((candidate) => !busySlaveIds.has(candidate.id))
   // Every reviewer is busy. Not an escalation -- the workspace is staffed, the task just has to
   // wait its turn -- so this is deliberately as silent as `decide()` leaving a task unstarted
-  // because every agent of its required role is busy.
+  // because every slave of its required role is busy.
   if (reviewer === undefined) return null
 
   // 4. Dispatch -- the `startRun` shape, minus worktree provisioning: a review judges the same
   // worktree the implementation run left, so there is nothing to provision.
   const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: task.workspaceId } })
 
-  const run = await prisma.agentRun.create({
-    data: { taskId: task.id, agentId: reviewer.id, kind: 'review', status: 'starting' },
+  const run = await prisma.slaveRun.create({
+    data: { taskId: task.id, slaveId: reviewer.id, kind: 'review', status: 'starting' },
   })
   const runId = brandRunId(run.id)
 
   // Declared outside the `try` for the same reason `startRun` does: the catch below needs to tell
-  // "never spawned" from "spawned, then something else failed" so it never abandons a live agent.
+  // "never spawned" from "spawned, then something else failed" so it never abandons a live slave.
   let handle: RunHandle | null = null
 
   // Nullable now that resolving it can itself fail (M12 Task 8: an unconfigured provider) -- the
   // catch below needs to tell "no adapter to cancel with" apart from "spawned, then something
   // else failed" just as it already does for `handle`.
-  let adapter: AgentRuntimeAdapter | null = null
+  let adapter: SlaveRuntimeAdapter | null = null
 
   try {
     // M12 Task 8: resolved first, inside the `try` -- see `tick.ts`'s `startRun` for the full
@@ -319,7 +319,7 @@ async function dispatchReview(deps: TickDeps, task: ReviewableTask): Promise<Run
     adapter = resolveAdapter(deps.registry, resolved.provider)
     // Spec §6's dispatch-time re-check (M12 Task 9, ruling R9), after the adapter resolves and
     // before anything is spawned. It is a RE-check, not the only one: `packages/control`'s
-    // `assignCompany`/`setAgentModel` already refuse this pairing at write time. It exists anyway
+    // `assignCompany`/`setSlaveModel` already refuse this pairing at write time. It exists anyway
     // because resolution crosses four levels, and a template edit -- or a new
     // `ProviderConfiguration` row -- can change the pair under a workspace that was perfectly
     // valid when it was configured, with no write to this workspace at all for the write-time
@@ -348,7 +348,7 @@ async function dispatchReview(deps: TickDeps, task: ReviewableTask): Promise<Run
       type: 'task.review_started',
       workspaceId: task.workspaceId,
       taskId: task.id,
-      agentId: reviewer.id,
+      slaveId: reviewer.id,
       runId: run.id,
       actor: 'system',
       payload: { title: task.title },
@@ -377,7 +377,7 @@ async function dispatchReview(deps: TickDeps, task: ReviewableTask): Promise<Run
       ...(model !== undefined ? { model } : {}),
     })
 
-    await prisma.agentRun.update({
+    await prisma.slaveRun.update({
       where: { id: run.id },
       // `provider` (M12 Task 8) -- see `tick.ts`'s own `startRun` for why it is written here,
       // alongside `pid`, rather than at creation.
@@ -390,7 +390,7 @@ async function dispatchReview(deps: TickDeps, task: ReviewableTask): Promise<Run
     const pump = pumpRun({
       runId,
       taskId: brandTaskId(task.id),
-      agentId: brandAgentId(reviewer.id),
+      slaveId: brandSlaveId(reviewer.id),
       workspaceId: deps.workspaceId,
       events: runAdapter.events(runId),
       cancel: () => runAdapter.cancel(runId),
@@ -419,7 +419,7 @@ async function dispatchReview(deps: TickDeps, task: ReviewableTask): Promise<Run
     return runId
   } catch (error) {
     // Kill what was spawned before recording anything -- the same discipline `startRun` applies,
-    // for the same reason: an agent nobody can find is worse than a failed run.
+    // for the same reason: an slave nobody can find is worse than a failed run.
     let cancelError: unknown = null
     // `adapter !== null` is implied by `handle !== null`, but a resolution failure (a
     // misconfigured provider, above) is precisely the case where `adapter` is still `null` here.
@@ -436,17 +436,17 @@ async function dispatchReview(deps: TickDeps, task: ReviewableTask): Promise<Run
         ? ''
         : ` -- AND THE CANCEL FAILED (${String(cancelError)}): the process may still be running.`)
     const now = new Date()
-    await prisma.agentRun.update({
+    await prisma.slaveRun.update({
       where: { id: run.id },
       data: { status: 'failed', terminalAt: now, endedAt: now },
     })
-    // The task stays in `reviewing` -- this is infra failing to start, not the agent's work being
-    // judged, so `attempt` (the agent-facing counter) is deliberately left untouched.
+    // The task stays in `reviewing` -- this is infra failing to start, not the slave's work being
+    // judged, so `attempt` (the slave-facing counter) is deliberately left untouched.
     await appendEvent({
       type: 'run.failed',
       workspaceId: task.workspaceId,
       taskId: task.id,
-      agentId: reviewer.id,
+      slaveId: reviewer.id,
       runId: run.id,
       actor: 'system',
       payload: { reason },

@@ -11,7 +11,7 @@ import { pauseActiveRuns, requestPause } from '../../src/pause.js'
 interface Fixture {
   readonly workspace: { readonly id: string; readonly repoPath: string }
   readonly task: { readonly id: string }
-  readonly agent: { readonly id: string }
+  readonly slave: { readonly id: string }
   readonly run: { readonly id: string }
 }
 
@@ -26,14 +26,14 @@ async function seed(): Promise<Fixture> {
     },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const agent = await prisma.agent.create({ data: { teamId: team.id, name: 'Alex', role: 'Backend' } })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'Backend' } })
   const task = await prisma.task.create({
     data: { workspaceId: workspace.id, title: 'Add checkout retry', description: 'Retry failed payments', maxAttempts: workspace.maxAttempts },
   })
-  const run = await prisma.agentRun.create({
-    data: { taskId: task.id, agentId: agent.id, status: 'working' },
+  const run = await prisma.slaveRun.create({
+    data: { taskId: task.id, slaveId: slave.id, status: 'working' },
   })
-  return { workspace: { id: workspace.id, repoPath }, task: { id: task.id }, agent: { id: agent.id }, run: { id: run.id } }
+  return { workspace: { id: workspace.id, repoPath }, task: { id: task.id }, slave: { id: slave.id }, run: { id: run.id } }
 }
 
 describe('requestPause', () => {
@@ -41,7 +41,7 @@ describe('requestPause', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Approval", "AgentMessage", "Artifact", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Approval", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
   })
@@ -51,7 +51,7 @@ describe('requestPause', () => {
     const result = await requestPause(run.id, 'meren')
     expect(result.ok).toBe(true)
 
-    const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })
+    const after = await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })
     expect(after.status).toBe('pause_requested')
     expect(after.pauseReason).toBe('human')
 
@@ -68,7 +68,7 @@ describe('requestPause', () => {
 
   it('refuses a run that already concluded, and writes nothing', async () => {
     const { workspace, run } = fixture
-    await prisma.agentRun.update({ where: { id: run.id }, data: { status: 'succeeded' } })
+    await prisma.slaveRun.update({ where: { id: run.id }, data: { status: 'succeeded' } })
 
     const result = await requestPause(run.id, 'meren')
     expect(result.ok).toBe(false)
@@ -98,7 +98,7 @@ describe('requestPause', () => {
    */
   it("signals the run's own provider, not a constant -- so an unimplemented one surfaces", async () => {
     const { run } = fixture
-    await prisma.agentRun.update({ where: { id: run.id }, data: { provider: 'cursor' } })
+    await prisma.slaveRun.update({ where: { id: run.id }, data: { provider: 'cursor' } })
 
     const result = await requestPause(run.id, 'meren')
     expect(result.ok).toBe(false)
@@ -106,7 +106,7 @@ describe('requestPause', () => {
     expect(result.error.kind).toBe('pause_unsignalled')
     expect(refusalText(result.error)).toMatch(/cursor/)
 
-    const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })
+    const after = await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })
     expect(after.status).toBe('working')
   })
 
@@ -115,7 +115,7 @@ describe('requestPause', () => {
     const result = await requestPause(run.id, 'budget guardrail', 'emergency_stop')
     expect(result.ok).toBe(true)
 
-    const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })
+    const after = await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })
     expect(after.pauseReason).toBe('emergency_stop')
   })
 
@@ -126,7 +126,7 @@ describe('requestPause', () => {
     expect(outcomes.filter((r) => r.ok)).toHaveLength(1)
     const refused = outcomes.find((r) => !r.ok)
     expect(refused && !refused.ok && refused.error.kind).toBe('wrong_status')
-    const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })
+    const after = await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })
     expect(after.status).toBe('pause_requested')
   })
 
@@ -139,10 +139,10 @@ describe('requestPause', () => {
     const { run, workspace } = fixture
     const { runDir } = runFilePaths(workspace.repoPath, runId(run.id))
     chmodSync(runDir, 0o555)
-    await prisma.agentRun.update({ where: { id: run.id }, data: { status: 'resuming' } })
+    await prisma.slaveRun.update({ where: { id: run.id }, data: { status: 'resuming' } })
     const result = await requestPause(run.id, 'meren')
     expect(result.ok).toBe(false)
-    const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })
+    const after = await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })
     expect(after.status).toBe('resuming') // the claim's own reading, not a stale earlier read
   })
 })
@@ -152,16 +152,16 @@ describe('pauseActiveRuns', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Approval", "AgentMessage", "Artifact", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Approval", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
   })
 
   it('requests pause on every active run and buckets refusals without throwing', async () => {
     const { workspace, task, run } = fixture
-    const { agentId } = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id }, select: { agentId: true } })
-    const alreadyPaused = await prisma.agentRun.create({
-      data: { taskId: task.id, agentId, status: 'paused' },
+    const { slaveId } = await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id }, select: { slaveId: true } })
+    const alreadyPaused = await prisma.slaveRun.create({
+      data: { taskId: task.id, slaveId, status: 'paused' },
     })
 
     const report = await pauseActiveRuns(workspace.id, 'budget guardrail', 'guardrail')
@@ -169,28 +169,28 @@ describe('pauseActiveRuns', () => {
     expect(report.requested).toEqual([run.id])
     expect(report.refused).toEqual([alreadyPaused.id])
 
-    const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })
+    const after = await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })
     expect(after.status).toBe('pause_requested')
     expect(after.pauseReason).toBe('guardrail')
   })
 
   /**
    * A planning run (Task 6) has no `Task` row -- its only linkage to a workspace is
-   * `agent -> team -> workspace`. Emergency stop fans out through `pauseActiveRuns`, so a
+   * `slave -> team -> workspace`. Emergency stop fans out through `pauseActiveRuns`, so a
    * task-less run scoped out of its query would keep running through a halt an operator believes
    * paused everything.
    */
   it('requests pause on a task-less planning run', async () => {
     const { workspace, run } = fixture
-    const { agentId } = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id }, select: { agentId: true } })
-    const planningRun = await prisma.agentRun.create({
-      data: { agentId, kind: 'planning', status: 'working' },
+    const { slaveId } = await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id }, select: { slaveId: true } })
+    const planningRun = await prisma.slaveRun.create({
+      data: { slaveId, kind: 'planning', status: 'working' },
     })
 
     const report = await pauseActiveRuns(workspace.id, 'budget guardrail', 'guardrail')
 
     expect(report.requested).toContain(planningRun.id)
-    const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: planningRun.id } })
+    const after = await prisma.slaveRun.findUniqueOrThrow({ where: { id: planningRun.id } })
     expect(after.status).toBe('pause_requested')
     expect(after.pauseReason).toBe('guardrail')
   })
@@ -206,13 +206,13 @@ describe('a pause that cannot be signalled', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Approval", "AgentMessage", "Artifact", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Approval", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
   })
 
   async function unsignallableRun(status: 'working' | 'starting' | 'resuming'): Promise<string> {
-    await prisma.agentRun.update({
+    await prisma.slaveRun.update({
       where: { id: fixture.run.id },
       data: { provider: 'cursor', pid: null, status },
     })
@@ -227,7 +227,7 @@ describe('a pause that cannot be signalled', () => {
     if (result.ok) return
     expect(result.error.kind).toBe('pause_unsignalled')
 
-    const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: runId } })
+    const after = await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId } })
     // A run never parks in `pause_requested` with nothing coming (Decision 5).
     expect(after.status).toBe('working')
     expect(
@@ -238,15 +238,15 @@ describe('a pause that cannot be signalled', () => {
   it('restores a resuming run to resuming, not to working', async (): Promise<void> => {
     const runId = await unsignallableRun('resuming')
     expect((await requestPause(runId, 'meren')).ok).toBe(false)
-    expect((await prisma.agentRun.findUniqueOrThrow({ where: { id: runId } })).status).toBe('resuming')
+    expect((await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId } })).status).toBe('resuming')
   })
 
   it('lands in pauseActiveRuns refused, and the fan-out keeps going', async (): Promise<void> => {
     const unsignallable = await unsignallableRun('working')
     // A second, ordinary run in the same workspace, AFTER the broken one, so a fan-out that
     // abandoned the loop on the first failure would leave this one unsignalled.
-    const second = await prisma.agentRun.create({
-      data: { taskId: fixture.task.id, agentId: fixture.agent.id, status: 'working' },
+    const second = await prisma.slaveRun.create({
+      data: { taskId: fixture.task.id, slaveId: fixture.slave.id, status: 'working' },
     })
 
     // `PauseFanoutReport` carries ids only, and the CLI renders `refused.length` as "already
@@ -263,7 +263,7 @@ describe('a pause that cannot be signalled', () => {
 
     expect(report.refused).toContain(unsignallable)
     expect(report.requested).toContain(second.id)
-    expect((await prisma.agentRun.findUniqueOrThrow({ where: { id: unsignallable } })).status).toBe('working')
-    expect((await prisma.agentRun.findUniqueOrThrow({ where: { id: second.id } })).status).toBe('pause_requested')
+    expect((await prisma.slaveRun.findUniqueOrThrow({ where: { id: unsignallable } })).status).toBe('working')
+    expect((await prisma.slaveRun.findUniqueOrThrow({ where: { id: second.id } })).status).toBe('pause_requested')
   })
 })

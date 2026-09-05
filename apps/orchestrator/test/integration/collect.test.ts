@@ -75,7 +75,7 @@ async function seedTask(
 ): Promise<TaskFixture> {
   const worktreePath = overrides.worktreePath ?? addWorktree(repoPath, n)
   const team = await prisma.team.create({ data: { workspaceId, name: 'Engineering' } })
-  const agent = await prisma.agent.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
   const task = await prisma.task.create({
     data: {
       workspaceId,
@@ -87,10 +87,10 @@ async function seedTask(
       maxAttempts: 3,
     },
   })
-  const agentRun = await prisma.agentRun.create({
+  const slaveRun = await prisma.slaveRun.create({
     data: {
       taskId: task.id,
-      agentId: agent.id,
+      slaveId: slave.id,
       status: (overrides.runStatus ?? 'succeeded') as never,
       pid: overrides.runPid ?? null,
       worktreePath,
@@ -101,13 +101,13 @@ async function seedTask(
       type: 'task.done',
       workspaceId,
       taskId: task.id,
-      agentId: agent.id,
-      runId: agentRun.id,
-      actor: 'agent',
+      slaveId: slave.id,
+      runId: slaveRun.id,
+      actor: 'slave',
       payload: { branch: `slaveofai/T-collect-${n}` },
     })
   }
-  return { worktreePath, taskId: task.id, runId: agentRun.id }
+  return { worktreePath, taskId: task.id, runId: slaveRun.id }
 }
 
 /** Ages a task's `task.done` event by rewriting `ts` directly (Step 1's recipe) -- there is no
@@ -124,7 +124,7 @@ async function ageTerminalEvent(taskId: string, days: number): Promise<void> {
 describe('collectWorktrees', () => {
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Approval", "AgentMessage", "Artifact", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "ProviderConfiguration", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Approval", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "ProviderConfiguration", "Workspace" RESTART IDENTITY CASCADE',
     )
   })
 
@@ -149,7 +149,7 @@ describe('collectWorktrees', () => {
     const second = await collectWorktrees({ workspaceId, now: () => new Date(), ttlMs: WORKTREE_TTL_MS })
     expect(second.collected).toEqual([])
     expect(
-      (await prisma.agentRun.findUniqueOrThrow({ where: { id: old.runId } })).worktreePath,
+      (await prisma.slaveRun.findUniqueOrThrow({ where: { id: old.runId } })).worktreePath,
     ).toBeNull()
   })
 

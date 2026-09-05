@@ -65,7 +65,7 @@ const CLAUDE_CODE_CAPABILITIES: ProviderCapabilities = {
  * narrowing, would have let this exact write through. See `cursor/hooks.ts` for the full
  * reasoning behind the no-matcher registration.
  *
- * `canPauseMidRun` stays `false`: there is still no mechanism that stops the agent between tool
+ * `canPauseMidRun` stays `false`: there is still no mechanism that stops the slave between tool
  * calls and leaves it resumable in place. The gate refuses calls; it does not suspend the run.
  * `reportsCost` stays `false`: the `result` line carries no cost figure at all.
  *

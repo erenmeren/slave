@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { agentId, runId } from '../../src/ids.js'
+import { slaveId, runId } from '../../src/ids.js'
 import { applyTaskEvent, initialTaskState, type TaskEvent, type TaskState } from '../../src/task/state.js'
 
 function drive(state: TaskState, events: readonly TaskEvent[]): TaskState {
@@ -12,7 +12,7 @@ function drive(state: TaskState, events: readonly TaskEvent[]): TaskState {
 
 const TO_RUNNING: readonly TaskEvent[] = [
   { type: 'dependencies_satisfied' },
-  { type: 'assigned', agentId: agentId('alex') },
+  { type: 'assigned', slaveId: slaveId('alex') },
   { type: 'run_started', runId: runId('run-1') },
 ]
 
@@ -55,7 +55,7 @@ describe('rejection paths', () => {
     const reworked = drive(initialTaskState(3), [
       ...TO_RUNNING,
       { type: 'run_failed', reason: 'crashed' },
-      { type: 'assigned', agentId: agentId('alex') },
+      { type: 'assigned', slaveId: slaveId('alex') },
       { type: 'run_started', runId: runId('run-2') },
     ])
     expect(reworked.status).toBe('running')
@@ -69,7 +69,7 @@ describe('rejection paths', () => {
     expect(state.status).toBe('rework')
 
     state = drive(state, [
-      { type: 'assigned', agentId: agentId('alex') },
+      { type: 'assigned', slaveId: slaveId('alex') },
       { type: 'run_started', runId: runId('run-2') },
       { type: 'run_failed', reason: 'second' },
     ])

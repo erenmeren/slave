@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
-import { addCompanyAgent, addCompanyTeam, assignCompany, createCompany, createTemplate, setAgentModel } from '../../src/org.js'
+import { addCompanySlave, addCompanyTeam, assignCompany, createCompany, createTemplate, setSlaveModel } from '../../src/org.js'
 import { refusalText } from '../../src/refusal.js'
 
 // A real directory, not a placeholder (M23 G3): runFilePaths' statSync preflight refuses a repo path that does not exist, and a reboot clears /tmp -- the trap emergency.test.ts fell into at ce48adc.
@@ -14,7 +14,7 @@ afterAll(() => rmSync(repoPath, { recursive: true, force: true }))
 describe('catalog and company CRUD', () => {
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "CompanyAgent", "CompanyTeam", "Company", "AgentTemplate" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
     )
   })
 
@@ -28,7 +28,7 @@ describe('catalog and company CRUD', () => {
 
       expect(result.ok).toBe(true)
       if (!result.ok) return
-      const row = await prisma.agentTemplate.findUniqueOrThrow({ where: { id: result.value.id } })
+      const row = await prisma.slaveTemplate.findUniqueOrThrow({ where: { id: result.value.id } })
       expect(row.name).toBe('Backend Engineer')
       expect(row.role).toBe('backend')
       expect(row.description).toBe('ships backend features')
@@ -41,7 +41,7 @@ describe('catalog and company CRUD', () => {
 
       expect(result.ok).toBe(true)
       if (!result.ok) return
-      const row = await prisma.agentTemplate.findUniqueOrThrow({ where: { id: result.value.id } })
+      const row = await prisma.slaveTemplate.findUniqueOrThrow({ where: { id: result.value.id } })
       expect(row.description).toBe('')
       expect(row.defaultModel).toBeNull()
       expect(row.provider).toBeNull()
@@ -52,7 +52,7 @@ describe('catalog and company CRUD', () => {
 
       expect(result.ok).toBe(false)
       if (!result.ok) expect(result.error).toEqual({ kind: 'model_without_provider' })
-      expect(await prisma.agentTemplate.count()).toBe(0)
+      expect(await prisma.slaveTemplate.count()).toBe(0)
     })
 
     it('refuses a provider with no defaultModel, creating nothing', async (): Promise<void> => {
@@ -60,7 +60,7 @@ describe('catalog and company CRUD', () => {
 
       expect(result.ok).toBe(false)
       if (!result.ok) expect(result.error).toEqual({ kind: 'model_without_provider' })
-      expect(await prisma.agentTemplate.count()).toBe(0)
+      expect(await prisma.slaveTemplate.count()).toBe(0)
     })
 
     it('refuses a provider kind nothing is configured for, creating nothing', async (): Promise<void> => {
@@ -71,7 +71,7 @@ describe('catalog and company CRUD', () => {
 
       expect(result.ok).toBe(false)
       if (!result.ok) expect(result.error).toEqual({ kind: 'invalid_provider', provider: 'nope' })
-      expect(await prisma.agentTemplate.count()).toBe(0)
+      expect(await prisma.slaveTemplate.count()).toBe(0)
     })
 
     it('refuses a duplicate template name', async (): Promise<void> => {
@@ -80,7 +80,7 @@ describe('catalog and company CRUD', () => {
 
       expect(result.ok).toBe(false)
       if (!result.ok) expect(result.error).toEqual({ kind: 'duplicate_name', name: 'Backend Engineer' })
-      expect(await prisma.agentTemplate.count()).toBe(1)
+      expect(await prisma.slaveTemplate.count()).toBe(1)
     })
 
     it('refuses a whitespace name, creating nothing', async (): Promise<void> => {
@@ -88,7 +88,7 @@ describe('catalog and company CRUD', () => {
 
       expect(result.ok).toBe(false)
       if (!result.ok) expect(result.error).toEqual({ kind: 'invalid_name' })
-      expect(await prisma.agentTemplate.count()).toBe(0)
+      expect(await prisma.slaveTemplate.count()).toBe(0)
     })
 
     it('refuses a whitespace role, creating nothing', async (): Promise<void> => {
@@ -96,7 +96,7 @@ describe('catalog and company CRUD', () => {
 
       expect(result.ok).toBe(false)
       if (!result.ok) expect(result.error).toEqual({ kind: 'invalid_name' })
-      expect(await prisma.agentTemplate.count()).toBe(0)
+      expect(await prisma.slaveTemplate.count()).toBe(0)
     })
 
     it('refuses a whitespace-only defaultModel, creating nothing', async (): Promise<void> => {
@@ -104,7 +104,7 @@ describe('catalog and company CRUD', () => {
 
       expect(result.ok).toBe(false)
       if (!result.ok) expect(result.error).toEqual({ kind: 'invalid_model' })
-      expect(await prisma.agentTemplate.count()).toBe(0)
+      expect(await prisma.slaveTemplate.count()).toBe(0)
     })
   })
 
@@ -191,25 +191,25 @@ describe('catalog and company CRUD', () => {
     })
   })
 
-  describe('addCompanyAgent', () => {
+  describe('addCompanySlave', () => {
     async function seedTeamAndTemplate(): Promise<{ companyTeamId: string; templateId: string }> {
       const company = await prisma.company.create({ data: { name: 'Acme Corp' } })
       const team = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Engineering' } })
-      const template = await prisma.agentTemplate.create({ data: { name: 'Backend Engineer', role: 'backend' } })
+      const template = await prisma.slaveTemplate.create({ data: { name: 'Backend Engineer', role: 'backend' } })
       return { companyTeamId: team.id, templateId: template.id }
     }
 
     it('creates the row under the given team and template, with an optional model+provider override', async (): Promise<void> => {
       const { companyTeamId, templateId } = await seedTeamAndTemplate()
 
-      const result = await addCompanyAgent(companyTeamId, templateId, 'Atlas', {
+      const result = await addCompanySlave(companyTeamId, templateId, 'Atlas', {
         model: 'claude-haiku',
         provider: 'claude_code',
       })
 
       expect(result.ok).toBe(true)
       if (!result.ok) return
-      const row = await prisma.companyAgent.findUniqueOrThrow({ where: { id: result.value.id } })
+      const row = await prisma.companySlave.findUniqueOrThrow({ where: { id: result.value.id } })
       expect(row.companyTeamId).toBe(companyTeamId)
       expect(row.templateId).toBe(templateId)
       expect(row.name).toBe('Atlas')
@@ -220,11 +220,11 @@ describe('catalog and company CRUD', () => {
     it('defaults model and provider to null when omitted', async (): Promise<void> => {
       const { companyTeamId, templateId } = await seedTeamAndTemplate()
 
-      const result = await addCompanyAgent(companyTeamId, templateId, 'Atlas')
+      const result = await addCompanySlave(companyTeamId, templateId, 'Atlas')
 
       expect(result.ok).toBe(true)
       if (!result.ok) return
-      const row = await prisma.companyAgent.findUniqueOrThrow({ where: { id: result.value.id } })
+      const row = await prisma.companySlave.findUniqueOrThrow({ where: { id: result.value.id } })
       expect(row.model).toBeNull()
       expect(row.provider).toBeNull()
     })
@@ -232,31 +232,31 @@ describe('catalog and company CRUD', () => {
     it('refuses a model with no provider, creating nothing', async (): Promise<void> => {
       const { companyTeamId, templateId } = await seedTeamAndTemplate()
 
-      const result = await addCompanyAgent(companyTeamId, templateId, 'Atlas', { model: 'claude-haiku' })
+      const result = await addCompanySlave(companyTeamId, templateId, 'Atlas', { model: 'claude-haiku' })
 
       expect(result.ok).toBe(false)
       if (!result.ok) expect(result.error).toEqual({ kind: 'model_without_provider' })
-      expect(await prisma.companyAgent.count()).toBe(0)
+      expect(await prisma.companySlave.count()).toBe(0)
     })
 
     it('refuses a provider kind nothing is configured for, creating nothing', async (): Promise<void> => {
       const { companyTeamId, templateId } = await seedTeamAndTemplate()
 
-      const result = await addCompanyAgent(companyTeamId, templateId, 'Atlas', {
+      const result = await addCompanySlave(companyTeamId, templateId, 'Atlas', {
         model: 'claude-haiku',
         provider: 'nope' as never,
       })
 
       expect(result.ok).toBe(false)
       if (!result.ok) expect(result.error).toEqual({ kind: 'invalid_provider', provider: 'nope' })
-      expect(await prisma.companyAgent.count()).toBe(0)
+      expect(await prisma.companySlave.count()).toBe(0)
     })
 
     it('refuses an unknown company team', async (): Promise<void> => {
       const { templateId } = await seedTeamAndTemplate()
       const unknown = '00000000-0000-4000-8000-000000000000'
 
-      const result = await addCompanyAgent(unknown, templateId, 'Atlas')
+      const result = await addCompanySlave(unknown, templateId, 'Atlas')
 
       expect(result.ok).toBe(false)
       if (!result.ok) expect(result.error).toEqual({ kind: 'company_team_not_found', companyTeamId: unknown })
@@ -266,31 +266,31 @@ describe('catalog and company CRUD', () => {
       const { companyTeamId } = await seedTeamAndTemplate()
       const unknown = '00000000-0000-4000-8000-000000000000'
 
-      const result = await addCompanyAgent(companyTeamId, unknown, 'Atlas')
+      const result = await addCompanySlave(companyTeamId, unknown, 'Atlas')
 
       expect(result.ok).toBe(false)
       if (!result.ok) expect(result.error).toEqual({ kind: 'template_not_found', templateId: unknown })
     })
 
-    it('refuses a duplicate agent name within the same team', async (): Promise<void> => {
+    it('refuses a duplicate slave name within the same team', async (): Promise<void> => {
       const { companyTeamId, templateId } = await seedTeamAndTemplate()
-      await addCompanyAgent(companyTeamId, templateId, 'Atlas')
+      await addCompanySlave(companyTeamId, templateId, 'Atlas')
 
-      const result = await addCompanyAgent(companyTeamId, templateId, 'Atlas')
+      const result = await addCompanySlave(companyTeamId, templateId, 'Atlas')
 
       expect(result.ok).toBe(false)
       if (!result.ok) expect(result.error).toEqual({ kind: 'duplicate_name', name: 'Atlas' })
-      expect(await prisma.companyAgent.count()).toBe(1)
+      expect(await prisma.companySlave.count()).toBe(1)
     })
 
-    it('allows the same agent name in two different teams', async (): Promise<void> => {
+    it('allows the same slave name in two different teams', async (): Promise<void> => {
       const company = await prisma.company.create({ data: { name: 'Acme Corp' } })
       const teamA = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Engineering' } })
       const teamB = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Design' } })
-      const template = await prisma.agentTemplate.create({ data: { name: 'Backend Engineer', role: 'backend' } })
+      const template = await prisma.slaveTemplate.create({ data: { name: 'Backend Engineer', role: 'backend' } })
 
-      const first = await addCompanyAgent(teamA.id, template.id, 'Atlas')
-      const second = await addCompanyAgent(teamB.id, template.id, 'Atlas')
+      const first = await addCompanySlave(teamA.id, template.id, 'Atlas')
+      const second = await addCompanySlave(teamB.id, template.id, 'Atlas')
 
       expect(first.ok).toBe(true)
       expect(second.ok).toBe(true)
@@ -299,21 +299,21 @@ describe('catalog and company CRUD', () => {
     it('refuses a whitespace name, creating nothing', async (): Promise<void> => {
       const { companyTeamId, templateId } = await seedTeamAndTemplate()
 
-      const result = await addCompanyAgent(companyTeamId, templateId, '  ')
+      const result = await addCompanySlave(companyTeamId, templateId, '  ')
 
       expect(result.ok).toBe(false)
       if (!result.ok) expect(result.error).toEqual({ kind: 'invalid_name' })
-      expect(await prisma.companyAgent.count()).toBe(0)
+      expect(await prisma.companySlave.count()).toBe(0)
     })
 
     it('refuses a whitespace-only model, creating nothing', async (): Promise<void> => {
       const { companyTeamId, templateId } = await seedTeamAndTemplate()
 
-      const result = await addCompanyAgent(companyTeamId, templateId, 'Atlas', { model: '  ' })
+      const result = await addCompanySlave(companyTeamId, templateId, 'Atlas', { model: '  ' })
 
       expect(result.ok).toBe(false)
       if (!result.ok) expect(result.error).toEqual({ kind: 'invalid_model' })
-      expect(await prisma.companyAgent.count()).toBe(0)
+      expect(await prisma.companySlave.count()).toBe(0)
     })
   })
 })
@@ -321,7 +321,7 @@ describe('catalog and company CRUD', () => {
 describe('assignCompany', () => {
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Agent", "Team", "Workspace", "CompanyAgent", "CompanyTeam", "Company", "AgentTemplate" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
     )
   })
 
@@ -339,23 +339,23 @@ describe('assignCompany', () => {
 
   /** Template names are made unique across calls via the company id, since they are unique globally. */
   async function seedCompanyWithRoster(
-    agentCount: number,
+    slaveCount: number,
     companyName = 'Acme Corp',
   ): Promise<{ companyId: string; companyName: string; teamName: string }> {
     const company = await prisma.company.create({ data: { name: companyName } })
     const team = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Engineering' } })
-    for (let i = 0; i < agentCount; i += 1) {
-      const template = await prisma.agentTemplate.create({
+    for (let i = 0; i < slaveCount; i += 1) {
+      const template = await prisma.slaveTemplate.create({
         data: { name: `Role ${i}-${company.id}`, role: `role-${i}` },
       })
-      await prisma.companyAgent.create({
+      await prisma.companySlave.create({
         data: { companyTeamId: team.id, templateId: template.id, name: `Worker ${i}` },
       })
     }
     return { companyId: company.id, companyName: company.name, teamName: team.name }
   }
 
-  it('materializes a team and workers from the roster, linking companyAgentId and emitting one event', async (): Promise<void> => {
+  it('materializes a team and workers from the roster, linking companySlaveId and emitting one event', async (): Promise<void> => {
     const workspace = await seedWorkspace()
     const { companyId, companyName, teamName } = await seedCompanyWithRoster(3)
 
@@ -373,17 +373,17 @@ describe('assignCompany', () => {
     const team = await prisma.team.findFirstOrThrow({ where: { workspaceId: workspace.id } })
     expect(team.name).toBe(teamName)
 
-    const agents = await prisma.agent.findMany({ where: { teamId: team.id } })
-    expect(agents).toHaveLength(3)
-    for (const agent of agents) {
-      expect(agent.companyAgentId).not.toBeNull()
-      expect(agent.role).toMatch(/^role-\d$/)
+    const slaves = await prisma.slave.findMany({ where: { teamId: team.id } })
+    expect(slaves).toHaveLength(3)
+    for (const slave of slaves) {
+      expect(slave.companySlaveId).not.toBeNull()
+      expect(slave.role).toMatch(/^role-\d$/)
     }
 
     for (const worker of result.value.createdWorkers) {
-      expect(worker.companyAgentId).not.toBe('')
-      const agent = agents.find((a) => a.name === worker.name)
-      expect(agent?.companyAgentId).toBe(worker.companyAgentId)
+      expect(worker.companySlaveId).not.toBe('')
+      const slave = slaves.find((a) => a.name === worker.name)
+      expect(slave?.companySlaveId).toBe(worker.companySlaveId)
     }
 
     const events = await prisma.executionEvent.findMany({
@@ -393,13 +393,13 @@ describe('assignCompany', () => {
     expect(events[0]?.actor).toBe('human')
     const payload = events[0]?.payload as unknown as {
       company: string
-      workers: readonly { companyAgentId: string; name: string; role: string }[]
+      workers: readonly { companySlaveId: string; name: string; role: string }[]
     }
     expect(payload.company).toBe(companyName)
     expect(payload.workers).toHaveLength(3)
     for (const worker of payload.workers) {
-      const agent = agents.find((a) => a.name === worker.name)
-      expect(agent?.companyAgentId).toBe(worker.companyAgentId)
+      const slave = slaves.find((a) => a.name === worker.name)
+      expect(slave?.companySlaveId).toBe(worker.companySlaveId)
     }
   })
 
@@ -415,7 +415,7 @@ describe('assignCompany', () => {
     expect(result.value.createdTeams).toEqual([])
     expect(result.value.createdWorkers).toEqual([])
 
-    expect(await prisma.agent.count()).toBe(3)
+    expect(await prisma.slave.count()).toBe(3)
 
     const events = await prisma.executionEvent.findMany({
       where: { workspaceId: workspace.id, type: 'workspace_company_assigned' },
@@ -429,11 +429,11 @@ describe('assignCompany', () => {
     const workspace = await seedWorkspace()
     const { companyId } = await seedCompanyWithRoster(3)
     await assignCompany(workspace.id, companyId)
-    const before = await prisma.agent.findMany({ orderBy: { name: 'asc' } })
+    const before = await prisma.slave.findMany({ orderBy: { name: 'asc' } })
 
     const team = await prisma.companyTeam.findFirstOrThrow({ where: { companyId } })
-    const template = await prisma.agentTemplate.create({ data: { name: `Role extra-${companyId}`, role: 'role-extra' } })
-    await prisma.companyAgent.create({
+    const template = await prisma.slaveTemplate.create({ data: { name: `Role extra-${companyId}`, role: 'role-extra' } })
+    await prisma.companySlave.create({
       data: { companyTeamId: team.id, templateId: template.id, name: 'Worker extra' },
     })
 
@@ -444,7 +444,7 @@ describe('assignCompany', () => {
     expect(result.value.createdWorkers).toHaveLength(1)
     expect(result.value.createdWorkers[0]?.name).toBe('Worker extra')
 
-    const after = await prisma.agent.findMany({ orderBy: { name: 'asc' } })
+    const after = await prisma.slave.findMany({ orderBy: { name: 'asc' } })
     expect(after).toHaveLength(4)
     for (const row of before) {
       expect(after.find((a) => a.id === row.id)).toEqual(row)
@@ -472,7 +472,7 @@ describe('assignCompany', () => {
     const ws = await prisma.workspace.findUniqueOrThrow({ where: { id: workspace.id } })
     expect(ws.companyId).toBe(firstCompanyId)
     expect(await prisma.team.count()).toBe(1)
-    expect(await prisma.agent.count()).toBe(1)
+    expect(await prisma.slave.count()).toBe(1)
   })
 
   it('serialises two concurrent assigns of different companies so exactly one wins, never a silent overwrite', async (): Promise<void> => {
@@ -504,20 +504,20 @@ describe('assignCompany', () => {
 
     // Exactly the winner's roster materialized -- the loser wrote nothing, not even a team.
     expect(await prisma.team.count({ where: { workspaceId: workspace.id } })).toBe(1)
-    expect(await prisma.agent.count()).toBe(1)
+    expect(await prisma.slave.count()).toBe(1)
   })
 
-  it('keeps a pre-existing hand-made team and agent, materializing alongside them', async (): Promise<void> => {
+  it('keeps a pre-existing hand-made team and slave, materializing alongside them', async (): Promise<void> => {
     const workspace = await seedWorkspace()
     const legacyTeam = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Legacy Ops' } })
-    const legacyAgent = await prisma.agent.create({ data: { teamId: legacyTeam.id, name: 'OldHand', role: 'legacy' } })
+    const legacySlave = await prisma.slave.create({ data: { teamId: legacyTeam.id, name: 'OldHand', role: 'legacy' } })
     const { companyId, teamName } = await seedCompanyWithRoster(2)
 
     const result = await assignCompany(workspace.id, companyId)
 
     expect(result.ok).toBe(true)
 
-    const stillThere = await prisma.agent.findUniqueOrThrow({ where: { id: legacyAgent.id } })
+    const stillThere = await prisma.slave.findUniqueOrThrow({ where: { id: legacySlave.id } })
     expect(stillThere.name).toBe('OldHand')
     expect(stillThere.role).toBe('legacy')
 
@@ -558,7 +558,7 @@ describe('assignCompany', () => {
     expect(teams[0]?.id).toBe(before[0]?.id)
     // The materialized team's own name is NOT retroactively renamed -- only newly created teams
     // pick up the roster's current name (Decision 6, additive-only).
-    expect(await prisma.agent.count({ where: { team: { workspaceId: workspace.id } } })).toBe(2)
+    expect(await prisma.slave.count({ where: { team: { workspaceId: workspace.id } } })).toBe(2)
   })
 
   it('adopts a pre-existing hand-made team with the same name on first assign, stamping it rather than duplicating', async (): Promise<void> => {
@@ -578,63 +578,63 @@ describe('assignCompany', () => {
     const companyTeam = await prisma.companyTeam.findFirstOrThrow({ where: { companyId } })
     expect(teams[0]?.companyTeamId).toBe(companyTeam.id)
 
-    expect(await prisma.agent.count({ where: { teamId: legacyTeam.id } })).toBe(1)
+    expect(await prisma.slave.count({ where: { teamId: legacyTeam.id } })).toBe(1)
   })
 
   it('rolls back the whole assignment when a roster template has gone dangling mid-transaction', async (): Promise<void> => {
     const workspace = await seedWorkspace()
     const { companyId } = await seedCompanyWithRoster(1)
-    const companyAgent = await prisma.companyAgent.findFirstOrThrow({ where: { companyTeam: { companyId } } })
+    const companySlave = await prisma.companySlave.findFirstOrThrow({ where: { companyTeam: { companyId } } })
 
-    // Force the FK target to go missing out from under the seeded CompanyAgent -- a state a plain
+    // Force the FK target to go missing out from under the seeded CompanySlave -- a state a plain
     // RESTRICT-backed delete can never produce, so the trigger-based FK check is disabled for the
     // width of one transaction (`SET LOCAL` unwinds automatically at commit; nothing else in the
     // process is affected) and the template is deleted while still referenced.
     await prisma.$transaction(async (tx) => {
       await tx.$executeRawUnsafe(`SET LOCAL session_replication_role = 'replica'`)
-      await tx.$executeRawUnsafe('DELETE FROM "AgentTemplate" WHERE id = $1', companyAgent.templateId)
+      await tx.$executeRawUnsafe('DELETE FROM "SlaveTemplate" WHERE id = $1', companySlave.templateId)
     })
 
     await expect(assignCompany(workspace.id, companyId)).rejects.toThrow()
 
-    expect(await prisma.agent.count()).toBe(0)
+    expect(await prisma.slave.count()).toBe(0)
     expect(await prisma.team.count()).toBe(0)
     const ws = await prisma.workspace.findUniqueOrThrow({ where: { id: workspace.id } })
     expect(ws.companyId).toBeNull()
   })
 })
 
-describe('setAgentModel', () => {
+describe('setSlaveModel', () => {
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
   })
 
-  async function seedAgent(): Promise<{ id: string }> {
+  async function seedSlave(): Promise<{ id: string }> {
     const workspace = await prisma.workspace.create({
       data: { name: 'Checkout Platform', repoPath, verifyCommands: ['true'], setupCommands: [] },
     })
     const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-    const agent = await prisma.agent.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
-    return { id: agent.id }
+    const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
+    return { id: slave.id }
   }
 
   it('writes the model and provider columns together', async (): Promise<void> => {
-    const { id } = await seedAgent()
+    const { id } = await seedSlave()
 
-    const result = await setAgentModel(id, 'claude-opus', 'claude_code')
+    const result = await setSlaveModel(id, 'claude-opus', 'claude_code')
 
     expect(result.ok).toBe(true)
-    const row = await prisma.agent.findUniqueOrThrow({ where: { id } })
+    const row = await prisma.slave.findUniqueOrThrow({ where: { id } })
     expect(row.model).toBe('claude-opus')
     expect(row.provider).toBe('claude_code')
 
-    // M23 D1: setAgentModel is the fifth site org.changed's field: 'model' covers.
-    const events = await prisma.executionEvent.findMany({ where: { agentId: id, type: 'org_changed' } })
+    // M23 D1: setSlaveModel is the fifth site org.changed's field: 'model' covers.
+    const events = await prisma.executionEvent.findMany({ where: { slaveId: id, type: 'org_changed' } })
     expect(events).toHaveLength(1)
     expect(events[0]?.payload).toEqual({
-      entity: 'agent',
+      entity: 'slave',
       id,
       field: 'model',
       from: '—@—',
@@ -642,74 +642,74 @@ describe('setAgentModel', () => {
     })
   })
 
-  it('refuses an unknown agent', async (): Promise<void> => {
+  it('refuses an unknown slave', async (): Promise<void> => {
     const unknown = '00000000-0000-4000-8000-000000000000'
 
-    const result = await setAgentModel(unknown, 'claude-opus', 'claude_code')
+    const result = await setSlaveModel(unknown, 'claude-opus', 'claude_code')
 
     expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.error).toEqual({ kind: 'agent_not_found', agentId: unknown })
+    if (!result.ok) expect(result.error).toEqual({ kind: 'slave_not_found', slaveId: unknown })
   })
 
   it('refuses an empty-string model, leaving the columns unchanged', async (): Promise<void> => {
-    const { id } = await seedAgent()
-    await setAgentModel(id, 'claude-opus', 'claude_code')
+    const { id } = await seedSlave()
+    await setSlaveModel(id, 'claude-opus', 'claude_code')
 
-    const result = await setAgentModel(id, '', 'claude_code')
+    const result = await setSlaveModel(id, '', 'claude_code')
 
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.error).toEqual({ kind: 'invalid_model' })
-    const row = await prisma.agent.findUniqueOrThrow({ where: { id } })
+    const row = await prisma.slave.findUniqueOrThrow({ where: { id } })
     expect(row.model).toBe('claude-opus')
     expect(row.provider).toBe('claude_code')
   })
 
   it('refuses a model with no provider to run it', async (): Promise<void> => {
-    const { id } = await seedAgent()
+    const { id } = await seedSlave()
 
-    const result = await setAgentModel(id, 'some-model', null)
+    const result = await setSlaveModel(id, 'some-model', null)
 
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.error).toEqual({ kind: 'model_without_provider' })
-    const row = await prisma.agent.findUniqueOrThrow({ where: { id } })
+    const row = await prisma.slave.findUniqueOrThrow({ where: { id } })
     expect(row.model).toBeNull()
     expect(row.provider).toBeNull()
   })
 
   it('refuses a provider with no model, the same way', async (): Promise<void> => {
-    const { id } = await seedAgent()
+    const { id } = await seedSlave()
 
-    const result = await setAgentModel(id, null, 'claude_code')
+    const result = await setSlaveModel(id, null, 'claude_code')
 
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.error).toEqual({ kind: 'model_without_provider' })
-    const row = await prisma.agent.findUniqueOrThrow({ where: { id } })
+    const row = await prisma.slave.findUniqueOrThrow({ where: { id } })
     expect(row.model).toBeNull()
     expect(row.provider).toBeNull()
   })
 
   it('refuses a provider kind nothing is configured for', async (): Promise<void> => {
-    const { id } = await seedAgent()
+    const { id } = await seedSlave()
 
-    const result = await setAgentModel(id, 'm', 'nope' as never)
+    const result = await setSlaveModel(id, 'm', 'nope' as never)
 
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.error).toEqual({ kind: 'invalid_provider', provider: 'nope' })
-    const row = await prisma.agent.findUniqueOrThrow({ where: { id } })
+    const row = await prisma.slave.findUniqueOrThrow({ where: { id } })
     expect(row.model).toBeNull()
     expect(row.provider).toBeNull()
   })
 
   it('clears both halves of the pair together', async (): Promise<void> => {
-    const { id } = await seedAgent()
-    await setAgentModel(id, 'claude-opus', 'claude_code')
+    const { id } = await seedSlave()
+    await setSlaveModel(id, 'claude-opus', 'claude_code')
 
-    const result = await setAgentModel(id, null, null)
+    const result = await setSlaveModel(id, null, null)
 
     expect(result.ok).toBe(true)
-    const agent = await prisma.agent.findUniqueOrThrow({ where: { id } })
-    expect(agent.model).toBeNull()
-    expect(agent.provider).toBeNull()
+    const slave = await prisma.slave.findUniqueOrThrow({ where: { id } })
+    expect(slave.model).toBeNull()
+    expect(slave.provider).toBeNull()
   })
 })
 
@@ -720,15 +720,15 @@ describe('setAgentModel', () => {
  * that silently stopped meaning anything.
  *
  * There are exactly two reachable sites, and they are the two verbs that can bind a provider to a
- * workspace: `assignCompany` (materializes a roster into one) and `setAgentModel` (pins a pair on
- * a worker that is already in one). `createTemplate` and `addCompanyAgent` are deliberately NOT
+ * workspace: `assignCompany` (materializes a roster into one) and `setSlaveModel` (pins a pair on
+ * a worker that is already in one). `createTemplate` and `addCompanySlave` are deliberately NOT
  * checked -- see the boundary comment in `org.ts` -- because a company is assignable to any
  * workspace, so no budget is knowable at their write time.
  */
 describe('write-time budget admission', () => {
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Agent", "Team", "Workspace", "CompanyAgent", "CompanyTeam", "Company", "AgentTemplate" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
     )
   })
 
@@ -749,14 +749,14 @@ describe('write-time budget admission', () => {
   async function rosterOn(provider: 'claude_code' | 'cursor' | null): Promise<{ companyId: string }> {
     const company = await prisma.company.create({ data: { name: 'Acme Corp' } })
     const team = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Engineering' } })
-    const template = await prisma.agentTemplate.create({
+    const template = await prisma.slaveTemplate.create({
       data: {
         name: 'Backend Engineer',
         role: 'backend',
         ...(provider === null ? {} : { defaultModel: 'some-model', provider }),
       },
     })
-    await prisma.companyAgent.create({ data: { companyTeamId: team.id, templateId: template.id, name: 'Atlas' } })
+    await prisma.companySlave.create({ data: { companyTeamId: team.id, templateId: template.id, name: 'Atlas' } })
     return { companyId: company.id }
   }
 
@@ -780,7 +780,7 @@ describe('write-time budget admission', () => {
       const ws = await prisma.workspace.findUniqueOrThrow({ where: { id: workspace.id } })
       expect(ws.companyId).toBeNull()
       expect(await prisma.team.count({ where: { workspaceId: workspace.id } })).toBe(0)
-      expect(await prisma.agent.count()).toBe(0)
+      expect(await prisma.slave.count()).toBe(0)
       expect(await prisma.executionEvent.count({ where: { workspaceId: workspace.id } })).toBe(0)
     })
 
@@ -791,7 +791,7 @@ describe('write-time budget admission', () => {
       const result = await assignCompany(workspace.id, companyId)
 
       expect(result.ok).toBe(true)
-      expect(await prisma.agent.count()).toBe(1)
+      expect(await prisma.slave.count()).toBe(1)
     })
 
     it('admits a cost-reporting roster into a budgeted workspace', async (): Promise<void> => {
@@ -801,7 +801,7 @@ describe('write-time budget admission', () => {
       const result = await assignCompany(workspace.id, companyId)
 
       expect(result.ok).toBe(true)
-      expect(await prisma.agent.count()).toBe(1)
+      expect(await prisma.slave.count()).toBe(1)
     })
 
     it("refuses when the WORKSPACE's own configured default is the cost-blind one", async (): Promise<void> => {
@@ -817,7 +817,7 @@ describe('write-time budget admission', () => {
 
       expect(result.ok).toBe(false)
       if (!result.ok) expect(result.error).toMatchObject({ kind: 'unmeasurable_budget', provider: 'cursor' })
-      expect(await prisma.agent.count()).toBe(0)
+      expect(await prisma.slave.count()).toBe(0)
     })
 
     it('does not refuse a roster whose runtime resolves to nothing at all', async (): Promise<void> => {
@@ -831,75 +831,75 @@ describe('write-time budget admission', () => {
       const result = await assignCompany(workspace.id, companyId)
 
       expect(result.ok).toBe(true)
-      expect(await prisma.agent.count()).toBe(1)
+      expect(await prisma.slave.count()).toBe(1)
     })
   })
 
-  describe('setAgentModel', () => {
-    async function agentIn(budgetUsd: number | null): Promise<{ id: string }> {
+  describe('setSlaveModel', () => {
+    async function slaveIn(budgetUsd: number | null): Promise<{ id: string }> {
       const workspace = await workspaceWithBudget(budgetUsd)
       const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-      const agent = await prisma.agent.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
-      return { id: agent.id }
+      const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
+      return { id: slave.id }
     }
 
     it('refuses pinning a cost-blind runtime on a worker in a budgeted workspace, changing nothing', async (): Promise<void> => {
-      const { id } = await agentIn(20)
+      const { id } = await slaveIn(20)
 
-      const result = await setAgentModel(id, 'some-model', 'cursor')
+      const result = await setSlaveModel(id, 'some-model', 'cursor')
 
       expect(result.ok).toBe(false)
       if (!result.ok) {
         expect(result.error).toMatchObject({ kind: 'unmeasurable_budget', provider: 'cursor' })
         expect(refusalText(result.error)).toBe('a budget needs a provider that reports cost')
       }
-      const row = await prisma.agent.findUniqueOrThrow({ where: { id } })
+      const row = await prisma.slave.findUniqueOrThrow({ where: { id } })
       expect(row.model).toBeNull()
       expect(row.provider).toBeNull()
     })
 
     it('allows the same pair on a worker whose workspace has no budget', async (): Promise<void> => {
-      const { id } = await agentIn(null)
+      const { id } = await slaveIn(null)
 
-      const result = await setAgentModel(id, 'some-model', 'cursor')
+      const result = await setSlaveModel(id, 'some-model', 'cursor')
 
       expect(result.ok).toBe(true)
-      const row = await prisma.agent.findUniqueOrThrow({ where: { id } })
+      const row = await prisma.slave.findUniqueOrThrow({ where: { id } })
       expect(row.model).toBe('some-model')
       expect(row.provider).toBe('cursor')
     })
 
     it('allows a cost-reporting pair in a budgeted workspace', async (): Promise<void> => {
-      const { id } = await agentIn(20)
+      const { id } = await slaveIn(20)
 
-      const result = await setAgentModel(id, 'claude-opus', 'claude_code')
+      const result = await setSlaveModel(id, 'claude-opus', 'claude_code')
 
       expect(result.ok).toBe(true)
-      const row = await prisma.agent.findUniqueOrThrow({ where: { id } })
+      const row = await prisma.slave.findUniqueOrThrow({ where: { id } })
       expect(row.provider).toBe('claude_code')
     })
 
     it('still lets a budgeted workspace CLEAR an override, which pins no runtime at all', async (): Promise<void> => {
-      const { id } = await agentIn(20)
-      await setAgentModel(id, 'claude-opus', 'claude_code')
+      const { id } = await slaveIn(20)
+      await setSlaveModel(id, 'claude-opus', 'claude_code')
 
-      const result = await setAgentModel(id, null, null)
+      const result = await setSlaveModel(id, null, null)
 
       expect(result.ok).toBe(true)
-      const row = await prisma.agent.findUniqueOrThrow({ where: { id } })
+      const row = await prisma.slave.findUniqueOrThrow({ where: { id } })
       expect(row.model).toBeNull()
       expect(row.provider).toBeNull()
     })
 
-    it('refuses an unknown agent before it can look up a workspace that is not there', async (): Promise<void> => {
-      // The new read is on the agent's workspace, so a missing agent must still produce
-      // `agent_not_found` and not some downstream failure about a null workspace.
+    it('refuses an unknown slave before it can look up a workspace that is not there', async (): Promise<void> => {
+      // The new read is on the slave's workspace, so a missing slave must still produce
+      // `slave_not_found` and not some downstream failure about a null workspace.
       const unknown = '00000000-0000-4000-8000-000000000000'
 
-      const result = await setAgentModel(unknown, 'some-model', 'cursor')
+      const result = await setSlaveModel(unknown, 'some-model', 'cursor')
 
       expect(result.ok).toBe(false)
-      if (!result.ok) expect(result.error).toEqual({ kind: 'agent_not_found', agentId: unknown })
+      if (!result.ok) expect(result.error).toEqual({ kind: 'slave_not_found', slaveId: unknown })
     })
   })
 })

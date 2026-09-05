@@ -20,7 +20,7 @@ export type ControlRefusal =
   /**
    * The run's row says `paused` but its process is still alive (M13 §3.2). The pump's ordering
    * (Task 1) is supposed to make this unreachable; this is the SECOND lock (Decision 3), and it is
-   * cheap: it turns a future ordering regression into a refusal instead of two agents on one branch.
+   * cheap: it turns a future ordering regression into a refusal instead of two slaves on one branch.
    */
   | { readonly kind: 'run_still_stopping'; readonly runId: string }
   /** `requestPause` claimed the run but `signalPause` threw; the claim was rolled back (M13 §3.4). */
@@ -57,30 +57,30 @@ export type ControlRefusal =
    */
   | { readonly kind: 'unmeasurable_budget'; readonly workspaceId: string; readonly provider: string }
   | { readonly kind: 'company_already_assigned'; readonly workspaceId: string; readonly companyName: string }
-  | { readonly kind: 'agent_not_found'; readonly agentId: string }
+  | { readonly kind: 'slave_not_found'; readonly slaveId: string }
   /** A role was set (or re-set) to blank text (M23 D1). */
   | { readonly kind: 'invalid_role' }
   /**
-   * `setAgentRole` on an agent that holds a run in a `NON_TERMINAL_RUN_STATUSES` status (M23 D1):
-   * the scheduler matches `Task.requiredRole` to `Agent.role` by equality, so re-rolling an agent
+   * `setSlaveRole` on an slave that holds a run in a `NON_TERMINAL_RUN_STATUSES` status (M23 D1):
+   * the scheduler matches `Task.requiredRole` to `Slave.role` by equality, so re-rolling an slave
    * mid-run would silently strand its dispatch decision.
    */
-  | { readonly kind: 'agent_run_active'; readonly agentId: string; readonly runId: string }
-  /** `deleteAgent` on an agent that has any `AgentRun` history at all (M23 D1) -- terminal or
+  | { readonly kind: 'slave_run_active'; readonly slaveId: string; readonly runId: string }
+  /** `deleteSlave` on an slave that has any `SlaveRun` history at all (M23 D1) -- terminal or
    *  not: the row is kept as the anchor for its own past runs rather than cascade-deleting them. */
-  | { readonly kind: 'agent_has_runs'; readonly agentId: string; readonly runs: number }
+  | { readonly kind: 'slave_has_runs'; readonly slaveId: string; readonly runs: number }
   /** `renameTeam`/`deleteTeam` on a `teamId` no `Team` row carries (M23 D1). */
   | { readonly kind: 'team_not_found'; readonly teamId: string }
-  /** `deleteTeam` on a team that still has agents on its roster (M23 D1). */
-  | { readonly kind: 'team_not_empty'; readonly teamId: string; readonly agents: number }
-  /** `moveAgent`'s target department belongs to another project than the agent (M25 §3.1). */
-  | { readonly kind: 'team_workspace_mismatch'; readonly agentId: string; readonly teamId: string }
-  /** `moveCompanyAgent`'s target department template belongs to another company than the catalog
-   *  agent (M25 §3.1). */
-  | { readonly kind: 'company_mismatch'; readonly companyAgentId: string; readonly companyTeamId: string }
-  /** `deleteCompanyTeam` on a department template that still has catalog agents on its roster
+  /** `deleteTeam` on a team that still has slaves on its roster (M23 D1). */
+  | { readonly kind: 'team_not_empty'; readonly teamId: string; readonly slaves: number }
+  /** `moveSlave`'s target department belongs to another project than the slave (M25 §3.1). */
+  | { readonly kind: 'team_workspace_mismatch'; readonly slaveId: string; readonly teamId: string }
+  /** `moveCompanySlave`'s target department template belongs to another company than the catalog
+   *  slave (M25 §3.1). */
+  | { readonly kind: 'company_mismatch'; readonly companySlaveId: string; readonly companyTeamId: string }
+  /** `deleteCompanyTeam` on a department template that still has catalog slaves on its roster
    *  (M25 §3.1) -- the template counterpart of `team_not_empty`. */
-  | { readonly kind: 'company_team_not_empty'; readonly companyTeamId: string; readonly agents: number }
+  | { readonly kind: 'company_team_not_empty'; readonly companyTeamId: string; readonly slaves: number }
   /** A skill id that no `Skill` row carries (M14 §4.3). */
   | { readonly kind: 'skill_not_found'; readonly skillId: string }
   /** A permission tool outside `PERMISSION_TOOLS` (M14 §5.7). */
@@ -172,24 +172,24 @@ export function refusalText(refusal: ControlRefusal): string {
       return 'a budget needs a provider that reports cost'
     case 'company_already_assigned':
       return `this workspace is already run by ${refusal.companyName}`
-    case 'agent_not_found':
-      return `no agent with id ${refusal.agentId}`
+    case 'slave_not_found':
+      return `no slave with id ${refusal.slaveId}`
     case 'invalid_role':
       return 'a role must be a non-empty text'
-    case 'agent_run_active':
-      return `agent ${refusal.agentId} has a live run (${refusal.runId}); change its role when the run has ended`
-    case 'agent_has_runs':
-      return `agent ${refusal.agentId} has ${refusal.runs} run(s) in history and stays (rename it or leave it idle)`
+    case 'slave_run_active':
+      return `slave ${refusal.slaveId} has a live run (${refusal.runId}); change its role when the run has ended`
+    case 'slave_has_runs':
+      return `slave ${refusal.slaveId} has ${refusal.runs} run(s) in history and stays (rename it or leave it idle)`
     case 'team_not_found':
       return `no team with id ${refusal.teamId}`
     case 'team_not_empty':
-      return `team ${refusal.teamId} still has ${refusal.agents} agent(s)`
+      return `team ${refusal.teamId} still has ${refusal.slaves} slave(s)`
     case 'team_workspace_mismatch':
-      return `department ${refusal.teamId} belongs to another project than agent ${refusal.agentId}`
+      return `department ${refusal.teamId} belongs to another project than slave ${refusal.slaveId}`
     case 'company_mismatch':
-      return `department template ${refusal.companyTeamId} belongs to another company than catalog agent ${refusal.companyAgentId}`
+      return `department template ${refusal.companyTeamId} belongs to another company than catalog slave ${refusal.companySlaveId}`
     case 'company_team_not_empty':
-      return `department template ${refusal.companyTeamId} still has ${refusal.agents} member(s); move them first`
+      return `department template ${refusal.companyTeamId} still has ${refusal.slaves} member(s); move them first`
     case 'skill_not_found':
       return `no skill with id ${refusal.skillId}`
     case 'invalid_tool':

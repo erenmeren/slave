@@ -5,7 +5,7 @@ import type { ProviderKind } from './types.js'
 
 /**
  * The persisted facts any process needs in order to signal a pause. Both columns already exist
- * on `AgentRun` (`Checkpoint.pauseFlagPath` / `AgentRun.pid`) -- nothing new is stored for this.
+ * on `SlaveRun` (`Checkpoint.pauseFlagPath` / `SlaveRun.pid`) -- nothing new is stored for this.
  */
 export interface PausableRunState {
   readonly pauseFlagPath: string
@@ -16,10 +16,10 @@ export interface PausableRunState {
  * Signal a pause from ANY process, given only what the run's row persists.
  *
  * Pausing is a cross-process control signal (spec §11): the caller here is usually not the
- * process that spawned the run's child and holds its live `AgentRuntimeAdapter` state -- an
+ * process that spawned the run's child and holds its live `SlaveRuntimeAdapter` state -- an
  * operator's CLI invocation, or a web request, are both new processes with no such state, and no
  * adapter-instance method could ever serve them (M12 Task 4 retired the one that tried,
- * `AgentRuntimeAdapter.requestPause`, for exactly this reason). So this function deliberately
+ * `SlaveRuntimeAdapter.requestPause`, for exactly this reason). So this function deliberately
  * takes no adapter instance, no constructor options, and touches no in-memory run registry --
  * only `kind` and the two columns already on the row.
  *
@@ -66,7 +66,7 @@ async function signalGatedPause(state: PausableRunState, reason: string): Promis
  * actually declared the capability, not a vendor this branch happened to be written for.
  *
  * `ProviderCapabilities.canPauseMidRun` is `false` for Cursor: there is no mechanism that stops the
- * agent between tool calls and leaves it resumable in place, so the pause protocol is cancel now
+ * slave between tool calls and leaves it resumable in place, so the pause protocol is cancel now
  * and `--resume <sessionId>` later (progress.md's 4→12 ruling, and the M12 plan's own Task 12 text:
  * "cancels the process and lets `pump.ts` write the checkpoint carrying `sessionId` and
  * `provider`"). The `sessionId` that makes that resume possible is already on the run's row, and
@@ -74,7 +74,7 @@ async function signalGatedPause(state: PausableRunState, reason: string): Promis
  *
  * **The pause flag is written as well, and deliberately.** It is not redundant with the kill: the
  * two are a sequence, not alternatives. Between the moment this function signals and the moment the
- * child actually dies, the agent can still start a shell command or a file write, and
+ * child actually dies, the slave can still start a shell command or a file write, and
  * `scripts/cursor-shell-gate.sh` -- armed from this very file by `.cursor/hooks.json` -- is the only
  * thing that can stop it. Writing the flag first costs one `write` and closes that window; skipping
  * it would leave the run's last act ungated for the whole of `killWithEscalation`'s grace window

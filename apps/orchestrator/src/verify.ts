@@ -12,7 +12,7 @@ import { describeOutcome, runShellCommand } from './shell.js'
  *
  * `not_configured` and `could_not_run` are both "we did not learn anything about the work", but for
  * opposite reasons and with opposite remedies: the first is the workspace's configuration and
- * affects every task in it, the second is this task's environment. Neither is the agent's fault,
+ * affects every task in it, the second is this task's environment. Neither is the slave's fault,
  * so neither costs it an attempt. Without a discriminator both would have to overload
  * `failedCommand === null`, which already means "everything passed".
  */
@@ -34,7 +34,7 @@ export interface RunVerifyInput {
   readonly worktreePath: string
   /**
    * Where the per-command logs go. Explicit rather than derived from `worktreePath` by walking up
-   * to the repository root: the logs must not land *inside* the worktree — that is what the agent
+   * to the repository root: the logs must not land *inside* the worktree — that is what the slave
    * commits from, and Task 13 already had to move the run's settings and pause flag out for the
    * same reason — and deriving the path would silently couple verify to the worktree layout.
    */
@@ -87,7 +87,7 @@ function logPathFor(artifactDir: string, attempt: number, index: number, command
  * Stopping at the first failure rather than running the list out: later commands routinely depend
  * on earlier ones (`npm run build` then `npm test`), so continuing produces a second, misleading
  * result from a command that should never have run — and here that result is what gets handed to
- * the next agent as the thing to fix.
+ * the next slave as the thing to fix.
  */
 export async function runVerify(input: RunVerifyInput): Promise<VerifyResult> {
   const task = await prisma.task.findUniqueOrThrow({ where: { id: input.taskId } })
@@ -180,7 +180,7 @@ export async function runVerify(input: RunVerifyInput): Promise<VerifyResult> {
  * — a cancel, the sweep — concluded the run first, and their decision is the one that counts.
  */
 export async function verifyConcludedRun(runId: RunId): Promise<void> {
-  const run = await prisma.agentRun.findUnique({
+  const run = await prisma.slaveRun.findUnique({
     where: { id: runId },
     include: { task: { include: { workspace: true } } },
   })
@@ -223,7 +223,7 @@ export async function verifyConcludedRun(runId: RunId): Promise<void> {
   const result = await runVerify({
     taskId: brandTaskId(task.id),
     worktreePath: run.worktreePath,
-    // Outside the worktree — that is what the agent commits from — and per task, the same layout
+    // Outside the worktree — that is what the slave commits from — and per task, the same layout
     // verify's own tests pin.
     artifactDir: join(task.workspace.repoPath, '.slaveofai', 'artifacts', task.id),
     commands: task.workspace.verifyCommands,
@@ -265,7 +265,7 @@ export async function rejectTask(taskId: TaskId, reason: string): Promise<Reject
       data: {
         status: exhausted ? 'failed' : 'rework',
         activeRunId: null,
-        // The agent-facing channel: `buildPrompt` puts this in front of the next run as the thing
+        // The slave-facing channel: `buildPrompt` puts this in front of the next run as the thing
         // to fix first.
         lastRejectionReason: reason,
       },
@@ -327,8 +327,8 @@ export async function advance(input: AdvanceInput): Promise<void> {
     return
   }
 
-  // Neither of these is the agent's doing, so neither costs it an attempt: charging one spends the
-  // task's budget on the orchestrator's problem, and with `maxAttempts` full agent runs per task it
+  // Neither of these is the slave's doing, so neither costs it an attempt: charging one spends the
+  // task's budget on the orchestrator's problem, and with `maxAttempts` full slave runs per task it
   // would spend the workspace's too.
   if (input.result.kind !== 'failed') {
     const guardrail = input.result.kind === 'not_configured' ? 'verify_not_configured' : 'verify_could_not_run'

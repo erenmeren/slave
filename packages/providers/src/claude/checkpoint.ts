@@ -56,7 +56,7 @@ export interface Checkpoint {
   readonly numTurns: number
   /**
    * From the terminal `result` event's `permission_denials`. On resume the model re-attempted
-   * exactly these calls, in order -- this is the operator's view of what the agent was about to
+   * exactly these calls, in order -- this is the operator's view of what the slave was about to
    * do (ADR 0001 §5, findings 3.5, 4.5-ii).
    */
   readonly deniedToolUseIds: readonly string[]
@@ -96,7 +96,7 @@ export interface Checkpoint {
    * `resolveRuntime` (M12 Task 8; defined in `packages/control/src/runtime.ts` since Task 9,
    * re-exported from `apps/orchestrator/src/model.ts`) and never re-resolved on resume -- a resumed
    * run must continue with the SAME model it started with, never whatever an operator's
-   * `setAgentModel` set most recently, so a mid-run model change affects only the run's NEXT
+   * `setSlaveModel` set most recently, so a mid-run model change affects only the run's NEXT
    * dispatch. Optional, not `string | null`: a legacy checkpoint written before this field existed
    * carries no value at all rather than an explicit null, and `resume()` treats both the same way
    * -- no `--model` flag is appended.

@@ -18,7 +18,7 @@ describe('signalPause', () => {
     const dir = mkdtempSync(join(tmpdir(), 'slaveofai-signal-pause-'))
     const pauseFlagPath = join(dir, 'pause.flag')
 
-    // A `pid` unrelated to any real process, and no `AgentRuntimeAdapter` in sight -- proof this
+    // A `pid` unrelated to any real process, and no `SlaveRuntimeAdapter` in sight -- proof this
     // is a pure, stateless dispatch on `kind` and the row's own persisted facts.
     await signalPause('claude_code', { pauseFlagPath, pid: null }, 'budget guardrail')
 

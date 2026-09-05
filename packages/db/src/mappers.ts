@@ -1,5 +1,5 @@
 import {
-  agentId,
+  slaveId,
   err,
   ok,
   parseExecutionEvent,
@@ -10,13 +10,13 @@ import {
   type RunState,
   type TaskState,
 } from '@slave-of-ai/domain'
-import type { AgentRunRow, ExecutionEventRow, TaskRow } from './client.js'
+import type { SlaveRunRow, ExecutionEventRow, TaskRow } from './client.js'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE } from './enums.js'
 
 export function toTaskState(row: TaskRow): TaskState {
   return {
     status: row.status,
-    assigneeId: row.assigneeId === null ? null : agentId(row.assigneeId),
+    assigneeId: row.assigneeId === null ? null : slaveId(row.assigneeId),
     activeRunId: row.activeRunId === null ? null : runId(row.activeRunId),
     attempt: row.attempt,
     maxAttempts: row.maxAttempts,
@@ -24,7 +24,7 @@ export function toTaskState(row: TaskRow): TaskState {
   }
 }
 
-export function toRunState(row: AgentRunRow): RunState {
+export function toRunState(row: SlaveRunRow): RunState {
   return {
     status: row.status,
     toolCalls: row.toolCalls,
@@ -50,7 +50,7 @@ export function toExecutionEvent(row: ExecutionEventRow): Result<ExecutionEvent,
     type: domainType,
     workspaceId: row.workspaceId,
     ...(row.taskId === null ? {} : { taskId: taskId(row.taskId) }),
-    ...(row.agentId === null ? {} : { agentId: agentId(row.agentId) }),
+    ...(row.slaveId === null ? {} : { slaveId: slaveId(row.slaveId) }),
     ...(row.runId === null ? {} : { runId: runId(row.runId) }),
     ...(row.userId === null ? {} : { userId: row.userId }),
     actor: row.actor,

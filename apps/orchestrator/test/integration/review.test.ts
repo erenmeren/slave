@@ -35,7 +35,7 @@ function makeRepo(): string {
 interface Fixture {
   readonly workspaceId: string
   readonly taskId: string
-  readonly agentId: string
+  readonly slaveId: string
   readonly repoPath: string
 }
 
@@ -50,12 +50,12 @@ async function seed(): Promise<Fixture> {
       setupCommands: [],
     },
   })
-  // M12 Task 8: no agent in this file names a model anywhere in the chain, so `resolveRuntime`
+  // M12 Task 8: no slave in this file names a model anywhere in the chain, so `resolveRuntime`
   // falls all the way to the workspace default -- which needs a `ProviderConfiguration` row to
   // exist at all, or every dispatch here refuses instead of starting the run under test.
   await prisma.providerConfiguration.create({ data: { workspaceId: workspace.id, kind: 'claude_code', settings: {} } })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const agent = await prisma.agent.create({
+  const slave = await prisma.slave.create({
     data: { teamId: team.id, name: 'Alex', role: 'backend' },
   })
   const task = await prisma.task.create({
@@ -68,7 +68,7 @@ async function seed(): Promise<Fixture> {
       maxAttempts: workspace.maxAttempts,
     },
   })
-  return { workspaceId: workspace.id, taskId: task.id, agentId: agent.id, repoPath }
+  return { workspaceId: workspace.id, taskId: task.id, slaveId: slave.id, repoPath }
 }
 
 async function eventTypesFor(workspaceId: string): Promise<readonly DomainEventType[]> {
@@ -88,7 +88,7 @@ function singleAdapterRegistry(adapter: ClaudeCodeAdapter): AdapterRegistry {
  * Drives a real `tick` with the `complete` fixture to give the seeded task a real worktree, branch
  * and a `succeeded` implementation run -- landing it in `reviewing` the way production does since
  * Task 8's flip (verify green enters review directly; nothing here parks it there by hand anymore).
- * Cheaper and more real than hand-provisioning a worktree and forging an `AgentRun` row: this is the
+ * Cheaper and more real than hand-provisioning a worktree and forging an `SlaveRun` row: this is the
  * exact shape `dispatchReviews` will actually see in production.
  */
 async function seedReviewingTask(fixture: Fixture, reviewFixture = 'review-approve'): Promise<TickDeps> {
@@ -115,10 +115,10 @@ async function seedReviewingTask(fixture: Fixture, reviewFixture = 'review-appro
   }
 }
 
-/** Adds a `reviewer`-role agent to the fixture's one team, idle and ready to be picked up. */
+/** Adds a `reviewer`-role slave to the fixture's one team, idle and ready to be picked up. */
 async function addReviewer(): Promise<void> {
   const team = await prisma.team.findFirstOrThrow()
-  await prisma.agent.create({ data: { teamId: team.id, name: 'Riley', role: 'reviewer' } })
+  await prisma.slave.create({ data: { teamId: team.id, name: 'Riley', role: 'reviewer' } })
 }
 
 async function eventsOf(
@@ -134,7 +134,7 @@ describe('dispatchReviews', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
     repos.push(fixture.repoPath)
@@ -152,12 +152,12 @@ describe('dispatchReviews', () => {
   it('starts a review run for a reviewing task with an idle reviewer', async (): Promise<void> => {
     const reviewDeps = await seedReviewingTask(fixture)
     const team = await prisma.team.findFirstOrThrow()
-    await prisma.agent.create({ data: { teamId: team.id, name: 'Riley', role: 'reviewer' } })
+    await prisma.slave.create({ data: { teamId: team.id, name: 'Riley', role: 'reviewer' } })
 
     const started = await dispatchReviews(reviewDeps)
 
     expect(started).toHaveLength(1)
-    const run = await prisma.agentRun.findFirstOrThrow({ where: { kind: 'review' } })
+    const run = await prisma.slaveRun.findFirstOrThrow({ where: { kind: 'review' } })
     expect(run.kind).toBe('review')
     expect(run.taskId).toBe(fixture.taskId)
 
@@ -178,14 +178,14 @@ describe('dispatchReviews', () => {
     // reached review rather than that the review itself was refused.
     const reviewDeps = await seedReviewingTask(fixture)
     const team = await prisma.team.findFirstOrThrow()
-    const reviewer = await prisma.agent.create({ data: { teamId: team.id, name: 'Riley', role: 'reviewer' } })
-    await prisma.agent.update({ where: { id: reviewer.id }, data: { model: 'whatever', provider: 'cursor' } })
+    const reviewer = await prisma.slave.create({ data: { teamId: team.id, name: 'Riley', role: 'reviewer' } })
+    await prisma.slave.update({ where: { id: reviewer.id }, data: { model: 'whatever', provider: 'cursor' } })
     await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { budgetUsd: 20 } })
 
     const started = await dispatchReviews(reviewDeps)
 
     expect(started).toEqual([])
-    const run = await prisma.agentRun.findFirstOrThrow({ where: { kind: 'review' } })
+    const run = await prisma.slaveRun.findFirstOrThrow({ where: { kind: 'review' } })
     expect(run.status).toBe('failed')
     const failures = await prisma.executionEvent.findMany({
       where: { workspaceId: fixture.workspaceId, runId: run.id, type: 'run_failed' },
@@ -199,7 +199,7 @@ describe('dispatchReviews', () => {
   it('starts nothing a second time while the review run it started is still live', async (): Promise<void> => {
     const reviewDeps = await seedReviewingTask(fixture)
     const team = await prisma.team.findFirstOrThrow()
-    await prisma.agent.create({ data: { teamId: team.id, name: 'Riley', role: 'reviewer' } })
+    await prisma.slave.create({ data: { teamId: team.id, name: 'Riley', role: 'reviewer' } })
 
     const first = await dispatchReviews(reviewDeps)
     expect(first).toHaveLength(1)
@@ -207,7 +207,7 @@ describe('dispatchReviews', () => {
     const second = await dispatchReviews(reviewDeps)
 
     expect(second).toEqual([])
-    expect(await prisma.agentRun.count({ where: { kind: 'review' } })).toBe(1)
+    expect(await prisma.slaveRun.count({ where: { kind: 'review' } })).toBe(1)
   })
 
   it('warns once, not once per tick, for a reviewing task with no usable implementation run', async (): Promise<void> => {
@@ -231,9 +231,9 @@ describe('dispatchReviews', () => {
     warn.mockRestore()
   })
 
-  it('escalates once with no reviewer-role agent in the workspace, and starts nothing', async (): Promise<void> => {
+  it('escalates once with no reviewer-role slave in the workspace, and starts nothing', async (): Promise<void> => {
     const reviewDeps = await seedReviewingTask(fixture)
-    // No reviewer-role agent exists -- only the `backend` agent `seed()` created.
+    // No reviewer-role slave exists -- only the `backend` slave `seed()` created.
 
     const first = await dispatchReviews(reviewDeps)
     expect(first).toEqual([])
@@ -241,7 +241,7 @@ describe('dispatchReviews', () => {
     const second = await dispatchReviews(reviewDeps)
     expect(second).toEqual([])
 
-    expect(await prisma.agentRun.count({ where: { kind: 'review' } })).toBe(0)
+    expect(await prisma.slaveRun.count({ where: { kind: 'review' } })).toBe(0)
     const guardrails = await prisma.executionEvent.findMany({
       where: { workspaceId: fixture.workspaceId, type: 'guardrail_tripped' },
     })
@@ -254,15 +254,15 @@ describe('dispatchReviews', () => {
   it('starts nothing once two review runs newer than the implementation run have failed', async (): Promise<void> => {
     const reviewDeps = await seedReviewingTask(fixture)
     const team = await prisma.team.findFirstOrThrow()
-    await prisma.agent.create({ data: { teamId: team.id, name: 'Riley', role: 'reviewer' } })
-    const reviewer = await prisma.agent.findFirstOrThrow({ where: { role: 'reviewer' } })
+    await prisma.slave.create({ data: { teamId: team.id, name: 'Riley', role: 'reviewer' } })
+    const reviewer = await prisma.slave.findFirstOrThrow({ where: { role: 'reviewer' } })
 
-    const latestImpl = await prisma.agentRun.findFirstOrThrow({ where: { kind: 'implementation' } })
+    const latestImpl = await prisma.slaveRun.findFirstOrThrow({ where: { kind: 'implementation' } })
     const after = (offsetMs: number): Date => new Date(latestImpl.startedAt.getTime() + offsetMs)
-    await prisma.agentRun.create({
+    await prisma.slaveRun.create({
       data: {
         taskId: fixture.taskId,
-        agentId: reviewer.id,
+        slaveId: reviewer.id,
         kind: 'review',
         status: 'failed',
         startedAt: after(1_000),
@@ -270,10 +270,10 @@ describe('dispatchReviews', () => {
         endedAt: after(2_000),
       },
     })
-    await prisma.agentRun.create({
+    await prisma.slaveRun.create({
       data: {
         taskId: fixture.taskId,
-        agentId: reviewer.id,
+        slaveId: reviewer.id,
         kind: 'review',
         status: 'failed',
         startedAt: after(3_000),
@@ -285,13 +285,13 @@ describe('dispatchReviews', () => {
     const started = await dispatchReviews(reviewDeps)
 
     expect(started).toEqual([])
-    expect(await prisma.agentRun.count({ where: { kind: 'review' } })).toBe(2)
+    expect(await prisma.slaveRun.count({ where: { kind: 'review' } })).toBe(2)
   })
 
   it('concludes the run failed instead of throwing when the diff itself cannot be produced', async (): Promise<void> => {
     const reviewDeps = await seedReviewingTask(fixture)
     const team = await prisma.team.findFirstOrThrow()
-    await prisma.agent.create({ data: { teamId: team.id, name: 'Riley', role: 'reviewer' } })
+    await prisma.slave.create({ data: { teamId: team.id, name: 'Riley', role: 'reviewer' } })
     // A branch recorded on the task but gone from git itself -- the step-2 null check cannot catch
     // it, so the dispatch reaches `git diff` and the diff fails.
     await prisma.task.update({ where: { id: fixture.taskId }, data: { branch: 'no-such-branch' } })
@@ -299,7 +299,7 @@ describe('dispatchReviews', () => {
     const started = await dispatchReviews(reviewDeps)
 
     expect(started).toEqual([])
-    const run = await prisma.agentRun.findFirstOrThrow({ where: { kind: 'review' } })
+    const run = await prisma.slaveRun.findFirstOrThrow({ where: { kind: 'review' } })
     expect(run.status).toBe('failed')
     expect(run.terminalAt).not.toBeNull()
     const failures = await prisma.executionEvent.findMany({ where: { runId: run.id, type: 'run_failed' } })
@@ -319,7 +319,7 @@ describe('dispatchReviews', () => {
     const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
     expect(task.status).toBe('merging')
 
-    const run = await prisma.agentRun.findFirstOrThrow({ where: { kind: 'review' } })
+    const run = await prisma.slaveRun.findFirstOrThrow({ where: { kind: 'review' } })
     expect(run.status).toBe('succeeded')
 
     const approved = await eventsOf(fixture.workspaceId, 'task_review_approved')
@@ -360,7 +360,7 @@ describe('dispatchReviews', () => {
 
     // The run row stays `succeeded` after a reject, so a crashed-and-restarted daemon (or any
     // duplicate pump settlement) can legally call the conclusion again for the same run.
-    const run = await prisma.agentRun.findFirstOrThrow({ where: { kind: 'review' } })
+    const run = await prisma.slaveRun.findFirstOrThrow({ where: { kind: 'review' } })
     await concludeReview(brandRunId(run.id))
 
     const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
@@ -396,7 +396,7 @@ describe('dispatchReviews', () => {
     expect(first).toHaveLength(1)
     await drainPumps()
 
-    const firstRun = await prisma.agentRun.findFirstOrThrow({ where: { kind: 'review' } })
+    const firstRun = await prisma.slaveRun.findFirstOrThrow({ where: { kind: 'review' } })
     expect(firstRun.status).toBe('failed')
     const afterFirst = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
     expect(afterFirst.status).toBe('reviewing')
@@ -412,13 +412,13 @@ describe('dispatchReviews', () => {
 
     const afterSecond = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
     expect(afterSecond.status).toBe('reviewing')
-    expect(await prisma.agentRun.count({ where: { kind: 'review' } })).toBe(2)
-    expect(await prisma.agentRun.count({ where: { kind: 'review', status: 'failed' } })).toBe(2)
+    expect(await prisma.slaveRun.count({ where: { kind: 'review' } })).toBe(2)
+    expect(await prisma.slaveRun.count({ where: { kind: 'review', status: 'failed' } })).toBe(2)
 
     // No third dispatch: the retry cap bounds it.
     const third = await dispatchReviews(reviewDeps)
     expect(third).toEqual([])
-    expect(await prisma.agentRun.count({ where: { kind: 'review' } })).toBe(2)
+    expect(await prisma.slaveRun.count({ where: { kind: 'review' } })).toBe(2)
   })
 
   it('recovers after one invalid verdict when the next review approves', async (): Promise<void> => {

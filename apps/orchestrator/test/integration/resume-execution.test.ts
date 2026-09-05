@@ -37,7 +37,7 @@ function makeRepo(): string {
 interface Fixture {
   readonly workspaceId: string
   readonly taskId: string
-  readonly agentId: string
+  readonly slaveId: string
   readonly repoPath: string
 }
 
@@ -52,12 +52,12 @@ async function seed(): Promise<Fixture> {
       setupCommands: [],
     },
   })
-  // M12 Task 8: no agent in this file names a model anywhere in the chain, so `resolveRuntime`
+  // M12 Task 8: no slave in this file names a model anywhere in the chain, so `resolveRuntime`
   // falls all the way to the workspace default -- which needs a `ProviderConfiguration` row to
   // exist at all, or every dispatch here refuses instead of starting the run under test.
   await prisma.providerConfiguration.create({ data: { workspaceId: workspace.id, kind: 'claude_code', settings: {} } })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const agent = await prisma.agent.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
   const task = await prisma.task.create({
     data: {
       workspaceId: workspace.id,
@@ -68,7 +68,7 @@ async function seed(): Promise<Fixture> {
       maxAttempts: workspace.maxAttempts,
     },
   })
-  return { workspaceId: workspace.id, taskId: task.id, agentId: agent.id, repoPath }
+  return { workspaceId: workspace.id, taskId: task.id, slaveId: slave.id, repoPath }
 }
 
 /** An adapter over the fake CLI, one fixture per spawn behaviour. */
@@ -101,7 +101,7 @@ describe('executing a resume intent from the daemon', () => {
       registry: singleAdapterRegistry(fakeAdapter('hook-deny')),
     })
     await drainPumps()
-    const run = await prisma.agentRun.findFirstOrThrow()
+    const run = await prisma.slaveRun.findFirstOrThrow()
     expect(run.status).toBe('paused')
     await prisma.checkpoint.findUniqueOrThrow({ where: { runId: run.id } })
     return run.id
@@ -109,7 +109,7 @@ describe('executing a resume intent from the daemon', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Approval", "AgentMessage", "Artifact", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Approval", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
     repos.push(fixture.repoPath)
@@ -137,7 +137,7 @@ describe('executing a resume intent from the daemon', () => {
     await tick({ workspaceId: brandWorkspaceId(fixture.workspaceId), registry: singleAdapterRegistry(adapter) })
     await drainPumps()
 
-    const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: runId } })
+    const after = await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId } })
     // Exact, not a union: `env-echo` always succeeds (gate-fix B review round 1, Critical 1) --
     // a union of `['working', 'succeeded']` passed even while a regression stranded every resumed
     // run in `resuming` for its entire life, because the pump's terminal-outcome write overwrites
@@ -171,7 +171,7 @@ describe('executing a resume intent from the daemon', () => {
 
     // The matrix edit happens BETWEEN pause and resume -- exactly the window the file must be
     // rewritten across, not merely written once at the original dispatch.
-    await prisma.agentPermission.create({ data: { agentId: fixture.agentId, tool: 'run tests', mode: 'deny' } })
+    await prisma.slavePermission.create({ data: { slaveId: fixture.slaveId, tool: 'run tests', mode: 'deny' } })
 
     expect((await requestResume(runId, MARKER, 'web')).ok).toBe(true)
     await tick({
@@ -220,8 +220,8 @@ describe('executing a resume intent from the daemon', () => {
     })
     await drainPumps()
 
-    const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: runId } })
-    // A halt is raised by a gate failure; relaunching an agent whose gate may still be broken is
+    const after = await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId } })
+    // A halt is raised by a gate failure; relaunching an slave whose gate may still be broken is
     // the recurrence the halt exists to bound.
     expect(after.status).toBe('paused')
     expect(after.resumeRequestedAt).not.toBeNull() // still visible, still waiting
@@ -258,8 +258,8 @@ describe('executing a resume intent from the daemon', () => {
     expect(loggedErrors.length).toBeGreaterThan(0)
 
     // Concluded, not stranded: `resuming` with a dead pid would otherwise hold the task and make
-    // the agent look busy until the daemon restarts.
-    const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: runId } })
+    // the slave look busy until the daemon restarts.
+    const after = await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId } })
     expect(after.status).toBe('failed')
     expect(after.terminalAt).not.toBeNull()
 
@@ -284,10 +284,10 @@ describe('executing a resume intent from the daemon', () => {
       registry: singleAdapterRegistry(fakeAdapter('env-echo')),
     })
 
-    const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: runId } })
+    const after = await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId } })
     // The whole point of intent-not-claim: had the web flipped this row to `resuming`, the sweep
     // would have found a non-terminal run with a dead pid and failed it -- checkpoint gone, task
-    // released to a second agent -- for the crime of an operator clicking resume before a restart.
+    // released to a second slave -- for the crime of an operator clicking resume before a restart.
     expect(after.status).toBe('paused')
     expect(after.resumeRequestedAt).not.toBeNull()
     expect(after.terminalAt).toBeNull()
@@ -313,7 +313,7 @@ describe('executing a resume intent from the daemon', () => {
       })
       await drainPumps()
 
-      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: runId } })
+      const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId } })
       expect(run.status).toBe('failed')
 
       const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
@@ -321,7 +321,7 @@ describe('executing a resume intent from the daemon', () => {
       expect(task.attempt).toBe(1)
       expect(task.status).toBe('rework')
       expect(task.activeRunId).toBeNull()
-      // The agent-facing channel is untouched -- an orchestrator-side failure is not feedback.
+      // The slave-facing channel is untouched -- an orchestrator-side failure is not feedback.
       expect(task.lastRejectionReason).toBeNull()
 
       expect(await prisma.executionEvent.count({ where: { runId, type: 'run_failed' } })).toBe(1)
@@ -345,14 +345,14 @@ describe('executing a resume intent from the daemon', () => {
         await prisma.executionEvent.count({ where: { taskId: fixture.taskId, type: 'task_failed' } }),
       ).toBe(1)
 
-      const runsBefore = await prisma.agentRun.count({ where: { taskId: fixture.taskId } })
+      const runsBefore = await prisma.slaveRun.count({ where: { taskId: fixture.taskId } })
       await tick({
         workspaceId: brandWorkspaceId(fixture.workspaceId),
         registry: singleAdapterRegistry(fakeAdapter('complete')),
       })
       await drainPumps()
-      // A `failed` task is not startable: the next tick must not hand it to an agent again.
-      expect(await prisma.agentRun.count({ where: { taskId: fixture.taskId } })).toBe(runsBefore)
+      // A `failed` task is not startable: the next tick must not hand it to an slave again.
+      expect(await prisma.slaveRun.count({ where: { taskId: fixture.taskId } })).toBe(runsBefore)
     }, 60_000)
   })
 })

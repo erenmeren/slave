@@ -26,7 +26,7 @@ export const planGraphSchema = z.object({ tasks: z.array(planTaskSchema).min(1).
 
 /**
  * Recover the task graph from a planning run's accumulated output text. The prompt demands one
- * JSON object in the final message, but agents wrap JSON in prose and code fences, so this scans
+ * JSON object in the final message, but slaves wrap JSON in prose and code fences, so this scans
  * for the LAST parseable object that satisfies the schema (the same last-object-wins convention
  * as `parseReviewVerdict`).
  *

@@ -92,7 +92,7 @@ export interface CommandOutcome {
  * The cost of `detached`, stated rather than discovered later: the shell is a session leader
  * outside the orchestrator's own process group, so a daemon that dies mid-provision leaves it
  * running against the worktree with nothing to reconcile -- §3.4's startup pass looks for runs
- * with dead pids, and no `AgentRun` exists yet at provisioning time. That is the right trade for
+ * with dead pids, and no `SlaveRun` exists yet at provisioning time. That is the right trade for
  * being able to kill the group at all, and it is Task 15's to sweep.
  */
 export async function runShellCommand(input: {

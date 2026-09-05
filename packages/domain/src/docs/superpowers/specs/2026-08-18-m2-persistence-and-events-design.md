@@ -76,7 +76,7 @@ Postgres enums mirror the TypeScript unions exactly:
 |---|---|---|
 | `TaskStatus` | 12 | `packages/domain/src/task/state.ts` |
 | `RunStatus` | 9 | `packages/domain/src/run/state.ts` |
-| `Actor` | 3 (`human`, `agent`, `system`) | `packages/domain/src/events/schema.ts` |
+| `Actor` | 3 (`human`, `slave`, `system`) | `packages/domain/src/events/schema.ts` |
 
 Prisma does not derive enums from TypeScript, so these are maintained by hand. They are protected
 by an integration test that enumerates every union member and asserts a matching enum value —
@@ -107,7 +107,7 @@ place to revisit if that ever stops being absurd.
 
 `packages/domain/src/events/schema.ts` types ids as plain `string`, so `ExecutionEvent.taskId` is
 `string | undefined`. Rather than have every consumer cast, `packages/db` exports row-to-domain
-mappers that re-brand: `taskId(row.id)`, `agentId(row.agentId)`, and so on. The brands are lost at
+mappers that re-brand: `taskId(row.id)`, `slaveId(row.slaveId)`, and so on. The brands are lost at
 the event boundary and regained in exactly one layer.
 
 ### 5.5 Schema accommodations for the carried M1 items
@@ -116,11 +116,11 @@ Behaviour is M8's. These columns exist from M2 so that M8 is not a migration aga
 
 | Carried item | M2 accommodation |
 |---|---|
-| QA-review runs unrepresentable | `AgentRun.kind`: `implementation \| review \| planning` |
-| Guardrails cannot express "pause active runs" | `AgentRun.pauseReason`: `human \| guardrail \| emergency_stop` |
+| QA-review runs unrepresentable | `SlaveRun.kind`: `implementation \| review \| planning` |
+| Guardrails cannot express "pause active runs" | `SlaveRun.pauseReason`: `human \| guardrail \| emergency_stop` |
 | The two unlinked `maxAttempts` | `Workspace` holds the guardrail configuration; `Task.maxAttempts` is copied from it at creation, and the seed performs that copy |
 
-`AgentRun.pauseReason` is nullable — it is null for a run that was never paused, and set at the moment of pausing. `AgentRun.kind` is not nullable and defaults to `implementation`.
+`SlaveRun.pauseReason` is nullable — it is null for a run that was never paused, and set at the moment of pausing. `SlaveRun.kind` is not nullable and defaults to `implementation`.
 | Branded ids stop at the event boundary | §5.4 above |
 
 ---

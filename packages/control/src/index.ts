@@ -6,7 +6,7 @@ export * from './runtime.js'
 
 /**
  * Re-exported so `apps/web` can NAME the runtime it renders (M12 Task 9, ruling R10). The web app
- * depends on `@slave-of-ai/control` but not on `@slave-of-ai/providers`, and `AgentRun.provider` now
+ * depends on `@slave-of-ai/control` but not on `@slave-of-ai/providers`, and `SlaveRun.provider` now
  * reaches the Overview as real data rather than a hardcoded string -- so the surface needs the
  * type. Re-exporting here is a strictly smaller change than adding a dependency edge from the web
  * app to the providers package, which it otherwise has no business importing from: it must never

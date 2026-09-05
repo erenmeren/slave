@@ -58,7 +58,7 @@ describe('ClaudeCodeAdapter', () => {
       // exist at this path for these tests (the adapter never reads it, only tells the child where
       // it is), matching how `pauseFlagPath` above is exercised the same way.
       permissionsFilePath: path.join(worktreePath, 'permissions.json'),
-      gitIdentity: { name: 'Test Agent', email: 'agent@example.com' },
+      gitIdentity: { name: 'Test Slave', email: 'slave@example.com' },
     }
   })
 

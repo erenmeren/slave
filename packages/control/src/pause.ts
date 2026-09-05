@@ -8,7 +8,7 @@ import { type ControlRefusal, refusalText } from './refusal.js'
 
 const PAUSABLE_STATUSES = ['starting', 'working', 'resuming'] as const
 
-/** `AgentRun.pauseReason`'s categories (spec §6): who -- or what -- asked for the pause. */
+/** `SlaveRun.pauseReason`'s categories (spec §6): who -- or what -- asked for the pause. */
 export type PauseCategory = 'human' | 'guardrail' | 'emergency_stop'
 
 export async function requestPause(
@@ -17,12 +17,12 @@ export async function requestPause(
   category: PauseCategory = 'human',
   principal?: Principal,
 ): Promise<Result<void, ControlRefusal>> {
-  // Scoped through `agent -> team`, not `task`: a `planning` run (M8b) has no `Task` row, and
-  // `agent -> team -> workspace` is the only linkage such a run has to a workspace -- the same
+  // Scoped through `slave -> team`, not `task`: a `planning` run (M8b) has no `Task` row, and
+  // `slave -> team -> workspace` is the only linkage such a run has to a workspace -- the same
   // derivation `pauseActiveRuns` below uses to find it in the first place.
-  const run = await prisma.agentRun.findUnique({
+  const run = await prisma.slaveRun.findUnique({
     where: { id: runId },
-    include: { agent: { include: { team: true } } },
+    include: { slave: { include: { team: true } } },
   })
   if (run === null) return err({ kind: 'run_not_found', runId })
 
@@ -34,7 +34,7 @@ export async function requestPause(
   //
   // Signaled through `packages/providers`' `signalPause`, not written here directly: pausing is
   // a cross-process control signal (this function runs in the CLI, in a web request, and in the
-  // daemon alike), so there is no live `AgentRuntimeAdapter` instance available to call --
+  // daemon alike), so there is no live `SlaveRuntimeAdapter` instance available to call --
   // `signalPause` is the stateless half of the provider seam that exists for exactly that
   // reason (M12 Task 3's fix round; see its report for why the adapter-instance route the task
   // was originally specified with does not work).
@@ -43,7 +43,7 @@ export async function requestPause(
   // actually interrupted, not the status an earlier SELECT happened to see. `FOR UPDATE` orders a
   // concurrent claimant behind this one; the RETURNING carries the pre-claim value out. Claimed,
   // not written: `pause_requested` is a non-terminal status, so pausing a run that already
-  // finished puts a *concluded* run back into `activeRuns`, makes its agent look busy, and leaves
+  // finished puts a *concluded* run back into `activeRuns`, makes its slave look busy, and leaves
   // it for the next restart's orphan sweep to flip to `failed` -- corrupting the record of a run
   // that actually succeeded.
   //
@@ -51,9 +51,9 @@ export async function requestPause(
   // engaged. Task 12 carried the column forward as one nothing wrote; Task 9 is the first caller
   // to pass anything but the human default.
   const claimedRows = await prisma.$queryRaw<{ priorStatus: (typeof PAUSABLE_STATUSES)[number] }[]>`
-    UPDATE "AgentRun" AS r
+    UPDATE "SlaveRun" AS r
     SET status = 'pause_requested'::"RunStatus", "pauseReason" = ${category}::"PauseReason"
-    FROM (SELECT id, status FROM "AgentRun" WHERE id = ${run.id} FOR UPDATE) AS prev
+    FROM (SELECT id, status FROM "SlaveRun" WHERE id = ${run.id} FOR UPDATE) AS prev
     WHERE r.id = prev.id AND prev.status = ANY(${[...PAUSABLE_STATUSES]}::text[]::"RunStatus"[])
     RETURNING prev.status AS "priorStatus"`
   const priorStatus = claimedRows[0]?.priorStatus
@@ -64,11 +64,11 @@ export async function requestPause(
   // The same derivation the tick used to tell the child where its flag is -- re-deriving it as
   // a second literal is how the two come to disagree, and a gate reading a path nobody writes
   // means an operator watches a "pausing" run keep working (spec §5.5's named failure).
-  const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: run.agent.team.workspaceId } })
+  const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: run.slave.team.workspaceId } })
   const { pauseFlagPath } = runFilePaths(workspace.repoPath, brandRunId(run.id))
   // The run's OWN provider (M12 Task 8), not a process-wide constant: `run` is already loaded
   // above, so this is a lookup, not a new query. `?? 'claude_code'` is a historical-fact backfill
-  // for runs recorded before `AgentRun.provider` existed to be written, not a guess among live
+  // for runs recorded before `SlaveRun.provider` existed to be written, not a guess among live
   // options -- the same discipline `resume.ts`/`sweep.ts` apply to their own `run.provider ??
   // 'claude_code'`. Signaling the wrong provider's flag file would pause nothing for a real run on
   // a second runtime.
@@ -84,7 +84,7 @@ export async function requestPause(
     // concurrent `requestStop`, the pump concluding it) keeps ITS outcome; this rollback only ever
     // undoes a claim that is still standing, and only ever to the status it displaced. That is the
     // `pause_unsignalled` edge in `packages/domain`'s run machine.
-    await prisma.agentRun.updateMany({
+    await prisma.slaveRun.updateMany({
       where: { id: run.id, status: 'pause_requested' },
       data: { status: priorStatus, pauseReason: run.pauseReason },
     })
@@ -99,9 +99,9 @@ export async function requestPause(
   // itself.
   await appendEvent({
     type: 'run.pause_requested',
-    workspaceId: run.agent.team.workspaceId,
+    workspaceId: run.slave.team.workspaceId,
     taskId: run.taskId,
-    agentId: run.agentId,
+    slaveId: run.slaveId,
     runId: run.id,
     actor: 'human',
     payload: { requestedBy },
@@ -129,11 +129,11 @@ export async function pauseActiveRuns(
   requestedBy: string,
   category: PauseCategory,
 ): Promise<PauseFanoutReport> {
-  // `agent: { team: { workspaceId } }`, not `task: { workspaceId }`: a `planning` run (M8b) has no
+  // `slave: { team: { workspaceId } }`, not `task: { workspaceId }`: a `planning` run (M8b) has no
   // `Task` row, and scoping through `Task` would silently drop it from an emergency stop's
   // fan-out -- exactly the run a halt most needs to reach, since it is still spending money.
-  const runs = await prisma.agentRun.findMany({
-    where: { status: { in: [...NON_TERMINAL_RUN_STATUSES] }, agent: { team: { workspaceId } } },
+  const runs = await prisma.slaveRun.findMany({
+    where: { status: { in: [...NON_TERMINAL_RUN_STATUSES] }, slave: { team: { workspaceId } } },
     select: { id: true },
   })
 

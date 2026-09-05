@@ -45,14 +45,14 @@ interface Fixture {
   readonly worktreePath: string
   readonly workspaceId: string
   readonly taskId: string
-  readonly agentId: string
+  readonly slaveId: string
   readonly runId: string
 }
 
 const repos: string[] = []
 
 /**
- * One task, one agent, one run -- the run carries `worktreePath` by default, matching a terminal
+ * One task, one slave, one run -- the run carries `worktreePath` by default, matching a terminal
  * task whose worktree is still on disk. Every case below overrides only what it needs to (task
  * status, run status/pid, whether the run carries a path at all) rather than re-deriving the
  * whole fixture, the same shape `cli.test.ts`'s `seed(overrides)` uses.
@@ -71,7 +71,7 @@ async function seed(
     data: { name: `Checkout ${repos.length}`, repoPath, verifyCommands: ['true'], setupCommands: [] },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const agent = await prisma.agent.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
   const task = await prisma.task.create({
     data: {
       workspaceId: workspace.id,
@@ -83,10 +83,10 @@ async function seed(
       maxAttempts: workspace.maxAttempts,
     },
   })
-  const agentRun = await prisma.agentRun.create({
+  const slaveRun = await prisma.slaveRun.create({
     data: {
       taskId: task.id,
-      agentId: agent.id,
+      slaveId: slave.id,
       status: (overrides.runStatus ?? 'succeeded') as never,
       pid: overrides.runPid ?? null,
       worktreePath: overrides.withWorktreePath === false ? null : worktreePath,
@@ -96,18 +96,18 @@ async function seed(
     type: 'task.done',
     workspaceId: workspace.id,
     taskId: task.id,
-    agentId: agent.id,
-    runId: agentRun.id,
-    actor: 'agent',
+    slaveId: slave.id,
+    runId: slaveRun.id,
+    actor: 'slave',
     payload: { branch: BRANCH },
   })
-  return { repoPath, worktreePath, workspaceId: workspace.id, taskId: task.id, agentId: agent.id, runId: agentRun.id }
+  return { repoPath, worktreePath, workspaceId: workspace.id, taskId: task.id, slaveId: slave.id, runId: slaveRun.id }
 }
 
 describe('collectTaskWorktree', () => {
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Approval", "AgentMessage", "Artifact", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "ProviderConfiguration", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Approval", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "ProviderConfiguration", "Workspace" RESTART IDENTITY CASCADE',
     )
   })
 
@@ -126,7 +126,7 @@ describe('collectTaskWorktree', () => {
       execFileSync('git', ['branch', '--list', BRANCH], { cwd: fixture.repoPath }).toString(),
     ).toContain(BRANCH)
     expect(
-      (await prisma.agentRun.findUniqueOrThrow({ where: { id: fixture.runId } })).worktreePath,
+      (await prisma.slaveRun.findUniqueOrThrow({ where: { id: fixture.runId } })).worktreePath,
     ).toBeNull()
     const events = await prisma.executionEvent.findMany({
       where: { taskId: fixture.taskId, type: 'task_worktree_collected' },
@@ -156,7 +156,7 @@ describe('collectTaskWorktree', () => {
 
     expect(result.ok).toBe(true)
     expect(
-      (await prisma.agentRun.findUniqueOrThrow({ where: { id: fixture.runId } })).worktreePath,
+      (await prisma.slaveRun.findUniqueOrThrow({ where: { id: fixture.runId } })).worktreePath,
     ).toBeNull()
     const list = execFileSync('git', ['worktree', 'list', '--porcelain'], { cwd: fixture.repoPath }).toString()
     expect(list).not.toContain(fixture.worktreePath)
@@ -230,7 +230,7 @@ describe('collectTaskWorktree', () => {
   it('a git failure refuses worktree_remove_failed, leaving the row and the log untouched', async (): Promise<void> => {
     const fixture = await seed()
     const strayDir = mkdtempSync(join(tmpdir(), 'slaveofai-collect-stray-'))
-    await prisma.agentRun.update({ where: { id: fixture.runId }, data: { worktreePath: strayDir } })
+    await prisma.slaveRun.update({ where: { id: fixture.runId }, data: { worktreePath: strayDir } })
 
     try {
       const result = await collectTaskWorktree(fixture.taskId, 'operator')
@@ -239,7 +239,7 @@ describe('collectTaskWorktree', () => {
       if (result.ok) throw new Error('unreachable')
       expect(result.error.kind).toBe('worktree_remove_failed')
       expect(
-        (await prisma.agentRun.findUniqueOrThrow({ where: { id: fixture.runId } })).worktreePath,
+        (await prisma.slaveRun.findUniqueOrThrow({ where: { id: fixture.runId } })).worktreePath,
       ).toBe(strayDir)
       expect(
         await prisma.executionEvent.count({ where: { taskId: fixture.taskId, type: 'task_worktree_collected' } }),
@@ -259,7 +259,7 @@ describe('collectTaskWorktree', () => {
       type: 'task.failed',
       workspaceId: fixture.workspaceId,
       taskId: fixture.taskId,
-      agentId: fixture.agentId,
+      slaveId: fixture.slaveId,
       runId: fixture.runId,
       actor: 'system',
       payload: { reason: 'a later failure' },

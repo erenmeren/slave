@@ -29,7 +29,7 @@ function makeRepo(): string {
 interface Workspace {
   readonly id: string
   readonly repoPath: string
-  readonly agentId: string
+  readonly slaveId: string
 }
 
 const repos: string[] = []
@@ -51,8 +51,8 @@ async function seedWorkspace(
     },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const agent = await prisma.agent.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
-  return { id: workspace.id, repoPath, agentId: agent.id }
+  const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
+  return { id: workspace.id, repoPath, slaveId: slave.id }
 }
 
 interface MergingTask {
@@ -94,10 +94,10 @@ async function seedMergingTask(
   git(['commit', '-q', '-m', 'implement the feature'], worktree.path)
 
   await prisma.task.update({ where: { id: task.id }, data: { branch: worktree.branch } })
-  const run = await prisma.agentRun.create({
+  const run = await prisma.slaveRun.create({
     data: {
       taskId: task.id,
-      agentId: workspace.agentId,
+      slaveId: workspace.slaveId,
       status: 'succeeded',
       terminalAt: new Date(),
       worktreePath: worktree.path,
@@ -128,7 +128,7 @@ const mergeCommitSubjects = (repoPath: string): readonly string[] =>
 describe('runMergePass', () => {
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
   })
 

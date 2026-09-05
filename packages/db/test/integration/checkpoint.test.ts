@@ -11,7 +11,7 @@ async function seedRun(): Promise<string> {
     },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const agent = await prisma.agent.create({ data: { teamId: team.id, name: 'Alex', role: 'Backend' } })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'Backend' } })
   const task = await prisma.task.create({
     data: {
       workspaceId: workspace.id,
@@ -20,15 +20,15 @@ async function seedRun(): Promise<string> {
       maxAttempts: workspace.maxAttempts,
     },
   })
-  const run = await prisma.agentRun.create({
-    data: { taskId: task.id, agentId: agent.id },
+  const run = await prisma.slaveRun.create({
+    data: { taskId: task.id, slaveId: slave.id },
   })
   return run.id
 }
 
 beforeEach(async (): Promise<void> => {
   await prisma.$executeRawUnsafe(
-    'TRUNCATE TABLE "Checkpoint", "AgentRun", "Task", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
+    'TRUNCATE TABLE "Checkpoint", "SlaveRun", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
   )
 })
 
@@ -65,7 +65,7 @@ describe('Checkpoint', () => {
         gitAuthorEmail: 'alex@example.com',
         // Deliberately not a PauseReason enum member's spelling — this field is free text (the
         // operator-supplied reason that went into the hook's deny message), not the category enum
-        // that AgentRun.pauseReason is. Using an enum-shaped value here would be the worst possible
+        // that SlaveRun.pauseReason is. Using an enum-shaped value here would be the worst possible
         // example for the next implementer to copy.
         pauseReason: 'operator asked to rename the class to MathKit before continuing',
         requestedBy: 'erenaltan@gmail.com',
@@ -143,7 +143,7 @@ describe('Checkpoint', () => {
       },
     })
 
-    await prisma.agentRun.delete({ where: { id: runId } })
+    await prisma.slaveRun.delete({ where: { id: runId } })
 
     expect(await prisma.checkpoint.count()).toBe(0)
   })

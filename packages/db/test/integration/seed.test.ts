@@ -11,11 +11,11 @@ describe('seed data', () => {
   it('creates the Atlas organisation', async () => {
     await seed()
 
-    const teams = await prisma.team.findMany({ include: { agents: true }, orderBy: { name: 'asc' } })
+    const teams = await prisma.team.findMany({ include: { slaves: true }, orderBy: { name: 'asc' } })
     expect(teams.map((t) => t.name)).toEqual(['Engineering', 'Management', 'Marketing', 'Product', 'Security'])
 
-    const agents = await prisma.agent.findMany({ orderBy: { name: 'asc' } })
-    expect(agents.map((a) => a.name)).toEqual([
+    const slaves = await prisma.slave.findMany({ orderBy: { name: 'asc' } })
+    expect(slaves.map((a) => a.name)).toEqual([
       'Alex',
       'Atlas',
       'Daniel',
@@ -29,14 +29,14 @@ describe('seed data', () => {
 
     // Lowercase, matching the M8b planning dispatch's exact-match `role === 'manager'` -- the
     // same convention `role === 'reviewer'` (M8a) already follows.
-    const atlas = agents.find((agent) => agent.name === 'Atlas')
+    const atlas = slaves.find((slave) => slave.name === 'Atlas')
     expect(atlas?.role).toBe('manager')
   })
 
   it('seeds the reusable template catalog', async () => {
     await seed()
 
-    const templates = await prisma.agentTemplate.findMany({ orderBy: { name: 'asc' } })
+    const templates = await prisma.slaveTemplate.findMany({ orderBy: { name: 'asc' } })
     expect(templates.map((t) => ({ name: t.name, role: t.role, defaultModel: t.defaultModel }))).toEqual([
       { name: 'Backend Developer', role: 'backend', defaultModel: null },
       { name: 'Engineering Manager', role: 'manager', defaultModel: null },
@@ -57,7 +57,7 @@ describe('seed data', () => {
     expect(companyTeams.map((t) => t.name)).toEqual(['Engineering'])
 
     const companyTeam = await prisma.companyTeam.findFirstOrThrow({ where: { companyId: company.id } })
-    const roster = await prisma.companyAgent.findMany({
+    const roster = await prisma.companySlave.findMany({
       where: { companyTeamId: companyTeam.id },
       include: { template: true },
       orderBy: { name: 'asc' },
@@ -70,7 +70,7 @@ describe('seed data', () => {
     ])
 
     // The legacy seeded workspace is untouched by the company catalog (spec Decision 7): its
-    // agents keep their own Backend/Frontend/DevOps/QA roles, not the template names above, and
+    // slaves keep their own Backend/Frontend/DevOps/QA roles, not the template names above, and
     // the workspace itself is never assigned to Atlas Software.
     const workspace = await prisma.workspace.findFirstOrThrow()
     expect(workspace.companyId).toBeNull()
@@ -96,24 +96,24 @@ describe('seed data', () => {
   it('is idempotent — running it twice leaves the same row counts', async () => {
     await seed()
     const first = {
-      agents: await prisma.agent.count(),
+      slaves: await prisma.slave.count(),
       tasks: await prisma.task.count(),
       teams: await prisma.team.count(),
-      templates: await prisma.agentTemplate.count(),
+      templates: await prisma.slaveTemplate.count(),
       companies: await prisma.company.count(),
       companyTeams: await prisma.companyTeam.count(),
-      companyAgents: await prisma.companyAgent.count(),
+      companySlaves: await prisma.companySlave.count(),
     }
 
     await seed()
     const second = {
-      agents: await prisma.agent.count(),
+      slaves: await prisma.slave.count(),
       tasks: await prisma.task.count(),
       teams: await prisma.team.count(),
-      templates: await prisma.agentTemplate.count(),
+      templates: await prisma.slaveTemplate.count(),
       companies: await prisma.company.count(),
       companyTeams: await prisma.companyTeam.count(),
-      companyAgents: await prisma.companyAgent.count(),
+      companySlaves: await prisma.companySlave.count(),
     }
 
     expect(second).toEqual(first)

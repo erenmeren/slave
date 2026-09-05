@@ -1,6 +1,6 @@
 /**
  * Yields every parseable balanced-brace JSON object in `text`, scanning from the rightmost `{`
- * to the leftmost — LAST object to FIRST. Agent output routinely wraps JSON in prose and code
+ * to the leftmost — LAST object to FIRST. Slave output routinely wraps JSON in prose and code
  * fences, or emits more than one candidate object; consumers pick the first one (i.e. the one
  * that appears last in the text) that also satisfies their schema.
  */

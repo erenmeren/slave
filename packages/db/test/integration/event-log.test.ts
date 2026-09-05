@@ -24,7 +24,7 @@ describe('execution event log', () => {
 
   it('stores the dotted domain spelling in the column, not the Prisma identifier', async () => {
     await prisma.executionEvent.create({
-      data: { type: 'run_tool_call', workspaceId: 'w1', actor: 'agent', payload: { name: 'Bash', summary: 'ls' } },
+      data: { type: 'run_tool_call', workspaceId: 'w1', actor: 'slave', payload: { name: 'Bash', summary: 'ls' } },
     })
 
     const rows = await prisma.$queryRawUnsafe<{ type: string }[]>('SELECT type::text AS type FROM "ExecutionEvent"')
@@ -34,9 +34,9 @@ describe('execution event log', () => {
   it('round-trips a JSON payload', async () => {
     const created = await prisma.executionEvent.create({
       data: {
-        type: 'agent_message_sent',
+        type: 'slave_message_sent',
         workspaceId: 'w1',
-        agentId: 'a1',
+        slaveId: 'a1',
         actor: 'human',
         payload: { category: 'instruction', body: 'use the retry helper' },
       },
@@ -44,7 +44,7 @@ describe('execution event log', () => {
 
     const found = await prisma.executionEvent.findUniqueOrThrow({ where: { seq: created.seq } })
     expect(found.payload).toEqual({ category: 'instruction', body: 'use the retry helper' })
-    expect(found.agentId).toBe('a1')
+    expect(found.slaveId).toBe('a1')
     expect(found.taskId).toBeNull()
   })
 })

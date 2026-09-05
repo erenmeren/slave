@@ -9,14 +9,14 @@ import { clearAndVerifyPauseFlagAbsent } from '../runtime/pause-flag.js'
 import { buildChildEnv, permissionsFilePathFor, terminateChild } from '../runtime/process.js'
 import { isRecord } from '../runtime/summary.js'
 import type { RunOutcome, RuntimeEvent } from '../types.js'
-import type { AgentRuntimeAdapter, ProviderCapabilities, RunHandle, StartRunInput } from '../claude/adapter.js'
+import type { SlaveRuntimeAdapter, ProviderCapabilities, RunHandle, StartRunInput } from '../claude/adapter.js'
 import type { Checkpoint } from '../claude/checkpoint.js'
 import { cursorFlags, cursorPreflightGate } from './flags.js'
 import { cursorHooksPath, writeCursorHooksFile } from './hooks.js'
 import { parseCursorLine } from './stream.js'
 
 /**
- * The second `AgentRuntimeAdapter` (M12 Task 12, spec §7). It implements the SAME interface
+ * The second `SlaveRuntimeAdapter` (M12 Task 12, spec §7). It implements the SAME interface
  * `ClaudeCodeAdapter` does -- `id`, `getCapabilities`, `start`, `events`, `cancel`, `resume` --
  * declared in `claude/adapter.ts`, which owns those types for the milestone. Nothing about that
  * interface is Claude-specific; what differs between the two runtimes lives entirely below.
@@ -116,7 +116,7 @@ interface CursorRunState {
   cancelled: boolean
 }
 
-export class CursorAdapter implements AgentRuntimeAdapter {
+export class CursorAdapter implements SlaveRuntimeAdapter {
   readonly id = 'cursor' as const
 
   private readonly command: string
@@ -230,7 +230,7 @@ export class CursorAdapter implements AgentRuntimeAdapter {
       ...this.extraArgs,
       ...cursorFlags({
         // Carried forward from the checkpoint, never re-resolved: the run continues with the SAME
-        // model it started with (M10 §6), independently of any `setAgentModel` since.
+        // model it started with (M10 §6), independently of any `setSlaveModel` since.
         model: checkpoint.model,
         // Never `--continue`: that picks "the previous session" by the CLI's own reckoning rather
         // than by id, which is not the same thing when a worktree has hosted more than one run.
@@ -462,7 +462,7 @@ function withDerivedFields(state: CursorRunState, outcome: RunOutcome): RunOutco
  *
  * - The information genuinely exists (Task 11 §3 Q5 measured the shape), and `[]` in the presence
  *   of real denials is the same class of untruth as reporting an unmeasured cost as `0`. The field
- *   means "what the agent was about to do and was stopped from doing"; a rejected call is exactly
+ *   means "what the slave was about to do and was stopped from doing"; a rejected call is exactly
  *   that.
  * - `pump.ts` treats a non-empty `deniedToolUseIds` as a FAILED run even when `is_error` is false,
  *   and names the ids in the operator's `run.failed` reason. That is the consequence of this

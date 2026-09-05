@@ -7,8 +7,8 @@ import {
   assignCompany,
   createProjectTeam,
   deleteCompanyTeam,
-  moveAgent,
-  moveCompanyAgent,
+  moveSlave,
+  moveCompanySlave,
   renameCompanyTeam,
 } from '../../src/org.js'
 
@@ -24,18 +24,18 @@ interface Fixture {
   readonly engineeringId: string
   readonly qaId: string
   readonly otherTeamId: string
-  readonly agentId: string
+  readonly slaveId: string
   readonly companyId: string
   readonly otherCompanyId: string
   readonly templateId: string
   readonly backendTemplateTeamId: string
   readonly emptyTemplateTeamId: string
   readonly otherCompanyTeamId: string
-  readonly companyAgentId: string
+  readonly companySlaveId: string
 }
 
-/** Two workspaces (one with two departments and one agent), two companies (one with a
- *  department template holding one catalog agent and an empty template), one agent template. */
+/** Two workspaces (one with two departments and one slave), two companies (one with a
+ *  department template holding one catalog slave and an empty template), one slave template. */
 async function seed(): Promise<Fixture> {
   const workspace = await prisma.workspace.create({
     data: { name: 'Checkout Platform', repoPath, verifyCommands: ['true'], setupCommands: [] },
@@ -46,8 +46,8 @@ async function seed(): Promise<Fixture> {
   const engineering = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
   const qa = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'QA' } })
   const otherTeam = await prisma.team.create({ data: { workspaceId: other.id, name: 'Engineering' } })
-  const agent = await prisma.agent.create({ data: { teamId: engineering.id, name: 'Alex', role: 'backend' } })
-  const template = await prisma.agentTemplate.create({
+  const slave = await prisma.slave.create({ data: { teamId: engineering.id, name: 'Alex', role: 'backend' } })
+  const template = await prisma.slaveTemplate.create({
     data: { name: 'Backend Developer', role: 'backend', description: 'ships services' },
   })
   const company = await prisma.company.create({ data: { name: 'Atlas Software' } })
@@ -55,7 +55,7 @@ async function seed(): Promise<Fixture> {
   const backendTemplateTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Backend' } })
   const emptyTemplateTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Design' } })
   const otherCompanyTeam = await prisma.companyTeam.create({ data: { companyId: otherCompany.id, name: 'Backend' } })
-  const companyAgent = await prisma.companyAgent.create({
+  const companySlave = await prisma.companySlave.create({
     data: { companyTeamId: backendTemplateTeam.id, templateId: template.id, name: 'Sam' },
   })
   return {
@@ -64,32 +64,32 @@ async function seed(): Promise<Fixture> {
     engineeringId: engineering.id,
     qaId: qa.id,
     otherTeamId: otherTeam.id,
-    agentId: agent.id,
+    slaveId: slave.id,
     companyId: company.id,
     otherCompanyId: otherCompany.id,
     templateId: template.id,
     backendTemplateTeamId: backendTemplateTeam.id,
     emptyTemplateTeamId: emptyTemplateTeam.id,
     otherCompanyTeamId: otherCompanyTeam.id,
-    companyAgentId: companyAgent.id,
+    companySlaveId: companySlave.id,
   }
 }
 
 async function orgChangedEvents(workspaceId: string): Promise<
-  readonly { readonly agentId: string | null; readonly payload: Record<string, unknown> }[]
+  readonly { readonly slaveId: string | null; readonly payload: Record<string, unknown> }[]
 > {
   const rows = await prisma.executionEvent.findMany({
     where: { workspaceId, type: 'org_changed' },
     orderBy: { seq: 'asc' },
   })
-  return rows.map((row) => ({ agentId: row.agentId, payload: row.payload as Record<string, unknown> }))
+  return rows.map((row) => ({ slaveId: row.slaveId, payload: row.payload as Record<string, unknown> }))
 }
 
 let fixture: Fixture
 
 beforeEach(async () => {
   await prisma.$executeRawUnsafe(
-    'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace", "CompanyAgent", "CompanyTeam", "Company", "AgentTemplate" RESTART IDENTITY CASCADE',
+    'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
   )
   fixture = await seed()
 })
@@ -105,7 +105,7 @@ describe('createProjectTeam', () => {
 
     const events = await orgChangedEvents(fixture.workspaceId)
     expect(events).toHaveLength(1)
-    expect(events[0]?.agentId).toBeNull()
+    expect(events[0]?.slaveId).toBeNull()
     expect(events[0]?.payload).toEqual({ entity: 'team', id: result.value.id, field: 'created', from: null, to: 'Design' })
   })
 
@@ -129,97 +129,97 @@ describe('createProjectTeam', () => {
   })
 })
 
-describe('moveAgent', () => {
-  it('moves the agent to another department in the same workspace and emits one org.changed event', async () => {
-    const result = await moveAgent(fixture.agentId, fixture.qaId)
+describe('moveSlave', () => {
+  it('moves the slave to another department in the same workspace and emits one org.changed event', async () => {
+    const result = await moveSlave(fixture.slaveId, fixture.qaId)
 
     expect(result.ok).toBe(true)
-    const row = await prisma.agent.findUniqueOrThrow({ where: { id: fixture.agentId } })
+    const row = await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId } })
     expect(row.teamId).toBe(fixture.qaId)
 
     const events = await orgChangedEvents(fixture.workspaceId)
     expect(events).toHaveLength(1)
-    expect(events[0]?.agentId).toBe(fixture.agentId)
-    expect(events[0]?.payload).toEqual({ entity: 'agent', id: fixture.agentId, field: 'team', from: 'Engineering', to: 'QA' })
+    expect(events[0]?.slaveId).toBe(fixture.slaveId)
+    expect(events[0]?.payload).toEqual({ entity: 'slave', id: fixture.slaveId, field: 'team', from: 'Engineering', to: 'QA' })
   })
 
   it('refuses a department in another workspace, changing nothing', async () => {
-    const result = await moveAgent(fixture.agentId, fixture.otherTeamId)
+    const result = await moveSlave(fixture.slaveId, fixture.otherTeamId)
 
     expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.error).toEqual({ kind: 'team_workspace_mismatch', agentId: fixture.agentId, teamId: fixture.otherTeamId })
-    const row = await prisma.agent.findUniqueOrThrow({ where: { id: fixture.agentId } })
+    if (!result.ok) expect(result.error).toEqual({ kind: 'team_workspace_mismatch', slaveId: fixture.slaveId, teamId: fixture.otherTeamId })
+    const row = await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId } })
     expect(row.teamId).toBe(fixture.engineeringId)
     expect(await orgChangedEvents(fixture.workspaceId)).toHaveLength(0)
   })
 
-  it('refuses while the agent holds a live run', async () => {
+  it('refuses while the slave holds a live run', async () => {
     const task = await prisma.task.create({
       data: { workspaceId: fixture.workspaceId, title: 'Add the thing', description: 'make it work', maxAttempts: 3 },
     })
-    const run = await prisma.agentRun.create({ data: { taskId: task.id, agentId: fixture.agentId, status: 'working' } })
+    const run = await prisma.slaveRun.create({ data: { taskId: task.id, slaveId: fixture.slaveId, status: 'working' } })
 
-    const result = await moveAgent(fixture.agentId, fixture.qaId)
+    const result = await moveSlave(fixture.slaveId, fixture.qaId)
 
     expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.error).toEqual({ kind: 'agent_run_active', agentId: fixture.agentId, runId: run.id })
+    if (!result.ok) expect(result.error).toEqual({ kind: 'slave_run_active', slaveId: fixture.slaveId, runId: run.id })
   })
 
-  it('refuses an unknown agent and an unknown department', async () => {
-    const agent = await moveAgent(UNKNOWN, fixture.qaId)
-    expect(agent.ok).toBe(false)
-    if (!agent.ok) expect(agent.error).toEqual({ kind: 'agent_not_found', agentId: UNKNOWN })
+  it('refuses an unknown slave and an unknown department', async () => {
+    const slave = await moveSlave(UNKNOWN, fixture.qaId)
+    expect(slave.ok).toBe(false)
+    if (!slave.ok) expect(slave.error).toEqual({ kind: 'slave_not_found', slaveId: UNKNOWN })
 
-    const team = await moveAgent(fixture.agentId, UNKNOWN)
+    const team = await moveSlave(fixture.slaveId, UNKNOWN)
     expect(team.ok).toBe(false)
     if (!team.ok) expect(team.error).toEqual({ kind: 'team_not_found', teamId: UNKNOWN })
   })
 
-  // M25 final review, item B: the one write path that skipped `renameAgent`'s own per-department
+  // M25 final review, item B: the one write path that skipped `renameSlave`'s own per-department
   // unique-name rule.
-  it('refuses a department that already has an agent of that name, changing nothing', async () => {
-    const clash = await prisma.agent.create({ data: { teamId: fixture.qaId, name: 'Alex', role: 'qa' } })
+  it('refuses a department that already has an slave of that name, changing nothing', async () => {
+    const clash = await prisma.slave.create({ data: { teamId: fixture.qaId, name: 'Alex', role: 'qa' } })
 
-    const result = await moveAgent(fixture.agentId, fixture.qaId)
+    const result = await moveSlave(fixture.slaveId, fixture.qaId)
 
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.error).toEqual({ kind: 'duplicate_name', name: 'Alex' })
-    const row = await prisma.agent.findUniqueOrThrow({ where: { id: fixture.agentId } })
+    const row = await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId } })
     expect(row.teamId).toBe(fixture.engineeringId)
-    const clashRow = await prisma.agent.findUniqueOrThrow({ where: { id: clash.id } })
+    const clashRow = await prisma.slave.findUniqueOrThrow({ where: { id: clash.id } })
     expect(clashRow.teamId).toBe(fixture.qaId)
     expect(await orgChangedEvents(fixture.workspaceId)).toHaveLength(0)
   })
 
   it('moving to the current department is a no-op with no event', async () => {
-    const result = await moveAgent(fixture.agentId, fixture.engineeringId)
+    const result = await moveSlave(fixture.slaveId, fixture.engineeringId)
 
     expect(result.ok).toBe(true)
-    const row = await prisma.agent.findUniqueOrThrow({ where: { id: fixture.agentId } })
+    const row = await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId } })
     expect(row.teamId).toBe(fixture.engineeringId)
     expect(await orgChangedEvents(fixture.workspaceId)).toHaveLength(0)
   })
 })
 
 // M25 final review, item A (Critical): `assignCompany`'s find-or-create used to look a worker up
-// by `{ teamId: <the template's own copied department>, companyAgentId }` -- scoped to the ONE
-// department that template first materialized into. A worker `moveAgent`d to a different
-// department of the same project still carries the same `companyAgentId`, so the next
-// `assignCompany` no longer found it there and created a second `Agent` with the same name and
-// the same `companyAgentId` (no unique index on that column catches it). The lookup is now scoped
+// by `{ teamId: <the template's own copied department>, companySlaveId }` -- scoped to the ONE
+// department that template first materialized into. A worker `moveSlave`d to a different
+// department of the same project still carries the same `companySlaveId`, so the next
+// `assignCompany` no longer found it there and created a second `Slave` with the same name and
+// the same `companySlaveId` (no unique index on that column catches it). The lookup is now scoped
 // to the workspace, not the department.
 describe('assignCompany (item A: finds a moved worker anywhere in the project)', () => {
-  it('does not duplicate a worker that moveAgent relocated to a second department', async () => {
+  it('does not duplicate a worker that moveSlave relocated to a second department', async () => {
     const first = await assignCompany(fixture.workspaceId, fixture.companyId)
     expect(first.ok).toBe(true)
     if (!first.ok) return
     expect(first.value.createdWorkers).toHaveLength(1)
 
-    const worker = await prisma.agent.findFirstOrThrow({ where: { companyAgentId: fixture.companyAgentId } })
+    const worker = await prisma.slave.findFirstOrThrow({ where: { companySlaveId: fixture.companySlaveId } })
     const originalTeamId = worker.teamId
     expect(originalTeamId).not.toBe(fixture.qaId)
 
-    const moved = await moveAgent(worker.id, fixture.qaId)
+    const moved = await moveSlave(worker.id, fixture.qaId)
     expect(moved.ok).toBe(true)
 
     const second = await assignCompany(fixture.workspaceId, fixture.companyId)
@@ -227,55 +227,55 @@ describe('assignCompany (item A: finds a moved worker anywhere in the project)',
     if (!second.ok) return
     expect(second.value.createdWorkers).toEqual([])
 
-    const workers = await prisma.agent.findMany({ where: { companyAgentId: fixture.companyAgentId } })
+    const workers = await prisma.slave.findMany({ where: { companySlaveId: fixture.companySlaveId } })
     expect(workers).toHaveLength(1)
     expect(workers[0]?.id).toBe(worker.id)
     expect(workers[0]?.teamId).toBe(fixture.qaId)
   })
 })
 
-describe('moveCompanyAgent', () => {
-  it('moves the catalog agent to another template of the same company and writes no event', async () => {
-    const result = await moveCompanyAgent(fixture.companyAgentId, fixture.emptyTemplateTeamId)
+describe('moveCompanySlave', () => {
+  it('moves the catalog slave to another template of the same company and writes no event', async () => {
+    const result = await moveCompanySlave(fixture.companySlaveId, fixture.emptyTemplateTeamId)
 
     expect(result.ok).toBe(true)
-    const row = await prisma.companyAgent.findUniqueOrThrow({ where: { id: fixture.companyAgentId } })
+    const row = await prisma.companySlave.findUniqueOrThrow({ where: { id: fixture.companySlaveId } })
     expect(row.companyTeamId).toBe(fixture.emptyTemplateTeamId)
     expect(await prisma.executionEvent.count()).toBe(0)
   })
 
   it('refuses a template of another company, changing nothing', async () => {
-    const result = await moveCompanyAgent(fixture.companyAgentId, fixture.otherCompanyTeamId)
+    const result = await moveCompanySlave(fixture.companySlaveId, fixture.otherCompanyTeamId)
 
     expect(result.ok).toBe(false)
     if (!result.ok) {
       expect(result.error).toEqual({
         kind: 'company_mismatch',
-        companyAgentId: fixture.companyAgentId,
+        companySlaveId: fixture.companySlaveId,
         companyTeamId: fixture.otherCompanyTeamId,
       })
     }
-    const row = await prisma.companyAgent.findUniqueOrThrow({ where: { id: fixture.companyAgentId } })
+    const row = await prisma.companySlave.findUniqueOrThrow({ where: { id: fixture.companySlaveId } })
     expect(row.companyTeamId).toBe(fixture.backendTemplateTeamId)
   })
 
   it('refuses when the target template already has a member of that name', async () => {
-    await prisma.companyAgent.create({
+    await prisma.companySlave.create({
       data: { companyTeamId: fixture.emptyTemplateTeamId, templateId: fixture.templateId, name: 'Sam' },
     })
 
-    const result = await moveCompanyAgent(fixture.companyAgentId, fixture.emptyTemplateTeamId)
+    const result = await moveCompanySlave(fixture.companySlaveId, fixture.emptyTemplateTeamId)
 
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.error).toEqual({ kind: 'duplicate_name', name: 'Sam' })
   })
 
-  it('refuses an unknown catalog agent and an unknown template', async () => {
-    const agent = await moveCompanyAgent(UNKNOWN, fixture.emptyTemplateTeamId)
-    expect(agent.ok).toBe(false)
-    if (!agent.ok) expect(agent.error).toEqual({ kind: 'agent_not_found', agentId: UNKNOWN })
+  it('refuses an unknown catalog slave and an unknown template', async () => {
+    const slave = await moveCompanySlave(UNKNOWN, fixture.emptyTemplateTeamId)
+    expect(slave.ok).toBe(false)
+    if (!slave.ok) expect(slave.error).toEqual({ kind: 'slave_not_found', slaveId: UNKNOWN })
 
-    const team = await moveCompanyAgent(fixture.companyAgentId, UNKNOWN)
+    const team = await moveCompanySlave(fixture.companySlaveId, UNKNOWN)
     expect(team.ok).toBe(false)
     if (!team.ok) expect(team.error).toEqual({ kind: 'company_team_not_found', companyTeamId: UNKNOWN })
   })
@@ -312,7 +312,7 @@ describe('deleteCompanyTeam', () => {
 
     expect(result.ok).toBe(false)
     if (!result.ok) {
-      expect(result.error).toEqual({ kind: 'company_team_not_empty', companyTeamId: fixture.backendTemplateTeamId, agents: 1 })
+      expect(result.error).toEqual({ kind: 'company_team_not_empty', companyTeamId: fixture.backendTemplateTeamId, slaves: 1 })
     }
     expect(await prisma.companyTeam.findUnique({ where: { id: fixture.backendTemplateTeamId } })).not.toBeNull()
   })

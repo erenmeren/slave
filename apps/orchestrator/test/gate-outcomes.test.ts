@@ -17,7 +17,7 @@ describe('classifyGateEvent', () => {
       classifyGateEvent({
         kind: 'hook_denied',
         hookName: 'PreToolUse:Bash',
-        reason: `${PERMISSION_DENY_REASON_PREFIX} 'run tests' (Bash) for this agent`,
+        reason: `${PERMISSION_DENY_REASON_PREFIX} 'run tests' (Bash) for this slave`,
       }),
     ).toEqual({ kind: 'tool_denied', tool: 'Bash', capability: 'run tests' })
   })
@@ -51,7 +51,7 @@ describe('classifyGateEvent', () => {
 
   it('does not classify a permission-mode denial as a gate outcome (controller ruling, M12 Task 4)', () => {
     // permission_denied is a guardrail observation, not a pause-protocol signal: it stops nothing
-    // and halts nothing (ADR 0001 measured the agent trying another tool), and it carries no
+    // and halts nothing (ADR 0001 measured the slave trying another tool), and it carries no
     // `reason` field to source `stopped_by_gate.reason` from. `pump.ts` keeps handling it on its
     // own, outside this function.
     expect(classifyGateEvent({ kind: 'permission_denied', toolName: 'Edit', toolUseId: 'tu_1' })).toBeNull()

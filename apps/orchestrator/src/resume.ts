@@ -2,7 +2,7 @@ import { dirname } from 'node:path'
 import { resolveDenyList, writePermissionsFile } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import {
-  agentId as brandAgentId,
+  slaveId as brandSlaveId,
   runId as brandRunId,
   taskId as brandTaskId,
   workspaceId as brandWorkspaceId,
@@ -17,7 +17,7 @@ export interface ExecuteResumeOptions {
   readonly runId: string
   /** M12 Task 5: a registry, not a single adapter -- see `TickDeps.registry`'s own docstring. */
   readonly registry: AdapterRegistry
-  /** The instruction to hand the agent, or `null` for the adapter's default continuation prompt. */
+  /** The instruction to hand the slave, or `null` for the adapter's default continuation prompt. */
   readonly message: string | null
   /**
    * Called the moment the child exists, with its pid.
@@ -46,13 +46,13 @@ export interface ExecuteResumeOptions {
  */
 export async function executeResume(options: ExecuteResumeOptions): Promise<void> {
   const { message } = options
-  // `agent -> team`, not `task`: a `planning` run (M8b) has no `Task` row, and `agent -> team ->
+  // `slave -> team`, not `task`: a `planning` run (M8b) has no `Task` row, and `slave -> team ->
   // workspace` is the only linkage such a run has to a workspace. `permissions` alongside it (M18
   // Task 5): the matrix is re-resolved and the run's `permissions.json` rewritten below, against
-  // whatever the agent's permission rows say NOW -- not what they said at the original dispatch.
-  const run = await prisma.agentRun.findUniqueOrThrow({
+  // whatever the slave's permission rows say NOW -- not what they said at the original dispatch.
+  const run = await prisma.slaveRun.findUniqueOrThrow({
     where: { id: options.runId },
-    include: { agent: { include: { team: true, permissions: true } } },
+    include: { slave: { include: { team: true, permissions: true } } },
   })
 
   // Thrown, not refused: by the time this runs the claim has already flipped the run to `resuming`,
@@ -81,7 +81,7 @@ export async function executeResume(options: ExecuteResumeOptions): Promise<void
   // `Checkpoint`), so what is written here is exactly what `SLAVEOFAI_PERMISSIONS_FILE` will point
   // the resumed child at.
   const runDir = dirname(checkpoint.pauseFlagPath)
-  writePermissionsFile(runDir, resolveDenyList(run.agent.permissions, checkpoint.provider ?? 'claude_code'))
+  writePermissionsFile(runDir, resolveDenyList(run.slave.permissions, checkpoint.provider ?? 'claude_code'))
 
   // The checkpoint is the whole point of `resume`'s signature: this process may never have called
   // `start()` for that run, so the settings file, the hook path and the git identity exist nowhere
@@ -106,7 +106,7 @@ export async function executeResume(options: ExecuteResumeOptions): Promise<void
       cumulativeCostUsd: checkpoint.cumulativeCostUsd,
       cumulativeTokens: checkpoint.cumulativeTokens,
       // Replayed verbatim, never re-resolved: the run must continue with the SAME model it started
-      // with (M10 §6), independently of whatever `setAgentModel` has set on the worker since the
+      // with (M10 §6), independently of whatever `setSlaveModel` has set on the worker since the
       // pause. `null` on the row (legacy or never set) omits the key entirely, matching how every
       // other optional field on `Checkpoint` behaves under `exactOptionalPropertyTypes`.
       ...(checkpoint.model !== null ? { model: checkpoint.model } : {}),
@@ -119,7 +119,7 @@ export async function executeResume(options: ExecuteResumeOptions): Promise<void
     message,
   )
 
-  await prisma.agentRun.update({
+  await prisma.slaveRun.update({
     where: { id: run.id },
     // `pausedAtStep` is cleared with the pause itself: the domain's `resuming -> working` edge
     // clears it, and a running run reporting where it once paused reads as still paused.
@@ -127,9 +127,9 @@ export async function executeResume(options: ExecuteResumeOptions): Promise<void
   })
   await appendEvent({
     type: 'run.resumed',
-    workspaceId: run.agent.team.workspaceId,
+    workspaceId: run.slave.team.workspaceId,
     taskId: run.taskId,
-    agentId: run.agentId,
+    slaveId: run.slaveId,
     runId: run.id,
     actor: 'human',
     payload: { sessionId: checkpoint.sessionId },
@@ -142,8 +142,8 @@ export async function executeResume(options: ExecuteResumeOptions): Promise<void
   const pumped = pumpRun({
     runId: brandRunId(run.id),
     taskId: run.taskId === null ? null : brandTaskId(run.taskId),
-    agentId: brandAgentId(run.agentId),
-    workspaceId: brandWorkspaceId(run.agent.team.workspaceId),
+    slaveId: brandSlaveId(run.slaveId),
+    workspaceId: brandWorkspaceId(run.slave.team.workspaceId),
     events: adapter.events(brandRunId(run.id)),
     cancel: () => adapter.cancel(brandRunId(run.id)),
     // The pump cannot tell a continuation from a first spawn -- a resumed process emits

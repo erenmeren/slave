@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
-import { deleteAgent, deleteTeam, renameAgent, renameTeam, setAgentRole } from '../../src/org.js'
+import { deleteSlave, deleteTeam, renameSlave, renameTeam, setSlaveRole } from '../../src/org.js'
 
 // A real directory, not a placeholder (M23 G3): runFilePaths' statSync preflight refuses a repo path that does not exist, and a reboot clears /tmp -- the trap emergency.test.ts fell into at ce48adc.
 const repoPath = mkdtempSync(join(tmpdir(), 'slaveofai-control-org-edit-'))
@@ -15,24 +15,24 @@ const UNKNOWN = '00000000-0000-4000-8000-000000000000'
 interface Fixture {
   readonly workspaceId: string
   readonly teamId: string
-  readonly agentWithRun: { readonly id: string; readonly name: string; readonly role: string }
-  readonly agentNoRuns: { readonly id: string; readonly name: string; readonly role: string }
+  readonly slaveWithRun: { readonly id: string; readonly name: string; readonly role: string }
+  readonly slaveNoRuns: { readonly id: string; readonly name: string; readonly role: string }
   readonly runId: string
   readonly taskId: string
 }
 
 /**
- * One team, two agents: `agentWithRun` carries a `succeeded` (terminal) `AgentRun` against a real
- * task -- exercises `deleteAgent`'s `agent_has_runs` refusal, which fires on ANY run history, not
- * only a live one. `agentNoRuns` is the clean roster member every ordinary edit lands on.
+ * One team, two slaves: `slaveWithRun` carries a `succeeded` (terminal) `SlaveRun` against a real
+ * task -- exercises `deleteSlave`'s `slave_has_runs` refusal, which fires on ANY run history, not
+ * only a live one. `slaveNoRuns` is the clean roster member every ordinary edit lands on.
  */
 async function seed(): Promise<Fixture> {
   const workspace = await prisma.workspace.create({
     data: { name: 'Checkout Platform', repoPath, verifyCommands: ['true'], setupCommands: [] },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const agentWithRunRow = await prisma.agent.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
-  const agentNoRunsRow = await prisma.agent.create({ data: { teamId: team.id, name: 'Sam', role: 'frontend' } })
+  const slaveWithRunRow = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
+  const slaveNoRunsRow = await prisma.slave.create({ data: { teamId: team.id, name: 'Sam', role: 'frontend' } })
   const task = await prisma.task.create({
     data: {
       workspaceId: workspace.id,
@@ -41,27 +41,27 @@ async function seed(): Promise<Fixture> {
       maxAttempts: workspace.maxAttempts,
     },
   })
-  const run = await prisma.agentRun.create({
-    data: { taskId: task.id, agentId: agentWithRunRow.id, status: 'succeeded' },
+  const run = await prisma.slaveRun.create({
+    data: { taskId: task.id, slaveId: slaveWithRunRow.id, status: 'succeeded' },
   })
   return {
     workspaceId: workspace.id,
     teamId: team.id,
-    agentWithRun: { id: agentWithRunRow.id, name: agentWithRunRow.name, role: agentWithRunRow.role },
-    agentNoRuns: { id: agentNoRunsRow.id, name: agentNoRunsRow.name, role: agentNoRunsRow.role },
+    slaveWithRun: { id: slaveWithRunRow.id, name: slaveWithRunRow.name, role: slaveWithRunRow.role },
+    slaveNoRuns: { id: slaveNoRunsRow.id, name: slaveNoRunsRow.name, role: slaveNoRunsRow.role },
     runId: run.id,
     taskId: task.id,
   }
 }
 
 async function orgChangedEvents(workspaceId: string): Promise<
-  readonly { readonly agentId: string | null; readonly payload: Record<string, unknown>; readonly actor: string }[]
+  readonly { readonly slaveId: string | null; readonly payload: Record<string, unknown>; readonly actor: string }[]
 > {
   const rows = await prisma.executionEvent.findMany({
     where: { workspaceId, type: 'org_changed' },
     orderBy: { seq: 'asc' },
   })
-  return rows.map((row) => ({ agentId: row.agentId, payload: row.payload as Record<string, unknown>, actor: row.actor }))
+  return rows.map((row) => ({ slaveId: row.slaveId, payload: row.payload as Record<string, unknown>, actor: row.actor }))
 }
 
 describe('org-edit verbs', () => {
@@ -69,145 +69,145 @@ describe('org-edit verbs', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "AgentRun", "Task", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "SlaveRun", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
   })
 
-  describe('renameAgent', () => {
+  describe('renameSlave', () => {
     it('renames the row and emits one org.changed event with the old and new name', async () => {
-      const { agentNoRuns, workspaceId } = fixture
+      const { slaveNoRuns, workspaceId } = fixture
 
-      const result = await renameAgent(agentNoRuns.id, 'Samantha')
+      const result = await renameSlave(slaveNoRuns.id, 'Samantha')
 
       expect(result.ok).toBe(true)
-      const row = await prisma.agent.findUniqueOrThrow({ where: { id: agentNoRuns.id } })
+      const row = await prisma.slave.findUniqueOrThrow({ where: { id: slaveNoRuns.id } })
       expect(row.name).toBe('Samantha')
 
       const events = await orgChangedEvents(workspaceId)
       expect(events).toHaveLength(1)
-      expect(events[0]?.agentId).toBe(agentNoRuns.id)
+      expect(events[0]?.slaveId).toBe(slaveNoRuns.id)
       expect(events[0]?.actor).toBe('human')
-      expect(events[0]?.payload).toEqual({ entity: 'agent', id: agentNoRuns.id, field: 'name', from: 'Sam', to: 'Samantha' })
+      expect(events[0]?.payload).toEqual({ entity: 'slave', id: slaveNoRuns.id, field: 'name', from: 'Sam', to: 'Samantha' })
     })
 
     it('refuses a name already taken by a sibling in the same team, changing nothing', async () => {
-      const { agentNoRuns, agentWithRun, workspaceId } = fixture
+      const { slaveNoRuns, slaveWithRun, workspaceId } = fixture
 
-      const result = await renameAgent(agentNoRuns.id, agentWithRun.name)
+      const result = await renameSlave(slaveNoRuns.id, slaveWithRun.name)
 
       expect(result.ok).toBe(false)
-      if (!result.ok) expect(result.error).toEqual({ kind: 'duplicate_name', name: agentWithRun.name })
-      const row = await prisma.agent.findUniqueOrThrow({ where: { id: agentNoRuns.id } })
+      if (!result.ok) expect(result.error).toEqual({ kind: 'duplicate_name', name: slaveWithRun.name })
+      const row = await prisma.slave.findUniqueOrThrow({ where: { id: slaveNoRuns.id } })
       expect(row.name).toBe('Sam')
       expect(await orgChangedEvents(workspaceId)).toHaveLength(0)
     })
 
     it('refuses a blank name, changing nothing', async () => {
-      const { agentNoRuns } = fixture
+      const { slaveNoRuns } = fixture
 
-      const result = await renameAgent(agentNoRuns.id, '   ')
+      const result = await renameSlave(slaveNoRuns.id, '   ')
 
       expect(result.ok).toBe(false)
       if (!result.ok) expect(result.error).toEqual({ kind: 'invalid_name' })
-      const row = await prisma.agent.findUniqueOrThrow({ where: { id: agentNoRuns.id } })
+      const row = await prisma.slave.findUniqueOrThrow({ where: { id: slaveNoRuns.id } })
       expect(row.name).toBe('Sam')
     })
 
-    it('refuses an unknown agent', async () => {
-      const result = await renameAgent(UNKNOWN, 'Whoever')
+    it('refuses an unknown slave', async () => {
+      const result = await renameSlave(UNKNOWN, 'Whoever')
 
       expect(result.ok).toBe(false)
-      if (!result.ok) expect(result.error).toEqual({ kind: 'agent_not_found', agentId: UNKNOWN })
+      if (!result.ok) expect(result.error).toEqual({ kind: 'slave_not_found', slaveId: UNKNOWN })
     })
   })
 
-  describe('setAgentRole', () => {
+  describe('setSlaveRole', () => {
     it('sets the role and emits one org.changed event with the old and new role', async () => {
-      const { agentNoRuns, workspaceId } = fixture
+      const { slaveNoRuns, workspaceId } = fixture
 
-      const result = await setAgentRole(agentNoRuns.id, 'qa')
+      const result = await setSlaveRole(slaveNoRuns.id, 'qa')
 
       expect(result.ok).toBe(true)
-      const row = await prisma.agent.findUniqueOrThrow({ where: { id: agentNoRuns.id } })
+      const row = await prisma.slave.findUniqueOrThrow({ where: { id: slaveNoRuns.id } })
       expect(row.role).toBe('qa')
 
       const events = await orgChangedEvents(workspaceId)
       expect(events).toHaveLength(1)
-      expect(events[0]?.payload).toEqual({ entity: 'agent', id: agentNoRuns.id, field: 'role', from: 'frontend', to: 'qa' })
+      expect(events[0]?.payload).toEqual({ entity: 'slave', id: slaveNoRuns.id, field: 'role', from: 'frontend', to: 'qa' })
     })
 
     it('refuses a blank role, changing nothing', async () => {
-      const { agentNoRuns } = fixture
+      const { slaveNoRuns } = fixture
 
-      const result = await setAgentRole(agentNoRuns.id, '   ')
+      const result = await setSlaveRole(slaveNoRuns.id, '   ')
 
       expect(result.ok).toBe(false)
       if (!result.ok) expect(result.error).toEqual({ kind: 'invalid_role' })
-      const row = await prisma.agent.findUniqueOrThrow({ where: { id: agentNoRuns.id } })
+      const row = await prisma.slave.findUniqueOrThrow({ where: { id: slaveNoRuns.id } })
       expect(row.role).toBe('frontend')
     })
 
-    it('refuses while the agent has a live run, changing nothing', async () => {
+    it('refuses while the slave has a live run, changing nothing', async () => {
       const { teamId } = fixture
-      const agent = await prisma.agent.create({ data: { teamId, name: 'Wendy', role: 'backend' } })
-      const run = await prisma.agentRun.create({ data: { agentId: agent.id, status: 'working' } })
+      const slave = await prisma.slave.create({ data: { teamId, name: 'Wendy', role: 'backend' } })
+      const run = await prisma.slaveRun.create({ data: { slaveId: slave.id, status: 'working' } })
 
-      const result = await setAgentRole(agent.id, 'qa')
+      const result = await setSlaveRole(slave.id, 'qa')
 
       expect(result.ok).toBe(false)
-      if (!result.ok) expect(result.error).toEqual({ kind: 'agent_run_active', agentId: agent.id, runId: run.id })
-      const row = await prisma.agent.findUniqueOrThrow({ where: { id: agent.id } })
+      if (!result.ok) expect(result.error).toEqual({ kind: 'slave_run_active', slaveId: slave.id, runId: run.id })
+      const row = await prisma.slave.findUniqueOrThrow({ where: { id: slave.id } })
       expect(row.role).toBe('backend')
     })
 
     it('a succeeded (terminal) run does not block a role change', async () => {
-      const { agentWithRun } = fixture
+      const { slaveWithRun } = fixture
 
-      const result = await setAgentRole(agentWithRun.id, 'staff-backend')
+      const result = await setSlaveRole(slaveWithRun.id, 'staff-backend')
 
       expect(result.ok).toBe(true)
     })
 
-    it('refuses an unknown agent', async () => {
-      const result = await setAgentRole(UNKNOWN, 'qa')
+    it('refuses an unknown slave', async () => {
+      const result = await setSlaveRole(UNKNOWN, 'qa')
 
       expect(result.ok).toBe(false)
-      if (!result.ok) expect(result.error).toEqual({ kind: 'agent_not_found', agentId: UNKNOWN })
+      if (!result.ok) expect(result.error).toEqual({ kind: 'slave_not_found', slaveId: UNKNOWN })
     })
   })
 
-  describe('deleteAgent', () => {
-    it('deletes a run-less agent and emits one org.changed event with to: null', async () => {
-      const { agentNoRuns, workspaceId } = fixture
+  describe('deleteSlave', () => {
+    it('deletes a run-less slave and emits one org.changed event with to: null', async () => {
+      const { slaveNoRuns, workspaceId } = fixture
 
-      const result = await deleteAgent(agentNoRuns.id)
+      const result = await deleteSlave(slaveNoRuns.id)
 
       expect(result.ok).toBe(true)
-      expect(await prisma.agent.findUnique({ where: { id: agentNoRuns.id } })).toBeNull()
+      expect(await prisma.slave.findUnique({ where: { id: slaveNoRuns.id } })).toBeNull()
 
       const events = await orgChangedEvents(workspaceId)
       expect(events).toHaveLength(1)
-      expect(events[0]?.agentId).toBe(agentNoRuns.id)
-      expect(events[0]?.payload).toEqual({ entity: 'agent', id: agentNoRuns.id, field: 'deleted', from: 'Sam', to: null })
+      expect(events[0]?.slaveId).toBe(slaveNoRuns.id)
+      expect(events[0]?.payload).toEqual({ entity: 'slave', id: slaveNoRuns.id, field: 'deleted', from: 'Sam', to: null })
     })
 
-    it('refuses an agent with run history, even terminal, leaving it in place', async () => {
-      const { agentWithRun, workspaceId } = fixture
+    it('refuses an slave with run history, even terminal, leaving it in place', async () => {
+      const { slaveWithRun, workspaceId } = fixture
 
-      const result = await deleteAgent(agentWithRun.id)
+      const result = await deleteSlave(slaveWithRun.id)
 
       expect(result.ok).toBe(false)
-      if (!result.ok) expect(result.error).toEqual({ kind: 'agent_has_runs', agentId: agentWithRun.id, runs: 1 })
-      expect(await prisma.agent.findUnique({ where: { id: agentWithRun.id } })).not.toBeNull()
+      if (!result.ok) expect(result.error).toEqual({ kind: 'slave_has_runs', slaveId: slaveWithRun.id, runs: 1 })
+      expect(await prisma.slave.findUnique({ where: { id: slaveWithRun.id } })).not.toBeNull()
       expect(await orgChangedEvents(workspaceId)).toHaveLength(0)
     })
 
-    it('refuses an unknown agent', async () => {
-      const result = await deleteAgent(UNKNOWN)
+    it('refuses an unknown slave', async () => {
+      const result = await deleteSlave(UNKNOWN)
 
       expect(result.ok).toBe(false)
-      if (!result.ok) expect(result.error).toEqual({ kind: 'agent_not_found', agentId: UNKNOWN })
+      if (!result.ok) expect(result.error).toEqual({ kind: 'slave_not_found', slaveId: UNKNOWN })
     })
   })
 
@@ -223,7 +223,7 @@ describe('org-edit verbs', () => {
 
       const events = await orgChangedEvents(workspaceId)
       expect(events).toHaveLength(1)
-      expect(events[0]?.agentId).toBeNull()
+      expect(events[0]?.slaveId).toBeNull()
       expect(events[0]?.payload).toEqual({ entity: 'team', id: teamId, field: 'name', from: 'Engineering', to: 'Platform' })
     })
 
@@ -259,13 +259,13 @@ describe('org-edit verbs', () => {
   })
 
   describe('deleteTeam', () => {
-    it('refuses a team that still has agents, deleting nothing', async () => {
+    it('refuses a team that still has slaves, deleting nothing', async () => {
       const { teamId, workspaceId } = fixture
 
       const result = await deleteTeam(teamId)
 
       expect(result.ok).toBe(false)
-      if (!result.ok) expect(result.error).toEqual({ kind: 'team_not_empty', teamId, agents: 2 })
+      if (!result.ok) expect(result.error).toEqual({ kind: 'team_not_empty', teamId, slaves: 2 })
       expect(await prisma.team.findUnique({ where: { id: teamId } })).not.toBeNull()
       expect(await orgChangedEvents(workspaceId)).toHaveLength(0)
     })
@@ -281,7 +281,7 @@ describe('org-edit verbs', () => {
 
       const events = await orgChangedEvents(workspaceId)
       expect(events).toHaveLength(1)
-      expect(events[0]?.agentId).toBeNull()
+      expect(events[0]?.slaveId).toBeNull()
       expect(events[0]?.payload).toEqual({ entity: 'team', id: emptyTeam.id, field: 'deleted', from: 'Design', to: null })
     })
 

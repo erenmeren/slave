@@ -10,11 +10,11 @@ export async function requestStop(
   requestedBy: string,
   principal?: Principal,
 ): Promise<Result<void, ControlRefusal>> {
-  // Scoped through `agent -> team`, not `task`: a `planning` run (M8b) has no `Task` row, and
-  // `agent -> team -> workspace` is the only linkage such a run has to a workspace.
-  const run = await prisma.agentRun.findUnique({
+  // Scoped through `slave -> team`, not `task`: a `planning` run (M8b) has no `Task` row, and
+  // `slave -> team -> workspace` is the only linkage such a run has to a workspace.
+  const run = await prisma.slaveRun.findUnique({
     where: { id: runId },
-    include: { agent: { include: { team: true } } },
+    include: { slave: { include: { team: true } } },
   })
   if (run === null) return err({ kind: 'run_not_found', runId })
 
@@ -33,7 +33,7 @@ export async function requestStop(
   // demotion. Left set after the run concludes -- historical record of who asked, nothing reads
   // them as live state, so there is nothing to clear.
   const stopRequestedAt = new Date()
-  await prisma.agentRun.updateMany({
+  await prisma.slaveRun.updateMany({
     where: { id: run.id, endedAt: null },
     data: { status: 'stopping', stopRequestedBy: requestedBy, stopRequestedAt },
   })
@@ -51,12 +51,12 @@ export async function requestStop(
   // The pump may have already won this race and written `stopped` itself (`concluded.count` is
   // then 0) -- `run.stopped` is then already in the log, so this function's own emit below stays
   // conditioned on having actually written the row, or a web stop would double-announce itself.
-  const concluded = await prisma.agentRun.updateMany({
+  const concluded = await prisma.slaveRun.updateMany({
     where: { id: run.id, endedAt: null },
     data: { status: 'stopped', terminalAt: now, endedAt: now },
   })
   // `blocked`, not `rework`: the help and the README both say cancel stops a run for good, and
-  // `rework` is startable -- the next tick would hand the task to a fresh agent on the same
+  // `rework` is startable -- the next tick would hand the task to a fresh slave on the same
   // worktree, with `attempt` never incremented so repeated cancels never reach the cap. The
   // spec does not decide this (§11 says only "kill and preserve the worktree"); shipping a
   // command that says one thing and does another is the part that is not a judgement call.
@@ -70,9 +70,9 @@ export async function requestStop(
   if (concluded.count > 0) {
     await appendEvent({
       type: 'run.stopped',
-      workspaceId: run.agent.team.workspaceId,
+      workspaceId: run.slave.team.workspaceId,
       taskId: run.taskId,
-      agentId: run.agentId,
+      slaveId: run.slaveId,
       runId: run.id,
       actor: 'human',
       payload: {

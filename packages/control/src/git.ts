@@ -5,14 +5,14 @@ const execFileAsync = promisify(execFile)
 
 /**
  * The identity every git command *the orchestrator itself* issues runs under -- layer 3 of spec
- * §7.3. Distinct from `StartRunInput.gitIdentity`, which is the *agent's* identity for the commits
+ * §7.3. Distinct from `StartRunInput.gitIdentity`, which is the *slave's* identity for the commits
  * a run produces; nothing here creates a commit, so this name is what would appear only if a git
  * subcommand unexpectedly needed an author, and it should read as the orchestrator rather than
- * impersonate whichever agent triggered the provisioning.
+ * impersonate whichever slave triggered the provisioning.
  *
  * Supplied per-command with `-c` rather than by writing `git config`, for the reason the M0 spike
  * found the hard way: `.git/config` is repo-wide state that worktrees do *not* isolate, so two
- * concurrent agents recovering from a missing-identity error both write it and silently overwrite
+ * concurrent slaves recovering from a missing-identity error both write it and silently overwrite
  * each other.
  *
  * Moved here from `apps/orchestrator/src/worktree.ts` in M23 B2: `collectTaskWorktree` needs the

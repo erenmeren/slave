@@ -8,15 +8,15 @@ async function seedChain(): Promise<{
   companyName: string
   companyTeamId: string
   companyTeamName: string
-  companyAgentId: string
+  companySlaveId: string
   workerId: string
 }> {
-  const template = await prisma.agentTemplate.create({
+  const template = await prisma.slaveTemplate.create({
     data: { name: 'Java Developer', role: 'backend', defaultModel: 'claude-sonnet-5' },
   })
   const company = await prisma.company.create({ data: { name: 'Atlas Software' } })
   const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Engineering' } })
-  const companyAgent = await prisma.companyAgent.create({
+  const companySlave = await prisma.companySlave.create({
     data: { companyTeamId: companyTeam.id, templateId: template.id, name: 'Atlas' },
   })
 
@@ -24,8 +24,8 @@ async function seedChain(): Promise<{
     data: { name: 'Checkout Platform', repoPath: '/tmp/checkout', verifyCommands: ['npm test'], setupCommands: ['npm ci'] },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const worker = await prisma.agent.create({
-    data: { teamId: team.id, name: 'Atlas', role: 'backend', companyAgentId: companyAgent.id },
+  const worker = await prisma.slave.create({
+    data: { teamId: team.id, name: 'Atlas', role: 'backend', companySlaveId: companySlave.id },
   })
 
   return {
@@ -35,14 +35,14 @@ async function seedChain(): Promise<{
     companyName: company.name,
     companyTeamId: companyTeam.id,
     companyTeamName: companyTeam.name,
-    companyAgentId: companyAgent.id,
+    companySlaveId: companySlave.id,
     workerId: worker.id,
   }
 }
 
 beforeEach(async (): Promise<void> => {
   await prisma.$executeRawUnsafe(
-    'TRUNCATE TABLE "Agent", "Team", "Workspace", "CompanyAgent", "CompanyTeam", "Company", "AgentTemplate" RESTART IDENTITY CASCADE',
+    'TRUNCATE TABLE "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
   )
 })
 
@@ -51,11 +51,11 @@ afterAll(async (): Promise<void> => {
 })
 
 describe('the organization schema', () => {
-  it('links template -> company -> team -> roster agent -> worker and reads the chain back', async () => {
+  it('links template -> company -> team -> roster slave -> worker and reads the chain back', async () => {
     const chain = await seedChain()
 
-    const found = await prisma.companyAgent.findUniqueOrThrow({
-      where: { id: chain.companyAgentId },
+    const found = await prisma.companySlave.findUniqueOrThrow({
+      where: { id: chain.companySlaveId },
       include: {
         template: true,
         companyTeam: { include: { company: true } },
@@ -73,9 +73,9 @@ describe('the organization schema', () => {
   })
 
   it('rejects a duplicate template name', async () => {
-    await prisma.agentTemplate.create({ data: { name: 'Java Developer', role: 'backend' } })
+    await prisma.slaveTemplate.create({ data: { name: 'Java Developer', role: 'backend' } })
 
-    await expect(prisma.agentTemplate.create({ data: { name: 'Java Developer', role: 'frontend' } })).rejects.toThrow()
+    await expect(prisma.slaveTemplate.create({ data: { name: 'Java Developer', role: 'frontend' } })).rejects.toThrow()
   })
 
   it('rejects a duplicate company name', async () => {
@@ -97,18 +97,18 @@ describe('the organization schema', () => {
   })
 
   it('rejects a duplicate roster member name within one team but allows the same name in another team', async () => {
-    const template = await prisma.agentTemplate.create({ data: { name: 'Backend Developer', role: 'backend' } })
+    const template = await prisma.slaveTemplate.create({ data: { name: 'Backend Developer', role: 'backend' } })
     const company = await prisma.company.create({ data: { name: 'Atlas Software' } })
     const team = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Engineering' } })
-    await prisma.companyAgent.create({ data: { companyTeamId: team.id, templateId: template.id, name: 'Atlas' } })
+    await prisma.companySlave.create({ data: { companyTeamId: team.id, templateId: template.id, name: 'Atlas' } })
 
     await expect(
-      prisma.companyAgent.create({ data: { companyTeamId: team.id, templateId: template.id, name: 'Atlas' } }),
+      prisma.companySlave.create({ data: { companyTeamId: team.id, templateId: template.id, name: 'Atlas' } }),
     ).rejects.toThrow()
 
     const otherTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Marketing' } })
     await expect(
-      prisma.companyAgent.create({ data: { companyTeamId: otherTeam.id, templateId: template.id, name: 'Atlas' } }),
+      prisma.companySlave.create({ data: { companyTeamId: otherTeam.id, templateId: template.id, name: 'Atlas' } }),
     ).resolves.toMatchObject({ name: 'Atlas' })
   })
 
@@ -118,32 +118,32 @@ describe('the organization schema', () => {
     await prisma.company.delete({ where: { id: chain.companyId } })
 
     expect(await prisma.companyTeam.count()).toBe(0)
-    expect(await prisma.companyAgent.count()).toBe(0)
-    expect(await prisma.agentTemplate.findUnique({ where: { id: chain.templateId } })).not.toBeNull()
+    expect(await prisma.companySlave.count()).toBe(0)
+    expect(await prisma.slaveTemplate.findUnique({ where: { id: chain.templateId } })).not.toBeNull()
 
-    // The worker with run history must survive its roster row's deletion -- Agent.companyAgent is
+    // The worker with run history must survive its roster row's deletion -- Slave.companySlave is
     // onDelete: SetNull, never Cascade.
-    const survivor = await prisma.agent.findUniqueOrThrow({ where: { id: chain.workerId } })
-    expect(survivor.companyAgentId).toBeNull()
+    const survivor = await prisma.slave.findUniqueOrThrow({ where: { id: chain.workerId } })
+    expect(survivor.companySlaveId).toBeNull()
   })
 
-  it('adds nullable model/company columns to Agent, Workspace and Checkpoint without breaking existing rows', async () => {
+  it('adds nullable model/company columns to Slave, Workspace and Checkpoint without breaking existing rows', async () => {
     const workspace = await prisma.workspace.create({
       data: { name: 'w', repoPath: '/tmp/w', verifyCommands: ['npm test'], setupCommands: ['npm ci'] },
     })
     expect(workspace.companyId).toBeNull()
 
     const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-    const agent = await prisma.agent.create({
+    const slave = await prisma.slave.create({
       data: { teamId: team.id, name: 'Alex', role: 'backend', model: 'claude-opus-4' },
     })
-    expect(agent.model).toBe('claude-opus-4')
-    expect(agent.companyAgentId).toBeNull()
+    expect(slave.model).toBe('claude-opus-4')
+    expect(slave.companySlaveId).toBeNull()
 
     const task = await prisma.task.create({
       data: { workspaceId: workspace.id, title: 't', description: 'd', maxAttempts: workspace.maxAttempts },
     })
-    const run = await prisma.agentRun.create({ data: { taskId: task.id, agentId: agent.id } })
+    const run = await prisma.slaveRun.create({ data: { taskId: task.id, slaveId: slave.id } })
     const checkpoint = await prisma.checkpoint.create({
       data: {
         runId: run.id,
@@ -164,7 +164,7 @@ describe('the organization schema', () => {
   it('links a project Team to its roster CompanyTeam by id, and SetNulls that link on company deletion while the team row survives', async () => {
     const chain = await seedChain()
 
-    const team = await prisma.team.findUniqueOrThrow({ where: { id: (await prisma.agent.findUniqueOrThrow({ where: { id: chain.workerId } })).teamId } })
+    const team = await prisma.team.findUniqueOrThrow({ where: { id: (await prisma.slave.findUniqueOrThrow({ where: { id: chain.workerId } })).teamId } })
     await prisma.team.update({ where: { id: team.id }, data: { companyTeamId: chain.companyTeamId } })
     const linked = await prisma.team.findUniqueOrThrow({ where: { id: team.id } })
     expect(linked.companyTeamId).toBe(chain.companyTeamId)

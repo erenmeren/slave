@@ -18,7 +18,7 @@ import type { ProviderKind } from '@slave-of-ai/providers'
  * 2. A HALF-PAIR: some level names a model but has no provider recorded for it. This is possible
  *    only on a row written before M12 existed -- Task 7 made writing a model without its provider
  *    a refusal at every level this chain reads (`packages/control/src/org.ts`), but it could not
- *    repair a row that predates the guard (`AgentTemplate` is append-only, `CompanyAgent` has no
+ *    repair a row that predates the guard (`SlaveTemplate` is append-only, `CompanySlave` has no
  *    update verb). When this level is reached, two silent moves are both available and both wrong:
  *    falling through to a LOWER level's provider would pair THIS level's model with a provider
  *    nobody ever chose for it (the exact "incompatible combination" Decision 5 says must be
@@ -27,7 +27,7 @@ import type { ProviderKind } from '@slave-of-ai/providers'
  *    substitution this milestone exists to remove, so the half-pair is unresolvable: refused, not
  *    repaired here, not guessed at.
  *
- * A legacy agent with no `companyAgentId` link (`companyAgent: null`) resolves through its own
+ * A legacy slave with no `companySlaveId` link (`companySlave: null`) resolves through its own
  * column alone, same as `resolveModel` did -- there is nothing else to consult.
  */
 export interface ResolvedRuntime {
@@ -44,7 +44,7 @@ export function resolveRuntime(
   worker: {
     readonly model: string | null
     readonly provider: ProviderKind | null
-    readonly companyAgent: {
+    readonly companySlave: {
       readonly model: string | null
       readonly provider: ProviderKind | null
       readonly template: { readonly defaultModel: string | null; readonly provider: ProviderKind | null }
@@ -54,11 +54,11 @@ export function resolveRuntime(
 ): ResolvedRuntime {
   const levels: readonly RuntimeLevel[] = [
     { model: worker.model, provider: worker.provider },
-    ...(worker.companyAgent === null
+    ...(worker.companySlave === null
       ? []
       : [
-          { model: worker.companyAgent.model, provider: worker.companyAgent.provider },
-          { model: worker.companyAgent.template.defaultModel, provider: worker.companyAgent.template.provider },
+          { model: worker.companySlave.model, provider: worker.companySlave.provider },
+          { model: worker.companySlave.template.defaultModel, provider: worker.companySlave.template.provider },
         ]),
   ]
 

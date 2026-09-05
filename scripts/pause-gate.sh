@@ -118,7 +118,7 @@ esac
 # checked first, above, and this permission-matrix check never runs while a pause is armed --
 # `deny` above already exited the whole script.
 if read_permission_verdict "$hook_payload"; then
-  deny "permission matrix denies '${PERMISSION_DENY_CAPABILITY}' (${PERMISSION_DENY_TOOL}) for this agent"
+  deny "permission matrix denies '${PERMISSION_DENY_CAPABILITY}' (${PERMISSION_DENY_TOOL}) for this slave"
 fi
 
 # No pause requested, and the tool is not matrix-denied. Claude's allow is silence.

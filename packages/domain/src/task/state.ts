@@ -1,5 +1,5 @@
 import { err, ok, type Result } from '../result.js'
-import type { AgentId, RunId } from '../ids.js'
+import type { SlaveId, RunId } from '../ids.js'
 
 export type TaskStatus =
   | 'backlog'
@@ -17,7 +17,7 @@ export type TaskStatus =
 
 export interface TaskState {
   readonly status: TaskStatus
-  readonly assigneeId: AgentId | null
+  readonly assigneeId: SlaveId | null
   readonly activeRunId: RunId | null
   readonly attempt: number
   readonly maxAttempts: number
@@ -27,7 +27,7 @@ export interface TaskState {
 export type TaskEvent =
   | { readonly type: 'dependencies_satisfied' }
   | { readonly type: 'dependencies_unmet' }
-  | { readonly type: 'assigned'; readonly agentId: AgentId }
+  | { readonly type: 'assigned'; readonly slaveId: SlaveId }
   | { readonly type: 'run_started'; readonly runId: RunId }
   | { readonly type: 'run_succeeded' }
   | { readonly type: 'run_failed'; readonly reason: string }
@@ -92,7 +92,7 @@ export function applyTaskEvent(state: TaskState, event: TaskEvent): Result<TaskS
 
     case 'ready':
     case 'rework':
-      if (event.type === 'assigned') return ok({ ...state, status: 'assigned', assigneeId: event.agentId })
+      if (event.type === 'assigned') return ok({ ...state, status: 'assigned', assigneeId: event.slaveId })
       if (event.type === 'dependencies_unmet') return ok({ ...state, status: 'blocked' })
       return illegal(state, event)
 

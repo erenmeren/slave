@@ -86,13 +86,13 @@ async function seed(options: {
       autoMerge: options.autoMerge ?? false,
     },
   })
-  // M12 Task 8: no agent in this file names a model anywhere in the chain, so `resolveRuntime`
+  // M12 Task 8: no slave in this file names a model anywhere in the chain, so `resolveRuntime`
   // falls all the way to the workspace default -- which needs a `ProviderConfiguration` row to
   // exist at all, or every dispatch here (the real CLI, `dist/cli.js`) refuses instead of
   // starting the run under test.
   await prisma.providerConfiguration.create({ data: { workspaceId: workspace.id, kind: 'claude_code', settings: {} } })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  await prisma.agent.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
+  await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
   const task = await prisma.task.create({
     data: {
       workspaceId: workspace.id,
@@ -119,16 +119,16 @@ function expectOrdered(types: readonly DomainEventType[], earlier: DomainEventTy
   expect(second, `${later} was never emitted`).toBeGreaterThan(first)
 }
 
-/** Adds a `reviewer`-role agent to the fixture's one team, idle and ready to be picked up. */
+/** Adds a `reviewer`-role slave to the fixture's one team, idle and ready to be picked up. */
 async function addReviewer(): Promise<void> {
   const team = await prisma.team.findFirstOrThrow()
-  await prisma.agent.create({ data: { teamId: team.id, name: 'Riley', role: 'reviewer' } })
+  await prisma.slave.create({ data: { teamId: team.id, name: 'Riley', role: 'reviewer' } })
 }
 
 describe('the M3/M8a milestone gate', () => {
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
   })
 
@@ -165,7 +165,7 @@ describe('the M3/M8a milestone gate', () => {
     }
 
     // Step 1-2: picked up by a tick, worktree provisioned, setup ran in it.
-    const implRun = await prisma.agentRun.findFirstOrThrow({ where: { kind: 'implementation' } })
+    const implRun = await prisma.slaveRun.findFirstOrThrow({ where: { kind: 'implementation' } })
     expect(implRun.status).toBe('succeeded')
     expect(implRun.pid).toBeGreaterThan(0)
     expect(implRun.worktreePath).toContain(join('.slaveofai', 'worktrees'))
@@ -242,10 +242,10 @@ describe('the M3/M8a milestone gate', () => {
 
     expect(result.code).toBe(0)
 
-    // The agent's run itself was fine — it is the *work* that failed verification. A gate that
+    // The slave's run itself was fine — it is the *work* that failed verification. A gate that
     // conflated the two could pass with verify never wired at all, failing runs standing in for
     // failing work.
-    const run = await prisma.agentRun.findFirstOrThrow()
+    const run = await prisma.slaveRun.findFirstOrThrow()
     expect(run.status).toBe('succeeded')
 
     const types = await eventTypesFor(fixture.workspaceId)
@@ -266,7 +266,7 @@ describe('the M3/M8a milestone gate', () => {
     // real `claude` follows, which is what lets §16 run this step against either.
     await runCli(['tick'], { SLAVEOFAI_CLAUDE_ARGS: `${FAKE} --fixture hook-deny` })
 
-    const paused = await prisma.agentRun.findFirstOrThrow()
+    const paused = await prisma.slaveRun.findFirstOrThrow()
     expect(paused.status).toBe('paused')
 
     // Step 4: the checkpoint written from the pause carries what a fresh process needs to resume.
@@ -283,7 +283,7 @@ describe('the M3/M8a milestone gate', () => {
     // The resumed run completes — and its completion is a completion like any other: verify runs
     // on it and the task advances into review (M8a). A resumed run whose success leaves the task
     // `running` forever would make pause/resume a trap rather than a control.
-    const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: paused.id } })
+    const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: paused.id } })
     expect(run.status).toBe('succeeded')
     expect(run.terminalAt).not.toBeNull()
 

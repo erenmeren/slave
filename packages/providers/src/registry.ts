@@ -1,4 +1,4 @@
-import { ClaudeCodeAdapter, type AgentRuntimeAdapter, type ClaudeCodeAdapterOptions } from './claude/adapter.js'
+import { ClaudeCodeAdapter, type SlaveRuntimeAdapter, type ClaudeCodeAdapterOptions } from './claude/adapter.js'
 import { CursorAdapter, type CursorAdapterOptions } from './cursor/adapter.js'
 import type { ProviderKind } from './types.js'
 
@@ -54,14 +54,14 @@ export class UnregistrableProviderError extends Error {
  * rule is unreachable through `buildRegistry`'s option shape today -- and an untested rule that
  * first runs on the day a third provider arrives is the rule most likely to be wrong then.
  */
-export function admitAdapter(kind: ProviderKind, adapter: AgentRuntimeAdapter): AgentRuntimeAdapter {
+export function admitAdapter(kind: ProviderKind, adapter: SlaveRuntimeAdapter): SlaveRuntimeAdapter {
   const capabilities = adapter.getCapabilities()
   if (!capabilities.canPauseMidRun && !capabilities.canResumeSession) throw new UnregistrableProviderError(kind)
   return adapter
 }
 
 /**
- * Hands out the one long-lived `AgentRuntimeAdapter` instance for each provider kind
+ * Hands out the one long-lived `SlaveRuntimeAdapter` instance for each provider kind
  * `buildRegistry` was actually given options for.
  *
  * `resolve` is exhaustive over the kinds this particular registry was configured with, not over
@@ -72,7 +72,7 @@ export function admitAdapter(kind: ProviderKind, adapter: AgentRuntimeAdapter): 
  * what the package can build, remains the question `resolve` answers.
  */
 export interface AdapterRegistry {
-  resolve(kind: ProviderKind): AgentRuntimeAdapter
+  resolve(kind: ProviderKind): SlaveRuntimeAdapter
 }
 
 /**
@@ -90,7 +90,7 @@ export function buildRegistry(options: {
   readonly claudeCode?: ClaudeCodeAdapterOptions
   readonly cursor?: CursorAdapterOptions
 }): AdapterRegistry {
-  const adapters = new Map<ProviderKind, AgentRuntimeAdapter>()
+  const adapters = new Map<ProviderKind, SlaveRuntimeAdapter>()
   if (options.claudeCode !== undefined) {
     adapters.set('claude_code', admitAdapter('claude_code', new ClaudeCodeAdapter(options.claudeCode)))
   }
@@ -99,7 +99,7 @@ export function buildRegistry(options: {
   }
 
   return {
-    resolve(kind: ProviderKind): AgentRuntimeAdapter {
+    resolve(kind: ProviderKind): SlaveRuntimeAdapter {
       const adapter = adapters.get(kind)
       if (adapter === undefined) throw new UnknownProviderError(kind)
       return adapter

@@ -15,7 +15,7 @@ import { preflightGate as runPreflight } from '../runtime/gate-preflight.js'
  * WHY EACH ONE IS HERE:
  *
  * - `--print` -- mandatory. `--output-format` "only works with --print", and
- *   without it the agent runs interactively and the stream parser is handed
+ *   without it the slave runs interactively and the stream parser is handed
  *   nothing it can read.
  * - `--output-format stream-json` -- the NDJSON `parseCursorLine` parses.
  * - `--trust` -- mandatory, and its absence is INVISIBLE. Measured while
@@ -160,6 +160,6 @@ function permissionOf(stdout: string): string | undefined {
 }
 
 // Only `permission` is read. The binary's own response validator accepts `permission`,
-// `user_message` and `agent_message` (Task 11 §3 Q4); the operator message is the gate's business
+// `user_message` and `slave_message` (Task 11 §3 Q4); the operator message is the gate's business
 // and this probe has no opinion on its wording.
 const hookResponseSchema = z.object({ permission: z.string() })

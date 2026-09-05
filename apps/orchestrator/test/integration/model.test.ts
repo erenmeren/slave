@@ -4,16 +4,16 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
-  addCompanyAgent,
+  addCompanySlave,
   addCompanyTeam,
   assignCompany,
   createCompany,
   createTemplate,
-  setAgentModel,
+  setSlaveModel,
 } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import { workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
-import { ClaudeCodeAdapter, type AdapterRegistry, type AgentRuntimeAdapter, type StartRunInput } from '@slave-of-ai/providers'
+import { ClaudeCodeAdapter, type AdapterRegistry, type SlaveRuntimeAdapter, type StartRunInput } from '@slave-of-ai/providers'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { drainPumps, tick, type TickDeps } from '../../src/tick.js'
 
@@ -46,7 +46,7 @@ function makeRepo(): string {
 }
 
 interface Recorder {
-  readonly adapter: AgentRuntimeAdapter
+  readonly adapter: SlaveRuntimeAdapter
   readonly starts: StartRunInput[]
 }
 
@@ -54,7 +54,7 @@ interface Recorder {
  * `deps.registry` for a test that only ever runs against one adapter instance (the ordinary case
  * pre-Task-8, when every run resolves to `'claude_code'` regardless of what `kind` is asked for).
  */
-function singleAdapterRegistry(adapter: AgentRuntimeAdapter): AdapterRegistry {
+function singleAdapterRegistry(adapter: SlaveRuntimeAdapter): AdapterRegistry {
   return { resolve: () => adapter }
 }
 
@@ -71,16 +71,16 @@ function recordingAdapter(): Recorder {
     },
     events: (runId: string) => inner.events(runId as never),
     cancel: (runId: string) => inner.cancel(runId as never),
-  } as unknown as AgentRuntimeAdapter
+  } as unknown as SlaveRuntimeAdapter
   return { adapter, starts }
 }
 
-describe('the model chain reaches a dispatched run, and setAgentModel changes the NEXT one', () => {
+describe('the model chain reaches a dispatched run, and setSlaveModel changes the NEXT one', () => {
   const repos: string[] = []
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace", "CompanyAgent", "CompanyTeam", "Company", "AgentTemplate" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
     )
   })
 
@@ -88,7 +88,7 @@ describe('the model chain reaches a dispatched run, and setAgentModel changes th
     for (const repo of repos) rmSync(repo, { recursive: true, force: true })
   })
 
-  it("starts a run with the template's default model, then the NEXT run reflects setAgentModel", async (): Promise<void> => {
+  it("starts a run with the template's default model, then the NEXT run reflects setSlaveModel", async (): Promise<void> => {
     const repoPath = makeRepo()
     repos.push(repoPath)
     const workspace = await prisma.workspace.create({
@@ -96,7 +96,7 @@ describe('the model chain reaches a dispatched run, and setAgentModel changes th
     })
 
     // A roster worker materialized through the real M10 org verbs, not hand-inserted rows: this is
-    // the actual path a worker's `companyAgentId` link is created through in production.
+    // the actual path a worker's `companySlaveId` link is created through in production.
     const company = await createCompany('Acme Corp')
     if (!company.ok) throw new Error('setup: createCompany failed')
     const team = await addCompanyTeam(company.value.id, 'Engineering')
@@ -106,12 +106,12 @@ describe('the model chain reaches a dispatched run, and setAgentModel changes th
       provider: 'claude_code',
     })
     if (!template.ok) throw new Error('setup: createTemplate failed')
-    const rosterAgent = await addCompanyAgent(team.value.id, template.value.id, 'Atlas')
-    if (!rosterAgent.ok) throw new Error('setup: addCompanyAgent failed')
+    const rosterSlave = await addCompanySlave(team.value.id, template.value.id, 'Atlas')
+    if (!rosterSlave.ok) throw new Error('setup: addCompanySlave failed')
 
     const assigned = await assignCompany(workspace.id, company.value.id)
     if (!assigned.ok) throw new Error('setup: assignCompany failed')
-    const worker = await prisma.agent.findFirstOrThrow({ where: { name: 'Atlas' } })
+    const worker = await prisma.slave.findFirstOrThrow({ where: { name: 'Atlas' } })
     expect(worker.model).toBeNull()
 
     const firstTask = await prisma.task.create({
@@ -135,11 +135,11 @@ describe('the model chain reaches a dispatched run, and setAgentModel changes th
     expect(first.started).toHaveLength(1)
     expect(recorder.starts[0]?.model).toBe('test-model-a')
     // M12 Task 8: the resolved provider is written onto the run row itself, not just handed to
-    // the adapter's `start()` -- `AgentRun.provider`'s own schema comment names this the task
+    // the adapter's `start()` -- `SlaveRun.provider`'s own schema comment names this the task
     // that finally writes it.
     const firstRunId = first.started[0]
     if (firstRunId === undefined) throw new Error('setup: expected a started run id')
-    const firstRun = await prisma.agentRun.findFirstOrThrow({ where: { id: firstRunId } })
+    const firstRun = await prisma.slaveRun.findFirstOrThrow({ where: { id: firstRunId } })
     expect(firstRun.provider).toBe('claude_code')
 
     // Let the first run conclude (fixture `complete`) so the worker frees up, then override the
@@ -148,7 +148,7 @@ describe('the model chain reaches a dispatched run, and setAgentModel changes th
     const concludedTask = await prisma.task.findUniqueOrThrow({ where: { id: firstTask.id } })
     expect(concludedTask.activeRunId).toBeNull()
 
-    const override = await setAgentModel(worker.id, 'test-model-b', 'claude_code')
+    const override = await setSlaveModel(worker.id, 'test-model-b', 'claude_code')
     expect(override.ok).toBe(true)
 
     await prisma.task.create({

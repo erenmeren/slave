@@ -1,4 +1,4 @@
-import type { AgentId, TaskId } from '../ids.js'
+import type { SlaveId, TaskId } from '../ids.js'
 import type { TaskStatus } from '../task/state.js'
 import {
   evaluateGuardrails,
@@ -14,21 +14,21 @@ export interface SchedulableTask {
   readonly dependenciesDone: boolean
 }
 
-export interface SchedulableAgent {
-  readonly id: AgentId
+export interface SchedulableSlave {
+  readonly id: SlaveId
   readonly role: string
   readonly busy: boolean
 }
 
 export interface World {
   readonly tasks: readonly SchedulableTask[]
-  readonly agents: readonly SchedulableAgent[]
+  readonly slaves: readonly SchedulableSlave[]
   readonly limits: GuardrailLimits
   readonly stats: WorkspaceStats
 }
 
 export type Command =
-  | { readonly kind: 'start_run'; readonly taskId: TaskId; readonly agentId: AgentId }
+  | { readonly kind: 'start_run'; readonly taskId: TaskId; readonly slaveId: SlaveId }
   | { readonly kind: 'halt'; readonly reason: string }
 
 const STARTABLE: readonly TaskStatus[] = ['ready', 'rework']
@@ -47,8 +47,8 @@ export function decide(world: World): readonly Command[] {
     .filter((t) => STARTABLE.includes(t.status) && t.dependenciesDone)
     .toSorted((a, b) => (b.priority - a.priority) || a.id.localeCompare(b.id))
 
-  const availableAgents = new Map<AgentId, SchedulableAgent>(
-    world.agents.filter((a) => !a.busy).map((a) => [a.id, a]),
+  const availableSlaves = new Map<SlaveId, SchedulableSlave>(
+    world.slaves.filter((a) => !a.busy).map((a) => [a.id, a]),
   )
 
   let slots = Math.min(
@@ -60,11 +60,11 @@ export function decide(world: World): readonly Command[] {
   for (const candidate of candidates) {
     if (slots <= 0) break
 
-    const agent = [...availableAgents.values()].find((a) => a.role === candidate.requiredRole)
-    if (agent === undefined) continue
+    const slave = [...availableSlaves.values()].find((a) => a.role === candidate.requiredRole)
+    if (slave === undefined) continue
 
-    commands.push({ kind: 'start_run', taskId: candidate.id, agentId: agent.id })
-    availableAgents.delete(agent.id)
+    commands.push({ kind: 'start_run', taskId: candidate.id, slaveId: slave.id })
+    availableSlaves.delete(slave.id)
     slots -= 1
   }
 

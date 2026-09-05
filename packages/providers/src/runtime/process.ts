@@ -115,7 +115,7 @@ export function permissionsFilePathFor(runDir: string): string {
  * The environment every runtime's child is spawned with (ADR 0001, "Concurrency and the git common
  * directory").
  *
- * Identity is supplied per-process rather than by writing `git config`: two concurrent M0 agents
+ * Identity is supplied per-process rather than by writing `git config`: two concurrent M0 slaves
  * both hit the same missing-identity failure, and the one that recovered with an unscoped
  * `git config user.name/user.email` wrote into the repo-wide `.git/config`, which every worktree
  * shares. Environment variables are per-process, write no file, and cannot leak to a sibling

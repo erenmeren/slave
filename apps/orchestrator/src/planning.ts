@@ -1,6 +1,6 @@
 import {
   NON_TERMINAL_RUN_STATUSES,
-  agentId as brandAgentId,
+  slaveId as brandSlaveId,
   runId as brandRunId,
   parsePlanGraph,
   type RunId,
@@ -8,7 +8,7 @@ import {
 import { admitProvider, refusalText, resolveDenyList, runFilePaths, writePermissionsFile } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import { appendEvent } from '@slave-of-ai/events'
-import type { AgentRuntimeAdapter, RunHandle } from '@slave-of-ai/providers'
+import type { SlaveRuntimeAdapter, RunHandle } from '@slave-of-ai/providers'
 import { resolveRuntime, workspaceDefaultProvider } from './model.js'
 import { resolveAdapter } from './provider.js'
 import { pumpRun } from './pump.js'
@@ -54,13 +54,13 @@ export function buildPlanningPrompt(goal: string): string {
  * untouched; the cap, not a cleared goal, is what eventually stops redispatch.
  */
 export async function concludePlanning(runId: RunId): Promise<void> {
-  const run = await prisma.agentRun.findUniqueOrThrow({
+  const run = await prisma.slaveRun.findUniqueOrThrow({
     where: { id: runId },
-    include: { agent: { include: { team: true } } },
+    include: { slave: { include: { team: true } } },
   })
   // A planning run has no task (M8b's task-less run) -- the workspace is only reachable through
-  // `agent -> team`, never through `run.task`, which is always null here.
-  const workspaceId = run.agent.team.workspaceId
+  // `slave -> team`, never through `run.task`, which is always null here.
+  const workspaceId = run.slave.team.workspaceId
 
   const rows = await prisma.executionEvent.findMany({
     where: { runId, type: 'run_output' },
@@ -70,14 +70,14 @@ export async function concludePlanning(runId: RunId): Promise<void> {
   const parsed = parsePlanGraph(text)
 
   if (!parsed.ok) {
-    await prisma.agentRun.updateMany({
+    await prisma.slaveRun.updateMany({
       where: { id: runId, status: 'succeeded' },
       data: { status: 'failed' },
     })
     await appendEvent({
       type: 'run.failed',
       workspaceId,
-      agentId: run.agentId,
+      slaveId: run.slaveId,
       runId: run.id,
       actor: 'system',
       payload: { reason: `planning run produced no valid task graph: ${parsed.error}` },
@@ -117,7 +117,7 @@ export async function concludePlanning(runId: RunId): Promise<void> {
           description: planTask.description,
           status: 'ready',
           requiredRole: planTask.role,
-          createdBy: 'agent',
+          createdBy: 'slave',
           createdByUserId: workspace.goalSetByUserId,
           maxAttempts: workspace.maxAttempts,
         },
@@ -144,7 +144,7 @@ export async function concludePlanning(runId: RunId): Promise<void> {
       type: 'task.created',
       workspaceId,
       taskId: task.id,
-      actor: 'agent',
+      actor: 'slave',
       payload: { title: task.title },
     })
   }
@@ -152,9 +152,9 @@ export async function concludePlanning(runId: RunId): Promise<void> {
   await appendEvent({
     type: 'workspace.plan_created',
     workspaceId,
-    agentId: run.agentId,
+    slaveId: run.slaveId,
     runId: run.id,
-    actor: 'agent',
+    actor: 'slave',
     payload: {
       goal: workspace.goal,
       tasks: created.map((task) => ({ id: task.id, title: task.title, role: task.role })),
@@ -185,13 +185,13 @@ export async function dispatchPlanning(deps: TickDeps): Promise<RunId | null> {
   if (taskCount > 0) return null
 
   // 3. Skip if a planning run is already live -- the ordinary case on every tick after the first,
-  // since a planning run routinely outlives the tick that started it. `agent: { team: { workspaceId } }`,
+  // since a planning run routinely outlives the tick that started it. `slave: { team: { workspaceId } }`,
   // not a task relation: a planning run has no task to scope through.
-  const livePlanning = await prisma.agentRun.count({
+  const livePlanning = await prisma.slaveRun.count({
     where: {
       kind: 'planning',
       status: { in: [...NON_TERMINAL_RUN_STATUSES] },
-      agent: { team: { workspaceId: deps.workspaceId } },
+      slave: { team: { workspaceId: deps.workspaceId } },
     },
   })
   if (livePlanning > 0) return null
@@ -204,27 +204,27 @@ export async function dispatchPlanning(deps: TickDeps): Promise<RunId | null> {
     orderBy: { seq: 'desc' },
   })
   const since = latestGoalSet?.ts ?? new Date(0)
-  const failedSinceGoal = await prisma.agentRun.count({
+  const failedSinceGoal = await prisma.slaveRun.count({
     where: {
       kind: 'planning',
       status: 'failed',
       startedAt: { gt: since },
-      agent: { team: { workspaceId: deps.workspaceId } },
+      slave: { team: { workspaceId: deps.workspaceId } },
     },
   })
   if (failedSinceGoal >= PLANNING_RETRY_CAP) return null
 
   // 5. Staffing. `role === 'manager'` is an exact match -- the same convention `dispatchReview`
   // uses for `role === 'reviewer'`.
-  // `companyAgent -> template` included so `resolveRuntime` (M12 Task 8) can walk the whole override
+  // `companySlave -> template` included so `resolveRuntime` (M12 Task 8) can walk the whole override
   // chain for whichever manager is actually picked below.
-  // `permissions` included alongside `companyAgent -> template` (M18 Task 5) -- see `tick.ts`'s
+  // `permissions` included alongside `companySlave -> template` (M18 Task 5) -- see `tick.ts`'s
   // own `startRun` for why: the resolved deny list is snapshotted at dispatch, from this run's own
-  // agent row.
-  const managers = await prisma.agent.findMany({
+  // slave row.
+  const managers = await prisma.slave.findMany({
     where: { role: 'manager', team: { workspaceId: deps.workspaceId } },
     orderBy: { id: 'asc' },
-    include: { companyAgent: { include: { template: true } }, permissions: true },
+    include: { companySlave: { include: { template: true } }, permissions: true },
   })
 
   if (managers.length === 0) {
@@ -248,22 +248,22 @@ export async function dispatchPlanning(deps: TickDeps): Promise<RunId | null> {
         actor: 'system',
         payload: {
           guardrail: 'no_planner',
-          detail: 'workspace has a goal and no tasks: no manager-role agent to plan it',
+          detail: 'workspace has a goal and no tasks: no manager-role slave to plan it',
         },
       })
     }
     return null
   }
 
-  const busyAgentIds = new Set(
+  const busySlaveIds = new Set(
     (
-      await prisma.agentRun.findMany({
-        where: { agentId: { in: managers.map((manager) => manager.id) }, status: { in: [...NON_TERMINAL_RUN_STATUSES] } },
-        select: { agentId: true },
+      await prisma.slaveRun.findMany({
+        where: { slaveId: { in: managers.map((manager) => manager.id) }, status: { in: [...NON_TERMINAL_RUN_STATUSES] } },
+        select: { slaveId: true },
       })
-    ).map((run) => run.agentId),
+    ).map((run) => run.slaveId),
   )
-  const manager = managers.find((candidate) => !busyAgentIds.has(candidate.id))
+  const manager = managers.find((candidate) => !busySlaveIds.has(candidate.id))
   // Every manager is busy. Not an escalation -- the workspace is staffed, planning just has to
   // wait its turn -- so this is deliberately as silent as `dispatchReview` leaving a task waiting
   // because every reviewer is busy.
@@ -272,20 +272,20 @@ export async function dispatchPlanning(deps: TickDeps): Promise<RunId | null> {
   // Dispatch -- the `dispatchReview` shape minus a diff and minus a task: run row first, NO
   // taskId, so a data-corruption null-task check downstream never has to wonder whether this row
   // was supposed to have one.
-  const run = await prisma.agentRun.create({
-    data: { agentId: manager.id, kind: 'planning', status: 'starting' },
+  const run = await prisma.slaveRun.create({
+    data: { slaveId: manager.id, kind: 'planning', status: 'starting' },
   })
   const runId = brandRunId(run.id)
 
   // Declared outside the `try` for the same reason `dispatchReview` does: the catch below needs to
   // tell "never spawned" from "spawned, then something else failed" so it never abandons a live
-  // agent.
+  // slave.
   let handle: RunHandle | null = null
 
   // Nullable now that resolving it can itself fail (M12 Task 8: an unconfigured provider) -- the
   // catch below needs to tell "no adapter to cancel with" apart from "spawned, then something
   // else failed" just as it already does for `handle`.
-  let adapter: AgentRuntimeAdapter | null = null
+  let adapter: SlaveRuntimeAdapter | null = null
 
   try {
     // M12 Task 8: resolved first, inside the `try` -- see `tick.ts`'s `startRun` for the full
@@ -303,7 +303,7 @@ export async function dispatchPlanning(deps: TickDeps): Promise<RunId | null> {
     adapter = resolveAdapter(deps.registry, resolved.provider)
     // Spec §6's dispatch-time re-check (M12 Task 9, ruling R9), after the adapter resolves and
     // before anything is spawned. It is a RE-check, not the only one: `packages/control`'s
-    // `assignCompany`/`setAgentModel` already refuse this pairing at write time. It exists anyway
+    // `assignCompany`/`setSlaveModel` already refuse this pairing at write time. It exists anyway
     // because resolution crosses four levels, and a template edit -- or a new
     // `ProviderConfiguration` row -- can change the pair under a workspace that was perfectly
     // valid when it was configured, with no write to this workspace at all for the write-time
@@ -344,7 +344,7 @@ export async function dispatchPlanning(deps: TickDeps): Promise<RunId | null> {
       ...(model !== undefined ? { model } : {}),
     })
 
-    await prisma.agentRun.update({
+    await prisma.slaveRun.update({
       where: { id: run.id },
       // `provider` (M12 Task 8) -- see `tick.ts`'s own `startRun` for why it is written here,
       // alongside `pid`, rather than at creation.
@@ -356,7 +356,7 @@ export async function dispatchPlanning(deps: TickDeps): Promise<RunId | null> {
     const pump = pumpRun({
       runId,
       taskId: null,
-      agentId: brandAgentId(manager.id),
+      slaveId: brandSlaveId(manager.id),
       workspaceId: deps.workspaceId,
       events: runAdapter.events(runId),
       cancel: () => runAdapter.cancel(runId),
@@ -385,7 +385,7 @@ export async function dispatchPlanning(deps: TickDeps): Promise<RunId | null> {
     return runId
   } catch (error) {
     // Kill what was spawned before recording anything -- the same discipline `dispatchReview`
-    // applies, for the same reason: an agent nobody can find is worse than a failed run.
+    // applies, for the same reason: an slave nobody can find is worse than a failed run.
     let cancelError: unknown = null
     // `adapter !== null` is implied by `handle !== null`, but a resolution failure (a
     // misconfigured provider, above) is precisely the case where `adapter` is still `null` here.
@@ -402,14 +402,14 @@ export async function dispatchPlanning(deps: TickDeps): Promise<RunId | null> {
         ? ''
         : ` -- AND THE CANCEL FAILED (${String(cancelError)}): the process may still be running.`)
     const now = new Date()
-    await prisma.agentRun.update({
+    await prisma.slaveRun.update({
       where: { id: run.id },
       data: { status: 'failed', terminalAt: now, endedAt: now },
     })
     await appendEvent({
       type: 'run.failed',
       workspaceId: deps.workspaceId,
-      agentId: manager.id,
+      slaveId: manager.id,
       runId: run.id,
       actor: 'system',
       payload: { reason },

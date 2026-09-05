@@ -14,7 +14,7 @@ describe('parseExecutionEvent', () => {
       ...BASE,
       type: 'task.started',
       taskId: 'TASK-142',
-      agentId: 'alex',
+      slaveId: 'alex',
       runId: 'run-1',
       payload: { title: 'Implement Checkout API' },
     })
@@ -47,11 +47,11 @@ describe('parseExecutionEvent', () => {
     if (result.ok && result.value.type === 'run.tool_denied') expect(result.value.payload.toolUseId).toBeUndefined()
   })
 
-  it('accepts an agent.message_sent event with a category', () => {
+  it('accepts an slave.message_sent event with a category', () => {
     const result = parseExecutionEvent({
       ...BASE,
-      type: 'agent.message_sent',
-      agentId: 'alex',
+      type: 'slave.message_sent',
+      slaveId: 'alex',
       actor: 'human',
       payload: { category: 'instruction', body: 'Use Redis for this part.' },
     })
@@ -321,14 +321,14 @@ describe('parseExecutionEvent', () => {
       type: 'workspace.company_assigned',
       payload: {
         company: 'Acme Corp',
-        workers: [{ companyAgentId: 'ca-1', name: 'Alex', role: 'backend' }],
+        workers: [{ companySlaveId: 'ca-1', name: 'Alex', role: 'backend' }],
       },
     })
     expect(result.ok).toBe(true)
     if (result.ok) expect(result.value.type).toBe('workspace.company_assigned')
   })
 
-  it('rejects a workspace.company_assigned event whose worker is missing companyAgentId', () => {
+  it('rejects a workspace.company_assigned event whose worker is missing companySlaveId', () => {
     const result = parseExecutionEvent({
       ...BASE,
       type: 'workspace.company_assigned',

@@ -9,7 +9,7 @@ import { prisma } from '../../src/client.js'
  */
 const WORKSPACE_MAX_ATTEMPTS = 5
 
-async function seedWorkspace(): Promise<{ workspaceId: string; agentId: string; maxAttempts: number }> {
+async function seedWorkspace(): Promise<{ workspaceId: string; slaveId: string; maxAttempts: number }> {
   const workspace = await prisma.workspace.create({
     data: {
       name: 'Checkout Platform',
@@ -20,14 +20,14 @@ async function seedWorkspace(): Promise<{ workspaceId: string; agentId: string; 
     },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const agent = await prisma.agent.create({ data: { teamId: team.id, name: 'Alex', role: 'Backend' } })
-  return { workspaceId: workspace.id, agentId: agent.id, maxAttempts: workspace.maxAttempts }
+  const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'Backend' } })
+  return { workspaceId: workspace.id, slaveId: slave.id, maxAttempts: workspace.maxAttempts }
 }
 
 describe('work tables', () => {
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "Approval", "AgentMessage", "Artifact", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "Approval", "SlaveMessage", "Artifact", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
   })
 
@@ -61,12 +61,12 @@ describe('work tables', () => {
   })
 
   it('defaults a run to implementation kind with no pause reason', async () => {
-    const { workspaceId, agentId, maxAttempts } = await seedWorkspace()
+    const { workspaceId, slaveId, maxAttempts } = await seedWorkspace()
     const task = await prisma.task.create({
       data: { workspaceId, title: 't', description: 'd', maxAttempts },
     })
 
-    const run = await prisma.agentRun.create({ data: { taskId: task.id, agentId } })
+    const run = await prisma.slaveRun.create({ data: { taskId: task.id, slaveId } })
 
     expect(run.kind).toBe('implementation')
     expect(run.status).toBe('starting')
@@ -75,15 +75,15 @@ describe('work tables', () => {
   })
 
   it('stores a review run alongside an implementation run for the same task', async () => {
-    const { workspaceId, agentId, maxAttempts } = await seedWorkspace()
+    const { workspaceId, slaveId, maxAttempts } = await seedWorkspace()
     const task = await prisma.task.create({
       data: { workspaceId, title: 't', description: 'd', maxAttempts },
     })
 
-    await prisma.agentRun.create({ data: { taskId: task.id, agentId, kind: 'implementation' } })
-    await prisma.agentRun.create({ data: { taskId: task.id, agentId, kind: 'review' } })
+    await prisma.slaveRun.create({ data: { taskId: task.id, slaveId, kind: 'implementation' } })
+    await prisma.slaveRun.create({ data: { taskId: task.id, slaveId, kind: 'review' } })
 
-    const kinds = await prisma.agentRun.findMany({ where: { taskId: task.id }, select: { kind: true } })
+    const kinds = await prisma.slaveRun.findMany({ where: { taskId: task.id }, select: { kind: true } })
     expect(kinds.map((r) => r.kind).sort()).toEqual(['implementation', 'review'])
   })
 

@@ -22,7 +22,7 @@ function run(command: string, args: readonly string[], cwd: string): string {
  *
  * The fixture writes its identity into its own `.git/config`, which is what makes the
  * common-directory test meaningful: the file is non-empty and already contains exactly the keys
- * the M0 spike saw an agent overwrite. It is also what makes the identity test meaningful -- a
+ * the M0 spike saw an slave overwrite. It is also what makes the identity test meaningful -- a
  * setup command that commits must come out with the *orchestrator's* name, not this one.
  */
 function makeRepo(): string {
@@ -339,7 +339,7 @@ describe('provisionWorktree', () => {
 
     // Spec §7.3, the general rule the M0 spike surfaced through a git-identity collision: worktrees
     // isolate refs and files, but `.git/config` is repo-wide state they do not isolate, so two
-    // concurrent agents writing it silently overwrite each other.
+    // concurrent slaves writing it silently overwrite each other.
     expect(readFileSync(configPath, 'utf8')).toBe(before)
   })
 
@@ -349,7 +349,7 @@ describe('provisionWorktree', () => {
 
     // A task moved to `rework` is startable again (`decide()`'s STARTABLE list), so the second run
     // of the same task arrives here with the same key. Refusing is right -- silently reusing the
-    // directory hands the agent someone else's uncommitted state -- but the caller has to be able
+    // directory hands the slave someone else's uncommitted state -- but the caller has to be able
     // to tell this apart from git being broken, and it cannot be asked to match on git's stderr.
     const error = await provisionWorktree(base).catch((cause: unknown): unknown => cause)
 
@@ -389,7 +389,7 @@ describe('provisionWorktree', () => {
     const error = await provisionWorktree(base).catch((cause: unknown): unknown => cause)
 
     // Wreckage, not a rework: a directory with no branch behind it is not something a previous
-    // attempt of this task produced, and adopting it would hand the agent an unrelated tree.
+    // attempt of this task produced, and adopting it would hand the slave an unrelated tree.
     // Short-circuiting the branch check once the directory is found collapses this into the
     // `both` case above, which is the one the caller is most likely to adopt.
     expect(error).toBeInstanceOf(WorktreeExistsError)
@@ -450,7 +450,7 @@ describe('provisionWorktree', () => {
   })
 
   it('reports an absolute path even when handed a relative repository path', async (): Promise<void> => {
-    // `path` becomes `AgentRun.worktreePath`, and spec §5.7 respawns a resumed run in that
+    // `path` becomes `SlaveRun.worktreePath`, and spec §5.7 respawns a resumed run in that
     // directory -- across a daemon restart whose process may have a different cwd entirely.
     const wt = await provisionWorktree({ ...base, repoPath: relative(process.cwd(), repoPath) })
 

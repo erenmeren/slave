@@ -13,14 +13,14 @@ import {
   evaluateGuardrails,
   runId as brandRunId,
   taskId as brandTaskId,
-  agentId as brandAgentId,
-  type AgentId,
+  slaveId as brandSlaveId,
+  type SlaveId,
   type RunId,
   type TaskId,
   type WorkspaceId,
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
-import type { AdapterRegistry, AgentRuntimeAdapter, RunHandle } from '@slave-of-ai/providers'
+import type { AdapterRegistry, SlaveRuntimeAdapter, RunHandle } from '@slave-of-ai/providers'
 import { runMergePass } from './merge.js'
 import { resolveRuntime, workspaceDefaultProvider } from './model.js'
 import { dispatchPlanning } from './planning.js'
@@ -42,7 +42,7 @@ export interface TickDeps {
    * dependency. Decision of Record #1 (M12): no caller outside `packages/providers` may know a
    * provider keeps a hook script at all.
    *
-   * M12 Task 5: a registry, not a single `AgentRuntimeAdapter`, now that a run's provider is a
+   * M12 Task 5: a registry, not a single `SlaveRuntimeAdapter`, now that a run's provider is a
    * real choice rather than a hardcoded fact -- M12 Task 8 makes each lookup against it resolve
    * to whatever `resolveRuntime` (`model.ts`) actually decided for that run.
    */
@@ -121,16 +121,16 @@ function slugify(title: string): string {
 }
 
 /**
- * An agent's git email local part. Falls back to the id rather than to `slugify`'s generic default,
- * which would put the same address on commits by two different agents whose names carry no ASCII.
+ * An slave's git email local part. Falls back to the id rather than to `slugify`'s generic default,
+ * which would put the same address on commits by two different slaves whose names carry no ASCII.
  *
- * Exported for Task 5's review dispatch, which gives a reviewer agent the same git identity
- * convention a run's implementation agent gets -- duplicating this would be a second place the
+ * Exported for Task 5's review dispatch, which gives a reviewer slave the same git identity
+ * convention a run's implementation slave gets -- duplicating this would be a second place the
  * convention could drift from this one.
  */
-export function emailLocalPart(agent: { readonly id: string; readonly name: string }): string {
-  const slug = slugify(agent.name)
-  return slug === 'task' ? `agent-${agent.id.slice(0, 8)}` : slug
+export function emailLocalPart(slave: { readonly id: string; readonly name: string }): string {
+  const slug = slugify(slave.name)
+  return slug === 'task' ? `slave-${slave.id.slice(0, 8)}` : slug
 }
 
 /**
@@ -157,7 +157,7 @@ function buildPrompt(task: {
  * the task is in `rework`. That combination is the only one that means "this task's last run left
  * this here". A stray directory, an orphaned branch, or a `ready` task that should never have had a
  * worktree at all is wreckage §7.4 preserved deliberately for an operator, and handing it to an
- * agent gives the run someone else's tree.
+ * slave gives the run someone else's tree.
  */
 async function acquireWorktree(input: {
   readonly repoPath: string
@@ -199,7 +199,7 @@ async function acquireWorktree(input: {
 export async function tick(deps: TickDeps): Promise<TickReport> {
   // Tells `reconcileOrphans` that its startup-only window has closed. A run that is mid-spawn --
   // row created, pid not yet recorded -- is indistinguishable from one the orphan pass should fail,
-  // so a reconcile racing a tick fails a live run and hands its task to a second agent.
+  // so a reconcile racing a tick fails a live run and hands its task to a second slave.
   noteTickRan()
 
   const { world, skippedNoRole } = await loadWorld(deps.workspaceId)
@@ -262,7 +262,7 @@ export async function tick(deps: TickDeps): Promise<TickReport> {
   const started: RunId[] = []
   for (const command of commands) {
     if (command.kind !== 'start_run') continue
-    const runId = await startRun(deps, command.taskId, command.agentId)
+    const runId = await startRun(deps, command.taskId, command.slaveId)
     if (runId !== null) started.push(runId)
   }
 
@@ -296,7 +296,7 @@ export async function tick(deps: TickDeps): Promise<TickReport> {
  *
  * Deliberately placed *after* the halt bail above rather than beside it: a halt is raised by a gate
  * failure or an unverifiable workspace, and picking up a queued resume while one stands relaunches
- * an agent whose gate may still be broken. The intent is left untouched -- visible, unconsumed, and
+ * an slave whose gate may still be broken. The intent is left untouched -- visible, unconsumed, and
  * waiting for the operator who clears the halt -- rather than refused, because the request was
  * legitimate when it was made.
  *
@@ -305,23 +305,23 @@ export async function tick(deps: TickDeps): Promise<TickReport> {
  * production caller (`daemon.ts` wires up `reconcileOrphans`, not `sweep`); `reconcileOrphans` itself
  * runs once before the first tick and refuses ever after (`noteTickRan`/`ticksHaveRun` above). So the
  * catch below concludes the run itself -- mirroring `sweep.ts`'s `concludeDeadRun` -- rather than
- * leaving a `resuming` row with a dead pid, a held task and a busy-looking agent until a restart.
+ * leaving a `resuming` row with a dead pid, a held task and a busy-looking slave until a restart.
  */
 async function resumeRequestedRuns(deps: TickDeps): Promise<void> {
-  // `agent: { team: { workspaceId } }`, not `task: { workspaceId }`: a `planning` run (M8b) has no
+  // `slave: { team: { workspaceId } }`, not `task: { workspaceId }`: a `planning` run (M8b) has no
   // `Task` row, and a paused planning run must resume like any other.
-  const intents = await prisma.agentRun.findMany({
+  const intents = await prisma.slaveRun.findMany({
     where: {
       status: 'paused',
       resumeRequestedAt: { not: null },
-      agent: { team: { workspaceId: deps.workspaceId } },
+      slave: { team: { workspaceId: deps.workspaceId } },
     },
-    select: { id: true, taskId: true, agentId: true },
+    select: { id: true, taskId: true, slaveId: true },
   })
 
   for (const intent of intents) {
     // Claimed one at a time, and the claim is what decides ownership: a CLI `resume` racing this
-    // tick, or a second daemon, loses here rather than putting a second agent on the branch.
+    // tick, or a second daemon, loses here rather than putting a second slave on the branch.
     const { claimed, queuedMessage } = await claimResume(intent.id)
     if (!claimed) continue
 
@@ -365,11 +365,11 @@ interface TaskRelease {
  * claim race must not roll back the winner's task row or burn an attempt against a run that is very
  * much alive.
  *
- * `lastRejectionReason` is deliberately NOT written here. It is the agent-facing channel --
+ * `lastRejectionReason` is deliberately NOT written here. It is the slave-facing channel --
  * `buildPrompt` puts it in front of the next run as the thing to fix first -- so an
  * orchestrator-side failure landing in it both destroys the verify feedback §8 requires and
- * instructs the next agent to go and fix a setup command it cannot see. The reason lives on the
- * `AgentRun` row and in `run.failed`, which is where an operator looks for it.
+ * instructs the next slave to go and fix a setup command it cannot see. The reason lives on the
+ * `SlaveRun` row and in `run.failed`, which is where an operator looks for it.
  */
 async function releaseTaskAfterFailure(
   task: { readonly id: string; readonly maxAttempts: number },
@@ -399,14 +399,14 @@ async function releaseTaskAfterFailure(
  */
 async function concludeFailedResume(
   deps: TickDeps,
-  run: { readonly id: string; readonly taskId: string | null; readonly agentId: string },
+  run: { readonly id: string; readonly taskId: string | null; readonly slaveId: string },
   error: unknown,
 ): Promise<void> {
   const now = new Date()
   // Conditioned on `resuming`: if `executeResume` threw after already moving the run past that
   // status (e.g. inside `verifyConcludedRun`, once the pump had already written a terminal row),
   // that row's status is the true outcome and must not be overwritten with `failed`.
-  const concluded = await prisma.agentRun.updateMany({
+  const concluded = await prisma.slaveRun.updateMany({
     where: { id: run.id, status: 'resuming' },
     data: { status: 'failed', terminalAt: now, endedAt: now },
   })
@@ -428,7 +428,7 @@ async function concludeFailedResume(
     type: 'run.failed',
     workspaceId: deps.workspaceId,
     taskId: run.taskId,
-    agentId: run.agentId,
+    slaveId: run.slaveId,
     runId: run.id,
     actor: 'system',
     payload: { reason: `resume failed to spawn: ${error instanceof Error ? error.message : String(error)}` },
@@ -454,22 +454,22 @@ async function concludeFailedResume(
 /**
  * Starts one run, or records why it could not start.
  *
- * The `AgentRun` row is created **before** provisioning, because spec §13 says a provisioning
+ * The `SlaveRun` row is created **before** provisioning, because spec §13 says a provisioning
  * failure is an attempted run that failed — not a task nobody scheduled. Recording it any other way
  * makes a task that never starts indistinguishable from one the scheduler never picked, which is
  * the difference an operator is actually looking for.
  */
-async function startRun(deps: TickDeps, taskId: TaskId, agentId: AgentId): Promise<RunId | null> {
+async function startRun(deps: TickDeps, taskId: TaskId, slaveId: SlaveId): Promise<RunId | null> {
   const task = await prisma.task.findUniqueOrThrow({ where: { id: taskId } })
-  // `companyAgent -> template` included so `resolveRuntime` (M12 Task 8) can walk the whole override
-  // chain -- a legacy agent with no roster link carries `companyAgent: null` and resolves through
+  // `companySlave -> template` included so `resolveRuntime` (M12 Task 8) can walk the whole override
+  // chain -- a legacy slave with no roster link carries `companySlave: null` and resolves through
   // its own column alone.
-  // `permissions` included alongside `companyAgent -> template` (M18 Task 5): the resolved deny
-  // list `writePermissionsFile` writes below is computed from this run's own agent row, at
+  // `permissions` included alongside `companySlave -> template` (M18 Task 5): the resolved deny
+  // list `writePermissionsFile` writes below is computed from this run's own slave row, at
   // dispatch time, the same snapshot-at-spawn discipline `resolveRuntime` already uses for model.
-  const agent = await prisma.agent.findUniqueOrThrow({
-    where: { id: agentId },
-    include: { companyAgent: { include: { template: true } }, permissions: true },
+  const slave = await prisma.slave.findUniqueOrThrow({
+    where: { id: slaveId },
+    include: { companySlave: { include: { template: true } }, permissions: true },
   })
   const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: task.workspaceId } })
 
@@ -483,21 +483,21 @@ async function startRun(deps: TickDeps, taskId: TaskId, agentId: AgentId): Promi
     task.branch !== null && task.branch.startsWith(prefix) ? task.branch.slice(prefix.length) : slugify(task.title)
   const branch = `${prefix}${slug}`
 
-  const run = await prisma.agentRun.create({
-    data: { taskId: task.id, agentId: agent.id, status: 'starting' },
+  const run = await prisma.slaveRun.create({
+    data: { taskId: task.id, slaveId: slave.id, status: 'starting' },
   })
   const runId = brandRunId(run.id)
 
   // The task leaves the startable set now, not after the run finishes: `decide()` treats `ready`
-  // and `rework` as startable, so a task left in either would be handed to a second idle agent on
+  // and `rework` as startable, so a task left in either would be handed to a second idle slave on
   // the very next tick, a second later.
   //
   // And it is *claimed*, not merely written: the status filter makes this the atomic step that
   // decides which of two overlapping ticks owns the task. Provisioning is awaited inline and a
   // setup command may run for minutes while the timer fires every second (spec §3.1), so two ticks
   // loading the same world is the ordinary case rather than an exotic one -- and both are handed
-  // the same `start_run`, because neither's `AgentRun` row exists when the other loads. A blind
-  // write let both proceed, which put two live agents in one worktree on one branch. Done in the
+  // the same `start_run`, because neither's `SlaveRun` row exists when the other loads. A blind
+  // write let both proceed, which put two live slaves in one worktree on one branch. Done in the
   // database rather than with an in-process lock because the CLI's `tick` (Task 16) can run against
   // a live daemon, and a mutex in one process says nothing about the other.
   const claimed = await prisma.task.updateMany({
@@ -507,7 +507,7 @@ async function startRun(deps: TickDeps, taskId: TaskId, agentId: AgentId): Promi
   if (claimed.count === 0) {
     // Lost the race. This is not a failed run -- nothing was attempted -- so it must not leave a
     // `failed` row that reads as an attempt against the task, and must not touch the winner's task.
-    await prisma.agentRun.delete({ where: { id: run.id } })
+    await prisma.slaveRun.delete({ where: { id: run.id } })
     return null
   }
 
@@ -515,14 +515,14 @@ async function startRun(deps: TickDeps, taskId: TaskId, agentId: AgentId): Promi
     type: 'task.started',
     workspaceId: workspace.id,
     taskId: task.id,
-    agentId: agent.id,
+    slaveId: slave.id,
     runId: run.id,
     actor: 'system',
     payload: { title: task.title },
   })
 
   // Declared outside the `try` so the catch can tell "never spawned" from "spawned, then something
-  // else failed". Without that distinction a failure after the spawn abandons a live agent: the run
+  // else failed". Without that distinction a failure after the spawn abandons a live slave: the run
   // row goes terminal with no pid, and §3.4's startup sweep only looks at *non-terminal* runs with
   // dead pids, so nothing in the system can ever find that process again.
   let handle: RunHandle | null = null
@@ -531,7 +531,7 @@ async function startRun(deps: TickDeps, taskId: TaskId, agentId: AgentId): Promi
   // (M12 Task 8: an unconfigured provider, below) -- the catch needs to tell "no adapter to
   // cancel with" from "spawned, then something else failed" just as it already tells that apart
   // for `handle`.
-  let adapter: AgentRuntimeAdapter | null = null
+  let adapter: SlaveRuntimeAdapter | null = null
 
   try {
     // M12 Task 8: resolved first, inside the `try`, so a misconfigured provider -- an unresolvable
@@ -542,7 +542,7 @@ async function startRun(deps: TickDeps, taskId: TaskId, agentId: AgentId): Promi
     // does not resolve itself on the next tick, so the operator needs to see it as a failure,
     // counted against the task's attempt cap, not silently retried forever.
     const workspaceDefault = await workspaceDefaultProvider(workspace.id)
-    const resolved = resolveRuntime(agent, workspaceDefault)
+    const resolved = resolveRuntime(slave, workspaceDefault)
     if (resolved.provider === null) {
       throw new Error(
         'no runtime could be resolved for this run: either this workspace has no configured ' +
@@ -556,7 +556,7 @@ async function startRun(deps: TickDeps, taskId: TaskId, agentId: AgentId): Promi
     adapter = resolveAdapter(deps.registry, resolved.provider)
     // Spec §6's dispatch-time re-check (M12 Task 9, ruling R9), after the adapter resolves and
     // before anything is spawned. It is a RE-check, not the only one: `packages/control`'s
-    // `assignCompany`/`setAgentModel` already refuse this pairing at write time. It exists anyway
+    // `assignCompany`/`setSlaveModel` already refuse this pairing at write time. It exists anyway
     // because resolution crosses four levels, and a template edit -- or a new
     // `ProviderConfiguration` row -- can change the pair under a workspace that was perfectly
     // valid when it was configured, with no write to this workspace at all for the write-time
@@ -595,7 +595,7 @@ async function startRun(deps: TickDeps, taskId: TaskId, agentId: AgentId): Promi
     // against this run's own provider -- the same resolve-once-at-spawn discipline `model` already
     // gets. `permissions.json` is written even when the deny list is empty (spec §2): the gate
     // scripts distinguish "armed with nothing denied" from "not armed at all".
-    const permissionsFilePath = writePermissionsFile(runDir, resolveDenyList(agent.permissions, resolved.provider))
+    const permissionsFilePath = writePermissionsFile(runDir, resolveDenyList(slave.permissions, resolved.provider))
 
     handle = await runAdapter.start({
       runId,
@@ -604,17 +604,17 @@ async function startRun(deps: TickDeps, taskId: TaskId, agentId: AgentId): Promi
       pauseFlagPath,
       runDir,
       permissionsFilePath,
-      gitIdentity: { name: agent.name, email: `${emailLocalPart(agent)}@slaveofai.local` },
+      gitIdentity: { name: slave.name, email: `${emailLocalPart(slave)}@slaveofai.local` },
       // Conditional spread, not `model`, because `exactOptionalPropertyTypes` treats an explicit
       // `model: undefined` as a different (and disallowed) thing from the key being absent.
       ...(model !== undefined ? { model } : {}),
     })
 
-    await prisma.agentRun.update({
+    await prisma.slaveRun.update({
       where: { id: run.id },
-      // `provider` (M12 Task 8): the schema comment on `AgentRun.provider` names Tasks 7/8 as the
+      // `provider` (M12 Task 8): the schema comment on `SlaveRun.provider` names Tasks 7/8 as the
       // ones that resolve and write it -- Task 7 covered the org-level pair; this is the run-level
-      // write. Written here, alongside `pid`, rather than at `agentRun.create` above, because
+      // write. Written here, alongside `pid`, rather than at `slaveRun.create` above, because
       // `resolved` is not known until the chain (and the registry) have both been consulted.
       data: { pid: handle.pid, worktreePath: worktree.path, provider: resolved.provider },
     })
@@ -625,13 +625,13 @@ async function startRun(deps: TickDeps, taskId: TaskId, agentId: AgentId): Promi
     //
     // Started, not awaited: the pump outlives this tick by design (spec §5.6), and awaiting it
     // would make one tick as long as one run -- the sweep, the reconcile pass and every other
-    // workspace would queue behind a single agent thinking. The rejection handler is not optional:
+    // workspace would queue behind a single slave thinking. The rejection handler is not optional:
     // an unhandled rejection here takes the daemon down, and the pump is the component that reacts
     // to a gate failure.
     const pump = pumpRun({
       runId,
       taskId: brandTaskId(task.id),
-      agentId: brandAgentId(agent.id),
+      slaveId: brandSlaveId(slave.id),
       workspaceId: deps.workspaceId,
       events: runAdapter.events(runId),
       cancel: () => runAdapter.cancel(runId),
@@ -643,7 +643,7 @@ async function startRun(deps: TickDeps, taskId: TaskId, agentId: AgentId): Promi
       spawn: {
         ...handle.runFiles,
         pauseFlagPath,
-        gitIdentity: { name: agent.name, email: `${emailLocalPart(agent)}@slaveofai.local` },
+        gitIdentity: { name: slave.name, email: `${emailLocalPart(slave)}@slaveofai.local` },
         // Recorded so a pause's checkpoint carries the provider the run actually started with
         // (M12 Task 6/8; spec §4) -- `resume()` replays it verbatim, never re-resolving.
         provider: resolved.provider,
@@ -668,7 +668,7 @@ async function startRun(deps: TickDeps, taskId: TaskId, agentId: AgentId): Promi
 
     return runId
   } catch (error) {
-    // Kill what was spawned before recording anything. An agent nobody can find is worse than a
+    // Kill what was spawned before recording anything. An slave nobody can find is worse than a
     // failed run, and this is the only moment its pid is still known.
     let cancelError: unknown = null
     // `adapter !== null` is implied by `handle !== null` (nothing spawns before it resolves), but
@@ -681,7 +681,7 @@ async function startRun(deps: TickDeps, taskId: TaskId, agentId: AgentId): Promi
         cancelError = failure
       }
     }
-    await failToStart(workspace.id, task, run.id, agent.id, error, cancelError)
+    await failToStart(workspace.id, task, run.id, slave.id, error, cancelError)
     return null
   }
 }
@@ -690,7 +690,7 @@ async function startRun(deps: TickDeps, taskId: TaskId, agentId: AgentId): Promi
  * Records a run that never got going, and puts the task somewhere it can be retried — or stops it.
  *
  * The attempt counts (spec §13), which is the whole reason this path is not silent: a task whose
- * worktree can never be provisioned would otherwise be handed to an agent every tick forever. The
+ * worktree can never be provisioned would otherwise be handed to an slave every tick forever. The
  * cap is checked here rather than left to Task 14's verify loop, because a run that never started
  * never reaches verify, and "the attempt counts" is only true if something eventually reads it.
  */
@@ -698,7 +698,7 @@ async function failToStart(
   workspaceId: string,
   task: { readonly id: string; readonly maxAttempts: number },
   runId: string,
-  agentId: string,
+  slaveId: string,
   error: unknown,
   cancelError: unknown = null,
 ): Promise<void> {
@@ -709,7 +709,7 @@ async function failToStart(
       : ` -- AND THE CANCEL FAILED (${String(cancelError)}): the process may still be running.`)
   const now = new Date()
 
-  await prisma.agentRun.update({
+  await prisma.slaveRun.update({
     where: { id: runId },
     data: { status: 'failed', terminalAt: now, endedAt: now },
   })
@@ -727,7 +727,7 @@ async function failToStart(
     type: 'run.failed',
     workspaceId,
     taskId: task.id,
-    agentId,
+    slaveId,
     runId,
     actor: 'system',
     payload: { reason },

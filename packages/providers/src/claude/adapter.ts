@@ -108,7 +108,7 @@ export interface RunHandle {
  * (`packages/providers`'s `signalPause`); the adapter itself has no pause
  * method at all.
  */
-export interface AgentRuntimeAdapter {
+export interface SlaveRuntimeAdapter {
   readonly id: string
   getCapabilities(): ProviderCapabilities
   /**
@@ -126,7 +126,7 @@ export interface AgentRuntimeAdapter {
  * pause block above is separate from Task 6's -- so the diff that added it stays legible against
  * this interface's own history.
  */
-export interface AgentRuntimeAdapter {
+export interface SlaveRuntimeAdapter {
   /**
    * Clears `checkpoint.pauseFlagPath`, **verifies it is actually absent**, then spawns
    * `claude -p "<prompt>" --resume <checkpoint.sessionId>` in `checkpoint.worktreePath`, with the
@@ -184,7 +184,7 @@ interface RunState {
    * The parsed JSON body of the run's terminal `result` line, kept
    * verbatim -- before `parseStreamLine` normalizes it into `RunOutcome`
    * and drops any field that type does not carry. Test/debug seam only
-   * (see `rawTerminalPayload`); it is not part of `AgentRuntimeAdapter`.
+   * (see `rawTerminalPayload`); it is not part of `SlaveRuntimeAdapter`.
    */
   rawResultPayload: Record<string, unknown> | undefined
   /**
@@ -210,7 +210,7 @@ const DEFAULT_RESUME_PROMPT = 'Continue the paused run.'
 
 const DEFAULT_KILL_GRACE_MS = 5_000
 
-export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
+export class ClaudeCodeAdapter implements SlaveRuntimeAdapter {
   readonly id = 'claude-code' as const
 
   private readonly command: string
@@ -422,7 +422,7 @@ export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
   }
 
   /**
-   * See the `AgentRuntimeAdapter.resume` docstring for the contract. This implementation, in
+   * See the `SlaveRuntimeAdapter.resume` docstring for the contract. This implementation, in
    * order (fix round 2 added steps 1 and 2; the M5 live-gate fix reordered step 3 below step 2;
    * the order itself is deliberate, not incidental):
    *
@@ -547,7 +547,7 @@ export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
       gitIdentity: { name: checkpoint.gitAuthorName, email: checkpoint.gitAuthorEmail },
       // Carried forward from the checkpoint, never re-resolved: the run must continue with the SAME
       // model it started with (M10 §6, the `Checkpoint.model` docstring), independently of whatever
-      // an operator's `setAgentModel` has set since. `undefined` on a legacy checkpoint behaves
+      // an operator's `setSlaveModel` has set since. `undefined` on a legacy checkpoint behaves
       // exactly as no override ever did.
       ...(checkpoint.model !== undefined ? { model: checkpoint.model } : {}),
     }
@@ -580,7 +580,7 @@ export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
   }
 
   /**
-   * Test/debug seam, not part of `AgentRuntimeAdapter`: the parsed JSON
+   * Test/debug seam, not part of `SlaveRuntimeAdapter`: the parsed JSON
    * body of the run's terminal `result` line, before normalization strips
    * fields `RuntimeEvent`/`RunOutcome` do not carry -- notably `env`, which
    * the fake CLI's `env-echo` fixture uses to prove the spawned child's

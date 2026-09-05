@@ -1,16 +1,16 @@
 import { describe, expect, it } from 'vitest'
-import { agentId, taskId } from '../../src/ids.js'
+import { slaveId, taskId } from '../../src/ids.js'
 import { DEFAULT_GUARDRAIL_LIMITS } from '../../src/guardrails/evaluate.js'
 import {
   decide,
   type Command,
-  type SchedulableAgent,
+  type SchedulableSlave,
   type SchedulableTask,
   type World,
 } from '../../src/scheduler/decide.js'
 
-const alex: SchedulableAgent = { id: agentId('alex'), role: 'backend', busy: false }
-const emma: SchedulableAgent = { id: agentId('emma'), role: 'frontend', busy: false }
+const alex: SchedulableSlave = { id: slaveId('alex'), role: 'backend', busy: false }
+const emma: SchedulableSlave = { id: slaveId('emma'), role: 'frontend', busy: false }
 
 /** Command is a union; narrow before reading taskId so the tests type-check. */
 function startedTaskIds(commands: readonly Command[]): readonly string[] {
@@ -31,7 +31,7 @@ function task(id: string, overrides: Partial<SchedulableTask> = {}): Schedulable
 function world(overrides: Partial<World> = {}): World {
   return {
     tasks: [],
-    agents: [alex, emma],
+    slaves: [alex, emma],
     limits: DEFAULT_GUARDRAIL_LIMITS,
     stats: {
       activeRuns: 0,
@@ -49,9 +49,9 @@ describe('decide', () => {
     expect(decide(world())).toEqual([])
   })
 
-  it('starts a ready task on a matching free agent', () => {
+  it('starts a ready task on a matching free slave', () => {
     const commands = decide(world({ tasks: [task('TASK-1')] }))
-    expect(commands).toEqual([{ kind: 'start_run', taskId: 'TASK-1', agentId: 'alex' }])
+    expect(commands).toEqual([{ kind: 'start_run', taskId: 'TASK-1', slaveId: 'alex' }])
   })
 
   it('starts a rework task too', () => {
@@ -67,11 +67,11 @@ describe('decide', () => {
     expect(decide(world({ tasks: [task('TASK-1', { status: 'running' })] }))).toEqual([])
   })
 
-  it('leaves a task unscheduled when no agent has the required role', () => {
+  it('leaves a task unscheduled when no slave has the required role', () => {
     expect(decide(world({ tasks: [task('TASK-1', { requiredRole: 'security' })] }))).toEqual([])
   })
 
-  it('does not assign two tasks to the same agent in one tick', () => {
+  it('does not assign two tasks to the same slave in one tick', () => {
     const commands = decide(world({ tasks: [task('TASK-1'), task('TASK-2')] }))
     expect(startedTaskIds(commands)).toEqual(['TASK-1'])
   })
@@ -139,9 +139,9 @@ describe('decide', () => {
     expect(commands).toHaveLength(1)
   })
 
-  it('skips busy agents', () => {
+  it('skips busy slaves', () => {
     const commands = decide(
-      world({ tasks: [task('TASK-1')], agents: [{ ...alex, busy: true }, emma] }),
+      world({ tasks: [task('TASK-1')], slaves: [{ ...alex, busy: true }, emma] }),
     )
     expect(commands).toEqual([])
   })
@@ -150,7 +150,7 @@ describe('decide', () => {
     // Critical: input in descending-id order so stable-sort-by-insertion-order
     // would pick TASK-9, proving the tie-break clause actually executes.
     // With equal priorities, only a.id.localeCompare(b.id) determines the winner.
-    // One agent ensures both can't run, making the sort order observable.
+    // One slave ensures both can't run, making the sort order observable.
     const commands = decide(
       world({
         tasks: [task('TASK-9', { priority: 5 }), task('TASK-2', { priority: 5 })],
@@ -161,10 +161,10 @@ describe('decide', () => {
 
   it('does not mutate input arrays', () => {
     const taskArray = Object.freeze([task('TASK-1'), task('TASK-2')] as readonly SchedulableTask[])
-    const agentArray = Object.freeze([alex, emma] as readonly SchedulableAgent[])
+    const slaveArray = Object.freeze([alex, emma] as readonly SchedulableSlave[])
     const testWorld = Object.freeze({
       tasks: taskArray,
-      agents: agentArray,
+      slaves: slaveArray,
       limits: DEFAULT_GUARDRAIL_LIMITS,
       stats: {
         activeRuns: 0,
@@ -178,6 +178,6 @@ describe('decide', () => {
     // Should not throw when called with frozen arrays; implementation must not mutate.
     const commands = decide(testWorld)
     expect(commands).toHaveLength(1)
-    expect(commands[0]).toEqual({ kind: 'start_run', taskId: 'TASK-1', agentId: 'alex' })
+    expect(commands[0]).toEqual({ kind: 'start_run', taskId: 'TASK-1', slaveId: 'alex' })
   })
 })

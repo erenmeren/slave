@@ -192,7 +192,7 @@ function parseAssistantLine(raw: unknown, line: string): RuntimeEvent {
     // kind this parser has no decision for". A two-block assistant message is
     // not that: it is exactly the kind this parser DOES have a decision for,
     // carrying more than was measured. Folding it into `ignored` made a real
-    // message from the agent vanish from the operator's feed with nothing
+    // message from the slave vanish from the operator's feed with nothing
     // counted, nothing warned and nothing in the terminal reason.
     //
     // `unparsable` is where that loss becomes attributable and non-fatal:
@@ -219,7 +219,7 @@ function parseAssistantLine(raw: unknown, line: string): RuntimeEvent {
     // nothing -- there is no text to carry -- so calling it a defect would be
     // false, and it would debase the counter that branch depends on: an
     // operator reading "3 unparsable lines were dropped" must be able to
-    // believe three pieces of the agent's message are missing. Padding that
+    // believe three pieces of the slave's message are missing. Padding that
     // count with messages that carried nothing is the same class of lie as
     // reporting an unmeasured cost as `0`.
     return { kind: 'ignored', line }
@@ -389,7 +389,7 @@ const resultSchema = z.object({
  * Claude's (`types.ts`): input = inputTokens + cacheReadTokens + cacheWriteTokens (each billed,
  * each 0 when absent), output = outputTokens alone. Any PRESENT field that is not a
  * non-negative finite number degrades the whole reading to `null` -- a partial figure is a lie
- * the per-agent averages would believe, and cursor-agent self-updates without notice, so the
+ * the per-slave averages would believe, and cursor-agent self-updates without notice, so the
  * shape is tolerated, never asserted (M15 spec §4).
  */
 function tokensFromUsage(usage: unknown): { readonly input: number; readonly output: number } | null {

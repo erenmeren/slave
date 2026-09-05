@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { AgentRuntimeAdapter, ProviderCapabilities } from '../src/claude/adapter.js'
+import type { SlaveRuntimeAdapter, ProviderCapabilities } from '../src/claude/adapter.js'
 import { admitAdapter, buildRegistry } from '../src/index.js'
 
 describe('buildRegistry', () => {
@@ -32,7 +32,7 @@ describe('buildRegistry', () => {
  * until the day a third provider needed it -- which is the day it must already work. Nothing is
  * mocked; the stub simply IS an adapter that promises neither capability.
  */
-function stubAdapter(capabilities: ProviderCapabilities): AgentRuntimeAdapter {
+function stubAdapter(capabilities: ProviderCapabilities): SlaveRuntimeAdapter {
   return {
     id: 'stub',
     getCapabilities: (): ProviderCapabilities => capabilities,

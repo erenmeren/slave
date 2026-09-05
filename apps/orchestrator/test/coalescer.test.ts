@@ -53,7 +53,7 @@ describe('createCoalescer', () => {
     await coalescer.inFlight()
 
     // The deferred wake must not fire after shutdown: a tick that starts while the daemon is
-    // draining spawns an agent nothing is left to supervise.
+    // draining spawns an slave nothing is left to supervise.
     expect(runs).toBe(1)
   })
 

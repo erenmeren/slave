@@ -12,7 +12,7 @@ const STDERR_CAP = 1_000
  * A runtime with `gate: 'none'` produces neither.
  *
  * `tool_denied` (M18 Task 6) is the third kind, sanctioned alongside the two above: a PERMISSION
- * MATRIX refusal, which the run survives -- one tool was refused, the agent keeps going, nothing
+ * MATRIX refusal, which the run survives -- one tool was refused, the slave keeps going, nothing
  * pauses. It is NOT a widening of `stopped_by_gate` (a matrix deny stops nothing, so folding it in
  * would tell the pump to pause a run that is still working) and it is NOT `permission_denied`
  * folded in here either -- see `classifyGateEvent`'s docstring for why that omission stands. It
@@ -60,12 +60,12 @@ function escapeRegExp(s: string): string {
  * separately).
  */
 const PERMISSION_DENY_REASON_PATTERN = new RegExp(
-  `^${escapeRegExp(PERMISSION_DENY_REASON_PREFIX)} '(.*)' \\((.+)\\) for this agent$`,
+  `^${escapeRegExp(PERMISSION_DENY_REASON_PREFIX)} '(.*)' \\((.+)\\) for this slave$`,
 )
 
 /**
  * The fixed grammar every matrix deny reason follows, verbatim (scripts/lib/permissions.sh, M18
- * Task 3): `permission matrix denies '<capability>' (<tool>) for this agent`. Parses `{ tool,
+ * Task 3): `permission matrix denies '<capability>' (<tool>) for this slave`. Parses `{ tool,
  * capability }` out of it, or `null` on anything that does not match -- a reason string the prefix
  * check already confirmed starts with `PERMISSION_DENY_REASON_PREFIX` but whose tail the shell
  * twin changed shape on, say, or a hand-built one in a test that got the punctuation wrong. Never
@@ -102,10 +102,10 @@ export function parsePermissionDenyReason(reason: string): { readonly tool: stri
  *
  * `permission_denied` is DELIBERATELY excluded, even though its name suggests a gate. It is a
  * guardrail observation in the shared vocabulary, not a pause-protocol signal: it stops nothing --
- * the agent is free to try another tool, and ADR 0001 measured it doing exactly that -- and halts
+ * the slave is free to try another tool, and ADR 0001 measured it doing exactly that -- and halts
  * nothing. It also carries no `reason` field to source `stopped_by_gate.reason` from (only
  * `toolName`/`toolUseId`). Folding it in here would conflate two behaviourally distinct outcomes
- * -- an ordinary tool refusal on a still-running agent, and the pause gate actually stopping the
+ * -- an ordinary tool refusal on a still-running slave, and the pause gate actually stopping the
  * run -- into one opaque value, destroying the very distinction ADR 0001 drew between them.
  * `pump.ts` keeps its own `permission_denied` handling entirely outside this function, unchanged.
  * Do not "fix" this omission by adding it back.

@@ -1,20 +1,20 @@
 import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
-import { PERMISSION_TOOLS, setAgentPermission } from '../../src/permission.js'
+import { PERMISSION_TOOLS, setSlavePermission } from '../../src/permission.js'
 import { refusalText } from '../../src/refusal.js'
 
-let agentId: string
+let slaveId: string
 
-describe('setAgentPermission', () => {
+describe('setSlavePermission', () => {
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "AgentPermission", "AgentSkill", "Skill", "SkillProvider", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "SlavePermission", "SlaveSkill", "Skill", "SkillProvider", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
     const workspace = await prisma.workspace.create({
       data: { name: 'W', repoPath: '/tmp/perm', verifyCommands: ['true'], setupCommands: [] },
     })
     const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'T' } })
-    agentId = (await prisma.agent.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })).id
+    slaveId = (await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })).id
   })
 
   afterAll(async (): Promise<void> => {
@@ -26,16 +26,16 @@ describe('setAgentPermission', () => {
   })
 
   it('writes a row and flips it in place rather than adding a second', async (): Promise<void> => {
-    expect((await setAgentPermission(agentId, 'repo read', 'allow')).ok).toBe(true)
-    expect((await setAgentPermission(agentId, 'repo read', 'deny')).ok).toBe(true)
+    expect((await setSlavePermission(slaveId, 'repo read', 'allow')).ok).toBe(true)
+    expect((await setSlavePermission(slaveId, 'repo read', 'deny')).ok).toBe(true)
 
-    const rows = await prisma.agentPermission.findMany({ where: { agentId } })
+    const rows = await prisma.slavePermission.findMany({ where: { slaveId } })
     expect(rows).toHaveLength(1)
     expect(rows[0]?.mode).toBe('deny')
   })
 
   it('refuses a tool outside the six with the verbatim text', async (): Promise<void> => {
-    const result = await setAgentPermission(agentId, 'rm -rf', 'allow')
+    const result = await setSlavePermission(slaveId, 'rm -rf', 'allow')
     expect(result.ok).toBe(false)
     if (!result.ok) {
       expect(result.error.kind).toBe('invalid_tool')
@@ -44,14 +44,14 @@ describe('setAgentPermission', () => {
   })
 
   it('refuses a mode that is neither allow nor deny', async (): Promise<void> => {
-    const result = await setAgentPermission(agentId, 'repo read', 'maybe' as 'allow')
+    const result = await setSlavePermission(slaveId, 'repo read', 'maybe' as 'allow')
     expect(result.ok).toBe(false)
     if (!result.ok) expect(refusalText(result.error)).toBe('a permission must be allow or deny')
   })
 
-  it('refuses an unknown agent', async (): Promise<void> => {
-    const result = await setAgentPermission('00000000-0000-4000-8000-000000000000', 'repo read', 'allow')
+  it('refuses an unknown slave', async (): Promise<void> => {
+    const result = await setSlavePermission('00000000-0000-4000-8000-000000000000', 'repo read', 'allow')
     expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.error.kind).toBe('agent_not_found')
+    if (!result.ok) expect(result.error.kind).toBe('slave_not_found')
   })
 })

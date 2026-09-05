@@ -7,7 +7,7 @@ import { refusalText } from '../../src/refusal.js'
 import { assignSkill, syncSkillCatalog, unassignSkill } from '../../src/skills.js'
 
 const TRUNCATE =
-  'TRUNCATE TABLE "ExecutionEvent", "AgentSkill", "Skill", "SkillProvider", "AgentPermission", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE'
+  'TRUNCATE TABLE "ExecutionEvent", "SlaveSkill", "Skill", "SkillProvider", "SlavePermission", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE'
 
 let root: string
 
@@ -190,14 +190,14 @@ describe('assignSkill / unassignSkill', () => {
     await prisma.$executeRawUnsafe(TRUNCATE)
   })
 
-  it('refuses an unknown skill with the verbatim text, and an unknown agent with its own', async (): Promise<void> => {
+  it('refuses an unknown skill with the verbatim text, and an unknown slave with its own', async (): Promise<void> => {
     const workspace = await prisma.workspace.create({
       data: { name: 'W', repoPath: '/tmp/x', verifyCommands: ['true'], setupCommands: [] },
     })
     const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'T' } })
-    const agent = await prisma.agent.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
+    const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
 
-    const noSkill = await assignSkill(agent.id, '00000000-0000-4000-8000-000000000000')
+    const noSkill = await assignSkill(slave.id, '00000000-0000-4000-8000-000000000000')
     expect(noSkill.ok).toBe(false)
     if (!noSkill.ok) {
       expect(noSkill.error.kind).toBe('skill_not_found')
@@ -206,9 +206,9 @@ describe('assignSkill / unassignSkill', () => {
 
     const provider = await prisma.skillProvider.create({ data: { name: 'personal' } })
     const skill = await prisma.skill.create({ data: { providerId: provider.id, name: 'n', description: 'd' } })
-    const noAgent = await assignSkill('00000000-0000-4000-8000-000000000000', skill.id)
-    expect(noAgent.ok).toBe(false)
-    if (!noAgent.ok) expect(noAgent.error.kind).toBe('agent_not_found')
+    const noSlave = await assignSkill('00000000-0000-4000-8000-000000000000', skill.id)
+    expect(noSlave.ok).toBe(false)
+    if (!noSlave.ok) expect(noSlave.error.kind).toBe('slave_not_found')
   })
 
   it('is idempotent in both directions', async (): Promise<void> => {
@@ -216,16 +216,16 @@ describe('assignSkill / unassignSkill', () => {
       data: { name: 'W', repoPath: '/tmp/x', verifyCommands: ['true'], setupCommands: [] },
     })
     const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'T' } })
-    const agent = await prisma.agent.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
+    const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
     const provider = await prisma.skillProvider.create({ data: { name: 'personal' } })
     const skill = await prisma.skill.create({ data: { providerId: provider.id, name: 'n', description: 'd' } })
 
-    expect((await assignSkill(agent.id, skill.id)).ok).toBe(true)
-    expect((await assignSkill(agent.id, skill.id)).ok).toBe(true)
-    expect(await prisma.agentSkill.count({ where: { agentId: agent.id } })).toBe(1)
+    expect((await assignSkill(slave.id, skill.id)).ok).toBe(true)
+    expect((await assignSkill(slave.id, skill.id)).ok).toBe(true)
+    expect(await prisma.slaveSkill.count({ where: { slaveId: slave.id } })).toBe(1)
 
-    expect((await unassignSkill(agent.id, skill.id)).ok).toBe(true)
-    expect((await unassignSkill(agent.id, skill.id)).ok).toBe(true)
-    expect(await prisma.agentSkill.count({ where: { agentId: agent.id } })).toBe(0)
+    expect((await unassignSkill(slave.id, skill.id)).ok).toBe(true)
+    expect((await unassignSkill(slave.id, skill.id)).ok).toBe(true)
+    expect(await prisma.slaveSkill.count({ where: { slaveId: slave.id } })).toBe(0)
   })
 })

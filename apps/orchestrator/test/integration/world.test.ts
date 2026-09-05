@@ -1,4 +1,4 @@
-import { agentId, taskId, workspaceId } from '@slave-of-ai/domain'
+import { slaveId, taskId, workspaceId } from '@slave-of-ai/domain'
 import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { loadWorld } from '../../src/world.js'
@@ -21,8 +21,8 @@ afterAll(async (): Promise<void> => {
  *    returning true unconditionally.
  *  - `roleless` has no `requiredRole` -- the one case spec §4 says gets excluded from the
  *    schedulable set and counted, not silently dropped.
- *  - `agentWithRun` holds a `working` (non-terminal) run, `idleAgent` holds none, and
- *    `retiredRunAgent` holds a `succeeded` (terminal) one -- so "busy" can't be satisfied by
+ *  - `slaveWithRun` holds a `working` (non-terminal) run, `idleSlave` holds none, and
+ *    `retiredRunSlave` holds a `succeeded` (terminal) one -- so "busy" can't be satisfied by
  *    "has ever had a run".
  */
 interface Fixture {
@@ -31,9 +31,9 @@ interface Fixture {
   readonly readyTaskId: string
   readonly blockedTaskId: string
   readonly rolelessTaskId: string
-  readonly agentWithRunId: string
-  readonly idleAgentId: string
-  readonly retiredRunAgentId: string
+  readonly slaveWithRunId: string
+  readonly idleSlaveId: string
+  readonly retiredRunSlaveId: string
 }
 
 async function seedFixture(): Promise<Fixture> {
@@ -47,13 +47,13 @@ async function seedFixture(): Promise<Fixture> {
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
 
-  const agentWithRun = await prisma.agent.create({
+  const slaveWithRun = await prisma.slave.create({
     data: { teamId: team.id, name: 'Alex', role: 'backend' },
   })
-  const idleAgent = await prisma.agent.create({
+  const idleSlave = await prisma.slave.create({
     data: { teamId: team.id, name: 'Blair', role: 'backend' },
   })
-  const retiredRunAgent = await prisma.agent.create({
+  const retiredRunSlave = await prisma.slave.create({
     data: { teamId: team.id, name: 'Casey', role: 'backend' },
   })
 
@@ -111,8 +111,8 @@ async function seedFixture(): Promise<Fixture> {
       maxAttempts: workspace.maxAttempts,
     },
   })
-  await prisma.agentRun.create({
-    data: { taskId: workingTask.id, agentId: agentWithRun.id, status: 'working' },
+  await prisma.slaveRun.create({
+    data: { taskId: workingTask.id, slaveId: slaveWithRun.id, status: 'working' },
   })
 
   const doneRunTask = await prisma.task.create({
@@ -125,8 +125,8 @@ async function seedFixture(): Promise<Fixture> {
       maxAttempts: workspace.maxAttempts,
     },
   })
-  await prisma.agentRun.create({
-    data: { taskId: doneRunTask.id, agentId: retiredRunAgent.id, status: 'succeeded' },
+  await prisma.slaveRun.create({
+    data: { taskId: doneRunTask.id, slaveId: retiredRunSlave.id, status: 'succeeded' },
   })
 
   return {
@@ -135,9 +135,9 @@ async function seedFixture(): Promise<Fixture> {
     readyTaskId: readyTask.id,
     blockedTaskId: blockedTask.id,
     rolelessTaskId: rolelessTask.id,
-    agentWithRunId: agentWithRun.id,
-    idleAgentId: idleAgent.id,
-    retiredRunAgentId: retiredRunAgent.id,
+    slaveWithRunId: slaveWithRun.id,
+    idleSlaveId: idleSlave.id,
+    retiredRunSlaveId: retiredRunSlave.id,
   }
 }
 
@@ -146,7 +146,7 @@ describe('loadWorld', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
     fixture = await seedFixture()
   })
@@ -173,14 +173,14 @@ describe('loadWorld', () => {
     expect(skippedNoRole).toBe(1)
   })
 
-  it('reports an agent busy only while it holds a non-terminal run', async (): Promise<void> => {
+  it('reports an slave busy only while it holds a non-terminal run', async (): Promise<void> => {
     const { world } = await loadWorld(workspaceId(fixture.workspaceId))
 
-    expect(world.agents.find((a) => a.id === agentId(fixture.agentWithRunId))?.busy).toBe(true)
-    expect(world.agents.find((a) => a.id === agentId(fixture.idleAgentId))?.busy).toBe(false)
-    // Held a run once, but it finished. "Busy" can't be implemented as "has any AgentRun row" --
-    // that would trap an agent as permanently busy after its first completed run.
-    expect(world.agents.find((a) => a.id === agentId(fixture.retiredRunAgentId))?.busy).toBe(false)
+    expect(world.slaves.find((a) => a.id === slaveId(fixture.slaveWithRunId))?.busy).toBe(true)
+    expect(world.slaves.find((a) => a.id === slaveId(fixture.idleSlaveId))?.busy).toBe(false)
+    // Held a run once, but it finished. "Busy" can't be implemented as "has any SlaveRun row" --
+    // that would trap an slave as permanently busy after its first completed run.
+    expect(world.slaves.find((a) => a.id === slaveId(fixture.retiredRunSlaveId))?.busy).toBe(false)
   })
 
   it('reports stats.emergencyStopped from Workspace.haltedReason, never a hardcoded value', async (): Promise<void> => {
@@ -230,7 +230,7 @@ async function seedRuns(specs: readonly RunSpec[]): Promise<string> {
     },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const agent = await prisma.agent.create({
+  const slave = await prisma.slave.create({
     data: { teamId: team.id, name: 'Dana', role: 'backend' },
   })
 
@@ -245,10 +245,10 @@ async function seedRuns(specs: readonly RunSpec[]): Promise<string> {
         maxAttempts: workspace.maxAttempts,
       },
     })
-    await prisma.agentRun.create({
+    await prisma.slaveRun.create({
       data: {
         taskId: task.id,
-        agentId: agent.id,
+        slaveId: slave.id,
         status: spec.status,
         startedAt: spec.startedAt,
         terminalAt: spec.terminalAt ?? null,
@@ -274,7 +274,7 @@ const at = (iso: string): Date => new Date(iso)
 describe('loadWorld stats.consecutiveFailures', () => {
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
   })
 
@@ -367,7 +367,7 @@ describe('loadWorld stats.consecutiveFailures', () => {
 describe('loadWorld stats.activeRuns and stats.spentUsd', () => {
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
   })
 
@@ -406,7 +406,7 @@ describe('loadWorld stats.activeRuns and stats.spentUsd', () => {
 
   /**
    * A planning run (Task 6) has no `Task` row -- `taskId` is `null` -- so its only linkage to a
-   * workspace is `agent -> team -> workspace`. Every query this file exercises above joins through
+   * workspace is `slave -> team -> workspace`. Every query this file exercises above joins through
    * `Task` instead, and a task-less run would silently vanish from both a workspace's concurrency
    * slot count and its spend total: it looks idle and free while a real process burns real money.
    * Seeded directly (no factory creates a task-less run yet) because nothing else in this
@@ -422,9 +422,9 @@ describe('loadWorld stats.activeRuns and stats.spentUsd', () => {
       },
     })
     const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-    const agent = await prisma.agent.create({ data: { teamId: team.id, name: 'Planner', role: 'planner' } })
-    await prisma.agentRun.create({
-      data: { agentId: agent.id, kind: 'planning', status: 'working', costUsd: 2.5 },
+    const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Planner', role: 'planner' } })
+    await prisma.slaveRun.create({
+      data: { slaveId: slave.id, kind: 'planning', status: 'working', costUsd: 2.5 },
     })
 
     const { world } = await loadWorld(workspaceId(workspace.id))
@@ -434,7 +434,7 @@ describe('loadWorld stats.activeRuns and stats.spentUsd', () => {
 })
 
 /**
- * `stats.globalActiveRuns` (spec §5) counts non-terminal `AgentRun`s across every workspace, not
+ * `stats.globalActiveRuns` (spec §5) counts non-terminal `SlaveRun`s across every workspace, not
  * just the one `loadWorld` was asked about -- it feeds a cross-workspace guardrail, so a second
  * workspace's runs must be visible here even though nothing else this file loads ever crosses a
  * workspace boundary.
@@ -442,7 +442,7 @@ describe('loadWorld stats.activeRuns and stats.spentUsd', () => {
 describe('loadWorld stats.globalActiveRuns', () => {
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
   })
 
@@ -460,8 +460,8 @@ describe('loadWorld stats.globalActiveRuns', () => {
     const otherTeam = await prisma.team.create({
       data: { workspaceId: otherWorkspace.id, name: 'Other Team' },
     })
-    const otherAgent = await prisma.agent.create({
-      data: { teamId: otherTeam.id, name: 'Other Agent', role: 'backend' },
+    const otherSlave = await prisma.slave.create({
+      data: { teamId: otherTeam.id, name: 'Other Slave', role: 'backend' },
     })
     const otherTask = await prisma.task.create({
       data: {
@@ -473,8 +473,8 @@ describe('loadWorld stats.globalActiveRuns', () => {
         maxAttempts: otherWorkspace.maxAttempts,
       },
     })
-    await prisma.agentRun.create({
-      data: { taskId: otherTask.id, agentId: otherAgent.id, status: 'working' },
+    await prisma.slaveRun.create({
+      data: { taskId: otherTask.id, slaveId: otherSlave.id, status: 'working' },
     })
 
     const { world } = await loadWorld(workspaceId(fixture.workspaceId))

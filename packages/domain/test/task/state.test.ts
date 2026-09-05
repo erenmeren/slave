@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { agentId, runId } from '../../src/ids.js'
+import { slaveId, runId } from '../../src/ids.js'
 import { applyTaskEvent, initialTaskState, type TaskEvent, type TaskState } from '../../src/task/state.js'
 
 function drive(state: TaskState, events: readonly TaskEvent[]): TaskState {
@@ -12,7 +12,7 @@ function drive(state: TaskState, events: readonly TaskEvent[]): TaskState {
 
 const HAPPY_PATH: readonly TaskEvent[] = [
   { type: 'dependencies_satisfied' },
-  { type: 'assigned', agentId: agentId('alex') },
+  { type: 'assigned', slaveId: slaveId('alex') },
   { type: 'run_started', runId: runId('run-1') },
   { type: 'run_succeeded' },
   { type: 'verify_passed' },

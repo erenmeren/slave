@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { err, ok, type Result } from '../src/result.js'
-import { agentId, taskId, type AgentId, type TaskId } from '../src/ids.js'
+import { slaveId, taskId, type SlaveId, type TaskId } from '../src/ids.js'
 
 describe('Result', () => {
   it('wraps a success value', () => {
@@ -18,7 +18,7 @@ describe('Result', () => {
 
 describe('branded ids', () => {
   it('preserves the underlying string', () => {
-    expect(agentId('alex')).toBe('alex')
+    expect(slaveId('alex')).toBe('alex')
   })
 
   it('produces distinct brands that still compare by value', () => {
@@ -26,8 +26,8 @@ describe('branded ids', () => {
   })
 
   it('prevents assignment between different branded types', () => {
-    const aid: AgentId = agentId('agent-1')
-    // @ts-expect-error AgentId is not assignable to TaskId
+    const aid: SlaveId = slaveId('slave-1')
+    // @ts-expect-error SlaveId is not assignable to TaskId
     const tid: TaskId = aid
   })
 })

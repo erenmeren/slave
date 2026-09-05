@@ -2,13 +2,13 @@ import { refusalText } from '@slave-of-ai/control'
 import {
   UnknownProviderError,
   type AdapterRegistry,
-  type AgentRuntimeAdapter,
+  type SlaveRuntimeAdapter,
   type ProviderKind,
 } from '@slave-of-ai/providers'
 
 /**
  * The single place every `deps.adapter.x(...)` call site in the orchestrator resolves a live
- * `AgentRuntimeAdapter` out of an `AdapterRegistry`.
+ * `SlaveRuntimeAdapter` out of an `AdapterRegistry`.
  *
  * M12 Task 5 through 7 left this function resolving a hardcoded `'claude_code'` constant that
  * lived in `packages/control/src/pause.ts` (`CURRENT_PROVIDER_KIND`, deleted at Task 8's fix
@@ -29,7 +29,7 @@ import {
  * place holding both the value and the registry -- so refusing here, with the same text the write
  * path already promises, is where the check finally meets it.
  */
-export function resolveAdapter(registry: AdapterRegistry, kind: ProviderKind): AgentRuntimeAdapter {
+export function resolveAdapter(registry: AdapterRegistry, kind: ProviderKind): SlaveRuntimeAdapter {
   try {
     return registry.resolve(kind)
   } catch (error) {

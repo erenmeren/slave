@@ -72,7 +72,7 @@ describe('appendEvent', () => {
     expect(typeof event.seq).toBe('number')
     expect(event.ts).toMatch(/^\d{4}-\d{2}-\d{2}T/)
     expect(event.taskId).toBe('task-1')
-    expect(event.agentId).toBeUndefined()
+    expect(event.slaveId).toBeUndefined()
     expect(event.runId).toBeUndefined()
     expect(await prisma.executionEvent.count()).toBe(1)
   })

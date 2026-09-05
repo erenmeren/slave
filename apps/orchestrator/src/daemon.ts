@@ -152,7 +152,7 @@ export async function runDaemon(deps: DaemonDeps): Promise<void> {
   try {
     // The subscription is opened *before* the timer starts. Opened after, a failure here left an
     // interval running with no signal handlers installed: the CLI printed "startup failed", set a
-    // non-zero exit code, and the process kept scheduling agents forever with nobody watching.
+    // non-zero exit code, and the process kept scheduling slaves forever with nobody watching.
     const connectionString = process.env['DATABASE_URL']
     if (connectionString !== undefined && connectionString !== '') {
       subscription = await subscribeEvents(connectionString, (notification): void => {
@@ -196,7 +196,7 @@ export async function runDaemon(deps: DaemonDeps): Promise<void> {
 
     // Ordered, and every one of them reached. The tick in flight goes first because it may still be
     // provisioning and about to spawn -- without this the daemon printed "daemon stopped", drained
-    // an empty pump set, disconnected Prisma, and *then* an in-flight tick started a fresh agent
+    // an empty pump set, disconnected Prisma, and *then* an in-flight tick started a fresh slave
     // nothing was left to supervise.
     await coalescer.inFlight()
     try {

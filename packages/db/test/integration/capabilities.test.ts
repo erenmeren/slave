@@ -1,7 +1,7 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { prisma } from '../../src/client.js'
 
-async function seedAgent(): Promise<{ workspaceId: string; agentId: string }> {
+async function seedSlave(): Promise<{ workspaceId: string; slaveId: string }> {
   const workspace = await prisma.workspace.create({
     data: {
       name: 'Checkout Platform',
@@ -11,14 +11,14 @@ async function seedAgent(): Promise<{ workspaceId: string; agentId: string }> {
     },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const agent = await prisma.agent.create({ data: { teamId: team.id, name: 'Alex', role: 'Backend' } })
-  return { workspaceId: workspace.id, agentId: agent.id }
+  const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'Backend' } })
+  return { workspaceId: workspace.id, slaveId: slave.id }
 }
 
-describe('agent capabilities', () => {
+describe('slave capabilities', () => {
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "AgentSkill", "Skill", "SkillProvider", "AgentPermission", "ProviderConfiguration", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "SlaveSkill", "Skill", "SkillProvider", "SlavePermission", "ProviderConfiguration", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
   })
 
@@ -26,25 +26,25 @@ describe('agent capabilities', () => {
     await prisma.$disconnect()
   })
 
-  it('rejects two permissions for the same agent and tool', async () => {
-    const { agentId } = await seedAgent()
-    await prisma.agentPermission.create({ data: { agentId, tool: 'Bash', mode: 'allow' } })
+  it('rejects two permissions for the same slave and tool', async () => {
+    const { slaveId } = await seedSlave()
+    await prisma.slavePermission.create({ data: { slaveId, tool: 'Bash', mode: 'allow' } })
 
     await expect(
-      prisma.agentPermission.create({ data: { agentId, tool: 'Bash', mode: 'deny' } }),
+      prisma.slavePermission.create({ data: { slaveId, tool: 'Bash', mode: 'deny' } }),
     ).rejects.toThrow()
   })
 
-  it('links an agent to skills through the join table', async () => {
-    const { agentId } = await seedAgent()
+  it('links an slave to skills through the join table', async () => {
+    const { slaveId } = await seedSlave()
     const provider = await prisma.skillProvider.create({ data: { name: 'superpowers' } })
     const skill = await prisma.skill.create({
       data: { providerId: provider.id, name: 'test-driven-development', description: 'TDD' },
     })
-    await prisma.agentSkill.create({ data: { agentId, skillId: skill.id } })
+    await prisma.slaveSkill.create({ data: { slaveId, skillId: skill.id } })
 
-    const found = await prisma.agent.findUniqueOrThrow({
-      where: { id: agentId },
+    const found = await prisma.slave.findUniqueOrThrow({
+      where: { id: slaveId },
       include: { skills: { include: { skill: true } } },
     })
 
@@ -52,7 +52,7 @@ describe('agent capabilities', () => {
   })
 
   it('allows one configuration per provider kind per workspace', async () => {
-    const { workspaceId } = await seedAgent()
+    const { workspaceId } = await seedSlave()
     await prisma.providerConfiguration.create({
       data: { workspaceId, kind: 'claude_code', settings: { permissionMode: 'bypassPermissions' } },
     })

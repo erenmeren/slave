@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@slave-of-ai/db'
 import { prisma } from '@slave-of-ai/db/client'
 import { workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
-import type { AgentRuntimeAdapter } from '@slave-of-ai/providers'
+import type { SlaveRuntimeAdapter } from '@slave-of-ai/providers'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { noteTickRan, reconcileOrphans, resetTickObservation, sweep, type SweepDeps } from '../../src/sweep.js'
 
@@ -27,7 +27,7 @@ beforeAll(async (): Promise<void> => {
 interface Fixture {
   readonly workspaceId: string
   readonly taskId: string
-  readonly agentId: string
+  readonly slaveId: string
 }
 
 const dirs: string[] = []
@@ -44,7 +44,7 @@ async function seed(overrides: { readonly runTimeoutMs?: number; readonly name?:
     },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const agent = await prisma.agent.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
   const task = await prisma.task.create({
     data: {
       workspaceId: workspace.id,
@@ -55,7 +55,7 @@ async function seed(overrides: { readonly runTimeoutMs?: number; readonly name?:
       maxAttempts: workspace.maxAttempts,
     },
   })
-  return { workspaceId: workspace.id, taskId: task.id, agentId: agent.id }
+  return { workspaceId: workspace.id, taskId: task.id, slaveId: slave.id }
 }
 
 async function eventTypesFor(workspaceId: string): Promise<readonly DomainEventType[]> {
@@ -80,10 +80,10 @@ describe('sweep and reconcileOrphans', () => {
     worktreePath?: string
     taskId?: string
   }) =>
-    prisma.agentRun.create({
+    prisma.slaveRun.create({
       data: {
         taskId: data.taskId ?? fixture.taskId,
-        agentId: fixture.agentId,
+        slaveId: fixture.slaveId,
         status: data.status,
         pid: data.pid === undefined ? DEAD_PID : data.pid,
         toolCalls: data.toolCalls ?? 0,
@@ -94,7 +94,7 @@ describe('sweep and reconcileOrphans', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
     cancelled = []
@@ -108,14 +108,14 @@ describe('sweep and reconcileOrphans', () => {
         // pump writes the terminal row. Modelling that here is what makes the lost-update
         // observable from a test.
         if (concludeDuringCancel) {
-          await prisma.agentRun.update({
+          await prisma.slaveRun.update({
             where: { id: runId },
             data: { status: 'succeeded', terminalAt: new Date(), costUsd: 1.5 },
           })
         }
         if (cancelThrows) throw new Error('SIGTERM failed: process not registered')
       },
-    } as unknown as AgentRuntimeAdapter
+    } as unknown as SlaveRuntimeAdapter
     deps = {
       workspaceId: brandWorkspaceId(fixture.workspaceId),
       // `resolve` ignores `kind` and always hands back the one adapter this test configured --
@@ -135,7 +135,7 @@ describe('sweep and reconcileOrphans', () => {
     const count = await reconcileOrphans(deps)
 
     expect(count).toBe(1)
-    const run = await prisma.agentRun.findFirstOrThrow()
+    const run = await prisma.slaveRun.findFirstOrThrow()
     expect(run.status).toBe('failed')
     // The column `loadWorld` orders the failure streak by. An orphan concluded without it sorts by
     // `startedAt` instead, which is the mixed-clock case Task 10 carried forward.
@@ -151,7 +151,7 @@ describe('sweep and reconcileOrphans', () => {
     await givenRun({ status: 'starting', pid: null })
 
     expect(await reconcileOrphans(deps)).toBe(1)
-    expect((await prisma.agentRun.findFirstOrThrow()).status).toBe('failed')
+    expect((await prisma.slaveRun.findFirstOrThrow()).status).toBe('failed')
   })
 
   it('preserves the worktree of an orphaned run', async (): Promise<void> => {
@@ -190,17 +190,17 @@ describe('sweep and reconcileOrphans', () => {
     // orphan shape. Discriminating on liveness alone destroys every paused run in the fleet on the
     // first daemon restart, along with the checkpoint written to preserve it.
     expect(count).toBe(0)
-    expect((await prisma.agentRun.findFirstOrThrow()).status).toBe('paused')
+    expect((await prisma.slaveRun.findFirstOrThrow()).status).toBe('paused')
   })
 
   it("leaves another workspace's runs alone", async (): Promise<void> => {
     const other = await seed({ name: 'Other Workspace' })
-    await prisma.agentRun.create({
-      data: { taskId: other.taskId, agentId: other.agentId, status: 'working', pid: DEAD_PID },
+    await prisma.slaveRun.create({
+      data: { taskId: other.taskId, slaveId: other.slaveId, status: 'working', pid: DEAD_PID },
     })
 
     expect(await reconcileOrphans(deps)).toBe(0)
-    const run = await prisma.agentRun.findFirstOrThrow()
+    const run = await prisma.slaveRun.findFirstOrThrow()
     expect(run.status).toBe('working')
   })
 
@@ -288,10 +288,10 @@ describe('sweep and reconcileOrphans', () => {
     // §3.3: "Dead pid -> the process is gone but the run is not terminal. Mark it failed, preserve
     // the worktree, emit run.failed." Only reporting it leaves no in-process path by which any run
     // is ever concluded: a run whose pump died, or whose process was killed externally, would stay
-    // non-terminal with its agent busy and its task stranded until the next daemon restart, while
+    // non-terminal with its slave busy and its task stranded until the next daemon restart, while
     // the sweep watched it every second and did nothing.
     expect(report.deadPids).toEqual([run.id])
-    const row = await prisma.agentRun.findFirstOrThrow()
+    const row = await prisma.slaveRun.findFirstOrThrow()
     expect(row.status).toBe('failed')
     expect(row.terminalAt).not.toBeNull()
     expect(row.endedAt).not.toBeNull()
@@ -307,7 +307,7 @@ describe('sweep and reconcileOrphans', () => {
     const report = await sweep({ ...deps, livePumpRunIds: new Set([run.id]) })
 
     expect(report.deadPids).toEqual([])
-    const row = await prisma.agentRun.findFirstOrThrow()
+    const row = await prisma.slaveRun.findFirstOrThrow()
     expect(row.status).toBe('working')
     expect(await eventTypesFor(fixture.workspaceId)).toEqual([])
   })
@@ -321,7 +321,7 @@ describe('sweep and reconcileOrphans', () => {
     // later, so a null pid mid-tick is a run about to spawn, not a dead one. Discriminating on the
     // pid rather than on liveness is what keeps §3.3 implementable from inside a running daemon.
     expect(report.deadPids).toEqual([])
-    expect((await prisma.agentRun.findFirstOrThrow()).status).toBe('starting')
+    expect((await prisma.slaveRun.findFirstOrThrow()).status).toBe('starting')
   })
 
   it('does not resurrect a run the pump concluded while the cancel was in flight', async (): Promise<void> => {
@@ -329,7 +329,7 @@ describe('sweep and reconcileOrphans', () => {
     // `cancel` awaits the child's exit, so by the time it returns the pump has very plausibly
     // already written the terminal row -- and a run at its wall-clock limit is exactly the kind
     // that is about to finish. An unguarded status write then rewrites `succeeded` back to
-    // `stopping`: the agent reads busy forever, the task is never released, and the failure streak
+    // `stopping`: the slave reads busy forever, the task is never released, and the failure streak
     // never sees a run that actually concluded.
     concludeDuringCancel = true
 
@@ -338,7 +338,7 @@ describe('sweep and reconcileOrphans', () => {
     // The conclusion lands *during* the cancel, so a cancel genuinely was issued and the report and
     // the event are honest about it. What must not survive is the status write: an unguarded one
     // rewrites `succeeded` back to `stopping` after the fact.
-    const row = await prisma.agentRun.findFirstOrThrow()
+    const row = await prisma.slaveRun.findFirstOrThrow()
     expect(row.status).toBe('succeeded')
     expect(row.terminalAt).not.toBeNull()
     expect(report.timedOut).toEqual([run.id])
@@ -374,7 +374,7 @@ describe('sweep and reconcileOrphans', () => {
     // the orphan pass still concludes it. That argument is the only thing making the exclusion
     // safe, and until now nothing tested it.
     expect(await reconcileOrphans(deps)).toBe(1)
-    expect((await prisma.agentRun.findFirstOrThrow()).status).toBe('failed')
+    expect((await prisma.slaveRun.findFirstOrThrow()).status).toBe('failed')
   })
 
   it('names the guardrail for the limit that was actually breached', async (): Promise<void> => {
@@ -386,7 +386,7 @@ describe('sweep and reconcileOrphans', () => {
     expect((event.payload as { guardrail: string }).guardrail).toBe('tool_call_ceiling')
   })
 
-  it('correlates its events to the run, task and agent they are about', async (): Promise<void> => {
+  it('correlates its events to the run, task and slave they are about', async (): Promise<void> => {
     const run = await givenRun({ status: 'working', pid: process.pid, startedAt: hoursAgo(2) })
 
     await sweep(deps)
@@ -395,7 +395,7 @@ describe('sweep and reconcileOrphans', () => {
     const event = await prisma.executionEvent.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })
     expect(event.runId).toBe(run.id)
     expect(event.taskId).toBe(fixture.taskId)
-    expect(event.agentId).toBe(fixture.agentId)
+    expect(event.slaveId).toBe(fixture.slaveId)
     expect(event.actor).toBe('system')
   })
 
@@ -440,7 +440,7 @@ describe('sweep and reconcileOrphans', () => {
     await reconcileOrphans(deps)
 
     // The task is being worked on by a live run. Releasing it because an *older* run was orphaned
-    // would hand the same task to a second agent while the first is still going -- the hazard Task
+    // would hand the same task to a second slave while the first is still going -- the hazard Task
     // 13's atomic claim exists to prevent, arriving from the other direction.
     const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
     expect(task.activeRunId).toBe(replacement.id)
@@ -467,7 +467,7 @@ describe('sweep and reconcileOrphans', () => {
     await givenRun({ status: 'working', pid: 1 })
 
     expect(await reconcileOrphans(deps)).toBe(0)
-    expect((await prisma.agentRun.findFirstOrThrow()).status).toBe('working')
+    expect((await prisma.slaveRun.findFirstOrThrow()).status).toBe('working')
   })
 
   it('treats pid 0 as dead rather than as the whole process group', async (): Promise<void> => {
@@ -480,10 +480,10 @@ describe('sweep and reconcileOrphans', () => {
 
   it("leaves another workspace's runs out of the sweep too", async (): Promise<void> => {
     const other = await seed({ name: 'Other Workspace' })
-    await prisma.agentRun.create({
+    await prisma.slaveRun.create({
       data: {
         taskId: other.taskId,
-        agentId: other.agentId,
+        slaveId: other.slaveId,
         status: 'working',
         pid: process.pid,
         toolCalls: 500,
@@ -504,7 +504,7 @@ describe('sweep and reconcileOrphans', () => {
     await sweep(deps)
 
     // The same guard the orphan pass needs, on the path that runs every second rather than once at
-    // startup: releasing a task because an older run died hands it to a second agent while the
+    // startup: releasing a task because an older run died hands it to a second slave while the
     // first is still working.
     const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
     expect(task.activeRunId).toBe(replacement.id)
@@ -517,7 +517,7 @@ describe('sweep and reconcileOrphans', () => {
     // The startup-only constraint is not a style preference: a null-pid run is legitimately
     // transient inside every startRun, so a reconcile racing a tick fails a run that is seconds
     // from spawning, releases its task to `rework`, and the next tick adopts the live run's
-    // worktree with a second agent. Documented-only, that failure is silent.
+    // worktree with a second slave. Documented-only, that failure is silent.
     await expect(reconcileOrphans(deps)).rejects.toThrow(/startup/i)
   })
 
@@ -536,7 +536,7 @@ describe('sweep and reconcileOrphans', () => {
     expect(task.status).toBe('rework')
     expect(task.mergeClaimedAt).toBeNull()
     expect(task.lastRejectionReason).toBe('merge interrupted')
-    // No attempt increment: a dead daemon is not the agent failing.
+    // No attempt increment: a dead daemon is not the slave failing.
     expect(task.attempt).toBe(0)
     expect(await eventTypesFor(fixture.workspaceId)).toEqual(['task.merge_failed'])
   })

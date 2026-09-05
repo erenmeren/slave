@@ -54,7 +54,7 @@ const SWEEPABLE: readonly RunStatus[] = ORPHANABLE.filter((status: RunStatus) =>
  * conclude it -- but that same shape exists legitimately for a few milliseconds inside every
  * `startRun`, between creating the row and recording the pid. Reconciling while a tick is in
  * flight therefore fails a run seconds from spawning, releases its task to `rework`, and the next
- * tick adopts the live run's worktree with a second agent: two agents, one branch, which is the
+ * tick adopts the live run's worktree with a second slave: two slaves, one branch, which is the
  * thing Task 13's atomic claim exists to prevent.
  *
  * Documented, that constraint was silent when broken. This makes it loud.
@@ -76,7 +76,7 @@ export function resetTickObservation(): void {
  *
  * **Startup only, and that is load-bearing rather than incidental.** A non-terminal run with a
  * `null` pid is an orphan here, because nothing will ever conclude it — but that same shape exists
- * legitimately for a few milliseconds inside every `startRun`, between creating the `AgentRun` row
+ * legitimately for a few milliseconds inside every `startRun`, between creating the `SlaveRun` row
  * and recording the pid the adapter returns. Running this concurrently with a tick would fail runs
  * that are moments from spawning. §3.4 places it before the first tick; a caller that puts it on a
  * timer instead has to close that window some other way.
@@ -93,10 +93,10 @@ export async function reconcileOrphans(deps: SweepDeps): Promise<number> {
   }
 
 
-  // `agent: { team: { workspaceId } }`, not `task: { workspaceId }`: a `planning` run (M8b) has no
+  // `slave: { team: { workspaceId } }`, not `task: { workspaceId }`: a `planning` run (M8b) has no
   // `Task` row, and this pass exists precisely to fail an orphan whichever kind it is.
-  const runs = await db.agentRun.findMany({
-    where: { status: { in: [...ORPHANABLE] }, agent: { team: { workspaceId: deps.workspaceId } } },
+  const runs = await db.slaveRun.findMany({
+    where: { status: { in: [...ORPHANABLE] }, slave: { team: { workspaceId: deps.workspaceId } } },
   })
 
   let failed = 0
@@ -106,7 +106,7 @@ export async function reconcileOrphans(deps: SweepDeps): Promise<number> {
     if (isAlive(run.pid)) continue
 
     const now = new Date()
-    await db.agentRun.update({
+    await db.slaveRun.update({
       where: { id: run.id },
       // `terminalAt` matters: it is the key `loadWorld` orders the failure streak by, and an orphan
       // concluded without it sorts by `startedAt` instead — the mixed-clock case Task 10 carried.
@@ -117,9 +117,9 @@ export async function reconcileOrphans(deps: SweepDeps): Promise<number> {
     // it starts one; failing the run and leaving the task pointing at it strands the task busy
     // forever, and nothing else in the milestone reconciles *tasks*.
     //
-    // No attempt is counted. A daemon that died is not the agent failing, and counting it would let
+    // No attempt is counted. A daemon that died is not the slave failing, and counting it would let
     // a crash-looping daemon exhaust every task's attempts and fail the lot — losing real work to
-    // an infrastructure problem. Same reasoning as Task 14's non-agent verify outcomes.
+    // an infrastructure problem. Same reasoning as Task 14's non-slave verify outcomes.
     //
     // A `planning` run (M8b) has no task to release -- `taskId` is `null` and there is nothing
     // else in this block for it.
@@ -136,7 +136,7 @@ export async function reconcileOrphans(deps: SweepDeps): Promise<number> {
       type: 'run.failed',
       workspaceId: deps.workspaceId,
       taskId: run.taskId,
-      agentId: run.agentId,
+      slaveId: run.slaveId,
       runId: run.id,
       actor: 'system',
       payload: {
@@ -170,7 +170,7 @@ export async function reconcileOrphans(deps: SweepDeps): Promise<number> {
   // Crash recovery for the merge pass (spec §4): a claimed merge whose process died mid-way is the
   // same shape a run orphan is -- a claim nothing will ever release -- so it gets the same M5
   // resume-claim treatment applied to tasks instead of runs. No attempt is counted, for the same
-  // reason a dead daemon does not count against a run's orphan: a crashed process is not the agent
+  // reason a dead daemon does not count against a run's orphan: a crashed process is not the slave
   // failing.
   const interrupted = await db.task.findMany({
     where: { workspaceId: deps.workspaceId, status: 'merging', mergeClaimedAt: { not: null } },
@@ -201,10 +201,10 @@ export async function reconcileOrphans(deps: SweepDeps): Promise<number> {
  */
 export async function sweep(deps: SweepDeps): Promise<SweepReport> {
   const workspace = await db.workspace.findUniqueOrThrow({ where: { id: deps.workspaceId } })
-  // `agent: { team: { workspaceId } }`, not `task: { workspaceId }`: a `planning` run (M8b) has no
+  // `slave: { team: { workspaceId } }`, not `task: { workspaceId }`: a `planning` run (M8b) has no
   // `Task` row, and the timeout/tool-cap guardrails below must still reach it.
-  const runs = await db.agentRun.findMany({
-    where: { status: { in: [...SWEEPABLE] }, agent: { team: { workspaceId: deps.workspaceId } } },
+  const runs = await db.slaveRun.findMany({
+    where: { status: { in: [...SWEEPABLE] }, slave: { team: { workspaceId: deps.workspaceId } } },
   })
 
   const timedOut: RunId[] = []
@@ -239,11 +239,11 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
     // Claim the run before cancelling it, exactly as the tick claims a task. `cancel` awaits the
     // child's exit, so by the time it returns the pump has very plausibly written the terminal row
     // -- and a run at its wall-clock limit is precisely the kind that is about to finish. An
-    // unguarded status write then rewrote `succeeded` back to `stopping`: the agent read busy
+    // unguarded status write then rewrote `succeeded` back to `stopping`: the slave read busy
     // forever, the task was never released, the failure streak never saw it, and a
     // `guardrail.tripped` announced a cancellation of a run that had succeeded. Nothing recovered
     // it in-process, because `stopping` is not swept.
-    const claimed = await db.agentRun.updateMany({
+    const claimed = await db.slaveRun.updateMany({
       where: { id: run.id, status: { in: [...SWEEPABLE] } },
       data: { status: 'stopping' },
     })
@@ -261,7 +261,7 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
       // Cursor, two runs in the same pass can be on different runtimes, and one adapter resolved
       // up front would call the WRONG one's `cancel` for the other. `?? 'claude_code'` is not a
       // choice among live options -- every run in this table was recorded before
-      // `AgentRun.provider` existed to be written, or (post-Task-8) was written by a dispatch that
+      // `SlaveRun.provider` existed to be written, or (post-Task-8) was written by a dispatch that
       // already refused an unconfigured kind, so a `null` here is a historical fact (there was
       // only ever the one kind of run that could have produced it), never a guess.
       //
@@ -281,7 +281,7 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
       type: 'guardrail.tripped',
       workspaceId: deps.workspaceId,
       taskId: run.taskId,
-      agentId: run.agentId,
+      slaveId: run.slaveId,
       runId: run.id,
       actor: 'system',
       payload: {
@@ -305,10 +305,10 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
  */
 async function concludeDeadRun(
   deps: SweepDeps,
-  run: { readonly id: string; readonly taskId: string | null; readonly agentId: string; readonly pid: number | null },
+  run: { readonly id: string; readonly taskId: string | null; readonly slaveId: string; readonly pid: number | null },
 ): Promise<void> {
   const now = new Date()
-  const concluded = await db.agentRun.updateMany({
+  const concluded = await db.slaveRun.updateMany({
     where: { id: run.id, status: { in: [...SWEEPABLE] } },
     data: { status: 'failed', terminalAt: now, endedAt: now },
   })
@@ -326,7 +326,7 @@ async function concludeDeadRun(
     type: 'run.failed',
     workspaceId: deps.workspaceId,
     taskId: run.taskId,
-    agentId: run.agentId,
+    slaveId: run.slaveId,
     runId: run.id,
     actor: 'system',
     payload: { reason: `the run's process (pid ${run.pid}) is gone but the run never concluded` },

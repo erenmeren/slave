@@ -1,6 +1,6 @@
-import type { AgentId } from '@slave-of-ai/domain'
+import type { SlaveId } from '@slave-of-ai/domain'
 import { describe, expect, it } from 'vitest'
-import type { AgentRunRow, ExecutionEventRow, TaskRow } from '../src/client.js'
+import type { SlaveRunRow, ExecutionEventRow, TaskRow } from '../src/client.js'
 import { toExecutionEvent, toRunState, toTaskState } from '../src/mappers.js'
 
 function taskRow(overrides: Partial<TaskRow> = {}): TaskRow {
@@ -12,7 +12,7 @@ function taskRow(overrides: Partial<TaskRow> = {}): TaskRow {
     status: 'ready',
     priority: 0,
     requiredRole: null,
-    assigneeId: 'agent-1',
+    assigneeId: 'slave-1',
     activeRunId: null,
     attempt: 1,
     maxAttempts: 3,
@@ -32,7 +32,7 @@ function eventRow(overrides: Partial<ExecutionEventRow> = {}): ExecutionEventRow
     type: 'task_created',
     workspaceId: 'w1',
     taskId: 'task-1',
-    agentId: null,
+    slaveId: null,
     runId: null,
     actor: 'system',
     payload: { title: 'Add checkout retry' },
@@ -43,8 +43,8 @@ function eventRow(overrides: Partial<ExecutionEventRow> = {}): ExecutionEventRow
 describe('toTaskState', () => {
   it('brands the assignee id', () => {
     const state = toTaskState(taskRow())
-    const assignee: AgentId | null = state.assigneeId
-    expect(assignee).toBe('agent-1')
+    const assignee: SlaveId | null = state.assigneeId
+    expect(assignee).toBe('slave-1')
   })
 
   it('carries the attempt counters through unchanged', () => {
@@ -63,7 +63,7 @@ describe('toRunState', () => {
     const row = {
       id: 'run-1',
       taskId: 'task-1',
-      agentId: 'agent-1',
+      slaveId: 'slave-1',
       kind: 'implementation',
       status: 'paused',
       sessionId: 'sess-9',
@@ -73,7 +73,7 @@ describe('toRunState', () => {
       costUsd: 0.12,
       startedAt: new Date(),
       endedAt: null,
-    } as AgentRunRow
+    } as SlaveRunRow
 
     expect(toRunState(row)).toEqual({
       status: 'paused',

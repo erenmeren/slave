@@ -4,7 +4,7 @@ import { promisify } from 'node:util'
 import { killWithEscalation } from '@slave-of-ai/control'
 import { toExecutionEvent } from '@slave-of-ai/db'
 import { Prisma, prisma } from '@slave-of-ai/db/client'
-import type { AgentId, RunId, TaskId, WorkspaceId } from '@slave-of-ai/domain'
+import type { SlaveId, RunId, TaskId, WorkspaceId } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import {
   classifyGateEvent,
@@ -16,7 +16,7 @@ import {
 } from '@slave-of-ai/providers'
 
 /**
- * The cap on a single `run.output` payload (spec §9: the agent's text output "with a truncation
+ * The cap on a single `run.output` payload (spec §9: the slave's text output "with a truncation
  * cap"). It protects an append-only log first and, from M4, a screen -- one runaway paste from a
  * model that decided to echo a file back is otherwise a row nobody can read and nobody can delete.
  */
@@ -28,13 +28,13 @@ export interface PumpRunInput {
   readonly runId: RunId
   /** `null` for a task-less `planning` run (M8b) -- it has no `attempt` counter to increment. */
   readonly taskId: TaskId | null
-  readonly agentId: AgentId
+  readonly slaveId: SlaveId
   readonly workspaceId: WorkspaceId
   readonly events: AsyncIterable<RuntimeEvent>
   /**
    * The caller's binding of the adapter's `cancel(runId)`. Required, not optional: the pump reacts
    * to a gate failure by stopping the run, and a pump that can be constructed without the ability
-   * to stop one is a pump that can silently leave an ungated agent running.
+   * to stop one is a pump that can silently leave an ungated slave running.
    */
   readonly cancel: () => Promise<void>
   /**
@@ -65,7 +65,7 @@ export interface PumpRunInput {
     /**
      * The model this run was actually spawned with (M10 §6), resolved once at spawn time by
      * `resolveRuntime` -- recorded into the checkpoint verbatim so `resume()` replays the SAME model
-     * rather than re-resolving the chain, which could have moved since (a `setAgentModel` call
+     * rather than re-resolving the chain, which could have moved since (a `setSlaveModel` call
      * between pause and resume affects only the run's NEXT dispatch, never this one).
      */
     readonly model?: string
@@ -82,11 +82,11 @@ export interface PumpRunInput {
 
 /**
  * `actor` says who the event is *about*, not who wrote the row -- every row here is written by the
- * orchestrator. `agent` is the agent's own activity as observed on the stream; `system` is the
- * orchestrator's judgement about it. A reader filtering for what the agent did wants the first
+ * orchestrator. `slave` is the slave's own activity as observed on the stream; `system` is the
+ * orchestrator's judgement about it. A reader filtering for what the slave did wants the first
  * without the second.
  */
-type Actor = 'agent' | 'system'
+type Actor = 'slave' | 'system'
 
 /** The name `pause` wrote into the flag file, if it is still there. Provenance, never required. */
 function readPauseRequester(pauseFlagPath: string | undefined): string | null {
@@ -185,13 +185,13 @@ async function writeStreamUsage(input: {
     // Stated, not merely left alone: this runtime cannot report skill use, and `Prisma.DbNull` is
     // SQL NULL -- the "we do not know" of Decision 4, never the `{}` that would claim a
     // measurement nobody made.
-    await prisma.agentRun.updateMany({ where: { id: input.runId }, data: { skillCalls: Prisma.DbNull } })
+    await prisma.slaveRun.updateMany({ where: { id: input.runId }, data: { skillCalls: Prisma.DbNull } })
   } else {
-    const row = await prisma.agentRun.findUniqueOrThrow({ where: { id: input.runId } })
+    const row = await prisma.slaveRun.findUniqueOrThrow({ where: { id: input.runId } })
     const merged = storedTally(row.skillCalls)
     for (const [name, count] of input.tally) merged.set(name, (merged.get(name) ?? 0) + count)
     // A plain object, never the `Map` -- Prisma writes the latter as `{}`.
-    await prisma.agentRun.updateMany({ where: { id: input.runId }, data: { skillCalls: Object.fromEntries(merged) } })
+    await prisma.slaveRun.updateMany({ where: { id: input.runId }, data: { skillCalls: Object.fromEntries(merged) } })
   }
 
   // Tokens are a fact of the `result` line, not of the stream ending: a pause or an operator's
@@ -200,7 +200,7 @@ async function writeStreamUsage(input: {
   // itself pauses again). So, unlike `skillCalls` above, this write only happens when THIS
   // stream's `outcome` is not `null`.
   if (input.outcome === null) return
-  await prisma.agentRun.updateMany({
+  await prisma.slaveRun.updateMany({
     where: { id: input.runId },
     data: {
       // NOT gated on `runtimeReportsUsage`/`reportsSkillCalls` (M15 fix round 1): that function
@@ -244,7 +244,7 @@ async function writeCheckpoint(input: {
     return
   }
 
-  const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: input.runId } })
+  const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: input.runId } })
   const worktreePath = run.worktreePath ?? ''
   const headCommit = worktreePath === '' ? '' : await gitOutput(worktreePath, ['rev-parse', 'HEAD'])
   const dirtyFiles =
@@ -277,15 +277,15 @@ async function writeCheckpoint(input: {
       deniedToolUseIds: [...input.denied],
       headCommit,
       dirtyFiles,
-      // AgentRun.costUsd (M12 Task 6) is written only once, at the run's terminal conclusion --
+      // SlaveRun.costUsd (M12 Task 6) is written only once, at the run's terminal conclusion --
       // mid-run, before that write happens, it is null, not the run's true accrued cost. A
       // checkpoint is written mid-run (on pause), so this is always the null case in practice; `??
       // 0` here targets Checkpoint.cumulativeCostUsd specifically, a column this task's migration
-      // does not touch and which stays NOT NULL @default(0) -- unlike AgentRun.costUsd, it was
+      // does not touch and which stays NOT NULL @default(0) -- unlike SlaveRun.costUsd, it was
       // never meant to distinguish "zero" from "not yet known".
       // SETTLED (M12 Task 9, ruling R4): `Checkpoint.cumulativeCostUsd` STAYS NOT NULL, and no
       // migration touches it. The question routed here from Task 6 was whether it needed to
-      // distinguish unknown from zero the way `AgentRun.costUsd` now does, and the answer is that
+      // distinguish unknown from zero the way `SlaveRun.costUsd` now does, and the answer is that
       // nothing reads it for a money decision: its only reader is `resume.ts`, which carries it
       // into the resumed run's checkpoint shape -- no sum, no comparison, no guardrail. It is
       // checkpoint bookkeeping, not spend the budget believes, so `?? 0` here is not the lie
@@ -364,7 +364,7 @@ const CURSOR_PAUSE_REASON =
  * produces a rejection is this system's own `beforeShellExecution` hook -- which denies only while
  * the pause flag exists -- so a
  * non-empty `denied` is not incidental to the pause: it is evidence the pause was in flight and
- * working. The sequence is `signalPause` writes the flag, SIGTERMs with a 2 s grace, the agent
+ * working. The sequence is `signalPause` writes the flag, SIGTERMs with a 2 s grace, the slave
  * starts one more shell command inside that window, the gate denies it (the entire purpose of
  * writing the flag before the kill), and `cursor-agent` treats the denial as an ordinary tool error
  * and still reaches `result` with `is_error: false`. Letting that "success" win recorded a pause
@@ -409,7 +409,7 @@ async function recordCursorPauseIfRequested(input: {
   // any other state ended for its own reasons and must keep the conclusion that state implies.
   // `endedAt: null` for the usual reason -- an operator's `cancel` or the sweep may already have
   // concluded this run, and their decision stands.
-  const claimed = await prisma.agentRun.updateMany({
+  const claimed = await prisma.slaveRun.updateMany({
     where: { id: input.runId, endedAt: null, status: 'pause_requested' },
     data: { status: 'paused', pausedAtStep: input.toolCalls },
   })
@@ -469,11 +469,11 @@ async function gitOutput(cwd: string, args: readonly string[]): Promise<string> 
  * per event. Spec §5.6 concludes from that that a slow database applies backpressure to the child's
  * stdout; today it does not, and the comment is written this way rather than repeating the claim.
  * The adapter's event queue buffers without bound and nothing pauses the reader over the child's
- * stdout, so a slow database grows an in-memory array instead of slowing the agent. Nothing is
+ * stdout, so a slow database grows an in-memory array instead of slowing the slave. Nothing is
  * lost, which is the property that matters here -- but the backpressure is not real until that
  * queue gains a high-water mark, and that is Task 6's code, not this file's.
  *
- * This function owns the `AgentRun` row's live columns, because it is the only thing that watches
+ * This function owns the `SlaveRun` row's live columns, because it is the only thing that watches
  * the stream: `sessionId` (spec §5.4, written in the same step as `run.started`), `toolCalls` (the
  * count §3.3's ceiling is read from), and the terminal `status`/`costUsd`/`terminalAt`. Task 13
  * writes the row at spawn and never sees it end.
@@ -482,14 +482,14 @@ async function gitOutput(cwd: string, args: readonly string[]): Promise<string> 
  * pause, or a stream that ended without a terminal event. A `null` is never a success.
  */
 export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
-  const { runId, taskId, agentId, workspaceId } = input
+  const { runId, taskId, slaveId, workspaceId } = input
 
   const emit = async (
     type: Parameters<typeof appendEvent>[0]['type'],
     actor: Actor,
     payload: unknown,
   ): Promise<void> => {
-    await appendEvent({ type, workspaceId, taskId, agentId, runId, actor, payload })
+    await appendEvent({ type, workspaceId, taskId, slaveId, runId, actor, payload })
   }
 
   let outcome: RunOutcome | null = null
@@ -559,7 +559,7 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
   // Seeded from the row, not from zero, for the same reason the column is incremented: on a resume
   // this pump is continuing a run that already made tool calls, and `pausedAtStep` should say
   // where the *run* is, not where this pump started reading.
-  const startingRow = await prisma.agentRun.findUniqueOrThrow({ where: { id: runId } })
+  const startingRow = await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId } })
   let toolCalls = startingRow.toolCalls
   /**
    * Skills invoked during THIS pump, tallied from the `tool_call` events the loop already sees
@@ -602,16 +602,16 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
         // this to `'starting'` alone -- gate-fix B review round 1, Critical 1 -- stranded every
         // resumed run in `resuming` for its whole remaining life, because a resumed pump's stream
         // opens with `session_started` exactly like a fresh one's.
-        await prisma.agentRun.updateMany({
+        await prisma.slaveRun.updateMany({
           where: { id: runId, endedAt: null },
           data: { sessionId: event.sessionId },
         })
-        await prisma.agentRun.updateMany({
+        await prisma.slaveRun.updateMany({
           where: { id: runId, endedAt: null, status: { in: ['starting', 'resuming'] } },
           data: { status: 'working' },
         })
         sessionId = event.sessionId
-        if (input.resumed !== true) await emit('run.started', 'agent', { sessionId: event.sessionId })
+        if (input.resumed !== true) await emit('run.started', 'slave', { sessionId: event.sessionId })
         break
       }
 
@@ -619,7 +619,7 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
         // `increment`, never an absolute local count. A resumed run is a *second* `pumpRun` on the
         // same row -- the adapter closes the old queue and `events()` hands out a new one (Task
         // 6/9) -- so writing a count that starts at zero refunds the tool-call budget every time
-        // an agent pauses. Task 15's §3.3 ceiling reads this column.
+        // an slave pauses. Task 15's §3.3 ceiling reads this column.
         toolCalls += 1
         if (event.toolName === 'Skill') {
           // `summary` is `"Skill <name>"` (`summaryFor` with `CLAUDE_SUMMARY_ARG_KEYS`'s leading
@@ -631,11 +631,11 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
           skillCalls.set(name, (skillCalls.get(name) ?? 0) + 1)
         }
         lastToolUse = { id: event.toolUseId, name: event.toolName }
-        await prisma.agentRun.updateMany({ where: { id: runId, endedAt: null }, data: { toolCalls: { increment: 1 } } })
+        await prisma.slaveRun.updateMany({ where: { id: runId, endedAt: null }, data: { toolCalls: { increment: 1 } } })
         // `summary` is the readable form the parser derives from the tool_use block's `input`
         // (M4 spec §1) -- e.g. `Write note3.txt` rather than the opaque `toolUseId`. It falls
         // back to the bare tool name when no known argument key is present.
-        await emit('run.tool_call', 'agent', { name: event.toolName, summary: event.summary })
+        await emit('run.tool_call', 'slave', { name: event.toolName, summary: event.summary })
         break
       }
 
@@ -654,16 +654,16 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
 
       case 'text': {
         // Truncated from the end, and *said* to be truncated: the beginning is what a reader
-        // wants, and a sentence that simply stops reads as the agent having stopped.
+        // wants, and a sentence that simply stops reads as the slave having stopped.
         const text =
           event.text.length > OUTPUT_CAP ? `${event.text.slice(0, OUTPUT_CAP - 1)}…` : event.text
-        await emit('run.output', 'agent', { text })
+        await emit('run.output', 'slave', { text })
         break
       }
 
       case 'permission_denied': {
         // A permission-mode denial is *not* a pause. The pause protocol is a hook deny, which
-        // removes the agent's ability to act; this is one tool refused, with the agent free to
+        // removes the slave's ability to act; this is one tool refused, with the slave free to
         // try another -- and ADR 0001 measured it doing exactly that. Reporting it as `run.paused`
         // would tell an operator a run had stopped when it had not.
         //
@@ -677,7 +677,7 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
         // reads to decide whether a clean-terminal Cursor run was actually paused, and a matrix
         // refusal on an otherwise-clean run poisoning that array would misclassify it as paused;
         // and it does not emit `guardrail.tripped`, because a matrix deny is a fact the run
-        // survives, not an observation of the agent being refused by the permission MODE.
+        // survives, not an observation of the slave being refused by the permission MODE.
         //
         // Fix round 1 (review Important 4, controller ruling): routed only on a FULL parse, the
         // same rule `classifyGateEvent` now applies on the Claude side -- fail-safe is treating an
@@ -691,7 +691,7 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
             // rejection -- recorded here so the terminal failure check below can tell this denial
             // apart from a genuine one.
             matrixDeniedToolUseIds.add(event.toolUseId)
-            await emit('run.tool_denied', 'agent', { tool: parsed.tool, capability: parsed.capability, toolUseId: event.toolUseId })
+            await emit('run.tool_denied', 'slave', { tool: parsed.tool, capability: parsed.capability, toolUseId: event.toolUseId })
             break
           }
         }
@@ -773,7 +773,7 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
             // on a `working` run (no operator asked; the domain machine does not admit it as `paused`) is
             // still reported as what the runtime did, exactly as before this reordering. Only the ordering
             // moved.
-            await prisma.agentRun.updateMany({
+            await prisma.slaveRun.updateMany({
               where: { id: runId, endedAt: null },
               data: { status: 'paused', pausedAtStep: toolCalls },
             })
@@ -795,7 +795,7 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
             //
             // A cancel that *rejects* must make this louder, never quieter. Letting it propagate --
             // which it did until this was measured -- skipped behaviours 2 to 4 entirely: no halt,
-            // no events, an attempt uncounted and the row still reading `working`. That is an agent
+            // no events, an attempt uncounted and the row still reading `working`. That is an slave
             // running with no gate, a kill that did not land, and a scheduler still free to start
             // more of them; the one case where the halt matters most was the one case it did not
             // happen.
@@ -833,7 +833,7 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
             })
 
             const now = new Date()
-            await prisma.agentRun.updateMany({
+            await prisma.slaveRun.updateMany({
               where: { id: runId, endedAt: null },
               data: {
                 status: 'failed',
@@ -859,7 +859,7 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
             // Important 4 controller ruling: a prefixed-but-malformed reason stays `stopped_by_gate`
             // above -- fail-safe is pausing, not silently trusting an unparseable matrix claim). One
             // event, exactly once per refusal, and nothing else: no `paused`, no checkpoint, no
-            // `killWithEscalation`. The run is still working; the agent is free to try something
+            // `killWithEscalation`. The run is still working; the slave is free to try something
             // else, the same way ADR 0001 measured a permission-mode denial leaving it free to.
             // B2 (M19): "the last tool_call this pump saw" is not, on its own, proof this deny
             // belongs to it. Task 1's REAL capture (`permission-matrix-deny.ndjson`) measured hook
@@ -897,7 +897,7 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
                 : lastToolUse !== null && lastToolUse.name === gateOutcome.tool
                   ? lastToolUse.id
                   : null
-            await emit('run.tool_denied', 'agent', {
+            await emit('run.tool_denied', 'slave', {
               tool: gateOutcome.tool,
               capability: gateOutcome.capability,
               toolUseId: associated,
@@ -932,7 +932,7 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
         // never a gate signal, which is Task 4's `hook_response` guard. Recorded out of band on
         // purpose: spec §9 adds exactly nine catalogue types and invents no names, none of the
         // nineteen means "the orchestrator could not read a line", and folding it into
-        // `run.output` would put orchestrator diagnostics into the stream M4 renders as the agent
+        // `run.output` would put orchestrator diagnostics into the stream M4 renders as the slave
         // speaking.
         unparsableLines += 1
         console.warn(`[pump] unparsable stream line on run ${runId}: ${event.line}`)
@@ -993,7 +993,7 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
     // a daemon, a web stop's kill lands in another process and can wake this stream before
     // `requestStop`'s own conclusion runs. Either way, when the intent record is present the row
     // must read `stopped`, and this is the side that has to write it when it wins that race.
-    const stopClaimed = await prisma.agentRun.updateMany({
+    const stopClaimed = await prisma.slaveRun.updateMany({
       where: { id: runId, endedAt: null, status: 'stopping', stopRequestedAt: { not: null } },
       data: {
         status: 'stopped',
@@ -1005,7 +1005,7 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
       // Read back who asked. Safe after the fact: nothing else can still be writing this row --
       // every other writer's own update is conditioned on `endedAt: null`, which this call just
       // set.
-      const stopped = await prisma.agentRun.findUniqueOrThrow({ where: { id: runId } })
+      const stopped = await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId } })
       await emit('run.stopped', 'system', {
         reason:
           stopped.stopRequestedBy === null
@@ -1024,7 +1024,7 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
     // and kills the child; the stream then ends without a terminal event and this branch used to
     // overwrite that with `failed`, emitting a spurious `run.failed` after `run.stopped` -- which
     // under a daemon is what happens on *every* cancel.
-    const concluded = await prisma.agentRun.updateMany({
+    const concluded = await prisma.slaveRun.updateMany({
       where: { id: runId, endedAt: null },
       data: {
         status: 'failed',
@@ -1073,7 +1073,7 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
   const nonMatrixDeniedToolUseIds = outcome.deniedToolUseIds.filter((id) => !matrixDeniedToolUseIds.has(id))
   const failed = outcome.isError || nonMatrixDeniedToolUseIds.length > 0
   const terminalNow = new Date()
-  const concluded = await prisma.agentRun.updateMany({
+  const concluded = await prisma.slaveRun.updateMany({
     where: { id: runId, endedAt: null },
     data: {
       status: failed ? 'failed' : 'succeeded',

@@ -97,10 +97,10 @@ function makeRepo(): string {
 interface Fixture {
   readonly workspaceId: string
   readonly taskId: string
-  readonly agentId: string
+  readonly slaveId: string
   readonly teamId: string
   /** A second, empty team on the same workspace -- `delete-team` succeeds only against a team
-   *  with no agents on it, and `fixture.teamId` always has `agentId` on its roster. */
+   *  with no slaves on it, and `fixture.teamId` always has `slaveId` on its roster. */
   readonly emptyTeamId: string
   readonly repoPath: string
 }
@@ -113,14 +113,14 @@ async function seed(overrides: { readonly name?: string } = {}): Promise<Fixture
   const workspace = await prisma.workspace.create({
     data: { name: overrides.name ?? 'Checkout Platform', repoPath, verifyCommands: ['true'], setupCommands: [] },
   })
-  // M12 Task 8: no agent in this file names a model anywhere in the chain, so `resolveRuntime`
+  // M12 Task 8: no slave in this file names a model anywhere in the chain, so `resolveRuntime`
   // falls all the way to the workspace default -- which needs a `ProviderConfiguration` row to
   // exist at all, or every dispatch here (the real CLI, `dist/cli.js`) refuses instead of
   // starting the run under test.
   await prisma.providerConfiguration.create({ data: { workspaceId: workspace.id, kind: 'claude_code', settings: {} } })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
   const emptyTeam = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Design' } })
-  const agent = await prisma.agent.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
   const task = await prisma.task.create({
     data: {
       workspaceId: workspace.id,
@@ -131,7 +131,7 @@ async function seed(overrides: { readonly name?: string } = {}): Promise<Fixture
       maxAttempts: workspace.maxAttempts,
     },
   })
-  return { workspaceId: workspace.id, taskId: task.id, agentId: agent.id, teamId: team.id, emptyTeamId: emptyTeam.id, repoPath }
+  return { workspaceId: workspace.id, taskId: task.id, slaveId: slave.id, teamId: team.id, emptyTeamId: emptyTeam.id, repoPath }
 }
 
 describe('the orchestrator CLI', () => {
@@ -139,7 +139,7 @@ describe('the orchestrator CLI', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace", "CompanyAgent", "CompanyTeam", "Company", "AgentTemplate", "User" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate", "User" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
   })
@@ -161,7 +161,7 @@ describe('the orchestrator CLI', () => {
 
     // "Exactly one tick" is the command's whole contract -- a `tick` that looped, or that also
     // reconciled, would be indistinguishable from `daemon` by its output alone.
-    expect(await prisma.agentRun.count()).toBe(1)
+    expect(await prisma.slaveRun.count()).toBe(1)
   }, 30_000)
 
   it('does not reconcile orphans on a bare tick', async (): Promise<void> => {
@@ -175,8 +175,8 @@ describe('the orchestrator CLI', () => {
         maxAttempts: 3,
       },
     })
-    await prisma.agentRun.create({
-      data: { taskId: other.id, agentId: fixture.agentId, status: 'working', pid: 999_999 },
+    await prisma.slaveRun.create({
+      data: { taskId: other.id, slaveId: fixture.slaveId, status: 'working', pid: 999_999 },
     })
 
     await runCli(['tick'])
@@ -184,7 +184,7 @@ describe('the orchestrator CLI', () => {
     // A CLI `tick` may run alongside a live daemon, and Task 15's orphan pass is startup-only for a
     // reason: a run that is mid-spawn is indistinguishable from one it should fail. Reconciling
     // here would fail runs belonging to a daemon that is very much alive.
-    const run = await prisma.agentRun.findFirstOrThrow({ where: { taskId: other.id } })
+    const run = await prisma.slaveRun.findFirstOrThrow({ where: { taskId: other.id } })
     expect(run.status).toBe('working')
   }, 30_000)
 
@@ -271,7 +271,7 @@ describe('the orchestrator CLI', () => {
 
     expect(result.code).toBe(0)
     expect(result.stdout).toMatch(/^template .+ created$/m)
-    expect(await prisma.agentTemplate.count()).toBe(1)
+    expect(await prisma.slaveTemplate.count()).toBe(1)
   })
 
   it('exits non-zero for create-template with no --name given', async (): Promise<void> => {
@@ -299,8 +299,8 @@ describe('the orchestrator CLI', () => {
   it('assigns a company to a workspace and prints the count of new workers', async (): Promise<void> => {
     const company = await prisma.company.create({ data: { name: 'Acme Corp' } })
     const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Engineering' } })
-    const template = await prisma.agentTemplate.create({ data: { name: 'Backend Engineer', role: 'backend' } })
-    await prisma.companyAgent.create({ data: { companyTeamId: companyTeam.id, templateId: template.id, name: 'Atlas' } })
+    const template = await prisma.slaveTemplate.create({ data: { name: 'Backend Engineer', role: 'backend' } })
+    await prisma.companySlave.create({ data: { companyTeamId: companyTeam.id, templateId: template.id, name: 'Atlas' } })
 
     const result = await runCli(['assign-company', '--workspace', fixture.workspaceId, '--company', company.id])
 
@@ -320,8 +320,8 @@ describe('the orchestrator CLI', () => {
   it('sets a worker model+provider override, then clears both -- a set/clear round trip', async (): Promise<void> => {
     const setResult = await runCli([
       'set-model',
-      '--agent',
-      fixture.agentId,
+      '--slave',
+      fixture.slaveId,
       '--model',
       'claude-opus',
       '--provider',
@@ -329,40 +329,40 @@ describe('the orchestrator CLI', () => {
     ])
 
     expect(setResult.code).toBe(0)
-    expect(setResult.stdout).toMatch(new RegExp(`^model set to claude-opus on ${fixture.agentId}$`, 'm'))
-    const afterSet = await prisma.agent.findUniqueOrThrow({ where: { id: fixture.agentId } })
+    expect(setResult.stdout).toMatch(new RegExp(`^model set to claude-opus on ${fixture.slaveId}$`, 'm'))
+    const afterSet = await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId } })
     expect(afterSet.model).toBe('claude-opus')
     expect(afterSet.provider).toBe('claude_code')
 
-    const clearResult = await runCli(['set-model', '--agent', fixture.agentId, '--clear'])
+    const clearResult = await runCli(['set-model', '--slave', fixture.slaveId, '--clear'])
 
     expect(clearResult.code).toBe(0)
-    expect(clearResult.stdout).toMatch(new RegExp(`^model cleared on ${fixture.agentId}$`, 'm'))
-    const afterClear = await prisma.agent.findUniqueOrThrow({ where: { id: fixture.agentId } })
+    expect(clearResult.stdout).toMatch(new RegExp(`^model cleared on ${fixture.slaveId}$`, 'm'))
+    const afterClear = await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId } })
     expect(afterClear.model).toBeNull()
     expect(afterClear.provider).toBeNull()
   })
 
   it('exits non-zero for set-model with neither --model nor --clear given', async (): Promise<void> => {
-    const result = await runCli(['set-model', '--agent', fixture.agentId])
+    const result = await runCli(['set-model', '--slave', fixture.slaveId])
 
     expect(result.code).not.toBe(0)
     expect(`${result.stdout}${result.stderr}`).toMatch(/--model or --clear is required/)
   })
 
   it('exits non-zero for set-model with --model and no --provider', async (): Promise<void> => {
-    const result = await runCli(['set-model', '--agent', fixture.agentId, '--model', 'claude-opus'])
+    const result = await runCli(['set-model', '--slave', fixture.slaveId, '--model', 'claude-opus'])
 
     expect(result.code).not.toBe(0)
     expect(`${result.stdout}${result.stderr}`).toMatch(/a model must name the provider that runs it/)
-    const agent = await prisma.agent.findUniqueOrThrow({ where: { id: fixture.agentId } })
-    expect(agent.model).toBeNull()
+    const slave = await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId } })
+    expect(slave.model).toBeNull()
   })
 
-  it('exits non-zero for set-model against an unknown agent', async (): Promise<void> => {
+  it('exits non-zero for set-model against an unknown slave', async (): Promise<void> => {
     const result = await runCli([
       'set-model',
-      '--agent',
+      '--slave',
       'nope',
       '--model',
       'claude-opus',
@@ -371,14 +371,14 @@ describe('the orchestrator CLI', () => {
     ])
 
     expect(result.code).not.toBe(0)
-    expect(`${result.stdout}${result.stderr}`).toMatch(/no agent with id nope/)
+    expect(`${result.stdout}${result.stderr}`).toMatch(/no slave with id nope/)
   })
 
   it('exits non-zero for set-model with an empty --model', async (): Promise<void> => {
     const result = await runCli([
       'set-model',
-      '--agent',
-      fixture.agentId,
+      '--slave',
+      fixture.slaveId,
       '--model',
       '',
       '--provider',
@@ -406,19 +406,19 @@ describe('the orchestrator CLI', () => {
     // Seeded rather than produced by a tick: §11 says `status` lists *active* runs, and the CLI's
     // `tick` waits for the run it started, so by the time it returns there is nothing active. A
     // status that listed finished runs would bury the one thing an operator is looking for.
-    await prisma.agentRun.create({
+    await prisma.slaveRun.create({
       data: {
         taskId: fixture.taskId,
-        agentId: fixture.agentId,
+        slaveId: fixture.slaveId,
         status: 'working',
         pid: process.pid,
         worktreePath: join(fixture.repoPath, '.slaveofai', 'worktrees', 'T-abcdef12'),
       },
     })
-    await prisma.agentRun.create({
+    await prisma.slaveRun.create({
       data: {
         taskId: fixture.taskId,
-        agentId: fixture.agentId,
+        slaveId: fixture.slaveId,
         status: 'succeeded',
         terminalAt: new Date(),
         endedAt: new Date(),
@@ -464,7 +464,7 @@ describe('the orchestrator CLI', () => {
 
   it('cancels a run and preserves its worktree', async (): Promise<void> => {
     await runCli(['tick'])
-    const run = await prisma.agentRun.findFirstOrThrow()
+    const run = await prisma.slaveRun.findFirstOrThrow()
 
     const result = await runCli(['cancel', '--run', run.id])
 
@@ -475,10 +475,10 @@ describe('the orchestrator CLI', () => {
     await runCli(['tick'])
 
     // The tick *function* deliberately does not await its pump -- a daemon's pumps outlive each
-    // tick. A one-shot command's process is about to exit, and exiting would leave a live agent
+    // tick. A one-shot command's process is about to exit, and exiting would leave a live slave
     // with nobody reading its stream: every event from that moment lost, and the run left for the
     // orphan pass to fail on some later startup.
-    const run = await prisma.agentRun.findFirstOrThrow()
+    const run = await prisma.slaveRun.findFirstOrThrow()
     expect(['succeeded', 'failed']).toContain(run.status)
     expect(run.terminalAt).not.toBeNull()
   }, 30_000)
@@ -490,8 +490,8 @@ describe('the orchestrator CLI', () => {
   }, 30_000)
 
   it('arms the gate and records who asked', async (): Promise<void> => {
-    const run = await prisma.agentRun.create({
-      data: { taskId: fixture.taskId, agentId: fixture.agentId, status: 'working', pid: process.pid },
+    const run = await prisma.slaveRun.create({
+      data: { taskId: fixture.taskId, slaveId: fixture.slaveId, status: 'working', pid: process.pid },
     })
 
     const result = await runCli(['pause', '--run', run.id, '--by', 'meren'])
@@ -503,7 +503,7 @@ describe('the orchestrator CLI', () => {
     // pump observes the deny.
     expect(existsSync(join(fixture.repoPath, '.slaveofai', 'runs', run.id, 'pause.flag'))).toBe(true)
 
-    const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })
+    const after = await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })
     expect(after.status).toBe('pause_requested')
     // The *category*, which this is the only place that knows: an operator asked. Task 12 carried
     // it forward as a column nothing ever wrote.
@@ -513,8 +513,8 @@ describe('the orchestrator CLI', () => {
   it('actually kills the process it cancels', async (): Promise<void> => {
     const sleeper = spawn('/bin/sh', ['-c', 'sleep 30'], { detached: true, stdio: 'ignore' })
     const pid = sleeper.pid ?? 0
-    const run = await prisma.agentRun.create({
-      data: { taskId: fixture.taskId, agentId: fixture.agentId, status: 'working', pid },
+    const run = await prisma.slaveRun.create({
+      data: { taskId: fixture.taskId, slaveId: fixture.slaveId, status: 'working', pid },
     })
 
     try {
@@ -564,11 +564,11 @@ describe('the orchestrator CLI', () => {
 
   it('shows only the workspace it was asked about', async (): Promise<void> => {
     const other = await seed({ name: 'Other Workspace' })
-    await prisma.agentRun.create({
-      data: { taskId: other.taskId, agentId: other.agentId, status: 'working', pid: process.pid },
+    await prisma.slaveRun.create({
+      data: { taskId: other.taskId, slaveId: other.slaveId, status: 'working', pid: process.pid },
     })
-    await prisma.agentRun.create({
-      data: { taskId: fixture.taskId, agentId: fixture.agentId, status: 'working', pid: process.pid },
+    await prisma.slaveRun.create({
+      data: { taskId: fixture.taskId, slaveId: fixture.slaveId, status: 'working', pid: process.pid },
     })
 
     const result = await runCli(['status', '--workspace', fixture.workspaceId])
@@ -590,8 +590,8 @@ describe('the orchestrator CLI', () => {
   }, 30_000)
 
   it('records the operator name it was given, even one that looks like a flag', async (): Promise<void> => {
-    const run = await prisma.agentRun.create({
-      data: { taskId: fixture.taskId, agentId: fixture.agentId, status: 'working', pid: process.pid },
+    const run = await prisma.slaveRun.create({
+      data: { taskId: fixture.taskId, slaveId: fixture.slaveId, status: 'working', pid: process.pid },
     })
 
     await runCli(['pause', '--run', run.id, '--by', '--urgent-oncall'])
@@ -603,10 +603,10 @@ describe('the orchestrator CLI', () => {
   }, 30_000)
 
   it('refuses to pause a run that has already finished', async (): Promise<void> => {
-    const run = await prisma.agentRun.create({
+    const run = await prisma.slaveRun.create({
       data: {
         taskId: fixture.taskId,
-        agentId: fixture.agentId,
+        slaveId: fixture.slaveId,
         status: 'succeeded',
         terminalAt: new Date(),
         endedAt: new Date(),
@@ -616,17 +616,17 @@ describe('the orchestrator CLI', () => {
     const result = await runCli(['pause', '--run', run.id])
 
     // `pause_requested` is non-terminal, so pausing a finished run puts it back into `activeRuns`,
-    // makes its agent look busy, and leaves the next restart's orphan sweep to flip a run that
+    // makes its slave look busy, and leaves the next restart's orphan sweep to flip a run that
     // actually succeeded to `failed`.
     expect(result.code).not.toBe(0)
-    expect((await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })).status).toBe('succeeded')
+    expect((await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })).status).toBe('succeeded')
   }, 30_000)
 
   it('refuses to resume a run that is not paused', async (): Promise<void> => {
-    const run = await prisma.agentRun.create({
+    const run = await prisma.slaveRun.create({
       data: {
         taskId: fixture.taskId,
-        agentId: fixture.agentId,
+        slaveId: fixture.slaveId,
         status: 'succeeded',
         terminalAt: new Date(),
         endedAt: new Date(),
@@ -648,18 +648,18 @@ describe('the orchestrator CLI', () => {
 
     const result = await runCli(['resume', '--run', run.id])
 
-    // Against a live daemon this is two agents on one branch, with the pid that could have killed
+    // Against a live daemon this is two slaves on one branch, with the pid that could have killed
     // the first overwritten by the second. The adapter's live-child guard cannot help: a CLI
     // invocation is always the cross-process case its registry is empty for.
     expect(result.code).not.toBe(0)
-    const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })
+    const after = await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })
     expect(after.status).toBe('succeeded')
     expect(await prisma.executionEvent.count({ where: { runId: run.id, type: 'run_resumed' } })).toBe(0)
   }, 30_000)
 
   it('refuses to resume into a halted workspace', async (): Promise<void> => {
-    const run = await prisma.agentRun.create({
-      data: { taskId: fixture.taskId, agentId: fixture.agentId, status: 'paused' },
+    const run = await prisma.slaveRun.create({
+      data: { taskId: fixture.taskId, slaveId: fixture.slaveId, status: 'paused' },
     })
     await prisma.workspace.update({
       where: { id: fixture.workspaceId },
@@ -668,7 +668,7 @@ describe('the orchestrator CLI', () => {
 
     const result = await runCli(['resume', '--run', run.id])
 
-    // A halt is raised by a gate failure, so resuming into one relaunches an agent whose gate may
+    // A halt is raised by a gate failure, so resuming into one relaunches an slave whose gate may
     // still be broken -- the recurrence §13.1 exists to bound. The help text promises this.
     expect(result.code).not.toBe(0)
     expect(`${result.stdout}${result.stderr}`).toMatch(/clear-halt/)
@@ -677,7 +677,7 @@ describe('the orchestrator CLI', () => {
   it('resumes a paused run in its own worktree, session and identity', async (): Promise<void> => {
     // A real pause, produced by the gate denying the fake CLI's first tool call.
     await runCli(['tick'], { SLAVEOFAI_CLAUDE_ARGS: `${FAKE} --fixture hook-deny` })
-    const paused = await prisma.agentRun.findFirstOrThrow()
+    const paused = await prisma.slaveRun.findFirstOrThrow()
     expect(paused.status).toBe('paused')
     const checkpoint = await prisma.checkpoint.findUniqueOrThrow({ where: { runId: paused.id } })
 
@@ -698,10 +698,10 @@ describe('the orchestrator CLI', () => {
     expect(checkpoint.gitAuthorEmail).toContain('@slaveofai.local')
   }, 60_000)
 
-  it('does not hand a cancelled task straight back to a new agent', async (): Promise<void> => {
+  it('does not hand a cancelled task straight back to a new slave', async (): Promise<void> => {
     await runCli(['tick'])
-    const run = await prisma.agentRun.findFirstOrThrow()
-    await prisma.agentRun.update({
+    const run = await prisma.slaveRun.findFirstOrThrow()
+    await prisma.slaveRun.update({
       where: { id: run.id },
       data: { status: 'working', terminalAt: null, endedAt: null },
     })
@@ -714,7 +714,7 @@ describe('the orchestrator CLI', () => {
     const report = await runCli(['tick'])
 
     // The help and the README both say cancel stops a run for good. Parking the task somewhere
-    // startable means the next tick hands it to a fresh agent on the same worktree -- and since
+    // startable means the next tick hands it to a fresh slave on the same worktree -- and since
     // cancelling does not count an attempt, repeated cancels never reach the cap.
     expect(JSON.parse(report.stdout)).toMatchObject({ started: [] })
     expect((await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })).status).toBe('blocked')
@@ -723,11 +723,11 @@ describe('the orchestrator CLI', () => {
   it('defaults to help rather than to doing something', async (): Promise<void> => {
     const result = await runCli([])
 
-    // A bare invocation that silently ran a tick would start an agent for an operator who typed
+    // A bare invocation that silently ran a tick would start an slave for an operator who typed
     // the command name to see what it does.
     expect(result.code).toBe(0)
     expect(result.stdout).toMatch(/usage/i)
-    expect(await prisma.agentRun.count()).toBe(0)
+    expect(await prisma.slaveRun.count()).toBe(0)
   }, 30_000)
 
   it('runs a daemon that ticks and shuts down on a signal', async (): Promise<void> => {
@@ -741,8 +741,8 @@ describe('the orchestrator CLI', () => {
         maxAttempts: 3,
       },
     })
-    const orphan = await prisma.agentRun.create({
-      data: { taskId: orphanTask.id, agentId: fixture.agentId, status: 'working', pid: 999_999 },
+    const orphan = await prisma.slaveRun.create({
+      data: { taskId: orphanTask.id, slaveId: fixture.slaveId, status: 'working', pid: 999_999 },
     })
 
     const child = execFile('node', [CLI, 'daemon', '--period', '200'], {
@@ -756,11 +756,11 @@ describe('the orchestrator CLI', () => {
 
     // Long enough for the startup reconcile and at least one tick.
     await new Promise((res) => setTimeout(res, 2_500))
-    expect(await prisma.agentRun.count()).toBeGreaterThan(1)
+    expect(await prisma.slaveRun.count()).toBeGreaterThan(1)
 
     // The orphan left behind by a "previous process" is reconciled before the first tick -- that is
     // §3.4's whole point, and the daemon is the only caller allowed to do it.
-    const orphanAfter = await prisma.agentRun.findUniqueOrThrow({ where: { id: orphan.id } })
+    const orphanAfter = await prisma.slaveRun.findUniqueOrThrow({ where: { id: orphan.id } })
     expect(orphanAfter.status).toBe('failed')
 
     const exited = new Promise<number | null>((res) => child.on('exit', (code) => res(code)))
@@ -776,7 +776,7 @@ describe('the orchestrator CLI', () => {
 
     // Shutdown drains the pumps rather than racing them: a run whose stream was still being
     // consumed when the process exited loses its last events and is left non-terminal.
-    const started = await prisma.agentRun.findFirstOrThrow({ where: { taskId: fixture.taskId } })
+    const started = await prisma.slaveRun.findFirstOrThrow({ where: { taskId: fixture.taskId } })
     expect(started.terminalAt).not.toBeNull()
   }, 30_000)
 
@@ -808,7 +808,7 @@ describe('the orchestrator CLI', () => {
       let run = null
       let timeouts: { readonly payload: unknown }[] = []
       for (;;) {
-        run = await prisma.agentRun.findFirst({ where: { taskId: fixture.taskId } })
+        run = await prisma.slaveRun.findFirst({ where: { taskId: fixture.taskId } })
         const guardrails = await prisma.executionEvent.findMany({
           where: { workspaceId: fixture.workspaceId, type: 'guardrail_tripped' },
         })
@@ -883,39 +883,39 @@ describe('the orchestrator CLI', () => {
 
   // M23 D2: the CLI surfaces for the five roster-editing verbs (`packages/control/src/org.ts`).
   describe('roster editing', () => {
-    it('renames an agent', async () => {
-      const result = await runCli(['rename-agent', '--agent', fixture.agentId, '--name', 'Jordan'])
+    it('renames an slave', async () => {
+      const result = await runCli(['rename-slave', '--slave', fixture.slaveId, '--name', 'Jordan'])
 
       expect(result.code).toBe(0)
-      expect(result.stdout).toMatch(new RegExp(`^agent ${fixture.agentId} renamed$`, 'm'))
-      expect((await prisma.agent.findUniqueOrThrow({ where: { id: fixture.agentId } })).name).toBe('Jordan')
+      expect(result.stdout).toMatch(new RegExp(`^slave ${fixture.slaveId} renamed$`, 'm'))
+      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId } })).name).toBe('Jordan')
     })
 
-    it('sets an agent role', async () => {
-      const result = await runCli(['set-role', '--agent', fixture.agentId, '--role', 'frontend'])
+    it('sets an slave role', async () => {
+      const result = await runCli(['set-role', '--slave', fixture.slaveId, '--role', 'frontend'])
 
       expect(result.code).toBe(0)
-      expect(result.stdout).toMatch(new RegExp(`^role set to frontend on ${fixture.agentId}$`, 'm'))
-      expect((await prisma.agent.findUniqueOrThrow({ where: { id: fixture.agentId } })).role).toBe('frontend')
+      expect(result.stdout).toMatch(new RegExp(`^role set to frontend on ${fixture.slaveId}$`, 'm'))
+      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId } })).role).toBe('frontend')
     })
 
-    it('deletes an agent with --yes', async () => {
-      const result = await runCli(['delete-agent', '--agent', fixture.agentId, '--yes'])
+    it('deletes an slave with --yes', async () => {
+      const result = await runCli(['delete-slave', '--slave', fixture.slaveId, '--yes'])
 
       expect(result.code).toBe(0)
-      expect(result.stdout).toMatch(new RegExp(`^agent ${fixture.agentId} deleted$`, 'm'))
-      expect(await prisma.agent.findUnique({ where: { id: fixture.agentId } })).toBeNull()
+      expect(result.stdout).toMatch(new RegExp(`^slave ${fixture.slaveId} deleted$`, 'm'))
+      expect(await prisma.slave.findUnique({ where: { id: fixture.slaveId } })).toBeNull()
     })
 
-    it('refuses to delete an agent without --yes, naming what it would have deleted', async () => {
-      const result = await runCli(['delete-agent', '--agent', fixture.agentId])
+    it('refuses to delete an slave without --yes, naming what it would have deleted', async () => {
+      const result = await runCli(['delete-slave', '--slave', fixture.slaveId])
 
       expect(result.code).toBe(1)
-      expect(result.stderr).toContain(`refusing without --yes: this would delete agent Alex (${fixture.agentId})`)
-      expect(await prisma.agent.findUnique({ where: { id: fixture.agentId } })).not.toBeNull()
+      expect(result.stderr).toContain(`refusing without --yes: this would delete slave Alex (${fixture.slaveId})`)
+      expect(await prisma.slave.findUnique({ where: { id: fixture.slaveId } })).not.toBeNull()
     })
 
-    it('passes a real refusal through refusalText -- agent_has_runs', async () => {
+    it('passes a real refusal through refusalText -- slave_has_runs', async () => {
       const task = await prisma.task.create({
         data: {
           workspaceId: fixture.workspaceId,
@@ -924,13 +924,13 @@ describe('the orchestrator CLI', () => {
           maxAttempts: 3,
         },
       })
-      await prisma.agentRun.create({ data: { taskId: task.id, agentId: fixture.agentId, status: 'succeeded' } })
+      await prisma.slaveRun.create({ data: { taskId: task.id, slaveId: fixture.slaveId, status: 'succeeded' } })
 
-      const result = await runCli(['delete-agent', '--agent', fixture.agentId, '--yes'])
+      const result = await runCli(['delete-slave', '--slave', fixture.slaveId, '--yes'])
 
       expect(result.code).toBe(1)
-      expect(result.stderr).toContain(`agent ${fixture.agentId} has 1 run(s) in history and stays (rename it or leave it idle)`)
-      expect(await prisma.agent.findUnique({ where: { id: fixture.agentId } })).not.toBeNull()
+      expect(result.stderr).toContain(`slave ${fixture.slaveId} has 1 run(s) in history and stays (rename it or leave it idle)`)
+      expect(await prisma.slave.findUnique({ where: { id: fixture.slaveId } })).not.toBeNull()
     })
 
     it('renames a team', async () => {

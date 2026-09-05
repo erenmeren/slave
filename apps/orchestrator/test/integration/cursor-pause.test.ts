@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@slave-of-ai/db'
 import { prisma } from '@slave-of-ai/db/client'
-import { agentId, runId, taskId, workspaceId } from '@slave-of-ai/domain'
+import { slaveId, runId, taskId, workspaceId } from '@slave-of-ai/domain'
 import type { RuntimeEvent } from '@slave-of-ai/providers'
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { pumpRun } from '../../src/pump.js'
@@ -35,7 +35,7 @@ async function* fromArray(events: readonly RuntimeEvent[]): AsyncIterable<Runtim
 interface Ids {
   readonly runId: ReturnType<typeof runId>
   readonly taskId: ReturnType<typeof taskId>
-  readonly agentId: ReturnType<typeof agentId>
+  readonly slaveId: ReturnType<typeof slaveId>
   readonly workspaceId: ReturnType<typeof workspaceId>
   readonly cancel: () => Promise<void>
 }
@@ -50,7 +50,7 @@ async function seed(status: string): Promise<Ids> {
     },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const agent = await prisma.agent.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
   const task = await prisma.task.create({
     data: {
       workspaceId: workspace.id,
@@ -61,16 +61,16 @@ async function seed(status: string): Promise<Ids> {
       maxAttempts: workspace.maxAttempts,
     },
   })
-  const run = await prisma.agentRun.create({
+  const run = await prisma.slaveRun.create({
     // `pause_requested` is the state `requestPause` leaves behind: it claims the status, then
     // signals. For Cursor the signal is the kill, so by the time this pump reaches the end of the
     // stream the row already reads `pause_requested` -- that is the whole discriminator.
-    data: { taskId: task.id, agentId: agent.id, status: status as 'pause_requested', toolCalls: 4 },
+    data: { taskId: task.id, slaveId: slave.id, status: status as 'pause_requested', toolCalls: 4 },
   })
   return {
     runId: runId(run.id),
     taskId: taskId(task.id),
-    agentId: agentId(agent.id),
+    slaveId: slaveId(slave.id),
     workspaceId: workspaceId(workspace.id),
     cancel: async (): Promise<void> => {},
   }
@@ -87,7 +87,7 @@ describe('pumpRun, when a paused Cursor run ends', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
     dir = mkdtempSync(path.join(tmpdir(), 'slaveofai-cursor-pump-'))
     writeFileSync(path.join(dir, 'pause.flag'), 'meren\n')
@@ -113,7 +113,7 @@ describe('pumpRun, when a paused Cursor run ends', () => {
       events: fromArray([{ kind: 'session_started', sessionId: 's-cursor-1' }]),
     })
 
-    const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+    const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
     expect(run.status).toBe('paused')
     // Non-terminal: a paused run has not ended, and writing `endedAt` here would put it beyond
     // every `endedAt: null` guard a later resume depends on.
@@ -166,7 +166,7 @@ describe('pumpRun, when a paused Cursor run ends', () => {
       ]),
     })
 
-    const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+    const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
     expect(run.status).toBe('paused')
     expect(await eventTypesFor(ids.runId)).not.toContain('run.failed')
   })
@@ -200,7 +200,7 @@ describe('pumpRun, when a paused Cursor run ends', () => {
       ]),
     })
 
-    const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+    const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
     expect(run.status).toBe('succeeded')
     expect(run.terminalAt).not.toBeNull()
     expect(run.endedAt).not.toBeNull()
@@ -213,7 +213,7 @@ describe('pumpRun, when a paused Cursor run ends', () => {
 
   it('records the pause when the clean terminal line was reached only because the gate denied a call', async (): Promise<void> => {
     // THE CASE THE GATE EXISTS FOR (final review I2, made real by M15). `signalPause('cursor')`
-    // writes the flag and then SIGTERMs with a 2 s grace; in that window the agent can still start
+    // writes the flag and then SIGTERMs with a 2 s grace; in that window the slave can still start
     // one more shell command, and `cursor-shell-gate.sh` -- armed by the flag this system just
     // wrote -- denies it. `cursor-agent`'s stream reports that denial as its OWN
     // `tool_call`/`completed` line whose result carries `rejected`, which `cursor/stream.ts` now
@@ -254,7 +254,7 @@ describe('pumpRun, when a paused Cursor run ends', () => {
       ]),
     })
 
-    const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+    const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
     expect(run.status).toBe('paused')
     expect(run.endedAt).toBeNull()
     const types = await eventTypesFor(ids.runId)
@@ -298,7 +298,7 @@ describe('pumpRun, when a paused Cursor run ends', () => {
       ]),
     })
 
-    const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+    const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
     expect(run.status).toBe('failed')
     expect(run.endedAt).not.toBeNull()
     const types = await eventTypesFor(ids.runId)
@@ -317,7 +317,7 @@ describe('pumpRun, when a paused Cursor run ends', () => {
       events: fromArray([{ kind: 'session_started', sessionId: 's-cursor-1' }]),
     })
 
-    const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+    const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
     expect(run.status).toBe('failed')
     expect(await eventTypesFor(ids.runId)).toContain('run.failed')
   })
@@ -334,7 +334,7 @@ describe('pumpRun, when a paused Cursor run ends', () => {
       events: fromArray([{ kind: 'session_started', sessionId: 's-claude-1' }]),
     })
 
-    const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+    const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
     expect(run.status).toBe('failed')
     expect(await eventTypesFor(ids.runId)).toContain('run.failed')
     expect(await prisma.checkpoint.findUnique({ where: { runId: ids.runId } })).toBeNull()

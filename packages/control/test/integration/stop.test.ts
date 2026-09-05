@@ -25,12 +25,12 @@ async function seed(): Promise<Fixture> {
     },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const agent = await prisma.agent.create({ data: { teamId: team.id, name: 'Alex', role: 'Backend' } })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'Backend' } })
   const task = await prisma.task.create({
     data: { workspaceId: workspace.id, title: 'Add checkout retry', description: 'Retry failed payments', maxAttempts: workspace.maxAttempts },
   })
-  const run = await prisma.agentRun.create({
-    data: { taskId: task.id, agentId: agent.id, status: 'working' },
+  const run = await prisma.slaveRun.create({
+    data: { taskId: task.id, slaveId: slave.id, status: 'working' },
   })
   return { workspace: { id: workspace.id, repoPath }, task: { id: task.id }, run: { id: run.id } }
 }
@@ -40,7 +40,7 @@ describe('requestStop', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Approval", "AgentMessage", "Artifact", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Approval", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
   })
@@ -50,12 +50,12 @@ describe('requestStop', () => {
     const child = spawn('node', ['-e', 'setInterval(() => {}, 1000)'])
     await new Promise((res) => child.once('spawn', res))
     const pid = child.pid ?? 0
-    await prisma.agentRun.update({ where: { id: run.id }, data: { pid } })
+    await prisma.slaveRun.update({ where: { id: run.id }, data: { pid } })
     await prisma.task.update({ where: { id: task.id }, data: { status: 'running', activeRunId: run.id } })
 
     const result = await requestStop(run.id, 'meren')
     expect(result.ok).toBe(true)
-    const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })
+    const after = await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })
     expect(after.status).toBe('stopped')
     expect(after.endedAt).not.toBeNull()
     // The intent record `requestStop` claims before the kill (gate-fix B review round 1): left
@@ -71,7 +71,7 @@ describe('requestStop', () => {
 
   it('still concludes a run whose process is already gone', async () => {
     const { run } = fixture
-    await prisma.agentRun.update({ where: { id: run.id }, data: { pid: 999_999_999 } })
+    await prisma.slaveRun.update({ where: { id: run.id }, data: { pid: 999_999_999 } })
     const result = await requestStop(run.id, 'meren')
     expect(result.ok).toBe(true)
     const event = await prisma.executionEvent.findFirst({ where: { runId: run.id, type: 'run_stopped' } })
@@ -86,7 +86,7 @@ describe('requestStop', () => {
     const { task, run } = fixture
     await prisma.task.update({ where: { id: task.id }, data: { status: 'running', activeRunId: run.id } })
     const now = new Date()
-    await prisma.agentRun.update({
+    await prisma.slaveRun.update({
       where: { id: run.id },
       data: { pid: 999_999_999, status: 'stopped', terminalAt: now, endedAt: now },
     })
@@ -94,7 +94,7 @@ describe('requestStop', () => {
       type: 'run.stopped',
       workspaceId: fixture.workspace.id,
       taskId: task.id,
-      agentId: (await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })).agentId,
+      slaveId: (await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })).slaveId,
       runId: run.id,
       actor: 'system',
       payload: { reason: 'stream ended after a stop was requested' },

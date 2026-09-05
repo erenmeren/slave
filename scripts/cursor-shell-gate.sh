@@ -216,7 +216,7 @@ esac
 # `beforeShellExecution` (the `default_tool` fallback above) is the reliable half; non-shell
 # enforcement on Cursor stays best-effort.
 if read_permission_verdict "$hook_payload" 'shell'; then
-  deny "permission matrix denies '${PERMISSION_DENY_CAPABILITY}' (${PERMISSION_DENY_TOOL}) for this agent"
+  deny "permission matrix denies '${PERMISSION_DENY_CAPABILITY}' (${PERMISSION_DENY_TOOL}) for this slave"
 fi
 
 # No pause requested, and the tool is not matrix-denied. Cursor's allow must say so OUT LOUD --

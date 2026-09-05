@@ -11,7 +11,7 @@ import {
   ClaudeCodeAdapter,
   buildRegistry,
   type AdapterRegistry,
-  type AgentRuntimeAdapter,
+  type SlaveRuntimeAdapter,
   type StartRunInput,
 } from '@slave-of-ai/providers'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -40,7 +40,7 @@ function makeRepo(): string {
 interface Fixture {
   readonly workspaceId: string
   readonly taskId: string
-  readonly agentId: string
+  readonly slaveId: string
   readonly repoPath: string
 }
 
@@ -55,13 +55,13 @@ async function seed(options: { readonly setupCommands?: readonly string[] } = {}
       setupCommands: [...(options.setupCommands ?? [])],
     },
   })
-  // M12 Task 8: this fixture's agent names no model anywhere in the chain, so `resolveRuntime`
+  // M12 Task 8: this fixture's slave names no model anywhere in the chain, so `resolveRuntime`
   // falls all the way to the workspace default -- which does not exist unless a
   // `ProviderConfiguration` row does. Without this, every dispatch in this file refuses
   // (`workspaceDefaultProvider` returns `null`) instead of starting the run under test.
   await prisma.providerConfiguration.create({ data: { workspaceId: workspace.id, kind: 'claude_code', settings: {} } })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const agent = await prisma.agent.create({
+  const slave = await prisma.slave.create({
     data: { teamId: team.id, name: 'Alex', role: 'backend' },
   })
   const task = await prisma.task.create({
@@ -74,7 +74,7 @@ async function seed(options: { readonly setupCommands?: readonly string[] } = {}
       maxAttempts: workspace.maxAttempts,
     },
   })
-  return { workspaceId: workspace.id, taskId: task.id, agentId: agent.id, repoPath }
+  return { workspaceId: workspace.id, taskId: task.id, slaveId: slave.id, repoPath }
 }
 
 async function eventTypesFor(workspaceId: string): Promise<readonly DomainEventType[]> {
@@ -88,12 +88,12 @@ const keyOf = (taskId: string): string => `T-${taskId.slice(0, 8)}`
  * `deps.registry` for a test that only ever runs against one adapter instance (the ordinary case
  * pre-Task-8, when every run resolves to `'claude_code'` regardless of what `kind` is asked for).
  */
-function singleAdapterRegistry(adapter: AgentRuntimeAdapter): AdapterRegistry {
+function singleAdapterRegistry(adapter: SlaveRuntimeAdapter): AdapterRegistry {
   return { resolve: () => adapter }
 }
 
 interface Recorder {
-  readonly adapter: AgentRuntimeAdapter
+  readonly adapter: SlaveRuntimeAdapter
   readonly starts: StartRunInput[]
   readonly cancelled: string[]
 }
@@ -123,7 +123,7 @@ function recordingAdapter(options: { readonly failEvents?: boolean } = {}): Reco
       cancelled.push(runId)
       return inner.cancel(runId as never)
     },
-  } as unknown as AgentRuntimeAdapter
+  } as unknown as SlaveRuntimeAdapter
   return { adapter, starts, cancelled }
 }
 
@@ -134,7 +134,7 @@ describe('tick', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
     repos.push(fixture.repoPath)
@@ -161,7 +161,7 @@ describe('tick', () => {
     const report = await tick(deps)
 
     expect(report.started).toHaveLength(1)
-    const run = await prisma.agentRun.findFirstOrThrow()
+    const run = await prisma.slaveRun.findFirstOrThrow()
     expect(run.pid).toBeGreaterThan(0)
     expect(run.worktreePath).toContain(join('.slaveofai', 'worktrees'))
   })
@@ -169,7 +169,7 @@ describe('tick', () => {
   it('writes the run its worktree and remembers the branch on the task', async (): Promise<void> => {
     await tick(deps)
 
-    const run = await prisma.agentRun.findFirstOrThrow()
+    const run = await prisma.slaveRun.findFirstOrThrow()
     const task = await prisma.task.findFirstOrThrow()
 
     // The key is derived from the task id rather than its title: a title is mutable and the key
@@ -182,7 +182,7 @@ describe('tick', () => {
   it('keeps the settings file and the pause flag out of the worktree', async (): Promise<void> => {
     await tick(deps)
 
-    const run = await prisma.agentRun.findFirstOrThrow()
+    const run = await prisma.slaveRun.findFirstOrThrow()
     const worktreePath = run.worktreePath ?? ''
 
     // Task 14 runs verify inside the worktree, and Task 11 already flagged `.slaveofai/` as
@@ -197,11 +197,11 @@ describe('tick', () => {
   it('writes the resolved permission matrix into the run dir at dispatch (M18 Task 5)', async (): Promise<void> => {
     // A denied capability that maps to a real Claude Code tool (`resolveDenyList`'s
     // `CAPABILITY_TOOLS` table): 'run tests' -> Bash.
-    await prisma.agentPermission.create({ data: { agentId: fixture.agentId, tool: 'run tests', mode: 'deny' } })
+    await prisma.slavePermission.create({ data: { slaveId: fixture.slaveId, tool: 'run tests', mode: 'deny' } })
 
     await tick(deps)
 
-    const run = await prisma.agentRun.findFirstOrThrow()
+    const run = await prisma.slaveRun.findFirstOrThrow()
     // `runFilePaths`'s own contract: `.slaveofai/runs/<runId>` under the repo root, beside
     // `pause.flag` -- not under the worktree (the previous test's own assertion).
     const permissionsPath = join(fixture.repoPath, '.slaveofai', 'runs', run.id, 'permissions.json')
@@ -212,7 +212,7 @@ describe('tick', () => {
   it('writes an armed-but-empty permissions.json when nothing is denied (M18 Task 5)', async (): Promise<void> => {
     await tick(deps)
 
-    const run = await prisma.agentRun.findFirstOrThrow()
+    const run = await prisma.slaveRun.findFirstOrThrow()
     const permissionsPath = join(fixture.repoPath, '.slaveofai', 'runs', run.id, 'permissions.json')
     const written: unknown = JSON.parse(readFileSync(permissionsPath, 'utf8'))
     // Present and armed, distinct from the file being absent -- `read_permission_verdict` treats
@@ -223,10 +223,10 @@ describe('tick', () => {
   it('emits guardrail.tripped and starts nothing when decide halts', async (): Promise<void> => {
     // Spend past the workspace's budget on a run that already concluded: money is spent whether or
     // not the run is still going, which is why `loadWorld` sums every run regardless of status.
-    await prisma.agentRun.create({
+    await prisma.slaveRun.create({
       data: {
         taskId: fixture.taskId,
-        agentId: fixture.agentId,
+        slaveId: fixture.slaveId,
         status: 'succeeded',
         costUsd: 999,
         terminalAt: new Date(),
@@ -241,10 +241,10 @@ describe('tick', () => {
   })
 
   it('does not repeat guardrail.tripped on a second tick while still halted', async (): Promise<void> => {
-    await prisma.agentRun.create({
+    await prisma.slaveRun.create({
       data: {
         taskId: fixture.taskId,
-        agentId: fixture.agentId,
+        slaveId: fixture.slaveId,
         status: 'succeeded',
         costUsd: 999,
         terminalAt: new Date(),
@@ -263,30 +263,30 @@ describe('tick', () => {
   })
 
   it('pauses every active run once the budget is exhausted, and does not re-pause on the next tick', async (): Promise<void> => {
-    const activeRun = await prisma.agentRun.create({
-      data: { taskId: fixture.taskId, agentId: fixture.agentId, status: 'working', costUsd: 999 },
+    const activeRun = await prisma.slaveRun.create({
+      data: { taskId: fixture.taskId, slaveId: fixture.slaveId, status: 'working', costUsd: 999 },
     })
 
     await tick(deps)
 
-    const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: activeRun.id } })
+    const after = await prisma.slaveRun.findUniqueOrThrow({ where: { id: activeRun.id } })
     expect(after.status).toBe('pause_requested')
     expect(after.pauseReason).toBe('guardrail')
 
     // The fan-out lives inside the halt's one-shot -- a second tick observing the same halt must
     // not try to pause an already-`pause_requested` run again.
     await tick(deps)
-    const stillOnce = await prisma.agentRun.findUniqueOrThrow({ where: { id: activeRun.id } })
+    const stillOnce = await prisma.slaveRun.findUniqueOrThrow({ where: { id: activeRun.id } })
     expect(stillOnce.status).toBe('pause_requested')
   })
 
   it('announces the budget warning exactly once, and the durable check survives a restart', async (): Promise<void> => {
     // 85% of the default $20 budget: past BUDGET_WARNING_RATIO (0.8) but short of exhausted, so
     // this must not halt scheduling.
-    await prisma.agentRun.create({
+    await prisma.slaveRun.create({
       data: {
         taskId: fixture.taskId,
-        agentId: fixture.agentId,
+        slaveId: fixture.slaveId,
         status: 'succeeded',
         costUsd: 17,
         terminalAt: new Date(),
@@ -325,7 +325,7 @@ describe('tick', () => {
 
     await tick(deps)
 
-    const run = await prisma.agentRun.findFirstOrThrow()
+    const run = await prisma.slaveRun.findFirstOrThrow()
     expect(run.status).toBe('failed')
     const task = await prisma.task.findFirstOrThrow()
     expect(task.attempt).toBe(1)
@@ -353,8 +353,8 @@ describe('tick', () => {
     // The first run's worktree and branch are still on disk -- §7.4 preserves them on purpose --
     // and `decide()` lists `rework` in STARTABLE, so the second run arrives at provisioning with
     // the same key. Treating that as a provisioning failure counts an attempt without a run, and
-    // the task reaches its cap without a second agent ever starting.
-    await prisma.agentRun.deleteMany({})
+    // the task reaches its cap without a second slave ever starting.
+    await prisma.slaveRun.deleteMany({})
     await prisma.task.update({
       where: { id: fixture.taskId },
       data: { status: 'rework', attempt: 1, lastRejectionReason: 'verify failed: npm test' },
@@ -365,7 +365,7 @@ describe('tick', () => {
     expect(report.started).toHaveLength(1)
     const task = await prisma.task.findFirstOrThrow()
     expect(task.attempt).toBe(1) // the failed verify's attempt, not a second one for provisioning
-    const run = await prisma.agentRun.findFirstOrThrow()
+    const run = await prisma.slaveRun.findFirstOrThrow()
     expect(run.status).not.toBe('failed')
   })
 
@@ -374,7 +374,7 @@ describe('tick', () => {
     await drainPumps()
     const branchAfterFirst = (await prisma.task.findFirstOrThrow()).branch
 
-    await prisma.agentRun.deleteMany({})
+    await prisma.slaveRun.deleteMany({})
     await prisma.task.update({
       where: { id: fixture.taskId },
       data: { status: 'rework', attempt: 1, title: 'Completely different title now' },
@@ -391,7 +391,7 @@ describe('tick', () => {
 
   it("escalates leftovers that are not this task's own previous attempt", async (): Promise<void> => {
     // A `ready` task -- never provisioned -- with a directory sitting at its worktree path. That
-    // is wreckage §7.4 preserved for an operator, not a rework, and handing it to an agent would
+    // is wreckage §7.4 preserved for an operator, not a rework, and handing it to an slave would
     // give the run someone else's tree.
     mkdirSync(join(fixture.repoPath, '.slaveofai', 'worktrees', keyOf(fixture.taskId)), {
       recursive: true,
@@ -400,7 +400,7 @@ describe('tick', () => {
     const report = await tick(deps)
 
     expect(report.started).toEqual([])
-    const run = await prisma.agentRun.findFirstOrThrow()
+    const run = await prisma.slaveRun.findFirstOrThrow()
     expect(run.status).toBe('failed')
     const task = await prisma.task.findFirstOrThrow()
     expect(task.attempt).toBe(1)
@@ -414,12 +414,12 @@ describe('tick', () => {
     // A genuine, registered worktree on the right branch -- everything `adoptWorktree` verifies --
     // but the task is `ready`, not `rework`. Only a rework means "my own previous attempt left
     // this"; a ready task with a worktree is state nobody can account for, and §7.4 preserved it
-    // for an operator to look at rather than for the next agent to inherit.
+    // for an operator to look at rather than for the next slave to inherit.
     //
     // The bare-directory case above cannot pin this: `adoptWorktree` rejects an unregistered path
     // on its own, so dropping the rework guard still fails there. This is the shape where adopting
     // would otherwise succeed.
-    await prisma.agentRun.deleteMany({})
+    await prisma.slaveRun.deleteMany({})
     await prisma.task.update({
       where: { id: fixture.taskId },
       data: { status: 'ready', activeRunId: null },
@@ -428,7 +428,7 @@ describe('tick', () => {
     const report = await tick(deps)
 
     expect(report.started).toEqual([])
-    const run = await prisma.agentRun.findFirstOrThrow()
+    const run = await prisma.slaveRun.findFirstOrThrow()
     expect(run.status).toBe('failed')
   })
 
@@ -447,8 +447,8 @@ describe('tick', () => {
         maxAttempts: 3,
       },
     })
-    await prisma.agentRun.create({
-      data: { taskId: otherTask.id, agentId: fixture.agentId, status: 'working' },
+    await prisma.slaveRun.create({
+      data: { taskId: otherTask.id, slaveId: fixture.slaveId, status: 'working' },
     })
 
     const report = await tick(deps)
@@ -464,7 +464,7 @@ describe('tick', () => {
     // The pump outlives the tick by design (spec §5.6). Awaiting it would make one tick as long as
     // one run, and the sweep, the reconcile pass and every other workspace would wait behind it.
     expect(report.started).toHaveLength(1)
-    const run = await prisma.agentRun.findFirstOrThrow()
+    const run = await prisma.slaveRun.findFirstOrThrow()
     expect(['starting', 'working']).toContain(run.status)
   })
 
@@ -472,28 +472,28 @@ describe('tick', () => {
     const first = await tick(deps)
     expect(first.started).toHaveLength(1)
 
-    // A second idle agent exists, and `decide()` treats `ready` and `rework` as startable -- so a
-    // task the tick left in either would be handed straight to that agent one second later, and
+    // A second idle slave exists, and `decide()` treats `ready` and `rework` as startable -- so a
+    // task the tick left in either would be handed straight to that slave one second later, and
     // the same work would be done twice on two branches.
     const team = await prisma.team.findFirstOrThrow()
-    await prisma.agent.create({ data: { teamId: team.id, name: 'Blair', role: 'backend' } })
+    await prisma.slave.create({ data: { teamId: team.id, name: 'Blair', role: 'backend' } })
 
     const second = await tick(deps)
 
     expect(second.started).toEqual([])
-    expect(await prisma.agentRun.count()).toBe(1)
+    expect(await prisma.slaveRun.count()).toBe(1)
   })
 
   it('refuses -- as an attempted run that failed, not a silent skip -- when the workspace has no configured default provider', async (): Promise<void> => {
     // `seed()` gives this workspace a `ProviderConfiguration` row; removing it reproduces a
-    // workspace nothing has configured at all, and the fixture agent names no model/provider
+    // workspace nothing has configured at all, and the fixture slave names no model/provider
     // anywhere in its own chain either -- so `resolveRuntime` has nothing to fall back to.
     await prisma.providerConfiguration.deleteMany({ where: { workspaceId: fixture.workspaceId } })
 
     const report = await tick(deps)
 
     expect(report.started).toEqual([])
-    const run = await prisma.agentRun.findFirstOrThrow()
+    const run = await prisma.slaveRun.findFirstOrThrow()
     // An ATTEMPTED run that failed (spec §13), exactly like a worktree that could not be
     // provisioned -- not the silent "nothing to attempt" `decide()` produces for an all-busy
     // roster, because unlike busyness this will not resolve itself on the next tick.
@@ -514,7 +514,7 @@ describe('tick', () => {
     // exactly Task 7's ledger gap: `isProviderKind` (write time) only checks union membership, so
     // writing this pair succeeds, and dispatch (this task) is the first thing that can tell the
     // difference between "known kind" and "configured kind".
-    await prisma.agent.update({ where: { id: fixture.agentId }, data: { model: 'whatever', provider: 'cursor' } })
+    await prisma.slave.update({ where: { id: fixture.slaveId }, data: { model: 'whatever', provider: 'cursor' } })
     // The REAL registry, not the test's own `singleAdapterRegistry` stub (which ignores `kind`
     // entirely and would silently paper over exactly the bug under test here) -- built with only
     // `claude_code` configured, matching production today (Cursor is Task 12's).
@@ -523,7 +523,7 @@ describe('tick', () => {
     const report = await tick({ ...deps, registry: realRegistry })
 
     expect(report.started).toEqual([])
-    const run = await prisma.agentRun.findFirstOrThrow()
+    const run = await prisma.slaveRun.findFirstOrThrow()
     expect(run.status).toBe('failed')
     const failures = await prisma.executionEvent.findMany({
       where: { workspaceId: fixture.workspaceId, runId: run.id, type: 'run_failed' },
@@ -544,7 +544,7 @@ describe('tick', () => {
     // no adapter registered for it, dispatch would refuse for that other reason first and this
     // check would never be reached, so a registry that stops at `invalid_provider` would prove
     // nothing about this one.
-    await prisma.agent.update({ where: { id: fixture.agentId }, data: { model: 'whatever', provider: 'cursor' } })
+    await prisma.slave.update({ where: { id: fixture.slaveId }, data: { model: 'whatever', provider: 'cursor' } })
     await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { budgetUsd: 20 } })
     const recorder = recordingAdapter()
     const costBlindRegistry: AdapterRegistry = { resolve: () => recorder.adapter }
@@ -554,7 +554,7 @@ describe('tick', () => {
     expect(report.started).toEqual([])
     // Never spawned: the refusal has to land before the process, or the money is already spent.
     expect(recorder.starts).toEqual([])
-    const run = await prisma.agentRun.findFirstOrThrow()
+    const run = await prisma.slaveRun.findFirstOrThrow()
     expect(run.status).toBe('failed')
     const failures = await prisma.executionEvent.findMany({
       where: { workspaceId: fixture.workspaceId, runId: run.id, type: 'run_failed' },
@@ -571,7 +571,7 @@ describe('tick', () => {
   it('dispatches that same cost-blind runtime freely once the workspace has no budget', async (): Promise<void> => {
     // The other half of the ruling, and the half that makes §10's milestone gate buildable at all:
     // an unbudgeted workspace runs a cost-blind provider without complaint.
-    await prisma.agent.update({ where: { id: fixture.agentId }, data: { model: 'whatever', provider: 'cursor' } })
+    await prisma.slave.update({ where: { id: fixture.slaveId }, data: { model: 'whatever', provider: 'cursor' } })
     await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { budgetUsd: null } })
     const recorder = recordingAdapter()
     const costBlindRegistry: AdapterRegistry = { resolve: () => recorder.adapter }
@@ -579,11 +579,11 @@ describe('tick', () => {
     const report = await tick({ ...deps, registry: costBlindRegistry })
 
     expect(report.started).toHaveLength(1)
-    const run = await prisma.agentRun.findFirstOrThrow()
+    const run = await prisma.slaveRun.findFirstOrThrow()
     expect(run.provider).toBe('cursor')
   })
 
-  it('kills the agent it just spawned when the start fails after the spawn', async (): Promise<void> => {
+  it('kills the slave it just spawned when the start fails after the spawn', async (): Promise<void> => {
     const recorder = recordingAdapter({ failEvents: true })
 
     const report = await tick({ ...deps, registry: singleAdapterRegistry(recorder.adapter) })
@@ -591,13 +591,13 @@ describe('tick', () => {
     // The window between `adapter.start()` returning and the row being updated is the one place a
     // live child can be orphaned: the run row goes terminal with no pid, and §3.4's startup sweep
     // only looks at NON-terminal runs with dead pids, so nothing in the system can ever find it
-    // again. Meanwhile the task goes back to the startable set and the next agent joins it in the
+    // again. Meanwhile the task goes back to the startable set and the next slave joins it in the
     // same worktree.
     expect(report.started).toEqual([])
     expect(recorder.starts).toHaveLength(1)
     expect(recorder.cancelled).toEqual([recorder.starts[0]?.runId])
 
-    const run = await prisma.agentRun.findFirstOrThrow()
+    const run = await prisma.slaveRun.findFirstOrThrow()
     expect(run.status).toBe('failed')
   })
 
@@ -607,7 +607,7 @@ describe('tick', () => {
       data: { setupCommands: ['sleep 1'] },
     })
     const team = await prisma.team.findFirstOrThrow()
-    await prisma.agent.create({ data: { teamId: team.id, name: 'Blair', role: 'backend' } })
+    await prisma.slave.create({ data: { teamId: team.id, name: 'Blair', role: 'backend' } })
 
     // Spec §3.1 runs this on a 1000ms timer while provisioning is awaited inline and a setup
     // command may take minutes -- so overlapping ticks are the normal case on the first real
@@ -616,7 +616,7 @@ describe('tick', () => {
     const [first, second] = await Promise.all([tick(deps), tick(deps)])
 
     expect([...first.started, ...second.started]).toHaveLength(1)
-    const runs = await prisma.agentRun.findMany()
+    const runs = await prisma.slaveRun.findMany()
     expect(runs.filter((r) => r.status !== 'failed')).toHaveLength(1)
 
     // And the loser must not rewrite the winner's task. Asserted after the drain rather than at
@@ -633,7 +633,7 @@ describe('tick', () => {
     expect(task.attempt).toBe(0)
     expect(task.activeRunId).toBeNull()
 
-    // No reviewer-role agent exists in this fixture. `dispatchReviews` runs on every tick (it is
+    // No reviewer-role slave exists in this fixture. `dispatchReviews` runs on every tick (it is
     // part of `tick()` itself, spec §3.2/Task 5) and escalates that once rather than trying forever
     // -- proving the task is not just parked in `reviewing` but visibly stuck for an operator.
     await tick(deps)
@@ -649,7 +649,7 @@ describe('tick', () => {
   it('does not turn the leftovers it refused into leftovers it will adopt', async (): Promise<void> => {
     await tick(deps)
     await drainPumps()
-    await prisma.agentRun.deleteMany({})
+    await prisma.slaveRun.deleteMany({})
     await prisma.task.update({
       where: { id: fixture.taskId },
       data: { status: 'ready', activeRunId: null },
@@ -674,7 +674,7 @@ describe('tick', () => {
 
     await tick(deps)
     await drainPumps()
-    await prisma.agentRun.deleteMany({})
+    await prisma.slaveRun.deleteMany({})
     await prisma.task.update({
       where: { id: fixture.taskId },
       data: { status: 'rework', attempt: 1, activeRunId: null },
@@ -684,7 +684,7 @@ describe('tick', () => {
 
     // The commonest route to adopt is a setup command that failed, because that is exactly what
     // leaves a half-provisioned worktree behind (§7.4). Adopting without re-running setup starts an
-    // agent in a tree with no node_modules, which then fails verify for reasons that have nothing
+    // slave in a tree with no node_modules, which then fails verify for reasons that have nothing
     // to do with its work.
     expect(readFileSync(log, 'utf8').trim().split('\n')).toHaveLength(2)
   })
@@ -701,9 +701,9 @@ describe('tick', () => {
 
     await tick(deps)
 
-    // `lastRejectionReason` is the agent-facing channel: `buildPrompt` puts it in front of the next
+    // `lastRejectionReason` is the slave-facing channel: `buildPrompt` puts it in front of the next
     // run as the thing to fix first. An orchestrator-side failure overwriting it both destroys the
-    // real feedback §8 requires and instructs the next agent to go and fix a setup command.
+    // real feedback §8 requires and instructs the next slave to go and fix a setup command.
     const task = await prisma.task.findFirstOrThrow()
     expect(task.lastRejectionReason).toContain('cart.spec.ts')
   })
@@ -718,16 +718,16 @@ describe('tick', () => {
     await tick({ ...deps, registry: singleAdapterRegistry(recorder.adapter) })
 
     // Spec §8's loop is the reason `lastRejectionReason` exists: a rework that does not tell the
-    // agent what broke is a re-roll, not a fix.
+    // slave what broke is a re-roll, not a fix.
     expect(recorder.starts[0]?.prompt).toContain('cart totals are wrong')
   })
 
   it('announces a halt again after the first one was cleared', async (): Promise<void> => {
     const exhaust = async (): Promise<void> => {
-      await prisma.agentRun.create({
+      await prisma.slaveRun.create({
         data: {
           taskId: fixture.taskId,
-          agentId: fixture.agentId,
+          slaveId: fixture.slaveId,
           status: 'succeeded',
           costUsd: 999,
           terminalAt: new Date(),
@@ -763,7 +763,7 @@ describe('tick', () => {
 
     await tick(deps)
 
-    // The attempt cap is what stops a permanently unprovisionable task being handed to an agent
+    // The attempt cap is what stops a permanently unprovisionable task being handed to an slave
     // every second forever. Off by one here gives every task one extra start and nothing notices.
     const task = await prisma.task.findFirstOrThrow()
     expect(task.attempt).toBe(3)
@@ -795,7 +795,7 @@ describe('tick', () => {
     // The drain is the daemon's shutdown join point and the tests' guard against truncating a
     // table under a live write. A drain that returns immediately is worse than none, because
     // everything downstream believes it.
-    const run = await prisma.agentRun.findFirstOrThrow()
+    const run = await prisma.slaveRun.findFirstOrThrow()
     expect(['succeeded', 'failed']).toContain(run.status)
   })
 

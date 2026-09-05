@@ -24,13 +24,13 @@ export type { PrismaClient }
  * A value export, not a type-only one (M14 Task 4): writing SQL NULL into a *nullable* Json column
  * needs the runtime sentinel `Prisma.DbNull`. Prisma's generated input type for such a column
  * deliberately does not accept a bare `null`, because `null` is ambiguous there — a JSON `null`
- * value and an absent value are different facts, and `AgentRun.skillCalls` is a column whose whole
+ * value and an absent value are different facts, and `SlaveRun.skillCalls` is a column whose whole
  * point is that "unknown" and "measured as empty" must not collide.
  */
 export { Prisma } from './generated/client.js'
 
 export type {
-  AgentRun as AgentRunRow,
+  SlaveRun as SlaveRunRow,
   ExecutionEvent as ExecutionEventRow,
   Task as TaskRow,
 } from './generated/client.js'

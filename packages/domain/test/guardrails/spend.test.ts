@@ -48,14 +48,14 @@ describe('sumSpend', () => {
   //
   // `costUsd` is null in four situations and only ONE of them is an unmeasured run. The column
   // facts, re-derived from the tree rather than assumed:
-  //   * `pump.ts`'s terminal `updateMany` is the ONLY writer of `AgentRun.costUsd`, and it writes
+  //   * `pump.ts`'s terminal `updateMany` is the ONLY writer of `SlaveRun.costUsd`, and it writes
   //     it in the same statement as `status: succeeded|failed`, `terminalAt` and `endedAt`.
-  //   * `AgentRun.provider` is written in the same statement as `pid`, at `tick.ts`,
+  //   * `SlaveRun.provider` is written in the same statement as `pid`, at `tick.ts`,
   //     `planning.ts` and `review.ts`, STRICTLY AFTER `await adapter.start(...)` returns a handle.
   //   * `tick.ts`'s `failToStart` writes `status`/`terminalAt`/`endedAt` and neither of the above.
 
   it('does not count a run that is merely in flight -- unfinished is not unmeasured', () => {
-    // Three agents working would otherwise read "3 unmeasured" on a workspace where nothing is
+    // Three slaves working would otherwise read "3 unmeasured" on a workspace where nothing is
     // unmeasurable, and the figure would be wrong for as long as the work is going well.
     const live: readonly SpendRow[] = [
       { costUsd: null, provider: 'claude_code', status: 'working' },

@@ -48,7 +48,7 @@ async function seed(): Promise<Fixture> {
     },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const agent = await prisma.agent.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
   const task = await prisma.task.create({
     data: {
       workspaceId: workspace.id,
@@ -60,8 +60,8 @@ async function seed(): Promise<Fixture> {
       branch: 'slaveofai/TASK-001-x',
     },
   })
-  const run = await prisma.agentRun.create({
-    data: { taskId: task.id, agentId: agent.id, status: 'succeeded', terminalAt: new Date() },
+  const run = await prisma.slaveRun.create({
+    data: { taskId: task.id, slaveId: slave.id, status: 'succeeded', terminalAt: new Date() },
   })
   await prisma.task.update({ where: { id: task.id }, data: { activeRunId: run.id } })
 
@@ -94,7 +94,7 @@ describe('verify and advance', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
     base = {
@@ -136,7 +136,7 @@ describe('verify and advance', () => {
     expect(result.exitCode).toBe(1)
     expect(existsSync(join(fixture.worktreePath, 'A'))).toBe(true)
     // Continuing past a failure produces a second, misleading result from a command that should
-    // never have run -- and here it would be the one reported to the next agent.
+    // never have run -- and here it would be the one reported to the next slave.
     expect(existsSync(join(fixture.worktreePath, 'B'))).toBe(false)
   })
 
@@ -147,7 +147,7 @@ describe('verify and advance', () => {
 
     const t = await task()
     expect(t.status).toBe('rework')
-    // This field is the agent-facing channel: `buildPrompt` puts it in front of the next run as the
+    // This field is the slave-facing channel: `buildPrompt` puts it in front of the next run as the
     // thing to fix first. Verify output is exactly what it is for.
     expect(t.lastRejectionReason).toContain('BOOM')
   })
@@ -210,7 +210,7 @@ describe('verify and advance', () => {
   it('writes its artifacts outside the worktree, leaving it clean', async (): Promise<void> => {
     await runVerify({ ...base, commands: ['echo noisy'] })
 
-    // The worktree is what the agent commits from. A log file written into it is content the next
+    // The worktree is what the slave commits from. A log file written into it is content the next
     // run would either commit or trip over, and Task 13 already had to move the run's settings and
     // pause flag out for the same reason.
     expect(git(['status', '--porcelain'], fixture.worktreePath)).toBe('')
@@ -270,13 +270,13 @@ describe('verify and advance', () => {
     expect(contents).toContain('TWO')
   })
 
-  it('does not tell the next agent to fix the workspace configuration', async (): Promise<void> => {
+  it('does not tell the next slave to fix the workspace configuration', async (): Promise<void> => {
     const result = await runVerify({ ...base, commands: [] })
 
     await advance({ taskId: base.taskId, result, branch: 'slaveofai/TASK-001-x' })
 
     // `lastRejectionReason` reaches the next run's prompt as the thing to fix first. An unconfigured
-    // verify list is not something an agent caused or can reach, and Task 13 was corrected for
+    // verify list is not something an slave caused or can reach, and Task 13 was corrected for
     // exactly this: nothing but what a verify command actually printed belongs in this field.
     expect((await task()).lastRejectionReason).toBeNull()
   })
@@ -287,7 +287,7 @@ describe('verify and advance', () => {
     await advance({ taskId: base.taskId, result, branch: 'slaveofai/TASK-001-x' })
 
     // Every task in this workspace will hit the same wall, so charging each of them maxAttempts
-    // full agent runs before failing is the worst available behaviour -- §13.1 says so in as many
+    // full slave runs before failing is the worst available behaviour -- §13.1 says so in as many
     // words about the equivalent hook misconfiguration, and the remedy there is the same: stop
     // scheduling and make a human look.
     const t = await task()
@@ -340,7 +340,7 @@ describe('verify and advance', () => {
 
     await advance({ taskId: base.taskId, result, branch: 'slaveofai/TASK-001-x' })
 
-    // The agent did not cause a missing worktree and cannot fix one. Charging the attempt spends
+    // The slave did not cause a missing worktree and cannot fix one. Charging the attempt spends
     // the task's budget on the orchestrator's own problem.
     expect((await task()).attempt).toBe(0)
   })

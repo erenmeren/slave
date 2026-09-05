@@ -10,9 +10,9 @@ export interface AppendableEvent {
    * which means "this event has no task at all" for callers that never had one to omit.
    */
   readonly taskId?: string | null
-  readonly agentId?: string
+  readonly slaveId?: string
   readonly runId?: string
-  readonly actor: 'human' | 'agent' | 'system'
+  readonly actor: 'human' | 'slave' | 'system'
   readonly payload: unknown
   /**
    * Who caused this event (M23 F6). `null`/absent for the CLI and the orchestrator, which have
@@ -65,7 +65,7 @@ async function appendEventNow(input: AppendableEvent): Promise<ExecutionEvent> {
         type: EVENT_TYPE_BY_DOMAIN_TYPE[input.type],
         workspaceId: input.workspaceId,
         taskId: input.taskId ?? null,
-        agentId: input.agentId ?? null,
+        slaveId: input.slaveId ?? null,
         runId: input.runId ?? null,
         userId: input.userId ?? null,
         actor: input.actor,

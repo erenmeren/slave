@@ -1,9 +1,9 @@
 import {
-  agentId,
+  slaveId,
   taskId,
   NON_TERMINAL_RUN_STATUSES,
   type RunStatus,
-  type SchedulableAgent,
+  type SchedulableSlave,
   type SchedulableTask,
   type TaskStatus,
   type WorkspaceId,
@@ -12,7 +12,7 @@ import {
 import { prisma, type Prisma } from '@slave-of-ai/db/client'
 
 // Re-exported so `cli.ts` and `sweep.ts` keep importing it from here -- the statuses an
-// `AgentRun` can still leave (an agent holding one of these is busy) now live in
+// `SlaveRun` can still leave (an slave holding one of these is busy) now live in
 // `packages/domain/src/run/state.ts`, the one place the web and the orchestrator both read them
 // from, so the two cannot drift onto different definitions of "not finished".
 export { NON_TERMINAL_RUN_STATUSES } from '@slave-of-ai/domain'
@@ -31,7 +31,7 @@ type RunStatusKind = 'non_terminal' | 'concluded' | 'terminal_uncounted'
  * domain's now), but it still has to classify every `RunStatus` to stay exhaustive, and "busy"
  * and "non-terminal" are the same question asked of two different tables.
  *
- * `stopped` is deliberately neither kind: it is terminal, so it releases the agent that held it,
+ * `stopped` is deliberately neither kind: it is terminal, so it releases the slave that held it,
  * but an operator stopping a run is not the run failing. It must not count toward the failure
  * streak, and it must not break one either -- a single stop should not launder away a real streak.
  */
@@ -62,7 +62,7 @@ export interface LoadedWorld {
   readonly world: World
   /**
    * Tasks excluded from `world.tasks` because `Task.requiredRole` is `null`. Spec §4: a task
-   * with no required role cannot be matched to an agent by `decide()`, whose `SchedulableTask`
+   * with no required role cannot be matched to an slave by `decide()`, whose `SchedulableTask`
    * makes `requiredRole` non-nullable by design. The exclusion is real (the domain type leaves
    * no other way to represent "no role"), but it must never be *silent* -- an operator needs to
    * see that a task is stuck outside the schedulable set for a reason that has nothing to do
@@ -108,22 +108,22 @@ async function loadTaskRows(
   `
 }
 
-interface AgentWorldRow {
+interface SlaveWorldRow {
   readonly id: string
   readonly role: string
   readonly runs: readonly { readonly id: string }[]
 }
 
 /**
- * An agent is busy when it holds any `AgentRun` in a non-terminal status -- not when it has ever
+ * An slave is busy when it holds any `SlaveRun` in a non-terminal status -- not when it has ever
  * held one. `take: 1` on the filtered relation is enough to answer "any?" without pulling every
- * run an agent has accumulated over its lifetime.
+ * run an slave has accumulated over its lifetime.
  */
-async function loadAgentRows(
+async function loadSlaveRows(
   tx: Prisma.TransactionClient,
   workspaceId: WorkspaceId,
-): Promise<readonly AgentWorldRow[]> {
-  return tx.agent.findMany({
+): Promise<readonly SlaveWorldRow[]> {
+  return tx.slave.findMany({
     where: { team: { workspaceId } },
     select: {
       id: true,
@@ -134,8 +134,8 @@ async function loadAgentRows(
 }
 
 /**
- * `stats.activeRuns` and `stats.spentUsd` are aggregated from every `AgentRun` belonging to the
- * workspace's tasks -- there is no `AgentRun.workspaceId` column, so both queries join through
+ * `stats.activeRuns` and `stats.spentUsd` are aggregated from every `SlaveRun` belonging to the
+ * workspace's tasks -- there is no `SlaveRun.workspaceId` column, so both queries join through
  * `Task`. Spend is summed across *every* run regardless of status, not just non-terminal ones:
  * spec §4 notes that summing `costUsd` across a task's run segments is the correct accounting
  * (ADR 0001 Q3 measured each segment's `total_cost_usd` as that segment's own total, not a
@@ -150,13 +150,13 @@ async function loadRunStats(
   readonly spentUsd: number
   readonly consecutiveFailures: number
 }> {
-  // `agent: { team: { workspaceId } }`, not `task: { workspaceId }`: a `planning` run (M8b) has no
+  // `slave: { team: { workspaceId } }`, not `task: { workspaceId }`: a `planning` run (M8b) has no
   // `Task` row, and it still occupies a concurrency slot and spends real money -- scoping through
   // `Task` would silently drop it from both figures below.
-  const activeRuns = await tx.agentRun.count({
-    where: { status: { in: [...NON_TERMINAL_RUN_STATUSES] }, agent: { team: { workspaceId } } },
+  const activeRuns = await tx.slaveRun.count({
+    where: { status: { in: [...NON_TERMINAL_RUN_STATUSES] }, slave: { team: { workspaceId } } },
   })
-  const globalActiveRuns = await tx.agentRun.count({
+  const globalActiveRuns = await tx.slaveRun.count({
     where: { status: { in: [...NON_TERMINAL_RUN_STATUSES] } },
   })
   // A `_sum` aggregate, and it stays one -- unlike `overview.ts` and `org.ts`, which read the same
@@ -177,13 +177,13 @@ async function loadRunStats(
   // was unknown -- those rows are already excluded from the sum, not folded into it as zeros. The
   // count of them is what was invisible, and it is now visible on the two surfaces that display
   // spend to an operator.
-  const spend = await tx.agentRun.aggregate({
-    where: { agent: { team: { workspaceId } } },
+  const spend = await tx.slaveRun.aggregate({
+    where: { slave: { team: { workspaceId } } },
     _sum: { costUsd: true },
   })
 
   // Most recently concluded first, so the leading run of the list is the one the streak counts
-  // from. `AgentRun.terminalAt` is written by the event pump as of Task 12 -- when this was first
+  // from. `SlaveRun.terminalAt` is written by the event pump as of Task 12 -- when this was first
   // written nothing populated it, and the COALESCE below was defensive; it is now load-bearing for
   // every run the pump concludes, while rows written before it still carry `null`. A bare
   // `ORDER BY "terminalAt" DESC` is therefore not merely imprecise, it is a trap: Postgres sorts
@@ -204,13 +204,13 @@ async function loadRunStats(
   // would not notice, but a later consumer reading the figure as a count would. One status column
   // per concluded run is cheap enough that the trade is not worth making blind; revisit it against
   // a workspace with a real run history rather than a fixture.
-  // Joined through `Agent`/`Team`, not `Task`: a `planning` run (M8b) has no `Task` row, and a
-  // garbage planner must still feed the circuit breaker like any other agent (the M8a review-run
+  // Joined through `Slave`/`Team`, not `Task`: a `planning` run (M8b) has no `Task` row, and a
+  // garbage planner must still feed the circuit breaker like any other slave (the M8a review-run
   // precedent) -- a join through `Task` alone would let it fail forever with no streak to halt it.
   const concludedRuns = await tx.$queryRaw<{ readonly status: RunStatus }[]>`
     SELECT r.status::text AS status
-    FROM "AgentRun" r
-    JOIN "Agent" a ON a.id = r."agentId"
+    FROM "SlaveRun" r
+    JOIN "Slave" a ON a.id = r."slaveId"
     JOIN "Team" tm ON tm.id = a."teamId"
     WHERE tm."workspaceId" = ${workspaceId}
       AND r.status::text = ANY(${[...CONCLUDED_RUN_STATUSES]}::text[])
@@ -249,7 +249,7 @@ const LOAD_WORLD_TIMEOUT_MS = 15_000
 const LOAD_WORLD_MAX_WAIT_MS = 5_000
 
 /**
- * Spec §5: a hard cap on non-terminal `AgentRun`s across every workspace at once, not per
+ * Spec §5: a hard cap on non-terminal `SlaveRun`s across every workspace at once, not per
  * workspace. A `Workspace` column would let N workspaces each configure their own limit and
  * collectively blow the machine's real capacity for concurrent `claude` processes -- the whole
  * point is a ceiling nothing on a per-workspace path can raise.
@@ -268,19 +268,19 @@ export async function loadWorld(workspaceId: WorkspaceId): Promise<LoadedWorld> 
   // nothing. Do not "simplify" the isolation level away.
   //
   // Atomicity matters here because `loadWorld`'s whole contract is *the snapshot the scheduler
-  // decides from*. A torn read -- `agents` from one instant, `stats` from another -- lets
-  // `decide()` emit a `start_run` for an agent that became busy between two of the reads, and
+  // decides from*. A torn read -- `slaves` from one instant, `stats` from another -- lets
+  // `decide()` emit a `start_run` for an slave that became busy between two of the reads, and
   // that spawns a real `claude` process spending real money.
-  const { workspace, taskRows, agentRows, runStats } = await prisma.$transaction(
+  const { workspace, taskRows, slaveRows, runStats } = await prisma.$transaction(
     async (tx) => {
       // Sequential rather than `Promise.all`: an interactive transaction is pinned to a single
       // connection, so queries issued concurrently on `tx` serialize anyway, and under
       // RepeatableRead the order they run in cannot change what they see.
       const workspace = await tx.workspace.findUniqueOrThrow({ where: { id: workspaceId } })
       const taskRows = await loadTaskRows(tx, workspaceId)
-      const agentRows = await loadAgentRows(tx, workspaceId)
+      const slaveRows = await loadSlaveRows(tx, workspaceId)
       const runStats = await loadRunStats(tx, workspaceId)
-      return { workspace, taskRows, agentRows, runStats }
+      return { workspace, taskRows, slaveRows, runStats }
     },
     {
       isolationLevel: 'RepeatableRead',
@@ -310,15 +310,15 @@ export async function loadWorld(workspaceId: WorkspaceId): Promise<LoadedWorld> 
     })
   }
 
-  const agents: SchedulableAgent[] = agentRows.map((row) => ({
-    id: agentId(row.id),
+  const slaves: SchedulableSlave[] = slaveRows.map((row) => ({
+    id: slaveId(row.id),
     role: row.role,
     busy: row.runs.length > 0,
   }))
 
   const world: World = {
     tasks,
-    agents,
+    slaves,
     limits: {
       maxConcurrentRuns: workspace.maxConcurrentRuns,
       budgetUsd: workspace.budgetUsd,

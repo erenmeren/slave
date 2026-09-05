@@ -53,7 +53,7 @@ export interface RunOutcome {
   /**
    * The run's token usage, or `null` when the `result` line carried no `usage` at all (M14 §4.2,
    * fix round 1). Never `{ input: 0, output: 0 }` for an unmeasured run -- zero is a figure a
-   * per-agent average would believe. `input` is BILLED input: `usage.input_tokens +
+   * per-slave average would believe. `input` is BILLED input: `usage.input_tokens +
    * usage.cache_creation_input_tokens + usage.cache_read_input_tokens`, each counter treated as
    * `0` when absent -- the cache fields are folded in deliberately, not left out, because they
    * are billed the same as fresh input and a figure that ignores them understates what the run

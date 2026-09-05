@@ -51,7 +51,7 @@ async function seed(goal: string | null, goalSetByUserId?: string | null): Promi
       ...(goalSetByUserId === undefined ? {} : { goalSetByUserId }),
     },
   })
-  // M12 Task 8: no agent in this file names a model anywhere in the chain, so `resolveRuntime`
+  // M12 Task 8: no slave in this file names a model anywhere in the chain, so `resolveRuntime`
   // falls all the way to the workspace default -- which needs a `ProviderConfiguration` row to
   // exist at all, or every dispatch here refuses instead of starting the run under test.
   await prisma.providerConfiguration.create({ data: { workspaceId: workspace.id, kind: 'claude_code', settings: {} } })
@@ -60,14 +60,14 @@ async function seed(goal: string | null, goalSetByUserId?: string | null): Promi
 }
 
 async function addManager(teamId: string, name = 'Atlas'): Promise<string> {
-  const agent = await prisma.agent.create({ data: { teamId, name, role: 'manager' } })
-  return agent.id
+  const slave = await prisma.slave.create({ data: { teamId, name, role: 'manager' } })
+  return slave.id
 }
 
-/** A `backend` agent -- the role every task the `plan-graph` fixture describes requires. */
-async function addBackendAgent(teamId: string, name = 'Beryl'): Promise<string> {
-  const agent = await prisma.agent.create({ data: { teamId, name, role: 'backend' } })
-  return agent.id
+/** A `backend` slave -- the role every task the `plan-graph` fixture describes requires. */
+async function addBackendSlave(teamId: string, name = 'Beryl'): Promise<string> {
+  const slave = await prisma.slave.create({ data: { teamId, name, role: 'backend' } })
+  return slave.id
 }
 
 /**
@@ -92,7 +92,7 @@ describe('dispatchPlanning', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace", "User" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace", "User" RESTART IDENTITY CASCADE',
     )
   })
 
@@ -113,7 +113,7 @@ describe('dispatchPlanning', () => {
     const runId = await dispatchPlanning(depsFor(fixture.workspaceId))
 
     expect(runId).not.toBeNull()
-    const run = await prisma.agentRun.findFirstOrThrow({ where: { kind: 'planning' } })
+    const run = await prisma.slaveRun.findFirstOrThrow({ where: { kind: 'planning' } })
     expect(run.kind).toBe('planning')
     expect(run.taskId).toBeNull()
 
@@ -133,13 +133,13 @@ describe('dispatchPlanning', () => {
     const fixture = await seed('Ship the checkout redesign')
     repos.push(fixture.repoPath)
     const managerId = await addManager(fixture.teamId)
-    await prisma.agent.update({ where: { id: managerId }, data: { model: 'whatever', provider: 'cursor' } })
+    await prisma.slave.update({ where: { id: managerId }, data: { model: 'whatever', provider: 'cursor' } })
     await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { budgetUsd: 20 } })
 
     const runId = await dispatchPlanning(depsFor(fixture.workspaceId))
 
     expect(runId).toBeNull()
-    const run = await prisma.agentRun.findFirstOrThrow({ where: { kind: 'planning' } })
+    const run = await prisma.slaveRun.findFirstOrThrow({ where: { kind: 'planning' } })
     expect(run.status).toBe('failed')
     const failures = await prisma.executionEvent.findMany({
       where: { workspaceId: fixture.workspaceId, runId: run.id, type: 'run_failed' },
@@ -169,7 +169,7 @@ describe('dispatchPlanning', () => {
     const runId = await dispatchPlanning(depsFor(fixture.workspaceId))
 
     expect(runId).toBeNull()
-    expect(await prisma.agentRun.count({ where: { kind: 'planning' } })).toBe(0)
+    expect(await prisma.slaveRun.count({ where: { kind: 'planning' } })).toBe(0)
   })
 
   it('(c) starts nothing with no goal set', async (): Promise<void> => {
@@ -180,7 +180,7 @@ describe('dispatchPlanning', () => {
     const runId = await dispatchPlanning(depsFor(fixture.workspaceId))
 
     expect(runId).toBeNull()
-    expect(await prisma.agentRun.count({ where: { kind: 'planning' } })).toBe(0)
+    expect(await prisma.slaveRun.count({ where: { kind: 'planning' } })).toBe(0)
   })
 
   it('(d) starts nothing a second time while the planning run it started is still live', async (): Promise<void> => {
@@ -199,13 +199,13 @@ describe('dispatchPlanning', () => {
     const second = await dispatchPlanning(deps)
 
     expect(second).toBeNull()
-    expect(await prisma.agentRun.count({ where: { kind: 'planning' } })).toBe(1)
+    expect(await prisma.slaveRun.count({ where: { kind: 'planning' } })).toBe(1)
   })
 
-  it('(e) escalates once with no manager-role agent in the workspace, and starts nothing', async (): Promise<void> => {
+  it('(e) escalates once with no manager-role slave in the workspace, and starts nothing', async (): Promise<void> => {
     const fixture = await seed('Ship the checkout redesign')
     repos.push(fixture.repoPath)
-    // No manager-role agent exists.
+    // No manager-role slave exists.
 
     const first = await dispatchPlanning(depsFor(fixture.workspaceId))
     expect(first).toBeNull()
@@ -213,7 +213,7 @@ describe('dispatchPlanning', () => {
     const second = await dispatchPlanning(depsFor(fixture.workspaceId))
     expect(second).toBeNull()
 
-    expect(await prisma.agentRun.count({ where: { kind: 'planning' } })).toBe(0)
+    expect(await prisma.slaveRun.count({ where: { kind: 'planning' } })).toBe(0)
     const guardrails = await prisma.executionEvent.findMany({
       where: { workspaceId: fixture.workspaceId, type: 'guardrail_tripped' },
     })
@@ -230,9 +230,9 @@ describe('dispatchPlanning', () => {
     const managerId = await addManager(fixture.teamId)
 
     const now = new Date()
-    await prisma.agentRun.create({
+    await prisma.slaveRun.create({
       data: {
-        agentId: managerId,
+        slaveId: managerId,
         kind: 'planning',
         status: 'failed',
         startedAt: now,
@@ -240,9 +240,9 @@ describe('dispatchPlanning', () => {
         endedAt: now,
       },
     })
-    await prisma.agentRun.create({
+    await prisma.slaveRun.create({
       data: {
-        agentId: managerId,
+        slaveId: managerId,
         kind: 'planning',
         status: 'failed',
         startedAt: now,
@@ -254,7 +254,7 @@ describe('dispatchPlanning', () => {
     const runId = await dispatchPlanning(depsFor(fixture.workspaceId))
 
     expect(runId).toBeNull()
-    expect(await prisma.agentRun.count({ where: { kind: 'planning' } })).toBe(2)
+    expect(await prisma.slaveRun.count({ where: { kind: 'planning' } })).toBe(2)
   })
 
   it('grants fresh attempts when the goal is re-set after two failures', async (): Promise<void> => {
@@ -267,8 +267,8 @@ describe('dispatchPlanning', () => {
     // buys the workspace a fresh plan instead of silence forever.
     const past = new Date(Date.now() - 60_000)
     for (let i = 0; i < 2; i += 1) {
-      await prisma.agentRun.create({
-        data: { agentId: managerId, kind: 'planning', status: 'failed', startedAt: past, terminalAt: past, endedAt: past },
+      await prisma.slaveRun.create({
+        data: { slaveId: managerId, kind: 'planning', status: 'failed', startedAt: past, terminalAt: past, endedAt: past },
       })
     }
     await prisma.executionEvent.create({
@@ -283,7 +283,7 @@ describe('dispatchPlanning', () => {
     const runId = await dispatchPlanning(depsFor(fixture.workspaceId))
 
     expect(runId).not.toBeNull()
-    expect(await prisma.agentRun.count({ where: { kind: 'planning' } })).toBe(3)
+    expect(await prisma.slaveRun.count({ where: { kind: 'planning' } })).toBe(3)
   })
 
   it('(h) records a real run.failed with no taskId when the spawn itself fails', async (): Promise<void> => {
@@ -298,7 +298,7 @@ describe('dispatchPlanning', () => {
     const runId = await dispatchPlanning(deps)
 
     expect(runId).toBeNull()
-    const run = await prisma.agentRun.findFirstOrThrow({ where: { kind: 'planning' } })
+    const run = await prisma.slaveRun.findFirstOrThrow({ where: { kind: 'planning' } })
     expect(run.status).toBe('failed')
     expect(run.taskId).toBeNull()
 
@@ -313,7 +313,7 @@ describe('concludePlanning', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace", "User" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace", "User" RESTART IDENTITY CASCADE',
     )
   })
 
@@ -334,14 +334,14 @@ describe('concludePlanning', () => {
     expect(runId).not.toBeNull()
     await drainPumps()
 
-    const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: runId as string } })
+    const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId as string } })
     expect(run.status).toBe('succeeded')
 
     const tasks = await prisma.task.findMany({ where: { workspaceId: fixture.workspaceId } })
     expect(tasks).toHaveLength(3)
     for (const task of tasks) {
       expect(task.requiredRole).toBe('backend')
-      expect(task.createdBy).toBe('agent')
+      expect(task.createdBy).toBe('slave')
       expect(task.status).toBe('ready')
     }
 
@@ -379,7 +379,7 @@ describe('concludePlanning', () => {
     expect(planCreated).toHaveLength(1)
     // M23 E1: the plan names its planner -- the communication graph's `plan` edge is derived
     // from this field, not from `runId` (which the fold never reads).
-    expect(planCreated[0]?.agentId).toBe(run.agentId)
+    expect(planCreated[0]?.slaveId).toBe(run.slaveId)
     const payload = planCreated[0]?.payload as unknown as { goal: string; tasks: readonly { title: string }[] }
     expect(payload.goal).toBe('Ship the checkout redesign')
     expect(payload.tasks.map((task) => task.title).sort()).toEqual(
@@ -415,7 +415,7 @@ describe('concludePlanning', () => {
     const second = await dispatchPlanning(depsFor(fixture.workspaceId))
 
     expect(second).toBeNull()
-    expect(await prisma.agentRun.count({ where: { kind: 'planning' } })).toBe(1)
+    expect(await prisma.slaveRun.count({ where: { kind: 'planning' } })).toBe(1)
     expect(await prisma.task.count({ where: { workspaceId: fixture.workspaceId } })).toBe(3)
   })
 
@@ -428,7 +428,7 @@ describe('concludePlanning', () => {
     expect(runId).not.toBeNull()
     await drainPumps()
 
-    const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: runId as string } })
+    const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId as string } })
     expect(run.status).toBe('failed')
 
     const failures = await prisma.executionEvent.findMany({ where: { runId: run.id, type: 'run_failed' } })
@@ -446,16 +446,16 @@ describe('concludePlanning', () => {
     const managerId = await addManager(fixture.teamId)
 
     const now = new Date()
-    const run = await prisma.agentRun.create({
-      data: { agentId: managerId, kind: 'planning', status: 'succeeded', startedAt: now, terminalAt: now, endedAt: now },
+    const run = await prisma.slaveRun.create({
+      data: { slaveId: managerId, kind: 'planning', status: 'succeeded', startedAt: now, terminalAt: now, endedAt: now },
     })
     await prisma.executionEvent.create({
       data: {
         type: 'run_output',
         workspaceId: fixture.workspaceId,
-        agentId: managerId,
+        slaveId: managerId,
         runId: run.id,
-        actor: 'agent',
+        actor: 'slave',
         payload: {
           text: '{"tasks":[{"key":"core","title":"Write the feature core","description":"Implement the core module.","role":"backend","dependsOn":[]}]}',
         },
@@ -496,7 +496,7 @@ describe('concludePlanning', () => {
     const fixture = await seed('Ship the checkout redesign')
     repos.push(fixture.repoPath)
     await addManager(fixture.teamId)
-    await addBackendAgent(fixture.teamId)
+    await addBackendSlave(fixture.teamId)
     const deps = depsFor(fixture.workspaceId)
 
     const runId = await dispatchPlanning(deps)

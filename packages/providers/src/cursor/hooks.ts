@@ -139,7 +139,7 @@ const EXCLUDE_LINE = '/.cursor/hooks.json'
  * **Two things this does that `writeSettingsFile` does not have to.** Claude's settings file lives
  * in `runDir`, outside the worktree entirely; Cursor's has to live INSIDE the run's checkout,
  * because that is the only place `cursor-agent` reads it from. So this file lands in a directory
- * that is also the agent's working tree -- somebody else's source repository -- and both of the
+ * that is also the slave's working tree -- somebody else's source repository -- and both of the
  * consequences are handled here rather than left for an operator to discover:
  *
  * 1. **It refuses to clobber a hooks file the project brought with it.** A checked-out project may
@@ -148,7 +148,7 @@ const EXCLUDE_LINE = '/.cursor/hooks.json'
  *    as its own and rewritten -- which is exactly the `resume()` case, and why this is not simply
  *    "refuse if the path exists".
  * 2. **It excludes itself from git.** Otherwise the run's own `git status` shows `?? .cursor/`, the
- *    agent sees a stray file containing an absolute local path to a gate script, and may well
+ *    slave sees a stray file containing an absolute local path to a gate script, and may well
  *    commit it. `writeCheckpoint`'s `dirtyFiles` would carry it too.
  */
 export function writeCursorHooksFile(input: { readonly hooksPath: string; readonly gatePath: string }): void {
@@ -177,12 +177,12 @@ export function writeCursorHooksFile(input: { readonly hooksPath: string; readon
       `writeCursorHooksFile: ${JSON.stringify(workspacePath)} already has a .cursor/hooks.json that ` +
         'this adapter did not write. Refusing to overwrite it: a project that ships its own Cursor ' +
         'hooks has configured something deliberate, and replacing it would disarm that silently and ' +
-        "leave a modified tracked file in the agent's working tree. Move or remove it, or run this " +
+        "leave a modified tracked file in the slave's working tree. Move or remove it, or run this " +
         'provider against a worktree that does not carry one.',
     )
   }
 
-  // Excluded BEFORE the file exists, so there is no window in which a `git status` -- the agent's
+  // Excluded BEFORE the file exists, so there is no window in which a `git status` -- the slave's
   // own, or `writeCheckpoint`'s `dirtyFiles` -- can see it.
   excludeFromGit(workspacePath)
   mkdirSync(dirname(input.hooksPath), { recursive: true })

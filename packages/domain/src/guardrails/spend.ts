@@ -18,13 +18,13 @@ export interface Spend {
 }
 
 /**
- * The three `AgentRun` columns it takes to tell an unmeasured run from a null cost. All three are
+ * The three `SlaveRun` columns it takes to tell an unmeasured run from a null cost. All three are
  * load-bearing; see `sumSpend`.
  */
 export interface SpendRow {
   readonly costUsd: number | null
   /**
-   * `AgentRun.provider`, typed as a bare string because only its NULLNESS is read here and
+   * `SlaveRun.provider`, typed as a bare string because only its NULLNESS is read here and
    * `ProviderKind` lives in `@slave-of-ai/providers`, which depends on this package rather than the
    * other way round.
    */
@@ -43,20 +43,20 @@ export interface SpendRow {
  * were already producing, restated where the other half can be produced beside it.
  *
  * `unknownRuns` is NOT "how many rows have `costUsd IS NULL`". That was this function's first
- * shipped meaning and it was wrong (fix round F1): it made a healthy workspace with three agents
+ * shipped meaning and it was wrong (fix round F1): it made a healthy workspace with three slaves
  * working read "3 unmeasured", and it made every refused dispatch add one to a figure that could
  * never come back down. `costUsd` is null in four situations and only one of them is an unmeasured
  * run. The column facts, verified against the tree rather than assumed:
  *
- * - `pump.ts`'s terminal `updateMany` is the ONLY writer of `AgentRun.costUsd` anywhere in the
+ * - `pump.ts`'s terminal `updateMany` is the ONLY writer of `SlaveRun.costUsd` anywhere in the
  *   codebase, and it writes it in the same statement as `status: succeeded|failed`, `terminalAt`
  *   and `endedAt`. So a run in flight ALWAYS has a null cost, no matter how well it is going.
- * - `AgentRun.provider` is written in the same statement as `pid` -- `tick.ts`, `planning.ts` and
- *   `review.ts` each do one `agentRun.update` STRICTLY AFTER `await adapter.start(...)` has
+ * - `SlaveRun.provider` is written in the same statement as `pid` -- `tick.ts`, `planning.ts` and
+ *   `review.ts` each do one `slaveRun.update` STRICTLY AFTER `await adapter.start(...)` has
  *   returned a handle. There is no path that writes `provider` without a live process behind it,
  *   which is what makes it an exact discriminator for "a runtime actually ran this" -- with one
  *   hole, named here rather than left in a task report: if `adapter.start()` succeeds and the
- *   `agentRun.update` on the next line throws, a live process exists behind a null `provider`
+ *   `slaveRun.update` on the next line throws, a live process exists behind a null `provider`
  *   and that run is UNDER-counted here. No better discriminator exists without a schema change
  *   (`pid` and `worktreePath` are written by that same statement; `sessionId` shares the window
  *   AND misses a runtime that dies before init), and in that window `failToStart`'s own writes

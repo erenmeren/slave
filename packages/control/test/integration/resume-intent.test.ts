@@ -29,7 +29,7 @@ async function seed(): Promise<Fixture> {
     },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const agent = await prisma.agent.create({ data: { teamId: team.id, name: 'Alex', role: 'Backend' } })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'Backend' } })
   const task = await prisma.task.create({
     data: {
       workspaceId: workspace.id,
@@ -38,8 +38,8 @@ async function seed(): Promise<Fixture> {
       maxAttempts: workspace.maxAttempts,
     },
   })
-  const run = await prisma.agentRun.create({
-    data: { taskId: task.id, agentId: agent.id, status: 'paused', pauseReason: 'human' },
+  const run = await prisma.slaveRun.create({
+    data: { taskId: task.id, slaveId: slave.id, status: 'paused', pauseReason: 'human' },
   })
   await prisma.checkpoint.create({
     data: {
@@ -69,7 +69,7 @@ describe('the resume intent', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Approval", "AgentMessage", "Artifact", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Approval", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
   })
@@ -79,7 +79,7 @@ describe('the resume intent', () => {
     const result = await requestResume(run.id, 'also create EXTRA.md', 'meren')
     expect(result.ok).toBe(true)
 
-    const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })
+    const after = await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })
     expect(after.status).toBe('paused') // NEVER resuming from here (sweep safety)
     expect(after.resumeRequestedAt).not.toBeNull()
     expect(after.queuedMessage).toBe('also create EXTRA.md')
@@ -94,7 +94,7 @@ describe('the resume intent', () => {
     await updateQueuedMessage(run.id, 'first instruction')
     await requestResume(run.id, null, 'meren')
 
-    const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })
+    const after = await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })
     expect(after.queuedMessage).toBe('first instruction')
   })
 
@@ -109,7 +109,7 @@ describe('the resume intent', () => {
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.error.kind).toBe('workspace_halted')
     // The refusal is total: nothing is recorded for a daemon to pick up the moment the halt clears.
-    const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })
+    const after = await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })
     expect(after.resumeRequestedAt).toBeNull()
   })
 
@@ -118,7 +118,7 @@ describe('the resume intent', () => {
     await prisma.checkpoint.delete({ where: { runId: run.id } })
     expect((await requestResume(run.id, null, 'meren')).ok).toBe(false)
 
-    await prisma.agentRun.update({ where: { id: run.id }, data: { status: 'working' } })
+    await prisma.slaveRun.update({ where: { id: run.id }, data: { status: 'working' } })
     const result = await requestResume(run.id, null, 'meren')
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.error.kind).toBe('wrong_status')
@@ -146,7 +146,7 @@ describe('the resume intent', () => {
     const first = await claimResume(run.id)
     expect(first).toEqual({ claimed: true, queuedMessage: 'do the thing' })
 
-    const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })
+    const after = await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })
     expect(after.status).toBe('resuming')
     expect(after.resumeRequestedAt).toBeNull()
     expect(after.queuedMessage).toBeNull()
@@ -160,7 +160,7 @@ describe('the resume intent', () => {
     // The intent column, not the status, is what the daemon's pass claims on: a paused run nobody
     // asked to resume must survive every tick untouched.
     expect(await claimResume(run.id)).toEqual({ claimed: false, queuedMessage: null })
-    expect((await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })).status).toBe('paused')
+    expect((await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })).status).toBe('paused')
   })
 
   it('updateQueuedMessage overwrites the single slot rather than accumulating', async (): Promise<void> => {
@@ -169,14 +169,14 @@ describe('the resume intent', () => {
     const second = await updateQueuedMessage(run.id, 'second instruction')
 
     expect(second.ok).toBe(true)
-    expect((await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })).queuedMessage).toBe(
+    expect((await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })).queuedMessage).toBe(
       'second instruction',
     )
   })
 
   it('updateQueuedMessage refuses when the run is not paused', async (): Promise<void> => {
     const { run } = fixture
-    await prisma.agentRun.update({ where: { id: run.id }, data: { status: 'working' } })
+    await prisma.slaveRun.update({ where: { id: run.id }, data: { status: 'working' } })
 
     const result = await updateQueuedMessage(run.id, 'x')
     expect(result.ok).toBe(false)
@@ -195,12 +195,12 @@ describe('the resume intent', () => {
 
     const cleared = await updateQueuedMessage(run.id, '')
     expect(cleared.ok).toBe(true)
-    expect((await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })).queuedMessage).toBeNull()
+    expect((await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })).queuedMessage).toBeNull()
 
     await updateQueuedMessage(run.id, 'second instruction')
     const clearedByWhitespace = await updateQueuedMessage(run.id, '   \n\t ')
     expect(clearedByWhitespace.ok).toBe(true)
-    expect((await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })).queuedMessage).toBeNull()
+    expect((await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })).queuedMessage).toBeNull()
   })
 
   it('requestResume normalizes an empty message to null rather than queuing an empty prompt', async (): Promise<void> => {
@@ -208,7 +208,7 @@ describe('the resume intent', () => {
     const result = await requestResume(run.id, '', 'meren')
     expect(result.ok).toBe(true)
 
-    const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })
+    const after = await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })
     expect(after.resumeRequestedAt).not.toBeNull()
     expect(after.queuedMessage).toBeNull()
 
@@ -218,7 +218,7 @@ describe('the resume intent', () => {
 
   describe('requestResume liveness', () => {
     async function pausedRunWithCheckpoint(pid: number | null): Promise<string> {
-      await prisma.agentRun.update({ where: { id: fixture.run.id }, data: { status: 'paused', pid } })
+      await prisma.slaveRun.update({ where: { id: fixture.run.id }, data: { status: 'paused', pid } })
       // `seed()` already writes a Checkpoint for this run (`runId` is `@unique`); replace it rather
       // than colliding on the constraint. The brief's literal `create` assumed no checkpoint existed
       // yet -- it does, so this deviates from the brief verbatim in this one line only.
@@ -275,7 +275,7 @@ describe('the resume intent', () => {
         expect(refusalText(result.error)).toBe('the run is still stopping; retry in a moment')
 
         // Nothing was recorded: a refused resume must not arm one.
-        const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: runId } })
+        const after = await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId } })
         expect(after.resumeRequestedAt).toBeNull()
         expect(await prisma.executionEvent.count({ where: { runId, type: 'run_resume_requested' } })).toBe(0)
       } finally {
@@ -288,7 +288,7 @@ describe('the resume intent', () => {
       const result = await requestResume(runId, null, 'meren')
 
       expect(result.ok).toBe(true)
-      const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: runId } })
+      const after = await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId } })
       expect(after.resumeRequestedAt).not.toBeNull()
     })
 

@@ -34,7 +34,7 @@ describe('parseStreamLine', () => {
     // through exactly as `extractDenyReason` reads it either way. The split lives one layer up, in
     // `classifyGateEvent`'s prefix check -- this test exists to pin that no change was needed here
     // for that split to work, per the M18 Task 6 brief's own "verify passthrough suffices" note.
-    const reason = `${PERMISSION_DENY_REASON_PREFIX} 'run tests' (Bash) for this agent`
+    const reason = `${PERMISSION_DENY_REASON_PREFIX} 'run tests' (Bash) for this slave`
     const inner = JSON.stringify({
       hookSpecificOutput: { permissionDecision: 'deny', permissionDecisionReason: reason },
     })
@@ -518,13 +518,13 @@ describe('the Skill tool_use line (M14 §4.1, recorded)', () => {
     for (const call of skillCalls) {
       // The summary carries the skill NAME, not the bare tool name -- `input.skill` is the only
       // argument a `Skill` tool_use has, and without it every skill call reads identically in the
-      // action line and on the agent card's skill chip.
+      // action line and on the slave card's skill chip.
       expect(call.summary).toMatch(/^Skill \S/)
       expect(call.toolUseId).toMatch(/^toolu_/)
     }
   })
 
-  it('summarizes the recorded call as exactly `Skill <name>`, the shape the agent card parses', () => {
+  it('summarizes the recorded call as exactly `Skill <name>`, the shape the slave card parses', () => {
     // Not merely "starts with Skill ": `apps/web/src/server/overview.ts`'s `skillNameOf` recovers
     // the chip's label with /^Skill\s+(\S+)/, so the exact string is the contract between this
     // parser and that card. The name is the fully-qualified `<plugin>:<name>` the CLI emitted.
@@ -556,7 +556,7 @@ describe('result line token usage (M14 §4.2)', () => {
     expect(event.kind).toBe('terminated')
     // BILLED input: input_tokens (4) + cache_creation_input_tokens (16_732) + cache_read_input_tokens
     // (46_948) = 63_684. Fix round 1 (controller ruling): input_tokens alone reads as a near-zero
-    // 4 tokens beside this run's real $0.21 spend -- the README's Agents-table tokens column and the
+    // 4 tokens beside this run's real $0.21 spend -- the README's Slaves-table tokens column and the
     // Analytics mock's "1.4M" are only reachable by counting what the run was actually billed for,
     // and cache reads/writes ARE billed.
     expect((event as Extract<RuntimeEvent, { kind: 'terminated' }>).outcome.tokens).toEqual({ input: 63_684, output: 741 })

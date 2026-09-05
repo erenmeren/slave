@@ -152,7 +152,7 @@ describe('cursor-shell-gate.sh', () => {
 
   // MEASURED, and the reason the key is snake_case: the binary reads
   // `response.user_message` (and its own validator accepts exactly
-  // `permission` / `user_message` / `agent_message`). A `userMessage` key is
+  // `permission` / `user_message` / `slave_message`). A `userMessage` key is
   // simply not read, which would still deny but would throw the operator's
   // message away silently.
   it('names the operator message user_message, not userMessage', async (): Promise<void> => {
@@ -340,7 +340,7 @@ describe('cursor-shell-gate.sh', () => {
         // The prefix is pinned byte-equal against packages/providers/src/gate.ts's
         // PERMISSION_DENY_REASON_PREFIX by packages/control/test/permission-mapping.test.ts --
         // this assertion is deliberately exact, not `.toContain`, so a drift here is caught here.
-        expect(parsed.user_message).toBe("permission matrix denies 'source write' (edit) for this agent")
+        expect(parsed.user_message).toBe("permission matrix denies 'source write' (edit) for this slave")
       } finally {
         rmSync(path.dirname(permissionsFile), { recursive: true, force: true })
       }
@@ -362,7 +362,7 @@ describe('cursor-shell-gate.sh', () => {
         expect(code).toBe(0)
         const parsed = JSON.parse(stdout) as { permission: string; user_message: string }
         expect(parsed.permission).toBe('deny')
-        expect(parsed.user_message).toBe("permission matrix denies 'run tests' (shell) for this agent")
+        expect(parsed.user_message).toBe("permission matrix denies 'run tests' (shell) for this slave")
       } finally {
         rmSync(path.dirname(permissionsFile), { recursive: true, force: true })
       }

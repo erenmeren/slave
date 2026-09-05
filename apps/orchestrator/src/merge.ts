@@ -77,7 +77,7 @@ async function failMerge(input: {
   }
 
   // The same rework machinery a failed verify or a rejected review uses: attempt counted, reason
-  // on the agent-facing channel the next run's prompt reads from.
+  // on the slave-facing channel the next run's prompt reads from.
   await rejectTask(brandTaskId(input.taskId), input.reason)
 
   // `rejectTask` does not know this column -- it is Task 3's, added after `verify.ts` was written.
@@ -159,7 +159,7 @@ export async function runMergePass(workspaceId: WorkspaceId): Promise<void> {
 
   // The preserved worktree from the task's own latest implementation run -- the same one review
   // judged, not a fresh provision. Mirrors `dispatchReview`'s `latestImpl` lookup.
-  const latestImpl = await prisma.agentRun.findFirst({
+  const latestImpl = await prisma.slaveRun.findFirst({
     where: { taskId: task.id, kind: 'implementation' },
     orderBy: { startedAt: 'desc' },
   })

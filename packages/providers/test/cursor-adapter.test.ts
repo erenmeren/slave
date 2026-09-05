@@ -110,7 +110,7 @@ function rejectedCompletedLine(callId: string): string {
  * The recording already caught one way that self-agreement goes stale. `rejectedCompletedLine`'s
  * reason text (`'Command execution was blocked by a hook: ...'`) is M12's, measured against
  * `cursor-agent` 2026.08.11-e8db854; under 2026.08.25-3e8eec8 the recorded reason is instead the
- * gate's own `user_message` verbatim followed by an agent-facing note. The adapter is indifferent
+ * gate's own `user_message` verbatim followed by an slave-facing note. The adapter is indifferent
  * to that -- it keys on the PRESENCE of `result.rejected` and never on the reason's wording -- and
  * these two tests exist to keep it that way by pinning it to bytes the binary actually emitted.
  */
@@ -147,7 +147,7 @@ describe('CursorAdapter', () => {
       // exist here (the adapter never reads it, only tells the child where it is), matching how
       // `pauseFlagPath` above is exercised the same way.
       permissionsFilePath: path.join(runDir, 'permissions.json'),
-      gitIdentity: { name: 'Test Agent', email: 'agent@example.com' },
+      gitIdentity: { name: 'Test Slave', email: 'slave@example.com' },
     }
   })
 
@@ -250,7 +250,7 @@ describe('CursorAdapter', () => {
     await adapter.start(input)
     await drain(adapter, input.runId)
 
-    expect(readFileSync(envOut, 'utf8')).toBe(`${input.pauseFlagPath}\nTest Agent\n${worktreePath}\n`)
+    expect(readFileSync(envOut, 'utf8')).toBe(`${input.pauseFlagPath}\nTest Slave\n${worktreePath}\n`)
   })
 
   it('sets SLAVEOFAI_PERMISSIONS_FILE on the child (M18 Task 5)', async () => {
@@ -417,8 +417,8 @@ describe('CursorAdapter', () => {
         cumulativeTokens: 0,
         settingsPath: path.join(worktreePath, '.cursor', 'hooks.json'),
         hookPath: gatePath,
-        gitAuthorName: 'Test Agent',
-        gitAuthorEmail: 'agent@example.com',
+        gitAuthorName: 'Test Slave',
+        gitAuthorEmail: 'slave@example.com',
         provider: 'cursor',
       }
     }

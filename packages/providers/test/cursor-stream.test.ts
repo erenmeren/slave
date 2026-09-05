@@ -238,7 +238,7 @@ describe('parseCursorLine, a rejected completed half (M15)', () => {
     // does -- this is what lets the pump's `permission_denied` case (`apps/orchestrator/src/pump.ts`)
     // tell a matrix refusal apart from an ordinary Cursor shell-gate pause, the same way
     // `classifyGateEvent` tells it apart on the Claude side.
-    const reason = "permission matrix denies 'run tests' (Bash) for this agent"
+    const reason = "permission matrix denies 'run tests' (Bash) for this slave"
     const line = JSON.stringify({
       type: 'tool_call',
       subtype: 'completed',
@@ -354,7 +354,7 @@ describe('parseCursorLine, totality', () => {
     // it would be the same sin as writing the parser from vendor docs.
     //
     // But it is NOT "a kind we have no decision for", which is what `ignored`
-    // means. It is a real message from the agent, and `ignored` made the
+    // means. It is a real message from the slave, and `ignored` made the
     // whole thing vanish from the operator's feed with nothing counted,
     // nothing warned, nothing anywhere. `unparsable` is
     // where the loss becomes loud: `pump.ts:507-508` counts it and warns WITH
@@ -387,7 +387,7 @@ describe('parseCursorLine, totality', () => {
     // The load-bearing reason is what `unparsable` is FOR here. Its whole
     // value in the branch above is that the count means "real output was
     // dropped" -- an operator reading `(3 unparsable line(s) were dropped
-    // first)` must be able to believe three pieces of the agent's message are
+    // first)` must be able to believe three pieces of the slave's message are
     // missing. Padding that counter with messages that carried nothing debases
     // exactly the signal this round exists to create, in the same way `?? 0`
     // on an unmeasured cost debased a figure the budget guardrail believed.

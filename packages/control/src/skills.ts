@@ -284,30 +284,30 @@ export function describeSync(result: SyncResult): string {
   return `${head}skipped ${result.skippedRoots.length} unreadable root(s), nothing marked missing under them: ${detail}\n`
 }
 
-/** Gives an agent a skill. Idempotent: the composite primary key `(agentId, skillId)` makes a
+/** Gives an slave a skill. Idempotent: the composite primary key `(slaveId, skillId)` makes a
  *  second call a no-op rather than a duplicate row. */
-export async function assignSkill(agentId: string, skillId: string): Promise<Result<void, ControlRefusal>> {
+export async function assignSkill(slaveId: string, skillId: string): Promise<Result<void, ControlRefusal>> {
   const skill = await prisma.skill.findUnique({ where: { id: skillId }, select: { id: true } })
   if (skill === null) return err({ kind: 'skill_not_found', skillId })
-  const agent = await prisma.agent.findUnique({ where: { id: agentId }, select: { id: true } })
-  if (agent === null) return err({ kind: 'agent_not_found', agentId })
+  const slave = await prisma.slave.findUnique({ where: { id: slaveId }, select: { id: true } })
+  if (slave === null) return err({ kind: 'slave_not_found', slaveId })
 
-  await prisma.agentSkill.upsert({
-    where: { agentId_skillId: { agentId, skillId } },
+  await prisma.slaveSkill.upsert({
+    where: { slaveId_skillId: { slaveId, skillId } },
     update: {},
-    create: { agentId, skillId },
+    create: { slaveId, skillId },
   })
   return ok(undefined)
 }
 
 /** Takes it away. Idempotent for the same reason, via `deleteMany` rather than `delete` (which
  *  throws on a row that is already gone). */
-export async function unassignSkill(agentId: string, skillId: string): Promise<Result<void, ControlRefusal>> {
+export async function unassignSkill(slaveId: string, skillId: string): Promise<Result<void, ControlRefusal>> {
   const skill = await prisma.skill.findUnique({ where: { id: skillId }, select: { id: true } })
   if (skill === null) return err({ kind: 'skill_not_found', skillId })
-  const agent = await prisma.agent.findUnique({ where: { id: agentId }, select: { id: true } })
-  if (agent === null) return err({ kind: 'agent_not_found', agentId })
+  const slave = await prisma.slave.findUnique({ where: { id: slaveId }, select: { id: true } })
+  if (slave === null) return err({ kind: 'slave_not_found', slaveId })
 
-  await prisma.agentSkill.deleteMany({ where: { agentId, skillId } })
+  await prisma.slaveSkill.deleteMany({ where: { slaveId, skillId } })
   return ok(undefined)
 }

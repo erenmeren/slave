@@ -37,7 +37,7 @@ function pairRefusal(
 }
 
 /**
- * Adds a reusable agent template to the catalog (M10 §4) -- the definition `addCompanyAgent`
+ * Adds a reusable slave template to the catalog (M10 §4) -- the definition `addCompanySlave`
  * below instantiates onto a company's roster. Templates are append-only (Decision 9): there is no
  * update or delete here, only creation.
  *
@@ -45,10 +45,10 @@ function pairRefusal(
  * spec §6). A template belongs to the catalog, not to a workspace: the same template is
  * instantiated onto rosters that are assignable to ANY workspace, so at this moment there is no
  * `budgetUsd` in existence to check a `reportsCost: false` provider against. The same is true of
- * `addCompanyAgent` below. Adding a check here would either have to invent a workspace or refuse
+ * `addCompanySlave` below. Adding a check here would either have to invent a workspace or refuse
  * a cost-blind provider globally -- which would make the second runtime uncatalogable and this
  * milestone pointless. The mismatch is caught at the two places it can actually be CREATED,
- * `assignCompany` and `setAgentModel`, and again at dispatch.
+ * `assignCompany` and `setSlaveModel`, and again at dispatch.
  */
 export async function createTemplate(
   name: string,
@@ -66,7 +66,7 @@ export async function createTemplate(
   if (pairErr !== null) return err(pairErr)
 
   try {
-    const template = await prisma.agentTemplate.create({
+    const template = await prisma.slaveTemplate.create({
       data: {
         name,
         role,
@@ -116,13 +116,13 @@ export async function addCompanyTeam(
 
 /**
  * Adds a roster member -- a durable identity such as "Atlas" -- to a company team, instantiated
- * from a template. Agent names are unique per team, not globally: the same name in two different
+ * from a template. Slave names are unique per team, not globally: the same name in two different
  * teams (even in the same company) is unrelated identities and is allowed.
  *
  * Workspace-independent, like `createTemplate` above, and so deliberately carries no budget
  * admission -- see that function's comment for the reasoning.
  */
-export async function addCompanyAgent(
+export async function addCompanySlave(
   companyTeamId: string,
   templateId: string,
   name: string,
@@ -139,11 +139,11 @@ export async function addCompanyAgent(
   const team = await prisma.companyTeam.findUnique({ where: { id: companyTeamId }, select: { id: true } })
   if (team === null) return err({ kind: 'company_team_not_found', companyTeamId })
 
-  const template = await prisma.agentTemplate.findUnique({ where: { id: templateId }, select: { id: true } })
+  const template = await prisma.slaveTemplate.findUnique({ where: { id: templateId }, select: { id: true } })
   if (template === null) return err({ kind: 'template_not_found', templateId })
 
   try {
-    const agent = await prisma.companyAgent.create({
+    const slave = await prisma.companySlave.create({
       data: {
         companyTeamId,
         templateId,
@@ -152,7 +152,7 @@ export async function addCompanyAgent(
         ...(options?.provider !== undefined ? { provider: options.provider } : {}),
       },
     })
-    return ok({ id: agent.id })
+    return ok({ id: slave.id })
   } catch (error) {
     if (isUniqueConstraintViolation(error)) return err({ kind: 'duplicate_name', name })
     throw error
@@ -189,7 +189,7 @@ async function admitRoster(
   if (workspace.budgetUsd === null) return null
 
   const workspaceDefault = await workspaceDefaultProvider(workspace.id)
-  const members = await prisma.companyAgent.findMany({
+  const members = await prisma.companySlave.findMany({
     where: { companyTeam: { companyId } },
     include: { template: true },
   })
@@ -200,7 +200,7 @@ async function admitRoster(
     // `resolveRuntime` walks, called here rather than reimplemented so the write surface can
     // never admit a pair that dispatch would resolve differently.
     const resolved = resolveRuntime(
-      { model: null, provider: null, companyAgent: { model: member.model, provider: member.provider, template: member.template } },
+      { model: null, provider: null, companySlave: { model: member.model, provider: member.provider, template: member.template } },
       workspaceDefault,
     )
     if (resolved.provider === null) continue
@@ -214,16 +214,16 @@ async function admitRoster(
 /** What {@link assignCompany} created -- the gate and M11's UI report this back to an operator. */
 export interface AssignReport {
   readonly createdTeams: readonly string[]
-  readonly createdWorkers: readonly { readonly companyAgentId: string; readonly name: string; readonly role: string }[]
+  readonly createdWorkers: readonly { readonly companySlaveId: string; readonly name: string; readonly role: string }[]
 }
 
 /**
  * Assigns a company's roster to a project workspace (M10 §5): links `Workspace.companyId` and
- * materializes a project `Team`/`Agent` for every `CompanyTeam`/`CompanyAgent` that has no
+ * materializes a project `Team`/`Slave` for every `CompanyTeam`/`CompanySlave` that has no
  * matching row there yet.
  *
  * Additive only (Decision 6): an existing project team or worker is never renamed, re-rowed, or
- * removed -- find-or-create by `companyTeamId` (teams, M11) and by `companyAgentId` (workers,
+ * removed -- find-or-create by `companyTeamId` (teams, M11) and by `companySlaveId` (workers,
  * within the workspace, whichever department it was moved to) is the whole mechanism, so a re-run
  * against the same company is a no-op re-sync rather than a second copy. A team match falls back
  * to name once, ONLY against a legacy row with no
@@ -251,7 +251,7 @@ export interface AssignReport {
  * of race.
  *
  * The roster read and every materializing write -- including the `companyId` write -- happen
- * inside that SAME transaction, `tx.agentTemplate.findUniqueOrThrow` included: a template is
+ * inside that SAME transaction, `tx.slaveTemplate.findUniqueOrThrow` included: a template is
  * append-only in the ordinary path (Decision 9), so its being missing here is always a data
  * integrity failure, and letting that throw is what keeps a torn assignment (companyId written,
  * some workers created, others not) impossible. The event -- ALWAYS emitted, even with zero new
@@ -286,10 +286,10 @@ export async function assignCompany(
 
     await tx.workspace.update({ where: { id: workspaceId }, data: { companyId } })
 
-    const companyTeams = await tx.companyTeam.findMany({ where: { companyId }, include: { agents: true } })
+    const companyTeams = await tx.companyTeam.findMany({ where: { companyId }, include: { slaves: true } })
 
     const createdTeams: string[] = []
-    const createdWorkers: { companyAgentId: string; name: string; role: string }[] = []
+    const createdWorkers: { companySlaveId: string; name: string; role: string }[] = []
 
     for (const companyTeam of companyTeams) {
       let team = await tx.team.findFirst({ where: { workspaceId, companyTeamId: companyTeam.id } })
@@ -303,28 +303,28 @@ export async function assignCompany(
         if (legacy === null) createdTeams.push(team.name)
       }
 
-      for (const companyAgent of companyTeam.agents) {
+      for (const companySlave of companyTeam.slaves) {
         // Scoped to the WORKSPACE, not to this template's own copied department (M25 final
-        // review, Critical): `moveAgent` keeps `companyAgentId` and only changes `teamId`, so a
+        // review, Critical): `moveSlave` keeps `companySlaveId` and only changes `teamId`, so a
         // worker moved to a different department of the same project is still this exact catalog
-        // row's materialization -- looking it up by `{ teamId: team.id, companyAgentId }` would
-        // miss it there and this loop would create a second `Agent` with the same name and the
-        // same `companyAgentId` (there is no unique index on that column to catch it).
-        const existingWorker = await tx.agent.findFirst({
-          where: { companyAgentId: companyAgent.id, team: { workspaceId } },
+        // row's materialization -- looking it up by `{ teamId: team.id, companySlaveId }` would
+        // miss it there and this loop would create a second `Slave` with the same name and the
+        // same `companySlaveId` (there is no unique index on that column to catch it).
+        const existingWorker = await tx.slave.findFirst({
+          where: { companySlaveId: companySlave.id, team: { workspaceId } },
         })
         if (existingWorker !== null) continue
 
-        const template = await tx.agentTemplate.findUniqueOrThrow({ where: { id: companyAgent.templateId } })
-        const worker = await tx.agent.create({
+        const template = await tx.slaveTemplate.findUniqueOrThrow({ where: { id: companySlave.templateId } })
+        const worker = await tx.slave.create({
           data: {
             teamId: team.id,
-            name: companyAgent.name,
+            name: companySlave.name,
             role: template.role,
-            companyAgentId: companyAgent.id,
+            companySlaveId: companySlave.id,
           },
         })
-        createdWorkers.push({ companyAgentId: companyAgent.id, name: worker.name, role: worker.role })
+        createdWorkers.push({ companySlaveId: companySlave.id, name: worker.name, role: worker.role })
       }
     }
 
@@ -362,7 +362,7 @@ export async function assignCompany(
  * A READ now precedes that write, which the paragraph above deliberately said this function did
  * not need, so the reason is recorded rather than left as a contradiction. M12 Task 9 (spec §6,
  * ruling R6) makes this one of the two moments a provider can be bound to a budgeted workspace,
- * and the check needs the AGENT'S WORKSPACE -- a fact `updateMany`'s `where: { id }` never had to
+ * and the check needs the SLAVE'S WORKSPACE -- a fact `updateMany`'s `where: { id }` never had to
  * fetch. The read is unavoidable; what the earlier reasoning protects is the WRITE, and that is
  * unchanged: still one conditioned `updateMany`, still both columns in the same statement, still
  * no window in which a model exists without its provider. The read adds a check-then-write gap,
@@ -370,7 +370,7 @@ export async function assignCompany(
  * routing note below), and the same mismatch is re-checked at dispatch anyway.
  *
  * M23 D1 makes the read UNCONDITIONAL rather than only when `provider !== null`: `org.changed`'s
- * `from` is this agent's OLD model/provider pair, which only exists to read before the write
+ * `from` is this slave's OLD model/provider pair, which only exists to read before the write
  * overwrites it, and the event needs `workspaceId` regardless of which direction (set or clear)
  * this call took. The same "nothing races it" reasoning still covers the wider read -- it is one
  * more fact pulled off the same row, not a new check-then-write gap of its own.
@@ -383,8 +383,8 @@ export async function assignCompany(
  * the ledger already routed to Task 13/14, and this note is here so the gap is named rather than
  * silently missing.
  */
-export async function setAgentModel(
-  agentId: string,
+export async function setSlaveModel(
+  slaveId: string,
   model: string | null,
   provider: ProviderKind | null,
   principal?: Principal,
@@ -394,38 +394,38 @@ export async function setAgentModel(
   const pairErr = pairRefusal(model, provider)
   if (pairErr !== null) return err(pairErr)
 
-  const agent = await prisma.agent.findUnique({
-    where: { id: agentId },
+  const slave = await prisma.slave.findUnique({
+    where: { id: slaveId },
     select: {
       model: true,
       provider: true,
       team: { select: { workspaceId: true, workspace: { select: { id: true, budgetUsd: true } } } },
     },
   })
-  if (agent === null) return err({ kind: 'agent_not_found', agentId })
+  if (slave === null) return err({ kind: 'slave_not_found', slaveId })
 
   if (provider !== null) {
     // Only when a provider is actually being PINNED. Clearing the pair (`null, null`) pins no
     // runtime at all -- it hands the choice back to the roster, the template and the workspace
     // default below it -- so there is nothing here to admit or refuse, and refusing an operator's
     // undo would trap them in the very override they are trying to remove.
-    const verdict = admitProvider(agent.team.workspace, provider)
+    const verdict = admitProvider(slave.team.workspace, provider)
     if (!verdict.ok) return err(verdict.refusal)
   }
 
-  const updated = await prisma.agent.updateMany({ where: { id: agentId }, data: { model, provider } })
-  if (updated.count === 0) return err({ kind: 'agent_not_found', agentId })
+  const updated = await prisma.slave.updateMany({ where: { id: slaveId }, data: { model, provider } })
+  if (updated.count === 0) return err({ kind: 'slave_not_found', slaveId })
 
   await appendEvent({
     type: 'org.changed',
-    workspaceId: agent.team.workspaceId,
-    agentId,
+    workspaceId: slave.team.workspaceId,
+    slaveId,
     actor: 'human',
     payload: {
-      entity: 'agent',
-      id: agentId,
+      entity: 'slave',
+      id: slaveId,
       field: 'model',
-      from: `${agent.model ?? '—'}@${agent.provider ?? '—'}`,
+      from: `${slave.model ?? '—'}@${slave.provider ?? '—'}`,
       to: `${model ?? '—'}@${provider ?? '—'}`,
     },
     userId: principal?.userId ?? null,
@@ -435,10 +435,10 @@ export async function setAgentModel(
 }
 
 // ---- D1: roster editing (M23 §5) ---------------------------------------------------------------
-// `createTemplate`/`createCompany`/`addCompanyTeam`/`addCompanyAgent`/`assignCompany` above only
+// `createTemplate`/`createCompany`/`addCompanyTeam`/`addCompanySlave`/`assignCompany` above only
 // ever ADD to the catalog or the roster it materializes -- Decision 9 in M10's own comments made
 // that append-only on purpose. The five verbs below are the first ones that EDIT a project team
-// or agent already on a workspace's roster: rename, re-role, or remove it. Every one of them ends
+// or slave already on a workspace's roster: rename, re-role, or remove it. Every one of them ends
 // in exactly one `org.changed` event, `field` naming what moved -- the one new activity-log entry
 // this task adds, so an operator can see a roster edit in the same timeline as everything else
 // that happened to a workspace.
@@ -447,19 +447,19 @@ export async function setAgentModel(
 // `org.changed` event each of them appends, the same as every other control verb.
 
 /**
- * Locks and loads one `Agent` row for an editing verb, with exactly what every caller below
+ * Locks and loads one `Slave` row for an editing verb, with exactly what every caller below
  * needs: its team (for the workspace id an `org.changed` event carries) and its runs (for the
- * live-run check `setAgentRole` makes and the has-history check `deleteAgent` makes) -- one
+ * live-run check `setSlaveRole` makes and the has-history check `deleteSlave` makes) -- one
  * shared read instead of five near-identical ones.
  *
- * `SELECT ... FOR UPDATE` first, not a plain `findUnique`: two operators editing the same agent
+ * `SELECT ... FOR UPDATE` first, not a plain `findUnique`: two operators editing the same slave
  * at once must serialise rather than race a lost update, the same `dependency.ts`/`world.ts`
  * idiom this package already uses for a single contested row.
  */
-async function lockAgent(tx: Prisma.TransactionClient, agentId: string) {
-  await tx.$queryRaw`SELECT id FROM "Agent" WHERE id = ${agentId} FOR UPDATE`
-  return tx.agent.findUnique({
-    where: { id: agentId },
+async function lockSlave(tx: Prisma.TransactionClient, slaveId: string) {
+  await tx.$queryRaw`SELECT id FROM "Slave" WHERE id = ${slaveId} FOR UPDATE`
+  return tx.slave.findUnique({
+    where: { id: slaveId },
     include: {
       team: { select: { id: true, workspaceId: true } },
       runs: { select: { id: true, status: true } },
@@ -467,39 +467,39 @@ async function lockAgent(tx: Prisma.TransactionClient, agentId: string) {
   })
 }
 
-/** The same lock-then-load shape as {@link lockAgent}, for `renameTeam`/`deleteTeam`'s own row --
- *  its agents are what `deleteTeam`'s not-empty check needs. */
+/** The same lock-then-load shape as {@link lockSlave}, for `renameTeam`/`deleteTeam`'s own row --
+ *  its slaves are what `deleteTeam`'s not-empty check needs. */
 async function lockTeam(tx: Prisma.TransactionClient, teamId: string) {
   await tx.$queryRaw`SELECT id FROM "Team" WHERE id = ${teamId} FOR UPDATE`
   return tx.team.findUnique({
     where: { id: teamId },
-    include: { agents: { select: { id: true } } },
+    include: { slaves: { select: { id: true } } },
   })
 }
 
 /**
- * Renames a project agent. Sibling names are unique per TEAM, matching `addCompanyAgent`'s own
- * rule for the roster template this agent may have been instantiated from -- but there is no
- * unique index to lean on here (unlike that insert path): `Agent` carries no `@@unique([teamId,
+ * Renames a project slave. Sibling names are unique per TEAM, matching `addCompanySlave`'s own
+ * rule for the roster template this slave may have been instantiated from -- but there is no
+ * unique index to lean on here (unlike that insert path): `Slave` carries no `@@unique([teamId,
  * name])`, so the check is a `findFirst` run inside the same locked transaction as the update,
  * not a caught constraint violation.
  */
-export async function renameAgent(
-  agentId: string,
+export async function renameSlave(
+  slaveId: string,
   name: string,
   principal?: Principal,
 ): Promise<Result<void, ControlRefusal>> {
   if (name.trim() === '') return err({ kind: 'invalid_name' })
 
   const outcome = await prisma.$transaction(async (tx) => {
-    const agent = await lockAgent(tx, agentId)
-    if (agent === null) return { ok: false as const, error: { kind: 'agent_not_found', agentId } as ControlRefusal }
+    const slave = await lockSlave(tx, slaveId)
+    if (slave === null) return { ok: false as const, error: { kind: 'slave_not_found', slaveId } as ControlRefusal }
 
-    const sibling = await tx.agent.findFirst({ where: { teamId: agent.teamId, name, NOT: { id: agentId } } })
+    const sibling = await tx.slave.findFirst({ where: { teamId: slave.teamId, name, NOT: { id: slaveId } } })
     if (sibling !== null) return { ok: false as const, error: { kind: 'duplicate_name', name } as ControlRefusal }
 
-    await tx.agent.update({ where: { id: agentId }, data: { name } })
-    return { ok: true as const, value: { workspaceId: agent.team.workspaceId, from: agent.name } }
+    await tx.slave.update({ where: { id: slaveId }, data: { name } })
+    return { ok: true as const, value: { workspaceId: slave.team.workspaceId, from: slave.name } }
   })
 
   if (!outcome.ok) return err(outcome.error)
@@ -507,9 +507,9 @@ export async function renameAgent(
   await appendEvent({
     type: 'org.changed',
     workspaceId: outcome.value.workspaceId,
-    agentId,
+    slaveId,
     actor: 'human',
-    payload: { entity: 'agent', id: agentId, field: 'name', from: outcome.value.from, to: name },
+    payload: { entity: 'slave', id: slaveId, field: 'name', from: outcome.value.from, to: name },
     userId: principal?.userId ?? null,
   })
 
@@ -517,32 +517,32 @@ export async function renameAgent(
 }
 
 /**
- * Changes a project agent's role -- the exact-match string the scheduler's `decide()` compares
- * against `Task.requiredRole`. Refused while the agent holds any run in a
- * `NON_TERMINAL_RUN_STATUSES` status: re-rolling an agent mid-dispatch would silently strand the
+ * Changes a project slave's role -- the exact-match string the scheduler's `decide()` compares
+ * against `Task.requiredRole`. Refused while the slave holds any run in a
+ * `NON_TERMINAL_RUN_STATUSES` status: re-rolling an slave mid-dispatch would silently strand the
  * scheduler's decision, which was made against the role the run started with.
  */
-export async function setAgentRole(
-  agentId: string,
+export async function setSlaveRole(
+  slaveId: string,
   role: string,
   principal?: Principal,
 ): Promise<Result<void, ControlRefusal>> {
   if (role.trim() === '') return err({ kind: 'invalid_role' })
 
   const outcome = await prisma.$transaction(async (tx) => {
-    const agent = await lockAgent(tx, agentId)
-    if (agent === null) return { ok: false as const, error: { kind: 'agent_not_found', agentId } as ControlRefusal }
+    const slave = await lockSlave(tx, slaveId)
+    if (slave === null) return { ok: false as const, error: { kind: 'slave_not_found', slaveId } as ControlRefusal }
 
-    const activeRun = agent.runs.find((run) => (NON_TERMINAL_RUN_STATUSES as readonly string[]).includes(run.status))
+    const activeRun = slave.runs.find((run) => (NON_TERMINAL_RUN_STATUSES as readonly string[]).includes(run.status))
     if (activeRun !== undefined) {
       return {
         ok: false as const,
-        error: { kind: 'agent_run_active', agentId, runId: activeRun.id } as ControlRefusal,
+        error: { kind: 'slave_run_active', slaveId, runId: activeRun.id } as ControlRefusal,
       }
     }
 
-    await tx.agent.update({ where: { id: agentId }, data: { role } })
-    return { ok: true as const, value: { workspaceId: agent.team.workspaceId, from: agent.role } }
+    await tx.slave.update({ where: { id: slaveId }, data: { role } })
+    return { ok: true as const, value: { workspaceId: slave.team.workspaceId, from: slave.role } }
   })
 
   if (!outcome.ok) return err(outcome.error)
@@ -550,9 +550,9 @@ export async function setAgentRole(
   await appendEvent({
     type: 'org.changed',
     workspaceId: outcome.value.workspaceId,
-    agentId,
+    slaveId,
     actor: 'human',
-    payload: { entity: 'agent', id: agentId, field: 'role', from: outcome.value.from, to: role },
+    payload: { entity: 'slave', id: slaveId, field: 'role', from: outcome.value.from, to: role },
     userId: principal?.userId ?? null,
   })
 
@@ -560,30 +560,30 @@ export async function setAgentRole(
 }
 
 /**
- * Removes a project agent -- refused while it carries ANY `AgentRun` history, terminal or not
- * (not only a live one, which `setAgentRole` above already guards separately). `Agent.runs` casc-
+ * Removes a project slave -- refused while it carries ANY `SlaveRun` history, terminal or not
+ * (not only a live one, which `setSlaveRole` above already guards separately). `Slave.runs` casc-
  * ades on delete (schema.prisma), so this refusal is the only thing standing between an operator
  * and silently destroying a worker's whole run history along with the row; the fix the refusal
  * text offers -- rename it, or leave it idle -- is real: a worker with history is never *forced*
  * to run again, it just cannot be deleted out from under its own record.
  */
-export async function deleteAgent(
-  agentId: string,
+export async function deleteSlave(
+  slaveId: string,
   principal?: Principal,
 ): Promise<Result<void, ControlRefusal>> {
   const outcome = await prisma.$transaction(async (tx) => {
-    const agent = await lockAgent(tx, agentId)
-    if (agent === null) return { ok: false as const, error: { kind: 'agent_not_found', agentId } as ControlRefusal }
+    const slave = await lockSlave(tx, slaveId)
+    if (slave === null) return { ok: false as const, error: { kind: 'slave_not_found', slaveId } as ControlRefusal }
 
-    if (agent.runs.length > 0) {
+    if (slave.runs.length > 0) {
       return {
         ok: false as const,
-        error: { kind: 'agent_has_runs', agentId, runs: agent.runs.length } as ControlRefusal,
+        error: { kind: 'slave_has_runs', slaveId, runs: slave.runs.length } as ControlRefusal,
       }
     }
 
-    await tx.agent.delete({ where: { id: agentId } })
-    return { ok: true as const, value: { workspaceId: agent.team.workspaceId, from: agent.name } }
+    await tx.slave.delete({ where: { id: slaveId } })
+    return { ok: true as const, value: { workspaceId: slave.team.workspaceId, from: slave.name } }
   })
 
   if (!outcome.ok) return err(outcome.error)
@@ -591,9 +591,9 @@ export async function deleteAgent(
   await appendEvent({
     type: 'org.changed',
     workspaceId: outcome.value.workspaceId,
-    agentId,
+    slaveId,
     actor: 'human',
-    payload: { entity: 'agent', id: agentId, field: 'deleted', from: outcome.value.from, to: null },
+    payload: { entity: 'slave', id: slaveId, field: 'deleted', from: outcome.value.from, to: null },
     userId: principal?.userId ?? null,
   })
 
@@ -601,7 +601,7 @@ export async function deleteAgent(
 }
 
 /** Renames a project team. Sibling names are unique per WORKSPACE, the same rule
- *  {@link renameAgent} enforces per team -- and, as there, no unique index exists to lean on. */
+ *  {@link renameSlave} enforces per team -- and, as there, no unique index exists to lean on. */
 export async function renameTeam(
   teamId: string,
   name: string,
@@ -634,10 +634,10 @@ export async function renameTeam(
 }
 
 /**
- * Removes a project team -- refused while it still has any agent on its roster. `deleteAgent`
+ * Removes a project team -- refused while it still has any slave on its roster. `deleteSlave`
  * above already keeps a worker with run history off-limits, so a non-empty team is always exactly
- * "agents remain that were never deleted"; there is no separate cascade concern to name here the
- * way there is for `deleteAgent`.
+ * "slaves remain that were never deleted"; there is no separate cascade concern to name here the
+ * way there is for `deleteSlave`.
  */
 export async function deleteTeam(
   teamId: string,
@@ -647,10 +647,10 @@ export async function deleteTeam(
     const team = await lockTeam(tx, teamId)
     if (team === null) return { ok: false as const, error: { kind: 'team_not_found', teamId } as ControlRefusal }
 
-    if (team.agents.length > 0) {
+    if (team.slaves.length > 0) {
       return {
         ok: false as const,
-        error: { kind: 'team_not_empty', teamId, agents: team.agents.length } as ControlRefusal,
+        error: { kind: 'team_not_empty', teamId, slaves: team.slaves.length } as ControlRefusal,
       }
     }
 
@@ -674,7 +674,7 @@ export async function deleteTeam(
 // ---- M25 §3.1: departments -----------------------------------------------------------------
 // A "department" is a project `Team`; a "department template" is a catalog `CompanyTeam`. The two
 // project-level verbs below emit `org.changed` like `renameTeam`; the three catalog-level verbs
-// emit nothing, the rule `addCompanyTeam`/`addCompanyAgent` already follow (no workspace, no
+// emit nothing, the rule `addCompanyTeam`/`addCompanySlave` already follow (no workspace, no
 // event).
 
 /** Creates a department in a project with no template link (`companyTeamId: null`). Names are
@@ -712,47 +712,47 @@ export async function createProjectTeam(
 }
 
 /**
- * Moves a project agent to another department of the SAME project. `companyAgentId` is left
- * alone: the agent still knows which catalog row it came from, only its department changed, and
+ * Moves a project slave to another department of the SAME project. `companySlaveId` is left
+ * alone: the slave still knows which catalog row it came from, only its department changed, and
  * `assignCompany` run again later finds it by that id anywhere in the project and leaves it where
  * it is (M25 final review corrected that lookup, which used to be scoped to the template's own
- * department -- §12 entry 13). Refused while the agent holds a live run, the rule
- * {@link setAgentRole} applies -- and, as of the same review, while the target department already
- * has an agent of that name, the rule {@link renameAgent} applies (M25 final review, Important:
- * `moveAgent` was the one write path that skipped the per-department unique-name rule every
- * sibling verb enforces). A move to the agent's CURRENT department is a no-op: nothing changes,
+ * department -- §12 entry 13). Refused while the slave holds a live run, the rule
+ * {@link setSlaveRole} applies -- and, as of the same review, while the target department already
+ * has an slave of that name, the rule {@link renameSlave} applies (M25 final review, Important:
+ * `moveSlave` was the one write path that skipped the per-department unique-name rule every
+ * sibling verb enforces). A move to the slave's CURRENT department is a no-op: nothing changes,
  * so there is nothing to check the name clash against and nothing worth an `org.changed` event
  * over -- the transaction returns `value: null` for that case and the event below is skipped.
  */
-export async function moveAgent(
-  agentId: string,
+export async function moveSlave(
+  slaveId: string,
   teamId: string,
   principal?: Principal,
 ): Promise<Result<void, ControlRefusal>> {
   const outcome = await prisma.$transaction(async (tx) => {
-    const agent = await lockAgent(tx, agentId)
-    if (agent === null) return { ok: false as const, error: { kind: 'agent_not_found', agentId } as ControlRefusal }
+    const slave = await lockSlave(tx, slaveId)
+    if (slave === null) return { ok: false as const, error: { kind: 'slave_not_found', slaveId } as ControlRefusal }
 
-    // Copy `setAgentRole`'s live-run check here verbatim (the `agent_run_active` refusal keyed on
+    // Copy `setSlaveRole`'s live-run check here verbatim (the `slave_run_active` refusal keyed on
     // `NON_TERMINAL_RUN_STATUSES`), so both verbs refuse on the same definition of "live".
-    const live = agent.runs.find((run) => (NON_TERMINAL_RUN_STATUSES as readonly string[]).includes(run.status))
+    const live = slave.runs.find((run) => (NON_TERMINAL_RUN_STATUSES as readonly string[]).includes(run.status))
     if (live !== undefined) {
-      return { ok: false as const, error: { kind: 'agent_run_active', agentId, runId: live.id } as ControlRefusal }
+      return { ok: false as const, error: { kind: 'slave_run_active', slaveId, runId: live.id } as ControlRefusal }
     }
 
     const target = await tx.team.findUnique({ where: { id: teamId }, select: { id: true, name: true, workspaceId: true } })
     if (target === null) return { ok: false as const, error: { kind: 'team_not_found', teamId } as ControlRefusal }
-    if (target.workspaceId !== agent.team.workspaceId) {
-      return { ok: false as const, error: { kind: 'team_workspace_mismatch', agentId, teamId } as ControlRefusal }
+    if (target.workspaceId !== slave.team.workspaceId) {
+      return { ok: false as const, error: { kind: 'team_workspace_mismatch', slaveId, teamId } as ControlRefusal }
     }
 
-    if (agent.team.id === teamId) return { ok: true as const, value: null }
+    if (slave.team.id === teamId) return { ok: true as const, value: null }
 
-    const clash = await tx.agent.findFirst({ where: { teamId, name: agent.name, NOT: { id: agentId } } })
-    if (clash !== null) return { ok: false as const, error: { kind: 'duplicate_name', name: agent.name } as ControlRefusal }
+    const clash = await tx.slave.findFirst({ where: { teamId, name: slave.name, NOT: { id: slaveId } } })
+    if (clash !== null) return { ok: false as const, error: { kind: 'duplicate_name', name: slave.name } as ControlRefusal }
 
-    const from = await tx.team.findUniqueOrThrow({ where: { id: agent.team.id }, select: { name: true } })
-    await tx.agent.update({ where: { id: agentId }, data: { teamId } })
+    const from = await tx.team.findUniqueOrThrow({ where: { id: slave.team.id }, select: { name: true } })
+    await tx.slave.update({ where: { id: slaveId }, data: { teamId } })
     return { ok: true as const, value: { workspaceId: target.workspaceId, from: from.name, to: target.name } }
   })
 
@@ -762,9 +762,9 @@ export async function moveAgent(
     await appendEvent({
       type: 'org.changed',
       workspaceId: outcome.value.workspaceId,
-      agentId,
+      slaveId,
       actor: 'human',
-      payload: { entity: 'agent', id: agentId, field: 'team', from: outcome.value.from, to: outcome.value.to },
+      payload: { entity: 'slave', id: slaveId, field: 'team', from: outcome.value.from, to: outcome.value.to },
       userId: principal?.userId ?? null,
     })
   }
@@ -772,29 +772,29 @@ export async function moveAgent(
   return ok(undefined)
 }
 
-/** Moves a catalog agent to another department template of the SAME company. The unique index
+/** Moves a catalog slave to another department template of the SAME company. The unique index
  *  `@@unique([companyTeamId, name])` is what refuses a name clash, caught the way
- *  {@link addCompanyAgent} catches it. No event: the catalog has no workspace. */
-export async function moveCompanyAgent(
-  companyAgentId: string,
+ *  {@link addCompanySlave} catches it. No event: the catalog has no workspace. */
+export async function moveCompanySlave(
+  companySlaveId: string,
   companyTeamId: string,
   _principal?: Principal,
 ): Promise<Result<void, ControlRefusal>> {
-  const agent = await prisma.companyAgent.findUnique({
-    where: { id: companyAgentId },
+  const slave = await prisma.companySlave.findUnique({
+    where: { id: companySlaveId },
     select: { id: true, name: true, companyTeam: { select: { companyId: true } } },
   })
-  if (agent === null) return err({ kind: 'agent_not_found', agentId: companyAgentId })
+  if (slave === null) return err({ kind: 'slave_not_found', slaveId: companySlaveId })
 
   const target = await prisma.companyTeam.findUnique({ where: { id: companyTeamId }, select: { id: true, companyId: true } })
   if (target === null) return err({ kind: 'company_team_not_found', companyTeamId })
-  if (target.companyId !== agent.companyTeam.companyId) return err({ kind: 'company_mismatch', companyAgentId, companyTeamId })
+  if (target.companyId !== slave.companyTeam.companyId) return err({ kind: 'company_mismatch', companySlaveId, companyTeamId })
 
   try {
-    await prisma.companyAgent.update({ where: { id: companyAgentId }, data: { companyTeamId } })
+    await prisma.companySlave.update({ where: { id: companySlaveId }, data: { companyTeamId } })
     return ok(undefined)
   } catch (error) {
-    if (isUniqueConstraintViolation(error)) return err({ kind: 'duplicate_name', name: agent.name })
+    if (isUniqueConstraintViolation(error)) return err({ kind: 'duplicate_name', name: slave.name })
     throw error
   }
 }
@@ -822,10 +822,10 @@ export async function renameCompanyTeam(
 /** Deletes an EMPTY department template. Project departments copied from it survive with
  *  `companyTeamId` set to null (`onDelete: SetNull` on `Team.companyTeam`). No event.
  *
- *  Locked check-then-delete, the same shape as {@link deleteTeam}: `CompanyAgent.companyTeamId`
+ *  Locked check-then-delete, the same shape as {@link deleteTeam}: `CompanySlave.companyTeamId`
  *  is `onDelete: Cascade` and NOT nullable, so a plain (unlocked) check racing a concurrent
- *  `addCompanyAgent`/`moveCompanyAgent` into this template between the read and the delete would
- *  cascade-delete that catalog agent -- exactly what `company_team_not_empty` exists to prevent.
+ *  `addCompanySlave`/`moveCompanySlave` into this template between the read and the delete would
+ *  cascade-delete that catalog slave -- exactly what `company_team_not_empty` exists to prevent.
  *  `SELECT ... FOR UPDATE` first serialises against that race the way `lockTeam` does for
  *  `deleteTeam`. */
 export async function deleteCompanyTeam(
@@ -836,13 +836,13 @@ export async function deleteCompanyTeam(
     await tx.$queryRaw`SELECT id FROM "CompanyTeam" WHERE id = ${companyTeamId} FOR UPDATE`
     const team = await tx.companyTeam.findUnique({
       where: { id: companyTeamId },
-      select: { id: true, _count: { select: { agents: true } } },
+      select: { id: true, _count: { select: { slaves: true } } },
     })
     if (team === null) return { ok: false as const, error: { kind: 'company_team_not_found', companyTeamId } as ControlRefusal }
-    if (team._count.agents > 0) {
+    if (team._count.slaves > 0) {
       return {
         ok: false as const,
-        error: { kind: 'company_team_not_empty', companyTeamId, agents: team._count.agents } as ControlRefusal,
+        error: { kind: 'company_team_not_empty', companyTeamId, slaves: team._count.slaves } as ControlRefusal,
       }
     }
 

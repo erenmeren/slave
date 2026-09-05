@@ -93,8 +93,8 @@ export function writePermissionsFile(
   return permissionsFilePath
 }
 
-export async function setAgentPermission(
-  agentId: string,
+export async function setSlavePermission(
+  slaveId: string,
   tool: string,
   mode: 'allow' | 'deny',
 ): Promise<Result<void, ControlRefusal>> {
@@ -104,15 +104,15 @@ export async function setAgentPermission(
   // hand-rolled request carries `"mode": "maybe"`.
   if (mode !== 'allow' && mode !== 'deny') return err({ kind: 'invalid_permission_mode', mode: String(mode) })
 
-  const agent = await prisma.agent.findUnique({ where: { id: agentId }, select: { id: true } })
-  if (agent === null) return err({ kind: 'agent_not_found', agentId })
+  const slave = await prisma.slave.findUnique({ where: { id: slaveId }, select: { id: true } })
+  if (slave === null) return err({ kind: 'slave_not_found', slaveId })
 
-  // `@@unique([agentId, tool])` makes this a flip in place -- the same "one row or none" shape
+  // `@@unique([slaveId, tool])` makes this a flip in place -- the same "one row or none" shape
   // `setWorkspaceProvider` keeps for its own table.
-  await prisma.agentPermission.upsert({
-    where: { agentId_tool: { agentId, tool } },
+  await prisma.slavePermission.upsert({
+    where: { slaveId_tool: { slaveId, tool } },
     update: { mode },
-    create: { agentId, tool, mode },
+    create: { slaveId, tool, mode },
   })
   return ok(undefined)
 }

@@ -89,7 +89,7 @@ export interface WorktreeHandle {
  * condition at all from the caller's side -- it is the normal shape of a task's second run. A task
  * that fails verify moves to `rework`, `decide()` lists `rework` as startable, and the next run
  * arrives here with the same key. Refusing is right: reusing a previous attempt's directory hands
- * the agent someone else's uncommitted state. But the adopt-versus-fail decision needs to know
+ * the slave someone else's uncommitted state. But the adopt-versus-fail decision needs to know
  * *why* the leftovers exist, which only the caller does, and it must not be made by string-matching
  * git's stderr -- git reports the path collision and the branch collision with different exit codes
  * and different wording.
@@ -173,7 +173,7 @@ export async function provisionWorktree(input: ProvisionWorktreeInput): Promise<
     }
   }
 
-  // Absolute, because `path` becomes `AgentRun.worktreePath` and spec §5.7 respawns a resumed run
+  // Absolute, because `path` becomes `SlaveRun.worktreePath` and spec §5.7 respawns a resumed run
   // there -- from a process that may have restarted into a different working directory.
   const repoPath = resolve(input.repoPath)
   ensureIgnored(repoPath)
@@ -224,7 +224,7 @@ export interface AdoptWorktreeInput {
   /**
    * Re-run on adoption, not skipped. The commonest route to an adoptable worktree is a setup
    * command that *failed* -- that is exactly what leaves a half-provisioned tree behind for §7.4 to
-   * preserve -- so adopting without re-running setup starts an agent in a tree with no
+   * preserve -- so adopting without re-running setup starts an slave in a tree with no
    * `node_modules`, which then fails verify for reasons that have nothing to do with its work.
    * Setup lists are expected to be idempotent (`npm ci` is), which is what makes re-running safe.
    */
@@ -246,7 +246,7 @@ export interface AdoptWorktreeInput {
  * The verification is the reason this function exists at all rather than the caller simply reusing
  * the path. `existsSync` matches any directory; only `git worktree list` can say that *this* path
  * is a registered worktree checked out on *that* branch. Adopting an unverified directory would
- * hand the agent a tree with someone else's contents and no branch behind it.
+ * hand the slave a tree with someone else's contents and no branch behind it.
  *
  * It lives here rather than at the call site because it needs {@link WORKTREE_ROOT}, the branch
  * naming rule and the identity-scoped `git` wrapper — re-deriving those one module over is how a

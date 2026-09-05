@@ -68,7 +68,7 @@ should be brought in line the next time they are touched.
 | `malformed.ndjson` | `b17561c` | Contains one line that is not JSON. The parser must return `unparsable` for it and keep going; a bad line must not kill a run. |
 | `review-approve.ndjson`, `review-reject.ndjson`, `review-invalid.ndjson` | `a16add4` | `complete`'s transcript with the final `result.result` replaced by the reviewer's JSON verdict — approve, reject, and a malformed verdict. They drive the fake CLI's `m8a-flow` mode. |
 | `plan-graph.ndjson` | `e8f2bb0` | Same base, with `result.result` carrying a planning task graph. Drives `m8-flow`'s planning arm. |
-| `permission-matrix-deny.ndjson` | M18 Task 6 fix round 1; **re-recorded from the real CLI in M19 Task A1** | A real orchestrator-driven run against a real permission matrix — see the section below for its full provenance. `Read` allowed, then `Bash` (`npm test`) met this repo's own `PreToolUse` hook denying with the M18 grammar (`permission matrix denies 'run tests' (Bash) for this agent`), the agent adapted and reported instead of retrying, and the `result` line is honest about the denial: `is_error: false` but `permission_denials` carries the denied `toolu_01LiQfhzhqKJPfrr4pAD1Xjs`, exactly as `hook-deny.ndjson` measures the real CLI doing for a hook deny of any kind. |
+| `permission-matrix-deny.ndjson` | M18 Task 6 fix round 1; **re-recorded from the real CLI in M19 Task A1** | A real orchestrator-driven run against a real permission matrix — see the section below for its full provenance. `Read` allowed, then `Bash` (`npm test`) met this repo's own `PreToolUse` hook denying with the M18 grammar (`permission matrix denies 'run tests' (Bash) for this slave`), the agent adapted and reported instead of retrying, and the `result` line is honest about the denial: `is_error: false` but `permission_denials` carries the denied `toolu_01LiQfhzhqKJPfrr4pAD1Xjs`, exactly as `hook-deny.ndjson` measures the real CLI doing for a hook deny of any kind. |
 
 The three review fixtures and `plan-graph` share `complete`'s `session_id`
 (`fake-session-complete`) because they are edits of it, not separate captures.
@@ -136,7 +136,7 @@ Exit 0, **6.3 s** (`duration_ms` 6301, `duration_api_ms` 5910), **29 lines**.
 `Read` allowed, `Bash` (`npm test`) matrix-denied, the agent reporting instead of retrying:
 
 ```json
-{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"permission matrix denies 'run tests' (Bash) for this agent"}}
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"permission matrix denies 'run tests' (Bash) for this slave"}}
 ```
 
 on line 22 (`hook_name` `"PreToolUse:Bash"`, `hook_event` `"PreToolUse"`, `exit_code` 0, `outcome`
@@ -170,7 +170,7 @@ the first is now read, by M21 C1's `hook_id` pairing:
   recording shows it was a guess, not a guarantee.
 - **`tool_result_meta`** on the denied `tool_result` (line 23):
   `[{"id":"toolu_01LiQ…","non_execution_kind":"permission-rule"}]`, alongside a
-  `tool_use_result` of `"Error: permission matrix denies 'run tests' (Bash) for this agent"`. A
+  `tool_use_result` of `"Error: permission matrix denies 'run tests' (Bash) for this slave"`. A
   structural denial signal, next to the string one everything currently matches on.
 - **A full `init` line** (line 9): `claude_code_version` `2.1.252`, `model` `claude-sonnet-5`,
   `permissionMode` `bypassPermissions`, the real `cwd`, and a full environment catalog — the tool

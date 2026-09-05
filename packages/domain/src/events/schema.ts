@@ -6,9 +6,9 @@ const envelope = {
   ts: z.string().datetime(),
   workspaceId: z.string().min(1),
   taskId: z.string().min(1).optional(),
-  agentId: z.string().min(1).optional(),
+  slaveId: z.string().min(1).optional(),
   runId: z.string().min(1).optional(),
-  actor: z.enum(['human', 'agent', 'system']),
+  actor: z.enum(['human', 'slave', 'system']),
   // M23 F6: who caused this event. Nullable/optional -- the CLI and the orchestrator write
   // events with no user, and every row from before this field existed reads back undefined.
   userId: z.string().min(1).nullable().optional(),
@@ -44,7 +44,7 @@ export const executionEventSchema = z.discriminatedUnion('type', [
   z.object({ ...envelope, type: z.literal('run.resumed'), payload: z.object({ sessionId: z.string() }) }),
   z.object({
     ...envelope,
-    type: z.literal('agent.message_sent'),
+    type: z.literal('slave.message_sent'),
     payload: z.object({
       category: z.enum(['instruction', 'feedback', 'context', 'priority_change', 'question_response']),
       body: z.string().min(1),
@@ -74,7 +74,7 @@ export const executionEventSchema = z.discriminatedUnion('type', [
   z.object({
     ...envelope,
     type: z.literal('run.succeeded'),
-    // costUsd is nullable (M12 Task 6): AgentRun.costUsd dropped its NOT NULL/DEFAULT(0) so an
+    // costUsd is nullable (M12 Task 6): SlaveRun.costUsd dropped its NOT NULL/DEFAULT(0) so an
     // unmeasured run's true cost -- unknown -- can be recorded honestly instead of as a false
     // zero. A provider that does not report cost produces a `null` here, not a `0`.
     payload: z.object({ numTurns: z.number().int(), costUsd: z.number().nullable() }),
@@ -132,7 +132,7 @@ export const executionEventSchema = z.discriminatedUnion('type', [
       company: z.string().min(1),
       // Deliberately NO .min(1): a pure re-sync that added nobody still emits with an empty array.
       workers: z.array(
-        z.object({ companyAgentId: z.string().min(1), name: z.string().min(1), role: z.string().min(1) }),
+        z.object({ companySlaveId: z.string().min(1), name: z.string().min(1), role: z.string().min(1) }),
       ),
     }),
   }),
@@ -169,13 +169,13 @@ export const executionEventSchema = z.discriminatedUnion('type', [
     payload: z.object({ path: z.string().min(1), reason: z.enum(['aged', 'operator']), branch: z.string().nullable() }),
   }),
   // M23 D1 / M25 §3.1: one of the roster and department control verbs in `org.ts` edited an
-  // agent or a team (or created/deleted one). `to: null` is `deleted`'s own shape and `from: null`
+  // slave or a team (or created/deleted one). `to: null` is `deleted`'s own shape and `from: null`
   // is `created`'s own shape (M25) -- every other field always carries a string on both sides.
   z.object({
     ...envelope,
     type: z.literal('org.changed'),
     payload: z.object({
-      entity: z.enum(['agent', 'team']),
+      entity: z.enum(['slave', 'team']),
       id: z.string().min(1),
       field: z.enum(['name', 'role', 'model', 'deleted', 'created', 'team']),
       from: z.string().nullable(),

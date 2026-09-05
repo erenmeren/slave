@@ -342,7 +342,7 @@ function parseResultLine(raw: unknown, line: string): RuntimeEvent {
       deniedToolUseIds: (data.permission_denials ?? []).map((denial) => denial.tool_use_id),
       // Both halves or neither (M14 §4.2). A `usage` carrying only `input_tokens` describes a
       // measurement that did not complete, and reporting `{ input: 10, output: 0 }` would put a
-      // fabricated zero into every per-agent token sum on the Analytics page. `input` is what the
+      // fabricated zero into every per-slave token sum on the Analytics page. `input` is what the
       // run was BILLED for, not merely `input_tokens` alone (fix round 1, controller ruling):
       // `input_tokens + cache_creation_input_tokens + cache_read_input_tokens`, each counter
       // treated as 0 when absent -- the fixture's own result line bills 4 fresh input tokens

@@ -24,12 +24,12 @@ async function seed(): Promise<Fixture> {
     },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const agent = await prisma.agent.create({ data: { teamId: team.id, name: 'Alex', role: 'Backend' } })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'Backend' } })
   const task = await prisma.task.create({
     data: { workspaceId: workspace.id, title: 'Add checkout retry', description: 'Retry failed payments', maxAttempts: workspace.maxAttempts },
   })
-  const run = await prisma.agentRun.create({
-    data: { taskId: task.id, agentId: agent.id, status: 'working' },
+  const run = await prisma.slaveRun.create({
+    data: { taskId: task.id, slaveId: slave.id, status: 'working' },
   })
   return { workspace: { id: workspace.id }, task: { id: task.id }, run: { id: run.id } }
 }
@@ -39,7 +39,7 @@ describe('emergencyStop', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Approval", "AgentMessage", "Artifact", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Approval", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
   })
@@ -57,7 +57,7 @@ describe('emergencyStop', () => {
     expect(after.haltedReason).toBe('emergency stop by riley')
     expect(after.haltedAt).not.toBeNull()
 
-    const pausedRun = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })
+    const pausedRun = await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })
     expect(pausedRun.status).toBe('pause_requested')
     expect(pausedRun.pauseReason).toBe('emergency_stop')
 
@@ -99,9 +99,9 @@ describe('emergencyStop', () => {
 
   it('buckets an already-paused run into refused but still succeeds', async () => {
     const { workspace, task, run } = fixture
-    const { agentId } = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id }, select: { agentId: true } })
-    const alreadyPaused = await prisma.agentRun.create({
-      data: { taskId: task.id, agentId, status: 'paused' },
+    const { slaveId } = await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id }, select: { slaveId: true } })
+    const alreadyPaused = await prisma.slaveRun.create({
+      data: { taskId: task.id, slaveId, status: 'paused' },
     })
 
     const result = await emergencyStop(workspace.id, 'riley')

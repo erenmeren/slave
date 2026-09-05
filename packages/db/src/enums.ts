@@ -16,7 +16,7 @@ export const EVENT_TYPE_BY_DOMAIN_TYPE = {
   'run.tool_denied': 'run_tool_denied',
   'run.paused': 'run_paused',
   'run.resumed': 'run_resumed',
-  'agent.message_sent': 'agent_message_sent',
+  'slave.message_sent': 'slave_message_sent',
   'guardrail.tripped': 'guardrail_tripped',
   'task.verifying': 'task_verifying',
   'task.verify_passed': 'task_verify_passed',
@@ -80,7 +80,7 @@ export const RUN_STATUSES = [
 ] as const
 
 /** Every Actor, as data. Pinned to the domain by the assertions below, same as the two above. */
-export const ACTORS = ['human', 'agent', 'system'] as const
+export const ACTORS = ['human', 'slave', 'system'] as const
 
 /**
  * Compile-time proof that the lists above are neither short nor long.

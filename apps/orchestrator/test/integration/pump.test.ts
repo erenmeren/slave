@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { isAlive } from '@slave-of-ai/control'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@slave-of-ai/db'
 import { prisma } from '@slave-of-ai/db/client'
-import { agentId, runId, taskId, workspaceId } from '@slave-of-ai/domain'
+import { slaveId, runId, taskId, workspaceId } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { PERMISSION_DENY_REASON_PREFIX, parseStreamLine, type RunOutcome, type RuntimeEvent } from '@slave-of-ai/providers'
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -101,7 +101,7 @@ const okOutcome: RunOutcome = {
 interface Ids {
   readonly runId: ReturnType<typeof runId>
   readonly taskId: ReturnType<typeof taskId>
-  readonly agentId: ReturnType<typeof agentId>
+  readonly slaveId: ReturnType<typeof slaveId>
   readonly workspaceId: ReturnType<typeof workspaceId>
   readonly cancel: () => Promise<void>
 }
@@ -109,7 +109,7 @@ interface Ids {
 /**
  * `cancel` is part of the fixture rather than optional in the signature. The plan's sample tests
  * spread `...ids` without one while its Interfaces block declares it required; resolving that by
- * making the parameter optional would make a pump that can silently fail to stop an ungated agent
+ * making the parameter optional would make a pump that can silently fail to stop an ungated slave
  * a type-legal construction.
  */
 async function seed(): Promise<Ids> {
@@ -122,7 +122,7 @@ async function seed(): Promise<Ids> {
     },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const agent = await prisma.agent.create({
+  const slave = await prisma.slave.create({
     data: { teamId: team.id, name: 'Alex', role: 'backend' },
   })
   const task = await prisma.task.create({
@@ -135,14 +135,14 @@ async function seed(): Promise<Ids> {
       maxAttempts: workspace.maxAttempts,
     },
   })
-  const run = await prisma.agentRun.create({
-    data: { taskId: task.id, agentId: agent.id, status: 'starting' },
+  const run = await prisma.slaveRun.create({
+    data: { taskId: task.id, slaveId: slave.id, status: 'starting' },
   })
 
   return {
     runId: runId(run.id),
     taskId: taskId(task.id),
-    agentId: agentId(agent.id),
+    slaveId: slaveId(slave.id),
     workspaceId: workspaceId(workspace.id),
     cancel: async (): Promise<void> => {},
   }
@@ -150,7 +150,7 @@ async function seed(): Promise<Ids> {
 
 /** A second run on the same workspace, for the two-gate-failures case. */
 async function seedSecondRun(ids: Ids): Promise<Ids> {
-  const agent = await prisma.agent.create({
+  const slave = await prisma.slave.create({
     data: {
       teamId: (await prisma.team.findFirstOrThrow()).id,
       name: 'Blair',
@@ -167,10 +167,10 @@ async function seedSecondRun(ids: Ids): Promise<Ids> {
       maxAttempts: 3,
     },
   })
-  const run = await prisma.agentRun.create({
-    data: { taskId: task.id, agentId: agent.id, status: 'starting' },
+  const run = await prisma.slaveRun.create({
+    data: { taskId: task.id, slaveId: slave.id, status: 'starting' },
   })
-  return { ...ids, runId: runId(run.id), taskId: taskId(task.id), agentId: agentId(agent.id) }
+  return { ...ids, runId: runId(run.id), taskId: taskId(task.id), slaveId: slaveId(slave.id) }
 }
 
 async function eventTypesFor(forRunId: string): Promise<readonly DomainEventType[]> {
@@ -186,7 +186,7 @@ describe('pumpRun', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Checkpoint", "AgentRun", "TaskDependency", "Task", "Agent", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
     ids = await seed()
   })
@@ -215,9 +215,9 @@ describe('pumpRun', () => {
       ]),
     })
 
-    // Spec §5.4 in as many words: "`AgentRun.sessionId` is written in the same step". Nothing else
+    // Spec §5.4 in as many words: "`SlaveRun.sessionId` is written in the same step". Nothing else
     // in the plan writes it, and §5.7's resume reads it.
-    const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+    const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
     expect(run.sessionId).toBe('s-1')
   })
 
@@ -239,7 +239,7 @@ describe('pumpRun', () => {
     // -- so this is the one shape that can pin it. A row stuck at `starting` misreports to §11's
     // `status` for the entire life of a run that is very much working.
     await new Promise((res) => setTimeout(res, 50))
-    const midRun = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+    const midRun = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
     expect(midRun.status).toBe('working')
 
     release()
@@ -253,7 +253,7 @@ describe('pumpRun', () => {
     // that only recognised `starting` here left every resumed run reading `resuming` for the rest
     // of its life, because the terminal-outcome write at the end of this file overwrites whatever
     // status it finds regardless of what happened in between.
-    await prisma.agentRun.update({ where: { id: ids.runId }, data: { status: 'resuming' } })
+    await prisma.slaveRun.update({ where: { id: ids.runId }, data: { status: 'resuming' } })
 
     let release = (): void => {}
     const held = new Promise<void>((res) => {
@@ -269,7 +269,7 @@ describe('pumpRun', () => {
     const pumping = pumpRun({ ...ids, resumed: true, events: stalls() })
 
     await new Promise((res) => setTimeout(res, 50))
-    const midRun = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+    const midRun = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
     expect(midRun.status).toBe('working')
 
     release()
@@ -286,8 +286,8 @@ describe('pumpRun', () => {
     })
 
     // A permission-mode denial and a hook deny are different shapes with different meanings
-    // (spec §5.3): only the second is a pause. Conflating them reports an agent that was refused
-    // one tool as an agent that was deliberately paused.
+    // (spec §5.3): only the second is a pause. Conflating them reports an slave that was refused
+    // one tool as an slave that was deliberately paused.
     const types = await eventTypesFor(ids.runId)
     expect(types).toContain('guardrail.tripped')
     expect(types).not.toContain('run.paused')
@@ -321,12 +321,12 @@ describe('pumpRun', () => {
       ]),
     })
 
-    // Spec §5.4: the count "is what `AgentRun.toolCalls` and the tool-call ceiling in §3.3 are
+    // Spec §5.4: the count "is what `SlaveRun.toolCalls` and the tool-call ceiling in §3.3 are
     // read from". Task 15's ceiling test seeds that column by hand, so nothing else in the
     // milestone would notice it never being written.
     const types = await eventTypesFor(ids.runId)
     expect(types.filter((t) => t === 'run.tool_call')).toHaveLength(2)
-    const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+    const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
     expect(run.toolCalls).toBe(2)
   })
 
@@ -348,7 +348,7 @@ describe('pumpRun', () => {
     expect(payload.summary).not.toBe('toolu_01UCoRZm85rNxfupNQPToZXL')
   })
 
-  it('carries the agent text through to run.output, truncated rather than dropped', async (): Promise<void> => {
+  it('carries the slave text through to run.output, truncated rather than dropped', async (): Promise<void> => {
     const long = 'x'.repeat(OUTPUT_CAP + 100)
 
     await pumpRun({
@@ -379,7 +379,7 @@ describe('pumpRun', () => {
 
     // The pump is the only component that sees the stream end, so nothing else can conclude the
     // row. `terminalAt` is the column `loadWorld` orders the failure streak by.
-    const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+    const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
     expect(run.status).toBe('succeeded')
     expect(run.costUsd).toBe(0.12)
     expect(run.terminalAt).not.toBeNull()
@@ -429,8 +429,8 @@ describe('pumpRun', () => {
     expect(task.attempt).toBe(1)
 
     // The run row itself is concluded. Left `working` it counts as non-terminal in `loadWorld`,
-    // so the agent holding it stays busy forever and never enters the failure streak.
-    const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+    // so the slave holding it stays busy forever and never enters the failure streak.
+    const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
     expect(run.status).toBe('failed')
     expect(run.terminalAt).not.toBeNull()
 
@@ -487,7 +487,7 @@ describe('pumpRun', () => {
       ]),
     })
 
-    // The worst state the system can reach: an agent running with no gate, a kill that did not
+    // The worst state the system can reach: an slave running with no gate, a kill that did not
     // land, and -- if the cancel's rejection escaped -- no halt, so the scheduler keeps starting
     // more of them. A failed cancel is the case where the halt matters MOST, and it must not be
     // the one case where the halt does not happen (spec §13's opening rule).
@@ -519,7 +519,7 @@ describe('pumpRun', () => {
       ]),
     })
 
-    // Spec §13.1 behaviour 1 is first for a reason: an agent that cannot be paused must not be
+    // Spec §13.1 behaviour 1 is first for a reason: an slave that cannot be paused must not be
     // left running while the orchestrator writes paperwork. `expect(cancel).toHaveBeenCalled()`
     // cannot tell an awaited cancel from a fired-and-forgotten one -- this can.
     await new Promise((res) => setTimeout(res, 50))
@@ -530,7 +530,7 @@ describe('pumpRun', () => {
     expect(await eventTypesFor(ids.runId)).toContain('run.failed')
   })
 
-  it('keeps recording what the ungated agent did after the gate failed', async (): Promise<void> => {
+  it('keeps recording what the ungated slave did after the gate failed', async (): Promise<void> => {
     await pumpRun({
       ...ids,
       events: fromArray([
@@ -568,7 +568,7 @@ describe('pumpRun', () => {
     // Task 8's adapter kills the child on the first deny -- that is what pausing *is* -- so a run
     // left recorded as `working` presents to Task 15's orphan sweep as exactly the shape it fails:
     // non-terminal, dead pid. The sweep excludes `paused`, which only works if something writes it.
-    const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+    const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
     expect(run.status).toBe('paused')
     expect(run.pausedAtStep).toBe(1)
     expect(await eventTypesFor(ids.runId)).toContain('run.paused')
@@ -581,7 +581,7 @@ describe('pumpRun', () => {
 
   it('leaves the row pause_requested and run.paused unannounced until the child is actually dead', async (): Promise<void> => {
     const pid = await spawnSigtermIgnoring()
-    await prisma.agentRun.update({
+    await prisma.slaveRun.update({
       where: { id: ids.runId },
       // `pause_requested` is what an operator's `requestPause` leaves behind; the deny below is the
       // gate answering it. This is the state Decision 1 is about.
@@ -610,14 +610,14 @@ describe('pumpRun', () => {
         return (await prisma.checkpoint.findUnique({ where: { runId: ids.runId } })) !== null
       })
 
-      const during = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      const during = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
       expect(during.status).toBe('pause_requested')
       expect(await eventTypesFor(ids.runId)).not.toContain('run.paused')
       expect(isAlive(pid)).toBe(true)
 
       await pumping
 
-      const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      const after = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
       expect(after.status).toBe('paused')
       expect(after.pausedAtStep).toBe(1)
       expect(await eventTypesFor(ids.runId)).toContain('run.paused')
@@ -640,7 +640,7 @@ describe('pumpRun', () => {
     // second `hook_denied` reaching this loop must not repeat the checkpoint write, the kill, or
     // the `run.paused` emit -- `paused` is already `true`, so the case is a no-op the second time.
     const pid = await spawnNeverExiting()
-    await prisma.agentRun.update({ where: { id: ids.runId }, data: { pid, worktreePath: '/tmp' } })
+    await prisma.slaveRun.update({ where: { id: ids.runId }, data: { pid, worktreePath: '/tmp' } })
 
     try {
       const outcome = await pumpRun({
@@ -664,7 +664,7 @@ describe('pumpRun', () => {
       const types = await eventTypesFor(ids.runId)
       expect(types.filter((t) => t === 'run.paused')).toHaveLength(1)
 
-      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
       expect(run.status).toBe('paused')
       // Recorded at the first deny (atStep 1, after `tu_1`), not walked forward by the second.
       expect(run.pausedAtStep).toBe(1)
@@ -680,7 +680,7 @@ describe('pumpRun', () => {
   })
 
   it('writes a checkpoint a fresh process could resume from', async (): Promise<void> => {
-    await prisma.agentRun.update({ where: { id: ids.runId }, data: { worktreePath: '/tmp' } })
+    await prisma.slaveRun.update({ where: { id: ids.runId }, data: { worktreePath: '/tmp' } })
 
     await pumpRun({
       ...ids,
@@ -719,7 +719,7 @@ describe('pumpRun', () => {
   })
 
   it('records the tool calls that were denied before the pause', async (): Promise<void> => {
-    await prisma.agentRun.update({ where: { id: ids.runId }, data: { worktreePath: '/tmp' } })
+    await prisma.slaveRun.update({ where: { id: ids.runId }, data: { worktreePath: '/tmp' } })
 
     await pumpRun({
       ...ids,
@@ -737,14 +737,14 @@ describe('pumpRun', () => {
     })
 
     // ADR 0001 §5: on resume the model re-attempted exactly these calls, in order. It is the
-    // operator's view of what the agent was about to do.
+    // operator's view of what the slave was about to do.
     const checkpoint = await prisma.checkpoint.findUniqueOrThrow({ where: { runId: ids.runId } })
     expect(checkpoint.deniedToolUseIds).toEqual(['tu_denied'])
   })
 
   it('kills the run process once the checkpoint lands, so a real CLI that keeps working after a hook deny does not stay alive', async (): Promise<void> => {
     const pid = await spawnNeverExiting()
-    await prisma.agentRun.update({ where: { id: ids.runId }, data: { pid, worktreePath: '/tmp' } })
+    await prisma.slaveRun.update({ where: { id: ids.runId }, data: { pid, worktreePath: '/tmp' } })
 
     try {
       const outcome = await pumpRun({
@@ -772,7 +772,7 @@ describe('pumpRun', () => {
       // Recorded as a pause, not laundered into a failure by the stream ending with no
       // `terminated` event -- the same shape the fake CLI already produces after a deny, now true
       // of the real CLI too because the pump is what kills it.
-      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
       expect(run.status).toBe('paused')
       const types = await eventTypesFor(ids.runId)
       expect(types).toContain('run.paused')
@@ -793,7 +793,7 @@ describe('pumpRun', () => {
     // can resume is not an excuse to leave a live, ungated child behind; it is the opposite case,
     // since the checkpoint that would have let a careful operator watch for this can never exist.
     const pid = await spawnNeverExiting()
-    await prisma.agentRun.update({ where: { id: ids.runId }, data: { pid } })
+    await prisma.slaveRun.update({ where: { id: ids.runId }, data: { pid } })
 
     try {
       await pumpRun({
@@ -813,7 +813,7 @@ describe('pumpRun', () => {
   })
 
   it('does not overwrite a run an operator already stopped', async (): Promise<void> => {
-    await prisma.agentRun.update({
+    await prisma.slaveRun.update({
       where: { id: ids.runId },
       data: { status: 'stopped', terminalAt: new Date(), endedAt: new Date() },
     })
@@ -823,7 +823,7 @@ describe('pumpRun', () => {
     // An operator's `cancel` writes `stopped` and kills the child; the stream then ends without a
     // terminal event, and the pump used to overwrite that with `failed` and announce it -- which
     // under a daemon is what happens on every single cancel.
-    const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+    const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
     expect(run.status).toBe('stopped')
     expect(await eventTypesFor(ids.runId)).not.toContain('run.failed')
   })
@@ -837,7 +837,7 @@ describe('pumpRun', () => {
     // Seeded with both `status: 'stopping'` AND the intent record, mirroring exactly what
     // `requestStop`'s own claim writes (gate-fix B review round 1, Critical 2): `stopping` alone
     // is what the guardrail sweep also claims, and is covered by its own, separate test below.
-    await prisma.agentRun.update({
+    await prisma.slaveRun.update({
       where: { id: ids.runId },
       data: { status: 'stopping', stopRequestedBy: 'meren', stopRequestedAt: new Date() },
     })
@@ -848,7 +848,7 @@ describe('pumpRun', () => {
     })
 
     expect(outcome).toBeNull()
-    const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+    const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
     expect(run.status).toBe('stopped')
     expect(run.terminalAt).not.toBeNull()
     expect(run.endedAt).not.toBeNull()
@@ -872,7 +872,7 @@ describe('pumpRun', () => {
     // reads `stopped` as `terminal_uncounted`, so a guardrail kill would silently stop counting
     // toward `consecutiveFailures` and the circuit breaker could never trip on a gate that keeps
     // timing out or blowing the tool cap.
-    await prisma.agentRun.update({ where: { id: ids.runId }, data: { status: 'stopping' } })
+    await prisma.slaveRun.update({ where: { id: ids.runId }, data: { status: 'stopping' } })
 
     const outcome = await pumpRun({
       ...ids,
@@ -880,7 +880,7 @@ describe('pumpRun', () => {
     })
 
     expect(outcome).toBeNull()
-    const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+    const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
     expect(run.status).toBe('failed')
     expect(run.terminalAt).not.toBeNull()
     const types = await eventTypesFor(ids.runId)
@@ -907,9 +907,9 @@ describe('pumpRun', () => {
     })
 
     // The child died without reporting. Not a success, and not silent -- and the row must not be
-    // left non-terminal, or the agent holding it never becomes schedulable again.
+    // left non-terminal, or the slave holding it never becomes schedulable again.
     expect(outcome).toBeNull()
-    const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+    const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
     expect(run.status).toBe('failed')
     expect(run.terminalAt).not.toBeNull()
     expect(await eventTypesFor(ids.runId)).toContain('run.failed')
@@ -930,7 +930,7 @@ describe('pumpRun', () => {
       ]),
     })
 
-    const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+    const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
     expect(run.status).toBe('failed')
     const types = await eventTypesFor(ids.runId)
     expect(types).not.toContain('run.succeeded')
@@ -995,8 +995,8 @@ describe('pumpRun', () => {
 
     // The adapter closes the old queue and `events()` hands out a new one, so a resumed run is a
     // second `pumpRun` on the same row (Task 6/9). A pump that writes an absolute local count
-    // resets `AgentRun.toolCalls` to 1 here -- and that column is what Task 15's §3.3 ceiling
-    // reads, so any agent that pauses once gets its budget silently refunded.
+    // resets `SlaveRun.toolCalls` to 1 here -- and that column is what Task 15's §3.3 ceiling
+    // reads, so any slave that pauses once gets its budget silently refunded.
     await pumpRun({
       ...ids,
       events: fromArray([
@@ -1006,7 +1006,7 @@ describe('pumpRun', () => {
       ]),
     })
 
-    const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+    const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
     expect(run.toolCalls).toBe(4)
   })
 
@@ -1067,7 +1067,7 @@ describe('pumpRun', () => {
   })
 
   /**
-   * M14 §4.1 / Decisions 4 and 5: `AgentRun.skillCalls`.
+   * M14 §4.1 / Decisions 4 and 5: `SlaveRun.skillCalls`.
    *
    * The tally comes from the `tool_call` events the pump loop already sees -- no new
    * `RuntimeEvent` variant, no second pass over the stream -- and is written ONCE per pump, when
@@ -1103,7 +1103,7 @@ describe('pumpRun', () => {
         ]),
       })
 
-      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
       expect(run.status).toBe('succeeded')
       expect(run.skillCalls).toEqual({
         'superpowers:writing-plans': 2,
@@ -1126,7 +1126,7 @@ describe('pumpRun', () => {
 
       // `{}`, not null: this run WAS measured and used no skill. `null` is reserved for a runtime
       // that cannot report (M14 Decision 4).
-      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
       expect(run.skillCalls).toEqual({})
       expect(run.skillCalls).not.toBeNull()
     })
@@ -1146,7 +1146,7 @@ describe('pumpRun', () => {
         ]),
       })
 
-      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
       expect(run.skillCalls).toEqual({ '<unnamed>': 1, 'superpowers:brainstorming': 1 })
     })
 
@@ -1160,7 +1160,7 @@ describe('pumpRun', () => {
         ]),
       })
 
-      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
       expect(run.status).toBe('failed')
       expect(run.skillCalls).toEqual({ 'superpowers:brainstorming': 1 })
     })
@@ -1174,7 +1174,7 @@ describe('pumpRun', () => {
         ]),
       })
 
-      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
       expect(run.status).toBe('failed')
       expect(run.skillCalls).toEqual({ 'superpowers:verification-before-completion': 1 })
     })
@@ -1193,7 +1193,7 @@ describe('pumpRun', () => {
         ]),
       })
 
-      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
       expect(run.status).toBe('failed')
       expect(run.skillCalls).toEqual({ 'superpowers:test-driven-development': 1 })
     })
@@ -1213,11 +1213,11 @@ describe('pumpRun', () => {
         yield { kind: 'session_started', sessionId: 's-1' }
         yield skillCall('t1', 'superpowers:systematic-debugging')
         const now = new Date()
-        await prisma.agentRun.updateMany({
+        await prisma.slaveRun.updateMany({
           where: { id: ids.runId, endedAt: null },
           data: { status: 'stopping', stopRequestedBy: 'meren', stopRequestedAt: now },
         })
-        await prisma.agentRun.updateMany({
+        await prisma.slaveRun.updateMany({
           where: { id: ids.runId, endedAt: null },
           data: { status: 'stopped', terminalAt: now, endedAt: now },
         })
@@ -1225,7 +1225,7 @@ describe('pumpRun', () => {
 
       await pumpRun({ ...ids, events: stopsMidStream() })
 
-      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
       // The other side's conclusion stands -- this write must not walk the status back.
       expect(run.status).toBe('stopped')
       expect(run.skillCalls).toEqual({ 'superpowers:systematic-debugging': 1 })
@@ -1244,14 +1244,14 @@ describe('pumpRun', () => {
         ]),
       })
 
-      const paused = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      const paused = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
       expect(paused.status).toBe('paused')
       // A pause is not a conclusion, but it IS a stream end: what the run did before it is a fact.
       expect(paused.endedAt).toBeNull()
       expect(paused.skillCalls).toEqual({ 'superpowers:brainstorming': 1 })
 
       // What the tick's paused->resuming claim leaves the row at before `resume()` pumps again.
-      await prisma.agentRun.update({ where: { id: ids.runId }, data: { status: 'resuming' } })
+      await prisma.slaveRun.update({ where: { id: ids.runId }, data: { status: 'resuming' } })
 
       await pumpRun({
         ...ids,
@@ -1264,7 +1264,7 @@ describe('pumpRun', () => {
         ]),
       })
 
-      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
       expect(run.status).toBe('succeeded')
       // Merged, not replaced: the second pump counted only its own two calls.
       expect(run.skillCalls).toEqual({
@@ -1292,7 +1292,7 @@ describe('pumpRun', () => {
         ]),
       })
 
-      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
       expect(run.status).toBe('succeeded')
       expect(run.skillCalls).toBeNull()
     })
@@ -1304,7 +1304,7 @@ describe('pumpRun', () => {
       // out as 1, on the path where the row is concluded from inside the loop and the stream end
       // arrives afterwards.
       //
-      // Not asserted with `vi.spyOn(prisma.agentRun, 'updateMany')`: measured here, spying on a
+      // Not asserted with `vi.spyOn(prisma.slaveRun, 'updateMany')`: measured here, spying on a
       // Prisma model method records the call but does NOT call through (it returns `undefined`),
       // so the probe would silently suppress the very write it claims to count.
       await pumpRun({
@@ -1317,14 +1317,14 @@ describe('pumpRun', () => {
         ]),
       })
 
-      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
       expect(run.status).toBe('failed')
       expect(run.skillCalls).toEqual({ 'superpowers:brainstorming': 1 })
     })
   })
 
   /**
-   * M14 §4.2, narrowed by M15 spec §4 (fix round 1): `AgentRun.tokensIn` / `tokensOut`, written
+   * M14 §4.2, narrowed by M15 spec §4 (fix round 1): `SlaveRun.tokensIn` / `tokensOut`, written
    * from `RunOutcome.tokens` at the same stream-end write `skillCalls` uses, NOT the terminal
    * `succeeded`/`failed` write -- tokens are a fact of the `result` line, which only that write
    * ever has in hand. Unlike `skillCalls`, which is unconditional every time the stream ends,
@@ -1336,7 +1336,7 @@ describe('pumpRun', () => {
    * provider rule is superseded here by M15 spec §4. `outcome.tokens` is persisted whenever it
    * is non-null, for any provider -- see the Cursor case below.
    */
-  describe('AgentRun.tokensIn / tokensOut (M14 §4.2, M15 spec §4)', () => {
+  describe('SlaveRun.tokensIn / tokensOut (M14 §4.2, M15 spec §4)', () => {
     it('writes the reported token counts beside the cost when the run concludes', async (): Promise<void> => {
       await pumpRun({
         ...ids,
@@ -1346,7 +1346,7 @@ describe('pumpRun', () => {
         ]),
       })
 
-      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
       expect(run.tokensIn).toBe(4)
       expect(run.tokensOut).toBe(741)
     })
@@ -1361,7 +1361,7 @@ describe('pumpRun', () => {
         ]),
       })
 
-      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
       expect(run.tokensIn).toBeNull()
       expect(run.tokensOut).toBeNull()
     })
@@ -1389,7 +1389,7 @@ describe('pumpRun', () => {
         ]),
       })
 
-      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
       expect(run.tokensIn).toBe(41247)
       expect(run.tokensOut).toBe(223)
       expect(run.skillCalls).toBeNull()
@@ -1400,7 +1400,7 @@ describe('pumpRun', () => {
       // from an earlier conclusion. This pump's own stream then ends on a pause -- no `result`
       // line, so no `outcome` -- and the earlier figure must survive that write, not be
       // overwritten with `null`.
-      await prisma.agentRun.update({ where: { id: ids.runId }, data: { tokensIn: 10, tokensOut: 20 } })
+      await prisma.slaveRun.update({ where: { id: ids.runId }, data: { tokensIn: 10, tokensOut: 20 } })
 
       await pumpRun({
         ...ids,
@@ -1410,7 +1410,7 @@ describe('pumpRun', () => {
         ]),
       })
 
-      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
       expect(run.status).toBe('paused')
       expect(run.tokensIn).toBe(10)
       expect(run.tokensOut).toBe(20)
@@ -1430,7 +1430,7 @@ describe('pumpRun', () => {
   describe('permission-matrix denials vs pause denials (M18 Task 6)', () => {
     it('runs a matrix-denied Bash call to completion: succeeded, never paused, no kill, one run.tool_denied, no guardrail.tripped, no denied tool use ids', async (): Promise<void> => {
       const pid = await spawnNeverExiting()
-      await prisma.agentRun.update({ where: { id: ids.runId }, data: { pid, worktreePath: '/tmp' } })
+      await prisma.slaveRun.update({ where: { id: ids.runId }, data: { pid, worktreePath: '/tmp' } })
 
       try {
         const outcome = await pumpRun({ ...ids, events: fromArray(eventsFromFixture('permission-matrix-deny')) })
@@ -1438,7 +1438,7 @@ describe('pumpRun', () => {
         // The run reached its own conclusion -- a matrix deny does not stop the stream, so
         // `terminated` still arrives and `pumpRun` still returns its outcome.
         expect(outcome).not.toBeNull()
-        const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+        const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
         expect(run.status).toBe('succeeded')
         // Never paused: the whole point of Task 6 is that a matrix deny is not the pause protocol.
         expect(run.pausedAtStep).toBeNull()
@@ -1475,7 +1475,7 @@ describe('pumpRun', () => {
 
     it('regression: hook-deny.ndjson through the real parser still pauses, exactly as before Task 6', async (): Promise<void> => {
       const pid = await spawnNeverExiting()
-      await prisma.agentRun.update({ where: { id: ids.runId }, data: { pid, worktreePath: '/tmp' } })
+      await prisma.slaveRun.update({ where: { id: ids.runId }, data: { pid, worktreePath: '/tmp' } })
 
       try {
         const outcome = await pumpRun({
@@ -1495,7 +1495,7 @@ describe('pumpRun', () => {
         // no matrix prefix, so `classifyGateEvent` still routes it to `stopped_by_gate`, not the
         // new `tool_denied` kind.
         expect(outcome).toBeNull()
-        const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+        const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
         expect(run.status).toBe('paused')
         // Two tool_call events precede the deny in this recording (Read, then the denied Edit) --
         // unlike the hand-authored single-tool-call pause tests above.
@@ -1523,12 +1523,12 @@ describe('pumpRun', () => {
       // request. This proves the heuristic itself survives a matrix denial mid-run -- a
       // clean-terminal Cursor run whose only denial was the matrix's own must NOT be reclassified
       // as paused just because a pause was requested while it was finishing.
-      await prisma.agentRun.update({
+      await prisma.slaveRun.update({
         where: { id: ids.runId },
         data: { status: 'pause_requested', worktreePath: '/tmp' },
       })
 
-      const matrixReason = "permission matrix denies 'run tests' (shell) for this agent"
+      const matrixReason = "permission matrix denies 'run tests' (shell) for this slave"
       const outcome = await pumpRun({
         ...ids,
         spawn: {
@@ -1551,7 +1551,7 @@ describe('pumpRun', () => {
       // a full parse of the matrix-prefixed reason, that it was a survivable refusal -- the run
       // concludes on its own merits, not failed by the CLI's reason-blind denial echo.
       expect(outcome).not.toBeNull()
-      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
       expect(run.status).toBe('succeeded')
       // NOT reclassified as paused despite the `pause_requested` seed: `recordCursorPauseIfRequested`
       // saw a clean terminal outcome AND an empty `denied` (the matrix branch never pushes into it),
@@ -1573,7 +1573,7 @@ describe('pumpRun', () => {
 
     it('pauses, does not tool_deny, on a hook_denied reason that only starts with the matrix prefix but fails to parse (fix round 1, review Important 4 controller ruling: fail-safe is pausing)', async (): Promise<void> => {
       const pid = await spawnNeverExiting()
-      await prisma.agentRun.update({ where: { id: ids.runId }, data: { pid, worktreePath: '/tmp' } })
+      await prisma.slaveRun.update({ where: { id: ids.runId }, data: { pid, worktreePath: '/tmp' } })
 
       try {
         // Carries the prefix -- so a pre-fix-round-1 `classifyGateEvent` would have reported
@@ -1598,7 +1598,7 @@ describe('pumpRun', () => {
         // Fail-safe is pausing: an unparseable claim of "this was the matrix" is treated exactly
         // like an ordinary pause deny, not trusted merely because it looks like one.
         expect(outcome).toBeNull()
-        const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+        const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
         expect(run.status).toBe('paused')
         expect(run.pausedAtStep).toBe(1)
 
@@ -1639,9 +1639,9 @@ describe('pumpRun', () => {
         type: 'run.tool_denied',
         workspaceId: ids.workspaceId,
         taskId: ids.taskId,
-        agentId: ids.agentId,
+        slaveId: ids.slaveId,
         runId: ids.runId,
-        actor: 'agent',
+        actor: 'slave',
         payload: { tool: 'Bash', capability: 'run tests', toolUseId: 'toolu_old_matrix' },
       })
 
@@ -1658,7 +1658,7 @@ describe('pumpRun', () => {
       })
 
       expect(outcome).not.toBeNull()
-      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
       expect(run.status).toBe('succeeded')
 
       const types = await eventTypesFor(ids.runId)
@@ -1678,9 +1678,9 @@ describe('pumpRun', () => {
         type: 'run.tool_denied',
         workspaceId: ids.workspaceId,
         taskId: ids.taskId,
-        agentId: ids.agentId,
+        slaveId: ids.slaveId,
         runId: ids.runId,
-        actor: 'agent',
+        actor: 'slave',
         payload: { tool: 'Bash', capability: 'run tests', toolUseId: 'toolu_old_matrix' },
       })
 
@@ -1692,7 +1692,7 @@ describe('pumpRun', () => {
         ]),
       })
 
-      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
       expect(run.status).toBe('failed')
     })
 
@@ -1709,9 +1709,9 @@ describe('pumpRun', () => {
         type: 'run.tool_denied',
         workspaceId: ids.workspaceId,
         taskId: ids.taskId,
-        agentId: ids.agentId,
+        slaveId: ids.slaveId,
         runId: ids.runId,
-        actor: 'agent',
+        actor: 'slave',
         payload: { tool: 'Bash', capability: 'run tests', toolUseId: 'toolu_old_matrix' },
       })
 
@@ -1727,7 +1727,7 @@ describe('pumpRun', () => {
         ]),
       })
 
-      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
       expect(run.status).toBe('failed')
 
       const failed = await prisma.executionEvent.findFirstOrThrow({
@@ -1749,7 +1749,7 @@ describe('pumpRun', () => {
      * not excluding an id this pump cannot actually vouch for.
      */
     it("B2: an adjacency mismatch between the last tool_call and the deny reason's own tool name does not associate the id — run.tool_denied still fires with toolUseId null, and the id is not excluded from the terminal failure check", async (): Promise<void> => {
-      const matrixReason = "permission matrix denies 'run tests' (Bash) for this agent"
+      const matrixReason = "permission matrix denies 'run tests' (Bash) for this slave"
       const outcome = await pumpRun({
         ...ids,
         events: fromArray([
@@ -1761,7 +1761,7 @@ describe('pumpRun', () => {
       })
 
       expect(outcome).not.toBeNull()
-      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
       // Fail-safe: the mismatched id was never added to `matrixDeniedToolUseIds`, so it still
       // shows up in `nonMatrixDeniedToolUseIds` and fails the run -- a wrong association must
       // never launder an id out of the failure check.
@@ -1788,7 +1788,7 @@ describe('pumpRun', () => {
      * (`permission-matrix-deny.ndjson`, a response on line 24 answering line 15) actually shows.
      */
     it('C1: a deny whose hook_response lands AFTER a differently named later tool_call still associates the right id via hook_id, and the run survives (closes the B2 over-fail)', async (): Promise<void> => {
-      const matrixReason = "permission matrix denies 'run tests' (Bash) for this agent"
+      const matrixReason = "permission matrix denies 'run tests' (Bash) for this slave"
       const outcome = await pumpRun({
         ...ids,
         events: fromArray([
@@ -1803,7 +1803,7 @@ describe('pumpRun', () => {
       })
 
       expect(outcome).not.toBeNull()
-      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
       expect(run.status).toBe('succeeded')
 
       const toolDenied = await prisma.executionEvent.findFirstOrThrow({
@@ -1821,7 +1821,7 @@ describe('pumpRun', () => {
      * failure check, and the run fails. An unbindable hook must never be a free pass.
      */
     it('C1: a hook_started whose tool name does not match the last tool_call binds nothing, so a deny by that hook_id falls back to null (fail-safe)', async (): Promise<void> => {
-      const matrixReason = "permission matrix denies 'run tests' (Bash) for this agent"
+      const matrixReason = "permission matrix denies 'run tests' (Bash) for this slave"
       await pumpRun({
         ...ids,
         events: fromArray([
@@ -1833,7 +1833,7 @@ describe('pumpRun', () => {
         ]),
       })
 
-      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
       expect(run.status).toBe('failed')
 
       const toolDenied = await prisma.executionEvent.findFirstOrThrow({
@@ -1861,14 +1861,14 @@ describe('pumpRun', () => {
           {
             kind: 'hook_denied',
             hookName: 'PreToolUse:Bash',
-            reason: "permission matrix denies 'read secrets' (Read) for this agent",
+            reason: "permission matrix denies 'read secrets' (Read) for this slave",
             hookId: 'hk-1',
           },
           { kind: 'terminated', outcome: { ...okOutcome, deniedToolUseIds: ['toolu_bash'] } },
         ]),
       })
 
-      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
       expect(run.status).toBe('failed')
 
       const toolDenied = await prisma.executionEvent.findFirstOrThrow({
@@ -1911,7 +1911,7 @@ describe('pumpRun', () => {
       // The stream still ends in a terminal result -- a permission-mode denial does not stop it,
       // matrix-shaped reason or not.
       expect(outcome).not.toBeNull()
-      const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
       // Ordinary path, not the matrix branch: a denial whose reason fails to parse is never
       // excluded from `outcome.deniedToolUseIds`, so the run fails on the CLI's own echoed id --
       // exactly the pre-Task-6 behaviour for any permission-mode denial.
