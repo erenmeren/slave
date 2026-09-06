@@ -66,7 +66,7 @@ function apply(state: TradeState, _role: RoleDefinition, action: ActionEnvelope,
       const next = nextId(state, 'purchase')
       const expectedDay = day + supplier.leadDays
       const payDay = day + supplier.paymentTermDays
-      const purchase = { id: next.id, supplierId, qty, unitPriceMinor: supplier.unitPriceMinor, orderedDay: day, expectedDay, deliveredDay: null, payDay, status: 'ordered' as const }
+      const purchase = { id: next.id, supplierId, qty, unitPriceMinor: supplier.unitPriceMinor, orderedDay: day, expectedDay, deliveredDay: null, payDay, status: 'ordered' as const, paid: false }
       return {
         state: { ...next.state, purchases: [...state.purchases, purchase] },
         schedule: [
@@ -113,9 +113,9 @@ function applyEvent(state: TradeState, event: TradeEvent, day: number): Applied<
     }
     case 'payment_due': {
       const purchase = state.purchases.find((p) => p.id === event.purchaseId)
-      if (purchase === undefined || purchase.status === 'paid') return { state, schedule: [], record: { ignored: 'already_paid', purchaseId: event.purchaseId } }
+      if (purchase === undefined || purchase.paid) return { state, schedule: [], record: { ignored: 'already_paid', purchaseId: event.purchaseId } }
       const amount = purchase.qty * purchase.unitPriceMinor
-      const purchases = state.purchases.map((p) => (p.id === purchase.id ? { ...p, status: 'paid' as const } : p))
+      const purchases = state.purchases.map((p) => (p.id === purchase.id ? { ...p, paid: true } : p))
       return { state: { ...state, cashMinor: state.cashMinor - amount, purchases }, schedule: [], record: { purchaseId: purchase.id, paidMinor: amount } }
     }
     case 'collection': {

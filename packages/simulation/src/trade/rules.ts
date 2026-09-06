@@ -26,7 +26,7 @@ export class RulesDecisionProvider implements DecisionProvider {
         return this.operations(o)
       case 'finance': {
         const cash = Number(o['cashMinor'] ?? 0)
-        const unpaid = ((o['purchases'] as Purchase[] | undefined) ?? []).filter((p) => p.status !== 'paid').reduce((s, p) => s + p.qty * p.unitPriceMinor, 0)
+        const unpaid = ((o['purchases'] as Purchase[] | undefined) ?? []).filter((p) => !p.paid).reduce((s, p) => s + p.qty * p.unitPriceMinor, 0)
         return [envelope('note', { text: `cash ${cash} minor, unpaid commitments ${unpaid} minor` }, 'daily cash watch')]
       }
       default:
@@ -44,19 +44,27 @@ export class RulesDecisionProvider implements DecisionProvider {
     const normal = suppliers.find((s) => s.id === 'normal')
     const fast = suppliers.find((s) => s.id === 'fast')
     const inbound = purchases.filter((p) => p.status === 'ordered')
-    const unpaid = purchases.filter((p) => p.status !== 'paid').reduce((s, p) => s + p.qty * p.unitPriceMinor, 0)
+    const unpaid = purchases.filter((p) => !p.paid).reduce((s, p) => s + p.qty * p.unitPriceMinor, 0)
     let available = cash - unpaid
     const actions: ActionEnvelope[] = []
     const remaining = orders.reduce((s, x) => s + x.remaining, 0)
     const inboundQty = inbound.reduce((s, p) => s + p.qty, 0)
     const shortfall = remaining - inventory - inboundQty
+    let normalQty = 0
+    let normalExpectedDay = 0
     if (shortfall > 0 && normal !== undefined && available >= shortfall * normal.unitPriceMinor) {
+      normalQty = shortfall
+      normalExpectedDay = day + normal.leadDays
       actions.push(envelope('place_purchase', { supplierId: 'normal', qty: shortfall }, `shortfall ${shortfall} against open orders`, orders.map((x) => x.id)))
       available -= shortfall * normal.unitPriceMinor
     }
     if (this.definition.policy === 'B' && fast !== undefined) {
       let stock = inventory
       let inboundAfterHedge = [...inbound]
+      // Include the normal purchase we just placed in the hedge simulation
+      if (normalQty > 0) {
+        inboundAfterHedge = [...inboundAfterHedge, { id: `pending-normal`, supplierId: 'normal', qty: normalQty, unitPriceMinor: normal!.unitPriceMinor, orderedDay: day, expectedDay: normalExpectedDay, deliveredDay: null, payDay: day + normal!.paymentTermDays, status: 'ordered' as const, paid: false }]
+      }
       for (const order of orders) {
         const fromStock = Math.min(stock, order.remaining)
         stock -= fromStock

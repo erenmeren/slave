@@ -30,7 +30,7 @@ describe('trade events', () => {
     const p = tradeModel.apply(base(), purchasing, act('place_purchase', { supplierId: 'normal', qty: 50 }), 1)
     expect(p.state.inventory).toBe(100)
     expect(p.state.cashMinor).toBe(5_000_000)
-    expect(p.state.purchases[0]).toMatchObject({ id: 'purchase-1', supplierId: 'normal', qty: 50, unitPriceMinor: 6_000, expectedDay: 8, payDay: 31, status: 'ordered' })
+    expect(p.state.purchases[0]).toMatchObject({ id: 'purchase-1', supplierId: 'normal', qty: 50, unitPriceMinor: 6_000, expectedDay: 8, payDay: 31, status: 'ordered', paid: false })
     expect(p.schedule).toEqual([
       { time: 8, priority: 'scheduled', event: { type: 'delivery', purchaseId: 'purchase-1' } },
       { time: 31, priority: 'scheduled', event: { type: 'payment_due', purchaseId: 'purchase-1' } },
@@ -40,7 +40,20 @@ describe('trade events', () => {
     expect(delivered.state.purchases[0]?.status).toBe('delivered')
     const paid = tradeModel.applyEvent(delivered.state, { type: 'payment_due', purchaseId: 'purchase-1' }, 31)
     expect(paid.state.cashMinor).toBe(5_000_000 - 300_000)
-    expect(paid.state.purchases[0]?.status).toBe('paid')
+    expect(paid.state.purchases[0]?.paid).toBe(true)
+  })
+  it('pay first, then deliver — order of events must not matter for delivery', () => {
+    const p = tradeModel.apply(base(), purchasing, act('place_purchase', { supplierId: 'fast', qty: 50 }), 1)
+    expect(p.state.purchases[0]?.payDay).toBe(1) // paymentTermDays: 0
+    expect(p.state.purchases[0]?.expectedDay).toBe(3) // leadDays: 2
+    const paid = tradeModel.applyEvent(p.state, { type: 'payment_due', purchaseId: 'purchase-1' }, 1)
+    expect(paid.state.cashMinor).toBe(5_000_000 - 425_000) // fast: 50 × 8500
+    expect(paid.state.purchases[0]?.paid).toBe(true)
+    expect(paid.state.inventory).toBe(100) // not yet delivered
+    const delivered = tradeModel.applyEvent(paid.state, { type: 'delivery', purchaseId: 'purchase-1' }, 3)
+    expect(delivered.state.inventory).toBe(150) // delivery happens despite being paid
+    expect(delivered.state.purchases[0]?.status).toBe('delivered')
+    expect(delivered.state.purchases[0]?.paid).toBe(true)
   })
   it('a supplier delay pushes every undelivered purchase of that supplier and reschedules its delivery', () => {
     const p = tradeModel.apply(base(), purchasing, act('place_purchase', { supplierId: 'normal', qty: 50 }), 1)
@@ -56,7 +69,7 @@ describe('trade events', () => {
 
 describe('trade rules', () => {
   it('refuses a purchase the cash minus unpaid commitments cannot cover', () => {
-    const state = base({ cashMinor: 400_000, purchases: [{ id: 'purchase-1', supplierId: 'fast', qty: 20, unitPriceMinor: 8_500, orderedDay: 0, expectedDay: 2, deliveredDay: null, payDay: 0, status: 'ordered' }] })
+    const state = base({ cashMinor: 400_000, purchases: [{ id: 'purchase-1', supplierId: 'fast', qty: 20, unitPriceMinor: 8_500, orderedDay: 0, expectedDay: 2, deliveredDay: null, payDay: 0, status: 'ordered', paid: false }] })
     // 400_000 - 170_000 unpaid = 230_000 available; 50 × 6_000 = 300_000
     expect(tradeModel.validate(state, purchasing, act('place_purchase', { supplierId: 'normal', qty: 50 }))).toEqual({ ok: false, reason: { kind: 'insufficient_cash', availableMinor: 230_000, costMinor: 300_000 } })
     expect(tradeModel.validate(state, purchasing, act('place_purchase', { supplierId: 'normal', qty: 30 })).ok).toBe(true)

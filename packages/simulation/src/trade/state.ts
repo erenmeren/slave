@@ -9,7 +9,7 @@ export const orderSchema = z.object({
 })
 export const purchaseSchema = z.object({
   id: z.string(), supplierId: z.string(), qty: z.number().int().positive(), unitPriceMinor: z.number().int().nonnegative(), orderedDay: z.number().int(),
-  expectedDay: z.number().int(), deliveredDay: z.number().int().nullable(), payDay: z.number().int(), status: z.enum(['ordered', 'delivered', 'paid']),
+  expectedDay: z.number().int(), deliveredDay: z.number().int().nullable(), payDay: z.number().int(), status: z.enum(['ordered', 'delivered']), paid: z.boolean(),
 })
 export const tradeStateSchema = z.object({
   cashMinor: z.number().int(), inventory: z.number().int().nonnegative(), dailyShipCapacity: z.number().int().nonnegative(), shippedToday: z.number().int().nonnegative(),
@@ -28,7 +28,7 @@ export function roundHalfUp(n: number): number {
 }
 
 export function unpaidCommitmentsMinor(state: TradeState): number {
-  return state.purchases.filter((p) => p.status !== 'paid').reduce((sum, p) => sum + p.qty * p.unitPriceMinor, 0)
+  return state.purchases.filter((p) => !p.paid).reduce((sum, p) => sum + p.qty * p.unitPriceMinor, 0)
 }
 
 export function initialTradeState(input: { readonly cashMinor: number; readonly inventory: number; readonly dailyShipCapacity: number; readonly suppliers: readonly Supplier[] }): TradeState {
