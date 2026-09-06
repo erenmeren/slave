@@ -39,6 +39,7 @@ import {
   simulationStatus,
   stepSimulation,
   syncSkillCatalog,
+  tickSimulations,
   plural,
 } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
@@ -385,7 +386,8 @@ export async function main(argv: readonly string[]): Promise<number> {
         workspaceId: await resolveWorkspace(flags),
         registry: buildAdapterRegistry(),
       })
-      process.stdout.write(`${JSON.stringify(report, null, 2)}\n`)
+      const simulations = await tickSimulations({ now: new Date() })
+      process.stdout.write(`${JSON.stringify({ ...report, simulations }, null, 2)}\n`)
 
       // The command waits for what it started, even though the *function* deliberately does not.
       // A daemon keeps running and its pumps outlive each tick by design (spec §5.6); a one-shot

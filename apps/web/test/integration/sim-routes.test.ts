@@ -8,6 +8,8 @@ import { POST as resumePOST } from '../../src/app/api/sim/[simulationId]/resume/
 import { POST as injectPOST } from '../../src/app/api/sim/[simulationId]/inject/route.js'
 import { POST as haltPOST } from '../../src/app/api/sim/[simulationId]/halt/route.js'
 import { POST as clonePOST } from '../../src/app/api/sim/[simulationId]/clone/route.js'
+import { POST as autoRunPOST } from '../../src/app/api/sim/[simulationId]/auto-run/route.js'
+import { POST as autoRunStopPOST } from '../../src/app/api/sim/[simulationId]/auto-run/stop/route.js'
 
 async function seedTradingCompany(): Promise<string> {
   const template = await prisma.slaveTemplate.create({ data: { name: 'Trade Clerk', role: 'clerk' } })
@@ -88,5 +90,16 @@ describe('the simulation routes', () => {
     expect(row?.clonedFromId).toBe(id)
     expect((await clonePOST(json({ name: '' }), params(id))).status).toBe(400)
     expect((await clonePOST(json({ name: 'x', policy: 'A' }), params('00000000-0000-4000-8000-00000000dead'))).status).toBe(404)
+  })
+  it('auto-run → 200 and the row has the intent; a bad body → 400; stop → 200', async () => {
+    const { id } = (await (await createPOST(json({ companyId, name: 'demo', policy: 'A' }))).json()) as { id: string }
+    const started = await autoRunPOST(json({ everyMs: 1000, untilDay: 10 }), params(id))
+    expect(started.status).toBe(200)
+    const row = await prisma.simulationRun.findUnique({ where: { id } })
+    expect(row).toMatchObject({ autoRunEveryMs: 1000, autoRunUntilDay: 10 })
+    expect((await autoRunPOST(json({ everyMs: 10 }), params(id))).status).toBe(400)
+    expect((await autoRunStopPOST(new Request('http://x', { method: 'POST' }), params(id))).status).toBe(200)
+    const stopped = await prisma.simulationRun.findUnique({ where: { id } })
+    expect(stopped?.autoRunEveryMs).toBeNull()
   })
 })

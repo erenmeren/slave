@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
-import { verifyCredentials } from '@slave-of-ai/control'
+import { startAutoRun, verifyCredentials } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 
@@ -1242,6 +1242,23 @@ describe('the orchestrator CLI', () => {
       expect(result.code).toBe(1)
       expect(result.stderr).toContain('--seed must be an integer')
       expect(await prisma.simulationRun.count()).toBe(0)
+    }, 30_000)
+    it('tick steps every due auto-run once and reports the counts (M30)', async () => {
+      const companyId = await tradingCompany()
+      const created = await runCli(['create-simulation', '--company', companyId, '--name', 'auto', '--policy', 'A'])
+      const id = /simulation (\S+) created/.exec(created.stdout)?.[1] ?? ''
+      expect(id).not.toBe('')
+      // `auto-run-simulation` is Task 6's CLI verb; here the intent is armed straight through
+      // control, in-process, against the same TEST_DATABASE_URL the spawned CLI child also uses.
+      expect((await startAutoRun(id, { everyMs: 250, untilDay: 3 })).ok).toBe(true)
+      await runCli(['tick', '--workspace', fixture.workspaceId])
+      await new Promise<void>((resolve) => setTimeout(resolve, 300))
+      const second = await runCli(['tick', '--workspace', fixture.workspaceId])
+      expect(second.code).toBe(0)
+      const parsed = JSON.parse(second.stdout) as { simulations: { candidates: number; stepped: number; halted: number } }
+      expect(parsed.simulations).toEqual({ candidates: 1, stepped: 1, halted: 0 })
+      const row = await prisma.simulationRun.findUniqueOrThrow({ where: { id } })
+      expect(row.simTime).toBe(2)
     }, 30_000)
   })
 })
