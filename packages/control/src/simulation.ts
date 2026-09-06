@@ -1,4 +1,4 @@
-import { Prisma, prisma } from '@slave-of-ai/db/client'
+import { Prisma, prisma, type PrismaClient } from '@slave-of-ai/db/client'
 import { err, ok, type Result } from '@slave-of-ai/domain'
 import {
   RulesDecisionProvider, demoDefinition, replay, runUntil, tradeExternalEventSchema, tradeInitialEngineState, tradeMetrics, tradeModel,
@@ -100,6 +100,12 @@ export async function createSimulation(
   }
 }
 
+/** Stored idempotency keys are namespaced by verb -- `step:${key}` vs. `inject:${key}` -- so the
+ *  same caller-supplied key used once for a step and once for an injection cannot collide on the
+ *  per-run `simulationId_idempotencyKey` unique and be replayed as the other verb's outcome
+ *  (fix round 1, Important #1). */
+const namespacedKey = (verb: 'step' | 'inject', key: string): string => `${verb}:${key}`
+
 async function locked(tx: Prisma.TransactionClient, simulationId: string): Promise<Result<{ row: Row; loaded: LoadedSimulation }, ControlRefusal>> {
   await tx.$queryRaw`SELECT id FROM "SimulationRun" WHERE id = ${simulationId} FOR UPDATE`
   const row = await tx.simulationRun.findUnique({ where: { id: simulationId }, include: { company: { select: { name: true } } } })
@@ -115,12 +121,15 @@ export async function stepSimulation(
 ): Promise<Result<{ readonly day: number; readonly status: string; readonly version: number; readonly entries: number; readonly replayed: boolean }, ControlRefusal>> {
   if (input.steps !== undefined && (!Number.isInteger(input.steps) || input.steps < 1)) return err({ kind: 'invalid_simulation_input', detail: 'steps must be a positive integer' })
   if (input.untilDay !== undefined && (!Number.isInteger(input.untilDay) || input.untilDay < 0)) return err({ kind: 'invalid_simulation_input', detail: 'untilDay must be a non-negative integer' })
+  // A full-horizon `runUntil` (up to `MAX_STEPS_PER_REQUEST` days) plus a `createMany` of
+  // thousands of journal rows can outrun Prisma's 5 s interactive-transaction default and throw
+  // P2028 (fix round 1, Important #2) -- a real-size request needs real headroom.
   return prisma.$transaction(async (tx) => {
     const got = await locked(tx, simulationId)
     if (!got.ok) return got
     const { row, loaded } = got.value
     if (input.idempotencyKey !== undefined) {
-      const seen = await tx.simulationJournalEntry.findUnique({ where: { simulationId_idempotencyKey: { simulationId, idempotencyKey: input.idempotencyKey } } })
+      const seen = await tx.simulationJournalEntry.findUnique({ where: { simulationId_idempotencyKey: { simulationId, idempotencyKey: namespacedKey('step', input.idempotencyKey) } } })
       if (seen !== null) {
         const p = seen.payload as { day?: number; status?: string; version?: number; entries?: number }
         return ok({ day: p.day ?? row.simTime, status: p.status ?? row.status, version: p.version ?? row.version, entries: p.entries ?? 0, replayed: true })
@@ -137,14 +146,14 @@ export async function stepSimulation(
     const outcome = { day: result.state.day, status, version, entries: result.entries.length }
     await tx.simulationJournalEntry.createMany({ data: journalRows(simulationId, result.entries) })
     await tx.simulationJournalEntry.create({
-      data: { simulationId, seq: controlSeq, simTime: result.state.day, kind: 'control', actorRole: null, idempotencyKey: input.idempotencyKey ?? null, payload: { op: 'stepped', ...outcome } },
+      data: { simulationId, seq: controlSeq, simTime: result.state.day, kind: 'control', actorRole: null, idempotencyKey: input.idempotencyKey !== undefined ? namespacedKey('step', input.idempotencyKey) : null, payload: { op: 'stepped', ...outcome } },
     })
     await tx.simulationRun.update({
       where: { id: simulationId },
       data: { state: json({ ...result.state, journalSeq: controlSeq }), version, status, simTime: result.state.day, stepCount: result.state.stepCount, decisionCount: result.state.decisionCount, haltedReason: result.state.haltedReason },
     })
     return ok({ ...outcome, replayed: false })
-  })
+  }, { timeout: 60_000, maxWait: 10_000 })
 }
 
 async function setStatus(simulationId: string, from: readonly string[], to: 'paused' | 'running' | 'halted', op: string, haltedReason: string | null): Promise<Result<void, ControlRefusal>> {
@@ -179,13 +188,13 @@ export async function injectExternalEvent(
     const { row, loaded } = got.value
     if (!Number.isInteger(input.day) || input.day < loaded.state.day) return err({ kind: 'invalid_simulation_input', detail: `day must be an integer ≥ the current day (${loaded.state.day})` })
     if (input.idempotencyKey !== undefined) {
-      const seen = await tx.simulationJournalEntry.findUnique({ where: { simulationId_idempotencyKey: { simulationId, idempotencyKey: input.idempotencyKey } } })
+      const seen = await tx.simulationJournalEntry.findUnique({ where: { simulationId_idempotencyKey: { simulationId, idempotencyKey: namespacedKey('inject', input.idempotencyKey) } } })
       if (seen !== null) return ok(undefined)
     }
     const queue = loaded.state.queue
     const item = { time: input.day, priority: 'external' as const, seq: queue.nextSeq, event: parsed.data }
     const seq = loaded.state.journalSeq + 1
-    await tx.simulationJournalEntry.create({ data: { simulationId, seq, simTime: row.simTime, kind: 'external_event', actorRole: null, idempotencyKey: input.idempotencyKey ?? null, payload: { op: 'injected', day: input.day, event: json(parsed.data) } } })
+    await tx.simulationJournalEntry.create({ data: { simulationId, seq, simTime: row.simTime, kind: 'external_event', actorRole: null, idempotencyKey: input.idempotencyKey !== undefined ? namespacedKey('inject', input.idempotencyKey) : null, payload: { op: 'injected', day: input.day, event: json(parsed.data) } } })
     await tx.simulationRun.update({ where: { id: simulationId }, data: { state: json({ ...loaded.state, journalSeq: seq, queue: { items: [...queue.items, item], nextSeq: queue.nextSeq + 1 } }) } })
     return ok(undefined)
   })
@@ -196,10 +205,17 @@ export async function deleteSimulation(simulationId: string, _principal?: Princi
   return count === 0 ? err({ kind: 'simulation_not_found', simulationId }) : ok(undefined)
 }
 
-export async function loadSimulation(simulationId: string): Promise<Result<LoadedSimulation, ControlRefusal>> {
-  const row = await prisma.simulationRun.findUnique({ where: { id: simulationId }, include: { company: { select: { name: true } } } })
+/** Shared by every read-only verb, plain `prisma` for a single unlocked read (`loadSimulation`
+ *  itself) or `tx` for one that must see the row and the journal from the SAME snapshot
+ *  (`replaySimulation`, `simulationStatus` -- fix round 1, Important #4). */
+async function readSimulation(client: PrismaClient | Prisma.TransactionClient, simulationId: string): Promise<Result<LoadedSimulation, ControlRefusal>> {
+  const row = await client.simulationRun.findUnique({ where: { id: simulationId }, include: { company: { select: { name: true } } } })
   if (row === null) return err({ kind: 'simulation_not_found', simulationId })
   return parseRow(row)
+}
+
+export async function loadSimulation(simulationId: string): Promise<Result<LoadedSimulation, ControlRefusal>> {
+  return readSimulation(prisma, simulationId)
 }
 
 export async function listSimulations(companyId?: string): Promise<readonly SimulationSummary[]> {
@@ -207,51 +223,82 @@ export async function listSimulations(companyId?: string): Promise<readonly Simu
   return rows.flatMap((row) => { const p = parseRow(row); return p.ok ? [p.value.summary] : [] })
 }
 
-/** Re-runs the engine from the frozen definition with the journal's own decisions and compares. */
+/** Re-runs the engine from the frozen definition with the journal's own decisions and compares.
+ *  Reads the row and the journal inside one `RepeatableRead` transaction (fix round 1, Important
+ *  #4): two unlocked reads outside a transaction could straddle a concurrent `stepSimulation`
+ *  commit and compare a journal that is newer than the state it is checked against, reporting a
+ *  spurious mismatch. `RepeatableRead` (not the default Read Committed) is what actually gives
+ *  both reads the same snapshot. */
 export async function replaySimulation(simulationId: string): Promise<Result<{ readonly matches: boolean }, ControlRefusal>> {
-  const loaded = await loadSimulation(simulationId)
-  if (!loaded.ok) return loaded
-  const rows = await prisma.simulationJournalEntry.findMany({ where: { simulationId, kind: { in: ['decision', 'action_applied', 'action_rejected', 'event', 'external_event'] } }, orderBy: { seq: 'asc' } })
-  const entries: JournalEntry[] = rows.map((r) => ({ seq: r.seq, simTime: r.simTime, kind: r.kind, actorRole: r.actorRole, payload: r.payload as Record<string, unknown> }))
-  const initial = tradeInitialEngineState(loaded.value.definition)
-  const injected = rows.filter((r) => r.kind === 'external_event' && (r.payload as { op?: string }).op === 'injected')
-  let seeded = initial
-  for (const r of injected) {
-    const p = r.payload as { day: number; event: TradeEvent }
-    seeded = { ...seeded, queue: { items: [...seeded.queue.items, { time: p.day, priority: 'external', seq: seeded.queue.nextSeq, event: p.event }], nextSeq: seeded.queue.nextSeq + 1 } }
+  return prisma.$transaction(async (tx) => {
+    const loaded = await readSimulation(tx, simulationId)
+    if (!loaded.ok) return loaded
+    const rows = await tx.simulationJournalEntry.findMany({ where: { simulationId, kind: { in: ['decision', 'action_applied', 'action_rejected', 'event', 'external_event'] } }, orderBy: { seq: 'asc' } })
+    const entries: JournalEntry[] = rows.map((r) => ({ seq: r.seq, simTime: r.simTime, kind: r.kind, actorRole: r.actorRole, payload: r.payload as Record<string, unknown> }))
+    const initial = tradeInitialEngineState(loaded.value.definition)
+    const injected = rows.filter((r) => r.kind === 'external_event' && (r.payload as { op?: string }).op === 'injected')
+    let seeded = initial
+    for (const r of injected) {
+      const p = r.payload as { day: number; event: TradeEvent }
+      seeded = { ...seeded, queue: { items: [...seeded.queue.items, { time: p.day, priority: 'external', seq: seeded.queue.nextSeq, event: p.event }], nextSeq: seeded.queue.nextSeq + 1 } }
+    }
+    const replayed = replay(tradeModel, loaded.value.definition, seeded, entries.filter((e) => !(e.kind === 'external_event' && e.payload['op'] === 'injected')))
+    const stored = loaded.value.state
+    return ok({ matches: comparable(replayed) === comparable(stored) })
+  }, { isolationLevel: 'RepeatableRead' })
+}
+
+/** A `JSON.stringify` that sorts object keys at every level, so two structurally-identical values
+ *  compare equal regardless of the key insertion order either one happens to carry (fix round 1,
+ *  Important #3): Postgres `jsonb` reorders an object's keys on storage (by key length, then
+ *  alphabetically) and `queueItemSchema`'s `event: z.unknown()` field passes that raw, reordered
+ *  value straight through `parseRow` untouched, while a freshly-run (never persisted) engine state
+ *  keeps the event object's natural construction order — so the SAME event, live vs. replayed, can
+ *  stringify differently by key order alone with zero difference in content. */
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`
+  if (value !== null && typeof value === 'object') {
+    const keys = Object.keys(value as Record<string, unknown>).sort()
+    return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify((value as Record<string, unknown>)[k])}`).join(',')}}`
   }
-  const replayed = replay(tradeModel, loaded.value.definition, seeded, entries.filter((e) => !(e.kind === 'external_event' && e.payload['op'] === 'injected')))
-  const stored = loaded.value.state
-  return ok({ matches: comparable(replayed) === comparable(stored) })
+  return JSON.stringify(value)
 }
 
 /** What replay must reproduce: the day, the sector state, the counters and the PENDING events as a
  *  `(time, priority, event)` list. Not compared: `journalSeq` (the stored state counts the control
  *  entries too), `status` (a paused row keeps its engine status), and the queue's own `seq`/`nextSeq`
  *  (an event injected mid-run was enqueued after the rules' own schedules; replay enqueues it up
- *  front, so the tie-break numbers differ while the pending events do not). */
+ *  front, so the tie-break numbers differ while the pending events do not). Uses {@link
+ *  stableStringify}, not raw `JSON.stringify`, so key order (see its docstring) never manufactures
+ *  a false mismatch; every field's VALUE is still compared exactly, so this does not weaken what is
+ *  checked. */
 function comparable(state: EngineState<TradeState, TradeEvent>): string {
-  const pending = [...state.queue.items].map((i) => ({ time: i.time, priority: i.priority, event: i.event })).sort((a, b) => a.time - b.time || a.priority.localeCompare(b.priority) || JSON.stringify(a.event).localeCompare(JSON.stringify(b.event)))
-  return JSON.stringify({ day: state.day, sector: state.sector, stepCount: state.stepCount, decisionCount: state.decisionCount, pending })
+  const pending = [...state.queue.items].map((i) => ({ time: i.time, priority: i.priority, event: i.event })).sort((a, b) => a.time - b.time || a.priority.localeCompare(b.priority) || stableStringify(a.event).localeCompare(stableStringify(b.event)))
+  return stableStringify({ day: state.day, sector: state.sector, stepCount: state.stepCount, decisionCount: state.decisionCount, pending })
 }
 
 /** Read model for an operator's dashboard (Task 8): the summary, the sector's headline numbers,
  *  the derived trade metrics computed from the journal, and how much real model spend (M31 writes
- *  it, M29 never does) is attributed so far. */
+ *  it, M29 never does) is attributed so far. Reads the row and the journal inside one
+ *  `RepeatableRead` transaction for the same reason as {@link replaySimulation} above (fix round
+ *  1, Important #4): a step committing between two unlocked reads would otherwise make the
+ *  journal newer than the state the metrics are computed against. */
 export async function simulationStatus(
   simulationId: string,
 ): Promise<Result<{ readonly summary: SimulationSummary; readonly company: { readonly day: number; readonly cashMinor: number; readonly inventory: number; readonly openOrders: number }; readonly metrics: TradeMetrics; readonly modelUsage: { readonly rows: number; readonly costUsd: number | null; readonly unmeasured: number } }, ControlRefusal>> {
-  const loaded = await loadSimulation(simulationId)
-  if (!loaded.ok) return loaded
-  const rows = await prisma.simulationJournalEntry.findMany({ where: { simulationId }, orderBy: { seq: 'asc' } })
-  const entries: JournalEntry[] = rows.map((r) => ({ seq: r.seq, simTime: r.simTime, kind: r.kind, actorRole: r.actorRole, payload: r.payload as Record<string, unknown> }))
-  const usage = await prisma.simulationModelUsage.aggregate({ where: { simulationId }, _count: { _all: true }, _sum: { costUsd: true } })
-  const unmeasured = await prisma.simulationModelUsage.count({ where: { simulationId, costUsd: null } })
-  const sector = loaded.value.state.sector
-  return ok({
-    summary: loaded.value.summary,
-    company: { day: loaded.value.state.day, cashMinor: sector.cashMinor, inventory: sector.inventory, openOrders: sector.orders.filter((o) => o.status !== 'shipped').length },
-    metrics: tradeMetrics(entries, sector),
-    modelUsage: { rows: usage._count._all, costUsd: usage._count._all === 0 || usage._sum.costUsd === null ? null : usage._sum.costUsd, unmeasured },
-  })
+  return prisma.$transaction(async (tx) => {
+    const loaded = await readSimulation(tx, simulationId)
+    if (!loaded.ok) return loaded
+    const rows = await tx.simulationJournalEntry.findMany({ where: { simulationId }, orderBy: { seq: 'asc' } })
+    const entries: JournalEntry[] = rows.map((r) => ({ seq: r.seq, simTime: r.simTime, kind: r.kind, actorRole: r.actorRole, payload: r.payload as Record<string, unknown> }))
+    const usage = await tx.simulationModelUsage.aggregate({ where: { simulationId }, _count: { _all: true }, _sum: { costUsd: true } })
+    const unmeasured = await tx.simulationModelUsage.count({ where: { simulationId, costUsd: null } })
+    const sector = loaded.value.state.sector
+    return ok({
+      summary: loaded.value.summary,
+      company: { day: loaded.value.state.day, cashMinor: sector.cashMinor, inventory: sector.inventory, openOrders: sector.orders.filter((o) => o.status !== 'shipped').length },
+      metrics: tradeMetrics(entries, sector),
+      modelUsage: { rows: usage._count._all, costUsd: usage._count._all === 0 || usage._sum.costUsd === null ? null : usage._sum.costUsd, unmeasured },
+    })
+  }, { isolationLevel: 'RepeatableRead' })
 }

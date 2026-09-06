@@ -83,7 +83,8 @@ describe('stepSimulation', () => {
     const row = await prisma.simulationRun.findUniqueOrThrow({ where: { id } })
     expect(row).toMatchObject({ simTime: 3, stepCount: 3, version: 1, status: 'running' })
     const entries = await prisma.simulationJournalEntry.findMany({ where: { simulationId: id }, orderBy: { seq: 'asc' } })
-    expect(entries.at(-1)).toMatchObject({ kind: 'control', idempotencyKey: 'k1' })
+    // The stored key is namespaced by verb (`step:k1`), not the caller's bare `k1` (fix round 1, Important #1).
+    expect(entries.at(-1)).toMatchObject({ kind: 'control', idempotencyKey: 'step:k1' })
     expect(new Set(entries.map((e) => e.seq)).size).toBe(entries.length)
   })
   it('refuses a stale version and a paused, halted or finished run', async () => {
@@ -121,6 +122,31 @@ describe('stepSimulation', () => {
     const row = await prisma.simulationRun.findUniqueOrThrow({ where: { id } })
     expect(row.simTime).toBe(2)
   })
+  // Fix round 1, Important #2: `runUntil` to the 30-day horizon plus the `createMany` of every
+  // day's journal rows must fit inside the transaction's timeout, not Prisma's 5 s default.
+  // The demo scenario's own decisions produce ~197 entries over 30 days (measured directly against
+  // `runUntil`, both policies) plus the create and step control rows, so 150 is a real, comfortably
+  // above-baseline floor -- not an arbitrary round number -- that still fails loudly if the engine
+  // stops early (e.g. from a halt) instead of proving the transaction survives a full-size run.
+  it('a real-size request (untilDay: 30, steps omitted) fits inside the transaction timeout', async () => {
+    const id = await create()
+    const result = await stepSimulation(id, { untilDay: 30 })
+    expect(result.ok && result.value.status).toBe('finished')
+    expect(await prisma.simulationJournalEntry.count({ where: { simulationId: id } })).toBeGreaterThan(150)
+  })
+  // Fix round 1, Important #3: an injected event must survive `replaySimulation` and actually
+  // become an order once the run steps past its day.
+  it('an injected event replays: the run matches, and the injected demand became an order', async () => {
+    const id = await create()
+    await stepSimulation(id, { steps: 2 })
+    const injected = await injectExternalEvent(id, { day: 5, event: { type: 'demand', qty: 40, unitPriceMinor: 2_000, dueInDays: 5, collectInDays: 0 }, idempotencyKey: 'ev-replay' })
+    expect(injected.ok).toBe(true)
+    expect((await stepSimulation(id, { untilDay: 10 })).ok).toBe(true)
+    const verdict = await replaySimulation(id)
+    expect(verdict.ok && verdict.value.matches).toBe(true)
+    const accepted = await prisma.simulationJournalEntry.findMany({ where: { simulationId: id, kind: 'action_applied', simTime: 5 } })
+    expect(accepted.some((e) => (e.payload as { action?: { type?: string } }).action?.type === 'accept_order')).toBe(true)
+  })
 })
 
 describe('injectExternalEvent', () => {
@@ -137,7 +163,27 @@ describe('injectExternalEvent', () => {
     const loaded = await loadSimulation(id)
     expect(loaded.ok && loaded.value.state.queue.items.filter((i) => i.time === 5)).toHaveLength(1)
     // The scenario's day-1 demand is journaled as `external_event` too; the injected one is the row with the key.
-    expect(await prisma.simulationJournalEntry.count({ where: { simulationId: id, kind: 'external_event', idempotencyKey: 'ev1' } })).toBe(1)
+    // The stored key is namespaced by verb (`inject:ev1`), not the caller's bare `ev1` (fix round 1, Important #1).
+    expect(await prisma.simulationJournalEntry.count({ where: { simulationId: id, kind: 'external_event', idempotencyKey: 'inject:ev1' } })).toBe(1)
+  })
+})
+
+describe('idempotency keys are namespaced by verb', () => {
+  it('a key used for an injection does not collide with the same key used for a step, or vice versa', async () => {
+    const id = await create()
+    const injected = await injectExternalEvent(id, { day: 5, event: { type: 'demand', qty: 10, unitPriceMinor: 1_000, dueInDays: 3, collectInDays: 0 }, idempotencyKey: 'k' })
+    expect(injected.ok).toBe(true)
+    // The same key used for a step is a DIFFERENT stored key (`step:k` vs. `inject:k`): the step really runs.
+    const stepped = await stepSimulation(id, { steps: 1, idempotencyKey: 'k' })
+    expect(stepped.ok && stepped.value).toMatchObject({ day: 1, replayed: false })
+    // Stepping again with the same key replays the step's own outcome.
+    const steppedAgain = await stepSimulation(id, { steps: 1, idempotencyKey: 'k' })
+    expect(steppedAgain.ok && steppedAgain.value).toMatchObject({ day: 1, replayed: true })
+    // Injecting again with the same key is still recognized as the injection's own idempotency key, not the step's.
+    const injectedAgain = await injectExternalEvent(id, { day: 5, event: { type: 'demand', qty: 10, unitPriceMinor: 1_000, dueInDays: 3, collectInDays: 0 }, idempotencyKey: 'k' })
+    expect(injectedAgain.ok).toBe(true)
+    const loaded = await loadSimulation(id)
+    expect(loaded.ok && loaded.value.state.queue.items.filter((i) => i.time === 5)).toHaveLength(1)
   })
 })
 
