@@ -65,6 +65,15 @@ from templates — manage it on the Projects page's team catalog and the Slaves 
 `create-company`, `add-team`, `add-slave`. Departments are per project; the catalog holds
 department templates that `assign-company` copies.
 
+## Try a company simulation
+
+A simulation is not a project: it needs no repository and calls no model. `npm run db:seed` ships
+"Demo Trading Co." with the four roles the trade sector uses (sales, purchasing, operations,
+finance). From **Simulations** → **+ New simulation** pick it, choose policy A (wait for the normal
+supplier) or B (hedge with the fast one when a delivery is at risk), and run to day 30. Every
+number on the page is synthetic and every metric is derived from the run's journal; the spec at
+`docs/superpowers/specs/2026-09-06-m29-company-simulation-design.md` lists the assumptions.
+
 ## The web UI
 
 | Page | What it shows |
@@ -78,6 +87,7 @@ department templates that `assign-company` copies.
 | **Settings** `/w/<id>/settings` | This project's goal, its runtime (provider, budget, and the read-only concurrency/timeout/attempts limits), its own slave permissions, its emergency stop, and its danger zone to archive/restore the project. |
 | **Slaves** `/slaves` | One table + Departments: every slave, project-materialized or still catalog-only, with its department as a select, rename/re-role/delete a slave with its history and a model chosen from the provider's own list inline; **+ New slave** adds one to the catalog and, optionally, to a project; a **Departments** tab beside it to add, rename or delete a project's department, along with the slaves on it. |
 | **Skills** `/skills` | The skill catalog and its assignments. |
+| **Simulations** `/sim` | Company simulation runs (M29): create one from a catalog company — a trade company on synthetic data, decided by the rules provider, no repository and no model call; step it by day, run it to a horizon, pause, halt, add customer demand or a supplier delay; the simulated company's cash and the real model cost are two separate panels; metrics are computed from the run's own journal. |
 | **Analytics** `/analytics` | Spend and throughput. |
 | **Settings** `/settings` | Provider adapters, security, and reset demo data (development only). |
 
@@ -110,6 +120,9 @@ npm run orchestrator -- delete-company-slave --slave <companySlaveId> --yes
 npm run orchestrator -- delete-template --template <id> --yes
 npm run orchestrator -- create-user --name <u>              # password read from stdin
 npm run orchestrator -- list-users
+npm run orchestrator -- create-simulation --company <id> --name <n> --policy A|B [--seed <n>]
+npm run orchestrator -- step-simulation --simulation <id> [--steps <n> | --until-day <d>]
+npm run orchestrator -- simulation-status --simulation <id>  # summary, company panel, metrics, model usage as JSON
 ```
 
 Every `delete-*` verb deletes what it names WITH everything under it (a slave's run history, a
