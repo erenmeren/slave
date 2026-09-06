@@ -76,11 +76,12 @@ describe('the shell', () => {
     pathname = '/w/w1'
   })
 
-  it('renders the five global rows in the handoff order: Projects, Slaves, Skills, Analytics, Settings (M24 §2.1)', () => {
+  it('renders the six global rows in order: Projects, Slaves, Simulations, Skills, Analytics, Settings (M29 adds Simulations after Slaves)', () => {
     render(<Sidebar />)
     const labels = screen.getAllByTestId('nav-row').map((row) => row.getAttribute('data-nav'))
-    expect(labels).toEqual(['Projects', 'Slaves', 'Skills', 'Analytics', 'Settings'])
+    expect(labels).toEqual(['Projects', 'Slaves', 'Simulations', 'Skills', 'Analytics', 'Settings'])
     expect(navRow('Slaves').getAttribute('href')).toBe('/slaves')
+    expect(navRow('Simulations').getAttribute('href')).toBe('/sim')
     expect(navRow('Skills').getAttribute('href')).toBe('/skills')
     expect(navRow('Analytics').getAttribute('href')).toBe('/analytics')
     expect(navRow('Settings').getAttribute('href')).toBe('/settings')

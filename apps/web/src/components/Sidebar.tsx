@@ -3,10 +3,12 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 
-/** The five global pages, in the handoff's order with Projects first (M24 §2.1). */
+/** The six global pages, in the handoff's order with Projects first (M24 §2.1); M29 adds
+ *  Simulations after Slaves. */
 const ROWS = [
   { label: 'Projects', href: '/' },
   { label: 'Slaves', href: '/slaves' },
+  { label: 'Simulations', href: '/sim' },
   { label: 'Skills', href: '/skills' },
   { label: 'Analytics', href: '/analytics' },
   { label: 'Settings', href: '/settings' },
@@ -40,7 +42,11 @@ function NavRow({ label, href, current }: { readonly label: string; readonly hre
 export function Sidebar(): React.JSX.Element | null {
   const pathname = usePathname()
   if (pathname === '/login') return null
-  const isCurrent = (href: string): boolean => (href === '/' ? pathname === '/' || pathname.startsWith('/w/') : pathname === href)
+  const isCurrent = (href: string): boolean => {
+    if (href === '/') return pathname === '/' || pathname.startsWith('/w/')
+    if (href === '/sim') return pathname === '/sim' || pathname.startsWith('/sim/')
+    return pathname === href
+  }
   return (
     <nav aria-label="Primary" className="flex w-[212px] shrink-0 flex-col border-r border-line bg-bg-1 px-[8px] py-[10px]">
       <div className="flex flex-col gap-px">
