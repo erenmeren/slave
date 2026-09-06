@@ -27,7 +27,7 @@ export async function GET(
   const truncated = info.size > ARTIFACT_READ_LIMIT
   const length = truncated ? ARTIFACT_READ_LIMIT : info.size
   const handle = await open(path, 'r')
-  let body: Buffer
+  let body: Buffer<ArrayBuffer>
   try {
     const { bytesRead, buffer } = await handle.read(Buffer.alloc(length), 0, length, info.size - length)
     body = buffer.subarray(0, bytesRead)
