@@ -897,6 +897,9 @@ export async function deleteSlaveTemplate(
  * projects itself first, with an explicit `updateMany`, so it can COUNT what was detached
  * (`projectsDetached`) before the row is gone. Every department and slave those projects copied
  * survives. No event.
+ *
+ * Refuses while any simulation run references the company (M29): the runs are the operator's
+ * experiments and a cascade would erase their results silently.
  */
 export async function deleteCompany(
   companyId: string,
@@ -906,6 +909,8 @@ export async function deleteCompany(
     await tx.$queryRaw`SELECT id FROM "Company" WHERE id = ${companyId} FOR UPDATE`
     const row = await tx.company.findUnique({ where: { id: companyId }, select: { id: true, _count: { select: { teams: true } } } })
     if (row === null) return { ok: false as const, error: { kind: 'company_not_found', companyId } as ControlRefusal }
+    const simulations = await tx.simulationRun.count({ where: { companyId } })
+    if (simulations > 0) return { ok: false as const, error: { kind: 'live_simulations', companyId, simulations } as ControlRefusal }
     const catalogSlaves = await tx.companySlave.count({ where: { companyTeam: { companyId } } })
     const { count: projectsDetached } = await tx.workspace.updateMany({ where: { companyId }, data: { companyId: null } })
     await tx.company.delete({ where: { id: companyId } })

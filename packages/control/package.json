@@ -9,6 +9,7 @@
     "@slave-of-ai/db": "*",
     "@slave-of-ai/domain": "*",
     "@slave-of-ai/events": "*",
-    "@slave-of-ai/providers": "*"
+    "@slave-of-ai/providers": "*",
+    "@slave-of-ai/simulation": "*"
   }
 }
