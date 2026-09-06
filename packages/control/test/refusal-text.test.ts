@@ -10,13 +10,21 @@ import { refusalText } from '../src/refusal.js'
 describe('refusalText for live_runs', () => {
   it('says project, department and slave — never workspace or team', () => {
     expect(refusalText({ kind: 'live_runs', entity: 'workspace', id: 'w1', runs: 2 })).toBe(
-      'project w1 has 2 live run(s); wait for them to finish or stop them first',
+      'project w1 has 2 live runs; wait for them to finish or stop them first',
     )
     expect(refusalText({ kind: 'live_runs', entity: 'team', id: 't1', runs: 1 })).toBe(
-      'department t1 has 1 live run(s); wait for them to finish or stop them first',
+      'department t1 has 1 live run; wait for them to finish or stop them first',
     )
     expect(refusalText({ kind: 'live_runs', entity: 'slave', id: 'a1', runs: 1 })).toBe(
-      'slave a1 has 1 live run(s); wait for them to finish or stop them first',
+      'slave a1 has 1 live run; wait for them to finish or stop them first',
+    )
+  })
+})
+
+describe('refusalText for workspace_archived', () => {
+  it('names the verb that lifts it, the way workspace_halted names clear-halt', () => {
+    expect(refusalText({ kind: 'workspace_archived', workspaceId: 'w1' })).toBe(
+      'project w1 is archived; nothing runs until it is restored with: restore-workspace --workspace w1',
     )
   })
 })

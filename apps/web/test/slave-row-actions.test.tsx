@@ -125,7 +125,7 @@ describe('SlaveRowActions', () => {
   it('shows a refusal on a blocked delete, and leaves the row in place', async () => {
     fetchMock.mockImplementationOnce(
       async () =>
-        new Response(JSON.stringify({ error: 'slave wk1 has 1 live run(s); wait for them to finish or stop them first' }), {
+        new Response(JSON.stringify({ error: 'slave wk1 has 1 live run; wait for them to finish or stop them first' }), {
           status: 409,
         }),
     )
@@ -137,7 +137,7 @@ describe('SlaveRowActions', () => {
     })
 
     expect(screen.getByTestId('slave-delete-error').textContent).toBe(
-      'slave wk1 has 1 live run(s); wait for them to finish or stop them first',
+      'slave wk1 has 1 live run; wait for them to finish or stop them first',
     )
     expect(routerRefresh).not.toHaveBeenCalled()
   })

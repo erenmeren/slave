@@ -269,7 +269,11 @@ export async function restoreWorkspace(
   const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId }, select: { id: true, name: true, archivedAt: true } })
   if (workspace === null) return err({ kind: 'workspace_not_found', workspaceId })
   if (workspace.archivedAt === null) return err({ kind: 'not_archived', workspaceId })
-  await prisma.workspace.update({ where: { id: workspaceId }, data: { archivedAt: null } })
+  // The clear is conditional on the row still being archived, so two restores racing each other
+  // (both past the read above) clear it once and emit `workspace.restored` once -- the loser sees
+  // `count: 0` and answers `not_archived`, the same as if it had arrived a moment later.
+  const cleared = await prisma.workspace.updateMany({ where: { id: workspaceId, archivedAt: { not: null } }, data: { archivedAt: null } })
+  if (cleared.count === 0) return err({ kind: 'not_archived', workspaceId })
   await appendEvent({
     type: 'workspace.restored',
     workspaceId,

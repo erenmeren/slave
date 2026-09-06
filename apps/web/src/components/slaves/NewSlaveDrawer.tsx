@@ -140,11 +140,21 @@ export function NewSlaveDrawer({
     let targetTeam = companyTeamId
     let justCreatedDepartment = false
     if (companyTeamId === NEW_DEPARTMENT) {
-      const created = await fetch('/api/org/teams', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ companyId, name: newDepartment }),
-      })
+      // A raw `fetch` (this step wants the created id back, which `postControl` does not carry) --
+      // so a network failure THROWS rather than answering, and an uncaught throw here left
+      // `pending` true for good: the drawer could neither close nor retry (M25 final review).
+      let created: Response
+      try {
+        created = await fetch('/api/org/teams', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ companyId, name: newDepartment }),
+        })
+      } catch (error) {
+        setErrorText(error instanceof Error ? error.message : String(error))
+        setPending(false)
+        return
+      }
       const data = (await created.json().catch(() => null)) as { id?: string; error?: string } | null
       if (!created.ok || data?.id === undefined) {
         setErrorText(data?.error ?? `request failed (${created.status})`)

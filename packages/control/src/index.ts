@@ -1,6 +1,7 @@
 export * from './paths.js'
 export * from './kill.js'
 export * from './refusal.js'
+export * from './plural.js'
 export * from './budget.js'
 export * from './runtime.js'
 

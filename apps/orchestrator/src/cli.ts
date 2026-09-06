@@ -36,6 +36,7 @@ import {
   setPassword,
   describeSync,
   syncSkillCatalog,
+  plural,
 } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import { workspaceId as brandWorkspaceId, type WorkspaceId } from '@slave-of-ai/domain'
@@ -79,7 +80,7 @@ const USAGE = `usage: orchestrator <command> [options]
                                        add a reusable slave template to the catalog. --model and
                                        --provider are a pair: give both or neither.
   create-company --name <n>            add a company (a persistent roster) to the catalog
-  add-team --company <id> --name <n>   add a team to a company's roster
+  add-team --company <id> --name <n>   add a department template to a company's roster
   add-slave --team <companyTeamId> --template <id> --name <n> [--model <m> --provider <p>]
                                        add a roster member to a company team, instantiated from a
                                        template. --model and --provider are a pair: give both or
@@ -100,7 +101,7 @@ const USAGE = `usage: orchestrator <command> [options]
   delete-slave --slave <id> --yes      remove a project slave WITH its run history -- refused
                                        only while it holds a live run. Omit --yes to see what
                                        would be deleted without doing it.
-  rename-team --team <id> --name <n>   rename a project team
+  rename-team --team <id> --name <n>   rename a project department
   delete-team --team <id> --yes        remove a department WITH its slaves and their run
                                        history -- refused only while any of its slaves holds a
                                        live run. Omit --yes to see what would be deleted without
@@ -286,9 +287,17 @@ async function resolveWorkspace(flags: Flags): Promise<WorkspaceId> {
   // `--workspace` may still name an archived one, and `tick`/`status` handle that themselves.
   const all = await prisma.workspace.findMany({ where: { archivedAt: null }, select: { id: true, name: true } })
   if (all.length === 1 && all[0] !== undefined) return brandWorkspaceId(all[0].id)
-  if (all.length === 0) throw new Error('there are no workspaces: seed one first')
+  if (all.length === 0) {
+    // Every project archived is a different situation from no project at all; say which.
+    const archived = await prisma.workspace.count({ where: { archivedAt: { not: null } } })
+    throw new Error(
+      archived > 0
+        ? `every project is archived (${archived}): restore one with restore-workspace --workspace <id>, or name one with --workspace`
+        : 'there are no projects: seed one first',
+    )
+  }
   throw new Error(
-    `--workspace is required when there is more than one workspace. Available:\n` +
+    `--workspace is required when there is more than one project. Available:\n` +
       all.map((w) => `  ${w.id}  ${w.name}`).join('\n'),
   )
 }
@@ -530,7 +539,7 @@ export async function main(argv: readonly string[]): Promise<number> {
       const { engaged, requested, refused } = result.value
       process.stdout.write(
         `${engaged ? 'emergency stop engaged' : 'workspace was already halted'} on ${workspaceId}: ` +
-          `pause requested on ${requested.length} run(s), ${refused.length} already concluding. ` +
+          `pause requested on ${plural(requested.length, 'run')}, ${refused.length} already concluding. ` +
           `Retract with: clear-halt --workspace ${workspaceId}\n`,
       )
       return 0
@@ -587,7 +596,7 @@ export async function main(argv: readonly string[]): Promise<number> {
       const name = requireFlag(flags, 'name')
       const result = await addCompanyTeam(companyId, name)
       if (!result.ok) throw new Error(refusalText(result.error))
-      process.stdout.write(`team ${result.value.id} created\n`)
+      process.stdout.write(`department template ${result.value.id} created\n`)
       return 0
     }
 
@@ -641,7 +650,7 @@ export async function main(argv: readonly string[]): Promise<number> {
       const result = await archiveWorkspace(workspaceId)
       if (!result.ok) throw new Error(refusalText(result.error))
       const f = result.value.footprint
-      process.stdout.write(`project ${workspaceId} archived: ${f.departments} departments, ${f.slaves} slaves, ${f.tasks} tasks, ${f.runs} runs stay on record\n`)
+      process.stdout.write(`project ${workspaceId} archived: ${plural(f.departments, 'department')}, ${plural(f.slaves, 'slave')}, ${plural(f.tasks, 'task')}, ${plural(f.runs, 'run')} stay on record\n`)
       return 0
     }
 
@@ -711,11 +720,11 @@ export async function main(argv: readonly string[]): Promise<number> {
       if (!('yes' in flags)) {
         const slave = await prisma.slave.findUnique({ where: { id: slaveId }, select: { name: true } })
         const runs = await prisma.slaveRun.count({ where: { slaveId } })
-        throw new Error(`refusing without --yes: this would delete slave ${slave?.name ?? slaveId} (${slaveId}) and ${runs} run(s)`)
+        throw new Error(`refusing without --yes: this would delete slave ${slave?.name ?? slaveId} (${slaveId}) and ${plural(runs, 'run')}`)
       }
       const result = await deleteSlave(slaveId)
       if (!result.ok) throw new Error(refusalText(result.error))
-      process.stdout.write(`slave ${slaveId} deleted; ${result.value.runs} run(s) went with it\n`)
+      process.stdout.write(`slave ${slaveId} deleted; ${plural(result.value.runs, 'run')} went with it\n`)
       return 0
     }
 
@@ -724,7 +733,7 @@ export async function main(argv: readonly string[]): Promise<number> {
       const name = requireFlag(flags, 'name')
       const result = await renameTeam(teamId, name)
       if (!result.ok) throw new Error(refusalText(result.error))
-      process.stdout.write(`team ${teamId} renamed\n`)
+      process.stdout.write(`department ${teamId} renamed\n`)
       return 0
     }
 
@@ -734,11 +743,11 @@ export async function main(argv: readonly string[]): Promise<number> {
         const team = await prisma.team.findUnique({ where: { id: teamId }, select: { name: true } })
         const slaves = await prisma.slave.count({ where: { teamId } })
         const runs = await prisma.slaveRun.count({ where: { slave: { teamId } } })
-        throw new Error(`refusing without --yes: this would delete department ${team?.name ?? teamId} (${teamId}) and ${slaves} slave(s), ${runs} run(s)`)
+        throw new Error(`refusing without --yes: this would delete department ${team?.name ?? teamId} (${teamId}) and ${plural(slaves, 'slave')}, ${plural(runs, 'run')}`)
       }
       const result = await deleteTeam(teamId)
       if (!result.ok) throw new Error(refusalText(result.error))
-      process.stdout.write(`department ${teamId} deleted; ${result.value.slaves} slave(s) and ${result.value.runs} run(s) went with it\n`)
+      process.stdout.write(`department ${teamId} deleted; ${plural(result.value.slaves, 'slave')} and ${plural(result.value.runs, 'run')} went with it\n`)
       return 0
     }
 
@@ -785,12 +794,12 @@ export async function main(argv: readonly string[]): Promise<number> {
         const team = await prisma.companyTeam.findUnique({ where: { id: companyTeamId }, select: { name: true } })
         const catalogSlaves = await prisma.companySlave.count({ where: { companyTeamId } })
         throw new Error(
-          `refusing without --yes: this would delete department template ${team?.name ?? companyTeamId} (${companyTeamId}) and ${catalogSlaves} catalog slave(s)`,
+          `refusing without --yes: this would delete department template ${team?.name ?? companyTeamId} (${companyTeamId}) and ${plural(catalogSlaves, 'catalog slave')}`,
         )
       }
       const result = await deleteCompanyTeam(companyTeamId)
       if (!result.ok) throw new Error(refusalText(result.error))
-      process.stdout.write(`department template ${companyTeamId} deleted; ${result.value.catalogSlaves} catalog slave(s) went with it\n`)
+      process.stdout.write(`department template ${companyTeamId} deleted; ${plural(result.value.catalogSlaves, 'catalog slave')} went with it\n`)
       return 0
     }
 
@@ -801,13 +810,13 @@ export async function main(argv: readonly string[]): Promise<number> {
         const templates = await prisma.companyTeam.count({ where: { companyId } })
         const catalogSlaves = await prisma.companySlave.count({ where: { companyTeam: { companyId } } })
         throw new Error(
-          `refusing without --yes: this would delete company ${company?.name ?? companyId} (${companyId}) and ${templates} department template(s), ${catalogSlaves} catalog slave(s)`,
+          `refusing without --yes: this would delete company ${company?.name ?? companyId} (${companyId}) and ${plural(templates, 'department template')}, ${plural(catalogSlaves, 'catalog slave')}`,
         )
       }
       const result = await deleteCompany(companyId)
       if (!result.ok) throw new Error(refusalText(result.error))
       process.stdout.write(
-        `company ${companyId} deleted; ${result.value.templates} department template(s) and ${result.value.catalogSlaves} catalog slave(s) went with it, ${result.value.projectsDetached} project(s) detached\n`,
+        `company ${companyId} deleted; ${plural(result.value.templates, 'department template')} and ${plural(result.value.catalogSlaves, 'catalog slave')} went with it, ${plural(result.value.projectsDetached, 'project')} detached\n`,
       )
       return 0
     }
@@ -822,7 +831,7 @@ export async function main(argv: readonly string[]): Promise<number> {
         // number an operator is deciding against is "how many working slaves does this touch".
         const copies = await prisma.slave.count({ where: { companySlaveId } })
         throw new Error(
-          `refusing without --yes: this would delete catalog slave ${slave?.name ?? companySlaveId} (${companySlaveId}); ${copies} project copy(ies) stay`,
+          `refusing without --yes: this would delete catalog slave ${slave?.name ?? companySlaveId} (${companySlaveId}); ${copies === 1 ? '1 project copy stays' : `${copies} project copies stay`}`,
         )
       }
       const result = await deleteCompanySlave(companySlaveId)
@@ -837,12 +846,12 @@ export async function main(argv: readonly string[]): Promise<number> {
         const template = await prisma.slaveTemplate.findUnique({ where: { id: templateId }, select: { name: true } })
         const catalogSlaves = await prisma.companySlave.count({ where: { templateId } })
         throw new Error(
-          `refusing without --yes: this would delete template ${template?.name ?? templateId} (${templateId}) and ${catalogSlaves} catalog slave(s)`,
+          `refusing without --yes: this would delete template ${template?.name ?? templateId} (${templateId}) and ${plural(catalogSlaves, 'catalog slave')}`,
         )
       }
       const result = await deleteSlaveTemplate(templateId)
       if (!result.ok) throw new Error(refusalText(result.error))
-      process.stdout.write(`template ${templateId} deleted; ${result.value.catalogSlaves} catalog slave(s) went with it\n`)
+      process.stdout.write(`template ${templateId} deleted; ${plural(result.value.catalogSlaves, 'catalog slave')} went with it\n`)
       return 0
     }
 

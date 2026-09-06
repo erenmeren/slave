@@ -229,6 +229,11 @@ try {
   const { createUser, deleteUser } = await import('../packages/control/dist/users.js')
   ;({ prisma: prismaClient } = await import('../packages/db/dist/client.js'))
   deleteUserFn = deleteUser
+  // A halt left on the seed workspace by an earlier run (an emergency-stop demo, a gate cut short
+  // mid-stage) made stage 8's `haltedAt === null` assertion fail once during M25's closing run for
+  // a reason that had nothing to do with auth. Lift it before the server boots; a halt starts
+  // nothing on its own, so clearing one here changes no live run.
+  await prismaClient.workspace.update({ where: { id: W }, data: { haltedAt: null, haltedReason: null } })
   gateUsername = `gate-${randomBytes(4).toString('hex')}`
   const USER_PASSWORD = randomBytes(12).toString('base64url') // 16 chars, >= MIN_PASSWORD_LENGTH
   const created = await createUser(gateUsername, USER_PASSWORD)

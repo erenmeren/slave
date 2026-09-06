@@ -90,6 +90,15 @@ describe('PUT /api/slaves/[slaveId]/team', () => {
     expect(row.teamId).toBe(fixture.qaId)
   })
 
+  // M25 final fix wave added the refusal; this is the route-level pin the review parked.
+  it('409s a move into a department that already has a slave of that name', async () => {
+    await prisma.slave.create({ data: { teamId: fixture.qaId, name: 'Alex', role: 'qa' } })
+    const response = await moveSlaveRoute(json({ teamId: fixture.qaId }, 'PUT'), { params: Promise.resolve({ slaveId: fixture.slaveId }) })
+    expect(response.status).toBe(409)
+    expect((await response.json()).error).toContain('Alex')
+    expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId } })).teamId).toBe(fixture.engineeringId)
+  })
+
   it('400s without a teamId', async () => {
     const response = await moveSlaveRoute(json({}, 'PUT'), { params: Promise.resolve({ slaveId: fixture.slaveId }) })
     expect(response.status).toBe(400)

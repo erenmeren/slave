@@ -201,6 +201,29 @@ describe('NewSlaveDrawer', () => {
     expect(fetchMock.mock.calls.filter(([url]) => url === '/api/org/teams')).toHaveLength(teamCallsSoFar)
   })
 
+  // M25 final review, parked: the "new department…" step is a raw `fetch`; a network failure there
+  // threw out of `submit` with `pending` still true, stranding the drawer unclosable.
+  it('surfaces a network failure on the "new department…" step and lets the drawer close', async () => {
+    const onClose = vi.fn()
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url === '/api/org/teams') throw new TypeError('Failed to fetch')
+      return new Response(JSON.stringify({ ok: true }), { status: 200 })
+    })
+    drawer(onClose)
+    fireEvent.change(screen.getByTestId('new-slave-company'), { target: { value: 'c1' } })
+    fireEvent.change(screen.getByTestId('new-slave-department'), { target: { value: '__new__' } })
+    fireEvent.change(screen.getByTestId('new-slave-department-name'), { target: { value: 'Design' } })
+    fireEvent.change(screen.getByTestId('new-slave-template'), { target: { value: 'tpl1' } })
+    fireEvent.change(screen.getByTestId('new-slave-name'), { target: { value: 'Sam' } })
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('new-slave-submit'))
+    })
+    expect(screen.getByTestId('new-slave-error').textContent).toContain('Failed to fetch')
+    expect((screen.getByTestId('new-slave-submit') as HTMLButtonElement).disabled).toBe(false)
+    fireEvent.click(screen.getByTestId('new-slave-close'))
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
   it('closes on Escape and on the close button', () => {
     const onClose = vi.fn()
     drawer(onClose)

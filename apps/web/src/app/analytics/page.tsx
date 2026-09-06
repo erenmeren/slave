@@ -13,7 +13,10 @@ export default async function AnalyticsPage({
 }): Promise<React.JSX.Element> {
   const { workspace } = await searchParams
   const workspaceId = workspace === undefined || workspace === '' ? null : workspace
-  const [snapshot, projects] = await Promise.all([buildAnalytics(workspaceId), listProjects()])
+  // Archived projects stay in the scope list: this page is GLOBAL spend, and an archived project's
+  // runs cost what they cost (M27 §3.3 keeps its history in full). The default filter hid them,
+  // and with them their share of the totals.
+  const [snapshot, projects] = await Promise.all([buildAnalytics(workspaceId), listProjects({ includeArchived: true })])
   return (
     <AnalyticsClient
       snapshot={snapshot}

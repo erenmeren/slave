@@ -280,8 +280,15 @@ export function ProjectsClient({
           setNewOpen(false)
           // Ruled minor (M24 final review): `?new=1` opened this drawer on load -- closing it
           // without dropping the param left it in the URL to reopen the drawer on the next
-          // reload, even after the operator dismissed it on purpose.
-          if (searchParams.get('new') === '1') router.replace('/')
+          // reload, even after the operator dismissed it on purpose. Dropped by MERGING into the
+          // current query (R13's rule, the same as `show archived` above): a bare `'/'` would
+          // also throw away `?archived=1`.
+          if (searchParams.get('new') === '1') {
+            const query = new URLSearchParams(searchParams)
+            query.delete('new')
+            const search = query.toString()
+            router.replace(search === '' ? '/' : `/?${search}`)
+          }
         }}
       />
     </div>

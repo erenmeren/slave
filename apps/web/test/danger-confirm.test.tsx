@@ -24,6 +24,21 @@ describe('DangerConfirm', () => {
     expect(screen.queryByTestId('x-confirm')).toBeNull()
   })
 
+  // M27 final review, parked: a second click on the confirm while the first is still pending
+  // must not run the destructive action twice.
+  it('ignores a second confirm click while the first is pending', async () => {
+    let resolveConfirm: (value: string | null) => void = () => {}
+    const onConfirm = vi.fn(() => new Promise<string | null>((resolve) => { resolveConfirm = resolve }))
+    render(<DangerConfirm label="delete" testId="x" confirmText="deletes it" onConfirm={onConfirm} />)
+    fireEvent.click(screen.getByTestId('x'))
+    const confirm = screen.getByTestId('x-confirm')
+    await act(async () => { fireEvent.click(confirm) })
+    await act(async () => { fireEvent.click(confirm) })
+    expect(onConfirm).toHaveBeenCalledTimes(1)
+    await act(async () => { resolveConfirm(null) })
+    expect(screen.queryByTestId('x-confirm')).toBeNull()
+  })
+
   it('shows a refusal and stays open', async () => {
     const onConfirm = vi.fn(async () => 'slave a1 has 1 live run(s)')
     render(<DangerConfirm label="delete" testId="x" confirmText="deletes it" onConfirm={onConfirm} />)

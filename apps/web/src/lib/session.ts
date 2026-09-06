@@ -68,7 +68,10 @@ export async function verifySession(secret: string, value: string | null, now: D
   const expiryText = parts[1]
   const signature = parts[2]
   if (parts.length !== 3 || userId === undefined || expiryText === undefined || signature === undefined) return null
-  if (!USER_ID_RE.test(userId) || !/^\d{1,12}$/.test(expiryText) || signature.length === 0) return null
+  // Anchored on a non-zero first digit: `Number('0' + expiry)` re-signs to the same digest, so a
+  // leading-zero spelling of a valid cookie would otherwise verify too (it grants nothing new, but
+  // one cookie has one spelling).
+  if (!USER_ID_RE.test(userId) || !/^[1-9]\d{0,11}$/.test(expiryText) || signature.length === 0) return null
   const expiresAt = Number(expiryText)
   if (expiresAt <= Math.floor(now.getTime() / 1000)) return null
   return (await digestEqual(signature, await sign(secret, userId, expiresAt))) ? { userId } : null

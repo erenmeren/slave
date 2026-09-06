@@ -209,3 +209,22 @@ Comment-only fixes carried by this task (stale since Task 2's behaviour change; 
 - `packages/db/prisma/schema.prisma:159-160` and `:219-220` still said template/company deletion was out of scope — both are deletable now (catalog slaves go with their template).
 
 No further divergence surfaced while executing Task 7 itself: the closing run's nine gates (§9's eight plus `gate:m23-onboarding` per R14) all passed unchanged, and `gate-m11-shell.mjs`'s stage 6 needed one self-correction during authoring (a DOM row-count assertion checked before the client's `router.refresh()` had landed; replaced with the same bounded poll every other assertion in that file already uses) — a gate-authoring fix, not a product or spec divergence.
+
+Post-merge (chore/backlog-polish, 2026-09-06) — the items the final review parked, closed on main:
+
+- `restoreWorkspace` clears `archivedAt` with a conditional `updateMany` (`archivedAt: { not: null }`),
+  so two concurrent restores emit one `workspace.restored` and the loser answers `not_archived`.
+- `/analytics` calls `listProjects({ includeArchived: true })`: it is global spend, and an archived
+  project's runs still cost what they cost.
+- `refusalText('workspace_archived')` names `restore-workspace --workspace <id>`, the way
+  `workspace_halted` names `clear-halt`; `live_runs` says `1 live run` / `2 live runs`.
+- CLI count strings are pluralised through `@slave-of-ai/control`'s `plural` (a copy of the web
+  helper's one rule, since the CLI cannot import from `apps/web`); `project copy(ies)` is spelled
+  at its call site; `add-team`/`rename-team` say department template / department; `resolveWorkspace`
+  tells "every project is archived" apart from "no projects"; the README cheat sheet lists
+  `delete-team` and `delete-company-team`.
+- `SlaveRowActions` takes a props union (`ProjectRowProps | CatalogRowProps`) — callers no longer pass
+  the catalog id as a dummy `slaveId`; `ProjectsClient` closes the drawer by merging the query
+  (`?new=1&archived=1` → `?archived=1`), the same rule as R13.
+- Pinned, no change needed: `DangerConfirm` cannot double-fire (the confirm is disabled while pending).
+

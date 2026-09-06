@@ -581,7 +581,7 @@ describe('the org routes', () => {
 
       const response = await slaveDELETE(deleteRequest(), slaveParams(slaveId))
       expect(response.status).toBe(409)
-      expect((await response.json()).error).toBe(`slave ${slaveId} has 1 live run(s); wait for them to finish or stop them first`)
+      expect((await response.json()).error).toBe(`slave ${slaveId} has 1 live run; wait for them to finish or stop them first`)
       expect(await prisma.slave.findUnique({ where: { id: slaveId } })).not.toBeNull()
     })
   })
@@ -646,7 +646,7 @@ describe('the org routes', () => {
 
       const response = await teamDELETE(deleteRequest(), teamParams(team.id))
       expect(response.status).toBe(409)
-      expect((await response.json()).error).toBe(`department ${team.id} has 1 live run(s); wait for them to finish or stop them first`)
+      expect((await response.json()).error).toBe(`department ${team.id} has 1 live run; wait for them to finish or stop them first`)
       expect(await prisma.team.findUnique({ where: { id: team.id } })).not.toBeNull()
     })
   })

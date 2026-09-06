@@ -5,7 +5,7 @@ import { Chip } from './ui/Chip'
  * The shell-only gate mark (M12 Task 13 fix round 1, spec §8: "wherever a worker's runtime is
  * shown, a provider whose gate is shell-only is marked as such -- Decision 8 is a user-visible
  * fact, not an internal flag"). Shared by `SlaveCard` and `SlavePanel`, the two Overview surfaces
- * that show a worker's runtime and had no mark at all.
+ * that show a worker's runtime and had no mark at all, and by `AllSlavesTable` since M24 Task 7.
  *
  * Deliberately narrower than the old roster table's own gate chip (deleted, M24 Task 7), which
  * rendered a label for every gate (`all-tools`/`shell-only`/`none`) -- that chip predated this

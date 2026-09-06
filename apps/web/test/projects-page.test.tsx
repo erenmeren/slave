@@ -336,6 +336,15 @@ describe('ProjectsClient', () => {
       expect(routerReplace).toHaveBeenCalledWith('/')
     })
 
+    // R13's shape again (M27 final review, parked): closing the drawer drops `new` but must keep
+    // every other param -- `?new=1&archived=1` closes to `?archived=1`, not to `/`.
+    it('clears ?new=1 on close without dropping ?archived=1', () => {
+      search = 'new=1&archived=1'
+      render(<TestProjectsClient projects={projects} companies={companies} templates={[]} roster={[]} />)
+      fireEvent.click(screen.getByTestId('new-project-close'))
+      expect(routerReplace).toHaveBeenCalledWith('/?archived=1')
+    })
+
     it('does not touch the URL closing the drawer when it was opened by the button, not the param', () => {
       render(<TestProjectsClient projects={projects} companies={companies} templates={[]} roster={[]} />)
       fireEvent.click(screen.getByTestId('new-project'))

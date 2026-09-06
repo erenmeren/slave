@@ -103,6 +103,8 @@ npm run orchestrator -- list-workspaces                     # every project, arc
 npm run orchestrator -- rename-slave --slave <id> --name <n>
 npm run orchestrator -- set-role --slave <id> --role <r>
 npm run orchestrator -- delete-slave --slave <id> --yes
+npm run orchestrator -- delete-team --team <id> --yes       # a department WITH its slaves and their history
+npm run orchestrator -- delete-company-team --team <companyTeamId> --yes
 npm run orchestrator -- delete-company --company <id> --yes
 npm run orchestrator -- delete-company-slave --slave <companySlaveId> --yes
 npm run orchestrator -- delete-template --template <id> --yes

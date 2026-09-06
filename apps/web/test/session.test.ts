@@ -58,6 +58,14 @@ describe('mintSession / verifySession', () => {
     expect(await verifySession(SECRET, `${userId}.${Number(expiry) + 1000}.${signature}`, LATER)).toBeNull()
   })
 
+  // M23 final review, parked: `Number('0' + expiry)` equals `Number(expiry)`, so a leading-zero
+  // variant re-signed to the same digest and verified. It grants nothing new, but one cookie should
+  // have one spelling.
+  it('rejects a leading-zero expiry variant of a valid cookie', async () => {
+    const [userId, expiry, signature] = (await mintSession(SECRET, USER, NOW)).split('.')
+    expect(await verifySession(SECRET, `${userId}.0${expiry}.${signature}`, LATER)).toBeNull()
+  })
+
   it('rejects a swapped user id — the signature covers it too, so no session is another user', async () => {
     const [, expiry, signature] = (await mintSession(SECRET, USER, NOW)).split('.')
     expect(await verifySession(SECRET, `someone-else.${expiry}.${signature}`, LATER)).toBeNull()

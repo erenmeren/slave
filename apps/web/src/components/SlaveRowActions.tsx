@@ -12,9 +12,9 @@ type Editing = 'name' | 'role' | null
 /**
  * The per-worker roster-editing controls (M23 D2): rename, re-role, delete -- mounted beside
  * `ModelOverrideEditor` in `AllSlavesTable.tsx`'s actions cell (M24 Task 7). A project row
- * (`catalog` undefined) renders all three; a catalog row (`catalog: { companySlaveId }` set,
- * `AllSlaveRow.slaveId === null`) renders only the delete -- rename/re-role act on a project
- * `Slave`, which a catalog member is not.
+ * (`ProjectRowProps`) renders all three; a catalog row (`CatalogRowProps`, `AllSlaveRow.slaveId
+ * === null`) renders only the delete -- rename/re-role act on a project `Slave`, which a catalog
+ * member is not.
  *
  * Name and role edit the same way: a plain button showing the current value swaps to a
  * `TextField` on click, committing on Enter or blur -- no separate save button, no Escape
@@ -26,19 +26,26 @@ type Editing = 'name' | 'role' | null
  * what goes (`runCount` for a project row's history, "project copies stay" for a catalog row,
  * since `assignCompany` re-materializes from the template) and a live run is the only refusal left.
  */
-export function SlaveRowActions({
-  slaveId,
-  name,
-  role,
-  runCount,
-  catalog,
-}: {
+/** A project row acts on a project `Slave` (rename, re-role, delete with its run history). */
+interface ProjectRowProps {
   readonly slaveId: string
   readonly name: string
   readonly role: string
   readonly runCount: number
-  readonly catalog?: { readonly companySlaveId: string }
-}): React.JSX.Element {
+  readonly catalog?: undefined
+}
+/** A catalog row has no project `Slave` -- only the delete, addressed by `companySlaveId`. Callers
+ *  used to pass the catalog id as a dummy `slaveId` and `runCount: 0` to satisfy one flat shape
+ *  (M27 final review, parked); the union says which fields each row really has. */
+interface CatalogRowProps {
+  readonly name: string
+  readonly role: string
+  readonly catalog: { readonly companySlaveId: string }
+}
+export type SlaveRowActionsProps = ProjectRowProps | CatalogRowProps
+
+export function SlaveRowActions(props: SlaveRowActionsProps): React.JSX.Element {
+  const { name, role } = props
   const router = useRouter()
   const [editing, setEditing] = useState<Editing>(null)
   const [draft, setDraft] = useState('')
@@ -58,7 +65,8 @@ export function SlaveRowActions({
     if (pending) return
     setPending(true)
     setErrorText(null)
-    const path = `/api/slaves/${slaveId}/${field}`
+    if (props.catalog !== undefined) return
+    const path = `/api/slaves/${props.slaveId}/${field}`
     const error = await sendControl(path, { method: 'PUT', body: { [field]: draft } })
     setPending(false)
     if (error === null) {
@@ -69,7 +77,8 @@ export function SlaveRowActions({
     }
   }
 
-  if (catalog !== undefined) {
+  if (props.catalog !== undefined) {
+    const { companySlaveId } = props.catalog
     return (
       <div data-testid="slave-row-actions" className="flex flex-wrap items-center gap-1">
         <DangerConfirm
@@ -77,7 +86,7 @@ export function SlaveRowActions({
           testId="catalog-slave-delete"
           confirmText={`deletes ${name} from the catalog; project copies stay`}
           onConfirm={async () => {
-            const error = await sendControl(`/api/org/slaves/${catalog.companySlaveId}`, { method: 'DELETE' })
+            const error = await sendControl(`/api/org/slaves/${companySlaveId}`, { method: 'DELETE' })
             if (error === null) router.refresh()
             return error
           }}
@@ -86,6 +95,7 @@ export function SlaveRowActions({
     )
   }
 
+  const { slaveId, runCount } = props
   return (
     <div data-testid="slave-row-actions" className="flex flex-wrap items-center gap-1">
       {editing === 'name' ? (

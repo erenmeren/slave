@@ -232,13 +232,7 @@ export function AllSlavesTable({
                 </>
               ) : (
                 row.companySlaveId !== null && (
-                  <SlaveRowActions
-                    slaveId={row.companySlaveId}
-                    name={row.name}
-                    role={row.role}
-                    runCount={0}
-                    catalog={{ companySlaveId: row.companySlaveId }}
-                  />
+                  <SlaveRowActions name={row.name} role={row.role} catalog={{ companySlaveId: row.companySlaveId }} />
                 )
               )}
             </div>

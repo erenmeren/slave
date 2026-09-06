@@ -111,6 +111,19 @@ describe('restoreWorkspace', () => {
     expect(events[0]?.payload).toEqual({ name: 'Checkout Platform' })
   })
 
+  // M27 final review, parked: `restoreWorkspace` was read-then-write with no lock, so two restores
+  // racing each other both saw `archivedAt` set and both emitted `workspace.restored`.
+  it('two concurrent restores clear it once: one ok, one not_archived, one event', async () => {
+    await archiveWorkspace(fixture.workspaceId)
+
+    const [a, b] = await Promise.all([restoreWorkspace(fixture.workspaceId), restoreWorkspace(fixture.workspaceId)])
+
+    expect([a.ok, b.ok].filter(Boolean)).toHaveLength(1)
+    const refused = [a, b].find((r) => !r.ok)
+    expect(refused !== undefined && !refused.ok ? refused.error : null).toEqual({ kind: 'not_archived', workspaceId: fixture.workspaceId })
+    expect(await eventsOfType(fixture.workspaceId, 'workspace_restored')).toHaveLength(1)
+  })
+
   it('refuses a project that is not archived, and an unknown one', async () => {
     const notArchived = await restoreWorkspace(fixture.workspaceId)
     expect(notArchived.ok).toBe(false)

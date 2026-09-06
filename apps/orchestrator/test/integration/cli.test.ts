@@ -904,7 +904,7 @@ describe('the orchestrator CLI', () => {
       const result = await runCli(['delete-slave', '--slave', fixture.slaveId, '--yes'])
 
       expect(result.code).toBe(0)
-      expect(result.stdout).toContain(`slave ${fixture.slaveId} deleted; 0 run(s) went with it`)
+      expect(result.stdout).toContain(`slave ${fixture.slaveId} deleted; 0 runs went with it`)
       expect(await prisma.slave.findUnique({ where: { id: fixture.slaveId } })).toBeNull()
     })
 
@@ -912,7 +912,7 @@ describe('the orchestrator CLI', () => {
       const result = await runCli(['delete-slave', '--slave', fixture.slaveId])
 
       expect(result.code).toBe(1)
-      expect(result.stderr).toContain(`refusing without --yes: this would delete slave Alex (${fixture.slaveId}) and 0 run(s)`)
+      expect(result.stderr).toContain(`refusing without --yes: this would delete slave Alex (${fixture.slaveId}) and 0 runs`)
       expect(await prisma.slave.findUnique({ where: { id: fixture.slaveId } })).not.toBeNull()
     })
 
@@ -930,7 +930,7 @@ describe('the orchestrator CLI', () => {
       const result = await runCli(['delete-slave', '--slave', fixture.slaveId, '--yes'])
 
       expect(result.code).toBe(0)
-      expect(result.stdout).toContain(`slave ${fixture.slaveId} deleted; 1 run(s) went with it`)
+      expect(result.stdout).toContain(`slave ${fixture.slaveId} deleted; 1 run went with it`)
       expect(await prisma.slave.findUnique({ where: { id: fixture.slaveId } })).toBeNull()
       expect(await prisma.slaveRun.count({ where: { slaveId: fixture.slaveId } })).toBe(0)
     })
@@ -939,7 +939,7 @@ describe('the orchestrator CLI', () => {
       const result = await runCli(['rename-team', '--team', fixture.teamId, '--name', 'Platform'])
 
       expect(result.code).toBe(0)
-      expect(result.stdout).toMatch(new RegExp(`^team ${fixture.teamId} renamed$`, 'm'))
+      expect(result.stdout).toMatch(new RegExp(`^department ${fixture.teamId} renamed$`, 'm'))
       expect((await prisma.team.findUniqueOrThrow({ where: { id: fixture.teamId } })).name).toBe('Platform')
     })
 
@@ -947,7 +947,7 @@ describe('the orchestrator CLI', () => {
       const result = await runCli(['delete-team', '--team', fixture.emptyTeamId, '--yes'])
 
       expect(result.code).toBe(0)
-      expect(result.stdout).toContain(`department ${fixture.emptyTeamId} deleted; 0 slave(s) and 0 run(s) went with it`)
+      expect(result.stdout).toContain(`department ${fixture.emptyTeamId} deleted; 0 slaves and 0 runs went with it`)
       expect(await prisma.team.findUnique({ where: { id: fixture.emptyTeamId } })).toBeNull()
     })
 
@@ -955,7 +955,7 @@ describe('the orchestrator CLI', () => {
       const result = await runCli(['delete-team', '--team', fixture.emptyTeamId])
 
       expect(result.code).toBe(1)
-      expect(result.stderr).toContain(`refusing without --yes: this would delete department Design (${fixture.emptyTeamId}) and 0 slave(s), 0 run(s)`)
+      expect(result.stderr).toContain(`refusing without --yes: this would delete department Design (${fixture.emptyTeamId}) and 0 slaves, 0 runs`)
       expect(await prisma.team.findUnique({ where: { id: fixture.emptyTeamId } })).not.toBeNull()
     })
   })
@@ -992,7 +992,7 @@ describe('the orchestrator CLI', () => {
 
       expect(result.code).toBe(0)
       expect(result.stdout).toContain(
-        `project ${fixture.workspaceId} archived: 2 departments, 1 slaves, 1 tasks, 0 runs stay on record`,
+        `project ${fixture.workspaceId} archived: 2 departments, 1 slave, 1 task, 0 runs stay on record`,
       )
       expect((await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspaceId } })).archivedAt).not.toBeNull()
 
@@ -1013,7 +1013,7 @@ describe('the orchestrator CLI', () => {
       const result = await runCli(['archive-workspace', '--workspace', fixture.workspaceId])
 
       expect(result.code).toBe(1)
-      expect(result.stderr).toContain(`project ${fixture.workspaceId} has 1 live run(s)`)
+      expect(result.stderr).toContain(`project ${fixture.workspaceId} has 1 live run;`)
       expect((await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspaceId } })).archivedAt).toBeNull()
     }, 30_000)
 
@@ -1046,14 +1046,14 @@ describe('the orchestrator CLI', () => {
       const preview = await runCli(['delete-company', '--company', catalog.companyId])
       expect(preview.code).toBe(1)
       expect(preview.stderr).toContain(
-        `refusing without --yes: this would delete company Atlas Software (${catalog.companyId}) and 1 department template(s), 1 catalog slave(s)`,
+        `refusing without --yes: this would delete company Atlas Software (${catalog.companyId}) and 1 department template, 1 catalog slave`,
       )
       expect(await prisma.company.count()).toBe(1)
 
       const result = await runCli(['delete-company', '--company', catalog.companyId, '--yes'])
       expect(result.code).toBe(0)
       expect(result.stdout).toContain(
-        `company ${catalog.companyId} deleted; 1 department template(s) and 1 catalog slave(s) went with it, 1 project(s) detached`,
+        `company ${catalog.companyId} deleted; 1 department template and 1 catalog slave went with it, 1 project detached`,
       )
       expect(await prisma.company.count()).toBe(0)
       expect(await prisma.companyTeam.count()).toBe(0)
@@ -1069,7 +1069,7 @@ describe('the orchestrator CLI', () => {
       const preview = await runCli(['delete-company-slave', '--slave', catalog.companySlaveId])
       expect(preview.code).toBe(1)
       expect(preview.stderr).toContain(
-        `refusing without --yes: this would delete catalog slave Sam (${catalog.companySlaveId}); 1 project copy(ies) stay`,
+        `refusing without --yes: this would delete catalog slave Sam (${catalog.companySlaveId}); 1 project copy stays`,
       )
       expect(await prisma.companySlave.count()).toBe(1)
 
@@ -1086,13 +1086,13 @@ describe('the orchestrator CLI', () => {
       const preview = await runCli(['delete-template', '--template', catalog.templateId])
       expect(preview.code).toBe(1)
       expect(preview.stderr).toContain(
-        `refusing without --yes: this would delete template Backend Developer (${catalog.templateId}) and 1 catalog slave(s)`,
+        `refusing without --yes: this would delete template Backend Developer (${catalog.templateId}) and 1 catalog slave`,
       )
       expect(await prisma.slaveTemplate.count()).toBe(1)
 
       const result = await runCli(['delete-template', '--template', catalog.templateId, '--yes'])
       expect(result.code).toBe(0)
-      expect(result.stdout).toContain(`template ${catalog.templateId} deleted; 1 catalog slave(s) went with it`)
+      expect(result.stdout).toContain(`template ${catalog.templateId} deleted; 1 catalog slave went with it`)
       expect(await prisma.slaveTemplate.count()).toBe(0)
       expect(await prisma.companySlave.count()).toBe(0)
       // The project slave keeps the role the template gave it.

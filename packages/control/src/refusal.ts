@@ -7,6 +7,8 @@
  * convention: it is defined here (M12 Task 7) ahead of the budget admission logic (Task 9) that
  * will actually raise it.
  */
+import { plural } from './plural.js'
+
 export type ControlRefusal =
   | { readonly kind: 'run_not_found'; readonly runId: string }
   | {
@@ -145,13 +147,15 @@ export function refusalText(refusal: ControlRefusal): string {
         `it with: clear-halt --workspace ${refusal.workspaceId}`
       )
     case 'workspace_archived':
-      return `project ${refusal.workspaceId} is archived; restore it first`
+      // Names the verb the way `workspace_halted` names `clear-halt`: the person reading this is
+      // most often at the CLI, and "restore it first" left them to guess the spelling.
+      return `project ${refusal.workspaceId} is archived; nothing runs until it is restored with: restore-workspace --workspace ${refusal.workspaceId}`
     case 'already_archived':
       return `project ${refusal.workspaceId} is already archived`
     case 'not_archived':
       return `project ${refusal.workspaceId} is not archived`
     case 'live_runs':
-      return `${LIVE_RUNS_NOUN[refusal.entity]} ${refusal.id} has ${refusal.runs} live run(s); wait for them to finish or stop them first`
+      return `${LIVE_RUNS_NOUN[refusal.entity]} ${refusal.id} has ${plural(refusal.runs, 'live run')}; wait for them to finish or stop them first`
     case 'no_checkpoint':
       return `run ${refusal.runId} has no checkpoint: there is nothing to resume it from`
     case 'run_still_stopping':
