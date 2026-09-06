@@ -55,4 +55,14 @@ describe('the simulation routes', () => {
     expect((await simDELETE(new Request('http://x', { method: 'DELETE' }), params(id))).status).toBe(200)
     expect((await simDELETE(new Request('http://x', { method: 'DELETE' }), params(id))).status).toBe(404)
   })
+  it('halt with no body defaults reason to operator; a non-empty non-JSON body is 400', async () => {
+    const { id } = (await (await createPOST(json({ companyId, name: 'demo', policy: 'A' }))).json()) as { id: string }
+    expect((await haltPOST(new Request('http://x', { method: 'POST' }), params(id))).status).toBe(200)
+    const row = await prisma.simulationRun.findUnique({ where: { id } })
+    expect(row?.haltedReason).toBe('operator')
+
+    const { id: id2 } = (await (await createPOST(json({ companyId, name: 'demo-two', policy: 'A' }))).json()) as { id: string }
+    const malformed = new Request('http://x', { method: 'POST', body: 'not json', headers: { 'content-type': 'application/json' } })
+    expect((await haltPOST(malformed, params(id2))).status).toBe(400)
+  })
 })
