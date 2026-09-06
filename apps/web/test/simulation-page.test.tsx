@@ -8,6 +8,9 @@ const routerRefresh = vi.fn()
 const routerPush = vi.fn()
 vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: routerRefresh, push: routerPush }) }))
 
+let stream: { version: number; connection: 'connected' | 'reconnecting' } = { version: 2, connection: 'connected' }
+vi.mock('../src/hooks/useSimulationStream', () => ({ useSimulationStream: () => stream }))
+
 function snapshot(over: Partial<SimulationSnapshot> = {}): SimulationSnapshot {
   return {
     summary: { id: 's1', companyId: 'c1', companyName: 'Demo Trading Co.', name: 'Q3 plan', sector: 'trade', mode: 'simulation', decisionProvider: 'rules', policy: 'B', status: 'running', simTime: 4, horizonDays: 30, stepCount: 4, actionCount: 16, version: 2, haltedReason: null, createdAt: '2026-09-06T00:00:00.000Z', synthetic: true, autoRun: null, clonedFromId: null, clonedFromName: null },
@@ -33,7 +36,7 @@ function snapshot(over: Partial<SimulationSnapshot> = {}): SimulationSnapshot {
   }
 }
 const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }))
-beforeEach(() => { vi.stubGlobal('fetch', fetchMock); fetchMock.mockClear(); routerRefresh.mockClear(); routerPush.mockClear() })
+beforeEach(() => { vi.stubGlobal('fetch', fetchMock); fetchMock.mockClear(); routerRefresh.mockClear(); routerPush.mockClear(); stream = { version: 2, connection: 'connected' } })
 afterEach(() => vi.unstubAllGlobals())
 
 describe('SimulationClient', () => {
@@ -142,5 +145,33 @@ describe('SimulationClient', () => {
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
     expect(url).toBe('/api/sim/s1/inject')
     expect(JSON.parse(String(init.body))).toMatchObject({ day: 6, event: { type: 'demand', qty: 20 } })
+  })
+  it('refreshes when the stream version moves past the summary version; sim-live shows LIVE/RECONNECTING', () => {
+    stream = { version: 2, connection: 'connected' }
+    const { rerender } = render(<SimulationClient initial={snapshot()} />)
+    expect(routerRefresh).not.toHaveBeenCalled()
+    expect(screen.getByTestId('sim-live').textContent).toContain('LIVE')
+    stream = { version: 3, connection: 'connected' }
+    rerender(<SimulationClient initial={snapshot()} />)
+    expect(routerRefresh).toHaveBeenCalledTimes(1)
+    stream = { version: 3, connection: 'reconnecting' }
+    rerender(<SimulationClient initial={snapshot()} />)
+    expect(screen.getByTestId('sim-live').textContent).toContain('RECONNECTING')
+  })
+  it('Auto-run posts everyMs/untilDay; with autoRun set, Stop auto-run posts to the stop route, the chip reads, and Step is disabled', async () => {
+    const { unmount } = render(<SimulationClient initial={snapshot()} />)
+    fireEvent.change(screen.getByTestId('sim-auto-run-every'), { target: { value: '1000' } })
+    fireEvent.change(screen.getByTestId('sim-auto-run-until'), { target: { value: '30' } })
+    await act(async () => { fireEvent.click(screen.getByTestId('sim-auto-run-start')) })
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
+    expect(url).toBe('/api/sim/s1/auto-run')
+    expect(JSON.parse(String(init.body))).toMatchObject({ everyMs: 1000, untilDay: 30 })
+    unmount()
+
+    render(<SimulationClient initial={snapshot({ summary: { ...snapshot().summary, autoRun: { everyMs: 1000, untilDay: 30, lastStepAt: null } } })} />)
+    expect(screen.getByTestId('sim-auto-run-chip').textContent).toContain('auto-run every 1 s → day 30')
+    expect((screen.getByTestId('sim-step') as HTMLButtonElement).disabled).toBe(true)
+    await act(async () => { fireEvent.click(screen.getByTestId('sim-auto-run-stop')) })
+    expect(fetchMock).toHaveBeenCalledWith('/api/sim/s1/auto-run/stop', expect.objectContaining({ method: 'POST' }))
   })
 })

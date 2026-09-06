@@ -63,6 +63,10 @@ describe('SimulationsClient', () => {
     render(<SimulationsClient cards={[card({ clonedFromId: 's0', clonedFromName: 'Q3 plan' })]} companies={companies} />)
     expect(screen.getByTestId('sim-card-s1').textContent).toContain('clone of Q3 plan')
   })
+  it('a card with autoRun set shows the auto-run chip', () => {
+    render(<SimulationsClient cards={[card({ autoRun: { everyMs: 1000, untilDay: 30, lastStepAt: null } })]} companies={companies} />)
+    expect(screen.getByTestId('sim-card-s1').textContent).toContain('auto-run')
+  })
   it('an empty list says so and names the demo company', () => {
     render(<SimulationsClient cards={[]} companies={companies} />)
     expect(screen.getByTestId('sim-empty').textContent).toContain('No simulations yet')
