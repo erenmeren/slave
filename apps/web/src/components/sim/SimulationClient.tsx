@@ -53,7 +53,11 @@ export function SimulationClient({ initial }: { readonly initial: SimulationSnap
     return call('inject', { day, event, idempotencyKey: newKey() })
   }
   const decisions = initial.journal.filter((row) => row.kind === 'decision')
-  const outcomesFor = (decision: JournalRow): readonly JournalRow[] => initial.journal.filter((row) => (row.kind === 'action_applied' || row.kind === 'action_rejected') && row.simTime === decision.simTime && row.actorRole === decision.actorRole && row.payload['index'] === decision.payload['index'])
+  // Matched by the journal's own `actionIndex`, not by array position — the outcome rows for a
+  // decision's several actions can land out of order (a later action's rejection can be journalled
+  // before an earlier action's own applied row), so zipping by index `i` would mislabel them.
+  const outcomeFor = (decision: JournalRow, actionIndex: number): JournalRow | undefined =>
+    initial.journal.find((row) => (row.kind === 'action_applied' || row.kind === 'action_rejected') && row.simTime === decision.simTime && row.actorRole === decision.actorRole && row.payload['index'] === decision.payload['index'] && row.payload['actionIndex'] === actionIndex)
 
   return (
     <div className="flex min-h-screen flex-1 flex-col">
@@ -113,44 +117,54 @@ export function SimulationClient({ initial }: { readonly initial: SimulationSnap
             </div>
           </Panel>
         </div>
-        <div className="flex gap-2 text-xs">
-          {(['overview', 'decisions', 'journal'] as const).map((t) => <button key={t} type="button" data-testid={`sim-tab-${t}`} onClick={() => setTab(t)} className={`rounded px-2 py-1 ${tab === t ? 'bg-bg-2 text-text-1' : 'text-text-3'}`}>{t}</button>)}
+        <div role="tablist" aria-label="simulation sections" className="flex gap-2 text-xs">
+          {(['overview', 'decisions', 'journal'] as const).map((t) => (
+            <button key={t} type="button" role="tab" aria-selected={tab === t} data-testid={`sim-tab-${t}`} onClick={() => setTab(t)} className={`rounded px-2 py-1 ${tab === t ? 'bg-bg-2 text-text-1' : 'text-text-3'}`}>{t}</button>
+          ))}
         </div>
         {tab === 'overview' && (
-          <Panel title="Metrics (from the journal)">
-            <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
-              {(Object.keys(METRIC_LABELS) as (keyof typeof METRIC_LABELS)[]).map((key) => {
-                const value = metrics[key]
-                const sources = (metrics.sources as Record<string, readonly string[] | undefined>)[key]
-                return (
-                  <div key={key} data-testid={`sim-metric-${key}`} className="rounded-card border border-line bg-bg-2 p-2 text-xs">
-                    <div className="text-text-3">{METRIC_LABELS[key]}{key === 'minCashMinor' ? ` (day ${metrics.minCashDay})` : ''}</div>
-                    <div className="font-mono text-sm text-text-1">{MONEY.has(key) ? formatMinor(value, currency) : String(value)}</div>
-                    {sources !== undefined && <div className="text-[10px] text-text-3">from {sources.join(', ')}</div>}
-                  </div>
-                )
-              })}
-            </div>
-            <div className="mt-3 text-xs text-text-3">roles: {initial.roles.map((r) => `${r.name} — ${r.slaveName}`).join(' · ')}</div>
-          </Panel>
+          <div role="tabpanel" aria-label="overview">
+            <Panel title="Metrics (from the journal)">
+              <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
+                {(Object.keys(METRIC_LABELS) as (keyof typeof METRIC_LABELS)[]).map((key) => {
+                  const value = metrics[key]
+                  const sources = (metrics.sources as Record<string, readonly string[] | undefined>)[key]
+                  return (
+                    <div key={key} data-testid={`sim-metric-${key}`} className="rounded-card border border-line bg-bg-2 p-2 text-xs">
+                      <div className="text-text-3">{METRIC_LABELS[key]}{key === 'minCashMinor' ? ` (day ${metrics.minCashDay})` : ''}</div>
+                      <div className="font-mono text-sm text-text-1">{MONEY.has(key) ? formatMinor(value, currency) : String(value)}</div>
+                      {sources !== undefined && <div className="text-[10px] text-text-3">from {sources.join(', ')}</div>}
+                    </div>
+                  )
+                })}
+              </div>
+              <div className="mt-3 text-xs text-text-3">roles: {initial.roles.map((r) => `${r.name} — ${r.slaveName}`).join(' · ')}</div>
+            </Panel>
+          </div>
         )}
         {tab === 'decisions' && (
-          <Panel title="Decisions">
-            <div className="flex flex-col gap-2">
-              {decisions.map((d) => (
-                <div key={d.seq} data-testid="sim-decision-row" className="rounded-card border border-line bg-bg-2 p-2 text-xs text-text-2">
-                  <div>day {d.simTime} · <span className="text-text-1">{d.actorRole}</span> · {String(d.payload['provider'])} provider</div>
-                  {((d.payload['actions'] as { type: string; params: Record<string, unknown>; rationale: string }[] | undefined) ?? []).map((a, i) => {
-                    const outcome = outcomesFor(d)[i]
-                    return <div key={i} className="ml-2">{a.type} {JSON.stringify(a.params)} — &ldquo;{a.rationale}&rdquo; → {outcome === undefined ? 'no outcome' : outcome.kind === 'action_applied' ? 'applied' : `rejected: ${JSON.stringify(outcome.payload['reason'])}`}</div>
-                  })}
-                  {((d.payload['actions'] as unknown[] | undefined) ?? []).length === 0 && <div className="ml-2 text-text-3">no action</div>}
-                </div>
-              ))}
-            </div>
-          </Panel>
+          <div role="tabpanel" aria-label="decisions">
+            <Panel title="Decisions">
+              <div className="flex flex-col gap-2">
+                {decisions.map((d) => (
+                  <div key={d.seq} data-testid="sim-decision-row" className="rounded-card border border-line bg-bg-2 p-2 text-xs text-text-2">
+                    <div>day {d.simTime} · <span className="text-text-1">{d.actorRole}</span> · {String(d.payload['provider'])} provider</div>
+                    {((d.payload['actions'] as { type: string; params: Record<string, unknown>; rationale: string }[] | undefined) ?? []).map((a, i) => {
+                      const outcome = outcomeFor(d, i)
+                      return <div key={i} className="ml-2">{a.type} {JSON.stringify(a.params)} — &ldquo;{a.rationale}&rdquo; → {outcome === undefined ? 'no outcome' : outcome.kind === 'action_applied' ? 'applied' : `rejected: ${JSON.stringify(outcome.payload['reason'])}`}</div>
+                    })}
+                    {((d.payload['actions'] as unknown[] | undefined) ?? []).length === 0 && <div className="ml-2 text-text-3">no action</div>}
+                  </div>
+                ))}
+              </div>
+            </Panel>
+          </div>
         )}
-        {tab === 'journal' && <Panel title={`Journal (last ${initial.journal.length})`}><JournalTable rows={initial.journal} /></Panel>}
+        {tab === 'journal' && (
+          <div role="tabpanel" aria-label="journal">
+            <Panel title={`Journal (last ${initial.journal.length})`}><JournalTable rows={initial.journal} /></Panel>
+          </div>
+        )}
       </div>
     </div>
   )

@@ -19,6 +19,12 @@ function snapshot(over: Partial<SimulationSnapshot> = {}): SimulationSnapshot {
       { seq: 6, simTime: 1, kind: 'action_applied', actorRole: 'purchasing', payload: { index: 1, actionIndex: 0, action: { type: 'place_purchase', params: { supplierId: 'normal', qty: 50 } }, costMinor: 300_000, expectedDay: 8 } },
       { seq: 7, simTime: 1, kind: 'action_rejected', actorRole: 'operations', payload: { index: 2, actionIndex: 1, action: { type: 'ship_order', params: { orderId: 'order-2', qty: 40 } }, reason: { kind: 'capacity_exhausted', remainingCapacity: 0 } } },
       { seq: 8, simTime: 1, kind: 'event', actorRole: null, payload: { kind: 'close', inventory: 70, cashMinor: 5_000_000, openOrders: 1, lateOrders: 0 } },
+      { seq: 9, simTime: 2, kind: 'decision', actorRole: 'operations', payload: { index: 2, provider: 'rules', observation: { openOrders: 2 }, actions: [{ type: 'ship_order', params: { qty: 30 }, rationale: 'ship the smaller order first', refs: ['order-3'] }, { type: 'ship_order', params: { qty: 40 }, rationale: 'ship the larger order next', refs: ['order-4'] }] } },
+      // Out-of-order on purpose: the rejection for the SECOND action (actionIndex 1) is
+      // journalled before the applied row for the FIRST action (actionIndex 0), so a positional
+      // zip (`outcomes[i]`) would swap them.
+      { seq: 10, simTime: 2, kind: 'action_rejected', actorRole: 'operations', payload: { index: 2, actionIndex: 1, action: { type: 'ship_order', params: { qty: 40 } }, reason: { kind: 'capacity_exhausted', remainingCapacity: 0 } } },
+      { seq: 11, simTime: 2, kind: 'action_applied', actorRole: 'operations', payload: { index: 2, actionIndex: 0, action: { type: 'ship_order', params: { qty: 30 } } } },
     ],
     modelUsage: { rows: 0, costUsd: null, unmeasured: 0 },
     scenario: [{ day: 1, event: { type: 'demand', qty: 150 } }],
@@ -82,15 +88,22 @@ describe('SimulationClient', () => {
   it('the Decisions tab lists each decision with role, provider, actions, rationale and the rule outcome; the Journal tab lists every row', () => {
     render(<SimulationClient initial={snapshot()} />)
     fireEvent.click(screen.getByTestId('sim-tab-decisions'))
+    expect(screen.getByRole('tab', { name: 'decisions' }).getAttribute('aria-selected')).toBe('true')
+    expect(screen.getByRole('tab', { name: 'overview' }).getAttribute('aria-selected')).toBe('false')
     const rows = screen.getAllByTestId('sim-decision-row')
-    expect(rows).toHaveLength(1)
+    expect(rows).toHaveLength(2)
     expect(rows[0]?.textContent).toContain('purchasing')
     expect(rows[0]?.textContent).toContain('rules')
     expect(rows[0]?.textContent).toContain('place_purchase')
     expect(rows[0]?.textContent).toContain('shortfall 50')
     expect(rows[0]?.textContent).toContain('applied')
+    // Outcomes are matched by the journal's own `actionIndex`, not by array position: the
+    // rejection for the second action arrives in the journal before the first action's own
+    // applied row, and the render must still pair each action with its own outcome.
+    const opRow = rows[1]?.textContent ?? ''
+    expect(opRow).toMatch(/"qty":30\}.*?applied.*?"qty":40\}.*?rejected/s)
     fireEvent.click(screen.getByTestId('sim-tab-journal'))
-    expect(screen.getAllByTestId('sim-journal-row')).toHaveLength(4)
+    expect(screen.getAllByTestId('sim-journal-row')).toHaveLength(7)
     expect(screen.getAllByTestId('sim-journal-row')[2]?.textContent).toContain('capacity_exhausted')
   })
   it('injecting a demand posts the event for a future day', async () => {
