@@ -5,7 +5,7 @@ import { requirePrincipal } from '../../../../../server/principal'
 
 export const dynamic = 'force-dynamic'
 const body = z.object({
-  steps: z.number().int().nonnegative().optional(),
+  steps: z.number().int().positive().optional(),
   untilDay: z.number().int().nonnegative().optional(),
   idempotencyKey: z.string().min(1).optional(),
   expectedVersion: z.number().int().nonnegative().optional(),

@@ -1,7 +1,7 @@
 import { Prisma, prisma, type PrismaClient } from '@slave-of-ai/db/client'
 import { err, ok, type Result } from '@slave-of-ai/domain'
 import {
-  RulesDecisionProvider, demoDefinition, replay, runUntil, tradeExternalEventSchema, tradeInitialEngineState, tradeMetrics, tradeModel,
+  RulesDecisionProvider, demoDefinition, replay, runUntil, tradeEventSchema, tradeExternalEventSchema, tradeInitialEngineState, tradeMetrics, tradeModel,
   tradeSimulationDefinitionSchema, tradeStateSchema, type EngineState, type JournalEntry, type TradeEvent, type TradeMetrics, type TradeSimulationDefinition, type TradeState,
 } from '@slave-of-ai/simulation'
 import { z } from 'zod'
@@ -40,7 +40,7 @@ export interface LoadedSimulation {
   readonly state: EngineState<TradeState, TradeEvent>
 }
 
-const queueItemSchema = z.object({ time: z.number().int(), priority: z.enum(['external', 'scheduled', 'decision', 'close']), seq: z.number().int(), event: z.unknown() })
+const queueItemSchema = z.object({ time: z.number().int(), priority: z.enum(['external', 'scheduled', 'decision', 'close']), seq: z.number().int(), event: tradeEventSchema })
 const engineStateSchema = z.object({
   day: z.number().int(), sector: tradeStateSchema, queue: z.object({ items: z.array(queueItemSchema), nextSeq: z.number().int() }), rngState: z.number(),
   journalSeq: z.number().int(), stepCount: z.number().int(), decisionCount: z.number().int(), status: z.enum(['ready', 'running', 'finished', 'halted']), haltedReason: z.string().nullable(),
@@ -139,6 +139,10 @@ export async function stepSimulation(
     if (input.expectedVersion !== undefined && input.expectedVersion !== row.version) return err({ kind: 'stale_version', simulationId, expected: input.expectedVersion, actual: row.version })
     if (row.status !== 'ready' && row.status !== 'running') return err({ kind: 'simulation_not_runnable', simulationId, status: row.status })
     const untilDay = input.untilDay ?? loaded.state.day + (input.steps ?? 1)
+    // A no-op step (untilDay at or before the current day) is refused before the engine ever
+    // runs, not journaled as a zero-entry step (fix wave, Important #1) -- only the explicit
+    // `untilDay` path can trip this, since `steps` always resolves to `day + steps > day`.
+    if (untilDay <= loaded.state.day) return err({ kind: 'invalid_simulation_input', detail: `untilDay must be greater than the current day (${loaded.state.day})` })
     const provider = new RulesDecisionProvider(loaded.definition)
     const result = runUntil(tradeModel, loaded.definition, loaded.state, provider, Math.min(untilDay, loaded.definition.horizonDays), MAX_STEPS_PER_REQUEST)
     const version = row.version + 1
@@ -165,7 +169,15 @@ async function setStatus(simulationId: string, from: readonly string[], to: 'pau
     if (!from.includes(row.status)) return err({ kind: 'simulation_not_runnable', simulationId, status: row.status })
     const seq = loaded.state.journalSeq + 1
     await tx.simulationJournalEntry.create({ data: { simulationId, seq, simTime: row.simTime, kind: 'control', actorRole: null, payload: { op, reason: haltedReason } } })
-    await tx.simulationRun.update({ where: { id: simulationId }, data: { status: to, haltedReason, state: json({ ...loaded.state, journalSeq: seq, status: to === 'paused' ? loaded.state.status : to }) } })
+    await tx.simulationRun.update({
+      where: { id: simulationId },
+      data: {
+        status: to, haltedReason,
+        // A halt writes its reason into the embedded engine state too, not just the row column
+        // (fix wave, Minor #5) -- a replay or an in-process reader of `state` alone must see it.
+        state: json({ ...loaded.state, journalSeq: seq, status: to === 'paused' ? loaded.state.status : to, ...(to === 'halted' ? { haltedReason } : {}) }),
+      },
+    })
     return ok(undefined)
   })
 }
@@ -208,8 +220,10 @@ export async function deleteSimulation(simulationId: string, _principal?: Princi
 
 /** Shared by every read-only verb, plain `prisma` for a single unlocked read (`loadSimulation`
  *  itself) or `tx` for one that must see the row and the journal from the SAME snapshot
- *  (`replaySimulation`, `simulationStatus` -- fix round 1, Important #4). */
-async function readSimulation(client: PrismaClient | Prisma.TransactionClient, simulationId: string): Promise<Result<LoadedSimulation, ControlRefusal>> {
+ *  (`replaySimulation`, `simulationStatus` -- fix round 1, Important #4; `apps/web`'s
+ *  `buildSimulationSnapshot`, which imports this across the package boundary -- final fix wave,
+ *  Important #2). */
+export async function readSimulation(client: PrismaClient | Prisma.TransactionClient, simulationId: string): Promise<Result<LoadedSimulation, ControlRefusal>> {
   const row = await client.simulationRun.findUnique({ where: { id: simulationId }, include: { company: { select: { name: true } } } })
   if (row === null) return err({ kind: 'simulation_not_found', simulationId })
   return parseRow(row)

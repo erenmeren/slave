@@ -65,7 +65,11 @@ export class RulesDecisionProvider implements DecisionProvider {
       if (normalQty > 0) {
         inboundAfterHedge = [...inboundAfterHedge, { id: `pending-normal`, supplierId: 'normal', qty: normalQty, unitPriceMinor: normal!.unitPriceMinor, orderedDay: day, expectedDay: normalExpectedDay, deliveredDay: null, payDay: day + normal!.paymentTermDays, status: 'ordered' as const, paid: false }]
       }
-      for (const order of orders) {
+      // Sorted by due day then id -- the same order `operations()` ships in (fix wave, Minor #8) --
+      // so limited cash hedges the order at greatest risk first rather than whichever happens to
+      // sit first in the unsorted array.
+      const hedgeOrders = [...orders].sort((a, b) => a.dueDay - b.dueDay || a.id.localeCompare(b.id))
+      for (const order of hedgeOrders) {
         const fromStock = Math.min(stock, order.remaining)
         stock -= fromStock
         let uncovered = order.remaining - fromStock

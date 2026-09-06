@@ -22,11 +22,6 @@ export type Order = z.infer<typeof orderSchema>
 export type Purchase = z.infer<typeof purchaseSchema>
 export type TradeState = z.infer<typeof tradeStateSchema>
 
-/** Half-up to the minor unit: 12.5 → 13, −12.5 → −12 (Math.round's own rule). */
-export function roundHalfUp(n: number): number {
-  return Math.round(n)
-}
-
 export function unpaidCommitmentsMinor(state: TradeState): number {
   return state.purchases.filter((p) => !p.paid).reduce((sum, p) => sum + p.qty * p.unitPriceMinor, 0)
 }

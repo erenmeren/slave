@@ -7,11 +7,15 @@ function walk(dir: string): string[] {
 }
 
 describe('the simulation never reaches a real tool (spec §8)', () => {
-  it('packages/simulation imports only zod and itself', () => {
+  it('packages/simulation imports only zod and itself, and never reaches for require/import()/node: (fix wave, Minor #13)', () => {
     const files = walk(new URL('../../simulation/src', import.meta.url).pathname).filter((f) => f.endsWith('.ts'))
     for (const file of files) {
-      const imports = [...readFileSync(file, 'utf8').matchAll(/from '([^']+)'/g)].map((m) => m[1] ?? '')
+      const source = readFileSync(file, 'utf8')
+      const imports = [...source.matchAll(/from '([^']+)'/g)].map((m) => m[1] ?? '')
       for (const spec of imports) expect(spec === 'zod' || spec.startsWith('.'), `${file} imports ${spec}`).toBe(true)
+      expect(source, `${file} contains require(`).not.toMatch(/require\(/)
+      expect(source, `${file} contains import(`).not.toMatch(/import\(/)
+      expect(source, `${file} contains 'node:'`).not.toContain('node:')
     }
   })
   it('control/simulation.ts imports no provider, spawns nothing and reads no environment', () => {

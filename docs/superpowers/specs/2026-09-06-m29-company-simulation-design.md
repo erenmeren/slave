@@ -329,7 +329,9 @@ All return `Result<…, ControlRefusal>`; new refusal kinds: `simulation_not_fou
 - The simulation drawer, routes and verbs never accept or return a repo path, a branch or a
   command. `Workspace`, `Task`, `SlaveRun` are not referenced by any simulation code path.
 - Cross-run ids: an action naming an order/supplier/purchase id absent from *this* run's state is
-  `unknown_reference`; a route with a run id under the wrong company is 404.
+  `unknown_reference`; a route with a run id under the wrong company is 404. Per-run counters
+  (`order-2`, `purchase-1`, …) are not globally unique — isolation rests entirely on an id
+  resolving only against its own run's state, never on the string being unique across runs.
 - Idempotency: `(simulationId, idempotencyKey)` unique; the same key returns the first outcome.
 - Simulated money vs real cost: two tables, two panels, never one figure; `SimulationModelUsage`
   has no rows in M29 and the UI says so instead of showing `$0.00`.
@@ -404,9 +406,16 @@ The rulings made while executing Tasks 1–11, and the notable execution finding
 - **R10** — the Simulations page's card keeps its click handler on the real `<button>` `Card` itself renders, not on an outer wrapper `<div>`: a first pass moved it to the wrapper to satisfy a draft test that clicked there, which would have cost the card its keyboard/focus path (the house convention `Card.tsx` already gives every card for free). Review restored the handler on the inner button and pointed the test at it instead; the drawer's "no repository" copy was also reworded to "no source checkout" so it stopped tripping a test's own ban on git-specific words, while still saying the true thing — a simulation names no repository at all.
 - **R11** — the run page's three sections (`overview` / `decisions` / `journal`) carry `role="tablist"` / `role="tab"` / `aria-selected`, the same pattern `SlavesClient` and `ProjectTabs` already use; and a decision's action outcomes are matched to their `action_applied` / `action_rejected` journal rows by the payload's own `actionIndex`, not by position in the actions array — a later action's rejection can be journalled before an earlier action's own applied row, which a positional zip would have mislabeled.
 - **R12** — execution ran on an in-place feature branch (`feature/m29-company-simulation`) rather than a separate git worktree: the repo's shared Postgres, `.env`, and installed `node_modules` are all assumed at the repo root by the pre-push hook and every gate, and a worktree would need its own copy of all three while buying no isolation for a database every milestone already shares.
+- **R13** — replay equality at the persistence boundary (`replaySimulation`) is the `comparable` projection — day, sector state, the counters, and the pending events as a `(time, priority, event)` list; not `journalSeq` (the stored state counts control entries too), `status` (a paused row keeps its engine status), or the queue's own `seq`/`nextSeq` — rather than §4.3's literal deep-equal, which the pure `replay()` in `packages/simulation` still holds to exactly: a stored run has been through `jsonb` round-tripping and mid-run pauses/injections that the pure engine's own replay test never sees, so the persistence boundary needs a projection that names what those extra degrees of freedom are allowed to differ on. Separately: a `decision` journal row's payload carries the provider's `kind` (`rules` today) but not the policy (`A`/`B`) — the policy lives in the frozen `definition` a reader already has alongside the journal, not duplicated onto every decision row.
 
 M30 backlog (already named in §12, restated here as what comes next): clone and compare a run
 against another; pause/resume that survives a process restart; CLI parity for `pause` / `inject` /
 `halt` (today's CLI has `create-simulation`, `step-simulation` and `simulation-status` only); SSE
 for simulation pages, so a run's own page updates itself the way every workspace page already does
-instead of relying on `router.refresh()` after each control.
+instead of relying on `router.refresh()` after each control; the `ignored` journal label conflates
+two different things — "this id names nothing in the run" and "this id names something, but it
+already happened" — and should split into distinct labels; per-run counters (`order-2`,
+`purchase-1`, …) are not globally unique, which is harmless today because every lookup resolves an
+id only against its own run's state (§8), but would need real naming the day runs are ever cloned,
+compared, or merged; rename `decisionCount` → `actionCount` (the field counts every action a role
+took, applied or rejected, not the number of decision points).

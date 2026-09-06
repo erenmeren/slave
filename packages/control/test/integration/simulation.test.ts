@@ -105,7 +105,22 @@ describe('stepSimulation', () => {
     expect((await haltSimulation(other, 'operator')).ok).toBe(true)
     const halted = await stepSimulation(other, { steps: 1 })
     expect(halted.ok === false && halted.error).toEqual({ kind: 'simulation_not_runnable', simulationId: other, status: 'halted' })
-    expect((await prisma.simulationRun.findUniqueOrThrow({ where: { id: other } })).haltedReason).toBe('operator')
+    const otherRow = await prisma.simulationRun.findUniqueOrThrow({ where: { id: other } })
+    expect(otherRow.haltedReason).toBe('operator')
+    // The embedded engine state carries the halted reason too, not just the row column (fix wave, Minor #5).
+    expect((otherRow.state as { haltedReason: string | null }).haltedReason).toBe('operator')
+  })
+  it('refuses a no-op `untilDay` at or before the current day, before touching the journal or version (fix wave, Important #1)', async () => {
+    const id = await create()
+    await stepSimulation(id, { untilDay: 3 })
+    const before = await prisma.simulationJournalEntry.count({ where: { simulationId: id, kind: 'control' } })
+    const atDay = await stepSimulation(id, { untilDay: 3 })
+    expect(atDay.ok === false && atDay.error).toEqual({ kind: 'invalid_simulation_input', detail: 'untilDay must be greater than the current day (3)' })
+    const beforeDay = await stepSimulation(id, { untilDay: 1 })
+    expect(beforeDay.ok === false && beforeDay.error).toEqual({ kind: 'invalid_simulation_input', detail: 'untilDay must be greater than the current day (3)' })
+    const row = await prisma.simulationRun.findUniqueOrThrow({ where: { id } })
+    expect(row.version).toBe(1)
+    expect(await prisma.simulationJournalEntry.count({ where: { simulationId: id, kind: 'control' } })).toBe(before)
   })
   it('a stored run replays to the same state from its journal, and writes no model usage', async () => {
     const id = await create('r', 'B')
