@@ -1236,5 +1236,12 @@ describe('the orchestrator CLI', () => {
       expect(result.stderr).toContain('cannot run in simulation mode yet')
       expect(await prisma.simulationRun.count()).toBe(0)
     }, 30_000)
+    it('refuses an invalid seed without creating anything', async () => {
+      const companyId = await tradingCompany()
+      const result = await runCli(['create-simulation', '--company', companyId, '--name', 'x', '--policy', 'A', '--seed', 'abc'])
+      expect(result.code).toBe(1)
+      expect(result.stderr).toContain('--seed must be an integer')
+      expect(await prisma.simulationRun.count()).toBe(0)
+    }, 30_000)
   })
 })

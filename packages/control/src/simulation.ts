@@ -78,6 +78,7 @@ export async function createSimulation(
   const mode = input.mode ?? 'simulation'
   if (!SUPPORTED.has(`${input.sector}:${mode}`)) return err({ kind: 'unsupported_simulation', sector: input.sector, mode })
   if (input.name.trim() === '') return err({ kind: 'invalid_simulation_input', detail: 'name must not be empty' })
+  if (input.seed !== undefined && !Number.isInteger(input.seed)) return err({ kind: 'invalid_simulation_input', detail: 'seed must be an integer' })
   const company = await prisma.company.findUnique({ where: { id: input.companyId }, include: { teams: { orderBy: { name: 'asc' }, include: { slaves: { orderBy: { name: 'asc' } } } } } })
   if (company === null) return err({ kind: 'company_not_found', companyId: input.companyId })
   const roster = company.teams.flatMap((team) => team.slaves.map((slave) => ({ slaveName: slave.name, departmentName: team.name })))

@@ -873,7 +873,12 @@ export async function main(argv: readonly string[]): Promise<number> {
       if (policy !== 'A' && policy !== 'B') throw new Error('--policy must be A or B')
       const sector = flagText(flags, 'sector') ?? 'trade'
       const seedText = flagText(flags, 'seed')
-      const result = await createSimulation({ companyId, name, sector: sector as 'trade', policy, ...(seedText !== undefined ? { seed: Number(seedText) } : {}) })
+      let seed: number | undefined
+      if (seedText !== undefined) {
+        seed = Number.parseInt(seedText, 10)
+        if (!Number.isInteger(seed) || String(seed) !== seedText.trim()) throw new Error('--seed must be an integer')
+      }
+      const result = await createSimulation({ companyId, name, sector: sector as 'trade', policy, ...(seed !== undefined ? { seed } : {}) })
       if (!result.ok) throw new Error(refusalText(result.error))
       process.stdout.write(`simulation ${result.value.id} created (trade, policy ${policy}, rules provider, synthetic)\n`)
       return 0

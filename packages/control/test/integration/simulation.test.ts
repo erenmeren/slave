@@ -59,6 +59,8 @@ describe('createSimulation', () => {
     expect(dup.ok === false && dup.error).toEqual({ kind: 'duplicate_name', name: 'dup' })
     const unknown = await createSimulation({ companyId: '00000000-0000-4000-8000-00000000dead', name: 'x', sector: 'trade', policy: 'A' })
     expect(unknown.ok === false && unknown.error.kind).toBe('company_not_found')
+    const badSeed = await createSimulation({ companyId, name: 'nan', sector: 'trade', policy: 'A', seed: Number.NaN })
+    expect(badSeed.ok === false && badSeed.error).toEqual({ kind: 'invalid_simulation_input', detail: 'seed must be an integer' })
   })
   it('two runs from one company never share state', async () => {
     const a = await create('a', 'A')
