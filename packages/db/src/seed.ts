@@ -24,6 +24,9 @@ const TEMPLATES: readonly { name: string; role: string }[] = [
 const COMPANY_NAME = 'Atlas Software'
 const COMPANY_TEAM_NAME = 'Engineering'
 
+export const DEMO_TRADING_COMPANY_NAME = 'Demo Trading Co.'
+const TRADE_ROSTER: readonly (readonly [string, string])[] = [['Sales', 'Sonia'], ['Purchasing', 'Pete'], ['Operations', 'Olga'], ['Finance', 'Fin']]
+
 /** Atlas Software's Engineering roster -- mirrors today's seeded crew, one member per template. */
 const ROSTER: readonly { name: string; template: string }[] = [
   { name: 'Atlas', template: 'Engineering Manager' },
@@ -54,7 +57,7 @@ const SLAVES: readonly { name: string; role: string; team: (typeof TEAMS)[number
  */
 export async function seed(): Promise<void> {
   await prisma.$executeRawUnsafe(
-    'TRUNCATE TABLE "ExecutionEvent", "Approval", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "SlaveSkill", "Skill", "SkillProvider", "SlavePermission", "ProviderConfiguration", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
+    'TRUNCATE TABLE "SimulationModelUsage", "SimulationJournalEntry", "SimulationRun", "ExecutionEvent", "Approval", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "SlaveSkill", "Skill", "SkillProvider", "SlavePermission", "ProviderConfiguration", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
   )
 
   const workspace = await prisma.workspace.create({
@@ -121,6 +124,16 @@ export async function seed(): Promise<void> {
     await prisma.companySlave.create({
       data: { companyTeamId: companyTeam.id, templateId, name: member.name },
     })
+  }
+
+  // M29: a second, non-software company so the Simulations page has a roster to freeze. Four
+  // departments named for the trade sector's four roles, one catalog slave each, from one
+  // generic template. Synthetic like everything else here; never assigned to a workspace.
+  const tradeTemplate = await prisma.slaveTemplate.create({ data: { name: 'Trade Clerk', role: 'clerk', defaultModel: null } })
+  const trading = await prisma.company.create({ data: { name: DEMO_TRADING_COMPANY_NAME } })
+  for (const [department, slave] of TRADE_ROSTER) {
+    const team = await prisma.companyTeam.create({ data: { companyId: trading.id, name: department } })
+    await prisma.companySlave.create({ data: { companyTeamId: team.id, templateId: tradeTemplate.id, name: slave } })
   }
 
   // One task per status, so every state has a real example on screen when M4 arrives.

@@ -28,3 +28,16 @@ describe('refusalText for workspace_archived', () => {
     )
   })
 })
+
+describe('refusalText for the simulation kinds (M29)', () => {
+  it('names the run, the version, the company and the verb', () => {
+    expect(refusalText({ kind: 'simulation_not_found', simulationId: 's1' })).toBe('no simulation with id s1')
+    expect(refusalText({ kind: 'unsupported_simulation', sector: 'software', mode: 'simulation' })).toBe('a software company cannot run in simulation mode yet; supported: trade + simulation')
+    expect(refusalText({ kind: 'simulation_not_runnable', simulationId: 's1', status: 'halted' })).toBe('simulation s1 is halted; it cannot be stepped')
+    expect(refusalText({ kind: 'stale_version', simulationId: 's1', expected: 3, actual: 4 })).toBe('simulation s1 moved on (version 4, you saw 3): reload and retry')
+    expect(refusalText({ kind: 'simulation_corrupt', simulationId: 's1', reason: 'state: bad' })).toBe('simulation s1 cannot be read: state: bad')
+    expect(refusalText({ kind: 'live_simulations', companyId: 'c1', simulations: 2 })).toBe('company c1 has 2 simulations; delete them first')
+    expect(refusalText({ kind: 'roster_too_small', companyId: 'c1', needed: 4, have: 1 })).toBe('company c1 has 1 slave; the trade sector needs 4 for its roles')
+    expect(refusalText({ kind: 'invalid_simulation_input', detail: 'qty must be positive' })).toBe('invalid simulation input: qty must be positive')
+  })
+})

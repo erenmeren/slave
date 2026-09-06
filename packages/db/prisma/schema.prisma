@@ -184,7 +184,8 @@ model Company {
   createdAt DateTime      @default(now())
   teams     CompanyTeam[]
 
-  workspaces Workspace[]
+  workspaces  Workspace[]
+  simulations SimulationRun[]
 }
 
 model CompanyTeam {
@@ -600,4 +601,108 @@ model User {
   executionEvents    ExecutionEvent[]
   createdTasks       Task[]
   goalSetWorkspaces  Workspace[]
+  simulations        SimulationRun[]
+}
+
+/// M29: a company simulation run (spec §3). Bound to the CATALOG company, never to a workspace:
+/// the software flow is Git and stays so. `definition` is frozen at creation (roster snapshot,
+/// roles, policy, scenario); `state` is the engine's current world; `version` is the optimistic
+/// lock every step takes. Simulated money lives inside `state` as integer minor units -- never in
+/// a column that could be mistaken for real spend.
+enum SimulationSector {
+  trade
+}
+
+enum SimulationMode {
+  simulation
+}
+
+enum DecisionProviderKind {
+  rules
+}
+
+enum SimulationStatus {
+  ready
+  running
+  paused
+  finished
+  halted
+}
+
+enum SimulationJournalKind {
+  decision
+  action_applied
+  action_rejected
+  event
+  external_event
+  control
+}
+
+model SimulationRun {
+  id               String               @id @default(uuid())
+  companyId        String
+  name             String
+  sector           SimulationSector
+  mode             SimulationMode       @default(simulation)
+  decisionProvider DecisionProviderKind @default(rules)
+  seed             Int
+  definition       Json
+  state            Json
+  version          Int                  @default(0)
+  status           SimulationStatus     @default(ready)
+  simTime          Int                  @default(0)
+  stepCount        Int                  @default(0)
+  decisionCount    Int                  @default(0)
+  haltedReason     String?
+  clonedFromId     String?
+  createdByUserId  String?
+  createdAt        DateTime             @default(now())
+
+  company    Company         @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  clonedFrom SimulationRun?  @relation("SimulationClone", fields: [clonedFromId], references: [id], onDelete: SetNull)
+  clones     SimulationRun[] @relation("SimulationClone")
+  createdBy  User?           @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+  journal    SimulationJournalEntry[]
+  modelUsage SimulationModelUsage[]
+
+  @@unique([companyId, name])
+  @@index([companyId])
+}
+
+/// The run's own ordered record: decisions, applied/rejected actions, rule events, injected
+/// events, control operations. `seq` is per run; `idempotencyKey` makes a repeated control
+/// request return its first outcome instead of stepping twice.
+model SimulationJournalEntry {
+  id             String                @id @default(uuid())
+  simulationId   String
+  seq            Int
+  simTime        Int
+  kind           SimulationJournalKind
+  actorRole      String?
+  payload        Json
+  idempotencyKey String?
+  createdAt      DateTime              @default(now())
+
+  simulation SimulationRun @relation(fields: [simulationId], references: [id], onDelete: Cascade)
+
+  @@unique([simulationId, seq])
+  @@unique([simulationId, idempotencyKey])
+  @@index([simulationId, simTime])
+}
+
+/// Real model spend attributable to a simulation (M31 writes it; M29 writes nothing). `costUsd`
+/// null is UNMEASURED, the same rule as `SlaveRun.costUsd` -- never 0 for an unknown figure.
+model SimulationModelUsage {
+  id           String       @id @default(uuid())
+  simulationId String
+  seq          Int
+  provider     ProviderKind
+  costUsd      Float?
+  tokensIn     Int?
+  tokensOut    Int?
+  createdAt    DateTime     @default(now())
+
+  simulation SimulationRun @relation(fields: [simulationId], references: [id], onDelete: Cascade)
+
+  @@index([simulationId])
 }

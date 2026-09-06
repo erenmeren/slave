@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, it } from 'vitest'
 import { prisma } from '../../src/client.js'
 import { TASK_STATUSES } from '../../src/enums.js'
-import { seed } from '../../src/seed.js'
+import { DEMO_TRADING_COMPANY_NAME, seed } from '../../src/seed.js'
 
 describe('seed data', () => {
   afterAll(async (): Promise<void> => {
@@ -45,6 +45,8 @@ describe('seed data', () => {
       // at the same `role`, proving templates key on name, not role.
       { name: 'Java Developer', role: 'backend', defaultModel: null },
       { name: 'QA Reviewer', role: 'reviewer', defaultModel: null },
+      // M29: the demo trading company's one generic template.
+      { name: 'Trade Clerk', role: 'clerk', defaultModel: null },
     ])
   })
 
@@ -74,6 +76,27 @@ describe('seed data', () => {
     // the workspace itself is never assigned to Atlas Software.
     const workspace = await prisma.workspace.findFirstOrThrow()
     expect(workspace.companyId).toBeNull()
+  })
+
+  it('seeds Demo Trading Co. with four departments, one clerk each (M29)', async () => {
+    await seed()
+
+    const company = await prisma.company.findUniqueOrThrow({ where: { name: DEMO_TRADING_COMPANY_NAME } })
+
+    const companyTeams = await prisma.companyTeam.findMany({ where: { companyId: company.id }, orderBy: { name: 'asc' } })
+    expect(companyTeams.map((t) => t.name)).toEqual(['Finance', 'Operations', 'Purchasing', 'Sales'])
+
+    const roster = await prisma.companySlave.findMany({
+      where: { companyTeam: { companyId: company.id } },
+      include: { template: true },
+      orderBy: { name: 'asc' },
+    })
+    expect(roster.map((member) => ({ name: member.name, template: member.template.name }))).toEqual([
+      { name: 'Fin', template: 'Trade Clerk' },
+      { name: 'Olga', template: 'Trade Clerk' },
+      { name: 'Pete', template: 'Trade Clerk' },
+      { name: 'Sonia', template: 'Trade Clerk' },
+    ])
   })
 
   it('creates one task in every task status', async () => {

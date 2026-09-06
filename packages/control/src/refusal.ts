@@ -119,6 +119,16 @@ export type ControlRefusal =
   | { readonly kind: 'weak_password'; readonly minimum: number }
   /** `setPassword`/`deleteUser` on a `username` no `User` row carries (M23 F3). */
   | { readonly kind: 'user_not_found'; readonly username: string }
+  /** M29: the simulation verbs (`simulation.ts`). */
+  | { readonly kind: 'simulation_not_found'; readonly simulationId: string }
+  | { readonly kind: 'unsupported_simulation'; readonly sector: string; readonly mode: string }
+  | { readonly kind: 'simulation_not_runnable'; readonly simulationId: string; readonly status: string }
+  | { readonly kind: 'stale_version'; readonly simulationId: string; readonly expected: number; readonly actual: number }
+  | { readonly kind: 'simulation_corrupt'; readonly simulationId: string; readonly reason: string }
+  /** `deleteCompany` while simulation runs still reference the company (M29 §3). */
+  | { readonly kind: 'live_simulations'; readonly companyId: string; readonly simulations: number }
+  | { readonly kind: 'roster_too_small'; readonly companyId: string; readonly needed: number; readonly have: number }
+  | { readonly kind: 'invalid_simulation_input'; readonly detail: string }
 
 /**
  * The word a person reads for `live_runs`'s `entity` (M27 final review, Important finding 3).
@@ -249,5 +259,21 @@ export function refusalText(refusal: ControlRefusal): string {
       return `a password must be at least ${refusal.minimum} characters`
     case 'user_not_found':
       return `no user named ${refusal.username}`
+    case 'simulation_not_found':
+      return `no simulation with id ${refusal.simulationId}`
+    case 'unsupported_simulation':
+      return `a ${refusal.sector} company cannot run in ${refusal.mode} mode yet; supported: trade + simulation`
+    case 'simulation_not_runnable':
+      return `simulation ${refusal.simulationId} is ${refusal.status}; it cannot be stepped`
+    case 'stale_version':
+      return `simulation ${refusal.simulationId} moved on (version ${refusal.actual}, you saw ${refusal.expected}): reload and retry`
+    case 'simulation_corrupt':
+      return `simulation ${refusal.simulationId} cannot be read: ${refusal.reason}`
+    case 'live_simulations':
+      return `company ${refusal.companyId} has ${plural(refusal.simulations, 'simulation')}; delete them first`
+    case 'roster_too_small':
+      return `company ${refusal.companyId} has ${plural(refusal.have, 'slave')}; the trade sector needs ${refusal.needed} for its roles`
+    case 'invalid_simulation_input':
+      return `invalid simulation input: ${refusal.detail}`
   }
 }
