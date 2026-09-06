@@ -21,7 +21,7 @@ const counter: SectorModel<CounterState, CounterEvent, CounterRejection> = {
   apply: (state, _role, action, day) => {
     const qty = Number(action.params['qty'])
     if (action.type === 'order') return { state, schedule: [{ time: day + 2, priority: 'scheduled', event: { type: 'deliver', qty } }] }
-    return { state: { ...state, count: state.count + qty }, schedule: [] }
+    return { state: { ...state, count: state.count + qty }, schedule: [], record: { added: qty } }
   },
   applyEvent: (state, event) => ({ state: { ...state, count: state.count + event.qty, deliveries: state.deliveries + 1 }, schedule: [], record: { qty: event.qty } }),
   closeDay: (state) => ({ state, schedule: [], record: { count: state.count } }),
@@ -48,6 +48,7 @@ describe('engine.step', () => {
     expect(entries[2]?.payload['reason']).toEqual({ kind: 'too_big', max: 10 })
     expect(entries[4]?.payload['reason']).toEqual({ kind: 'role_not_allowed', role: 'guest', type: 'add' })
     expect(entries.at(-1)?.payload).toEqual({ kind: 'close', count: 3 })
+    expect(entries[1]?.payload).toEqual(expect.objectContaining({ index: 0, actionIndex: 0, added: 3 }))
   })
   it('an ordered delivery lands only when its scheduled day comes', () => {
     const initial = initialEngineState<CounterState, CounterEvent>({ count: 0, deliveries: 0 }, [], 1)

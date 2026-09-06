@@ -89,7 +89,7 @@ export function step<S, E, R extends Record<string, unknown>>(model: SectorModel
       if (outcome.ok) {
         sector = outcome.state
         queue = scheduleAll(queue, outcome.schedule)
-        record('action_applied', role.name, { index, actionIndex, action: outcome.action, ...(outcome.record !== undefined ? { record: outcome.record } : {}) })
+        record('action_applied', role.name, { index, actionIndex, action: outcome.action, ...(outcome.record ?? {}) })
       } else {
         record('action_rejected', role.name, { index, actionIndex, action: raw, reason: outcome.reason })
         // One `limit_exceeded` per decision point: everything past the cap is dropped, not listed.
