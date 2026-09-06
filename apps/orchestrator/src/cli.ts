@@ -9,6 +9,7 @@ import {
   claimResume,
   createCompany,
   createProjectTeam,
+  createSimulation,
   createTemplate,
   createUser,
   createWorkspace,
@@ -35,6 +36,8 @@ import {
   setGoal,
   setPassword,
   describeSync,
+  simulationStatus,
+  stepSimulation,
   syncSkillCatalog,
   plural,
 } from '@slave-of-ai/control'
@@ -127,6 +130,14 @@ const USAGE = `usage: orchestrator <command> [options]
   delete-template --template <id> --yes
                                        remove a slave template with the catalog slaves made from
                                        it; project slaves keep their role
+  create-simulation --company <id> --name <n> --policy A|B [--seed <n>] [--sector trade]
+                                       create a company SIMULATION from a catalog company's
+                                       roster (frozen at creation). No repository, no model
+                                       call: the rules provider decides. Synthetic data.
+  step-simulation --simulation <id> [--steps <n> | --until-day <d>]
+                                       advance the simulation clock (one day per step)
+  simulation-status --simulation <id>  the run's summary, company panel, metrics and model
+                                       usage as JSON — simulated money and real cost apart
 
   users
   create-user --name <u>                create a local account. The password is never a
@@ -852,6 +863,37 @@ export async function main(argv: readonly string[]): Promise<number> {
       const result = await deleteSlaveTemplate(templateId)
       if (!result.ok) throw new Error(refusalText(result.error))
       process.stdout.write(`template ${templateId} deleted; ${plural(result.value.catalogSlaves, 'catalog slave')} went with it\n`)
+      return 0
+    }
+
+    case 'create-simulation': {
+      const companyId = requireFlag(flags, 'company')
+      const name = requireFlag(flags, 'name')
+      const policy = requireFlag(flags, 'policy')
+      if (policy !== 'A' && policy !== 'B') throw new Error('--policy must be A or B')
+      const sector = flagText(flags, 'sector') ?? 'trade'
+      const seedText = flagText(flags, 'seed')
+      const result = await createSimulation({ companyId, name, sector: sector as 'trade', policy, ...(seedText !== undefined ? { seed: Number(seedText) } : {}) })
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(`simulation ${result.value.id} created (trade, policy ${policy}, rules provider, synthetic)\n`)
+      return 0
+    }
+
+    case 'step-simulation': {
+      const simulationId = requireFlag(flags, 'simulation')
+      const steps = flagText(flags, 'steps')
+      const untilDay = flagText(flags, 'until-day')
+      const result = await stepSimulation(simulationId, { ...(steps !== undefined ? { steps: Number(steps) } : {}), ...(untilDay !== undefined ? { untilDay: Number(untilDay) } : {}) })
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(`simulation ${simulationId} at day ${result.value.day} (${result.value.status}), version ${result.value.version}, ${result.value.entries} journal ${result.value.entries === 1 ? 'entry' : 'entries'}\n`)
+      return 0
+    }
+
+    case 'simulation-status': {
+      const simulationId = requireFlag(flags, 'simulation')
+      const snapshot = await simulationStatus(simulationId)
+      if (!snapshot.ok) throw new Error(refusalText(snapshot.error))
+      process.stdout.write(`${JSON.stringify(snapshot.value, null, 2)}\n`)
       return 0
     }
 

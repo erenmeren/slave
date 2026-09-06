@@ -140,7 +140,7 @@ describe('the orchestrator CLI', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate", "User" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "SimulationModelUsage", "SimulationJournalEntry", "SimulationRun", "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate", "User" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
   })
@@ -1198,5 +1198,43 @@ describe('the orchestrator CLI', () => {
       expect(result.code).toBe(0)
       expect(result.stdout.trim()).toBe('')
     })
+  })
+
+  describe('simulations (M29)', () => {
+    async function tradingCompany(): Promise<string> {
+      const template = await prisma.slaveTemplate.create({ data: { name: 'Trade Clerk', role: 'clerk' } })
+      const company = await prisma.company.create({ data: { name: 'Demo Trading Co.' } })
+      for (const [department, slave] of [['Sales', 'Sonia'], ['Purchasing', 'Pete'], ['Operations', 'Olga'], ['Finance', 'Fin']] as const) {
+        const team = await prisma.companyTeam.create({ data: { companyId: company.id, name: department } })
+        await prisma.companySlave.create({ data: { companyTeamId: team.id, templateId: template.id, name: slave } })
+      }
+      return company.id
+    }
+    it('creates, steps and reports a simulation; the status is JSON with the two money figures apart', async () => {
+      const companyId = await tradingCompany()
+      const created = await runCli(['create-simulation', '--company', companyId, '--name', 'cli demo', '--policy', 'B'])
+      expect(created.code).toBe(0)
+      const id = /simulation (\S+) created/.exec(created.stdout)?.[1] ?? ''
+      expect(id).not.toBe('')
+      const stepped = await runCli(['step-simulation', '--simulation', id, '--until-day', '30'])
+      expect(stepped.code).toBe(0)
+      expect(stepped.stdout).toContain(`simulation ${id} at day 30 (finished), version 1`)
+      const status = await runCli(['simulation-status', '--simulation', id])
+      expect(status.code).toBe(0)
+      const parsed = JSON.parse(status.stdout) as { summary: { status: string; synthetic: boolean; decisionProvider: string }; company: { cashMinor: number }; modelUsage: { costUsd: number | null } }
+      expect(parsed.summary).toMatchObject({ status: 'finished', synthetic: true, decisionProvider: 'rules' })
+      expect(typeof parsed.company.cashMinor).toBe('number')
+      expect(parsed.modelUsage.costUsd).toBeNull()
+      const again = await runCli(['step-simulation', '--simulation', id, '--steps', '1'])
+      expect(again.code).toBe(1)
+      expect(again.stderr).toContain('is finished; it cannot be stepped')
+    }, 30_000)
+    it('refuses an unsupported sector without creating anything', async () => {
+      const companyId = await tradingCompany()
+      const result = await runCli(['create-simulation', '--company', companyId, '--name', 'x', '--policy', 'A', '--sector', 'software'])
+      expect(result.code).toBe(1)
+      expect(result.stderr).toContain('cannot run in simulation mode yet')
+      expect(await prisma.simulationRun.count()).toBe(0)
+    }, 30_000)
   })
 })
