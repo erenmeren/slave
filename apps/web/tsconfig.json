@@ -39,6 +39,7 @@
     "test"
   ],
   "references": [
-    { "path": "../../packages/control" }
+    { "path": "../../packages/control" },
+    { "path": "../../packages/simulation" }
   ]
 }
