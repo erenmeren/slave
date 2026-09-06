@@ -71,6 +71,9 @@ const ROSTER = [
 ]
 const SIM_NAME_A = 'gate A'
 const SIM_NAME_B = 'gate B'
+// Fixed and hardcoded, not varied per run: M29's engine carries a seeded `rngState` but never
+// consumes it (the demo scenario is an explicit, non-random list of events), so no outcome this
+// gate checks depends on the seed's value.
 const SEED = 5
 
 /** Same currency formatting the run page uses (`apps/web/src/lib/money.ts`'s `formatMinor`) --
