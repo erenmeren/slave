@@ -2,6 +2,7 @@
   "files": [],
   "references": [
     { "path": "packages/domain" },
+    { "path": "packages/simulation" },
     { "path": "packages/db" },
     { "path": "packages/events" },
     { "path": "packages/control" },
