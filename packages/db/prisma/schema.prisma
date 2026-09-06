@@ -652,7 +652,15 @@ model SimulationRun {
   status           SimulationStatus     @default(ready)
   simTime          Int                  @default(0)
   stepCount        Int                  @default(0)
-  decisionCount    Int                  @default(0)
+  /// M29 named this `decisionCount`; it counts actions, not decision points (M29 final review).
+  /// The column keeps its name, the field says what it holds.
+  actionCount      Int                  @default(0) @map("decisionCount")
+  /// M30 auto-run intent (spec §3): step one day every `autoRunEveryMs` while running, until
+  /// `simTime >= autoRunUntilDay`; `lastAutoStepAt` is the pacing watermark the daemon's verb
+  /// compares under the row lock. All three null = no intent.
+  autoRunEveryMs   Int?
+  autoRunUntilDay  Int?
+  lastAutoStepAt   DateTime?
   haltedReason     String?
   clonedFromId     String?
   createdByUserId  String?
