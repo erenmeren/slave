@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SimulationsClient } from '../src/components/sim/SimulationsClient.js'
 import type { SimulationSummary } from '@slave-of-ai/control'
@@ -27,7 +27,7 @@ describe('SimulationsClient', () => {
     expect(first.textContent).toContain('day 4 / 30')
     expect(first.textContent).toContain('running')
     expect(first.textContent).toContain('rules provider')
-    fireEvent.click(first)
+    fireEvent.click(within(first).getByRole('button'))
     expect(routerPush).toHaveBeenCalledWith('/sim/s1')
     expect(screen.getAllByTestId('sim-card')).toHaveLength(2)
   })

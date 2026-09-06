@@ -7,7 +7,7 @@ import { PrimaryButton, SelectField, TextField } from '../ui/FormControls'
 
 export interface SimulationCompanyOption { readonly id: string; readonly name: string; readonly slaves: number }
 
-/** Create a simulation from a catalog company (M29 §7). No repository, no branch, no verify
+/** Create a simulation from a catalog company (M29 §7). No source checkout, no branch, no verify
  *  command: the trade sector runs on simulated resources, and this form says so. */
 export function NewSimulationDrawer({ open, onClose, companies }: { readonly open: boolean; readonly onClose: () => void; readonly companies: readonly SimulationCompanyOption[] }): React.JSX.Element | null {
   const router = useRouter()

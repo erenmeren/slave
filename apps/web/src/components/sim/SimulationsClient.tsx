@@ -25,8 +25,8 @@ export function SimulationsClient({ cards, companies }: { readonly cards: readon
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
             {cards.map((card) => (
               <div key={card.id} data-testid="sim-card">
-                <div data-testid={`sim-card-${card.id}`} onClick={() => router.push(`/sim/${card.id}`)} className="cursor-pointer">
-                  <Card>
+                <div data-testid={`sim-card-${card.id}`}>
+                  <Card onClick={() => router.push(`/sim/${card.id}`)}>
                     <div className="flex items-center gap-2">
                       <span data-testid="sim-chip"><Chip tone="waiting">SIMULATION</Chip></span>
                       <span className="text-sm text-text-1">{card.name}</span>
