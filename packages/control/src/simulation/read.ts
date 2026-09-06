@@ -10,7 +10,7 @@ import { comparable, parseRow, type LoadedSimulation, type SimulationSummary } f
  *  `buildSimulationSnapshot`, which imports this across the package boundary -- final fix wave,
  *  Important #2). */
 export async function readSimulation(client: PrismaClient | Prisma.TransactionClient, simulationId: string): Promise<Result<LoadedSimulation, ControlRefusal>> {
-  const row = await client.simulationRun.findUnique({ where: { id: simulationId }, include: { company: { select: { name: true } } } })
+  const row = await client.simulationRun.findUnique({ where: { id: simulationId }, include: { company: { select: { name: true } }, clonedFrom: { select: { name: true } } } })
   if (row === null) return err({ kind: 'simulation_not_found', simulationId })
   return parseRow(row)
 }
@@ -20,7 +20,7 @@ export async function loadSimulation(simulationId: string): Promise<Result<Loade
 }
 
 export async function listSimulations(companyId?: string): Promise<readonly SimulationSummary[]> {
-  const rows = await prisma.simulationRun.findMany({ where: companyId === undefined ? {} : { companyId }, include: { company: { select: { name: true } } }, orderBy: [{ createdAt: 'desc' }] })
+  const rows = await prisma.simulationRun.findMany({ where: companyId === undefined ? {} : { companyId }, include: { company: { select: { name: true } }, clonedFrom: { select: { name: true } } }, orderBy: [{ createdAt: 'desc' }] })
   return rows.flatMap((row) => { const p = parseRow(row); return p.ok ? [p.value.summary] : [] })
 }
 

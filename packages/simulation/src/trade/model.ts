@@ -106,14 +106,16 @@ function applyEvent(state: TradeState, event: TradeEvent, day: number): Applied<
     }
     case 'delivery': {
       const purchase = state.purchases.find((p) => p.id === event.purchaseId)
-      if (purchase === undefined || purchase.status !== 'ordered') return { state, schedule: [], record: { ignored: 'not_ordered', purchaseId: event.purchaseId } }
+      if (purchase === undefined) return { state, schedule: [], record: { ignored: 'unknown_purchase', purchaseId: event.purchaseId } }
+      if (purchase.status !== 'ordered') return { state, schedule: [], record: { ignored: 'already_delivered', purchaseId: purchase.id } }
       if (day < purchase.expectedDay) return { state, schedule: [], record: { ignored: 'before_expected_day', purchaseId: purchase.id, expectedDay: purchase.expectedDay } }
       const purchases = state.purchases.map((p) => (p.id === purchase.id ? { ...p, deliveredDay: day, status: 'delivered' as const } : p))
       return { state: { ...state, inventory: state.inventory + purchase.qty, purchases }, schedule: [], record: { purchaseId: purchase.id, qty: purchase.qty } }
     }
     case 'payment_due': {
       const purchase = state.purchases.find((p) => p.id === event.purchaseId)
-      if (purchase === undefined || purchase.paid) return { state, schedule: [], record: { ignored: 'already_paid', purchaseId: event.purchaseId } }
+      if (purchase === undefined) return { state, schedule: [], record: { ignored: 'unknown_purchase', purchaseId: event.purchaseId } }
+      if (purchase.paid) return { state, schedule: [], record: { ignored: 'already_paid', purchaseId: purchase.id } }
       const amount = purchase.qty * purchase.unitPriceMinor
       const purchases = state.purchases.map((p) => (p.id === purchase.id ? { ...p, paid: true } : p))
       return { state: { ...state, cashMinor: state.cashMinor - amount, purchases }, schedule: [], record: { purchaseId: purchase.id, paidMinor: amount } }

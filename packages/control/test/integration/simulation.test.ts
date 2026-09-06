@@ -2,6 +2,7 @@ import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { deleteCompany, renameCompanyTeam } from '../../src/org.js'
 import {
+  cloneSimulation,
   createSimulation,
   deleteSimulation,
   haltSimulation,
@@ -13,6 +14,7 @@ import {
   resumeSimulation,
   simulationStatus,
   stepSimulation,
+  type LoadedSimulation,
 } from '../../src/simulation.js'
 
 async function seedTradingCompany(name = 'Demo Trading Co.'): Promise<string> {
@@ -201,6 +203,34 @@ describe('idempotency keys are namespaced by verb', () => {
     expect(injectedAgain.ok).toBe(true)
     const loaded = await loadSimulation(id)
     expect(loaded.ok && loaded.value.state.queue.items.filter((i) => i.time === 5)).toHaveLength(1)
+  })
+})
+
+describe('cloneSimulation', () => {
+  it('starts at day 0 from the frozen definition with the new policy and seed, carrying no injected event and no journal', async () => {
+    const source = await create('src', 'A')
+    await stepSimulation(source, { steps: 2 })
+    await injectExternalEvent(source, { day: 5, event: { type: 'demand', qty: 10, unitPriceMinor: 1_000, dueInDays: 3, collectInDays: 0 } })
+    const cloned = await cloneSimulation(source, { name: 'src (B)', policy: 'B', seed: 11 })
+    expect(cloned.ok).toBe(true)
+    const id = cloned.ok ? cloned.value.id : ''
+    const loaded = await loadSimulation(id)
+    expect(loaded.ok && loaded.value.summary).toMatchObject({ policy: 'B', status: 'ready', simTime: 0, clonedFromId: source, autoRun: null })
+    expect(loaded.ok && loaded.value.definition.seed).toBe(11)
+    const sourceLoaded = await loadSimulation(source)
+    expect(loaded.ok && loaded.value.definition.roster).toEqual(sourceLoaded.ok ? (sourceLoaded as { ok: true; value: LoadedSimulation }).value.definition.roster : null)
+    expect(loaded.ok && loaded.value.state.queue.items.filter((i) => i.time === 5)).toHaveLength(0)
+    const rows = await prisma.simulationJournalEntry.findMany({ where: { simulationId: id } })
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.payload).toMatchObject({ op: 'created', clonedFrom: source, policy: 'B', seed: 11 })
+  })
+  it('refuses an unknown source, a duplicate name, an empty name and a non-integer seed', async () => {
+    const source = await create('src')
+    expect((await cloneSimulation('00000000-0000-4000-8000-00000000dead', { name: 'x', policy: 'A' })).ok).toBe(false)
+    const dup = await cloneSimulation(source, { name: 'src', policy: 'B' })
+    expect(dup.ok === false && dup.error).toEqual({ kind: 'duplicate_name', name: 'src' })
+    expect((await cloneSimulation(source, { name: '  ', policy: 'B' })).ok).toBe(false)
+    expect((await cloneSimulation(source, { name: 'y', policy: 'B', seed: 1.5 })).ok).toBe(false)
   })
 })
 

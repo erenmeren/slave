@@ -32,6 +32,7 @@ export function SimulationsClient({ cards, companies }: { readonly cards: readon
                       <span className="text-sm text-text-1">{card.name}</span>
                     </div>
                     <div className="text-xs text-text-3">{card.companyName} · {card.sector} · policy {card.policy} · {card.decisionProvider} provider</div>
+                    {card.clonedFromName !== null && <div className="text-xs text-text-3">clone of {card.clonedFromName}</div>}
                     <div className="flex items-center gap-2 text-xs text-text-2">
                       <span>day {card.simTime} / {card.horizonDays}</span>
                       <Chip tone={STATUS_TONE[card.status]}>{card.status}</Chip>

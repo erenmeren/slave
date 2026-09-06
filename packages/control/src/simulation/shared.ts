@@ -31,6 +31,7 @@ export interface SimulationSummary {
   readonly synthetic: true
   readonly autoRun: { readonly everyMs: number; readonly untilDay: number; readonly lastStepAt: string | null } | null
   readonly clonedFromId: string | null
+  readonly clonedFromName: string | null
 }
 
 export interface LoadedSimulation {
@@ -45,7 +46,7 @@ export const engineStateSchema = z.object({
   journalSeq: z.number().int(), stepCount: z.number().int(), decisionCount: z.number().int(), status: z.enum(['ready', 'running', 'finished', 'halted']), haltedReason: z.string().nullable(),
 })
 
-export type Row = Prisma.SimulationRunGetPayload<{ include: { company: { select: { name: true } } } }>
+export type Row = Prisma.SimulationRunGetPayload<{ include: { company: { select: { name: true } }; clonedFrom: { select: { name: true } } } }>
 
 export function summarize(row: Row, definition: TradeSimulationDefinition): SimulationSummary {
   return {
@@ -53,6 +54,7 @@ export function summarize(row: Row, definition: TradeSimulationDefinition): Simu
     policy: definition.policy, status: row.status, simTime: row.simTime, horizonDays: definition.horizonDays, stepCount: row.stepCount,
     actionCount: row.actionCount,
     clonedFromId: row.clonedFromId,
+    clonedFromName: row.clonedFrom?.name ?? null,
     autoRun: row.autoRunEveryMs !== null && row.autoRunUntilDay !== null ? { everyMs: row.autoRunEveryMs, untilDay: row.autoRunUntilDay, lastStepAt: row.lastAutoStepAt?.toISOString() ?? null } : null,
     version: row.version, haltedReason: row.haltedReason, createdAt: row.createdAt.toISOString(), synthetic: true,
   }
@@ -81,7 +83,7 @@ export const namespacedKey = (verb: 'step' | 'inject', key: string): string => `
 
 export async function locked(tx: Prisma.TransactionClient, simulationId: string): Promise<Result<{ row: Row; loaded: LoadedSimulation }, ControlRefusal>> {
   await tx.$queryRaw`SELECT id FROM "SimulationRun" WHERE id = ${simulationId} FOR UPDATE`
-  const row = await tx.simulationRun.findUnique({ where: { id: simulationId }, include: { company: { select: { name: true } } } })
+  const row = await tx.simulationRun.findUnique({ where: { id: simulationId }, include: { company: { select: { name: true } }, clonedFrom: { select: { name: true } } } })
   if (row === null) return err({ kind: 'simulation_not_found', simulationId })
   const loaded = parseRow(row)
   return loaded.ok ? ok({ row, loaded: loaded.value }) : loaded

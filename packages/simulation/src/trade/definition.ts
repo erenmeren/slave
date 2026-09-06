@@ -90,6 +90,13 @@ export function demoDefinition(input: { readonly policy: TradePolicy; readonly s
   }) as TradeSimulationDefinition
 }
 
+/** A clone shares the world, not the history (M30 §2.3): every frozen field copied, only the
+ *  policy and the seed replaced. Deep-copied through JSON so a clone never aliases its source. */
+export function cloneDefinition(definition: TradeSimulationDefinition, over: { readonly policy: TradePolicy; readonly seed: number }): TradeSimulationDefinition {
+  const copy = JSON.parse(JSON.stringify(definition)) as TradeSimulationDefinition
+  return tradeSimulationDefinitionSchema.parse({ ...copy, policy: over.policy, seed: over.seed }) as TradeSimulationDefinition
+}
+
 export function tradeInitialEngineState(definition: TradeSimulationDefinition): EngineState<TradeState, TradeEvent> {
   const scenario: ScheduleRequest<TradeEvent>[] = definition.scenario.map((s) => ({ time: s.day, priority: 'external', event: s.event }))
   return initialEngineState(initialTradeState(definition.initial), scenario, definition.seed)

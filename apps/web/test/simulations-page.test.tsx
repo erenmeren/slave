@@ -10,7 +10,7 @@ vi.mock('next/navigation', () => ({ useRouter: () => ({ push: routerPush, refres
 
 const card = (over: Partial<SimulationSummary> = {}): SimulationSummary => ({
   id: 's1', companyId: 'c1', companyName: 'Demo Trading Co.', name: 'Q3 plan', sector: 'trade', mode: 'simulation', decisionProvider: 'rules', policy: 'A',
-  status: 'running', simTime: 4, horizonDays: 30, stepCount: 4, actionCount: 16, version: 2, haltedReason: null, createdAt: '2026-09-06T00:00:00.000Z', synthetic: true, autoRun: null, clonedFromId: null, ...over,
+  status: 'running', simTime: 4, horizonDays: 30, stepCount: 4, actionCount: 16, version: 2, haltedReason: null, createdAt: '2026-09-06T00:00:00.000Z', synthetic: true, autoRun: null, clonedFromId: null, clonedFromName: null, ...over,
 })
 const companies = [{ id: 'c1', name: 'Demo Trading Co.', slaves: 4 }, { id: 'c2', name: 'Tiny', slaves: 1 }]
 
@@ -58,6 +58,10 @@ describe('SimulationsClient', () => {
     await act(async () => { fireEvent.click(screen.getByTestId('new-simulation-submit')) })
     expect(screen.getByTestId('new-simulation-error').textContent).toContain('needs 4')
     expect(screen.getByTestId('new-simulation-drawer')).toBeTruthy()
+  })
+  it('a card cloned from another run shows "clone of <name>"', () => {
+    render(<SimulationsClient cards={[card({ clonedFromId: 's0', clonedFromName: 'Q3 plan' })]} companies={companies} />)
+    expect(screen.getByTestId('sim-card-s1').textContent).toContain('clone of Q3 plan')
   })
   it('an empty list says so and names the demo company', () => {
     render(<SimulationsClient cards={[]} companies={companies} />)

@@ -1,7 +1,7 @@
 import { Prisma, prisma } from '@slave-of-ai/db/client'
 import { err, ok, type Result } from '@slave-of-ai/domain'
 import {
-  RulesDecisionProvider, demoDefinition, runUntil, tradeExternalEventSchema, tradeInitialEngineState, tradeModel,
+  RulesDecisionProvider, cloneDefinition, demoDefinition, runUntil, tradeExternalEventSchema, tradeInitialEngineState, tradeModel,
 } from '@slave-of-ai/simulation'
 import { isUniqueConstraintViolation } from '../prisma-errors.js'
 import type { Principal } from '../principal.js'
@@ -9,6 +9,7 @@ import type { ControlRefusal } from '../refusal.js'
 import {
   MAX_STEPS_PER_REQUEST, SUPPORTED, clearAutoRun, json, journalRows, locked, namespacedKey, type LoadedSimulation, type Row,
 } from './shared.js'
+import { loadSimulation } from './read.js'
 
 export async function createSimulation(
   input: { readonly companyId: string; readonly name: string; readonly sector: 'trade'; readonly mode?: 'simulation'; readonly policy: 'A' | 'B'; readonly seed?: number; readonly scenario?: 'demo' },
@@ -31,6 +32,36 @@ export async function createSimulation(
         companyId: company.id, name: input.name.trim(), sector: 'trade', mode: 'simulation', decisionProvider: 'rules', seed,
         definition: json(definition), state: json(state), createdByUserId: principal?.userId ?? null,
         journal: { create: { seq: 0, simTime: 0, kind: 'control', actorRole: null, payload: { op: 'created', policy: input.policy, seed, synthetic: true } } },
+      },
+    })
+    return ok({ id: row.id })
+  } catch (error) {
+    if (isUniqueConstraintViolation(error)) return err({ kind: 'duplicate_name', name: input.name.trim() })
+    throw error
+  }
+}
+
+/** Clones a run from its frozen definition (spec M30 §2.3): a fresh row at day 0, the same
+ *  scenario and roster, only the policy and (optionally) the seed replaced. Carries no injected
+ *  event and no journal from the source -- only its own single `created` control row. */
+export async function cloneSimulation(
+  sourceId: string,
+  input: { readonly name: string; readonly policy: 'A' | 'B'; readonly seed?: number },
+  principal?: Principal,
+): Promise<Result<{ readonly id: string }, ControlRefusal>> {
+  if (input.name.trim() === '') return err({ kind: 'invalid_simulation_input', detail: 'name must not be empty' })
+  if (input.seed !== undefined && !Number.isInteger(input.seed)) return err({ kind: 'invalid_simulation_input', detail: 'seed must be an integer' })
+  const source = await loadSimulation(sourceId)
+  if (!source.ok) return source
+  const seed = input.seed ?? source.value.definition.seed
+  const definition = cloneDefinition(source.value.definition, { policy: input.policy, seed })
+  const state = tradeInitialEngineState(definition)
+  try {
+    const row = await prisma.simulationRun.create({
+      data: {
+        companyId: source.value.summary.companyId, name: input.name.trim(), sector: 'trade', mode: 'simulation', decisionProvider: 'rules', seed,
+        definition: json(definition), state: json(state), clonedFromId: sourceId, createdByUserId: principal?.userId ?? null,
+        journal: { create: { seq: 0, simTime: 0, kind: 'control', actorRole: null, payload: { op: 'created', policy: input.policy, seed, synthetic: true, clonedFrom: sourceId } } },
       },
     })
     return ok({ id: row.id })

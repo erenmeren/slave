@@ -8,6 +8,7 @@ import type { SimulationSnapshot, JournalRow } from '../../server/simulation'
 import { DangerConfirm } from '../ui/DangerConfirm'
 import { PrimaryButton, GhostButton, SelectField, TextField } from '../ui/FormControls'
 import { Panel } from '../ui/Panel'
+import { CloneDrawer } from './CloneDrawer'
 import { JournalTable } from './JournalTable'
 import { SimulationStrip } from './SimulationStrip'
 
@@ -31,6 +32,7 @@ export function SimulationClient({ initial }: { readonly initial: SimulationSnap
   const [pending, setPending] = useState(false)
   const [errorText, setErrorText] = useState<string | null>(null)
   const [injectOpen, setInjectOpen] = useState(false)
+  const [cloneOpen, setCloneOpen] = useState(false)
   const [inject, setInject] = useState({ kind: 'demand', day: String(company.day + 1), qty: '10', unitPrice: '120.00', dueInDays: '10', collectInDays: '15', supplierId: 'normal', extraDays: '3' })
   const runnable = summary.status === 'ready' || summary.status === 'running'
   const base = `/api/sim/${summary.id}`
@@ -75,6 +77,7 @@ export function SimulationClient({ initial }: { readonly initial: SimulationSnap
           )}
           <DangerConfirm label="Halt" testId="sim-halt" confirmText="halt this simulation: no further step, ever" disabled={pending || summary.status === 'finished' || summary.status === 'halted'} onConfirm={async () => { const error = await sendControl(`${base}/halt`, { method: 'POST', body: { reason: 'operator' } }); if (error === null) router.refresh(); return error }} />
           <GhostButton data-testid="sim-inject-open" disabled={summary.status === 'finished' || summary.status === 'halted'} onClick={() => setInjectOpen((v) => !v)}>Add external event</GhostButton>
+          <GhostButton data-testid="sim-clone-open" onClick={() => setCloneOpen(true)}>Clone…</GhostButton>
           {errorText !== null && <span role="alert" data-testid="sim-error" className="text-xs text-tone-blocked">{errorText}</span>}
           {summary.status === 'halted' && <span className="text-xs text-text-3">halted{summary.haltedReason !== null ? ` (${summary.haltedReason})` : ''} — stepping is in-request, so nothing was in flight to stop</span>}
         </div>
@@ -166,6 +169,7 @@ export function SimulationClient({ initial }: { readonly initial: SimulationSnap
           </div>
         )}
       </div>
+      <CloneDrawer open={cloneOpen} onClose={() => setCloneOpen(false)} sourceId={summary.id} sourceName={summary.name} sourcePolicy={summary.policy} />
     </div>
   )
 }

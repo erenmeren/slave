@@ -7,6 +7,7 @@ import { POST as pausePOST } from '../../src/app/api/sim/[simulationId]/pause/ro
 import { POST as resumePOST } from '../../src/app/api/sim/[simulationId]/resume/route.js'
 import { POST as injectPOST } from '../../src/app/api/sim/[simulationId]/inject/route.js'
 import { POST as haltPOST } from '../../src/app/api/sim/[simulationId]/halt/route.js'
+import { POST as clonePOST } from '../../src/app/api/sim/[simulationId]/clone/route.js'
 
 async function seedTradingCompany(): Promise<string> {
   const template = await prisma.slaveTemplate.create({ data: { name: 'Trade Clerk', role: 'clerk' } })
@@ -77,5 +78,15 @@ describe('the simulation routes', () => {
     const missing = await simGET(new Request('http://x', { method: 'GET' }), params('00000000-0000-4000-8000-00000000dead'))
     expect(missing.status).toBe(404)
     expect((await missing.json()).error).toBe('no such simulation')
+  })
+  it('clone → 200 with the id and the new row cloned from the source; a bad body → 400; unknown id → 404', async () => {
+    const { id } = (await (await createPOST(json({ companyId, name: 'demo', policy: 'A' }))).json()) as { id: string }
+    const cloned = await clonePOST(json({ name: 'demo (B)', policy: 'B' }), params(id))
+    expect(cloned.status).toBe(200)
+    const { id: cloneId } = (await cloned.json()) as { ok: true; id: string }
+    const row = await prisma.simulationRun.findUnique({ where: { id: cloneId } })
+    expect(row?.clonedFromId).toBe(id)
+    expect((await clonePOST(json({ name: '' }), params(id))).status).toBe(400)
+    expect((await clonePOST(json({ name: 'x', policy: 'A' }), params('00000000-0000-4000-8000-00000000dead'))).status).toBe(404)
   })
 })

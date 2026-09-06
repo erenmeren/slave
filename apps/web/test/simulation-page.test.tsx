@@ -5,11 +5,12 @@ import { SimulationClient } from '../src/components/sim/SimulationClient.js'
 import type { SimulationSnapshot } from '../src/server/simulation.js'
 
 const routerRefresh = vi.fn()
-vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: routerRefresh, push: vi.fn() }) }))
+const routerPush = vi.fn()
+vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: routerRefresh, push: routerPush }) }))
 
 function snapshot(over: Partial<SimulationSnapshot> = {}): SimulationSnapshot {
   return {
-    summary: { id: 's1', companyId: 'c1', companyName: 'Demo Trading Co.', name: 'Q3 plan', sector: 'trade', mode: 'simulation', decisionProvider: 'rules', policy: 'B', status: 'running', simTime: 4, horizonDays: 30, stepCount: 4, actionCount: 16, version: 2, haltedReason: null, createdAt: '2026-09-06T00:00:00.000Z', synthetic: true, autoRun: null, clonedFromId: null },
+    summary: { id: 's1', companyId: 'c1', companyName: 'Demo Trading Co.', name: 'Q3 plan', sector: 'trade', mode: 'simulation', decisionProvider: 'rules', policy: 'B', status: 'running', simTime: 4, horizonDays: 30, stepCount: 4, actionCount: 16, version: 2, haltedReason: null, createdAt: '2026-09-06T00:00:00.000Z', synthetic: true, autoRun: null, clonedFromId: null, clonedFromName: null },
     currency: 'USD',
     company: { day: 4, cashMinor: 4_575_000, inventory: 10, openOrders: 1, pendingDemand: 0, inboundPurchases: 2, dailyShipCapacity: 30 },
     roles: [{ name: 'sales', slaveName: 'Sonia', purpose: 'accepts demand', allowedActions: ['accept_order', 'note'] }],
@@ -32,7 +33,7 @@ function snapshot(over: Partial<SimulationSnapshot> = {}): SimulationSnapshot {
   }
 }
 const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }))
-beforeEach(() => { vi.stubGlobal('fetch', fetchMock); fetchMock.mockClear(); routerRefresh.mockClear() })
+beforeEach(() => { vi.stubGlobal('fetch', fetchMock); fetchMock.mockClear(); routerRefresh.mockClear(); routerPush.mockClear() })
 afterEach(() => vi.unstubAllGlobals())
 
 describe('SimulationClient', () => {
@@ -105,6 +106,31 @@ describe('SimulationClient', () => {
     fireEvent.click(screen.getByTestId('sim-tab-journal'))
     expect(screen.getAllByTestId('sim-journal-row')).toHaveLength(7)
     expect(screen.getAllByTestId('sim-journal-row')[2]?.textContent).toContain('capacity_exhausted')
+  })
+  it('Clone… opens the drawer prefilled from the source; submit posts and navigates on success', async () => {
+    render(<SimulationClient initial={snapshot()} />)
+    fireEvent.click(screen.getByTestId('sim-clone-open'))
+    expect(screen.getByTestId('sim-clone-drawer')).toBeTruthy()
+    // source policy is 'B' (see snapshot()), so the name suggests '(A)' and the policy defaults to the OTHER policy, 'A'.
+    expect((screen.getByTestId('sim-clone-name') as HTMLInputElement).value).toBe('Q3 plan (A)')
+    expect((screen.getByTestId('sim-clone-policy') as HTMLSelectElement).value).toBe('A')
+    expect((screen.getByTestId('sim-clone-seed') as HTMLInputElement).value).toBe('1')
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, id: 'c1' }), { status: 200 }))
+    await act(async () => { fireEvent.click(screen.getByTestId('sim-clone-submit')) })
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
+    expect(url).toBe('/api/sim/s1/clone')
+    expect(JSON.parse(String(init.body))).toMatchObject({ name: 'Q3 plan (A)', policy: 'A', seed: 1 })
+    expect(routerPush).toHaveBeenCalledWith('/sim/c1')
+    expect(screen.queryByTestId('sim-clone-drawer')).toBeNull()
+  })
+  it('a 409 on clone keeps the drawer open with sim-clone-error', async () => {
+    render(<SimulationClient initial={snapshot()} />)
+    fireEvent.click(screen.getByTestId('sim-clone-open'))
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: 'a simulation named "Q3 plan (A)" already exists' }), { status: 409 }))
+    await act(async () => { fireEvent.click(screen.getByTestId('sim-clone-submit')) })
+    expect(screen.getByTestId('sim-clone-error').textContent).toContain('already exists')
+    expect(screen.getByTestId('sim-clone-drawer')).toBeTruthy()
+    expect(routerPush).not.toHaveBeenCalled()
   })
   it('injecting a demand posts the event for a future day', async () => {
     render(<SimulationClient initial={snapshot()} />)

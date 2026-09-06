@@ -65,6 +65,16 @@ describe('trade events', () => {
     expect(early.state.inventory).toBe(100)
     expect(early.record).toMatchObject({ ignored: 'before_expected_day' })
   })
+  it('names why an event was ignored: unknown purchase, already delivered, already paid, unknown order', () => {
+    const p = tradeModel.apply(base(), purchasing, act('place_purchase', { supplierId: 'fast', qty: 5 }), 1)
+    expect(tradeModel.applyEvent(p.state, { type: 'delivery', purchaseId: 'nope' }, 3).record).toMatchObject({ ignored: 'unknown_purchase' })
+    const delivered = tradeModel.applyEvent(p.state, { type: 'delivery', purchaseId: 'purchase-1' }, 3)
+    expect(tradeModel.applyEvent(delivered.state, { type: 'delivery', purchaseId: 'purchase-1' }, 4).record).toMatchObject({ ignored: 'already_delivered' })
+    expect(tradeModel.applyEvent(p.state, { type: 'payment_due', purchaseId: 'nope' }, 1).record).toMatchObject({ ignored: 'unknown_purchase' })
+    const paid = tradeModel.applyEvent(p.state, { type: 'payment_due', purchaseId: 'purchase-1' }, 1)
+    expect(tradeModel.applyEvent(paid.state, { type: 'payment_due', purchaseId: 'purchase-1' }, 2).record).toMatchObject({ ignored: 'already_paid' })
+    expect(tradeModel.applyEvent(base(), { type: 'collection', orderId: 'nope', qty: 1 }, 1).record).toMatchObject({ ignored: 'unknown_order' })
+  })
 })
 
 describe('trade rules', () => {
