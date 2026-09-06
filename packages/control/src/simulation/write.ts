@@ -11,14 +11,37 @@ import {
 } from './shared.js'
 import { loadSimulation } from './read.js'
 
+/** The one guard both `createSimulation` and `cloneSimulation` run before touching the database:
+ *  an empty (or all-whitespace) name, or a seed that isn't an integer. */
+function validateNameAndSeed(name: string, seed: number | undefined): ControlRefusal | null {
+  if (name.trim() === '') return { kind: 'invalid_simulation_input', detail: 'name must not be empty' }
+  if (seed !== undefined && !Number.isInteger(seed)) return { kind: 'invalid_simulation_input', detail: 'seed must be an integer' }
+  return null
+}
+
+/** The one insert both `createSimulation` and `cloneSimulation` make: the row plus its seq-0
+ *  `created` journal row, with the unique-name violation turned into the typed refusal. */
+async function insertRun(
+  data: Omit<Prisma.SimulationRunUncheckedCreateInput, 'journal' | 'name'> & { readonly name: string },
+  createdPayload: Prisma.InputJsonValue,
+): Promise<Result<{ readonly id: string }, ControlRefusal>> {
+  try {
+    const row = await prisma.simulationRun.create({ data: { ...data, journal: { create: { seq: 0, simTime: 0, kind: 'control', actorRole: null, payload: createdPayload } } } })
+    return ok({ id: row.id })
+  } catch (error) {
+    if (isUniqueConstraintViolation(error)) return err({ kind: 'duplicate_name', name: data.name })
+    throw error
+  }
+}
+
 export async function createSimulation(
   input: { readonly companyId: string; readonly name: string; readonly sector: 'trade'; readonly mode?: 'simulation'; readonly policy: 'A' | 'B'; readonly seed?: number; readonly scenario?: 'demo' },
   principal?: Principal,
 ): Promise<Result<{ readonly id: string }, ControlRefusal>> {
   const mode = input.mode ?? 'simulation'
   if (!SUPPORTED.has(`${input.sector}:${mode}`)) return err({ kind: 'unsupported_simulation', sector: input.sector, mode })
-  if (input.name.trim() === '') return err({ kind: 'invalid_simulation_input', detail: 'name must not be empty' })
-  if (input.seed !== undefined && !Number.isInteger(input.seed)) return err({ kind: 'invalid_simulation_input', detail: 'seed must be an integer' })
+  const invalid = validateNameAndSeed(input.name, input.seed)
+  if (invalid !== null) return err(invalid)
   const company = await prisma.company.findUnique({ where: { id: input.companyId }, include: { teams: { orderBy: { name: 'asc' }, include: { slaves: { orderBy: { name: 'asc' } } } } } })
   if (company === null) return err({ kind: 'company_not_found', companyId: input.companyId })
   const roster = company.teams.flatMap((team) => team.slaves.map((slave) => ({ slaveName: slave.name, departmentName: team.name })))
@@ -26,19 +49,10 @@ export async function createSimulation(
   const seed = input.seed ?? 1
   const definition = demoDefinition({ policy: input.policy, seed, roster, currency: 'USD' })
   const state = tradeInitialEngineState(definition)
-  try {
-    const row = await prisma.simulationRun.create({
-      data: {
-        companyId: company.id, name: input.name.trim(), sector: 'trade', mode: 'simulation', decisionProvider: 'rules', seed,
-        definition: json(definition), state: json(state), createdByUserId: principal?.userId ?? null,
-        journal: { create: { seq: 0, simTime: 0, kind: 'control', actorRole: null, payload: { op: 'created', policy: input.policy, seed, synthetic: true } } },
-      },
-    })
-    return ok({ id: row.id })
-  } catch (error) {
-    if (isUniqueConstraintViolation(error)) return err({ kind: 'duplicate_name', name: input.name.trim() })
-    throw error
-  }
+  return insertRun(
+    { companyId: company.id, name: input.name.trim(), sector: 'trade', mode: 'simulation', decisionProvider: 'rules', seed, definition: json(definition), state: json(state), createdByUserId: principal?.userId ?? null },
+    { op: 'created', policy: input.policy, seed, synthetic: true },
+  )
 }
 
 /** Clones a run from its frozen definition (spec M30 §2.3): a fresh row at day 0, the same
@@ -49,26 +63,17 @@ export async function cloneSimulation(
   input: { readonly name: string; readonly policy: 'A' | 'B'; readonly seed?: number },
   principal?: Principal,
 ): Promise<Result<{ readonly id: string }, ControlRefusal>> {
-  if (input.name.trim() === '') return err({ kind: 'invalid_simulation_input', detail: 'name must not be empty' })
-  if (input.seed !== undefined && !Number.isInteger(input.seed)) return err({ kind: 'invalid_simulation_input', detail: 'seed must be an integer' })
+  const invalid = validateNameAndSeed(input.name, input.seed)
+  if (invalid !== null) return err(invalid)
   const source = await loadSimulation(sourceId)
   if (!source.ok) return source
   const seed = input.seed ?? source.value.definition.seed
   const definition = cloneDefinition(source.value.definition, { policy: input.policy, seed })
   const state = tradeInitialEngineState(definition)
-  try {
-    const row = await prisma.simulationRun.create({
-      data: {
-        companyId: source.value.summary.companyId, name: input.name.trim(), sector: 'trade', mode: 'simulation', decisionProvider: 'rules', seed,
-        definition: json(definition), state: json(state), clonedFromId: sourceId, createdByUserId: principal?.userId ?? null,
-        journal: { create: { seq: 0, simTime: 0, kind: 'control', actorRole: null, payload: { op: 'created', policy: input.policy, seed, synthetic: true, clonedFrom: sourceId } } },
-      },
-    })
-    return ok({ id: row.id })
-  } catch (error) {
-    if (isUniqueConstraintViolation(error)) return err({ kind: 'duplicate_name', name: input.name.trim() })
-    throw error
-  }
+  return insertRun(
+    { companyId: source.value.summary.companyId, name: input.name.trim(), sector: 'trade', mode: 'simulation', decisionProvider: 'rules', seed, definition: json(definition), state: json(state), clonedFromId: sourceId, createdByUserId: principal?.userId ?? null },
+    { op: 'created', policy: input.policy, seed, synthetic: true, clonedFrom: sourceId },
+  )
 }
 
 /** The one step body (spec M30 §2.1): the button, the CLI and the daemon's auto-run all come
