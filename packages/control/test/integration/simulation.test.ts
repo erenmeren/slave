@@ -185,6 +185,16 @@ describe('injectExternalEvent', () => {
     // The stored key is namespaced by verb (`inject:ev1`), not the caller's bare `ev1` (fix round 1, Important #1).
     expect(await prisma.simulationJournalEntry.count({ where: { simulationId: id, kind: 'external_event', idempotencyKey: 'inject:ev1' } })).toBe(1)
   })
+  // Auto-run fix round 1, Important #1: `injectExternalEvent` was the one write verb with no
+  // status guard, computing its journal seq from `state.journalSeq` -- which a throw-path
+  // `haltUnparsed` (M30 §5) never rewrites. On a halted run that seq can lag the journal's real
+  // max, so an injection collided on the `(simulationId, seq)` unique instead of refusing cleanly.
+  it('refuses on a halted run instead of computing a stale journal seq (auto-run fix round 1, Important #1)', async () => {
+    const id = await create()
+    expect((await haltSimulation(id, 'operator')).ok).toBe(true)
+    const injected = await injectExternalEvent(id, { day: 0, event: { type: 'demand', qty: 10, unitPriceMinor: 1_000, dueInDays: 3, collectInDays: 0 } })
+    expect(injected.ok === false && injected.error).toEqual({ kind: 'simulation_not_runnable', simulationId: id, status: 'halted' })
+  })
 })
 
 describe('idempotency keys are namespaced by verb', () => {

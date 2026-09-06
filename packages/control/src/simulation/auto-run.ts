@@ -26,7 +26,7 @@ export async function startAutoRun(simulationId: string, input: { readonly every
   })
 }
 
-export async function stopAutoRun(simulationId: string, reason: 'operator' | 'until_day' = 'operator', _principal?: Principal): Promise<Result<void, ControlRefusal>> {
+export async function stopAutoRun(simulationId: string, reason: 'operator' = 'operator', _principal?: Principal): Promise<Result<void, ControlRefusal>> {
   return prisma.$transaction(async (tx) => {
     const got = await locked(tx, simulationId)
     if (!got.ok) return got

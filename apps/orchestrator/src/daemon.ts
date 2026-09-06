@@ -130,17 +130,17 @@ export async function runDaemon(deps: DaemonDeps): Promise<void> {
       ) {
         process.stdout.write(`${JSON.stringify(report)}\n`)
       }
-      // The guardrail sweep -- run timeout, tool-call ceiling, dead pids -- lives with the daemon,
-      // not inside `tick()`: it kills processes, which is a lifecycle concern like the startup
-      // reconcile above, and a one-shot CLI `tick` cancelling runs it did not start would be a
-      // surprise. Until M9 wired this line, `sweep()` had no production caller at all and the
-      // runTimeoutMs / maxToolCallsPerRun limits were enforced by nothing.
       // M30 §5: auto-run stepping is a global pass, not part of `tick()` -- simulations belong to
       // a company, not to this daemon's workspace, and `decide()` stays pure (ADR 0004). Two
       // daemons both running this pass is safe: `autoStepDue` decides "due" under the row lock.
       const sims = await tickSimulations({ now: new Date() })
       if (sims.stepped > 0 || sims.halted > 0) process.stdout.write(`${JSON.stringify({ simulations: sims })}\n`)
 
+      // The guardrail sweep -- run timeout, tool-call ceiling, dead pids -- lives with the daemon,
+      // not inside `tick()`: it kills processes, which is a lifecycle concern like the startup
+      // reconcile above, and a one-shot CLI `tick` cancelling runs it did not start would be a
+      // surprise. Until M9 wired this line, `sweep()` had no production caller at all and the
+      // runTimeoutMs / maxToolCallsPerRun limits were enforced by nothing.
       const swept = await sweep({ workspaceId: deps.workspaceId, registry: deps.registry, livePumpRunIds: activePumpRunIds })
       if (swept.timedOut.length > 0 || swept.overToolCap.length > 0 || swept.deadPids.length > 0) {
         process.stdout.write(`${JSON.stringify({ sweep: swept })}\n`)

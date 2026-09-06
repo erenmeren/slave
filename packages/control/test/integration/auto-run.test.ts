@@ -1,6 +1,6 @@
 import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
-import { autoStepDue, createSimulation, haltSimulation, loadSimulation, pauseSimulation, startAutoRun, stepSimulation, stopAutoRun, tickSimulations } from '../../src/simulation.js'
+import { autoStepDue, createSimulation, haltSimulation, injectExternalEvent, loadSimulation, pauseSimulation, startAutoRun, stepSimulation, stopAutoRun, tickSimulations } from '../../src/simulation.js'
 
 async function seedTradingCompany(name = 'Demo Trading Co.'): Promise<string> {
   const template = await prisma.slaveTemplate.upsert({ where: { name: 'Trade Clerk' }, create: { name: 'Trade Clerk', role: 'clerk' }, update: {} })
@@ -82,6 +82,7 @@ describe('autoStepDue', () => {
     const row = await prisma.simulationRun.findUniqueOrThrow({ where: { id } })
     expect(row).toMatchObject({ simTime: 2, status: 'running', autoRunEveryMs: null })
     expect((await controlOps(id)).at(-1)).toBe('auto_run_stopped')
+    expect((await prisma.simulationJournalEntry.findFirst({ where: { simulationId: id, kind: 'control' }, orderBy: { seq: 'desc' } }))?.payload).toMatchObject({ op: 'auto_run_stopped', reason: 'until_day' })
     await pauseSimulation(id)
     // `startAutoRun` on a `paused` row refuses (its own status guard: only `ready`/`running` may
     // arm an intent) without writing anything, so the row here is field-identical to a row that
@@ -92,6 +93,16 @@ describe('autoStepDue', () => {
     // `Row` carries no such history field. See task-3-report.md for the full trace.
     await startAutoRun(id, { everyMs: 1000, untilDay: 5 }).catch(() => undefined)
     expect((await autoStepDue(id, plus(3000))).ok && (await autoStepDue(id, plus(3000)) as { ok: true; value: { reason?: string } }).value.reason).toBe('no_intent')
+  })
+  it('not_running when the intent is still armed but the row itself is paused (fix round 1, item 2)', async () => {
+    const id = await create()
+    await startAutoRun(id, { everyMs: 1000, untilDay: 10 })
+    // Bypasses `pauseSimulation` (which would clear the intent itself) so the row lands in the
+    // state `autoStepDue`'s `not_running` branch actually exists for: an armed intent on a row
+    // that is not `running`.
+    await prisma.simulationRun.update({ where: { id }, data: { status: 'paused' } })
+    const result = await autoStepDue(id, T0)
+    expect(result.ok && result.value).toEqual({ stepped: false, reason: 'not_running' })
   })
 })
 
@@ -133,5 +144,14 @@ describe('tickSimulations', () => {
     expect(halted.status).toBe('halted')
     expect(halted.haltedReason).toMatch(/^auto-run step failed: /)
     expect(halted.autoRunEveryMs).toBeNull()
+    const controlRows = await prisma.simulationJournalEntry.findMany({ where: { simulationId: bad, kind: 'control' }, orderBy: { seq: 'asc' } })
+    expect(controlRows.map((r) => (r.payload as { op: string }).op).slice(-3)).toEqual(['auto_run_started', 'auto_run_stopped', 'halted'])
+    expect(controlRows.find((r) => (r.payload as { op: string }).op === 'auto_run_stopped')?.payload).toMatchObject({ reason: 'error' })
+    // `haltUnparsed` (fix round 1, Important #1) never rewrites the corrupt `state` -- it stays as
+    // evidence -- so this row still fails `locked()`'s own `parseRow` on `simulation_corrupt`.
+    // Either way `injectExternalEvent` must come back a refusal, never throw and never touch a
+    // stale `journalSeq`.
+    const injected = await injectExternalEvent(bad, { day: 5, event: { type: 'demand', qty: 10, unitPriceMinor: 1_000, dueInDays: 3, collectInDays: 0 } })
+    expect(injected.ok).toBe(false)
   })
 })

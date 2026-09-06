@@ -185,6 +185,7 @@ export async function injectExternalEvent(
     const got = await locked(tx, simulationId)
     if (!got.ok) return got
     const { row, loaded } = got.value
+    if (row.status !== 'ready' && row.status !== 'running') return err({ kind: 'simulation_not_runnable', simulationId, status: row.status })
     if (!Number.isInteger(input.day) || input.day < loaded.state.day) return err({ kind: 'invalid_simulation_input', detail: `day must be an integer ≥ the current day (${loaded.state.day})` })
     if (input.idempotencyKey !== undefined) {
       const seen = await tx.simulationJournalEntry.findUnique({ where: { simulationId_idempotencyKey: { simulationId, idempotencyKey: namespacedKey('inject', input.idempotencyKey) } } })
@@ -192,7 +193,14 @@ export async function injectExternalEvent(
     }
     const queue = loaded.state.queue
     const item = { time: input.day, priority: 'external' as const, seq: queue.nextSeq, event: parsed.data }
-    const seq = loaded.state.journalSeq + 1
+    // `state.journalSeq` can lag the journal's real `max(seq)` -- a throw-path `haltUnparsed`
+    // (M30 §5) never rewrites `state` (the corrupt JSON is left as evidence), so a run halted that
+    // way keeps a stale `journalSeq`. Reading `max(seq) + 1` fresh, inside this same lock, is the
+    // only value that is always correct; `loaded.state.journalSeq + 1` is not (fix round 1,
+    // Important #1). The `ready`/`running` guard above makes a halted row unreachable here too,
+    // but the seq is computed the safe way regardless of which guard a future change might loosen.
+    const last = await tx.simulationJournalEntry.findFirst({ where: { simulationId }, orderBy: { seq: 'desc' }, select: { seq: true } })
+    const seq = (last?.seq ?? -1) + 1
     await tx.simulationJournalEntry.create({ data: { simulationId, seq, simTime: row.simTime, kind: 'external_event', actorRole: null, idempotencyKey: input.idempotencyKey !== undefined ? namespacedKey('inject', input.idempotencyKey) : null, payload: { op: 'injected', day: input.day, event: json(parsed.data) } } })
     await tx.simulationRun.update({ where: { id: simulationId }, data: { state: json({ ...loaded.state, journalSeq: seq, queue: { items: [...queue.items, item], nextSeq: queue.nextSeq + 1 } }) } })
     return ok(undefined)
