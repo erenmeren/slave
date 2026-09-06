@@ -9,7 +9,8 @@
  * initial task spawn and `simulate`'s periodic task spawn are both skipped for an empty office —
  * the design never had one, spec §5 requires it; the export block is eight named `export const X`
  * lines, not one destructuring export, because Next's webpack build dropped the destructured
- * bindings. Pixel-art code keeps its own style.
+ * bindings; the v5 renderer's unused helpers (`wallD`, `floorD`, `deskD` and the `BACK`/`CORR`/`FRONT`
+ * bands only they read) are dropped. Pixel-art code keeps its own style.
  */
 const OfficeEngine = {}
 let PIXEL_FONT = 'Silkscreen'
@@ -150,7 +151,6 @@ function bubble(ctx,a,x,y,t){const s=a.state;if(s==='blocked'){rect(ctx,x-1,y-1,
   else if(s==='work'||s==='resuming'){rect(ctx,x-5,y+1,14,3,'#0a0c12');rect(ctx,x-4,y+2,Math.max(1,Math.round(a.progress/8.4)),1,E.STATUS.working)}}
 function lerpC(a,b,k){const A=parseInt(a.slice(1),16),B=parseInt(b.slice(1),16);const ch=s=>Math.round(((A>>s)&255)*(1-k)+((B>>s)&255)*k);return '#'+[16,8,0].map(s=>ch(s).toString(16).padStart(2,'0')).join('')}
 
-const BACK=30,CORR=90,FRONT=140;
 const SEATED=['sit','work','paused','pausing','resuming','blocked'];
 function skyColor(d){return lerpC('#0a0f1f','#9ccbee',d)}
 function windowC(ctx,x,y,w,h,world,seed){const d=world.daylight(),t=world.t;rect(ctx,x-2,y-2,w+4,h+4,'#e8e2d6');rect(ctx,x-1,y-1,w+2,h+2,'#2a2f3a');rect(ctx,x,y,w,h,skyColor(d));
@@ -187,23 +187,6 @@ const E=OfficeEngine,{rect,drawBoard,screenLines,stars,rnd,shade}=E._h,{slaveSpr
 function fit(v,cw,ch){const sw=v.w*v.S,sh=v.h*v.S;v.ox=sw<=cw?(cw-sw)/2:Math.max(cw-sw,Math.min(0,v.ox));v.oy=sh<=ch?(ch-sh)/2:Math.max(ch-sh,Math.min(0,v.oy));v.ox=Math.round(v.ox);v.oy=Math.round(v.oy)}
 function shadow(ctx,x,y,w,h,a){ctx.save();ctx.globalAlpha=a||.28;ctx.fillStyle='#000';ctx.fillRect(Math.round(x),Math.round(y),Math.round(w),Math.round(h));ctx.restore()}
 function focusMark(ctx,x,y,t){const k=Math.floor(t*4)%2;rect(ctx,x-2,y-k,6,2,'#fff');rect(ctx,x-1,y+2-k,4,2,'#fff');rect(ctx,x,y+4-k,2,1,'#fff')}
-function wallD(ctx,W,WALL,d){const top=lerpC('#232a3a','#5a667f',d),bot=lerpC('#1a1f2c','#48536a',d);for(let y=0;y<WALL;y+=2)rect(ctx,0,y,W,2,lerpC(top,bot,y/WALL));for(let x=0;x<W;x+=50)rect(ctx,x,0,1,WALL,'rgba(0,0,0,.07)');
-  rect(ctx,0,0,W,3,lerpC('#10141d','#2c3444',d));rect(ctx,0,3,W,1,'rgba(255,255,255,.06)');
-  rect(ctx,0,74,W,WALL-74,lerpC('#181d29','#3d475c',d));rect(ctx,0,74,W,2,lerpC('#2a3140','#6a7690',d));for(let x=8;x<W;x+=28){rect(ctx,x,80,20,WALL-88,'rgba(0,0,0,.12)');rect(ctx,x,80,20,1,'rgba(255,255,255,.05)')}
-  rect(ctx,0,WALL-6,W,6,lerpC('#2a2f3a','#6a7085',d));rect(ctx,0,WALL-6,W,1,'rgba(255,255,255,.12)');rect(ctx,0,WALL,W,2,'#14171f')}
-function floorD(ctx,W,y0,y1,d,seed){const r=rnd(seed);for(let y=y0;y<y1;y+=6){const k=(y-y0)/(y1-y0);rect(ctx,0,y,W,6,lerpC(lerpC('#2c2620','#4a3f35',k),lerpC('#56483c','#80705e',k),d));rect(ctx,0,y,W,1,'rgba(0,0,0,.28)');let x=-Math.floor(r()*60);while(x<W){const len=40+Math.floor(r()*40),v=r();if(v<.3)rect(ctx,x,y+1,len,5,'rgba(255,255,255,.03)');else if(v>.8)rect(ctx,x,y+1,len,5,'rgba(0,0,0,.06)');rect(ctx,x+len,y+1,1,5,'rgba(0,0,0,.25)');x+=len+1}}}
-function deskD(ctx,x,fy,a,world,t,seed,night){const st=a?world.status(a):'idle';
-  shadow(ctx,x-4,fy-2,62,3,.3);shadow(ctx,x+12,fy-13,46,13,.10);
-  rect(ctx,x-2,fy-3,14,2,'#1c1f27');rect(ctx,x-3,fy-2,3,2,'#0d1018');rect(ctx,x+9,fy-2,3,2,'#0d1018');rect(ctx,x+4,fy-10,2,8,'#2a2f3a');rect(ctx,x-1,fy-13,12,4,'#2f3542');rect(ctx,x-1,fy-13,12,1,'#3d4452');rect(ctx,x-2,fy-29,3,17,'#2a2f3a');rect(ctx,x-3,fy-30,10,4,'#2f3542');rect(ctx,x-2,fy-29,8,1,'#3d4452');
-  rect(ctx,x+12,fy-19,46,4,'#dccfb8');rect(ctx,x+12,fy-19,46,1,'#f2eadb');rect(ctx,x+12,fy-16,46,1,'#a89b84');rect(ctx,x+14,fy-15,2,15,'#3a3f4a');rect(ctx,x+15,fy-15,1,15,'#4a505c');
-  rect(ctx,x+44,fy-15,13,15,'#c9bca4');rect(ctx,x+44,fy-15,13,1,'#a89b84');rect(ctx,x+45,fy-13,11,5,'#d6c9b1');rect(ctx,x+45,fy-7,11,5,'#d6c9b1');rect(ctx,x+49,fy-11,3,1,'#3a3f4a');rect(ctx,x+49,fy-5,3,1,'#3a3f4a');rect(ctx,x+44,fy-1,13,1,'#3a3f4a');
-  rect(ctx,x+25,fy-37,21,15,'#1a1d26');rect(ctx,x+26,fy-36,19,13,'#0d1018');screenLines(ctx,x+27,fy-35,17,11,st,t,seed);rect(ctx,x+26,fy-36,19,1,'#2a2f3a');rect(ctx,x+34,fy-22,3,3,'#1a1d26');rect(ctx,x+30,fy-20,11,1,'#1a1d26');rect(ctx,x+35,fy-19,1,4,'#14171f');
-  rect(ctx,x+16,fy-21,12,2,'#262b36');for(let i=0;i<5;i++)rect(ctx,x+17+i*2,fy-21,1,1,'#3d4452');rect(ctx,x+30,fy-21,3,2,'#c8cfda');
-  const prop=seed%3;if(prop===0){rect(ctx,x+48,fy-24,5,5,['#e7eaf0','#f5b34a','#7b8cff'][seed%3]);rect(ctx,x+53,fy-23,1,3,'#e7eaf0');rect(ctx,x+49,fy-26+(Math.floor(t*2)%2),1,1,'rgba(255,255,255,.4)')}
-  else if(prop===1){rect(ctx,x+48,fy-25,6,6,'#3d2f27');rect(ctx,x+49,fy-25,4,1,'#5a4436');rect(ctx,x+50,fy-30,2,5,'#2f7d4a');rect(ctx,x+47,fy-29,3,3,'#3fa35f');rect(ctx,x+52,fy-31,3,3,'#56c47a')}
-  else{rect(ctx,x+47,fy-22,8,3,'#e7eaf0');rect(ctx,x+48,fy-23,6,1,'#c8cfda');rect(ctx,x+49,fy-21,4,1,'#8a929e')}
-  rect(ctx,x+19,fy-38,1,19,'#3a3f4a');rect(ctx,x+16,fy-40,8,3,'#3a3f4a');rect(ctx,x+17,fy-37,6,1,'#f5e2b0');
-  if(night>.15&&st!=='paused'){ctx.save();ctx.globalAlpha=.30*night;ctx.fillStyle='#ffd88a';ctx.beginPath();ctx.moveTo(x+16,fy-37);ctx.lineTo(x+24,fy-37);ctx.lineTo(x+30,fy-19);ctx.lineTo(x+10,fy-19);ctx.closePath();ctx.fill();ctx.globalAlpha=.16*night;ctx.fillStyle=E.STATUS[st]||'#2ee6cf';ctx.fillRect(x+18,fy-40,34,24);ctx.restore()}}
 /* v6: pod layout — 8 departments × 4 desks as 2×2 islands in two bands around a central corridor; lounge wing on the right */
 const PX=[70,210,350,490],BANDS=[[44,100],[196,252]],CORR=148;
 class WorldD extends E.World{

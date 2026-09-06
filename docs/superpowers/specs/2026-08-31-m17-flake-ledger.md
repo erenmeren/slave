@@ -548,3 +548,36 @@ Template per flake:
   next signal to escalate to `next dev --turbo` (a different, actively-developed dev compiler) or
   to file the manifest-write race upstream with the two live reproductions' exact log lines as
   evidence, both preserved in this entry.
+
+## Flake 7 — gate-m11-shell stage 2 "no company" badge
+
+- **Evidence** — M28 close-out (2026-09-05): the gate, which had reached stage 7 on the previous
+  run, failed once at stage 2 — `assertCardBadge(workspaceNameA, 'no company')` timed out waiting
+  for the project card's `chip` on `/`. The next run passed all seven stages unchanged.
+- **Mechanism** — stage 1 creates the two projects through the browser and the projects page
+  repaints through `router.refresh()`; stage 2 then navigates to `/` and filters `project-card`
+  by name. When the RSC refresh from stage 1's last create is still in flight as the `goto` lands,
+  the card can render from the pre-refresh payload (no `chip` yet) and the locator waits on a
+  tree the refresh never re-delivers to that navigation. A repaint race in the gate's own
+  sequencing, not a product defect: the badge is right on every manual load.
+- **Change** — none in product code. The ruling from the M28 close-out stands: re-run the gate
+  once before diagnosing a stage 2 badge failure.
+- **Proof** — the re-run PASSED all seven stages (recorded in M28 §13).
+- **Residue** — if it recurs, the fix is in the gate: wait for the stage 1 create's own
+  `router.refresh()` to settle (a `waitForResponse` on the RSC fetch) before the stage 2 `goto`.
+
+## Flake 8 (watch) — password.test.ts dummyHash timing depends on test order
+
+- **Evidence** — no recorded failure. Read during the M23 final review: the `>= 50 ms` timing
+  case in `packages/control/test/password.test.ts` runs after "is memoized", so `dummyHash()` is
+  already warm when the measured window starts; run alone, the same window also pays the
+  first derivation. Both orders pass today (the measured `verifyPassword` derives regardless).
+- **Mechanism** — the assertion's meaning ("a missing-user login costs as much as a real one")
+  is carried by `verifyPassword`, not by `dummyHash()`'s own cost; the memo only changes how
+  much *extra* the window takes. So the coupling cannot flip the verdict, but it makes the
+  measured number depend on what ran before.
+- **Change** — none. Recorded so a future timing failure here is read as "the machine was slow",
+  not as a memo regression.
+- **Proof** — `npx vitest run packages/control/test/password.test.ts` green, in file order and
+  with the timing case filtered alone (`-t "cost a real derivation"`).
+- **Residue** — none queued.

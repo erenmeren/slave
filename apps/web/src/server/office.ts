@@ -30,18 +30,27 @@ export interface OfficeSnapshot {
  * status is not here — the client reads it from the overview stream this snapshot also seeds.
  */
 export async function buildOfficeSnapshot(workspaceId: string): Promise<OfficeSnapshot | null> {
-  const [workspace, teams, overview] = await Promise.all([
-    prisma.workspace.findUnique({ where: { id: workspaceId }, select: { id: true, name: true, archivedAt: true } }),
-    prisma.team.findMany({
-      where: { workspaceId },
-      orderBy: { name: 'asc' },
-      select: { id: true, name: true, slaves: { orderBy: { name: 'asc' }, select: { id: true, name: true, role: true } } },
+  // One round trip for the project and its roster (the review's "two lookups" note): the teams
+  // ride on the workspace row. `buildOverviewSnapshot` still resolves the workspace for itself —
+  // it is the Overview tab's own read, shared unchanged.
+  const [workspace, overview] = await Promise.all([
+    prisma.workspace.findUnique({
+      where: { id: workspaceId },
+      select: {
+        id: true,
+        name: true,
+        archivedAt: true,
+        teams: {
+          orderBy: { name: 'asc' },
+          select: { id: true, name: true, slaves: { orderBy: { name: 'asc' }, select: { id: true, name: true, role: true } } },
+        },
+      },
     }),
     buildOverviewSnapshot(workspaceId),
   ])
   if (workspace === null || overview === null) return null
   let slaveIndex = 0
-  const departments = teams.map((team, i) => ({
+  const departments = workspace.teams.map((team, i) => ({
     teamId: team.id,
     name: team.name,
     color: DEPT_COLORS[i % DEPT_COLORS.length] as string,

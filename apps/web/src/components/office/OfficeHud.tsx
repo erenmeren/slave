@@ -70,13 +70,13 @@ export function OfficeHud({
         <span>· scroll zoom · drag pan · click focus</span>
       </div>
       <div className="absolute bottom-3 right-3 flex items-center gap-1 rounded-[5px] bg-[rgba(8,9,12,.7)] p-1">
-        <button type="button" data-testid="office-zoom-out" onClick={() => onZoom(-1)} className="h-[22px] w-6 rounded border border-[rgba(255,255,255,.12)] font-mono text-[13px] text-[#c8cfda]">
+        <button type="button" data-testid="office-zoom-out" aria-label="zoom out" onClick={() => onZoom(-1)} className="h-[22px] w-6 rounded border border-[rgba(255,255,255,.12)] font-mono text-[13px] text-[#c8cfda]">
           −
         </button>
         <span data-testid="office-zoom" className={`min-w-[30px] text-center text-[#c8cfda] ${PIXEL}`}>
           {view.zoom}
         </span>
-        <button type="button" data-testid="office-zoom-in" onClick={() => onZoom(1)} className="h-[22px] w-6 rounded border border-[rgba(255,255,255,.12)] font-mono text-[13px] text-[#c8cfda]">
+        <button type="button" data-testid="office-zoom-in" aria-label="zoom in" onClick={() => onZoom(1)} className="h-[22px] w-6 rounded border border-[rgba(255,255,255,.12)] font-mono text-[13px] text-[#c8cfda]">
           +
         </button>
       </div>

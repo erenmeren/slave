@@ -606,7 +606,7 @@ describe('the graph page route', () => {
     const { default: GraphPageRoute } = await import('../src/app/w/[workspaceId]/graph/page.js')
     const element = await GraphPageRoute({ params: Promise.resolve({ workspaceId: 'nope' }) })
     render(element)
-    expect(screen.getByText(/no workspace with id nope/)).toBeTruthy()
+    expect(screen.getByText(/no project with id nope/)).toBeTruthy()
   })
 
   it('renders GraphClient when the workspace exists', async () => {

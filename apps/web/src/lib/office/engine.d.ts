@@ -68,7 +68,10 @@ export declare class World {
   resume(id: string): void
   stop(id: string): void
 }
-export declare class WorldF extends World {}
+export declare class WorldF extends World {
+  /** The confetti pass's live particles (`WorldE.tick` spawns them at the desk of the slave a `done` event names). */
+  confetti: { life: number }[]
+}
 export declare const STATUS: Record<StatusKey, string>
 export declare const DEPT_COLORS: readonly string[]
 export declare const SLAVE_COLORS: readonly string[]

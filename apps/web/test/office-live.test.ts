@@ -194,6 +194,18 @@ describe('LiveOffice', () => {
     expect([alex.x, alex.y]).toEqual([o.seat(alex).x, o.seat(alex).y])
   })
 
+  // The engine's confetti pass reads its own event list for a `done` type naming the slave; the
+  // client fires `ev('task.done', …)` on a stream `run.succeeded`. Nothing else fires it (R6).
+  it('throws confetti at the slave\'s desk on a task.done event, and never on its own', () => {
+    const o = office()
+    o.apply(new Map([['s1', live('working')]]), { todo: 0, doing: 0, review: 0, done: 0 })
+    settle(o, 10)
+    expect(o.confetti).toHaveLength(0)
+    o.ev('task.done', o.slaves[0]!, o.slaves[0]!.task, 'verify passed')
+    o.tick(0.05)
+    expect(o.confetti.length).toBeGreaterThan(0)
+  })
+
   it('draws the board from the counts, capped at six cards a column', () => {
     const o = office()
     o.apply(new Map(), { todo: 9, doing: 2, review: 0, done: 4 })

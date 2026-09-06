@@ -696,7 +696,7 @@ describe('the activity page route', () => {
     const { default: ActivityPageRoute } = await import('../src/app/w/[workspaceId]/activity/page.js')
     const element = await ActivityPageRoute({ params: Promise.resolve({ workspaceId: 'nope' }) })
     render(element)
-    expect(screen.getByText(/no workspace with id nope/)).toBeTruthy()
+    expect(screen.getByText(/no project with id nope/)).toBeTruthy()
   })
 
   it('renders ActivityClient when the workspace exists', async () => {

@@ -104,11 +104,10 @@ function cards(count: number): WorldTask[] {
  * slave — instead of the engine's own task board and dice. What stays from the design: the walk to
  * the board when a run starts, the walk with the finished work when it stops, the idle wander to
  * the arcade and the coffee machine, the cat, the roomba, the boss. The engine's confetti machinery
- * also stays (R6), but nothing in this adapter fires it: confetti is deferred, not impossible.
- * `progressPct` is a tool-call ratio, not a finish line (a normal success ends well under 100), and
- * this snapshot alone cannot tell who succeeded — the trigger would read `useOverview`'s
- * `liveEvents[slaveId]` for a `run.succeeded` type, which is a client-side wiring this milestone
- * does not do.
+ * also stays, and nothing in this adapter fires it: `progressPct` is a tool-call ratio, not a
+ * finish line (a normal success ends well under 100), and this snapshot alone cannot tell who
+ * succeeded. The trigger lives in `OfficeClient`, which reads `useOverview`'s `liveEvents[slaveId]`
+ * for a `run.succeeded` and calls `ev('task.done', …)` on this world (R6/R14, wired after M28).
  */
 export class LiveOffice extends WorldF {
   private live: ReadonlyMap<string, LiveSlave> = new Map()

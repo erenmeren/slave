@@ -31,7 +31,7 @@ export function OfficeClient({
   readonly initial: OfficeSnapshot
   readonly pixelFontFamily: string
 }): React.JSX.Element {
-  const { snapshot, connection } = useOverview(workspaceId, initial.overview)
+  const { snapshot, connection, liveEvents } = useOverview(workspaceId, initial.overview)
   const overview = snapshot ?? initial.overview
   const wrapRef = useRef<HTMLDivElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -77,6 +77,30 @@ export function OfficeClient({
   useEffect(() => {
     worldRef.current?.apply(liveSlavesOf(overview), boardFromOverview(overview))
   }, [overview])
+
+  // Confetti (spec §4.2, deferred by R6/R14 and wired here): a `run.succeeded` in the stream's
+  // per-slave feed becomes the engine's own `task.done` event, which its confetti pass reads on
+  // the next tick. The feed is cumulative (`useOverview` only ever grows it), so the highest seq
+  // already handled per slave is kept — a repaint or a roster rebuild must not throw the same
+  // party twice. Spec §8: under `prefers-reduced-motion` the loop still runs but nothing fires.
+  const seenSeqRef = useRef(new Map<string, number>())
+  useEffect(() => {
+    const world = worldRef.current
+    if (world === null) return
+    const reduced = typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    for (const [slaveId, events] of Object.entries(liveEvents)) {
+      const last = seenSeqRef.current.get(slaveId) ?? 0
+      let newest = last
+      for (const event of events) {
+        if (event.seq <= last) continue
+        newest = Math.max(newest, event.seq)
+        if (reduced || event.type !== 'run.succeeded') continue
+        const slave = world.slaves.find((s) => s.id === slaveId)
+        if (slave !== undefined) world.ev('task.done', slave, slave.task, event.summary)
+      }
+      seenSeqRef.current.set(slaveId, newest)
+    }
+  }, [liveEvents])
 
   // The loop: size, tick, render; the overlays every OVERLAY_MS.
   useEffect(() => {
@@ -264,7 +288,7 @@ export function OfficeClient({
   }
   const focused = world === null ? null : (world.slaves.find((s) => s.id === world.focusId) ?? world.slaves[0] ?? null)
   const focus: FocusView | null =
-    world === null || focused === null || focused === undefined
+    world === null || focused === null
       ? null
       : (() => {
           const live = world.liveOf(focused.id)

@@ -22,6 +22,7 @@ const stubWorld = {
   t: 0,
   events: [],
   tick: vi.fn(),
+  ev: vi.fn(),
   apply: vi.fn((...args: unknown[]) => applied.push(args)),
   setWallClock: vi.fn(),
   liveOf: (id: string) => liveById[id] ?? null,
@@ -51,8 +52,9 @@ vi.mock('../src/lib/office/engine.js', () => ({
 vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: vi.fn() }) }))
 
 let streamSnapshot: OverviewSnapshot
+let liveEvents: Record<string, readonly { seq: number; ts: string; type: string; summary: string }[]> = {}
 vi.mock('../src/hooks/useOverview', () => ({
-  useOverview: () => ({ snapshot: streamSnapshot, connection: 'connected', error: null, latencyMs: null, actionLines: {}, liveEvents: {} }),
+  useOverview: () => ({ snapshot: streamSnapshot, connection: 'connected', error: null, latencyMs: null, actionLines: {}, liveEvents }),
 }))
 
 import { LiveOffice } from '../src/lib/office/liveOffice.js'
@@ -109,6 +111,8 @@ beforeEach(() => {
   Object.defineProperty(document, 'fonts', { value: { load: () => Promise.resolve([]) }, configurable: true })
   stubWorld.focusId = null
   stubWorld.hourLock = null
+  stubWorld.ev.mockClear()
+  liveEvents = {}
   // The zoom test mutates `view` in place (`v.li`/`v.S`/`v.ox`/`v.oy`) — a fresh object every test
   // keeps that from leaking into whichever test runs next.
   stubWorld.view = { S: 1, ox: 0, oy: 0, w: 100, h: 100, levels: [1, 2, 3, 4], li: 0 }
@@ -176,6 +180,39 @@ describe('OfficeClient', () => {
     expect(screen.getByTestId('office-zoom').textContent).toBe('2x')
     fireEvent.click(screen.getByTestId('office-zoom-out'))
     expect(stubWorld.view.li).toBe(0)
+  })
+
+  it('labels the zoom buttons for assistive tech', async () => {
+    await mount()
+    expect(screen.getByLabelText('zoom in')).toBe(screen.getByTestId('office-zoom-in'))
+    expect(screen.getByLabelText('zoom out')).toBe(screen.getByTestId('office-zoom-out'))
+  })
+
+  // The confetti trigger the M28 review parked (R6/R14): a `run.succeeded` in the stream's
+  // per-slave feed lands on the floor as the engine's own `task.done` event, which its confetti
+  // pass reads. Each feed event fires once — the feed is cumulative, so a repaint must not re-fire.
+  it('fires the engine\'s task.done once per run.succeeded in the live feed', async () => {
+    await mount()
+    expect(stubWorld.ev).not.toHaveBeenCalled()
+    liveEvents = { s1: [{ seq: 1, ts: '', type: 'run.tool_call', summary: 'Edit' }, { seq: 2, ts: '', type: 'run.succeeded', summary: 'verify passed' }] }
+    await act(async () => { vi.advanceTimersByTime(320) })
+    expect(stubWorld.ev).toHaveBeenCalledTimes(1)
+    expect(stubWorld.ev).toHaveBeenCalledWith('task.done', stubSlaves[0], stubSlaves[0]!.task, 'verify passed')
+    await act(async () => { vi.advanceTimersByTime(320) })
+    expect(stubWorld.ev).toHaveBeenCalledTimes(1)
+    liveEvents = { s1: [...liveEvents.s1!, { seq: 3, ts: '', type: 'run.succeeded', summary: 'verify passed' }], s9: [{ seq: 4, ts: '', type: 'run.succeeded', summary: 'x' }] }
+    await act(async () => { vi.advanceTimersByTime(320) })
+    // s9 is not on the floor; s1's second success is a second party.
+    expect(stubWorld.ev).toHaveBeenCalledTimes(2)
+  })
+
+  // Spec §8: under `prefers-reduced-motion` the loop still runs but the confetti is skipped.
+  it('skips the confetti under prefers-reduced-motion', async () => {
+    vi.stubGlobal('matchMedia', (query: string) => ({ matches: query.includes('reduce'), media: query, addEventListener() {}, removeEventListener() {} }))
+    await mount()
+    liveEvents = { s1: [{ seq: 1, ts: '', type: 'run.succeeded', summary: 'verify passed' }] }
+    await act(async () => { vi.advanceTimersByTime(320) })
+    expect(stubWorld.ev).not.toHaveBeenCalled()
   })
 
   it('focuses the first slave by default, shows its live task, and Next cycles', async () => {

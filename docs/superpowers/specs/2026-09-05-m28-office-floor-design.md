@@ -184,3 +184,18 @@ Anything else that diverged, found while executing Task 5:
 
 - The m11 gate's stage 7 brief code reads `office-focus`'s text unconditionally before checking the roster size, and only guards the `Next`-cycle assertion behind `officeSlaves > 1`. At HEAD, project A's roster at the point stage 7 runs is 1 department and **0** slaves (stage 6a deletes the one slave that stage 5 had moved into the second department; stage 6b then deletes that now-slave-less department, leaving only the original "Crew" department, empty). With zero slaves `OfficeClient` renders no focus card at all (§5's "empty project" case in `OfficeClient.tsx`'s `focused` computation applies to any zero-slave roster, not only a zero-department one), so stage 7 as implemented reads both counts from `prisma` and branches three ways: zero slaves asserts the focus card is absent, exactly one slave asserts it renders but does not assert `Next` changes anything (nothing to cycle to), and two or more asserts the cycle. This is the gate script only; no product code changed.
 
+Post-merge (chore/backlog-polish, 2026-09-06) — the parked items §13 R6/R14 and the final review
+named, closed on main after the milestone:
+
+- **R17** — the confetti trigger is wired: `OfficeClient` reads `useOverview`'s `liveEvents[slaveId]`
+  and, for each not-yet-seen `run.succeeded` (highest handled `seq` kept per slave, so a repaint or
+  a roster rebuild never re-fires), calls the world's `ev('task.done', slave, slave.task, summary)`;
+  the engine's own confetti pass does the rest. Under `prefers-reduced-motion` nothing fires (§8's
+  confetti half; the boss's coin throw still lives inside `WorldE.tick` and stays as R6 recorded).
+- The zoom buttons carry `aria-label`s; the `focused === undefined` dead branch is gone; the
+  engine's unused v5 helpers (`wallD`/`floorD`/`deskD`, `BACK`/`CORR`/`FRONT`) are dropped (one
+  more listed vendor edit); `buildOfficeSnapshot` reads the roster on the workspace row (one query,
+  not two — `buildOverviewSnapshot`'s own workspace read is the Overview tab's and stays);
+  every project page's missing-id fallback says "no project with id" (it said "workspace");
+  gate m11's stage 2 badge race is Flake 7 in the M17 ledger.
+
