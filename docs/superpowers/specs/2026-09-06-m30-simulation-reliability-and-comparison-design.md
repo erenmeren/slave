@@ -45,7 +45,7 @@ model SimulationRun {
 ```
 
 - `SimulationSummary` gains `autoRun: { everyMs: number; untilDay: number; lastStepAt: string | null } | null` and `actionCount` (was `decisionCount`; every reader renamed).
-- Journal `control` ops added: `cloned { fromId, policy, seed }` (on the clone, seq 0 payload alongside `created`), `auto_run_started { everyMs, untilDay }`, `auto_run_stopped { reason: 'operator' | 'until_day' | 'paused' | 'halted' | 'finished' | 'error' }`.
+- Journal `control` ops added: on a clone, the seq-0 `created` row carries `clonedFrom` alongside `policy` and `seed` (no separate `cloned` op — one row, not two), `auto_run_started { everyMs, untilDay }`, `auto_run_stopped { reason: 'operator' | 'until_day' | 'paused' | 'halted' | 'finished' | 'error' }`.
 - Migration: `ALTER TABLE "SimulationRun" ADD COLUMN "autoRunEveryMs" INTEGER, ADD COLUMN "autoRunUntilDay" INTEGER, ADD COLUMN "lastAutoStepAt" TIMESTAMP(3);` — nothing else; no data changes.
 
 ## 4. Control verbs (`packages/control/src/simulation.ts`, split as it grows — see §9)
@@ -67,8 +67,8 @@ Restart safety follows from the row: intent and watermark are columns, every ste
 
 ## 6. The live page (SSE)
 
-- Route `GET /api/sim/[simulationId]/events`: an SSE response that polls `SimulationRun.version` every 1000 ms (`select version, status, simTime`) and emits `data: { version, status, simTime }` when `version` changes (and once on open), a `: heartbeat` comment every 15 s, 404 for an unknown id, closed on client abort. No `pg_notify`: the journal is not the event log, and a 1 s poll on a primary-key read is cheap and honest.
-- Hook `useSimulationStream(simulationId, initialVersion)` → `{ version, connection }`; the page calls `router.refresh()` when `version` changes (the page is keyed on `<id>:<version>` in M29, so a refresh remounts the client with a fresh snapshot). The strip shows `● LIVE` / `● RECONNECTING` like the Overview.
+- Route `GET /api/sim/[simulationId]/events`: an SSE response that polls `SimulationRun.version` every 1000 ms (`select version, status, simTime`) and emits `data: { version, status, simTime }` when the `(version, status, simTime)` triple changes (and once on open), a `: heartbeat` comment every 15 s, 404 for an unknown id, closed on client abort. No `pg_notify`: the journal is not the event log, and a 1 s poll on a primary-key read is cheap and honest. Keyed on the triple, not `version` alone (fix wave, Important #1): a status verb — `setStatus` (pause/resume/halt), `startAutoRun`, `stopAutoRun`, `haltUnparsed` — changes `status` without ever bumping `version`, so `version`-only change detection would leave an open page stale (an auto-run's error halt, or a CLI pause/halt/stop-auto-run, never reaching it) until reload.
+- Hook `useSimulationStream(simulationId, initialVersion, initialStatus)` → `{ version, status, connection }`; the page calls `router.refresh()` when `version` or `status` changes (the page is keyed on `<id>:<version>` in M29, so a refresh remounts the client with a fresh snapshot). The strip shows `● LIVE` / `● RECONNECTING` like the Overview.
 - Because every control already calls `router.refresh()`, the stream only matters for steps made elsewhere: auto-run, the CLI, another tab.
 
 ## 7. UI
@@ -139,5 +139,13 @@ already-past-horizon cycle before the intent clears); `stopAutoRun` and `autoSte
 lines worth of intent-clearing that could be a named helper; no test of the SSE events route's own
 principal gate; the stream hook's duplication against `useWorkspaceStream` (an accepted shape, not
 an oversight — see the plan); `listCompareCandidates` duplicating the snapshot's own inline
-candidate filter; and splitting the compare page's per-metric testids more finely than
-`sim-compare-row-<key>`/`sim-compare-delta-<key>` already do.
+candidate filter; splitting the compare page's per-metric testids more finely than
+`sim-compare-row-<key>`/`sim-compare-delta-<key>` already do; the clone drawer defaulting the seed
+to `1` rather than the source's own seed, because `SimulationSummary` carries no `seed` field (add
+`seed` to the summary and default the drawer to it); no daemon-level unit test of the work function
+itself (the CLI `tick` test and the `gate:m30-simulation-compare` gate cover it end to end, but
+nothing exercises it in isolation); `TICK_SIMULATIONS_CAP` is untested (no test drives more than
+50 due runs through one `tickSimulations` pass to prove the cap and the rest waiting for the next
+tick); and the live page remounting on every version bump — a version bump during a fast auto-run
+(250 ms) tears down and reopens the SSE `EventSource` each time (a deliberate design choice, not an
+oversight; see the plan).

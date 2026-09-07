@@ -75,9 +75,9 @@ number on the page is synthetic and every metric is derived from the run's journ
 `docs/superpowers/specs/2026-09-06-m29-company-simulation-design.md` lists the assumptions.
 
 With `npm run orchestrator -- daemon` running, **Auto-run** steps a run for you at its own pace
-instead of clicking Step or Run to day. **Clone…** then **Compare with…** puts two policies side
-by side — same scenario, same roster, same start, only the policy (or seed) different — with no
-verdict, just the b − a deltas; `docs/superpowers/specs/2026-09-06-m30-simulation-reliability-and-comparison-design.md`
+instead of clicking Step or Run to day. **Clone…** then the run page's "compare with" dropdown
+puts two policies side by side — same scenario, same roster, same start, only the policy (or seed)
+different — with no verdict, just the b − a deltas; `docs/superpowers/specs/2026-09-06-m30-simulation-reliability-and-comparison-design.md`
 covers the reliability and comparison work.
 
 ## The web UI

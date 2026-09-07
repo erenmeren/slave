@@ -35,9 +35,9 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals())
 
 describe('useSimulationStream', () => {
-  it('returns the initial version connected; a message bumps version; onerror/onopen toggle connection; unmount closes the source', () => {
-    const { result, unmount } = renderHook(() => useSimulationStream('s1', 3))
-    expect(result.current).toEqual({ version: 3, connection: 'connected' })
+  it('returns the initial version and status connected; a message bumps version; onerror/onopen toggle connection; unmount closes the source', () => {
+    const { result, unmount } = renderHook(() => useSimulationStream('s1', 3, 'running'))
+    expect(result.current).toEqual({ version: 3, status: 'running', connection: 'connected' })
     expect(instances).toHaveLength(1)
     expect(instances[0]?.url).toBe('/api/sim/s1/events')
 
@@ -53,5 +53,11 @@ describe('useSimulationStream', () => {
     const source = instances[0] as unknown as StubEventSource
     unmount()
     expect(source.closed).toBe(true)
+  })
+  it('a frame with an unchanged version but a new status still updates status (fix wave, Important #1)', () => {
+    const { result } = renderHook(() => useSimulationStream('s1', 3, 'running'))
+    act(() => { instances[0]?.onmessage?.({ data: JSON.stringify({ version: 3, status: 'halted', simTime: 3 }) }) })
+    expect(result.current.version).toBe(3)
+    expect(result.current.status).toBe('halted')
   })
 })

@@ -36,8 +36,10 @@ export function SimulationClient({ initial }: { readonly initial: SimulationSnap
   const [injectOpen, setInjectOpen] = useState(false)
   const [cloneOpen, setCloneOpen] = useState(false)
   const [inject, setInject] = useState({ kind: 'demand', day: String(company.day + 1), qty: '10', unitPrice: '120.00', dueInDays: '10', collectInDays: '15', supplierId: 'normal', extraDays: '3' })
-  const stream = useSimulationStream(summary.id, summary.version)
-  useEffect(() => { if (stream.version !== summary.version) router.refresh() }, [stream.version, summary.version, router])
+  const stream = useSimulationStream(summary.id, summary.version, summary.status)
+  // Fix wave, Important #1: a status verb (auto-run's error halt, a CLI pause/halt/stop-auto-run)
+  // never bumps `version`, so `version` alone would leave this page stale until reload.
+  useEffect(() => { if (stream.version !== summary.version || stream.status !== summary.status) router.refresh() }, [stream.version, stream.status, summary.version, summary.status, router])
   const runnable = summary.status === 'ready' || summary.status === 'running'
   // Step / Run-to-day are refused while an auto-run owns this run (a manual step during auto-run
   // is a UI refusal, not the control verb's) -- but Pause and Halt must stay live regardless

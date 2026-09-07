@@ -8,7 +8,7 @@ const routerRefresh = vi.fn()
 const routerPush = vi.fn()
 vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: routerRefresh, push: routerPush }) }))
 
-let stream: { version: number; connection: 'connected' | 'reconnecting' } = { version: 2, connection: 'connected' }
+let stream: { version: number; status: string; connection: 'connected' | 'reconnecting' } = { version: 2, status: 'running', connection: 'connected' }
 vi.mock('../src/hooks/useSimulationStream', () => ({ useSimulationStream: () => stream }))
 
 function snapshot(over: Partial<SimulationSnapshot> = {}): SimulationSnapshot {
@@ -37,7 +37,7 @@ function snapshot(over: Partial<SimulationSnapshot> = {}): SimulationSnapshot {
   }
 }
 const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }))
-beforeEach(() => { vi.stubGlobal('fetch', fetchMock); fetchMock.mockClear(); routerRefresh.mockClear(); routerPush.mockClear(); stream = { version: 2, connection: 'connected' } })
+beforeEach(() => { vi.stubGlobal('fetch', fetchMock); fetchMock.mockClear(); routerRefresh.mockClear(); routerPush.mockClear(); stream = { version: 2, status: 'running', connection: 'connected' } })
 afterEach(() => vi.unstubAllGlobals())
 
 describe('SimulationClient', () => {
@@ -158,16 +158,24 @@ describe('SimulationClient', () => {
     expect(JSON.parse(String(init.body))).toMatchObject({ day: 6, event: { type: 'demand', qty: 20 } })
   })
   it('refreshes when the stream version moves past the summary version; sim-live shows LIVE/RECONNECTING', () => {
-    stream = { version: 2, connection: 'connected' }
+    stream = { version: 2, status: 'running', connection: 'connected' }
     const { rerender } = render(<SimulationClient initial={snapshot()} />)
     expect(routerRefresh).not.toHaveBeenCalled()
     expect(screen.getByTestId('sim-live').textContent).toContain('LIVE')
-    stream = { version: 3, connection: 'connected' }
+    stream = { version: 3, status: 'running', connection: 'connected' }
     rerender(<SimulationClient initial={snapshot()} />)
     expect(routerRefresh).toHaveBeenCalledTimes(1)
-    stream = { version: 3, connection: 'reconnecting' }
+    stream = { version: 3, status: 'running', connection: 'reconnecting' }
     rerender(<SimulationClient initial={snapshot()} />)
     expect(screen.getByTestId('sim-live').textContent).toContain('RECONNECTING')
+  })
+  it('refreshes when the stream status changes with the version unchanged (fix wave, Important #1): an auto-run error halt, or a CLI pause/halt/stop-auto-run, never bumps version', () => {
+    stream = { version: 2, status: 'running', connection: 'connected' }
+    const { rerender } = render(<SimulationClient initial={snapshot()} />)
+    expect(routerRefresh).not.toHaveBeenCalled()
+    stream = { version: 2, status: 'halted', connection: 'connected' }
+    rerender(<SimulationClient initial={snapshot()} />)
+    expect(routerRefresh).toHaveBeenCalledTimes(1)
   })
   it('Auto-run posts everyMs/untilDay; with autoRun set, Stop auto-run posts to the stop route, the chip reads, and Step is disabled', async () => {
     const { unmount } = render(<SimulationClient initial={snapshot()} />)

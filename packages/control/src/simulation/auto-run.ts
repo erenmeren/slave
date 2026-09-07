@@ -67,9 +67,13 @@ export async function autoStepDue(simulationId: string, now: Date): Promise<Resu
  *  normal `setStatus` path. The stored `state` JSON is left untouched -- it is the evidence of
  *  what went wrong, not something this can safely rewrite without parsing it. Journals an
  *  `auto_run_stopped { reason: 'error' }` row first when the run held an intent, so the journal
- *  reads the whole story: the intent was cleared, then the run was halted. */
+ *  reads the whole story: the intent was cleared, then the run was halted. Takes the row lock
+ *  first (fix wave, Minor #2): every other journal writer in this file goes through `locked()`,
+ *  which does the same `FOR UPDATE` before its own read -- this was the one writer that read the
+ *  row unlocked, open to a concurrent writer's read-modify-write racing in between. */
 async function haltUnparsed(simulationId: string, reason: string): Promise<void> {
   await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM "SimulationRun" WHERE id = ${simulationId} FOR UPDATE`
     const row = await tx.simulationRun.findUnique({ where: { id: simulationId }, select: { simTime: true, autoRunEveryMs: true } })
     if (row === null) return
     const last = await tx.simulationJournalEntry.findFirst({ where: { simulationId }, orderBy: { seq: 'desc' }, select: { seq: true } })

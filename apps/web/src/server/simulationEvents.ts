@@ -10,7 +10,7 @@ export async function createSimulationSse(options: { readonly simulationId: stri
   const first = await prisma.simulationRun.findUnique({ where: { id: options.simulationId }, select })
   if (first === null) return new Response('no such simulation', { status: 404 })
   const encoder = new TextEncoder()
-  let lastVersion = -1
+  let lastEmitted: string | null = null
   let poll: ReturnType<typeof setInterval> | null = null
   let beat: ReturnType<typeof setInterval> | null = null
   let closed = false
@@ -35,9 +35,14 @@ export async function createSimulationSse(options: { readonly simulationId: stri
           // already closed by the consumer
         }
       }
+      // Fix wave, Important #1: keyed on the composite, not `version` alone -- `setStatus`,
+      // `startAutoRun`, `stopAutoRun` and `haltUnparsed` change `status` (or `simTime`) without
+      // ever bumping `version`, so an auto-run's error halt or a CLI pause/halt/stop-auto-run
+      // would otherwise leave an open page stale until reload.
       const emit = (row: { version: number; status: string; simTime: number }): void => {
-        if (closed || row.version === lastVersion) return
-        lastVersion = row.version
+        const composite = `${row.version}|${row.status}|${row.simTime}`
+        if (closed || composite === lastEmitted) return
+        lastEmitted = composite
         try {
           controller.enqueue(encoder.encode(`data: ${JSON.stringify(row)}\n\n`))
         } catch {

@@ -1,5 +1,5 @@
 import { prisma } from '@slave-of-ai/db/client'
-import { createSimulation, stepSimulation } from '@slave-of-ai/control'
+import { createSimulation, pauseSimulation, stepSimulation } from '@slave-of-ai/control'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { createSimulationSse } from '../../src/server/simulationEvents.js'
 
@@ -42,6 +42,15 @@ describe('createSimulationSse', () => {
     let beat = ''
     for (let i = 0; i < 10 && !beat.includes(': heartbeat'); i++) beat += await read()
     expect(beat).toContain(': heartbeat')
+    // A status change with no version bump (fix wave, Important #1): pauseSimulation never
+    // touches `version`, so the old version-only change detection would swallow this frame and
+    // leave an open page stale until reload. The composite `(version, status, simTime)` key must
+    // still emit it.
+    await pauseSimulation(id)
+    let paused = ''
+    for (let i = 0; i < 10 && !paused.includes('"status":"paused"'); i++) paused += await read()
+    expect(paused).toContain('"status":"paused"')
+    expect(paused).toContain('"version":1')
     await reader.cancel()
     // The poll and heartbeat intervals must have actually cleared on cancel -- if either kept
     // firing, its enqueue onto the now-closed controller would throw. A further step plus a wait
