@@ -112,8 +112,9 @@ environment (`PATH`, `HOME`, `LANG`, `TERM`) — it can reach no tool, no file, 
 real system. Every call's real cost is shown on the run page against the cap (`$<spent> of
 $<cap>`, never a misleading `$0.00` for an unmeasured call — a call whose cost the provider did
 not report is charged as $1.00 toward the cap, an estimate on the safe side, and the panel says
-so); the run halts on its own once the cap is reached, and a tool call from the model — the isolation failing — halts the run immediately as
-an isolation breach. Both halts are permanent: nothing about them resumes automatically.
+so); the run halts on its own once the cap is reached, and a tool call from the model — the
+isolation failing — halts the run immediately as an isolation breach. Both halts are permanent:
+nothing about them resumes automatically.
 `docs/superpowers/specs/2026-09-07-m31a-llm-decision-provider-design.md` has the full design.
 
 ## The web UI

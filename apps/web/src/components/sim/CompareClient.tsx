@@ -1,4 +1,5 @@
 import type { SimulationComparison } from '@slave-of-ai/control'
+import { metricValue } from '../../lib/metricValue'
 import { formatMinor } from '../../lib/money'
 import { Chip } from '../ui/Chip'
 import { DataTable, Row } from '../ui/DataTable'
@@ -10,12 +11,6 @@ const COLUMNS = '1.4fr 1fr 1fr 1fr'
 function deltaMoney(minor: number, currency: string): string {
   return minor < 0 ? formatMinor(minor, currency) : `+${formatMinor(minor, currency)}`
 }
-/** One metric as a figure to print, narrowed exactly the way control's `metricDeltas` narrows it
- *  (M32 item 6): a missing labelled key is 0, anything that is not a finite number has no figure
- *  at all. A sector's metrics are `unknown`-valued -- trade's carry a `sources` object beside the
- *  numbers -- so this is where the page finds out. */
-const metricValue = (value: unknown): number | null => (value === undefined ? 0 : typeof value === 'number' && Number.isFinite(value) ? value : null)
-
 /** A plain count delta: `+50`, the typographic minus `−4`, or `0` — never a bare positive
  *  integer, which would read as an absolute value rather than a change. */
 function deltaCount(value: number): string {

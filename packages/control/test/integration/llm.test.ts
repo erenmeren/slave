@@ -1,5 +1,5 @@
 import { prisma } from '@slave-of-ai/db/client'
-import { afterAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   PER_CALL_CAP_USD,
   applyModelDecision,
@@ -34,6 +34,19 @@ beforeEach(async () => {
   await prisma.$executeRawUnsafe('TRUNCATE TABLE "SimulationModelUsage", "SimulationJournalEntry", "SimulationRun", "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE')
   companyId = await seedTradingCompany()
 })
+/** Every `heldDecider()` this file makes (see below), so the hook under it can let go of whatever
+ *  a test left hanging. A held decider's call is DETACHED (M32 item 2): the pass that started it
+ *  returned long ago, and the apply is still waiting on a promise only the test can resolve. A
+ *  test that fails on its way to `release()` would leave that apply parked with the run id still
+ *  in the in-flight set -- and it would then land in the middle of the NEXT test, whose
+ *  `beforeEach` has already truncated the tables it is about to write to. */
+const heldDeciders: { readonly release: (outcome?: ModelOutcome) => void }[] = []
+
+afterEach(async () => {
+  for (const held of heldDeciders.splice(0)) held.release()
+  await drainModelCalls()
+})
+
 afterAll(async () => { await prisma.$disconnect() })
 
 const validLlmInput = { decisionProvider: 'llm' as const, modelProvider: 'claude_code' as const, model: 'claude-haiku-4-5', maxModelCostUsd: 2 }
@@ -414,15 +427,19 @@ function heldDecider(): {
 } {
   const waiting: { resolve: (outcome: ModelOutcome) => void; reject: (error: Error) => void }[] = []
   const inputs: { model: string; prompt: string; maxBudgetUsd: number }[] = []
-  return {
-    decider: (input) => {
+  const held = {
+    decider: (input: { model: string; prompt: string; maxBudgetUsd: number }): Promise<ModelOutcome> => {
       inputs.push(input)
       return new Promise<ModelOutcome>((resolve, reject) => { waiting.push({ resolve, reject }) })
     },
     inputs,
-    release: (outcome = answer()) => { for (const w of waiting.splice(0)) w.resolve(outcome) },
-    rejectAll: (error) => { for (const w of waiting.splice(0)) w.reject(error) },
+    release: (outcome = answer()): void => { for (const w of waiting.splice(0)) w.resolve(outcome) },
+    rejectAll: (error: Error): void => { for (const w of waiting.splice(0)) w.reject(error) },
   }
+  // Registered so the file's `afterEach` can release and drain it even when the test that made it
+  // never got that far.
+  heldDeciders.push(held)
+  return held
 }
 
 describe('tickSimulations with a model decider', () => {

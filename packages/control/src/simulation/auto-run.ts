@@ -124,9 +124,13 @@ export async function drainModelCalls(): Promise<void> {
  *  auto-run and then ran `tick` needs to be told why nothing happened rather than left to conclude
  *  the run is stuck.
  *
- *  `skippedInFlight` counts the `llm` runs left for a later pass because a model call was already
- *  out: this run's own (the run is mid-decision) or enough other runs' to fill the concurrency cap.
- *  Both are "waiting", exactly like a run that is not due yet, and neither spends anything. */
+ *  `skippedInFlight` counts the `llm` runs this pass left for a later one because a model call was
+ *  already out: the run was in flight, or the cap was full when the run was reached, DUE OR NOT.
+ *  Not-due-or-not is genuinely unknown here -- the check happens before `prepareModelDecision`, so
+ *  the pass never reads the run at all -- and that is the honest reading of the number: "left
+ *  alone because this process is already carrying calls", not "would have stepped but could not".
+ *  It is therefore non-zero on every pass for the whole life of a call, which is why the daemon
+ *  does not log on it alone. */
 export interface TickSimulationsReport {
   readonly candidates: number
   readonly stepped: number

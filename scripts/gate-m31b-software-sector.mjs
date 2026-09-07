@@ -24,9 +24,9 @@
 //
 // Stage 2 (software A, software B): `/sim`'s drawer, sector `software`, this company, seed 1 for
 // both (spec §9's own seed) -- policy A, then policy B, created independently (not cloned; their
-// definitions match anyway since `COMPARED_KEYS` never carries policy or its knobs). Both are
-// `rules`-provider runs, so they step synchronously through `sim-run-to-day`/`sim-run-to` -- no
-// daemon needed for this stage.
+// definitions match anyway since the plugin's `comparedKeys` never carries policy or its knobs).
+// Both are `rules`-provider runs, so they step synchronously through `sim-run-to-day`/`sim-run-to`
+// -- no daemon needed for this stage.
 //
 // Stage 3 (both to day 30, the pinned invariants): `sim-run-to` to day 30 on each, polled against
 // `prisma` for `status finished` and `simTime 30`. B's `defectIncidents` must be exactly 0, A's at

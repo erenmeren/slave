@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import type { ExternalEventForm } from '@slave-of-ai/simulation'
 import { useSimulationStream } from '../../hooks/useSimulationStream'
+import { metricValue } from '../../lib/metricValue'
 import { formatMinor } from '../../lib/money'
 import { sendControl } from '../../lib/postControl'
 import type { SimulationSnapshot, JournalRow } from '../../server/simulation'
@@ -255,13 +256,18 @@ export function SimulationClient({ initial }: { readonly initial: SimulationSnap
                   // Since M32 item 6 `SimulationMetrics` is `unknown`-valued and says so, so these
                   // reads are ordinary narrowing rather than a defensive cast around a type that
                   // claimed the fields could not be there.
-                  const value = typeof metrics[key] === 'number' ? (metrics[key] as number) : 0
+                  //
+                  // M32 review: through the SAME `metricValue` the compare page uses, so the two
+                  // cannot disagree about what is a number -- a labelled metric that is not one
+                  // reads `—` here and `—` there, rather than a confident `0` on one page and a
+                  // dash on the other.
+                  const value = metricValue(metrics[key])
                   const dayValue = metrics[`${key}Day`]
                   const sources = (metrics['sources'] as Record<string, readonly string[] | undefined> | undefined)?.[key]
                   return (
                     <div key={key} data-testid={`sim-metric-${key}`} className="rounded-card border border-line bg-bg-2 p-2 text-xs">
                       <div className="text-text-3">{label.label}{typeof dayValue === 'number' ? ` (day ${dayValue})` : ''}</div>
-                      <div className="font-mono text-sm text-text-1">{label.kind === 'money' ? formatMinor(value, currency) : String(value)}</div>
+                      <div className="font-mono text-sm text-text-1">{value === null ? '—' : label.kind === 'money' ? formatMinor(value, currency) : String(value)}</div>
                       {sources !== undefined && <div className="text-[10px] text-text-3">from {sources.join(', ')}</div>}
                     </div>
                   )

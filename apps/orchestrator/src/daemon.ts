@@ -156,10 +156,17 @@ export async function runDaemon(deps: DaemonDeps): Promise<void> {
       })
       // `skippedNoDecider` is reported too (M31a §4): a daemon that was built without a decider
       // silently doing nothing for an armed llm run is exactly the failure an operator cannot
-      // diagnose from the outside. `startedModelCalls` and `skippedInFlight` for the same reason
-      // (M32 item 2): a pass that started a call finishes long before the call does, so without
-      // these two lines the log for a busy llm run would read as a daemon doing nothing at all.
-      if (sims.stepped > 0 || sims.halted > 0 || sims.skippedNoDecider > 0 || sims.startedModelCalls > 0 || sims.skippedInFlight > 0) process.stdout.write(`${JSON.stringify({ simulations: sims })}\n`)
+      // diagnose from the outside. `startedModelCalls` for the same reason (M32 item 2): a pass
+      // that started a call finishes long before the call does, so without that line the log for a
+      // busy llm run would read as a daemon doing nothing at all.
+      //
+      // `skippedInFlight` is NOT in this predicate, deliberately (M32 review): it is non-zero on
+      // every pass for the whole life of a model call -- once a second, for minutes -- and a line
+      // printed that often says nothing except that time is passing. The `startedModelCalls` line
+      // already marks where the call began, and the run's journal records how it ended. The field
+      // is still in the report the line PRINTS, so a pass that logs for another reason still shows
+      // what it skipped.
+      if (sims.stepped > 0 || sims.halted > 0 || sims.skippedNoDecider > 0 || sims.startedModelCalls > 0) process.stdout.write(`${JSON.stringify({ simulations: sims })}\n`)
 
       // The guardrail sweep -- run timeout, tool-call ceiling, dead pids -- lives with the daemon,
       // not inside `tick()`: it kills processes, which is a lifecycle concern like the startup

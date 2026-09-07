@@ -75,6 +75,17 @@ describe('SimulationClient', () => {
     expect(screen.getByTestId('sim-metric-purchaseCostMinor').textContent).toContain('action_applied:place_purchase')
     expect(screen.getByTestId('sim-metric-lateDays').textContent).toContain('0')
   })
+  // M32 review: the same rule the compare page follows. A sector's metrics are `unknown`-valued,
+  // so a labelled key that is not a number has no figure to show -- an em dash, never a confident
+  // `0`, which would read as a real measurement of zero.
+  it('a labelled metric that is not a number renders — rather than 0', () => {
+    const odd = snapshot({ metrics: { ...snapshot().metrics, closingInventory: 'lots' } })
+    render(<SimulationClient initial={odd} />)
+    expect(screen.getByTestId('sim-metric-closingInventory').textContent).toContain('—')
+    expect(screen.getByTestId('sim-metric-closingInventory').textContent).not.toContain('0')
+    // One odd figure does not blank the panel: every other metric still reads its own number.
+    expect(screen.getByTestId('sim-metric-purchaseCostMinor').textContent).toContain('$7,250.00')
+  })
   it('the horizon suffix is keyed on HeadlineItem.ofHorizon, never on a label string (review round 1, Important #2)', () => {
     // A headline item labeled 'day' but WITHOUT ofHorizon renders as a plain number; one labeled
     // something else WITH ofHorizon gets the "/ horizonDays" suffix — proving the page reads the
