@@ -61,6 +61,10 @@ export function SimulationClient({ initial }: { readonly initial: SimulationSnap
   // Switching the event kind resets every field to a fresh default (M31b §5): the previous kind's
   // fields may not even exist on the new one (trade's `qty` vs. software's `engineerId`).
   useEffect(() => { setInjectFields(defaultInjectFieldValues(currentInjectForm, injectOptions)) }, [injectKind]) // eslint-disable-line react-hooks/exhaustive-deps
+  // Review round 1, Minor #1: a `select` field with nothing to select from would otherwise post
+  // `''` as the field's value with no operator ever having chosen anything -- the submit is
+  // blocked instead, and the field says so.
+  const hasEmptyInjectSelect = (currentInjectForm?.fields ?? []).some((field) => field.kind === 'select' && (injectOptions[field.optionsFrom ?? ''] ?? []).length === 0)
   const stream = useSimulationStream(summary.id, summary.version, summary.status)
   // Fix wave, Important #1: a status verb (auto-run's error halt, a CLI pause/halt/stop-auto-run)
   // never bumps `version`, so `version` alone would leave this page stale until reload.
@@ -189,6 +193,7 @@ export function SimulationClient({ initial }: { readonly initial: SimulationSnap
               const onChange = (v: string): void => setInjectFields({ ...injectFields, [field.name]: v })
               if (field.kind === 'select') {
                 const options = injectOptions[field.optionsFrom ?? ''] ?? []
+                if (options.length === 0) return <span key={field.name} data-testid={testId} className="text-xs text-tone-blocked">no {field.label} available</span>
                 return (
                   <SelectField key={field.name} label={field.label} selectProps={{ 'data-testid': testId, value, onChange: (event) => onChange(event.target.value) } as React.SelectHTMLAttributes<HTMLSelectElement>}>
                     {options.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
@@ -205,7 +210,7 @@ export function SimulationClient({ initial }: { readonly initial: SimulationSnap
                 />
               )
             })}
-            <PrimaryButton data-testid="sim-inject-submit" disabled={pending} onClick={() => void submitInject()}>Add</PrimaryButton>
+            <PrimaryButton data-testid="sim-inject-submit" disabled={pending || hasEmptyInjectSelect} onClick={() => void submitInject()}>Add</PrimaryButton>
             <span className="text-xs text-text-3">a clone of this run's scenario will not carry an event added here</span>
           </div>
         )}
@@ -213,7 +218,7 @@ export function SimulationClient({ initial }: { readonly initial: SimulationSnap
           <Panel title="Simulated company">
             <div data-testid="sim-company" className="flex flex-col gap-1 text-xs text-text-2">
               {headline.map((item) => {
-                const display = item.label === 'day' ? `${item.value} / ${summary.horizonDays}` : item.kind === 'money' ? formatMinor(item.value, currency) : String(item.value)
+                const display = item.ofHorizon === true ? `${item.value} / ${summary.horizonDays}` : item.kind === 'money' ? formatMinor(item.value, currency) : String(item.value)
                 return (
                   <div key={item.label}>
                     {item.label} <span data-testid={`sim-company-${slugify(item.label)}`} className={item.kind === 'money' ? 'font-mono text-text-1' : undefined}>{display}</span>

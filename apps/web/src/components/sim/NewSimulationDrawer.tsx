@@ -30,7 +30,10 @@ export function NewSimulationDrawer({
   readonly companiesBySector: Readonly<Record<SectorName, readonly SimulationCompanyOption[]>>
 }): React.JSX.Element | null {
   const router = useRouter()
-  const [sector, setSector] = useState<SectorName>('trade')
+  // The default is the registry's own first entry, never a sector literal (review round 1,
+  // Important #1) -- `SECTOR_NAMES` comes from `Object.keys(sectors)` above, which the registry
+  // guarantees is non-empty, so the assertion is safe.
+  const [sector, setSector] = useState<SectorName>(SECTOR_NAMES[0]!)
   const [companyId, setCompanyId] = useState('')
   const [name, setName] = useState('')
   const [policy, setPolicy] = useState<'A' | 'B'>('A')

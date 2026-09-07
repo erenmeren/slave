@@ -97,9 +97,11 @@ describe('SimulationsClient', () => {
     render(<SimulationsClient cards={[card({ autoRun: { everyMs: 1000, untilDay: 30, lastStepAt: null } })]} companiesBySector={companiesBySector} />)
     expect(screen.getByTestId('sim-card-s1').textContent).toContain('auto-run')
   })
-  it('an empty list says so and names the demo company', () => {
+  it('an empty list says so, sector-neutrally (review round 1, Minor #2: no "trade sector" text)', () => {
     render(<SimulationsClient cards={[]} companiesBySector={companiesBySector} />)
-    expect(screen.getByTestId('sim-empty').textContent).toContain('No simulations yet')
+    const text = screen.getByTestId('sim-empty').textContent ?? ''
+    expect(text).toContain('No simulations yet')
+    expect(text).not.toMatch(/trade/i)
   })
   it('a card with decisionProvider llm shows an llm chip', () => {
     render(<SimulationsClient cards={[card({ decisionProvider: 'llm', modelProvider: 'claude_code', model: 'sonnet', maxModelCostUsd: 2, llmRoles: ['purchasing'] })]} companiesBySector={companiesBySector} />)

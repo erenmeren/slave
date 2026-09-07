@@ -10,7 +10,10 @@ import type { SectorModel } from './sector.js'
  *  `SectorPlugin` value; control and web never name a sector except through the registry
  *  (`./registry.js`). */
 export interface MetricLabel { readonly label: string; readonly kind: 'count' | 'money' | 'days' }
-export interface HeadlineItem { readonly label: string; readonly value: number; readonly kind: 'count' | 'money' | 'days' }
+// Controller ruling R14: `ofHorizon` is optional and new -- it marks the ONE headline item (a
+// sector's "day" figure, if it has one) the run page renders as `${value} / ${horizonDays}`
+// rather than a plain number, so the page never has to guess that by matching a label string.
+export interface HeadlineItem { readonly label: string; readonly value: number; readonly kind: 'count' | 'money' | 'days'; readonly ofHorizon?: boolean }
 // Controller ruling R1: `testId` is optional and new -- it lets a plugin's external-event form
 // carry the exact `data-testid` the run page's inputs already use, so the trade plugin can wrap
 // M29/M30's form without changing what a test (or an operator's muscle memory) targets.

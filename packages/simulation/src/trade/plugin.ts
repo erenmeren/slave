@@ -77,7 +77,7 @@ export const tradePlugin: TradePlugin = {
   metrics: tradeMetrics,
   metricLabels: METRIC_LABELS,
   headline: (state, day) => [
-    { label: 'day', value: day, kind: 'count' },
+    { label: 'day', value: day, kind: 'count', ofHorizon: true },
     { label: 'cash', value: state.cashMinor, kind: 'money' },
     { label: 'inventory', value: state.inventory, kind: 'count' },
     { label: 'open orders', value: state.orders.filter((o) => o.status !== 'shipped').length, kind: 'count' },

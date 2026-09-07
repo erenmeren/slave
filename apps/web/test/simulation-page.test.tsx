@@ -21,7 +21,7 @@ function snapshot(over: Partial<SimulationSnapshot> = {}): SimulationSnapshot {
     // items `packages/simulation/src/trade/plugin.ts` publishes, in its own order -- not a
     // trade-shaped object the page used to narrow to.
     headline: [
-      { label: 'day', value: 4, kind: 'count' },
+      { label: 'day', value: 4, kind: 'count', ofHorizon: true },
       { label: 'cash', value: 4_575_000, kind: 'money' },
       { label: 'inventory', value: 10, kind: 'count' },
       { label: 'open orders', value: 1, kind: 'count' },
@@ -74,6 +74,14 @@ describe('SimulationClient', () => {
     expect(screen.getByTestId('sim-metric-purchaseCostMinor').textContent).toContain('$7,250.00')
     expect(screen.getByTestId('sim-metric-purchaseCostMinor').textContent).toContain('action_applied:place_purchase')
     expect(screen.getByTestId('sim-metric-lateDays').textContent).toContain('0')
+  })
+  it('the horizon suffix is keyed on HeadlineItem.ofHorizon, never on a label string (review round 1, Important #2)', () => {
+    // A headline item labeled 'day' but WITHOUT ofHorizon renders as a plain number; one labeled
+    // something else WITH ofHorizon gets the "/ horizonDays" suffix — proving the page reads the
+    // flag, not the word "day".
+    render(<SimulationClient initial={snapshot({ headline: [{ label: 'day', value: 4, kind: 'count' }, { label: 'sprint', value: 7, kind: 'count', ofHorizon: true }] })} />)
+    expect(screen.getByTestId('sim-company-day').textContent).toBe('4')
+    expect(screen.getByTestId('sim-company-sprint').textContent).toBe('7 / 30')
   })
   it('Step posts one step with an idempotency key and a version, then refreshes; Run to day posts untilDay', async () => {
     render(<SimulationClient initial={snapshot()} />)
@@ -175,6 +183,14 @@ describe('SimulationClient', () => {
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
     expect(url).toBe('/api/sim/s1/inject')
     expect(JSON.parse(String(init.body))).toMatchObject({ day: 6, event: { type: 'demand', qty: 20 } })
+  })
+  it('a select field with nothing to select from blocks the submit and says so, instead of posting "" (review round 1, Minor #1)', () => {
+    render(<SimulationClient initial={snapshot({ injectOptions: { suppliers: [] } })} />)
+    fireEvent.click(screen.getByTestId('sim-inject-open'))
+    fireEvent.change(screen.getByTestId('sim-inject-kind'), { target: { value: 'supplier_delay' } })
+    expect(screen.getByTestId('sim-inject-supplier').textContent).toContain('no supplier available')
+    expect(screen.queryByTestId('sim-inject-supplier')?.tagName).not.toBe('SELECT')
+    expect((screen.getByTestId('sim-inject-submit') as HTMLButtonElement).disabled).toBe(true)
   })
   it('refreshes when the stream version moves past the summary version; sim-live shows LIVE/RECONNECTING', () => {
     stream = { version: 2, status: 'running', connection: 'connected' }

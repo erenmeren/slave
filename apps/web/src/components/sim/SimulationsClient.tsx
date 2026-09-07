@@ -28,7 +28,7 @@ export function SimulationsClient({
     <div className="flex flex-col gap-4 p-6">
       <Panel title="Simulations" action={<PrimaryButton data-testid="new-simulation" onClick={() => setOpen(true)}>+ New simulation</PrimaryButton>}>
         {cards.length === 0 ? (
-          <p data-testid="sim-empty" className="text-xs text-text-3">No simulations yet. Create one from a catalog company — the seed ships “Demo Trading Co.” with the four roles the trade sector needs.</p>
+          <p data-testid="sim-empty" className="text-xs text-text-3">No simulations yet. Create the first run from a catalog company whose roster fits the sector.</p>
         ) : (
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
             {cards.map((card) => (
