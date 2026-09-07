@@ -1,6 +1,7 @@
 import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import {
+  cloneSimulation,
   createSimulation,
   loadSimulation,
   startAutoRun,
@@ -79,6 +80,21 @@ describe('createSimulation on an llm run', () => {
     const id = result.ok ? result.value.id : ''
     const loaded = await loadSimulation(id)
     expect(loaded.ok && loaded.value.summary).toMatchObject({ decisionProvider: 'rules', modelProvider: null, model: null, maxModelCostUsd: null, llmRoles: [] })
+    expect(loaded.ok && loaded.value.definition.llmRoles).toEqual([])
+  })
+})
+
+describe('cloneSimulation of an llm run (controller ruling R4: a clone never inherits paid use)', () => {
+  it('the clone is a rules run with no llm roles and no model fields, whatever the source carried', async () => {
+    const source = await createSimulation({ companyId, name: 'llm-source', sector: 'trade', policy: 'A', ...validLlmInput })
+    const sourceId = source.ok ? source.value.id : ''
+    const cloned = await cloneSimulation(sourceId, { name: 'llm-clone', policy: 'B' })
+    expect(cloned.ok).toBe(true)
+    const cloneId = cloned.ok ? cloned.value.id : ''
+    const loaded = await loadSimulation(cloneId)
+    expect(loaded.ok && loaded.value.summary).toMatchObject({
+      decisionProvider: 'rules', modelProvider: null, model: null, maxModelCostUsd: null, llmRoles: [],
+    })
     expect(loaded.ok && loaded.value.definition.llmRoles).toEqual([])
   })
 })

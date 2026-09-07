@@ -112,7 +112,10 @@ export async function cloneSimulation(
   const source = await loadSimulation(sourceId)
   if (!source.ok) return source
   const seed = input.seed ?? source.value.definition.seed
-  const definition = cloneDefinition(source.value.definition, { policy: input.policy, seed })
+  // Controller ruling R4: a clone never inherits paid use -- the row below already forces
+  // `decisionProvider: 'rules'` and null model columns, so the frozen definition must not still
+  // claim a role decides with a model.
+  const definition = { ...cloneDefinition(source.value.definition, { policy: input.policy, seed }), llmRoles: [] }
   const state = tradeInitialEngineState(definition)
   return insertRun(
     { companyId: source.value.summary.companyId, name: input.name.trim(), sector: 'trade', mode: 'simulation', decisionProvider: 'rules', seed, definition: json(definition), state: json(state), clonedFromId: sourceId, createdByUserId: principal?.userId ?? null },
