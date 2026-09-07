@@ -191,5 +191,15 @@ describe('tickSimulations', () => {
     // stale `journalSeq`.
     const injected = await injectExternalEvent(bad, { day: 5, event: { type: 'demand', qty: 10, unitPriceMinor: 1_000, dueInDays: 3, collectInDays: 0 } })
     expect(injected.ok).toBe(false)
+    // M32 item 3: the halt wrote two journal rows at the journal's own `max(seq) + 1`, so the
+    // run's watermark moves with them. It used to be left behind on the reasoning that `halted` is
+    // terminal -- true of today's writers and true of nothing else: every writer in this package
+    // computes its seq as `state.journalSeq + 1`, so a watermark that lags the journal is a
+    // `(simulationId, seq)` collision waiting for the first writer that reaches a halted row.
+    const maxSeq = (await prisma.simulationJournalEntry.aggregate({ where: { simulationId: bad }, _max: { seq: true } }))._max.seq
+    expect(((await prisma.simulationRun.findUniqueOrThrow({ where: { id: bad } })).state as { journalSeq: number }).journalSeq).toBe(maxSeq)
+    // The corrupt state itself is untouched -- it is the evidence of what went wrong, and only the
+    // watermark inside it moved.
+    expect(((await prisma.simulationRun.findUniqueOrThrow({ where: { id: bad } })).state as { sector: { suppliers: { unitPriceMinor: unknown }[] } }).sector.suppliers[0]?.unitPriceMinor).toBe('x')
   })
 })

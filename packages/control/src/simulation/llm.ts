@@ -8,7 +8,7 @@ import {
 import type { ControlRefusal } from '../refusal.js'
 import { readSimulation } from './read.js'
 import { clearAutoRun, json, locked } from './shared.js'
-import { haltUnparsed, stepLocked } from './write.js'
+import { haltUnparsed, stepLocked, watermark } from './write.js'
 
 /** The ceiling on ONE model call, whatever budget the run still has (M31a §4). A run's own cap is
  *  cumulative and can be large; this bounds the blast radius of a single decision -- a prompt that
@@ -71,23 +71,29 @@ export type PrepareOutcome =
       readonly remainingUsd: number
     }
 
-/** Writes one journal row at `max(seq) + 1` under the row lock. Used by the one path that journals
- *  outside `stepLocked` and does NOT move `state.journalSeq` (the exhausted budget): the seq is
- *  read fresh from the journal itself because `state.journalSeq` can lag the journal's real
- *  maximum after a `haltUnparsed` (which never rewrites `state`) -- the same reasoning
+/** Writes one journal row at `max(seq) + 1` under the row lock, and moves `state.journalSeq` to
+ *  the seq it wrote, in the same transaction. Used by the one path that journals outside
+ *  `stepLocked` (the exhausted budget): the seq is read fresh from the journal itself because
+ *  `state.journalSeq` can lag the journal's real maximum -- the same reasoning
  *  `injectExternalEvent` documents.
  *
- *  Not moving the watermark is safe HERE and nowhere else (final review, Critical #1): the only
- *  caller halts the run through `haltUnparsed` on the very next line, and `halted` is terminal for
- *  every journal writer in this package -- `stepSimulation`, `startAutoRun` and `setStatus` all
- *  refuse a halted row, and `haltUnparsed` itself reads `max(seq)` fresh. A caller that journals
- *  through this and leaves the run RUNNING would strand `state.journalSeq` behind the journal and
- *  the next `state.journalSeq + 1` writer would collide on `(simulationId, seq)`. */
+ *  M32 item 3: the watermark moves. It used to be left behind, on the reasoning that the only
+ *  caller halts the run on the very next line and `halted` is terminal for every journal writer in
+ *  this package. That was true of the writers of the day and of nothing else: every one of them
+ *  computes its next seq as `state.journalSeq + 1`, so a watermark left behind is a
+ *  `(simulationId, seq)` collision waiting for the first writer that reaches such a row -- a
+ *  property of who happens to call this, which is exactly the kind of invariant that does not
+ *  survive its next reader. The move is a shallow key set through `watermark` (`write.ts`), so
+ *  nothing else in the stored state is read or rewritten. */
 async function journalControl(simulationId: string, simTime: number, payload: Record<string, unknown>): Promise<void> {
   await prisma.$transaction(async (tx) => {
     await tx.$queryRaw`SELECT id FROM "SimulationRun" WHERE id = ${simulationId} FOR UPDATE`
+    const row = await tx.simulationRun.findUnique({ where: { id: simulationId }, select: { state: true } })
+    if (row === null) return
     const last = await tx.simulationJournalEntry.findFirst({ where: { simulationId }, orderBy: { seq: 'desc' }, select: { seq: true } })
-    await tx.simulationJournalEntry.create({ data: { simulationId, seq: (last?.seq ?? -1) + 1, simTime, kind: 'control', actorRole: null, payload: json(payload) } })
+    const seq = (last?.seq ?? -1) + 1
+    await tx.simulationJournalEntry.create({ data: { simulationId, seq, simTime, kind: 'control', actorRole: null, payload: json(payload) } })
+    await tx.simulationRun.update({ where: { id: simulationId }, data: watermark(row.state, seq) })
   })
 }
 

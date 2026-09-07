@@ -199,11 +199,31 @@ export async function stepLocked(
   return outcome
 }
 
+/** Moves ONLY `journalSeq` inside a stored state, for the two writers that journal outside
+ *  `stepLocked` and cannot parse the state first (M32 item 3): `haltUnparsed` here, whose whole
+ *  premise is a state that may not parse, and `llm.ts`'s `journalControl`. A shallow key set on
+ *  whatever JSON is stored, so nothing else in it is read, validated or rewritten -- a corrupt
+ *  state stays corrupt, byte for byte, which is what makes it evidence.
+ *
+ *  Returns a Prisma update fragment, empty when the stored value is not a JSON object (`null`, an
+ *  array, a scalar): there is no watermark to move in that case and inventing a state around one
+ *  would destroy the evidence this exists to preserve. */
+export function watermark(state: Prisma.JsonValue, journalSeq: number): { readonly state?: Prisma.InputJsonValue } {
+  if (typeof state !== 'object' || state === null || Array.isArray(state)) return {}
+  return { state: json({ ...(state as Record<string, unknown>), journalSeq }) }
+}
+
 /** Halts a run whose state cannot be parsed (spec M30 §5): `haltSimulation` goes through
  *  `locked()` → `parseRow`, which would refuse `simulation_corrupt` again on a corrupt state, so
  *  `tickSimulations`'s halt path writes the row and its journal directly instead of replaying the
- *  normal `setStatus` path. The stored `state` JSON is left untouched -- it is the evidence of
- *  what went wrong, not something this can safely rewrite without parsing it. Journals an
+ *  normal `setStatus` path. The stored `state` JSON is left otherwise untouched -- it is the
+ *  evidence of what went wrong, not something this can safely rewrite without parsing it -- but
+ *  its `journalSeq` moves to the seq this wrote (M32 item 3), in the same transaction: this writes
+ *  at the journal's own `max(seq) + 1` and every other writer in this package computes its next
+ *  seq as `state.journalSeq + 1`, so a watermark left behind is a `(simulationId, seq)` collision
+ *  waiting for the first writer that reaches this row. "Halted is terminal" was true of today's
+ *  writers and of nothing else. The merge is a shallow key set on the stored JSON, so a state too
+ *  corrupt to parse still keeps every byte of its evidence. Journals an
  *  `auto_run_stopped { reason: 'error' }` row first when the run held an intent, so the journal
  *  reads the whole story: the intent was cleared, then the run was halted. Takes the row lock
  *  first (fix wave, Minor #2): every other journal writer in this file goes through `locked()`,
@@ -215,7 +235,7 @@ export async function stepLocked(
 export async function haltUnparsed(simulationId: string, reason: string): Promise<void> {
   await prisma.$transaction(async (tx) => {
     await tx.$queryRaw`SELECT id FROM "SimulationRun" WHERE id = ${simulationId} FOR UPDATE`
-    const row = await tx.simulationRun.findUnique({ where: { id: simulationId }, select: { simTime: true, autoRunEveryMs: true } })
+    const row = await tx.simulationRun.findUnique({ where: { id: simulationId }, select: { simTime: true, autoRunEveryMs: true, state: true } })
     if (row === null) return
     const last = await tx.simulationJournalEntry.findFirst({ where: { simulationId }, orderBy: { seq: 'desc' }, select: { seq: true } })
     let seq = (last?.seq ?? -1) + 1
@@ -224,7 +244,7 @@ export async function haltUnparsed(simulationId: string, reason: string): Promis
       seq += 1
     }
     await tx.simulationJournalEntry.create({ data: { simulationId, seq, simTime: row.simTime, kind: 'control', actorRole: null, payload: { op: 'halted', reason } } })
-    await tx.simulationRun.update({ where: { id: simulationId }, data: { status: 'halted', haltedReason: reason, autoRunEveryMs: null, autoRunUntilDay: null, lastAutoStepAt: null } })
+    await tx.simulationRun.update({ where: { id: simulationId }, data: { status: 'halted', haltedReason: reason, autoRunEveryMs: null, autoRunUntilDay: null, lastAutoStepAt: null, ...watermark(row.state, seq) } })
   })
 }
 
@@ -328,12 +348,11 @@ export async function injectExternalEvent(
     }
     const queue = loaded.state.queue
     const item = { time: input.day, priority: 'external' as const, seq: queue.nextSeq, event: parsed.data }
-    // `state.journalSeq` can lag the journal's real `max(seq)` -- a throw-path `haltUnparsed`
-    // (M30 §5) never rewrites `state` (the corrupt JSON is left as evidence), so a run halted that
-    // way keeps a stale `journalSeq`. Reading `max(seq) + 1` fresh, inside this same lock, is the
-    // only value that is always correct; `loaded.state.journalSeq + 1` is not (fix round 1,
-    // Important #1). The `ready`/`running` guard above makes a halted row unreachable here too,
-    // but the seq is computed the safe way regardless of which guard a future change might loosen.
+    // Reading `max(seq) + 1` fresh, inside this same lock, is the only value that is always
+    // correct; `loaded.state.journalSeq + 1` is not (fix round 1, Important #1). Every writer that
+    // journals outside `stepLocked` moves the watermark with it since M32 item 3, so the two agree
+    // today -- but a fresh read cannot go wrong however some future writer behaves, and this one
+    // costs a single indexed query.
     const last = await tx.simulationJournalEntry.findFirst({ where: { simulationId }, orderBy: { seq: 'desc' }, select: { seq: true } })
     const seq = (last?.seq ?? -1) + 1
     await tx.simulationJournalEntry.create({ data: { simulationId, seq, simTime: row.simTime, kind: 'external_event', actorRole: null, idempotencyKey: input.idempotencyKey !== undefined ? namespacedKey('inject', input.idempotencyKey) : null, payload: { op: 'injected', day: input.day, event: json(parsed.data) } } })

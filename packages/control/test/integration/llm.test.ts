@@ -597,6 +597,13 @@ describe('tickSimulations with a model decider', () => {
       .map((r) => r.payload as { op: string; spentUsd?: number; unmeasured?: number; chargedUsd?: number; capUsd?: number })
       .find((p) => p.op === 'model_budget_exhausted')
     expect(exhausted).toMatchObject({ spentUsd: 0, unmeasured: 3, chargedUsd: 3 * PER_CALL_CAP_USD, capUsd: 2.5 })
+    // M32 item 3: the budget halt writes TWO journal rows outside `stepLocked` -- the
+    // `model_budget_exhausted` control row and, through `haltUnparsed`, the `halted` row -- and
+    // the watermark ends level with the journal's own maximum. Neither writer may leave it behind
+    // on the reasoning that a halted run is terminal: every other writer in this package computes
+    // its next seq as `state.journalSeq + 1`.
+    const maxSeq = (await prisma.simulationJournalEntry.aggregate({ where: { simulationId: id }, _max: { seq: true } }))._max.seq
+    expect(((await prisma.simulationRun.findUniqueOrThrow({ where: { id } })).state as { journalSeq: number }).journalSeq).toBe(maxSeq)
   })
 
   it('stops at untilDay without spending another cent, and the clear bumps version so the stream sees it (ruling R11)', async () => {
