@@ -43,6 +43,7 @@ import {
   setGoal,
   setPassword,
   describeSync,
+  DEFAULT_MAX_MODEL_CALLS,
   simulationStatus,
   startAutoRun,
   stepSimulation,
@@ -310,6 +311,18 @@ function buildModelDecider(): ModelDecider {
 }
 
 /**
+ * How many simulation model calls the daemon keeps in flight at once (M32 item 2). Read here for
+ * the same reason `buildModelDecider` is built here: this file is the one place that reads the
+ * environment for spawn configuration. A value that is not a positive integer is ignored rather
+ * than obeyed -- `SLAVEOFAI_MAX_MODEL_CALLS=0` would arm an llm auto-run that can never step, and
+ * a typo must not silently do that.
+ */
+function maxConcurrentModelCalls(): number {
+  const parsed = Number(process.env['SLAVEOFAI_MAX_MODEL_CALLS'])
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_MODEL_CALLS
+}
+
+/**
  * Cursor's gate script, sourced exactly the way `hookPath()` above sources Claude's and for the
  * same reasons -- derived from this file's own location so a checkout works with no configuration,
  * overridable because an installed daemon's layout is not this one. A separate variable rather
@@ -489,6 +502,7 @@ export async function main(argv: readonly string[]): Promise<number> {
         // not -- a command an operator runs by hand must never start spending on model calls -- so
         // it reports `skippedNoDecider` instead and the llm runs wait for the daemon.
         modelDecider: buildModelDecider(),
+        maxConcurrentModelCalls: maxConcurrentModelCalls(),
       })
       return 0
     }

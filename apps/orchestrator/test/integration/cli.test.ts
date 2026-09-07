@@ -1331,7 +1331,7 @@ describe('the orchestrator CLI', () => {
       const second = await runCli(['tick', '--workspace', fixture.workspaceId])
       expect(second.code).toBe(0)
       const parsed = JSON.parse(second.stdout) as { simulations: { candidates: number; stepped: number; halted: number; skippedNoDecider: number } }
-      expect(parsed.simulations).toEqual({ candidates: 1, stepped: 1, halted: 0, skippedNoDecider: 0 })
+      expect(parsed.simulations).toEqual({ candidates: 1, stepped: 1, halted: 0, skippedNoDecider: 0, skippedInFlight: 0, startedModelCalls: 0 })
       const row = await prisma.simulationRun.findUniqueOrThrow({ where: { id } })
       expect(row.simTime).toBe(2)
     }, 30_000)

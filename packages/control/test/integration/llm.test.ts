@@ -3,6 +3,8 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import {
   PER_CALL_CAP_USD,
   applyModelDecision,
+  drainModelCalls,
+  inFlightModelCalls,
   cloneSimulation,
   createSimulation,
   haltSimulation,
@@ -13,6 +15,7 @@ import {
   stopAutoRun,
   stepSimulation,
   tickSimulations,
+  type ModelDecider,
   type ModelOutcome,
 } from '../../src/simulation.js'
 
@@ -285,7 +288,8 @@ describe('applyModelDecision', () => {
     const state = (await prisma.simulationRun.findUniqueOrThrow({ where: { id } })).state as { journalSeq: number }
     expect(state.journalSeq).toBe(maxSeq)
     const report = await tickSimulations({ now: plus(250), modelDecider: async () => answer() })
-    expect(report).toMatchObject({ stepped: 1, halted: 0 })
+    expect(report).toMatchObject({ startedModelCalls: 1, halted: 0 })
+    await drainModelCalls()
     expect((await prisma.simulationRun.findUniqueOrThrow({ where: { id } })).simTime).toBe(1)
   })
 
@@ -392,24 +396,129 @@ describe('haltSimulation on an llm run (spec §6)', () => {
   })
 })
 
+// ---------------------------------------------------------------------------------------------
+// M32 item 2: the model step happens OFF the daemon's loop. A pass PREPARES each due llm run,
+// starts its `modelDecider(...)` without awaiting it, records the run id in the in-flight set and
+// returns; the apply happens when the promise settles. Every test below therefore has two halves
+// -- what the pass did (its report, immediately) and what the call did (after `drainModelCalls`).
+// Nothing here spawns anything: every decider is a plain function.
+// ---------------------------------------------------------------------------------------------
+
+/** A decider whose calls hang until the test releases them, which is the only way to observe a
+ *  call that is genuinely in flight across two passes. */
+function heldDecider(): {
+  readonly decider: ModelDecider
+  readonly inputs: { model: string; prompt: string; maxBudgetUsd: number }[]
+  readonly release: (outcome?: ModelOutcome) => void
+  readonly rejectAll: (error: Error) => void
+} {
+  const waiting: { resolve: (outcome: ModelOutcome) => void; reject: (error: Error) => void }[] = []
+  const inputs: { model: string; prompt: string; maxBudgetUsd: number }[] = []
+  return {
+    decider: (input) => {
+      inputs.push(input)
+      return new Promise<ModelOutcome>((resolve, reject) => { waiting.push({ resolve, reject }) })
+    },
+    inputs,
+    release: (outcome = answer()) => { for (const w of waiting.splice(0)) w.resolve(outcome) },
+    rejectAll: (error) => { for (const w of waiting.splice(0)) w.reject(error) },
+  }
+}
+
 describe('tickSimulations with a model decider', () => {
-  it('makes at most ONE model call per pass; two due llm runs need two passes (fix round 1, Important #3)', async () => {
-    // A model call can take minutes and the daemon awaits it inline, so a pass that decided for
-    // every due llm run would stall the whole loop for as long as the sum of them.
+  it('starts every due llm run in ONE pass and returns without waiting for any of them', async () => {
+    // The M31a rule this replaces (ruling R7) let one pass make ONE model call, because the pass
+    // awaited it inline and a slow call would otherwise stall the whole daemon for the sum of
+    // them. Nothing is awaited now, so both runs start together and neither waits a period.
     const a = await armedLlmRun('llm a', { everyMs: 10_000 })
     const b = await armedLlmRun('llm b', { everyMs: 10_000 })
-    let calls = 0
-    const decider = async (): Promise<ModelOutcome> => { calls += 1; return answer() }
-    const first = await tickSimulations({ now: T0, modelDecider: decider })
-    expect(calls).toBe(1)
-    expect(first).toMatchObject({ candidates: 2, stepped: 1, halted: 0, skippedNoDecider: 0 })
-    // The oldest due run goes first: candidates are read in creation order.
-    expect((await prisma.simulationRun.findUniqueOrThrow({ where: { id: a } })).simTime).toBe(1)
-    expect((await prisma.simulationRun.findUniqueOrThrow({ where: { id: b } })).simTime).toBe(0)
-    const second = await tickSimulations({ now: plus(250), modelDecider: decider })
-    expect(calls).toBe(2)
-    expect(second).toMatchObject({ stepped: 1 })
-    expect((await prisma.simulationRun.findUniqueOrThrow({ where: { id: b } })).simTime).toBe(1)
+    const held = heldDecider()
+    const first = await tickSimulations({ now: T0, modelDecider: held.decider })
+    expect(first).toEqual({ candidates: 2, stepped: 0, halted: 0, skippedNoDecider: 0, skippedInFlight: 0, startedModelCalls: 2 })
+    expect(held.inputs).toHaveLength(2)
+    // The pass returned while both calls were still out: that is the whole point of the change.
+    expect(inFlightModelCalls()).toEqual(new Set([a, b]))
+    // Neither has stepped yet -- `applyModelDecision` is what steps, and it has not run.
+    expect((await prisma.simulationRun.findUniqueOrThrow({ where: { id: a } })).simTime).toBe(0)
+    held.release()
+    await drainModelCalls()
+    expect(inFlightModelCalls().size).toBe(0)
+    for (const id of [a, b]) {
+      expect((await prisma.simulationRun.findUniqueOrThrow({ where: { id } })).simTime).toBe(1)
+      expect(await prisma.simulationModelUsage.count({ where: { simulationId: id } })).toBe(1)
+    }
+  })
+
+  it('a run whose call is in flight is skipped by the next pass, and never asked twice', async () => {
+    const id = await armedLlmRun('in flight')
+    const held = heldDecider()
+    const first = await tickSimulations({ now: T0, modelDecider: held.decider })
+    expect(first).toMatchObject({ startedModelCalls: 1, skippedInFlight: 0 })
+    expect(inFlightModelCalls()).toEqual(new Set([id]))
+    // Due again by the clock: `lastAutoStepAt` has not moved, because nothing has been applied
+    // yet -- so the in-flight set is the only thing standing between this run and a second paid
+    // call for the same day.
+    const second = await tickSimulations({ now: plus(250), modelDecider: held.decider })
+    expect(second).toEqual({ candidates: 1, stepped: 0, halted: 0, skippedNoDecider: 0, skippedInFlight: 1, startedModelCalls: 0 })
+    expect(held.inputs).toHaveLength(1)
+    held.release()
+    await drainModelCalls()
+    expect((await prisma.simulationRun.findUniqueOrThrow({ where: { id } })).simTime).toBe(1)
+    expect(await prisma.simulationModelUsage.count({ where: { simulationId: id } })).toBe(1)
+  })
+
+  it('the concurrency cap leaves the third due run for a later pass', async () => {
+    const a = await armedLlmRun('cap a', { everyMs: 10_000 })
+    const b = await armedLlmRun('cap b', { everyMs: 10_000 })
+    const c = await armedLlmRun('cap c', { everyMs: 10_000 })
+    const held = heldDecider()
+    const first = await tickSimulations({ now: T0, modelDecider: held.decider, maxConcurrentModelCalls: 2 })
+    expect(first).toEqual({ candidates: 3, stepped: 0, halted: 0, skippedNoDecider: 0, skippedInFlight: 1, startedModelCalls: 2 })
+    // Creation order decides who goes: the two oldest due runs, then the cap.
+    expect(inFlightModelCalls()).toEqual(new Set([a, b]))
+    expect((await prisma.simulationRun.findUniqueOrThrow({ where: { id: c } })).simTime).toBe(0)
+    held.release()
+    await drainModelCalls()
+    const second = await tickSimulations({ now: plus(250), modelDecider: held.decider, maxConcurrentModelCalls: 2 })
+    expect(second).toMatchObject({ startedModelCalls: 1 })
+    expect(inFlightModelCalls()).toEqual(new Set([c]))
+    held.release()
+    await drainModelCalls()
+    expect((await prisma.simulationRun.findUniqueOrThrow({ where: { id: c } })).simTime).toBe(1)
+  })
+
+  it('a decider that rejects halts its own run, leaves the set clean and never throws out of the pass', async () => {
+    const bad = await armedLlmRun('rejects')
+    const held = heldDecider()
+    const report = await tickSimulations({ now: T0, modelDecider: held.decider })
+    expect(report).toMatchObject({ startedModelCalls: 1, halted: 0 })
+    held.rejectAll(new Error('the CLI died'))
+    await drainModelCalls()
+    expect(inFlightModelCalls().size).toBe(0)
+    const row = await prisma.simulationRun.findUniqueOrThrow({ where: { id: bad } })
+    expect(row).toMatchObject({ status: 'halted', simTime: 0, autoRunEveryMs: null })
+    expect(row.haltedReason).toBe('auto-run step failed: the CLI died')
+    // No usage row: the call never came back, so nothing is known to have been spent.
+    expect(await prisma.simulationModelUsage.count({ where: { simulationId: bad } })).toBe(0)
+    // And the next pass simply finds nothing to do.
+    expect(await tickSimulations({ now: plus(250), modelDecider: held.decider })).toMatchObject({ candidates: 0 })
+  })
+
+  it('an apply that lands after the run was stopped still writes the usage row, and steps nothing (spec §2.6)', async () => {
+    const id = await armedLlmRun('stopped mid-call')
+    const held = heldDecider()
+    await tickSimulations({ now: T0, modelDecider: held.decider })
+    expect(inFlightModelCalls()).toEqual(new Set([id]))
+    // The operator stops the run while the call is out. Spec §2.6: the call finishes and is
+    // billed; its decision is discarded.
+    expect((await stopAutoRun(id)).ok).toBe(true)
+    held.release()
+    await drainModelCalls()
+    const row = await prisma.simulationRun.findUniqueOrThrow({ where: { id } })
+    expect(row).toMatchObject({ simTime: 0, status: 'running', autoRunEveryMs: null })
+    expect(await prisma.simulationModelUsage.count({ where: { simulationId: id } })).toBe(1)
+    const stale = (await prisma.simulationJournalEntry.findMany({ where: { simulationId: id, kind: 'control' }, orderBy: { seq: 'asc' } })).map((r) => r.payload as { op: string }).find((p) => p.op === 'stale_decision')
+    expect(stale).toBeDefined()
   })
 
   it('steps the llm run through the decider, reports skippedNoDecider without one, and leaves a rules run alone', async () => {
@@ -420,7 +529,7 @@ describe('tickSimulations with a model decider', () => {
 
     // No decider: the llm run is skipped untouched and the rules run steps as it always did.
     const without = await tickSimulations({ now: T0 })
-    expect(without).toEqual({ candidates: 2, stepped: 1, halted: 0, skippedNoDecider: 1 })
+    expect(without).toEqual({ candidates: 2, stepped: 1, halted: 0, skippedNoDecider: 1, skippedInFlight: 0, startedModelCalls: 0 })
     expect((await prisma.simulationRun.findUniqueOrThrow({ where: { id: llmId } })).simTime).toBe(0)
     expect((await prisma.simulationRun.findUniqueOrThrow({ where: { id: rulesId } })).simTime).toBe(1)
     expect(await prisma.simulationModelUsage.count({ where: { simulationId: llmId } })).toBe(0)
@@ -430,8 +539,10 @@ describe('tickSimulations with a model decider', () => {
       calls.push(input)
       return answer()
     }
+    // The rules run steps inside the pass; the llm run's call is merely started by it.
     const withDecider = await tickSimulations({ now: plus(250), modelDecider: decider })
-    expect(withDecider).toEqual({ candidates: 2, stepped: 2, halted: 0, skippedNoDecider: 0 })
+    expect(withDecider).toEqual({ candidates: 2, stepped: 1, halted: 0, skippedNoDecider: 0, skippedInFlight: 0, startedModelCalls: 1 })
+    await drainModelCalls()
     expect(calls).toHaveLength(1)
     // `Math.min(remainingUsd, PER_CALL_CAP_USD)`: the run's cap is 2, the per-call ceiling is 1.
     expect(calls[0]).toMatchObject({ model: 'claude-haiku-4-5', maxBudgetUsd: PER_CALL_CAP_USD })
@@ -448,13 +559,16 @@ describe('tickSimulations with a model decider', () => {
       return answer(ANSWER_TEXT, 0.006)
     }
     const first = await tickSimulations({ now: T0, modelDecider: decider })
-    expect(first).toMatchObject({ stepped: 1, halted: 0 })
+    expect(first).toMatchObject({ startedModelCalls: 1, halted: 0 })
+    await drainModelCalls()
     const second = await tickSimulations({ now: plus(250), modelDecider: decider })
-    expect(second).toMatchObject({ stepped: 1, halted: 0 })
+    expect(second).toMatchObject({ startedModelCalls: 1, halted: 0 })
+    await drainModelCalls()
     expect(calls).toBe(2)
-    // 0.012 >= 0.01: the third pass never calls the model at all.
+    // 0.012 >= 0.01: the third pass never calls the model at all. The budget halt is decided in
+    // `prepareModelDecision`, which the pass still awaits, so it is this pass's own `halted`.
     const third = await tickSimulations({ now: plus(500), modelDecider: decider })
-    expect(third).toMatchObject({ stepped: 0, halted: 1 })
+    expect(third).toMatchObject({ startedModelCalls: 0, halted: 1 })
     expect(calls).toBe(2)
     const row = await prisma.simulationRun.findUniqueOrThrow({ where: { id } })
     expect(row).toMatchObject({ status: 'halted', haltedReason: 'model budget exhausted' })
@@ -466,7 +580,10 @@ describe('tickSimulations with a model decider', () => {
     // Counting an unmeasured call as $0 would have let this run spend to the horizon for free.
     const id = await armedLlmRun('unmeasured', { maxModelCostUsd: 2.5 })
     const decider = async (): Promise<ModelOutcome> => answer(ANSWER_TEXT, null)
-    for (const at of [T0, plus(250), plus(500)]) await tickSimulations({ now: at, modelDecider: decider })
+    for (const at of [T0, plus(250), plus(500)]) {
+      await tickSimulations({ now: at, modelDecider: decider })
+      await drainModelCalls()
+    }
     const usage = await prisma.simulationModelUsage.findMany({ where: { simulationId: id }, orderBy: { seq: 'asc' } })
     expect(usage).toHaveLength(3)
     // Unmeasured stays unmeasured on the row itself: the cap arithmetic charges it, the ledger does not invent a figure.
@@ -487,9 +604,11 @@ describe('tickSimulations with a model decider', () => {
     let calls = 0
     const decider = async (): Promise<ModelOutcome> => { calls += 1; return answer() }
     await tickSimulations({ now: T0, modelDecider: decider })
+    await drainModelCalls()
     const stepped = await prisma.simulationRun.findUniqueOrThrow({ where: { id } })
     expect(stepped.simTime).toBe(1)
     await tickSimulations({ now: plus(250), modelDecider: decider })
+    await drainModelCalls()
     expect(calls).toBe(1)
     const row = await prisma.simulationRun.findUniqueOrThrow({ where: { id } })
     expect(row).toMatchObject({ simTime: 1, status: 'running', autoRunEveryMs: null })

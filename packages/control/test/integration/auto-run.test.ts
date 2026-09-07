@@ -137,7 +137,7 @@ describe('tickSimulations', () => {
     await startAutoRun(c, { everyMs: 250, untilDay: 30 })
     await pauseSimulation(c)
     const first = await tickSimulations({ now: T0 })
-    expect(first).toEqual({ candidates: 2, stepped: 2, halted: 0, skippedNoDecider: 0 })
+    expect(first).toEqual({ candidates: 2, stepped: 2, halted: 0, skippedNoDecider: 0, skippedInFlight: 0, startedModelCalls: 0 })
     const [x, y] = await Promise.all([tickSimulations({ now: plus(250) }), tickSimulations({ now: plus(250) })])
     expect(x.stepped + y.stepped).toBe(2)
     for (const id of [a, b]) {
@@ -156,7 +156,7 @@ describe('tickSimulations', () => {
     // `tickSimulations` with no `modelDecider` is the one-shot CLI `tick`: it must never make a
     // model call of its own, so the llm run is counted and left exactly where it was.
     const report = await tickSimulations({ now: T0 })
-    expect(report).toEqual({ candidates: 2, stepped: 1, halted: 0, skippedNoDecider: 1 })
+    expect(report).toEqual({ candidates: 2, stepped: 1, halted: 0, skippedNoDecider: 1, skippedInFlight: 0, startedModelCalls: 0 })
     const untouched = await prisma.simulationRun.findUniqueOrThrow({ where: { id: llmId } })
     expect(untouched).toMatchObject({ simTime: 0, status: 'running', autoRunEveryMs: 250, lastAutoStepAt: null })
     expect(await prisma.simulationModelUsage.count({ where: { simulationId: llmId } })).toBe(0)

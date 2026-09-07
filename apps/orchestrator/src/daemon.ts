@@ -1,4 +1,4 @@
-import { describeSync, syncSkillCatalog, tickSimulations, WORKTREE_TTL_MS, type ModelDecider } from '@slave-of-ai/control'
+import { describeSync, drainModelCalls, syncSkillCatalog, tickSimulations, WORKTREE_TTL_MS, type ModelDecider } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import type { WorkspaceId } from '@slave-of-ai/domain'
 import { subscribeEvents, type EventSubscription } from '@slave-of-ai/events'
@@ -30,6 +30,14 @@ export interface DaemonDeps {
    * "an llm run only ever steps in the daemon" true of the wiring and not just of a guard.
    */
   readonly modelDecider?: ModelDecider
+  /**
+   * M32 item 2: how many model calls this process may keep in flight at once. The calls happen
+   * OFF the tick loop now, so without a cap one pass would start a child process for every due
+   * llm run at once and every one of them would be spending. `cli.ts` reads
+   * `SLAVEOFAI_MAX_MODEL_CALLS` (default 3) into this; a caller that omits it gets control's own
+   * `DEFAULT_MAX_MODEL_CALLS`, which is the same number.
+   */
+  readonly maxConcurrentModelCalls?: number
 }
 
 /**
@@ -141,11 +149,17 @@ export async function runDaemon(deps: DaemonDeps): Promise<void> {
       // M30 §5: auto-run stepping is a global pass, not part of `tick()` -- simulations belong to
       // a company, not to this daemon's workspace, and `decide()` stays pure (ADR 0004). Two
       // daemons both running this pass is safe: `autoStepDue` decides "due" under the row lock.
-      const sims = await tickSimulations({ now: new Date(), ...(deps.modelDecider !== undefined ? { modelDecider: deps.modelDecider } : {}) })
+      const sims = await tickSimulations({
+        now: new Date(),
+        ...(deps.modelDecider !== undefined ? { modelDecider: deps.modelDecider } : {}),
+        ...(deps.maxConcurrentModelCalls !== undefined ? { maxConcurrentModelCalls: deps.maxConcurrentModelCalls } : {}),
+      })
       // `skippedNoDecider` is reported too (M31a §4): a daemon that was built without a decider
       // silently doing nothing for an armed llm run is exactly the failure an operator cannot
-      // diagnose from the outside.
-      if (sims.stepped > 0 || sims.halted > 0 || sims.skippedNoDecider > 0) process.stdout.write(`${JSON.stringify({ simulations: sims })}\n`)
+      // diagnose from the outside. `startedModelCalls` and `skippedInFlight` for the same reason
+      // (M32 item 2): a pass that started a call finishes long before the call does, so without
+      // these two lines the log for a busy llm run would read as a daemon doing nothing at all.
+      if (sims.stepped > 0 || sims.halted > 0 || sims.skippedNoDecider > 0 || sims.startedModelCalls > 0 || sims.skippedInFlight > 0) process.stdout.write(`${JSON.stringify({ simulations: sims })}\n`)
 
       // The guardrail sweep -- run timeout, tool-call ceiling, dead pids -- lives with the daemon,
       // not inside `tick()`: it kills processes, which is a lifecycle concern like the startup
@@ -222,6 +236,12 @@ export async function runDaemon(deps: DaemonDeps): Promise<void> {
       process.stderr.write(`[daemon] subscription close failed: ${String(error)}\n`)
     }
     await drainPumps()
+    // M32 item 2: the model calls this process started are not on the tick's stack any more, so
+    // `coalescer.inFlight()` above does not cover them. An apply is a database write -- the usage
+    // row for a call the account has ALREADY been billed for (spec §2.6) -- so disconnecting
+    // Prisma out from under one would lose exactly the record that must not be lost. No new call
+    // can start behind this: the coalescer is stopped.
+    await drainModelCalls()
     await prisma.$disconnect()
     process.stdout.write('daemon stopped\n')
   }

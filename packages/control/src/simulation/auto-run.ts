@@ -78,15 +78,98 @@ export async function autoStepDue(simulationId: string, now: Date): Promise<Resu
   }, { timeout: 60_000, maxWait: 10_000 })
 }
 
-/** What one pass did. `skippedNoDecider` counts the `llm` runs this pass left untouched because
- *  no model decider was injected -- the one-shot CLI `tick` is exactly that caller, and an
- *  operator who armed an llm auto-run and then ran `tick` needs to be told why nothing happened
- *  rather than left to conclude the run is stuck. */
+/** How many model calls this process keeps in flight at once when the caller names no cap. The
+ *  daemon reads `SLAVEOFAI_MAX_MODEL_CALLS` and passes it in; anything that forgets to gets this. */
+export const DEFAULT_MAX_MODEL_CALLS = 3
+
+/**
+ * The model calls this PROCESS has started and not yet applied, keyed by run id (M32 item 2).
+ *
+ * Module-level, and deliberately so: it is the daemon process's own set, it must survive from one
+ * `tickSimulations` pass to the next (that is the whole point -- a pass that started a call is not
+ * the pass that finishes it), and there is exactly one daemon loop per process. Two daemons on the
+ * same database each keep their own set and cannot see each other's; that is not a hole, because
+ * `applyModelDecision` re-checks `version` under the row lock and discards a decision the world has
+ * moved past -- the set saves money, the lock keeps correctness.
+ *
+ * The stored promise NEVER rejects: `startModelCall` catches everything inside it, so nothing here
+ * can become an unhandled rejection, and `drainModelCalls` can await the values safely.
+ */
+const inFlight = new Map<string, Promise<void>>()
+
+/** The run ids whose model call this process started and has not yet applied. A copy: callers
+ *  (tests, and anything that reports) must not be able to edit the set the pass decides from. */
+export function inFlightModelCalls(): ReadonlySet<string> {
+  return new Set(inFlight.keys())
+}
+
+/** Waits for every detached model call to finish applying. The daemon awaits this on shutdown --
+ *  an apply is a database write, and disconnecting Prisma out from under one would lose the usage
+ *  row for a call the account has already been billed for (spec §2.6). Tests await it to observe
+ *  what a call did. Loops rather than awaiting one snapshot: an apply can, in principle, be slower
+ *  than the pass that started another. */
+export async function drainModelCalls(): Promise<void> {
+  while (inFlight.size > 0) await Promise.all([...inFlight.values()])
+}
+
+/** What one pass did.
+ *
+ *  `stepped` and `halted` count only what the pass itself finished: the rules runs it stepped, and
+ *  the halts it decided synchronously (a corrupt state, a refusal, an exhausted budget). An llm
+ *  run's own step is NOT here -- the pass does not wait for it (see {@link tickSimulations}); what
+ *  the pass did for one is `startedModelCalls`, and the outcome lands in the run's journal.
+ *
+ *  `skippedNoDecider` counts the `llm` runs this pass left untouched because no model decider was
+ *  injected -- the one-shot CLI `tick` is exactly that caller, and an operator who armed an llm
+ *  auto-run and then ran `tick` needs to be told why nothing happened rather than left to conclude
+ *  the run is stuck.
+ *
+ *  `skippedInFlight` counts the `llm` runs left for a later pass because a model call was already
+ *  out: this run's own (the run is mid-decision) or enough other runs' to fill the concurrency cap.
+ *  Both are "waiting", exactly like a run that is not due yet, and neither spends anything. */
 export interface TickSimulationsReport {
   readonly candidates: number
   readonly stepped: number
   readonly halted: number
   readonly skippedNoDecider: number
+  readonly skippedInFlight: number
+  readonly startedModelCalls: number
+}
+
+/** What `prepareModelDecision` handed back for a run that has a day to decide. */
+type PreparedDecision = { readonly version: number; readonly role: string; readonly prompt: string; readonly promptHash: string; readonly model: string; readonly remainingUsd: number }
+
+/**
+ * Starts one model call and returns IMMEDIATELY (M32 item 2). Everything after the call -- the
+ * apply, a halt for a refusal or a throw, and removing the run from the in-flight set -- happens
+ * when the promise settles, on nobody's stack.
+ *
+ * Nothing thrown in here escapes: the whole body is caught, the halt path is caught again (a halt
+ * that itself fails must not become an unhandled rejection), and the promise stored in `inFlight`
+ * is therefore always a resolving one. That is what lets `tickSimulations` fire and forget without
+ * ever leaving a rejected promise behind.
+ */
+function startModelCall(simulationId: string, decider: ModelDecider, prepared: PreparedDecision, now: Date): void {
+  const { version, role, prompt, promptHash, model, remainingUsd } = prepared
+  const settled = (async (): Promise<void> => {
+    try {
+      // The model call itself: no lock held, no transaction open, capped at the smaller of what
+      // the run has left and the per-call ceiling.
+      const outcome = await decider({ model, prompt, maxBudgetUsd: Math.min(remainingUsd, PER_CALL_CAP_USD) })
+      const applied = await applyModelDecision(simulationId, { expectedVersion: version, role, outcome, promptHash, now })
+      // `simulation_not_found` is a run deleted while its call was out: there is nothing left to
+      // halt, and halting it would only fail again.
+      if (!applied.ok && applied.error.kind !== 'simulation_not_found') {
+        await haltUnparsed(simulationId, `auto-run step failed: ${refusalText(applied.error)}`)
+      }
+    } catch (error) {
+      // A decider that rejects (the CLI died, the spawn failed) or an apply that throws: the run
+      // halts with the message, exactly as a thrown rules step does. An auto-run never retries
+      // forever.
+      await haltUnparsed(simulationId, `auto-run step failed: ${error instanceof Error ? error.message : String(error)}`).catch(() => undefined)
+    }
+  })()
+  inFlight.set(simulationId, settled.finally((): void => { inFlight.delete(simulationId) }))
 }
 
 /** One global pass (spec §5): every running run with an intent, in creation order, capped. A
@@ -97,20 +180,35 @@ export interface TickSimulationsReport {
  *  that takes seconds to minutes and must not happen with a transaction open. It goes through the
  *  two-phase path instead -- `prepareModelDecision` (unlocked) → `modelDecider` (NO transaction) →
  *  `applyModelDecision` (locked). With no decider injected, an llm run is skipped and counted; the
- *  rules runs in the same pass are unaffected either way. */
-export async function tickSimulations(input: { readonly now: Date; readonly modelDecider?: ModelDecider }): Promise<TickSimulationsReport> {
+ *  rules runs in the same pass are unaffected either way.
+ *
+ *  M32 item 2 -- the model step is OFF this loop. The pass prepares each due llm run, STARTS its
+ *  `modelDecider(...)` without awaiting it, records the run id in {@link inFlightModelCalls} and
+ *  moves on; the apply happens when that promise settles ({@link startModelCall}). So:
+ *
+ *  - every due llm run starts in the same pass, up to `maxConcurrentModelCalls`. M31a's ruling R7
+ *    allowed exactly one call per pass because the pass AWAITED it, and the daemon awaits the
+ *    pass: fifty due runs meant fifty timeouts end to end, and one slow run blocked every fast one.
+ *    Nothing is awaited now, so the rule that existed to bound the loop is not needed and R7 is
+ *    superseded.
+ *  - a run whose call is still out is skipped by later passes (`skippedInFlight`), which is what
+ *    keeps this from paying twice for the same day: nothing about the ROW says a decision is in
+ *    flight, so the set is the only record of it.
+ *  - the cap bounds concurrent SPEND and concurrent child processes, not the loop. Filling it is
+ *    also a skip: those runs wait exactly like a run that is not due yet.
+ *  - `stepped`/`halted` count only what this pass finished itself (see {@link
+ *    TickSimulationsReport}); an llm run's own outcome lands in its journal, not in this report.
+ *
+ *  Everything the pass still awaits is short and database-only: `autoStepDue` for a rules run and
+ *  `prepareModelDecision` for an llm one. */
+export async function tickSimulations(input: { readonly now: Date; readonly modelDecider?: ModelDecider; readonly maxConcurrentModelCalls?: number }): Promise<TickSimulationsReport> {
   const rows = await prisma.simulationRun.findMany({ where: { autoRunEveryMs: { not: null }, status: 'running' }, select: { id: true, decisionProvider: true }, orderBy: { createdAt: 'asc' }, take: TICK_SIMULATIONS_CAP })
+  const maxConcurrent = input.maxConcurrentModelCalls ?? DEFAULT_MAX_MODEL_CALLS
   let stepped = 0
   let halted = 0
   let skippedNoDecider = 0
-  // At most ONE model call per pass (fix round 1, ruling R7). The daemon awaits this loop inline
-  // and a decision call can take minutes, so deciding for every due llm run in one pass would
-  // stall the whole daemon for the sum of them. The oldest due llm run goes first and the rest
-  // wait one period -- they are neither stepped nor skipped-for-want-of-a-decider, exactly like a
-  // run that is not due yet. Rules runs are unaffected: the pass goes on to every one of them.
-  // The proper fix -- stepping llm runs OFF this loop, with an in-flight set keyed by run id so a
-  // slow run never blocks a fast one -- is M31 backlog.
-  let modelCallMade = false
+  let skippedInFlight = 0
+  let startedModelCalls = 0
   for (const { id, decisionProvider } of rows) {
     try {
       if (decisionProvider === 'llm') {
@@ -119,8 +217,13 @@ export async function tickSimulations(input: { readonly now: Date; readonly mode
           skippedNoDecider += 1
           continue
         }
-        // This pass has already spent its one model call; this run waits for the next one.
-        if (modelCallMade) continue
+        // This run is already mid-decision, or the process is already carrying as many calls as it
+        // is allowed to. Either way the run waits, untouched and unbilled -- and it is checked
+        // BEFORE `prepareModelDecision`, so a pass that cannot act on a run does not even read it.
+        if (inFlight.has(id) || inFlight.size >= maxConcurrent) {
+          skippedInFlight += 1
+          continue
+        }
         const prepared = await prepareModelDecision(id, input.now)
         if (!prepared.ok) {
           if (prepared.error.kind === 'simulation_not_found') continue
@@ -135,19 +238,9 @@ export async function tickSimulations(input: { readonly now: Date; readonly mode
           continue
         }
         if (prepared.value.kind === 'skip') continue
-        const { model, prompt, remainingUsd, version, role, promptHash } = prepared.value
-        // The model call itself: no lock held, no transaction open, capped at the smaller of what
-        // the run has left and the per-call ceiling.
-        modelCallMade = true
-        const outcome = await decider({ model, prompt, maxBudgetUsd: Math.min(remainingUsd, PER_CALL_CAP_USD) })
-        const applied = await applyModelDecision(id, { expectedVersion: version, role, outcome, promptHash, now: input.now })
-        if (!applied.ok) {
-          if (applied.error.kind !== 'simulation_not_found') {
-            await haltUnparsed(id, `auto-run step failed: ${refusalText(applied.error)}`)
-            halted += 1
-          }
-        } else if (applied.value.applied) stepped += 1
-        else if (applied.value.reason === 'breach') halted += 1
+        // Started, not awaited: this returns as soon as the child is on its way.
+        startModelCall(id, decider, prepared.value, input.now)
+        startedModelCalls += 1
         continue
       }
       const result = await autoStepDue(id, input.now)
@@ -163,5 +256,5 @@ export async function tickSimulations(input: { readonly now: Date; readonly mode
       halted += 1
     }
   }
-  return { candidates: rows.length, stepped, halted, skippedNoDecider }
+  return { candidates: rows.length, stepped, halted, skippedNoDecider, skippedInFlight, startedModelCalls }
 }
