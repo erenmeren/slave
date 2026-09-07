@@ -55,3 +55,4 @@ jobs:
       - run: npm run gate:m29-simulation
       - run: npm run gate:m30-simulation-compare
       - run: npm run gate:m31a-llm-decisions
+      - run: npm run gate:m31b-software-sector

@@ -80,13 +80,30 @@ puts two policies side by side — same scenario, same roster, same start, only 
 different — with no verdict, just the b − a deltas; `docs/superpowers/specs/2026-09-06-m30-simulation-reliability-and-comparison-design.md`
 covers the reliability and comparison work.
 
+### Try the software company
+
+Choose sector `software` in the drawer instead, and the roster shape changes with it: a Product
+slave who accepts requests into the queue, a Management slave (the `lead`) who assigns them to
+engineers, a reviewer (or QA) slave, and at least two more Engineering slaves who do the work.
+`npm run db:seed` does not ship a catalog company with that shape yet — build one first
+(`create-company`, `add-team`, `add-slave`) with departments named `Product`, `Management` and
+`Engineering`, the way the seeded "Checkout Platform" workspace's own crew is staffed: a Business
+Analyst in Product, a manager in Management, and Backend/Frontend/DevOps/QA/reviewer slaves in
+Engineering. Policy A ships fast — whoever is free takes the task — which is quick but lets a
+mismatched or unreviewed task surface a defect three days later; policy B reviews everything and
+waits up to two days for an engineer who actually knows the area, so it never reworks. From the run
+page, **Add external event** injects a feature request, an incident, or an engineer's absence into
+the same queue; the sector's own metrics (delivered, on time, late, tasks reworked, defect
+incidents, idle engineer-days…) come from the same journal every other sector reads.
+`docs/superpowers/specs/2026-09-07-m31b-software-sector-design.md` has the full design.
+
 ### Let a model decide
 
 By default every role is decided by a fixed rules provider — no model, no cost. From the **+ New
 simulation** drawer you can instead choose decision provider `llm`: pick a Claude model, set a cost
 cap in USD, and tick the consent checkbox before **Create simulation** unlocks — this is a real,
-paid, capped run on your own account. Only the purchasing role asks the model, once per simulated
-day; the other three roles stay on the rules provider. An `llm` run's page drops Step and Run to
+paid, capped run on your own account. Only one role per sector asks the model — trade's purchasing,
+software's lead — once per simulated day; every other role stays on the rules provider. An `llm` run's page drops Step and Run to
 day — it steps only through **Auto-run**, because the model calls are made by
 `npm run orchestrator -- daemon`, never by a page click. Each call is spawned `--restricted
 --strict-mcp-config --tools ""` plus a deny-all hook, an empty working directory and a four-variable
