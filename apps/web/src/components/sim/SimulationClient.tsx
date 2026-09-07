@@ -12,6 +12,7 @@ import { Chip } from '../ui/Chip'
 import { DangerConfirm } from '../ui/DangerConfirm'
 import { PrimaryButton, GhostButton, SelectField, TextField } from '../ui/FormControls'
 import { Panel } from '../ui/Panel'
+import { AdoptDrawer } from './AdoptDrawer'
 import { AutoRunControls } from './AutoRunControls'
 import { CloneDrawer } from './CloneDrawer'
 import { JournalTable } from './JournalTable'
@@ -49,13 +50,14 @@ function defaultInjectFieldValues(form: ExternalEventForm | undefined, injectOpt
  *  three tabs — the rolled-up metrics, per-decision detail, and the raw journal. */
 export function SimulationClient({ initial }: { readonly initial: SimulationSnapshot }): React.JSX.Element {
   const router = useRouter()
-  const { summary, headline, metricLabels, metrics, currency, injectForms, injectOptions } = initial
+  const { summary, headline, metricLabels, metrics, currency, injectForms, injectOptions, adoptable } = initial
   const [tab, setTab] = useState<Tab>('overview')
   const [runToDay, setRunToDay] = useState(String(summary.horizonDays))
   const [pending, setPending] = useState(false)
   const [errorText, setErrorText] = useState<string | null>(null)
   const [injectOpen, setInjectOpen] = useState(false)
   const [cloneOpen, setCloneOpen] = useState(false)
+  const [adoptOpen, setAdoptOpen] = useState(false)
   const [injectKind, setInjectKind] = useState(injectForms[0]?.type ?? '')
   const [injectDay, setInjectDay] = useState(String(summary.simTime + 1))
   const [injectFields, setInjectFields] = useState<Record<string, string>>(() => defaultInjectFieldValues(injectForms[0], injectOptions))
@@ -167,6 +169,7 @@ export function SimulationClient({ initial }: { readonly initial: SimulationSnap
           <DangerConfirm label="Halt" testId="sim-halt" confirmText="halt this simulation: no further step, ever" disabled={pending || summary.status === 'finished' || summary.status === 'halted'} onConfirm={async () => { const error = await sendControl(`${base}/halt`, { method: 'POST', body: { reason: 'operator' } }); if (error === null) router.refresh(); return error }} />
           <GhostButton data-testid="sim-inject-open" disabled={summary.status === 'finished' || summary.status === 'halted'} onClick={() => setInjectOpen((v) => !v)}>Add external event</GhostButton>
           <GhostButton data-testid="sim-clone-open" onClick={() => setCloneOpen(true)}>Clone…</GhostButton>
+          {adoptable && <GhostButton data-testid="sim-adopt-open" onClick={() => setAdoptOpen(true)}>Adopt this organisation…</GhostButton>}
           <AutoRunControls summary={summary} pending={pending} onStart={(everyMs, untilDay) => void call('auto-run', { everyMs, untilDay })} onStop={() => void call('auto-run/stop')} />
           {initial.compareCandidates.length > 0 && (
             <SelectField
@@ -316,6 +319,7 @@ export function SimulationClient({ initial }: { readonly initial: SimulationSnap
         )}
       </div>
       <CloneDrawer open={cloneOpen} onClose={() => setCloneOpen(false)} sourceId={summary.id} sourceName={summary.name} sourcePolicy={summary.policy} sector={summary.sector} />
+      {adoptable && <AdoptDrawer open={adoptOpen} onClose={() => setAdoptOpen(false)} simulationId={summary.id} />}
     </div>
   )
 }

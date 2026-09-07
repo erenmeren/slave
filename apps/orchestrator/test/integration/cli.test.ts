@@ -1516,5 +1516,76 @@ describe('the orchestrator CLI', () => {
       expect(row.autoRunEveryMs).toBe(1000)
       expect(row.autoRunUntilDay).toBe(horizonDays)
     }, 30_000)
+
+    describe('adopt-simulation (M33 §4)', () => {
+      it('adopts a software run\'s organisation into a company-less project, printing the assign report and the settings written', async () => {
+        const companyId = await softwareCompany()
+        const created = await runCli(['create-simulation', '--sector', 'software', '--company', companyId, '--name', 'adopt me', '--policy', 'A'])
+        const id = /simulation (\S+) created/.exec(created.stdout)?.[1] ?? ''
+        expect(id).not.toBe('')
+        const workspace = await prisma.workspace.create({ data: { name: 'Alpha Project', repoPath: '/tmp/x', verifyCommands: [], setupCommands: [] } })
+
+        const result = await runCli(['adopt-simulation', '--simulation', id, '--workspace', workspace.id])
+
+        expect(result.code).toBe(0)
+        expect(result.stdout).toContain(`simulation ${id} adopted into ${workspace.id}`)
+        expect(result.stdout).toMatch(/\d+ departments?, \d+ workers?/)
+        expect(result.stdout).toContain('maxConcurrentRuns')
+        expect(result.stdout).toContain('maxAttempts')
+        expect(result.stdout).toContain('autoMerge false')
+        const row = await prisma.workspace.findUniqueOrThrow({ where: { id: workspace.id } })
+        expect(row.companyId).toBe(companyId)
+        expect(row.adoptedFromSimulationId).toBe(id)
+        expect(row.autoMerge).toBe(false)
+        const slaves = await prisma.slave.findMany({ where: { team: { workspaceId: workspace.id } } })
+        expect(slaves.length).toBeGreaterThan(0)
+        expect(slaves.some((s) => s.role === 'manager')).toBe(true)
+      }, 30_000)
+
+      it('--max-concurrent / --max-attempts / --apply-model are honoured; a refusal writes nothing', async () => {
+        const companyId = await softwareCompany()
+        const created = await runCli([
+          'create-simulation', '--sector', 'software', '--company', companyId, '--name', 'adopt with model', '--policy', 'B',
+          '--decision-provider', 'llm', '--model-provider', 'claude_code', '--model', 'claude-opus-4', '--max-model-cost-usd', '5',
+        ])
+        const id = /simulation (\S+) created/.exec(created.stdout)?.[1] ?? ''
+        const workspace = await prisma.workspace.create({ data: { name: 'Beta Project', repoPath: '/tmp/y', verifyCommands: [], setupCommands: [] } })
+
+        const result = await runCli(['adopt-simulation', '--simulation', id, '--workspace', workspace.id, '--max-concurrent', '2', '--max-attempts', '1', '--apply-model'])
+
+        expect(result.code).toBe(0)
+        expect(result.stdout).toContain('maxConcurrentRuns 2, maxAttempts 1')
+        const row = await prisma.workspace.findUniqueOrThrow({ where: { id: workspace.id } })
+        expect(row.maxConcurrentRuns).toBe(2)
+        expect(row.maxAttempts).toBe(1)
+        const lead = await prisma.companySlave.findFirst({ where: { companyTeam: { companyId }, name: 'Atlas' } })
+        expect(lead?.model).toBe('claude-opus-4')
+        expect(lead?.provider).toBe('claude_code')
+      }, 30_000)
+
+      it('refuses a trade run\'s organisation with the sector\'s own reason, writing nothing', async () => {
+        const companyId = await tradingCompany()
+        const created = await runCli(['create-simulation', '--sector', 'trade', '--company', companyId, '--name', 'not adoptable', '--policy', 'A'])
+        const id = /simulation (\S+) created/.exec(created.stdout)?.[1] ?? ''
+        const workspace = await prisma.workspace.create({ data: { name: 'Gamma Project', repoPath: '/tmp/z', verifyCommands: [], setupCommands: [] } })
+
+        const result = await runCli(['adopt-simulation', '--simulation', id, '--workspace', workspace.id])
+
+        expect(result.code).toBe(1)
+        expect(result.stderr).toContain('not software roles')
+        const row = await prisma.workspace.findUniqueOrThrow({ where: { id: workspace.id } })
+        expect(row.companyId).toBeNull()
+        expect(row.adoptedFromSimulationId).toBeNull()
+      }, 30_000)
+
+      it('--simulation and --workspace are required', async () => {
+        const missingWorkspace = await runCli(['adopt-simulation', '--simulation', '00000000-0000-4000-8000-00000000dead'])
+        expect(missingWorkspace.code).toBe(1)
+        expect(missingWorkspace.stderr).toContain('--workspace is required')
+        const missingSimulation = await runCli(['adopt-simulation', '--workspace', '00000000-0000-4000-8000-00000000dead'])
+        expect(missingSimulation.code).toBe(1)
+        expect(missingSimulation.stderr).toContain('--simulation is required')
+      }, 30_000)
+    })
   })
 })

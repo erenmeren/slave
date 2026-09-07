@@ -42,6 +42,13 @@ export function SimulationsClient({
                     </div>
                     <div className="text-xs text-text-3">{card.companyName} · {card.sector} · policy {card.policy} · {card.decisionProvider} provider</div>
                     {card.clonedFromName !== null && <div className="text-xs text-text-3">clone of {card.clonedFromName}</div>}
+                    {card.adoptedBy.length > 0 && (
+                      <div className="flex flex-wrap items-center gap-1">
+                        {card.adoptedBy.map((workspace) => (
+                          <Chip key={workspace.workspaceId} tone="done"><span data-testid="sim-adopted-chip">adopted → {workspace.workspaceName}</span></Chip>
+                        ))}
+                      </div>
+                    )}
                     <div className="flex items-center gap-2 text-xs text-text-2">
                       <span>day {card.simTime} / {card.horizonDays}</span>
                       <Chip tone={STATUS_TONE[card.status]}>{card.status}</Chip>

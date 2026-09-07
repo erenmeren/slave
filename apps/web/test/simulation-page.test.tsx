@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { sectors } from '@slave-of-ai/simulation'
 import { SimulationClient } from '../src/components/sim/SimulationClient.js'
@@ -52,6 +52,9 @@ function snapshot(over: Partial<SimulationSnapshot> = {}): SimulationSnapshot {
     ],
     modelUsage: { spentUsd: null, capUsd: null, rows: [], unmeasured: 0 },
     compareCandidates: [{ id: 's2', name: 'Q3 plan (B)', policy: 'B', status: 'finished', simTime: 30 }],
+    // A trade run is never adoptable (M33 §1 principle 5) -- the default fixture stays `false` so
+    // every test that does not care about adoption never sees the button by accident.
+    adoptable: false,
     ...over,
   }
 }
@@ -348,6 +351,7 @@ describe('SimulationClient', () => {
         journal: [],
         modelUsage: { spentUsd: null, capUsd: null, rows: [], unmeasured: 0 },
         compareCandidates: [],
+        adoptable: false,
         ...over,
       }
     }
@@ -405,6 +409,101 @@ describe('SimulationClient', () => {
       fireEvent.click(screen.getByTestId('sim-inject-open'))
       expect((screen.getByTestId('sim-inject-sizeDays') as HTMLInputElement).value).toBe('1')
       expect((screen.getByTestId('sim-inject-dueInDays') as HTMLInputElement).value).toBe('1')
+    })
+  })
+
+  describe('the Adopt drawer (M33 §4)', () => {
+    const preview = {
+      simulationId: 's1',
+      companyId: 'c1',
+      companyName: 'Checkout Platform',
+      roles: [
+        { slaveName: 'Atlas', catalogRole: 'manager', role: 'lead' },
+        { slaveName: 'Riley', catalogRole: 'reviewer', role: 'reviewer' },
+        { slaveName: 'Alex', catalogRole: 'Backend', role: 'backend' },
+        { slaveName: 'John', catalogRole: 'Business Analyst', role: 'product' },
+      ],
+      settings: { maxConcurrentRuns: 4, maxAttempts: 3, autoMerge: false },
+      model: null as { provider: string; model: string } | null,
+      workspaces: [{ id: 'w1', name: 'Alpha Project' }, { id: 'w2', name: 'Beta Project' }],
+    }
+
+    it('the button is absent when the snapshot says not adoptable (a trade run)', () => {
+      render(<SimulationClient initial={snapshot({ adoptable: false })} />)
+      expect(screen.queryByTestId('sim-adopt-open')).toBeNull()
+    })
+
+    it('opens the drawer, fetches the preview, and renders the roles table (run role → the runtime role it becomes), the workspace select, the settings proposal and the locked autoMerge', async () => {
+      fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(preview), { status: 200 }))
+      render(<SimulationClient initial={snapshot({ adoptable: true })} />)
+      fireEvent.click(screen.getByTestId('sim-adopt-open'))
+      expect(screen.getByTestId('sim-adopt-drawer')).toBeTruthy()
+      expect(fetchMock).toHaveBeenCalledWith('/api/sim/s1/adoption')
+      await waitFor(() => expect(screen.getAllByTestId('sim-adopt-role-row')).toHaveLength(4))
+      const rows = screen.getAllByTestId('sim-adopt-role-row').map((r) => r.textContent ?? '')
+      // The run's own role AND the runtime role it becomes (T1-E5 / ruling R2): the lead becomes
+      // the manager the planner staffs, the reviewer stays the reviewer, and everyone else keeps
+      // their CATALOG role rather than the run's own vocabulary (`product`, an engineer's
+      // expertise) -- the pair that differs, `backend`/`Backend` and `product`/`Business Analyst`,
+      // is the proof the table shows the WRITE, not just the run's own word.
+      expect(rows[0]).toContain('lead')
+      expect(rows[0]).toContain('manager')
+      expect(rows[1]).toContain('reviewer')
+      expect(rows[2]).toContain('backend')
+      expect(rows[2]).toContain('Backend')
+      expect(rows[3]).toContain('product')
+      expect(rows[3]).toContain('Business Analyst')
+      expect((screen.getByTestId('sim-adopt-max-concurrent') as HTMLInputElement).value).toBe('4')
+      expect((screen.getByTestId('sim-adopt-max-attempts') as HTMLInputElement).value).toBe('3')
+      expect(screen.getByTestId('sim-adopt-automerge').textContent).toBe('off (locked)')
+      const select = screen.getByTestId('sim-adopt-workspace') as HTMLSelectElement
+      expect([...select.querySelectorAll('option')].map((o) => o.value)).toEqual(['w1', 'w2'])
+      expect(select.value).toBe('w1')
+      expect(screen.queryByTestId('sim-adopt-apply-model')).toBeNull()
+    })
+
+    it('the model checkbox shows only for an llm preview, with the spec §4 text', async () => {
+      fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ ...preview, model: { provider: 'claude_code', model: 'claude-opus-4' } }), { status: 200 }))
+      render(<SimulationClient initial={snapshot({ adoptable: true })} />)
+      fireEvent.click(screen.getByTestId('sim-adopt-open'))
+      await waitFor(() => expect(screen.getByTestId('sim-adopt-apply-model')).toBeTruthy())
+      expect(screen.getByTestId('sim-adopt-drawer').textContent).toContain("also set claude-opus-4 on Atlas's roster row — real, paid use")
+    })
+
+    it('submit posts the body and pushes to /w/<id> on success', async () => {
+      fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(preview), { status: 200 }))
+      render(<SimulationClient initial={snapshot({ adoptable: true })} />)
+      fireEvent.click(screen.getByTestId('sim-adopt-open'))
+      await waitFor(() => expect(screen.getByTestId('sim-adopt-workspace')).toBeTruthy())
+      fireEvent.change(screen.getByTestId('sim-adopt-workspace'), { target: { value: 'w2' } })
+      fireEvent.change(screen.getByTestId('sim-adopt-max-concurrent'), { target: { value: '5' } })
+      fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, workspaceId: 'w2', assigned: { createdTeams: [], createdWorkers: [] } }), { status: 200 }))
+      await act(async () => { fireEvent.click(screen.getByTestId('sim-adopt-submit')) })
+      const [url, init] = fetchMock.mock.calls[1] as unknown as [string, RequestInit]
+      expect(url).toBe('/api/sim/s1/adopt')
+      expect(JSON.parse(String(init.body))).toMatchObject({ workspaceId: 'w2', maxConcurrentRuns: 5, maxAttempts: 3 })
+      expect(routerPush).toHaveBeenCalledWith('/w/w2')
+    })
+
+    it('a 409 on submit keeps the drawer open with sim-adopt-error', async () => {
+      fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(preview), { status: 200 }))
+      render(<SimulationClient initial={snapshot({ adoptable: true })} />)
+      fireEvent.click(screen.getByTestId('sim-adopt-open'))
+      await waitFor(() => expect(screen.getByTestId('sim-adopt-workspace')).toBeTruthy())
+      fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: 'workspace already has a company: Checkout Platform' }), { status: 409 }))
+      await act(async () => { fireEvent.click(screen.getByTestId('sim-adopt-submit')) })
+      expect(screen.getByTestId('sim-adopt-error').textContent).toContain('already has a company')
+      expect(screen.getByTestId('sim-adopt-drawer')).toBeTruthy()
+      expect(routerPush).not.toHaveBeenCalledWith(expect.stringContaining('/w/'))
+    })
+
+    it('an empty workspace list says so and disables submit', async () => {
+      fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ ...preview, workspaces: [] }), { status: 200 }))
+      render(<SimulationClient initial={snapshot({ adoptable: true })} />)
+      fireEvent.click(screen.getByTestId('sim-adopt-open'))
+      await waitFor(() => expect(screen.getByTestId('sim-adopt-no-workspace')).toBeTruthy())
+      expect(screen.getByTestId('sim-adopt-no-workspace').textContent).toBe('no workspace without a company; create one from Projects first')
+      expect((screen.getByTestId('sim-adopt-submit') as HTMLButtonElement).disabled).toBe(true)
     })
   })
 })

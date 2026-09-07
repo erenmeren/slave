@@ -221,6 +221,14 @@ export function OverviewClient({
             showing stale data: {error}
           </div>
         )}
+        {view.workspace.adoptedFrom !== null && (
+          <div data-testid="ws-adopted-from" className="border-b border-line bg-bg-1 px-4 py-1.5 text-xs text-text-3">
+            organisation adopted from simulation{' '}
+            <Link href={`/sim/${view.workspace.adoptedFrom.simulationId}`} className="text-text-2 underline">
+              {view.workspace.adoptedFrom.name}
+            </Link>
+          </div>
+        )}
         <TopStrip snapshot={view} />
         {/* The handoff's 3-column card grid at an 11px gap (design README §3a.1), narrowing to
           * two and then one rather than shrinking the cards past the anatomy they hold. */}

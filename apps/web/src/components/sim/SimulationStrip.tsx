@@ -26,6 +26,12 @@ export function SimulationStrip({
           <span>·</span>
         </>
       )}
+      {summary.adoptedBy.map((workspace) => (
+        <span key={workspace.workspaceId} className="contents">
+          <Chip tone="done"><span data-testid="sim-adopted-chip">adopted → {workspace.workspaceName}</span></Chip>
+          <span>·</span>
+        </span>
+      ))}
       {connection !== undefined && (
         <>
           <span data-testid="sim-live" className={connection === 'connected' ? 'text-[#4ade80]' : 'text-[#f5b34a]'}>{connection === 'connected' ? '● LIVE' : '● RECONNECTING'}</span>

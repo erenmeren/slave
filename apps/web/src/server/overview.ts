@@ -155,6 +155,9 @@ export interface OverviewSnapshot {
     readonly maxConcurrentRuns: number
     readonly runTimeoutMs: number
     readonly maxAttempts: number
+    /** M33 §4: the run this project's organisation was adopted from, or `null` for a workspace
+     *  assigned by hand. The overview's own note (`ws-adopted-from`) links back to it. */
+    readonly adoptedFrom: { readonly simulationId: string; readonly name: string } | null
   }
   readonly slaves: readonly SlaveCardData[]
   readonly tasks: {
@@ -205,7 +208,10 @@ export interface OverviewSnapshot {
 const ACTIVE_TASK_STATUSES = ['ready', 'running', 'verifying', 'reviewing', 'merging', 'rework'] as const
 
 export async function buildOverviewSnapshot(workspaceId: string): Promise<OverviewSnapshot | null> {
-  const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId } })
+  // M33 §4: `adoptedFromSimulation` is read here, in the one existing workspace query, rather than
+  // a second round trip -- the same reason every other field on `workspace` below comes off this
+  // one row.
+  const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId }, include: { adoptedFromSimulation: { select: { id: true, name: true } } } })
   if (workspace === null) return null
 
   // The one tested rule, not a copy of it (fix round 1, Important finding 1): ONE
@@ -413,6 +419,7 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
       maxConcurrentRuns: workspace.maxConcurrentRuns,
       runTimeoutMs: workspace.runTimeoutMs,
       maxAttempts: workspace.maxAttempts,
+      adoptedFrom: workspace.adoptedFromSimulation === null ? null : { simulationId: workspace.adoptedFromSimulation.id, name: workspace.adoptedFromSimulation.name },
     },
     slaves: slaves.map((slave) => {
       const run = liveRunBySlave.get(slave.id) ?? null

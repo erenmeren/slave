@@ -9,6 +9,7 @@ const SNAPSHOT: OverviewSnapshot = {
     id: 'w1', name: 'W', haltedReason: null, haltedAt: null, budgetUsd: 100, spentUsd: 0, unmeasuredRuns: 0,
     goal: null, provider: 'claude_code', costBlindBudgeted: false,
     maxConcurrentRuns: 3, runTimeoutMs: 1_800_000, maxAttempts: 3,
+    adoptedFrom: null,
   },
   slaves: [
     {

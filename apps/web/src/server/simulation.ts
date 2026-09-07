@@ -39,6 +39,10 @@ export interface SimulationSnapshot {
     readonly unmeasured: number
   }
   readonly compareCandidates: readonly CompareCandidate[]
+  /** M33 §4: whether the run page's "Adopt this organisation…" button shows at all. Off the run's
+   *  own plugin (`plugin.adoptable.ok`), never a sector name -- the button's visibility is a plain
+   *  boolean the client reads, so nothing under `apps/web/src` has to know which sector this is. */
+  readonly adoptable: boolean
 }
 
 const JOURNAL_PAGE = 200
@@ -87,6 +91,7 @@ export async function buildSimulationSnapshot(simulationId: string): Promise<Sim
         unmeasured,
       },
       compareCandidates: compareCandidatesOf(await listSimulations(tx, summary.companyId), summary).map((s) => ({ id: s.id, name: s.name, policy: s.policy, status: s.status, simTime: s.simTime })),
+      adoptable: plugin.adoptable.ok,
     }
   }, { isolationLevel: 'RepeatableRead' })
 }

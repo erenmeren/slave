@@ -8,6 +8,8 @@ import { POST as resumePOST } from '../../src/app/api/sim/[simulationId]/resume/
 import { POST as injectPOST } from '../../src/app/api/sim/[simulationId]/inject/route.js'
 import { POST as haltPOST } from '../../src/app/api/sim/[simulationId]/halt/route.js'
 import { POST as clonePOST } from '../../src/app/api/sim/[simulationId]/clone/route.js'
+import { GET as adoptionGET } from '../../src/app/api/sim/[simulationId]/adoption/route.js'
+import { POST as adoptPOST } from '../../src/app/api/sim/[simulationId]/adopt/route.js'
 import { POST as autoRunPOST } from '../../src/app/api/sim/[simulationId]/auto-run/route.js'
 import { POST as autoRunStopPOST } from '../../src/app/api/sim/[simulationId]/auto-run/stop/route.js'
 import { GET as compareGET } from '../../src/app/api/sim/compare/route.js'
@@ -166,6 +168,50 @@ describe('the simulation routes', () => {
     expect((await autoRunStopPOST(new Request('http://x', { method: 'POST' }), params(id))).status).toBe(200)
     const stopped = await prisma.simulationRun.findUnique({ where: { id } })
     expect(stopped?.autoRunEveryMs).toBeNull()
+  })
+  it('adoption preview → 200 with the roles/settings/workspaces for a software run; a trade run → 409 not_adoptable; unknown id → 404 (M33 §4)', async () => {
+    const softwareCompanyId = await seedSoftwareCompany()
+    const { id } = (await (await createPOST(json({ companyId: softwareCompanyId, name: 'sw run', policy: 'A', sector: 'software' }))).json()) as { id: string }
+    const workspace = await prisma.workspace.create({ data: { name: 'Alpha Project', repoPath: '/tmp/x', verifyCommands: [], setupCommands: [] } })
+
+    const preview = await adoptionGET(new Request('http://x', { method: 'GET' }), params(id))
+    expect(preview.status).toBe(200)
+    const body = (await preview.json()) as { settings: { maxConcurrentRuns: number; maxAttempts: number; autoMerge: boolean }; workspaces: { id: string }[] }
+    expect(body.settings.autoMerge).toBe(false)
+    expect(body.workspaces.map((w) => w.id)).toContain(workspace.id)
+
+    const { id: tradeId } = (await (await createPOST(json({ companyId, name: 'trade run', policy: 'A', sector: 'trade' }))).json()) as { id: string }
+    const refused = await adoptionGET(new Request('http://x', { method: 'GET' }), params(tradeId))
+    expect(refused.status).toBe(409)
+    expect((await refused.json()).error).toContain('not software roles')
+
+    const missing = await adoptionGET(new Request('http://x', { method: 'GET' }), params('00000000-0000-4000-8000-00000000dead'))
+    expect(missing.status).toBe(404)
+  })
+  it('adopt → 200 assigns the workspace and journals it; a bad body → 400; an unknown simulation → 404, an unknown workspace → 409; an out-of-range setting → 409 (M33 §4)', async () => {
+    const softwareCompanyId = await seedSoftwareCompany()
+    const { id } = (await (await createPOST(json({ companyId: softwareCompanyId, name: 'sw run', policy: 'A', sector: 'software' }))).json()) as { id: string }
+    const workspace = await prisma.workspace.create({ data: { name: 'Alpha Project', repoPath: '/tmp/x', verifyCommands: [], setupCommands: [] } })
+
+    expect((await adoptPOST(json({}), params(id))).status).toBe(400)
+
+    const adopted = await adoptPOST(json({ workspaceId: workspace.id }), params(id))
+    expect(adopted.status).toBe(200)
+    const adoptedBody = (await adopted.json()) as { ok: true; workspaceId: string }
+    expect(adoptedBody.workspaceId).toBe(workspace.id)
+    const row = await prisma.workspace.findUniqueOrThrow({ where: { id: workspace.id } })
+    expect(row.adoptedFromSimulationId).toBe(id)
+    expect(row.companyId).toBe(softwareCompanyId)
+
+    // `workspace_not_found` is not in the sim routes' NOT_FOUND set (only `simulation_not_found`
+    // and `company_not_found` are) -- the same 409 every other refusal on this route gets.
+    expect((await adoptPOST(json({ workspaceId: '00000000-0000-4000-8000-00000000dead' }), params(id))).status).toBe(409)
+    expect((await adoptPOST(json({ workspaceId: workspace.id }), params('00000000-0000-4000-8000-00000000dead'))).status).toBe(404)
+
+    const second = await prisma.workspace.create({ data: { name: 'Beta Project', repoPath: '/tmp/y', verifyCommands: [], setupCommands: [] } })
+    const badRange = await adoptPOST(json({ workspaceId: second.id, maxConcurrentRuns: 99 }), params(id))
+    expect(badRange.status).toBe(409)
+    expect((await badRange.json()).error).toContain('between 1 and 10')
   })
   it('GET compare → 200 with definitionsMatch; missing a param → 400; unknown id → 404; a === b → 409', async () => {
     const { id: a } = (await (await createPOST(json({ companyId, name: 'a', policy: 'A', sector: 'trade' }))).json()) as { id: string }

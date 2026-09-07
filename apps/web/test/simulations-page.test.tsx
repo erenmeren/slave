@@ -108,6 +108,11 @@ describe('SimulationsClient', () => {
     render(<SimulationsClient cards={[card({ autoRun: { everyMs: 1000, untilDay: 30, lastStepAt: null } })]} companiesBySector={companiesBySector} />)
     expect(screen.getByTestId('sim-card-s1').textContent).toContain('auto-run')
   })
+  it('a card adopted into one or more workspaces shows one "adopted → <name>" chip per entry (M33 §4)', () => {
+    render(<SimulationsClient cards={[card({ adoptedBy: [{ workspaceId: 'w1', workspaceName: 'Alpha Project' }, { workspaceId: 'w2', workspaceName: 'Beta Project' }] })]} companiesBySector={companiesBySector} />)
+    const chips = within(screen.getByTestId('sim-card-s1')).getAllByTestId('sim-adopted-chip')
+    expect(chips.map((c) => c.textContent)).toEqual(['adopted → Alpha Project', 'adopted → Beta Project'])
+  })
   it('an empty list says so, sector-neutrally (review round 1, Minor #2: no "trade sector" text)', () => {
     render(<SimulationsClient cards={[]} companiesBySector={companiesBySector} />)
     const text = screen.getByTestId('sim-empty').textContent ?? ''

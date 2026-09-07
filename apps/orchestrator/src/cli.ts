@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 import {
   addCompanySlave,
   addCompanyTeam,
+  adoptSimulation,
   archiveWorkspace,
   assignCompany,
   claimResume,
@@ -172,6 +173,14 @@ const USAGE = `usage: orchestrator <command> [options]
   clone-simulation --simulation <id> --name <n> --policy A|B [--seed <n>]
                                        a new run from this run's frozen scenario: same world,
                                        different policy or seed, day 0, nothing carried over
+  adopt-simulation --simulation <id> --workspace <id>
+      [--max-concurrent <n>] [--max-attempts <n>] [--apply-model]
+                                       put the run's organisation onto a real, company-less
+                                       project: the current roster with the run's roles, a
+                                       settings proposal (override with --max-concurrent /
+                                       --max-attempts), autoMerge off. --apply-model sets an llm
+                                       run's model on the lead's roster row -- real, paid use.
+                                       Starts nothing. Only a software-sector run is adoptable.
   auto-run-simulation --simulation <id> [--every-ms <n>] [--until-day <d>]
                                        let the daemon step it (default every 1000 ms to the horizon)
   stop-auto-run --simulation <id>
@@ -1103,6 +1112,34 @@ export async function main(argv: readonly string[]): Promise<number> {
       const result = await cloneSimulation(sourceId, { name, policy, ...(seed !== undefined ? { seed } : {}) })
       if (!result.ok) throw new Error(refusalText(result.error))
       process.stdout.write(`simulation ${result.value.id} created (cloned from ${sourceId}, policy ${policy})\n`)
+      return 0
+    }
+
+    case 'adopt-simulation': {
+      const simulationId = requireFlag(flags, 'simulation')
+      const workspaceId = requireFlag(flags, 'workspace')
+      const maxConcurrentText = flagText(flags, 'max-concurrent')
+      const maxAttemptsText = flagText(flags, 'max-attempts')
+      // Same idiom as `set-model --clear` (`'apply-model' in flags`, not `!== undefined`): a bare
+      // `--apply-model` (no value following it) is exactly how `parseArgs` records a flag with no
+      // argument, setting the key to `undefined` rather than leaving it absent.
+      const applyModel = 'apply-model' in flags
+      const result = await adoptSimulation(simulationId, {
+        workspaceId,
+        ...(maxConcurrentText !== undefined ? { maxConcurrentRuns: Number(maxConcurrentText) } : {}),
+        ...(maxAttemptsText !== undefined ? { maxAttempts: Number(maxAttemptsText) } : {}),
+        ...(applyModel ? { applyModel: true } : {}),
+      })
+      if (!result.ok) throw new Error(refusalText(result.error))
+      // `adoptSimulation`'s own return carries the assign report but not the settings it actually
+      // wrote (they may be the run's proposal or the operator's own override) -- read back off the
+      // workspace row, the same one the drawer and the overview page read.
+      const adopted = await prisma.workspace.findUniqueOrThrow({ where: { id: result.value.workspaceId }, select: { maxConcurrentRuns: true, maxAttempts: true, autoMerge: true } })
+      process.stdout.write(
+        `simulation ${simulationId} adopted into ${result.value.workspaceId}: ` +
+          `${plural(result.value.assigned.createdTeams.length, 'department')}, ${plural(result.value.assigned.createdWorkers.length, 'worker')}; ` +
+          `maxConcurrentRuns ${adopted.maxConcurrentRuns}, maxAttempts ${adopted.maxAttempts}, autoMerge ${adopted.autoMerge}\n`,
+      )
       return 0
     }
 

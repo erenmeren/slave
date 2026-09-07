@@ -58,6 +58,10 @@ const snapshot = (slaves: readonly SlaveCardData[]): OverviewSnapshot => ({
     // live on the overview snapshot so the page can PROVIDE `ShellFacts` from the stream it
     // already has, rather than the header opening a second `EventSource` of its own.
     maxConcurrentRuns: 3, runTimeoutMs: 1_800_000, maxAttempts: 3,
+    // M33 §4: null in the shared fixture -- a workspace assigned by hand, exactly like every
+    // other fixture-made workspace before this milestone. Adoption's own note is exercised by a
+    // dedicated test below rather than by widening this default.
+    adoptedFrom: null,
   },
   slaves,
   tasks: { active: 2, ready: 3, blocked: 1, done: 4, failed: 0 },
@@ -644,6 +648,18 @@ describe('shell facts and stream state reach the project header, never the sideb
     expect(screen.queryByTestId('runtime-provider')).toBeNull()
     expect(screen.queryByTestId('goal-suggestion')).toBeNull()
     expect(screen.getAllByTestId('slave-card').length).toBe(PUBLISHED.slaves.length)
+  })
+
+  it('a workspace adopted from a simulation shows the note linking back to it; a hand-assigned one shows nothing (M33 §4)', () => {
+    const { unmount } = render(<OverviewClient workspaceId="w1" initial={PUBLISHED} />)
+    expect(screen.queryByTestId('ws-adopted-from')).toBeNull()
+    unmount()
+
+    const adopted = { ...PUBLISHED, workspace: { ...PUBLISHED.workspace, adoptedFrom: { simulationId: 's1', name: 'Sprint plan' } } }
+    render(<OverviewClient workspaceId="w2" initial={adopted} />)
+    const note = screen.getByTestId('ws-adopted-from')
+    expect(note.textContent).toBe('organisation adopted from simulation Sprint plan')
+    expect(note.querySelector('a')?.getAttribute('href')).toBe('/sim/s1')
   })
 })
 
