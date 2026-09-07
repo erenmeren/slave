@@ -1,3 +1,5 @@
+import { readdir } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { buildDecisionEnv, decideWithModel, decisionArgs, preflightDenyAll } from '../src/claude/decision.js'
@@ -51,11 +53,18 @@ describe('decideWithModel (fake CLI)', () => {
     const outcome = await decideWithModel({ ...base, extraArgs: [FAKE, '--fixture', 'decision-breach'] })
     expect(outcome).toMatchObject({ kind: 'isolation_breach', tools: ['Bash'], costUsd: 0.0121 })
   })
-  it('fails with a reason on a timeout and on a stream without a result line', async () => {
+  it('fails with a reason on a timeout', async () => {
     const hung = await decideWithModel({ ...base, extraArgs: [FAKE, '--fixture', 'hang'], timeoutMs: 500 })
     expect(hung).toMatchObject({ kind: 'failed', reason: expect.stringMatching(/timeout/), costUsd: null })
+  })
+  it('fails with a reason on a stream that ends with no result line and no tool call', async () => {
+    const outcome = await decideWithModel({ ...base, extraArgs: [FAKE, '--fixture', 'decision-noresult'] })
+    expect(outcome).toMatchObject({ kind: 'failed', reason: expect.stringMatching(/without a result line/), costUsd: null })
+  })
+  it('reports an isolation breach when a tool call is seen even though the stream then crashes with no result line (R2: breach outweighs a missing result)', async () => {
     const crashed = await decideWithModel({ ...base, extraArgs: [FAKE, '--fixture', 'crash'] })
-    expect(crashed.kind).toBe('failed')
+    expect(crashed).toMatchObject({ kind: 'isolation_breach', costUsd: null })
+    if (crashed.kind === 'isolation_breach') expect(crashed.tools).toContain('Write')
   })
   it('gives the child only PATH, HOME, LANG and TERM (env-echo replays its own env in a field decideWithModel never surfaces)', async () => {
     process.env['DATABASE_URL'] = 'postgres://should-not-leak'
@@ -65,5 +74,18 @@ describe('decideWithModel (fake CLI)', () => {
     if (outcome.kind === 'answer') expect(outcome.numTurns).toBe(1)
     delete process.env['DATABASE_URL']
     delete process.env['SLAVEOFAI_TEST_LEAK']
+  })
+  it('rejects a non-absolute hookPath and leaves no slaveofai-decision-* temp dir behind', async () => {
+    // A relative path that still spawns and denies correctly (so `preflightDenyAll` passes and
+    // `decideWithModel` reaches its own `mkdtemp('slaveofai-decision-')` and `writeSettingsFile`,
+    // which is what actually exercises the try/finally reordering this test guards -- a hookPath
+    // relative segment that does not resolve at all (e.g. `'relative/hook.sh'`) fails earlier, in
+    // `preflightDenyAll`'s own spawn, before any `slaveofai-decision-*` dir would ever exist either
+    // way, and would pass this assertion without testing anything.
+    const relativeHookPath = 'scripts/deny-all-gate.sh'
+    const before = (await readdir(tmpdir())).filter((name) => name.startsWith('slaveofai-decision-')).length
+    await expect(decideWithModel({ ...base, extraArgs: [FAKE, '--fixture', 'decision'], hookPath: relativeHookPath })).rejects.toThrow(/absolute/)
+    const after = (await readdir(tmpdir())).filter((name) => name.startsWith('slaveofai-decision-')).length
+    expect(after).toBe(before)
   })
 })

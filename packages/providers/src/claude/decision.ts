@@ -122,70 +122,88 @@ export async function preflightDenyAll(input: { readonly hookPath: string }): Pr
 export async function decideWithModel(input: ModelDecisionInput): Promise<ModelDecisionOutcome> {
   await preflightDenyAll({ hookPath: input.hookPath })
   const dir = await mkdtemp(join(tmpdir(), 'slaveofai-decision-'))
-  const settingsPath = join(dir, 'settings.json')
-  writeSettingsFile({ settingsPath, hookPath: input.hookPath })
-  const env = buildDecisionEnv()
-  const child = spawn(
-    input.command,
-    decisionArgs({
-      ...(input.extraArgs !== undefined ? { extraArgs: input.extraArgs } : {}),
-      model: input.model,
-      maxBudgetUsd: input.maxBudgetUsd,
-      settingsPath,
-    }),
-    { cwd: dir, env, stdio: ['pipe', 'pipe', 'pipe'] },
-  )
-  child.stdin.end(input.prompt)
+  // The `try` wraps everything from here on -- `writeSettingsFile` (throws synchronously on a
+  // non-absolute `hookPath`) and the spawn itself included -- so `dir` is removed in `finally` no
+  // matter which of those throws or how the run ends. Fix round 1, Important 2: a caller that
+  // passes a bad `hookPath` used to leak a `slaveofai-decision-*` directory on every call, because
+  // the old `try` opened only around the stream-reading promise, after both of those had already
+  // run unguarded.
   // A plain mutable object rather than several `let`s: TS's control-flow analysis of a `let`
   // reassigned only inside a nested closure (`handleLine`, called from the `data`/`close`
   // listeners below) narrows the outer reads of that `let` to `never` after the closure runs --
   // reproduced in isolation, not specific to this file -- where a property on a held object
-  // narrows correctly. See git history for the `let outcome: RunOutcome | null` version this
-  // replaced and its `tsc` errors.
+  // narrows correctly.
   const state: { text: string; tools: string[]; outcome: RunOutcome | null } = { text: '', tools: [], outcome: null }
-  let buffer = ''
-  let timedOut = false
-  const timer = setTimeout((): void => {
-    timedOut = true
-    void terminateChild(child, 2_000)
-  }, input.timeoutMs ?? DEFAULT_MODEL_TIMEOUT_MS)
-  const handleLine = (line: string): void => {
-    if (line.trim() === '') return
-    const event = parseStreamLine(line)
-    if (event.kind === 'text') state.text += event.text
-    else if (event.kind === 'tool_call') state.tools.push(event.toolName)
-    else if (event.kind === 'terminated') state.outcome = event.outcome
-  }
   try {
-    await new Promise<void>((resolve) => {
-      child.stdout.on('data', (chunk: Buffer): void => {
-        buffer += chunk.toString('utf8')
-        const lines = buffer.split('\n')
-        buffer = lines.pop() ?? ''
-        lines.forEach(handleLine)
+    const settingsPath = join(dir, 'settings.json')
+    writeSettingsFile({ settingsPath, hookPath: input.hookPath })
+    const env = buildDecisionEnv()
+    const child = spawn(
+      input.command,
+      decisionArgs({
+        ...(input.extraArgs !== undefined ? { extraArgs: input.extraArgs } : {}),
+        model: input.model,
+        maxBudgetUsd: input.maxBudgetUsd,
+        settingsPath,
+      }),
+      { cwd: dir, env, stdio: ['pipe', 'pipe', 'pipe'] },
+    )
+    // Fix round 1, Important 1: a child that exits (or never reads stdin at all -- `hang` mode
+    // never touches its stdin) before `end()`'s write lands turns that write into an EPIPE. With
+    // no listener, `EventEmitter` throws it back out synchronously and takes the orchestrator down
+    // with it; absorbing it here is exactly what `stdin.end()` racing a dead child calls for --
+    // the run's own outcome (timeout, crash, or a clean result) still gets decided below by what
+    // actually arrived on stdout.
+    child.stdin.on('error', () => {})
+    child.stdin.end(input.prompt)
+    let buffer = ''
+    let timedOut = false
+    const timer = setTimeout((): void => {
+      timedOut = true
+      void terminateChild(child, 2_000)
+    }, input.timeoutMs ?? DEFAULT_MODEL_TIMEOUT_MS)
+    const handleLine = (line: string): void => {
+      if (line.trim() === '') return
+      const event = parseStreamLine(line)
+      if (event.kind === 'text') state.text += event.text
+      else if (event.kind === 'tool_call') state.tools.push(event.toolName)
+      else if (event.kind === 'terminated') state.outcome = event.outcome
+    }
+    try {
+      await new Promise<void>((resolve) => {
+        child.stdout.on('data', (chunk: Buffer): void => {
+          buffer += chunk.toString('utf8')
+          const lines = buffer.split('\n')
+          buffer = lines.pop() ?? ''
+          lines.forEach(handleLine)
+        })
+        child.on('close', (): void => {
+          if (buffer !== '') handleLine(buffer)
+          resolve()
+        })
+        child.on('error', (): void => resolve())
       })
-      child.on('close', (): void => {
-        if (buffer !== '') handleLine(buffer)
-        resolve()
-      })
-      child.on('error', (): void => resolve())
-    })
+    } finally {
+      clearTimeout(timer)
+    }
+    const { text, tools, outcome } = state
+    const costUsd = outcome?.costUsd ?? null
+    const tokens = outcome?.tokens ?? null
+    // Controller ruling R2 (fix round 1, Critical 1, overrides this function's first cut): an
+    // isolation breach outranks every other classification, including a timeout or a stream that
+    // never produced a result line. `tools.length > 0` is checked FIRST -- a `failed` run only
+    // costs the simulation one day's worth of actions and is retried; a breach means the deny-all
+    // hook was defeated or bypassed and the run must halt, so the conservative read of "the model
+    // called a tool AND the process then also timed out or crashed" is the breach, not the
+    // failure. `fixtures/crash.ndjson`'s first half (what `--fixture crash` replays) already
+    // contains a `Write` tool_use before its truncation point with no trailing result line --
+    // exactly this case -- and must report `isolation_breach`, not `failed`.
+    if (tools.length > 0) return { kind: 'isolation_breach', tools, costUsd, tokens }
+    if (timedOut) return { kind: 'failed', reason: 'timeout', costUsd, tokens }
+    if (outcome === null) return { kind: 'failed', reason: 'the model process ended without a result line', costUsd, tokens }
+    if (outcome.isError) return { kind: 'failed', reason: `result is_error: ${outcome.terminalReason}`, costUsd, tokens }
+    return { kind: 'answer', text, costUsd, tokens, numTurns: outcome.numTurns }
   } finally {
-    clearTimeout(timer)
     await rm(dir, { recursive: true, force: true })
   }
-  const { text, tools, outcome } = state
-  const costUsd = outcome?.costUsd ?? null
-  const tokens = outcome?.tokens ?? null
-  // Order matters: a crashed or hung run can still have emitted a tool_use block before it died
-  // (measured -- `fixtures/crash.ndjson`'s first half already contains one), and that must not
-  // read as an `isolation_breach` -- a breach classification means the model *finished* a turn
-  // while ignoring the deny-all hook, which requires a result line to say so. No result line at
-  // all is simply a failed run, tool call notwithstanding, so `timedOut` and `outcome === null`
-  // are both checked before `tools.length > 0`.
-  if (timedOut) return { kind: 'failed', reason: 'timeout', costUsd, tokens }
-  if (outcome === null) return { kind: 'failed', reason: 'the model process ended without a result line', costUsd, tokens }
-  if (tools.length > 0) return { kind: 'isolation_breach', tools, costUsd, tokens }
-  if (outcome.isError) return { kind: 'failed', reason: `result is_error: ${outcome.terminalReason}`, costUsd, tokens }
-  return { kind: 'answer', text, costUsd, tokens, numTurns: outcome.numTurns }
 }
