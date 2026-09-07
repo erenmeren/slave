@@ -40,6 +40,7 @@ describe('CompareClient', () => {
     expect(strip).toContain('SIMULATION')
     expect(strip).toContain('Run A')
     expect(strip).toContain('Run B')
+    expect(strip).toContain('trade')
     expect(screen.queryByTestId('sim-compare-warning')).toBeNull()
   })
 

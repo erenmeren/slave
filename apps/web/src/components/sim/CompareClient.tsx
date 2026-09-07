@@ -38,7 +38,10 @@ export function CompareClient({ comparison }: { readonly comparison: SimulationC
         <span className="text-text-1">{a.summary.name}</span>
         <span>vs</span>
         <span className="text-text-1">{b.summary.name}</span>
-        <span className="text-text-3">— synthetic data, no verdict</span>
+        <span>·</span>
+        <span>{a.summary.sector}</span>
+        <span>·</span>
+        <span className="text-text-3">synthetic data — not a real company; no verdict</span>
       </div>
 
       {!clean && (

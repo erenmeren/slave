@@ -1,5 +1,5 @@
 import { prisma } from '@slave-of-ai/db/client'
-import { compareSimulations, listSimulations, readSimulation, refusalText, type SimulationComparison, type SimulationSummary } from '@slave-of-ai/control'
+import { compareCandidatesOf, compareSimulations, listSimulations, readSimulation, refusalText, type SimulationComparison, type SimulationSummary } from '@slave-of-ai/control'
 import { tradeMetrics, type JournalEntry, type TradeMetrics } from '@slave-of-ai/simulation'
 
 export interface JournalRow { readonly seq: number; readonly simTime: number; readonly kind: string; readonly actorRole: string | null; readonly payload: Record<string, unknown> }
@@ -49,7 +49,7 @@ export async function buildSimulationSnapshot(simulationId: string): Promise<Sim
       journal: entries.slice(-JOURNAL_PAGE),
       modelUsage: { rows: usage._count._all, costUsd: usage._count._all === 0 || usage._sum.costUsd === null ? null : usage._sum.costUsd, unmeasured },
       scenario: definition.scenario.map((s) => ({ day: s.day, event: s.event })),
-      compareCandidates: (await listSimulations(summary.companyId)).filter((s) => s.id !== simulationId && s.sector === summary.sector).map((s) => ({ id: s.id, name: s.name, policy: s.policy, status: s.status, simTime: s.simTime })),
+      compareCandidates: compareCandidatesOf(await listSimulations(tx, summary.companyId), summary).map((s) => ({ id: s.id, name: s.name, policy: s.policy, status: s.status, simTime: s.simTime })),
     }
   }, { isolationLevel: 'RepeatableRead' })
 }
@@ -59,13 +59,14 @@ export function listSimulationCards(): Promise<readonly SimulationSummary[]> {
 }
 
 /** The "compare with…" select's options (M30 §4): other runs of the SAME company and sector —
- *  never itself — as the thin shape the dropdown needs, not a full `SimulationSummary`. */
+ *  never itself — as the thin shape the dropdown needs, not a full `SimulationSummary`. Shares
+ *  `compareCandidatesOf`'s filter with `buildSimulationSnapshot` above (fix round 1, Important #2)
+ *  so "what counts as a candidate" is decided in exactly one place. */
 export async function listCompareCandidates(simulationId: string): Promise<readonly CompareCandidate[]> {
   const loaded = await readSimulation(prisma, simulationId)
   if (!loaded.ok) return []
-  const { companyId, sector } = loaded.value.summary
-  const all = await listSimulations(companyId)
-  return all.filter((s) => s.id !== simulationId && s.sector === sector).map((s) => ({ id: s.id, name: s.name, policy: s.policy, status: s.status, simTime: s.simTime }))
+  const all = await listSimulations(prisma, loaded.value.summary.companyId)
+  return compareCandidatesOf(all, loaded.value.summary).map((s) => ({ id: s.id, name: s.name, policy: s.policy, status: s.status, simTime: s.simTime }))
 }
 
 export type ComparisonResult = { readonly kind: 'ok'; readonly comparison: SimulationComparison } | { readonly kind: 'refused'; readonly text: string } | null
