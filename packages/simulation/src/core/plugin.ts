@@ -18,8 +18,14 @@ export interface FormField { readonly name: string; readonly label: string; read
 export interface ExternalEventForm { readonly type: string; readonly label: string; readonly fields: readonly FormField[] }
 export interface RosterEntry { readonly slaveName: string; readonly departmentName: string; readonly role: string }
 
+/** Every sector the platform knows, by name. Written out here rather than derived from the
+ *  registry (review round 1, Minor): `SectorPlugin.name` IS a sector name, and a `SectorName` read
+ *  as `keyof typeof sectors` would make the registry's own type circular. `./registry.js` checks
+ *  with `satisfies` that its keys are exactly these, so the two can never drift. */
+export type SectorName = 'trade' | 'software'
+
 export interface SectorPlugin<S, E, R, D extends EngineDefinition, M extends Record<string, number>> {
-  readonly name: string                                    // 'trade' | 'software'
+  readonly name: SectorName
   readonly model: SectorModel<S, E, R>
   readonly definitionSchema: z.ZodType<D>
   readonly stateSchema: z.ZodType<S>

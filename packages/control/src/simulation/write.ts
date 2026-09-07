@@ -5,7 +5,7 @@ import { isUniqueConstraintViolation } from '../prisma-errors.js'
 import type { Principal } from '../principal.js'
 import type { ControlRefusal } from '../refusal.js'
 import {
-  MAX_STEPS_PER_REQUEST, SUPPORTED, clearAutoRun, json, journalRows, locked, namespacedKey, type LoadedSimulation, type Row, type SimulationSummary,
+  MAX_STEPS_PER_REQUEST, SUPPORTED, clearAutoRun, json, journalRows, locked, namespacedKey, type LoadedSimulation, type Row,
 } from './shared.js'
 import { loadSimulation, rosterOf } from './read.js'
 
@@ -100,21 +100,28 @@ export async function createSimulation(
   })
   if (company === null) return err({ kind: 'company_not_found', companyId: input.companyId })
   const roster = rosterOf(company.teams)
-  if (roster.length < 4) return err({ kind: 'roster_too_small', companyId: company.id, needed: 4, have: roster.length })
   const seed = input.seed ?? 1
   const llmRoles = decisionProvider === 'llm' ? [...plugin.llmRoleCandidates] : []
-  // The plugin decides whether this roster can fill its roles and throws its own requirement text
-  // when it cannot (design §2) -- control neither knows nor repeats what a sector needs.
+  // Whether this roster can fill this sector's roles is the plugin's question, asked with the
+  // plugin's own words (review round 1): control neither knows nor repeats what a sector needs, so
+  // there is no "four slaves" of its own to go stale the moment a second sector exists.
+  if (!plugin.rosterFits(roster)) return err({ kind: 'invalid_simulation_input', detail: plugin.rosterRequirement })
   let definition: ReturnType<AnySectorPlugin['demoDefinition']>
   try {
     definition = plugin.demoDefinition({ policy: input.policy, seed, roster, currency: 'USD', llmRoles })
-  } catch {
-    return err({ kind: 'invalid_simulation_input', detail: plugin.rosterRequirement })
+  } catch (error) {
+    // `demoDefinition` throws exactly `rosterRequirement` for a roster it cannot staff, and that
+    // is the ONE throw this turns into a refusal -- unreachable in practice, since `rosterFits` is
+    // the same rule asked first, and kept because the contract says the throw exists. Anything
+    // else is a bug inside the sector and must reach the caller as the error it is, not be
+    // reported to an operator as a short roster (review round 1, Important #2).
+    if (error instanceof Error && error.message === plugin.rosterRequirement) return err({ kind: 'invalid_simulation_input', detail: plugin.rosterRequirement })
+    throw error
   }
   const state = plugin.initialState(definition)
   return insertRun(
     {
-      companyId: company.id, name: input.name.trim(), sector: plugin.name as SimulationSummary['sector'], mode: 'simulation', decisionProvider, seed, definition: json(definition), state: json(state), createdByUserId: principal?.userId ?? null,
+      companyId: company.id, name: input.name.trim(), sector: plugin.name, mode: 'simulation', decisionProvider, seed, definition: json(definition), state: json(state), createdByUserId: principal?.userId ?? null,
       modelProvider: llm?.modelProvider ?? null, model: llm?.model ?? null, maxModelCostUsd: llm?.maxModelCostUsd ?? null,
     },
     { op: 'created', policy: input.policy, seed, synthetic: true },

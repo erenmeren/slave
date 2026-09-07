@@ -62,21 +62,20 @@ export interface LoadedSimulation {
   readonly state: EngineState<unknown, unknown>
 }
 
-/** The engine's own envelope around a sector state, built per plugin: everything but `sector` is
- *  the same for every sector, and `sector` is the plugin's own `stateSchema`.
+/** The engine's own envelope around a sector state, built per plugin: everything but `sector` and
+ *  the queue's `event` is the same for every sector, and those two are the plugin's own
+ *  `stateSchema` and its model's `eventSchema` (review round 1, R10).
  *
- *  The queue's `event` is deliberately `z.unknown()`. A queue holds every event the sector
- *  schedules — `task_finished`, `defect_surfaced`, trade's `delivery` — not just the injectable
- *  ones, and the plugin contract (design §2) publishes only `externalEventSchema`. The events in
- *  a stored queue were written by the engine itself from a definition this same parse has already
- *  validated, and every one of them is validated again by the sector's own `applyEvent` when it
- *  comes due; what this schema is actually guarding is the SHAPE control depends on — the day, the
- *  counters, the status and the sector state. */
+ *  `model.eventSchema` — not `externalEventSchema`: a stored queue holds every event the sector
+ *  schedules for itself (`task_finished`, `defect_surfaced`, trade's `delivery`), not just the
+ *  three a person may inject, and `SectorModel` publishes the full union for exactly this. So a
+ *  row whose queue carries an event its own sector cannot parse reads as `simulation_corrupt`
+ *  here, before the engine is ever handed it. */
 const schemaCache = new WeakMap<AnySectorPlugin, z.ZodType<EngineState<unknown, unknown>>>()
 export function engineStateSchemaFor(plugin: AnySectorPlugin): z.ZodType<EngineState<unknown, unknown>> {
   const cached = schemaCache.get(plugin)
   if (cached !== undefined) return cached
-  const queueItemSchema = z.object({ time: z.number().int(), priority: z.enum(['external', 'scheduled', 'decision', 'close']), seq: z.number().int(), event: z.unknown() })
+  const queueItemSchema = z.object({ time: z.number().int(), priority: z.enum(['external', 'scheduled', 'decision', 'close']), seq: z.number().int(), event: plugin.model.eventSchema })
   const schema = z.object({
     day: z.number().int(), sector: plugin.stateSchema, queue: z.object({ items: z.array(queueItemSchema), nextSeq: z.number().int() }), rngState: z.number(),
     journalSeq: z.number().int(), stepCount: z.number().int(), decisionCount: z.number().int(), status: z.enum(['ready', 'running', 'finished', 'halted']), haltedReason: z.string().nullable(),
@@ -153,10 +152,10 @@ export async function clearAutoRun(
 /** A `JSON.stringify` that sorts object keys at every level, so two structurally-identical values
  *  compare equal regardless of the key insertion order either one happens to carry (fix round 1,
  *  Important #3): Postgres `jsonb` reorders an object's keys on storage (by key length, then
- *  alphabetically) and `queueItemSchema`'s `event: z.unknown()` field passes that raw, reordered
- *  value straight through `parseRow` untouched, while a freshly-run (never persisted) engine state
- *  keeps the event object's natural construction order — so the SAME event, live vs. replayed, can
- *  stringify differently by key order alone with zero difference in content. */
+ *  alphabetically) and a schema that VALIDATES an event — as `queueItemSchema` does — still
+ *  hands back the fields in whatever order they arrived, while a freshly-run (never persisted)
+ *  engine state keeps the event object's natural construction order — so the SAME event, live vs.
+ *  replayed, can stringify differently by key order alone with zero difference in content. */
 export function stableStringify(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`
   if (value !== null && typeof value === 'object') {

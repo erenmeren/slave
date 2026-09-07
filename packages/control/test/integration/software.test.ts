@@ -1,6 +1,6 @@
 import { prisma } from '@slave-of-ai/db/client'
 import { sectors } from '@slave-of-ai/simulation'
-import { afterAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   applyModelDecision,
   cloneSimulation,
@@ -10,6 +10,7 @@ import {
   injectExternalEvent,
   loadSimulation,
   prepareModelDecision,
+  replaySimulation,
   simulationStatus,
   startAutoRun,
   stepSimulation,
@@ -122,6 +123,20 @@ describe('createSimulation for the software sector', () => {
     expect(await prisma.simulationRun.count()).toBe(0)
   })
 
+  it('only the roster error becomes a refusal: any other throw out of the plugin surfaces (review round 1)', async () => {
+    // `demoDefinition` throws exactly `rosterRequirement` for a roster it cannot staff, and that
+    // is the ONE throw `createSimulation` is allowed to turn into a refusal. A bug inside the
+    // sector -- anything else -- must reach the caller as the error it is, not be reported to an
+    // operator as "your company is short a Product slave".
+    const boom = vi.spyOn(sectors.software, 'demoDefinition').mockImplementation(() => { throw new Error('boom') })
+    try {
+      await expect(createSimulation({ companyId, name: 'boom', sector: 'software', policy: 'A' })).rejects.toThrow('boom')
+    } finally {
+      boom.mockRestore()
+    }
+    expect(await prisma.simulationRun.count()).toBe(0)
+  })
+
   it('an llm run puts the plugin\'s own candidate role on the model, not trade\'s', async () => {
     const created = await createSimulation({ companyId, name: 'llm lead', sector: 'software', policy: 'A', decisionProvider: 'llm', modelProvider: 'claude_code', model: 'claude-haiku-4-5', maxModelCostUsd: 2 })
     expect(created.ok).toBe(true)
@@ -164,6 +179,22 @@ describe('stepping and reading a software run', () => {
   }, 30_000)
 })
 
+describe('reading a corrupt row', () => {
+  it('a queue event the sector\'s own event schema rejects is simulation_corrupt (review round 1, R10)', async () => {
+    const id = await create()
+    const row = await prisma.simulationRun.findUniqueOrThrow({ where: { id } })
+    const state = row.state as { queue: { items: { event: { sizeDays: unknown } }[] } }
+    // The queue holds the demo's twelve scheduled `request` events; one of them is made nonsense.
+    expect(state.queue.items.length).toBeGreaterThan(0)
+    state.queue.items[0]!.event.sizeDays = 'not a number'
+    await prisma.simulationRun.update({ where: { id }, data: { state: state as object } })
+    const loaded = await loadSimulation(id)
+    expect(loaded.ok).toBe(false)
+    expect(loaded.ok === false && loaded.error.kind).toBe('simulation_corrupt')
+    expect(loaded.ok === false && loaded.error.kind === 'simulation_corrupt' && loaded.error.reason).toMatch(/^state: /)
+  })
+})
+
 describe('injecting a software external event', () => {
   it('accepts request, incident and absence, and refuses a trade event the software schema does not know', async () => {
     const id = await create()
@@ -183,6 +214,9 @@ describe('injecting a software external event', () => {
     expect(state.tasks.filter((t) => t.origin === 'incident').length).toBeGreaterThanOrEqual(1)
     // Ruling R6: `absentUntilDay` is the LAST day away — day 4 plus two days.
     expect(state.engineers.find((e) => e.id === 'Alex')?.absentUntilDay).toBe(6)
+    // Replay is the whole point of a frozen definition (M29 §6): the software model, its initial
+    // state and the three injected events reproduce this exact world from the journal alone.
+    expect(await replaySimulation(id)).toEqual({ ok: true, value: { matches: true } })
   })
 })
 

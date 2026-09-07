@@ -128,7 +128,6 @@ export type ControlRefusal =
   | { readonly kind: 'simulation_corrupt'; readonly simulationId: string; readonly reason: string }
   /** `deleteCompany` while simulation runs still reference the company (M29 §3). */
   | { readonly kind: 'live_simulations'; readonly companyId: string; readonly simulations: number }
-  | { readonly kind: 'roster_too_small'; readonly companyId: string; readonly needed: number; readonly have: number }
   | { readonly kind: 'invalid_simulation_input'; readonly detail: string }
   /** `stepSimulation` on a run whose `decisionProvider` is `llm` (M31a §3): its steps happen in
    *  the auto-run daemon, not through the manual step verb. */
@@ -279,8 +278,6 @@ export function refusalText(refusal: ControlRefusal): string {
       return `simulation ${refusal.simulationId} cannot be read: ${refusal.reason}`
     case 'live_simulations':
       return `company ${refusal.companyId} has ${plural(refusal.simulations, 'simulation')}; delete them first`
-    case 'roster_too_small':
-      return `company ${refusal.companyId} has ${plural(refusal.have, 'slave')}; the trade sector needs ${refusal.needed} for its roles`
     case 'invalid_simulation_input':
       return `invalid simulation input: ${refusal.detail}`
     case 'llm_steps_in_daemon':

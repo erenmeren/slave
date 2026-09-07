@@ -60,12 +60,12 @@ export function compareCandidatesOf(summaries: readonly SimulationSummary[], sel
   return summaries.filter((s) => s.id !== self.id && s.sector === self.sector)
 }
 
-/** One run's row, its FULL journal (mapped to `JournalEntry[]`, seq ascending), the derived trade
- *  metrics and the count of externally injected events — the read every one of
- *  `simulationStatus`, `compareSimulations` and `replaySimulation` needs, previously written out
- *  three times with three separate journal queries (fix round 1, Important #3). Takes the caller's
- *  `client` (plain `prisma` or a `tx`) so every caller keeps reading the row and the journal from
- *  the SAME snapshot it already opened -- this helper adds no transaction of its own. */
+/** One run's row, its FULL journal (mapped to `JournalEntry[]`, seq ascending), the metrics its own
+ *  sector derives from that journal, and the count of externally injected events — the read every
+ *  one of `simulationStatus`, `compareSimulations` and `replaySimulation` needs, previously written
+ *  out three times with three separate journal queries (fix round 1, Important #3). Takes the
+ *  caller's `client` (plain `prisma` or a `tx`) so every caller keeps reading the row and the
+ *  journal from the SAME snapshot it already opened -- this helper adds no transaction of its own. */
 async function loadSideMetrics(
   client: PrismaClient | Prisma.TransactionClient,
   simulationId: string,
@@ -117,12 +117,12 @@ export interface ModelUsageTotals {
   readonly unmeasured: number
 }
 
-/** Read model for an operator's dashboard (Task 8): the summary, the sector's headline numbers,
- *  the derived trade metrics computed from the journal, and how much real model spend (M31 writes
- *  it, M29 never does) is attributed so far. Reads the row and the journal inside one
- *  `RepeatableRead` transaction for the same reason as {@link replaySimulation} above (fix round
- *  1, Important #4): a step committing between two unlocked reads would otherwise make the
- *  journal newer than the state the metrics are computed against. */
+/** Read model for an operator's dashboard (Task 8): the summary, the sector's headline numbers, the
+ *  sector's own metrics computed from the journal (with the labels to render them by), and how much
+ *  real model spend (M31 writes it, M29 never does) is attributed so far. Reads the row and the
+ *  journal inside one `RepeatableRead` transaction for the same reason as {@link replaySimulation}
+ *  above (fix round 1, Important #4): a step committing between two unlocked reads would otherwise
+ *  make the journal newer than the state the metrics are computed against. */
 export async function simulationStatus(
   simulationId: string,
 ): Promise<Result<{ readonly summary: SimulationSummary; readonly headline: readonly HeadlineItem[]; readonly metrics: SimulationMetrics; readonly metricLabels: Readonly<Record<string, MetricLabel>>; readonly modelUsage: ModelUsageTotals }, ControlRefusal>> {
@@ -135,9 +135,9 @@ export async function simulationStatus(
     const usage = await tx.simulationModelUsage.aggregate({ where: { simulationId }, _count: { _all: true, costUsd: true }, _sum: { costUsd: true } })
     return ok({
       summary: loaded.summary,
-      headline: loaded.plugin.headline(loaded.state.sector, loaded.state.day) as readonly HeadlineItem[],
+      headline: loaded.plugin.headline(loaded.state.sector, loaded.state.day),
       metrics,
-      metricLabels: loaded.plugin.metricLabels as Readonly<Record<string, MetricLabel>>,
+      metricLabels: loaded.plugin.metricLabels,
       modelUsage: { calls: usage._count._all, spentUsd: usage._count.costUsd === 0 ? null : usage._sum.costUsd, unmeasured: usage._count._all - usage._count.costUsd },
     })
   }, { isolationLevel: 'RepeatableRead' })
@@ -154,7 +154,7 @@ export async function compareSimulations(aId: string, bId: string): Promise<Resu
     if (!b.ok) return b
     if (a.value.loaded.summary.sector !== b.value.loaded.summary.sector) return err({ kind: 'invalid_simulation_input', detail: 'runs of different sectors cannot be compared' })
     const differences = COMPARED_KEYS.filter((key) => stableStringify(a.value.loaded.definition[key]) !== stableStringify(b.value.loaded.definition[key]))
-    const metricLabels = a.value.loaded.plugin.metricLabels as Readonly<Record<string, MetricLabel>>
+    const metricLabels: Readonly<Record<string, MetricLabel>> = a.value.loaded.plugin.metricLabels
     // The plugin's own label keys, in its own order: the metrics a sector publishes are exactly
     // the ones it labels, so this is the list and there is no second one to keep in step.
     const deltas: Record<string, number> = {}

@@ -57,7 +57,7 @@ describe('createSimulation', () => {
     expect(unsupported.ok === false && unsupported.error).toEqual({ kind: 'unsupported_simulation', sector: 'retail', mode: 'simulation' })
     const small = await prisma.company.create({ data: { name: 'Tiny' } })
     const tooSmall = await createSimulation({ companyId: small.id, name: 'x', sector: 'trade', policy: 'A' })
-    expect(tooSmall.ok === false && tooSmall.error).toEqual({ kind: 'roster_too_small', companyId: small.id, needed: 4, have: 0 })
+    expect(tooSmall.ok === false && tooSmall.error).toEqual({ kind: 'invalid_simulation_input', detail: 'the trade sector needs four slaves for its four roles' })
     await create('dup')
     const dup = await createSimulation({ companyId, name: 'dup', sector: 'trade', policy: 'A' })
     expect(dup.ok === false && dup.error).toEqual({ kind: 'duplicate_name', name: 'dup' })
