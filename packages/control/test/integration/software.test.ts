@@ -237,8 +237,15 @@ describe('cloning and comparing software runs', () => {
     expect(Object.keys(comparison.value.deltas)).toEqual(labels)
     expect(Object.keys(comparison.value.metricLabels)).toEqual(labels)
     expect(comparison.value.metricLabels['avgLeadDays']).toEqual({ label: 'average lead time', kind: 'days' })
-    // The delta is arithmetic, nothing more: b − a on every label the plugin publishes.
-    for (const key of labels) expect(comparison.value.deltas[key]).toBe((comparison.value.b.metrics[key] ?? 0) - (comparison.value.a.metrics[key] ?? 0))
+    // The delta is arithmetic, nothing more: b − a on every label the plugin publishes. Every
+    // software metric is a number, so every delta is one too -- `metricDeltas` only returns `null`
+    // for a labelled key that is not a finite number, and this sector has none (M32 item 6).
+    for (const key of labels) {
+      const av = comparison.value.a.metrics[key]
+      const bv = comparison.value.b.metrics[key]
+      expect(typeof av === 'number' && typeof bv === 'number').toBe(true)
+      expect(comparison.value.deltas[key]).toBe(Number(bv) - Number(av))
+    }
     expect(comparison.value.definitionsMatch).toBe(true)
     expect(comparison.value.b.metrics['defectIncidents']).toBe(0)
   }, 30_000)

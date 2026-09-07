@@ -14,11 +14,11 @@ export interface SimulationSnapshot {
    *  object is now whatever the run's own sector reports. */
   readonly headline: readonly HeadlineItem[]
   readonly roles: readonly { readonly name: string; readonly slaveName: string; readonly purpose: string; readonly allowedActions: readonly string[] }[]
-  /** The sector's own metrics, a plain `name -> number` map read against {@link metricLabels} for
-   *  the label, order and `money`/`count`/`days` kind. Trade's runtime object also carries two
-   *  extra fields the panel reads directly rather than through a label -- `sources` (per-metric
-   *  provenance) and `minCashDay` -- exactly as `packages/simulation`'s trade plugin already
-   *  documents; this type says nothing about them; the panel reaches for them defensively. */
+  /** The sector's own metrics, read against {@link metricLabels} for the label, order and
+   *  `money`/`count`/`days` kind. Values are `unknown` and the panel narrows (M32 item 6): a
+   *  sector publishes whatever shape it likes, and trade's does -- `sources` (per-metric
+   *  provenance) and a `minCashDay` companion beside the numbers. `metricLabels` is what names the
+   *  keys that are numbers. */
   readonly metrics: SimulationMetrics
   readonly metricLabels: Readonly<Record<string, MetricLabel>>
   /** The inject form's own shape (M31b §5): one entry per event type the run's sector accepts,
@@ -75,7 +75,7 @@ export async function buildSimulationSnapshot(simulationId: string): Promise<Sim
       currency: definition.currency,
       headline: plugin.headline(state.sector, state.day),
       roles: definition.roles.map((r) => ({ name: r.name, slaveName: r.slaveName, purpose: r.purpose, allowedActions: r.allowedActions })),
-      metrics: plugin.metrics(entries, state.sector) as SimulationMetrics,
+      metrics: plugin.metrics(entries, state.sector),
       metricLabels: plugin.metricLabels,
       injectForms: plugin.externalEventForms,
       injectOptions: plugin.injectOptions(state.sector),

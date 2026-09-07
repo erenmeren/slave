@@ -251,13 +251,13 @@ export function SimulationClient({ initial }: { readonly initial: SimulationSnap
                 {Object.entries(metricLabels).map(([key, label]) => {
                   // The plugin's own labels and order drive this panel (M31b §5); trade's runtime
                   // metrics object also carries two fields no label names -- `sources` (per-metric
-                  // provenance) and a `<key>Day` companion for a "when" figure like `minCashDay` --
-                  // read defensively here exactly as the trade plugin's own docs describe, rather
-                  // than through the generic `SimulationMetrics` (`Record<string, number>`) type.
-                  const untyped = metrics as unknown as Record<string, unknown>
-                  const value = typeof untyped[key] === 'number' ? (untyped[key] as number) : 0
-                  const dayValue = untyped[`${key}Day`]
-                  const sources = (untyped['sources'] as Record<string, readonly string[] | undefined> | undefined)?.[key]
+                  // provenance) and a `<key>Day` companion for a "when" figure like `minCashDay`.
+                  // Since M32 item 6 `SimulationMetrics` is `unknown`-valued and says so, so these
+                  // reads are ordinary narrowing rather than a defensive cast around a type that
+                  // claimed the fields could not be there.
+                  const value = typeof metrics[key] === 'number' ? (metrics[key] as number) : 0
+                  const dayValue = metrics[`${key}Day`]
+                  const sources = (metrics['sources'] as Record<string, readonly string[] | undefined> | undefined)?.[key]
                   return (
                     <div key={key} data-testid={`sim-metric-${key}`} className="rounded-card border border-line bg-bg-2 p-2 text-xs">
                       <div className="text-text-3">{label.label}{typeof dayValue === 'number' ? ` (day ${dayValue})` : ''}</div>

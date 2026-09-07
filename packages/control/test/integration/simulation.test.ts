@@ -290,6 +290,14 @@ describe('compareSimulations', () => {
     expect(result.value.deltas.closingInventory).toBe(50)
     expect(result.value.a.injected).toBe(0)
     expect(result.value.currency).toBe('USD')
+    // M32 item 6: `metrics` is whatever the sector returns, untouched -- trade's carries a
+    // `sources` object of provenance lists (the run page prints them under each figure) and a
+    // `minCashDay` companion, neither of which is a number and neither of which is labelled. The
+    // type used to say `Record<string, number>` and a cast made the compiler believe it.
+    expect(result.value.a.metrics['sources']).toMatchObject({ deliveredQty: ['action_applied:ship_order'], purchaseCostMinor: ['action_applied:place_purchase'] })
+    expect(typeof result.value.a.metrics['minCashDay']).toBe('number')
+    // ...and nothing unlabelled gets a delta: `sources` is not subtracted from `sources`.
+    expect(Object.keys(result.value.deltas)).toEqual(Object.keys(result.value.metricLabels))
   })
   it('flags a differing world and counts injected events; refuses the same id', async () => {
     const a = await create('a', 'A')

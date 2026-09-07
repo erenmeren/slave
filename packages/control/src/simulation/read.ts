@@ -4,14 +4,25 @@ import { replay, sectorFor, type HeadlineItem, type JournalEntry, type MetricLab
 import type { ControlRefusal } from '../refusal.js'
 import { comparable, parseRow, stableStringify, type LoadedSimulation, type SimulationSummary } from './shared.js'
 
-/** Metrics are the plugin's, not trade's (M31b §4): a plain `name -> number` map, read against
- *  `metricLabels` for the label, the order and the `money`/`count`/`days` kind. */
-export type SimulationMetrics = Readonly<Record<string, number>>
+/** Metrics are the plugin's, not trade's (M31b §4): the map a sector's `metrics(...)` returns,
+ *  read against `metricLabels` for the label, the order and the `money`/`count`/`days` kind.
+ *
+ *  `unknown`, not `number` (M32 item 6). This was typed `Record<string, number>` and was not one:
+ *  trade's `tradeMetrics` also returns `sources` (an object of provenance lists per figure) and a
+ *  `minCashDay` companion, and two `as SimulationMetrics` casts told the compiler otherwise. The
+ *  readers that wanted those fields already narrowed defensively -- against a type that said they
+ *  could not be there. So the type says what is true (a sector may publish any shape it likes) and
+ *  the narrowing moved into the two places that need a number: {@link metricDeltas} and the pages'
+ *  own rendering. `metricLabels` is what says which keys ARE numbers. */
+export type SimulationMetrics = Readonly<Record<string, unknown>>
 
 export interface SimulationComparison {
   readonly a: { readonly summary: SimulationSummary; readonly metrics: SimulationMetrics; readonly injected: number }
   readonly b: { readonly summary: SimulationSummary; readonly metrics: SimulationMetrics; readonly injected: number }
-  readonly deltas: SimulationMetrics
+  /** `b − a` for every LABELLED metric ({@link metricDeltas}). `null` where either side is not a
+   *  number, which a reader shows as `—`: 0 is a measurement, and printing it here would claim the
+   *  two runs came out the same on a figure nobody subtracted. */
+  readonly deltas: Readonly<Record<string, number | null>>
   /** The sector's own labels, in the sector's own order -- what a reader renders these numbers
    *  with, carried here so a page never has to know which sector it is looking at. */
   readonly metricLabels: Readonly<Record<string, MetricLabel>>
@@ -68,7 +79,7 @@ async function loadSideMetrics(
   const rows = await client.simulationJournalEntry.findMany({ where: { simulationId }, orderBy: { seq: 'asc' } })
   const entries: JournalEntry[] = rows.map((r) => ({ seq: r.seq, simTime: r.simTime, kind: r.kind, actorRole: r.actorRole, payload: r.payload as Record<string, unknown> }))
   const injected = entries.filter((e) => e.kind === 'external_event' && (e.payload as { op?: string }).op === 'injected').length
-  return ok({ loaded: loaded.value, entries, metrics: loaded.value.plugin.metrics(entries, loaded.value.state.sector) as SimulationMetrics, injected })
+  return ok({ loaded: loaded.value, entries, metrics: loaded.value.plugin.metrics(entries, loaded.value.state.sector), injected })
 }
 
 /** Re-runs the engine from the frozen definition with the journal's own decisions and compares.
@@ -136,6 +147,36 @@ export async function simulationStatus(
   }, { isolationLevel: 'RepeatableRead' })
 }
 
+/**
+ * `b − a` over the LABELLED metrics, in the plugin's own label order (M32 item 6). The labelled
+ * keys are the list: the metrics a sector publishes numbers for are exactly the ones it labels, so
+ * there is no second list to keep in step -- and an unlabelled figure like trade's `sources` is
+ * never subtracted from another `sources`.
+ *
+ * A key missing on a side counts as 0, as it always did. A key present but not a FINITE number
+ * (an object, a string, `NaN`, `Infinity` -- arithmetic would carry any of the last two all the
+ * way to a rendered "NaN" or "Infinity") has no delta at all: `null`, which
+ * a reader shows as `—`. Never 0 -- 0 is a measurement, and a page that printed it would be saying
+ * the two runs came out the same on a figure nobody could subtract.
+ *
+ * Pure, and exported, so the rule can be tested without a database against a label set no real
+ * sector has (both label numbers only, which is exactly why the old cast went unnoticed).
+ */
+export function metricDeltas(
+  metricLabels: Readonly<Record<string, MetricLabel>>,
+  a: SimulationMetrics,
+  b: SimulationMetrics,
+): Readonly<Record<string, number | null>> {
+  const numeric = (value: unknown): number | null => (typeof value === 'number' && Number.isFinite(value) ? value : value === undefined ? 0 : null)
+  const deltas: Record<string, number | null> = {}
+  for (const key of Object.keys(metricLabels)) {
+    const av = numeric(a[key])
+    const bv = numeric(b[key])
+    deltas[key] = av === null || bv === null ? null : bv - av
+  }
+  return deltas
+}
+
 /** Two runs side by side (spec §4): metrics, b − a deltas, and whether they lived in the same
  *  world (frozen definition minus policy and seed). Never a verdict. */
 export async function compareSimulations(aId: string, bId: string): Promise<Result<SimulationComparison, ControlRefusal>> {
@@ -152,10 +193,7 @@ export async function compareSimulations(aId: string, bId: string): Promise<Resu
     // updated to match.
     const differences = a.value.loaded.plugin.comparedKeys.filter((key: string) => stableStringify(a.value.loaded.definition[key]) !== stableStringify(b.value.loaded.definition[key]))
     const metricLabels: Readonly<Record<string, MetricLabel>> = a.value.loaded.plugin.metricLabels
-    // The plugin's own label keys, in its own order: the metrics a sector publishes are exactly
-    // the ones it labels, so this is the list and there is no second one to keep in step.
-    const deltas: Record<string, number> = {}
-    for (const key of Object.keys(metricLabels)) deltas[key] = (b.value.metrics[key] ?? 0) - (a.value.metrics[key] ?? 0)
+    const deltas = metricDeltas(metricLabels, a.value.metrics, b.value.metrics)
     return ok({
       a: { summary: a.value.loaded.summary, metrics: a.value.metrics, injected: a.value.injected },
       b: { summary: b.value.loaded.summary, metrics: b.value.metrics, injected: b.value.injected },

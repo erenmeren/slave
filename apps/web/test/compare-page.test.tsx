@@ -69,6 +69,21 @@ describe('CompareClient', () => {
     expect(screen.getByTestId('sim-compare-delta-deliveredQty').textContent).toBe('0')
   })
 
+  // M32 item 6: a labelled metric that is not a number has no delta -- control sends `null` and
+  // the page draws an em dash. Never `0`, which is a measurement and would read as "the two runs
+  // came out the same" on a figure nobody subtracted.
+  it('a labelled metric with no numeric value shows — for the figure and for the delta', () => {
+    const odd = comparison({
+      a: { ...comparison().a, metrics: { ...comparison().a.metrics, deliveredQty: 'many' } },
+      deltas: { ...comparison().deltas, deliveredQty: null },
+    })
+    render(<CompareClient comparison={odd} />)
+    expect(screen.getByTestId('sim-compare-delta-deliveredQty').textContent).toBe('—')
+    expect(screen.getByTestId('sim-compare-row-deliveredQty').textContent).toContain('—')
+    // Every other row is unaffected: one odd figure does not blank the table.
+    expect(screen.getByTestId('sim-compare-delta-lateDays').textContent).toBe('−4')
+  })
+
   it('the footer says no verdict is computed', () => {
     render(<CompareClient comparison={comparison()} />)
     expect(screen.getByTestId('sim-compare-footer').textContent).toContain('no verdict')

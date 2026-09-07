@@ -10,6 +10,12 @@ const COLUMNS = '1.4fr 1fr 1fr 1fr'
 function deltaMoney(minor: number, currency: string): string {
   return minor < 0 ? formatMinor(minor, currency) : `+${formatMinor(minor, currency)}`
 }
+/** One metric as a figure to print, narrowed exactly the way control's `metricDeltas` narrows it
+ *  (M32 item 6): a missing labelled key is 0, anything that is not a finite number has no figure
+ *  at all. A sector's metrics are `unknown`-valued -- trade's carry a `sources` object beside the
+ *  numbers -- so this is where the page finds out. */
+const metricValue = (value: unknown): number | null => (value === undefined ? 0 : typeof value === 'number' && Number.isFinite(value) ? value : null)
+
 /** A plain count delta: `+50`, the typographic minus `−4`, or `0` — never a bare positive
  *  integer, which would read as an absolute value rather than a change. */
 function deltaCount(value: number): string {
@@ -50,18 +56,21 @@ export function CompareClient({ comparison }: { readonly comparison: SimulationC
       <DataTable columns={COLUMNS} header={['metric', 'A', 'B', 'Δ']}>
         {Object.entries(comparison.metricLabels).map(([key, label]) => {
           const isMoney = label.kind === 'money'
-          // The comparison carries the plugin's metrics as a plain `name -> number` map, so an
-          // index read is `number | undefined` -- a missing key reads 0 rather than `NaN`.
-          const av = a.metrics[key] ?? 0
-          const bv = b.metrics[key] ?? 0
-          const dv = deltas[key] ?? 0
+          // M32 item 6: a sector's metrics are `unknown`-valued (trade's carry `sources`, an
+          // object), so both figures are narrowed here rather than trusted -- by the same rule
+          // `metricDeltas` uses, so a row's A, B and Δ can never disagree about what is a number.
+          // Missing reads 0, as it always did; present-but-not-a-finite-number has no figure to
+          // show and no delta either -- `—`, never a confident 0.
+          const av = metricValue(a.metrics[key])
+          const bv = metricValue(b.metrics[key])
+          const dv = deltas[key] ?? null
           return (
             <div key={key} data-testid={`sim-compare-row-${key}`}>
               <Row columns={COLUMNS}>
                 <span className="text-text-3">{label.label}</span>
-                <span className="font-mono text-text-1">{isMoney ? formatMinor(av, currency) : String(av)}</span>
-                <span className="font-mono text-text-1">{isMoney ? formatMinor(bv, currency) : String(bv)}</span>
-                <span data-testid={`sim-compare-delta-${key}`} className="font-mono text-text-1">{isMoney ? deltaMoney(dv, currency) : deltaCount(dv)}</span>
+                <span className="font-mono text-text-1">{av === null ? '—' : isMoney ? formatMinor(av, currency) : String(av)}</span>
+                <span className="font-mono text-text-1">{bv === null ? '—' : isMoney ? formatMinor(bv, currency) : String(bv)}</span>
+                <span data-testid={`sim-compare-delta-${key}`} className="font-mono text-text-1">{dv === null ? '—' : isMoney ? deltaMoney(dv, currency) : deltaCount(dv)}</span>
               </Row>
             </div>
           )
