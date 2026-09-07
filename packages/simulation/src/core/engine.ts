@@ -81,7 +81,7 @@ export function step<S, E, R extends Record<string, unknown>>(model: SectorModel
     if (role === undefined) return
     const observation = model.observe(sector, role)
     const proposed = provider.decide({ day, role, observation, index })
-    record('decision', role.name, { index, provider: provider.kind, observation, actions: proposed })
+    record('decision', role.name, { index, provider: provider.kindFor?.(role) ?? provider.kind, observation, actions: proposed })
     for (let actionIndex = 0; actionIndex < proposed.length; actionIndex++) {
       const raw = proposed[actionIndex]
       const outcome = validateAndApply(model, definition, sector, role, raw, actionIndex, day)
