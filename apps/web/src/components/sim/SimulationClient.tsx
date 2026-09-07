@@ -38,7 +38,11 @@ export function SimulationClient({ initial }: { readonly initial: SimulationSnap
   const [inject, setInject] = useState({ kind: 'demand', day: String(company.day + 1), qty: '10', unitPrice: '120.00', dueInDays: '10', collectInDays: '15', supplierId: 'normal', extraDays: '3' })
   const stream = useSimulationStream(summary.id, summary.version)
   useEffect(() => { if (stream.version !== summary.version) router.refresh() }, [stream.version, summary.version, router])
-  const runnable = (summary.status === 'ready' || summary.status === 'running') && summary.autoRun === null
+  const runnable = summary.status === 'ready' || summary.status === 'running'
+  // Step / Run-to-day are refused while an auto-run owns this run (a manual step during auto-run
+  // is a UI refusal, not the control verb's) -- but Pause and Halt must stay live regardless
+  // (spec §4: pause clears the intent, which is exactly what should stop an auto-run in flight).
+  const steppable = runnable && summary.autoRun === null
   const base = `/api/sim/${summary.id}`
 
   const call = async (path: string, body?: Record<string, unknown>): Promise<void> => {
@@ -71,9 +75,9 @@ export function SimulationClient({ initial }: { readonly initial: SimulationSnap
       <div className="flex flex-col gap-4 p-6">
         <div data-testid="sim-controls" className="flex flex-wrap items-center gap-2">
           <h1 className="mr-2 text-[14.5px] font-semibold text-text-1">{summary.name}</h1>
-          <PrimaryButton data-testid="sim-step" disabled={pending || !runnable} onClick={() => void call('step', stepBody({ steps: 1 }))}>Step 1 day</PrimaryButton>
+          <PrimaryButton data-testid="sim-step" disabled={pending || !steppable} onClick={() => void call('step', stepBody({ steps: 1 }))}>Step 1 day</PrimaryButton>
           <TextField inputProps={{ 'aria-label': 'run to day', 'data-testid': 'sim-run-to-day', value: runToDay, inputMode: 'numeric', className: 'w-16', onChange: (event) => setRunToDay(event.target.value) } as React.InputHTMLAttributes<HTMLInputElement>} />
-          <PrimaryButton data-testid="sim-run-to" disabled={pending || !runnable} onClick={() => void call('step', stepBody({ untilDay: Number.parseInt(runToDay, 10) }))}>Run to day</PrimaryButton>
+          <PrimaryButton data-testid="sim-run-to" disabled={pending || !steppable} onClick={() => void call('step', stepBody({ untilDay: Number.parseInt(runToDay, 10) }))}>Run to day</PrimaryButton>
           {summary.status === 'paused' ? (
             <GhostButton data-testid="sim-resume" disabled={pending} onClick={() => void call('resume')}>Resume</GhostButton>
           ) : (

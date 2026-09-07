@@ -171,6 +171,11 @@ describe('SimulationClient', () => {
     render(<SimulationClient initial={snapshot({ summary: { ...snapshot().summary, autoRun: { everyMs: 1000, untilDay: 30, lastStepAt: null } } })} />)
     expect(screen.getByTestId('sim-auto-run-chip').textContent).toContain('auto-run every 1 s → day 30')
     expect((screen.getByTestId('sim-step') as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByTestId('sim-run-to') as HTMLButtonElement).disabled).toBe(true)
+    // Pause must stay live during auto-run (fix round 1, Important #2): it is what stops the
+    // auto-run in flight (spec §4), so gating it the same way as Step/Run-to would make it
+    // impossible to pause a run whose auto-run is stuck or misbehaving.
+    expect((screen.getByTestId('sim-pause') as HTMLButtonElement).disabled).toBe(false)
     await act(async () => { fireEvent.click(screen.getByTestId('sim-auto-run-stop')) })
     expect(fetchMock).toHaveBeenCalledWith('/api/sim/s1/auto-run/stop', expect.objectContaining({ method: 'POST' }))
   })

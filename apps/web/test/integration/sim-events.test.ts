@@ -43,6 +43,12 @@ describe('createSimulationSse', () => {
     for (let i = 0; i < 10 && !beat.includes(': heartbeat'); i++) beat += await read()
     expect(beat).toContain(': heartbeat')
     await reader.cancel()
+    // The poll and heartbeat intervals must have actually cleared on cancel -- if either kept
+    // firing, its enqueue onto the now-closed controller would throw. A further step plus a wait
+    // longer than pollMs + heartbeatMs, with no assertion beyond "this doesn't throw", is exactly
+    // what proves that (fix round 1, Important #1).
+    await stepSimulation(id, { steps: 1 })
+    await new Promise((resolve) => setTimeout(resolve, 300))
     expect((await createSimulationSse({ simulationId: '00000000-0000-4000-8000-00000000dead' })).status).toBe(404)
   })
 })

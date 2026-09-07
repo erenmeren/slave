@@ -14,23 +14,53 @@ export async function createSimulationSse(options: { readonly simulationId: stri
   let poll: ReturnType<typeof setInterval> | null = null
   let beat: ReturnType<typeof setInterval> | null = null
   let closed = false
+  // Set inside start() (below) and called from cancel() too, so both paths -- an enqueue that
+  // discovers the consumer is gone, and an explicit reader.cancel() -- converge on one place that
+  // clears both intervals and closes the controller exactly once.
+  let close: (() => void) | null = null
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
+      // Mirrors server/sse.ts's close(): a write can fail (the consumer went away) before
+      // cancel() is ever observed, so every enqueue below routes a failure back here rather than
+      // trusting `closed` alone -- `closed` guards against enqueuing after we already know the
+      // stream is done, this guards against the enqueue itself being the thing that finds out.
+      close = (): void => {
+        if (closed) return
+        closed = true
+        if (poll !== null) clearInterval(poll)
+        if (beat !== null) clearInterval(beat)
+        try {
+          controller.close()
+        } catch {
+          // already closed by the consumer
+        }
+      }
       const emit = (row: { version: number; status: string; simTime: number }): void => {
         if (closed || row.version === lastVersion) return
         lastVersion = row.version
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(row)}\n\n`))
+        try {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(row)}\n\n`))
+        } catch {
+          close?.()
+        }
       }
       emit(first)
       poll = setInterval((): void => {
         void prisma.simulationRun.findUnique({ where: { id: options.simulationId }, select }).then((row) => { if (row !== null) emit(row) }).catch(() => undefined)
       }, pollMs)
-      beat = setInterval((): void => { if (!closed) controller.enqueue(encoder.encode(': heartbeat\n\n')) }, heartbeatMs)
+      poll.unref?.()
+      beat = setInterval((): void => {
+        if (closed) return
+        try {
+          controller.enqueue(encoder.encode(': heartbeat\n\n'))
+        } catch {
+          close?.()
+        }
+      }, heartbeatMs)
+      beat.unref?.()
     },
     cancel() {
-      closed = true
-      if (poll !== null) clearInterval(poll)
-      if (beat !== null) clearInterval(beat)
+      close?.()
     },
   })
   return new Response(stream, { status: 200, headers: { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache, no-transform', connection: 'keep-alive' } })
