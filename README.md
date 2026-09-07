@@ -74,6 +74,12 @@ supplier) or B (hedge with the fast one when a delivery is at risk), and run to 
 number on the page is synthetic and every metric is derived from the run's journal; the spec at
 `docs/superpowers/specs/2026-09-06-m29-company-simulation-design.md` lists the assumptions.
 
+With `npm run orchestrator -- daemon` running, **Auto-run** steps a run for you at its own pace
+instead of clicking Step or Run to day. **Clone…** then **Compare with…** puts two policies side
+by side — same scenario, same roster, same start, only the policy (or seed) different — with no
+verdict, just the b − a deltas; `docs/superpowers/specs/2026-09-06-m30-simulation-reliability-and-comparison-design.md`
+covers the reliability and comparison work.
+
 ## The web UI
 
 | Page | What it shows |
@@ -87,7 +93,7 @@ number on the page is synthetic and every metric is derived from the run's journ
 | **Settings** `/w/<id>/settings` | This project's goal, its runtime (provider, budget, and the read-only concurrency/timeout/attempts limits), its own slave permissions, its emergency stop, and its danger zone to archive/restore the project. |
 | **Slaves** `/slaves` | One table + Departments: every slave, project-materialized or still catalog-only, with its department as a select, rename/re-role/delete a slave with its history and a model chosen from the provider's own list inline; **+ New slave** adds one to the catalog and, optionally, to a project; a **Departments** tab beside it to add, rename or delete a project's department, along with the slaves on it. |
 | **Skills** `/skills` | The skill catalog and its assignments. |
-| **Simulations** `/sim` | Company simulation runs (M29): create one from a catalog company — a trade company on synthetic data, decided by the rules provider, no repository and no model call; step it by day, run it to a horizon, pause, halt, add customer demand or a supplier delay; the simulated company's cash and the real model cost are two separate panels; metrics are computed from the run's own journal. |
+| **Simulations** `/sim` | Company simulation runs (M29): create one from a catalog company — a trade company on synthetic data, decided by the rules provider, no repository and no model call; step it by day, run it to a horizon, pause, halt, add customer demand or a supplier delay; the simulated company's cash and the real model cost are two separate panels; metrics are computed from the run's own journal; clone a run under another policy, let the daemon auto-run it, compare two runs side by side (no verdict). |
 | **Analytics** `/analytics` | Spend and throughput. |
 | **Settings** `/settings` | Provider adapters, security, and reset demo data (development only). |
 
@@ -123,6 +129,14 @@ npm run orchestrator -- list-users
 npm run orchestrator -- create-simulation --company <id> --name <n> --policy A|B [--seed <n>]
 npm run orchestrator -- step-simulation --simulation <id> [--steps <n> | --until-day <d>]
 npm run orchestrator -- simulation-status --simulation <id>  # summary, company panel, metrics, model usage as JSON
+npm run orchestrator -- pause-simulation --simulation <id>   # refuse every next step (clears auto-run)
+npm run orchestrator -- resume-simulation --simulation <id>  # auto-run is not restored
+npm run orchestrator -- halt-simulation --simulation <id> [--reason <text>]  # the emergency stop for a simulation
+npm run orchestrator -- inject-simulation-event --simulation <id> --day <d> --event '<json>'
+npm run orchestrator -- clone-simulation --simulation <id> --name <n> --policy A|B [--seed <n>]  # same world, day 0, nothing carried over
+npm run orchestrator -- auto-run-simulation --simulation <id> [--every-ms <n>] [--until-day <d>]  # needs `orchestrator -- daemon` running
+npm run orchestrator -- stop-auto-run --simulation <id>
+npm run orchestrator -- compare-simulations --a <id> --b <id>  # both runs' metrics and b − a deltas as JSON, no verdict
 ```
 
 Every `delete-*` verb deletes what it names WITH everything under it (a slave's run history, a

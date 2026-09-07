@@ -53,3 +53,4 @@ jobs:
       - run: npm run gate:m21-loose-ends
       - run: npm run gate:m23-onboarding
       - run: npm run gate:m29-simulation
+      - run: npm run gate:m30-simulation-compare

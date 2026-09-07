@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
-import { startAutoRun, verifyCredentials } from '@slave-of-ai/control'
+import { loadSimulation, startAutoRun, verifyCredentials } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 
@@ -1200,7 +1200,7 @@ describe('the orchestrator CLI', () => {
     })
   })
 
-  describe('simulations (M29)', () => {
+  describe('simulations', () => {
     async function tradingCompany(): Promise<string> {
       const template = await prisma.slaveTemplate.create({ data: { name: 'Trade Clerk', role: 'clerk' } })
       const company = await prisma.company.create({ data: { name: 'Demo Trading Co.' } })
@@ -1275,6 +1275,114 @@ describe('the orchestrator CLI', () => {
       const parsed = JSON.parse(result.stdout) as { definitionsMatch: boolean; deltas: { purchaseCostMinor: number } }
       expect(parsed.definitionsMatch).toBe(true)
       expect(parsed.deltas.purchaseCostMinor).toBe(425_000)
+    }, 30_000)
+    it('pauses a simulation (M30)', async () => {
+      const companyId = await tradingCompany()
+      const created = await runCli(['create-simulation', '--company', companyId, '--name', 'pause me', '--policy', 'A'])
+      const id = /simulation (\S+) created/.exec(created.stdout)?.[1] ?? ''
+      expect(id).not.toBe('')
+      const result = await runCli(['pause-simulation', '--simulation', id])
+      expect(result.code).toBe(0)
+      expect(result.stdout).toMatch(new RegExp(`^simulation ${id} paused$`, 'm'))
+      const row = await prisma.simulationRun.findUniqueOrThrow({ where: { id } })
+      expect(row.status).toBe('paused')
+    }, 30_000)
+    it('resumes a paused simulation (M30)', async () => {
+      const companyId = await tradingCompany()
+      const created = await runCli(['create-simulation', '--company', companyId, '--name', 'resume me', '--policy', 'A'])
+      const id = /simulation (\S+) created/.exec(created.stdout)?.[1] ?? ''
+      expect((await runCli(['pause-simulation', '--simulation', id])).code).toBe(0)
+      const result = await runCli(['resume-simulation', '--simulation', id])
+      expect(result.code).toBe(0)
+      expect(result.stdout).toMatch(new RegExp(`^simulation ${id} resumed$`, 'm'))
+      const row = await prisma.simulationRun.findUniqueOrThrow({ where: { id } })
+      expect(row.status).toBe('running')
+    }, 30_000)
+    it('halts a simulation with a reason (M30)', async () => {
+      const companyId = await tradingCompany()
+      const created = await runCli(['create-simulation', '--company', companyId, '--name', 'halt me', '--policy', 'A'])
+      const id = /simulation (\S+) created/.exec(created.stdout)?.[1] ?? ''
+      const result = await runCli(['halt-simulation', '--simulation', id, '--reason', 'operator judgment call'])
+      expect(result.code).toBe(0)
+      expect(result.stdout).toMatch(new RegExp(`^simulation ${id} halted: operator judgment call$`, 'm'))
+      const row = await prisma.simulationRun.findUniqueOrThrow({ where: { id } })
+      expect(row.status).toBe('halted')
+      expect(row.haltedReason).toBe('operator judgment call')
+    }, 30_000)
+    it('injects a supplier delay onto the queue (M30)', async () => {
+      const companyId = await tradingCompany()
+      const created = await runCli(['create-simulation', '--company', companyId, '--name', 'inject me', '--policy', 'A'])
+      const id = /simulation (\S+) created/.exec(created.stdout)?.[1] ?? ''
+      const before = await loadSimulation(id)
+      const beforeCount = before.ok ? before.value.state.queue.items.length : -1
+      const result = await runCli([
+        'inject-simulation-event',
+        '--simulation', id,
+        '--day', '2',
+        '--event', JSON.stringify({ type: 'supplier_delay', supplierId: 'normal', extraDays: 2 }),
+      ])
+      expect(result.code).toBe(0)
+      expect(result.stdout).toMatch(new RegExp(`^event injected into simulation ${id} on day 2$`, 'm'))
+      const loaded = await loadSimulation(id)
+      expect(loaded.ok && loaded.value.state.queue.items).toHaveLength(beforeCount + 1)
+      expect(loaded.ok && loaded.value.state.queue.items.filter((item) => item.time === 2)).toHaveLength(1)
+    }, 30_000)
+    it('refuses invalid JSON for --event without touching the queue (M30)', async () => {
+      const companyId = await tradingCompany()
+      const created = await runCli(['create-simulation', '--company', companyId, '--name', 'inject bad', '--policy', 'A'])
+      const id = /simulation (\S+) created/.exec(created.stdout)?.[1] ?? ''
+      const before = await loadSimulation(id)
+      const beforeCount = before.ok ? before.value.state.queue.items.length : -1
+      const result = await runCli(['inject-simulation-event', '--simulation', id, '--day', '1', '--event', '{not json'])
+      expect(result.code).toBe(1)
+      expect(result.stderr).toContain('--event must be JSON')
+      const loaded = await loadSimulation(id)
+      expect(loaded.ok && loaded.value.state.queue.items).toHaveLength(beforeCount)
+    }, 30_000)
+    it('clones a simulation into a fresh row at day 0 (M30)', async () => {
+      const companyId = await tradingCompany()
+      const created = await runCli(['create-simulation', '--company', companyId, '--name', 'clone source', '--policy', 'A'])
+      const id = /simulation (\S+) created/.exec(created.stdout)?.[1] ?? ''
+      expect((await runCli(['step-simulation', '--simulation', id, '--until-day', '5'])).code).toBe(0)
+      const result = await runCli(['clone-simulation', '--simulation', id, '--name', 'clone target', '--policy', 'B'])
+      expect(result.code).toBe(0)
+      const cloneId = /simulation (\S+) created/.exec(result.stdout)?.[1] ?? ''
+      expect(cloneId).not.toBe('')
+      const row = await prisma.simulationRun.findUniqueOrThrow({ where: { id: cloneId } })
+      expect(row.clonedFromId).toBe(id)
+      expect(row.simTime).toBe(0)
+      const cloneLoaded = await loadSimulation(cloneId)
+      expect(cloneLoaded.ok && cloneLoaded.value.summary.policy).toBe('B')
+    }, 30_000)
+    it('starts and stops an auto-run intent (M30)', async () => {
+      const companyId = await tradingCompany()
+      const created = await runCli(['create-simulation', '--company', companyId, '--name', 'auto cli', '--policy', 'A'])
+      const id = /simulation (\S+) created/.exec(created.stdout)?.[1] ?? ''
+      const started = await runCli(['auto-run-simulation', '--simulation', id, '--every-ms', '250', '--until-day', '10'])
+      expect(started.code).toBe(0)
+      expect(started.stdout).toMatch(new RegExp(`^simulation ${id} auto-running every 250 ms to day 10$`, 'm'))
+      const running = await prisma.simulationRun.findUniqueOrThrow({ where: { id } })
+      expect(running.autoRunEveryMs).toBe(250)
+      expect(running.autoRunUntilDay).toBe(10)
+      const stopped = await runCli(['stop-auto-run', '--simulation', id])
+      expect(stopped.code).toBe(0)
+      expect(stopped.stdout).toMatch(new RegExp(`^simulation ${id} auto-run stopped$`, 'm'))
+      const cleared = await prisma.simulationRun.findUniqueOrThrow({ where: { id } })
+      expect(cleared.autoRunEveryMs).toBeNull()
+      expect(cleared.autoRunUntilDay).toBeNull()
+    }, 30_000)
+    it('auto-run-simulation defaults to every 1000 ms until the horizon (M30)', async () => {
+      const companyId = await tradingCompany()
+      const created = await runCli(['create-simulation', '--company', companyId, '--name', 'auto default', '--policy', 'A'])
+      const id = /simulation (\S+) created/.exec(created.stdout)?.[1] ?? ''
+      const loaded = await loadSimulation(id)
+      const horizonDays = loaded.ok ? loaded.value.summary.horizonDays : -1
+      const result = await runCli(['auto-run-simulation', '--simulation', id])
+      expect(result.code).toBe(0)
+      expect(result.stdout).toMatch(new RegExp(`^simulation ${id} auto-running every 1000 ms to day ${horizonDays}$`, 'm'))
+      const row = await prisma.simulationRun.findUniqueOrThrow({ where: { id } })
+      expect(row.autoRunEveryMs).toBe(1000)
+      expect(row.autoRunUntilDay).toBe(horizonDays)
     }, 30_000)
   })
 })

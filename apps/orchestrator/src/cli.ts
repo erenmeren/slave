@@ -7,6 +7,7 @@ import {
   archiveWorkspace,
   assignCompany,
   claimResume,
+  cloneSimulation,
   compareSimulations,
   createCompany,
   createProjectTeam,
@@ -22,9 +23,13 @@ import {
   deleteTeam,
   deleteUser,
   emergencyStop,
+  haltSimulation,
+  injectExternalEvent,
   listUsers,
+  loadSimulation,
   moveSlave,
   moveCompanySlave,
+  pauseSimulation,
   refusalText,
   renameSlave,
   renameCompanyTeam,
@@ -32,13 +37,16 @@ import {
   requestPause,
   requestStop,
   restoreWorkspace,
+  resumeSimulation,
   setSlaveModel,
   setSlaveRole,
   setGoal,
   setPassword,
   describeSync,
   simulationStatus,
+  startAutoRun,
   stepSimulation,
+  stopAutoRun,
   syncSkillCatalog,
   tickSimulations,
   plural,
@@ -140,6 +148,18 @@ const USAGE = `usage: orchestrator <command> [options]
                                        advance the simulation clock (one day per step)
   simulation-status --simulation <id>  the run's summary, company panel, metrics and model
                                        usage as JSON — simulated money and real cost apart
+  pause-simulation --simulation <id>   pause: refuse every next step (clears auto-run)
+  resume-simulation --simulation <id>  resume a paused simulation (auto-run is not restored)
+  halt-simulation --simulation <id> [--reason <text>]
+                                       the emergency stop for a simulation
+  inject-simulation-event --simulation <id> --day <d> --event '<json>'
+                                       add customer demand or a supplier delay on a future day
+  clone-simulation --simulation <id> --name <n> --policy A|B [--seed <n>]
+                                       a new run from this run's frozen scenario: same world,
+                                       different policy or seed, day 0, nothing carried over
+  auto-run-simulation --simulation <id> [--every-ms <n>] [--until-day <d>]
+                                       let the daemon step it (default every 1000 ms to the horizon)
+  stop-auto-run --simulation <id>
   compare-simulations --a <id> --b <id>
                                        both runs' metrics, b − a deltas and whether they share a
                                        world, as JSON — no verdict
@@ -914,6 +934,93 @@ export async function main(argv: readonly string[]): Promise<number> {
       const result = await compareSimulations(a, b)
       if (!result.ok) throw new Error(refusalText(result.error))
       process.stdout.write(`${JSON.stringify(result.value, null, 2)}\n`)
+      return 0
+    }
+
+    case 'pause-simulation': {
+      const simulationId = requireFlag(flags, 'simulation')
+      const result = await pauseSimulation(simulationId)
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(`simulation ${simulationId} paused\n`)
+      return 0
+    }
+
+    case 'resume-simulation': {
+      const simulationId = requireFlag(flags, 'simulation')
+      const result = await resumeSimulation(simulationId)
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(`simulation ${simulationId} resumed\n`)
+      return 0
+    }
+
+    case 'halt-simulation': {
+      const simulationId = requireFlag(flags, 'simulation')
+      const reason = flagText(flags, 'reason') ?? 'operator'
+      const result = await haltSimulation(simulationId, reason)
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(`simulation ${simulationId} halted: ${reason}\n`)
+      return 0
+    }
+
+    case 'inject-simulation-event': {
+      const simulationId = requireFlag(flags, 'simulation')
+      const dayText = requireFlag(flags, 'day')
+      const day = Number(dayText)
+      if (!Number.isInteger(day)) throw new Error('--day must be an integer')
+      const eventText = requireFlag(flags, 'event')
+      let event: unknown
+      try {
+        event = JSON.parse(eventText)
+      } catch {
+        throw new Error('--event must be JSON')
+      }
+      const result = await injectExternalEvent(simulationId, { day, event })
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(`event injected into simulation ${simulationId} on day ${day}\n`)
+      return 0
+    }
+
+    case 'clone-simulation': {
+      const sourceId = requireFlag(flags, 'simulation')
+      const name = requireFlag(flags, 'name')
+      const policy = requireFlag(flags, 'policy')
+      if (policy !== 'A' && policy !== 'B') throw new Error('--policy must be A or B')
+      const seedText = flagText(flags, 'seed')
+      let seed: number | undefined
+      if (seedText !== undefined) {
+        seed = Number.parseInt(seedText, 10)
+        if (!Number.isInteger(seed) || String(seed) !== seedText.trim()) throw new Error('--seed must be an integer')
+      }
+      const result = await cloneSimulation(sourceId, { name, policy, ...(seed !== undefined ? { seed } : {}) })
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(`simulation ${result.value.id} created (cloned from ${sourceId}, policy ${policy})\n`)
+      return 0
+    }
+
+    case 'auto-run-simulation': {
+      const simulationId = requireFlag(flags, 'simulation')
+      const everyMsText = flagText(flags, 'every-ms')
+      const everyMs = everyMsText === undefined ? 1000 : Number(everyMsText)
+      const untilDayText = flagText(flags, 'until-day')
+      let untilDay: number
+      if (untilDayText === undefined) {
+        const loaded = await loadSimulation(simulationId)
+        if (!loaded.ok) throw new Error(refusalText(loaded.error))
+        untilDay = loaded.value.summary.horizonDays
+      } else {
+        untilDay = Number(untilDayText)
+      }
+      const result = await startAutoRun(simulationId, { everyMs, untilDay })
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(`simulation ${simulationId} auto-running every ${everyMs} ms to day ${untilDay}\n`)
+      return 0
+    }
+
+    case 'stop-auto-run': {
+      const simulationId = requireFlag(flags, 'simulation')
+      const result = await stopAutoRun(simulationId)
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(`simulation ${simulationId} auto-run stopped\n`)
       return 0
     }
 
