@@ -178,12 +178,16 @@ export async function addCompanySlave(
  * that skips an already-materialized worker still leaves that worker running in this workspace,
  * and "the budget is enforceable here" has to be true of the workspace, not of one call's delta.
  *
+ * Exported since M33: `adoptSimulation` composes this same admission, in the same place in the
+ * order (before its own transaction opens), rather than adopting a roster past a budget the plain
+ * assignment would have refused.
+ *
  * A member whose chain resolves to NOTHING (`provider: null`) is not refused here. That is an
  * unresolvable configuration, a different failure with its own wording at dispatch -- and since
  * no workspace that predates M12 has a `ProviderConfiguration` row, refusing it here would make
  * every such workspace unassignable.
  */
-async function admitRoster(
+export async function admitRoster(
   workspace: { readonly id: string; readonly budgetUsd: number | null; readonly archivedAt: Date | null },
   companyId: string,
 ): Promise<ControlRefusal | null> {
@@ -262,6 +266,7 @@ export async function assignCompany(
   workspaceId: string,
   companyId: string,
   principal?: Principal,
+  options?: AssignOptions,
 ): Promise<Result<AssignReport, ControlRefusal>> {
   const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId } })
   if (workspace === null) return err({ kind: 'workspace_not_found', workspaceId })
@@ -272,65 +277,7 @@ export async function assignCompany(
   const admission = await admitRoster(workspace, companyId)
   if (admission !== null) return err(admission)
 
-  const outcome = await prisma.$transaction(async (tx) => {
-    const locked = await tx.$queryRaw<{ companyId: string | null }[]>`
-      SELECT "companyId" FROM "Workspace" WHERE id = ${workspaceId} FOR UPDATE
-    `
-    const lockedCompanyId = locked[0]?.companyId ?? null
-    if (lockedCompanyId !== null && lockedCompanyId !== companyId) {
-      const current = await tx.company.findUniqueOrThrow({ where: { id: lockedCompanyId } })
-      return {
-        ok: false as const,
-        error: { kind: 'company_already_assigned', workspaceId, companyName: current.name } as ControlRefusal,
-      }
-    }
-
-    await tx.workspace.update({ where: { id: workspaceId }, data: { companyId } })
-
-    const companyTeams = await tx.companyTeam.findMany({ where: { companyId }, include: { slaves: true } })
-
-    const createdTeams: string[] = []
-    const createdWorkers: { companySlaveId: string; name: string; role: string }[] = []
-
-    for (const companyTeam of companyTeams) {
-      let team = await tx.team.findFirst({ where: { workspaceId, companyTeamId: companyTeam.id } })
-      if (team === null) {
-        const legacy = await tx.team.findFirst({
-          where: { workspaceId, name: companyTeam.name, companyTeamId: null },
-        })
-        team = legacy !== null
-          ? await tx.team.update({ where: { id: legacy.id }, data: { companyTeamId: companyTeam.id } })
-          : await tx.team.create({ data: { workspaceId, name: companyTeam.name, companyTeamId: companyTeam.id } })
-        if (legacy === null) createdTeams.push(team.name)
-      }
-
-      for (const companySlave of companyTeam.slaves) {
-        // Scoped to the WORKSPACE, not to this template's own copied department (M25 final
-        // review, Critical): `moveSlave` keeps `companySlaveId` and only changes `teamId`, so a
-        // worker moved to a different department of the same project is still this exact catalog
-        // row's materialization -- looking it up by `{ teamId: team.id, companySlaveId }` would
-        // miss it there and this loop would create a second `Slave` with the same name and the
-        // same `companySlaveId` (there is no unique index on that column to catch it).
-        const existingWorker = await tx.slave.findFirst({
-          where: { companySlaveId: companySlave.id, team: { workspaceId } },
-        })
-        if (existingWorker !== null) continue
-
-        const template = await tx.slaveTemplate.findUniqueOrThrow({ where: { id: companySlave.templateId } })
-        const worker = await tx.slave.create({
-          data: {
-            teamId: team.id,
-            name: companySlave.name,
-            role: template.role,
-            companySlaveId: companySlave.id,
-          },
-        })
-        createdWorkers.push({ companySlaveId: companySlave.id, name: worker.name, role: worker.role })
-      }
-    }
-
-    return { ok: true as const, value: { createdTeams, createdWorkers } }
-  })
+  const outcome = await prisma.$transaction(async (tx) => assignCompanyTx(tx, workspaceId, companyId, options))
 
   if (!outcome.ok) return err(outcome.error)
 
@@ -343,6 +290,91 @@ export async function assignCompany(
   })
 
   return ok(outcome.value)
+}
+
+/** What a caller may bend about the materialization (M33 §3): a `slaveName → role` map applied to
+ *  the `Slave.role` this writes, with the catalog role it displaced kept in `requiredRole`. Only
+ *  `adoptSimulation` passes one -- a hand assignment writes the catalog role, as it always did. */
+export interface AssignOptions { readonly roleOverrides?: Readonly<Record<string, string>> }
+
+/**
+ * {@link assignCompany}'s transaction body, on a caller's `tx` (M33 controller ruling R1). It is
+ * the whole of the locking, the one-way check and the materialization -- everything the doc
+ * comment above describes -- extracted so `adoptSimulation` can run it inside ITS OWN transaction,
+ * alongside the settings, the provenance and the journal row it writes. A refusal returned from
+ * here is a value, not a throw, exactly as it was: `assignCompany` writes nothing before the
+ * refusal so it needs no rollback, and a caller that DOES write before this (adoption) throws on
+ * the returned refusal itself to roll its own work back.
+ *
+ * The pre-checks (`workspace_not_found`, `company_not_found`, `admitRoster`) and the event stay
+ * with the callers: both happen OUTSIDE the transaction, before it opens and after it commits.
+ */
+export async function assignCompanyTx(
+  tx: Prisma.TransactionClient,
+  workspaceId: string,
+  companyId: string,
+  options?: AssignOptions,
+): Promise<Result<AssignReport, ControlRefusal>> {
+  const lockedRows = await tx.$queryRaw<{ companyId: string | null }[]>`
+    SELECT "companyId" FROM "Workspace" WHERE id = ${workspaceId} FOR UPDATE
+  `
+  const lockedCompanyId = lockedRows[0]?.companyId ?? null
+  if (lockedCompanyId !== null && lockedCompanyId !== companyId) {
+    const current = await tx.company.findUniqueOrThrow({ where: { id: lockedCompanyId } })
+    return err({ kind: 'company_already_assigned', workspaceId, companyName: current.name })
+  }
+  await tx.workspace.update({ where: { id: workspaceId }, data: { companyId } })
+
+  const companyTeams = await tx.companyTeam.findMany({ where: { companyId }, include: { slaves: true } })
+
+  const createdTeams: string[] = []
+  const createdWorkers: { companySlaveId: string; name: string; role: string }[] = []
+
+  for (const companyTeam of companyTeams) {
+    let team = await tx.team.findFirst({ where: { workspaceId, companyTeamId: companyTeam.id } })
+    if (team === null) {
+      const legacy = await tx.team.findFirst({
+        where: { workspaceId, name: companyTeam.name, companyTeamId: null },
+      })
+      team = legacy !== null
+        ? await tx.team.update({ where: { id: legacy.id }, data: { companyTeamId: companyTeam.id } })
+        : await tx.team.create({ data: { workspaceId, name: companyTeam.name, companyTeamId: companyTeam.id } })
+      if (legacy === null) createdTeams.push(team.name)
+    }
+
+    for (const companySlave of companyTeam.slaves) {
+      // Scoped to the WORKSPACE, not to this template's own copied department (M25 final
+      // review, Critical): `moveSlave` keeps `companySlaveId` and only changes `teamId`, so a
+      // worker moved to a different department of the same project is still this exact catalog
+      // row's materialization -- looking it up by `{ teamId: team.id, companySlaveId }` would
+      // miss it there and this loop would create a second `Slave` with the same name and the
+      // same `companySlaveId` (there is no unique index on that column to catch it).
+      const existingWorker = await tx.slave.findFirst({
+        where: { companySlaveId: companySlave.id, team: { workspaceId } },
+      })
+      if (existingWorker !== null) continue
+
+      const template = await tx.slaveTemplate.findUniqueOrThrow({ where: { id: companySlave.templateId } })
+      // M33 §3: an override replaces the role this worker is materialized WITH, and the catalog
+      // role it displaced is kept in `requiredRole` rather than lost -- that column is what says
+      // which template shape this worker was cut from. No override (a hand assignment, or a
+      // roster member the simulation never named) leaves both exactly as they were: the catalog
+      // role in `role`, nothing in `requiredRole`.
+      const override = options?.roleOverrides?.[companySlave.name]
+      const worker = await tx.slave.create({
+        data: {
+          teamId: team.id,
+          name: companySlave.name,
+          role: override ?? template.role,
+          ...(override !== undefined ? { requiredRole: template.role } : {}),
+          companySlaveId: companySlave.id,
+        },
+      })
+      createdWorkers.push({ companySlaveId: companySlave.id, name: worker.name, role: worker.role })
+    }
+  }
+
+  return ok({ createdTeams, createdWorkers })
 }
 
 /**

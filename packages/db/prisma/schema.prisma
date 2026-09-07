@@ -74,6 +74,9 @@ model Workspace {
   /// and every workspace created before this column existed reads back null. `onDelete: SetNull`
   /// -- a workspace must survive the deletion of the account that once set its goal.
   goalSetByUserId String?
+  /// M33: the simulation run this workspace's organisation was adopted from; null for every
+  /// workspace assigned by hand. SetNull: deleting the run must not touch the project.
+  adoptedFromSimulationId String?
 
   maxConcurrentRuns       Int   @default(3)
   /// The spend ceiling this workspace's budget guardrail enforces (spec §9.2). Nullable as of
@@ -98,10 +101,13 @@ model Workspace {
   // than a Cascade that would destroy a project's history.
   company Company? @relation(fields: [companyId], references: [id])
   goalSetByUser User? @relation(fields: [goalSetByUserId], references: [id], onDelete: SetNull)
+  adoptedFromSimulation SimulationRun? @relation("SimulationAdoption", fields: [adoptedFromSimulationId], references: [id], onDelete: SetNull)
 
   teams                  Team[]
   providerConfigurations ProviderConfiguration[]
   tasks                  Task[]
+
+  @@index([adoptedFromSimulationId])
 }
 
 model Team {
@@ -679,6 +685,9 @@ model SimulationRun {
   createdBy  User?           @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
   journal    SimulationJournalEntry[]
   modelUsage SimulationModelUsage[]
+  /// M33: the workspaces whose organisation was adopted from this run (design §2). A run may be
+  /// adopted by many; a workspace records at most one origin.
+  adoptedWorkspaces Workspace[] @relation("SimulationAdoption")
 
   @@unique([companyId, name])
   @@index([companyId])

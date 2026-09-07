@@ -9,7 +9,7 @@ function summary(over: Partial<SimulationSummary> = {}): SimulationSummary {
   return {
     id: 'a1', companyId: 'c1', companyName: 'Demo Trading Co.', name: 'Run A', sector: 'trade', mode: 'simulation', decisionProvider: 'rules', modelProvider: null, model: null, maxModelCostUsd: null, llmRoles: [],
     policy: 'A', status: 'finished', simTime: 30, horizonDays: 30, stepCount: 30, actionCount: 90, version: 1, haltedReason: null,
-    createdAt: '2026-09-06T00:00:00.000Z', synthetic: true, autoRun: null, clonedFromId: null, clonedFromName: null,
+    createdAt: '2026-09-06T00:00:00.000Z', synthetic: true, autoRun: null, clonedFromId: null, clonedFromName: null, adoptedBy: [],
     ...over,
   }
 }

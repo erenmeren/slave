@@ -14,7 +14,7 @@ vi.mock('../src/hooks/useSimulationStream', () => ({ useSimulationStream: () => 
 
 function snapshot(over: Partial<SimulationSnapshot> = {}): SimulationSnapshot {
   return {
-    summary: { id: 's1', companyId: 'c1', companyName: 'Demo Trading Co.', name: 'Q3 plan', sector: 'trade', mode: 'simulation', decisionProvider: 'rules', modelProvider: null, model: null, maxModelCostUsd: null, llmRoles: [], policy: 'B', status: 'running', simTime: 4, horizonDays: 30, stepCount: 4, actionCount: 16, version: 2, haltedReason: null, createdAt: '2026-09-06T00:00:00.000Z', synthetic: true, autoRun: null, clonedFromId: null, clonedFromName: null },
+    summary: { id: 's1', companyId: 'c1', companyName: 'Demo Trading Co.', name: 'Q3 plan', sector: 'trade', mode: 'simulation', decisionProvider: 'rules', modelProvider: null, model: null, maxModelCostUsd: null, llmRoles: [], policy: 'B', status: 'running', simTime: 4, horizonDays: 30, stepCount: 4, actionCount: 16, version: 2, haltedReason: null, createdAt: '2026-09-06T00:00:00.000Z', synthetic: true, autoRun: null, clonedFromId: null, clonedFromName: null, adoptedBy: [] },
     sector: 'trade',
     currency: 'USD',
     // M31b Task 4: the "company" panel is the trade plugin's own `headline` -- the same seven
@@ -330,7 +330,7 @@ describe('SimulationClient', () => {
   describe('a software run (M31b Task 4: the panels and the inject form are the software plugin\'s own)', () => {
     function softwareSnapshot(over: Partial<SimulationSnapshot> = {}): SimulationSnapshot {
       return {
-        summary: { id: 'sw1', companyId: 'c2', companyName: 'Checkout Platform', name: 'Sprint plan', sector: 'software', mode: 'simulation', decisionProvider: 'rules', modelProvider: null, model: null, maxModelCostUsd: null, llmRoles: [], policy: 'A', status: 'running', simTime: 2, horizonDays: 30, stepCount: 2, actionCount: 4, version: 1, haltedReason: null, createdAt: '2026-09-06T00:00:00.000Z', synthetic: true, autoRun: null, clonedFromId: null, clonedFromName: null },
+        summary: { id: 'sw1', companyId: 'c2', companyName: 'Checkout Platform', name: 'Sprint plan', sector: 'software', mode: 'simulation', decisionProvider: 'rules', modelProvider: null, model: null, maxModelCostUsd: null, llmRoles: [], policy: 'A', status: 'running', simTime: 2, horizonDays: 30, stepCount: 2, actionCount: 4, version: 1, haltedReason: null, createdAt: '2026-09-06T00:00:00.000Z', synthetic: true, autoRun: null, clonedFromId: null, clonedFromName: null, adoptedBy: [] },
         sector: 'software',
         currency: 'USD',
         headline: [

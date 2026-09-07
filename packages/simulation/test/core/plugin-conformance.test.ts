@@ -110,6 +110,15 @@ describe.each(Object.entries(sectors) as (readonly [string, AnySectorPlugin])[])
     expect(plugin.comparedKeys).not.toContain('seed')
   })
 
+  // M33: every plugin answers whether its organisation can be adopted into a real project, and a
+  // "no" carries the sentence a person reads (`not_adoptable`'s reason). A sector that simply
+  // omitted the field would refuse adoption with an empty explanation.
+  it('adoptable is present, and a refusal carries a reason', () => {
+    expect(plugin.adoptable).toBeDefined()
+    expect(typeof plugin.adoptable.ok).toBe('boolean')
+    if (!plugin.adoptable.ok) expect(plugin.adoptable.reason.trim().length).toBeGreaterThan(0)
+  })
+
   it('headline(state, day) reads back without throwing', () => {
     const definition = plugin.demoDefinition({ policy: 'A', seed: 1, roster, currency: 'USD' })
     const state = plugin.initialState(definition).sector
@@ -132,6 +141,13 @@ describe.each(Object.entries(sectors) as (readonly [string, AnySectorPlugin])[])
     expect(result.state.status).toBe('finished')
     const replayed = replay(plugin.model, definition, initial, result.entries)
     expect(replayed).toEqual(result.state)
+  })
+})
+
+describe('adoptable, sector by sector (M33)', () => {
+  it('is yes for software and no for trade, with trade\'s own sentence', () => {
+    expect(sectors.software.adoptable).toEqual({ ok: true })
+    expect(sectors.trade.adoptable).toEqual({ ok: false, reason: "the trade sector's roles are not software roles" })
   })
 })
 

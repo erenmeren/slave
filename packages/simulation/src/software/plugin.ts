@@ -90,6 +90,9 @@ export const softwarePlugin: SoftwarePlugin = {
   externalEventForms: EXTERNAL_EVENT_FORMS,
   injectOptions: (state) => ({ areas: AREAS.map((a) => ({ ...a })), engineers: state.engineers.map((e) => ({ id: e.id, label: `${e.id} (${e.expertise})` })) }),
   llmRoleCandidates: ['lead'],
+  // M33: the one adoptable sector -- product / lead / reviewer / an engineer's expertise are the
+  // roles a real project already schedules and reviews by.
+  adoptable: { ok: true },
   // Software's world: the three decision roles, the engineer pool (its ids AND their expertise --
   // the same twelve requests against a different pool is a different world), the scenario, and the
   // three frame numbers. `roster` and `initial` are trade's fields and this sector has neither, so

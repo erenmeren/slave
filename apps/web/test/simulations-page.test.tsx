@@ -12,7 +12,7 @@ vi.mock('next/navigation', () => ({ useRouter: () => ({ push: routerPush, refres
 
 const card = (over: Partial<SimulationSummary> = {}): SimulationSummary => ({
   id: 's1', companyId: 'c1', companyName: 'Demo Trading Co.', name: 'Q3 plan', sector: 'trade', mode: 'simulation', decisionProvider: 'rules', modelProvider: null, model: null, maxModelCostUsd: null, llmRoles: [], policy: 'A',
-  status: 'running', simTime: 4, horizonDays: 30, stepCount: 4, actionCount: 16, version: 2, haltedReason: null, createdAt: '2026-09-06T00:00:00.000Z', synthetic: true, autoRun: null, clonedFromId: null, clonedFromName: null, ...over,
+  status: 'running', simTime: 4, horizonDays: 30, stepCount: 4, actionCount: 16, version: 2, haltedReason: null, createdAt: '2026-09-06T00:00:00.000Z', synthetic: true, autoRun: null, clonedFromId: null, clonedFromName: null, adoptedBy: [], ...over,
 })
 // M31b Task 4: the company list is filtered SERVER-side per sector (`companiesForSector`), so the
 // fixture already carries only companies that fit -- there is no "offered but marked" roster any

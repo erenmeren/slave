@@ -136,6 +136,11 @@ export type ControlRefusal =
    *  either it isn't a `ProviderKind` at all, or (`cursor`) it reports no cost so a
    *  `maxModelCostUsd` cap could never be enforced (M31a §3). */
   | { readonly kind: 'unsupported_model_provider'; readonly provider: string; readonly reason: string }
+  /** M33 §3: `adoptSimulation`/`adoptionPreview` on a run whose sector says its organisation does
+   *  not map onto software work. The `reason` is the SECTOR's own sentence
+   *  (`SectorPlugin.adoptable`), printed verbatim -- control never writes a sector's reason for
+   *  it. */
+  | { readonly kind: 'not_adoptable'; readonly simulationId: string; readonly reason: string }
 
 /**
  * The word a person reads for `live_runs`'s `entity` (M27 final review, Important finding 3).
@@ -284,5 +289,7 @@ export function refusalText(refusal: ControlRefusal): string {
       return `simulation ${refusal.simulationId} makes its decisions with a model; its steps happen in the daemon — start auto-run`
     case 'unsupported_model_provider':
       return `model provider ${refusal.provider} is not supported for simulations: ${refusal.reason}`
+    case 'not_adoptable':
+      return `simulation ${refusal.simulationId} cannot be adopted: ${refusal.reason}`
   }
 }

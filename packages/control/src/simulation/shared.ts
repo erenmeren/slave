@@ -38,6 +38,10 @@ export interface SimulationSummary {
   readonly autoRun: { readonly everyMs: number; readonly untilDay: number; readonly lastStepAt: string | null } | null
   readonly clonedFromId: string | null
   readonly clonedFromName: string | null
+  /** M33 §2: the projects whose organisation was adopted from this run -- a run may be adopted
+   *  many times, and every card, strip and run page reads the provenance from here. Empty for a
+   *  run nobody has adopted. */
+  readonly adoptedBy: readonly { readonly workspaceId: string; readonly workspaceName: string }[]
 }
 
 /** What EVERY sector's frozen definition carries, whatever else it carries beside it (M31b §4):
@@ -84,7 +88,15 @@ export function engineStateSchemaFor(plugin: AnySectorPlugin): z.ZodType<EngineS
   return schema
 }
 
-export type Row = Prisma.SimulationRunGetPayload<{ include: { company: { select: { name: true } }; clonedFrom: { select: { name: true } } } }>
+/** The ONE include every reader of a run row uses (M33): `Row` is derived from it, so a field the
+ *  summary needs can never be added to the type without every query fetching it. */
+export const RUN_INCLUDE = {
+  company: { select: { name: true } },
+  clonedFrom: { select: { name: true } },
+  adoptedWorkspaces: { select: { id: true, name: true } },
+} as const satisfies Prisma.SimulationRunInclude
+
+export type Row = Prisma.SimulationRunGetPayload<{ include: typeof RUN_INCLUDE }>
 
 export function summarize(row: Row, definition: LoadedDefinition): SimulationSummary {
   return {
@@ -94,6 +106,7 @@ export function summarize(row: Row, definition: LoadedDefinition): SimulationSum
     actionCount: row.actionCount,
     clonedFromId: row.clonedFromId,
     clonedFromName: row.clonedFrom?.name ?? null,
+    adoptedBy: row.adoptedWorkspaces.map((workspace) => ({ workspaceId: workspace.id, workspaceName: workspace.name })),
     autoRun: row.autoRunEveryMs !== null && row.autoRunUntilDay !== null ? { everyMs: row.autoRunEveryMs, untilDay: row.autoRunUntilDay, lastStepAt: row.lastAutoStepAt?.toISOString() ?? null } : null,
     version: row.version, haltedReason: row.haltedReason, createdAt: row.createdAt.toISOString(), synthetic: true,
   }
@@ -123,11 +136,11 @@ export function journalRows(simulationId: string, entries: readonly JournalEntry
  *  same caller-supplied key used once for a step and once for an injection cannot collide on the
  *  per-run `simulationId_idempotencyKey` unique and be replayed as the other verb's outcome
  *  (fix round 1, Important #1). */
-export const namespacedKey = (verb: 'step' | 'inject', key: string): string => `${verb}:${key}`
+export const namespacedKey = (verb: 'step' | 'inject' | 'adopt', key: string): string => `${verb}:${key}`
 
 export async function locked(tx: Prisma.TransactionClient, simulationId: string): Promise<Result<{ row: Row; loaded: LoadedSimulation }, ControlRefusal>> {
   await tx.$queryRaw`SELECT id FROM "SimulationRun" WHERE id = ${simulationId} FOR UPDATE`
-  const row = await tx.simulationRun.findUnique({ where: { id: simulationId }, include: { company: { select: { name: true } }, clonedFrom: { select: { name: true } } } })
+  const row = await tx.simulationRun.findUnique({ where: { id: simulationId }, include: RUN_INCLUDE })
   if (row === null) return err({ kind: 'simulation_not_found', simulationId })
   const loaded = parseRow(row)
   return loaded.ok ? ok({ row, loaded: loaded.value }) : loaded

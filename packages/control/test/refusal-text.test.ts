@@ -41,6 +41,14 @@ describe('refusalText for the simulation kinds (M29)', () => {
   })
 })
 
+describe('refusalText for not_adoptable (M33)', () => {
+  it('names the run and prints the sector\'s own reason verbatim', () => {
+    expect(refusalText({ kind: 'not_adoptable', simulationId: 's1', reason: "the trade sector's roles are not software roles" })).toBe(
+      "simulation s1 cannot be adopted: the trade sector's roles are not software roles",
+    )
+  })
+})
+
 describe('refusalText for the llm decision provider kinds (M31a)', () => {
   it('names the run and points at auto-run, and explains why a provider is unsupported', () => {
     expect(refusalText({ kind: 'llm_steps_in_daemon', simulationId: 's1' })).toBe(

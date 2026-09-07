@@ -67,4 +67,11 @@ Creating a workspace from the drawer, adopting trade runs, goal text, roles as r
 3. Gate, README, errata, full verification.
 
 ## 8. Errata — where execution corrected the plan
-(filled in during execution)
+
+**T1-E1 — a workspace that already has THIS company is refused too.** §3 said `assignCompany` already refuses `company_already_assigned`, and it does not: its one-way rule refuses a *different* company, while re-assigning the *same* one is its ordinary re-sync path. Two runs of one company adopted into one workspace would therefore have silently overwritten the first adoption's settings and provenance — the very thing §6 lists as a non-goal. `adoptSimulation` now asks the question itself, behind the workspace's own `FOR UPDATE` lock taken before `assignCompanyTx`'s, and refuses `company_already_assigned` whenever `companyId` is non-null (naming whichever company is there).
+
+**T1-E2 — `assignCompanyTx` takes no `principal`.** Ruling R1's signature carried one, but the transaction body never used it: `assignCompany` emits `workspace.company_assigned` *after* the commit, so the principal belongs to the caller. `adoptSimulation` emits the same event, with its own principal, after its own commit. The extracted form is `assignCompanyTx(tx, workspaceId, companyId, options?)`.
+
+**T1-E3 — the settings ranges have refusal text.** §3 said "anything else → `invalid_simulation_input`" without wording it: the details are `maxConcurrentRuns must be an integer between 1 and 10` and `maxAttempts must be an integer between 1 and 5`.
+
+**T1-E4 — `SectorPlugin.adoptable` is required, not optional.** §3 allowed an absent field to read as "not adoptable"; the conformance test the same section asks for makes absence impossible, so the field is required and every plugin answers explicitly.

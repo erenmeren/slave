@@ -2,7 +2,7 @@ import { Prisma, prisma, type PrismaClient } from '@slave-of-ai/db/client'
 import { err, ok, type Result } from '@slave-of-ai/domain'
 import { replay, sectorFor, type HeadlineItem, type JournalEntry, type MetricLabel, type RosterEntry, type SectorName } from '@slave-of-ai/simulation'
 import type { ControlRefusal } from '../refusal.js'
-import { comparable, parseRow, stableStringify, type LoadedSimulation, type SimulationSummary } from './shared.js'
+import { RUN_INCLUDE, comparable, parseRow, stableStringify, type LoadedSimulation, type SimulationSummary } from './shared.js'
 
 /** Metrics are the plugin's, not trade's (M31b §4): the map a sector's `metrics(...)` returns,
  *  read against `metricLabels` for the label, the order and the `money`/`count`/`days` kind.
@@ -37,7 +37,7 @@ export interface SimulationComparison {
  *  `buildSimulationSnapshot`, which imports this across the package boundary -- final fix wave,
  *  Important #2). */
 export async function readSimulation(client: PrismaClient | Prisma.TransactionClient, simulationId: string): Promise<Result<LoadedSimulation, ControlRefusal>> {
-  const row = await client.simulationRun.findUnique({ where: { id: simulationId }, include: { company: { select: { name: true } }, clonedFrom: { select: { name: true } } } })
+  const row = await client.simulationRun.findUnique({ where: { id: simulationId }, include: RUN_INCLUDE })
   if (row === null) return err({ kind: 'simulation_not_found', simulationId })
   return parseRow(row)
 }
@@ -52,7 +52,7 @@ export async function loadSimulation(simulationId: string): Promise<Result<Loade
  *  as everything else it returns, instead of a second, unlocked connection racing a concurrent
  *  write. */
 export async function listSimulations(client: PrismaClient | Prisma.TransactionClient = prisma, companyId?: string): Promise<readonly SimulationSummary[]> {
-  const rows = await client.simulationRun.findMany({ where: companyId === undefined ? {} : { companyId }, include: { company: { select: { name: true } }, clonedFrom: { select: { name: true } } }, orderBy: [{ createdAt: 'desc' }] })
+  const rows = await client.simulationRun.findMany({ where: companyId === undefined ? {} : { companyId }, include: RUN_INCLUDE, orderBy: [{ createdAt: 'desc' }] })
   return rows.flatMap((row) => { const p = parseRow(row); return p.ok ? [p.value.summary] : [] })
 }
 

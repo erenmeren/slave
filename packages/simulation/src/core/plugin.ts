@@ -57,6 +57,18 @@ export interface SectorPlugin<S, E, R, D extends EngineDefinition, M extends Rec
   injectOptions(state: S): Readonly<Record<string, readonly { id: string; label: string }[]>>
   readonly llmRoleCandidates: readonly string[]            // trade: ['purchasing']; software: ['lead']
   /**
+   * Whether an organisation tried in this sector can be ADOPTED into a real project (M33 §1
+   * principle 5) -- the roster materialised with the roles the run assigned, on a workspace that
+   * has no company yet.
+   *
+   * A sector answers for itself rather than control keeping a list of adoptable sector names: only
+   * software's roles (product / lead / reviewer / an engineer's expertise) are roles a coding
+   * project's scheduler and review pass already key on. Trade's are sales, purchasing, operations
+   * and finance, and mapping them onto software work would be an approximation nobody asked for --
+   * so it says no, in its own words, and control prints that reason verbatim.
+   */
+  readonly adoptable: { readonly ok: true } | { readonly ok: false; readonly reason: string }
+  /**
    * The definition fields two runs of this sector must agree on to have lived in the SAME world
    * (M30 §4, moved here by M32 item 5): what `compareSimulations` reports as `differences` and
    * `definitionsMatch`. Control used to keep a hand-written UNION of every sector's keys, which is
