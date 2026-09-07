@@ -170,6 +170,35 @@ export async function stepLocked(
   return outcome
 }
 
+/** Halts a run whose state cannot be parsed (spec M30 §5): `haltSimulation` goes through
+ *  `locked()` → `parseRow`, which would refuse `simulation_corrupt` again on a corrupt state, so
+ *  `tickSimulations`'s halt path writes the row and its journal directly instead of replaying the
+ *  normal `setStatus` path. The stored `state` JSON is left untouched -- it is the evidence of
+ *  what went wrong, not something this can safely rewrite without parsing it. Journals an
+ *  `auto_run_stopped { reason: 'error' }` row first when the run held an intent, so the journal
+ *  reads the whole story: the intent was cleared, then the run was halted. Takes the row lock
+ *  first (fix wave, Minor #2): every other journal writer in this file goes through `locked()`,
+ *  which does the same `FOR UPDATE` before its own read -- this was the one writer that read the
+ *  row unlocked, open to a concurrent writer's read-modify-write racing in between.
+ *
+ *  Exported since M31a Task 4: the model path halts through this same writer too -- an exhausted
+ *  budget, a refusal from `prepareModelDecision`, a throw around the model call. */
+export async function haltUnparsed(simulationId: string, reason: string): Promise<void> {
+  await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM "SimulationRun" WHERE id = ${simulationId} FOR UPDATE`
+    const row = await tx.simulationRun.findUnique({ where: { id: simulationId }, select: { simTime: true, autoRunEveryMs: true } })
+    if (row === null) return
+    const last = await tx.simulationJournalEntry.findFirst({ where: { simulationId }, orderBy: { seq: 'desc' }, select: { seq: true } })
+    let seq = (last?.seq ?? -1) + 1
+    if (row.autoRunEveryMs !== null) {
+      await tx.simulationJournalEntry.create({ data: { simulationId, seq, simTime: row.simTime, kind: 'control', actorRole: null, payload: { op: 'auto_run_stopped', reason: 'error' } } })
+      seq += 1
+    }
+    await tx.simulationJournalEntry.create({ data: { simulationId, seq, simTime: row.simTime, kind: 'control', actorRole: null, payload: { op: 'halted', reason } } })
+    await tx.simulationRun.update({ where: { id: simulationId }, data: { status: 'halted', haltedReason: reason, autoRunEveryMs: null, autoRunUntilDay: null, lastAutoStepAt: null } })
+  })
+}
+
 export async function stepSimulation(
   simulationId: string,
   input: { readonly steps?: number; readonly untilDay?: number; readonly idempotencyKey?: string; readonly expectedVersion?: number },
@@ -215,7 +244,15 @@ async function setStatus(simulationId: string, from: readonly string[], to: 'pau
     if (!got.ok) return got
     const { row, loaded } = got.value
     if (!from.includes(row.status)) return err({ kind: 'simulation_not_runnable', simulationId, status: row.status })
-    const seq = loaded.state.journalSeq + 1
+    let seq = loaded.state.journalSeq + 1
+    // Spec §6: halting an `llm` run says so in the journal before it says it halted -- the halt is
+    // what stops the spending, and the row that records it is the evidence an operator reads. The
+    // model call itself is not interruptible mid-flight; `applyModelDecision`'s stale check is what
+    // discards an answer that lands after this.
+    if (to === 'halted' && row.decisionProvider === 'llm') {
+      await tx.simulationJournalEntry.create({ data: { simulationId, seq, simTime: row.simTime, kind: 'control', actorRole: null, payload: { op: 'model_calls_blocked' } } })
+      seq += 1
+    }
     await tx.simulationJournalEntry.create({ data: { simulationId, seq, simTime: row.simTime, kind: 'control', actorRole: null, payload: { op, reason: haltedReason } } })
     // Spec §4: pausing or halting drops any auto-run intent in the same transaction; resuming
     // never re-arms one (an operator restarts auto-run explicitly).
@@ -268,7 +305,12 @@ export async function injectExternalEvent(
     const last = await tx.simulationJournalEntry.findFirst({ where: { simulationId }, orderBy: { seq: 'desc' }, select: { seq: true } })
     const seq = (last?.seq ?? -1) + 1
     await tx.simulationJournalEntry.create({ data: { simulationId, seq, simTime: row.simTime, kind: 'external_event', actorRole: null, idempotencyKey: input.idempotencyKey !== undefined ? namespacedKey('inject', input.idempotencyKey) : null, payload: { op: 'injected', day: input.day, event: json(parsed.data) } } })
-    await tx.simulationRun.update({ where: { id: simulationId }, data: { state: json({ ...loaded.state, journalSeq: seq, queue: { items: [...queue.items, item], nextSeq: queue.nextSeq + 1 } }) } })
+    // Ruling R8 (M31a fix round 1): an injection is a state mutation like every other, so it bumps
+    // `version`. Without this, an event injected while a model was thinking left the version
+    // untouched and `applyModelDecision`'s stale check waved the answer through -- a decision taken
+    // against a world that had since gained an event. The idempotent replay above returns before
+    // reaching here, so a repeated key still bumps the version exactly once.
+    await tx.simulationRun.update({ where: { id: simulationId }, data: { version: row.version + 1, state: json({ ...loaded.state, journalSeq: seq, queue: { items: [...queue.items, item], nextSeq: queue.nextSeq + 1 } }) } })
     return ok(undefined)
   })
 }

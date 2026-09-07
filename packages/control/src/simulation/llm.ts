@@ -6,10 +6,9 @@ import {
   type ActionEnvelope,
 } from '@slave-of-ai/simulation'
 import type { ControlRefusal } from '../refusal.js'
-import { haltUnparsed } from './auto-run.js'
 import { readSimulation } from './read.js'
 import { clearAutoRun, json, locked } from './shared.js'
-import { stepLocked } from './write.js'
+import { haltUnparsed, stepLocked } from './write.js'
 
 /** The ceiling on ONE model call, whatever budget the run still has (M31a §4). A run's own cap is
  *  cumulative and can be large; this bounds the blast radius of a single decision -- a prompt that
@@ -214,11 +213,18 @@ export async function applyModelDecision(
       return (last?.seq ?? -1) + 1
     }
 
-    // 2. Stale: the row moved (a step, a pause, a halt) while the model was thinking. The answer
-    //    was decided against a world that no longer exists, so it is recorded and dropped.
-    if (row.version !== expectedVersion || row.status !== 'running') {
+    // 2. Stale: the world moved while the model was thinking, so the answer was decided against a
+    //    world that no longer exists and is recorded and dropped.
+    //
+    //    THREE questions, not two (fix round 1, Critical #1). `stopAutoRun` clears the intent
+    //    columns and touches neither `version` nor `status`, so a check that read only those two
+    //    was blind to it: a person who stopped the run mid-call would watch it step once more
+    //    anyway, which spec §2.6 forbids. The cleared intent is the third question, and the
+    //    journal names which one answered.
+    const staleReason = row.version !== expectedVersion ? 'version' : row.status !== 'running' ? 'status' : row.autoRunEveryMs === null ? 'intent_cleared' : null
+    if (staleReason !== null) {
       await tx.simulationJournalEntry.create({
-        data: { simulationId, seq: await nextSeq(), simTime: row.simTime, kind: 'control', actorRole: null, payload: { op: 'stale_decision', role, expectedVersion, actual: row.version, promptHash, usageSeq } },
+        data: { simulationId, seq: await nextSeq(), simTime: row.simTime, kind: 'control', actorRole: null, payload: { op: 'stale_decision', role, reason: staleReason, expectedVersion, actual: row.version, promptHash, usageSeq } },
       })
       return ok({ applied: false, reason: 'stale' } as const)
     }

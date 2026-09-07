@@ -722,5 +722,6 @@ model SimulationModelUsage {
 
   simulation SimulationRun @relation(fields: [simulationId], references: [id], onDelete: Cascade)
 
+  @@unique([simulationId, seq])
   @@index([simulationId])
 }

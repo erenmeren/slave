@@ -5,9 +5,11 @@ import {
   applyModelDecision,
   cloneSimulation,
   createSimulation,
+  haltSimulation,
   loadSimulation,
   prepareModelDecision,
   startAutoRun,
+  stopAutoRun,
   stepSimulation,
   tickSimulations,
   type ModelOutcome,
@@ -155,7 +157,8 @@ describe('prepareModelDecision', () => {
   it('skips a run with no intent, one that is not running, and one that is not due yet', async () => {
     const noIntent = await createSimulation({ companyId, name: 'no-intent', sector: 'trade', policy: 'A', ...validLlmInput })
     const noIntentId = noIntent.ok ? noIntent.value.id : ''
-    expect((await prepareModelDecision(noIntentId, T0)).ok && ((await prepareModelDecision(noIntentId, T0)) as { ok: true; value: { kind: string; reason?: string } }).value).toEqual({ kind: 'skip', reason: 'no_intent' })
+    const noIntentResult = await prepareModelDecision(noIntentId, T0)
+    expect(noIntentResult.ok && noIntentResult.value).toEqual({ kind: 'skip', reason: 'no_intent' })
 
     const paused = await armedLlmRun('paused')
     // Straight to the column: `pauseSimulation` would clear the intent itself, and the state this
@@ -221,7 +224,26 @@ describe('applyModelDecision', () => {
     expect(after.version).toBe(before.version)
     expect(after.simTime).toBe(0)
     const stale = (await prisma.simulationJournalEntry.findMany({ where: { simulationId: id, kind: 'control' }, orderBy: { seq: 'asc' } })).map((r) => r.payload as { op: string; role?: string; expectedVersion?: number; actual?: number }).find((p) => p.op === 'stale_decision')
-    expect(stale).toMatchObject({ op: 'stale_decision', role: 'purchasing', expectedVersion: before.version + 7, actual: before.version })
+    expect(stale).toMatchObject({ op: 'stale_decision', role: 'purchasing', expectedVersion: before.version + 7, actual: before.version, reason: 'version' })
+  })
+
+  it('a stopped auto-run makes the decision stale, though neither the version nor the status moved (fix round 1, Critical #1)', async () => {
+    const id = await armedLlmRun('stopped')
+    const before = await prisma.simulationRun.findUniqueOrThrow({ where: { id } })
+    // The person stopped the run while the model was thinking. `stopAutoRun` clears the intent
+    // columns and NOTHING else -- same `version`, same `running` status -- so a stale check that
+    // reads only those two would step the run after it was stopped (spec §2.6).
+    expect((await stopAutoRun(id)).ok).toBe(true)
+    const mid = await prisma.simulationRun.findUniqueOrThrow({ where: { id } })
+    expect(mid).toMatchObject({ version: before.version, status: 'running', autoRunEveryMs: null })
+    const applied = await applyModelDecision(id, { expectedVersion: before.version, role: 'purchasing', outcome: answer(), promptHash: 'abc', now: T0 })
+    expect(applied.ok && applied.value).toEqual({ applied: false, reason: 'stale' })
+    const after = await prisma.simulationRun.findUniqueOrThrow({ where: { id } })
+    expect(after).toMatchObject({ simTime: 0, version: before.version, lastAutoStepAt: mid.lastAutoStepAt })
+    // The call was still made and paid for.
+    expect(await prisma.simulationModelUsage.count({ where: { simulationId: id } })).toBe(1)
+    const stale = (await prisma.simulationJournalEntry.findMany({ where: { simulationId: id, kind: 'control' }, orderBy: { seq: 'asc' } })).map((r) => r.payload as { op: string; reason?: string }).find((p) => p.op === 'stale_decision')
+    expect(stale).toMatchObject({ op: 'stale_decision', reason: 'intent_cleared' })
   })
 
   it('an isolation breach halts the run, names the tools, clears the intent and still records the usage', async () => {
@@ -286,7 +308,42 @@ describe('applyModelDecision', () => {
   })
 })
 
+describe('haltSimulation on an llm run (spec §6)', () => {
+  it('journals model_calls_blocked immediately before the halt entry; a rules run gets no such entry', async () => {
+    const id = await armedLlmRun('halted')
+    expect((await haltSimulation(id, 'operator')).ok).toBe(true)
+    const ops = (await prisma.simulationJournalEntry.findMany({ where: { simulationId: id, kind: 'control' }, orderBy: { seq: 'asc' } })).map((r) => (r.payload as { op: string }).op)
+    expect(ops.slice(-3)).toEqual(['model_calls_blocked', 'halted', 'auto_run_stopped'])
+
+    const rules = await createSimulation({ companyId, name: 'rules halted', sector: 'trade', policy: 'A' })
+    const rulesId = rules.ok ? rules.value.id : ''
+    expect((await haltSimulation(rulesId, 'operator')).ok).toBe(true)
+    const rulesOps = (await prisma.simulationJournalEntry.findMany({ where: { simulationId: rulesId, kind: 'control' }, orderBy: { seq: 'asc' } })).map((r) => (r.payload as { op: string }).op)
+    expect(rulesOps).not.toContain('model_calls_blocked')
+    expect(rulesOps.slice(-1)).toEqual(['halted'])
+  })
+})
+
 describe('tickSimulations with a model decider', () => {
+  it('makes at most ONE model call per pass; two due llm runs need two passes (fix round 1, Important #3)', async () => {
+    // A model call can take minutes and the daemon awaits it inline, so a pass that decided for
+    // every due llm run would stall the whole loop for as long as the sum of them.
+    const a = await armedLlmRun('llm a', { everyMs: 10_000 })
+    const b = await armedLlmRun('llm b', { everyMs: 10_000 })
+    let calls = 0
+    const decider = async (): Promise<ModelOutcome> => { calls += 1; return answer() }
+    const first = await tickSimulations({ now: T0, modelDecider: decider })
+    expect(calls).toBe(1)
+    expect(first).toMatchObject({ candidates: 2, stepped: 1, halted: 0, skippedNoDecider: 0 })
+    // The oldest due run goes first: candidates are read in creation order.
+    expect((await prisma.simulationRun.findUniqueOrThrow({ where: { id: a } })).simTime).toBe(1)
+    expect((await prisma.simulationRun.findUniqueOrThrow({ where: { id: b } })).simTime).toBe(0)
+    const second = await tickSimulations({ now: plus(250), modelDecider: decider })
+    expect(calls).toBe(2)
+    expect(second).toMatchObject({ stepped: 1 })
+    expect((await prisma.simulationRun.findUniqueOrThrow({ where: { id: b } })).simTime).toBe(1)
+  })
+
   it('steps the llm run through the decider, reports skippedNoDecider without one, and leaves a rules run alone', async () => {
     const llmId = await armedLlmRun('ticked')
     const rulesCreated = await createSimulation({ companyId, name: 'rules-beside', sector: 'trade', policy: 'A' })

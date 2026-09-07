@@ -4,11 +4,14 @@ import type { Principal } from '../principal.js'
 import type { ControlRefusal } from '../refusal.js'
 import { refusalText } from '../refusal.js'
 import { clearAutoRun, json, locked } from './shared.js'
-import { stepLocked } from './write.js'
-// `llm.ts` imports `haltUnparsed` back out of this module: the cycle is function-level only (both
-// sides call, neither reads the other at module-evaluation time), which ESM and every bundler this
-// repo uses resolve through hoisted function declarations.
+import { haltUnparsed, stepLocked } from './write.js'
 import { PER_CALL_CAP_USD, applyModelDecision, prepareModelDecision, type ModelDecider } from './llm.js'
+
+/** Re-exported from `write.js`, where it lives so that `llm.ts` (which halts through it too) can
+ *  reach it without an import cycle back through this module (fix round 1, ruling R6). It was
+ *  first written here and is still this file's own halt path, so the name stays on this module's
+ *  surface as well. */
+export { haltUnparsed }
 
 export const AUTO_RUN_MIN_MS = 250
 export const AUTO_RUN_MAX_MS = 3_600_000
@@ -65,35 +68,6 @@ export async function autoStepDue(simulationId: string, now: Date): Promise<Resu
   }, { timeout: 60_000, maxWait: 10_000 })
 }
 
-/** Halts a run whose state cannot be parsed (spec M30 §5): `haltSimulation` goes through
- *  `locked()` → `parseRow`, which would refuse `simulation_corrupt` again on a corrupt state, so
- *  `tickSimulations`'s halt path writes the row and its journal directly instead of replaying the
- *  normal `setStatus` path. The stored `state` JSON is left untouched -- it is the evidence of
- *  what went wrong, not something this can safely rewrite without parsing it. Journals an
- *  `auto_run_stopped { reason: 'error' }` row first when the run held an intent, so the journal
- *  reads the whole story: the intent was cleared, then the run was halted. Takes the row lock
- *  first (fix wave, Minor #2): every other journal writer in this file goes through `locked()`,
- *  which does the same `FOR UPDATE` before its own read -- this was the one writer that read the
- *  row unlocked, open to a concurrent writer's read-modify-write racing in between.
- *
- *  Exported since M31a Task 4: the model path halts through this same writer too -- an exhausted
- *  budget, a refusal from `prepareModelDecision`, a throw around the model call. */
-export async function haltUnparsed(simulationId: string, reason: string): Promise<void> {
-  await prisma.$transaction(async (tx) => {
-    await tx.$queryRaw`SELECT id FROM "SimulationRun" WHERE id = ${simulationId} FOR UPDATE`
-    const row = await tx.simulationRun.findUnique({ where: { id: simulationId }, select: { simTime: true, autoRunEveryMs: true } })
-    if (row === null) return
-    const last = await tx.simulationJournalEntry.findFirst({ where: { simulationId }, orderBy: { seq: 'desc' }, select: { seq: true } })
-    let seq = (last?.seq ?? -1) + 1
-    if (row.autoRunEveryMs !== null) {
-      await tx.simulationJournalEntry.create({ data: { simulationId, seq, simTime: row.simTime, kind: 'control', actorRole: null, payload: { op: 'auto_run_stopped', reason: 'error' } } })
-      seq += 1
-    }
-    await tx.simulationJournalEntry.create({ data: { simulationId, seq, simTime: row.simTime, kind: 'control', actorRole: null, payload: { op: 'halted', reason } } })
-    await tx.simulationRun.update({ where: { id: simulationId }, data: { status: 'halted', haltedReason: reason, autoRunEveryMs: null, autoRunUntilDay: null, lastAutoStepAt: null } })
-  })
-}
-
 /** What one pass did. `skippedNoDecider` counts the `llm` runs this pass left untouched because
  *  no model decider was injected -- the one-shot CLI `tick` is exactly that caller, and an
  *  operator who armed an llm auto-run and then ran `tick` needs to be told why nothing happened
@@ -119,6 +93,14 @@ export async function tickSimulations(input: { readonly now: Date; readonly mode
   let stepped = 0
   let halted = 0
   let skippedNoDecider = 0
+  // At most ONE model call per pass (fix round 1, ruling R7). The daemon awaits this loop inline
+  // and a decision call can take minutes, so deciding for every due llm run in one pass would
+  // stall the whole daemon for the sum of them. The oldest due llm run goes first and the rest
+  // wait one period -- they are neither stepped nor skipped-for-want-of-a-decider, exactly like a
+  // run that is not due yet. Rules runs are unaffected: the pass goes on to every one of them.
+  // The proper fix -- stepping llm runs OFF this loop, with an in-flight set keyed by run id so a
+  // slow run never blocks a fast one -- is M31 backlog.
+  let modelCallMade = false
   for (const { id, decisionProvider } of rows) {
     try {
       if (decisionProvider === 'llm') {
@@ -127,6 +109,8 @@ export async function tickSimulations(input: { readonly now: Date; readonly mode
           skippedNoDecider += 1
           continue
         }
+        // This pass has already spent its one model call; this run waits for the next one.
+        if (modelCallMade) continue
         const prepared = await prepareModelDecision(id, input.now)
         if (!prepared.ok) {
           if (prepared.error.kind === 'simulation_not_found') continue
@@ -144,15 +128,15 @@ export async function tickSimulations(input: { readonly now: Date; readonly mode
         const { model, prompt, remainingUsd, version, role, promptHash } = prepared.value
         // The model call itself: no lock held, no transaction open, capped at the smaller of what
         // the run has left and the per-call ceiling.
+        modelCallMade = true
         const outcome = await decider({ model, prompt, maxBudgetUsd: Math.min(remainingUsd, PER_CALL_CAP_USD) })
         const applied = await applyModelDecision(id, { expectedVersion: version, role, outcome, promptHash, now: input.now })
         if (!applied.ok) {
-          if (applied.error.kind === 'simulation_not_found') continue
-          await haltUnparsed(id, `auto-run step failed: ${refusalText(applied.error)}`)
-          halted += 1
-          continue
-        }
-        if (applied.value.applied) stepped += 1
+          if (applied.error.kind !== 'simulation_not_found') {
+            await haltUnparsed(id, `auto-run step failed: ${refusalText(applied.error)}`)
+            halted += 1
+          }
+        } else if (applied.value.applied) stepped += 1
         else if (applied.value.reason === 'breach') halted += 1
         continue
       }

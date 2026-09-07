@@ -186,6 +186,20 @@ describe('injectExternalEvent', () => {
     // The stored key is namespaced by verb (`inject:ev1`), not the caller's bare `ev1` (fix round 1, Important #1).
     expect(await prisma.simulationJournalEntry.count({ where: { simulationId: id, kind: 'external_event', idempotencyKey: 'inject:ev1' } })).toBe(1)
   })
+  // M31a fix round 1, ruling R8: an injection is a state mutation like every other, so it bumps
+  // `version`. Without this an event injected while a model was thinking left the row's version
+  // unchanged, and `applyModelDecision`'s stale check waved through a decision taken against a
+  // world that had since gained an event.
+  it('bumps version like every other state mutation, and an idempotent replay bumps it once', async () => {
+    const id = await create()
+    const before = await prisma.simulationRun.findUniqueOrThrow({ where: { id } })
+    const injected = await injectExternalEvent(id, { day: 5, event: { type: 'demand', qty: 10, unitPriceMinor: 1_000, dueInDays: 3, collectInDays: 0 }, idempotencyKey: 'v1' })
+    expect(injected.ok).toBe(true)
+    expect((await prisma.simulationRun.findUniqueOrThrow({ where: { id } })).version).toBe(before.version + 1)
+    const again = await injectExternalEvent(id, { day: 5, event: { type: 'demand', qty: 10, unitPriceMinor: 1_000, dueInDays: 3, collectInDays: 0 }, idempotencyKey: 'v1' })
+    expect(again.ok).toBe(true)
+    expect((await prisma.simulationRun.findUniqueOrThrow({ where: { id } })).version).toBe(before.version + 1)
+  })
   // Auto-run fix round 1, Important #1: `injectExternalEvent` was the one write verb with no
   // status guard, computing its journal seq from `state.journalSeq` -- which a throw-path
   // `haltUnparsed` (M30 §5) never rewrites. On a halted run that seq can lag the journal's real
