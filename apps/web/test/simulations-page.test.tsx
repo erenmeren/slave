@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
-import { act, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SimulationsClient } from '../src/components/sim/SimulationsClient.js'
+import { clearModelSelectCache } from '../src/components/ModelSelect.js'
 import type { SimulationSummary } from '@slave-of-ai/control'
 
 const routerPush = vi.fn()
@@ -14,8 +15,16 @@ const card = (over: Partial<SimulationSummary> = {}): SimulationSummary => ({
 })
 const companies = [{ id: 'c1', name: 'Demo Trading Co.', slaves: 4 }, { id: 'c2', name: 'Tiny', slaves: 1 }]
 
-beforeEach(() => { routerPush.mockClear(); routerRefresh.mockClear() })
+beforeEach(() => { routerPush.mockClear(); routerRefresh.mockClear(); clearModelSelectCache() })
 afterEach(() => vi.unstubAllGlobals())
+
+async function waitForModelSelect(): Promise<HTMLSelectElement> {
+  return waitFor(() => {
+    const select = screen.getByTestId('model-select') as HTMLSelectElement
+    expect(select.disabled).toBe(false)
+    return select
+  })
+}
 
 describe('SimulationsClient', () => {
   it('lists every run as a card with the SIMULATION chip, sector, policy, day and status, and opens it on click', () => {
@@ -70,5 +79,62 @@ describe('SimulationsClient', () => {
   it('an empty list says so and names the demo company', () => {
     render(<SimulationsClient cards={[]} companies={companies} />)
     expect(screen.getByTestId('sim-empty').textContent).toContain('No simulations yet')
+  })
+  it('a card with decisionProvider llm shows an llm chip', () => {
+    render(<SimulationsClient cards={[card({ decisionProvider: 'llm', modelProvider: 'claude_code', model: 'sonnet', maxModelCostUsd: 2, llmRoles: ['purchasing'] })]} companies={companies} />)
+    const first = within(screen.getByTestId('sim-card-s1'))
+    expect(first.getByText('llm')).toBeTruthy()
+  })
+  it('the provider select defaults to rules and hides the llm fields', () => {
+    render(<SimulationsClient cards={[]} companies={companies} />)
+    fireEvent.click(screen.getByTestId('new-simulation'))
+    expect((screen.getByTestId('new-simulation-provider') as HTMLSelectElement).value).toBe('rules')
+    expect(screen.queryByTestId('new-simulation-model')).toBeNull()
+    expect(screen.queryByTestId('new-simulation-cap')).toBeNull()
+    expect(screen.queryByTestId('new-simulation-consent')).toBeNull()
+  })
+  it('choosing llm reveals the model, cap and consent fields; submit is disabled until consent is checked; the body carries the llm fields', async () => {
+    const fetchMock = vi.fn(async (url: string) =>
+      url.startsWith('/api/providers/')
+        ? new Response(JSON.stringify({ models: [{ id: 'claude-sonnet-4-5', label: 'sonnet' }], source: 'static' }), { status: 200 })
+        : new Response(JSON.stringify({ ok: true, id: 's9' }), { status: 200 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    render(<SimulationsClient cards={[]} companies={companies} />)
+    fireEvent.click(screen.getByTestId('new-simulation'))
+    fireEvent.change(screen.getByTestId('new-simulation-company'), { target: { value: 'c1' } })
+    fireEvent.change(screen.getByTestId('new-simulation-name'), { target: { value: 'Q4' } })
+    fireEvent.change(screen.getByTestId('new-simulation-provider'), { target: { value: 'llm' } })
+    expect(screen.getByTestId('new-simulation-drawer').textContent).toContain('paid model calls')
+    expect((screen.getByTestId('new-simulation-cap') as HTMLInputElement).value).toBe('2.00')
+    await waitForModelSelect()
+    fireEvent.change(screen.getByTestId('model-select'), { target: { value: 'claude-sonnet-4-5' } })
+    expect((screen.getByTestId('new-simulation-submit') as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(screen.getByTestId('new-simulation-consent'))
+    expect((screen.getByTestId('new-simulation-submit') as HTMLButtonElement).disabled).toBe(false)
+    await act(async () => { fireEvent.click(screen.getByTestId('new-simulation-submit')) })
+    const call = fetchMock.mock.calls.find(([url]) => url === '/api/sim')
+    expect(call).toBeDefined()
+    const body = JSON.parse(String((call as unknown as [string, RequestInit])[1].body))
+    expect(body).toMatchObject({ companyId: 'c1', name: 'Q4', policy: 'A', decisionProvider: 'llm', modelProvider: 'claude_code', model: 'claude-sonnet-4-5', maxModelCostUsd: 2 })
+    expect(routerPush).toHaveBeenCalledWith('/sim/s9')
+  })
+  it('a 400 refusal for a missing cap lands in the drawer error', async () => {
+    const fetchMock = vi.fn(async (url: string) =>
+      url.startsWith('/api/providers/')
+        ? new Response(JSON.stringify({ models: [{ id: 'claude-sonnet-4-5', label: 'sonnet' }], source: 'static' }), { status: 200 })
+        : new Response(JSON.stringify({ error: 'invalid simulation input: maxModelCostUsd must be a positive number' }), { status: 400 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    render(<SimulationsClient cards={[]} companies={companies} />)
+    fireEvent.click(screen.getByTestId('new-simulation'))
+    fireEvent.change(screen.getByTestId('new-simulation-company'), { target: { value: 'c1' } })
+    fireEvent.change(screen.getByTestId('new-simulation-name'), { target: { value: 'Q4' } })
+    fireEvent.change(screen.getByTestId('new-simulation-provider'), { target: { value: 'llm' } })
+    await waitForModelSelect()
+    fireEvent.change(screen.getByTestId('model-select'), { target: { value: 'claude-sonnet-4-5' } })
+    fireEvent.click(screen.getByTestId('new-simulation-consent'))
+    await act(async () => { fireEvent.click(screen.getByTestId('new-simulation-submit')) })
+    expect(screen.getByTestId('new-simulation-error').textContent).toContain('maxModelCostUsd must be a positive number')
   })
 })

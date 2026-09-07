@@ -11,8 +11,16 @@ export interface SimulationSnapshot {
   readonly roles: readonly { readonly name: string; readonly slaveName: string; readonly purpose: string; readonly allowedActions: readonly string[] }[]
   readonly metrics: TradeMetrics
   readonly journal: readonly JournalRow[]
-  /** Real model spend (M31 writes it). `costUsd` null means no measured figure — never shown as $0. */
-  readonly modelUsage: { readonly rows: number; readonly costUsd: number | null; readonly unmeasured: number }
+  /** Real model spend (M31 writes it; M31a adds the cap and the per-call rows). `spentUsd` null
+   *  means no measured figure — never shown as $0. `capUsd` is `summary.maxModelCostUsd`, carried
+   *  here so the panel never has to reach back into `summary` itself. `rows` is every usage row
+   *  (seq order) so a decision's `usageSeq` can be matched to its own cost, not just the total. */
+  readonly modelUsage: {
+    readonly spentUsd: number | null
+    readonly capUsd: number | null
+    readonly rows: readonly { readonly seq: number; readonly simTime: number | null; readonly role: string | null; readonly costUsd: number | null }[]
+    readonly unmeasured: number
+  }
   readonly scenario: readonly { readonly day: number; readonly event: unknown }[]
   readonly compareCandidates: readonly CompareCandidate[]
 }
@@ -33,7 +41,8 @@ export async function buildSimulationSnapshot(simulationId: string): Promise<Sim
     const { summary, definition, state } = loaded.value
     const rows = await tx.simulationJournalEntry.findMany({ where: { simulationId }, orderBy: { seq: 'asc' } })
     const usage = await tx.simulationModelUsage.aggregate({ where: { simulationId }, _count: { _all: true }, _sum: { costUsd: true } })
-    const unmeasured = await tx.simulationModelUsage.count({ where: { simulationId, costUsd: null } })
+    const usageRows = await tx.simulationModelUsage.findMany({ where: { simulationId }, orderBy: { seq: 'asc' } })
+    const unmeasured = usageRows.filter((r) => r.costUsd === null).length
     const entries: JournalEntry[] = rows.map((r) => ({ seq: r.seq, simTime: r.simTime, kind: r.kind, actorRole: r.actorRole, payload: r.payload as Record<string, unknown> }))
     const sector = state.sector
     return {
@@ -47,7 +56,12 @@ export async function buildSimulationSnapshot(simulationId: string): Promise<Sim
       roles: definition.roles.map((r) => ({ name: r.name, slaveName: r.slaveName, purpose: r.purpose, allowedActions: r.allowedActions })),
       metrics: tradeMetrics(entries, sector),
       journal: entries.slice(-JOURNAL_PAGE),
-      modelUsage: { rows: usage._count._all, costUsd: usage._count._all === 0 || usage._sum.costUsd === null ? null : usage._sum.costUsd, unmeasured },
+      modelUsage: {
+        spentUsd: usage._count._all === 0 || usage._sum.costUsd === null ? null : usage._sum.costUsd,
+        capUsd: summary.maxModelCostUsd,
+        rows: usageRows.map((r) => ({ seq: r.seq, simTime: r.simTime, role: r.role, costUsd: r.costUsd })),
+        unmeasured,
+      },
       scenario: definition.scenario.map((s) => ({ day: s.day, event: s.event })),
       compareCandidates: compareCandidatesOf(await listSimulations(tx, summary.companyId), summary).map((s) => ({ id: s.id, name: s.name, policy: s.policy, status: s.status, simTime: s.simTime })),
     }

@@ -19,7 +19,7 @@ export function SimulationStrip({
     <div data-testid="sim-strip" className="flex flex-wrap items-center gap-2 border-b border-line bg-bg-1 px-6 py-2 text-xs text-text-2">
       <Chip tone="waiting">SIMULATION</Chip>
       <span>{summary.companyName}</span><span>·</span><span>{summary.sector}</span><span>·</span><span>policy {summary.policy}</span><span>·</span>
-      <span>{summary.decisionProvider} provider</span><span>·</span>
+      <span>{summary.decisionProvider} provider{summary.decisionProvider === 'llm' ? ` · ${String(summary.modelProvider)} · ${String(summary.model)}` : ''}</span><span>·</span>
       {summary.autoRun !== null && (
         <>
           <Chip tone="working"><span data-testid="sim-auto-run-chip">auto-run every {formatEveryMs(summary.autoRun.everyMs)} → day {summary.autoRun.untilDay}</span></Chip>

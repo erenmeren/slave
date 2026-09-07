@@ -36,6 +36,7 @@ export function SimulationsClient({ cards, companies }: { readonly cards: readon
                     <div className="flex items-center gap-2 text-xs text-text-2">
                       <span>day {card.simTime} / {card.horizonDays}</span>
                       <Chip tone={STATUS_TONE[card.status]}>{card.status}</Chip>
+                      {card.decisionProvider === 'llm' && <Chip tone="working">llm</Chip>}
                       {card.autoRun !== null && <Chip tone="working">auto-run</Chip>}
                     </div>
                   </Card>

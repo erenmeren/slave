@@ -1243,6 +1243,26 @@ describe('the orchestrator CLI', () => {
       expect(result.stderr).toContain('--seed must be an integer')
       expect(await prisma.simulationRun.count()).toBe(0)
     }, 30_000)
+    it('an llm run refuses without a cap, creating nothing; with a cap the row carries the llm fields and simulation-status reports spentUsd/capUsd', async () => {
+      const companyId = await tradingCompany()
+      const missingCap = await runCli(['create-simulation', '--company', companyId, '--name', 'llm cli', '--policy', 'A', '--decision-provider', 'llm', '--model-provider', 'claude_code', '--model', 'claude-sonnet-4-5'])
+      expect(missingCap.code).toBe(1)
+      expect(missingCap.stderr).toContain('maxModelCostUsd must be a positive number')
+      expect(await prisma.simulationRun.count()).toBe(0)
+
+      const created = await runCli(['create-simulation', '--company', companyId, '--name', 'llm cli', '--policy', 'A', '--decision-provider', 'llm', '--model-provider', 'claude_code', '--model', 'claude-sonnet-4-5', '--max-model-cost-usd', '2'])
+      expect(created.code).toBe(0)
+      const id = /simulation (\S+) created/.exec(created.stdout)?.[1] ?? ''
+      expect(id).not.toBe('')
+      const row = await prisma.simulationRun.findUniqueOrThrow({ where: { id } })
+      expect(row).toMatchObject({ decisionProvider: 'llm', modelProvider: 'claude_code', model: 'claude-sonnet-4-5', maxModelCostUsd: 2 })
+
+      const status = await runCli(['simulation-status', '--simulation', id])
+      expect(status.code).toBe(0)
+      const parsed = JSON.parse(status.stdout) as { modelUsage: { spentUsd: number | null; capUsd: number | null } }
+      expect(parsed.modelUsage.capUsd).toBe(2)
+      expect(parsed.modelUsage.spentUsd).toBeNull()
+    }, 30_000)
     it('tick steps every due auto-run once and reports the counts (M30)', async () => {
       const companyId = await tradingCompany()
       const created = await runCli(['create-simulation', '--company', companyId, '--name', 'auto', '--policy', 'A'])

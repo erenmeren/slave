@@ -6,6 +6,7 @@ import { useSimulationStream } from '../../hooks/useSimulationStream'
 import { formatMinor } from '../../lib/money'
 import { sendControl } from '../../lib/postControl'
 import type { SimulationSnapshot, JournalRow } from '../../server/simulation'
+import { Chip } from '../ui/Chip'
 import { DangerConfirm } from '../ui/DangerConfirm'
 import { PrimaryButton, GhostButton, SelectField, TextField } from '../ui/FormControls'
 import { Panel } from '../ui/Panel'
@@ -64,6 +65,28 @@ export function SimulationClient({ initial }: { readonly initial: SimulationSnap
       : { type: 'supplier_delay', supplierId: inject.supplierId, extraDays: Number.parseInt(inject.extraDays, 10) }
     return call('inject', { day, event, idempotencyKey: newKey() })
   }
+  // The panel's text (M31a §5): an `llm` run with a cap reads `$<spent> of $<cap>` -- `spent` at
+  // four decimals so a real but tiny call never rounds to the misleading `$0.00`, `cap` at two
+  // since it is the operator's own round figure -- plus an `unmeasured` count when > 0. A `rules`
+  // run (or an `llm` run whose cap is somehow absent) keeps the M31 count-and-total reading.
+  const modelUsageText = ((): string => {
+    const usage = initial.modelUsage
+    if (summary.decisionProvider === 'llm' && usage.capUsd !== null) {
+      const spent = usage.spentUsd ?? 0
+      const unmeasuredSuffix = usage.unmeasured > 0 ? ` · ${usage.unmeasured} unmeasured` : ''
+      return `$${spent.toFixed(4)} of $${usage.capUsd.toFixed(2)}${unmeasuredSuffix}`
+    }
+    if (usage.rows.length === 0) return `${summary.decisionProvider} provider — no model calls; cost: no record`
+    return `${usage.rows.length} calls · ${usage.spentUsd === null ? 'cost unmeasured' : `$${usage.spentUsd.toFixed(2)}`}${usage.unmeasured > 0 ? ` · ${usage.unmeasured} unmeasured` : ''}`
+  })()
+  // A decision's own cost (M31a §5): matched by the usage row whose `seq` equals the decision
+  // payload's `usageSeq`, never by array position -- `unmeasured` when that row's cost is still
+  // null, and the same text when no row is found at all (the usage insert has not committed yet).
+  const costForDecision = (d: JournalRow): string => {
+    const usageSeq = d.payload['usageSeq']
+    const row = initial.modelUsage.rows.find((r) => r.seq === usageSeq)
+    return row === undefined || row.costUsd === null ? 'unmeasured' : `$${row.costUsd.toFixed(4)}`
+  }
   const decisions = initial.journal.filter((row) => row.kind === 'decision')
   // Matched by the journal's own `actionIndex`, not by array position — the outcome rows for a
   // decision's several actions can land out of order (a later action's rejection can be journalled
@@ -77,9 +100,15 @@ export function SimulationClient({ initial }: { readonly initial: SimulationSnap
       <div className="flex flex-col gap-4 p-6">
         <div data-testid="sim-controls" className="flex flex-wrap items-center gap-2">
           <h1 className="mr-2 text-[14.5px] font-semibold text-text-1">{summary.name}</h1>
-          <PrimaryButton data-testid="sim-step" disabled={pending || !steppable} onClick={() => void call('step', stepBody({ steps: 1 }))}>Step 1 day</PrimaryButton>
-          <TextField inputProps={{ 'aria-label': 'run to day', 'data-testid': 'sim-run-to-day', value: runToDay, inputMode: 'numeric', className: 'w-16', onChange: (event) => setRunToDay(event.target.value) } as React.InputHTMLAttributes<HTMLInputElement>} />
-          <PrimaryButton data-testid="sim-run-to" disabled={pending || !steppable} onClick={() => void call('step', stepBody({ untilDay: Number.parseInt(runToDay, 10) }))}>Run to day</PrimaryButton>
+          {summary.decisionProvider === 'llm' ? (
+            <span className="text-xs text-text-3">an llm run steps only through auto-run (the daemon makes the model calls); a call already in flight finishes and is billed</span>
+          ) : (
+            <>
+              <PrimaryButton data-testid="sim-step" disabled={pending || !steppable} onClick={() => void call('step', stepBody({ steps: 1 }))}>Step 1 day</PrimaryButton>
+              <TextField inputProps={{ 'aria-label': 'run to day', 'data-testid': 'sim-run-to-day', value: runToDay, inputMode: 'numeric', className: 'w-16', onChange: (event) => setRunToDay(event.target.value) } as React.InputHTMLAttributes<HTMLInputElement>} />
+              <PrimaryButton data-testid="sim-run-to" disabled={pending || !steppable} onClick={() => void call('step', stepBody({ untilDay: Number.parseInt(runToDay, 10) }))}>Run to day</PrimaryButton>
+            </>
+          )}
           {summary.status === 'paused' ? (
             <GhostButton data-testid="sim-resume" disabled={pending} onClick={() => void call('resume')}>Resume</GhostButton>
           ) : (
@@ -103,7 +132,12 @@ export function SimulationClient({ initial }: { readonly initial: SimulationSnap
             </SelectField>
           )}
           {errorText !== null && <span role="alert" data-testid="sim-error" className="text-xs text-tone-blocked">{errorText}</span>}
-          {summary.status === 'halted' && <span className="text-xs text-text-3">halted{summary.haltedReason !== null ? ` (${summary.haltedReason})` : ''} — stepping is in-request, so nothing was in flight to stop</span>}
+          {summary.status === 'halted' && (
+            <span data-testid="sim-halted-note" className="text-xs text-text-3">
+              halted{summary.haltedReason !== null ? ` (${summary.haltedReason})` : ''}
+              {summary.decisionProvider === 'llm' ? '' : ' — stepping is in-request, so nothing was in flight to stop'}
+            </span>
+          )}
         </div>
         {injectOpen && (
           <div className="flex flex-wrap items-end gap-2 rounded-card border border-line bg-bg-2 p-3">
@@ -137,11 +171,7 @@ export function SimulationClient({ initial }: { readonly initial: SimulationSnap
             </div>
           </Panel>
           <Panel title="Model usage (real)">
-            <div data-testid="sim-model-usage" className="text-xs text-text-2">
-              {initial.modelUsage.rows === 0
-                ? `${summary.decisionProvider} provider — no model calls; cost: no record`
-                : `${initial.modelUsage.rows} calls · ${initial.modelUsage.costUsd === null ? 'cost unmeasured' : `$${initial.modelUsage.costUsd.toFixed(2)}`}${initial.modelUsage.unmeasured > 0 ? ` · ${initial.modelUsage.unmeasured} unmeasured` : ''}`}
-            </div>
+            <div data-testid="sim-model-usage" className="text-xs text-text-2">{modelUsageText}</div>
           </Panel>
         </div>
         <div role="tablist" aria-label="simulation sections" className="flex gap-2 text-xs">
@@ -173,16 +203,30 @@ export function SimulationClient({ initial }: { readonly initial: SimulationSnap
           <div role="tabpanel" aria-label="decisions">
             <Panel title="Decisions">
               <div className="flex flex-col gap-2">
-                {decisions.map((d) => (
-                  <div key={d.seq} data-testid="sim-decision-row" className="rounded-card border border-line bg-bg-2 p-2 text-xs text-text-2">
-                    <div>day {d.simTime} · <span className="text-text-1">{d.actorRole}</span> · {String(d.payload['provider'])} provider</div>
-                    {((d.payload['actions'] as { type: string; params: Record<string, unknown>; rationale: string }[] | undefined) ?? []).map((a, i) => {
-                      const outcome = outcomeFor(d, i)
-                      return <div key={i} className="ml-2">{a.type} {JSON.stringify(a.params)} — &ldquo;{a.rationale}&rdquo; → {outcome === undefined ? 'no outcome' : outcome.kind === 'action_applied' ? 'applied' : `rejected: ${JSON.stringify(outcome.payload['reason'])}`}</div>
-                    })}
-                    {((d.payload['actions'] as unknown[] | undefined) ?? []).length === 0 && <div className="ml-2 text-text-3">no action</div>}
-                  </div>
-                ))}
+                {decisions.map((d) => {
+                  const isLlm = d.payload['provider'] === 'llm'
+                  const parseError = d.payload['parseError']
+                  return (
+                    <div key={d.seq} data-testid="sim-decision-row" className="rounded-card border border-line bg-bg-2 p-2 text-xs text-text-2">
+                      <div className="flex flex-wrap items-center gap-1">
+                        <span>day {d.simTime} · <span className="text-text-1">{d.actorRole}</span> · {String(d.payload['provider'])} provider</span>
+                        {isLlm && (
+                          <>
+                            <Chip tone="working">llm</Chip>
+                            <span className="font-mono">{String(d.payload['model'])}</span>
+                            <span>{costForDecision(d)}</span>
+                          </>
+                        )}
+                      </div>
+                      {((d.payload['actions'] as { type: string; params: Record<string, unknown>; rationale: string }[] | undefined) ?? []).map((a, i) => {
+                        const outcome = outcomeFor(d, i)
+                        return <div key={i} className="ml-2">{a.type} {JSON.stringify(a.params)} — &ldquo;{a.rationale}&rdquo; → {outcome === undefined ? 'no outcome' : outcome.kind === 'action_applied' ? 'applied' : `rejected: ${JSON.stringify(outcome.payload['reason'])}`}</div>
+                      })}
+                      {((d.payload['actions'] as unknown[] | undefined) ?? []).length === 0 && <div className="ml-2 text-text-3">no action</div>}
+                      {parseError !== undefined && <div className="ml-2 text-tone-blocked">parse error: {String(parseError)}</div>}
+                    </div>
+                  )
+                })}
               </div>
             </Panel>
           </div>

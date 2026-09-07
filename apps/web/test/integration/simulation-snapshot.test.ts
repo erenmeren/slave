@@ -29,7 +29,7 @@ describe('buildSimulationSnapshot', () => {
     expect(snapshot?.currency).toBe('USD')
     expect(snapshot?.company).toMatchObject({ day: 30, inventory: 50, openOrders: 0 })
     expect(snapshot?.metrics.deliveredQty).toBe(150)
-    expect(snapshot?.modelUsage).toEqual({ rows: 0, costUsd: null, unmeasured: 0 })
+    expect(snapshot?.modelUsage).toEqual({ spentUsd: null, capUsd: null, rows: [], unmeasured: 0 })
     expect(snapshot?.journal.length).toBeLessThanOrEqual(200)
     expect(snapshot?.journal.at(-1)?.kind).toBe('control')
     expect(snapshot?.roles.map((r) => r.slaveName)).toEqual(['Sonia', 'Pete', 'Olga', 'Fin'])

@@ -30,7 +30,7 @@ function snapshot(over: Partial<SimulationSnapshot> = {}): SimulationSnapshot {
       { seq: 10, simTime: 2, kind: 'action_rejected', actorRole: 'operations', payload: { index: 2, actionIndex: 1, action: { type: 'ship_order', params: { qty: 40 } }, reason: { kind: 'capacity_exhausted', remainingCapacity: 0 } } },
       { seq: 11, simTime: 2, kind: 'action_applied', actorRole: 'operations', payload: { index: 2, actionIndex: 0, action: { type: 'ship_order', params: { qty: 30 } } } },
     ],
-    modelUsage: { rows: 0, costUsd: null, unmeasured: 0 },
+    modelUsage: { spentUsd: null, capUsd: null, rows: [], unmeasured: 0 },
     scenario: [{ day: 1, event: { type: 'demand', qty: 150 } }],
     compareCandidates: [{ id: 's2', name: 'Q3 plan (B)', policy: 'B', status: 'finished', simTime: 30 }],
     ...over,
@@ -197,5 +197,56 @@ describe('SimulationClient', () => {
     expect((screen.getByTestId('sim-pause') as HTMLButtonElement).disabled).toBe(false)
     await act(async () => { fireEvent.click(screen.getByTestId('sim-auto-run-stop')) })
     expect(fetchMock).toHaveBeenCalledWith('/api/sim/s1/auto-run/stop', expect.objectContaining({ method: 'POST' }))
+  })
+
+  describe('an llm run', () => {
+    function llmSnapshot(over: Partial<SimulationSnapshot> = {}): SimulationSnapshot {
+      return snapshot({
+        summary: { ...snapshot().summary, decisionProvider: 'llm', modelProvider: 'claude_code', model: 'claude-sonnet-4-5', maxModelCostUsd: 2, llmRoles: ['purchasing'] },
+        journal: [
+          { seq: 20, simTime: 5, kind: 'decision', actorRole: 'purchasing', payload: { index: 5, provider: 'llm', model: 'claude-sonnet-4-5', usageSeq: 100, promptHash: 'h1', observation: { inventory: 40 }, actions: [{ type: 'place_purchase', params: { supplierId: 'normal', qty: 20 }, rationale: 'restock', refs: [] }] } },
+          { seq: 21, simTime: 6, kind: 'decision', actorRole: 'purchasing', payload: { index: 6, provider: 'llm', model: 'claude-sonnet-4-5', usageSeq: 101, promptHash: 'h2', parseError: 'no JSON action block found', observation: { inventory: 30 }, actions: [] } },
+        ],
+        modelUsage: { spentUsd: 0.0038, capUsd: 2, unmeasured: 1, rows: [{ seq: 100, simTime: 5, role: 'purchasing', costUsd: 0.0038 }, { seq: 101, simTime: 6, role: 'purchasing', costUsd: null }] },
+        ...over,
+      })
+    }
+
+    it('the strip names the model provider and model', () => {
+      render(<SimulationClient initial={llmSnapshot()} />)
+      expect(screen.getByTestId('sim-strip').textContent).toContain('llm provider · claude_code · claude-sonnet-4-5')
+    })
+
+    it('the model panel reads $spent of $cap with unmeasured count', () => {
+      render(<SimulationClient initial={llmSnapshot()} />)
+      expect(screen.getByTestId('sim-model-usage').textContent).toContain('$0.0038 of $2.00')
+      expect(screen.getByTestId('sim-model-usage').textContent).toContain('1 unmeasured')
+    })
+
+    it('Step and Run-to-day are absent; the auto-run-only sentence shows instead', () => {
+      render(<SimulationClient initial={llmSnapshot()} />)
+      expect(screen.queryByTestId('sim-step')).toBeNull()
+      expect(screen.queryByTestId('sim-run-to')).toBeNull()
+      expect(screen.getByTestId('sim-controls').textContent).toContain('an llm run steps only through auto-run (the daemon makes the model calls); a call already in flight finishes and is billed')
+    })
+
+    it('a halted llm run names the reason without the in-request stepping note', () => {
+      render(<SimulationClient initial={llmSnapshot({ summary: { ...llmSnapshot().summary, status: 'halted', haltedReason: 'model budget exhausted' } })} />)
+      const note = screen.getByTestId('sim-halted-note').textContent ?? ''
+      expect(note).toContain('model budget exhausted')
+      expect(note).not.toContain('stepping is in-request')
+    })
+
+    it('the Decisions tab shows the llm chip, the model, the matched cost, and a parse error line', () => {
+      render(<SimulationClient initial={llmSnapshot()} />)
+      fireEvent.click(screen.getByTestId('sim-tab-decisions'))
+      const rows = screen.getAllByTestId('sim-decision-row')
+      expect(rows).toHaveLength(2)
+      expect(rows[0]?.textContent).toContain('llm')
+      expect(rows[0]?.textContent).toContain('claude-sonnet-4-5')
+      expect(rows[0]?.textContent).toContain('$0.0038')
+      expect(rows[1]?.textContent).toContain('unmeasured')
+      expect(rows[1]?.textContent).toContain('no JSON action block found')
+    })
   })
 })

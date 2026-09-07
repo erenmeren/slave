@@ -142,13 +142,20 @@ const USAGE = `usage: orchestrator <command> [options]
                                        remove a slave template with the catalog slaves made from
                                        it; project slaves keep their role
   create-simulation --company <id> --name <n> --policy A|B [--seed <n>] [--sector trade]
+      [--decision-provider rules|llm] [--model-provider claude_code] [--model <id>]
+      [--max-model-cost-usd <n>]
                                        create a company SIMULATION from a catalog company's
-                                       roster (frozen at creation). No repository, no model
-                                       call: the rules provider decides. Synthetic data.
+                                       roster (frozen at creation). No repository. The rules
+                                       provider (default) makes no model call; an llm run needs
+                                       --model-provider, --model and a positive
+                                       --max-model-cost-usd, and steps only through auto-run.
+                                       Synthetic data.
   step-simulation --simulation <id> [--steps <n> | --until-day <d>]
-                                       advance the simulation clock (one day per step)
+                                       advance the simulation clock (one day per step) — refused
+                                       for an llm run; its steps happen in the daemon
   simulation-status --simulation <id>  the run's summary, company panel, metrics and model
-                                       usage as JSON — simulated money and real cost apart
+                                       usage (spentUsd/capUsd apart from the simulated money) as
+                                       JSON — real cost apart
   pause-simulation --simulation <id>   pause: refuse every next step (clears auto-run)
   resume-simulation --simulation <id>  resume a paused simulation (auto-run is not restored)
   halt-simulation --simulation <id> [--reason <text>]
@@ -952,9 +959,29 @@ export async function main(argv: readonly string[]): Promise<number> {
         seed = Number.parseInt(seedText, 10)
         if (!Number.isInteger(seed) || String(seed) !== seedText.trim()) throw new Error('--seed must be an integer')
       }
-      const result = await createSimulation({ companyId, name, sector: sector as 'trade', policy, ...(seed !== undefined ? { seed } : {}) })
+      // M31a §5: `--decision-provider llm` is a paid, capped run -- `createSimulation` itself
+      // refuses a missing `--model-provider`/`--model`/`--max-model-cost-usd`, so the CLI passes
+      // whatever was given straight through rather than re-validating it here.
+      const decisionProviderText = flagText(flags, 'decision-provider')
+      if (decisionProviderText !== undefined && decisionProviderText !== 'rules' && decisionProviderText !== 'llm') throw new Error('--decision-provider must be rules or llm')
+      const decisionProvider = decisionProviderText as 'rules' | 'llm' | undefined
+      const modelProviderText = flagText(flags, 'model-provider')
+      if (modelProviderText !== undefined && modelProviderText !== 'claude_code' && modelProviderText !== 'cursor') throw new Error('--model-provider must be claude_code or cursor')
+      const modelProvider = modelProviderText as 'claude_code' | 'cursor' | undefined
+      const model = flagText(flags, 'model')
+      const maxModelCostUsdText = flagText(flags, 'max-model-cost-usd')
+      const maxModelCostUsd = maxModelCostUsdText !== undefined ? Number(maxModelCostUsdText) : undefined
+      const result = await createSimulation({
+        companyId, name, sector: sector as 'trade', policy,
+        ...(seed !== undefined ? { seed } : {}),
+        ...(decisionProvider !== undefined ? { decisionProvider } : {}),
+        ...(modelProvider !== undefined ? { modelProvider } : {}),
+        ...(model !== undefined ? { model } : {}),
+        ...(maxModelCostUsd !== undefined ? { maxModelCostUsd } : {}),
+      })
       if (!result.ok) throw new Error(refusalText(result.error))
-      process.stdout.write(`simulation ${result.value.id} created (trade, policy ${policy}, rules provider, synthetic)\n`)
+      const providerText = decisionProvider === 'llm' ? `llm provider · ${String(modelProvider)} · ${String(model)}, cap $${Number(maxModelCostUsd).toFixed(2)}` : 'rules provider'
+      process.stdout.write(`simulation ${result.value.id} created (trade, policy ${policy}, ${providerText}, synthetic)\n`)
       return 0
     }
 
@@ -972,7 +999,10 @@ export async function main(argv: readonly string[]): Promise<number> {
       const simulationId = requireFlag(flags, 'simulation')
       const snapshot = await simulationStatus(simulationId)
       if (!snapshot.ok) throw new Error(refusalText(snapshot.error))
-      process.stdout.write(`${JSON.stringify(snapshot.value, null, 2)}\n`)
+      // M31a §5: `spentUsd`/`capUsd` alongside the M31 `costUsd` total -- real spend against the
+      // cap without the caller cross-referencing `summary.maxModelCostUsd` by hand.
+      const printed = { ...snapshot.value, modelUsage: { ...snapshot.value.modelUsage, spentUsd: snapshot.value.modelUsage.costUsd, capUsd: snapshot.value.summary.maxModelCostUsd } }
+      process.stdout.write(`${JSON.stringify(printed, null, 2)}\n`)
       return 0
     }
 

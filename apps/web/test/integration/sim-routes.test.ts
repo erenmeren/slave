@@ -42,6 +42,22 @@ describe('the simulation routes', () => {
     expect(unsupported.status).toBe(409)
     expect((await unsupported.json()).error).toContain('cannot run in simulation mode yet')
   })
+  it('create with decisionProvider llm but no cap → 400 with the refusal text; nothing is created', async () => {
+    const missingCap = await createPOST(json({ companyId, name: 'llm run', policy: 'A', decisionProvider: 'llm', modelProvider: 'claude_code', model: 'claude-sonnet-4-5' }))
+    expect(missingCap.status).toBe(400)
+    expect((await missingCap.json()).error).toContain('maxModelCostUsd must be a positive number')
+    expect(await prisma.simulationRun.count()).toBe(0)
+  })
+  it('create with decisionProvider llm and a cap → 200; the row and the GET snapshot carry the llm fields', async () => {
+    const created = await createPOST(json({ companyId, name: 'llm run', policy: 'A', decisionProvider: 'llm', modelProvider: 'claude_code', model: 'claude-sonnet-4-5', maxModelCostUsd: 2 }))
+    expect(created.status).toBe(200)
+    const { id } = (await created.json()) as { id: string }
+    const row = await prisma.simulationRun.findUnique({ where: { id } })
+    expect(row).toMatchObject({ decisionProvider: 'llm', modelProvider: 'claude_code', model: 'claude-sonnet-4-5', maxModelCostUsd: 2 })
+    const got = await simGET(new Request('http://x', { method: 'GET' }), params(id))
+    const snapshot = (await got.json()) as { summary: { decisionProvider: string; modelProvider: string; model: string; maxModelCostUsd: number } }
+    expect(snapshot.summary).toMatchObject({ decisionProvider: 'llm', modelProvider: 'claude_code', model: 'claude-sonnet-4-5', maxModelCostUsd: 2 })
+  })
   it('step / pause / resume / halt / inject answer 200 / 409 / 404 by the verb', async () => {
     const { id } = (await (await createPOST(json({ companyId, name: 'demo', policy: 'A' }))).json()) as { id: string }
     // `steps` must be a positive integer, same as every other malformed body (fix wave, Minor #10).
@@ -75,9 +91,11 @@ describe('the simulation routes', () => {
     const { id } = (await (await createPOST(json({ companyId, name: 'demo', policy: 'A' }))).json()) as { id: string }
     const got = await simGET(new Request('http://x', { method: 'GET' }), params(id))
     expect(got.status).toBe(200)
-    const snapshot = (await got.json()) as { summary: { id: string }; modelUsage: { costUsd: number | null } }
+    const snapshot = (await got.json()) as { summary: { id: string }; modelUsage: { spentUsd: number | null; capUsd: number | null; rows: unknown[]; unmeasured: number } }
     expect(snapshot.summary.id).toBe(id)
-    expect(snapshot.modelUsage.costUsd).toBeNull()
+    expect(snapshot.modelUsage.spentUsd).toBeNull()
+    expect(snapshot.modelUsage.capUsd).toBeNull()
+    expect(snapshot.modelUsage.rows).toEqual([])
     const missing = await simGET(new Request('http://x', { method: 'GET' }), params('00000000-0000-4000-8000-00000000dead'))
     expect(missing.status).toBe(404)
     expect((await missing.json()).error).toBe('no such simulation')
