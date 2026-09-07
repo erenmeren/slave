@@ -8,6 +8,7 @@
   "dependencies": {
     "@slave-of-ai/control": "*",
     "@slave-of-ai/db": "*",
-    "@slave-of-ai/domain": "*"
+    "@slave-of-ai/domain": "*",
+    "@slave-of-ai/simulation": "*"
   }
 }

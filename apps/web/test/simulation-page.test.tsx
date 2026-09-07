@@ -184,6 +184,27 @@ describe('SimulationClient', () => {
     expect(url).toBe('/api/sim/s1/inject')
     expect(JSON.parse(String(init.body))).toMatchObject({ day: 6, event: { type: 'demand', qty: 20 } })
   })
+  it('the trade inject form opens on M29/M30\'s own values, not the generic 1 / 0.00 (final fix wave)', () => {
+    render(<SimulationClient initial={snapshot()} />)
+    fireEvent.click(screen.getByTestId('sim-inject-open'))
+    // `demand` is the first form, so this is what the drawer shows the moment it opens.
+    expect((screen.getByTestId('sim-inject-qty') as HTMLInputElement).value).toBe('10')
+    expect((screen.getByTestId('sim-inject-price') as HTMLInputElement).value).toBe('120.00')
+    expect((screen.getByTestId('sim-inject-due') as HTMLInputElement).value).toBe('10')
+    expect((screen.getByTestId('sim-inject-collect') as HTMLInputElement).value).toBe('15')
+    fireEvent.change(screen.getByTestId('sim-inject-kind'), { target: { value: 'supplier_delay' } })
+    // The supplier has no `default`: a select falls back to its first option, which is `normal`.
+    expect((screen.getByTestId('sim-inject-supplier') as HTMLSelectElement).value).toBe('normal')
+    expect(screen.getByTestId('sim-inject-supplier').textContent).toContain('normal')
+    expect((screen.getByTestId('sim-inject-extra-days') as HTMLInputElement).value).toBe('3')
+  })
+  it('the clone drawer\'s policy options are the run\'s own sector\'s prose (final fix wave)', () => {
+    render(<SimulationClient initial={snapshot()} />)
+    fireEvent.click(screen.getByTestId('sim-clone-open'))
+    const options = [...screen.getByTestId('sim-clone-policy').querySelectorAll('option')].map((o) => o.textContent)
+    expect(options).toEqual([sectors.trade.policyLabels.A, sectors.trade.policyLabels.B])
+    expect(options[0]).toContain('normal supplier')
+  })
   it('a select field with nothing to select from blocks the submit and says so, instead of posting "" (review round 1, Minor #1)', () => {
     render(<SimulationClient initial={snapshot({ injectOptions: { suppliers: [] } })} />)
     fireEvent.click(screen.getByTestId('sim-inject-open'))
@@ -357,6 +378,22 @@ describe('SimulationClient', () => {
       const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
       expect(url).toBe('/api/sim/sw1/inject')
       expect(JSON.parse(String(init.body))).toMatchObject({ event: { type: 'absence', engineerId: 'emma', days: 3 } })
+    })
+
+    it('the clone drawer offers the SOFTWARE policies, never trade\'s supplier prose (final fix wave)', () => {
+      render(<SimulationClient initial={softwareSnapshot()} />)
+      fireEvent.click(screen.getByTestId('sim-clone-open'))
+      const options = [...screen.getByTestId('sim-clone-policy').querySelectorAll('option')].map((o) => o.textContent)
+      expect(options).toEqual([sectors.software.policyLabels.A, sectors.software.policyLabels.B])
+      expect(options.join(' ')).toContain('review everything')
+      expect(options.join(' ')).not.toMatch(/supplier/i)
+    })
+
+    it('the software inject form has no trade defaults to inherit: its int fields open on 1', () => {
+      render(<SimulationClient initial={softwareSnapshot()} />)
+      fireEvent.click(screen.getByTestId('sim-inject-open'))
+      expect((screen.getByTestId('sim-inject-sizeDays') as HTMLInputElement).value).toBe('1')
+      expect((screen.getByTestId('sim-inject-dueInDays') as HTMLInputElement).value).toBe('1')
     })
   })
 })

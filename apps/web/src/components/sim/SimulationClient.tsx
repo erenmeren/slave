@@ -27,16 +27,17 @@ function slugify(label: string): string {
   return label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
 }
 
-/** A field's starting text (M31b §5): the run page has no sector-specific defaults to reach for
- *  any more, so every field starts at a plain, always-parseable value -- `1` for a count or a day,
- *  `0.00` (major units) for money, the first option for a select. Switching the event kind resets
- *  every field to this, since the previous kind's fields may not even exist on the new one. */
+/** A field's starting text (M31b §5): the field's OWN `default` when its sector states one --
+ *  trade's demand form opens on M29/M30's plausible order (qty 10 at 120.00, due in 10 days,
+ *  collected in 15), which the first cut of this function flattened to `1` / `0.00` -- and
+ *  otherwise a plain, always-parseable value by kind: `1` for a count or a day, `0.00` (major
+ *  units) for money, the first option for a select. Switching the event kind resets every field to
+ *  this, since the previous kind's fields may not even exist on the new one. */
 function defaultInjectFieldValues(form: ExternalEventForm | undefined, injectOptions: SimulationSnapshot['injectOptions']): Record<string, string> {
   const values: Record<string, string> = {}
   for (const field of form?.fields ?? []) {
     if (field.kind === 'select') values[field.name] = injectOptions[field.optionsFrom ?? '']?.[0]?.id ?? ''
-    else if (field.kind === 'money') values[field.name] = '0.00'
-    else values[field.name] = '1'
+    else values[field.name] = field.default ?? (field.kind === 'money' ? '0.00' : '1')
   }
   return values
 }
@@ -302,7 +303,7 @@ export function SimulationClient({ initial }: { readonly initial: SimulationSnap
           </div>
         )}
       </div>
-      <CloneDrawer open={cloneOpen} onClose={() => setCloneOpen(false)} sourceId={summary.id} sourceName={summary.name} sourcePolicy={summary.policy} />
+      <CloneDrawer open={cloneOpen} onClose={() => setCloneOpen(false)} sourceId={summary.id} sourceName={summary.name} sourcePolicy={summary.policy} sector={summary.sector} />
     </div>
   )
 }

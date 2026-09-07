@@ -108,7 +108,15 @@ function readRoster(roster: readonly SoftwareRosterEntry[]): { readonly roles: R
   const engineering = roster.filter((r) => inDepartment(r, 'engineering'))
   const reviewer = engineering.find((r) => hasRole(r, 'reviewer')) ?? engineering.find((r) => hasRole(r, 'qa'))
   if (product === undefined || lead === undefined || reviewer === undefined) return null
-  const engineers = engineering.filter((r) => r.slaveName !== reviewer.slaveName).map((r) => ({ id: r.slaveName, expertise: expertiseFor(r.role) }))
+  // Ordered by id (erratum R17), NOT left in roster order: policy A's `pick()` breaks a
+  // free-engineer tie by array position, so an unordered pool would make the run depend on how the
+  // caller happened to list the roster -- control's `rosterOf` reads slaves name-ascending out of
+  // the database, a hand-typed test fixture does not. A plain comparator, not `localeCompare`:
+  // engineer ids are slave names and the order must be the same under every locale.
+  const engineers = engineering
+    .filter((r) => r.slaveName !== reviewer.slaveName)
+    .map((r) => ({ id: r.slaveName, expertise: expertiseFor(r.role) }))
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
   if (engineers.length < 2) return null
   const slaveFor: Readonly<Record<SoftwareRoleName, string>> = { product: product.slaveName, lead: lead.slaveName, reviewer: reviewer.slaveName }
   const roles = SOFTWARE_ROLE_NAMES.map((name) => ({ name, purpose: PURPOSE[name], observes: [...OBSERVES[name]], allowedActions: [...ALLOWED[name]], constraints: { ...CONSTRAINTS[name] }, slaveName: slaveFor[name] }))

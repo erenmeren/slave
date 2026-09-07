@@ -110,8 +110,10 @@ export function NewSimulationDrawer({
         {companies.length === 0 && <p data-testid="new-simulation-roster-hint" className="text-xs text-text-3">no catalog company fits yet — {sectors[sector].rosterRequirement}</p>}
         <TextField label="name" inputProps={{ 'aria-label': 'simulation name', 'data-testid': 'new-simulation-name', value: name, disabled: pending, onChange: (event) => setName(event.target.value) } as React.InputHTMLAttributes<HTMLInputElement>} />
         <SelectField label="policy" selectProps={{ 'aria-label': 'policy', 'data-testid': 'new-simulation-policy', value: policy, disabled: pending, onChange: (event) => setPolicy(event.target.value as 'A' | 'B') } as React.SelectHTMLAttributes<HTMLSelectElement>}>
-          <option value="A">A — wait for the normal supplier</option>
-          <option value="B">B — hedge with the fast supplier when a delivery is at risk</option>
+          {/* The chosen sector's own prose (final fix wave): trade's two suppliers are not
+              software's two review policies, and a hard-coded pair here printed trade's over both. */}
+          <option value="A">{sectors[sector].policyLabels.A}</option>
+          <option value="B">{sectors[sector].policyLabels.B}</option>
         </SelectField>
         <TextField label="seed" inputProps={{ 'aria-label': 'seed', 'data-testid': 'new-simulation-seed', value: seed, disabled: pending, inputMode: 'numeric', onChange: (event) => setSeed(event.target.value) } as React.InputHTMLAttributes<HTMLInputElement>} />
         <SelectField label="decision provider" selectProps={{ 'aria-label': 'decision provider', 'data-testid': 'new-simulation-provider', value: decisionProvider, disabled: pending, onChange: (event) => setDecisionProvider(event.target.value as 'rules' | 'llm') } as React.SelectHTMLAttributes<HTMLSelectElement>}>

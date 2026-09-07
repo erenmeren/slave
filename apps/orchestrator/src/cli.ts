@@ -54,11 +54,16 @@ import {
 } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import { workspaceId as brandWorkspaceId, type WorkspaceId } from '@slave-of-ai/domain'
+import { sectors } from '@slave-of-ai/simulation'
 import { DEFAULT_MODEL_TIMEOUT_MS, buildRegistry, decideWithModel, type AdapterRegistry, type ProviderKind } from '@slave-of-ai/providers'
 import { runDaemon } from './daemon.js'
 import { NON_TERMINAL_RUN_STATUSES } from './world.js'
 import { executeResume } from './resume.js'
 import { drainPumps, tick } from './tick.js'
+
+// Every sector the platform knows, from the registry itself -- a literal `trade|software` here
+// would be a third place to edit when a sector is added (M31b §1 principle 1).
+const SECTOR_CHOICES = Object.keys(sectors).join('|')
 
 const USAGE = `usage: orchestrator <command> [options]
 
@@ -141,7 +146,7 @@ const USAGE = `usage: orchestrator <command> [options]
   delete-template --template <id> --yes
                                        remove a slave template with the catalog slaves made from
                                        it; project slaves keep their role
-  create-simulation --sector trade|software --company <id> --name <n> --policy A|B [--seed <n>]
+  create-simulation --sector ${SECTOR_CHOICES} --company <id> --name <n> --policy A|B [--seed <n>]
       [--decision-provider rules|llm] [--model-provider claude_code] [--model <id>]
       [--max-model-cost-usd <n>]
                                        create a company SIMULATION from a catalog company's
@@ -161,7 +166,7 @@ const USAGE = `usage: orchestrator <command> [options]
   halt-simulation --simulation <id> [--reason <text>]
                                        the emergency stop for a simulation
   inject-simulation-event --simulation <id> --day <d> --event '<json>'
-                                       add customer demand or a supplier delay on a future day
+                                       inject an external event the sector allows on a future day
   clone-simulation --simulation <id> --name <n> --policy A|B [--seed <n>]
                                        a new run from this run's frozen scenario: same world,
                                        different policy or seed, day 0, nothing carried over

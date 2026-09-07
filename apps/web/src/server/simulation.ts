@@ -121,7 +121,12 @@ export async function buildComparison(a: string, b: string): Promise<ComparisonR
 /** The catalog companies the drawer can offer for ONE sector (M31b §5): delegates to control's
  *  `companiesForSector`, which already keeps only the companies whose frozen roster passes that
  *  sector's own `rosterFits` -- the list the drawer shows can never offer a company `createSimulation`
- *  would then refuse. */
-export function listSimulationCompanies(sector: SectorName): Promise<readonly { id: string; name: string; slaves: number }[]> {
-  return companiesForSector(sector)
+ *  would then refuse.
+ *
+ *  A refusal (only `unsupported_simulation`, for a sector no plugin answers to) becomes an empty
+ *  list HERE rather than in control: the page iterates the registry's own keys, so it cannot ask
+ *  for an unregistered sector, and a drawer has nothing useful to say about one if it did. */
+export async function listSimulationCompanies(sector: SectorName): Promise<readonly { id: string; name: string; slaves: number }[]> {
+  const result = await companiesForSector(sector)
+  return result.ok ? result.value : []
 }

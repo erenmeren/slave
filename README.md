@@ -85,13 +85,14 @@ covers the reliability and comparison work.
 Choose sector `software` in the drawer instead, and the roster shape changes with it: a Product
 slave who accepts requests into the queue, a Management slave (the `lead`) who assigns them to
 engineers, a reviewer (or QA) slave, and at least two more Engineering slaves who do the work.
-`npm run db:seed` does not ship a catalog company with that shape yet — build one first
-(`create-company`, `add-team`, `add-slave`) with departments named `Product`, `Management` and
-`Engineering`, the way the seeded "Checkout Platform" workspace's own crew is staffed: a Business
-Analyst in Product, a manager in Management, and Backend/Frontend/DevOps/QA/reviewer slaves in
-Engineering. Policy A ships fast — whoever is free takes the task — which is quick but lets a
-mismatched or unreviewed task surface a defect three days later; policy B reviews everything and
-waits up to two days for an engineer who actually knows the area, so it never reworks. From the run
+`npm run db:seed` ships one that fits: the catalog company **Checkout Platform** — the seeded
+workspace's own crew, as a company — with a Business Analyst in Product, a manager in Management,
+and Backend/Frontend/DevOps/QA/reviewer slaves in Engineering. (Build your own the same shape with
+`create-company`, `add-team`, `add-slave` if you would rather.)
+
+Policy A ships fast — whoever is free takes the task — which is quick but lets a mismatched or
+unreviewed task surface a defect three days later; policy B reviews everything and waits up to two
+days for an engineer who actually knows the area, so it never reworks. From the run
 page, **Add external event** injects a feature request, an incident, or an engineer's absence into
 the same queue; the sector's own metrics (delivered, on time, late, tasks reworked, defect
 incidents, idle engineer-days…) come from the same journal every other sector reads.

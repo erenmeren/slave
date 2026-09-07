@@ -37,7 +37,7 @@ export async function POST(request: Request): Promise<Response> {
   const gate = await requirePrincipal()
   if ('response' in gate) return gate.response
   const parsed = body.safeParse(await request.json().catch(() => null))
-  if (!parsed.success) return Response.json({ error: parsed.error.issues[0]?.message ?? 'the body must be { companyId, name, policy: "A" | "B", sector?, seed? }' }, { status: 400 })
+  if (!parsed.success) return Response.json({ error: parsed.error.issues[0]?.message ?? 'the body must be { companyId, name, policy: "A" | "B", sector, seed? }' }, { status: 400 })
   const { companyId, name, policy, sector, seed, decisionProvider, modelProvider, model, maxModelCostUsd } = parsed.data
   return simControlResponse(() =>
     createSimulation(

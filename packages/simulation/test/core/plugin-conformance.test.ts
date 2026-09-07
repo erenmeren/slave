@@ -4,7 +4,8 @@ import type { AnySectorPlugin } from '../../src/core/plugin.js'
 import { sectorFor, sectors } from '../../src/core/registry.js'
 import type { RoleDefinition } from '../../src/core/sector.js'
 
-/** The catalog's "Checkout Platform" crew (`packages/db/src/seed.ts`), which is the roster a
+/** The catalog's "Checkout Platform" crew (`packages/db/src/checkout-platform.ts`, which the seed
+ *  writes both the legacy workspace's slaves and a catalog company from), which is the roster a
  *  person actually creates a simulation from — and the one fixture BOTH sectors accept: nine
  *  slaves clears trade's "four slaves for four roles", and its departments and catalog roles fill
  *  software's product / lead / reviewer / engineers. Task 1's four-slave roster was enough only
@@ -38,6 +39,14 @@ describe.each(Object.entries(sectors) as (readonly [string, AnySectorPlugin])[])
   it('rosterFits agrees with demoDefinition on the same roster', () => {
     expect(plugin.rosterFits(roster)).toBe(true)
     expect(() => plugin.demoDefinition({ policy: 'A', seed: 1, roster, currency: 'USD' })).not.toThrow()
+  })
+
+  it('policyLabels names both policies, in prose of its own', () => {
+    // Both keys, both non-empty: the drawers print these verbatim, so an empty string would be an
+    // option a person cannot read rather than a caught error.
+    expect(Object.keys(plugin.policyLabels).sort()).toEqual(['A', 'B'])
+    expect(plugin.policyLabels.A.trim().length).toBeGreaterThan(0)
+    expect(plugin.policyLabels.B.trim().length).toBeGreaterThan(0)
   })
 
   it('rosterFits is false and demoDefinition throws rosterRequirement on a short roster', () => {

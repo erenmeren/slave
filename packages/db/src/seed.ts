@@ -1,10 +1,9 @@
+import { CHECKOUT_PLATFORM_COMPANY_NAME, CHECKOUT_PLATFORM_ROSTER, CHECKOUT_PLATFORM_TEAMS, checkoutPlatformTemplateName } from './checkout-platform.js'
 import { prisma } from './client.js'
 import { TASK_STATUSES } from './enums.js'
 import { SEED_WORKSPACE_ID } from './seed-workspace-id.js'
 
 export { SEED_WORKSPACE_ID }
-
-const TEAMS = ['Management', 'Engineering', 'Security', 'Product', 'Marketing'] as const
 
 /**
  * The reusable slave templates (M10 §4) a company's roster instantiates from. `defaultModel` is
@@ -33,22 +32,6 @@ const ROSTER: readonly { name: string; template: string }[] = [
   { name: 'Alex', template: 'Backend Developer' },
   { name: 'Emma', template: 'Frontend Developer' },
   { name: 'Riley', template: 'QA Reviewer' },
-]
-
-const SLAVES: readonly { name: string; role: string; team: (typeof TEAMS)[number] }[] = [
-  // Lowercase, matching the M8b planning dispatch's exact-match `role === 'manager'` -- the same
-  // convention `dispatchReview` uses for `role === 'reviewer'`.
-  { name: 'Atlas', role: 'manager', team: 'Management' },
-  { name: 'Alex', role: 'Backend', team: 'Engineering' },
-  { name: 'Emma', role: 'Frontend', team: 'Engineering' },
-  { name: 'Daniel', role: 'DevOps', team: 'Engineering' },
-  { name: 'Maya', role: 'QA', team: 'Engineering' },
-  // Lowercase, unlike the other roles here: Task 5's review dispatch matches `role === 'reviewer'`
-  // exactly, the same convention `decide()` uses for `requiredRole`.
-  { name: 'Riley', role: 'reviewer', team: 'Engineering' },
-  { name: 'Sarah', role: 'Security', team: 'Security' },
-  { name: 'John', role: 'Business Analyst', team: 'Product' },
-  { name: 'Oliver', role: 'SEO', team: 'Marketing' },
 ]
 
 /**
@@ -82,7 +65,7 @@ export async function seed(): Promise<void> {
     data: { workspaceId: workspace.id, kind: 'claude_code', settings: {} },
   })
 
-  for (const team of TEAMS) {
+  for (const team of CHECKOUT_PLATFORM_TEAMS) {
     await prisma.team.create({ data: { workspaceId: workspace.id, name: team } })
   }
 
@@ -90,12 +73,12 @@ export async function seed(): Promise<void> {
     (await prisma.team.findMany()).map((team) => [team.name, team.id] as const),
   )
 
-  for (const slave of SLAVES) {
-    const teamId = teamsByName.get(slave.team)
+  for (const member of CHECKOUT_PLATFORM_ROSTER) {
+    const teamId = teamsByName.get(member.departmentName)
     if (teamId === undefined) {
-      throw new Error(`seed is inconsistent: no team named ${slave.team}`)
+      throw new Error(`seed is inconsistent: no team named ${member.departmentName}`)
     }
-    await prisma.slave.create({ data: { teamId, name: slave.name, role: slave.role } })
+    await prisma.slave.create({ data: { teamId, name: member.slaveName, role: member.role } })
   }
 
   // The reusable template catalog and Atlas Software's roster (M10 §4-5) -- written directly with
@@ -134,6 +117,33 @@ export async function seed(): Promise<void> {
   for (const [department, slave] of TRADE_ROSTER) {
     const team = await prisma.companyTeam.create({ data: { companyId: trading.id, name: department } })
     await prisma.companySlave.create({ data: { companyTeamId: team.id, templateId: tradeTemplate.id, name: slave } })
+  }
+
+  // M31b final fix wave: a catalog company the SOFTWARE sector actually fits. Neither of the two
+  // companies above does -- Atlas Software is a single Engineering department (no Product, no
+  // Management), and the trade demo's four clerks have no Engineering at all -- so before this
+  // the drawer's software list was empty on freshly-seeded data and the README had to tell an
+  // operator to build a company by hand. This is the legacy workspace's own crew as a catalog
+  // company: the same departments, the same roles, so `rosterOf` reads exactly the roster
+  // `packages/simulation/test/software/roster.ts` pins its figures against. One template per
+  // distinct role, because `rosterOf` takes a catalog slave's role off its TEMPLATE.
+  const checkoutTemplateIds = new Map<string, string>()
+  for (const role of new Set(CHECKOUT_PLATFORM_ROSTER.map((member) => member.role))) {
+    const template = await prisma.slaveTemplate.create({ data: { name: checkoutPlatformTemplateName(role), role, defaultModel: null } })
+    checkoutTemplateIds.set(role, template.id)
+  }
+  const checkout = await prisma.company.create({ data: { name: CHECKOUT_PLATFORM_COMPANY_NAME } })
+  for (const department of CHECKOUT_PLATFORM_TEAMS) {
+    const members = CHECKOUT_PLATFORM_ROSTER.filter((member) => member.departmentName === department)
+    if (members.length === 0) continue
+    const team = await prisma.companyTeam.create({ data: { companyId: checkout.id, name: department } })
+    for (const member of members) {
+      const templateId = checkoutTemplateIds.get(member.role)
+      if (templateId === undefined) {
+        throw new Error(`seed is inconsistent: no template for role ${member.role}`)
+      }
+      await prisma.companySlave.create({ data: { companyTeamId: team.id, templateId, name: member.slaveName } })
+    }
   }
 
   // One task per status, so every state has a real example on screen when M4 arrives.

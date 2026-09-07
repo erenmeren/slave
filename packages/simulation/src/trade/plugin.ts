@@ -1,7 +1,7 @@
 import type { ExternalEventForm, SectorPlugin } from '../core/plugin.js'
 import { TRADE_ACTION_DOCS } from './action-docs.js'
 import type { TradeRejection } from './actions.js'
-import { cloneDefinition, demoDefinition as tradeDemoDefinition, tradeInitialEngineState, tradeSimulationDefinitionSchema, TRADE_ROSTER_REQUIREMENT, type TradeSimulationDefinition } from './definition.js'
+import { cloneDefinition, demoDefinition as tradeDemoDefinition, tradeInitialEngineState, tradeSimulationDefinitionSchema, TRADE_ROLE_NAMES, TRADE_ROSTER_REQUIREMENT, type TradeSimulationDefinition } from './definition.js'
 import { tradeExternalEventSchema, type TradeEvent } from './events.js'
 import { tradeMetrics, type TradeMetrics } from './metrics.js'
 import { tradeModel } from './model.js'
@@ -34,15 +34,21 @@ const METRIC_LABELS: TradePlugin['metricLabels'] = {
 // own `data-testid`s (`apps/web/src/components/sim/SimulationClient.tsx`, the inject drawer) --
 // verified against both files rather than trusted from memory, per the task-1 brief's ruling R1.
 // Note: the unit-price field's testid is `sim-inject-price`, not `sim-inject-unit-price`.
+//
+// The `default`s are M29/M30's own opening values, read off the pre-plugin form's `useState`
+// (`{ qty: '10', unitPrice: '120.00', dueInDays: '10', collectInDays: '15', extraDays: '3' }`):
+// a plausible order rather than a value that merely parses, so the drawer opens on something an
+// operator would actually inject. `supplierId` has none -- the page falls back to the first
+// option, which is the `normal` supplier the old form defaulted to.
 const EXTERNAL_EVENT_FORMS: readonly ExternalEventForm[] = [
   {
     type: 'demand',
     label: 'customer demand',
     fields: [
-      { name: 'qty', label: 'qty', kind: 'int', testId: 'sim-inject-qty' },
-      { name: 'unitPriceMinor', label: 'unit price', kind: 'money', testId: 'sim-inject-price' },
-      { name: 'dueInDays', label: 'due in days', kind: 'int', testId: 'sim-inject-due' },
-      { name: 'collectInDays', label: 'collect in days', kind: 'int', testId: 'sim-inject-collect' },
+      { name: 'qty', label: 'qty', kind: 'int', testId: 'sim-inject-qty', default: '10' },
+      { name: 'unitPriceMinor', label: 'unit price', kind: 'money', testId: 'sim-inject-price', default: '120.00' },
+      { name: 'dueInDays', label: 'due in days', kind: 'int', testId: 'sim-inject-due', default: '10' },
+      { name: 'collectInDays', label: 'collect in days', kind: 'int', testId: 'sim-inject-collect', default: '15' },
     ],
   },
   {
@@ -50,7 +56,7 @@ const EXTERNAL_EVENT_FORMS: readonly ExternalEventForm[] = [
     label: 'supplier delay',
     fields: [
       { name: 'supplierId', label: 'supplier', kind: 'select', optionsFrom: 'suppliers', testId: 'sim-inject-supplier' },
-      { name: 'extraDays', label: 'extra days', kind: 'int', testId: 'sim-inject-extra-days' },
+      { name: 'extraDays', label: 'extra days', kind: 'int', testId: 'sim-inject-extra-days', default: '3' },
     ],
   },
 ]
@@ -69,7 +75,11 @@ export const tradePlugin: TradePlugin = {
   stateSchema: tradeStateSchema,
   externalEventSchema: tradeExternalEventSchema,
   rosterRequirement: TRADE_ROSTER_REQUIREMENT,
-  rosterFits: (roster) => roster.length >= 4,
+  // Verbatim what M29's drawer printed; the drawer now reads them from here.
+  policyLabels: { A: 'A — wait for the normal supplier', B: 'B — hedge with the fast supplier when a delivery is at risk' },
+  // One role per slave, so the head count IS the requirement -- read off the role list rather
+  // than written as `4`, which would be a second place to update if trade ever grew a fifth role.
+  rosterFits: (roster) => roster.length >= TRADE_ROLE_NAMES.length,
   demoDefinition: tradeDemoDefinition,
   cloneDefinition,
   initialState: tradeInitialEngineState,
@@ -87,6 +97,8 @@ export const tradePlugin: TradePlugin = {
   ],
   actionDocs: TRADE_ACTION_DOCS,
   externalEventForms: EXTERNAL_EVENT_FORMS,
-  injectOptions: (state) => ({ suppliers: state.suppliers.map((s) => ({ id: s.id, label: s.name })) }),
+  // The option TEXT is the supplier's id (`normal` / `fast`), not its display name: that is what
+  // M29/M30's own select showed, and the run page is meant to be pixel-identical for trade.
+  injectOptions: (state) => ({ suppliers: state.suppliers.map((s) => ({ id: s.id, label: s.id })) }),
   llmRoleCandidates: ['purchasing'],
 }

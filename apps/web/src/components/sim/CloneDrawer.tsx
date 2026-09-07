@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { sectors, type SectorName } from '@slave-of-ai/simulation'
 import { errorMessage } from '../../lib/postControl'
 import { PrimaryButton, SelectField, TextField } from '../ui/FormControls'
 
@@ -10,13 +11,16 @@ const OTHER: Record<'A' | 'B', 'A' | 'B'> = { A: 'B', B: 'A' }
 /** Clones a run from its frozen definition (M30 §2.3): same scenario, same roster, same start —
  *  only a different policy or seed. No source checkout, no branch, no journal from the source. */
 export function CloneDrawer({
-  open, onClose, sourceId, sourceName, sourcePolicy,
+  open, onClose, sourceId, sourceName, sourcePolicy, sector,
 }: {
   readonly open: boolean
   readonly onClose: () => void
   readonly sourceId: string
   readonly sourceName: string
   readonly sourcePolicy: 'A' | 'B'
+  /** The source run's sector, off its own summary: a clone never changes sector, so the policy
+   *  select here reads that sector's own prose rather than trade's (final fix wave). */
+  readonly sector: SectorName
 }): React.JSX.Element | null {
   const router = useRouter()
   const otherPolicy = OTHER[sourcePolicy]
@@ -73,8 +77,8 @@ export function CloneDrawer({
         <p className="text-xs text-text-3">same scenario, same roster, same start — a different policy or seed; nothing that happened in the source is carried over</p>
         <TextField label="name" inputProps={{ 'aria-label': 'clone name', 'data-testid': 'sim-clone-name', value: name, disabled: pending, onChange: (event) => setName(event.target.value) } as React.InputHTMLAttributes<HTMLInputElement>} />
         <SelectField label="policy" selectProps={{ 'aria-label': 'clone policy', 'data-testid': 'sim-clone-policy', value: policy, disabled: pending, onChange: (event) => setPolicy(event.target.value as 'A' | 'B') } as React.SelectHTMLAttributes<HTMLSelectElement>}>
-          <option value="A">A — wait for the normal supplier</option>
-          <option value="B">B — hedge with the fast supplier when a delivery is at risk</option>
+          <option value="A">{sectors[sector].policyLabels.A}</option>
+          <option value="B">{sectors[sector].policyLabels.B}</option>
         </SelectField>
         <TextField label="seed" inputProps={{ 'aria-label': 'clone seed', 'data-testid': 'sim-clone-seed', value: seed, disabled: pending, inputMode: 'numeric', onChange: (event) => setSeed(event.target.value) } as React.InputHTMLAttributes<HTMLInputElement>} />
         <div className="flex items-center gap-3">

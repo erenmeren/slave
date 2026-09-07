@@ -8,6 +8,7 @@
   "references": [
     { "path": "../../packages/domain" },
     { "path": "../../packages/db" },
-    { "path": "../../packages/control" }
+    { "path": "../../packages/control" },
+    { "path": "../../packages/simulation" }
   ]
 }

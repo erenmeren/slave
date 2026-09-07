@@ -297,16 +297,30 @@ describe('an llm lead run', () => {
 describe('companiesForSector', () => {
   it('keeps only the catalog companies whose roster the sector\'s plugin can staff', async () => {
     const tiny = await prisma.company.create({ data: { name: 'Tiny Co.' } })
-    const software = await companiesForSector('software')
+    const softwareResult = await companiesForSector('software')
+    if (!softwareResult.ok) throw new Error(`companiesForSector('software') refused: ${JSON.stringify(softwareResult.error)}`)
+    const software = softwareResult.value
     expect(software.map((c) => c.name)).toEqual(['Checkout Platform'])
     expect(software[0]).toEqual({ id: companyId, name: 'Checkout Platform', slaves: 9 })
     // Trade asks only for four bodies, which the software company also has: the two lists are not
     // complements, they are each plugin's own `rosterFits` over the same catalog. What both refuse
     // is a company with nobody in it.
-    const trade = await companiesForSector('trade')
+    const tradeResult = await companiesForSector('trade')
+    if (!tradeResult.ok) throw new Error(`companiesForSector('trade') refused: ${JSON.stringify(tradeResult.error)}`)
+    const trade = tradeResult.value
     expect(trade.map((c) => c.name)).toEqual(['Checkout Platform', 'Demo Trading Co.'])
     expect(trade.map((c) => c.id)).not.toContain(tiny.id)
     expect(software.map((c) => c.id)).not.toContain(tiny.id)
     expect(software.map((c) => c.id)).not.toContain(tradingId)
+  })
+
+  it('refuses a sector no plugin answers to instead of reading back an empty catalog (final fix wave)', async () => {
+    // `unsupported_simulation`, the same refusal `createSimulation` answers such a sector with --
+    // "nothing in the catalog fits" and "there is no such sector" are different facts and the
+    // drawer's roster hint would otherwise print the first for the second.
+    const result = await companiesForSector('nonsense' as never)
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.error).toEqual({ kind: 'unsupported_simulation', sector: 'nonsense', mode: 'simulation' })
   })
 })

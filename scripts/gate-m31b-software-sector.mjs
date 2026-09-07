@@ -19,7 +19,8 @@
 // exactly the roster `packages/simulation/test/software/roster.ts`'s `CHECKOUT_ROSTER` names,
 // literally, so the fake CLI's `assign_task { engineerId: "Alex" }` answer (stage 4) targets a
 // real engineer. `rosterOf` (every real `createSimulation` call's own roster read) orders both
-// teams and slaves by name ascending, not by insertion order -- see erratum R15.
+// teams and slaves by name ascending, not by insertion order; the engineer pool is then ordered
+// by id inside the plugin (erratum R17), so neither order can change what this gate measures.
 //
 // Stage 2 (software A, software B): `/sim`'s drawer, sector `software`, this company, seed 1 for
 // both (spec §9's own seed) -- policy A, then policy B, created independently (not cloned; their
@@ -29,9 +30,8 @@
 //
 // Stage 3 (both to day 30, the pinned invariants): `sim-run-to` to day 30 on each, polled against
 // `prisma` for `status finished` and `simTime 30`. B's `defectIncidents` must be exactly 0, A's at
-// least 4 (spec §3.5's own invariants); `deliveredTasks` is asserted exactly, at whatever this
-// company's real roster order actually measures (erratum R15: 24 for A, 12 for B -- not the unit
-// test's hand-ordered 21/12), printed before asserting either.
+// least 4 (spec §3.5's own invariants); `deliveredTasks` is asserted exactly (24 for A, 12 for B,
+// spec §9's table), printed before asserting either.
 //
 // Stage 4 (compare, the software labels): `/sim/compare?a=<A>&b=<B>`, `compareSimulations` (control
 // dist) read directly and formatted the identical way `CompareClient.tsx` does, for every key the
@@ -111,10 +111,9 @@ const HORIZON = 30
 const MODEL_NAME = 'claude-haiku-4-5-20251001'
 const CAP_USD = 2
 const LEAD_DECISION_COST = 0.0038
-// Erratum R15: the real DB-ordered roster (name ascending within each department) does not
-// reproduce the unit test's hand-ordered `CHECKOUT_ROSTER` figures -- measured directly against
-// this exact company/roster through `createSimulation` + `stepSimulation` (the same path this
-// gate drives through the browser), seed 1, horizon 30, `rulesProvider`.
+// Spec §9's table, seed 1, horizon 30, `rulesProvider`. Erratum R17 orders the engineer pool by id
+// inside the plugin, so the roster's own order no longer reaches the run: this gate's DB-ordered
+// roster and `policies.test.ts`'s hand-typed one measure the same figures.
 const EXPECTED_DELIVERED_A = 24
 const EXPECTED_DELIVERED_B = 12
 
@@ -425,7 +424,7 @@ try {
     console.log(`B metrics: ${JSON.stringify(b.metrics)}`)
     if (b.metrics.defectIncidents !== 0) await fail(`B's defectIncidents is ${b.metrics.defectIncidents}, expected exactly 0 (spec §3.5's own invariant)`)
     if (!(a.metrics.defectIncidents >= 4)) await fail(`A's defectIncidents is ${a.metrics.defectIncidents}, expected >= 4 (spec §3.5's own invariant)`)
-    if (a.metrics.deliveredTasks !== EXPECTED_DELIVERED_A) await fail(`A's deliveredTasks is ${a.metrics.deliveredTasks}, expected exactly ${EXPECTED_DELIVERED_A} (erratum R15 -- measured against this exact roster order)`)
+    if (a.metrics.deliveredTasks !== EXPECTED_DELIVERED_A) await fail(`A's deliveredTasks is ${a.metrics.deliveredTasks}, expected exactly ${EXPECTED_DELIVERED_A} (spec §9's table)`)
     if (b.metrics.deliveredTasks !== EXPECTED_DELIVERED_B) await fail(`B's deliveredTasks is ${b.metrics.deliveredTasks}, expected exactly ${EXPECTED_DELIVERED_B}`)
     console.log(`pinned invariants verified: B.defectIncidents 0, A.defectIncidents ${a.metrics.defectIncidents} >= 4, deliveredTasks A ${a.metrics.deliveredTasks} / B ${b.metrics.deliveredTasks} (statuses ${statusA.status}/${statusB.status})`)
 

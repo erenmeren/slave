@@ -70,6 +70,8 @@ export const softwarePlugin: SoftwarePlugin = {
   stateSchema: softwareStateSchema,
   externalEventSchema: softwareExternalEventSchema,
   rosterRequirement: SOFTWARE_ROSTER_REQUIREMENT,
+  // §3.4's two policies in one line each: A is fast, B is careful.
+  policyLabels: { A: 'A — first free engineer, review only incidents', B: 'B — wait for matching expertise, review everything' },
   rosterFits,
   demoDefinition,
   cloneDefinition,

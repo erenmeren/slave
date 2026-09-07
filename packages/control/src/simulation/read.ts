@@ -173,18 +173,23 @@ export async function compareSimulations(aId: string, bId: string): Promise<Resu
  *  departments and slaves by name, the catalog ROLE off the template -- so the list can never offer
  *  a company that the create verb would then refuse.
  *
- *  Ordering is by company name, matching the drawer's existing list. */
-export async function companiesForSector(sector: SectorName, client: PrismaClient | Prisma.TransactionClient = prisma): Promise<readonly { readonly id: string; readonly name: string; readonly slaves: number }[]> {
+ *  Ordering is by company name, matching the drawer's existing list.
+ *
+ *  A `Result`, not a bare list (final fix wave): a sector name no plugin answers to used to read
+ *  back as `[]`, which is indistinguishable from "the catalog has nothing that fits" -- the very
+ *  thing the drawer prints a roster requirement for. It is the same `unsupported_simulation`
+ *  `createSimulation` refuses such a sector with. */
+export async function companiesForSector(sector: SectorName, client: PrismaClient | Prisma.TransactionClient = prisma): Promise<Result<readonly { readonly id: string; readonly name: string; readonly slaves: number }[], ControlRefusal>> {
   const plugin = sectorFor(sector)
-  if (plugin === undefined) return []
+  if (plugin === undefined) return err({ kind: 'unsupported_simulation', sector, mode: 'simulation' })
   const companies = await client.company.findMany({
     orderBy: { name: 'asc' },
     select: { id: true, name: true, teams: { orderBy: { name: 'asc' }, select: { name: true, slaves: { orderBy: { name: 'asc' }, select: { name: true, template: { select: { role: true } } } } } } },
   })
-  return companies.flatMap((company) => {
+  return ok(companies.flatMap((company) => {
     const roster = rosterOf(company.teams)
     return plugin.rosterFits(roster) ? [{ id: company.id, name: company.name, slaves: roster.length }] : []
-  })
+  }))
 }
 
 /** The one reading of a catalog company's roster (M31b §4), shared by `companiesForSector` here and

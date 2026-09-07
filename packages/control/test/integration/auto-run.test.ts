@@ -150,9 +150,10 @@ describe('tickSimulations', () => {
     const bad = await create('bad')
     await startAutoRun(good, { everyMs: 250, untilDay: 30 })
     await startAutoRun(bad, { everyMs: 250, untilDay: 30 })
-    // Force a step failure without touching the engine: a state row `engineStateSchema` rejects
-    // (`simulation_corrupt` from `autoStepDue`), which `tickSimulations` treats exactly like a
-    // thrown step -- halt the run with the refusal text and move on to the next run.
+    // Force a step failure without touching the engine: a state row the run's own sector cannot
+    // parse (`engineStateSchemaFor(plugin)` in `simulation/shared.ts`, so `simulation_corrupt`
+    // from `autoStepDue`), which `tickSimulations` treats exactly like a thrown step -- halt the
+    // run with the refusal text and move on to the next run.
     const row = await prisma.simulationRun.findUniqueOrThrow({ where: { id: bad } })
     const state = row.state as { sector: { suppliers: { unitPriceMinor: unknown }[] } }
     state.sector.suppliers[0]!.unitPriceMinor = 'x'

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SimulationsClient } from '../src/components/sim/SimulationsClient.js'
 import { clearModelSelectCache } from '../src/components/ModelSelect.js'
 import type { SimulationSummary } from '@slave-of-ai/control'
+import { sectors } from '@slave-of-ai/simulation'
 
 const routerPush = vi.fn()
 const routerRefresh = vi.fn()
@@ -78,6 +79,16 @@ describe('SimulationsClient', () => {
     expect(screen.getByTestId('new-simulation-roster-hint').textContent).toContain('the software sector needs')
     fireEvent.change(screen.getByTestId('new-simulation-name'), { target: { value: 'x' } })
     expect((screen.getByTestId('new-simulation-submit') as HTMLButtonElement).disabled).toBe(true)
+  })
+  it('the policy options are the CHOSEN sector\'s own prose, and change with the sector (final fix wave)', () => {
+    render(<SimulationsClient cards={[]} companiesBySector={companiesBySector} />)
+    fireEvent.click(screen.getByTestId('new-simulation'))
+    const options = (): (string | null)[] => [...screen.getByTestId('new-simulation-policy').querySelectorAll('option')].map((o) => o.textContent)
+    expect(options()).toEqual([sectors.trade.policyLabels.A, sectors.trade.policyLabels.B])
+    expect(options()[0]).toContain('normal supplier')
+    fireEvent.change(screen.getByTestId('new-simulation-sector'), { target: { value: 'software' } })
+    expect(options()).toEqual([sectors.software.policyLabels.A, sectors.software.policyLabels.B])
+    expect(options().join(' ')).not.toMatch(/supplier/i)
   })
   it('a 409 refusal from the server stays in the drawer with the error', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: 'a simulation named "x" already exists' }), { status: 409 })))

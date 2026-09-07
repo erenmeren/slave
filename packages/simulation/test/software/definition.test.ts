@@ -6,10 +6,12 @@ describe('assignRoles on the Checkout Platform roster', () => {
   it('reads product from Product, lead from Management, the reviewer from the catalog role, engineers from the rest of Engineering', () => {
     const { roles, engineers } = assignRoles(CHECKOUT_ROSTER)
     expect(roles.map((r) => [r.name, r.slaveName])).toEqual([['product', 'John'], ['lead', 'Atlas'], ['reviewer', 'Riley']])
+    // Ordered by id (erratum R17), not by roster position: the caller's ordering must not reach
+    // the run, since policy A breaks a free-engineer tie by array position.
     expect(engineers).toEqual([
       { id: 'Alex', expertise: 'backend' },
-      { id: 'Emma', expertise: 'frontend' },
       { id: 'Daniel', expertise: 'devops' },
+      { id: 'Emma', expertise: 'frontend' },
       { id: 'Maya', expertise: 'general' },
     ])
   })
@@ -25,7 +27,7 @@ describe('assignRoles on the Checkout Platform roster', () => {
     // Maya (QA) becomes the reviewer, so only three engineers are left.
     const { roles, engineers } = assignRoles([...noRiley, { slaveName: 'Nina', departmentName: 'Engineering', role: 'Backend' }])
     expect(roles.find((r) => r.name === 'reviewer')?.slaveName).toBe('Maya')
-    expect(engineers.map((e) => e.id)).toEqual(['Alex', 'Emma', 'Daniel', 'Nina'])
+    expect(engineers.map((e) => e.id)).toEqual(['Alex', 'Daniel', 'Emma', 'Nina'])
   })
 
   it('throws the roster requirement verbatim when a role slave or a second engineer is missing', () => {
@@ -60,7 +62,7 @@ describe('demoDefinition and cloneDefinition', () => {
     expect(initial.queue.items).toHaveLength(DEMO_SCENARIO.requests.length)
     expect(initial.queue.items.every((i) => i.priority === 'external')).toBe(true)
     expect(initial.queue.items[0]).toMatchObject({ time: 1, event: { type: 'request', area: 'backend', sizeDays: 3, dueInDays: 10 } })
-    expect(initial.sector.engineers.map((e) => e.id)).toEqual(['Alex', 'Emma', 'Daniel', 'Maya'])
+    expect(initial.sector.engineers.map((e) => e.id)).toEqual(['Alex', 'Daniel', 'Emma', 'Maya'])
     expect(initial.sector.reviewCapacityPerDay).toBe(1)
   })
 

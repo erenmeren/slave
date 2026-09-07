@@ -17,7 +17,12 @@ export interface HeadlineItem { readonly label: string; readonly value: number; 
 // Controller ruling R1: `testId` is optional and new -- it lets a plugin's external-event form
 // carry the exact `data-testid` the run page's inputs already use, so the trade plugin can wrap
 // M29/M30's form without changing what a test (or an operator's muscle memory) targets.
-export interface FormField { readonly name: string; readonly label: string; readonly kind: 'int' | 'money' | 'select'; readonly optionsFrom?: string; readonly testId?: string }   // optionsFrom names a key of injectOptions(state)
+// Final fix wave: `default` is optional and new -- the starting text the run page puts in the
+// field. It exists because M29/M30's trade form opened on a plausible order (qty 10 at 120.00 due
+// in 10 days) and the generic form regressed that to `1` / `0.00`; a sector that has no opinion
+// omits it and gets the page's kind-based fallback. Written the way the field is TYPED, so a
+// money field's default is major units ('120.00'), matching what the input shows.
+export interface FormField { readonly name: string; readonly label: string; readonly kind: 'int' | 'money' | 'select'; readonly optionsFrom?: string; readonly testId?: string; readonly default?: string }   // optionsFrom names a key of injectOptions(state)
 export interface ExternalEventForm { readonly type: string; readonly label: string; readonly fields: readonly FormField[] }
 export interface RosterEntry { readonly slaveName: string; readonly departmentName: string; readonly role: string }
 
@@ -34,6 +39,11 @@ export interface SectorPlugin<S, E, R, D extends EngineDefinition, M extends Rec
   readonly stateSchema: z.ZodType<S>
   readonly externalEventSchema: z.ZodType<E>
   readonly rosterRequirement: string                       // the refusal text when the roster cannot fill the roles
+  // The two policies as a person reads them, in the drawer's own select. A sector's policies are
+  // its own -- trade's A waits for the normal supplier, software's A takes whoever is free -- so
+  // the prose belongs to the plugin, not to a drawer that would otherwise print trade's sentence
+  // over every sector's runs (final fix wave).
+  readonly policyLabels: Readonly<Record<'A' | 'B', string>>
   rosterFits(roster: readonly RosterEntry[]): boolean      // the same rule demoDefinition enforces, without building anything
   demoDefinition(input: { policy: 'A' | 'B'; seed: number; roster: readonly RosterEntry[]; currency: string; llmRoles?: readonly string[] }): D   // throws Error(rosterRequirement) on a short roster
   cloneDefinition(definition: D, over: { policy: 'A' | 'B'; seed: number }): D

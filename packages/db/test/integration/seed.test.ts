@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, it } from 'vitest'
+import { CHECKOUT_PLATFORM_COMPANY_NAME } from '../../src/checkout-platform.js'
 import { prisma } from '../../src/client.js'
 import { TASK_STATUSES } from '../../src/enums.js'
 import { DEMO_TRADING_COMPANY_NAME, seed } from '../../src/seed.js'
@@ -36,9 +37,26 @@ describe('seed data', () => {
   it('seeds the reusable template catalog', async () => {
     await seed()
 
-    const templates = await prisma.slaveTemplate.findMany({ orderBy: { name: 'asc' } })
-    expect(templates.map((t) => ({ name: t.name, role: t.role, defaultModel: t.defaultModel }))).toEqual([
+    // Sorted in JS with a plain comparator rather than by the database: the Checkout Platform
+    // templates below are named after roles that are not all capitalised the same way
+    // (`manager`, `reviewer`, `SEO`, `Security`), and where two names differ only in case a
+    // Postgres `ORDER BY name` answers by the server's collation -- which is not this repo's to
+    // pin. The rows asserted are the same either way; only their order here is made deterministic.
+    const templates = await prisma.slaveTemplate.findMany()
+    const byName = [...templates].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+    expect(byName.map((t) => ({ name: t.name, role: t.role, defaultModel: t.defaultModel }))).toEqual([
       { name: 'Backend Developer', role: 'backend', defaultModel: null },
+      // M31b final fix wave: one template per distinct role on the Checkout Platform catalog
+      // company, since `rosterOf` reads a catalog slave's role off its template.
+      { name: 'Checkout Backend', role: 'Backend', defaultModel: null },
+      { name: 'Checkout Business Analyst', role: 'Business Analyst', defaultModel: null },
+      { name: 'Checkout DevOps', role: 'DevOps', defaultModel: null },
+      { name: 'Checkout Frontend', role: 'Frontend', defaultModel: null },
+      { name: 'Checkout QA', role: 'QA', defaultModel: null },
+      { name: 'Checkout SEO', role: 'SEO', defaultModel: null },
+      { name: 'Checkout Security', role: 'Security', defaultModel: null },
+      { name: 'Checkout manager', role: 'manager', defaultModel: null },
+      { name: 'Checkout reviewer', role: 'reviewer', defaultModel: null },
       { name: 'Engineering Manager', role: 'manager', defaultModel: null },
       { name: 'Frontend Developer', role: 'frontend', defaultModel: null },
       // The canonical shared-template example: two roles (this one and Backend Developer) point
@@ -96,6 +114,34 @@ describe('seed data', () => {
       { name: 'Olga', template: 'Trade Clerk' },
       { name: 'Pete', template: 'Trade Clerk' },
       { name: 'Sonia', template: 'Trade Clerk' },
+    ])
+  })
+
+  it('seeds Checkout Platform as a catalog company the software sector can be run on (M31b)', async () => {
+    await seed()
+
+    const company = await prisma.company.findUniqueOrThrow({ where: { name: CHECKOUT_PLATFORM_COMPANY_NAME } })
+
+    const companyTeams = await prisma.companyTeam.findMany({ where: { companyId: company.id }, orderBy: { name: 'asc' } })
+    expect(companyTeams.map((t) => t.name)).toEqual(['Engineering', 'Management', 'Marketing', 'Product', 'Security'])
+
+    // Department, name and CATALOG role (off the template) -- exactly what control's `rosterOf`
+    // reads, in the order it reads it: teams then slaves, both name-ascending.
+    const roster = await prisma.companyTeam.findMany({
+      where: { companyId: company.id },
+      orderBy: { name: 'asc' },
+      select: { name: true, slaves: { orderBy: { name: 'asc' }, select: { name: true, template: { select: { role: true } } } } },
+    })
+    expect(roster.flatMap((team) => team.slaves.map((slave) => `${team.name}/${slave.name}/${slave.template.role}`))).toEqual([
+      'Engineering/Alex/Backend',
+      'Engineering/Daniel/DevOps',
+      'Engineering/Emma/Frontend',
+      'Engineering/Maya/QA',
+      'Engineering/Riley/reviewer',
+      'Management/Atlas/manager',
+      'Marketing/Oliver/SEO',
+      'Product/John/Business Analyst',
+      'Security/Sarah/Security',
     ])
   })
 

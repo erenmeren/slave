@@ -128,18 +128,20 @@ Measured, not designed: the Checkout Platform roster, seed 1, horizon 30, both p
 
 | metric | A — fast | B — careful |
 |---|---|---|
-| `deliveredTasks` | 21 | 12 |
-| `onTimeTasks` | 15 | 12 |
-| `lateTasks` | 6 | 0 |
-| `avgLeadDays` | 3 | 2.8 |
-| `reworkTasks` | 9 | 0 |
-| `defectIncidents` | 9 | 0 |
-| `queueMaxLength` | 3 | 2 |
+| `deliveredTasks` | 24 | 12 |
+| `onTimeTasks` | 14 | 12 |
+| `lateTasks` | 10 | 0 |
+| `avgLeadDays` | 3.2 | 2.8 |
+| `reworkTasks` | 12 | 0 |
+| `defectIncidents` | 12 | 0 |
+| `queueMaxLength` | 4 | 2 |
 | `reviewBacklogMax` | 2 | 2 |
-| `idleEngineerDays` | 63 | 89 |
+| `idleEngineerDays` | 55 | 89 |
 | `openTasks` | 0 | 0 |
 
-§3.5's four invariants hold. A's twelve scenario requests all land; its extra nine deliveries are the incidents its own skipped reviews produced (`A.deliveredTasks − A.defectIncidents === B.deliveredTasks`), and all six of its late tasks are those incidents — not one scenario request is late under either policy.
+Re-measured after **R17** ordered the engineer pool by id: these are the figures BOTH the unit test's hand-typed roster and the database-ordered roster `gate:m31b-software-sector` builds now measure, because the roster's order no longer reaches the run. (The pre-R17 A column read 21 / 15 / 6 / 3 / 9 / 9 / 3 / 2 / 63 / 0; B never moved.)
+
+§3.5's four invariants hold. A's twelve scenario requests all land; its extra twelve deliveries are the incidents its own skipped reviews produced (`A.deliveredTasks − A.defectIncidents === B.deliveredTasks`), and all ten of its late tasks are those incidents — not one scenario request is late under either policy.
 
 ### Rulings
 - **R2 — `ActionDoc` moves to `packages/simulation/src/core/action-docs.ts`**, re-exported from `trade/action-docs.ts` so no importer changes. `core/plugin.ts` names it in the `SectorPlugin` contract and every sector fills it in, so it is not trade's to own.
@@ -164,6 +166,8 @@ Measured, not designed: the Checkout Platform roster, seed 1, horizon 30, both p
 - **R13 (Task 3):** `SectorName` is an explicit union in `core/plugin.ts` and the registry is checked with `satisfies Record<SectorName, AnySectorPlugin>` — a third sector is two edits in `packages/simulation`, never one in control or web.
 - **Create (Task 3):** only a `demoDefinition` throw whose message equals `rosterRequirement` becomes `invalid_simulation_input`; any other throw propagates. `injectExternalEvent` parses the event under the row lock because the schema belongs to the run's sector.
 - **Compare (Task 3, backlog):** `COMPARED_KEYS` in control's `read.ts` is a hand-made union of the sectors' world keys; a `comparedKeys` field on the plugin is the honest fix (M31 backlog).
+- **`SimulationMetrics = Record<string, number>` is a runtime approximation (backlog):** control publishes a sector's metrics under that type, but trade's `tradeMetrics` also returns `sources` (an object) and `minCashDay` (nullable), neither of which is a number — the readers that want them narrow defensively rather than trusting the type. Honest fix, deferred to the M31 backlog: type it `Record<string, unknown>` (or the plugin's own metric type) per sector, and make every reader narrow.
 - **R14 (Task 4):** `HeadlineItem.ofHorizon?` marks the item the run page suffixes with `/ horizonDays`; the page never keys on a label string.
-- **R15 (Task 5):** the §9 demo figures were measured through `demoDefinition` on `policies.test.ts`'s hand-typed `CHECKOUT_ROSTER` array, whose Engineering order (Alex, Emma, Daniel, Maya) is not alphabetical — but `rosterOf` (the roster read every real `createSimulation` call goes through) orders both teams and slaves by name ascending, giving Engineering order Alex, Daniel, Emma, Maya instead. Policy A's `pick()` breaks a free-engineer tie by array position, so the two orders diverge: a company built and run through `gate:m31b-software-sector` (prisma → `createSimulation` → `stepSimulation`, the same path an operator's browser drives) measures policy A at `deliveredTasks 24, defectIncidents 12, reworkTasks 12, lateTasks 10, onTimeTasks 14`, not the unit test's 21/9/9/6/15 — B is unaffected (matched-first, not array-order) and stays 12/0/0/0/12. Both figures satisfy every invariant §3.5 and `policies.test.ts` actually assert (`B.defectIncidents === 0`, `A.defectIncidents ≥ 4`, `A.deliveredTasks − A.defectIncidents === B.deliveredTasks`, `A.lateTasks > B.lateTasks`); the gate asserts its own measured 24/12 rather than the unit test's 21/12, and prints both before asserting.
+- **R15 (Task 5):** the §9 demo figures were originally measured through `demoDefinition` on `policies.test.ts`'s hand-typed `CHECKOUT_ROSTER`, whose Engineering order (Alex, Emma, Daniel, Maya) is not the order `rosterOf` reads out of the database (Alex, Daniel, Emma, Maya — teams and slaves name-ascending), and the two measured different runs. That divergence is gone: **R17** orders the engineer pool inside the plugin, so the unit test's figures and the gate's are one set of figures (§9's table). The gate still asserts `deliveredTasks` exactly — 24 for A, 12 for B — and still prints both runs' metrics before asserting.
 - **R16 (Task 5):** an external event injected at day `d` (the run page's own default, `simTime + 1`) is scheduled at engine time `d`, but `step()` processes engine day = the run's simTime *before* that step (§8's `state.day` starts at 0) — so on a fresh run (simTime 0) the event fires on the step that carries simTime from 1 to 2, not the first step. `injectExternalEvent`'s own `external_event` journal row (`payload.op 'injected'`) is written immediately and needs no step at all; the row `step()` itself writes when the event actually pops the queue (`payload.event.type`, e.g. `'incident'`) — and the headline's open-incidents count that follows from it — need that second step. `gate:m31b-software-sector` steps until the queued-event journal row appears rather than assuming one step suffices, and prints the day it actually fired on.
+- **R17 (final fix wave):** `assignRoles` sorts the engineer pool by `id` (a plain `<`/`>` comparator, not `localeCompare` — engineer ids are slave names and the order must not depend on a locale). Policy A's `pick()` breaks a free-engineer tie by array position, so before this the run depended on the order the caller happened to list the roster in: control's `rosterOf` reads slaves name-ascending out of the database, a hand-typed fixture does not, and R15's two sets of figures were the same model measured twice. Ordering belongs in the plugin, not in each caller — `policies.test.ts` now asserts that the reversed roster yields the same engineer order and the same metrics, and §9's table is the one measurement both paths make.
