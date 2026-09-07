@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { sectors } from '@slave-of-ai/simulation'
 import { SimulationClient } from '../src/components/sim/SimulationClient.js'
 import type { SimulationSnapshot } from '../src/server/simulation.js'
 
@@ -14,10 +15,29 @@ vi.mock('../src/hooks/useSimulationStream', () => ({ useSimulationStream: () => 
 function snapshot(over: Partial<SimulationSnapshot> = {}): SimulationSnapshot {
   return {
     summary: { id: 's1', companyId: 'c1', companyName: 'Demo Trading Co.', name: 'Q3 plan', sector: 'trade', mode: 'simulation', decisionProvider: 'rules', modelProvider: null, model: null, maxModelCostUsd: null, llmRoles: [], policy: 'B', status: 'running', simTime: 4, horizonDays: 30, stepCount: 4, actionCount: 16, version: 2, haltedReason: null, createdAt: '2026-09-06T00:00:00.000Z', synthetic: true, autoRun: null, clonedFromId: null, clonedFromName: null },
+    sector: 'trade',
     currency: 'USD',
-    company: { day: 4, cashMinor: 4_575_000, inventory: 10, openOrders: 1, pendingDemand: 0, inboundPurchases: 2, dailyShipCapacity: 30 },
+    // M31b Task 4: the "company" panel is the trade plugin's own `headline` -- the same seven
+    // items `packages/simulation/src/trade/plugin.ts` publishes, in its own order -- not a
+    // trade-shaped object the page used to narrow to.
+    headline: [
+      { label: 'day', value: 4, kind: 'count' },
+      { label: 'cash', value: 4_575_000, kind: 'money' },
+      { label: 'inventory', value: 10, kind: 'count' },
+      { label: 'open orders', value: 1, kind: 'count' },
+      { label: 'pending demand', value: 0, kind: 'count' },
+      { label: 'inbound purchases', value: 2, kind: 'count' },
+      { label: 'daily ship capacity', value: 30, kind: 'count' },
+    ],
     roles: [{ name: 'sales', slaveName: 'Sonia', purpose: 'accepts demand', allowedActions: ['accept_order', 'note'] }],
-    metrics: { deliveredQty: 90, onTimeQty: 90, lateDays: 0, purchaseCostMinor: 725_000, closingInventory: 10, closingCashMinor: 4_575_000, minCashMinor: 4_575_000, minCashDay: 3, collectedMinor: 0, unpaidCommitmentsMinor: 300_000, sources: { deliveredQty: ['action_applied:ship_order'], lateDays: ['state.orders'], purchaseCostMinor: ['action_applied:place_purchase'], collectedMinor: ['event:collection'], unpaidCommitmentsMinor: ['state.purchases'] } },
+    // Trade's runtime metrics carry two fields the generic `Record<string, number>` type says
+    // nothing about -- `sources` and `minCashDay` -- exactly as the trade plugin's own docs
+    // describe (`packages/simulation/src/trade/plugin.ts`); the cast is the fixture's, not the
+    // panel's, which reads them back defensively.
+    metrics: { deliveredQty: 90, onTimeQty: 90, lateDays: 0, purchaseCostMinor: 725_000, closingInventory: 10, closingCashMinor: 4_575_000, minCashMinor: 4_575_000, minCashDay: 3, collectedMinor: 0, unpaidCommitmentsMinor: 300_000, sources: { deliveredQty: ['action_applied:ship_order'], lateDays: ['state.orders'], purchaseCostMinor: ['action_applied:place_purchase'], collectedMinor: ['event:collection'], unpaidCommitmentsMinor: ['state.purchases'] } } as unknown as SimulationSnapshot['metrics'],
+    metricLabels: sectors.trade.metricLabels,
+    injectForms: sectors.trade.externalEventForms,
+    injectOptions: { suppliers: [{ id: 'normal', label: 'normal' }, { id: 'fast', label: 'fast' }] },
     journal: [
       { seq: 5, simTime: 1, kind: 'decision', actorRole: 'purchasing', payload: { index: 1, provider: 'rules', observation: { inventory: 100 }, actions: [{ type: 'place_purchase', params: { supplierId: 'normal', qty: 50 }, rationale: 'shortfall 50 against open orders', refs: ['order-2'] }] } },
       { seq: 6, simTime: 1, kind: 'action_applied', actorRole: 'purchasing', payload: { index: 1, actionIndex: 0, action: { type: 'place_purchase', params: { supplierId: 'normal', qty: 50 } }, costMinor: 300_000, expectedDay: 8 } },
@@ -31,7 +51,6 @@ function snapshot(over: Partial<SimulationSnapshot> = {}): SimulationSnapshot {
       { seq: 11, simTime: 2, kind: 'action_applied', actorRole: 'operations', payload: { index: 2, actionIndex: 0, action: { type: 'ship_order', params: { qty: 30 } } } },
     ],
     modelUsage: { spentUsd: null, capUsd: null, rows: [], unmeasured: 0 },
-    scenario: [{ day: 1, event: { type: 'demand', qty: 150 } }],
     compareCandidates: [{ id: 's2', name: 'Q3 plan (B)', policy: 'B', status: 'finished', simTime: 30 }],
     ...over,
   }
@@ -257,6 +276,71 @@ describe('SimulationClient', () => {
       expect(rows[0]?.textContent).toContain('$0.0038')
       expect(rows[1]?.textContent).toContain('unmeasured')
       expect(rows[1]?.textContent).toContain('no JSON action block found')
+    })
+  })
+
+  describe('a software run (M31b Task 4: the panels and the inject form are the software plugin\'s own)', () => {
+    function softwareSnapshot(over: Partial<SimulationSnapshot> = {}): SimulationSnapshot {
+      return {
+        summary: { id: 'sw1', companyId: 'c2', companyName: 'Checkout Platform', name: 'Sprint plan', sector: 'software', mode: 'simulation', decisionProvider: 'rules', modelProvider: null, model: null, maxModelCostUsd: null, llmRoles: [], policy: 'A', status: 'running', simTime: 2, horizonDays: 30, stepCount: 2, actionCount: 4, version: 1, haltedReason: null, createdAt: '2026-09-06T00:00:00.000Z', synthetic: true, autoRun: null, clonedFromId: null, clonedFromName: null },
+        sector: 'software',
+        currency: 'USD',
+        headline: [
+          { label: 'queued', value: 2, kind: 'count' },
+          { label: 'in progress', value: 1, kind: 'count' },
+          { label: 'in review', value: 0, kind: 'count' },
+          { label: 'done', value: 3, kind: 'count' },
+          { label: 'open incidents', value: 0, kind: 'count' },
+        ],
+        roles: [{ name: 'lead', slaveName: 'Atlas', purpose: 'assigns queued work to engineers', allowedActions: ['assign_task', 'note'] }],
+        metrics: { deliveredTasks: 3, onTimeTasks: 3, lateTasks: 0, avgLeadDays: 2.5, reworkTasks: 0, defectIncidents: 0, queueMaxLength: 2, reviewBacklogMax: 1, idleEngineerDays: 0, openTasks: 3 },
+        metricLabels: sectors.software.metricLabels,
+        injectForms: sectors.software.externalEventForms,
+        injectOptions: { areas: [{ id: 'backend', label: 'backend' }, { id: 'frontend', label: 'frontend' }, { id: 'devops', label: 'devops' }], engineers: [{ id: 'alex', label: 'alex (backend)' }, { id: 'emma', label: 'emma (frontend)' }] },
+        journal: [],
+        modelUsage: { spentUsd: null, capUsd: null, rows: [], unmeasured: 0 },
+        compareCandidates: [],
+        ...over,
+      }
+    }
+
+    it('the strip and the company panel are the software plugin\'s own headline, never trade\'s cash/inventory shape', () => {
+      render(<SimulationClient initial={softwareSnapshot()} />)
+      expect(screen.getByTestId('sim-strip').textContent).toContain('software')
+      expect(screen.getByTestId('sim-company-queued').textContent).toBe('2')
+      expect(screen.getByTestId('sim-company-in-progress').textContent).toBe('1')
+      expect(screen.queryByTestId('sim-company-cash')).toBeNull()
+      expect(screen.queryByTestId('sim-company-day')).toBeNull()
+    })
+
+    it('the metrics panel renders the software plugin\'s own labels', () => {
+      render(<SimulationClient initial={softwareSnapshot()} />)
+      expect(screen.getByTestId('sim-metric-deliveredTasks').textContent).toContain('delivered')
+      expect(screen.getByTestId('sim-metric-avgLeadDays').textContent).toContain('2.5')
+      expect(screen.queryByTestId('sim-metric-deliveredQty')).toBeNull()
+    })
+
+    it('the inject form is generated from the software plugin\'s own fields: sim-inject-area/sizeDays/dueInDays for a request', () => {
+      render(<SimulationClient initial={softwareSnapshot()} />)
+      fireEvent.click(screen.getByTestId('sim-inject-open'))
+      expect((screen.getByTestId('sim-inject-kind') as HTMLSelectElement).value).toBe('request')
+      expect(screen.getByTestId('sim-inject-area')).toBeTruthy()
+      expect(screen.getByTestId('sim-inject-sizeDays')).toBeTruthy()
+      expect(screen.getByTestId('sim-inject-dueInDays')).toBeTruthy()
+    })
+
+    it('switching to absence shows sim-inject-engineerId/days; submitting posts { type: "absence", engineerId, days }', async () => {
+      render(<SimulationClient initial={softwareSnapshot()} />)
+      fireEvent.click(screen.getByTestId('sim-inject-open'))
+      fireEvent.change(screen.getByTestId('sim-inject-kind'), { target: { value: 'absence' } })
+      expect(screen.getByTestId('sim-inject-engineerId')).toBeTruthy()
+      expect(screen.getByTestId('sim-inject-days')).toBeTruthy()
+      fireEvent.change(screen.getByTestId('sim-inject-engineerId'), { target: { value: 'emma' } })
+      fireEvent.change(screen.getByTestId('sim-inject-days'), { target: { value: '3' } })
+      await act(async () => { fireEvent.click(screen.getByTestId('sim-inject-submit')) })
+      const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
+      expect(url).toBe('/api/sim/sw1/inject')
+      expect(JSON.parse(String(init.body))).toMatchObject({ event: { type: 'absence', engineerId: 'emma', days: 3 } })
     })
   })
 })

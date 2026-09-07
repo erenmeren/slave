@@ -1,15 +1,32 @@
 import { prisma } from '@slave-of-ai/db/client'
-import { compareCandidatesOf, compareSimulations, listSimulations, readSimulation, refusalText, type SimulationComparison, type SimulationSummary } from '@slave-of-ai/control'
-import { tradeMetrics, type JournalEntry, type TradeMetrics, type TradeSimulationDefinition, type TradeState } from '@slave-of-ai/simulation'
+import { companiesForSector, compareCandidatesOf, compareSimulations, listSimulations, readSimulation, refusalText, type SimulationComparison, type SimulationMetrics, type SimulationSummary } from '@slave-of-ai/control'
+import type { ExternalEventForm, HeadlineItem, JournalEntry, MetricLabel, SectorName } from '@slave-of-ai/simulation'
 
 export interface JournalRow { readonly seq: number; readonly simTime: number; readonly kind: string; readonly actorRole: string | null; readonly payload: Record<string, unknown> }
 export interface CompareCandidate { readonly id: string; readonly name: string; readonly policy: 'A' | 'B'; readonly status: SimulationSummary['status']; readonly simTime: number }
 export interface SimulationSnapshot {
   readonly summary: SimulationSummary
+  /** M31b Task 4: the run's own sector, read off the row through the plugin -- never hardcoded. */
+  readonly sector: SectorName
   readonly currency: string
-  readonly company: { readonly day: number; readonly cashMinor: number; readonly inventory: number; readonly openOrders: number; readonly pendingDemand: number; readonly inboundPurchases: number; readonly dailyShipCapacity: number }
+  /** The "company" panel, drawn from the sector's own `headline` (M31b §4/§5): a plain list of
+   *  `{ label, value, kind }`, in the plugin's own order. What used to be a trade-shaped `company`
+   *  object is now whatever the run's own sector reports. */
+  readonly headline: readonly HeadlineItem[]
   readonly roles: readonly { readonly name: string; readonly slaveName: string; readonly purpose: string; readonly allowedActions: readonly string[] }[]
-  readonly metrics: TradeMetrics
+  /** The sector's own metrics, a plain `name -> number` map read against {@link metricLabels} for
+   *  the label, order and `money`/`count`/`days` kind. Trade's runtime object also carries two
+   *  extra fields the panel reads directly rather than through a label -- `sources` (per-metric
+   *  provenance) and `minCashDay` -- exactly as `packages/simulation`'s trade plugin already
+   *  documents; this type says nothing about them; the panel reaches for them defensively. */
+  readonly metrics: SimulationMetrics
+  readonly metricLabels: Readonly<Record<string, MetricLabel>>
+  /** The inject form's own shape (M31b §5): one entry per event type the run's sector accepts,
+   *  each with its fields and (for trade) the `data-testid`s the run page already carried. */
+  readonly injectForms: readonly ExternalEventForm[]
+  /** `select`-kind fields' options, keyed by `FormField.optionsFrom` (M31b §5) -- trade's
+   *  `suppliers`, software's `areas`/`engineers`. */
+  readonly injectOptions: Readonly<Record<string, readonly { readonly id: string; readonly label: string }[]>>
   readonly journal: readonly JournalRow[]
   /** Real model spend (M31 writes it; M31a adds the cap and the per-call rows). `spentUsd` null
    *  means no measured figure — never shown as $0. `capUsd` is `summary.maxModelCostUsd`, carried
@@ -21,7 +38,6 @@ export interface SimulationSnapshot {
     readonly rows: readonly { readonly seq: number; readonly simTime: number | null; readonly role: string | null; readonly costUsd: number | null }[]
     readonly unmeasured: number
   }
-  readonly scenario: readonly { readonly day: number; readonly event: unknown }[]
   readonly compareCandidates: readonly CompareCandidate[]
 }
 
@@ -38,12 +54,12 @@ export async function buildSimulationSnapshot(simulationId: string): Promise<Sim
   return prisma.$transaction(async (tx) => {
     const loaded = await readSimulation(tx, simulationId)
     if (!loaded.ok) return null
-    // M31b Task 3: `LoadedSimulation` is now generic over the run's sector. This page is still the
-    // TRADE run page and renders exactly what it always did, so it narrows here; Task 4 replaces
-    // the narrowing with the plugin's own `headline`/`metricLabels`.
-    const { summary } = loaded.value
-    const definition = loaded.value.definition as unknown as TradeSimulationDefinition
-    const state = loaded.value.state as { day: number; sector: TradeState }
+    // M31b Task 4: everything below reads through the run's own plugin -- `headline`,
+    // `metricLabels`, `externalEventForms`, `injectOptions` -- rather than narrowing to trade's
+    // own shapes. The trade run page still renders exactly what it always did (the trade plugin's
+    // labels and forms carry the M29/M30 text and test ids verbatim), but nothing here names a
+    // sector.
+    const { summary, sector, plugin, definition, state } = loaded.value
     const rows = await tx.simulationJournalEntry.findMany({ where: { simulationId }, orderBy: { seq: 'asc' } })
     // Fix round 1, Minor #2: one query, not two -- `spentUsd` (the measured rows' sum, or null
     // when none are measured) and `unmeasured` (the null-cost count) are both derived from these
@@ -53,17 +69,16 @@ export async function buildSimulationSnapshot(simulationId: string): Promise<Sim
     const spentUsd = measuredCosts.length === 0 ? null : measuredCosts.reduce((sum, cost) => sum + cost, 0)
     const unmeasured = usageRows.length - measuredCosts.length
     const entries: JournalEntry[] = rows.map((r) => ({ seq: r.seq, simTime: r.simTime, kind: r.kind, actorRole: r.actorRole, payload: r.payload as Record<string, unknown> }))
-    const sector = state.sector
     return {
       summary,
+      sector,
       currency: definition.currency,
-      company: {
-        day: state.day, cashMinor: sector.cashMinor, inventory: sector.inventory,
-        openOrders: sector.orders.filter((o) => o.status !== 'shipped').length, pendingDemand: sector.pendingDemand.length,
-        inboundPurchases: sector.purchases.filter((p) => p.status === 'ordered').length, dailyShipCapacity: sector.dailyShipCapacity,
-      },
+      headline: plugin.headline(state.sector, state.day),
       roles: definition.roles.map((r) => ({ name: r.name, slaveName: r.slaveName, purpose: r.purpose, allowedActions: r.allowedActions })),
-      metrics: tradeMetrics(entries, sector),
+      metrics: plugin.metrics(entries, state.sector) as SimulationMetrics,
+      metricLabels: plugin.metricLabels,
+      injectForms: plugin.externalEventForms,
+      injectOptions: plugin.injectOptions(state.sector),
       journal: entries.slice(-JOURNAL_PAGE),
       modelUsage: {
         spentUsd,
@@ -71,7 +86,6 @@ export async function buildSimulationSnapshot(simulationId: string): Promise<Sim
         rows: usageRows.map((r) => ({ seq: r.seq, simTime: r.simTime, role: r.role, costUsd: r.costUsd })),
         unmeasured,
       },
-      scenario: definition.scenario.map((s) => ({ day: s.day, event: s.event })),
       compareCandidates: compareCandidatesOf(await listSimulations(tx, summary.companyId), summary).map((s) => ({ id: s.id, name: s.name, policy: s.policy, status: s.status, simTime: s.simTime })),
     }
   }, { isolationLevel: 'RepeatableRead' })
@@ -104,7 +118,10 @@ export async function buildComparison(a: string, b: string): Promise<ComparisonR
   return { kind: 'refused', text: refusalText(result.error) }
 }
 
-export async function listSimulationCompanies(): Promise<readonly { id: string; name: string; slaves: number }[]> {
-  const companies = await prisma.company.findMany({ orderBy: { name: 'asc' }, select: { id: true, name: true, teams: { select: { _count: { select: { slaves: true } } } } } })
-  return companies.map((c) => ({ id: c.id, name: c.name, slaves: c.teams.reduce((n, t) => n + t._count.slaves, 0) }))
+/** The catalog companies the drawer can offer for ONE sector (M31b §5): delegates to control's
+ *  `companiesForSector`, which already keeps only the companies whose frozen roster passes that
+ *  sector's own `rosterFits` -- the list the drawer shows can never offer a company `createSimulation`
+ *  would then refuse. */
+export function listSimulationCompanies(sector: SectorName): Promise<readonly { id: string; name: string; slaves: number }[]> {
+  return companiesForSector(sector)
 }

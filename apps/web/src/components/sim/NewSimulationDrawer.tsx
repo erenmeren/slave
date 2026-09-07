@@ -2,20 +2,35 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { sectors, type SectorName } from '@slave-of-ai/simulation'
 import { errorMessage } from '../../lib/postControl'
 import { ModelSelect } from '../ModelSelect'
 import { PrimaryButton, SelectField, TextField } from '../ui/FormControls'
 
 export interface SimulationCompanyOption { readonly id: string; readonly name: string; readonly slaves: number }
 
+const SECTOR_NAMES = Object.keys(sectors) as SectorName[]
 const DEFAULT_CAP = '2.00'
 
-/** Create a simulation from a catalog company (M29 §7). No source checkout, no branch, no verify
- *  command: the trade sector runs on simulated resources, and this form says so. `decisionProvider
- *  llm` (M31a §5) is a paid, capped run -- the model field, the cap and an explicit consent
- *  checkbox appear only then, and the submit stays disabled until the checkbox is checked. */
-export function NewSimulationDrawer({ open, onClose, companies }: { readonly open: boolean; readonly onClose: () => void; readonly companies: readonly SimulationCompanyOption[] }): React.JSX.Element | null {
+/** Create a simulation from a catalog company (M29 §7; sector picker M31b §5). No source checkout,
+ *  no branch, no verify command: a simulation runs on synthetic resources, and this form says so.
+ *  The company list is per sector, filtered server-side to the companies whose frozen roster the
+ *  chosen sector can actually staff (`companiesForSector`) -- so nothing offered here can be
+ *  refused by `createSimulation` for a short roster; when a sector has no fitting company yet, the
+ *  sector's own `rosterRequirement` explains why. `decisionProvider llm` (M31a §5) is a paid,
+ *  capped run -- the model field, the cap and an explicit consent checkbox appear only then, and
+ *  the submit stays disabled until the checkbox is checked. */
+export function NewSimulationDrawer({
+  open,
+  onClose,
+  companiesBySector,
+}: {
+  readonly open: boolean
+  readonly onClose: () => void
+  readonly companiesBySector: Readonly<Record<SectorName, readonly SimulationCompanyOption[]>>
+}): React.JSX.Element | null {
   const router = useRouter()
+  const [sector, setSector] = useState<SectorName>('trade')
   const [companyId, setCompanyId] = useState('')
   const [name, setName] = useState('')
   const [policy, setPolicy] = useState<'A' | 'B'>('A')
@@ -36,11 +51,12 @@ export function NewSimulationDrawer({ open, onClose, companies }: { readonly ope
 
   if (!open) return null
   const isLlm = decisionProvider === 'llm'
+  const companies = companiesBySector[sector] ?? []
   const submit = async (): Promise<void> => {
     if (pending) return
     setPending(true)
     setErrorText(null)
-    const body: Record<string, unknown> = { companyId, name, policy }
+    const body: Record<string, unknown> = { companyId, name, policy, sector }
     const seedNumber = Number.parseInt(seed, 10)
     if (Number.isInteger(seedNumber)) body['seed'] = seedNumber
     if (isLlm) {
@@ -72,13 +88,23 @@ export function NewSimulationDrawer({ open, onClose, companies }: { readonly ope
         </div>
         <p className="text-xs text-text-3">
           {isLlm
-            ? 'a trade company on synthetic data, decided by a model — no source checkout; the roster is frozen at creation'
-            : 'a trade company on synthetic data, decided by the rules provider — no source checkout, no model call; the roster is frozen at creation'}
+            ? `a ${sector} company on synthetic data, decided by a model — no source checkout; the roster is frozen at creation`
+            : `a ${sector} company on synthetic data, decided by the rules provider — no source checkout, no model call; the roster is frozen at creation`}
         </p>
+        <SelectField
+          label="sector"
+          selectProps={{
+            'aria-label': 'sector', 'data-testid': 'new-simulation-sector', value: sector, disabled: pending,
+            onChange: (event) => { setSector(event.target.value as SectorName); setCompanyId('') },
+          } as React.SelectHTMLAttributes<HTMLSelectElement>}
+        >
+          {SECTOR_NAMES.map((s) => <option key={s} value={s}>{s}</option>)}
+        </SelectField>
         <SelectField label="company" selectProps={{ 'aria-label': 'company', 'data-testid': 'new-simulation-company', value: companyId, disabled: pending, onChange: (event) => setCompanyId(event.target.value) } as React.SelectHTMLAttributes<HTMLSelectElement>}>
           <option value="">select a company</option>
-          {companies.map((c) => <option key={c.id} value={c.id}>{c.name} · {c.slaves} {c.slaves === 1 ? 'slave' : 'slaves'}{c.slaves < 4 ? ' (needs 4)' : ''}</option>)}
+          {companies.map((c) => <option key={c.id} value={c.id}>{c.name} · {c.slaves} {c.slaves === 1 ? 'slave' : 'slaves'}</option>)}
         </SelectField>
+        {companies.length === 0 && <p data-testid="new-simulation-roster-hint" className="text-xs text-text-3">no catalog company fits yet — {sectors[sector].rosterRequirement}</p>}
         <TextField label="name" inputProps={{ 'aria-label': 'simulation name', 'data-testid': 'new-simulation-name', value: name, disabled: pending, onChange: (event) => setName(event.target.value) } as React.InputHTMLAttributes<HTMLInputElement>} />
         <SelectField label="policy" selectProps={{ 'aria-label': 'policy', 'data-testid': 'new-simulation-policy', value: policy, disabled: pending, onChange: (event) => setPolicy(event.target.value as 'A' | 'B') } as React.SelectHTMLAttributes<HTMLSelectElement>}>
           <option value="A">A — wait for the normal supplier</option>

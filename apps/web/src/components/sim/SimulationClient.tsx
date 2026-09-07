@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import type { ExternalEventForm } from '@slave-of-ai/simulation'
 import { useSimulationStream } from '../../hooks/useSimulationStream'
 import { formatMinor } from '../../lib/money'
 import { sendControl } from '../../lib/postControl'
@@ -16,11 +17,28 @@ import { JournalTable } from './JournalTable'
 import { SimulationStrip } from './SimulationStrip'
 
 type Tab = 'overview' | 'decisions' | 'journal'
-const METRIC_LABELS = { deliveredQty: 'delivered', onTimeQty: 'on time', lateDays: 'late days', purchaseCostMinor: 'purchase cost', closingInventory: 'closing stock', closingCashMinor: 'closing cash', minCashMinor: 'minimum cash', collectedMinor: 'collected', unpaidCommitmentsMinor: 'unpaid commitments' } as const
-const MONEY = new Set(['purchaseCostMinor', 'closingCashMinor', 'minCashMinor', 'collectedMinor', 'unpaidCommitmentsMinor'])
 
 function newKey(): string {
   return typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`
+}
+
+/** `'open orders'` → `'open-orders'`: a headline or metric label, as a `data-testid` suffix. */
+function slugify(label: string): string {
+  return label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+}
+
+/** A field's starting text (M31b §5): the run page has no sector-specific defaults to reach for
+ *  any more, so every field starts at a plain, always-parseable value -- `1` for a count or a day,
+ *  `0.00` (major units) for money, the first option for a select. Switching the event kind resets
+ *  every field to this, since the previous kind's fields may not even exist on the new one. */
+function defaultInjectFieldValues(form: ExternalEventForm | undefined, injectOptions: SimulationSnapshot['injectOptions']): Record<string, string> {
+  const values: Record<string, string> = {}
+  for (const field of form?.fields ?? []) {
+    if (field.kind === 'select') values[field.name] = injectOptions[field.optionsFrom ?? '']?.[0]?.id ?? ''
+    else if (field.kind === 'money') values[field.name] = '0.00'
+    else values[field.name] = '1'
+  }
+  return values
 }
 
 /** The simulation run page's body (M29 T10): a persistent strip that says what this is (and is
@@ -29,14 +47,20 @@ function newKey(): string {
  *  three tabs — the rolled-up metrics, per-decision detail, and the raw journal. */
 export function SimulationClient({ initial }: { readonly initial: SimulationSnapshot }): React.JSX.Element {
   const router = useRouter()
-  const { summary, company, metrics, currency } = initial
+  const { summary, headline, metricLabels, metrics, currency, injectForms, injectOptions } = initial
   const [tab, setTab] = useState<Tab>('overview')
   const [runToDay, setRunToDay] = useState(String(summary.horizonDays))
   const [pending, setPending] = useState(false)
   const [errorText, setErrorText] = useState<string | null>(null)
   const [injectOpen, setInjectOpen] = useState(false)
   const [cloneOpen, setCloneOpen] = useState(false)
-  const [inject, setInject] = useState({ kind: 'demand', day: String(company.day + 1), qty: '10', unitPrice: '120.00', dueInDays: '10', collectInDays: '15', supplierId: 'normal', extraDays: '3' })
+  const [injectKind, setInjectKind] = useState(injectForms[0]?.type ?? '')
+  const [injectDay, setInjectDay] = useState(String(summary.simTime + 1))
+  const [injectFields, setInjectFields] = useState<Record<string, string>>(() => defaultInjectFieldValues(injectForms[0], injectOptions))
+  const currentInjectForm = injectForms.find((f) => f.type === injectKind)
+  // Switching the event kind resets every field to a fresh default (M31b §5): the previous kind's
+  // fields may not even exist on the new one (trade's `qty` vs. software's `engineerId`).
+  useEffect(() => { setInjectFields(defaultInjectFieldValues(currentInjectForm, injectOptions)) }, [injectKind]) // eslint-disable-line react-hooks/exhaustive-deps
   const stream = useSimulationStream(summary.id, summary.version, summary.status)
   // Fix wave, Important #1: a status verb (auto-run's error halt, a CLI pause/halt/stop-auto-run)
   // never bumps `version`, so `version` alone would leave this page stale until reload.
@@ -58,11 +82,19 @@ export function SimulationClient({ initial }: { readonly initial: SimulationSnap
     else router.refresh()
   }
   const stepBody = (extra: Record<string, unknown>): Record<string, unknown> => ({ ...extra, expectedVersion: summary.version, idempotencyKey: newKey() })
+  // The event's own shape is the plugin's `externalEventForms` (M31b §5): each field parses by
+  // its own `kind` -- `int` as an integer, `money` from the major-units text the input carries
+  // (exactly as the trade unit-price field always converted) into the minor-unit field the event
+  // schema wants, `select` as the raw option id -- so the trade fields end up posting exactly the
+  // shape M29/M30 always posted, and a new sector's fields need no code here at all.
   const submitInject = (): Promise<void> => {
-    const day = Number.parseInt(inject.day, 10)
-    const event = inject.kind === 'demand'
-      ? { type: 'demand', qty: Number.parseInt(inject.qty, 10), unitPriceMinor: Math.round(Number.parseFloat(inject.unitPrice) * 100), dueInDays: Number.parseInt(inject.dueInDays, 10), collectInDays: Number.parseInt(inject.collectInDays, 10) }
-      : { type: 'supplier_delay', supplierId: inject.supplierId, extraDays: Number.parseInt(inject.extraDays, 10) }
+    const day = Number.parseInt(injectDay, 10)
+    const fields: Record<string, unknown> = {}
+    for (const field of currentInjectForm?.fields ?? []) {
+      const raw = injectFields[field.name] ?? ''
+      fields[field.name] = field.kind === 'int' ? Number.parseInt(raw, 10) : field.kind === 'money' ? Math.round(Number.parseFloat(raw) * 100) : raw
+    }
+    const event = { type: injectKind, ...fields }
     return call('inject', { day, event, idempotencyKey: newKey() })
   }
   // The panel's text (M31a §5): an `llm` run with a cap reads `$<spent> of $<cap>` -- `spent` at
@@ -147,21 +179,32 @@ export function SimulationClient({ initial }: { readonly initial: SimulationSnap
         </div>
         {injectOpen && (
           <div className="flex flex-wrap items-end gap-2 rounded-card border border-line bg-bg-2 p-3">
-            <SelectField label="event" selectProps={{ 'data-testid': 'sim-inject-kind', value: inject.kind, onChange: (event) => setInject({ ...inject, kind: event.target.value }) } as React.SelectHTMLAttributes<HTMLSelectElement>}><option value="demand">customer demand</option><option value="supplier_delay">supplier delay</option></SelectField>
-            <TextField label="day" inputProps={{ 'data-testid': 'sim-inject-day', value: inject.day, className: 'w-16', onChange: (event) => setInject({ ...inject, day: event.target.value }) } as React.InputHTMLAttributes<HTMLInputElement>} />
-            {inject.kind === 'demand' ? (
-              <>
-                <TextField label="qty" inputProps={{ 'data-testid': 'sim-inject-qty', value: inject.qty, className: 'w-16', onChange: (event) => setInject({ ...inject, qty: event.target.value }) } as React.InputHTMLAttributes<HTMLInputElement>} />
-                <TextField label={`unit price (${currency})`} inputProps={{ 'data-testid': 'sim-inject-price', value: inject.unitPrice, className: 'w-20', onChange: (event) => setInject({ ...inject, unitPrice: event.target.value }) } as React.InputHTMLAttributes<HTMLInputElement>} />
-                <TextField label="due in days" inputProps={{ 'data-testid': 'sim-inject-due', value: inject.dueInDays, className: 'w-16', onChange: (event) => setInject({ ...inject, dueInDays: event.target.value }) } as React.InputHTMLAttributes<HTMLInputElement>} />
-                <TextField label="collect in days" inputProps={{ 'data-testid': 'sim-inject-collect', value: inject.collectInDays, className: 'w-16', onChange: (event) => setInject({ ...inject, collectInDays: event.target.value }) } as React.InputHTMLAttributes<HTMLInputElement>} />
-              </>
-            ) : (
-              <>
-                <SelectField label="supplier" selectProps={{ 'data-testid': 'sim-inject-supplier', value: inject.supplierId, onChange: (event) => setInject({ ...inject, supplierId: event.target.value }) } as React.SelectHTMLAttributes<HTMLSelectElement>}><option value="normal">normal</option><option value="fast">fast</option></SelectField>
-                <TextField label="extra days" inputProps={{ 'data-testid': 'sim-inject-extra-days', value: inject.extraDays, className: 'w-16', onChange: (event) => setInject({ ...inject, extraDays: event.target.value }) } as React.InputHTMLAttributes<HTMLInputElement>} />
-              </>
-            )}
+            <SelectField label="event" selectProps={{ 'data-testid': 'sim-inject-kind', value: injectKind, onChange: (event) => setInjectKind(event.target.value) } as React.SelectHTMLAttributes<HTMLSelectElement>}>
+              {injectForms.map((form) => <option key={form.type} value={form.type}>{form.label}</option>)}
+            </SelectField>
+            <TextField label="day" inputProps={{ 'data-testid': 'sim-inject-day', value: injectDay, className: 'w-16', onChange: (event) => setInjectDay(event.target.value) } as React.InputHTMLAttributes<HTMLInputElement>} />
+            {(currentInjectForm?.fields ?? []).map((field) => {
+              const testId = field.testId ?? `sim-inject-${field.name}`
+              const value = injectFields[field.name] ?? ''
+              const onChange = (v: string): void => setInjectFields({ ...injectFields, [field.name]: v })
+              if (field.kind === 'select') {
+                const options = injectOptions[field.optionsFrom ?? ''] ?? []
+                return (
+                  <SelectField key={field.name} label={field.label} selectProps={{ 'data-testid': testId, value, onChange: (event) => onChange(event.target.value) } as React.SelectHTMLAttributes<HTMLSelectElement>}>
+                    {options.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+                  </SelectField>
+                )
+              }
+              // `money` reads and writes major units (the same text field the trade unit-price
+              // field always was), converted to the minor-unit event field on submit.
+              return (
+                <TextField
+                  key={field.name}
+                  label={field.kind === 'money' ? `${field.label} (${currency})` : field.label}
+                  inputProps={{ 'data-testid': testId, value, className: field.kind === 'money' ? 'w-20' : 'w-16', onChange: (event) => onChange(event.target.value) } as React.InputHTMLAttributes<HTMLInputElement>}
+                />
+              )
+            })}
             <PrimaryButton data-testid="sim-inject-submit" disabled={pending} onClick={() => void submitInject()}>Add</PrimaryButton>
             <span className="text-xs text-text-3">a clone of this run's scenario will not carry an event added here</span>
           </div>
@@ -169,11 +212,15 @@ export function SimulationClient({ initial }: { readonly initial: SimulationSnap
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           <Panel title="Simulated company">
             <div data-testid="sim-company" className="flex flex-col gap-1 text-xs text-text-2">
-              <div>day <span data-testid="sim-company-day">{company.day} / {summary.horizonDays}</span></div>
-              <div>cash <span data-testid="sim-company-cash" className="font-mono text-text-1">{formatMinor(company.cashMinor, currency)}</span></div>
-              <div>stock <span data-testid="sim-company-inventory">{company.inventory}</span> · capacity {company.dailyShipCapacity}/day</div>
-              <div>open orders {company.openOrders} · pending demand {company.pendingDemand} · inbound purchases {company.inboundPurchases}</div>
-              <div className="text-text-3">simulated money in {currency}; not real spend</div>
+              {headline.map((item) => {
+                const display = item.label === 'day' ? `${item.value} / ${summary.horizonDays}` : item.kind === 'money' ? formatMinor(item.value, currency) : String(item.value)
+                return (
+                  <div key={item.label}>
+                    {item.label} <span data-testid={`sim-company-${slugify(item.label)}`} className={item.kind === 'money' ? 'font-mono text-text-1' : undefined}>{display}</span>
+                  </div>
+                )
+              })}
+              {headline.some((item) => item.kind === 'money') && <div className="text-text-3">simulated money in {currency}; not real spend</div>}
             </div>
           </Panel>
           <Panel title="Model usage (real)">
@@ -189,13 +236,20 @@ export function SimulationClient({ initial }: { readonly initial: SimulationSnap
           <div role="tabpanel" aria-label="overview">
             <Panel title="Metrics (from the journal)">
               <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
-                {(Object.keys(METRIC_LABELS) as (keyof typeof METRIC_LABELS)[]).map((key) => {
-                  const value = metrics[key]
-                  const sources = (metrics.sources as Record<string, readonly string[] | undefined>)[key]
+                {Object.entries(metricLabels).map(([key, label]) => {
+                  // The plugin's own labels and order drive this panel (M31b §5); trade's runtime
+                  // metrics object also carries two fields no label names -- `sources` (per-metric
+                  // provenance) and a `<key>Day` companion for a "when" figure like `minCashDay` --
+                  // read defensively here exactly as the trade plugin's own docs describe, rather
+                  // than through the generic `SimulationMetrics` (`Record<string, number>`) type.
+                  const untyped = metrics as unknown as Record<string, unknown>
+                  const value = typeof untyped[key] === 'number' ? (untyped[key] as number) : 0
+                  const dayValue = untyped[`${key}Day`]
+                  const sources = (untyped['sources'] as Record<string, readonly string[] | undefined> | undefined)?.[key]
                   return (
                     <div key={key} data-testid={`sim-metric-${key}`} className="rounded-card border border-line bg-bg-2 p-2 text-xs">
-                      <div className="text-text-3">{METRIC_LABELS[key]}{key === 'minCashMinor' ? ` (day ${metrics.minCashDay})` : ''}</div>
-                      <div className="font-mono text-sm text-text-1">{MONEY.has(key) ? formatMinor(value, currency) : String(value)}</div>
+                      <div className="text-text-3">{label.label}{typeof dayValue === 'number' ? ` (day ${dayValue})` : ''}</div>
+                      <div className="font-mono text-sm text-text-1">{label.kind === 'money' ? formatMinor(value, currency) : String(value)}</div>
                       {sources !== undefined && <div className="text-[10px] text-text-3">from {sources.join(', ')}</div>}
                     </div>
                   )

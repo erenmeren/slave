@@ -3,11 +3,6 @@ import { formatMinor } from '../../lib/money'
 import { Chip } from '../ui/Chip'
 import { DataTable, Row } from '../ui/DataTable'
 
-const METRIC_LABELS = {
-  deliveredQty: 'delivered', onTimeQty: 'on time', lateDays: 'late days', purchaseCostMinor: 'purchase cost', closingInventory: 'closing stock',
-  closingCashMinor: 'closing cash', minCashMinor: 'minimum cash', collectedMinor: 'collected', unpaidCommitmentsMinor: 'unpaid commitments',
-} as const
-const MONEY: ReadonlySet<string> = new Set(['purchaseCostMinor', 'closingCashMinor', 'minCashMinor', 'collectedMinor', 'unpaidCommitmentsMinor'])
 const COLUMNS = '1.4fr 1fr 1fr 1fr'
 
 /** `formatMinor` already carries an ASCII `-` for a negative amount; a non-negative one gets an
@@ -53,18 +48,17 @@ export function CompareClient({ comparison }: { readonly comparison: SimulationC
       )}
 
       <DataTable columns={COLUMNS} header={['metric', 'A', 'B', 'Δ']}>
-        {(Object.keys(METRIC_LABELS) as (keyof typeof METRIC_LABELS)[]).map((key) => {
-          const isMoney = MONEY.has(key)
-          // M31b Task 3: the comparison carries the plugin's metrics as a plain `name -> number`
-          // map, so an index read is `number | undefined`. Task 4 renders `comparison.metricLabels`
-          // instead of this trade-only list; until then a missing key reads 0 rather than `NaN`.
+        {Object.entries(comparison.metricLabels).map(([key, label]) => {
+          const isMoney = label.kind === 'money'
+          // The comparison carries the plugin's metrics as a plain `name -> number` map, so an
+          // index read is `number | undefined` -- a missing key reads 0 rather than `NaN`.
           const av = a.metrics[key] ?? 0
           const bv = b.metrics[key] ?? 0
           const dv = deltas[key] ?? 0
           return (
             <div key={key} data-testid={`sim-compare-row-${key}`}>
               <Row columns={COLUMNS}>
-                <span className="text-text-3">{METRIC_LABELS[key]}</span>
+                <span className="text-text-3">{label.label}</span>
                 <span className="font-mono text-text-1">{isMoney ? formatMinor(av, currency) : String(av)}</span>
                 <span className="font-mono text-text-1">{isMoney ? formatMinor(bv, currency) : String(bv)}</span>
                 <span data-testid={`sim-compare-delta-${key}`} className="font-mono text-text-1">{isMoney ? deltaMoney(dv, currency) : deltaCount(dv)}</span>

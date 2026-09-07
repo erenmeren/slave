@@ -1,4 +1,5 @@
 import { LLM_INPUT_MESSAGES, createSimulation } from '@slave-of-ai/control'
+import { sectors } from '@slave-of-ai/simulation'
 import { z } from 'zod'
 import { simControlResponse } from '../../../server/simControlRoute'
 import { requirePrincipal } from '../../../server/principal'
@@ -10,12 +11,15 @@ export const dynamic = 'force-dynamic'
 // checks exist -- this one is the route's own contract, not a duplicate of control's -- but the
 // three messages come from control's own `LLM_INPUT_MESSAGES` (fix round 1, Minor #3) so this
 // text can never drift from the refusal text a caller sees when control declines the same input.
+// M31b §5: `sector` is required, no default -- every sector the platform knows is the registry's
+// own keys (`Object.keys(sectors)`), never a literal, so a third sector needs no change here.
+const SECTOR_NAMES = Object.keys(sectors) as [string, ...string[]]
 const body = z
   .object({
     companyId: z.string().min(1),
     name: z.string().min(1),
     policy: z.enum(['A', 'B']),
-    sector: z.string().default('trade'),
+    sector: z.enum(SECTOR_NAMES),
     seed: z.number().int().optional(),
     decisionProvider: z.enum(['rules', 'llm']).optional(),
     modelProvider: z.enum(['claude_code', 'cursor']).optional(),

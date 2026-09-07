@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import type { SimulationSummary } from '@slave-of-ai/control'
+import type { SectorName } from '@slave-of-ai/simulation'
 import { Card } from '../ui/Card'
 import { Chip } from '../ui/Chip'
 import { PrimaryButton } from '../ui/FormControls'
@@ -12,8 +13,15 @@ import { NewSimulationDrawer, type SimulationCompanyOption } from './NewSimulati
 const STATUS_TONE = { ready: 'idle', running: 'working', paused: 'paused', finished: 'done', halted: 'blocked' } as const
 
 /** M29: every simulation run as a card (chip, sector, policy, day, status), and the drawer that
- *  creates one from a catalog company. */
-export function SimulationsClient({ cards, companies }: { readonly cards: readonly SimulationSummary[]; readonly companies: readonly SimulationCompanyOption[] }): React.JSX.Element {
+ *  creates one from a catalog company. M31b §5: `companiesBySector` carries every registered
+ *  sector's own (already roster-filtered) company list; the drawer picks which one to show. */
+export function SimulationsClient({
+  cards,
+  companiesBySector,
+}: {
+  readonly cards: readonly SimulationSummary[]
+  readonly companiesBySector: Readonly<Record<SectorName, readonly SimulationCompanyOption[]>>
+}): React.JSX.Element {
   const router = useRouter()
   const [open, setOpen] = useState(false)
   return (
@@ -30,6 +38,7 @@ export function SimulationsClient({ cards, companies }: { readonly cards: readon
                     <div className="flex items-center gap-2">
                       <span data-testid="sim-chip"><Chip tone="waiting">SIMULATION</Chip></span>
                       <span className="text-sm text-text-1">{card.name}</span>
+                      <span data-testid="sim-sector-chip"><Chip>{card.sector}</Chip></span>
                     </div>
                     <div className="text-xs text-text-3">{card.companyName} · {card.sector} · policy {card.policy} · {card.decisionProvider} provider</div>
                     {card.clonedFromName !== null && <div className="text-xs text-text-3">clone of {card.clonedFromName}</div>}
@@ -46,7 +55,7 @@ export function SimulationsClient({ cards, companies }: { readonly cards: readon
           </div>
         )}
       </Panel>
-      <NewSimulationDrawer open={open} onClose={() => setOpen(false)} companies={companies} />
+      <NewSimulationDrawer open={open} onClose={() => setOpen(false)} companiesBySector={companiesBySector} />
     </div>
   )
 }

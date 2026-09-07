@@ -141,7 +141,7 @@ const USAGE = `usage: orchestrator <command> [options]
   delete-template --template <id> --yes
                                        remove a slave template with the catalog slaves made from
                                        it; project slaves keep their role
-  create-simulation --company <id> --name <n> --policy A|B [--seed <n>] [--sector trade|software]
+  create-simulation --sector trade|software --company <id> --name <n> --policy A|B [--seed <n>]
       [--decision-provider rules|llm] [--model-provider claude_code] [--model <id>]
       [--max-model-cost-usd <n>]
                                        create a company SIMULATION from a catalog company's
@@ -952,7 +952,8 @@ export async function main(argv: readonly string[]): Promise<number> {
       const name = requireFlag(flags, 'name')
       const policy = requireFlag(flags, 'policy')
       if (policy !== 'A' && policy !== 'B') throw new Error('--policy must be A or B')
-      const sector = flagText(flags, 'sector') ?? 'trade'
+      // M31b T4: no default -- every sector the platform knows is one the operator must name.
+      const sector = requireFlag(flags, 'sector')
       const seedText = flagText(flags, 'seed')
       let seed: number | undefined
       if (seedText !== undefined) {

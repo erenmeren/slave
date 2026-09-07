@@ -143,10 +143,10 @@ npm run orchestrator -- delete-company-slave --slave <companySlaveId> --yes
 npm run orchestrator -- delete-template --template <id> --yes
 npm run orchestrator -- create-user --name <u>              # password read from stdin
 npm run orchestrator -- list-users
-npm run orchestrator -- create-simulation --company <id> --name <n> --policy A|B [--seed <n>]
+npm run orchestrator -- create-simulation --sector trade|software --company <id> --name <n> --policy A|B [--seed <n>]
     [--decision-provider llm --model-provider claude_code --model <m> --max-model-cost-usd <n>]
 npm run orchestrator -- step-simulation --simulation <id> [--steps <n> | --until-day <d>]
-npm run orchestrator -- simulation-status --simulation <id>  # summary, company panel, metrics, model usage as JSON
+npm run orchestrator -- simulation-status --simulation <id>  # summary, the sector's own headline and metrics, model usage as JSON
 npm run orchestrator -- pause-simulation --simulation <id>   # refuse every next step (clears auto-run)
 npm run orchestrator -- resume-simulation --simulation <id>  # auto-run is not restored
 npm run orchestrator -- halt-simulation --simulation <id> [--reason <text>]  # the emergency stop for a simulation

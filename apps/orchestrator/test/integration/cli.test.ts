@@ -1210,9 +1210,34 @@ describe('the orchestrator CLI', () => {
       }
       return company.id
     }
+    /** A roster the software sector can staff (design §3.2): a Product slave, a Management slave,
+     *  a dedicated reviewer and two more Engineering slaves. The catalog ROLE (on the template, not
+     *  the roster row) is where the sector reads an engineer's expertise from. */
+    async function softwareCompany(): Promise<string> {
+      const company = await prisma.company.create({ data: { name: 'Checkout Platform' } })
+      const members = [
+        { name: 'John', department: 'Product', role: 'Business Analyst' },
+        { name: 'Atlas', department: 'Management', role: 'manager' },
+        { name: 'Riley', department: 'Engineering', role: 'reviewer' },
+        { name: 'Alex', department: 'Engineering', role: 'Backend' },
+        { name: 'Emma', department: 'Engineering', role: 'Frontend' },
+      ] as const
+      const teams = new Map<string, string>()
+      for (const member of members) {
+        let teamId = teams.get(member.department)
+        if (teamId === undefined) {
+          const team = await prisma.companyTeam.create({ data: { companyId: company.id, name: member.department } })
+          teamId = team.id
+          teams.set(member.department, teamId)
+        }
+        const template = await prisma.slaveTemplate.create({ data: { name: `Checkout ${member.role}`, role: member.role } })
+        await prisma.companySlave.create({ data: { companyTeamId: teamId, templateId: template.id, name: member.name } })
+      }
+      return company.id
+    }
     it('creates, steps and reports a simulation; the status is JSON with the two money figures apart', async () => {
       const companyId = await tradingCompany()
-      const created = await runCli(['create-simulation', '--company', companyId, '--name', 'cli demo', '--policy', 'B'])
+      const created = await runCli(['create-simulation', '--sector', 'trade', '--company', companyId, '--name', 'cli demo', '--policy', 'B'])
       expect(created.code).toBe(0)
       const id = /simulation (\S+) created/.exec(created.stdout)?.[1] ?? ''
       expect(id).not.toBe('')
@@ -1237,21 +1262,50 @@ describe('the orchestrator CLI', () => {
       expect(result.stderr).toContain('cannot run in simulation mode yet')
       expect(await prisma.simulationRun.count()).toBe(0)
     }, 30_000)
+    it('refuses to create a simulation without --sector, creating nothing (M31b T4: --sector is required, no default)', async () => {
+      const companyId = await tradingCompany()
+      const result = await runCli(['create-simulation', '--company', companyId, '--name', 'x', '--policy', 'A'])
+      expect(result.code).toBe(1)
+      expect(result.stderr).toContain('--sector is required')
+      expect(await prisma.simulationRun.count()).toBe(0)
+    }, 30_000)
+    it('creates a software simulation and simulation-status prints its own headline and metric labels generically (M31b T4)', async () => {
+      const companyId = await softwareCompany()
+      const created = await runCli(['create-simulation', '--sector', 'software', '--company', companyId, '--name', 'sw cli', '--policy', 'A'])
+      expect(created.code).toBe(0)
+      expect(created.stdout).toContain('simulation')
+      expect(created.stdout).toContain('(software, policy A')
+      const id = /simulation (\S+) created/.exec(created.stdout)?.[1] ?? ''
+      expect(id).not.toBe('')
+      const status = await runCli(['simulation-status', '--simulation', id])
+      expect(status.code).toBe(0)
+      const parsed = JSON.parse(status.stdout) as {
+        summary: { sector: string }
+        headline: { label: string; value: number }[]
+        metricLabels: Record<string, { label: string; kind: string }>
+      }
+      expect(parsed.summary.sector).toBe('software')
+      // The headline is the software plugin's own (queued/in progress/in review/done/open
+      // incidents), never trade's cash-and-inventory shape.
+      expect(parsed.headline.some((h) => h.label === 'queued')).toBe(true)
+      expect(parsed.headline.some((h) => h.label === 'cash')).toBe(false)
+      expect(parsed.metricLabels['deliveredTasks']).toEqual({ label: 'delivered', kind: 'count' })
+    }, 30_000)
     it('refuses an invalid seed without creating anything', async () => {
       const companyId = await tradingCompany()
-      const result = await runCli(['create-simulation', '--company', companyId, '--name', 'x', '--policy', 'A', '--seed', 'abc'])
+      const result = await runCli(['create-simulation', '--sector', 'trade', '--company', companyId, '--name', 'x', '--policy', 'A', '--seed', 'abc'])
       expect(result.code).toBe(1)
       expect(result.stderr).toContain('--seed must be an integer')
       expect(await prisma.simulationRun.count()).toBe(0)
     }, 30_000)
     it('an llm run refuses without a cap, creating nothing; with a cap the row carries the llm fields and simulation-status reports spentUsd/capUsd', async () => {
       const companyId = await tradingCompany()
-      const missingCap = await runCli(['create-simulation', '--company', companyId, '--name', 'llm cli', '--policy', 'A', '--decision-provider', 'llm', '--model-provider', 'claude_code', '--model', 'claude-sonnet-4-5'])
+      const missingCap = await runCli(['create-simulation', '--sector', 'trade', '--company', companyId, '--name', 'llm cli', '--policy', 'A', '--decision-provider', 'llm', '--model-provider', 'claude_code', '--model', 'claude-sonnet-4-5'])
       expect(missingCap.code).toBe(1)
       expect(missingCap.stderr).toContain('maxModelCostUsd must be a positive number')
       expect(await prisma.simulationRun.count()).toBe(0)
 
-      const created = await runCli(['create-simulation', '--company', companyId, '--name', 'llm cli', '--policy', 'A', '--decision-provider', 'llm', '--model-provider', 'claude_code', '--model', 'claude-sonnet-4-5', '--max-model-cost-usd', '2'])
+      const created = await runCli(['create-simulation', '--sector', 'trade', '--company', companyId, '--name', 'llm cli', '--policy', 'A', '--decision-provider', 'llm', '--model-provider', 'claude_code', '--model', 'claude-sonnet-4-5', '--max-model-cost-usd', '2'])
       expect(created.code).toBe(0)
       const id = /simulation (\S+) created/.exec(created.stdout)?.[1] ?? ''
       expect(id).not.toBe('')
@@ -1266,7 +1320,7 @@ describe('the orchestrator CLI', () => {
     }, 30_000)
     it('tick steps every due auto-run once and reports the counts (M30)', async () => {
       const companyId = await tradingCompany()
-      const created = await runCli(['create-simulation', '--company', companyId, '--name', 'auto', '--policy', 'A'])
+      const created = await runCli(['create-simulation', '--sector', 'trade', '--company', companyId, '--name', 'auto', '--policy', 'A'])
       const id = /simulation (\S+) created/.exec(created.stdout)?.[1] ?? ''
       expect(id).not.toBe('')
       // `auto-run-simulation` is Task 6's CLI verb; here the intent is armed straight through
@@ -1334,10 +1388,10 @@ describe('the orchestrator CLI', () => {
     }, 60_000)
     it('compare-simulations prints both runs\' metrics and the b − a deltas as JSON (M30)', async () => {
       const companyId = await tradingCompany()
-      const createdA = await runCli(['create-simulation', '--company', companyId, '--name', 'cmp a', '--policy', 'A'])
+      const createdA = await runCli(['create-simulation', '--sector', 'trade', '--company', companyId, '--name', 'cmp a', '--policy', 'A'])
       const a = /simulation (\S+) created/.exec(createdA.stdout)?.[1] ?? ''
       expect(a).not.toBe('')
-      const createdB = await runCli(['create-simulation', '--company', companyId, '--name', 'cmp b', '--policy', 'B'])
+      const createdB = await runCli(['create-simulation', '--sector', 'trade', '--company', companyId, '--name', 'cmp b', '--policy', 'B'])
       const b = /simulation (\S+) created/.exec(createdB.stdout)?.[1] ?? ''
       expect(b).not.toBe('')
       expect((await runCli(['step-simulation', '--simulation', a, '--until-day', '30'])).code).toBe(0)
@@ -1350,7 +1404,7 @@ describe('the orchestrator CLI', () => {
     }, 30_000)
     it('pauses a simulation (M30)', async () => {
       const companyId = await tradingCompany()
-      const created = await runCli(['create-simulation', '--company', companyId, '--name', 'pause me', '--policy', 'A'])
+      const created = await runCli(['create-simulation', '--sector', 'trade', '--company', companyId, '--name', 'pause me', '--policy', 'A'])
       const id = /simulation (\S+) created/.exec(created.stdout)?.[1] ?? ''
       expect(id).not.toBe('')
       const result = await runCli(['pause-simulation', '--simulation', id])
@@ -1361,7 +1415,7 @@ describe('the orchestrator CLI', () => {
     }, 30_000)
     it('resumes a paused simulation (M30)', async () => {
       const companyId = await tradingCompany()
-      const created = await runCli(['create-simulation', '--company', companyId, '--name', 'resume me', '--policy', 'A'])
+      const created = await runCli(['create-simulation', '--sector', 'trade', '--company', companyId, '--name', 'resume me', '--policy', 'A'])
       const id = /simulation (\S+) created/.exec(created.stdout)?.[1] ?? ''
       expect((await runCli(['pause-simulation', '--simulation', id])).code).toBe(0)
       const result = await runCli(['resume-simulation', '--simulation', id])
@@ -1372,7 +1426,7 @@ describe('the orchestrator CLI', () => {
     }, 30_000)
     it('halts a simulation with a reason (M30)', async () => {
       const companyId = await tradingCompany()
-      const created = await runCli(['create-simulation', '--company', companyId, '--name', 'halt me', '--policy', 'A'])
+      const created = await runCli(['create-simulation', '--sector', 'trade', '--company', companyId, '--name', 'halt me', '--policy', 'A'])
       const id = /simulation (\S+) created/.exec(created.stdout)?.[1] ?? ''
       const result = await runCli(['halt-simulation', '--simulation', id, '--reason', 'operator judgment call'])
       expect(result.code).toBe(0)
@@ -1383,7 +1437,7 @@ describe('the orchestrator CLI', () => {
     }, 30_000)
     it('injects a supplier delay onto the queue (M30)', async () => {
       const companyId = await tradingCompany()
-      const created = await runCli(['create-simulation', '--company', companyId, '--name', 'inject me', '--policy', 'A'])
+      const created = await runCli(['create-simulation', '--sector', 'trade', '--company', companyId, '--name', 'inject me', '--policy', 'A'])
       const id = /simulation (\S+) created/.exec(created.stdout)?.[1] ?? ''
       const before = await loadSimulation(id)
       const beforeCount = before.ok ? before.value.state.queue.items.length : -1
@@ -1401,7 +1455,7 @@ describe('the orchestrator CLI', () => {
     }, 30_000)
     it('refuses invalid JSON for --event without touching the queue (M30)', async () => {
       const companyId = await tradingCompany()
-      const created = await runCli(['create-simulation', '--company', companyId, '--name', 'inject bad', '--policy', 'A'])
+      const created = await runCli(['create-simulation', '--sector', 'trade', '--company', companyId, '--name', 'inject bad', '--policy', 'A'])
       const id = /simulation (\S+) created/.exec(created.stdout)?.[1] ?? ''
       const before = await loadSimulation(id)
       const beforeCount = before.ok ? before.value.state.queue.items.length : -1
@@ -1413,7 +1467,7 @@ describe('the orchestrator CLI', () => {
     }, 30_000)
     it('clones a simulation into a fresh row at day 0 (M30)', async () => {
       const companyId = await tradingCompany()
-      const created = await runCli(['create-simulation', '--company', companyId, '--name', 'clone source', '--policy', 'A'])
+      const created = await runCli(['create-simulation', '--sector', 'trade', '--company', companyId, '--name', 'clone source', '--policy', 'A'])
       const id = /simulation (\S+) created/.exec(created.stdout)?.[1] ?? ''
       expect((await runCli(['step-simulation', '--simulation', id, '--until-day', '5'])).code).toBe(0)
       const result = await runCli(['clone-simulation', '--simulation', id, '--name', 'clone target', '--policy', 'B'])
@@ -1428,7 +1482,7 @@ describe('the orchestrator CLI', () => {
     }, 30_000)
     it('starts and stops an auto-run intent (M30)', async () => {
       const companyId = await tradingCompany()
-      const created = await runCli(['create-simulation', '--company', companyId, '--name', 'auto cli', '--policy', 'A'])
+      const created = await runCli(['create-simulation', '--sector', 'trade', '--company', companyId, '--name', 'auto cli', '--policy', 'A'])
       const id = /simulation (\S+) created/.exec(created.stdout)?.[1] ?? ''
       const started = await runCli(['auto-run-simulation', '--simulation', id, '--every-ms', '250', '--until-day', '10'])
       expect(started.code).toBe(0)
@@ -1445,7 +1499,7 @@ describe('the orchestrator CLI', () => {
     }, 30_000)
     it('auto-run-simulation defaults to every 1000 ms until the horizon (M30)', async () => {
       const companyId = await tradingCompany()
-      const created = await runCli(['create-simulation', '--company', companyId, '--name', 'auto default', '--policy', 'A'])
+      const created = await runCli(['create-simulation', '--sector', 'trade', '--company', companyId, '--name', 'auto default', '--policy', 'A'])
       const id = /simulation (\S+) created/.exec(created.stdout)?.[1] ?? ''
       const loaded = await loadSimulation(id)
       const horizonDays = loaded.ok ? loaded.value.summary.horizonDays : -1
