@@ -60,14 +60,41 @@ function engineersOf(definition: LoadedDefinition): readonly { readonly id: stri
 
 /**
  * `slaveName → role` for every member the RUN gave a job to (§3): its decision roles by name
- * (`product`, `lead`, `reviewer`) and its engineers by expertise (`backend`, `general`, …). A
- * roster member the run never named -- Security, Marketing -- is deliberately absent, so
- * `assignCompanyTx` materialises them with the catalog role exactly as a hand assignment does.
+ * (`product`, `lead`, `reviewer`) and its engineers by expertise (`backend`, `general`, …). This
+ * is the run's OWN vocabulary, and it is what the preview shows and the `adopted` journal row
+ * records -- not what gets written to a `Slave` (see {@link roleOverridesOf}).
  */
+function runRolesOf(definition: LoadedDefinition): Readonly<Record<string, string>> {
+  const roles: Record<string, string> = {}
+  for (const role of definition.roles) roles[role.slaveName] = role.name
+  for (const engineer of engineersOf(definition)) roles[engineer.id] = engineer.expertise
+  return roles
+}
+
+/**
+ * The run's decision roles in the RUNTIME's vocabulary (controller ruling R2). `Slave.role` is not
+ * a label: the scheduler matches `Task.requiredRole` to it by equality, `planning.ts` staffs
+ * `role === 'manager'` and `review.ts` staffs `role === 'reviewer'` -- so a worker materialised as
+ * `'lead'` would be a manager no planning pass could find. Adoption therefore TRANSLATES rather
+ * than copies.
+ *
+ * Only two entries have a translation. `product` has no runtime counterpart, and an engineer's
+ * expertise (`backend`, `general`) is not a role at all -- the planner emits CATALOG roles as a
+ * task's `requiredRole`, so those members must keep the catalog role they would have been
+ * materialised with anyway. The run's full assignment is not lost: it is in the preview and in the
+ * journal.
+ */
+const RUNTIME_ROLE: Readonly<Record<string, string>> = { lead: 'manager', reviewer: 'reviewer' }
+
+/** The `slaveName → role` map `assignCompanyTx` actually writes: the translated decision roles and
+ *  nothing else. A roster member with no entry here is materialised with the catalog role, exactly
+ *  as a hand assignment does. */
 function roleOverridesOf(definition: LoadedDefinition): Readonly<Record<string, string>> {
   const overrides: Record<string, string> = {}
-  for (const role of definition.roles) overrides[role.slaveName] = role.name
-  for (const engineer of engineersOf(definition)) overrides[engineer.id] = engineer.expertise
+  for (const role of definition.roles) {
+    const runtime = RUNTIME_ROLE[role.name]
+    if (runtime !== undefined) overrides[role.slaveName] = runtime
+  }
   return overrides
 }
 
@@ -117,7 +144,9 @@ export async function adoptionPreview(simulationId: string): Promise<Result<Adop
   })
   if (company === null) return err({ kind: 'company_not_found', companyId: summary.companyId })
 
-  const overrides = roleOverridesOf(definition)
+  // The RUN's own roles, not the translated ones (R2): the preview is where a person sees who the
+  // simulation made its lead, its reviewer and its backend engineer.
+  const runRoles = runRolesOf(definition)
   const workspaces = await prisma.workspace.findMany({
     where: { companyId: null, archivedAt: null },
     orderBy: { name: 'asc' },
@@ -131,7 +160,7 @@ export async function adoptionPreview(simulationId: string): Promise<Result<Adop
     roles: rosterOf(company.teams).map((member) => ({
       slaveName: member.slaveName,
       catalogRole: member.role,
-      role: overrides[member.slaveName] ?? member.role,
+      role: runRoles[member.slaveName] ?? member.role,
     })),
     settings: proposedSettings(definition),
     model: modelOf(summary),
@@ -141,7 +170,15 @@ export async function adoptionPreview(simulationId: string): Promise<Result<Adop
 
 /** Thrown to roll a half-written adoption back: a `$transaction` callback that RETURNS a refusal
  *  commits everything written before it, which is exactly what this must not do. Caught by
- *  {@link adoptSimulation} and unwrapped into the refusal it carries. */
+ *  {@link adoptSimulation} and unwrapped into the refusal it carries.
+ *
+ *  The rollback itself is DEFENSIVE and, as the code stands, unreachable: every refusal
+ *  `adoptSimulation` can reach is decided before its first write. `assignCompanyTx`'s own
+ *  `company_already_assigned` is precluded by the stricter "any company at all" guard a few lines
+ *  above it, under the same workspace lock, and the model's ambiguity refusal was hoisted above
+ *  the assignment for the same reason. That is a property of today's ordering, not a guarantee --
+ *  a future refusal added after the assignment would silently commit a half-adopted project
+ *  without this, which is why the throw stays. */
 class AdoptionRefused extends Error {
   constructor(readonly refusal: ControlRefusal) {
     super('adoption refused')
@@ -211,6 +248,12 @@ export async function adoptSimulation(
         })
         if (seen !== null) {
           const payload = seen.payload as { workspaceId?: string }
+          // A key identifies ONE adoption, not one caller (review round 1): replaying it against a
+          // different project would report the first project's id as though the second had been
+          // adopted. Refused rather than silently answered for the wrong workspace.
+          if (payload.workspaceId !== undefined && payload.workspaceId !== input.workspaceId) {
+            throw new AdoptionRefused({ kind: 'invalid_simulation_input', detail: 'idempotency key already used for another workspace' })
+          }
           return { replayed: true as const, workspaceId: payload.workspaceId ?? input.workspaceId, assigned: { createdTeams: [], createdWorkers: [] } satisfies AssignReport }
         }
       }
@@ -233,6 +276,24 @@ export async function adoptSimulation(
         throw new AdoptionRefused({ kind: 'company_already_assigned', workspaceId: input.workspaceId, companyName: current.name })
       }
 
+      // Paid use stays an explicit choice (§1 principle 4): only with `applyModel`, only from an
+      // `llm` run, and only onto the lead's OWN roster row. Resolved to ONE row here, before
+      // anything is written (review round 1): `CompanySlave` is unique on `(companyTeamId, name)`,
+      // not on `(companyId, name)`, so a company with an "Atlas" in two departments has two rows a
+      // name-scoped update would both have written -- one of them a roster row nobody chose to
+      // spend money on. Ambiguity is refused, never guessed.
+      const model = modelOf(loaded.summary)
+      const leadName = leadNameOf(loaded.definition)
+      const wantsModel = input.applyModel === true && model !== null && leadName !== null
+      let leadRowId: string | null = null
+      if (wantsModel) {
+        const leadRows = await tx.companySlave.findMany({ where: { name: leadName as string, companyTeam: { companyId } }, select: { id: true } })
+        if (leadRows.length !== 1) {
+          throw new AdoptionRefused({ kind: 'invalid_simulation_input', detail: "the lead's name is ambiguous in the roster; set the model by hand" })
+        }
+        leadRowId = leadRows[0]?.id ?? null
+      }
+
       const roleOverrides = roleOverridesOf(loaded.definition)
       const assigned = await assignCompanyTx(tx, input.workspaceId, companyId, { roleOverrides })
       if (!assigned.ok) throw new AdoptionRefused(assigned.error)
@@ -249,17 +310,10 @@ export async function adoptSimulation(
         data: { ...settings, autoMerge: false, adoptedFromSimulationId: simulationId },
       })
 
-      // Paid use stays an explicit choice (§1 principle 4): only with `applyModel`, only from an
-      // `llm` run, and only onto the lead's OWN roster row.
-      const model = modelOf(loaded.summary)
-      const leadName = leadNameOf(loaded.definition)
       let appliedModel: { readonly provider: string; readonly model: string } | null = null
-      if (input.applyModel === true && model !== null && leadName !== null) {
-        const { count } = await tx.companySlave.updateMany({
-          where: { name: leadName, companyTeam: { companyId } },
-          data: { model: model.model, provider: model.provider },
-        })
-        if (count > 0) appliedModel = model
+      if (leadRowId !== null && model !== null) {
+        await tx.companySlave.update({ where: { id: leadRowId }, data: { model: model.model, provider: model.provider } })
+        appliedModel = model
       }
 
       // `max(seq) + 1` read fresh under this row's lock, and the watermark moved with it (M32 item
@@ -271,13 +325,19 @@ export async function adoptSimulation(
         data: {
           simulationId, seq, simTime: row.simTime, kind: 'control', actorRole: null,
           idempotencyKey: input.idempotencyKey !== undefined ? namespacedKey('adopt', input.idempotencyKey) : null,
-          payload: json({ op: 'adopted', workspaceId: target.id, workspaceName: target.name, settings, roles: roleOverrides, appliedModel }),
+          // The RUN's own role assignment, not the two translated entries (R2): the journal is the
+          // record of what the simulation decided, and `product`/an engineer's expertise are part
+          // of that even though no `Slave.role` carries them.
+          payload: json({ op: 'adopted', workspaceId: target.id, workspaceName: target.name, settings, roles: runRolesOf(loaded.definition), appliedModel }),
         },
       })
       await tx.simulationRun.update({ where: { id: simulationId }, data: watermark(row.state, seq) })
 
       return { replayed: false as const, workspaceId: target.id, assigned: assigned.value }
-    })
+      // `RepeatableRead` as §3 asks. The two `FOR UPDATE` locks are what actually make this
+      // correct; the level is here so every multi-read transaction in this package reads from one
+      // snapshot the same way (`read.ts`'s three do).
+    }, { isolationLevel: 'RepeatableRead' })
 
     // Outside the transaction, exactly where `assignCompany` emits it: the project really was
     // assigned a company, and M11's overview reads that event. A replay emits nothing -- the first

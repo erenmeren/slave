@@ -292,9 +292,12 @@ export async function assignCompany(
   return ok(outcome.value)
 }
 
-/** What a caller may bend about the materialization (M33 §3): a `slaveName → role` map applied to
- *  the `Slave.role` this writes, with the catalog role it displaced kept in `requiredRole`. Only
- *  `adoptSimulation` passes one -- a hand assignment writes the catalog role, as it always did. */
+/** What a caller may bend about the materialization (M33 §3, controller ruling R2): a
+ *  `slaveName → role` map applied to the `Slave.role` this writes. Only `adoptSimulation` passes
+ *  one -- a hand assignment writes the catalog role, as it always did -- and it passes only the
+ *  roles the RUNTIME dispatches on (`manager`, `reviewer`), never the simulation's own vocabulary.
+ *  `requiredRole` is not touched by an override: that column names the role a TASK needs, and
+ *  neither assignment nor adoption creates a task. */
 export interface AssignOptions { readonly roleOverrides?: Readonly<Record<string, string>> }
 
 /**
@@ -323,9 +326,26 @@ export async function assignCompanyTx(
     const current = await tx.company.findUniqueOrThrow({ where: { id: lockedCompanyId } })
     return err({ kind: 'company_already_assigned', workspaceId, companyName: current.name })
   }
-  await tx.workspace.update({ where: { id: workspaceId }, data: { companyId } })
-
   const companyTeams = await tx.companyTeam.findMany({ where: { companyId }, include: { slaves: true } })
+
+  // Before the FIRST write (M33 review round 1): a roster name is unique per DEPARTMENT
+  // (`CompanySlave` is unique on `(companyTeamId, name)`), not per company, so an override keyed by
+  // name can address two roster rows. Which of two "Atlas"es the run meant by its lead is not
+  // something to guess -- the whole adoption is refused, and a person renames one or sets the role
+  // by hand.
+  const overrideNames = Object.keys(options?.roleOverrides ?? {})
+  if (overrideNames.length > 0) {
+    const counts = new Map<string, number>()
+    for (const companyTeam of companyTeams) {
+      for (const companySlave of companyTeam.slaves) counts.set(companySlave.name, (counts.get(companySlave.name) ?? 0) + 1)
+    }
+    const ambiguous = overrideNames.find((name) => (counts.get(name) ?? 0) > 1)
+    if (ambiguous !== undefined) {
+      return err({ kind: 'invalid_simulation_input', detail: `the roster has more than one slave named ${ambiguous}; adoption cannot tell which one the run means` })
+    }
+  }
+
+  await tx.workspace.update({ where: { id: workspaceId }, data: { companyId } })
 
   const createdTeams: string[] = []
   const createdWorkers: { companySlaveId: string; name: string; role: string }[] = []
@@ -355,18 +375,16 @@ export async function assignCompanyTx(
       if (existingWorker !== null) continue
 
       const template = await tx.slaveTemplate.findUniqueOrThrow({ where: { id: companySlave.templateId } })
-      // M33 §3: an override replaces the role this worker is materialized WITH, and the catalog
-      // role it displaced is kept in `requiredRole` rather than lost -- that column is what says
-      // which template shape this worker was cut from. No override (a hand assignment, or a
-      // roster member the simulation never named) leaves both exactly as they were: the catalog
-      // role in `role`, nothing in `requiredRole`.
+      // M33 §3 (ruling R2): an override replaces the role this worker is materialized WITH, and
+      // nothing else -- `Slave.role` is what the runtime dispatches on, so the override IS the
+      // runtime role, already translated by the caller. `requiredRole` stays untouched: it names
+      // the role a TASK needs, and neither verb here creates a task.
       const override = options?.roleOverrides?.[companySlave.name]
       const worker = await tx.slave.create({
         data: {
           teamId: team.id,
           name: companySlave.name,
           role: override ?? template.role,
-          ...(override !== undefined ? { requiredRole: template.role } : {}),
           companySlaveId: companySlave.id,
         },
       })

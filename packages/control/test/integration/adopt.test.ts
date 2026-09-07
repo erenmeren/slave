@@ -45,10 +45,15 @@ async function seedCompany(name: string, roster: readonly { readonly name: strin
 }
 
 /** A workspace row with no company: adoption's whole target. `repoPath` is never touched at this
- *  level (no git probe runs in `assignCompany`), so any string does. */
+ *  level (no git probe runs in `assignCompany`), so any string does.
+ *
+ *  Deliberately NOT on the column defaults (review round 1): `autoMerge: true` is what §1
+ *  principle 3 exists to switch back off, `maxAttempts: 5` is a value the proposal must be seen to
+ *  MOVE rather than coincide with, and `budgetUsd: 12` is a real budget adoption must leave
+ *  exactly where it found it (§1 principle 2 -- simulated money never becomes a real one). */
 async function seedWorkspace(name: string, over: { readonly archivedAt?: Date } = {}): Promise<{ id: string; name: string }> {
   const workspace = await prisma.workspace.create({
-    data: { name, repoPath: '/tmp/x', verifyCommands: [], setupCommands: [], companyId: null, ...over },
+    data: { name, repoPath: '/tmp/x', verifyCommands: [], setupCommands: [], companyId: null, autoMerge: true, maxAttempts: 5, budgetUsd: 12, ...over },
   })
   return { id: workspace.id, name: workspace.name }
 }
@@ -184,22 +189,33 @@ describe('adoptSimulation', () => {
     const slaves = await prisma.slave.findMany({ where: { team: { workspaceId: alpha.id } }, orderBy: { name: 'asc' } })
     const byName = new Map(slaves.map((s) => [s.name, s]))
     expect(slaves).toHaveLength(9)
-    // The run's roles land in `role`; the catalog role it displaced is kept in `requiredRole`.
-    expect(byName.get('Atlas')).toMatchObject({ role: 'lead', requiredRole: 'manager' })
-    expect(byName.get('John')).toMatchObject({ role: 'product', requiredRole: 'Business Analyst' })
-    expect(byName.get('Riley')).toMatchObject({ role: 'reviewer', requiredRole: 'reviewer' })
-    expect(byName.get('Alex')).toMatchObject({ role: 'backend', requiredRole: 'Backend' })
-    expect(byName.get('Maya')).toMatchObject({ role: 'general', requiredRole: 'QA' })
-    // A member the run never named keeps the catalog role and gains no `requiredRole` at all --
-    // exactly what a hand assignment writes.
-    expect(byName.get('Sarah')).toMatchObject({ role: 'Security', requiredRole: null })
-    expect(byName.get('Oliver')).toMatchObject({ role: 'SEO', requiredRole: null })
+    // Ruling R2: `Slave.role` is what the RUNTIME dispatches on -- `planning.ts` staffs
+    // `role === 'manager'`, `review.ts` staffs `role === 'reviewer'`, and the scheduler matches
+    // `Task.requiredRole` to it by equality. So the run's decision roles are TRANSLATED, not
+    // copied: its lead becomes the manager the planner can find, its reviewer the reviewer the
+    // review pass can find, and everyone else keeps the catalog role the planner emits as a
+    // `requiredRole`. Exactly one of each, so neither pass has two candidates it never had before.
+    expect(slaves.filter((s) => s.role === 'manager').map((s) => s.name)).toEqual(['Atlas'])
+    expect(slaves.filter((s) => s.role === 'reviewer').map((s) => s.name)).toEqual(['Riley'])
+    expect(byName.get('John')?.role).toBe('Business Analyst')
+    expect(byName.get('Alex')?.role).toBe('Backend')
+    expect(byName.get('Emma')?.role).toBe('Frontend')
+    expect(byName.get('Daniel')?.role).toBe('DevOps')
+    expect(byName.get('Maya')?.role).toBe('QA')
+    expect(byName.get('Sarah')?.role).toBe('Security')
+    expect(byName.get('Oliver')?.role).toBe('SEO')
+    // Adoption writes no `requiredRole` at all (R2): that column names the role a TASK needs, and
+    // adoption creates no tasks.
+    expect(slaves.every((s) => s.requiredRole === null)).toBe(true)
 
     const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: alpha.id } })
     expect(workspace.companyId).toBe(companyId)
     expect(workspace.maxConcurrentRuns).toBe(4)
+    // The seeded 5 moves to the policy's proposal, the seeded `autoMerge: true` is switched back
+    // off (§1 principle 3), and the real budget is untouched (§1 principle 2).
     expect(workspace.maxAttempts).toBe(3)
     expect(workspace.autoMerge).toBe(false)
+    expect(workspace.budgetUsd).toBe(12)
     expect(workspace.adoptedFromSimulationId).toBe(id)
 
     const entries = await prisma.simulationJournalEntry.findMany({ where: { simulationId: id }, orderBy: { seq: 'asc' } })
@@ -327,6 +343,53 @@ describe('adoptSimulation', () => {
     expect(result.ok).toBe(true)
     const rows = await prisma.companySlave.findMany({ where: { companyTeam: { companyId } } })
     expect(rows.every((s) => s.model === null && s.provider === null)).toBe(true)
+  })
+
+  it('refuses when a role the run assigned names more than one roster slave, before writing anything', async () => {
+    const id = await softwareRun()
+    // A second "Atlas", in a department the software sector never reads: the frozen definition
+    // still names Management's Atlas as its lead, but the roster now has two rows that name
+    // answers to, and adoption must not guess which one becomes the manager.
+    const security = await prisma.companyTeam.findFirstOrThrow({ where: { companyId, name: 'Security' } })
+    const template = await prisma.slaveTemplate.findFirstOrThrow({ where: { name: 'Checkout Platform manager' } })
+    await prisma.companySlave.create({ data: { companyTeamId: security.id, templateId: template.id, name: 'Atlas' } })
+
+    const result = await adoptSimulation(id, { workspaceId: alpha.id })
+
+    expect(result.ok === false && result.error).toEqual({
+      kind: 'invalid_simulation_input', detail: 'the roster has more than one slave named Atlas; adoption cannot tell which one the run means',
+    })
+    expect((await prisma.workspace.findUniqueOrThrow({ where: { id: alpha.id } })).companyId).toBeNull()
+    expect(await prisma.team.count()).toBe(0)
+    expect(await prisma.simulationJournalEntry.count({ where: { simulationId: id, kind: 'control' } })).toBe(1)
+  })
+
+  it('refuses applyModel when the lead\'s name is ambiguous, and writes no model', async () => {
+    const id = await llmRun()
+    const security = await prisma.companyTeam.findFirstOrThrow({ where: { companyId, name: 'Security' } })
+    const template = await prisma.slaveTemplate.findFirstOrThrow({ where: { name: 'Checkout Platform manager' } })
+    await prisma.companySlave.create({ data: { companyTeamId: security.id, templateId: template.id, name: 'Atlas' } })
+
+    const result = await adoptSimulation(id, { workspaceId: alpha.id, applyModel: true })
+
+    expect(result.ok === false && result.error).toEqual({
+      kind: 'invalid_simulation_input', detail: "the lead's name is ambiguous in the roster; set the model by hand",
+    })
+    const rows = await prisma.companySlave.findMany({ where: { companyTeam: { companyId } } })
+    expect(rows.every((row) => row.model === null && row.provider === null)).toBe(true)
+    expect((await prisma.workspace.findUniqueOrThrow({ where: { id: alpha.id } })).companyId).toBeNull()
+  })
+
+  it('refuses an idempotency key already used for a different workspace', async () => {
+    const id = await softwareRun()
+    expect((await adoptSimulation(id, { workspaceId: alpha.id, idempotencyKey: 'k1' })).ok).toBe(true)
+
+    const result = await adoptSimulation(id, { workspaceId: beta.id, idempotencyKey: 'k1' })
+
+    expect(result.ok === false && result.error).toEqual({
+      kind: 'invalid_simulation_input', detail: 'idempotency key already used for another workspace',
+    })
+    expect((await prisma.workspace.findUniqueOrThrow({ where: { id: beta.id } })).companyId).toBeNull()
   })
 
   it('replays an idempotency key without a second journal row or a second refusal', async () => {
