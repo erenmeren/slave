@@ -72,9 +72,12 @@ export function SimulationClient({ initial }: { readonly initial: SimulationSnap
   const modelUsageText = ((): string => {
     const usage = initial.modelUsage
     if (summary.decisionProvider === 'llm' && usage.capUsd !== null) {
-      const spent = usage.spentUsd ?? 0
+      // Fix round 1, Minor #1: `spentUsd === null` means every call so far is unmeasured -- there
+      // is no real figure to print, so the word replaces it rather than a `spentUsd ?? 0` that
+      // would read as an accurate $0.00 and hide the very calls the `unmeasured` count names.
+      const spentText = usage.spentUsd === null ? 'unmeasured' : `$${usage.spentUsd.toFixed(4)}`
       const unmeasuredSuffix = usage.unmeasured > 0 ? ` · ${usage.unmeasured} unmeasured` : ''
-      return `$${spent.toFixed(4)} of $${usage.capUsd.toFixed(2)}${unmeasuredSuffix}`
+      return `${spentText} of $${usage.capUsd.toFixed(2)}${unmeasuredSuffix}`
     }
     if (usage.rows.length === 0) return `${summary.decisionProvider} provider — no model calls; cost: no record`
     return `${usage.rows.length} calls · ${usage.spentUsd === null ? 'cost unmeasured' : `$${usage.spentUsd.toFixed(2)}`}${usage.unmeasured > 0 ? ` · ${usage.unmeasured} unmeasured` : ''}`

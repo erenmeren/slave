@@ -40,9 +40,13 @@ export async function buildSimulationSnapshot(simulationId: string): Promise<Sim
     if (!loaded.ok) return null
     const { summary, definition, state } = loaded.value
     const rows = await tx.simulationJournalEntry.findMany({ where: { simulationId }, orderBy: { seq: 'asc' } })
-    const usage = await tx.simulationModelUsage.aggregate({ where: { simulationId }, _count: { _all: true }, _sum: { costUsd: true } })
+    // Fix round 1, Minor #2: one query, not two -- `spentUsd` (the measured rows' sum, or null
+    // when none are measured) and `unmeasured` (the null-cost count) are both derived from these
+    // same rows instead of a redundant `aggregate` over the same table.
     const usageRows = await tx.simulationModelUsage.findMany({ where: { simulationId }, orderBy: { seq: 'asc' } })
-    const unmeasured = usageRows.filter((r) => r.costUsd === null).length
+    const measuredCosts = usageRows.flatMap((r) => (r.costUsd === null ? [] : [r.costUsd]))
+    const spentUsd = measuredCosts.length === 0 ? null : measuredCosts.reduce((sum, cost) => sum + cost, 0)
+    const unmeasured = usageRows.length - measuredCosts.length
     const entries: JournalEntry[] = rows.map((r) => ({ seq: r.seq, simTime: r.simTime, kind: r.kind, actorRole: r.actorRole, payload: r.payload as Record<string, unknown> }))
     const sector = state.sector
     return {
@@ -57,7 +61,7 @@ export async function buildSimulationSnapshot(simulationId: string): Promise<Sim
       metrics: tradeMetrics(entries, sector),
       journal: entries.slice(-JOURNAL_PAGE),
       modelUsage: {
-        spentUsd: usage._count._all === 0 || usage._sum.costUsd === null ? null : usage._sum.costUsd,
+        spentUsd,
         capUsd: summary.maxModelCostUsd,
         rows: usageRows.map((r) => ({ seq: r.seq, simTime: r.simTime, role: r.role, costUsd: r.costUsd })),
         unmeasured,

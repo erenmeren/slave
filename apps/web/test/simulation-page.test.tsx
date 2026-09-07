@@ -223,6 +223,14 @@ describe('SimulationClient', () => {
       expect(screen.getByTestId('sim-model-usage').textContent).toContain('1 unmeasured')
     })
 
+    it('when every call is unmeasured the panel names it "unmeasured", never $0.00 (fix round 1, Minor #1)', () => {
+      render(<SimulationClient initial={llmSnapshot({ modelUsage: { spentUsd: null, capUsd: 2, unmeasured: 2, rows: [{ seq: 100, simTime: 5, role: 'purchasing', costUsd: null }, { seq: 101, simTime: 6, role: 'purchasing', costUsd: null }] } })} />)
+      const text = screen.getByTestId('sim-model-usage').textContent ?? ''
+      expect(text).not.toContain('$0.00')
+      expect(text).toContain('unmeasured of $2.00')
+      expect(text).toContain('2 unmeasured')
+    })
+
     it('Step and Run-to-day are absent; the auto-run-only sentence shows instead', () => {
       render(<SimulationClient initial={llmSnapshot()} />)
       expect(screen.queryByTestId('sim-step')).toBeNull()

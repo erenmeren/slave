@@ -22,18 +22,28 @@ function validateNameAndSeed(name: string, seed: number | undefined): ControlRef
 
 type ValidatedLlmInput = { readonly modelProvider: 'claude_code'; readonly model: string; readonly maxModelCostUsd: number }
 
+/** The three `invalid_simulation_input` detail strings an `llm` run's missing field can produce
+ *  (M31a §3). Exported (fix round 1, Minor #3) so `apps/web`'s own request-shape check -- the
+ *  route's zod 400, distinct from this function's 409 refusal for the same condition -- reads the
+ *  same text instead of a hand-copied one that could silently drift from it. */
+export const LLM_INPUT_MESSAGES = {
+  modelProviderRequired: 'modelProvider is required for an llm run',
+  modelRequired: 'model is required for an llm run',
+  maxModelCostUsdPositive: 'maxModelCostUsd must be a positive number',
+} as const
+
 /** `createSimulation`'s `decisionProvider: 'llm'` guard (M31a §3): `modelProvider` must be
  *  `claude_code` -- `cursor` gets its own reason (it reports no cost, so a cap can never be
  *  enforced), anything else is simply not a provider this ever configures -- then `model` a
  *  non-empty text and `maxModelCostUsd` a positive finite number. Returns the trimmed, narrowed
  *  values a `rules` run never needs to carry. */
 function validateLlmInput(input: { readonly modelProvider?: string; readonly model?: string; readonly maxModelCostUsd?: number }): Result<ValidatedLlmInput, ControlRefusal> {
-  if (input.modelProvider === undefined) return err({ kind: 'invalid_simulation_input', detail: 'modelProvider is required for an llm run' })
+  if (input.modelProvider === undefined) return err({ kind: 'invalid_simulation_input', detail: LLM_INPUT_MESSAGES.modelProviderRequired })
   if (input.modelProvider === 'cursor') return err({ kind: 'unsupported_model_provider', provider: 'cursor', reason: 'it reports no cost, so a cap cannot be enforced' })
   if (input.modelProvider !== 'claude_code') return err({ kind: 'unsupported_model_provider', provider: input.modelProvider, reason: 'it is not a configured provider' })
   const model = input.model?.trim()
-  if (model === undefined || model === '') return err({ kind: 'invalid_simulation_input', detail: 'model is required for an llm run' })
-  if (input.maxModelCostUsd === undefined || !Number.isFinite(input.maxModelCostUsd) || input.maxModelCostUsd <= 0) return err({ kind: 'invalid_simulation_input', detail: 'maxModelCostUsd must be a positive number' })
+  if (model === undefined || model === '') return err({ kind: 'invalid_simulation_input', detail: LLM_INPUT_MESSAGES.modelRequired })
+  if (input.maxModelCostUsd === undefined || !Number.isFinite(input.maxModelCostUsd) || input.maxModelCostUsd <= 0) return err({ kind: 'invalid_simulation_input', detail: LLM_INPUT_MESSAGES.maxModelCostUsdPositive })
   return ok({ modelProvider: 'claude_code', model, maxModelCostUsd: input.maxModelCostUsd })
 }
 
