@@ -56,6 +56,23 @@ export interface SectorPlugin<S, E, R, D extends EngineDefinition, M extends Rec
   readonly externalEventForms: readonly ExternalEventForm[]
   injectOptions(state: S): Readonly<Record<string, readonly { id: string; label: string }[]>>
   readonly llmRoleCandidates: readonly string[]            // trade: ['purchasing']; software: ['lead']
+  /**
+   * The definition fields two runs of this sector must agree on to have lived in the SAME world
+   * (M30 §4, moved here by M32 item 5): what `compareSimulations` reports as `differences` and
+   * `definitionsMatch`. Control used to keep a hand-written UNION of every sector's keys, which is
+   * a list only its author knows to update -- a key a sector does not carry reads `undefined ===
+   * undefined` on both sides and silently compares nothing, so a new sector's world was checked by
+   * whichever of trade's keys it happened to share.
+   *
+   * `policy` and `seed` are never here: differing on them is the whole point of a clone, so
+   * comparing them would report every A-vs-B comparison as a different world. Neither is anything
+   * the policy DERIVES -- software's `reviewCapacityPerDay` / `reviewEverything` / `matchWaitDays`
+   * are `POLICY_SETTINGS[policy]` and nothing else, so listing them would smuggle `policy` back in
+   * under three other names.
+   *
+   * Every entry must be a real field of the sector's definition; the conformance test checks it.
+   */
+  readonly comparedKeys: readonly string[]
 }
 
 // The one place `any` is allowed in this package: the registry hands control an existential --

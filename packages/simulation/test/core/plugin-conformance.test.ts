@@ -96,6 +96,20 @@ describe.each(Object.entries(sectors) as (readonly [string, AnySectorPlugin])[])
     for (const key of Object.keys(plugin.metricLabels)) expect(keys.has(key)).toBe(true)
   })
 
+  // M32 item 5: `comparedKeys` is the sector's own answer to "did these two runs live in the same
+  // world" -- control used to keep a hand-made UNION of every sector's keys, which silently
+  // compared nothing for a sector that did not carry one. A key that is not on the definition is
+  // exactly that failure, and reads `undefined === undefined` on both sides forever.
+  it('every comparedKeys entry is a real field of the demo definition, and neither is the policy', () => {
+    const definition = plugin.demoDefinition({ policy: 'A', seed: 1, roster, currency: 'USD' }) as unknown as Record<string, unknown>
+    expect(plugin.comparedKeys.length).toBeGreaterThan(0)
+    for (const key of plugin.comparedKeys) expect(Object.keys(definition)).toContain(key)
+    // `policy` and `seed` are absent by design (M30 §4): differing on them is the whole point of a
+    // clone, so comparing them would report every A-vs-B comparison as a different world.
+    expect(plugin.comparedKeys).not.toContain('policy')
+    expect(plugin.comparedKeys).not.toContain('seed')
+  })
+
   it('headline(state, day) reads back without throwing', () => {
     const definition = plugin.demoDefinition({ policy: 'A', seed: 1, roster, currency: 'USD' })
     const state = plugin.initialState(definition).sector

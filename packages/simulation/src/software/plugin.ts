@@ -90,4 +90,14 @@ export const softwarePlugin: SoftwarePlugin = {
   externalEventForms: EXTERNAL_EVENT_FORMS,
   injectOptions: (state) => ({ areas: AREAS.map((a) => ({ ...a })), engineers: state.engineers.map((e) => ({ id: e.id, label: `${e.id} (${e.expertise})` })) }),
   llmRoleCandidates: ['lead'],
+  // Software's world: the three decision roles, the engineer pool (its ids AND their expertise --
+  // the same twelve requests against a different pool is a different world), the scenario, and the
+  // three frame numbers. `roster` and `initial` are trade's fields and this sector has neither, so
+  // they are gone rather than compared as `undefined`.
+  //
+  // NOT here, deliberately: `reviewCapacityPerDay`, `reviewEverything` and `matchWaitDays`. They
+  // are `POLICY_SETTINGS[policy]` verbatim -- `cloneDefinition` overwrites them from the new
+  // policy -- so they ARE the policy, and comparing them would make every A-vs-B comparison read
+  // "the runs did not share the same world", which is exactly what compare exists to deny.
+  comparedKeys: ['roles', 'engineers', 'scenario', 'currency', 'horizonDays', 'limits'],
 }

@@ -101,4 +101,9 @@ export const tradePlugin: TradePlugin = {
   // M29/M30's own select showed, and the run page is meant to be pixel-identical for trade.
   injectOptions: (state) => ({ suppliers: state.suppliers.map((s) => ({ id: s.id, label: s.id })) }),
   llmRoleCandidates: ['purchasing'],
+  // Trade's world: who is in it, what they may do, what it starts with, what happens to it, and
+  // the three frame numbers. Exactly the keys control's own `COMPARED_KEYS` union listed for trade
+  // before M32 item 5 moved the question here -- `roster`, `roles`, `initial`, `scenario`,
+  // `currency`, `horizonDays`, `limits`.
+  comparedKeys: ['roster', 'roles', 'initial', 'scenario', 'currency', 'horizonDays', 'limits'],
 }

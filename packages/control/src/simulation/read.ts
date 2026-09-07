@@ -4,13 +4,6 @@ import { replay, sectorFor, type HeadlineItem, type JournalEntry, type MetricLab
 import type { ControlRefusal } from '../refusal.js'
 import { comparable, parseRow, stableStringify, type LoadedSimulation, type SimulationSummary } from './shared.js'
 
-/** The definition fields two runs of the SAME world must agree on (M30 §4). Deliberately a union
- *  across sectors rather than a per-sector list: a key a sector's definition does not carry reads
- *  `undefined` on both sides and so never manufactures a difference, and the two keys a policy
- *  IS -- `policy` and `seed` -- are absent by design, since differing on them is the whole point
- *  of a clone. */
-const COMPARED_KEYS = ['roster', 'roles', 'initial', 'scenario', 'currency', 'horizonDays', 'limits', 'engineers'] as const
-
 /** Metrics are the plugin's, not trade's (M31b §4): a plain `name -> number` map, read against
  *  `metricLabels` for the label, the order and the `money`/`count`/`days` kind. */
 export type SimulationMetrics = Readonly<Record<string, number>>
@@ -153,7 +146,11 @@ export async function compareSimulations(aId: string, bId: string): Promise<Resu
     const b = await loadSideMetrics(tx, bId)
     if (!b.ok) return b
     if (a.value.loaded.summary.sector !== b.value.loaded.summary.sector) return err({ kind: 'invalid_simulation_input', detail: 'runs of different sectors cannot be compared' })
-    const differences = COMPARED_KEYS.filter((key) => stableStringify(a.value.loaded.definition[key]) !== stableStringify(b.value.loaded.definition[key]))
+    // The sector's own list, not a union control maintains (M32 item 5): both runs are the same
+    // sector by the check above, so either plugin answers, and a sector that grows a world field
+    // adds it in one place -- `packages/simulation` -- rather than hoping control's list is
+    // updated to match.
+    const differences = a.value.loaded.plugin.comparedKeys.filter((key: string) => stableStringify(a.value.loaded.definition[key]) !== stableStringify(b.value.loaded.definition[key]))
     const metricLabels: Readonly<Record<string, MetricLabel>> = a.value.loaded.plugin.metricLabels
     // The plugin's own label keys, in its own order: the metrics a sector publishes are exactly
     // the ones it labels, so this is the list and there is no second one to keep in step.
