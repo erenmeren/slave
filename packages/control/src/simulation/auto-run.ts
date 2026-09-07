@@ -5,6 +5,10 @@ import type { ControlRefusal } from '../refusal.js'
 import { refusalText } from '../refusal.js'
 import { clearAutoRun, json, locked } from './shared.js'
 import { stepLocked } from './write.js'
+// `llm.ts` imports `haltUnparsed` back out of this module: the cycle is function-level only (both
+// sides call, neither reads the other at module-evaluation time), which ESM and every bundler this
+// repo uses resolve through hoisted function declarations.
+import { PER_CALL_CAP_USD, applyModelDecision, prepareModelDecision, type ModelDecider } from './llm.js'
 
 export const AUTO_RUN_MIN_MS = 250
 export const AUTO_RUN_MAX_MS = 3_600_000
@@ -70,8 +74,11 @@ export async function autoStepDue(simulationId: string, now: Date): Promise<Resu
  *  reads the whole story: the intent was cleared, then the run was halted. Takes the row lock
  *  first (fix wave, Minor #2): every other journal writer in this file goes through `locked()`,
  *  which does the same `FOR UPDATE` before its own read -- this was the one writer that read the
- *  row unlocked, open to a concurrent writer's read-modify-write racing in between. */
-async function haltUnparsed(simulationId: string, reason: string): Promise<void> {
+ *  row unlocked, open to a concurrent writer's read-modify-write racing in between.
+ *
+ *  Exported since M31a Task 4: the model path halts through this same writer too -- an exhausted
+ *  budget, a refusal from `prepareModelDecision`, a throw around the model call. */
+export async function haltUnparsed(simulationId: string, reason: string): Promise<void> {
   await prisma.$transaction(async (tx) => {
     await tx.$queryRaw`SELECT id FROM "SimulationRun" WHERE id = ${simulationId} FOR UPDATE`
     const row = await tx.simulationRun.findUnique({ where: { id: simulationId }, select: { simTime: true, autoRunEveryMs: true } })
@@ -87,15 +94,68 @@ async function haltUnparsed(simulationId: string, reason: string): Promise<void>
   })
 }
 
+/** What one pass did. `skippedNoDecider` counts the `llm` runs this pass left untouched because
+ *  no model decider was injected -- the one-shot CLI `tick` is exactly that caller, and an
+ *  operator who armed an llm auto-run and then ran `tick` needs to be told why nothing happened
+ *  rather than left to conclude the run is stuck. */
+export interface TickSimulationsReport {
+  readonly candidates: number
+  readonly stepped: number
+  readonly halted: number
+  readonly skippedNoDecider: number
+}
+
 /** One global pass (spec §5): every running run with an intent, in creation order, capped. A
  *  step that throws or refuses (anything but not-found) halts that run with the message and the
- *  pass moves on — an auto-run never retries forever. */
-export async function tickSimulations(input: { readonly now: Date }): Promise<{ readonly candidates: number; readonly stepped: number; readonly halted: number }> {
-  const rows = await prisma.simulationRun.findMany({ where: { autoRunEveryMs: { not: null }, status: 'running' }, select: { id: true }, orderBy: { createdAt: 'asc' }, take: TICK_SIMULATIONS_CAP })
+ *  pass moves on — an auto-run never retries forever.
+ *
+ *  M31a §4: an `llm` run does not go through `autoStepDue`, because its step needs a model call
+ *  that takes seconds to minutes and must not happen with a transaction open. It goes through the
+ *  two-phase path instead -- `prepareModelDecision` (unlocked) → `modelDecider` (NO transaction) →
+ *  `applyModelDecision` (locked). With no decider injected, an llm run is skipped and counted; the
+ *  rules runs in the same pass are unaffected either way. */
+export async function tickSimulations(input: { readonly now: Date; readonly modelDecider?: ModelDecider }): Promise<TickSimulationsReport> {
+  const rows = await prisma.simulationRun.findMany({ where: { autoRunEveryMs: { not: null }, status: 'running' }, select: { id: true, decisionProvider: true }, orderBy: { createdAt: 'asc' }, take: TICK_SIMULATIONS_CAP })
   let stepped = 0
   let halted = 0
-  for (const { id } of rows) {
+  let skippedNoDecider = 0
+  for (const { id, decisionProvider } of rows) {
     try {
+      if (decisionProvider === 'llm') {
+        const decider = input.modelDecider
+        if (decider === undefined) {
+          skippedNoDecider += 1
+          continue
+        }
+        const prepared = await prepareModelDecision(id, input.now)
+        if (!prepared.ok) {
+          if (prepared.error.kind === 'simulation_not_found') continue
+          await haltUnparsed(id, `auto-run step failed: ${refusalText(prepared.error)}`)
+          halted += 1
+          continue
+        }
+        // An exhausted budget has already halted the run inside `prepareModelDecision`; a skip is
+        // simply a run with nothing due. Neither spends anything.
+        if (prepared.value.kind === 'budget') {
+          halted += 1
+          continue
+        }
+        if (prepared.value.kind === 'skip') continue
+        const { model, prompt, remainingUsd, version, role, promptHash } = prepared.value
+        // The model call itself: no lock held, no transaction open, capped at the smaller of what
+        // the run has left and the per-call ceiling.
+        const outcome = await decider({ model, prompt, maxBudgetUsd: Math.min(remainingUsd, PER_CALL_CAP_USD) })
+        const applied = await applyModelDecision(id, { expectedVersion: version, role, outcome, promptHash, now: input.now })
+        if (!applied.ok) {
+          if (applied.error.kind === 'simulation_not_found') continue
+          await haltUnparsed(id, `auto-run step failed: ${refusalText(applied.error)}`)
+          halted += 1
+          continue
+        }
+        if (applied.value.applied) stepped += 1
+        else if (applied.value.reason === 'breach') halted += 1
+        continue
+      }
       const result = await autoStepDue(id, input.now)
       if (result.ok) {
         if (result.value.stepped) stepped += 1
@@ -109,5 +169,5 @@ export async function tickSimulations(input: { readonly now: Date }): Promise<{ 
       halted += 1
     }
   }
-  return { candidates: rows.length, stepped, halted }
+  return { candidates: rows.length, stepped, halted, skippedNoDecider }
 }

@@ -1,4 +1,4 @@
-import { describeSync, syncSkillCatalog, tickSimulations, WORKTREE_TTL_MS } from '@slave-of-ai/control'
+import { describeSync, syncSkillCatalog, tickSimulations, WORKTREE_TTL_MS, type ModelDecider } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import type { WorkspaceId } from '@slave-of-ai/domain'
 import { subscribeEvents, type EventSubscription } from '@slave-of-ai/events'
@@ -22,6 +22,14 @@ export interface DaemonDeps {
   /** M12 Task 5: a registry, not a single adapter -- see `TickDeps.registry`'s own docstring. */
   readonly registry: AdapterRegistry
   readonly periodMs: number
+  /**
+   * M31a §4: how a simulation's `llm` run gets its decision. Optional, and absent in every test
+   * that only exercises the loop -- a pass with no decider steps the rules runs and reports the
+   * llm ones as `skippedNoDecider`, spending nothing. The daemon is the only production caller
+   * that supplies one (`apps/orchestrator/src/cli.ts`'s `buildModelDecider`), which is what makes
+   * "an llm run only ever steps in the daemon" true of the wiring and not just of a guard.
+   */
+  readonly modelDecider?: ModelDecider
 }
 
 /**
@@ -133,8 +141,11 @@ export async function runDaemon(deps: DaemonDeps): Promise<void> {
       // M30 §5: auto-run stepping is a global pass, not part of `tick()` -- simulations belong to
       // a company, not to this daemon's workspace, and `decide()` stays pure (ADR 0004). Two
       // daemons both running this pass is safe: `autoStepDue` decides "due" under the row lock.
-      const sims = await tickSimulations({ now: new Date() })
-      if (sims.stepped > 0 || sims.halted > 0) process.stdout.write(`${JSON.stringify({ simulations: sims })}\n`)
+      const sims = await tickSimulations({ now: new Date(), ...(deps.modelDecider !== undefined ? { modelDecider: deps.modelDecider } : {}) })
+      // `skippedNoDecider` is reported too (M31a §4): a daemon that was built without a decider
+      // silently doing nothing for an armed llm run is exactly the failure an operator cannot
+      // diagnose from the outside.
+      if (sims.stepped > 0 || sims.halted > 0 || sims.skippedNoDecider > 0) process.stdout.write(`${JSON.stringify({ simulations: sims })}\n`)
 
       // The guardrail sweep -- run timeout, tool-call ceiling, dead pids -- lives with the daemon,
       // not inside `tick()`: it kills processes, which is a lifecycle concern like the startup

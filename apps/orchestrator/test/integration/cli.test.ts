@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
-import { loadSimulation, startAutoRun, verifyCredentials } from '@slave-of-ai/control'
+import { createSimulation, loadSimulation, startAutoRun, verifyCredentials } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 
@@ -1255,11 +1255,62 @@ describe('the orchestrator CLI', () => {
       await new Promise<void>((resolve) => setTimeout(resolve, 300))
       const second = await runCli(['tick', '--workspace', fixture.workspaceId])
       expect(second.code).toBe(0)
-      const parsed = JSON.parse(second.stdout) as { simulations: { candidates: number; stepped: number; halted: number } }
-      expect(parsed.simulations).toEqual({ candidates: 1, stepped: 1, halted: 0 })
+      const parsed = JSON.parse(second.stdout) as { simulations: { candidates: number; stepped: number; halted: number; skippedNoDecider: number } }
+      expect(parsed.simulations).toEqual({ candidates: 1, stepped: 1, halted: 0, skippedNoDecider: 0 })
       const row = await prisma.simulationRun.findUniqueOrThrow({ where: { id } })
       expect(row.simTime).toBe(2)
     }, 30_000)
+    it('a one-shot tick never decides for an llm run: it reports skippedNoDecider and spends nothing (M31a)', async () => {
+      const companyId = await tradingCompany()
+      const created = await createSimulation({ companyId, name: 'llm auto', sector: 'trade', policy: 'A', decisionProvider: 'llm', modelProvider: 'claude_code', model: 'claude-haiku-4-5', maxModelCostUsd: 1 })
+      const id = created.ok ? created.value.id : ''
+      expect(id).not.toBe('')
+      expect((await startAutoRun(id, { everyMs: 250, untilDay: 3 })).ok).toBe(true)
+      const result = await runCli(['tick', '--workspace', fixture.workspaceId])
+      expect(result.code).toBe(0)
+      const parsed = JSON.parse(result.stdout) as { simulations: { candidates: number; stepped: number; skippedNoDecider: number } }
+      expect(parsed.simulations).toMatchObject({ candidates: 1, stepped: 0, skippedNoDecider: 1 })
+      expect((await prisma.simulationRun.findUniqueOrThrow({ where: { id } })).simTime).toBe(0)
+      expect(await prisma.simulationModelUsage.count({ where: { simulationId: id } })).toBe(0)
+    }, 30_000)
+    it('the daemon decides an llm run through decideWithModel and the fake CLI: the answer is applied and the cost recorded (M31a)', async () => {
+      const companyId = await tradingCompany()
+      const created = await createSimulation({ companyId, name: 'llm daemon', sector: 'trade', policy: 'A', decisionProvider: 'llm', modelProvider: 'claude_code', model: 'claude-haiku-4-5', maxModelCostUsd: 1 })
+      const id = created.ok ? created.value.id : ''
+      expect(id).not.toBe('')
+      expect((await startAutoRun(id, { everyMs: 250, untilDay: 2 })).ok).toBe(true)
+      // The FAKE CLI, driven down the real `decideWithModel` path (the same binary/args seam the
+      // adapters use): no real `claude` is spawned and nothing is billed. `--fixture decision`
+      // answers with a fenced JSON array holding one `place_purchase` from `fast`.
+      const child = execFile('node', [CLI, 'daemon', '--period', '200'], {
+        env: {
+          ...process.env,
+          DATABASE_URL: process.env['TEST_DATABASE_URL'] ?? '',
+          SLAVEOFAI_CLAUDE_BIN: 'node',
+          SLAVEOFAI_CLAUDE_ARGS: `${FAKE} --fixture decision`,
+        },
+      })
+      try {
+        const deadline = Date.now() + 20_000
+        let simTime = 0
+        while (Date.now() < deadline && simTime === 0) {
+          await new Promise((res) => setTimeout(res, 250))
+          simTime = (await prisma.simulationRun.findUniqueOrThrow({ where: { id } })).simTime
+        }
+        expect(simTime).toBeGreaterThan(0)
+        const usage = await prisma.simulationModelUsage.findFirstOrThrow({ where: { simulationId: id }, orderBy: { seq: 'asc' } })
+        expect(usage).toMatchObject({ provider: 'claude_code', role: 'purchasing', simTime: 0, costUsd: 0.0038 })
+        const decision = await prisma.simulationJournalEntry.findFirstOrThrow({ where: { simulationId: id, kind: 'decision', actorRole: 'purchasing' }, orderBy: { seq: 'asc' } })
+        expect(decision.payload).toMatchObject({ provider: 'llm', model: 'claude-haiku-4-5', usageSeq: usage.seq, parseError: null })
+        const applied = await prisma.simulationJournalEntry.findMany({ where: { simulationId: id, kind: 'action_applied', actorRole: 'purchasing' } })
+        expect(applied).toHaveLength(1)
+        expect((applied[0]?.payload as { action: { type: string; params: Record<string, unknown> } }).action).toMatchObject({ type: 'place_purchase', params: { supplierId: 'fast', qty: 50 } })
+      } finally {
+        const exited = new Promise<number | null>((res) => child.on('exit', (code) => res(code)))
+        child.kill('SIGTERM')
+        await Promise.race([exited, new Promise<number | null>((res) => setTimeout(() => res(-1), 12_000))])
+      }
+    }, 60_000)
     it('compare-simulations prints both runs\' metrics and the b − a deltas as JSON (M30)', async () => {
       const companyId = await tradingCompany()
       const createdA = await runCli(['create-simulation', '--company', companyId, '--name', 'cmp a', '--policy', 'A'])

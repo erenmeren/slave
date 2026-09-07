@@ -2,6 +2,7 @@ import { Prisma, prisma } from '@slave-of-ai/db/client'
 import { err, ok, type Result } from '@slave-of-ai/domain'
 import {
   RulesDecisionProvider, cloneDefinition, demoDefinition, runUntil, tradeExternalEventSchema, tradeInitialEngineState, tradeModel,
+  type DecisionExtras, type DecisionProvider,
 } from '@slave-of-ai/simulation'
 import { isUniqueConstraintViolation } from '../prisma-errors.js'
 import type { Principal } from '../principal.js'
@@ -131,10 +132,22 @@ export async function stepLocked(
   tx: Prisma.TransactionClient,
   row: Row,
   loaded: LoadedSimulation,
-  input: { readonly untilDay: number; readonly idempotencyKey?: string; readonly lastAutoStepAt?: Date },
+  input: {
+    readonly untilDay: number
+    readonly idempotencyKey?: string
+    readonly lastAutoStepAt?: Date
+    /** M31a §4: the provider the engine decides with. Defaults to the rules provider, which is
+     *  every pre-M31a caller; an `llm` run's `applyModelDecision` passes the composite that routes
+     *  its llm roles to the model's already-parsed envelopes and everything else to these rules. */
+    readonly provider?: DecisionProvider
+    /** M31a §4: per-role fields the CALLER knows and the engine cannot -- which model answered,
+     *  which usage row paid for it, whether the answer parsed. Merged into that role's `decision`
+     *  payload only; a step that passes none journals exactly what it always did. */
+    readonly decisionExtras?: DecisionExtras
+  },
 ): Promise<{ readonly day: number; readonly status: string; readonly version: number; readonly entries: number }> {
-  const provider = new RulesDecisionProvider(loaded.definition)
-  const result = runUntil(tradeModel, loaded.definition, loaded.state, provider, Math.min(input.untilDay, loaded.definition.horizonDays), MAX_STEPS_PER_REQUEST)
+  const provider = input.provider ?? new RulesDecisionProvider(loaded.definition)
+  const result = runUntil(tradeModel, loaded.definition, loaded.state, provider, Math.min(input.untilDay, loaded.definition.horizonDays), MAX_STEPS_PER_REQUEST, input.decisionExtras)
   const version = row.version + 1
   const status = result.state.status
   const controlSeq = result.state.journalSeq + 1

@@ -50,10 +50,11 @@ import {
   syncSkillCatalog,
   tickSimulations,
   plural,
+  type ModelDecider,
 } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import { workspaceId as brandWorkspaceId, type WorkspaceId } from '@slave-of-ai/domain'
-import { buildRegistry, type AdapterRegistry, type ProviderKind } from '@slave-of-ai/providers'
+import { DEFAULT_MODEL_TIMEOUT_MS, buildRegistry, decideWithModel, type AdapterRegistry, type ProviderKind } from '@slave-of-ai/providers'
 import { runDaemon } from './daemon.js'
 import { NON_TERMINAL_RUN_STATUSES } from './world.js'
 import { executeResume } from './resume.js'
@@ -251,6 +252,52 @@ function hookPath(): string {
 }
 
 /**
+ * The deny-all gate a SIMULATION's model call is spawned with (M31a §4), sourced exactly the way
+ * `hookPath()` above sources the pause gate and for the same reasons. A separate script, not a
+ * parameterisation of the pause gate: this one denies EVERY tool call unconditionally, whatever
+ * any flag says -- `preflightDenyAll` refuses to start a decision call whose hook does anything
+ * else -- because a simulation actor has no business touching a real tool at all.
+ */
+function denyAllHookPath(): string {
+  const fromEnv = process.env['SLAVEOFAI_DENY_ALL_HOOK_PATH']
+  if (fromEnv !== undefined && fromEnv !== '') return resolve(fromEnv)
+  // dist/cli.js -> apps/orchestrator -> apps -> repo root
+  return resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'scripts', 'deny-all-gate.sh')
+}
+
+/**
+ * The `claude` binary this process spawns, and any extra argv in front of its own flags. Injectable
+ * through the environment for the reason `buildAdapterRegistry` documents: the gates have to drive
+ * the fake CLI and the real one down the SAME code path. Extracted (M31a Task 4) because a
+ * simulation's model call (`decideWithModel`) is the second caller that must spawn exactly what an
+ * adapter would -- two readings of the same two variables would drift.
+ */
+function claudeCommand(): { readonly command: string; readonly extraArgs?: readonly string[] } {
+  const command = process.env['SLAVEOFAI_CLAUDE_BIN'] ?? 'claude'
+  const extra = process.env['SLAVEOFAI_CLAUDE_ARGS']
+  return { command, ...(extra === undefined || extra === '' ? {} : { extraArgs: extra.split(' ') }) }
+}
+
+/**
+ * The decider the DAEMON injects into `tickSimulations` (M31a §4). The control layer holds no
+ * knowledge of how a model is called -- it hands out a prompt and a budget and takes an outcome --
+ * so this closure is the whole seam between a simulation's decision point and a real model call.
+ * Built here, next to `claudeCommand()` and the gate paths, rather than inside the daemon: this
+ * file is the one place that reads the environment for spawn configuration.
+ */
+function buildModelDecider(): ModelDecider {
+  return (input) =>
+    decideWithModel({
+      ...claudeCommand(),
+      hookPath: denyAllHookPath(),
+      model: input.model,
+      prompt: input.prompt,
+      maxBudgetUsd: input.maxBudgetUsd,
+      timeoutMs: Number(process.env['SLAVEOFAI_MODEL_TIMEOUT_MS'] ?? DEFAULT_MODEL_TIMEOUT_MS),
+    })
+}
+
+/**
  * Cursor's gate script, sourced exactly the way `hookPath()` above sources Claude's and for the
  * same reasons -- derived from this file's own location so a checkout works with no configuration,
  * overridable because an installed daemon's layout is not this one. A separate variable rather
@@ -285,13 +332,10 @@ function cursorGatePath(): string {
  * was never wired for that provider", and after this task it would be false.
  */
 function buildAdapterRegistry(): AdapterRegistry {
-  const command = process.env['SLAVEOFAI_CLAUDE_BIN'] ?? 'claude'
-  const extra = process.env['SLAVEOFAI_CLAUDE_ARGS']
   const cursorExtra = process.env['SLAVEOFAI_CURSOR_ARGS']
   return buildRegistry({
     claudeCode: {
-      command,
-      ...(extra === undefined || extra === '' ? {} : { extraArgs: extra.split(' ') }),
+      ...claudeCommand(),
       // M12 Task 2: the hook path is a fact about this adapter instance now, not a per-run input --
       // it used to be threaded through `TickDeps`/`DaemonDeps` and into every `adapter.start()`
       // call; now it is set once, here.
@@ -429,6 +473,10 @@ export async function main(argv: readonly string[]): Promise<number> {
         workspaceId: await resolveWorkspace(flags),
         registry: buildAdapterRegistry(),
         periodMs: Number.isFinite(period) && period > 0 ? period : 1000,
+        // M31a §4: only the daemon carries a decider. The one-shot `tick` above deliberately does
+        // not -- a command an operator runs by hand must never start spending on model calls -- so
+        // it reports `skippedNoDecider` instead and the llm runs wait for the daemon.
+        modelDecider: buildModelDecider(),
       })
       return 0
     }

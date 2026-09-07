@@ -51,8 +51,15 @@ function scheduleAll<E>(queue: EventQueue<E>, requests: readonly ScheduleRequest
   return next
 }
 
+/** Extra fields the CALLER knows about a decision point that the engine itself cannot: which
+ *  model answered, which usage row paid for it, whether the answer parsed (M31a §4). Keyed by role
+ *  name, merged into that role's `decision` payload and nothing else's -- a role with no entry
+ *  journals exactly what it always did, so a rules-only run's journal is unchanged byte for byte.
+ *  The engine never interprets these values; it only records them. */
+export type DecisionExtras = Readonly<Record<string, Readonly<Record<string, unknown>>>>
+
 /** One simulation day: due events → each role's decision point → the sector's day close. */
-export function step<S, E, R extends Record<string, unknown>>(model: SectorModel<S, E, R>, definition: EngineDefinition, state: EngineState<S, E>, provider: DecisionProvider): StepResult<S, E> {
+export function step<S, E, R extends Record<string, unknown>>(model: SectorModel<S, E, R>, definition: EngineDefinition, state: EngineState<S, E>, provider: DecisionProvider, extras?: DecisionExtras): StepResult<S, E> {
   if (state.status === 'finished' || state.status === 'halted') return { state, entries: [] }
   const day = state.day
   const entries: JournalEntry[] = []
@@ -81,7 +88,7 @@ export function step<S, E, R extends Record<string, unknown>>(model: SectorModel
     if (role === undefined) return
     const observation = model.observe(sector, role)
     const proposed = provider.decide({ day, role, observation, index })
-    record('decision', role.name, { index, provider: provider.kindFor?.(role) ?? provider.kind, observation, actions: proposed })
+    record('decision', role.name, { index, provider: provider.kindFor?.(role) ?? provider.kind, observation, actions: proposed, ...(extras?.[role.name] ?? {}) })
     for (let actionIndex = 0; actionIndex < proposed.length; actionIndex++) {
       const raw = proposed[actionIndex]
       const outcome = validateAndApply(model, definition, sector, role, raw, actionIndex, day)
@@ -136,12 +143,12 @@ function validateAndApply<S, E, R extends Record<string, unknown>>(model: Sector
 
 /** Steps until `untilDay` (exclusive of nothing: the state's `day` reaches it), the horizon, a
  *  halt, or `maxStepsPerCall` — the control layer's own bound on one request. */
-export function runUntil<S, E, R extends Record<string, unknown>>(model: SectorModel<S, E, R>, definition: EngineDefinition, state: EngineState<S, E>, provider: DecisionProvider, untilDay: number, maxStepsPerCall: number): StepResult<S, E> {
+export function runUntil<S, E, R extends Record<string, unknown>>(model: SectorModel<S, E, R>, definition: EngineDefinition, state: EngineState<S, E>, provider: DecisionProvider, untilDay: number, maxStepsPerCall: number, extras?: DecisionExtras): StepResult<S, E> {
   let current: EngineState<S, E> = state.status === 'ready' ? { ...state, status: 'running' } : state
   const entries: JournalEntry[] = []
   let steps = 0
   while (current.day < untilDay && current.status === 'running' && steps < maxStepsPerCall) {
-    const result = step(model, definition, current, provider)
+    const result = step(model, definition, current, provider, extras)
     current = result.state
     entries.push(...result.entries)
     steps += 1

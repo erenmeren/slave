@@ -114,3 +114,24 @@ describe('runUntil and replay', () => {
     expect(() => recorded.decide({ day: 0, role: clerk, observation: {}, index: 0 })).toThrow(/replay_divergence/)
   })
 })
+
+describe('decisionExtras (M31a Task 4)', () => {
+  it('merges the named role\'s extras into that role\'s decision payload and leaves every other role\'s alone', () => {
+    const initial = initialEngineState<CounterState, CounterEvent>({ count: 0, deliveries: 0 }, [], 1)
+    const p = provider((_day, role) => (role === 'clerk' ? [add(2)] : []))
+    const { entries } = step(counter, definition, initial, p, { clerk: { model: 'claude-haiku-4-5', usageSeq: 3, parseError: null } })
+    const decisions = entries.filter((e) => e.kind === 'decision')
+    expect(decisions[0]?.payload).toEqual(expect.objectContaining({ index: 0, provider: 'rules', model: 'claude-haiku-4-5', usageSeq: 3, parseError: null }))
+    expect(decisions[0]?.payload['actions']).toEqual([add(2)])
+    expect(Object.keys(decisions[1]?.payload ?? {})).toEqual(['index', 'provider', 'observation', 'actions'])
+  })
+  it('a step with no extras is byte-identical to one whose extras name no role in play, and runUntil threads them through every day', () => {
+    const initial = initialEngineState<CounterState, CounterEvent>({ count: 0, deliveries: 0 }, [], 1)
+    const p = provider(() => [])
+    expect(step(counter, definition, initial, p).entries).toEqual(step(counter, definition, initial, p, { nobody: { model: 'x' } }).entries)
+    const ran = runUntil(counter, definition, initial, p, 3, 100, { clerk: { usageSeq: 7 } })
+    const clerkDecisions = ran.entries.filter((e) => e.kind === 'decision' && e.actorRole === 'clerk')
+    expect(clerkDecisions).toHaveLength(3)
+    for (const entry of clerkDecisions) expect(entry.payload['usageSeq']).toBe(7)
+  })
+})

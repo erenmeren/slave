@@ -116,7 +116,7 @@ describe('tickSimulations', () => {
     await startAutoRun(c, { everyMs: 250, untilDay: 30 })
     await pauseSimulation(c)
     const first = await tickSimulations({ now: T0 })
-    expect(first).toEqual({ candidates: 2, stepped: 2, halted: 0 })
+    expect(first).toEqual({ candidates: 2, stepped: 2, halted: 0, skippedNoDecider: 0 })
     const [x, y] = await Promise.all([tickSimulations({ now: plus(250) }), tickSimulations({ now: plus(250) })])
     expect(x.stepped + y.stepped).toBe(2)
     for (const id of [a, b]) {
@@ -124,6 +124,22 @@ describe('tickSimulations', () => {
         .map((r) => r.payload as { op: string; day?: number }).filter((p) => p.op === 'stepped').map((p) => p.day)
       expect(days).toEqual([1, 2])
     }
+  })
+  it('skips an llm run when no model decider is injected, and steps the rules run beside it (M31a §4)', async () => {
+    const rules = await create('rules beside')
+    const llm = await createSimulation({ companyId, name: 'llm run', sector: 'trade', policy: 'A', decisionProvider: 'llm', modelProvider: 'claude_code', model: 'claude-haiku-4-5', maxModelCostUsd: 1 })
+    const llmId = llm.ok ? llm.value.id : ''
+    expect(llmId).not.toBe('')
+    await startAutoRun(rules, { everyMs: 250, untilDay: 30 })
+    await startAutoRun(llmId, { everyMs: 250, untilDay: 30 })
+    // `tickSimulations` with no `modelDecider` is the one-shot CLI `tick`: it must never make a
+    // model call of its own, so the llm run is counted and left exactly where it was.
+    const report = await tickSimulations({ now: T0 })
+    expect(report).toEqual({ candidates: 2, stepped: 1, halted: 0, skippedNoDecider: 1 })
+    const untouched = await prisma.simulationRun.findUniqueOrThrow({ where: { id: llmId } })
+    expect(untouched).toMatchObject({ simTime: 0, status: 'running', autoRunEveryMs: 250, lastAutoStepAt: null })
+    expect(await prisma.simulationModelUsage.count({ where: { simulationId: llmId } })).toBe(0)
+    expect((await prisma.simulationRun.findUniqueOrThrow({ where: { id: rules } })).simTime).toBe(1)
   })
   it('halts a run whose step throws, with the error in the reason, and keeps ticking the others', async () => {
     const good = await create('good')
