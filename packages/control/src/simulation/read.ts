@@ -1,16 +1,27 @@
 import { Prisma, prisma, type PrismaClient } from '@slave-of-ai/db/client'
 import { err, ok, type Result } from '@slave-of-ai/domain'
-import { replay, tradeInitialEngineState, tradeMetrics, tradeModel, type JournalEntry, type TradeEvent, type TradeMetrics } from '@slave-of-ai/simulation'
+import { replay, sectorFor, type HeadlineItem, type JournalEntry, type MetricLabel, type RosterEntry, type SectorName } from '@slave-of-ai/simulation'
 import type { ControlRefusal } from '../refusal.js'
 import { comparable, parseRow, stableStringify, type LoadedSimulation, type SimulationSummary } from './shared.js'
 
-const COMPARED_KEYS = ['roster', 'roles', 'initial', 'scenario', 'currency', 'horizonDays', 'limits'] as const
-const METRIC_KEYS = ['deliveredQty', 'onTimeQty', 'lateDays', 'purchaseCostMinor', 'closingInventory', 'closingCashMinor', 'minCashMinor', 'collectedMinor', 'unpaidCommitmentsMinor'] as const
+/** The definition fields two runs of the SAME world must agree on (M30 §4). Deliberately a union
+ *  across sectors rather than a per-sector list: a key a sector's definition does not carry reads
+ *  `undefined` on both sides and so never manufactures a difference, and the two keys a policy
+ *  IS -- `policy` and `seed` -- are absent by design, since differing on them is the whole point
+ *  of a clone. */
+const COMPARED_KEYS = ['roster', 'roles', 'initial', 'scenario', 'currency', 'horizonDays', 'limits', 'engineers'] as const
+
+/** Metrics are the plugin's, not trade's (M31b §4): a plain `name -> number` map, read against
+ *  `metricLabels` for the label, the order and the `money`/`count`/`days` kind. */
+export type SimulationMetrics = Readonly<Record<string, number>>
 
 export interface SimulationComparison {
-  readonly a: { readonly summary: SimulationSummary; readonly metrics: TradeMetrics; readonly injected: number }
-  readonly b: { readonly summary: SimulationSummary; readonly metrics: TradeMetrics; readonly injected: number }
-  readonly deltas: Readonly<Record<(typeof METRIC_KEYS)[number], number>>
+  readonly a: { readonly summary: SimulationSummary; readonly metrics: SimulationMetrics; readonly injected: number }
+  readonly b: { readonly summary: SimulationSummary; readonly metrics: SimulationMetrics; readonly injected: number }
+  readonly deltas: SimulationMetrics
+  /** The sector's own labels, in the sector's own order -- what a reader renders these numbers
+   *  with, carried here so a page never has to know which sector it is looking at. */
+  readonly metricLabels: Readonly<Record<string, MetricLabel>>
   readonly definitionsMatch: boolean
   readonly differences: readonly string[]
   readonly currency: string
@@ -58,13 +69,13 @@ export function compareCandidatesOf(summaries: readonly SimulationSummary[], sel
 async function loadSideMetrics(
   client: PrismaClient | Prisma.TransactionClient,
   simulationId: string,
-): Promise<Result<{ readonly loaded: LoadedSimulation; readonly entries: readonly JournalEntry[]; readonly metrics: TradeMetrics; readonly injected: number }, ControlRefusal>> {
+): Promise<Result<{ readonly loaded: LoadedSimulation; readonly entries: readonly JournalEntry[]; readonly metrics: SimulationMetrics; readonly injected: number }, ControlRefusal>> {
   const loaded = await readSimulation(client, simulationId)
   if (!loaded.ok) return loaded
   const rows = await client.simulationJournalEntry.findMany({ where: { simulationId }, orderBy: { seq: 'asc' } })
   const entries: JournalEntry[] = rows.map((r) => ({ seq: r.seq, simTime: r.simTime, kind: r.kind, actorRole: r.actorRole, payload: r.payload as Record<string, unknown> }))
   const injected = entries.filter((e) => e.kind === 'external_event' && (e.payload as { op?: string }).op === 'injected').length
-  return ok({ loaded: loaded.value, entries, metrics: tradeMetrics(entries, loaded.value.state.sector), injected })
+  return ok({ loaded: loaded.value, entries, metrics: loaded.value.plugin.metrics(entries, loaded.value.state.sector) as SimulationMetrics, injected })
 }
 
 /** Re-runs the engine from the frozen definition with the journal's own decisions and compares.
@@ -81,14 +92,14 @@ export async function replaySimulation(simulationId: string): Promise<Result<{ r
     if (!side.ok) return side
     const { loaded, entries: allEntries } = side.value
     const entries = allEntries.filter((e) => e.kind === 'decision' || e.kind === 'action_applied' || e.kind === 'action_rejected' || e.kind === 'event' || e.kind === 'external_event')
-    const initial = tradeInitialEngineState(loaded.definition)
+    const initial = loaded.plugin.initialState(loaded.definition)
     const injected = entries.filter((e) => e.kind === 'external_event' && (e.payload as { op?: string }).op === 'injected')
     let seeded = initial
     for (const e of injected) {
-      const p = e.payload as { day: number; event: TradeEvent }
+      const p = e.payload as { day: number; event: unknown }
       seeded = { ...seeded, queue: { items: [...seeded.queue.items, { time: p.day, priority: 'external', seq: seeded.queue.nextSeq, event: p.event }], nextSeq: seeded.queue.nextSeq + 1 } }
     }
-    const replayed = replay(tradeModel, loaded.definition, seeded, entries.filter((e) => !(e.kind === 'external_event' && e.payload['op'] === 'injected')))
+    const replayed = replay(loaded.plugin.model, loaded.definition, seeded, entries.filter((e) => !(e.kind === 'external_event' && e.payload['op'] === 'injected')))
     const stored = loaded.state
     return ok({ matches: comparable(replayed) === comparable(stored) })
   }, { isolationLevel: 'RepeatableRead' })
@@ -114,7 +125,7 @@ export interface ModelUsageTotals {
  *  journal newer than the state the metrics are computed against. */
 export async function simulationStatus(
   simulationId: string,
-): Promise<Result<{ readonly summary: SimulationSummary; readonly company: { readonly day: number; readonly cashMinor: number; readonly inventory: number; readonly openOrders: number }; readonly metrics: TradeMetrics; readonly modelUsage: ModelUsageTotals }, ControlRefusal>> {
+): Promise<Result<{ readonly summary: SimulationSummary; readonly headline: readonly HeadlineItem[]; readonly metrics: SimulationMetrics; readonly metricLabels: Readonly<Record<string, MetricLabel>>; readonly modelUsage: ModelUsageTotals }, ControlRefusal>> {
   return prisma.$transaction(async (tx) => {
     const side = await loadSideMetrics(tx, simulationId)
     if (!side.ok) return side
@@ -122,11 +133,11 @@ export async function simulationStatus(
     // One aggregate, not an aggregate plus a count: `_count.costUsd` counts the non-null costs, so
     // the unmeasured rows are the difference against `_count._all`.
     const usage = await tx.simulationModelUsage.aggregate({ where: { simulationId }, _count: { _all: true, costUsd: true }, _sum: { costUsd: true } })
-    const sector = loaded.state.sector
     return ok({
       summary: loaded.summary,
-      company: { day: loaded.state.day, cashMinor: sector.cashMinor, inventory: sector.inventory, openOrders: sector.orders.filter((o) => o.status !== 'shipped').length },
+      headline: loaded.plugin.headline(loaded.state.sector, loaded.state.day) as readonly HeadlineItem[],
       metrics,
+      metricLabels: loaded.plugin.metricLabels as Readonly<Record<string, MetricLabel>>,
       modelUsage: { calls: usage._count._all, spentUsd: usage._count.costUsd === 0 ? null : usage._sum.costUsd, unmeasured: usage._count._all - usage._count.costUsd },
     })
   }, { isolationLevel: 'RepeatableRead' })
@@ -143,11 +154,43 @@ export async function compareSimulations(aId: string, bId: string): Promise<Resu
     if (!b.ok) return b
     if (a.value.loaded.summary.sector !== b.value.loaded.summary.sector) return err({ kind: 'invalid_simulation_input', detail: 'runs of different sectors cannot be compared' })
     const differences = COMPARED_KEYS.filter((key) => stableStringify(a.value.loaded.definition[key]) !== stableStringify(b.value.loaded.definition[key]))
-    const deltas = Object.fromEntries(METRIC_KEYS.map((key) => [key, b.value.metrics[key] - a.value.metrics[key]])) as SimulationComparison['deltas']
+    const metricLabels = a.value.loaded.plugin.metricLabels as Readonly<Record<string, MetricLabel>>
+    // The plugin's own label keys, in its own order: the metrics a sector publishes are exactly
+    // the ones it labels, so this is the list and there is no second one to keep in step.
+    const deltas: Record<string, number> = {}
+    for (const key of Object.keys(metricLabels)) deltas[key] = (b.value.metrics[key] ?? 0) - (a.value.metrics[key] ?? 0)
     return ok({
       a: { summary: a.value.loaded.summary, metrics: a.value.metrics, injected: a.value.injected },
       b: { summary: b.value.loaded.summary, metrics: b.value.metrics, injected: b.value.injected },
-      deltas, definitionsMatch: differences.length === 0, differences, currency: a.value.loaded.definition.currency,
+      deltas, metricLabels, definitionsMatch: differences.length === 0, differences, currency: a.value.loaded.definition.currency,
     })
   }, { isolationLevel: 'RepeatableRead' })
+}
+
+/** The catalog companies one sector can actually be run on (M31b §5): every company whose frozen
+ *  roster would pass that sector's own `rosterFits`, with the same `{ id, name, slaves }` shape the
+ *  drawer's company list already uses. The roster is read exactly as `createSimulation` reads it --
+ *  departments and slaves by name, the catalog ROLE off the template -- so the list can never offer
+ *  a company that the create verb would then refuse.
+ *
+ *  Ordering is by company name, matching the drawer's existing list. */
+export async function companiesForSector(sector: SectorName, client: PrismaClient | Prisma.TransactionClient = prisma): Promise<readonly { readonly id: string; readonly name: string; readonly slaves: number }[]> {
+  const plugin = sectorFor(sector)
+  if (plugin === undefined) return []
+  const companies = await client.company.findMany({
+    orderBy: { name: 'asc' },
+    select: { id: true, name: true, teams: { orderBy: { name: 'asc' }, select: { name: true, slaves: { orderBy: { name: 'asc' }, select: { name: true, template: { select: { role: true } } } } } } },
+  })
+  return companies.flatMap((company) => {
+    const roster = rosterOf(company.teams)
+    return plugin.rosterFits(roster) ? [{ id: company.id, name: company.name, slaves: roster.length }] : []
+  })
+}
+
+/** The one reading of a catalog company's roster (M31b §4), shared by `companiesForSector` here and
+ *  `createSimulation` in `write.ts` so the list and the create verb can never disagree about what a
+ *  roster is. `role` is the CATALOG role, which lives on the template rather than on the roster row
+ *  -- the software sector reads an engineer's expertise from it, and trade ignores it. */
+export function rosterOf(teams: readonly { readonly name: string; readonly slaves: readonly { readonly name: string; readonly template: { readonly role: string } }[] }[]): readonly RosterEntry[] {
+  return teams.flatMap((team) => team.slaves.map((slave) => ({ slaveName: slave.name, departmentName: team.name, role: slave.template.role })))
 }

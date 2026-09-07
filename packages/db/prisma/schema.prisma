@@ -611,6 +611,7 @@ model User {
 /// a column that could be mistaken for real spend.
 enum SimulationSector {
   trade
+  software
 }
 
 enum SimulationMode {

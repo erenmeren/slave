@@ -38,7 +38,7 @@ describe('the simulation routes', () => {
     const { id } = (await created.json()) as { id: string }
     expect(typeof id).toBe('string')
     expect((await createPOST(json({ companyId }))).status).toBe(400)
-    const unsupported = await createPOST(json({ companyId, name: 'x', policy: 'A', sector: 'software' }))
+    const unsupported = await createPOST(json({ companyId, name: 'x', policy: 'A', sector: 'retail' }))
     expect(unsupported.status).toBe(409)
     expect((await unsupported.json()).error).toContain('cannot run in simulation mode yet')
   })

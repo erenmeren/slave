@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { prisma } from '@slave-of-ai/db/client'
 import { err, ok, type Result } from '@slave-of-ai/domain'
 import {
-  CompositeDecisionProvider, LlmDecisionProvider, RulesDecisionProvider, TRADE_ACTION_DOCS, buildDecisionPrompt, parseEnvelopes, tradeModel,
+  CompositeDecisionProvider, LlmDecisionProvider, buildDecisionPrompt, parseEnvelopes,
   type ActionEnvelope,
 } from '@slave-of-ai/simulation'
 import type { ControlRefusal } from '../refusal.js'
@@ -98,8 +98,9 @@ async function journalControl(simulationId: string, simTime: number, payload: Re
  *
  * Reads the run unlocked, answers the three watermark questions `autoStepDue` answers (plus the
  * intent's own `untilDay`), checks the cumulative spend against the cap, and -- if there is a day
- * to decide -- builds the prompt from the role's OWN observation (`tradeModel.observe`, which
- * filters by `role.observes`) and the actions that role is allowed to propose. Nothing here is
+ * to decide -- builds the prompt from the role's OWN observation (the RUN's own sector model's
+ * `observe`, which filters by `role.observes`) and the actions that role is allowed to propose --
+ * both read off the plugin its `sector` resolves to. Nothing here is
  * written except the halt an exhausted budget causes: preparing a decision is otherwise a pure
  * read, and the `version` it returns is what `applyModelDecision` re-checks under the lock.
  *
@@ -109,7 +110,7 @@ async function journalControl(simulationId: string, simTime: number, payload: Re
 export async function prepareModelDecision(simulationId: string, now: Date): Promise<Result<PrepareOutcome, ControlRefusal>> {
   const read = await readSimulation(prisma, simulationId)
   if (!read.ok) return read
-  const { summary, definition, state } = read.value
+  const { summary, definition, state, plugin } = read.value
   const intent = summary.autoRun
   if (intent === null) return ok({ kind: 'skip', reason: 'no_intent' } as const)
   if (summary.status !== 'running') return ok({ kind: 'skip', reason: 'not_running' } as const)
@@ -155,18 +156,18 @@ export async function prepareModelDecision(simulationId: string, now: Date): Pro
 
   const roleName = definition.llmRoles[0]
   const role = roleName === undefined ? undefined : definition.roles.find((r) => r.name === roleName)
-  // An `llm` run is created with `llmRoles: ['purchasing']` and a non-empty `model`, so neither of
-  // these can be missing on a row this function is reached for. A row that somehow has neither is
-  // not steppable at all, and saying so as a refusal halts it (through `tickSimulations`'s own
-  // halt path) rather than silently skipping it forever.
+  // An `llm` run is created with the plugin's own `llmRoleCandidates` (trade `purchasing`, software
+  // `lead`) and a non-empty `model`, so neither of these can be missing on a row this function is
+  // reached for. A row that somehow has neither is not steppable at all, and saying so as a refusal
+  // halts it (through `tickSimulations`'s own halt path) rather than silently skipping it forever.
   if (roleName === undefined || role === undefined) return err({ kind: 'simulation_corrupt', simulationId, reason: 'an llm run has no llm role to decide for' })
   if (summary.model === null) return err({ kind: 'simulation_corrupt', simulationId, reason: 'an llm run has no model' })
 
-  const observation = tradeModel.observe(state.sector, role)
+  const observation = plugin.model.observe(state.sector, role)
   const prompt = buildDecisionPrompt({
     role,
     observation,
-    actionDocs: TRADE_ACTION_DOCS.filter((doc) => role.allowedActions.includes(doc.type)),
+    actionDocs: plugin.actionDocs.filter((doc) => role.allowedActions.includes(doc.type)),
     day: state.day,
     currency: definition.currency,
     maxActions: definition.limits.maxDecisionsPerStep,
@@ -298,7 +299,7 @@ export async function applyModelDecision(
       provider: new CompositeDecisionProvider({
         llmRoles: loaded.definition.llmRoles,
         llm: new LlmDecisionProvider(new Map([[role, envelopes]])),
-        rules: new RulesDecisionProvider(loaded.definition),
+        rules: loaded.plugin.rulesProvider(loaded.definition),
       }),
       // What the engine cannot know about its own decision point: which model answered, which
       // usage row paid for it, and whether that answer parsed. `parseError: null` is written

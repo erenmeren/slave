@@ -55,9 +55,12 @@ export function CompareClient({ comparison }: { readonly comparison: SimulationC
       <DataTable columns={COLUMNS} header={['metric', 'A', 'B', 'Δ']}>
         {(Object.keys(METRIC_LABELS) as (keyof typeof METRIC_LABELS)[]).map((key) => {
           const isMoney = MONEY.has(key)
-          const av = a.metrics[key]
-          const bv = b.metrics[key]
-          const dv = deltas[key]
+          // M31b Task 3: the comparison carries the plugin's metrics as a plain `name -> number`
+          // map, so an index read is `number | undefined`. Task 4 renders `comparison.metricLabels`
+          // instead of this trade-only list; until then a missing key reads 0 rather than `NaN`.
+          const av = a.metrics[key] ?? 0
+          const bv = b.metrics[key] ?? 0
+          const dv = deltas[key] ?? 0
           return (
             <div key={key} data-testid={`sim-compare-row-${key}`}>
               <Row columns={COLUMNS}>

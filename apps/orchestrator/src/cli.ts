@@ -141,7 +141,7 @@ const USAGE = `usage: orchestrator <command> [options]
   delete-template --template <id> --yes
                                        remove a slave template with the catalog slaves made from
                                        it; project slaves keep their role
-  create-simulation --company <id> --name <n> --policy A|B [--seed <n>] [--sector trade]
+  create-simulation --company <id> --name <n> --policy A|B [--seed <n>] [--sector trade|software]
       [--decision-provider rules|llm] [--model-provider claude_code] [--model <id>]
       [--max-model-cost-usd <n>]
                                        create a company SIMULATION from a catalog company's
@@ -972,7 +972,7 @@ export async function main(argv: readonly string[]): Promise<number> {
       const maxModelCostUsdText = flagText(flags, 'max-model-cost-usd')
       const maxModelCostUsd = maxModelCostUsdText !== undefined ? Number(maxModelCostUsdText) : undefined
       const result = await createSimulation({
-        companyId, name, sector: sector as 'trade', policy,
+        companyId, name, sector, policy,
         ...(seed !== undefined ? { seed } : {}),
         ...(decisionProvider !== undefined ? { decisionProvider } : {}),
         ...(modelProvider !== undefined ? { modelProvider } : {}),
@@ -981,7 +981,7 @@ export async function main(argv: readonly string[]): Promise<number> {
       })
       if (!result.ok) throw new Error(refusalText(result.error))
       const providerText = decisionProvider === 'llm' ? `llm provider · ${String(modelProvider)} · ${String(model)}, cap $${Number(maxModelCostUsd).toFixed(2)}` : 'rules provider'
-      process.stdout.write(`simulation ${result.value.id} created (trade, policy ${policy}, ${providerText}, synthetic)\n`)
+      process.stdout.write(`simulation ${result.value.id} created (${sector}, policy ${policy}, ${providerText}, synthetic)\n`)
       return 0
     }
 

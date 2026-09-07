@@ -38,7 +38,7 @@ export async function POST(request: Request): Promise<Response> {
   return simControlResponse(() =>
     createSimulation(
       {
-        companyId, name, sector: sector as 'trade', policy,
+        companyId, name, sector, policy,
         ...(seed !== undefined ? { seed } : {}),
         ...(decisionProvider !== undefined ? { decisionProvider } : {}),
         ...(modelProvider !== undefined ? { modelProvider } : {}),

@@ -49,11 +49,12 @@ describe('createSimulation', () => {
     await prisma.companySlave.updateMany({ where: { companyTeamId: team.id }, data: { name: 'Someone Else' } })
     const loaded = await loadSimulation(id)
     expect(loaded.ok && loaded.value.definition.roles[0]).toMatchObject({ name: 'sales', slaveName: 'Sonia' })
-    expect(loaded.ok && loaded.value.definition.roster.map((r) => r.departmentName)).toContain('Sales')
+    // M31b: `definition` is the run's own sector's, so a trade-only field is read as one.
+    expect(loaded.ok && (loaded.value.definition['roster'] as { departmentName: string }[]).map((r) => r.departmentName)).toContain('Sales')
   })
   it('refuses an unsupported sector/mode, a small roster, a duplicate name, an unknown company', async () => {
-    const unsupported = await createSimulation({ companyId, name: 'x', sector: 'software' as unknown as 'trade', policy: 'A' })
-    expect(unsupported.ok === false && unsupported.error).toEqual({ kind: 'unsupported_simulation', sector: 'software', mode: 'simulation' })
+    const unsupported = await createSimulation({ companyId, name: 'x', sector: 'retail', policy: 'A' })
+    expect(unsupported.ok === false && unsupported.error).toEqual({ kind: 'unsupported_simulation', sector: 'retail', mode: 'simulation' })
     const small = await prisma.company.create({ data: { name: 'Tiny' } })
     const tooSmall = await createSimulation({ companyId: small.id, name: 'x', sector: 'trade', policy: 'A' })
     expect(tooSmall.ok === false && tooSmall.error).toEqual({ kind: 'roster_too_small', companyId: small.id, needed: 4, have: 0 })
@@ -73,7 +74,7 @@ describe('createSimulation', () => {
     const lb = await loadSimulation(b)
     expect(la.ok && la.value.state.day).toBe(30)
     expect(lb.ok && lb.value.state.day).toBe(0)
-    expect(lb.ok && lb.value.state.sector.inventory).toBe(100)
+    expect(lb.ok && (lb.value.state.sector as { inventory: number }).inventory).toBe(100)
     expect(await prisma.simulationJournalEntry.count({ where: { simulationId: b } })).toBe(1) // the create record only
   })
 })

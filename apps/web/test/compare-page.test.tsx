@@ -2,6 +2,7 @@
 import { render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import { CompareClient } from '../src/components/sim/CompareClient.js'
+import { sectors } from '@slave-of-ai/simulation'
 import type { SimulationSummary, SimulationComparison } from '@slave-of-ai/control'
 
 function summary(over: Partial<SimulationSummary> = {}): SimulationSummary {
@@ -17,15 +18,16 @@ function comparison(over: Partial<SimulationComparison> = {}): SimulationCompari
   return {
     a: {
       summary: summary({ id: 'a1', name: 'Run A', policy: 'A' }),
-      metrics: { deliveredQty: 90, onTimeQty: 86, lateDays: 4, purchaseCostMinor: 300_000, closingInventory: 0, closingCashMinor: 4_700_000, minCashMinor: 4_700_000, minCashDay: 8, collectedMinor: 1_800_000, unpaidCommitmentsMinor: 0, sources: { deliveredQty: [], lateDays: [], purchaseCostMinor: [], collectedMinor: [], unpaidCommitmentsMinor: [] } },
+      metrics: { deliveredQty: 90, onTimeQty: 86, lateDays: 4, purchaseCostMinor: 300_000, closingInventory: 0, closingCashMinor: 4_700_000, minCashMinor: 4_700_000, minCashDay: 8, collectedMinor: 1_800_000, unpaidCommitmentsMinor: 0 },
       injected: 0,
     },
     b: {
       summary: summary({ id: 'b1', name: 'Run B', policy: 'B' }),
-      metrics: { deliveredQty: 90, onTimeQty: 90, lateDays: 0, purchaseCostMinor: 725_000, closingInventory: 50, closingCashMinor: 4_700_000, minCashMinor: 4_700_000, minCashDay: 8, collectedMinor: 1_800_000, unpaidCommitmentsMinor: 0, sources: { deliveredQty: [], lateDays: [], purchaseCostMinor: [], collectedMinor: [], unpaidCommitmentsMinor: [] } },
+      metrics: { deliveredQty: 90, onTimeQty: 90, lateDays: 0, purchaseCostMinor: 725_000, closingInventory: 50, closingCashMinor: 4_700_000, minCashMinor: 4_700_000, minCashDay: 8, collectedMinor: 1_800_000, unpaidCommitmentsMinor: 0 },
       injected: 0,
     },
     deltas: { deliveredQty: 0, onTimeQty: 4, lateDays: -4, purchaseCostMinor: 425_000, closingInventory: 50, closingCashMinor: 0, minCashMinor: 0, collectedMinor: 0, unpaidCommitmentsMinor: 0 },
+    metricLabels: sectors.trade.metricLabels,
     definitionsMatch: true,
     differences: [],
     currency: 'USD',

@@ -7,6 +7,7 @@
  * convention: it is defined here (M12 Task 7) ahead of the budget admission logic (Task 9) that
  * will actually raise it.
  */
+import { sectors } from '@slave-of-ai/simulation'
 import { plural } from './plural.js'
 
 export type ControlRefusal =
@@ -269,7 +270,7 @@ export function refusalText(refusal: ControlRefusal): string {
     case 'simulation_not_found':
       return `no simulation with id ${refusal.simulationId}`
     case 'unsupported_simulation':
-      return `a ${refusal.sector} company cannot run in ${refusal.mode} mode yet; supported: trade + simulation`
+      return `a ${refusal.sector} company cannot run in ${refusal.mode} mode yet; supported: ${Object.keys(sectors).join(', ')} + simulation`
     case 'simulation_not_runnable':
       return `simulation ${refusal.simulationId} is ${refusal.status}; it cannot be stepped`
     case 'stale_version':

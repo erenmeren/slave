@@ -1221,9 +1221,10 @@ describe('the orchestrator CLI', () => {
       expect(stepped.stdout).toContain(`simulation ${id} at day 30 (finished), version 1`)
       const status = await runCli(['simulation-status', '--simulation', id])
       expect(status.code).toBe(0)
-      const parsed = JSON.parse(status.stdout) as { summary: { status: string; synthetic: boolean; decisionProvider: string }; company: { cashMinor: number }; modelUsage: { spentUsd: number | null } }
+      const parsed = JSON.parse(status.stdout) as { summary: { status: string; synthetic: boolean; decisionProvider: string }; headline: { label: string; value: number }[]; modelUsage: { spentUsd: number | null } }
       expect(parsed.summary).toMatchObject({ status: 'finished', synthetic: true, decisionProvider: 'rules' })
-      expect(typeof parsed.company.cashMinor).toBe('number')
+      // M31b: the sector's own headline, not a trade-shaped `company` object.
+      expect(typeof parsed.headline.find((h) => h.label === 'cash')?.value).toBe('number')
       expect(parsed.modelUsage.spentUsd).toBeNull()
       const again = await runCli(['step-simulation', '--simulation', id, '--steps', '1'])
       expect(again.code).toBe(1)
@@ -1231,7 +1232,7 @@ describe('the orchestrator CLI', () => {
     }, 30_000)
     it('refuses an unsupported sector without creating anything', async () => {
       const companyId = await tradingCompany()
-      const result = await runCli(['create-simulation', '--company', companyId, '--name', 'x', '--policy', 'A', '--sector', 'software'])
+      const result = await runCli(['create-simulation', '--company', companyId, '--name', 'x', '--policy', 'A', '--sector', 'retail'])
       expect(result.code).toBe(1)
       expect(result.stderr).toContain('cannot run in simulation mode yet')
       expect(await prisma.simulationRun.count()).toBe(0)

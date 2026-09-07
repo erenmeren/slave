@@ -1,6 +1,6 @@
 import { prisma } from '@slave-of-ai/db/client'
 import { compareCandidatesOf, compareSimulations, listSimulations, readSimulation, refusalText, type SimulationComparison, type SimulationSummary } from '@slave-of-ai/control'
-import { tradeMetrics, type JournalEntry, type TradeMetrics } from '@slave-of-ai/simulation'
+import { tradeMetrics, type JournalEntry, type TradeMetrics, type TradeSimulationDefinition, type TradeState } from '@slave-of-ai/simulation'
 
 export interface JournalRow { readonly seq: number; readonly simTime: number; readonly kind: string; readonly actorRole: string | null; readonly payload: Record<string, unknown> }
 export interface CompareCandidate { readonly id: string; readonly name: string; readonly policy: 'A' | 'B'; readonly status: SimulationSummary['status']; readonly simTime: number }
@@ -38,7 +38,12 @@ export async function buildSimulationSnapshot(simulationId: string): Promise<Sim
   return prisma.$transaction(async (tx) => {
     const loaded = await readSimulation(tx, simulationId)
     if (!loaded.ok) return null
-    const { summary, definition, state } = loaded.value
+    // M31b Task 3: `LoadedSimulation` is now generic over the run's sector. This page is still the
+    // TRADE run page and renders exactly what it always did, so it narrows here; Task 4 replaces
+    // the narrowing with the plugin's own `headline`/`metricLabels`.
+    const { summary } = loaded.value
+    const definition = loaded.value.definition as unknown as TradeSimulationDefinition
+    const state = loaded.value.state as { day: number; sector: TradeState }
     const rows = await tx.simulationJournalEntry.findMany({ where: { simulationId }, orderBy: { seq: 'asc' } })
     // Fix round 1, Minor #2: one query, not two -- `spentUsd` (the measured rows' sum, or null
     // when none are measured) and `unmeasured` (the null-cost count) are both derived from these

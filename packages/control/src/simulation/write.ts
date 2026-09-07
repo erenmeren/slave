@@ -1,16 +1,13 @@
 import { Prisma, prisma } from '@slave-of-ai/db/client'
 import { err, ok, type Result } from '@slave-of-ai/domain'
-import {
-  RulesDecisionProvider, cloneDefinition, demoDefinition, runUntil, tradeExternalEventSchema, tradeInitialEngineState, tradeModel,
-  type DecisionExtras, type DecisionProvider,
-} from '@slave-of-ai/simulation'
+import { runUntil, sectorFor, type AnySectorPlugin, type DecisionExtras, type DecisionProvider } from '@slave-of-ai/simulation'
 import { isUniqueConstraintViolation } from '../prisma-errors.js'
 import type { Principal } from '../principal.js'
 import type { ControlRefusal } from '../refusal.js'
 import {
-  MAX_STEPS_PER_REQUEST, SUPPORTED, clearAutoRun, json, journalRows, locked, namespacedKey, type LoadedSimulation, type Row,
+  MAX_STEPS_PER_REQUEST, SUPPORTED, clearAutoRun, json, journalRows, locked, namespacedKey, type LoadedSimulation, type Row, type SimulationSummary,
 } from './shared.js'
-import { loadSimulation } from './read.js'
+import { loadSimulation, rosterOf } from './read.js'
 
 /** The one guard both `createSimulation` and `cloneSimulation` run before touching the database:
  *  an empty (or all-whitespace) name, or a seed that isn't an integer. */
@@ -66,7 +63,10 @@ export async function createSimulation(
   input: {
     readonly companyId: string
     readonly name: string
-    readonly sector: 'trade'
+    /** M31b §4: the sector a run lives in, resolved through the registry. No default -- the route
+     *  and the CLI supply it -- and a name no plugin answers to is `unsupported_simulation`, never
+     *  a fallback to trade. */
+    readonly sector: string
     readonly mode?: 'simulation'
     readonly policy: 'A' | 'B'
     readonly seed?: number
@@ -81,7 +81,8 @@ export async function createSimulation(
   principal?: Principal,
 ): Promise<Result<{ readonly id: string }, ControlRefusal>> {
   const mode = input.mode ?? 'simulation'
-  if (!SUPPORTED.has(`${input.sector}:${mode}`)) return err({ kind: 'unsupported_simulation', sector: input.sector, mode })
+  const plugin = sectorFor(input.sector)
+  if (plugin === undefined || !SUPPORTED.has(`${input.sector}:${mode}`)) return err({ kind: 'unsupported_simulation', sector: input.sector, mode })
   const invalid = validateNameAndSeed(input.name, input.seed)
   if (invalid !== null) return err(invalid)
   const decisionProvider = input.decisionProvider ?? 'rules'
@@ -93,17 +94,27 @@ export async function createSimulation(
     if (!validated.ok) return validated
     llm = validated.value
   }
-  const company = await prisma.company.findUnique({ where: { id: input.companyId }, include: { teams: { orderBy: { name: 'asc' }, include: { slaves: { orderBy: { name: 'asc' } } } } } })
+  const company = await prisma.company.findUnique({
+    where: { id: input.companyId },
+    include: { teams: { orderBy: { name: 'asc' }, include: { slaves: { orderBy: { name: 'asc' }, include: { template: { select: { role: true } } } } } } },
+  })
   if (company === null) return err({ kind: 'company_not_found', companyId: input.companyId })
-  const roster = company.teams.flatMap((team) => team.slaves.map((slave) => ({ slaveName: slave.name, departmentName: team.name })))
+  const roster = rosterOf(company.teams)
   if (roster.length < 4) return err({ kind: 'roster_too_small', companyId: company.id, needed: 4, have: roster.length })
   const seed = input.seed ?? 1
-  const llmRoles = decisionProvider === 'llm' ? ['purchasing'] : []
-  const definition = demoDefinition({ policy: input.policy, seed, roster, currency: 'USD', llmRoles })
-  const state = tradeInitialEngineState(definition)
+  const llmRoles = decisionProvider === 'llm' ? [...plugin.llmRoleCandidates] : []
+  // The plugin decides whether this roster can fill its roles and throws its own requirement text
+  // when it cannot (design §2) -- control neither knows nor repeats what a sector needs.
+  let definition: ReturnType<AnySectorPlugin['demoDefinition']>
+  try {
+    definition = plugin.demoDefinition({ policy: input.policy, seed, roster, currency: 'USD', llmRoles })
+  } catch {
+    return err({ kind: 'invalid_simulation_input', detail: plugin.rosterRequirement })
+  }
+  const state = plugin.initialState(definition)
   return insertRun(
     {
-      companyId: company.id, name: input.name.trim(), sector: 'trade', mode: 'simulation', decisionProvider, seed, definition: json(definition), state: json(state), createdByUserId: principal?.userId ?? null,
+      companyId: company.id, name: input.name.trim(), sector: plugin.name as SimulationSummary['sector'], mode: 'simulation', decisionProvider, seed, definition: json(definition), state: json(state), createdByUserId: principal?.userId ?? null,
       modelProvider: llm?.modelProvider ?? null, model: llm?.model ?? null, maxModelCostUsd: llm?.maxModelCostUsd ?? null,
     },
     { op: 'created', policy: input.policy, seed, synthetic: true },
@@ -123,13 +134,14 @@ export async function cloneSimulation(
   const source = await loadSimulation(sourceId)
   if (!source.ok) return source
   const seed = input.seed ?? source.value.definition.seed
+  const plugin = source.value.plugin
   // Controller ruling R4: a clone never inherits paid use -- the row below already forces
   // `decisionProvider: 'rules'` and null model columns, so the frozen definition must not still
   // claim a role decides with a model.
-  const definition = { ...cloneDefinition(source.value.definition, { policy: input.policy, seed }), llmRoles: [] }
-  const state = tradeInitialEngineState(definition)
+  const definition = { ...plugin.cloneDefinition(source.value.definition, { policy: input.policy, seed }), llmRoles: [] }
+  const state = plugin.initialState(definition)
   return insertRun(
-    { companyId: source.value.summary.companyId, name: input.name.trim(), sector: 'trade', mode: 'simulation', decisionProvider: 'rules', seed, definition: json(definition), state: json(state), clonedFromId: sourceId, createdByUserId: principal?.userId ?? null },
+    { companyId: source.value.summary.companyId, name: input.name.trim(), sector: source.value.sector, mode: 'simulation', decisionProvider: 'rules', seed, definition: json(definition), state: json(state), clonedFromId: sourceId, createdByUserId: principal?.userId ?? null },
     { op: 'created', policy: input.policy, seed, synthetic: true, clonedFrom: sourceId },
   )
 }
@@ -156,8 +168,8 @@ export async function stepLocked(
     readonly decisionExtras?: DecisionExtras
   },
 ): Promise<{ readonly day: number; readonly status: string; readonly version: number; readonly entries: number }> {
-  const provider = input.provider ?? new RulesDecisionProvider(loaded.definition)
-  const result = runUntil(tradeModel, loaded.definition, loaded.state, provider, Math.min(input.untilDay, loaded.definition.horizonDays), MAX_STEPS_PER_REQUEST, input.decisionExtras)
+  const provider = input.provider ?? loaded.plugin.rulesProvider(loaded.definition)
+  const result = runUntil(loaded.plugin.model, loaded.definition, loaded.state, provider, Math.min(input.untilDay, loaded.definition.horizonDays), MAX_STEPS_PER_REQUEST, input.decisionExtras)
   const version = row.version + 1
   const status = result.state.status
   const controlSeq = result.state.journalSeq + 1
@@ -292,12 +304,15 @@ export async function injectExternalEvent(
   input: { readonly day: number; readonly event: unknown; readonly idempotencyKey?: string },
   _principal?: Principal,
 ): Promise<Result<void, ControlRefusal>> {
-  const parsed = tradeExternalEventSchema.safeParse(input.event)
-  if (!parsed.success) return err({ kind: 'invalid_simulation_input', detail: `event: ${parsed.error.issues[0]?.message ?? 'not an external event'}` })
   return prisma.$transaction(async (tx) => {
     const got = await locked(tx, simulationId)
     if (!got.ok) return got
     const { row, loaded } = got.value
+    // The event is validated by the RUN's sector (M31b §4), so the schema is only known once the
+    // row has been read -- the parse moved inside the lock for that reason alone. It still writes
+    // nothing on a bad event: this returns before any journal row or update.
+    const parsed = loaded.plugin.externalEventSchema.safeParse(input.event)
+    if (!parsed.success) return err({ kind: 'invalid_simulation_input', detail: `event: ${parsed.error.issues[0]?.message ?? 'not an external event'}` })
     if (row.status !== 'ready' && row.status !== 'running') return err({ kind: 'simulation_not_runnable', simulationId, status: row.status })
     if (!Number.isInteger(input.day) || input.day < loaded.state.day) return err({ kind: 'invalid_simulation_input', detail: `day must be an integer ≥ the current day (${loaded.state.day})` })
     if (input.idempotencyKey !== undefined) {
