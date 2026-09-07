@@ -4,14 +4,21 @@ import type { AnySectorPlugin } from '../../src/core/plugin.js'
 import { sectorFor, sectors } from '../../src/core/registry.js'
 import type { RoleDefinition } from '../../src/core/sector.js'
 
-/** A four-slave roster with `role` set (M31b task 1 brief): enough for trade's four roles, and
- *  shaped the way a software roster would be too, so every sector in `sectors` can build a demo
- *  definition from the same fixture. */
+/** The catalog's "Checkout Platform" crew (`packages/db/src/seed.ts`), which is the roster a
+ *  person actually creates a simulation from — and the one fixture BOTH sectors accept: nine
+ *  slaves clears trade's "four slaves for four roles", and its departments and catalog roles fill
+ *  software's product / lead / reviewer / engineers. Task 1's four-slave roster was enough only
+ *  while trade was the only sector registered. */
 const roster = [
-  { slaveName: 'Sonia', departmentName: 'Sales', role: 'sales' },
-  { slaveName: 'Pete', departmentName: 'Purchasing', role: 'purchasing' },
-  { slaveName: 'Olga', departmentName: 'Operations', role: 'operations' },
-  { slaveName: 'Fin', departmentName: 'Finance', role: 'finance' },
+  { slaveName: 'Atlas', departmentName: 'Management', role: 'manager' },
+  { slaveName: 'Alex', departmentName: 'Engineering', role: 'Backend' },
+  { slaveName: 'Emma', departmentName: 'Engineering', role: 'Frontend' },
+  { slaveName: 'Daniel', departmentName: 'Engineering', role: 'DevOps' },
+  { slaveName: 'Maya', departmentName: 'Engineering', role: 'QA' },
+  { slaveName: 'Riley', departmentName: 'Engineering', role: 'reviewer' },
+  { slaveName: 'Sarah', departmentName: 'Security', role: 'Security' },
+  { slaveName: 'John', departmentName: 'Product', role: 'Business Analyst' },
+  { slaveName: 'Oliver', departmentName: 'Marketing', role: 'SEO' },
 ]
 
 /** Builds a value for one form field from its `kind`, so `externalEventForms` can be exercised

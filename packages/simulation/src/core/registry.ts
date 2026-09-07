@@ -1,10 +1,11 @@
 import type { AnySectorPlugin } from './plugin.js'
+import { softwarePlugin } from '../software/plugin.js'
 import { tradePlugin } from '../trade/plugin.js'
 
-/** Every sector the platform knows, by name (M31b design §2). Software is added in task 2; this
- *  task registers only trade, wrapping what M29/M30/M31a already built untouched. Control and web
- *  never name a sector except through this object or `sectorFor`. */
-export const sectors = { trade: tradePlugin } as const
+/** Every sector the platform knows, by name (M31b design §2). Control and web never name a sector
+ *  except through this object or `sectorFor`; adding a third is one entry here and one directory
+ *  under `src/`, with nothing outside `packages/simulation` to change. */
+export const sectors = { trade: tradePlugin, software: softwarePlugin } as const
 
 export type SectorName = keyof typeof sectors
 

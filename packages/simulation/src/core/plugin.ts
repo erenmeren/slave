@@ -1,5 +1,5 @@
 import type { z } from 'zod'
-import type { ActionDoc } from '../trade/action-docs.js'
+import type { ActionDoc } from './action-docs.js'
 import type { DecisionProvider } from '../decide/provider.js'
 import type { EngineDefinition, EngineState } from './engine.js'
 import type { JournalEntry } from './journal.js'

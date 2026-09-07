@@ -1,10 +1,8 @@
-/** One line of the model's action documentation: what an action is called, what it takes, when
- *  a role would use it. Kept as data so the prompt and any future UI read the same source. */
-export interface ActionDoc {
-  readonly type: string
-  readonly params: string
-  readonly when: string
-}
+// M31b ruling R2: `ActionDoc` itself now lives in `../core/action-docs.js` -- `core/plugin.ts`
+// names it in the `SectorPlugin` contract, and the software sector fills the same shape in. It is
+// re-exported here so every existing importer of `trade/action-docs.js` keeps working unchanged.
+export type { ActionDoc } from '../core/action-docs.js'
+import type { ActionDoc } from '../core/action-docs.js'
 
 /** Documents the trade sector's four action types (`src/trade/actions.ts`) in the shape the
  *  purchasing rules already act on (`src/trade/rules.ts`): the param names here are the real
