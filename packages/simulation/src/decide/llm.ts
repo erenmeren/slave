@@ -4,21 +4,52 @@ import type { DecisionProvider, DecisionRequest } from './provider.js'
 
 const FENCED_JSON = /```json\s*([\s\S]*?)```/g
 
+/** Scans from the first `[` for the `]` that closes it, tracking JSON string state (so a `]`
+ *  inside a string value is not mistaken for the end) and bracket depth over both `[`/`]` and
+ *  `{`/`}` (so a nested object's own brackets don't close the array early). Returns the matching
+ *  substring, or `undefined` if the text never opens or never closes an array. Trailing prose
+ *  after the array — which may itself contain `]`, e.g. "... ] see item [2] for details" — is not
+ *  part of the scan once depth returns to 0. */
+function scanForArray(text: string): string | undefined {
+  const start = text.indexOf('[')
+  if (start === -1) return undefined
+  let depth = 0
+  let inString = false
+  let escaped = false
+  for (let i = start; i < text.length; i++) {
+    const char = text[i]
+    if (inString) {
+      if (escaped) escaped = false
+      else if (char === '\\') escaped = true
+      else if (char === '"') inString = false
+      continue
+    }
+    if (char === '"') inString = true
+    else if (char === '[' || char === '{') depth += 1
+    else if (char === ']' || char === '}') {
+      depth -= 1
+      if (depth === 0) return text.slice(start, i + 1)
+    }
+  }
+  return undefined
+}
+
 /** Pulls a JSON array out of a model's free-form answer and validates each element as an
  *  `ActionEnvelope`. A real answer carries tool-call noise and prose around the array (the r4
  *  shape: `<function_calls>…</function_calls>` then prose then a fenced block then more prose) —
- *  so this prefers the LAST ```json fenced block if one is present, else the substring from the
- *  first `[` to the matching last `]`. Pure: no I/O, the model call happens outside this module. */
+ *  so this prefers the LAST ```json fenced block if one is present, else scans from the first `[`
+ *  for its matching `]` (tracking string and bracket-depth state, not just the last `]` in the
+ *  text — trailing prose can itself contain `]`). Pure: no I/O, the model call happens outside
+ *  this module. */
 export function parseEnvelopes(text: string, maxActions: number): { readonly envelopes: readonly ActionEnvelope[] } | { readonly parseError: string } {
   const fenced = [...text.matchAll(FENCED_JSON)]
   let candidate: string
   if (fenced.length > 0) {
     candidate = (fenced[fenced.length - 1]?.[1] ?? '').trim()
   } else {
-    const first = text.indexOf('[')
-    const last = text.lastIndexOf(']')
-    if (first === -1 || last === -1 || last < first) return { parseError: 'no JSON array found in the answer' }
-    candidate = text.slice(first, last + 1)
+    const scanned = scanForArray(text)
+    if (scanned === undefined) return { parseError: 'no JSON array found in the answer' }
+    candidate = scanned
   }
 
   let parsed: unknown

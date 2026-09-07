@@ -74,6 +74,25 @@ describe('parseEnvelopes', () => {
     expect('parseError' in result).toBe(true)
   })
 
+  it('a fenced non-array value is a parseError mentioning "array"', () => {
+    const result = parseEnvelopes('```json\n{"type":"note"}\n```', 8)
+    if (!('parseError' in result)) throw new Error('expected parseError')
+    expect(result.parseError).toContain('array')
+  })
+
+  it('an array of non-envelope elements is a parseError naming element 0', () => {
+    const result = parseEnvelopes('[1,2,3]', 8)
+    if (!('parseError' in result)) throw new Error('expected parseError')
+    expect(result.parseError).toContain('element 0')
+  })
+
+  it('finds the unfenced array by a bracket scan, not the last "]" — a "]" inside a string value or in trailing prose does not fool it', () => {
+    const text = 'Here: [{"type":"note","params":{"text":"a]b"},"rationale":"r","refs":[]}] see item [2] for details'
+    const result = parseEnvelopes(text, 8)
+    if (!('envelopes' in result)) throw new Error('expected envelopes')
+    expect(result.envelopes).toEqual([noteEnvelope('a]b')])
+  })
+
   it('names the index of an element that fails the envelope schema', () => {
     const text = '[{"type":"note","params":{"text":"ok"},"rationale":"r","refs":[]},{"type":"note","params":{"text":"bad"}}]'
     const result = parseEnvelopes(text, 8)
