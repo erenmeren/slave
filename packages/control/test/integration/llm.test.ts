@@ -230,21 +230,38 @@ describe('applyModelDecision', () => {
     expect(stale).toMatchObject({ op: 'stale_decision', role: 'purchasing', expectedVersion: before.version + 7, actual: before.version, reason: 'version' })
   })
 
-  it('a stopped auto-run makes the decision stale, though neither the version nor the status moved (fix round 1, Critical #1)', async () => {
+  it('a stopped auto-run makes the decision stale, and the run is not stepped after it was stopped (spec §2.6)', async () => {
     const id = await armedLlmRun('stopped')
     const before = await prisma.simulationRun.findUniqueOrThrow({ where: { id } })
-    // The person stopped the run while the model was thinking. `stopAutoRun` clears the intent
-    // columns and NOTHING else -- same `version`, same `running` status -- so a stale check that
-    // reads only those two would step the run after it was stopped (spec §2.6).
+    // The person stopped the run while the model was thinking. Since M32 item 1 `stopAutoRun`
+    // bumps `version` with the clear (so the page's stream sees it), so this answer is stale by
+    // `version` -- the first of the three questions. What spec §2.6 requires is unchanged and is
+    // what this asserts: the answer is recorded and dropped, never stepped.
     expect((await stopAutoRun(id)).ok).toBe(true)
     const mid = await prisma.simulationRun.findUniqueOrThrow({ where: { id } })
-    expect(mid).toMatchObject({ version: before.version, status: 'running', autoRunEveryMs: null })
+    expect(mid).toMatchObject({ version: before.version + 1, status: 'running', autoRunEveryMs: null })
     const applied = await applyModelDecision(id, { expectedVersion: before.version, role: 'purchasing', outcome: answer(), promptHash: 'abc', now: T0 })
     expect(applied.ok && applied.value).toEqual({ applied: false, reason: 'stale' })
     const after = await prisma.simulationRun.findUniqueOrThrow({ where: { id } })
-    expect(after).toMatchObject({ simTime: 0, version: before.version, lastAutoStepAt: mid.lastAutoStepAt })
+    expect(after).toMatchObject({ simTime: 0, version: mid.version, lastAutoStepAt: mid.lastAutoStepAt })
     // The call was still made and paid for.
     expect(await prisma.simulationModelUsage.count({ where: { simulationId: id } })).toBe(1)
+    const stale = (await prisma.simulationJournalEntry.findMany({ where: { simulationId: id, kind: 'control' }, orderBy: { seq: 'asc' } })).map((r) => r.payload as { op: string; reason?: string }).find((p) => p.op === 'stale_decision')
+    expect(stale).toMatchObject({ op: 'stale_decision', reason: 'version' })
+  })
+
+  it('the third question still answers: an intent cleared with the version left where it was is stale by intent_cleared', async () => {
+    const id = await armedLlmRun('intent cleared')
+    const before = await prisma.simulationRun.findUniqueOrThrow({ where: { id } })
+    // Bypasses `stopAutoRun` (which since M32 item 1 bumps `version` and would be caught by the
+    // first question) so the row lands in the state the third question exists for: an intent that
+    // is gone with `version` and `status` both untouched. `applyModelDecision` asks all three
+    // deliberately -- a future writer that clears an intent some other way must not slip an
+    // answer through.
+    await prisma.simulationRun.update({ where: { id }, data: { autoRunEveryMs: null, autoRunUntilDay: null } })
+    const applied = await applyModelDecision(id, { expectedVersion: before.version, role: 'purchasing', outcome: answer(), promptHash: 'abc', now: T0 })
+    expect(applied.ok && applied.value).toEqual({ applied: false, reason: 'stale' })
+    expect((await prisma.simulationRun.findUniqueOrThrow({ where: { id } })).simTime).toBe(0)
     const stale = (await prisma.simulationJournalEntry.findMany({ where: { simulationId: id, kind: 'control' }, orderBy: { seq: 'asc' } })).map((r) => r.payload as { op: string; reason?: string }).find((p) => p.op === 'stale_decision')
     expect(stale).toMatchObject({ op: 'stale_decision', reason: 'intent_cleared' })
   })
@@ -272,7 +289,7 @@ describe('applyModelDecision', () => {
     expect((await prisma.simulationRun.findUniqueOrThrow({ where: { id } })).simTime).toBe(1)
   })
 
-  it('a stale-by-intent_cleared decision leaves the run haltable', async () => {
+  it('a stale decision after a stop leaves the run haltable', async () => {
     const id = await armedLlmRun('stale-then-halt')
     const before = await prisma.simulationRun.findUniqueOrThrow({ where: { id } })
     expect((await stopAutoRun(id)).ok).toBe(true)

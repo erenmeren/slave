@@ -225,7 +225,7 @@ describe('SimulationClient', () => {
     rerender(<SimulationClient initial={snapshot()} />)
     expect(screen.getByTestId('sim-live').textContent).toContain('RECONNECTING')
   })
-  it('refreshes when the stream status changes with the version unchanged (fix wave, Important #1): an auto-run error halt, or a CLI pause/halt/stop-auto-run, never bumps version', () => {
+  it('refreshes when the stream status changes with the version unchanged (fix wave, Important #1): an auto-run error halt, or a CLI pause/halt, never bumps version', () => {
     stream = { version: 2, status: 'running', connection: 'connected' }
     const { rerender } = render(<SimulationClient initial={snapshot()} />)
     expect(routerRefresh).not.toHaveBeenCalled()

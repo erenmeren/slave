@@ -47,6 +47,23 @@ describe('startAutoRun / stopAutoRun', () => {
     expect((await prisma.simulationRun.findUniqueOrThrow({ where: { id } })).autoRunEveryMs).toBeNull()
     expect(await controlOps(id)).toEqual(['created', 'auto_run_started', 'auto_run_stopped'])
   })
+  // M32 item 1: the operator's stop moves neither `status` (a stopped run stays `running`, it
+  // simply stops advancing) nor `simTime`, so `version` is the ONLY field the run page's SSE
+  // stream (keyed on `version|status|simTime`) can notice it by -- the same reasoning ruling R11
+  // applied to the `until_day` clear. Without the bump the page went on offering "Stop auto-run"
+  // for an intent that was already gone.
+  it('the operator\'s stop bumps version, so the stream sees an intent that is already gone', async () => {
+    const id = await create('stop bumps version')
+    expect((await startAutoRun(id, { everyMs: 1000, untilDay: 10 })).ok).toBe(true)
+    const armed = await prisma.simulationRun.findUniqueOrThrow({ where: { id } })
+    expect((await stopAutoRun(id)).ok).toBe(true)
+    const stopped = await prisma.simulationRun.findUniqueOrThrow({ where: { id } })
+    expect(stopped.version).toBe(armed.version + 1)
+    expect(stopped).toMatchObject({ status: 'running', simTime: armed.simTime, autoRunEveryMs: null })
+    // Idempotent: a second stop finds no intent and writes nothing at all, version included.
+    expect((await stopAutoRun(id)).ok).toBe(true)
+    expect((await prisma.simulationRun.findUniqueOrThrow({ where: { id } })).version).toBe(stopped.version)
+  })
   it('pause and halt clear the intent with their reason; a finished run clears it with finished', async () => {
     const a = await create('a')
     await startAutoRun(a, { everyMs: 1000, untilDay: 10 })

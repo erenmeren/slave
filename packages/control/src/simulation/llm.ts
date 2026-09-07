@@ -238,10 +238,13 @@ export async function applyModelDecision(
     // 2. Stale: the world moved while the model was thinking, so the answer was decided against a
     //    world that no longer exists and is recorded and dropped.
     //
-    //    THREE questions, not two (fix round 1, Critical #1). `stopAutoRun` clears the intent
-    //    columns and touches neither `version` nor `status`, so a check that read only those two
-    //    was blind to it: a person who stopped the run mid-call would watch it step once more
-    //    anyway, which spec §2.6 forbids. The cleared intent is the third question, and the
+    //    THREE questions, not two (fix round 1, Critical #1). `stopAutoRun` used to clear the
+    //    intent columns and touch neither `version` nor `status`, so a check that read only those
+    //    two was blind to it: a person who stopped the run mid-call would watch it step once more
+    //    anyway, which spec §2.6 forbids. Since M32 item 1 that stop bumps `version` as well (so
+    //    the page's stream can see it), and the FIRST question now catches it -- but the cleared
+    //    intent stays the third question regardless: it is the only one that holds for a writer
+    //    that clears an intent without moving the other two, and asking it costs nothing. The
     //    journal names which one answered.
     const staleReason = row.version !== expectedVersion ? 'version' : row.status !== 'running' ? 'status' : row.autoRunEveryMs === null ? 'intent_cleared' : null
     if (staleReason !== null) {

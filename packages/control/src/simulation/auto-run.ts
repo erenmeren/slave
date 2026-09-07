@@ -40,7 +40,14 @@ export async function stopAutoRun(simulationId: string, reason: 'operator' = 'op
     const { row, loaded } = got.value
     if (row.autoRunEveryMs === null) return ok(undefined)
     const seq = await clearAutoRun(tx, row, loaded, reason, loaded.state.journalSeq + 1)
-    await tx.simulationRun.update({ where: { id: simulationId }, data: { autoRunEveryMs: null, autoRunUntilDay: null, lastAutoStepAt: null, state: json({ ...loaded.state, journalSeq: seq }) } })
+    // M32 item 1: `version` moves with the clear, exactly as ruling R11 made it move for the
+    // `until_day` clear. The operator's stop touches neither `status` (a stopped run stays
+    // `running`; it simply stops advancing) nor `simTime`, so `version` is the only field the run
+    // page's SSE stream -- keyed on the `version|status|simTime` composite -- can see this by.
+    // Without the bump the page went on offering "Stop auto-run" for an intent that no longer
+    // existed until somebody reloaded by hand. The early return above keeps a second stop free:
+    // with no intent to clear, nothing is written and the version does not move.
+    await tx.simulationRun.update({ where: { id: simulationId }, data: { version: row.version + 1, autoRunEveryMs: null, autoRunUntilDay: null, lastAutoStepAt: null, state: json({ ...loaded.state, journalSeq: seq }) } })
     return ok(undefined)
   })
 }

@@ -67,8 +67,10 @@ export function SimulationClient({ initial }: { readonly initial: SimulationSnap
   // blocked instead, and the field says so.
   const hasEmptyInjectSelect = (currentInjectForm?.fields ?? []).some((field) => field.kind === 'select' && (injectOptions[field.optionsFrom ?? ''] ?? []).length === 0)
   const stream = useSimulationStream(summary.id, summary.version, summary.status)
-  // Fix wave, Important #1: a status verb (auto-run's error halt, a CLI pause/halt/stop-auto-run)
-  // never bumps `version`, so `version` alone would leave this page stale until reload.
+  // Fix wave, Important #1: a status verb (auto-run's error halt, a CLI pause or halt) never
+  // bumps `version`, so `version` alone would leave this page stale until reload. (Stopping an
+  // auto-run was the third such verb until M32 item 1 gave it a version bump of its own -- it
+  // moves neither status nor day, so a bump was the only thing the stream could see it by.)
   useEffect(() => { if (stream.version !== summary.version || stream.status !== summary.status) router.refresh() }, [stream.version, stream.status, summary.version, summary.status, router])
   const runnable = summary.status === 'ready' || summary.status === 'running'
   // Step / Run-to-day are refused while an auto-run owns this run (a manual step during auto-run

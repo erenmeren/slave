@@ -36,9 +36,10 @@ export async function createSimulationSse(options: { readonly simulationId: stri
         }
       }
       // Fix wave, Important #1: keyed on the composite, not `version` alone -- `setStatus`,
-      // `startAutoRun`, `stopAutoRun` and `haltUnparsed` change `status` (or `simTime`) without
-      // ever bumping `version`, so an auto-run's error halt or a CLI pause/halt/stop-auto-run
-      // would otherwise leave an open page stale until reload.
+      // `startAutoRun` and `haltUnparsed` change `status` (or `simTime`) without ever bumping
+      // `version`, so an auto-run's error halt or a CLI pause/halt would otherwise leave an open
+      // page stale until reload. (`stopAutoRun` changes none of the three, which is why M32 item 1
+      // gave it a `version` bump instead of a fourth key here.)
       const emit = (row: { version: number; status: string; simTime: number }): void => {
         const composite = `${row.version}|${row.status}|${row.simTime}`
         if (closed || composite === lastEmitted) return
