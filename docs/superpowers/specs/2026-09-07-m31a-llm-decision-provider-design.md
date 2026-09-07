@@ -67,7 +67,7 @@ export async function decideWithModel(input: ModelDecisionInput): Promise<ModelD
 ## 5. Prompt and parse (`packages/simulation/src/decide/llm-prompt.ts`, pure)
 
 - `buildDecisionPrompt({ role, observation, actionSchemas, day, currency })` → one string: the role's `purpose`, the list of allowed actions with their parameter shapes (from a small table the trade sector exports: `TRADE_ACTION_DOCS`), the observation as JSON, the output contract ("ONLY a JSON array of `{type, params, rationale, refs}`; an empty array means no action; no prose, no fences"), and the synthetic-data caveat. `promptHash = sha256(prompt)` is journaled (computed in control, the pure module has no `node:crypto`).
-- `parseEnvelopes(text)` → `{ envelopes: ActionEnvelope[] } | { parseError: string }`: strips one leading/trailing ```json / ``` fence, `JSON.parse`, requires an array, validates each element with `actionEnvelopeSchema`, caps at `limits.maxDecisionsPerStep` (the engine caps again).
+- `parseEnvelopes(text)` → `{ envelopes: ActionEnvelope[] } | { parseError: string }`: takes the LAST ```json … ``` fenced block, else the substring from the first `[` to the last `]` (R0: the model may put prose before the array), `JSON.parse`, requires an array, validates each element with `actionEnvelopeSchema`, caps at `limits.maxDecisionsPerStep` (the engine caps again).
 - `LlmDecisionProvider` in `packages/simulation/src/decide/llm.ts`: kind `'llm'`; constructed with the already-parsed envelopes per role (`Map<role, ActionEnvelope[]>`) — it never calls anything; `CompositeDecisionProvider({ llm, rules })` answers by `request.role.name ∈ llmRoles ? llm : rules`. `DecisionProvider.kind` union gains `'llm'`; the journal `decision` row's `provider` field shows which one answered.
 
 ## 6. Control (`packages/control/src/simulation/llm.ts`)
@@ -117,4 +117,6 @@ export async function decideWithModel(input: ModelDecisionInput): Promise<ModelD
 
 ## 12. Errata — where execution corrected the plan
 
-(filled in during execution; the Task 1 real-call result is recorded here first)
+- **R0 (2026-09-07, before Task 1, one real call with the operator's consent, ~$0.004):** `claude -p --restricted --strict-mcp-config --tools "" --no-session-persistence --max-budget-usd 0.2 --settings <deny-all hook>` with the tempting prompt on stdin, an empty temp cwd and `env -i PATH HOME LANG TERM`: the init line reports `tools: []` and `mcp_servers: []`; zero `tool_use` events; the hook was never invoked; one turn; `total_cost_usd 0.003824`. The model's answer contained hallucinated `<function_calls>` prose ("I ran ls, the directory is empty") BEFORE the JSON array — harmless (nothing ran) but decisive for parsing: `parseEnvelopes` extracts the JSON array (last fenced block, else first `[`…last `]`) rather than parsing the whole answer. §5 is amended accordingly; the isolation flag trio is proven and is what §4 spawns.
+
+(further rulings filled in during execution)
