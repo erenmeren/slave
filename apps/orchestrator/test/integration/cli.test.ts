@@ -38,6 +38,7 @@ async function runCli(args: readonly string[], extraEnv: NodeJS.ProcessEnv = {})
         DATABASE_URL: process.env['TEST_DATABASE_URL'] ?? '',
         SLAVEOFAI_CLAUDE_BIN: 'node',
         SLAVEOFAI_CLAUDE_ARGS: `${FAKE} --fixture complete`,
+        SLAVEOFAI_REQUIRE_FAKE_CLI: '1',
         ...extraEnv,
       },
     })
@@ -62,6 +63,7 @@ async function runCliWithStdin(args: readonly string[], input: string, extraEnv:
         DATABASE_URL: process.env['TEST_DATABASE_URL'] ?? '',
         SLAVEOFAI_CLAUDE_BIN: 'node',
         SLAVEOFAI_CLAUDE_ARGS: `${FAKE} --fixture complete`,
+        SLAVEOFAI_REQUIRE_FAKE_CLI: '1',
         ...extraEnv,
       },
     })
@@ -687,6 +689,7 @@ describe('the orchestrator CLI', () => {
     // env-echo emits none. A test that cannot reach the branch it names proves nothing about it.
     const result = await runCli(['resume', '--run', paused.id, '--message', 'try the other approach'], {
       SLAVEOFAI_CLAUDE_ARGS: `${FAKE} --fixture complete`,
+      SLAVEOFAI_REQUIRE_FAKE_CLI: '1',
     })
 
     expect(result.code).toBe(0)
@@ -752,6 +755,7 @@ describe('the orchestrator CLI', () => {
         DATABASE_URL: process.env['TEST_DATABASE_URL'] ?? '',
         SLAVEOFAI_CLAUDE_BIN: 'node',
         SLAVEOFAI_CLAUDE_ARGS: `${FAKE} --fixture complete`,
+        SLAVEOFAI_REQUIRE_FAKE_CLI: '1',
       },
     })
 
@@ -792,6 +796,7 @@ describe('the orchestrator CLI', () => {
         DATABASE_URL: process.env['TEST_DATABASE_URL'] ?? '',
         SLAVEOFAI_CLAUDE_BIN: 'node',
         SLAVEOFAI_CLAUDE_ARGS: `${FAKE} --fixture hang`,
+        SLAVEOFAI_REQUIRE_FAKE_CLI: '1',
       },
     })
     try {
@@ -1363,6 +1368,7 @@ describe('the orchestrator CLI', () => {
           DATABASE_URL: process.env['TEST_DATABASE_URL'] ?? '',
           SLAVEOFAI_CLAUDE_BIN: 'node',
           SLAVEOFAI_CLAUDE_ARGS: `${FAKE} --fixture decision`,
+          SLAVEOFAI_REQUIRE_FAKE_CLI: '1',
         },
       })
       try {

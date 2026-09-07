@@ -196,6 +196,10 @@ try {
         ...process.env,
         SLAVEOFAI_CLAUDE_BIN: 'node',
         SLAVEOFAI_CLAUDE_ARGS: `${FAKE_CLAUDE} --fixture m8-flow`,
+        // M32 item 7: this daemon must never reach a vendor account. With the flag set the CLI
+        // refuses to start if the two lines above ever go missing, instead of falling back to
+        // the real `claude` and billing somebody.
+        SLAVEOFAI_REQUIRE_FAKE_CLI: '1',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     })

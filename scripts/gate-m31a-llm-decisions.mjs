@@ -241,7 +241,10 @@ async function switchModelToFreeText() {
 function spawnDaemon(fixtureName) {
   const proc = spawn('node', ['apps/orchestrator/dist/cli.js', 'daemon', '--workspace', SEED_WORKSPACE_ID, '--period', '250'], {
     cwd: repoRoot,
-    env: { ...loopbackChildEnv(), SLAVEOFAI_CLAUDE_BIN: 'node', SLAVEOFAI_CLAUDE_ARGS: `${FAKE_CLAUDE} --fixture ${fixtureName}` },
+    // M32 item 7: this daemon MAKES MODEL CALLS, so the fake wiring is the whole of what keeps
+    // this gate free. The flag makes the daemon refuse to start rather than fall back to the real
+    // `claude` if either variable beside it is ever lost.
+    env: { ...loopbackChildEnv(), SLAVEOFAI_CLAUDE_BIN: 'node', SLAVEOFAI_CLAUDE_ARGS: `${FAKE_CLAUDE} --fixture ${fixtureName}`, SLAVEOFAI_REQUIRE_FAKE_CLI: '1' },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   proc.stdout.on('data', (chunk) => process.stdout.write(`[daemon:${fixtureName}] ${chunk}`))

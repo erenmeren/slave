@@ -36,6 +36,10 @@ jobs:
           --health-cmd "pg_isready -U slaveofai" --health-interval 5s --health-timeout 5s --health-retries 20
     env:
       SLAVEOFAI_CLAUDE_BIN: ${{ github.workspace }}/scripts/gate-fakes/fake-claude.sh
+      # M32 item 7: job-wide, beside the binary it is about. Every gate in this job drives the fake
+      # CLI; with this set the orchestrator refuses to start rather than falling back to the real
+      # `claude` if the line above ever goes missing, so a broken CI env cannot quietly spend.
+      SLAVEOFAI_REQUIRE_FAKE_CLI: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

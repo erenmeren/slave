@@ -1055,7 +1055,12 @@ try {
     cwd: repoRoot,
     // `buildChildEnv` spreads `process.env` into the vendor child, so this reaches `fake-claude.sh`
     // and widens the window in which the run is `working` (see FAKE_STEP_GAP_MS).
-    env: { ...process.env, FAKE_CLAUDE_STEP_GAP_MS: FAKE_STEP_GAP_MS },
+    //
+    // M32 item 7: this gate's preflight already refuses to run unless `SLAVEOFAI_CLAUDE_BIN` is an
+    // executable under `scripts/gate-fakes/`; the flag carries that same promise INTO the daemon,
+    // which would otherwise fall back to the real `claude` if the variable were ever lost between
+    // here and there.
+    env: { ...process.env, FAKE_CLAUDE_STEP_GAP_MS: FAKE_STEP_GAP_MS, SLAVEOFAI_REQUIRE_FAKE_CLI: '1' },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   daemon.stdout.on('data', (chunk) => {

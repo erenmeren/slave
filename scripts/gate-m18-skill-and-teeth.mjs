@@ -631,6 +631,8 @@ try {
         ...process.env,
         SLAVEOFAI_CLAUDE_BIN: 'node',
         SLAVEOFAI_CLAUDE_ARGS: `${FAKE_CLAUDE} --fixture permission-matrix-deny`,
+        // M32 item 7: and the child refuses to start at all if those two ever go missing.
+        SLAVEOFAI_REQUIRE_FAKE_CLI: '1',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     },

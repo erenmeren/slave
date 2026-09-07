@@ -91,6 +91,9 @@ try {
         ...process.env,
         SLAVEOFAI_CLAUDE_BIN: 'node',
         SLAVEOFAI_CLAUDE_ARGS: `${FAKE_CLAUDE} --fixture m8-flow`,
+        // M32 item 7: the CLI refuses to start if the two lines above ever go missing, rather
+        // than falling back to the real `claude`.
+        SLAVEOFAI_REQUIRE_FAKE_CLI: '1',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     },

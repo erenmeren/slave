@@ -407,7 +407,9 @@ try {
     })
 
     daemon = spawn('node', [ORCHESTRATOR_CLI, 'daemon', '--workspace', workspaceId, '--period', '500'], {
-      env: { ...process.env, SLAVEOFAI_CLAUDE_BIN: 'node', SLAVEOFAI_CLAUDE_ARGS: `${FAKE_CLAUDE} --fixture m8a-flow` },
+      // M32 item 7: `SLAVEOFAI_REQUIRE_FAKE_CLI` makes the daemon refuse to start if the fake
+      // wiring beside it ever goes missing, instead of spawning the real `claude`.
+      env: { ...process.env, SLAVEOFAI_CLAUDE_BIN: 'node', SLAVEOFAI_CLAUDE_ARGS: `${FAKE_CLAUDE} --fixture m8a-flow`, SLAVEOFAI_REQUIRE_FAKE_CLI: '1' },
       stdio: ['ignore', 'pipe', 'pipe'],
     })
     daemon.stdout.on('data', (chunk) => process.stdout.write(`[daemon] ${chunk}`))

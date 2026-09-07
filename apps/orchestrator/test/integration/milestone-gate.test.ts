@@ -38,6 +38,7 @@ async function runCli(args: readonly string[], extraEnv: NodeJS.ProcessEnv = {})
         DATABASE_URL: process.env['TEST_DATABASE_URL'] ?? '',
         SLAVEOFAI_CLAUDE_BIN: 'node',
         SLAVEOFAI_CLAUDE_ARGS: `${FAKE} --fixture complete`,
+        SLAVEOFAI_REQUIRE_FAKE_CLI: '1',
         ...extraEnv,
       },
     })
@@ -276,6 +277,7 @@ describe('the M3/M8a milestone gate', () => {
 
     const result = await runCli(['resume', '--run', paused.id], {
       SLAVEOFAI_CLAUDE_ARGS: `${FAKE} --fixture complete`,
+      SLAVEOFAI_REQUIRE_FAKE_CLI: '1',
     })
 
     expect(result.code).toBe(0)

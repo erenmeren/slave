@@ -39,6 +39,9 @@ const FAKE_CLAUDE = join(repoRoot, 'packages/providers/test/fake-claude.mjs')
 // the same fake CLI the daemon used without this script repeating the wiring at every call site.
 process.env.SLAVEOFAI_CLAUDE_BIN = 'node'
 process.env.SLAVEOFAI_CLAUDE_ARGS = `${FAKE_CLAUDE} --fixture hook-deny`
+// M32 item 7: and every one of those children refuses to start if the two lines above are ever
+// lost, instead of falling back to the real `claude`.
+process.env.SLAVEOFAI_REQUIRE_FAKE_CLI = '1'
 process.env.FAKE_CLAUDE_LINE_DELAY_MS = '150'
 
 /** Same as `milestone-gate.test.ts`'s `makeRepo` -- a real repository, because the orchestrator's
