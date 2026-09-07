@@ -13,7 +13,7 @@ vi.mock('../src/hooks/useSimulationStream', () => ({ useSimulationStream: () => 
 
 function snapshot(over: Partial<SimulationSnapshot> = {}): SimulationSnapshot {
   return {
-    summary: { id: 's1', companyId: 'c1', companyName: 'Demo Trading Co.', name: 'Q3 plan', sector: 'trade', mode: 'simulation', decisionProvider: 'rules', policy: 'B', status: 'running', simTime: 4, horizonDays: 30, stepCount: 4, actionCount: 16, version: 2, haltedReason: null, createdAt: '2026-09-06T00:00:00.000Z', synthetic: true, autoRun: null, clonedFromId: null, clonedFromName: null },
+    summary: { id: 's1', companyId: 'c1', companyName: 'Demo Trading Co.', name: 'Q3 plan', sector: 'trade', mode: 'simulation', decisionProvider: 'rules', modelProvider: null, model: null, maxModelCostUsd: null, llmRoles: [], policy: 'B', status: 'running', simTime: 4, horizonDays: 30, stepCount: 4, actionCount: 16, version: 2, haltedReason: null, createdAt: '2026-09-06T00:00:00.000Z', synthetic: true, autoRun: null, clonedFromId: null, clonedFromName: null },
     currency: 'USD',
     company: { day: 4, cashMinor: 4_575_000, inventory: 10, openOrders: 1, pendingDemand: 0, inboundPurchases: 2, dailyShipCapacity: 30 },
     roles: [{ name: 'sales', slaveName: 'Sonia', purpose: 'accepts demand', allowedActions: ['accept_order', 'note'] }],

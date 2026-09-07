@@ -18,7 +18,11 @@ export interface SimulationSummary {
   readonly name: string
   readonly sector: 'trade'
   readonly mode: 'simulation'
-  readonly decisionProvider: 'rules'
+  readonly decisionProvider: 'rules' | 'llm'
+  readonly modelProvider: 'claude_code' | 'cursor' | null
+  readonly model: string | null
+  readonly maxModelCostUsd: number | null
+  readonly llmRoles: readonly string[]
   readonly policy: 'A' | 'B'
   readonly status: 'ready' | 'running' | 'paused' | 'finished' | 'halted'
   readonly simTime: number
@@ -50,7 +54,8 @@ export type Row = Prisma.SimulationRunGetPayload<{ include: { company: { select:
 
 export function summarize(row: Row, definition: TradeSimulationDefinition): SimulationSummary {
   return {
-    id: row.id, companyId: row.companyId, companyName: row.company.name, name: row.name, sector: 'trade', mode: 'simulation', decisionProvider: 'rules',
+    id: row.id, companyId: row.companyId, companyName: row.company.name, name: row.name, sector: 'trade', mode: 'simulation', decisionProvider: row.decisionProvider,
+    modelProvider: row.modelProvider, model: row.model, maxModelCostUsd: row.maxModelCostUsd, llmRoles: definition.llmRoles,
     policy: definition.policy, status: row.status, simTime: row.simTime, horizonDays: definition.horizonDays, stepCount: row.stepCount,
     actionCount: row.actionCount,
     clonedFromId: row.clonedFromId,

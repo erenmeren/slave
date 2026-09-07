@@ -619,6 +619,7 @@ enum SimulationMode {
 
 enum DecisionProviderKind {
   rules
+  llm
 }
 
 enum SimulationStatus {
@@ -645,6 +646,11 @@ model SimulationRun {
   sector           SimulationSector
   mode             SimulationMode       @default(simulation)
   decisionProvider DecisionProviderKind @default(rules)
+  /// M31a: an `llm` run's model choice and cost cap (spec §3). Null on a `rules` run -- these
+  /// three fields only mean something together, and only when `decisionProvider` is `llm`.
+  modelProvider    ProviderKind?
+  model            String?
+  maxModelCostUsd  Float?
   seed             Int
   definition       Json
   state            Json
@@ -708,6 +714,10 @@ model SimulationModelUsage {
   costUsd      Float?
   tokensIn     Int?
   tokensOut    Int?
+  /// M31a: the simulated day and role the decision call was made for -- both null on a row
+  /// written before M31a, or by a caller that has no role to attribute (additive, optional).
+  simTime      Int?
+  role         String?
   createdAt    DateTime     @default(now())
 
   simulation SimulationRun @relation(fields: [simulationId], references: [id], onDelete: Cascade)

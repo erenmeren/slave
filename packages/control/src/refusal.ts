@@ -129,6 +129,13 @@ export type ControlRefusal =
   | { readonly kind: 'live_simulations'; readonly companyId: string; readonly simulations: number }
   | { readonly kind: 'roster_too_small'; readonly companyId: string; readonly needed: number; readonly have: number }
   | { readonly kind: 'invalid_simulation_input'; readonly detail: string }
+  /** `stepSimulation` on a run whose `decisionProvider` is `llm` (M31a §3): its steps happen in
+   *  the auto-run daemon, not through the manual step verb. */
+  | { readonly kind: 'llm_steps_in_daemon'; readonly simulationId: string }
+  /** `createSimulation`'s `modelProvider` named a provider this simulation cannot run on --
+   *  either it isn't a `ProviderKind` at all, or (`cursor`) it reports no cost so a
+   *  `maxModelCostUsd` cap could never be enforced (M31a §3). */
+  | { readonly kind: 'unsupported_model_provider'; readonly provider: string; readonly reason: string }
 
 /**
  * The word a person reads for `live_runs`'s `entity` (M27 final review, Important finding 3).
@@ -275,5 +282,9 @@ export function refusalText(refusal: ControlRefusal): string {
       return `company ${refusal.companyId} has ${plural(refusal.have, 'slave')}; the trade sector needs ${refusal.needed} for its roles`
     case 'invalid_simulation_input':
       return `invalid simulation input: ${refusal.detail}`
+    case 'llm_steps_in_daemon':
+      return `simulation ${refusal.simulationId} makes its decisions with a model; its steps happen in the daemon — start auto-run`
+    case 'unsupported_model_provider':
+      return `model provider ${refusal.provider} is not supported for simulations: ${refusal.reason}`
   }
 }

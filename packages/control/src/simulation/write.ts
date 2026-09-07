@@ -19,6 +19,23 @@ function validateNameAndSeed(name: string, seed: number | undefined): ControlRef
   return null
 }
 
+type ValidatedLlmInput = { readonly modelProvider: 'claude_code'; readonly model: string; readonly maxModelCostUsd: number }
+
+/** `createSimulation`'s `decisionProvider: 'llm'` guard (M31a §3): `modelProvider` must be
+ *  `claude_code` -- `cursor` gets its own reason (it reports no cost, so a cap can never be
+ *  enforced), anything else is simply not a provider this ever configures -- then `model` a
+ *  non-empty text and `maxModelCostUsd` a positive finite number. Returns the trimmed, narrowed
+ *  values a `rules` run never needs to carry. */
+function validateLlmInput(input: { readonly modelProvider?: string; readonly model?: string; readonly maxModelCostUsd?: number }): Result<ValidatedLlmInput, ControlRefusal> {
+  if (input.modelProvider === undefined) return err({ kind: 'invalid_simulation_input', detail: 'modelProvider is required for an llm run' })
+  if (input.modelProvider === 'cursor') return err({ kind: 'unsupported_model_provider', provider: 'cursor', reason: 'it reports no cost, so a cap cannot be enforced' })
+  if (input.modelProvider !== 'claude_code') return err({ kind: 'unsupported_model_provider', provider: input.modelProvider, reason: 'it is not a configured provider' })
+  const model = input.model?.trim()
+  if (model === undefined || model === '') return err({ kind: 'invalid_simulation_input', detail: 'model is required for an llm run' })
+  if (input.maxModelCostUsd === undefined || !Number.isFinite(input.maxModelCostUsd) || input.maxModelCostUsd <= 0) return err({ kind: 'invalid_simulation_input', detail: 'maxModelCostUsd must be a positive number' })
+  return ok({ modelProvider: 'claude_code', model, maxModelCostUsd: input.maxModelCostUsd })
+}
+
 /** The one insert both `createSimulation` and `cloneSimulation` make: the row plus its seq-0
  *  `created` journal row, with the unique-name violation turned into the typed refusal. */
 async function insertRun(
@@ -35,22 +52,49 @@ async function insertRun(
 }
 
 export async function createSimulation(
-  input: { readonly companyId: string; readonly name: string; readonly sector: 'trade'; readonly mode?: 'simulation'; readonly policy: 'A' | 'B'; readonly seed?: number; readonly scenario?: 'demo' },
+  input: {
+    readonly companyId: string
+    readonly name: string
+    readonly sector: 'trade'
+    readonly mode?: 'simulation'
+    readonly policy: 'A' | 'B'
+    readonly seed?: number
+    readonly scenario?: 'demo'
+    /** M31a §3: which decides the run's actions. Defaults to `rules` -- the M29/M30 behaviour --
+     *  so every existing caller is unaffected. */
+    readonly decisionProvider?: 'rules' | 'llm'
+    readonly modelProvider?: 'claude_code' | 'cursor'
+    readonly model?: string
+    readonly maxModelCostUsd?: number
+  },
   principal?: Principal,
 ): Promise<Result<{ readonly id: string }, ControlRefusal>> {
   const mode = input.mode ?? 'simulation'
   if (!SUPPORTED.has(`${input.sector}:${mode}`)) return err({ kind: 'unsupported_simulation', sector: input.sector, mode })
   const invalid = validateNameAndSeed(input.name, input.seed)
   if (invalid !== null) return err(invalid)
+  const decisionProvider = input.decisionProvider ?? 'rules'
+  // Validated (and its `modelProvider`/`model` trimmed and narrowed) only for an `llm` run -- a
+  // `rules` run ignores these fields entirely rather than validating input it will never use.
+  let llm: ValidatedLlmInput | null = null
+  if (decisionProvider === 'llm') {
+    const validated = validateLlmInput(input)
+    if (!validated.ok) return validated
+    llm = validated.value
+  }
   const company = await prisma.company.findUnique({ where: { id: input.companyId }, include: { teams: { orderBy: { name: 'asc' }, include: { slaves: { orderBy: { name: 'asc' } } } } } })
   if (company === null) return err({ kind: 'company_not_found', companyId: input.companyId })
   const roster = company.teams.flatMap((team) => team.slaves.map((slave) => ({ slaveName: slave.name, departmentName: team.name })))
   if (roster.length < 4) return err({ kind: 'roster_too_small', companyId: company.id, needed: 4, have: roster.length })
   const seed = input.seed ?? 1
-  const definition = demoDefinition({ policy: input.policy, seed, roster, currency: 'USD' })
+  const llmRoles = decisionProvider === 'llm' ? ['purchasing'] : []
+  const definition = demoDefinition({ policy: input.policy, seed, roster, currency: 'USD', llmRoles })
   const state = tradeInitialEngineState(definition)
   return insertRun(
-    { companyId: company.id, name: input.name.trim(), sector: 'trade', mode: 'simulation', decisionProvider: 'rules', seed, definition: json(definition), state: json(state), createdByUserId: principal?.userId ?? null },
+    {
+      companyId: company.id, name: input.name.trim(), sector: 'trade', mode: 'simulation', decisionProvider, seed, definition: json(definition), state: json(state), createdByUserId: principal?.userId ?? null,
+      modelProvider: llm?.modelProvider ?? null, model: llm?.model ?? null, maxModelCostUsd: llm?.maxModelCostUsd ?? null,
+    },
     { op: 'created', policy: input.policy, seed, synthetic: true },
   )
 }
@@ -115,6 +159,12 @@ export async function stepSimulation(
   input: { readonly steps?: number; readonly untilDay?: number; readonly idempotencyKey?: string; readonly expectedVersion?: number },
   _principal?: Principal,
 ): Promise<Result<{ readonly day: number; readonly status: string; readonly version: number; readonly entries: number; readonly replayed: boolean }, ControlRefusal>> {
+  // M31a §3: an `llm` run's steps happen in the daemon (auto-run), never through this manual verb
+  // -- checked with a plain unlocked read, before any lock is taken or anything is written. A
+  // `simulationId` no row carries falls through to the usual `simulation_not_found` from `locked`
+  // inside the transaction below, rather than being special-cased here.
+  const providerRow = await prisma.simulationRun.findUnique({ where: { id: simulationId }, select: { decisionProvider: true } })
+  if (providerRow !== null && providerRow.decisionProvider === 'llm') return err({ kind: 'llm_steps_in_daemon', simulationId })
   if (input.steps !== undefined && (!Number.isInteger(input.steps) || input.steps < 1)) return err({ kind: 'invalid_simulation_input', detail: 'steps must be a positive integer' })
   if (input.untilDay !== undefined && (!Number.isInteger(input.untilDay) || input.untilDay < 0)) return err({ kind: 'invalid_simulation_input', detail: 'untilDay must be a non-negative integer' })
   // A full-horizon `runUntil` (up to `MAX_STEPS_PER_REQUEST` days) plus a `createMany` of

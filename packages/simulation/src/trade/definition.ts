@@ -24,6 +24,10 @@ export const tradeSimulationDefinitionSchema = z.object({
   roster: z.array(z.object({ slaveName: z.string(), departmentName: z.string() })),
   initial: z.object({ cashMinor: z.number().int(), inventory: z.number().int().nonnegative(), dailyShipCapacity: z.number().int().positive(), suppliers: z.array(supplierSchema) }),
   scenario: z.array(scenarioEventSchema),
+  /** M31a: which of `roleOrder`'s roles decide with a model instead of the rules provider.
+   *  `.default([])` means an M29/M30 definition stored before this field existed still parses --
+   *  it was a rules-only run, so an empty list is exactly right, not a guess. */
+  llmRoles: z.array(z.string()).default([]),
 })
 export type TradeSimulationDefinition = z.infer<typeof tradeSimulationDefinitionSchema> & EngineDefinition
 export type TradeRosterEntry = { readonly slaveName: string; readonly departmentName: string }
@@ -81,12 +85,12 @@ export function assignRoles(roster: readonly TradeRosterEntry[]): RoleDefinition
   return TRADE_ROLE_NAMES.map((name) => ({ name, purpose: PURPOSE[name], observes: [...OBSERVES[name]], allowedActions: [...ALLOWED[name]], constraints: name === 'purchasing' ? { maxPurchaseQty: 500 } : {}, slaveName: pick(name) }))
 }
 
-export function demoDefinition(input: { readonly policy: TradePolicy; readonly seed: number; readonly roster: readonly TradeRosterEntry[]; readonly currency: string }): TradeSimulationDefinition {
+export function demoDefinition(input: { readonly policy: TradePolicy; readonly seed: number; readonly roster: readonly TradeRosterEntry[]; readonly currency: string; readonly llmRoles?: readonly string[] }): TradeSimulationDefinition {
   const roles = assignRoles(input.roster)
   return tradeSimulationDefinitionSchema.parse({
     sector: 'trade', synthetic: true, currency: input.currency, policy: input.policy, seed: input.seed,
     horizonDays: DEMO_SCENARIO.horizonDays, limits: DEMO_SCENARIO.limits, roles, roleOrder: [...TRADE_ROLE_NAMES],
-    roster: input.roster, initial: DEMO_SCENARIO.initial, scenario: DEMO_SCENARIO.scenario,
+    roster: input.roster, initial: DEMO_SCENARIO.initial, scenario: DEMO_SCENARIO.scenario, llmRoles: input.llmRoles ?? [],
   }) as TradeSimulationDefinition
 }
 

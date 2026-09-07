@@ -41,3 +41,14 @@ describe('refusalText for the simulation kinds (M29)', () => {
     expect(refusalText({ kind: 'invalid_simulation_input', detail: 'qty must be positive' })).toBe('invalid simulation input: qty must be positive')
   })
 })
+
+describe('refusalText for the llm decision provider kinds (M31a)', () => {
+  it('names the run and points at auto-run, and explains why a provider is unsupported', () => {
+    expect(refusalText({ kind: 'llm_steps_in_daemon', simulationId: 's1' })).toBe(
+      'simulation s1 makes its decisions with a model; its steps happen in the daemon — start auto-run',
+    )
+    expect(refusalText({ kind: 'unsupported_model_provider', provider: 'cursor', reason: 'it reports no cost, so a cap cannot be enforced' })).toBe(
+      'model provider cursor is not supported for simulations: it reports no cost, so a cap cannot be enforced',
+    )
+  })
+})
