@@ -67,7 +67,7 @@ department templates that `assign-company` copies.
 
 ## Try a company simulation
 
-A simulation is not a project: it needs no repository and calls no model. `npm run db:seed` ships
+A simulation is not a project: it needs no repository and, by default, calls no model. `npm run db:seed` ships
 "Demo Trading Co." with the four roles the trade sector uses (sales, purchasing, operations,
 finance). From **Simulations** → **+ New simulation** pick it, choose policy A (wait for the normal
 supplier) or B (hedge with the fast one when a delivery is at risk), and run to day 30. Every
@@ -79,6 +79,23 @@ instead of clicking Step or Run to day. **Clone…** then the run page's "compar
 puts two policies side by side — same scenario, same roster, same start, only the policy (or seed)
 different — with no verdict, just the b − a deltas; `docs/superpowers/specs/2026-09-06-m30-simulation-reliability-and-comparison-design.md`
 covers the reliability and comparison work.
+
+### Let a model decide
+
+By default every role is decided by a fixed rules provider — no model, no cost. From the **+ New
+simulation** drawer you can instead choose decision provider `llm`: pick a Claude model, set a cost
+cap in USD, and tick the consent checkbox before **Create simulation** unlocks — this is a real,
+paid, capped run on your own account. Only the purchasing role asks the model, once per simulated
+day; the other three roles stay on the rules provider. An `llm` run's page drops Step and Run to
+day — it steps only through **Auto-run**, because the model calls are made by
+`npm run orchestrator -- daemon`, never by a page click. Each call is spawned `--restricted
+--strict-mcp-config --tools ""` plus a deny-all hook, an empty working directory and a four-variable
+environment (`PATH`, `HOME`, `LANG`, `TERM`) — it can reach no tool, no file, no database and no
+real system. Every call's real cost is shown on the run page against the cap (`$<spent> of
+$<cap>`, never a misleading `$0.00` for an unmeasured call); the run halts on its own once the cap
+is reached, and a tool call from the model — the isolation failing — halts the run immediately as
+an isolation breach. Both halts are permanent: nothing about them resumes automatically.
+`docs/superpowers/specs/2026-09-07-m31a-llm-decision-provider-design.md` has the full design.
 
 ## The web UI
 
@@ -127,6 +144,7 @@ npm run orchestrator -- delete-template --template <id> --yes
 npm run orchestrator -- create-user --name <u>              # password read from stdin
 npm run orchestrator -- list-users
 npm run orchestrator -- create-simulation --company <id> --name <n> --policy A|B [--seed <n>]
+    [--decision-provider llm --model-provider claude_code --model <m> --max-model-cost-usd <n>]
 npm run orchestrator -- step-simulation --simulation <id> [--steps <n> | --until-day <d>]
 npm run orchestrator -- simulation-status --simulation <id>  # summary, company panel, metrics, model usage as JSON
 npm run orchestrator -- pause-simulation --simulation <id>   # refuse every next step (clears auto-run)

@@ -41,7 +41,8 @@
     "gate:m23-onboarding": "tsc --build && node --env-file=.env scripts/gate-m23-onboarding.mjs",
     "gate:m26-vocabulary": "node scripts/gate-m26-vocabulary.mjs",
     "gate:m29-simulation": "tsc --build && node --env-file=.env scripts/gate-m29-simulation.mjs",
-    "gate:m30-simulation-compare": "tsc --build && node --env-file=.env scripts/gate-m30-simulation-compare.mjs"
+    "gate:m30-simulation-compare": "tsc --build && node --env-file=.env scripts/gate-m30-simulation-compare.mjs",
+    "gate:m31a-llm-decisions": "tsc --build && node --env-file=.env scripts/gate-m31a-llm-decisions.mjs"
   },
   "devDependencies": {
     "@testing-library/react": "^16.0.0",
