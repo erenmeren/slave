@@ -118,7 +118,11 @@ export function SimulationClient({ initial }: { readonly initial: SimulationSnap
       // Ruling R10: an unmeasured call is not free to the cap -- `prepareModelDecision` charges it
       // `PER_CALL_CAP_USD` ($1, the ceiling one call is spawned with), so the panel says so rather
       // than leaving an operator to read "$0.0038 of $2.00" and think the run has $1.9962 left.
-      const unmeasuredSuffix = usage.unmeasured > 0 ? ` · ${usage.unmeasured} unmeasured (each counts $1.00 toward the cap)` : ''
+      // M32 item 4: and it says what KIND of figure that is. $1.00 is the most such a call could
+      // have cost, not what it did cost -- nobody knows what it cost -- so the cap arithmetic is
+      // an estimate on the safe side, and a panel that stated it as a fact was overstating what
+      // this system knows about the operator's own bill.
+      const unmeasuredSuffix = usage.unmeasured > 0 ? ` · ${usage.unmeasured} unmeasured (charged as $1.00 each toward the cap, an estimate)` : ''
       return `${spentText} of $${usage.capUsd.toFixed(2)}${unmeasuredSuffix}`
     }
     if (usage.rows.length === 0) return `${summary.decisionProvider} provider — no model calls; cost: no record`
