@@ -1,8 +1,10 @@
 import type { JournalEntry } from '../core/journal.js'
 import type { SoftwareState } from './state.js'
 
-/** Design §3.6. Ten whole numbers: nothing here is an average that drifts, a ratio, or an
- *  estimate — `avgLeadDays` is rounded to an integer for exactly that reason. */
+/** Design §3.6. Nine whole numbers and one figure in tenths of a day: nothing here drifts. A raw
+ *  mean would differ between two runs in a float's last bit; rounding `avgLeadDays` to a tenth
+ *  (ruling R7) keeps it stable and still tells two policies apart, which whole days did not — on
+ *  the demo scenario both policies round to 3, while the tenths read 3 against 2.8. */
 export interface SoftwareMetrics {
   readonly deliveredTasks: number
   readonly onTimeTasks: number
@@ -60,7 +62,7 @@ export function softwareMetrics(entries: readonly JournalEntry[], state: Softwar
     deliveredTasks: delivered.length,
     onTimeTasks: delivered.filter((t) => (t.doneDay ?? 0) <= t.dueDay).length,
     lateTasks: delivered.filter((t) => (t.doneDay ?? 0) > t.dueDay).length,
-    avgLeadDays: delivered.length === 0 ? 0 : Math.round(leadDays / delivered.length),
+    avgLeadDays: delivered.length === 0 ? 0 : Math.round((leadDays / delivered.length) * 10) / 10,
     reworkTasks: state.tasks.filter((t) => t.rework > 0).length,
     defectIncidents,
     queueMaxLength,

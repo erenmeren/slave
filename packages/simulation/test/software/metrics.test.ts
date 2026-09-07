@@ -30,10 +30,10 @@ describe('softwareMetrics', () => {
     expect(metrics.reworkTasks).toBe(state.tasks.filter((t) => t.rework > 0).length)
     expect(metrics.defectIncidents).toBe(state.tasks.filter((t) => t.origin === 'defect').length)
     expect(metrics.idleEngineerDays).toBe(state.idleEngineerDays)
-    // `avgLeadDays` is integer-rounded so the metric stays a whole number across the wire.
-    expect(Number.isInteger(metrics.avgLeadDays)).toBe(true)
+    // `avgLeadDays` is reported to a tenth of a day (ruling R7): enough resolution to tell two
+    // policies apart, not enough for a float's last bit to drift between two runs.
     const done = state.tasks.filter((t) => t.doneDay !== null)
-    expect(metrics.avgLeadDays).toBe(Math.round(done.reduce((s, t) => s + ((t.doneDay ?? 0) - t.requestedDay), 0) / done.length))
+    expect(metrics.avgLeadDays).toBe(Math.round((done.reduce((s, t) => s + ((t.doneDay ?? 0) - t.requestedDay), 0) / done.length) * 10) / 10)
     // Both peaks are running maxima over the journal, so each is at least the largest the day-close
     // records ever saw — the close only ever sees what the lead and the reviewer left behind.
     const closes = result.entries.filter((e) => e.kind === 'event' && e.payload['kind'] === 'close')

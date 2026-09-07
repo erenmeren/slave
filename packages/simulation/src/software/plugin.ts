@@ -18,9 +18,9 @@ const METRIC_LABELS: SoftwarePlugin['metricLabels'] = {
   deliveredTasks: { label: 'delivered', kind: 'count' },
   onTimeTasks: { label: 'on time', kind: 'count' },
   lateTasks: { label: 'late', kind: 'count' },
-  // Integer-rounded (`Math.round`), so the figure stays a whole number across the wire and two
-  // runs never differ by a float's last bit; the label says days, and days is what it means.
-  avgLeadDays: { label: 'average lead time (whole days)', kind: 'days' },
+  // Reported to a tenth of a day (ruling R7): stable across runs, and fine enough to show the
+  // difference between two policies that whole days rounded away.
+  avgLeadDays: { label: 'average lead time', kind: 'days' },
   reworkTasks: { label: 'tasks reworked', kind: 'count' },
   defectIncidents: { label: 'defect incidents', kind: 'count' },
   queueMaxLength: { label: 'longest queue', kind: 'count' },

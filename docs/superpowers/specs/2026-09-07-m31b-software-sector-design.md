@@ -73,7 +73,7 @@ Validation (`model.validate`): `accept_request` needs `status === 'requested'`; 
 Apply: `accept_request` → `queued`, `queuedDay = day`. `assign_task` → `in_progress`, `startedDay = day`, `duration = sizeDays` when `engineer.expertise === task.area`, else `ceil(sizeDays * 1.5)`; engineer `busyUntilDay = day + duration`; schedule `task_finished { taskId }` at `day + duration` (priority `scheduled`). `review_task` → `done`, `reviewed = true`, `doneDay = day`, `reviewedToday += 1`.
 
 ### 3.3 Events (`events.ts`)
-- External (injectable): `request { area, sizeDays, dueInDays }` → a new `requested` task; `incident { area }` → a new task `sizeDays 1, priority 'incident', origin 'incident'`, already `queued` (incidents skip product); `absence { engineerId, days }` → `absentUntilDay = day + days`; an engineer mid-task keeps the task, its `busyUntilDay` and the scheduled `task_finished` move by `days` (the event is re-scheduled; record lists the shift).
+- External (injectable): `request { area, sizeDays, dueInDays }` → a new `requested` task; `incident { area }` → a new task `sizeDays 1, priority 'incident', origin 'incident'`, already `queued` (incidents skip product) — an incident carries no `dueInDays`, so its `dueDay = day + sizeDays`, the earliest a day of work could land (R5); `absence { engineerId, days }` → `absentUntilDay = day + days`, read **inclusively** as the last day away, so the field is non-null on exactly the absent days and "absent today" needs no day argument (R6); an engineer mid-task keeps the task, its `busyUntilDay` and the scheduled `task_finished` move by `days` (the event is re-scheduled; record lists the shift).
 - Scheduled: `task_finished { taskId }` → engineer freed; the task goes to `in_review` when the policy reviews it (§3.4), else straight to `done` with `reviewed = false`, `doneDay = day`, and — if `!reviewed && (mismatch || sizeDays >= 3)` — schedules `defect_surfaced { taskId }` at `day + 3`. `defect_surfaced { taskId }` → the source task's `rework += 1` and a new incident task (`origin 'defect'`, `sourceTaskId`, `area` of the source, `sizeDays 1`, `priority 'incident'`, `queued`).
 - `closeDay`: `reviewedToday = 0`; engineers whose `absentUntilDay <= day` are cleared; `idleEngineerDays += count(engineers free and not absent today)`; the run finishes at `day >= horizonDays` (as trade).
 
@@ -122,4 +122,34 @@ Four-way policies, hiring/salaries/money in the software model, a second llm rol
 5. Gate, README, errata, full verification.
 
 ## 9. Errata — where execution corrected the plan
-(filled in during execution; Task 2 records the demo figures first)
+
+### The demo figures (Task 2)
+Measured, not designed: the Checkout Platform roster, seed 1, horizon 30, both policies under `rulesProvider`, both runs `finished`. Pinned in `packages/simulation/test/software/policies.test.ts`.
+
+| metric | A — fast | B — careful |
+|---|---|---|
+| `deliveredTasks` | 21 | 12 |
+| `onTimeTasks` | 15 | 12 |
+| `lateTasks` | 6 | 0 |
+| `avgLeadDays` | 3 | 2.8 |
+| `reworkTasks` | 9 | 0 |
+| `defectIncidents` | 9 | 0 |
+| `queueMaxLength` | 3 | 2 |
+| `reviewBacklogMax` | 2 | 2 |
+| `idleEngineerDays` | 63 | 89 |
+| `openTasks` | 0 | 0 |
+
+§3.5's four invariants hold. A's twelve scenario requests all land; its extra nine deliveries are the incidents its own skipped reviews produced (`A.deliveredTasks − A.defectIncidents === B.deliveredTasks`), and all six of its late tasks are those incidents — not one scenario request is late under either policy.
+
+### Rulings
+- **R2 — `ActionDoc` moves to `packages/simulation/src/core/action-docs.ts`**, re-exported from `trade/action-docs.ts` so no importer changes. `core/plugin.ts` names it in the `SectorPlugin` contract and every sector fills it in, so it is not trade's to own.
+- **R3 — `queueMaxLength` and `reviewBacklogMax` are running maxima over the journal, not day-close samples.** Sampled at the close they read A = 1 / B = 0 and §3.5's `A.reviewBacklogMax ≤ B.reviewBacklogMax` is false: B reviews a task the same day it finishes, so its close-of-day backlog is always zero and the metric distinguishes nothing. Read as peaks (every arrival and departure is its own journal entry, so the walk is exact) both are 2 and the invariant holds. The scenario was not touched.
+- **R4 — `reviewEverything` lives in the state**, beside `reviewCapacityPerDay` and `matchWaitDays`. `SectorModel.applyEvent` is handed `(state, event, day)` and never the definition, and §3.3's `task_finished` has to know whether the policy reviews this task.
+- **R5 — an incident's `dueDay = day + sizeDays`** (§3.3, amended above). §3.3 gives an incident no `dueInDays` but a task needs a due day; the earliest date a single day of work could land is the only figure not invented outright. It is what drives A's `lateTasks = 6`.
+- **R6 — `absentUntilDay` is inclusive**, the last day away rather than the first day back (§3.3, amended above). Forced, not chosen: `SectorModel.validate` receives `(state, role, action)` with no `day`, so "not absent today" must be answerable from the engineer alone. Both of §3.3's rules stay verbatim and together make the field non-null on exactly the absent days.
+- **R7 — `avgLeadDays` is reported in tenths of a day** (`Math.round(mean * 10) / 10`), labelled `average lead time`. Whole days rounded both policies to 3 and erased the one place B is faster; tenths read 3 against 2.8 and still never drift between two runs.
+- **R8 — a role's `constraints` are hints to the rules provider, not engine-enforced limits.** `lead.maxAssignmentsPerStep = 4` bounds what `rules.ts` proposes; `validate` cannot count a step's actions from the state. Nothing is lost: the demo has exactly four engineers, so a fifth assignment in a day is rejected `engineer_busy` regardless.
+
+### Two shape facts
+- **`reviewEverything` is a state field** (R4), so `softwareStateSchema` carries all three policy knobs and the model needs no access to the definition.
+- **`packages/simulation/src/index.ts` aliases the software sector's colliding names.** Trade already exports `demoDefinition`, `assignRoles`, `cloneDefinition`, `DEMO_SCENARIO` and `noteParams`, and a barrel cannot export one name twice; inside `src/software/*` the names stay exactly as this design writes them, and the barrel re-exports them as `softwareDemoDefinition`, `assignSoftwareRoles`, `cloneSoftwareDefinition`, `SOFTWARE_DEMO_SCENARIO`, `SOFTWARE_POLICY_SETTINGS`, `softwareRosterFits` and `softwareNoteParams`. Control and web reach a sector only through `sectors` / `sectorFor` (§1 principle 1), so nothing downstream depends on the unprefixed names.

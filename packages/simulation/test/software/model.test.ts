@@ -116,6 +116,21 @@ describe('software model — events', () => {
     expect(real.state.engineers[0]).toMatchObject({ busyUntilDay: null, taskId: null })
   })
 
+  it('task_finished is ignored when the engineer no longer holds that task', () => {
+    const first = queued(base(), 1, 'backend', 3)
+    const assigned = softwareModel.apply(first.state, LEAD, env('assign_task', { taskId: first.taskId, engineerId: 'Alex' }), 1).state
+    // Alex is freed and picks up a second task; the first task's own `task_finished` is still in
+    // the queue. Its day has come and Alex is not busy past it, so only the task id tells the two
+    // apart — without that check the model would finish work that is still in progress.
+    const freed = softwareModel.applyEvent(assigned, { type: 'task_finished', taskId: first.taskId }, 4).state
+    const second = queued({ ...freed, tasks: freed.tasks.map((t) => (t.id === first.taskId ? { ...t, status: 'in_progress' as const, doneDay: null, finishedDay: null } : t)) }, 4, 'frontend', 1)
+    const busyElsewhere = softwareModel.apply(second.state, LEAD, env('assign_task', { taskId: second.taskId, engineerId: 'Alex' }), 4).state
+    const stale = softwareModel.applyEvent(busyElsewhere, { type: 'task_finished', taskId: first.taskId }, 5)
+    expect(stale.record).toMatchObject({ ignored: 'not_held', taskId: 't-1' })
+    expect(stale.state.tasks[0]?.status).toBe('in_progress')
+    expect(stale.state.engineers[0]).toMatchObject({ taskId: 't-2', busyUntilDay: 6 })
+  })
+
   it('absence of a free engineer shifts nothing', () => {
     const away = softwareModel.applyEvent(base(), { type: 'absence', engineerId: 'Emma', days: 1 }, 3)
     expect(away.state.engineers[1]).toMatchObject({ absentUntilDay: 4, busyUntilDay: null })

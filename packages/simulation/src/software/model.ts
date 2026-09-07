@@ -128,13 +128,13 @@ function applyEvent(state: SoftwareState, event: SoftwareEvent, day: number): Ap
       // Mid-task, the work does not change hands: the engineer keeps it, everything slips by the
       // absence, and the already-queued `task_finished` is re-scheduled at the new day (the stale
       // one fires first and is ignored below, the way trade ignores an early delivery).
-      const shifting = engineer.busyUntilDay !== null && engineer.taskId !== null
       const busyUntilDay = engineer.busyUntilDay === null ? null : engineer.busyUntilDay + event.days
+      const shiftedTaskId = busyUntilDay !== null ? engineer.taskId : null
       const next = patchEngineer(state, engineer.id, { absentUntilDay, busyUntilDay })
       return {
         state: next,
-        schedule: shifting && busyUntilDay !== null && engineer.taskId !== null ? [{ time: busyUntilDay, priority: 'scheduled', event: { type: 'task_finished', taskId: engineer.taskId } }] : [],
-        record: { engineerId: engineer.id, absentUntilDay, shiftedTaskId: shifting ? engineer.taskId : null, shiftedDays: shifting ? event.days : 0, busyUntilDay },
+        schedule: shiftedTaskId !== null && busyUntilDay !== null ? [{ time: busyUntilDay, priority: 'scheduled', event: { type: 'task_finished', taskId: shiftedTaskId } }] : [],
+        record: { engineerId: engineer.id, absentUntilDay, shiftedTaskId, shiftedDays: shiftedTaskId === null ? 0 : event.days, busyUntilDay },
       }
     }
     case 'task_finished': {
@@ -142,6 +142,13 @@ function applyEvent(state: SoftwareState, event: SoftwareEvent, day: number): Ap
       if (task === undefined) return { state, schedule: [], record: { ignored: 'unknown_task', taskId: event.taskId } }
       if (task.status !== 'in_progress') return { state, schedule: [], record: { ignored: 'not_in_progress', taskId: task.id, status: task.status } }
       const engineer = state.engineers.find((e) => e.id === task.assignedTo)
+      // A `task_finished` outlives the assignment that scheduled it: an absence re-schedules it at
+      // a later day, and the engineer may have moved on to other work by the time the stale copy
+      // fires. Both guards ask the same question -- is this event still the one that finishes this
+      // task? -- and identity is the sharper half, so it answers first.
+      if (engineer !== undefined && engineer.taskId !== task.id) {
+        return { state, schedule: [], record: { ignored: 'not_held', taskId: task.id, engineerId: engineer.id, holding: engineer.taskId } }
+      }
       if (engineer !== undefined && engineer.busyUntilDay !== null && engineer.busyUntilDay > day) {
         return { state, schedule: [], record: { ignored: 'shifted', taskId: task.id, busyUntilDay: engineer.busyUntilDay } }
       }
@@ -151,6 +158,8 @@ function applyEvent(state: SoftwareState, event: SoftwareEvent, day: number): Ap
       if (freed.reviewEverything || task.priority === 'incident') {
         return { state: patchTask(freed, task.id, { status: 'in_review', finishedDay: day }), schedule: [], record: { taskId: task.id, engineerId: engineer?.id ?? null, outcome: 'in_review', mismatch } }
       }
+      // `!task.reviewed` restates §3.3's rule rather than guarding anything live: the branch above
+      // already took every task the policy reviews, so nothing reviewed reaches this line.
       const defect = !task.reviewed && (mismatch || task.sizeDays >= DEFECT_SIZE_THRESHOLD)
       const done = patchTask(freed, task.id, { status: 'done', finishedDay: day, doneDay: day, reviewed: false })
       return {
@@ -190,7 +199,7 @@ function observe(state: SoftwareState, role: RoleDefinition): Readonly<Record<st
     requestedTasks: () => state.tasks.filter((t) => t.status === 'requested').sort((a, b) => a.requestedDay - b.requestedDay || compareTaskIds(a.id, b.id)),
     queueLength: () => state.tasks.filter((t) => t.status === 'queued').length,
     queue: () => state.tasks.filter((t) => t.status === 'queued').sort(compareQueue),
-    engineers: () => state.engineers,
+    engineers: () => [...state.engineers],   // a copy: an observation is a reading, never a handle on the state
     inReviewTasks: () => state.tasks.filter((t) => t.status === 'in_review').sort((a, b) => (a.finishedDay ?? 0) - (b.finishedDay ?? 0) || compareTaskIds(a.id, b.id)),
     matchWaitDays: () => state.matchWaitDays,
     reviewCapacityPerDay: () => state.reviewCapacityPerDay,

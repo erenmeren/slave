@@ -18,7 +18,7 @@ function run(policy: 'A' | 'B') {
  *  here so any later change to the sector has to say so out loud. Recorded in design §9. */
 const PINNED: Readonly<Record<'A' | 'B', SoftwareMetrics>> = {
   A: { deliveredTasks: 21, onTimeTasks: 15, lateTasks: 6, avgLeadDays: 3, reworkTasks: 9, defectIncidents: 9, queueMaxLength: 3, reviewBacklogMax: 2, idleEngineerDays: 63, openTasks: 0 },
-  B: { deliveredTasks: 12, onTimeTasks: 12, lateTasks: 0, avgLeadDays: 3, reworkTasks: 0, defectIncidents: 0, queueMaxLength: 2, reviewBacklogMax: 2, idleEngineerDays: 89, openTasks: 0 },
+  B: { deliveredTasks: 12, onTimeTasks: 12, lateTasks: 0, avgLeadDays: 2.8, reworkTasks: 0, defectIncidents: 0, queueMaxLength: 2, reviewBacklogMax: 2, idleEngineerDays: 89, openTasks: 0 },
 }
 
 describe('the software demo under the two policies', () => {
