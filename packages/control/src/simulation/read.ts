@@ -2,7 +2,19 @@ import { Prisma, prisma, type PrismaClient } from '@slave-of-ai/db/client'
 import { err, ok, type Result } from '@slave-of-ai/domain'
 import { replay, tradeInitialEngineState, tradeMetrics, tradeModel, type JournalEntry, type TradeEvent, type TradeMetrics } from '@slave-of-ai/simulation'
 import type { ControlRefusal } from '../refusal.js'
-import { comparable, parseRow, type LoadedSimulation, type SimulationSummary } from './shared.js'
+import { comparable, parseRow, stableStringify, type LoadedSimulation, type SimulationSummary } from './shared.js'
+
+const COMPARED_KEYS = ['roster', 'roles', 'initial', 'scenario', 'currency', 'horizonDays', 'limits'] as const
+const METRIC_KEYS = ['deliveredQty', 'onTimeQty', 'lateDays', 'purchaseCostMinor', 'closingInventory', 'closingCashMinor', 'minCashMinor', 'collectedMinor', 'unpaidCommitmentsMinor'] as const
+
+export interface SimulationComparison {
+  readonly a: { readonly summary: SimulationSummary; readonly metrics: TradeMetrics; readonly injected: number }
+  readonly b: { readonly summary: SimulationSummary; readonly metrics: TradeMetrics; readonly injected: number }
+  readonly deltas: Readonly<Record<(typeof METRIC_KEYS)[number], number>>
+  readonly definitionsMatch: boolean
+  readonly differences: readonly string[]
+  readonly currency: string
+}
 
 /** Shared by every read-only verb, plain `prisma` for a single unlocked read (`loadSimulation`
  *  itself) or `tx` for one that must see the row and the journal from the SAME snapshot
@@ -71,6 +83,34 @@ export async function simulationStatus(
       company: { day: loaded.value.state.day, cashMinor: sector.cashMinor, inventory: sector.inventory, openOrders: sector.orders.filter((o) => o.status !== 'shipped').length },
       metrics: tradeMetrics(entries, sector),
       modelUsage: { rows: usage._count._all, costUsd: usage._count._all === 0 || usage._sum.costUsd === null ? null : usage._sum.costUsd, unmeasured },
+    })
+  }, { isolationLevel: 'RepeatableRead' })
+}
+
+/** Two runs side by side (spec §4): metrics, b − a deltas, and whether they lived in the same
+ *  world (frozen definition minus policy and seed). Never a verdict. */
+export async function compareSimulations(aId: string, bId: string): Promise<Result<SimulationComparison, ControlRefusal>> {
+  if (aId === bId) return err({ kind: 'invalid_simulation_input', detail: 'compare two different runs' })
+  return prisma.$transaction(async (tx) => {
+    const sideOf = async (id: string) => {
+      const loaded = await readSimulation(tx, id)
+      if (!loaded.ok) return loaded
+      const rows = await tx.simulationJournalEntry.findMany({ where: { simulationId: id }, orderBy: { seq: 'asc' } })
+      const entries: JournalEntry[] = rows.map((r) => ({ seq: r.seq, simTime: r.simTime, kind: r.kind, actorRole: r.actorRole, payload: r.payload as Record<string, unknown> }))
+      const injected = rows.filter((r) => r.kind === 'external_event' && (r.payload as { op?: string }).op === 'injected').length
+      return ok({ loaded: loaded.value, metrics: tradeMetrics(entries, loaded.value.state.sector), injected })
+    }
+    const a = await sideOf(aId)
+    if (!a.ok) return a
+    const b = await sideOf(bId)
+    if (!b.ok) return b
+    if (a.value.loaded.summary.sector !== b.value.loaded.summary.sector) return err({ kind: 'invalid_simulation_input', detail: 'runs of different sectors cannot be compared' })
+    const differences = COMPARED_KEYS.filter((key) => stableStringify(a.value.loaded.definition[key]) !== stableStringify(b.value.loaded.definition[key]))
+    const deltas = Object.fromEntries(METRIC_KEYS.map((key) => [key, b.value.metrics[key] - a.value.metrics[key]])) as SimulationComparison['deltas']
+    return ok({
+      a: { summary: a.value.loaded.summary, metrics: a.value.metrics, injected: a.value.injected },
+      b: { summary: b.value.loaded.summary, metrics: b.value.metrics, injected: b.value.injected },
+      deltas, definitionsMatch: differences.length === 0, differences, currency: a.value.loaded.definition.currency,
     })
   }, { isolationLevel: 'RepeatableRead' })
 }

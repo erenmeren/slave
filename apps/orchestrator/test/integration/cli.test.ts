@@ -1260,5 +1260,21 @@ describe('the orchestrator CLI', () => {
       const row = await prisma.simulationRun.findUniqueOrThrow({ where: { id } })
       expect(row.simTime).toBe(2)
     }, 30_000)
+    it('compare-simulations prints both runs\' metrics and the b − a deltas as JSON (M30)', async () => {
+      const companyId = await tradingCompany()
+      const createdA = await runCli(['create-simulation', '--company', companyId, '--name', 'cmp a', '--policy', 'A'])
+      const a = /simulation (\S+) created/.exec(createdA.stdout)?.[1] ?? ''
+      expect(a).not.toBe('')
+      const createdB = await runCli(['create-simulation', '--company', companyId, '--name', 'cmp b', '--policy', 'B'])
+      const b = /simulation (\S+) created/.exec(createdB.stdout)?.[1] ?? ''
+      expect(b).not.toBe('')
+      expect((await runCli(['step-simulation', '--simulation', a, '--until-day', '30'])).code).toBe(0)
+      expect((await runCli(['step-simulation', '--simulation', b, '--until-day', '30'])).code).toBe(0)
+      const result = await runCli(['compare-simulations', '--a', a, '--b', b])
+      expect(result.code).toBe(0)
+      const parsed = JSON.parse(result.stdout) as { definitionsMatch: boolean; deltas: { purchaseCostMinor: number } }
+      expect(parsed.definitionsMatch).toBe(true)
+      expect(parsed.deltas.purchaseCostMinor).toBe(425_000)
+    }, 30_000)
   })
 })

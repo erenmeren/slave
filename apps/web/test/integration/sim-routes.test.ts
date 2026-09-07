@@ -10,6 +10,7 @@ import { POST as haltPOST } from '../../src/app/api/sim/[simulationId]/halt/rout
 import { POST as clonePOST } from '../../src/app/api/sim/[simulationId]/clone/route.js'
 import { POST as autoRunPOST } from '../../src/app/api/sim/[simulationId]/auto-run/route.js'
 import { POST as autoRunStopPOST } from '../../src/app/api/sim/[simulationId]/auto-run/stop/route.js'
+import { GET as compareGET } from '../../src/app/api/sim/compare/route.js'
 
 async function seedTradingCompany(): Promise<string> {
   const template = await prisma.slaveTemplate.create({ data: { name: 'Trade Clerk', role: 'clerk' } })
@@ -101,5 +102,19 @@ describe('the simulation routes', () => {
     expect((await autoRunStopPOST(new Request('http://x', { method: 'POST' }), params(id))).status).toBe(200)
     const stopped = await prisma.simulationRun.findUnique({ where: { id } })
     expect(stopped?.autoRunEveryMs).toBeNull()
+  })
+  it('GET compare → 200 with definitionsMatch; missing a param → 400; unknown id → 404; a === b → 409', async () => {
+    const { id: a } = (await (await createPOST(json({ companyId, name: 'a', policy: 'A' }))).json()) as { id: string }
+    const cloned = await clonePOST(json({ name: 'b', policy: 'B' }), params(a))
+    const { id: b } = (await cloned.json()) as { id: string }
+    const got = await compareGET(new Request(`http://x/api/sim/compare?a=${a}&b=${b}`))
+    expect(got.status).toBe(200)
+    const body = (await got.json()) as { definitionsMatch: boolean; a: { summary: { id: string } } }
+    expect(body.definitionsMatch).toBe(true)
+    expect(body.a.summary.id).toBe(a)
+    expect((await compareGET(new Request(`http://x/api/sim/compare?a=${a}`))).status).toBe(400)
+    expect((await compareGET(new Request('http://x/api/sim/compare'))).status).toBe(400)
+    expect((await compareGET(new Request(`http://x/api/sim/compare?a=${a}&b=00000000-0000-4000-8000-00000000dead`))).status).toBe(404)
+    expect((await compareGET(new Request(`http://x/api/sim/compare?a=${a}&b=${a}`))).status).toBe(409)
   })
 })

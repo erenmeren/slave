@@ -87,6 +87,19 @@ export function SimulationClient({ initial }: { readonly initial: SimulationSnap
           <GhostButton data-testid="sim-inject-open" disabled={summary.status === 'finished' || summary.status === 'halted'} onClick={() => setInjectOpen((v) => !v)}>Add external event</GhostButton>
           <GhostButton data-testid="sim-clone-open" onClick={() => setCloneOpen(true)}>Clone…</GhostButton>
           <AutoRunControls summary={summary} pending={pending} onStart={(everyMs, untilDay) => void call('auto-run', { everyMs, untilDay })} onStop={() => void call('auto-run/stop')} />
+          {initial.compareCandidates.length > 0 && (
+            <SelectField
+              label="compare with"
+              selectProps={{
+                'data-testid': 'sim-compare-with',
+                defaultValue: '',
+                onChange: (event) => { if (event.target.value !== '') router.push(`/sim/compare?a=${summary.id}&b=${event.target.value}`) },
+              } as React.SelectHTMLAttributes<HTMLSelectElement>}
+            >
+              <option value="">compare with…</option>
+              {initial.compareCandidates.map((c) => <option key={c.id} value={c.id}>{c.name} (policy {c.policy})</option>)}
+            </SelectField>
+          )}
           {errorText !== null && <span role="alert" data-testid="sim-error" className="text-xs text-tone-blocked">{errorText}</span>}
           {summary.status === 'halted' && <span className="text-xs text-text-3">halted{summary.haltedReason !== null ? ` (${summary.haltedReason})` : ''} — stepping is in-request, so nothing was in flight to stop</span>}
         </div>

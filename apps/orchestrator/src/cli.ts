@@ -7,6 +7,7 @@ import {
   archiveWorkspace,
   assignCompany,
   claimResume,
+  compareSimulations,
   createCompany,
   createProjectTeam,
   createSimulation,
@@ -139,6 +140,9 @@ const USAGE = `usage: orchestrator <command> [options]
                                        advance the simulation clock (one day per step)
   simulation-status --simulation <id>  the run's summary, company panel, metrics and model
                                        usage as JSON — simulated money and real cost apart
+  compare-simulations --a <id> --b <id>
+                                       both runs' metrics, b − a deltas and whether they share a
+                                       world, as JSON — no verdict
 
   users
   create-user --name <u>                create a local account. The password is never a
@@ -901,6 +905,15 @@ export async function main(argv: readonly string[]): Promise<number> {
       const snapshot = await simulationStatus(simulationId)
       if (!snapshot.ok) throw new Error(refusalText(snapshot.error))
       process.stdout.write(`${JSON.stringify(snapshot.value, null, 2)}\n`)
+      return 0
+    }
+
+    case 'compare-simulations': {
+      const a = requireFlag(flags, 'a')
+      const b = requireFlag(flags, 'b')
+      const result = await compareSimulations(a, b)
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(`${JSON.stringify(result.value, null, 2)}\n`)
       return 0
     }
 

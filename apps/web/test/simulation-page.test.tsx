@@ -32,6 +32,7 @@ function snapshot(over: Partial<SimulationSnapshot> = {}): SimulationSnapshot {
     ],
     modelUsage: { rows: 0, costUsd: null, unmeasured: 0 },
     scenario: [{ day: 1, event: { type: 'demand', qty: 150 } }],
+    compareCandidates: [{ id: 's2', name: 'Q3 plan (B)', policy: 'B', status: 'finished', simTime: 30 }],
     ...over,
   }
 }
@@ -134,6 +135,16 @@ describe('SimulationClient', () => {
     expect(screen.getByTestId('sim-clone-error').textContent).toContain('already exists')
     expect(screen.getByTestId('sim-clone-drawer')).toBeTruthy()
     expect(routerPush).not.toHaveBeenCalled()
+  })
+  it('choosing a run in "compare with" navigates to the compare page', () => {
+    render(<SimulationClient initial={snapshot()} />)
+    fireEvent.change(screen.getByTestId('sim-compare-with'), { target: { value: 's2' } })
+    expect(routerPush).toHaveBeenCalledWith('/sim/compare?a=s1&b=s2')
+    expect(routerRefresh).not.toHaveBeenCalled()
+  })
+  it('no candidates hides "compare with"', () => {
+    render(<SimulationClient initial={snapshot({ compareCandidates: [] })} />)
+    expect(screen.queryByTestId('sim-compare-with')).toBeNull()
   })
   it('injecting a demand posts the event for a future day', async () => {
     render(<SimulationClient initial={snapshot()} />)

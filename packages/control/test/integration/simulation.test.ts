@@ -3,6 +3,7 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { deleteCompany, renameCompanyTeam } from '../../src/org.js'
 import {
   cloneSimulation,
+  compareSimulations,
   createSimulation,
   deleteSimulation,
   haltSimulation,
@@ -254,5 +255,38 @@ describe('delete', () => {
     expect(await prisma.simulationJournalEntry.count()).toBe(0)
     expect((await deleteCompany(companyId)).ok).toBe(true)
     expect(await listSimulations()).toEqual([])
+  })
+})
+
+describe('compareSimulations', () => {
+  it('reports both metric sets, b − a deltas, definitionsMatch for a clone pair, and injected counts', async () => {
+    const a = await create('a', 'A')
+    const cloned = await cloneSimulation(a, { name: 'b', policy: 'B' })
+    const b = cloned.ok ? cloned.value.id : ''
+    await stepSimulation(a, { untilDay: 30 })
+    await stepSimulation(b, { untilDay: 30 })
+    const result = await compareSimulations(a, b)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.definitionsMatch).toBe(true)
+    expect(result.value.differences).toEqual([])
+    expect(result.value.deltas.purchaseCostMinor).toBe(725_000 - 300_000)
+    expect(result.value.deltas.lateDays).toBe(0 - 4)
+    expect(result.value.deltas.closingInventory).toBe(50)
+    expect(result.value.a.injected).toBe(0)
+    expect(result.value.currency).toBe('USD')
+  })
+  it('flags a differing world and counts injected events; refuses the same id', async () => {
+    const a = await create('a', 'A')
+    const b = await create('b', 'B')
+    await injectExternalEvent(b, { day: 2, event: { type: 'supplier_delay', supplierId: 'fast', extraDays: 1 } })
+    await prisma.simulationRun.update({ where: { id: b }, data: { definition: { ...((await prisma.simulationRun.findUniqueOrThrow({ where: { id: b } })).definition as object), initial: { cashMinor: 1, inventory: 100, dailyShipCapacity: 30, suppliers: [{ id: 'normal', name: 'Normal Supply', unitPriceMinor: 6_000, leadDays: 7, paymentTermDays: 30 }, { id: 'fast', name: 'Fast Supply', unitPriceMinor: 8_500, leadDays: 2, paymentTermDays: 0 }] } } as object } })
+    const result = await compareSimulations(a, b)
+    expect(result.ok && result.value.definitionsMatch).toBe(false)
+    expect(result.ok && result.value.differences).toEqual(['initial'])
+    expect(result.ok && result.value.b.injected).toBe(1)
+    const same = await compareSimulations(a, a)
+    expect(same.ok === false && same.error.kind).toBe('invalid_simulation_input')
+    expect((await compareSimulations(a, '00000000-0000-4000-8000-00000000dead')).ok).toBe(false)
   })
 })
