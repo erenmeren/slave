@@ -94,6 +94,18 @@ export async function replaySimulation(simulationId: string): Promise<Result<{ r
   }, { isolationLevel: 'RepeatableRead' })
 }
 
+/** Real model spend attributed to one run: how many calls were made, what they are KNOWN to have
+ *  cost, and how many reported nothing. One shape, everywhere (final review, Minor #5): the CLI's
+ *  `simulation-status` adds only `capUsd` to it and `apps/web`'s snapshot uses the same three field
+ *  NAMES, so nobody has to remember whether this reader calls the total `costUsd` or `spentUsd`.
+ *  `spentUsd` is null -- never 0 -- when nothing measured was recorded: no calls at all, or calls
+ *  that every one of them reported no cost for. `unmeasured` is what tells those two apart. */
+export interface ModelUsageTotals {
+  readonly calls: number
+  readonly spentUsd: number | null
+  readonly unmeasured: number
+}
+
 /** Read model for an operator's dashboard (Task 8): the summary, the sector's headline numbers,
  *  the derived trade metrics computed from the journal, and how much real model spend (M31 writes
  *  it, M29 never does) is attributed so far. Reads the row and the journal inside one
@@ -102,19 +114,20 @@ export async function replaySimulation(simulationId: string): Promise<Result<{ r
  *  journal newer than the state the metrics are computed against. */
 export async function simulationStatus(
   simulationId: string,
-): Promise<Result<{ readonly summary: SimulationSummary; readonly company: { readonly day: number; readonly cashMinor: number; readonly inventory: number; readonly openOrders: number }; readonly metrics: TradeMetrics; readonly modelUsage: { readonly rows: number; readonly costUsd: number | null; readonly unmeasured: number } }, ControlRefusal>> {
+): Promise<Result<{ readonly summary: SimulationSummary; readonly company: { readonly day: number; readonly cashMinor: number; readonly inventory: number; readonly openOrders: number }; readonly metrics: TradeMetrics; readonly modelUsage: ModelUsageTotals }, ControlRefusal>> {
   return prisma.$transaction(async (tx) => {
     const side = await loadSideMetrics(tx, simulationId)
     if (!side.ok) return side
     const { loaded, metrics } = side.value
-    const usage = await tx.simulationModelUsage.aggregate({ where: { simulationId }, _count: { _all: true }, _sum: { costUsd: true } })
-    const unmeasured = await tx.simulationModelUsage.count({ where: { simulationId, costUsd: null } })
+    // One aggregate, not an aggregate plus a count: `_count.costUsd` counts the non-null costs, so
+    // the unmeasured rows are the difference against `_count._all`.
+    const usage = await tx.simulationModelUsage.aggregate({ where: { simulationId }, _count: { _all: true, costUsd: true }, _sum: { costUsd: true } })
     const sector = loaded.state.sector
     return ok({
       summary: loaded.summary,
       company: { day: loaded.state.day, cashMinor: sector.cashMinor, inventory: sector.inventory, openOrders: sector.orders.filter((o) => o.status !== 'shipped').length },
       metrics,
-      modelUsage: { rows: usage._count._all, costUsd: usage._count._all === 0 || usage._sum.costUsd === null ? null : usage._sum.costUsd, unmeasured },
+      modelUsage: { calls: usage._count._all, spentUsd: usage._count.costUsd === 0 ? null : usage._sum.costUsd, unmeasured: usage._count._all - usage._count.costUsd },
     })
   }, { isolationLevel: 'RepeatableRead' })
 }

@@ -999,9 +999,11 @@ export async function main(argv: readonly string[]): Promise<number> {
       const simulationId = requireFlag(flags, 'simulation')
       const snapshot = await simulationStatus(simulationId)
       if (!snapshot.ok) throw new Error(refusalText(snapshot.error))
-      // M31a §5: `spentUsd`/`capUsd` alongside the M31 `costUsd` total -- real spend against the
-      // cap without the caller cross-referencing `summary.maxModelCostUsd` by hand.
-      const printed = { ...snapshot.value, modelUsage: { ...snapshot.value.modelUsage, spentUsd: snapshot.value.modelUsage.costUsd, capUsd: snapshot.value.summary.maxModelCostUsd } }
+      // M31a §5: the run's own cap alongside `modelUsage`'s `{ calls, spentUsd, unmeasured }` --
+      // real spend against the cap without the caller cross-referencing `summary.maxModelCostUsd`
+      // by hand. `capUsd` is the only field added; the three names are the reader's own (final
+      // review, Minor #5 -- this used to print `costUsd` AND a `spentUsd` copy of it).
+      const printed = { ...snapshot.value, modelUsage: { ...snapshot.value.modelUsage, capUsd: snapshot.value.summary.maxModelCostUsd } }
       process.stdout.write(`${JSON.stringify(printed, null, 2)}\n`)
       return 0
     }

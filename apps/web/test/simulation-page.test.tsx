@@ -217,10 +217,12 @@ describe('SimulationClient', () => {
       expect(screen.getByTestId('sim-strip').textContent).toContain('llm provider · claude_code · claude-sonnet-4-5')
     })
 
-    it('the model panel reads $spent of $cap with unmeasured count', () => {
+    it('the model panel reads $spent of $cap with the unmeasured count and what it charges (ruling R10)', () => {
       render(<SimulationClient initial={llmSnapshot()} />)
       expect(screen.getByTestId('sim-model-usage').textContent).toContain('$0.0038 of $2.00')
-      expect(screen.getByTestId('sim-model-usage').textContent).toContain('1 unmeasured')
+      // An unmeasured call is not free to the cap: the panel says exactly what each one charges,
+      // so an operator reading "$0.0038 of $2.00" is not misled about how much room is left.
+      expect(screen.getByTestId('sim-model-usage').textContent).toContain('1 unmeasured (each counts $1.00 toward the cap)')
     })
 
     it('when every call is unmeasured the panel names it "unmeasured", never $0.00 (fix round 1, Minor #1)', () => {
@@ -228,7 +230,7 @@ describe('SimulationClient', () => {
       const text = screen.getByTestId('sim-model-usage').textContent ?? ''
       expect(text).not.toContain('$0.00')
       expect(text).toContain('unmeasured of $2.00')
-      expect(text).toContain('2 unmeasured')
+      expect(text).toContain('2 unmeasured (each counts $1.00 toward the cap)')
     })
 
     it('Step and Run-to-day are absent; the auto-run-only sentence shows instead', () => {

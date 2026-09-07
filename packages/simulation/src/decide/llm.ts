@@ -34,9 +34,9 @@ function scanForArray(text: string): string | undefined {
   return undefined
 }
 
-/** Pulls a JSON array out of a model's free-form answer and validates each element as an
- *  `ActionEnvelope`. A real answer carries tool-call noise and prose around the array (the r4
- *  shape: `<function_calls>…</function_calls>` then prose then a fenced block then more prose) —
+/** Pulls a JSON array out of a model's free-form answer, truncates it to `maxActions`, and
+ *  validates each of THOSE elements as an `ActionEnvelope`. A real answer carries tool-call noise
+ *  and prose around the array (the r4 shape: `<function_calls>…</function_calls>` then prose then a fenced block then more prose) —
  *  so this prefers the LAST ```json fenced block if one is present, else scans from the first `[`
  *  for its matching `]` (tracking string and bracket-depth state, not just the last `]` in the
  *  text — trailing prose can itself contain `]`). Pure: no I/O, the model call happens outside
@@ -60,13 +60,19 @@ export function parseEnvelopes(text: string, maxActions: number): { readonly env
   }
   if (!Array.isArray(parsed)) return { parseError: 'the parsed JSON value is not an array' }
 
+  // The cap comes FIRST, before validation (final review, Minor #6): only the first `maxActions`
+  // elements will ever reach the engine, so an element past the cap is not part of the answer at
+  // all and its shape is nobody's business. Validating the whole array first meant a model that
+  // padded a good answer with a malformed sixth element had the whole answer rejected -- a day's
+  // actions lost to an element that would have been discarded anyway.
+  const capped = parsed.slice(0, maxActions)
   const envelopes: ActionEnvelope[] = []
-  for (let i = 0; i < parsed.length; i++) {
-    const result = actionEnvelopeSchema.safeParse(parsed[i])
+  for (let i = 0; i < capped.length; i++) {
+    const result = actionEnvelopeSchema.safeParse(capped[i])
     if (!result.success) return { parseError: `element ${i}: ${result.error.issues.map((issue) => issue.message).join('; ')}` }
     envelopes.push(result.data)
   }
-  return { envelopes: envelopes.slice(0, maxActions) }
+  return { envelopes }
 }
 
 /** Answers each decision point from a pre-parsed envelope map, keyed by role name. The model

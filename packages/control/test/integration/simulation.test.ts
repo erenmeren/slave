@@ -133,7 +133,7 @@ describe('stepSimulation', () => {
     expect(await prisma.simulationModelUsage.count({ where: { simulationId: id } })).toBe(0)
     const status = await simulationStatus(id)
     expect(status.ok && status.value.metrics.deliveredQty).toBe(150)
-    expect(status.ok && status.value.modelUsage).toEqual({ rows: 0, costUsd: null, unmeasured: 0 })
+    expect(status.ok && status.value.modelUsage).toEqual({ calls: 0, spentUsd: null, unmeasured: 0 })
   })
   it('two concurrent steps: one wins, the other sees stale_version, and the journal has no duplicate seq', async () => {
     const id = await create()

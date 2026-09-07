@@ -60,7 +60,10 @@ export async function autoStepDue(simulationId: string, now: Date): Promise<Resu
     if (row.lastAutoStepAt !== null && row.lastAutoStepAt.getTime() + row.autoRunEveryMs > now.getTime()) return ok({ stepped: false, reason: 'not_due' } as const)
     if (row.simTime >= row.autoRunUntilDay) {
       const seq = await clearAutoRun(tx, row, loaded, 'until_day', loaded.state.journalSeq + 1)
-      await tx.simulationRun.update({ where: { id: simulationId }, data: { autoRunEveryMs: null, autoRunUntilDay: null, lastAutoStepAt: null, state: json({ ...loaded.state, journalSeq: seq }) } })
+      // M31a ruling R11: `version` moves with the clear. Neither `status` nor `simTime` changes
+      // here, so `version` is the only field the run page's SSE stream can see this by -- without
+      // the bump the page kept offering "Stop auto-run" for an intent that no longer existed.
+      await tx.simulationRun.update({ where: { id: simulationId }, data: { version: row.version + 1, autoRunEveryMs: null, autoRunUntilDay: null, lastAutoStepAt: null, state: json({ ...loaded.state, journalSeq: seq }) } })
       return ok({ stepped: false, reason: 'until_day' } as const)
     }
     const outcome = await stepLocked(tx, row, loaded, { untilDay: row.simTime + 1, lastAutoStepAt: now })

@@ -71,10 +71,18 @@ export type PrepareOutcome =
       readonly remainingUsd: number
     }
 
-/** Writes one journal row at `max(seq) + 1` under the row lock. Used by the paths that journal
- *  outside `stepLocked` (an exhausted budget, a stale decision): `state.journalSeq` can lag the
- *  journal's real maximum after a `haltUnparsed` (which never rewrites `state`), so the seq is
- *  always read fresh from the journal itself -- the same reasoning `injectExternalEvent` documents. */
+/** Writes one journal row at `max(seq) + 1` under the row lock. Used by the one path that journals
+ *  outside `stepLocked` and does NOT move `state.journalSeq` (the exhausted budget): the seq is
+ *  read fresh from the journal itself because `state.journalSeq` can lag the journal's real
+ *  maximum after a `haltUnparsed` (which never rewrites `state`) -- the same reasoning
+ *  `injectExternalEvent` documents.
+ *
+ *  Not moving the watermark is safe HERE and nowhere else (final review, Critical #1): the only
+ *  caller halts the run through `haltUnparsed` on the very next line, and `halted` is terminal for
+ *  every journal writer in this package -- `stepSimulation`, `startAutoRun` and `setStatus` all
+ *  refuse a halted row, and `haltUnparsed` itself reads `max(seq)` fresh. A caller that journals
+ *  through this and leaves the run RUNNING would strand `state.journalSeq` behind the journal and
+ *  the next `state.journalSeq + 1` writer would collide on `(simulationId, seq)`. */
 async function journalControl(simulationId: string, simTime: number, payload: Record<string, unknown>): Promise<void> {
   await prisma.$transaction(async (tx) => {
     await tx.$queryRaw`SELECT id FROM "SimulationRun" WHERE id = ${simulationId} FOR UPDATE`
@@ -117,19 +125,30 @@ export async function prepareModelDecision(simulationId: string, now: Date): Pro
       const { row, loaded } = got.value
       if (row.autoRunEveryMs === null || row.autoRunUntilDay === null || row.simTime < row.autoRunUntilDay) return
       const seq = await clearAutoRun(tx, row, loaded, 'until_day', loaded.state.journalSeq + 1)
-      await tx.simulationRun.update({ where: { id: simulationId }, data: { autoRunEveryMs: null, autoRunUntilDay: null, lastAutoStepAt: null, state: json({ ...loaded.state, journalSeq: seq }) } })
+      // Ruling R11: `version` moves too. The clear touches neither `status` nor `simTime`, so
+      // `version` is the ONLY field the run page's SSE stream can notice it by -- without the bump
+      // the page went on offering "Stop auto-run" for an intent that was already gone, until
+      // somebody reloaded by hand.
+      await tx.simulationRun.update({ where: { id: simulationId }, data: { version: row.version + 1, autoRunEveryMs: null, autoRunUntilDay: null, lastAutoStepAt: null, state: json({ ...loaded.state, journalSeq: seq }) } })
     })
     return ok({ kind: 'skip', reason: 'until_day' } as const)
   }
 
-  // Cost honesty (M31a §4): an unmeasured call is stored as a NULL cost and counts 0 here, so the
-  // cap is enforced on what is actually known to have been spent -- the page shows those rows as
-  // unmeasured rather than as free. `>=`, not `>`: reaching the cap ends the run.
+  // Cost honesty (M31a §4, ruling R10): an unmeasured call is stored as a NULL cost -- the ledger
+  // never invents a figure for it -- but the CAP is not the ledger. A call that reported nothing
+  // still happened and still cost something, and counting it as $0 would let a provider that
+  // reports no cost spend to the horizon under any cap at all. So the cap is enforced on
+  // `chargedUsd`: the measured spend plus PER_CALL_CAP_USD for every unmeasured call, which is the
+  // most a single call could have cost (`decideWithModel` is spawned with `--max-budget-usd` at
+  // most that). The run page says so in as many words, so the charge is never a silent one.
+  // `>=`, not `>`: reaching the cap ends the run.
   const capUsd = summary.maxModelCostUsd
-  const aggregate = await prisma.simulationModelUsage.aggregate({ where: { simulationId }, _sum: { costUsd: true } })
+  const aggregate = await prisma.simulationModelUsage.aggregate({ where: { simulationId }, _sum: { costUsd: true }, _count: { _all: true, costUsd: true } })
   const spentUsd = aggregate._sum.costUsd ?? 0
-  if (capUsd !== null && spentUsd >= capUsd) {
-    await journalControl(simulationId, summary.simTime, { op: 'model_budget_exhausted', spentUsd, capUsd })
+  const unmeasured = aggregate._count._all - aggregate._count.costUsd
+  const chargedUsd = spentUsd + unmeasured * PER_CALL_CAP_USD
+  if (capUsd !== null && chargedUsd >= capUsd) {
+    await journalControl(simulationId, summary.simTime, { op: 'model_budget_exhausted', spentUsd, unmeasured, chargedUsd, capUsd })
     await haltUnparsed(simulationId, 'model budget exhausted')
     return ok({ kind: 'budget' } as const)
   }
@@ -162,7 +181,9 @@ export async function prepareModelDecision(simulationId: string, now: Date): Pro
     // storing the prompt itself on every step.
     promptHash: createHash('sha256').update(prompt).digest('hex'),
     model: summary.model,
-    remainingUsd: capUsd === null ? PER_CALL_CAP_USD : capUsd - spentUsd,
+    // What is left is measured against the same `chargedUsd` the cap is: an unmeasured call has
+    // already taken its per-call ceiling out of the budget, so the next call asks for less.
+    remainingUsd: capUsd === null ? PER_CALL_CAP_USD : capUsd - chargedUsd,
   } as const)
 }
 
@@ -223,9 +244,18 @@ export async function applyModelDecision(
     //    journal names which one answered.
     const staleReason = row.version !== expectedVersion ? 'version' : row.status !== 'running' ? 'status' : row.autoRunEveryMs === null ? 'intent_cleared' : null
     if (staleReason !== null) {
+      const seq = await nextSeq()
       await tx.simulationJournalEntry.create({
-        data: { simulationId, seq: await nextSeq(), simTime: row.simTime, kind: 'control', actorRole: null, payload: { op: 'stale_decision', role, reason: staleReason, expectedVersion, actual: row.version, promptHash, usageSeq } },
+        data: { simulationId, seq, simTime: row.simTime, kind: 'control', actorRole: null, payload: { op: 'stale_decision', role, reason: staleReason, expectedVersion, actual: row.version, promptHash, usageSeq } },
       })
+      // The watermark moves with the row (final review, Critical #1). A stale decision is NOT a
+      // terminal state -- the run is still running, still (possibly) armed, still haltable -- and
+      // every other writer computes its own seq as `state.journalSeq + 1` (`stepLocked`,
+      // `setStatus`, `startAutoRun`). Leaving `journalSeq` behind the row just written meant the
+      // next write of any kind collided on the journal's `(simulationId, seq)` unique and threw:
+      // one stale decision and Halt stopped working. Only `journalSeq` changes; `version` must not
+      // (nothing about the world moved) and neither may `status`.
+      await tx.simulationRun.update({ where: { id: simulationId }, data: { state: json({ ...loaded.state, journalSeq: seq }) } })
       return ok({ applied: false, reason: 'stale' } as const)
     }
 
@@ -236,7 +266,13 @@ export async function applyModelDecision(
       const reason = `isolation breach: ${outcome.tools.join(', ')}`
       const seq = await nextSeq()
       await tx.simulationJournalEntry.create({ data: { simulationId, seq, simTime: row.simTime, kind: 'control', actorRole: null, payload: { op: 'isolation_breach', role, tools: [...outcome.tools], usageSeq } } })
-      const seqAfter = await clearAutoRun(tx, row, { ...loaded, state: { ...loaded.state, journalSeq: seq } }, 'halted', seq + 1)
+      // Ruling R12: then the halt itself, exactly as every other halt path writes it (`setStatus`
+      // for the operator's verb, `haltUnparsed` for the daemon's error path). The breach row names
+      // WHAT was found; a reader scanning the journal for "when did this run stop, and why" must
+      // find the same `control { op: 'halted', reason }` row here as anywhere else -- an automatic
+      // halt that only journalled its cause was invisible to that reading.
+      await tx.simulationJournalEntry.create({ data: { simulationId, seq: seq + 1, simTime: row.simTime, kind: 'control', actorRole: null, payload: { op: 'halted', reason } } })
+      const seqAfter = await clearAutoRun(tx, row, { ...loaded, state: { ...loaded.state, journalSeq: seq + 1 } }, 'halted', seq + 2)
       await tx.simulationRun.update({
         where: { id: simulationId },
         data: { status: 'halted', haltedReason: reason, autoRunEveryMs: null, autoRunUntilDay: null, lastAutoStepAt: null, state: json({ ...loaded.state, journalSeq: seqAfter, status: 'halted', haltedReason: reason }) },

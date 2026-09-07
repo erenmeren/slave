@@ -100,11 +100,23 @@ describe('parseEnvelopes', () => {
     expect(result.parseError).toContain('element 1')
   })
 
-  it('truncates to maxActions', () => {
+  it('truncates to maxActions BEFORE validating, so a malformed element past the cap is never read', () => {
+    // Final review, Minor #6: the cap is what the engine will act on, so an element beyond it is
+    // not part of the answer at all -- rejecting the whole answer for a malformed 5th element when
+    // only 2 will ever be used threw away a usable decision and cost the day.
     const elements = [0, 1, 2, 3].map((i) => `{"type":"note","params":{"text":"n${i}"},"rationale":"r","refs":[]}`)
     const result = parseEnvelopes(`[${elements.join(',')}]`, 2)
     if (!('envelopes' in result)) throw new Error('expected envelopes')
     expect(result.envelopes).toHaveLength(2)
+
+    const withGarbage = parseEnvelopes(`[${elements.slice(0, 2).join(',')},{"type":"note","params":{"text":"bad"}}]`, 2)
+    if (!('envelopes' in withGarbage)) throw new Error('expected envelopes, not a parse error')
+    expect(withGarbage.envelopes).toHaveLength(2)
+
+    // Inside the cap it still rejects: element 1 is one the engine WOULD have acted on.
+    const withinCap = parseEnvelopes(`[${elements[0]},{"type":"note","params":{"text":"bad"}},${elements[1]}]`, 2)
+    if (!('parseError' in withinCap)) throw new Error('expected a parse error')
+    expect(withinCap.parseError).toContain('element 1')
   })
 })
 

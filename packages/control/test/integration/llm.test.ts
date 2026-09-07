@@ -6,6 +6,7 @@ import {
   cloneSimulation,
   createSimulation,
   haltSimulation,
+  injectExternalEvent,
   loadSimulation,
   prepareModelDecision,
   startAutoRun,
@@ -204,8 +205,10 @@ describe('prepareModelDecision', () => {
     const row = await prisma.simulationRun.findUniqueOrThrow({ where: { id } })
     expect(row).toMatchObject({ status: 'halted', haltedReason: 'model budget exhausted', autoRunEveryMs: null, autoRunUntilDay: null })
     const control = await prisma.simulationJournalEntry.findMany({ where: { simulationId: id, kind: 'control' }, orderBy: { seq: 'asc' } })
-    const exhausted = control.map((r) => r.payload as { op: string; spentUsd?: number; capUsd?: number }).find((p) => p.op === 'model_budget_exhausted')
-    expect(exhausted).toMatchObject({ spentUsd: 0.011, capUsd: 0.01 })
+    const exhausted = control.map((r) => r.payload as { op: string; spentUsd?: number; unmeasured?: number; chargedUsd?: number; capUsd?: number }).find((p) => p.op === 'model_budget_exhausted')
+    // Ruling R10: `chargedUsd` is what the cap is actually enforced on -- here it equals `spentUsd`
+    // because both rows were measured.
+    expect(exhausted).toMatchObject({ spentUsd: 0.011, unmeasured: 0, chargedUsd: 0.011, capUsd: 0.01 })
     expect(control.map((r) => (r.payload as { op: string }).op).slice(-2)).toEqual(['auto_run_stopped', 'halted'])
   })
 })
@@ -246,6 +249,51 @@ describe('applyModelDecision', () => {
     expect(stale).toMatchObject({ op: 'stale_decision', reason: 'intent_cleared' })
   })
 
+  // ---------------------------------------------------------------------------------------------
+  // Final review, Critical #1: the `stale_decision` row is written at the journal's OWN `max(seq)
+  // + 1`, so the run's `state.journalSeq` must move with it. It did not, and every later writer
+  // computes its seq as `state.journalSeq + 1` (`stepLocked`, `setStatus`, `startAutoRun`) -- so
+  // the very next write collided on the journal's `(simulationId, seq)` unique and threw. A stale
+  // decision is not a terminal state: the run is still running, still armed, still haltable.
+  // ---------------------------------------------------------------------------------------------
+  it('a stale-by-version decision moves the journal watermark, so the next pass steps normally', async () => {
+    const id = await armedLlmRun('stale-then-step')
+    const before = await prisma.simulationRun.findUniqueOrThrow({ where: { id } })
+    // The world moved while the model was thinking: an injection bumps `version` (ruling R8).
+    expect((await injectExternalEvent(id, { day: 1, event: { type: 'supplier_delay', supplierId: 'normal', extraDays: 2 } })).ok).toBe(true)
+    const applied = await applyModelDecision(id, { expectedVersion: before.version, role: 'purchasing', outcome: answer(), promptHash: 'abc', now: T0 })
+    expect(applied.ok && applied.value).toEqual({ applied: false, reason: 'stale' })
+    // The watermark now equals the journal's real maximum -- the stale row included.
+    const maxSeq = (await prisma.simulationJournalEntry.aggregate({ where: { simulationId: id }, _max: { seq: true } }))._max.seq
+    const state = (await prisma.simulationRun.findUniqueOrThrow({ where: { id } })).state as { journalSeq: number }
+    expect(state.journalSeq).toBe(maxSeq)
+    const report = await tickSimulations({ now: plus(250), modelDecider: async () => answer() })
+    expect(report).toMatchObject({ stepped: 1, halted: 0 })
+    expect((await prisma.simulationRun.findUniqueOrThrow({ where: { id } })).simTime).toBe(1)
+  })
+
+  it('a stale-by-intent_cleared decision leaves the run haltable', async () => {
+    const id = await armedLlmRun('stale-then-halt')
+    const before = await prisma.simulationRun.findUniqueOrThrow({ where: { id } })
+    expect((await stopAutoRun(id)).ok).toBe(true)
+    const applied = await applyModelDecision(id, { expectedVersion: before.version, role: 'purchasing', outcome: answer(), promptHash: 'abc', now: T0 })
+    expect(applied.ok && applied.value).toEqual({ applied: false, reason: 'stale' })
+    const halted = await haltSimulation(id, 'operator')
+    expect(halted.ok).toBe(true)
+    expect(await prisma.simulationRun.findUniqueOrThrow({ where: { id } })).toMatchObject({ status: 'halted', haltedReason: 'operator' })
+  })
+
+  it('a stale decision leaves the run re-armable', async () => {
+    const id = await armedLlmRun('stale-then-arm')
+    const before = await prisma.simulationRun.findUniqueOrThrow({ where: { id } })
+    expect((await stopAutoRun(id)).ok).toBe(true)
+    const applied = await applyModelDecision(id, { expectedVersion: before.version, role: 'purchasing', outcome: answer(), promptHash: 'abc', now: T0 })
+    expect(applied.ok && applied.value).toEqual({ applied: false, reason: 'stale' })
+    const restarted = await startAutoRun(id, { everyMs: 250, untilDay: 5 })
+    expect(restarted.ok).toBe(true)
+    expect(await prisma.simulationRun.findUniqueOrThrow({ where: { id } })).toMatchObject({ autoRunEveryMs: 250, autoRunUntilDay: 5 })
+  })
+
   it('an isolation breach halts the run, names the tools, clears the intent and still records the usage', async () => {
     const id = await armedLlmRun('breach')
     const version = (await prisma.simulationRun.findUniqueOrThrow({ where: { id } })).version
@@ -258,9 +306,12 @@ describe('applyModelDecision', () => {
     // Unmeasured stays unmeasured: a null cost is never written as 0.
     expect(usage[0]?.costUsd).toBeNull()
     expect(usage[0]?.tokensIn).toBeNull()
-    const ops = (await prisma.simulationJournalEntry.findMany({ where: { simulationId: id, kind: 'control' }, orderBy: { seq: 'asc' } })).map((r) => r.payload as { op: string; tools?: string[] })
+    const ops = (await prisma.simulationJournalEntry.findMany({ where: { simulationId: id, kind: 'control' }, orderBy: { seq: 'asc' } })).map((r) => r.payload as { op: string; tools?: string[]; reason?: string })
     expect(ops.find((p) => p.op === 'isolation_breach')).toMatchObject({ tools: ['Write', 'Bash'] })
-    expect(ops.map((p) => p.op).slice(-2)).toEqual(['isolation_breach', 'auto_run_stopped'])
+    // Ruling R12: the automatic halt says it halted, like every other halt path -- the breach row
+    // names WHAT happened, the `halted` row names what was DONE about it.
+    expect(ops.map((p) => p.op).slice(-3)).toEqual(['isolation_breach', 'halted', 'auto_run_stopped'])
+    expect(ops.find((p) => p.op === 'halted')).toMatchObject({ reason: 'isolation breach: Write, Bash' })
   })
 
   it('a failed call still advances the day, with the reason on the decision row and no purchasing action', async () => {
@@ -392,25 +443,41 @@ describe('tickSimulations with a model decider', () => {
     expect(row).toMatchObject({ status: 'halted', haltedReason: 'model budget exhausted' })
   })
 
-  it('an unmeasured call counts 0 toward the cap and never becomes a 0 cost row', async () => {
-    const id = await armedLlmRun('unmeasured', { maxModelCostUsd: 0.01 })
+  it('an unmeasured call charges the per-call cap toward the run cap and never becomes a 0 cost row (ruling R10)', async () => {
+    // A cap of 2.5 against a provider that reports nothing: three unmeasured calls charge
+    // 3 × PER_CALL_CAP_USD = $3, which is past the cap, so the fourth prepare never calls at all.
+    // Counting an unmeasured call as $0 would have let this run spend to the horizon for free.
+    const id = await armedLlmRun('unmeasured', { maxModelCostUsd: 2.5 })
     const decider = async (): Promise<ModelOutcome> => answer(ANSWER_TEXT, null)
     for (const at of [T0, plus(250), plus(500)]) await tickSimulations({ now: at, modelDecider: decider })
     const usage = await prisma.simulationModelUsage.findMany({ where: { simulationId: id }, orderBy: { seq: 'asc' } })
     expect(usage).toHaveLength(3)
+    // Unmeasured stays unmeasured on the row itself: the cap arithmetic charges it, the ledger does not invent a figure.
     for (const row of usage) expect(row.costUsd).toBeNull()
     expect((await prisma.simulationRun.findUniqueOrThrow({ where: { id } })).status).toBe('running')
+
+    const prepared = await prepareModelDecision(id, plus(750))
+    expect(prepared.ok && prepared.value).toEqual({ kind: 'budget' })
+    expect(await prisma.simulationRun.findUniqueOrThrow({ where: { id } })).toMatchObject({ status: 'halted', haltedReason: 'model budget exhausted' })
+    const exhausted = (await prisma.simulationJournalEntry.findMany({ where: { simulationId: id, kind: 'control' }, orderBy: { seq: 'asc' } }))
+      .map((r) => r.payload as { op: string; spentUsd?: number; unmeasured?: number; chargedUsd?: number; capUsd?: number })
+      .find((p) => p.op === 'model_budget_exhausted')
+    expect(exhausted).toMatchObject({ spentUsd: 0, unmeasured: 3, chargedUsd: 3 * PER_CALL_CAP_USD, capUsd: 2.5 })
   })
 
-  it('stops at untilDay without spending another cent', async () => {
+  it('stops at untilDay without spending another cent, and the clear bumps version so the stream sees it (ruling R11)', async () => {
     const id = await armedLlmRun('until', { untilDay: 1 })
     let calls = 0
     const decider = async (): Promise<ModelOutcome> => { calls += 1; return answer() }
     await tickSimulations({ now: T0, modelDecider: decider })
-    expect((await prisma.simulationRun.findUniqueOrThrow({ where: { id } })).simTime).toBe(1)
+    const stepped = await prisma.simulationRun.findUniqueOrThrow({ where: { id } })
+    expect(stepped.simTime).toBe(1)
     await tickSimulations({ now: plus(250), modelDecider: decider })
     expect(calls).toBe(1)
     const row = await prisma.simulationRun.findUniqueOrThrow({ where: { id } })
     expect(row).toMatchObject({ simTime: 1, status: 'running', autoRunEveryMs: null })
+    // Ruling R11: the clear touches neither status nor day, so `version` is the ONLY thing the SSE
+    // stream can notice it by -- without this bump the page kept offering "Stop auto-run" forever.
+    expect(row.version).toBe(stepped.version + 1)
   })
 })

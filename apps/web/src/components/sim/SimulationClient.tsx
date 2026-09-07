@@ -76,7 +76,10 @@ export function SimulationClient({ initial }: { readonly initial: SimulationSnap
       // is no real figure to print, so the word replaces it rather than a `spentUsd ?? 0` that
       // would read as an accurate $0.00 and hide the very calls the `unmeasured` count names.
       const spentText = usage.spentUsd === null ? 'unmeasured' : `$${usage.spentUsd.toFixed(4)}`
-      const unmeasuredSuffix = usage.unmeasured > 0 ? ` · ${usage.unmeasured} unmeasured` : ''
+      // Ruling R10: an unmeasured call is not free to the cap -- `prepareModelDecision` charges it
+      // `PER_CALL_CAP_USD` ($1, the ceiling one call is spawned with), so the panel says so rather
+      // than leaving an operator to read "$0.0038 of $2.00" and think the run has $1.9962 left.
+      const unmeasuredSuffix = usage.unmeasured > 0 ? ` · ${usage.unmeasured} unmeasured (each counts $1.00 toward the cap)` : ''
       return `${spentText} of $${usage.capUsd.toFixed(2)}${unmeasuredSuffix}`
     }
     if (usage.rows.length === 0) return `${summary.decisionProvider} provider — no model calls; cost: no record`

@@ -1221,10 +1221,10 @@ describe('the orchestrator CLI', () => {
       expect(stepped.stdout).toContain(`simulation ${id} at day 30 (finished), version 1`)
       const status = await runCli(['simulation-status', '--simulation', id])
       expect(status.code).toBe(0)
-      const parsed = JSON.parse(status.stdout) as { summary: { status: string; synthetic: boolean; decisionProvider: string }; company: { cashMinor: number }; modelUsage: { costUsd: number | null } }
+      const parsed = JSON.parse(status.stdout) as { summary: { status: string; synthetic: boolean; decisionProvider: string }; company: { cashMinor: number }; modelUsage: { spentUsd: number | null } }
       expect(parsed.summary).toMatchObject({ status: 'finished', synthetic: true, decisionProvider: 'rules' })
       expect(typeof parsed.company.cashMinor).toBe('number')
-      expect(parsed.modelUsage.costUsd).toBeNull()
+      expect(parsed.modelUsage.spentUsd).toBeNull()
       const again = await runCli(['step-simulation', '--simulation', id, '--steps', '1'])
       expect(again.code).toBe(1)
       expect(again.stderr).toContain('is finished; it cannot be stepped')

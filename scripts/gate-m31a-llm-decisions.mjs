@@ -41,7 +41,9 @@
 // before the daemon comes back is what makes it decide again at all, not a stylistic choice), then
 // a fresh daemon is spawned on `--fixture decision-breach`. Within 15 s the run is `halted` with
 // `haltedReason 'isolation breach: Bash'`; the control journal carries `{ op: 'isolation_breach',
-// tools: ['Bash'] }` then `{ op: 'auto_run_stopped', reason: 'halted' }` -- read from
+// tools: ['Bash'] }`, then `{ op: 'halted', reason: 'isolation breach: Bash' }` (ruling R12: an
+// automatic halt journals the halt itself, like every other halt path), then `{ op:
+// 'auto_run_stopped', reason: 'halted' }` -- read from
 // `packages/control/src/simulation/llm.ts`'s `applyModelDecision`, `op: 'model_calls_blocked'` is
 // NEVER journaled here: that entry belongs only to the manual `haltSimulation` verb
 // (`packages/control/src/simulation/write.ts`'s `setStatus`), which this automatic halt never
@@ -55,7 +57,7 @@
 // Teardown (in `finally`): kill the daemon and `next dev`, then delete the run, then the company,
 // then the template.
 
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -288,6 +290,13 @@ try {
         `chromium under ~/.cache/ms-playwright) before running this gate`,
     )
   }
+  // No outer `SLAVEOFAI_CLAUDE_BIN` precondition here, and that is deliberate (see
+  // `gate-m19-measure-and-harden.mjs`'s own note): this gate HARDCODES the override on every
+  // daemon it spawns (`spawnDaemon` passes `SLAVEOFAI_CLAUDE_BIN: 'node'` and
+  // `SLAVEOFAI_CLAUDE_ARGS` pointing at the fake CLI below), so the operator's environment cannot
+  // make it reach a real `claude` -- requiring them to set a variable this script overrides anyway
+  // would be theatre, and theatre in a gate teaches an operator to set variables without knowing
+  // why. What IS enforced is that the fake CLI actually exists.
   if (!existsSync(FAKE_CLAUDE)) throw new Error(`fake claude CLI not found at ${FAKE_CLAUDE}`)
 
   await preflightCleanup()
@@ -509,12 +518,10 @@ try {
   }
   await terminateAndWait(daemonProc, 'the daemon (decision fixture)')
   console.log('daemon (decision fixture) exited after SIGTERM')
-  // The `until_day` clear touches neither `version` nor `status` (`write.ts`'s own fix-wave note,
-  // echoed by `useSimulationStream`'s docstring), so the page's live stream never pushed it --
-  // reload to pick up the cleared intent server-side before `AutoRunControls` will show start
-  // controls again instead of "Stop auto-run".
-  await page.reload({ waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
-  await waitVisible(page.getByTestId('sim-strip'), `"${SIM_NAME}"'s run page's strip after reload`)
+  // No reload here (ruling R11): the `until_day` clear bumps `version`, so the page's live stream
+  // sees it and refreshes itself. The wait is still bounded -- the SSE round trip takes a moment,
+  // and `AutoRunControls` shows "Stop auto-run" until the refreshed snapshot lands.
+  await waitVisible(page.getByTestId('sim-auto-run-start'), `"${SIM_NAME}"'s auto-run start controls, restored by the stream after the until_day clear`)
   await armAutoRunOnPage(15)
   daemonProc = spawnDaemon('decision-breach')
   console.log(`a fresh daemon was spawned (pid ${daemonProc.pid}) on fixture decision-breach`)
@@ -538,16 +545,23 @@ try {
     if (breachIndex === -1) await fail('no control journal row with payload.op "isolation_breach" was found')
     const breachRow = controlRows[breachIndex]
     if (JSON.stringify(breachRow.payload.tools) !== JSON.stringify(['Bash'])) await fail(`the isolation_breach row's tools are ${JSON.stringify(breachRow.payload.tools)}, expected ["Bash"]`)
-    const halted = controlRows.slice(breachIndex + 1).find((r) => r.payload.op === 'auto_run_stopped' && r.payload.reason === 'halted')
-    if (halted === undefined) await fail('no control journal row with payload { op: "auto_run_stopped", reason: "halted" } was found after the isolation_breach row')
     // Read from `packages/control/src/simulation/llm.ts`'s `applyModelDecision`: the automatic
-    // isolation-breach halt journals `isolation_breach` then (through `clearAutoRun`)
-    // `auto_run_stopped { reason: 'halted' }` -- it never journals `model_calls_blocked`, which
+    // isolation-breach halt journals `isolation_breach`, then the halt itself (ruling R12 -- the
+    // breach row names what was FOUND, the `halted` row names what was DONE, exactly as every
+    // other halt path writes it), then, through `clearAutoRun`, `auto_run_stopped { reason:
+    // 'halted' }`. It never journals `model_calls_blocked`, which
     // `packages/control/src/simulation/write.ts`'s `setStatus` writes only for the manual
     // `haltSimulation` verb this automatic halt never calls.
+    const afterBreach = controlRows.slice(breachIndex + 1).map((r) => r.payload.op)
+    if (JSON.stringify(afterBreach.slice(0, 2)) !== JSON.stringify(['halted', 'auto_run_stopped'])) {
+      await fail(`the control journal rows after isolation_breach are ${JSON.stringify(afterBreach)}, expected it to start with ["halted","auto_run_stopped"]`)
+    }
+    const haltedRow = controlRows[breachIndex + 1]
+    if (haltedRow.payload.reason !== 'isolation breach: Bash') await fail(`the halted row's reason is ${JSON.stringify(haltedRow.payload.reason)}, expected 'isolation breach: Bash'`)
+    if (controlRows[breachIndex + 2].payload.reason !== 'halted') await fail(`the auto_run_stopped row's reason is ${JSON.stringify(controlRows[breachIndex + 2].payload.reason)}, expected 'halted'`)
     const blocked = controlRows.find((r) => r.payload.op === 'model_calls_blocked')
     if (blocked !== undefined) await fail(`a control journal row with payload.op "model_calls_blocked" was found (seq ${blocked.seq}) -- the automatic isolation-breach halt must never journal it, only the manual haltSimulation verb does`)
-    console.log('control journal verified: isolation_breach then auto_run_stopped { reason: "halted" }, no model_calls_blocked')
+    console.log('control journal verified: isolation_breach, halted { reason: "isolation breach: Bash" }, auto_run_stopped { reason: "halted" }, no model_calls_blocked')
   }
   {
     const usageRows = await prisma.simulationModelUsage.findMany({ where: { simulationId }, orderBy: { seq: 'asc' } })

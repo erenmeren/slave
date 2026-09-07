@@ -77,10 +77,14 @@ describe('autoStepDue', () => {
     expect(early.ok && early.value).toEqual({ stepped: false, reason: 'not_due' })
     const second = await autoStepDue(id, plus(1000))
     expect(second.ok && second.value).toEqual({ stepped: true, day: 2 })
+    const beforeClear = await prisma.simulationRun.findUniqueOrThrow({ where: { id } })
     const done = await autoStepDue(id, plus(2000))
     expect(done.ok && done.value).toEqual({ stepped: false, reason: 'until_day' })
     const row = await prisma.simulationRun.findUniqueOrThrow({ where: { id } })
     expect(row).toMatchObject({ simTime: 2, status: 'running', autoRunEveryMs: null })
+    // Ruling R11 (M31a): the clear moves neither the day nor the status, so `version` is the only
+    // thing the run page's SSE stream can see it by -- it must move.
+    expect(row.version).toBe(beforeClear.version + 1)
     expect((await controlOps(id)).at(-1)).toBe('auto_run_stopped')
     expect((await prisma.simulationJournalEntry.findFirst({ where: { simulationId: id, kind: 'control' }, orderBy: { seq: 'desc' } }))?.payload).toMatchObject({ op: 'auto_run_stopped', reason: 'until_day' })
     await pauseSimulation(id)
