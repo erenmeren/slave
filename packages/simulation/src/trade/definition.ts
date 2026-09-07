@@ -8,6 +8,11 @@ export const TRADE_ROLE_NAMES = ['sales', 'purchasing', 'operations', 'finance']
 export type TradeRoleName = (typeof TRADE_ROLE_NAMES)[number]
 export type TradePolicy = 'A' | 'B'
 
+/** The trade plugin's `rosterRequirement` (M31b task 1): what `assignRoles` throws verbatim on a
+ *  short roster, so control can match on the text instead of parsing a sentence with a number
+ *  baked in. */
+export const TRADE_ROSTER_REQUIREMENT = 'the trade sector needs four slaves for its four roles'
+
 const roleSchema = z.object({ name: z.string(), purpose: z.string(), observes: z.array(z.string()), allowedActions: z.array(z.string()), constraints: z.record(z.number()), slaveName: z.string() })
 const scenarioEventSchema = z.object({ day: z.number().int().nonnegative(), event: tradeExternalEventSchema })
 
@@ -30,7 +35,10 @@ export const tradeSimulationDefinitionSchema = z.object({
   llmRoles: z.array(z.string()).default([]),
 })
 export type TradeSimulationDefinition = z.infer<typeof tradeSimulationDefinitionSchema> & EngineDefinition
-export type TradeRosterEntry = { readonly slaveName: string; readonly departmentName: string }
+// `role` is optional here (M31b design §2 bullet 1): the shared `RosterEntry` the plugin registry
+// passes around requires it, but trade never reads it -- expertise-by-role is a software-sector
+// idea. Optional keeps `RosterEntry` assignable to `TradeRosterEntry` without trade caring.
+export type TradeRosterEntry = { readonly slaveName: string; readonly departmentName: string; readonly role?: string }
 
 /** The synthetic demo (spec §5.4). Not a real company; every number is an assumption. */
 export const DEMO_SCENARIO = {
@@ -73,7 +81,10 @@ const PURPOSE: Readonly<Record<TradeRoleName, string>> = {
 
 /** Maps the four roles onto the frozen roster: by department name first, then by position. */
 export function assignRoles(roster: readonly TradeRosterEntry[]): RoleDefinition[] {
-  if (roster.length < TRADE_ROLE_NAMES.length) throw new Error(`the trade sector needs four slaves for its four roles; the roster has ${roster.length}`)
+  // M31b task 1: throws exactly `TRADE_ROSTER_REQUIREMENT` (also the trade plugin's
+  // `rosterRequirement`) so control can map the message to a refusal kind later, instead of
+  // parsing a sentence that used to carry the roster's length too.
+  if (roster.length < TRADE_ROLE_NAMES.length) throw new Error(TRADE_ROSTER_REQUIREMENT)
   const taken = new Set<string>()
   const pick = (role: TradeRoleName): string => {
     const byDepartment = roster.find((r) => r.departmentName.toLowerCase() === role && !taken.has(r.slaveName))

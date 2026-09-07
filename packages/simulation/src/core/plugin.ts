@@ -1,0 +1,49 @@
+import type { z } from 'zod'
+import type { ActionDoc } from '../trade/action-docs.js'
+import type { DecisionProvider } from '../decide/provider.js'
+import type { EngineDefinition, EngineState } from './engine.js'
+import type { JournalEntry } from './journal.js'
+import type { SectorModel } from './sector.js'
+
+/** M31b design §2, copied verbatim. A sector is a plugin, not a branch: everything
+ *  sector-specific -- schemas, model, rules, metrics, demo, forms -- lives under one
+ *  `SectorPlugin` value; control and web never name a sector except through the registry
+ *  (`./registry.js`). */
+export interface MetricLabel { readonly label: string; readonly kind: 'count' | 'money' | 'days' }
+export interface HeadlineItem { readonly label: string; readonly value: number; readonly kind: 'count' | 'money' | 'days' }
+// Controller ruling R1: `testId` is optional and new -- it lets a plugin's external-event form
+// carry the exact `data-testid` the run page's inputs already use, so the trade plugin can wrap
+// M29/M30's form without changing what a test (or an operator's muscle memory) targets.
+export interface FormField { readonly name: string; readonly label: string; readonly kind: 'int' | 'money' | 'select'; readonly optionsFrom?: string; readonly testId?: string }   // optionsFrom names a key of injectOptions(state)
+export interface ExternalEventForm { readonly type: string; readonly label: string; readonly fields: readonly FormField[] }
+export interface RosterEntry { readonly slaveName: string; readonly departmentName: string; readonly role: string }
+
+export interface SectorPlugin<S, E, R, D extends EngineDefinition, M extends Record<string, number>> {
+  readonly name: string                                    // 'trade' | 'software'
+  readonly model: SectorModel<S, E, R>
+  readonly definitionSchema: z.ZodType<D>
+  readonly stateSchema: z.ZodType<S>
+  readonly externalEventSchema: z.ZodType<E>
+  readonly rosterRequirement: string                       // the refusal text when the roster cannot fill the roles
+  rosterFits(roster: readonly RosterEntry[]): boolean      // the same rule demoDefinition enforces, without building anything
+  demoDefinition(input: { policy: 'A' | 'B'; seed: number; roster: readonly RosterEntry[]; currency: string; llmRoles?: readonly string[] }): D   // throws Error(rosterRequirement) on a short roster
+  cloneDefinition(definition: D, over: { policy: 'A' | 'B'; seed: number }): D
+  initialState(definition: D): EngineState<S, E>
+  rulesProvider(definition: D): DecisionProvider
+  metrics(entries: readonly JournalEntry[], state: S): M
+  readonly metricLabels: Readonly<Record<keyof M & string, MetricLabel>>
+  headline(state: S, day: number): readonly HeadlineItem[]  // the "company" panel
+  readonly actionDocs: readonly ActionDoc[]
+  readonly externalEventForms: readonly ExternalEventForm[]
+  injectOptions(state: S): Readonly<Record<string, readonly { id: string; label: string }[]>>
+  readonly llmRoleCandidates: readonly string[]            // trade: ['purchasing']; software: ['lead']
+}
+
+// The one place `any` is allowed in this package: the registry hands control an existential --
+// a plugin whose five type parameters (state, event, rejection, definition, metrics) differ per
+// sector and are never the same across `sectors`' entries. Control and web read a plugin only
+// through this shape (`name`, `metricLabels`, `headline`, the schemas, the functions) and never
+// reach into `S`/`E`/`R`/`D`/`M` themselves, so collapsing them to `any` here costs nothing at
+// the only call sites that exist -- `sectorFor` and `Object.values(sectors)`.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- see comment above; repo has no eslint config today, kept for if one lands.
+export type AnySectorPlugin = SectorPlugin<any, any, any, any, any>
