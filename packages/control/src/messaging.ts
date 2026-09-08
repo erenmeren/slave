@@ -1,9 +1,10 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { prisma } from '@slave-of-ai/db/client'
 import {
   type MessageKind, type Result, type SlaveMessageView, err, isValidRecipient, ok,
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
+import type { Principal } from './principal.js'
 import type { ControlRefusal } from './refusal.js'
 
 const SEND_TIMEOUT_MS = 5_000
@@ -16,7 +17,7 @@ const SEND_MAX_WAIT_MS = 2_000
  * shared by this task's `send` and Task 3's `answer`; the prefix is what keeps the two verbs'
  * keys from colliding on a coincidentally-equal caller-supplied string.
  */
-const namespacedKey = (verb: 'send', key: string): string => `${verb}:${key}`
+const namespacedKey = (verb: 'send' | 'answer', key: string): string => `${verb}:${key}`
 
 export interface SendMessageInput {
   readonly kind: MessageKind
@@ -295,4 +296,145 @@ export async function markMessageRead(
     data: { readAt: new Date() },
   })
   return ok(toView(updated))
+}
+
+export interface AnswerQuestionInput {
+  readonly body: string
+  /** Who answered, for the event's own record. The CLI passes the operator's name. */
+  readonly answeredBy: string
+  /**
+   * Replaying the same key returns the first call's message, unwritten a second time. Defaults to
+   * a key derived from the question and the answer TEXT, so the ordinary operator replay -- the
+   * same command run twice, a retried request -- writes one row, while an operator who genuinely
+   * says something different writes a second.
+   */
+  readonly idempotencyKey?: string
+  readonly principal?: Principal
+}
+
+/**
+ * Answers a worker's question as a HUMAN (M36 t3) -- the operator's way to unstick a project with
+ * no second worker to hand.
+ *
+ * The worker path is `sendMessage(runId, { kind: 'answer', replyToId })`, which derives its sender
+ * from the run. A human has no run, so this is a separate verb rather than a nullable-run branch
+ * inside that one: everything a `sendMessage` refusal is about (an unknown run, a recipient the
+ * sender may not address, a reply target outside the sender's workspace) is decided from the
+ * SENDER's scope, and there is no sender here to scope by. What replaces that scope is the
+ * question itself: the answer is written into the question's own workspace, thread and task, so
+ * there is no workspace boundary for it to cross.
+ *
+ * **Whose row this is.** `SlaveMessage.slaveId` is NOT NULL, and for a human-authored row it has
+ * meant the slave the human ADDRESSED since long before M36 -- it is what the web's communication
+ * fold reads to draw `operator -> slave` for every `actor: 'human'` message. So it holds the
+ * ASKER: the one this answer is for, and the one who will be resumed by it. `senderRunId` stays
+ * null (no run wrote it) and `actor` is `human`, which together are what tell this row apart from
+ * a worker's answer.
+ *
+ * Delivery is deliberately NOT here: this writes the answer, and `deliverAnswers`
+ * (`apps/orchestrator/src/deliver.ts`) is the one place that decides whether a waiting run may be
+ * resumed by it. Control does not spawn children, and a resume that no process is standing behind
+ * is the orphan shape the sweep exists to destroy.
+ */
+export async function answerQuestion(
+  questionId: string,
+  input: AnswerQuestionInput,
+): Promise<Result<SlaveMessageView, ControlRefusal>> {
+  if (input.body.trim() === '') return err({ kind: 'invalid_message_body' })
+
+  const question = await prisma.slaveMessage.findUnique({ where: { id: questionId } })
+  if (question === null) return err({ kind: 'message_not_found', messageId: questionId })
+  if (question.kind !== 'question') {
+    return err({ kind: 'not_a_question', messageId: questionId, messageKind: question.kind })
+  }
+
+  const workspaceId = question.workspaceId
+  const generatedId = randomUUID()
+  const key = namespacedKey(
+    'answer',
+    input.idempotencyKey ?? `human:${questionId}:${createHash('sha256').update(input.body).digest('hex').slice(0, 16)}`,
+  )
+
+  const outcome = await prisma.$transaction(
+    async (tx) => {
+      // The same workspace lock `sendMessage` takes, for the same reason: the idempotency replay
+      // has to observe (and, on a miss, close) the window a concurrent answer with the same key
+      // would also open.
+      await tx.$queryRaw`SELECT 1 FROM "Workspace" WHERE id = ${workspaceId} FOR UPDATE`
+
+      const seen = await tx.slaveMessage.findUnique({
+        where: { workspaceId_idempotencyKey: { workspaceId, idempotencyKey: key } },
+      })
+      if (seen !== null) return { replayed: true as const, row: seen }
+
+      const row = await tx.slaveMessage.create({
+        data: {
+          id: generatedId,
+          taskId: question.taskId,
+          // The asker, twice: as the slave this human addressed (`slaveId`, the pre-M36 convention
+          // for a human-authored row) and as the recipient in M36's own columns.
+          slaveId: question.slaveId,
+          recipientSlaveId: question.slaveId,
+          recipientRole: null,
+          workspaceId,
+          senderRunId: null,
+          threadId: question.threadId,
+          replyToId: question.id,
+          kind: 'answer',
+          body: input.body,
+          actor: 'human',
+          expectsReply: false,
+          idempotencyKey: key,
+        },
+      })
+      return { replayed: false as const, row }
+    },
+    { timeout: SEND_TIMEOUT_MS, maxWait: SEND_MAX_WAIT_MS },
+  )
+
+  if (!outcome.replayed) {
+    await appendEvent({
+      type: 'slave.message_sent',
+      workspaceId,
+      taskId: question.taskId,
+      slaveId: question.slaveId,
+      actor: 'human',
+      payload: {
+        messageId: outcome.row.id,
+        kind: 'answer',
+        body: outcome.row.body,
+        threadId: outcome.row.threadId,
+        replyToId: outcome.row.replyToId,
+        recipientSlaveId: outcome.row.recipientSlaveId,
+        recipientRole: null,
+        expectsReply: false,
+        answeredBy: input.answeredBy,
+      },
+      userId: input.principal?.userId ?? null,
+    })
+  }
+
+  return ok(toView(outcome.row))
+}
+
+/**
+ * Every question in a workspace that is still waiting for a reply (M36 t3), oldest first.
+ *
+ * The operator's read side for `answerQuestion`: a human answering needs the message id, and the
+ * id lives nowhere an operator can see it otherwise. Workspace-scoped rather than slave-scoped
+ * (`listMessagesForSlave` is the worker's own inbox) because the operator is answering ON BEHALF
+ * of whoever was addressed -- including a role nobody free is holding, which is exactly the
+ * situation this verb exists for.
+ */
+export async function listPendingQuestions(
+  workspaceId: string,
+): Promise<Result<readonly SlaveMessageView[], ControlRefusal>> {
+  const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId }, select: { id: true } })
+  if (workspace === null) return err({ kind: 'workspace_not_found', workspaceId })
+
+  const rows = await prisma.slaveMessage.findMany({
+    where: { workspaceId, kind: 'question', expectsReply: true, replies: { none: {} } },
+    orderBy: { seq: 'asc' },
+  })
+  return ok(rows.map(toView))
 }

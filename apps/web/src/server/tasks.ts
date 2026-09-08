@@ -29,6 +29,16 @@ export interface TaskRunSummary {
      */
     readonly deniedDuringPause: readonly { readonly id: string; readonly summary: string | null }[]
   } | null
+  /**
+   * Who this run is waiting on an answer from (M36 t3), or `null` when it is not waiting.
+   *
+   * Read off the RUN's own pause category (`waiting_for_answer`), not off the presence of a
+   * message: the run saying it is waiting is the fact, and a missing message row must not turn a
+   * waiting run back into an ordinary paused one -- the same rule `overview.ts`'s `waitingFor`
+   * follows. The panel renders "waiting for X" instead of "paused at step N", because that pause
+   * is not one a human is being asked to end.
+   */
+  readonly waitingFor: string | null
 }
 
 export interface TaskArtifactSummary {
@@ -94,6 +104,38 @@ export async function buildTasksSnapshot(workspaceId: string): Promise<TasksSnap
   ])
   if (workspace === null || shellFacts === null) return null
 
+  // The waiting affordance (M36 t3): what each waiting run asked, and of whom. Two queries for the
+  // whole board when anything is waiting -- usually nothing is -- and none at all otherwise. Same
+  // shape as `overview.ts`'s own `waitingFor` lookup; kept here rather than shared because the two
+  // walk different row sets (one live run per slave there, every run of every task here).
+  const waitingRunIds = tasks
+    .flatMap((task) => task.runs)
+    .filter((run) => run.status === 'paused' && run.pauseReason === 'waiting_for_answer')
+    .map((run) => run.id)
+  const waitingFor = new Map<string, string>()
+  if (waitingRunIds.length > 0) {
+    const [questions, slaves] = await Promise.all([
+      prisma.slaveMessage.findMany({
+        where: { senderRunId: { in: waitingRunIds }, kind: 'question' },
+        orderBy: { seq: 'desc' },
+        select: { senderRunId: true, recipientSlaveId: true, recipientRole: true },
+      }),
+      prisma.slave.findMany({ where: { team: { workspaceId } }, select: { id: true, name: true } }),
+    ])
+    const nameById = new Map(slaves.map((slave) => [slave.id, slave.name]))
+    for (const question of questions) {
+      // Descending `seq`, so the first row seen for a run is its latest question: a run that asked,
+      // was answered, resumed and asked again is waiting on the second one.
+      if (question.senderRunId === null || waitingFor.has(question.senderRunId)) continue
+      waitingFor.set(
+        question.senderRunId,
+        question.recipientSlaveId !== null
+          ? (nameById.get(question.recipientSlaveId) ?? question.recipientSlaveId)
+          : `anyone with the ${question.recipientRole ?? 'unknown'} role`,
+      )
+    }
+  }
+
   return {
     workspace: { id: workspace.id, name: workspace.name, haltedReason: workspace.haltedReason },
     shellFacts,
@@ -145,6 +187,10 @@ export async function buildTasksSnapshot(workspaceId: string): Promise<TasksSnap
                   // no widening, and there is no `run.tool_call` field to join those ids against.
                   deniedDuringPause: run.checkpoint.deniedToolUseIds.map((id) => ({ id, summary: null })),
                 },
+          waitingFor:
+            run.status === 'paused' && run.pauseReason === 'waiting_for_answer'
+              ? (waitingFor.get(run.id) ?? 'another slave')
+              : null,
         })),
       }
     }),

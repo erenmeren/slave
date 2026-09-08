@@ -421,6 +421,13 @@ model SlaveRun {
   /// never sit in `resuming` without a process — the orphan sweep would destroy it.
   resumeRequestedAt DateTime?
   queuedMessage     String?
+  /// The `SlaveMessage` ids this run's prompt actually carried (M36 t3) -- the unanswered messages
+  /// addressed to its slave, as `apps/orchestrator/src/inbox.ts` rendered them at dispatch. Empty
+  /// for a run whose slave had no pending messages, which is nearly every run. Written once, in
+  /// the same update as `pid`/`provider`, so a debugger holding a run id can reconstruct what the
+  /// slave was actually shown -- the reason the milestone asks for it at all, ahead of the full
+  /// run-context builder that is a later milestone's work.
+  suppliedMessageIds String[]
   /// Stop intent (M5 gate-fix B): `requestStop` writes both columns in the same conditioned
   /// update that claims `status: stopping`, before it kills the child -- so a run's stream ending
   /// with no terminal result can tell an operator's stop (this record present) from the guardrail
@@ -585,9 +592,17 @@ model SlaveMessage {
   /// will write into this same column, and the namespace is what keeps the two verbs' keys from
   /// colliding on a coincidentally-equal string.
   idempotencyKey   String?
-  /// Read state (M36 t1). Delivery state is Task 3's column to add, not this one's -- Task 1 is
-  /// the durable layer underneath it.
+  /// Read state (M36 t1). Delivery state is `deliveredAt` below.
   readAt           DateTime?
+  /// Delivery state (M36 t3), and only ever set on an `answer`: the moment `deliverAnswers`
+  /// (apps/orchestrator/src/deliver.ts) claimed this answer as the one that would wake the run
+  /// that asked. It is a CLAIM, not a log line -- the claim is a conditioned `updateMany` on
+  /// `deliveredAt IS NULL`, so two deliveries racing over the same answer row produce one resume
+  /// intent between them, and a replay of the same answer produces none at all. Cleared again if
+  /// the resume it was claimed for is refused, so a transient refusal is not a permanently
+  /// swallowed answer. Null on every question, every human instruction, and every answer not yet
+  /// delivered.
+  deliveredAt      DateTime?
   /// Monotonic, gap-permitted insertion order -- `createdAt`'s millisecond resolution is not fine
   /// enough to order two messages written in the same tick, the same reasoning
   /// `ExecutionEvent.seq` (packages/events/src/append.ts) already codifies for this codebase.
@@ -602,6 +617,9 @@ model SlaveMessage {
 
   @@unique([workspaceId, idempotencyKey])
   @@index([slaveId, createdAt])
+  /// M36 t3: `deliverAnswers` reads "the answers to this question" on every tick that has a
+  /// waiting run, and t1 indexed the recipient, thread and idempotency shapes rather than this one.
+  @@index([replyToId])
   @@index([workspaceId, recipientSlaveId, readAt])
   @@index([workspaceId, recipientRole, readAt])
   @@index([threadId, seq])

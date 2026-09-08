@@ -48,6 +48,16 @@ export async function requestResume(
   rawMessage: string | null,
   requestedBy: string,
   principal?: Principal,
+  /**
+   * Who the `run.resume_requested` event is attributed to. `'human'` is the default and the only
+   * value every caller before M36 t3 could have wanted -- an operator's Resume button, or the CLI.
+   * `deliverAnswers` (`apps/orchestrator/src/deliver.ts`) passes `'system'` when the answer that
+   * woke the run came from another SLAVE: nobody pressed anything, the orchestrator's delivery pass
+   * decided it, and recording that as a human intervention would put it in the web's own
+   * "interventions" activity filter under a person who was never there. An OPERATOR's answer still
+   * passes `'human'`, because it is one.
+   */
+  actor: 'human' | 'system' = 'human',
 ): Promise<Result<void, ControlRefusal>> {
   // An empty or whitespace-only message is the "say nothing" case, not a literal instruction: the
   // adapter would otherwise spawn the child with `-p ''` (see `updateQueuedMessage`'s doc comment
@@ -126,7 +136,7 @@ export async function requestResume(
     taskId: run.taskId,
     slaveId: run.slaveId,
     runId: run.id,
-    actor: 'human',
+    actor,
     payload: { requestedBy, message },
     userId: principal?.userId ?? null,
   })

@@ -31,6 +31,7 @@ const SNAPSHOT: TasksSnapshot = {
         {
           id: 'r1',
           status: 'working',
+          waitingFor: null,
           costUsd: 0.1,
           toolCalls: 2,
           startedAt: new Date(0).toISOString(),

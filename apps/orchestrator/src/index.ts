@@ -3,6 +3,8 @@ export { advance, runVerify, type AdvanceInput, type RunVerifyInput, type Verify
 export { COMMAND_OUTPUT_LIMIT, DEFAULT_COMMAND_TIMEOUT_MS, commandFailure, runShellCommand, type CommandOutcome } from './shell.js'
 export { drainPumps, tick, type TickDeps, type TickReport } from './tick.js'
 export { OUTPUT_CAP, pumpRun, type PumpRunInput } from './pump.js'
+export { deliverAnswers, type AnswerDelivery } from './deliver.js'
+export { concludeWithAnswers, type AnswerConclusion, type AnswerConclusionInput } from './answer.js'
 export { loadWorld, type LoadedWorld } from './world.js'
 export {
   SETUP_OUTPUT_LIMIT,

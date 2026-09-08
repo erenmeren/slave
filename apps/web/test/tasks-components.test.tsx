@@ -138,6 +138,7 @@ describe('TaskDetailPanel', () => {
               endedAt: null,
               worktreePath: null,
               checkpoint: null,
+              waitingFor: null,
             },
           ],
         })}
@@ -165,6 +166,7 @@ describe('TaskDetailPanel', () => {
               endedAt: null,
               worktreePath: null,
               checkpoint: { pausedAtStep: 4, sessionId: 's1', dirtyFileCount: 2, deniedDuringPause: [] },
+              waitingFor: null,
             },
           ],
         })}
@@ -173,6 +175,35 @@ describe('TaskDetailPanel', () => {
     )
     expect(screen.getByText(/paused at step 4/)).toBeTruthy()
     expect(screen.queryByText(/denied during pause/)).toBeNull()
+  })
+
+  // M36 t3: a run waiting for another slave's answer is `paused` with a checkpoint like any other,
+  // but calling it "paused at step N" invites an operator to resume something that is not theirs to
+  // resume. The panel names what it is waiting on instead.
+  it("shows 'waiting for <recipient>' instead of 'paused at step N' for a waiting run", () => {
+    render(
+      <TaskDetailPanel
+        workspaceId="w1"
+        task={task({
+          runs: [
+            {
+              id: 'r1',
+              status: 'paused',
+              costUsd: 0.1,
+              toolCalls: 2,
+              startedAt: new Date(0).toISOString(),
+              endedAt: null,
+              worktreePath: null,
+              checkpoint: { pausedAtStep: 4, sessionId: 's1', dirtyFileCount: 2, deniedDuringPause: [] },
+              waitingFor: 'Maya',
+            },
+          ],
+        })}
+        onClose={() => {}}
+      />,
+    )
+    expect(screen.getByText(/waiting for Maya at step 4/)).toBeTruthy()
+    expect(screen.queryByText(/paused at step 4/)).toBeNull()
   })
 
   it("shows 'N tool calls denied during pause · <id-prefixes>' when the checkpoint has denials", () => {
@@ -201,6 +232,7 @@ describe('TaskDetailPanel', () => {
                   { id: 'call-ghijkl02', summary: null },
                 ],
               },
+              waitingFor: null,
             },
           ],
         })}
@@ -258,6 +290,7 @@ describe('TaskDetailPanel worktree collection (M23 B4)', () => {
     endedAt: new Date(1).toISOString(),
     worktreePath,
     checkpoint: null,
+    waitingFor: null,
   })
 
   it('renders the collect control for a terminal task with a worktree still on disk', () => {

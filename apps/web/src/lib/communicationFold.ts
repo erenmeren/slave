@@ -36,7 +36,10 @@ export interface CommunicationEdge {
  * - `task.review_rejected` names a reviewer; the next `run.started` on the same task names the
  *   slave sent back to rework it -> `reviewer -> implementer, 'rework'`.
  * - `slave.message_sent` with `actor: 'human'` and a `slaveId` -> `operator -> slaveId,
- *   'message'`.
+ *   'message'` (a human message's `slaveId` is who the operator addressed).
+ * - `slave.message_sent` with `actor: 'slave'` -> `slaveId -> payload.recipientSlaveId, 'message'`
+ *   (M36 t3): here `slaveId` is the SENDER and the recipient is on the event. A role-addressed
+ *   message draws no edge -- see the case itself for why.
  *
  * `events` must already be in `seq` order -- the fold is a single forward pass with no look-ahead
  * (a task's planner/reviewer state is only ever set from an event already seen).
@@ -98,7 +101,21 @@ export function foldCommunication(events: readonly FoldEvent[]): { edges: Commun
         break
       }
       case 'slave.message_sent': {
-        if (event.actor === 'human' && event.slaveId !== null) bump(OPERATOR, event.slaveId, 'message')
+        if (event.slaveId === null) break
+        // A human message's `slaveId` is who the operator ADDRESSED; a worker's is the SENDER, and
+        // the recipient rides in the payload (M36 t1's `sendMessage`). Two readings of one column,
+        // told apart by `actor` and by nothing else.
+        if (event.actor === 'human') {
+          bump(OPERATOR, event.slaveId, 'message')
+          break
+        }
+        const recipient = (event.payload as { recipientSlaveId?: unknown } | null)?.recipientSlaveId
+        // A ROLE-addressed message draws nothing. The payload names the role, not its holders, and
+        // this fold is a pure pass over events with no roster to expand one against -- inventing an
+        // edge per current holder would also credit workers who never saw it. The exchange still
+        // shows up: an `answer` is always addressed to the asker by name (M36 t3's `answer.ts`
+        // reads the recipient off the question row), so the reply draws `answerer -> asker`.
+        if (typeof recipient === 'string') bump(event.slaveId, recipient, 'message')
         break
       }
       default:

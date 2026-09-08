@@ -80,6 +80,7 @@ const ALL_KINDS: Record<ControlRefusal['kind'], true> = {
   invalid_message_body: true,
   message_not_found: true,
   not_message_recipient: true,
+  not_a_question: true,
 }
 
 const ALL = Object.keys(ALL_KINDS) as ControlRefusal['kind'][]

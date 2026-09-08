@@ -188,6 +188,9 @@ export type ControlRefusal =
   | { readonly kind: 'message_not_found'; readonly messageId: string }
   /** `markMessageRead` on a message addressed to neither this slave nor a role it holds. */
   | { readonly kind: 'not_message_recipient'; readonly messageId: string; readonly slaveId: string }
+  /** M36 t3: `answerQuestion` was pointed at a message that is not a `question` -- an answer to an
+   *  `information` or a `handoff` has nobody waiting on it, and nothing to resume. */
+  | { readonly kind: 'not_a_question'; readonly messageId: string; readonly messageKind: string }
 
 /**
  * The word a person reads for `live_runs`'s `entity` (M27 final review, Important finding 3).
@@ -362,5 +365,7 @@ export function refusalText(refusal: ControlRefusal): string {
       return `no message with id ${refusal.messageId}`
     case 'not_message_recipient':
       return `message ${refusal.messageId} is not addressed to slave ${refusal.slaveId}`
+    case 'not_a_question':
+      return `message ${refusal.messageId} is a ${refusal.messageKind}, not a question: there is nobody waiting on an answer to it`
   }
 }

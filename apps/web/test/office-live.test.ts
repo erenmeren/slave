@@ -31,7 +31,7 @@ const ROSTER = [
 ]
 
 function live(status: LiveStatus, over: Partial<LiveSlave> = {}): LiveSlave {
-  return { slaveId: 's1', status, taskTitle: status === 'idle' ? null : 'Add the thing', stepLabel: 'verifying', progressPct: 40, runId: status === 'idle' ? null : 'r1', ...over }
+  return { slaveId: 's1', status, taskTitle: status === 'idle' ? null : 'Add the thing', stepLabel: 'verifying', progressPct: 40, runId: status === 'idle' ? null : 'r1', waitingFor: null, ...over }
 }
 
 function office(): LiveOffice {
@@ -66,8 +66,16 @@ describe('liveSlavesOf / boardFromOverview', () => {
       blocked: [{ kind: 'run', id: 'r1', title: 'x', detail: 'y', action: 'resume', runId: 'r1' }] as OverviewSnapshot['blocked'],
     })
     const m = liveSlavesOf(o)
-    expect(m.get('s1')).toEqual({ slaveId: 's1', status: 'paused', taskTitle: 'Ship it', stepLabel: 'verifying', progressPct: 55, runId: 'r1' })
+    expect(m.get('s1')).toEqual({ slaveId: 's1', status: 'paused', taskTitle: 'Ship it', stepLabel: 'verifying', progressPct: 55, runId: 'r1', waitingFor: null })
     expect(m.get('s2')?.status).toBe('idle')
+  })
+  it('carries who a waiting slave is waiting on, beside its (still paused) status (M36 t3)', () => {
+    const o = overview({
+      slaves: [card({ id: 's1', status: 'paused', runId: 'r1', waitingFor: { recipient: 'Maya', question: 'which queue?' } })],
+    })
+    const live = liveSlavesOf(o).get('s1')
+    expect(live?.status).toBe('paused')
+    expect(live?.waitingFor).toBe('Maya')
   })
   it('reads the task status, not the blocked list, for the blocked signal', () => {
     const o = overview({ slaves: [card({ id: 's1', status: 'working', taskStatus: 'blocked' })] })

@@ -40,6 +40,55 @@ describe('foldCommunication', () => {
     expect(foldCommunication(events)).toEqual({ edges: [{ from: 'operator', to: 'alex', kind: 'message', count: 1 }] })
   })
 
+  it('slave -> slave: a worker message_sent naming a recipient (M36 t3)', () => {
+    const events: FoldEvent[] = [
+      {
+        type: 'slave.message_sent',
+        slaveId: 'alex',
+        taskId: 't1',
+        actor: 'slave',
+        payload: { kind: 'question', body: 'which queue?', recipientSlaveId: 'maya', recipientRole: null },
+        seq: 1,
+      },
+      {
+        type: 'slave.message_sent',
+        slaveId: 'maya',
+        taskId: 't2',
+        actor: 'slave',
+        payload: { kind: 'answer', body: 'payments-retry', recipientSlaveId: 'alex', recipientRole: null },
+        seq: 2,
+      },
+    ]
+    expect(foldCommunication(events)).toEqual({
+      edges: [
+        { from: 'alex', to: 'maya', kind: 'message', count: 1 },
+        { from: 'maya', to: 'alex', kind: 'message', count: 1 },
+      ],
+    })
+  })
+
+  it('a role-addressed message draws no edge; its answer draws the one real exchange (M36 t3)', () => {
+    const events: FoldEvent[] = [
+      {
+        type: 'slave.message_sent',
+        slaveId: 'alex',
+        taskId: 't1',
+        actor: 'slave',
+        payload: { kind: 'question', body: 'which queue?', recipientSlaveId: null, recipientRole: 'answerer' },
+        seq: 1,
+      },
+      {
+        type: 'slave.message_sent',
+        slaveId: 'maya',
+        taskId: 't1',
+        actor: 'slave',
+        payload: { kind: 'answer', body: 'payments-retry', recipientSlaveId: 'alex', recipientRole: null },
+        seq: 2,
+      },
+    ]
+    expect(foldCommunication(events)).toEqual({ edges: [{ from: 'maya', to: 'alex', kind: 'message', count: 1 }] })
+  })
+
   it('counts accumulate across repeats of the same edge', () => {
     const events: FoldEvent[] = [
       { type: 'slave.message_sent', slaveId: 'alex', taskId: 't1', actor: 'human', payload: { category: 'instruction', body: 'a' }, seq: 1 },

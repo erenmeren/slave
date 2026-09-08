@@ -5,6 +5,7 @@ import {
   addCompanySlave,
   addCompanyTeam,
   adoptSimulation,
+  answerQuestion,
   archiveWorkspace,
   assignCompany,
   claimResume,
@@ -27,6 +28,7 @@ import {
   emergencyStop,
   haltSimulation,
   injectExternalEvent,
+  listPendingQuestions,
   listUsers,
   loadSimulation,
   moveSlave,
@@ -61,6 +63,7 @@ import { workspaceId as brandWorkspaceId, type WorkspaceId } from '@slave-of-ai/
 import { sectors } from '@slave-of-ai/simulation'
 import { DEFAULT_MODEL_TIMEOUT_MS, buildRegistry, decideWithModel, type AdapterRegistry, type ProviderKind } from '@slave-of-ai/providers'
 import { runDaemon } from './daemon.js'
+import { deliverAnswers } from './deliver.js'
 import { claudeCommandFrom } from './claude-command.js'
 import { NON_TERMINAL_RUN_STATUSES } from './world.js'
 import { executeResume } from './resume.js'
@@ -90,6 +93,12 @@ const USAGE = `usage: orchestrator <command> [options]
                                        never reset -- a task already at its attempt ceiling is
                                        refused unless --allow-another-attempt raises the ceiling
                                        by exactly one.
+  messages [--workspace <id>]          every question a slave is still waiting on an answer to,
+                                       with the message id the answer verb needs
+  answer --message <id> --text "<t>" [--by <name>]
+                                       answer a slave's question as a human, and hand the answer
+                                       to the run that is waiting for it. The waiting run is
+                                       queued to resume; the daemon (or one tick) continues it.
   clear-halt --workspace <id>          retract a WORKSPACE-WIDE safety halt
   emergency-stop --workspace <id> [--by <name>]
                                        halt scheduling on the WHOLE workspace AND pause every
@@ -673,6 +682,54 @@ export async function main(argv: readonly string[]): Promise<number> {
       const result = await unblockTask(taskIdFlag, { allowAnotherAttempt })
       if (!result.ok) throw new Error(refusalText(result.error))
       process.stdout.write(`task ${taskIdFlag} is unblocked and back in rework\n`)
+      return 0
+    }
+
+    case 'messages': {
+      const workspaceId = await resolveWorkspace(flags)
+      const result = await listPendingQuestions(workspaceId)
+      if (!result.ok) throw new Error(refusalText(result.error))
+      if (result.value.length === 0) {
+        process.stdout.write('no slave is waiting on an answer\n')
+        return 0
+      }
+      // Names, not ids, for the two slaves -- an operator reading `from <uuid> to <uuid>` learns
+      // nothing. One query for the whole roster, not one per row.
+      const roster = await prisma.slave.findMany({
+        where: { team: { workspaceId } },
+        select: { id: true, name: true, role: true },
+      })
+      const nameById = new Map(roster.map((slave) => [slave.id, `${slave.name} (${slave.role})`]))
+      // The id first on every line: it is the one thing an operator has to copy into `answer`.
+      for (const message of result.value) {
+        const from = nameById.get(message.senderSlaveId) ?? message.senderSlaveId
+        const to =
+          message.recipientSlaveId !== null
+            ? (nameById.get(message.recipientSlaveId) ?? message.recipientSlaveId)
+            : `anyone with the ${message.recipientRole ?? 'unknown'} role`
+        process.stdout.write(`${message.id}  from ${from} to ${to}\n  ${message.body.replaceAll('\n', '\n  ')}\n`)
+      }
+      return 0
+    }
+
+    case 'answer': {
+      const messageId = requireFlag(flags, 'message')
+      const result = await answerQuestion(messageId, {
+        body: requireFlag(flags, 'text'),
+        answeredBy: flagText(flags, 'by') ?? 'operator',
+      })
+      if (!result.ok) throw new Error(refusalText(result.error))
+
+      // The same delivery pass the tick runs, not a second path: writing the answer and deciding
+      // whether a waiting run may be resumed by it are different questions, and only one place in
+      // the system is allowed to answer the second (`deliver.ts`).
+      const delivered = await deliverAnswers(result.value.workspaceId)
+      const woke = delivered.find((one) => one.answerId === result.value.id)
+      process.stdout.write(
+        woke === undefined
+          ? `answered ${messageId}. No run is waiting on it right now, so nothing was resumed.\n`
+          : `answered ${messageId}. Run ${woke.runId} is queued to resume -- the daemon (or one \`tick\`) continues it.\n`,
+      )
       return 0
     }
 

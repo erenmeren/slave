@@ -172,8 +172,13 @@ export function TaskDetailPanel({
                 </div>
                 {run.checkpoint !== null && run.checkpoint.pausedAtStep !== null && (
                   <div className="mt-1 text-text-3">
-                    paused at step {run.checkpoint.pausedAtStep} · session {run.checkpoint.sessionId} · {run.checkpoint.dirtyFileCount}{' '}
-                    dirty files
+                    {/* M36 t3: a run waiting for another slave's answer is `paused`, but "paused at
+                      * step N" reads as a pause a human is being asked to end. Name what it is
+                      * actually waiting on instead. */}
+                    {run.waitingFor === null
+                      ? `paused at step ${run.checkpoint.pausedAtStep}`
+                      : `waiting for ${run.waitingFor} at step ${run.checkpoint.pausedAtStep}`}{' '}
+                    · session {run.checkpoint.sessionId} · {run.checkpoint.dirtyFileCount} dirty files
                   </div>
                 )}
                 {run.checkpoint !== null && run.checkpoint.deniedDuringPause.length > 0 && (

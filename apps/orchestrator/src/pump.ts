@@ -14,6 +14,7 @@ import {
   type RunOutcome,
   type RuntimeEvent,
 } from '@slave-of-ai/providers'
+import { concludeWithAnswers } from './answer.js'
 import { concludeWithQuestion } from './ask.js'
 import { releaseTaskAfterFailure } from './taskRelease.js'
 
@@ -1130,6 +1131,12 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
   // text may be half a message, and treating it as an ask would turn a failure into an
   // indefinite wait with no attempt charged. Those runs conclude below exactly as they always have.
   if (!failed) {
+    // M36 t3: any questions this run answered, written BEFORE the ask hook below -- a slave that
+    // answers somebody and then asks a question of its own does both, in that order. Nothing here
+    // touches this run's outcome (see `answer.ts`): the state that moves is the ASKER's, on the
+    // next `deliverAnswers` pass.
+    await concludeWithAnswers({ runId, taskId, text: outputTail })
+
     const asked = await concludeWithQuestion({
       runId,
       taskId,

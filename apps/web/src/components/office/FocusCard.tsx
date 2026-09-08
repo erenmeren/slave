@@ -15,6 +15,8 @@ export interface FocusView {
   readonly taskTitle: string
   readonly pct: number
   readonly runId: string | null
+  /** Who this slave is waiting on an answer from (M36 t3), or `null`. See `LiveSlave.waitingFor`. */
+  readonly waitingFor: string | null
 }
 
 /** The design's focus card (M28 §5–§6): who, what, how far, and the run's Pause/Resume/Stop. The
@@ -37,6 +39,10 @@ export function FocusCard({
   // pause has been asked for but not taken effect — the button keeps saying Pause and goes
   // disabled, so the card never invites a resume of a run that is still stopping work.
   const paused = view.status === 'paused'
+  // M36 t3: a run waiting for another slave's answer is `paused`, but it is NOT a human pause --
+  // nobody should be invited to resume it by hand, and the thing that will continue it is the
+  // answer. Same rule `SlaveCard`/`SlavePanel` follow for the same field.
+  const waitingFor = view.waitingFor
   const runAction = async (action: 'pause' | 'resume' | 'stop'): Promise<void> => {
     if (view.runId === null) return
     setPending(true)
@@ -72,8 +78,13 @@ export function FocusCard({
       <div className="h-[3px] rounded-sm bg-[rgba(255,255,255,.06)]">
         <div className="h-full rounded-sm transition-[width] duration-500" style={{ width: `${view.pct}%`, background: view.statusColor, boxShadow: `0 0 8px ${view.statusColor}` }} />
       </div>
+      {waitingFor !== null && (
+        <span data-testid="office-focus-waiting" className="truncate text-[10px] text-[#f5b34a]">
+          waiting for {waitingFor}
+        </span>
+      )}
       <div className="flex gap-[5px]">
-        {!archived && (
+        {!archived && waitingFor === null && (
           <button type="button" data-testid="office-focus-pause" disabled={pending || view.runId === null || view.status === 'pausing'} onClick={() => void runAction(paused ? 'resume' : 'pause')} className={button}>
             {paused ? 'Resume' : 'Pause'}
           </button>

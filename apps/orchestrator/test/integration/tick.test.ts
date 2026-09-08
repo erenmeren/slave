@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { refusalText } from '@slave-of-ai/control'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@slave-of-ai/db'
 import { prisma } from '@slave-of-ai/db/client'
-import { workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
+import { ANSWER_BLOCK_OPEN, workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
 import {
   ClaudeCodeAdapter,
   buildRegistry,
@@ -135,7 +135,7 @@ describe('tick', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "SlaveMessage", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
     repos.push(fixture.repoPath)
@@ -165,6 +165,79 @@ describe('tick', () => {
     const run = await prisma.slaveRun.findFirstOrThrow()
     expect(run.pid).toBeGreaterThan(0)
     expect(run.worktreePath).toContain(join('.slaveofai', 'worktrees'))
+  })
+
+  describe("the recipient's next run sees the question (M36 t3)", () => {
+    /** A question from somebody else, addressed to the slave this fixture is about to dispatch. */
+    async function askTheFixtureSlave(body: string): Promise<string> {
+      const team = await prisma.team.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })
+      const asker = await prisma.slave.create({ data: { teamId: team.id, name: 'Maya', role: 'product' } })
+      const askerRun = await prisma.slaveRun.create({ data: { slaveId: asker.id, status: 'paused', kind: 'planning' } })
+      const message = await prisma.slaveMessage.create({
+        data: {
+          slaveId: asker.id,
+          workspaceId: fixture.workspaceId,
+          senderRunId: askerRun.id,
+          recipientSlaveId: fixture.slaveId,
+          threadId: 'thread-1',
+          kind: 'question',
+          body,
+          actor: 'slave',
+          expectsReply: true,
+        },
+      })
+      return message.id
+    }
+
+    it('puts the pending question, its id and the answer envelope in the prompt, and records the ids', async (): Promise<void> => {
+      const messageId = await askTheFixtureSlave('Which queue should retries land on?')
+      const recorder = recordingAdapter()
+
+      await tick({ ...deps, registry: singleAdapterRegistry(recorder.adapter) })
+
+      const prompt = recorder.starts[0]?.prompt ?? ''
+      expect(prompt).toContain('Which queue should retries land on?')
+      expect(prompt).toContain(messageId)
+      expect(prompt).toContain('Maya (product)')
+      expect(prompt).toContain(ANSWER_BLOCK_OPEN)
+      // The task itself is still there, under the inbox.
+      expect(prompt).toContain('Add the thing')
+
+      const run = await prisma.slaveRun.findFirstOrThrow({ where: { taskId: fixture.taskId } })
+      expect(run.suppliedMessageIds).toEqual([messageId])
+    })
+
+    it('leaves an ordinary prompt alone when nothing is pending, and records no ids', async (): Promise<void> => {
+      const recorder = recordingAdapter()
+
+      await tick({ ...deps, registry: singleAdapterRegistry(recorder.adapter) })
+
+      expect(recorder.starts[0]?.prompt).toBe('Add the thing\n\nmake it work')
+      const run = await prisma.slaveRun.findFirstOrThrow({ where: { taskId: fixture.taskId } })
+      expect(run.suppliedMessageIds).toEqual([])
+    })
+
+    it('does not carry a question that has already been answered', async (): Promise<void> => {
+      const messageId = await askTheFixtureSlave('Which queue should retries land on?')
+      const question = await prisma.slaveMessage.findUniqueOrThrow({ where: { id: messageId } })
+      await prisma.slaveMessage.create({
+        data: {
+          slaveId: fixture.slaveId,
+          workspaceId: fixture.workspaceId,
+          recipientSlaveId: question.slaveId,
+          threadId: question.threadId,
+          replyToId: question.id,
+          kind: 'answer',
+          body: 'payments-retry',
+          actor: 'slave',
+        },
+      })
+      const recorder = recordingAdapter()
+
+      await tick({ ...deps, registry: singleAdapterRegistry(recorder.adapter) })
+
+      expect(recorder.starts[0]?.prompt).not.toContain('Which queue should retries land on?')
+    })
   })
 
   it('writes the run its worktree and remembers the branch on the task', async (): Promise<void> => {

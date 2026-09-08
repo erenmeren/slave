@@ -29,9 +29,12 @@ const stubWorld = {
   status: (s: { state: string }) => ({ work: 'working', sit: 'idle', paused: 'paused', blocked: 'blocked' })[s.state] ?? 'idle',
   clock: () => '10:00',
 }
-const liveById: Record<string, { slaveId: string; status: string; taskTitle: string | null; stepLabel: string | null; progressPct: number; runId: string | null }> = {
-  s1: { slaveId: 's1', status: 'working', taskTitle: 'Add the thing', stepLabel: 'verifying', progressPct: 40, runId: 'r1' },
-  s3: { slaveId: 's3', status: 'paused', taskTitle: 'Plan', stepLabel: null, progressPct: 10, runId: 'r3' },
+const liveById: Record<
+  string,
+  { slaveId: string; status: string; taskTitle: string | null; stepLabel: string | null; progressPct: number; runId: string | null; waitingFor: string | null }
+> = {
+  s1: { slaveId: 's1', status: 'working', taskTitle: 'Add the thing', stepLabel: 'verifying', progressPct: 40, runId: 'r1', waitingFor: null },
+  s3: { slaveId: 's3', status: 'paused', taskTitle: 'Plan', stepLabel: null, progressPct: 10, runId: 'r3', waitingFor: null },
 }
 
 vi.mock('../src/lib/office/liveOffice.js', async (importOriginal) => {
@@ -259,6 +262,24 @@ describe('OfficeClient', () => {
       expect(pause.disabled).toBe(true)
     } finally {
       liveById.s3!.status = before
+    }
+  })
+
+  // M36 t3: a run waiting for another slave's answer is `paused`, but it is not a human pause --
+  // the office must not offer Resume for it, and must say what it is actually waiting on.
+  it('shows what a waiting slave is waiting on, and offers no Resume', async () => {
+    const before = liveById.s3!.waitingFor
+    liveById.s3!.waitingFor = 'Maya'
+    try {
+      await mount()
+      stubWorld.focusId = 's3'
+      await act(async () => { vi.advanceTimersByTime(320) })
+      expect(screen.getByTestId('office-focus-waiting').textContent).toContain('waiting for Maya')
+      expect(screen.queryByTestId('office-focus-pause')).toBeNull()
+      // Stop is still there: an operator can always end a run.
+      expect(screen.getByTestId('office-focus-stop')).not.toBeNull()
+    } finally {
+      liveById.s3!.waitingFor = before
     }
   })
 

@@ -142,7 +142,7 @@ describe('the orchestrator CLI', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "SimulationModelUsage", "SimulationJournalEntry", "SimulationRun", "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate", "User" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "SimulationModelUsage", "SimulationJournalEntry", "SimulationRun", "ExecutionEvent", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate", "User" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
   })
@@ -306,6 +306,110 @@ describe('the orchestrator CLI', () => {
     expect(task.status).toBe('rework')
     expect(task.attempt).toBe(1)
   })
+
+  /**
+   * The state M36 t2's ask path leaves behind, written directly: a run `paused` on
+   * `waiting_for_answer` with a checkpoint, a task parked `waiting` and still this run's, and the
+   * question it is waiting on. Written rather than produced by a real ask because what is under
+   * test here is the CLI verb, not the pump.
+   */
+  async function seedAWaitingRun(): Promise<{ readonly runId: string; readonly questionId: string }> {
+    const run = await prisma.slaveRun.create({
+      data: {
+        taskId: fixture.taskId,
+        slaveId: fixture.slaveId,
+        status: 'paused',
+        pauseReason: 'waiting_for_answer',
+        sessionId: 's-1',
+        worktreePath: fixture.repoPath,
+      },
+    })
+    await prisma.checkpoint.create({
+      data: {
+        runId: run.id,
+        sessionId: 's-1',
+        worktreePath: fixture.repoPath,
+        pauseFlagPath: '/tmp/pause.flag',
+        settingsPath: '/tmp/settings.json',
+        hookPath: '/tmp/pause-gate.sh',
+        gitAuthorName: 'Alex',
+        gitAuthorEmail: 'alex@slaveofai.local',
+        headCommit: 'a'.repeat(40),
+        deniedToolUseIds: [],
+        dirtyFiles: [],
+      },
+    })
+    await prisma.task.update({ where: { id: fixture.taskId }, data: { status: 'waiting', activeRunId: run.id } })
+    const question = await prisma.slaveMessage.create({
+      data: {
+        slaveId: fixture.slaveId,
+        workspaceId: fixture.workspaceId,
+        senderRunId: run.id,
+        taskId: fixture.taskId,
+        recipientRole: 'product',
+        threadId: 'thread-1',
+        kind: 'question',
+        body: 'Which queue should retries land on?',
+        actor: 'slave',
+        expectsReply: true,
+      },
+    })
+    return { runId: run.id, questionId: question.id }
+  }
+
+  it('answers a waiting slave as a human and queues its run to resume', async (): Promise<void> => {
+    const { runId, questionId } = await seedAWaitingRun()
+
+    const result = await runCli(['answer', '--message', questionId, '--text', 'payments-retry'])
+
+    expect(result.code).toBe(0)
+    expect(result.stdout).toContain('queued to resume')
+    const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId } })
+    expect(run.resumeRequestedAt).not.toBeNull()
+    expect(run.queuedMessage).toContain('payments-retry')
+    const answered = await prisma.slaveMessage.findFirstOrThrow({ where: { kind: 'answer' } })
+    expect(answered.actor).toBe('human')
+    expect(answered.replyToId).toBe(questionId)
+    expect(answered.deliveredAt).not.toBeNull()
+  }, 30_000)
+
+  it('answers exactly once when the same answer is given twice', async (): Promise<void> => {
+    const { runId, questionId } = await seedAWaitingRun()
+
+    await runCli(['answer', '--message', questionId, '--text', 'payments-retry'])
+    const second = await runCli(['answer', '--message', questionId, '--text', 'payments-retry'])
+
+    expect(second.code).toBe(0)
+    expect(second.stdout).toContain('nothing was resumed')
+    expect(await prisma.slaveMessage.count({ where: { kind: 'answer' } })).toBe(1)
+    expect(
+      await prisma.executionEvent.count({ where: { runId, type: 'run_resume_requested' } }),
+    ).toBe(1)
+  }, 30_000)
+
+  it('lists the questions a slave is still waiting on, with the id answer needs', async (): Promise<void> => {
+    const { questionId } = await seedAWaitingRun()
+
+    const result = await runCli(['messages'])
+
+    expect(result.code).toBe(0)
+    expect(result.stdout).toContain(questionId)
+    expect(result.stdout).toContain('Which queue should retries land on?')
+  }, 30_000)
+
+  it('says so plainly when nobody is waiting on an answer', async (): Promise<void> => {
+    const result = await runCli(['messages'])
+
+    expect(result.code).toBe(0)
+    expect(result.stdout).toContain('no slave is waiting on an answer')
+  }, 30_000)
+
+  it('exits non-zero for answer on a message id nobody wrote', async (): Promise<void> => {
+    const result = await runCli(['answer', '--message', '00000000-0000-0000-0000-000000000000', '--text', 'x'])
+
+    expect(result.code).not.toBe(0)
+    expect(`${result.stdout}${result.stderr}`).toMatch(/no message with id/)
+  }, 30_000)
 
   it('exits non-zero for unblock-task on a task that is not blocked', async (): Promise<void> => {
     // `fixture.taskId` seeds as `ready` (see `seed` above), not `blocked`.

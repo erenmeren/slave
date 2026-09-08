@@ -12,6 +12,17 @@ export interface LiveSlave {
   readonly stepLabel: string | null
   readonly progressPct: number
   readonly runId: string | null
+  /**
+   * Who this slave is waiting on an answer from (M36 t3), or `null` when it is not waiting.
+   *
+   * Carried BESIDE `status` rather than as a status of its own: a waiting run really is `paused`
+   * (M36 t2 parks it there deliberately, because that is the one status the sweep leaves alone and
+   * the resume path acts on), and the floor's own `LiveStatus` drives the canvas's seat states. The
+   * one thing the scene must not do is offer Resume as if a human had paused it -- see
+   * `FocusCard`. Same shape and same reason as `SlaveCardData.waitingFor`, which M36 t2 added for
+   * the overview cards.
+   */
+  readonly waitingFor: string | null
 }
 
 export interface LiveBoard {
@@ -55,6 +66,7 @@ export function liveSlavesOf(overview: OverviewSnapshot): ReadonlyMap<string, Li
         stepLabel: card.stepLabel,
         progressPct: card.progressPct,
         runId: card.runId,
+        waitingFor: card.waitingFor?.recipient ?? null,
       },
     ]),
   )

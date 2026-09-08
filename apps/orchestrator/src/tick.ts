@@ -21,6 +21,8 @@ import {
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import type { AdapterRegistry, SlaveRuntimeAdapter, RunHandle } from '@slave-of-ai/providers'
+import { deliverAnswers } from './deliver.js'
+import { pendingInbox, withInbox } from './inbox.js'
 import { runMergePass } from './merge.js'
 import { resolveRuntime, workspaceDefaultProvider } from './model.js'
 import { dispatchPlanning } from './planning.js'
@@ -278,6 +280,11 @@ export async function tick(deps: TickDeps): Promise<TickReport> {
     const runId = await startRun(deps, command.taskId, command.slaveId)
     if (runId !== null) started.push(runId)
   }
+
+  // M36 t3: before the resume pass, not after -- an answer that arrives now writes its resume
+  // intent, and the very next line claims and spawns it, so a waiting slave is continued in the
+  // same tick rather than one period later.
+  await deliverAnswers(deps.workspaceId)
 
   await resumeRequestedRuns(deps)
 
@@ -561,6 +568,12 @@ async function startRun(deps: TickDeps, taskId: TaskId, slaveId: SlaveId): Promi
     // else -- is that adapter's business, reported back opaquely on `handle.runFiles` below.
     const { runDir, pauseFlagPath } = runFilePaths(workspace.repoPath, runId)
 
+    // M36 t3: the unanswered questions addressed to this slave, rendered above the task. The one
+    // place a recipient ever SEES a message -- `inbox.ts` owns what goes in it, this file owns
+    // only that it goes in front of `buildPrompt`'s output and that the ids are recorded on the
+    // run below.
+    const inbox = await pendingInbox(slave.id)
+
     // M18 Task 5: the permission matrix is resolved and snapshotted to disk HERE, at dispatch,
     // against this run's own provider -- the same resolve-once-at-spawn discipline `model` already
     // gets. `permissions.json` is written even when the deny list is empty (spec §2): the gate
@@ -569,7 +582,7 @@ async function startRun(deps: TickDeps, taskId: TaskId, slaveId: SlaveId): Promi
 
     handle = await runAdapter.start({
       runId,
-      prompt: buildPrompt(task),
+      prompt: withInbox(inbox.section, buildPrompt(task)),
       worktreePath: worktree.path,
       pauseFlagPath,
       runDir,
@@ -587,7 +600,15 @@ async function startRun(deps: TickDeps, taskId: TaskId, slaveId: SlaveId): Promi
       // write. Written here, alongside `pid`, rather than in `createRunUnlessArchived`'s insert
       // above (`runs.js`), because `resolved` is not known until the chain (and the registry)
       // have both been consulted.
-      data: { pid: handle.pid, worktreePath: worktree.path, provider: resolved.provider },
+      // `suppliedMessageIds` (M36 t3) written here rather than at the insert above: the run's
+      // prompt is only real once the child is up, and a dispatch that fails before the spawn showed
+      // the slave nothing.
+      data: {
+        pid: handle.pid,
+        worktreePath: worktree.path,
+        provider: resolved.provider,
+        suppliedMessageIds: [...inbox.messageIds],
+      },
     })
 
     // Only ever a *first* pump for this run: the tick never resumes anything, so the second

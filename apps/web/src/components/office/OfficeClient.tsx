@@ -306,6 +306,7 @@ export function OfficeClient({
             taskTitle: focused.task?.title ?? '—',
             pct: Math.round(focused.progress),
             runId: live?.runId ?? null,
+            waitingFor: live?.waitingFor ?? null,
           }
         })()
 

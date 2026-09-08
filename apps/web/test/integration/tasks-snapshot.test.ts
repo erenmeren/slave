@@ -28,13 +28,54 @@ describe('buildTasksSnapshot', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
   })
 
   afterAll(async (): Promise<void> => {
     await prisma.$disconnect()
+  })
+
+  it('names who a waiting run is waiting on, and leaves an ordinary pause alone (M36 t3)', async (): Promise<void> => {
+    const maya = await prisma.slave.create({
+      data: { teamId: (await prisma.team.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })).id, name: 'Maya', role: 'product' },
+    })
+    const task = await prisma.task.create({
+      data: {
+        workspaceId: fixture.workspaceId,
+        title: 'Add the thing',
+        description: 'x',
+        status: 'waiting',
+        requiredRole: 'backend',
+        maxAttempts: 3,
+      },
+    })
+    const waitingRun = await prisma.slaveRun.create({
+      data: { taskId: task.id, slaveId: fixture.slaveId, status: 'paused', pauseReason: 'waiting_for_answer', pausedAtStep: 3 },
+    })
+    const humanPause = await prisma.slaveRun.create({
+      data: { taskId: task.id, slaveId: fixture.slaveId, status: 'paused', pauseReason: 'human', pausedAtStep: 1 },
+    })
+    await prisma.slaveMessage.create({
+      data: {
+        slaveId: fixture.slaveId,
+        workspaceId: fixture.workspaceId,
+        senderRunId: waitingRun.id,
+        recipientSlaveId: maya.id,
+        threadId: 'thread-1',
+        kind: 'question',
+        body: 'Which queue?',
+        actor: 'slave',
+        expectsReply: true,
+      },
+    })
+
+    const snapshot = await buildTasksSnapshot(fixture.workspaceId)
+    const runs = snapshot?.tasks[0]?.runs ?? []
+
+    expect(runs.find((run) => run.id === waitingRun.id)?.waitingFor).toBe('Maya')
+    expect(runs.find((run) => run.id === humanPause.id)?.waitingFor).toBeNull()
   })
 
   it('returns every task with its runs newest-first and checkpoint summaries', async (): Promise<void> => {
