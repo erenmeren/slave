@@ -1,7 +1,7 @@
 import { prisma } from '@slave-of-ai/db/client'
 import { err, ok, type Result } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
-import { admitRoster, assignCompanyTx, type AssignReport } from '../org.js'
+import { admitRoster, AssignmentRefused, assignCompanyTx, type AssignReport } from '../org.js'
 import type { Principal } from '../principal.js'
 import type { ControlRefusal } from '../refusal.js'
 import { loadSimulation, rosterOf } from './read.js'
@@ -182,13 +182,19 @@ export async function adoptionPreview(simulationId: string): Promise<Result<Adop
  *  commits everything written before it, which is exactly what this must not do. Caught by
  *  {@link adoptSimulation} and unwrapped into the refusal it carries.
  *
- *  The rollback itself is DEFENSIVE and, as the code stands, unreachable: every refusal
- *  `adoptSimulation` can reach is decided before its first write. `assignCompanyTx`'s own
- *  `company_already_assigned` is precluded by the stricter "any company at all" guard a few lines
- *  above it, under the same workspace lock, and the model's ambiguity refusal was hoisted above
- *  the assignment for the same reason. That is a property of today's ordering, not a guarantee --
- *  a future refusal added after the assignment would silently commit a half-adopted project
- *  without this, which is why the throw stays. */
+ *  Every explicit `throw new AdoptionRefused(...)` SITE in this file's own transaction body is
+ *  DEFENSIVE and, as the code stands, unreachable: each is decided before this function's own
+ *  first write. `assignCompanyTx`'s own `company_already_assigned` is precluded by the stricter
+ *  "any company at all" guard a few lines above it, under the same workspace lock, and the model's
+ *  ambiguity refusal was hoisted above the assignment for the same reason. That is a property of
+ *  today's ordering, not a guarantee -- a future refusal added after the assignment would silently
+ *  commit a half-adopted project without this, which is why the throw stays.
+ *
+ *  `assignCompanyTx`'s OWN post-write refusal (M34 t2 fix round 2, `Team_workspaceId_name_key`) is
+ *  NOT one of these unreachable sites: it throws {@link AssignmentRefused} directly from inside
+ *  `assignCompanyTx` -- a different class, defined in `org.ts` for `assignCompany`'s own use too --
+ *  and this file's outer `catch` converts that one into an `AdoptionRefused`-shaped `Result` at
+ *  the same place it already unwraps this class, rather than adding a second unwrapping site. */
 class AdoptionRefused extends Error {
   constructor(readonly refusal: ControlRefusal) {
     super('adoption refused')
@@ -365,7 +371,11 @@ export async function adoptSimulation(
 
     return ok({ workspaceId: outcome.workspaceId, assigned: outcome.assigned })
   } catch (error) {
-    if (error instanceof AdoptionRefused) return err(error.refusal)
+    // `AssignmentRefused` (M34 t2 fix round 2) is `assignCompanyTx`'s OWN post-write refusal,
+    // thrown from inside the `assignCompanyTx` call above rather than returned as a value -- see
+    // that class's doc comment in `org.ts`. Unwrapped here the same way `AdoptionRefused` is,
+    // rather than adding a second `try`/`catch` around just that one call.
+    if (error instanceof AdoptionRefused || error instanceof AssignmentRefused) return err(error.refusal)
     throw error
   }
 }

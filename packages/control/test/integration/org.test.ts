@@ -601,13 +601,84 @@ describe('assignCompany', () => {
   // inserting the identical key at the literal same instant, and a Postgres-wide characteristic
   // every unique-catching verb in this file already carries, not something new here or in scope
   // for this fix. The construction below sidesteps needing real concurrency at all: it reproduces
-  // the STATE such a race leaves behind deterministically, by calling `assignCompanyTx` directly
-  // (exported for exactly this -- `adoptSimulation` already runs it inside its own transaction) on
-  // a `tx` that has already committed a same-named sibling under a companyTeamId neither of
-  // `assignCompanyTx`'s own two pre-checks recognizes: not "already this roster's team" (a
-  // different companyTeamId) and not "a legacy hand-made team to adopt" (companyTeamId is not
-  // null). It walks straight into `tx.team.create`, which now collides for real, every time.
-  it('refuses duplicate_name when a same-named Team already exists under an unrelated companyTeamId', async (): Promise<void> => {
+  // the STATE such a race leaves behind deterministically -- a same-named sibling already
+  // committed under a companyTeamId neither of `assignCompanyTx`'s own two pre-checks recognizes:
+  // not "already this roster's team" (a different companyTeamId) and not "a legacy hand-made team
+  // to adopt" (companyTeamId is not null). It walks straight into `tx.team.create`, which now
+  // collides for real, every time (fix round 2 below calls `assignCompany`, not `assignCompanyTx`
+  // directly, so this no longer needs its own transaction wrapper either).
+  //
+  // M34 t2 fix round 2: the catch above used to RETURN `err({ kind: 'duplicate_name', ... })` as a
+  // value (fix round 1, f6ca14c) -- but by the time it fires, `tx.workspace.update({ data: {
+  // companyId } })` a few lines up, and possibly an earlier `companyTeam` iteration's own `Team`
+  // and `Slave` rows, have already been written to THIS transaction. Prisma's own documented
+  // contract for an interactive `$transaction`: a callback that REJECTS rolls everything back; one
+  // that RESOLVES -- to any value, a refusal included -- commits. `assignCompany` (org.ts, before
+  // this fix) simply forwarded that value as `err(...)` without ever rejecting its own
+  // `$transaction` call, which is a genuine contract violation regardless of what any one database
+  // happens to do about it. Thrown as `AssignmentRefused` instead (see that class), the collision
+  // now rolls back the way the contract says it must.
+  //
+  // Empirical note, checked directly against BOTH a raw `pg` client and this exact test: for THIS
+  // one refusal specifically -- sourced from a genuine Postgres unique-violation, with no further
+  // query attempted afterward either way -- Postgres's own "an aborted transaction's COMMIT is
+  // silently treated as ROLLBACK" behavior happens to roll the whole transaction back even under
+  // f6ca14c's RETURNED value, because the earlier failed `INSERT` already poisoned the underlying
+  // transaction before `assignCompany`'s `$transaction` call ever tries to commit it. So the data
+  // assertions below (`companyId` null, no leftover `Engineering` row) hold under BOTH f6ca14c and
+  // this fix in this specific construction -- they do NOT, on their own, discriminate the two. They
+  // are kept anyway as a permanent regression guard on the actual invariant that matters (no torn
+  // assignment ever observable), and because relying on a specific database's incidental recovery
+  // behavior instead of Prisma's own documented contract is exactly the kind of accidental
+  // correctness a later refusal that is a plain in-process decision (not sourced from a failed
+  // query, and so with no such protection) would not get. The ACTUAL discriminating assertion is
+  // the second test below: whether `assignCompanyTx` itself resolves with a value (f6ca14c) or
+  // rejects (this fix) for the exact same collision -- verified directly, not inferred from a
+  // database side effect.
+  it('refuses duplicate_name via assignCompany, rolling back everything else this call wrote', async (): Promise<void> => {
+    const workspace = await seedWorkspace()
+
+    // Two departments, not one: the collision below lands on the SECOND (`Support`), so a torn
+    // assignment -- `companyId` written, `Engineering`'s team and worker from the FIRST loop
+    // iteration left behind -- has something to actually tear. A single-department fixture could
+    // not tell "everything rolled back" apart from "assignCompanyTx never reached its first write".
+    const company = await prisma.company.create({ data: { name: 'Acme Corp' } })
+    const engineeringTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Engineering' } })
+    const engineeringTemplate = await prisma.slaveTemplate.create({ data: { name: `Engineer-${company.id}`, role: 'engineer' } })
+    await prisma.companySlave.create({ data: { companyTeamId: engineeringTeam.id, templateId: engineeringTemplate.id, name: 'Atlas' } })
+    const supportTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Support' } })
+    const supportTemplate = await prisma.slaveTemplate.create({ data: { name: `Support-${company.id}`, role: 'support' } })
+    await prisma.companySlave.create({ data: { companyTeamId: supportTeam.id, templateId: supportTemplate.id, name: 'Robin' } })
+
+    const otherCompany = await prisma.company.create({ data: { name: 'Globex Corp' } })
+    const otherCompanyTeam = await prisma.companyTeam.create({ data: { companyId: otherCompany.id, name: 'Unrelated' } })
+    await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Support', companyTeamId: otherCompanyTeam.id } })
+
+    const result = await assignCompany(workspace.id, company.id)
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error).toEqual({ kind: 'duplicate_name', name: 'Support' })
+
+    // See the empirical note above: these hold under f6ca14c too, in this specific construction --
+    // still asserted, as the permanent regression guard on the invariant itself.
+    const ws = await prisma.workspace.findUniqueOrThrow({ where: { id: workspace.id } })
+    expect(ws.companyId).toBeNull()
+    expect(await prisma.team.count({ where: { workspaceId: workspace.id, name: 'Engineering' } })).toBe(0)
+    expect(await prisma.slave.count({ where: { team: { workspaceId: workspace.id } } })).toBe(0)
+    // The pre-existing sibling itself is untouched: still exactly one row, still under the
+    // unrelated companyTeamId it started with.
+    const survivor = await prisma.team.findFirstOrThrow({ where: { workspaceId: workspace.id, name: 'Support' } })
+    expect(survivor.companyTeamId).toBe(otherCompanyTeam.id)
+    expect(await prisma.team.count({ where: { workspaceId: workspace.id, name: 'Support' } })).toBe(1)
+  })
+
+  // The actual RED/GREEN discriminator for fix round 2 (see the empirical note on the test above):
+  // `assignCompanyTx` itself, called directly on its own transaction the way `adoptSimulation`
+  // does, must REJECT for this collision -- under f6ca14c it instead RESOLVED with
+  // `{ ok: false, error: { kind: 'duplicate_name', ... } }`, a plain value a `$transaction` caller
+  // has to remember to re-throw on (exactly the omission `assignCompany` made and this fix closes
+  // at the SOURCE instead, so no future caller of `assignCompanyTx` can make the same mistake).
+  it('assignCompanyTx itself throws AssignmentRefused for the collision, not a returned value', async (): Promise<void> => {
     const workspace = await seedWorkspace()
     const { companyId, teamName } = await seedCompanyWithRoster(1)
 
@@ -615,11 +686,10 @@ describe('assignCompany', () => {
     const otherCompanyTeam = await prisma.companyTeam.create({ data: { companyId: otherCompany.id, name: 'Unrelated' } })
     await prisma.team.create({ data: { workspaceId: workspace.id, name: teamName, companyTeamId: otherCompanyTeam.id } })
 
-    const result = await prisma.$transaction((tx) => assignCompanyTx(tx, workspace.id, companyId))
-
-    expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.error).toEqual({ kind: 'duplicate_name', name: teamName })
-    expect(await prisma.team.count({ where: { workspaceId: workspace.id, name: teamName } })).toBe(1)
+    await expect(prisma.$transaction((tx) => assignCompanyTx(tx, workspace.id, companyId))).rejects.toMatchObject({
+      name: 'AssignmentRefused',
+      refusal: { kind: 'duplicate_name', name: teamName },
+    })
   })
 
   it('rolls back the whole assignment when a roster template has gone dangling mid-transaction', async (): Promise<void> => {

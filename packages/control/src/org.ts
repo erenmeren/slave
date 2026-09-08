@@ -165,14 +165,18 @@ export async function addCompanySlave(
  * budgeted workspace will not accept a roster whose members would run on a runtime that cannot
  * report what it spends. Returns the refusal, or `null` to proceed.
  *
- * Run BEFORE the transaction, not inside it, and that ordering is the point: the refusal must
- * leave the workspace exactly as it was. A check inside the transaction would work too, but
- * `assignCompany`'s transaction writes `companyId` first and materializes afterwards, so a
- * mid-transaction refusal would depend on the rollback for correctness where nothing needs to be
- * written in the first place. Nothing here can go stale between the check and the write in a way
- * that matters: the one-way `companyId` lock inside the transaction still guards the assignment
- * itself, and a roster edit racing this check is caught again at dispatch (spec §6's second half,
- * which exists precisely because resolution crosses four levels).
+ * Run BEFORE the transaction, not inside it: this is a pure read across the roster's resolution
+ * chains, nothing here is written, and there is nothing to gain by moving it inside and holding a
+ * row lock across a check that never touches the row. (The transaction itself DOES have a refusal
+ * that can only be discovered after it has already written something -- `assignCompanyTx`'s own
+ * `Team_workspaceId_name_key` race, M34 t2 fix round 2 -- and that one is thrown as
+ * `AssignmentRefused` rather than returned, precisely because a value returned from an interactive
+ * `$transaction` callback still COMMITS everything written before it; a plain refusal VALUE is
+ * only ever safe when, as here, nothing has been written yet.) Nothing here can go stale between
+ * the check and the write in a way that matters: the one-way `companyId` lock inside the
+ * transaction still guards the assignment itself, and a roster edit racing this check is caught
+ * again at dispatch (spec §6's second half, which exists precisely because resolution crosses
+ * four levels).
  *
  * Every roster member is examined, not only the ones this call will newly materialize. A re-sync
  * that skips an already-materialized worker still leaves that worker running in this workspace,
@@ -259,8 +263,15 @@ export interface AssignReport {
  * inside that SAME transaction, `tx.slaveTemplate.findUniqueOrThrow` included: a template is
  * append-only in the ordinary path (Decision 9), so its being missing here is always a data
  * integrity failure, and letting that throw is what keeps a torn assignment (companyId written,
- * some workers created, others not) impossible. The event -- ALWAYS emitted, even with zero new
- * workers -- follows the transaction rather than living inside it, mirroring `setGoal`.
+ * some workers created, others not) impossible. `AssignmentRefused` (M34 t2 fix round 2) is the
+ * SAME mechanism used deliberately: a name collision on `Team_workspaceId_name_key`, discovered
+ * only after `companyId` (and possibly earlier departments' teams and workers) has already been
+ * written this transaction, is thrown rather than returned as a value for exactly this reason --
+ * Prisma's interactive `$transaction` only rolls back a callback that REJECTS, so a refusal
+ * returned as a plain value after a write has already happened would commit that write anyway.
+ * The `catch` just below unwraps the throw back into the `Result` this function has always
+ * returned. The event -- ALWAYS emitted, even with zero new workers -- follows the transaction
+ * rather than living inside it, mirroring `setGoal`.
  */
 export async function assignCompany(
   workspaceId: string,
@@ -277,7 +288,17 @@ export async function assignCompany(
   const admission = await admitRoster(workspace, companyId)
   if (admission !== null) return err(admission)
 
-  const outcome = await prisma.$transaction(async (tx) => assignCompanyTx(tx, workspaceId, companyId, options))
+  let outcome: Result<AssignReport, ControlRefusal>
+  try {
+    outcome = await prisma.$transaction(async (tx) => assignCompanyTx(tx, workspaceId, companyId, options))
+  } catch (error) {
+    // `AssignmentRefused` (M34 t2 fix round 2): thrown, not returned, from a refusal
+    // `assignCompanyTx` only discovers after it has already written to this SAME transaction --
+    // the throw is what makes Prisma actually roll that write back. Unwrapped into the ordinary
+    // `Result` this function has always returned; anything else is a real failure and propagates.
+    if (error instanceof AssignmentRefused) return err(error.refusal)
+    throw error
+  }
 
   if (!outcome.ok) return err(outcome.error)
 
@@ -301,13 +322,39 @@ export async function assignCompany(
 export interface AssignOptions { readonly roleOverrides?: Readonly<Record<string, string>> }
 
 /**
+ * Thrown by {@link assignCompanyTx} for the ONE refusal it can only discover after it has already
+ * written to its caller's transaction (M34 t2 fix round 2) -- the `Team_workspaceId_name_key` race
+ * a concurrent `createProjectTeam`/`renameTeam` (or another department's own materialization) can
+ * still win. Every OTHER refusal in that function is decided before its first write and stays a
+ * plain returned value (see the function's own doc comment) -- this one exists because a value
+ * returned from an interactive `$transaction` callback still COMMITS everything written before it;
+ * only a callback that REJECTS rolls back. Mirrors `adopt.ts`'s own `AdoptionRefused` idiom
+ * (the two are not the same class: `assignCompany` catches THIS one directly, and `adoptSimulation`
+ * -- which runs `assignCompanyTx` inside its own transaction -- converts it into its own
+ * `AdoptionRefused` at the same outer catch that already handles that class, rather than every
+ * `assignCompanyTx` caller needing its own duplicate unwrapping).
+ */
+export class AssignmentRefused extends Error {
+  constructor(readonly refusal: ControlRefusal) {
+    super('assignment refused')
+    this.name = 'AssignmentRefused'
+  }
+}
+
+/**
  * {@link assignCompany}'s transaction body, on a caller's `tx` (M33 controller ruling R1). It is
  * the whole of the locking, the one-way check and the materialization -- everything the doc
  * comment above describes -- extracted so `adoptSimulation` can run it inside ITS OWN transaction,
- * alongside the settings, the provenance and the journal row it writes. A refusal returned from
- * here is a value, not a throw, exactly as it was: `assignCompany` writes nothing before the
- * refusal so it needs no rollback, and a caller that DOES write before this (adoption) throws on
- * the returned refusal itself to roll its own work back.
+ * alongside the settings, the provenance and the journal row it writes.
+ *
+ * A refusal decided BEFORE this function's first write (`company_already_assigned`, the
+ * roleOverrides ambiguity check) is a plain returned value: nothing has been written yet, so
+ * nothing needs rolling back, and both `assignCompany` and `adoptSimulation` already throw on a
+ * returned refusal themselves when THEY have written something earlier in their own transaction
+ * (see each caller). A refusal discovered AFTER this function's own first write -- currently only
+ * the `Team_workspaceId_name_key` race, M34 t2 fix round 2 -- is thrown as {@link AssignmentRefused}
+ * instead: a value cannot undo what this function itself already wrote in the SAME transaction, so
+ * a value here would let the caller's transaction commit that write out from under the refusal.
  *
  * The pre-checks (`workspace_not_found`, `company_not_found`, `admitRoster`) and the event stay
  * with the callers: both happen OUTSIDE the transaction, before it opens and after it commits.
@@ -367,11 +414,15 @@ export async function assignCompanyTx(
         // M34 t2 fix round 1: a `createProjectTeam`/`renameTeam` racing THIS create for the same
         // `(workspaceId, name)` -- no lock here serialises against them, only `assignCompanyTx`'s
         // own workspace-row lock -- now hits `Team_workspaceId_name_key` instead of silently
-        // duplicating. Caught the same way every other write path onto that index is.
+        // duplicating. THROWN (fix round 2), not returned: `companyId` (and possibly an earlier
+        // `companyTeam` iteration's own team and workers) has already been written to THIS
+        // transaction by this point, and a value returned from an interactive `$transaction`
+        // callback still commits everything written before it -- only a throw makes Prisma roll
+        // it back. See {@link AssignmentRefused}.
         try {
           team = await tx.team.create({ data: { workspaceId, name: companyTeam.name, companyTeamId: companyTeam.id } })
         } catch (error) {
-          if (isUniqueConstraintViolation(error)) return err({ kind: 'duplicate_name', name: companyTeam.name })
+          if (isUniqueConstraintViolation(error)) throw new AssignmentRefused({ kind: 'duplicate_name', name: companyTeam.name })
           throw error
         }
         createdTeams.push(team.name)
