@@ -184,6 +184,10 @@ describe('a slave that asks, and waits', () => {
     expect(run.endedAt).toBeNull()
     expect(run.terminalAt).toBeNull()
     expect(run.pausedAtStep).toBe(1)
+    // Final review: the child has already exited by the time this path runs, so the pid it left
+    // behind names a process that is gone -- and pids are recycled. Kept, `requestResume`'s
+    // `isAlive(run.pid)` could refuse `run_still_stopping` and never deliver the answer.
+    expect(run.pid).toBeNull()
 
     const task = await prisma.task.findUniqueOrThrow({ where: { id: ids.taskId } })
     expect(task.status).toBe('waiting')
@@ -426,6 +430,35 @@ describe('a slave that asks, and waits', () => {
     expect(await prisma.checkpoint.count({ where: { runId: ids.runId } })).toBe(0)
     expect(await prisma.slaveMessage.count({ where: { senderRunId: ids.runId } })).toBe(0)
     expect((await prisma.task.findUniqueOrThrow({ where: { id: ids.taskId } })).status).not.toBe('waiting')
+  })
+
+  it('refuses an ask from a REVIEW run: a question nobody could ever answer is not asked at all', async (): Promise<void> => {
+    // The shape `verify.ts` leaves behind when a run passes: the task is `reviewing`, and its
+    // `activeRunId` is null because only `tick.ts`'s `startRun` ever writes that column. A review
+    // run parked here would leave the task `reviewing` -- which `deliverAnswers` refuses to deliver
+    // to -- while `dispatchReview`'s "already live" gate counted the paused run as live and
+    // dispatched no replacement. Refused instead, and the review concludes the ordinary way.
+    await prisma.task.update({ where: { id: ids.taskId }, data: { status: 'reviewing', activeRunId: null } })
+    const reviewRun = await prisma.slaveRun.create({
+      data: { taskId: ids.taskId, slaveId: ids.slaveId, status: 'starting', kind: 'review', worktreePath, pid: DEAD_PID },
+    })
+
+    const outcome = await pumpEndingWith(
+      { ...ids, runId: runId(reviewRun.id) },
+      `I need to know the policy first.\n\n${ask('{"role":"answerer","question":"Which queue should retries land on?"}')}`,
+    )
+
+    // An ordinary conclusion, in every particular: nothing parked, nothing asked, nothing to resume.
+    expect(outcome).not.toBeNull()
+    const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: reviewRun.id } })
+    expect(run.status).toBe('succeeded')
+    expect(run.pauseReason).toBeNull()
+    expect(run.endedAt).not.toBeNull()
+    expect(await prisma.slaveMessage.count({ where: { senderRunId: reviewRun.id } })).toBe(0)
+    expect(await prisma.checkpoint.count({ where: { runId: reviewRun.id } })).toBe(0)
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: ids.taskId } })
+    expect(task.status).toBe('reviewing')
+    expect(task.attempt).toBe(0)
   })
 
   it('is reclaimed by the resume that answers it, and then finishes normally', async (): Promise<void> => {

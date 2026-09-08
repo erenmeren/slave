@@ -1,6 +1,6 @@
 import { listMessagesForSlave } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
-import { ANSWER_BLOCK_CLOSE, ANSWER_BLOCK_OPEN } from '@slave-of-ai/domain'
+import { ANSWER_BLOCK_CLOSE, ANSWER_BLOCK_OPEN, ASK_BLOCK_CLOSE, ASK_BLOCK_OPEN } from '@slave-of-ai/domain'
 
 /**
  * What a run's prompt carried from this slave's inbox, and which rows it was.
@@ -73,7 +73,68 @@ export async function pendingInbox(slaveId: string): Promise<PendingInbox> {
   return { section, messageIds: pending.value.map((message) => message.id) }
 }
 
-/** The prompt a run actually starts from: its inbox, then its task. */
-export function withInbox(section: string | null, prompt: string): string {
-  return section === null ? prompt : `${section}\n\n${prompt}`
+/**
+ * How many peers the roster below names before it stops (final review, Important 2).
+ *
+ * The roster is there so a slave addresses somebody who exists rather than inventing a role; it is
+ * not a directory. A large project would otherwise spend hundreds of prompt lines on names nobody
+ * reads, and `recipientCanAnswer` (`ask.ts`) still validates whatever the slave writes -- the
+ * roster is a hint, and a truncated hint is still a hint.
+ */
+const ROSTER_CAP = 25
+
+/**
+ * The few lines that teach an implementation run HOW to ask, and who it may ask (final review,
+ * Important 2).
+ *
+ * Nothing taught a slave the `<slave-ask>` envelope before this: the whole waiting loop existed and
+ * could not fire in production, because a model has no way to guess a tag it has never been shown.
+ * The markers come from `packages/domain/src/messaging/ask.ts` rather than being written out here,
+ * so the string the parser looks for and the string the prompt teaches cannot drift apart.
+ *
+ * **IMPLEMENTATION runs only.** `apps/orchestrator/src/ask.ts` refuses an ask from a `review` run
+ * (its task is not that run's to park), so teaching a reviewer the envelope would teach it a move
+ * that always ends in an ordinary conclusion and a warning line. `review.ts`'s `buildReviewPrompt`
+ * and `planning.ts`'s `buildPlanningPrompt` are therefore left alone; only `tick.ts`'s dispatch
+ * composes this in.
+ *
+ * `null` when this slave has no peers: with nobody else in the workspace, every recipient the slave
+ * could name is refused by `recipientCanAnswer` anyway, and an offer the system will always turn
+ * down is worse than no offer.
+ */
+export async function askProtocol(slaveId: string, workspaceId: string): Promise<string | null> {
+  const peers = await prisma.slave.findMany({
+    where: { id: { not: slaveId }, team: { workspaceId } },
+    select: { id: true, name: true, role: true },
+    orderBy: [{ role: 'asc' }, { name: 'asc' }],
+    take: ROSTER_CAP,
+  })
+  if (peers.length === 0) return null
+
+  const roster = peers.map((peer) => `- ${peer.name}, role "${peer.role}", id ${peer.id}`)
+  return [
+    'ASKING ANOTHER SLAVE',
+    '',
+    'If you cannot continue without an answer somebody else has to give, do not guess. End your',
+    'FINAL message with one block like this and stop there:',
+    `${ASK_BLOCK_OPEN}{"role":"<a role below>","question":"..."}${ASK_BLOCK_CLOSE}`,
+    `Use "slaveId":"<an id below>" instead of "role" to ask one slave by name. Add "context":"..."`,
+    'for anything the answerer needs to know first.',
+    '',
+    'Your run stops there. That is not a failure: it costs you no attempt, and you are resumed in',
+    'this same session, in this same worktree, with the answer in front of you. Ask only when you',
+    'are genuinely stuck; finish the task otherwise.',
+    '',
+    'Slaves you can address:',
+    ...roster,
+    '',
+    '---',
+  ].join('\n')
+}
+
+/** The prompt a run actually starts from: the sections above (its inbox, the ask protocol), then
+ *  its task. Absent sections are skipped rather than rendered empty. */
+export function withPreamble(sections: readonly (string | null)[], prompt: string): string {
+  const present = sections.filter((section): section is string => section !== null)
+  return present.length === 0 ? prompt : `${present.join('\n\n')}\n\n${prompt}`
 }

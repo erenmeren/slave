@@ -213,7 +213,14 @@ async function claimTheAnswer(questionId: string): Promise<ClaimedAnswer | null>
       if (alreadyDelivered > 0) return null
 
       const answer = await tx.slaveMessage.findFirst({
-        where: { replyToId: questionId, kind: 'answer', deliveredAt: null },
+        // `supersededAt: null` (final review): the schema states that `deliveredAt` and
+        // `supersededAt` are mutually exclusive, and this is the only write that could break that
+        // -- `supersedeLateAnswers` already refuses a delivered row, but nothing stopped a claim
+        // from delivering an answer a previous pass had stamped superseded. Unreachable in the
+        // sequence the two passes actually run in (a superseded answer's question always has a
+        // delivered one, which the count above catches first); enforced here anyway, because the
+        // exclusion is a stated property of the table and not a coincidence of the call order.
+        where: { replyToId: questionId, kind: 'answer', deliveredAt: null, supersededAt: null },
         orderBy: { seq: 'asc' },
         select: { id: true, body: true, slaveId: true, actor: true },
       })

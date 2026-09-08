@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { refusalText } from '@slave-of-ai/control'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@slave-of-ai/db'
 import { prisma } from '@slave-of-ai/db/client'
-import { ANSWER_BLOCK_OPEN, workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
+import { ANSWER_BLOCK_OPEN, ASK_BLOCK_OPEN, workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
 import {
   ClaudeCodeAdapter,
   buildRegistry,
@@ -172,7 +172,12 @@ describe('tick', () => {
     async function askTheFixtureSlave(body: string): Promise<string> {
       const team = await prisma.team.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })
       const asker = await prisma.slave.create({ data: { teamId: team.id, name: 'Maya', role: 'product' } })
-      const askerRun = await prisma.slaveRun.create({ data: { slaveId: asker.id, status: 'paused', kind: 'planning' } })
+      // `pauseReason` matters, not just `paused`: a question is pending only while its asker is
+      // still waiting on it (`stillPendingQuestion`, packages/control/src/messaging.ts), which is
+      // exactly the state `ask.ts` parks a run in.
+      const askerRun = await prisma.slaveRun.create({
+        data: { slaveId: asker.id, status: 'paused', pauseReason: 'waiting_for_answer', kind: 'planning' },
+      })
       const message = await prisma.slaveMessage.create({
         data: {
           slaveId: asker.id,
@@ -207,14 +212,31 @@ describe('tick', () => {
       expect(run.suppliedMessageIds).toEqual([messageId])
     })
 
-    it('leaves an ordinary prompt alone when nothing is pending, and records no ids', async (): Promise<void> => {
+    it('leaves an ordinary prompt alone when nothing is pending and there is nobody to ask, and records no ids', async (): Promise<void> => {
       const recorder = recordingAdapter()
 
       await tick({ ...deps, registry: singleAdapterRegistry(recorder.adapter) })
 
+      // The fixture's slave is the only one in this workspace, so there is no roster to offer and
+      // no ask protocol to teach -- an offer the system would refuse anyway is not made.
       expect(recorder.starts[0]?.prompt).toBe('Add the thing\n\nmake it work')
       const run = await prisma.slaveRun.findFirstOrThrow({ where: { taskId: fixture.taskId } })
       expect(run.suppliedMessageIds).toEqual([])
+    })
+
+    it('teaches an implementation run the ask envelope, and names the peers it may address (final review)', async (): Promise<void> => {
+      const team = await prisma.team.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })
+      await prisma.slave.create({ data: { teamId: team.id, name: 'Maya', role: 'product' } })
+      const recorder = recordingAdapter()
+
+      await tick({ ...deps, registry: singleAdapterRegistry(recorder.adapter) })
+
+      const prompt = recorder.starts[0]?.prompt ?? ''
+      expect(prompt).toContain(ASK_BLOCK_OPEN)
+      expect(prompt).toContain('Maya')
+      expect(prompt).toContain('product')
+      // The task is still the last thing the slave reads.
+      expect(prompt.endsWith('Add the thing\n\nmake it work')).toBe(true)
     })
 
     it('does not carry a question that has already been answered', async (): Promise<void> => {

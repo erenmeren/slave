@@ -633,6 +633,12 @@ model SlaveMessage {
   @@index([workspaceId, recipientSlaveId, readAt])
   @@index([workspaceId, recipientRole, readAt])
   @@index([threadId, seq])
+  /// M36 final review: "the messages this run sent, latest first" is the shape three readers
+  /// share -- `deliver.ts` matching a waiting run to the question it asked, and the two web
+  /// surfaces (`overview.ts`, `tasks.ts`) rendering `waiting for <whoever was asked>`. All three
+  /// order by `seq` inside a `senderRunId` filter, and none of the indexes above starts with
+  /// `senderRunId`.
+  @@index([senderRunId, seq])
 }
 
 model Approval {

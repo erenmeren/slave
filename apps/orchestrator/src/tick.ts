@@ -22,7 +22,7 @@ import {
 import { appendEvent } from '@slave-of-ai/events'
 import type { AdapterRegistry, SlaveRuntimeAdapter, RunHandle } from '@slave-of-ai/providers'
 import { deliverAnswers } from './deliver.js'
-import { pendingInbox, withInbox } from './inbox.js'
+import { askProtocol, pendingInbox, withPreamble } from './inbox.js'
 import { runMergePass } from './merge.js'
 import { resolveRuntime, workspaceDefaultProvider } from './model.js'
 import { dispatchPlanning } from './planning.js'
@@ -574,6 +574,11 @@ async function startRun(deps: TickDeps, taskId: TaskId, slaveId: SlaveId): Promi
     // run below.
     const inbox = await pendingInbox(slave.id)
 
+    // M36 final review (Important 2): the few lines that teach this slave the `<slave-ask>`
+    // envelope, and name the peers it may address. IMPLEMENTATION runs only -- this is the one
+    // dispatch that starts one, and `ask.ts` refuses an ask from any other kind.
+    const protocol = await askProtocol(slave.id, workspace.id)
+
     // M18 Task 5: the permission matrix is resolved and snapshotted to disk HERE, at dispatch,
     // against this run's own provider -- the same resolve-once-at-spawn discipline `model` already
     // gets. `permissions.json` is written even when the deny list is empty (spec §2): the gate
@@ -582,7 +587,7 @@ async function startRun(deps: TickDeps, taskId: TaskId, slaveId: SlaveId): Promi
 
     handle = await runAdapter.start({
       runId,
-      prompt: withInbox(inbox.section, buildPrompt(task)),
+      prompt: withPreamble([inbox.section, protocol], buildPrompt(task)),
       worktreePath: worktree.path,
       pauseFlagPath,
       runDir,

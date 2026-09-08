@@ -47,6 +47,18 @@ async function seed(): Promise<Fixture> {
   }
 }
 
+/**
+ * Parks the asking run the way `apps/orchestrator/src/ask.ts` does at its conclusion.
+ *
+ * Required by `unansweredOnly` since the final review: a question is pending only while its asker
+ * is still `paused` with `pauseReason = waiting_for_answer`, so that a run resumed by anything
+ * other than its answer stops re-injecting a question nobody is waiting on into every subsequent
+ * run of its recipient. The ask path sends and parks in one conclusion; so does this.
+ */
+async function parkAsWaiting(runId: string): Promise<void> {
+  await prisma.slaveRun.update({ where: { id: runId }, data: { status: 'paused', pauseReason: 'waiting_for_answer' } })
+}
+
 const question = (over: Partial<SendMessageInput> = {}): SendMessageInput => ({
   kind: 'question',
   body: 'Which queue should retries land on?',
@@ -269,6 +281,7 @@ describe('listMessagesForSlave', () => {
     const sent = await sendMessage(run.id, question({ recipientRole: sender.role }))
     expect(sent.ok).toBe(true)
     if (!sent.ok) return
+    await parkAsWaiting(run.id)
 
     const ownInbox = await listMessagesForSlave(sender.id)
     expect(ownInbox.ok).toBe(true)
@@ -304,6 +317,7 @@ describe('listMessagesForSlave', () => {
     const opener = await sendMessage(run.id, question({ recipientSlaveId: recipient.id }))
     expect(opener.ok).toBe(true)
     if (!opener.ok) return
+    await parkAsWaiting(run.id)
 
     const beforeReply = await listMessagesForSlave(recipient.id, { unansweredOnly: true })
     expect(beforeReply.ok).toBe(true)

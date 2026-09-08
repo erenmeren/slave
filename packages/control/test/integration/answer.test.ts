@@ -25,6 +25,15 @@ async function seed(): Promise<Fixture> {
   return { workspaceId: workspace.id, askerId: asker.id, answererId: answerer.id, runId: run.id, taskId: task.id }
 }
 
+/**
+ * Asks, and parks the asking run exactly as `apps/orchestrator/src/ask.ts` parks it.
+ *
+ * The park is not decoration: since the final review a question is pending only while its asker is
+ * still `paused` with `pauseReason = waiting_for_answer` (`stillPendingQuestion` in
+ * `src/messaging.ts`), because a question nobody is waiting on is a zombie in every recipient's
+ * prompt. A `working` run that sent a question is a shape production never produces -- the ask path
+ * sends and parks in the same conclusion -- so the fixture reproduces both halves.
+ */
 async function askAQuestion(fixture: Fixture): Promise<string> {
   const sent = await sendMessage(fixture.runId, {
     kind: 'question',
@@ -34,6 +43,10 @@ async function askAQuestion(fixture: Fixture): Promise<string> {
     taskId: fixture.taskId,
   })
   if (!sent.ok) throw new Error(`the fixture could not ask: ${JSON.stringify(sent.error)}`)
+  await prisma.slaveRun.update({
+    where: { id: fixture.runId },
+    data: { status: 'paused', pauseReason: 'waiting_for_answer' },
+  })
   return sent.value.id
 }
 

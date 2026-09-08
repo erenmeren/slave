@@ -226,9 +226,53 @@ export async function sendMessage(
 export interface ListMessagesFilter {
   /** Only messages with no `readAt` yet. */
   readonly unreadOnly?: boolean
-  /** Only `question`s that expect a reply and have none in their thread yet -- `kind: 'question'`,
-   *  `expectsReply: true`, and no `SlaveMessage` row replies to it. */
+  /** Only `question`s somebody is STILL waiting on -- see {@link stillPendingQuestion}. */
   readonly unansweredOnly?: boolean
+}
+
+/**
+ * The one definition of "this question is still pending", shared by every reader of that set:
+ * `listMessagesForSlave`'s `unansweredOnly` filter (which is what `apps/orchestrator/src/inbox.ts`
+ * puts in a recipient's prompt), {@link listPendingQuestions} (the CLI's `messages` verb and the
+ * web's answer box), and nothing else.
+ *
+ * Three conditions, and the third is the one the final review added. A question is pending while
+ * it is a question that expects a reply, while no reply has landed -- and while THE ASKER IS STILL
+ * WAITING FOR ONE. Without that last clause, a waiting run resumed by anything other than its
+ * answer (`orchestrator resume --run`, the slave panel's fallback Resume button) left its question
+ * matching forever: the asker was long since running, finished, or failed, and every subsequent run
+ * of the recipient still opened with "another slave asked you this and cannot continue until you
+ * reply". Worse, a recipient that eventually did reply wrote an answer `deliverAnswers` could never
+ * deliver -- the asker was not `paused` any more -- so it sat with both timestamps null forever.
+ *
+ * "Still waiting" is exactly the state `ask.ts` parks a run in and `deliverAnswers` hunts for:
+ * `paused` with `pauseReason = waiting_for_answer`. Expressed as a run-id set rather than a
+ * relation filter because `SlaveMessage.senderRunId` deliberately carries no Prisma relation (see
+ * its own doc comment: a second FK to `SlaveRun` would fight `slaveId`'s cascade). The set is one
+ * indexed read of the waiting runs in one workspace -- usually none.
+ */
+async function waitingSenderRunIds(workspaceId: string): Promise<string[]> {
+  const runs = await prisma.slaveRun.findMany({
+    where: { status: 'paused', pauseReason: 'waiting_for_answer', slave: { team: { workspaceId } } },
+    select: { id: true },
+  })
+  return runs.map((run) => run.id)
+}
+
+/** The `where` fragment {@link waitingSenderRunIds} feeds. A question whose `senderRunId` is null
+ *  (no run ever asked it) can park nobody and is never pending. */
+function stillPendingQuestion(waitingRunIds: string[]): {
+  kind: 'question'
+  expectsReply: true
+  replies: { none: Record<string, never> }
+  senderRunId: { in: string[] }
+} {
+  return {
+    kind: 'question' as const,
+    expectsReply: true as const,
+    replies: { none: {} },
+    senderRunId: { in: waitingRunIds },
+  }
 }
 
 /** Every message addressed to `slaveId` -- directly, or by every role it currently holds -- in
@@ -241,6 +285,9 @@ export async function listMessagesForSlave(
   const slave = await prisma.slave.findUnique({ where: { id: slaveId }, include: { team: true } })
   if (slave === null) return err({ kind: 'slave_not_found', slaveId })
 
+  const waitingRunIds =
+    filter.unansweredOnly === true ? await waitingSenderRunIds(slave.team.workspaceId) : []
+
   const rows = await prisma.slaveMessage.findMany({
     where: {
       workspaceId: slave.team.workspaceId,
@@ -251,9 +298,7 @@ export async function listMessagesForSlave(
       slaveId: { not: slaveId },
       OR: [{ recipientSlaveId: slaveId }, { recipientRole: slave.role }],
       ...(filter.unreadOnly === true ? { readAt: null } : {}),
-      ...(filter.unansweredOnly === true
-        ? { kind: 'question' as const, expectsReply: true, replies: { none: {} } }
-        : {}),
+      ...(filter.unansweredOnly === true ? stillPendingQuestion(waitingRunIds) : {}),
     },
     orderBy: { seq: 'asc' },
   })
@@ -425,6 +470,10 @@ export async function answerQuestion(
  * (`listMessagesForSlave` is the worker's own inbox) because the operator is answering ON BEHALF
  * of whoever was addressed -- including a role nobody free is holding, which is exactly the
  * situation this verb exists for.
+ *
+ * "Still waiting for a reply" is {@link stillPendingQuestion}'s definition, shared with the inbox a
+ * recipient's prompt is built from, so an operator's `messages` list and a worker's inbox can never
+ * disagree about which questions are open.
  */
 export async function listPendingQuestions(
   workspaceId: string,
@@ -433,7 +482,7 @@ export async function listPendingQuestions(
   if (workspace === null) return err({ kind: 'workspace_not_found', workspaceId })
 
   const rows = await prisma.slaveMessage.findMany({
-    where: { workspaceId, kind: 'question', expectsReply: true, replies: { none: {} } },
+    where: { workspaceId, ...stillPendingQuestion(await waitingSenderRunIds(workspaceId)) },
     orderBy: { seq: 'asc' },
   })
   return ok(rows.map(toView))

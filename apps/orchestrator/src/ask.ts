@@ -163,6 +163,23 @@ export async function concludeWithQuestion(input: AskConclusionInput): Promise<A
   if (run.status !== 'working') {
     return { kind: 'refused', reason: `the run is ${run.status}, not working: something else owns its outcome` }
   }
+  // Only a run whose TASK this path can actually park may wait (final review, Important 1). The
+  // park below is guarded on `activeRunId`, the same guard `releaseTaskAfterFailure` uses -- and
+  // `tick.ts`'s `startRun` is the only writer of that column, so a `review` run is never its task's
+  // `activeRunId`. Parking it therefore moved nothing: the task stayed `reviewing`, `deliverAnswers`
+  // refused every answer to it (it demands a `waiting` task), and `dispatchReview`'s "a review is
+  // already live" gate counted the paused run as live -- a review run paused forever on a question
+  // nobody could ever answer, and a task no replacement review would ever be dispatched for.
+  //
+  // A task-LESS run (`planning`, M8b) is parkable by definition: it has no task to park, the guard
+  // below is skipped entirely, and delivery matches it through `slave -> team` rather than a task.
+  // Everything else is refused the same way an unreachable recipient is -- loudly, and then the run
+  // concludes exactly as it would have without this function.
+  if (input.taskId !== null && run.kind !== 'implementation') {
+    const reason = `a ${run.kind} run cannot wait for an answer: its task is not this run's to park`
+    console.warn(`[ask] run ${input.runId} tried to ask a question it could never be answered on: ${reason}`)
+    return { kind: 'refused', reason }
+  }
   const senderSlaveId = run.slave.id
   const workspaceId = run.slave.team.workspaceId
 
@@ -209,7 +226,13 @@ export async function concludeWithQuestion(input: AskConclusionInput): Promise<A
   // resumed one alike).
   const claimed = await prisma.slaveRun.updateMany({
     where: { id: input.runId, endedAt: null, status: 'working' },
-    data: { status: 'paused', pauseReason: WAITING_FOR_ANSWER, pausedAtStep: input.toolCalls },
+    // `pid: null` (final review): the child has ALREADY exited -- this path runs at the run's own
+    // clean conclusion, after the stream ended -- so the recorded pid names a process that is gone,
+    // and pids are recycled. `requestResume` reads `isAlive(run.pid)` and refuses
+    // `run_still_stopping` for a live one, which on a recycled pid would refuse to deliver the
+    // answer to a run whose process died minutes ago. `executeResume` writes the new child's pid
+    // back, so nothing downstream needs the stale one.
+    data: { status: 'paused', pauseReason: WAITING_FOR_ANSWER, pausedAtStep: input.toolCalls, pid: null },
   })
   if (claimed.count === 0) {
     return { kind: 'refused', reason: 'the run was concluded by something else before it could wait' }

@@ -1,7 +1,7 @@
 import { execFileSync, spawn as spawnChild } from 'node:child_process'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { answerQuestion, claimResume } from '@slave-of-ai/control'
+import { answerQuestion, claimResume, listPendingQuestions, requestResume } from '@slave-of-ai/control'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@slave-of-ai/db'
 import { prisma } from '@slave-of-ai/db/client'
 import {
@@ -21,8 +21,9 @@ import {
 import type { RunOutcome, RuntimeEvent } from '@slave-of-ai/providers'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { deliverAnswers } from '../../src/deliver.js'
-import { pendingInbox } from '../../src/inbox.js'
+import { askProtocol, pendingInbox, withPreamble } from '../../src/inbox.js'
 import { pumpRun } from '../../src/pump.js'
+import { buildReviewPrompt } from '../../src/review.js'
 
 /** The adapter hands the pump an async stream; an array is the same contract without a process. */
 async function* fromArray(events: readonly RuntimeEvent[]): AsyncIterable<RuntimeEvent> {
@@ -346,6 +347,79 @@ describe('a slave answers, and the asker resumes', () => {
     })
   })
 
+  describe('what the prompt teaches (final review, Important 2)', () => {
+    it("an implementation run's prompt carries the ask envelope and the roster of who may be asked", async () => {
+      const protocol = await askProtocol(fixture.alex.slaveId, fixture.workspaceId)
+      expect(protocol).not.toBeNull()
+      // The open tag itself, from the domain constant -- if the parser's marker ever moves, this
+      // assertion moves with it and the prompt cannot silently teach a tag nothing reads.
+      expect(protocol).toContain(ASK_BLOCK_OPEN)
+      expect(protocol).toContain(ASK_BLOCK_CLOSE)
+      // What the slave has to be told beyond the tag: that stopping here is free, and who exists.
+      expect(protocol).toContain('costs you no attempt')
+      expect(protocol).toContain('Maya')
+      expect(protocol).toContain('answerer')
+      // And never itself: `recipientCanAnswer` refuses a slave that asks itself.
+      expect(protocol).not.toContain(fixture.alex.slaveId)
+
+      // Composed exactly as `tick.ts` composes it, above the task the run is actually for.
+      const prompt = withPreamble([null, protocol], 'Add checkout retry\n\nretry failed payments')
+      expect(prompt).toContain(ASK_BLOCK_OPEN)
+      expect(prompt.endsWith('retry failed payments')).toBe(true)
+    })
+
+    it("a REVIEW run's prompt does not: a reviewer's ask is refused, so teaching it one would be a lie", async () => {
+      const prompt = buildReviewPrompt({ title: 'Add checkout retry', description: 'retry' }, 'diff --git a b')
+      expect(prompt).not.toContain(ASK_BLOCK_OPEN)
+      expect(prompt).toContain('verdict')
+    })
+
+    it('offers nothing when there is nobody to ask: every recipient would be refused anyway', async () => {
+      const alone = await prisma.workspace.create({
+        data: { name: 'Solo', repoPath: '/tmp/solo', verifyCommands: ['true'], setupCommands: [] },
+      })
+      const team = await prisma.team.create({ data: { workspaceId: alone.id, name: 'Engineering' } })
+      const only = await prisma.slave.create({ data: { teamId: team.id, name: 'Robin', role: 'backend' } })
+
+      expect(await askProtocol(only.id, alone.id)).toBeNull()
+      expect(withPreamble([null, null], 'the task')).toBe('the task')
+    })
+  })
+
+  describe('a question stops pending when its asker stops waiting (final review, Important 3)', () => {
+    it('leaves no zombie in the recipient inbox after an operator resumes the asker by hand', async () => {
+      const asked = await askAndWait(fixture, fixture.alex, 'Which queue should retries land on?')
+      expect((await pendingInbox(fixture.maya.slaveId)).messageIds).toEqual([asked])
+      const pendingBefore = await listPendingQuestions(fixture.workspaceId)
+      expect(pendingBefore.ok && pendingBefore.value.map((row) => row.id)).toEqual([asked])
+
+      // The operator's own way out -- `orchestrator resume --run <id>`, and the slave panel's
+      // fallback Resume button. It resumes the run without ever answering the question.
+      const requested = await requestResume(fixture.alex.runId, 'never mind, carry on', 'the operator')
+      expect(requested.ok).toBe(true)
+      const claim = await claimResume(fixture.alex.runId)
+      expect(claim.claimed).toBe(true)
+
+      // Nobody is waiting on it any more, so nobody is told they are holding somebody up. Before
+      // the fix this question was re-injected into every subsequent run of every holder of the
+      // role, forever, under a sentence that had stopped being true.
+      expect(await pendingInbox(fixture.maya.slaveId)).toEqual({ section: null, messageIds: [] })
+      expect(await pendingInbox(fixture.nina.slaveId)).toEqual({ section: null, messageIds: [] })
+      const pendingAfter = await listPendingQuestions(fixture.workspaceId)
+      expect(pendingAfter.ok && pendingAfter.value).toEqual([])
+
+      // And it is not deleted -- the thread still reads as the conversation it was.
+      expect(await prisma.slaveMessage.count({ where: { id: asked } })).toBe(1)
+    })
+
+    it('still pends while the asker is genuinely waiting', async () => {
+      const asked = await askAndWait(fixture, fixture.alex, 'Which queue?')
+      expect((await pendingInbox(fixture.maya.slaveId)).messageIds).toEqual([asked])
+      const pending = await listPendingQuestions(fixture.workspaceId)
+      expect(pending.ok && pending.value.map((row) => row.id)).toEqual([asked])
+    })
+  })
+
   describe('delivery', () => {
     it('resumes exactly the waiting run that asked, and no other', async () => {
       const asked = await askAndWait(fixture, fixture.alex, 'Which queue?')
@@ -535,6 +609,42 @@ describe('a slave answers, and the asker resumes', () => {
         where: { runId: fixture.alex.runId, type: 'run_resume_requested' },
       })
       expect(requested.actor).toBe('human')
+    })
+
+    it('releases the answer it stamped when the resume is refused, and delivers it once the refusal clears', async () => {
+      const asked = await askAndWait(fixture, fixture.alex, 'Which queue?')
+      await pumpEndingWith(fixture.maya, fixture.workspaceId, answer(JSON.stringify({ messageId: asked, answer: 'payments-retry' })))
+      // A halted workspace is the honest refusal: `requestResume` refuses `workspace_halted`
+      // before it records anything, and a halt is exactly the state an operator later clears.
+      await prisma.workspace.update({
+        where: { id: fixture.workspaceId },
+        data: { haltedReason: 'a pause gate failed', haltedAt: new Date() },
+      })
+
+      expect(await deliverAnswers(fixture.workspaceId)).toEqual([])
+
+      // Released, not left claimed: the stamp is back to null, so a later pass can try again.
+      const held = await prisma.slaveMessage.findFirstOrThrow({ where: { kind: 'answer' } })
+      expect(held.deliveredAt).toBeNull()
+      expect(held.supersededAt).toBeNull()
+      expect(
+        await prisma.executionEvent.count({ where: { runId: fixture.alex.runId, type: 'run_resume_requested' } }),
+      ).toBe(0)
+      expect((await prisma.slaveRun.findUniqueOrThrow({ where: { id: fixture.alex.runId } })).resumeRequestedAt).toBeNull()
+
+      // The operator clears the halt. The very same answer wakes the run, exactly once.
+      await prisma.workspace.update({
+        where: { id: fixture.workspaceId },
+        data: { haltedReason: null, haltedAt: null },
+      })
+
+      const delivered = await deliverAnswers(fixture.workspaceId)
+      expect(delivered).toEqual([{ runId: fixture.alex.runId, questionId: asked, answerId: held.id }])
+      expect((await prisma.slaveMessage.findUniqueOrThrow({ where: { id: held.id } })).deliveredAt).not.toBeNull()
+      expect(await deliverAnswers(fixture.workspaceId)).toEqual([])
+      expect(
+        await prisma.executionEvent.count({ where: { runId: fixture.alex.runId, type: 'run_resume_requested' } }),
+      ).toBe(1)
     })
 
     it('answers the LATEST question when a resumed run asked a second one', async () => {

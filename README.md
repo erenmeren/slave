@@ -233,7 +233,9 @@ without deleting it.
 
 ## When a slave asks a question
 
-A slave that hits a decision it cannot make alone can ask another slave instead of guessing. Its
+A slave that hits a decision it cannot make alone can ask another slave instead of guessing. Every
+implementation run is told how, and given the roster of who it may address, so this needs no setup
+from you — reviewers are not, because a review run's question could never be answered. Its
 run stops with the question on record and its task moves to **waiting** — an amber `WAITING` pill,
 still on the **In Progress** column, because the work is mid-flight: the session is alive, the
 worktree is still held, and nothing has failed. No attempt is charged, no verify or review pass is
@@ -253,7 +255,9 @@ npm run orchestrator -- answer --message <id> --text "use Postgres"
 
 or type into the answer box on the waiting slave's panel in the UI. Either way the answer is
 delivered on the next tick and the slave picks up where it stopped. Answering twice with the same
-text writes one answer and resumes once.
+text writes one answer and resumes once. Resuming the slave *without* answering (`resume --run`, or
+the panel's Resume button) is also a way out: the question stops being pending, and nobody is asked
+about it again.
 
 If somebody else answers first, a later answer is **not** thrown away and **not** delivered: it
 stays in the thread marked *superseded*, so the thread still reads as the conversation it was, and
