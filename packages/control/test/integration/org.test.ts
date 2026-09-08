@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
-import { addCompanySlave, addCompanyTeam, assignCompany, createCompany, createTemplate, setSlaveModel } from '../../src/org.js'
+import { addCompanySlave, addCompanyTeam, assignCompany, assignCompanyTx, createCompany, createTemplate, setSlaveModel } from '../../src/org.js'
 import { refusalText } from '../../src/refusal.js'
 
 // A real directory, not a placeholder (M23 G3): runFilePaths' statSync preflight refuses a repo path that does not exist, and a reboot clears /tmp -- the trap emergency.test.ts fell into at ce48adc.
@@ -579,6 +579,47 @@ describe('assignCompany', () => {
     expect(teams[0]?.companyTeamId).toBe(companyTeam.id)
 
     expect(await prisma.slave.count({ where: { teamId: legacyTeam.id } })).toBe(1)
+  })
+
+  // M34 t2 fix round 1: `assignCompanyTx`'s materialization creates a `Team` row by
+  // `(workspaceId, name)` (or adopts a legacy one of that name) with no `try`/`catch` of its own --
+  // no lock here serialises it against a concurrent `createProjectTeam`/`renameTeam` on the same
+  // workspace and name, only `Team_workspaceId_name_key` (M34 t2) does, and only once the create
+  // is caught. Without the catch, whichever of the two loses such a race throws a raw P2002 out of
+  // its own transaction instead of refusing.
+  //
+  // A bare `Promise.all` of `assignCompany` and `createProjectTeam` almost never reproduces the
+  // collision on its own: `assignCompanyTx` has several round trips of preamble (a `SELECT ...
+  // FOR UPDATE` on `Workspace`, the roster read, the `companyId` write) before it ever reaches
+  // its own `Team` check-then-write, while `createProjectTeam` is three queries total -- it
+  // reliably commits its `INSERT` (or `assignCompanyTx` finds it already committed and takes the
+  // harmless `legacy`-adoption branch above, not a collision at all) long before `assignCompanyTx`
+  // gets there; 15/15 manual runs produced no failure either way. Forcing the two `INSERT`s into
+  // the exact same instant (e.g. both blocked on a shared `LOCK TABLE`, released together) does
+  // reproduce a genuine collision, but roughly half the time as a Postgres "deadlock detected"
+  // (40P01) rather than a unique violation -- a well-documented Postgres quirk of two backends
+  // inserting the identical key at the literal same instant, and a Postgres-wide characteristic
+  // every unique-catching verb in this file already carries, not something new here or in scope
+  // for this fix. The construction below sidesteps needing real concurrency at all: it reproduces
+  // the STATE such a race leaves behind deterministically, by calling `assignCompanyTx` directly
+  // (exported for exactly this -- `adoptSimulation` already runs it inside its own transaction) on
+  // a `tx` that has already committed a same-named sibling under a companyTeamId neither of
+  // `assignCompanyTx`'s own two pre-checks recognizes: not "already this roster's team" (a
+  // different companyTeamId) and not "a legacy hand-made team to adopt" (companyTeamId is not
+  // null). It walks straight into `tx.team.create`, which now collides for real, every time.
+  it('refuses duplicate_name when a same-named Team already exists under an unrelated companyTeamId', async (): Promise<void> => {
+    const workspace = await seedWorkspace()
+    const { companyId, teamName } = await seedCompanyWithRoster(1)
+
+    const otherCompany = await prisma.company.create({ data: { name: 'Globex Corp' } })
+    const otherCompanyTeam = await prisma.companyTeam.create({ data: { companyId: otherCompany.id, name: 'Unrelated' } })
+    await prisma.team.create({ data: { workspaceId: workspace.id, name: teamName, companyTeamId: otherCompanyTeam.id } })
+
+    const result = await prisma.$transaction((tx) => assignCompanyTx(tx, workspace.id, companyId))
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error).toEqual({ kind: 'duplicate_name', name: teamName })
+    expect(await prisma.team.count({ where: { workspaceId: workspace.id, name: teamName } })).toBe(1)
   })
 
   it('rolls back the whole assignment when a roster template has gone dangling mid-transaction', async (): Promise<void> => {

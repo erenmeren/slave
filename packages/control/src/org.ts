@@ -356,10 +356,26 @@ export async function assignCompanyTx(
       const legacy = await tx.team.findFirst({
         where: { workspaceId, name: companyTeam.name, companyTeamId: null },
       })
-      team = legacy !== null
-        ? await tx.team.update({ where: { id: legacy.id }, data: { companyTeamId: companyTeam.id } })
-        : await tx.team.create({ data: { workspaceId, name: companyTeam.name, companyTeamId: companyTeam.id } })
-      if (legacy === null) createdTeams.push(team.name)
+      if (legacy !== null) {
+        // Only `companyTeamId` changes here -- `workspaceId` and `name` are read off the row
+        // itself and are not part of this update's `data`, so this write cannot itself collide
+        // with `Team_workspaceId_name_key` (M34 t2): the index only ever rejects a row whose
+        // OWN `(workspaceId, name)` pair changes to match another row's, and this one does not
+        // change at all.
+        team = await tx.team.update({ where: { id: legacy.id }, data: { companyTeamId: companyTeam.id } })
+      } else {
+        // M34 t2 fix round 1: a `createProjectTeam`/`renameTeam` racing THIS create for the same
+        // `(workspaceId, name)` -- no lock here serialises against them, only `assignCompanyTx`'s
+        // own workspace-row lock -- now hits `Team_workspaceId_name_key` instead of silently
+        // duplicating. Caught the same way every other write path onto that index is.
+        try {
+          team = await tx.team.create({ data: { workspaceId, name: companyTeam.name, companyTeamId: companyTeam.id } })
+        } catch (error) {
+          if (isUniqueConstraintViolation(error)) return err({ kind: 'duplicate_name', name: companyTeam.name })
+          throw error
+        }
+        createdTeams.push(team.name)
+      }
     }
 
     for (const companySlave of companyTeam.slaves) {
