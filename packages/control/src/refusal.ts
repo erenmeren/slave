@@ -72,7 +72,16 @@ export type ControlRefusal =
   | { readonly kind: 'attempt_ceiling_reached'; readonly taskId: string; readonly attempt: number; readonly maxAttempts: number }
   | { readonly kind: 'self_dependency'; readonly taskId: string }
   | { readonly kind: 'duplicate_dependency'; readonly taskId: string; readonly dependsOnTaskId: string }
+  /**
+   * Two members share this literal (M36 t1 reused it rather than mint a second name for the same
+   * refused thing): `dependency.ts`'s own shape above, and `sendMessage`'s below, refusing a named
+   * recipient in another workspace. `refusalText`'s one `case 'cross_workspace'` distinguishes
+   * them with `'taskId' in refusal` -- TypeScript cannot narrow a discriminated union further than
+   * "one of these shapes" when two members carry the same tag, so this is the one place in the
+   * file that checks a second field instead of switching on `kind` alone.
+   */
   | { readonly kind: 'cross_workspace'; readonly taskId: string; readonly dependsOnTaskId: string }
+  | { readonly kind: 'cross_workspace'; readonly runId: string; readonly recipientSlaveId: string }
   | { readonly kind: 'dependency_not_found'; readonly taskId: string; readonly dependsOnTaskId: string }
   | { readonly kind: 'dependency_cycle'; readonly taskId: string; readonly dependsOnTaskId: string }
   | { readonly kind: 'workspace_not_found'; readonly workspaceId: string }
@@ -167,6 +176,18 @@ export type ControlRefusal =
    *  (`SectorPlugin.adoptable`), printed verbatim -- control never writes a sector's reason for
    *  it. */
   | { readonly kind: 'not_adoptable'; readonly simulationId: string; readonly reason: string }
+  /** M36 t1: the messaging verbs (`messaging.ts`). `sendMessage`'s recipient named neither a
+   *  worker nor a role, or named both -- exactly one must identify who a message is addressed
+   *  to. */
+  | { readonly kind: 'invalid_recipient'; readonly detail: string }
+  /** `sendMessage`'s `body` was blank. */
+  | { readonly kind: 'invalid_message_body' }
+  /** `sendMessage`'s `replyToId`, or `markMessageRead`'s `messageId`, named no row in this
+   *  workspace -- including a row that exists but belongs to another workspace, which reads back
+   *  the same as "does not exist" from a scoped caller's side of the boundary. */
+  | { readonly kind: 'message_not_found'; readonly messageId: string }
+  /** `markMessageRead` on a message addressed to neither this slave nor a role it holds. */
+  | { readonly kind: 'not_message_recipient'; readonly messageId: string; readonly slaveId: string }
 
 /**
  * The word a person reads for `live_runs`'s `entity` (M27 final review, Important finding 3).
@@ -233,7 +254,9 @@ export function refusalText(refusal: ControlRefusal): string {
     case 'duplicate_dependency':
       return `task ${refusal.taskId} already depends on ${refusal.dependsOnTaskId}`
     case 'cross_workspace':
-      return `task ${refusal.taskId} and ${refusal.dependsOnTaskId} are in different workspaces`
+      return 'taskId' in refusal
+        ? `task ${refusal.taskId} and ${refusal.dependsOnTaskId} are in different workspaces`
+        : `run ${refusal.runId} cannot send a message to ${refusal.recipientSlaveId}: they are in a different workspace`
     case 'dependency_not_found':
       return `task ${refusal.taskId} does not depend on ${refusal.dependsOnTaskId}`
     case 'dependency_cycle':
@@ -331,5 +354,13 @@ export function refusalText(refusal: ControlRefusal): string {
       return `model provider ${refusal.provider} is not supported for simulations: ${refusal.reason}`
     case 'not_adoptable':
       return `simulation ${refusal.simulationId} cannot be adopted: ${refusal.reason}`
+    case 'invalid_recipient':
+      return `invalid recipient: ${refusal.detail}`
+    case 'invalid_message_body':
+      return 'a message body must be a non-empty text'
+    case 'message_not_found':
+      return `no message with id ${refusal.messageId}`
+    case 'not_message_recipient':
+      return `message ${refusal.messageId} is not addressed to slave ${refusal.slaveId}`
   }
 }

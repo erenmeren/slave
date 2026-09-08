@@ -59,3 +59,22 @@ describe('refusalText for the llm decision provider kinds (M31a)', () => {
     )
   })
 })
+
+describe('refusalText for the messaging verbs (M36 t1)', () => {
+  it('disambiguates the two cross_workspace shapes by their own fields, and names the messaging refusals', () => {
+    expect(refusalText({ kind: 'cross_workspace', taskId: 't1', dependsOnTaskId: 't2' })).toBe(
+      'task t1 and t2 are in different workspaces',
+    )
+    expect(refusalText({ kind: 'cross_workspace', runId: 'r1', recipientSlaveId: 's2' })).toBe(
+      'run r1 cannot send a message to s2: they are in a different workspace',
+    )
+    expect(refusalText({ kind: 'invalid_recipient', detail: 'exactly one of recipientSlaveId or recipientRole must be set' })).toBe(
+      'invalid recipient: exactly one of recipientSlaveId or recipientRole must be set',
+    )
+    expect(refusalText({ kind: 'invalid_message_body' })).toBe('a message body must be a non-empty text')
+    expect(refusalText({ kind: 'message_not_found', messageId: 'm1' })).toBe('no message with id m1')
+    expect(refusalText({ kind: 'not_message_recipient', messageId: 'm1', slaveId: 's1' })).toBe(
+      'message m1 is not addressed to slave s1',
+    )
+  })
+})

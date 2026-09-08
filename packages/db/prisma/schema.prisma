@@ -47,38 +47,38 @@ enum Actor {
 /// fail loudly at creation rather than silently getting `[]`. See the m3_runs_checkpoints_commands
 /// migration for the DDL that enforces this.
 model Workspace {
-  id             String    @id @default(uuid())
+  id                      String    @id @default(uuid())
   /// Unique as of M23 A1: a workspace is addressed by name from the CLI and the Settings form,
   /// so two rows sharing a name would make that addressing permanently ambiguous.
-  name           String    @unique
-  repoPath       String
-  baseBranch     String    @default("main")
-  verifyCommands String[]
-  setupCommands  String[]
-  autoMerge      Boolean   @default(false)
-  haltedReason   String?
-  haltedAt       DateTime?
+  name                    String    @unique
+  repoPath                String
+  baseBranch              String    @default("main")
+  verifyCommands          String[]
+  setupCommands           String[]
+  autoMerge               Boolean   @default(false)
+  haltedReason            String?
+  haltedAt                DateTime?
   /// M27: an archived project keeps every row but leaves every list and the scheduler (spec §3).
-  archivedAt     DateTime?
+  archivedAt              DateTime?
   /// The operator's standing instruction for what this workspace's slaves are working toward
   /// (M8b). Read by the planner (Task 4) and written by the workspace settings UI (Task 6) --
   /// unlike `verifyCommands`/`setupCommands` above, an unset goal is a perfectly ordinary state
   /// (no planning run has run yet), so this stays on Prisma's conventional nullable-String DDL.
-  goal           String?
+  goal                    String?
   /// The company assigned to run this project (M10 §5), nullable: the engine never required a
   /// company, and existing seeded workspaces keep their hand-made teams/slaves untouched
   /// (Decision 7). Assignment is one-way in M10 -- no un-assignment or re-assignment to a
   /// different company (Decision 2) -- so this column only ever moves from null to set.
-  companyId      String?
+  companyId               String?
   /// Who set the current goal (M23 F6), nullable: the CLI and the orchestrator act with no user,
   /// and every workspace created before this column existed reads back null. `onDelete: SetNull`
   /// -- a workspace must survive the deletion of the account that once set its goal.
-  goalSetByUserId String?
+  goalSetByUserId         String?
   /// M33: the simulation run this workspace's organisation was adopted from; null for every
   /// workspace assigned by hand. SetNull: deleting the run must not touch the project.
   adoptedFromSimulationId String?
 
-  maxConcurrentRuns       Int   @default(3)
+  maxConcurrentRuns       Int    @default(3)
   /// The spend ceiling this workspace's budget guardrail enforces (spec §9.2). Nullable as of
   /// M12 Task 9, and the `@default(20)` deliberately STAYS: a workspace is budgeted unless an
   /// operator deliberately clears it, so no existing row moves and every new one is guarded
@@ -88,10 +88,10 @@ model Workspace {
   /// instead would leave every newly created workspace unguarded -- strictly worse than the bug
   /// this column's nullability exists to fix.
   budgetUsd               Float? @default(20)
-  runTimeoutMs            Int   @default(1800000)
-  maxToolCallsPerRun      Int   @default(200)
-  maxAttempts             Int   @default(3)
-  consecutiveFailureLimit Int   @default(3)
+  runTimeoutMs            Int    @default(1800000)
+  maxToolCallsPerRun      Int    @default(200)
+  maxAttempts             Int    @default(3)
+  consecutiveFailureLimit Int    @default(3)
 
   createdAt DateTime @default(now())
 
@@ -99,8 +99,8 @@ model Workspace {
   // itself, inside its own transaction, so it can COUNT what it detached before the row is gone --
   // this optional relation keeps Prisma's Postgres default for an optional FK -- SetNull -- rather
   // than a Cascade that would destroy a project's history.
-  company Company? @relation(fields: [companyId], references: [id])
-  goalSetByUser User? @relation(fields: [goalSetByUserId], references: [id], onDelete: SetNull)
+  company               Company?       @relation(fields: [companyId], references: [id])
+  goalSetByUser         User?          @relation(fields: [goalSetByUserId], references: [id], onDelete: SetNull)
   adoptedFromSimulation SimulationRun? @relation("SimulationAdoption", fields: [adoptedFromSimulationId], references: [id], onDelete: SetNull)
 
   teams                  Team[]
@@ -125,17 +125,17 @@ model Team {
   companyTeam CompanyTeam? @relation(fields: [companyTeamId], references: [id], onDelete: SetNull)
   slaves      Slave[]
 
-  @@index([workspaceId])
   /// M34 t2: a department name is unique per project. `createProjectTeam`/`renameTeam` still run
   /// a friendly pre-check first (it names the sibling in the refusal), but this index is what
   /// actually closes the race a read-then-write pre-check cannot -- both verbs also catch
   /// `isUniqueConstraintViolation` (P2002) on this index, the rule `org.ts`'s catalog verbs already
   /// follow for their own `@@unique` indexes.
   @@unique([workspaceId, name])
+  @@index([workspaceId])
 }
 
 model Slave {
-  id             String  @id @default(uuid())
+  id             String        @id @default(uuid())
   teamId         String
   name           String
   role           String
@@ -215,7 +215,7 @@ model CompanyTeam {
 }
 
 model CompanySlave {
-  id            String  @id @default(uuid())
+  id            String        @id @default(uuid())
   companyTeamId String
   templateId    String
   /// The durable identity -- "Atlas" -- statistics and history accrue to this name across every
@@ -323,6 +323,17 @@ enum MessageCategory {
   question_response
 }
 
+/// The worker-protocol role a `SlaveMessage` plays (M36 t1) -- orthogonal to `MessageCategory`,
+/// which classifies a HUMAN instruction. `sendMessage` (packages/control/src/messaging.ts) always
+/// sets one of these; a worker-authored message never carries a `MessageCategory`.
+enum MessageKind {
+  question
+  answer
+  information
+  blocker
+  handoff
+}
+
 model Task {
   id                  String     @id @default(uuid())
   workspaceId         String
@@ -379,17 +390,17 @@ model TaskDependency {
 }
 
 model SlaveRun {
-  id                String       @id @default(uuid())
+  id                String        @id @default(uuid())
   /// Nullable as of M8b: a `planning` run (Task 6) has no `Task` row to attach to -- it works
   /// toward `Workspace.goal`, not a task. `slave -> team -> workspace` is then the only linkage a
   /// task-less run has to a workspace, which every run-scoping query in the codebase must join
   /// through instead of `Task` (see the audit landed alongside this column).
   taskId            String?
   slaveId           String
-  kind              RunKind      @default(implementation)
-  status            RunStatus    @default(starting)
+  kind              RunKind       @default(implementation)
+  status            RunStatus     @default(starting)
   sessionId         String?
-  toolCalls         Int          @default(0)
+  toolCalls         Int           @default(0)
   pausedAtStep      Int?
   /// The pause's category (human / guardrail / emergency_stop). Contrast with
   /// Checkpoint.pauseReason, which is the operator-facing free text of *why* — the string that
@@ -445,7 +456,7 @@ model SlaveRun {
   provider          ProviderKind?
   pid               Int?
   worktreePath      String?
-  startedAt         DateTime     @default(now())
+  startedAt         DateTime      @default(now())
   terminalAt        DateTime?
   endedAt           DateTime?
 
@@ -458,22 +469,22 @@ model SlaveRun {
 }
 
 model Checkpoint {
-  id                String   @id @default(uuid())
-  runId             String   @unique
+  id                String        @id @default(uuid())
+  runId             String        @unique
   sessionId         String
   worktreePath      String
   pauseFlagPath     String
   lastToolUseId     String?
   lastToolName      String?
-  numTurns          Int      @default(0)
+  numTurns          Int           @default(0)
   /// Unlike Workspace.verifyCommands/setupCommands, an empty array here is a perfectly ordinary
   /// value (no denials yet, no dirty files yet) rather than a refusal — so these two stay on
   /// Prisma's conventional nullable-array DDL rather than getting the NOT NULL enforcement above.
   deniedToolUseIds  String[]
   headCommit        String
   dirtyFiles        String[]
-  cumulativeCostUsd Float    @default(0)
-  cumulativeTokens  Int      @default(0)
+  cumulativeCostUsd Float         @default(0)
+  cumulativeTokens  Int           @default(0)
   /// Fix round 1: the spawn-critical fields `resume()` cannot rediscover on its own, mirroring
   /// `packages/providers`' `Checkpoint` interface (see that file's docstring for the ruling this
   /// implements — ADR 0001 §5 puts `worktreePath` here for the same reason). Deliberately no
@@ -488,7 +499,7 @@ model Checkpoint {
   /// literal spelling here — that would read as this field being the same enum when it is not.
   pauseReason       String?
   requestedBy       String?
-  ts                DateTime @default(now())
+  ts                DateTime      @default(now())
   /// M10 §6: the model the run started with, written at start and replayed by `adapter.resume` --
   /// resume must continue with the SAME model, never whatever `setSlaveModel` set most recently.
   /// A mid-run model change therefore affects only the NEXT run. Consumed starting Task 5.
@@ -512,19 +523,78 @@ model Artifact {
   @@index([taskId])
 }
 
+/// A durable, scoped message (M36 t1). Extended rather than duplicated into a parallel
+/// worker-to-worker table -- see this task's migration for why a human-sent instruction and a
+/// worker-sent question share one table. `slaveId` was already this row's one `Slave` reference;
+/// it is now documented as the SENDER, which every row (human or worker) always has.
 model SlaveMessage {
-  id        String          @id @default(uuid())
-  taskId    String?
-  slaveId   String
-  category  MessageCategory
-  body      String
-  actor     Actor           @default(human)
-  createdAt DateTime        @default(now())
+  id               String           @id @default(uuid())
+  taskId           String?
+  /// SENDER. `sendMessage` resolves this from the sending run's own `SlaveRun.slaveId` -- never
+  /// from caller input, so a model that names someone else as sender is ignored.
+  slaveId          String
+  /// Scope boundary (M36 t1): the workspace the sending run belongs to, denormalized from
+  /// `slave -> team -> workspaceId` (the same two-hop derivation `pause.ts`/`dependency.ts`
+  /// already make) so every scoping read is a single indexed column, not a join. Every read and
+  /// write `sendMessage`/`listMessagesForSlave`/`markMessageRead` perform is confined to it; a
+  /// recipient outside it is refused before anything is written.
+  workspaceId      String
+  /// The run that sent this, when the sender is a worker (M36 t1) -- kept for provenance. No
+  /// Prisma relation on purpose: `slaveId` above already cascades this row when the sender is
+  /// deleted, and a second FK to `SlaveRun` with its own `ON DELETE` would fight that cascade
+  /// over the same row the moment a slave is deleted (Postgres's "tuple already modified by an
+  /// operation triggered by the current command" diamond). Null for a human-authored message,
+  /// which has no run.
+  senderRunId      String?
+  /// Exactly one of these two identifies who a message is addressed to (M36 t1): a named worker,
+  /// or every worker currently holding a role. `sendMessage` refuses both-or-neither before
+  /// writing anything -- the database does not enforce it. No relation on `recipientSlaveId`
+  /// either, for the same reason as `senderRunId`: deleting a slave must not reach back and
+  /// delete (or null) messages addressed TO it, only ones it sent.
+  recipientSlaveId String?
+  recipientRole    String?
+  /// Groups a message with its replies (M36 t1). Defaults to the opening message's own id;
+  /// generated application-side (not `@default(uuid())`) so the same value can be written into
+  /// both this column and `id` on that first row in one insert.
+  threadId         String
+  /// The message this one replies to (M36 t1), or null for a thread's opener. `sendMessage`
+  /// derives `threadId` from this row's own `threadId` when it is set, rather than trusting a
+  /// caller-supplied `threadId` that could disagree with it.
+  replyToId        String?
+  category         MessageCategory?
+  /// The worker-protocol role this message plays (M36 t1) -- required for every row `sendMessage`
+  /// writes; see the enum's own doc comment for how it relates to `category`.
+  kind             MessageKind
+  body             String
+  actor            Actor            @default(human)
+  /// Whether the sender expects a reply (M36 t1) -- true for a worker's `question`; left false
+  /// for `information`/`handoff`.
+  expectsReply     Boolean          @default(false)
+  /// `sendMessage`'s idempotency key, namespaced by verb the way `SimulationJournalEntry`'s is
+  /// (`packages/control/src/simulation/shared.ts`'s `namespacedKey`) -- Task 3's `answer` verb
+  /// will write into this same column, and the namespace is what keeps the two verbs' keys from
+  /// colliding on a coincidentally-equal string.
+  idempotencyKey   String?
+  /// Read state (M36 t1). Delivery state is Task 3's column to add, not this one's -- Task 1 is
+  /// the durable layer underneath it.
+  readAt           DateTime?
+  /// Monotonic, gap-permitted insertion order -- `createdAt`'s millisecond resolution is not fine
+  /// enough to order two messages written in the same tick, the same reasoning
+  /// `ExecutionEvent.seq` (packages/events/src/append.ts) already codifies for this codebase.
+  /// `listMessagesForSlave` reads a thread back in this order, not `createdAt`'s.
+  seq              BigInt           @unique @default(autoincrement())
+  createdAt        DateTime         @default(now())
 
-  task  Task? @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  slave Slave @relation(fields: [slaveId], references: [id], onDelete: Cascade)
+  task    Task?          @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  slave   Slave          @relation(fields: [slaveId], references: [id], onDelete: Cascade)
+  replyTo SlaveMessage?  @relation("MessageReplies", fields: [replyToId], references: [id], onDelete: SetNull)
+  replies SlaveMessage[] @relation("MessageReplies")
 
+  @@unique([workspaceId, idempotencyKey])
   @@index([slaveId, createdAt])
+  @@index([workspaceId, recipientSlaveId, readAt])
+  @@index([workspaceId, recipientRole, readAt])
+  @@index([threadId, seq])
 }
 
 model Approval {
@@ -626,10 +696,10 @@ model User {
   passwordHash String
   createdAt    DateTime @default(now())
 
-  executionEvents    ExecutionEvent[]
-  createdTasks       Task[]
-  goalSetWorkspaces  Workspace[]
-  simulations        SimulationRun[]
+  executionEvents   ExecutionEvent[]
+  createdTasks      Task[]
+  goalSetWorkspaces Workspace[]
+  simulations       SimulationRun[]
 }
 
 /// M29: a company simulation run (spec §3). Bound to the CATALOG company, never to a workspace:
@@ -701,15 +771,15 @@ model SimulationRun {
   createdByUserId  String?
   createdAt        DateTime             @default(now())
 
-  company    Company         @relation(fields: [companyId], references: [id], onDelete: Restrict)
-  clonedFrom SimulationRun?  @relation("SimulationClone", fields: [clonedFromId], references: [id], onDelete: SetNull)
-  clones     SimulationRun[] @relation("SimulationClone")
-  createdBy  User?           @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
-  journal    SimulationJournalEntry[]
-  modelUsage SimulationModelUsage[]
+  company           Company                  @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  clonedFrom        SimulationRun?           @relation("SimulationClone", fields: [clonedFromId], references: [id], onDelete: SetNull)
+  clones            SimulationRun[]          @relation("SimulationClone")
+  createdBy         User?                    @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+  journal           SimulationJournalEntry[]
+  modelUsage        SimulationModelUsage[]
   /// M33: the workspaces whose organisation was adopted from this run (design §2). A run may be
   /// adopted by many; a workspace records at most one origin.
-  adoptedWorkspaces Workspace[] @relation("SimulationAdoption")
+  adoptedWorkspaces Workspace[]              @relation("SimulationAdoption")
 
   @@unique([companyId, name])
   @@index([companyId])

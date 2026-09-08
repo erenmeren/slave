@@ -46,8 +46,22 @@ export const executionEventSchema = z.discriminatedUnion('type', [
     ...envelope,
     type: z.literal('slave.message_sent'),
     payload: z.object({
-      category: z.enum(['instruction', 'feedback', 'context', 'priority_change', 'question_response']),
+      // Pre-M36: a human instruction's classification. Optional now, not required -- a
+      // worker-authored message (M36 t1) never carries one; see `kind` below for its own axis.
+      category: z
+        .enum(['instruction', 'feedback', 'context', 'priority_change', 'question_response'])
+        .nullable()
+        .optional(),
       body: z.string().min(1),
+      // M36 t1: `sendMessage` (packages/control/src/messaging.ts) always sets the fields below;
+      // all remain optional here so the pre-M36 minimal payload above still parses.
+      messageId: z.string().min(1).optional(),
+      kind: z.enum(['question', 'answer', 'information', 'blocker', 'handoff']).optional(),
+      threadId: z.string().min(1).optional(),
+      replyToId: z.string().min(1).nullable().optional(),
+      recipientSlaveId: z.string().min(1).nullable().optional(),
+      recipientRole: z.string().min(1).nullable().optional(),
+      expectsReply: z.boolean().optional(),
     }),
   }),
   z.object({
