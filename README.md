@@ -190,6 +190,8 @@ npm run orchestrator -- tick                                # one scheduling pas
 npm run orchestrator -- pause  --run <id> --by <name>
 npm run orchestrator -- resume --run <id> --message "try the other approach"
 npm run orchestrator -- cancel --run <id>
+npm run orchestrator -- messages [--workspace <id>]         # every question a slave is waiting on
+npm run orchestrator -- answer --message <id> --text "use Postgres" [--by <name>]
 npm run orchestrator -- confirm-integration --task <id>     # after a hand merge (autoMerge off); unblocks its dependents
 npm run orchestrator -- unblock-task --task <id> [--allow-another-attempt]  # move a blocked task back to rework
 npm run orchestrator -- emergency-stop --workspace <id> --by <name>
@@ -229,6 +231,34 @@ without deleting it.
 
 `--workspace <id>` can be left out while there is exactly one workspace.
 
+## When a slave asks a question
+
+A slave that hits a decision it cannot make alone can ask another slave instead of guessing. Its
+run stops with the question on record and its task moves to **waiting** — an amber `WAITING` pill,
+still on the **In Progress** column, because the work is mid-flight: the session is alive, the
+worktree is still held, and nothing has failed. No attempt is charged, no verify or review pass is
+spent, and the slave panel shows `waiting for <whoever was asked>` with the question underneath.
+
+**`waiting` is not `blocked`.** `blocked` is the **Blocked** column and means the project needs you
+before anything can move. `waiting` usually resolves itself: the slave who was asked answers on its
+own next run, and the asker is resumed inside its original session — same conversation, same
+worktree — with the answer in front of it. Answering is the way to unstick it *early*, not a duty.
+
+Two ways to answer:
+
+```bash
+npm run orchestrator -- messages                                    # the pending questions, with their ids
+npm run orchestrator -- answer --message <id> --text "use Postgres"
+```
+
+or type into the answer box on the waiting slave's panel in the UI. Either way the answer is
+delivered on the next tick and the slave picks up where it stopped. Answering twice with the same
+text writes one answer and resumes once.
+
+If somebody else answers first, a later answer is **not** thrown away and **not** delivered: it
+stays in the thread marked *superseded*, so the thread still reads as the conversation it was, and
+the daemon logs which answer won.
+
 ## Using it from another device
 
 By default the UI binds to loopback only and needs no login. To reach it from a phone, a laptop or
@@ -263,8 +293,12 @@ npm run typecheck
 ```
 
 The `npm run gate:*` scripts are end-to-end proofs of each milestone against fake slave CLIs, so
-they spend nothing; CI runs `gate:m15-boundary`, `gate:m20-auth`, `gate:m21-loose-ends` and
-`gate:m23-onboarding` on every push. Tests and gates share one Postgres — run one at a time.
+they spend nothing. CI runs `gate:m26-vocabulary`, `gate:m15-boundary`, `gate:m20-auth`,
+`gate:m21-loose-ends`, `gate:m23-onboarding`, `gate:m29-simulation`, `gate:m30-simulation-compare`,
+`gate:m31a-llm-decisions`, `gate:m31b-software-sector`, `gate:m33-adopt`,
+`gate:m35-pipeline-honesty` and `gate:m36-messaging` on every push — the last of those stops the
+orchestrator and starts it again mid-scenario, to prove a waiting slave's question survives a
+restart. Tests and gates share one Postgres — run one at a time.
 
 ## Learn more
 

@@ -163,6 +163,11 @@ describe('SlavesClient row click opens the panel', () => {
                 costUsd: 0,
                 toolCalls: 0,
                 pausedAtStep: null,
+                // M36 t2 added this to `SlaveCardData`, and the server sets it on every row
+                // (`overview.ts`: a non-waiting run gets `null`). This literal is a fetch RESPONSE
+                // body, so TypeScript never checks it -- without the field `SlavePanel` reads
+                // `undefined`, which is not `null`, and crashes on `waitingFor.recipient`.
+                waitingFor: null,
               },
             ],
           }),

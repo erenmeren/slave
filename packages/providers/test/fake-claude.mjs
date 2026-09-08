@@ -36,6 +36,26 @@
 //                  prompt (containing `"verdict"`) replays `review-approve`,
 //                  same as m8a-flow. Any other prompt is a work run and
 //                  reuses the m8a-flow work body verbatim.
+//   m36-flow       synthetic, selected by ARGV rather than by prompt content:
+//                  the two legs of M36's ask/answer round trip. A run spawned
+//                  WITHOUT `--resume` is the asking leg -- it replays
+//                  `complete` with the ask envelope in
+//                  `FAKE_CLAUDE_ASK_JSON` appended to that fixture's last
+//                  assistant text block, which is what the orchestrator's
+//                  pump reads its `<slave-ask>` block out of. A run spawned
+//                  WITH `--resume <sessionId>` is the resumed leg: it is the
+//                  same session continuing after its question was answered,
+//                  so it does the m8a-flow work body (a real commit in the
+//                  worktree) and replays `complete` unmodified -- no ask
+//                  block, so the run concludes for real instead of waiting
+//                  again. A review prompt (containing `"verdict"`) replays
+//                  `review-approve`, same as m8a-flow, so a downstream review
+//                  pass cannot land back on either of the two legs above.
+//                  `--resume` is the discriminator because it is the ONE
+//                  thing the runtime itself puts on the resumed argv
+//                  (`ClaudeCodeAdapter.resume` appends it); keying off the
+//                  resume prompt's wording would make this fake agree with a
+//                  sentence in `deliver.ts` rather than with the protocol.
 //   anything else  replays `fixtures/<name>.ndjson` verbatim, exit 0 -- real
 //                  captures show process exit code 0 even for hook-crash,
 //                  hook-deny, and permission-denied runs, so the fake matches
@@ -144,6 +164,53 @@ async function main() {
       session_id: 'fake-env-echo',
     })
     await writeLines([resultLine, stopHookLine])
+    process.exit(0)
+  }
+
+  if (fixtureName === 'm36-flow') {
+    const promptIndex = args.indexOf('-p')
+    const prompt = promptIndex === -1 ? '' : (args[promptIndex + 1] ?? '')
+    if (prompt.includes('"verdict"')) {
+      await replayFixture('review-approve')
+      return
+    }
+    if (args.includes('--resume')) {
+      // The resumed leg: the same session, continuing with its answer in hand. The m8a-flow work
+      // body verbatim -- a real commit in the worktree (cwd) -- and then `complete` UNmodified, so
+      // this leg carries no ask block and concludes for real.
+      writeFileSync(path.join(process.cwd(), 'm36-work.txt'), `${prompt.slice(0, 80)}\n`)
+      execFileSync('git', ['-c', 'user.name=Fake Claude', '-c', 'user.email=fake@slaveofai.local', 'add', '-A'], { cwd: process.cwd() })
+      execFileSync('git', ['-c', 'user.name=Fake Claude', '-c', 'user.email=fake@slaveofai.local', 'commit', '-q', '-m', 'fake work after the answer'], { cwd: process.cwd() })
+      await replayFixture('complete')
+      return
+    }
+    // The asking leg. The envelope comes from the environment, not from this file: the recipient
+    // is a slave id (or a role) that only the caller seeding the workspace knows.
+    const askJson = process.env.FAKE_CLAUDE_ASK_JSON
+    if (askJson === undefined || askJson.trim() === '') {
+      process.stderr.write('fake-claude: m36-flow needs FAKE_CLAUDE_ASK_JSON (the <slave-ask> envelope) in the environment\n')
+      process.exit(2)
+    }
+    // Appended to the LAST assistant text block of the real `complete` capture rather than emitted
+    // as a synthetic line of its own: the block then reaches the pump through the exact stream
+    // shape a real run produces, and the fixture's own `system:init` line still supplies the
+    // session id the checkpoint is written from.
+    const lines = readFixtureLines('complete')
+    let patched = false
+    for (let i = lines.length - 1; i >= 0 && !patched; i -= 1) {
+      const parsed = JSON.parse(lines[i])
+      if (parsed.type !== 'assistant') continue
+      const block = parsed.message?.content?.find?.((part) => part.type === 'text')
+      if (block === undefined) continue
+      block.text = `${block.text}\n\n<slave-ask>\n${askJson}\n</slave-ask>`
+      lines[i] = JSON.stringify(parsed)
+      patched = true
+    }
+    if (!patched) {
+      process.stderr.write('fake-claude: m36-flow could not find an assistant text block in the complete fixture\n')
+      process.exit(2)
+    }
+    await writeLines(lines)
     process.exit(0)
   }
 

@@ -5,7 +5,7 @@ import { BOARD_COLUMNS, COLUMN_FOR_STATUS, COLUMN_STATE, priorityChip } from '..
 
 const ALL_STATUSES: readonly TaskStatus[] = [
   'backlog', 'ready', 'blocked', 'assigned', 'running',
-  'verifying', 'reviewing', 'merging', 'rework', 'done', 'failed', 'cancelled',
+  'verifying', 'reviewing', 'merging', 'rework', 'waiting', 'done', 'failed', 'cancelled',
 ]
 
 describe('the board columns', () => {
@@ -25,6 +25,10 @@ describe('the board columns', () => {
       verifying: 'In Progress',
       reviewing: 'Review',
       merging: 'Review',
+      // M36: a task waiting for another slave's answer is mid-flight -- its session is alive and
+      // its worktree is held -- so it stays on In Progress and keeps its own amber WAITING pill.
+      // NOT Blocked, which is the column addressed to the human.
+      waiting: 'In Progress',
       blocked: 'Blocked',
       done: 'Done',
       failed: 'Done',

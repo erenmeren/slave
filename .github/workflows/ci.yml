@@ -62,3 +62,4 @@ jobs:
       - run: npm run gate:m31b-software-sector
       - run: npm run gate:m33-adopt
       - run: npm run gate:m35-pipeline-honesty
+      - run: npm run gate:m36-messaging
