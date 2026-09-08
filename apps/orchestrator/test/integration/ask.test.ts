@@ -6,6 +6,7 @@ import { prisma } from '@slave-of-ai/db/client'
 import { ASK_BLOCK_CLOSE, ASK_BLOCK_OPEN, slaveId, runId, taskId, workspaceId } from '@slave-of-ai/domain'
 import type { RunOutcome, RuntimeEvent, SlaveRuntimeAdapter } from '@slave-of-ai/providers'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { claimResume, requestResume } from '@slave-of-ai/control'
 import { ASK_PAUSE_REASON } from '../../src/ask.js'
 import { pumpRun } from '../../src/pump.js'
 import { noteTickRan, reconcileOrphans, resetTickObservation, sweep } from '../../src/sweep.js'
@@ -91,7 +92,9 @@ const spawn = {
 
 async function seed(): Promise<Fixture> {
   const workspace = await prisma.workspace.create({
-    data: { name: 'Checkout Platform', repoPath: '/tmp/checkout', verifyCommands: ['npm test'], setupCommands: ['npm ci'] },
+    // `true` as the verify command, and the temp worktree as the repo: the resume test below runs
+    // the REAL `verifyConcludedRun` on the resumed run, and a verify pass has to be able to pass.
+    data: { name: 'Checkout Platform', repoPath: worktreePath, verifyCommands: ['true'], setupCommands: [] },
   })
   const other = await prisma.workspace.create({
     data: { name: 'Other Platform', repoPath: '/tmp/other', verifyCommands: ['npm test'], setupCommands: [] },
@@ -109,6 +112,9 @@ async function seed(): Promise<Fixture> {
       status: 'running',
       requiredRole: 'backend',
       maxAttempts: workspace.maxAttempts,
+      // What the tick writes at provisioning; `verifyConcludedRun` refuses to advance a task with
+      // no branch recorded.
+      branch: 'slave/add-checkout-retry',
     },
   })
   const run = await prisma.slaveRun.create({
@@ -372,7 +378,7 @@ describe('a slave that asks, and waits', () => {
     })
   })
 
-  it('does not park a run nothing could resume: no session id means no checkpoint', async (): Promise<void> => {
+  it('does not park a run that never reached working: nothing else owns a run that never started', async (): Promise<void> => {
     const outcome = await pumpRun({
       runId: ids.runId,
       taskId: ids.taskId,
@@ -380,8 +386,8 @@ describe('a slave that asks, and waits', () => {
       workspaceId: ids.workspaceId,
       cancel: ids.cancel,
       spawn,
-      // No `session_started`: there is no session to `--resume`, so parking this run would strand
-      // the task waiting on an answer nothing could ever deliver.
+      // No `session_started`, so the row is still `starting` -- `pump.ts` writes `working` there
+      // and nowhere else. The status guard is what refuses this one, before any recipient is read.
       events: fromArray([
         { kind: 'text', text: ask('{"role":"answerer","question":"Which queue?"}') },
         { kind: 'terminated', outcome: okOutcome },
@@ -393,5 +399,74 @@ describe('a slave that asks, and waits', () => {
     const task = await prisma.task.findUniqueOrThrow({ where: { id: ids.taskId } })
     expect(task.status).not.toBe('waiting')
     expect(await prisma.slaveMessage.count({ where: { senderRunId: ids.runId } })).toBe(0)
+  })
+
+  it('does not park a run nothing could resume: no spawn facts means no checkpoint', async (): Promise<void> => {
+    // The live shape of `writeCheckpoint`'s refusal on a run that DID reach `working`: a caller
+    // with no spawn facts (a test fixture, a future caller that never pauses) cannot support a
+    // resume, so parking here would leave a task waiting on an answer nothing could deliver.
+    const outcome = await pumpRun({
+      runId: ids.runId,
+      taskId: ids.taskId,
+      slaveId: ids.slaveId,
+      workspaceId: ids.workspaceId,
+      cancel: ids.cancel,
+      // No `spawn`, deliberately.
+      events: fromArray([
+        { kind: 'session_started', sessionId: 's-1' },
+        { kind: 'text', text: ask('{"role":"answerer","question":"Which queue?"}') },
+        { kind: 'terminated', outcome: okOutcome },
+      ]),
+    })
+
+    expect(outcome).not.toBeNull()
+    const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
+    expect(run.status).toBe('succeeded')
+    expect(run.pauseReason).toBeNull()
+    expect(await prisma.checkpoint.count({ where: { runId: ids.runId } })).toBe(0)
+    expect(await prisma.slaveMessage.count({ where: { senderRunId: ids.runId } })).toBe(0)
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: ids.taskId } })).status).not.toBe('waiting')
+  })
+
+  it('is reclaimed by the resume that answers it, and then finishes normally', async (): Promise<void> => {
+    await pumpEndingWith(ids, ask('{"role":"answerer","question":"Which queue should retries land on?"}'))
+
+    // The real path Task 3's delivery will take: record the answer as the resume intent, then let
+    // the process that owns a child claim it (`tick.ts`'s resume pass calls exactly this).
+    const requested = await requestResume(ids.runId, 'payments-retry', 'maya')
+    expect(requested.ok).toBe(true)
+    const claim = await claimResume(ids.runId)
+    expect(claim).toEqual({ claimed: true, queuedMessage: 'payments-retry' })
+
+    // The task is back in the scheduler's world as the running task it was, still owned by this
+    // run -- without this, everything below concludes into a task nothing can advance.
+    const claimed = await prisma.task.findUniqueOrThrow({ where: { id: ids.taskId } })
+    expect(claimed.status).toBe('running')
+    expect(claimed.activeRunId).toBe(ids.runId)
+    expect(claimed.attempt).toBe(0)
+
+    // The resumed session finishes the work.
+    await pumpRun({
+      runId: ids.runId,
+      taskId: ids.taskId,
+      slaveId: ids.slaveId,
+      workspaceId: ids.workspaceId,
+      cancel: ids.cancel,
+      spawn,
+      resumed: true,
+      events: fromArray([
+        { kind: 'session_started', sessionId: 's-1' },
+        { kind: 'text', text: 'Done: retries land on payments-retry.' },
+        { kind: 'terminated', outcome: okOutcome },
+      ]),
+    })
+    await verifyConcludedRun(ids.runId)
+
+    expect((await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })).status).toBe('succeeded')
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: ids.taskId } })
+    // Advanced, not ignored: `ADVANCEABLE` never included `waiting`, so a task left there would
+    // have sat forever with `activeRunId` pointing at a terminal run.
+    expect(task.status).toBe('reviewing')
+    expect(task.attempt).toBe(0)
   })
 })

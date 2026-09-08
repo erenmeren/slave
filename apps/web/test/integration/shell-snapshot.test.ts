@@ -80,8 +80,8 @@ describe('buildShellFacts', () => {
     expect((await buildShellFacts(fixture.workspaceId))?.counts.slavesWorking).toBe(2)
   })
 
-  it('counts a task under review and one in the merge queue as active', async (): Promise<void> => {
-    for (const status of ['reviewing', 'merging', 'done'] as const) {
+  it('counts a task under review, one in the merge queue and one waiting for another slave as active', async (): Promise<void> => {
+    for (const status of ['reviewing', 'merging', 'waiting', 'done'] as const) {
       await prisma.task.create({
         data: {
           workspaceId: fixture.workspaceId,
@@ -93,7 +93,9 @@ describe('buildShellFacts', () => {
         },
       })
     }
-    expect((await buildShellFacts(fixture.workspaceId))?.counts.tasksActive).toBe(2)
+    // `waiting` (M36 t2) joins them: the slave is mid-session waiting on another slave, not parked
+    // for a human, and the header must not read "0 active" for a workspace full of them.
+    expect((await buildShellFacts(fixture.workspaceId))?.counts.tasksActive).toBe(3)
   })
 
   it('does not leak another workspace tasks', async (): Promise<void> => {

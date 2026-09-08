@@ -36,9 +36,10 @@ function chainSource(hasWorkerOverride: boolean, rosterValue: unknown, templateV
 }
 
 // Mirrors overview.ts's ACTIVE_TASK_STATUSES exactly (the M8a widening: a task under review or in
-// the merge queue is still active work). Not imported from there -- overview.ts does not export
+// the merge queue is still active work; the M36 t2 one: a task waiting for another slave's answer
+// is in flight, not parked for a human). Not imported from there -- overview.ts does not export
 // it, and this task's scope is one new module, nothing else changes.
-const ACTIVE_TASK_STATUSES = ['ready', 'running', 'verifying', 'reviewing', 'merging', 'rework'] as const
+const ACTIVE_TASK_STATUSES = ['ready', 'running', 'verifying', 'reviewing', 'merging', 'rework', 'waiting'] as const
 
 /** Every list read below's default filter (M27 §3.3): an archived project has `archivedAt !==
  *  null` and is hidden from every list unless a caller opts in with `includeArchived: true`

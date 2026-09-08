@@ -47,6 +47,7 @@ const slave = (over: Partial<SlaveCardData>): SlaveCardData => ({
   costUsd: 0,
   toolCalls: 0,
   pausedAtStep: null,
+  waitingFor: null,
   ...over,
 })
 
@@ -194,6 +195,35 @@ describe('SlaveCard', () => {
     rerender(<SlaveCard slave={slave({ status: 'paused' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
     // Motion carries information (spec §7): a pulsing paused slave is a lie on screen.
     expect(dot().className).not.toContain('status-pulse')
+  })
+
+  // M36 t2 fix round 1, finding 1: a waiting run is `paused`, and a footer offering a bare
+  // "Resume" told an operator to continue a slave whose question nobody had answered.
+  describe('a slave waiting for another slave (M36 t2)', () => {
+    const waiting = slave({
+      status: 'paused',
+      waitingFor: { recipient: 'Maya', question: 'Which queue should retries land on?' },
+    })
+
+    it('offers Answer instead of Resume, and Answer opens the panel where an answer can be typed', () => {
+      const onOpen = vi.fn()
+      render(<SlaveCard slave={waiting} liveActionLine={null} workspaceId="w1" onOpen={onOpen} />)
+      expect(screen.queryByTestId('card-resume')).toBeNull()
+      fireEvent.click(screen.getByTestId('card-answer'))
+      expect(onOpen).toHaveBeenCalledWith('a1')
+    })
+
+    it('names who it is waiting on', () => {
+      render(<SlaveCard slave={waiting} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
+      expect(screen.getByTestId('card-waiting-for').textContent).toContain('Maya')
+    })
+
+    it('still offers Resume for an ordinary operator pause', () => {
+      render(<SlaveCard slave={slave({ status: 'paused' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
+      expect(screen.getByTestId('card-resume')).toBeTruthy()
+      expect(screen.queryByTestId('card-answer')).toBeNull()
+      expect(screen.queryByTestId('card-waiting-for')).toBeNull()
+    })
   })
 
   it('opens the detail panel via onOpen when the header is clicked — no more disabled M4 buttons', () => {

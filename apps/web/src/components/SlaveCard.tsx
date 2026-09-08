@@ -105,9 +105,14 @@ export function SlaveCard({
   // panel also disables on a halted workspace; the card has no halt reason to read, and that one
   // stays server-refused into `card-error`.)
   const resumeRequestedWhilePaused = slave.status === 'paused' && slave.resumeRequestedAt !== null
-  const canResume = runId !== null && slave.status === 'paused' && !resumeRequestedWhilePaused
+  // M36 t2: a slave waiting for another slave's answer is `paused` like any other, and a bare
+  // "Resume" on this footer would read as continuing a pause an operator asked for. The footer
+  // offers "Answer" instead, which opens the panel -- the one place an answer can actually be
+  // typed and delivered (the panel's message box, consumed by the resume).
+  const waitingFor = slave.waitingFor
+  const canResume = runId !== null && slave.status === 'paused' && waitingFor === null && !resumeRequestedWhilePaused
   const canStop = runId !== null && slave.status !== 'idle'
-  const showResume = slave.status === 'paused' || slave.status === 'pausing'
+  const showResume = (slave.status === 'paused' || slave.status === 'pausing') && waitingFor === null
 
   const run = async (action: CardAction): Promise<void> => {
     if (runId === null) return
@@ -205,6 +210,12 @@ export function SlaveCard({
         <ShellOnlyMark gate={slave.gate} />
       </div>
 
+      {waitingFor !== null && (
+        <span data-testid="card-waiting-for" className="truncate text-[10.5px] text-tone-waiting">
+          waiting for {waitingFor.recipient}
+        </span>
+      )}
+
       {resumeRequestedWhilePaused && (
         <span data-testid="card-resume-requested" className="text-[10.5px] text-text-3">
           {/* The panel's own wording, verbatim: the same fact told twice in two places should not
@@ -220,7 +231,11 @@ export function SlaveCard({
       )}
 
       <footer className="flex gap-[5px] border-t border-white/[0.06] pt-[3px]">
-        {showResume ? (
+        {waitingFor !== null ? (
+          <FooterButton testId="card-answer" disabled={false} onClick={() => onOpen(slave.id)}>
+            Answer
+          </FooterButton>
+        ) : showResume ? (
           <FooterButton testId="card-resume" disabled={!canResume || pending.has('resume')} onClick={() => void run('resume')}>
             Resume
           </FooterButton>

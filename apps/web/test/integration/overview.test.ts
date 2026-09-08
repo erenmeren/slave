@@ -40,7 +40,7 @@ describe('buildOverviewSnapshot', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Approval", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Approval", "Artifact", "Checkpoint", "SlaveMessage", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
   })
@@ -277,6 +277,26 @@ describe('buildOverviewSnapshot', () => {
     // The seeded fixture task is `running`, plus the two just created: 3 active, none blocked/
     // done/failed — and none `ready`, which is its own tile now.
     expect(snapshot?.tasks).toEqual({ active: 3, ready: 0, blocked: 0, done: 0, failed: 0 })
+  })
+
+  it('counts a task waiting for another slave as active, not vanished (M36 t2)', async (): Promise<void> => {
+    await prisma.task.create({
+      data: {
+        workspaceId: fixture.workspaceId,
+        title: 'waiting',
+        description: 'x',
+        status: 'waiting',
+        requiredRole: 'backend',
+        maxAttempts: 3,
+      },
+    })
+
+    const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
+
+    // A task whose slave is waiting for another slave's answer is in flight, not parked for a
+    // human: the seeded `running` task plus this one. A workspace whose in-flight tasks are ALL
+    // waiting must not read "0 active".
+    expect(snapshot?.tasks).toEqual({ active: 2, ready: 0, blocked: 0, done: 0, failed: 0 })
   })
 
   it('carries the halt verbatim', async (): Promise<void> => {
@@ -520,6 +540,67 @@ describe('buildOverviewSnapshot', () => {
     expect(snapshot?.blocked.find((b) => b.kind === 'run')?.runId).toBe(run.id)
     expect(snapshot?.blocked.find((b) => b.kind === 'run')?.detail).toBe('paused at step 7')
     expect(snapshot?.blocked.find((b) => b.kind === 'task')?.action).toBeNull()
+  })
+
+  it('tells the card and panel that a slave is waiting, and on whom (M36 t2)', async (): Promise<void> => {
+    const team = await prisma.team.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })
+    const answerer = await prisma.slave.create({ data: { teamId: team.id, name: 'Maya', role: 'answerer' } })
+    const run = await prisma.slaveRun.create({
+      data: {
+        taskId: fixture.taskId,
+        slaveId: fixture.slaveId,
+        status: 'paused',
+        pausedAtStep: 3,
+        pauseReason: 'waiting_for_answer',
+      },
+    })
+    await prisma.slaveMessage.create({
+      data: {
+        taskId: fixture.taskId,
+        slaveId: fixture.slaveId,
+        workspaceId: fixture.workspaceId,
+        senderRunId: run.id,
+        recipientSlaveId: answerer.id,
+        threadId: 'thread-1',
+        kind: 'question',
+        body: 'Which queue should retries land on?',
+        actor: 'slave',
+        expectsReply: true,
+      },
+    })
+
+    const card = (await buildOverviewSnapshot(fixture.workspaceId))?.slaves.find((s) => s.id === fixture.slaveId)
+    // A waiting run is `paused` like every operator pause; this field is the ONLY thing that tells
+    // the two apart on screen, so the surfaces do not offer to resume a slave nobody has answered.
+    expect(card?.status).toBe('paused')
+    expect(card?.waitingFor).toEqual({ recipient: 'Maya', question: 'Which queue should retries land on?' })
+  })
+
+  it('names the ROLE a broadcast question was addressed to, and says nothing for an ordinary pause', async (): Promise<void> => {
+    const run = await prisma.slaveRun.create({
+      data: { taskId: fixture.taskId, slaveId: fixture.slaveId, status: 'paused', pauseReason: 'human' },
+    })
+    expect(
+      (await buildOverviewSnapshot(fixture.workspaceId))?.slaves.find((s) => s.id === fixture.slaveId)?.waitingFor,
+    ).toBeNull()
+
+    await prisma.slaveRun.update({ where: { id: run.id }, data: { pauseReason: 'waiting_for_answer' } })
+    await prisma.slaveMessage.create({
+      data: {
+        slaveId: fixture.slaveId,
+        workspaceId: fixture.workspaceId,
+        senderRunId: run.id,
+        recipientRole: 'answerer',
+        threadId: 'thread-2',
+        kind: 'question',
+        body: 'Which queue?',
+        actor: 'slave',
+        expectsReply: true,
+      },
+    })
+    expect(
+      (await buildOverviewSnapshot(fixture.workspaceId))?.slaves.find((s) => s.id === fixture.slaveId)?.waitingFor,
+    ).toEqual({ recipient: 'anyone with the answerer role', question: 'Which queue?' })
   })
 
   it('leaves out a run that is waiting for another slave, which needs nobody here (M36 t2)', async (): Promise<void> => {

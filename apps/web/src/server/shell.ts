@@ -43,9 +43,10 @@ export interface ShellFacts {
 }
 
 // Mirrors `overview.ts`'s own list (the M8a widening: a task under review or in the merge queue
-// is still active work). Not imported — `overview.ts` does not export it, and this module's whole
-// point is not to depend on that one.
-const ACTIVE_TASK_STATUSES = ['ready', 'running', 'verifying', 'reviewing', 'merging', 'rework'] as const
+// is still active work; the M36 t2 one: a task waiting for another slave's answer is in flight,
+// not parked for a human). Not imported — `overview.ts` does not export it, and this module's
+// whole point is not to depend on that one.
+const ACTIVE_TASK_STATUSES = ['ready', 'running', 'verifying', 'reviewing', 'merging', 'rework', 'waiting'] as const
 
 export async function buildShellFacts(workspaceId: string): Promise<ShellFacts | null> {
   const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId } })

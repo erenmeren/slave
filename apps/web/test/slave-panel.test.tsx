@@ -33,6 +33,7 @@ const slave = (over: Partial<SlaveCardData>): SlaveCardData => ({
   costUsd: 0,
   toolCalls: 0,
   pausedAtStep: null,
+  waitingFor: null,
   ...over,
 })
 
@@ -246,6 +247,48 @@ describe('SlavePanel', () => {
         />,
       )
       expect(screen.getByTestId('run-paused-step').textContent).toContain('4')
+    })
+
+    // M36 t2 fix round 1, finding 1.
+    it('reads as waiting, not as an operator pause, when the run is waiting for another slave', () => {
+      render(
+        <SlavePanel
+          slave={slave({
+            status: 'paused',
+            pausedAtStep: 4,
+            waitingFor: { recipient: 'Maya', question: 'Which queue should retries land on?' },
+          })}
+          liveEvents={[]}
+          workspaceId="w1"
+          haltedReason={null}
+          onClose={() => {}}
+        />,
+      )
+      // The human-pause detail gives way to what it is actually waiting on.
+      expect(screen.queryByTestId('run-paused-step')).toBeNull()
+      expect(screen.getByTestId('run-waiting-step').textContent).toContain('4')
+      expect(screen.getByTestId('waiting-for').textContent).toContain('Maya')
+      expect(screen.getByTestId('waiting-question').textContent).toContain('Which queue should retries land on?')
+      // The control is still reachable -- typing an answer and sending it is what a human does
+      // here -- but it is not labelled as resuming a pause somebody asked for.
+      expect(screen.getByTestId('resume-button').textContent).toBe('answer')
+      expect(screen.getByTestId('resume-button').getAttribute('disabled')).toBeNull()
+      expect(screen.getByTestId('message-input')).toBeTruthy()
+    })
+
+    it('still reads as an operator pause when nothing is being waited on', () => {
+      render(
+        <SlavePanel
+          slave={slave({ status: 'paused', pausedAtStep: 4 })}
+          liveEvents={[]}
+          workspaceId="w1"
+          haltedReason={null}
+          onClose={() => {}}
+        />,
+      )
+      expect(screen.getByTestId('run-paused-step')).toBeTruthy()
+      expect(screen.queryByTestId('waiting-for')).toBeNull()
+      expect(screen.getByTestId('resume-button').textContent).toBe('resume')
     })
 
     it('does not show paused-at step outside paused, even if the field happens to be set', () => {

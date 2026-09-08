@@ -72,6 +72,21 @@ describe('org query module', () => {
       expect(project?.companyName).toBeNull()
       expect(project?.halted).toBe(false)
       expect(project?.taskCounts).toEqual({ done: 1, total: 2, active: 1, blocked: 0 })
+      // M36 t2: a task waiting for another slave's answer counts as active here too -- the three
+      // copies of `ACTIVE_TASK_STATUSES` (this module's, `overview.ts`'s and `shell.ts`'s) are
+      // meant to agree, and this is where that agreement is checked for the projects list.
+      await prisma.task.create({
+        data: {
+          workspaceId: fixture.workspaceId,
+          title: 'Waiting task',
+          description: 'x',
+          status: 'waiting',
+          requiredRole: 'backend',
+          maxAttempts: 3,
+        },
+      })
+      const withWaiting = (await listProjects()).find((p) => p.id === fixture.workspaceId)
+      expect(withWaiting?.taskCounts).toEqual({ done: 1, total: 3, active: 2, blocked: 0 })
       // Re-pointed by the M14 fix wave (review I4): `workerCount` counts every slave on the
       // workspace's teams, staffed from a company or not. `seed()`'s 'Alex' is exactly such an
       // slave, and it used to be counted as zero slaves while the card drew its face.

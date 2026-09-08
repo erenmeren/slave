@@ -103,6 +103,24 @@ export interface SlaveCardData {
   readonly toolCalls: number
   /** Set only while a checkpoint exists to resume from — null outside `paused`. */
   readonly pausedAtStep: number | null
+  /**
+   * Non-null exactly when this slave's live run is `paused` with `SlaveRun.pauseReason =
+   * waiting_for_answer` (M36 t2) — it asked another slave a question and stopped.
+   *
+   * One field, doing two jobs on purpose. A waiting run is `paused` like every operator pause, so
+   * every surface that gates a resume button, a "paused at step N" line or a writable message box
+   * on `status === 'paused'` alone would present it as a human pause and invite an operator to
+   * resume a slave whose question nobody has answered. Non-null IS that discriminator, and it
+   * carries what the waiting affordance needs so the panel does not have to ask a second question
+   * to render one.
+   *
+   * `recipient` is already display text (a slave's name, or the role the question was broadcast
+   * to) — the recipient is always in this workspace, so it is resolved from the roster this
+   * snapshot already loaded rather than a second query. `question` is the body of the LATEST
+   * question this run sent, or `null` in the one case the run says it is waiting and no message
+   * row can be found for it.
+   */
+  readonly waitingFor: { readonly recipient: string; readonly question: string | null } | null
 }
 
 export interface OverviewSnapshot {
@@ -205,7 +223,10 @@ export interface OverviewSnapshot {
 // A task under review or in the merge queue is still active work, not a vanished one — widened
 // (M8a Task 12) from the M5-era four to also cover `reviewing`/`merging`, the two verify-passed
 // states that sit between a run finishing and the task landing on `main`.
-const ACTIVE_TASK_STATUSES = ['ready', 'running', 'verifying', 'reviewing', 'merging', 'rework'] as const
+// `waiting` (M36 t2) counts as active: a task whose slave is waiting for another slave's answer is
+// in flight, not parked for a human -- a workspace whose in-flight tasks are all waiting must not
+// read "0 active". `org.ts` and `shell.ts` carry the same list and were widened with it.
+const ACTIVE_TASK_STATUSES = ['ready', 'running', 'verifying', 'reviewing', 'merging', 'rework', 'waiting'] as const
 
 export async function buildOverviewSnapshot(workspaceId: string): Promise<OverviewSnapshot | null> {
   // M33 §4: `adoptedFromSimulation` is read here, in the one existing workspace query, rather than
@@ -253,6 +274,35 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
     if (event !== null) {
       const summary = (event.payload as { summary?: string }).summary
       if (typeof summary === 'string') lines.set(run.slaveId, summary)
+    }
+  }
+
+  // The waiting affordance (M36 t2): what each waiting run asked, and of whom. One query for every
+  // waiting run in the workspace -- usually none -- rather than one per run, and no query at all
+  // when nothing is waiting.
+  const waitingRunIds = [...liveRunBySlave.values()]
+    .filter((run) => run.status === 'paused' && run.pauseReason === 'waiting_for_answer')
+    .map((run) => run.id)
+  const waitingFor = new Map<string, { readonly recipient: string; readonly question: string | null }>()
+  if (waitingRunIds.length > 0) {
+    const nameById = new Map(slaves.map((slave) => [slave.id, slave.name]))
+    const questions = await prisma.slaveMessage.findMany({
+      where: { senderRunId: { in: waitingRunIds }, kind: 'question' },
+      orderBy: { seq: 'desc' },
+    })
+    for (const message of questions) {
+      // Descending `seq`, so the first row seen for a run is its latest question; a run that asked,
+      // was answered, resumed and asked again is waiting on the second one.
+      if (message.senderRunId === null || waitingFor.has(message.senderRunId)) continue
+      waitingFor.set(message.senderRunId, {
+        recipient:
+          message.recipientSlaveId !== null
+            ? // A named recipient is always in this workspace (`sendMessage` refuses any other), so
+              // the roster above resolves it; the id is the honest fallback if a slave was deleted.
+              (nameById.get(message.recipientSlaveId) ?? message.recipientSlaveId)
+            : `anyone with the ${message.recipientRole ?? 'unknown'} role`,
+        question: message.body,
+      })
     }
   }
 
@@ -470,6 +520,13 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
         costUsd: run === null ? 0 : run.costUsd,
         toolCalls: run?.toolCalls ?? 0,
         pausedAtStep: run?.pausedAtStep ?? null,
+        // Derived from the RUN's own pause category, not from the message lookup: the run saying
+        // it is waiting is the fact, and a missing message row must not silently turn a waiting
+        // slave back into an ordinary paused one on every surface that reads this field.
+        waitingFor:
+          run !== null && run.status === 'paused' && run.pauseReason === 'waiting_for_answer'
+            ? (waitingFor.get(run.id) ?? { recipient: 'another slave', question: null })
+            : null,
       }
     }),
     tasks: {

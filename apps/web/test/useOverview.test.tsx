@@ -35,6 +35,7 @@ const SNAPSHOT: OverviewSnapshot = {
       costUsd: 0,
       toolCalls: 0,
       pausedAtStep: null,
+      waitingFor: null,
     },
   ],
   tasks: { active: 1, ready: 0, blocked: 0, done: 0, failed: 0 },

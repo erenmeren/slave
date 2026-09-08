@@ -163,6 +163,54 @@ describe('the resume intent', () => {
     expect((await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })).status).toBe('paused')
   })
 
+  // M36 t2 fix round 1, finding 2. Nothing else on any resume path writes `Task.status`, so a task
+  // parked `waiting` by the ask path would stay there forever: the resumed run concludes, `advance`
+  // refuses it (`ADVANCEABLE` is `['running','verifying']`), and the task is neither startable nor
+  // orphanable with `activeRunId` pointing at a terminal run.
+  it('claimResume reclaims the task of a run that was waiting for an answer', async (): Promise<void> => {
+    const { run, task } = fixture
+    await prisma.slaveRun.update({ where: { id: run.id }, data: { pauseReason: 'waiting_for_answer' } })
+    await prisma.task.update({ where: { id: task.id }, data: { status: 'waiting', activeRunId: run.id } })
+    await requestResume(run.id, 'the retry queue is payments-retry', 'meren')
+
+    expect((await claimResume(run.id)).claimed).toBe(true)
+
+    const after = await prisma.task.findUniqueOrThrow({ where: { id: task.id } })
+    expect(after.status).toBe('running')
+    // Still this run's task: the resumed session is the same run, and releasing it would hand the
+    // branch to a second slave.
+    expect(after.activeRunId).toBe(run.id)
+    expect(after.attempt).toBe(0)
+  })
+
+  it('claimResume leaves the task of an ordinary paused run alone', async (): Promise<void> => {
+    const { run, task } = fixture
+    await prisma.task.update({ where: { id: task.id }, data: { status: 'running', activeRunId: run.id } })
+    await requestResume(run.id, null, 'meren')
+
+    expect((await claimResume(run.id)).claimed).toBe(true)
+
+    const after = await prisma.task.findUniqueOrThrow({ where: { id: task.id } })
+    expect(after.status).toBe('running')
+    expect(after.activeRunId).toBe(run.id)
+  })
+
+  it('claimResume with requireIntent: false claims a paused run nobody asked about -- the CLI path', async (): Promise<void> => {
+    const { run, task } = fixture
+    await prisma.slaveRun.update({ where: { id: run.id }, data: { pauseReason: 'waiting_for_answer' } })
+    await prisma.task.update({ where: { id: task.id }, data: { status: 'waiting', activeRunId: run.id } })
+    await updateQueuedMessage(run.id, 'the retry queue is payments-retry')
+
+    // `orchestrator resume --run <id>` is an operator standing in front of the run: there is no
+    // recorded intent, and the task reclaim must happen all the same.
+    expect(await claimResume(run.id, { requireIntent: false })).toEqual({
+      claimed: true,
+      queuedMessage: 'the retry queue is payments-retry',
+    })
+    expect((await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })).status).toBe('resuming')
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: task.id } })).status).toBe('running')
+  })
+
   it('updateQueuedMessage overwrites the single slot rather than accumulating', async (): Promise<void> => {
     const { run } = fixture
     await updateQueuedMessage(run.id, 'first instruction')

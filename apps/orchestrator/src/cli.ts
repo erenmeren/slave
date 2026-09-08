@@ -615,19 +615,17 @@ export async function main(argv: readonly string[]): Promise<number> {
       //
       // `claimResume` first, so an operator resuming a run the web already queued picks up that
       // instruction rather than silently discarding it. It claims only when an intent is recorded,
-      // so a run nobody asked about falls through to the plain claim this command has always made.
-      const intent = await claimResume(run.id)
+      // so a run nobody asked about falls through to the second call below -- which is the SAME
+      // function with the intent requirement dropped, not a second claim written out by hand
+      // (M36 t2 fix round 1, finding 2): every resume has to reclaim the task of a run that was
+      // waiting for an answer, and a hand-rolled `updateMany` here is precisely how one path comes
+      // to forget it. It clears the intent columns either way, closing the window where a web
+      // `requestResume` lands between the two calls: without that, the intent would survive into
+      // `resuming` and later spontaneously resume the run on its own.
+      const requested = await claimResume(run.id)
+      const intent = requested.claimed ? requested : await claimResume(run.id, { requireIntent: false })
       if (!intent.claimed) {
-        const claimed = await prisma.slaveRun.updateMany({
-          where: { id: run.id, status: 'paused' },
-          // Clears any intent columns too, closing the window where a web `requestResume` lands
-          // between `claimResume`'s check and this fallback write: without this, that intent would
-          // survive into `resuming` and later spontaneously resume the run on its own.
-          data: { status: 'resuming', resumeRequestedAt: null, queuedMessage: null },
-        })
-        if (claimed.count === 0) {
-          throw new Error(`run ${run.id} is not paused (it is ${run.status}): there is nothing to resume`)
-        }
+        throw new Error(`run ${run.id} is not paused (it is ${run.status}): there is nothing to resume`)
       }
 
       // An explicit `--message` beats the queued one: the operator typing it now is looking at the

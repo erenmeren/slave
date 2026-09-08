@@ -161,29 +161,74 @@ export async function updateQueuedMessage(runId: string, rawMessage: string): Pr
   return ok(undefined)
 }
 
+export interface ClaimResumeOptions {
+  /**
+   * Whether a recorded `resumeRequestedAt` is required (the default).
+   *
+   * `false` is the CLI's `resume --run <id>`: an operator standing in front of the run is the
+   * intent, and there may be no recorded one at all. It exists so that path claims through THIS
+   * function rather than its own `updateMany` -- the task reclaim below has to happen on every
+   * resume, and a second claim site is how one of them comes to forget it.
+   */
+  readonly requireIntent?: boolean
+}
+
 /**
- * Daemon/CLI side: atomically claim `paused -> resuming`, clearing and returning the intent.
+ * Daemon/CLI side: atomically claim `paused -> resuming`, clearing and returning the intent, and
+ * reclaiming the task of a run that was waiting for an answer.
  *
  * The transition and the consumption of the message are one write, so the message is delivered
  * exactly once no matter how many ticks, daemons or CLI invocations look at the run at the same
  * moment: whoever's `updateMany` matched gets the row, everyone else gets `claimed: false` and
- * moves on. Conditioned on `resumeRequestedAt` as well as on the status, so a paused run nobody
- * asked to resume is never picked up by a pass that reads the status alone.
+ * moves on. Conditioned on `resumeRequestedAt` as well as on the status by default, so a paused run
+ * nobody asked to resume is never picked up by a pass that reads the status alone; the CLI's own
+ * operator-driven resume opts out with `requireIntent: false`.
+ *
+ * **The task reclaim (M36 t2 fix round 1).** A run parked by the ask path leaves its task
+ * `waiting` -- a status the scheduler will not start and the sweep will not reset, which is exactly
+ * right while the run is paused and exactly wrong the moment it is not. Nothing else on any resume
+ * path writes `Task.status`, so without this the resumed run would run to a clean conclusion and
+ * `advance` would refuse it (`ADVANCEABLE` is `['running','verifying']`), leaving the task
+ * `waiting` forever with `activeRunId` pointing at a terminal run: not startable, not orphanable,
+ * nothing to reconcile it. It belongs HERE because this is the one claim every resume goes through
+ * -- the tick's intent pass, the CLI's command, and Task 3's answer delivery (which resumes through
+ * `requestResume` and is then claimed by that same tick pass) -- and because it must be atomic with
+ * the run's own transition.
+ *
+ * Conditioned on the TASK's own columns (`activeRunId` and `status: 'waiting'`) rather than on the
+ * run's `pauseReason`: a `waiting` task pointing at THIS run exists only because this run asked, so
+ * the task-side pair is the stronger evidence, and it cannot flip a task some other resume owns.
  *
  * The caller must be the process that then spawns the child. A claim without a spawn behind it is
  * a `resuming` row with no process, which is what the orphan sweep exists to fail.
  */
-export async function claimResume(runId: string): Promise<{ claimed: boolean; queuedMessage: string | null }> {
+export async function claimResume(
+  runId: string,
+  options: ClaimResumeOptions = {},
+): Promise<{ claimed: boolean; queuedMessage: string | null }> {
   return prisma.$transaction(async (tx) => {
     // Read inside the transaction and before the update, because the update clears the column: this
     // is the only moment the message and the claim can be observed together.
-    const run = await tx.slaveRun.findUnique({ where: { id: runId }, select: { queuedMessage: true } })
+    const run = await tx.slaveRun.findUnique({ where: { id: runId }, select: { queuedMessage: true, taskId: true } })
     const claimed = await tx.slaveRun.updateMany({
-      where: { id: runId, status: 'paused', resumeRequestedAt: { not: null } },
+      where: {
+        id: runId,
+        status: 'paused',
+        ...(options.requireIntent === false ? {} : { resumeRequestedAt: { not: null } }),
+      },
       data: { status: 'resuming', resumeRequestedAt: null, queuedMessage: null },
     })
-    return claimed.count === 1
-      ? { claimed: true, queuedMessage: run?.queuedMessage ?? null }
-      : { claimed: false, queuedMessage: null }
+    if (claimed.count !== 1) return { claimed: false, queuedMessage: null }
+
+    if (run !== null && run.taskId !== null) {
+      // A no-op for every other resume: only a task this run parked is `waiting` with
+      // `activeRunId` still pointing here.
+      await tx.task.updateMany({
+        where: { id: run.taskId, activeRunId: runId, status: 'waiting' },
+        data: { status: 'running' },
+      })
+    }
+
+    return { claimed: true, queuedMessage: run?.queuedMessage ?? null }
   })
 }

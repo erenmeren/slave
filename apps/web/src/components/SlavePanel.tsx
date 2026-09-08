@@ -62,6 +62,12 @@ export function SlavePanel({
   const resumeEnabled = runId !== null && status === 'paused' && !workspaceHalted && !resumeRequestedWhilePaused
   const showMessageBox = status !== 'idle'
   const messageWritable = status === 'paused'
+  // M36 t2: `paused` with `waiting_for_answer` -- the slave asked another slave and stopped, and
+  // nobody asked it to pause. The controls stay reachable (typing here and pressing the button IS
+  // how a human answers, since the message is delivered to the resumed session), but they are not
+  // labelled as continuing an operator's pause, and the "paused at step N" detail gives way to
+  // what the slave is actually waiting on.
+  const waitingFor = slave.waitingFor
 
   const feed = useMemo(() => mergeFeed(slave.recentEvents, liveEvents), [slave.recentEvents, liveEvents])
 
@@ -118,9 +124,10 @@ export function SlavePanel({
           *  measurement this run never made (spec Decision 6; M12 Task 9, ruling R3). */}
         <span data-testid="run-cost">{slave.costUsd === null ? '—' : `$${slave.costUsd.toFixed(2)}`}</span>
         <span data-testid="run-tool-calls">{slave.toolCalls} calls</span>
-        {status === 'paused' && slave.pausedAtStep !== null && (
+        {status === 'paused' && waitingFor === null && slave.pausedAtStep !== null && (
           <span data-testid="run-paused-step">paused at step {slave.pausedAtStep}</span>
         )}
+        {waitingFor !== null && <span data-testid="run-waiting-step">waiting at step {slave.pausedAtStep ?? 0}</span>}
       </div>
 
       {errorText !== null && (
@@ -134,12 +141,24 @@ export function SlavePanel({
           pause
         </Button>
         <Button variant="ghost" data-testid="resume-button" disabled={!resumeEnabled || pending.has('resume')} onClick={() => void run('resume', 'resume')}>
-          resume
+          {waitingFor === null ? 'resume' : 'answer'}
         </Button>
         <Button variant="ghost" data-testid="stop-button" disabled={!stopEnabled || pending.has('stop')} onClick={() => void run('stop', 'stop')}>
           stop
         </Button>
       </section>
+
+      {waitingFor !== null && (
+        <section data-testid="waiting-for" className="flex flex-col gap-1 rounded border border-tone-waiting/40 bg-tone-waiting/10 px-2 py-1.5">
+          <h3 className="text-xs uppercase tracking-wide text-tone-waiting">waiting for {waitingFor.recipient}</h3>
+          <p data-testid="waiting-question" className="whitespace-pre-wrap text-xs text-text-2">
+            {waitingFor.question ?? 'the question is no longer on record'}
+          </p>
+          <p className="text-[10.5px] text-text-3">
+            it is not waiting for you — but a message sent below is delivered as the answer.
+          </p>
+        </section>
+      )}
 
       {resumeRequestedWhilePaused && (
         <p data-testid="resume-requested" className="text-xs text-text-3">
