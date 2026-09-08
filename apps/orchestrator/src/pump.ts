@@ -14,6 +14,7 @@ import {
   type RunOutcome,
   type RuntimeEvent,
 } from '@slave-of-ai/providers'
+import { releaseTaskAfterFailure } from './taskRelease.js'
 
 /**
  * The cap on a single `run.output` payload (spec §9: the slave's text output "with a truncation
@@ -841,10 +842,17 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
                 endedAt: now,
               },
             })
-            // The attempt counts, so a task cannot loop forever against a gate that stays broken.
+            // The attempt counts, so a task cannot loop forever against a gate that stays broken --
+            // via the shared release helper (M35 Task 1), not a bare increment: the bare increment
+            // this replaced left the task `running`/`reviewing` with `activeRunId` still pointing at
+            // this now-dead run, stranding it forever once the halt was cleared. Sharing the helper
+            // also means `verify.ts`'s own release-on-failure path -- chained onto this same run
+            // right after this switch returns -- finds `activeRunId` already cleared and charges no
+            // second attempt.
             // A task-less `planning` run (M8b) has no attempt counter to increment.
             if (taskId !== null) {
-              await prisma.task.update({ where: { id: taskId }, data: { attempt: { increment: 1 } } })
+              const task = await prisma.task.findUniqueOrThrow({ where: { id: taskId } })
+              await releaseTaskAfterFailure(task, runId, 'rework')
             }
 
             // Two events, because the run failed *and* a guardrail is what failed it (§13.1).

@@ -6,6 +6,7 @@ import { appendEvent } from '@slave-of-ai/events'
 import { concludePlanning } from './planning.js'
 import { concludeReview } from './review.js'
 import { describeOutcome, runShellCommand } from './shell.js'
+import { releaseTaskAfterFailure } from './taskRelease.js'
 
 /**
  * Four outcomes, named rather than encoded in the nullability of two other fields.
@@ -168,23 +169,71 @@ export async function runVerify(input: RunVerifyInput): Promise<VerifyResult> {
 }
 
 /**
- * The reaction spec §3.2 leaves outside `decide()`: a run that concluded `succeeded` has work to
- * judge, so verify runs on it and the task advances. Called by whoever awaited the run's pump —
- * the tick's per-run chain for fresh runs, `resume` for continuations — because the pump owns the
- * *run* row and this owns what happens to the *task* once the run is done with it.
+ * The reaction spec §3.2 leaves outside `decide()`: whatever a concluded run means for the *task*
+ * it was working. Called by whoever awaited the run's pump — the tick's per-run chain for fresh
+ * runs, `resume` for continuations — because the pump owns the *run* row and this owns what
+ * happens to the *task* once the run is done with it.
  *
- * Only a `succeeded` run verifies. A `failed` run's own path already announced it and verify would
- * judge a tree nobody claims is finished; a `stopped` run was concluded by an operator whose
- * decision stands; a `paused` run is not terminal at all. The guard reads the row rather than
- * trusting the caller's outcome, because the pump hands back its outcome even when something else
- * — a cancel, the sweep — concluded the run first, and their decision is the one that counts.
+ * A `succeeded` run has work to judge, so verify runs on it and the task advances (or, for
+ * `planning`/`review`, whatever concluding that kind means — see below). A `failed` run has no
+ * tree anyone claims is finished, so verify never runs against it — but (M35 Task 1) an
+ * `implementation` run's task must still be released, exactly as a failed resume already is by
+ * `releaseTaskAfterFailure` (`./taskRelease.js`), rather than left `running` forever. A `review`
+ * run's task is deliberately left alone on a review failure — see the comment on that branch below
+ * for why. A `stopped` run was concluded by an operator whose decision stands; a `paused` run is
+ * not terminal at all — both are left alone. The status checks read the row rather than trusting
+ * the caller's outcome, because the pump hands back its outcome even when something else — a
+ * cancel, the sweep — concluded the run first, and their decision is the one that counts.
  */
 export async function verifyConcludedRun(runId: RunId): Promise<void> {
   const run = await prisma.slaveRun.findUnique({
     where: { id: runId },
     include: { task: { include: { workspace: true } } },
   })
-  if (run === null || run.status !== 'succeeded') return
+  if (run === null) return
+
+  // M35 Task 1: `pump.ts`'s terminal conclusion writes `SlaveRun.status = 'failed'` and emits
+  // `run.failed`, but touches no `Task` -- that write is this function's caller's whole reason for
+  // existing (see the module doc), and until this branch a failed run was the one conclusion this
+  // function silently ignored (the guard below used to read `run.status !== 'succeeded'` alone). A
+  // task left `running` with `activeRunId` still pointing at the now-terminal run is invisible to
+  // `decide()` (`STARTABLE` never includes `running`) and to the sweep (`ORPHANABLE`/`SWEEPABLE`
+  // only reconcile NON-terminal runs) -- permanently stranded, no attempt charged.
+  if (run.status === 'failed') {
+    if (run.kind === 'implementation') {
+      const { task } = run
+      // Every `implementation` run has a task by construction (M8b) -- a null one here is data
+      // corruption worth failing loudly on, exactly as the `succeeded` path below treats it.
+      if (task === null) {
+        throw new Error(`run ${run.id} of kind ${run.kind} has no task`)
+      }
+      const release = await releaseTaskAfterFailure(task, run.id, 'rework')
+      if (release.exhausted) {
+        // The task's own terminal, not just the run's -- §13: no failure is silent, and without
+        // this a task that just spent its last attempt drops off the board with `run.failed` as
+        // the only trace of why nothing is running against it any more.
+        await appendEvent({
+          type: 'task.failed',
+          workspaceId: task.workspaceId,
+          taskId: task.id,
+          actor: 'system',
+          payload: { reason: `implementation run failed after ${String(release.attempt)} attempt(s)` },
+        })
+      }
+    }
+    // `review`: deliberately left alone. Unlike `implementation`, a `reviewing` task with a dead
+    // `activeRunId` does not strand -- `dispatchReview`'s "already live" gate (`review.ts`) counts
+    // NON-terminal review runs for the task, never reads `Task.activeRunId`, so a `reviewing` task
+    // is re-dispatched normally next tick. `review.ts` already has its own bounded-retry policy
+    // for a review run that fails (`REVIEW_RETRY_CAP`, tested in review.test.ts's "invalid
+    // verdict" and "diff itself cannot be produced" cases): it deliberately leaves `Task.status`
+    // at `reviewing` and charges no `Task.attempt` across repeated review failures. Releasing here
+    // too would fight that policy with an implementation-shaped rework/attempt charge for the same
+    // failure, not "handle it consistently" with it.
+    // `planning`: no task to release (M8b).
+    return
+  }
+  if (run.status !== 'succeeded') return
 
   if (run.kind === 'planning') {
     // A planning run's succeeded process has produced a task graph, not a tree to check out --

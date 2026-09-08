@@ -138,6 +138,10 @@ async function seed(): Promise<Ids> {
   const run = await prisma.slaveRun.create({
     data: { taskId: task.id, slaveId: slave.id, status: 'starting' },
   })
+  // Mirrors what `tick.ts`'s `startRun` does at dispatch: `activeRunId` is what
+  // `releaseTaskAfterFailure` (`./taskRelease.js`) guards its release on, so a fixture that never
+  // set it would make every release path here a silent no-op regardless of what it wrote.
+  await prisma.task.update({ where: { id: task.id }, data: { activeRunId: run.id } })
 
   return {
     runId: runId(run.id),
@@ -170,6 +174,7 @@ async function seedSecondRun(ids: Ids): Promise<Ids> {
   const run = await prisma.slaveRun.create({
     data: { taskId: task.id, slaveId: slave.id, status: 'starting' },
   })
+  await prisma.task.update({ where: { id: task.id }, data: { activeRunId: run.id } })
   return { ...ids, runId: runId(run.id), taskId: taskId(task.id), slaveId: slaveId(slave.id) }
 }
 

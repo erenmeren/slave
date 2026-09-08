@@ -4,9 +4,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@slave-of-ai/db'
 import { prisma } from '@slave-of-ai/db/client'
-import { taskId as brandTaskId } from '@slave-of-ai/domain'
+import { runId as brandRunId, taskId as brandTaskId } from '@slave-of-ai/domain'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
-import { advance, runVerify } from '../../src/verify.js'
+import { advance, runVerify, verifyConcludedRun } from '../../src/verify.js'
 import { provisionWorktree } from '../../src/worktree.js'
 
 function git(args: readonly string[], cwd: string): string {
@@ -427,5 +427,146 @@ describe('verify and advance', () => {
     ).rejects.toThrow(/branch/)
 
     expect((await task()).status).not.toBe('done')
+  })
+})
+
+interface FailedRunFixture {
+  readonly workspaceId: string
+  readonly taskId: string
+  readonly runId: string
+}
+
+/**
+ * A run the pump has already concluded `failed`, terminal, for a task holding it -- the shape
+ * `verifyConcludedRun` sees for M35 Task 1's defect: `pump.ts` writes the run row and touches no
+ * `Task`, so the task still reads whatever `taskStatus` names and `activeRunId` still points at
+ * this run until `verifyConcludedRun` (or something else) releases it.
+ */
+async function seedFailedRun(options: {
+  readonly kind?: 'implementation' | 'review'
+  readonly taskStatus?: 'running' | 'reviewing'
+  readonly taskMaxAttempts?: number
+  readonly taskAttempt?: number
+}): Promise<FailedRunFixture> {
+  const repoPath = makeRepo()
+  repos.push(repoPath)
+  const workspace = await prisma.workspace.create({
+    data: { name: 'Checkout Platform', repoPath, verifyCommands: ['true'], setupCommands: [], maxAttempts: 5 },
+  })
+  const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
+  const task = await prisma.task.create({
+    data: {
+      workspaceId: workspace.id,
+      title: 'Add the thing',
+      description: 'make it work',
+      status: options.taskStatus ?? 'running',
+      requiredRole: 'backend',
+      maxAttempts: options.taskMaxAttempts ?? workspace.maxAttempts,
+      attempt: options.taskAttempt ?? 0,
+      branch: 'slaveofai/TASK-001-x',
+    },
+  })
+  const run = await prisma.slaveRun.create({
+    data: {
+      taskId: task.id,
+      slaveId: slave.id,
+      kind: options.kind ?? 'implementation',
+      status: 'failed',
+      terminalAt: new Date(),
+      endedAt: new Date(),
+    },
+  })
+  await prisma.task.update({ where: { id: task.id }, data: { activeRunId: run.id } })
+
+  return { workspaceId: workspace.id, taskId: task.id, runId: run.id }
+}
+
+describe('verifyConcludedRun releases a task after a run concludes failed', () => {
+  beforeEach(async (): Promise<void> => {
+    await prisma.$executeRawUnsafe(
+      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
+    )
+  })
+
+  it('releases an implementation run to rework with exactly one attempt charged (RED: today the task stays running)', async (): Promise<void> => {
+    const f = await seedFailedRun({})
+
+    await verifyConcludedRun(brandRunId(f.runId))
+
+    const t = await prisma.task.findUniqueOrThrow({ where: { id: f.taskId } })
+    expect(t.status).toBe('rework')
+    expect(t.attempt).toBe(1)
+    expect(t.activeRunId).toBeNull()
+  })
+
+  it('parks the task failed, not rework, once the released attempt reaches the cap', async (): Promise<void> => {
+    const f = await seedFailedRun({ taskMaxAttempts: 2, taskAttempt: 1 })
+
+    await verifyConcludedRun(brandRunId(f.runId))
+
+    const t = await prisma.task.findUniqueOrThrow({ where: { id: f.taskId } })
+    expect(t.status).toBe('failed')
+    expect(t.attempt).toBe(2)
+    expect(await eventTypesFor(f.workspaceId)).toContain('task.failed')
+  })
+
+  it('is idempotent: calling it a second time for the same failed run charges nothing more', async (): Promise<void> => {
+    const f = await seedFailedRun({})
+
+    await verifyConcludedRun(brandRunId(f.runId))
+    await verifyConcludedRun(brandRunId(f.runId))
+
+    const t = await prisma.task.findUniqueOrThrow({ where: { id: f.taskId } })
+    expect(t.attempt).toBe(1)
+    expect(t.status).toBe('rework')
+  })
+
+  it('does not overwrite a task a cancel or sweep already released from this run', async (): Promise<void> => {
+    const f = await seedFailedRun({})
+    // A cancel or the sweep got here first: the task is off this run entirely before verify runs.
+    await prisma.task.update({ where: { id: f.taskId }, data: { status: 'blocked', activeRunId: null } })
+
+    await verifyConcludedRun(brandRunId(f.runId))
+
+    const t = await prisma.task.findUniqueOrThrow({ where: { id: f.taskId } })
+    expect(t.status).toBe('blocked')
+    expect(t.attempt).toBe(0)
+  })
+
+  it('leaves a reviewing task exactly where it is when its own review run fails -- the retry cap governs review, not this path', async (): Promise<void> => {
+    // Finding (M35 Task 1): unlike an implementation task, a `reviewing` task does not strand the
+    // same way a `running` one does. `dispatchReview`'s "is one already live" gate is a count of
+    // NON-terminal review runs for the task, never a check of `Task.activeRunId` -- so a `reviewing`
+    // task with a dead `activeRunId` is re-dispatched normally on the next tick. `review.ts` already
+    // has its own bounded-retry policy for a review run that fails (`REVIEW_RETRY_CAP`, tested in
+    // review.test.ts's "invalid verdict" and "diff itself cannot be produced" cases), which
+    // deliberately leaves `Task.status` at `reviewing` and charges no `Task.attempt` across repeated
+    // review failures. Releasing here too would double that policy: an implementation-shaped
+    // rework/attempt charge fighting the review-shaped retry cap for the same failure. Consistent
+    // handling is leaving review alone, not forcing it through the implementation path.
+    const f = await seedFailedRun({ kind: 'review', taskStatus: 'reviewing' })
+
+    await verifyConcludedRun(brandRunId(f.runId))
+
+    const t = await prisma.task.findUniqueOrThrow({ where: { id: f.taskId } })
+    expect(t.status).toBe('reviewing')
+    expect(t.activeRunId).toBe(f.runId)
+    expect(t.attempt).toBe(0)
+  })
+
+  it('does nothing for a task-less planning run that fails', async (): Promise<void> => {
+    const repoPath = makeRepo()
+    repos.push(repoPath)
+    const workspace = await prisma.workspace.create({
+      data: { name: 'Checkout Platform', repoPath, verifyCommands: ['true'], setupCommands: [], maxAttempts: 5 },
+    })
+    const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
+    const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
+    const run = await prisma.slaveRun.create({
+      data: { slaveId: slave.id, kind: 'planning', status: 'failed', terminalAt: new Date(), endedAt: new Date() },
+    })
+
+    await expect(verifyConcludedRun(brandRunId(run.id))).resolves.toBeUndefined()
   })
 })

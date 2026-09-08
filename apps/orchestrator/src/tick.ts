@@ -30,6 +30,7 @@ import { executeResume } from './resume.js'
 import { createRunUnlessArchived } from './runs.js'
 import { dispatchReviews } from './review.js'
 import { noteTickRan } from './sweep.js'
+import { releaseTaskAfterFailure, type TaskRelease } from './taskRelease.js'
 import { verifyConcludedRun } from './verify.js'
 import { loadWorld } from './world.js'
 import { WorktreeExistsError, adoptWorktree, provisionWorktree, type WorktreeHandle } from './worktree.js'
@@ -353,52 +354,6 @@ async function resumeRequestedRuns(deps: TickDeps): Promise<void> {
       })
     pumps.add(resumed)
   }
-}
-
-/**
- * What {@link releaseTaskAfterFailure} did, so the caller can announce it.
- */
-interface TaskRelease {
-  /** The task's attempt count AFTER the increment. */
-  readonly attempt: number
-  /** `true` when that count reached `maxAttempts` and the task was parked `failed`. */
-  readonly exhausted: boolean
-}
-
-/**
- * Counts one failed attempt against a task and puts it somewhere it can be retried -- or stops it.
- *
- * Shared by `failToStart` and `concludeFailedResume` (M13 Decision 4). Both are "an attempted run
- * that failed", and until M13 only the first of them counted: a resume that could not spawn
- * released the task straight back to `rework`, so a run that failed to resume forever was handed
- * out forever, each attempt costing real money and none of them costing an attempt.
- *
- * Conditional on still owning the task, and incremented rather than assigned: a tick that lost the
- * claim race must not roll back the winner's task row or burn an attempt against a run that is very
- * much alive.
- *
- * `lastRejectionReason` is deliberately NOT written here. It is the slave-facing channel --
- * `buildPrompt` puts it in front of the next run as the thing to fix first -- so an
- * orchestrator-side failure landing in it both destroys the verify feedback §8 requires and
- * instructs the next slave to go and fix a setup command it cannot see. The reason lives on the
- * `SlaveRun` row and in `run.failed`, which is where an operator looks for it.
- */
-async function releaseTaskAfterFailure(
-  task: { readonly id: string; readonly maxAttempts: number },
-  runId: string,
-  parked: 'rework' | 'blocked',
-): Promise<TaskRelease> {
-  await prisma.task.updateMany({
-    where: { id: task.id, activeRunId: runId },
-    data: { attempt: { increment: 1 } },
-  })
-  const after = await prisma.task.findUniqueOrThrow({ where: { id: task.id } })
-  const exhausted = after.attempt >= task.maxAttempts
-  await prisma.task.updateMany({
-    where: { id: task.id, activeRunId: runId },
-    data: { status: exhausted ? 'failed' : parked, activeRunId: null },
-  })
-  return { attempt: after.attempt, exhausted }
 }
 
 /**
