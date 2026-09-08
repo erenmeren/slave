@@ -84,7 +84,7 @@ const SIM_NAME = 'M33 Gate Run'
 const WORKSPACE_NAME = 'M33 Gate Project'
 const DEMO_SEED = 1
 const POLICY = 'A'
-// Spec §3's proposal for a policy-A run with four engineers: `engineers.length` / 3.
+// Spec §3's proposal for a policy-A run with four engineers: `engineers.length` concurrent runs and 3 attempts.
 const EXPECTED_MAX_CONCURRENT = 4
 const EXPECTED_MAX_ATTEMPTS = 3
 // Controller ruling R2 (spec §3, T1-E5): what the drawer shows as the run's role and what
