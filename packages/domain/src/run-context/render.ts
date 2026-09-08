@@ -42,28 +42,36 @@ export function neutraliseMarkers(text: string): string {
 }
 
 /**
- * The review kind's verdict instructions, moved verbatim (M37 t1) from
- * `apps/orchestrator/src/review.ts` `buildReviewPrompt` (lines 40-59) -- every literal string in
- * that array that is not the task (title + description, now the `task` section) or the diff (now
- * `review_diff`). `buildReviewPrompt` itself is untouched by this task; Task 2 removes it once
- * `renderRunContext` is the one place a review prompt is built.
+ * The review kind's verdict instructions, moved verbatim (M37 t1, fix round 1) from
+ * `apps/orchestrator/src/review.ts` `buildReviewPrompt` (lines 40-59) -- every literal array
+ * element in that function that is not the task (title + description, now the `task` section) or
+ * the diff (now `review_diff`), in order, INCLUDING both blank-string separators (the one right
+ * after the intro sentence and the one right before "Your final message...") -- dropping either
+ * one silently removes a blank line from the rendered prompt relative to the text this replaces.
+ * `buildReviewPrompt` itself is untouched by this task; Task 2 removes it once `renderRunContext`
+ * is the one place a review prompt is built. `render.test.ts` cross-checks this constant against
+ * a live call to `buildReviewPrompt` so a future edit to `review.ts`'s source strings cannot drift
+ * from this copy unnoticed.
  */
 export const REVIEW_VERDICT_INSTRUCTIONS = [
   'You are the QA reviewer for this task. Judge the DIFF against the task — do not rebuild or re-run it.',
+  '',
   '',
   'Your final message must contain exactly one JSON object and nothing else on its line:',
   '{"verdict":"approve","reason":"one paragraph"} or {"verdict":"reject","reason":"one paragraph"}',
 ].join('\n')
 
 /**
- * The planning kind's graph instructions, moved verbatim (M37 t1) from
- * `apps/orchestrator/src/planning.ts` `buildPlanningPrompt` (lines 32-43) -- every literal string
- * in that array that is not the goal itself (now the `planning_goal` section). `buildPlanningPrompt`
- * itself is untouched by this task; Task 2 removes it.
+ * The planning kind's graph instructions, moved verbatim (M37 t1, fix round 1) from
+ * `apps/orchestrator/src/planning.ts` `buildPlanningPrompt` (lines 32-43) -- every literal array
+ * element in that function that is not the goal itself (now the `planning_goal` section), in
+ * order, INCLUDING both blank-string separators (the one right before `GOAL: ...` and the one
+ * right after it). `buildPlanningPrompt` itself is untouched by this task; Task 2 removes it.
  */
 export const PLANNING_GRAPH_INSTRUCTIONS = [
   'You are the engineering manager. Decompose the GOAL below into a "task graph" for your team.',
   'Read the repository for context, but do NOT modify, create, or commit any file.',
+  '',
   '',
   'Your final message must contain exactly one JSON object and nothing else on its line:',
   '{"tasks":[{"key":"short-unique-key","title":"...","description":"...","role":"backend","dependsOn":["other-key"]}]}',

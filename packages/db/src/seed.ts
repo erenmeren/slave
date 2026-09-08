@@ -78,7 +78,15 @@ export async function seed(): Promise<void> {
     if (teamId === undefined) {
       throw new Error(`seed is inconsistent: no team named ${member.departmentName}`)
     }
-    await prisma.slave.create({ data: { teamId, name: member.slaveName, role: member.role } })
+    // `runtimeRoles: [member.role]` (M37 t1 fix round 1): this is the one non-test
+    // `slave.create` in the repo that predates `runtimeRoles`, and it would otherwise rely on
+    // the column's `@default([])` -- fine today (nothing reads `runtimeRoles` yet), but every
+    // legacy-workspace seed slave would become permanently undispatchable the moment Task 3
+    // wires the scheduler onto this column instead of `role`. Mirrors the same placeholder
+    // `packages/control/src/org.ts` `assignCompanyTx` writes.
+    await prisma.slave.create({
+      data: { teamId, name: member.slaveName, role: member.role, runtimeRoles: [member.role] },
+    })
   }
 
   // The reusable template catalog and Atlas Software's roster (M10 §4-5) -- written directly with
