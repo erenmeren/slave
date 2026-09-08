@@ -52,6 +52,22 @@ npm run orchestrator -- create-workspace --name <name> --repo /abs/path/to/repo 
 one `--verify` command is required: a task is only done when your verify commands pass. The
 orchestrator keeps its worktrees and logs under `<repo>/.slaveofai/` and gitignores them for you.
 
+**Done is not the same as integrated.** A task reaches `done` once it has been reviewed and its
+verify commands pass — that is the only thing `done` means. Whether its code has actually reached
+your base branch is a separate fact, `Task.integratedAt`, and a workspace created from the CLI
+starts with `autoMerge` off: every task merges by hand, so `done` leaves the branch and worktree
+sitting there for you and `integratedAt` stays null. Any task depending on one that is `done` but
+not yet integrated waits — the scheduler will not provision it from a base branch that does not yet
+have its dependency's commits on it. Merge the branch yourself, then say so:
+
+```bash
+npm run orchestrator -- confirm-integration --task <id>
+```
+
+and its dependents become schedulable on the next tick. `autoMerge` on skips this by merging (and
+stamping `integratedAt`) for you the moment a task's review is approved — there is no CLI flag to
+turn it on yet; it is a row you set by hand for now.
+
 Staff it and give the team something to do:
 
 ```bash
@@ -160,6 +176,8 @@ npm run orchestrator -- tick                                # one scheduling pas
 npm run orchestrator -- pause  --run <id> --by <name>
 npm run orchestrator -- resume --run <id> --message "try the other approach"
 npm run orchestrator -- cancel --run <id>
+npm run orchestrator -- confirm-integration --task <id>     # after a hand merge (autoMerge off); unblocks its dependents
+npm run orchestrator -- unblock-task --task <id> [--allow-another-attempt]  # move a blocked task back to rework
 npm run orchestrator -- emergency-stop --workspace <id> --by <name>
 npm run orchestrator -- clear-halt --workspace <id>         # lift a workspace halt (starts nothing)
 npm run orchestrator -- archive-workspace --workspace <id>  # nothing runs until restored; refused while a run is live
