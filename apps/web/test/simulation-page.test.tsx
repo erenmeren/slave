@@ -417,11 +417,13 @@ describe('SimulationClient', () => {
       simulationId: 's1',
       companyId: 'c1',
       companyName: 'Checkout Platform',
+      // `runtimeRole` now comes straight off control (fix round 1, ruling R3) -- the fixture
+      // carries it rather than the drawer re-deriving it.
       roles: [
-        { slaveName: 'Atlas', catalogRole: 'manager', role: 'lead' },
-        { slaveName: 'Riley', catalogRole: 'reviewer', role: 'reviewer' },
-        { slaveName: 'Alex', catalogRole: 'Backend', role: 'backend' },
-        { slaveName: 'John', catalogRole: 'Business Analyst', role: 'product' },
+        { slaveName: 'Atlas', catalogRole: 'manager', role: 'lead', runtimeRole: 'manager' },
+        { slaveName: 'Riley', catalogRole: 'reviewer', role: 'reviewer', runtimeRole: 'reviewer' },
+        { slaveName: 'Alex', catalogRole: 'Backend', role: 'backend', runtimeRole: 'Backend' },
+        { slaveName: 'John', catalogRole: 'Business Analyst', role: 'product', runtimeRole: 'Business Analyst' },
       ],
       settings: { maxConcurrentRuns: 4, maxAttempts: 3, autoMerge: false },
       model: null as { provider: string; model: string } | null,
@@ -483,6 +485,30 @@ describe('SimulationClient', () => {
       expect(url).toBe('/api/sim/s1/adopt')
       expect(JSON.parse(String(init.body))).toMatchObject({ workspaceId: 'w2', maxConcurrentRuns: 5, maxAttempts: 3 })
       expect(routerPush).toHaveBeenCalledWith('/w/w2')
+    })
+
+    it('a blank or non-numeric settings field disables submit and shows "enter a whole number" instead of silently falling back (fix round 1, Minor #4)', async () => {
+      fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(preview), { status: 200 }))
+      render(<SimulationClient initial={snapshot({ adoptable: true })} />)
+      fireEvent.click(screen.getByTestId('sim-adopt-open'))
+      await waitFor(() => expect(screen.getByTestId('sim-adopt-max-concurrent')).toBeTruthy())
+      expect(screen.queryByTestId('sim-adopt-max-concurrent-error')).toBeNull()
+
+      fireEvent.change(screen.getByTestId('sim-adopt-max-concurrent'), { target: { value: '' } })
+      expect(screen.getByTestId('sim-adopt-max-concurrent-error').textContent).toBe('enter a whole number')
+      expect((screen.getByTestId('sim-adopt-submit') as HTMLButtonElement).disabled).toBe(true)
+
+      fireEvent.change(screen.getByTestId('sim-adopt-max-concurrent'), { target: { value: '4' } })
+      fireEvent.change(screen.getByTestId('sim-adopt-max-attempts'), { target: { value: 'three' } })
+      expect(screen.queryByTestId('sim-adopt-max-concurrent-error')).toBeNull()
+      expect(screen.getByTestId('sim-adopt-max-attempts-error').textContent).toBe('enter a whole number')
+      expect((screen.getByTestId('sim-adopt-submit') as HTMLButtonElement).disabled).toBe(true)
+      // Only the preview GET fired -- an invalid value never reaches a POST.
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+
+      fireEvent.change(screen.getByTestId('sim-adopt-max-attempts'), { target: { value: '3' } })
+      expect(screen.queryByTestId('sim-adopt-max-attempts-error')).toBeNull()
+      expect((screen.getByTestId('sim-adopt-submit') as HTMLButtonElement).disabled).toBe(false)
     })
 
     it('a 409 on submit keeps the drawer open with sim-adopt-error', async () => {

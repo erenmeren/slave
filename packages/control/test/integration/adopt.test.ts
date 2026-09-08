@@ -112,16 +112,19 @@ describe('adoptionPreview', () => {
     // Roster order: departments by name, members by name -- exactly how `createSimulation` reads a
     // catalog roster. Sarah and Oliver are in neither `roles` nor `engineers`, so they keep the
     // catalog role they were instantiated from.
+    // `runtimeRole` is what adoption actually WRITES (R2/`roleOverridesOf`): the lead's `manager`
+    // and the reviewer's `reviewer` are translated, everyone else keeps their catalog role rather
+    // than the run's own word (`backend` → `Backend`, `product` → `Business Analyst`).
     expect(preview.value.roles).toEqual([
-      { slaveName: 'Alex', catalogRole: 'Backend', role: 'backend' },
-      { slaveName: 'Daniel', catalogRole: 'DevOps', role: 'devops' },
-      { slaveName: 'Emma', catalogRole: 'Frontend', role: 'frontend' },
-      { slaveName: 'Maya', catalogRole: 'QA', role: 'general' },
-      { slaveName: 'Riley', catalogRole: 'reviewer', role: 'reviewer' },
-      { slaveName: 'Atlas', catalogRole: 'manager', role: 'lead' },
-      { slaveName: 'Oliver', catalogRole: 'SEO', role: 'SEO' },
-      { slaveName: 'John', catalogRole: 'Business Analyst', role: 'product' },
-      { slaveName: 'Sarah', catalogRole: 'Security', role: 'Security' },
+      { slaveName: 'Alex', catalogRole: 'Backend', role: 'backend', runtimeRole: 'Backend' },
+      { slaveName: 'Daniel', catalogRole: 'DevOps', role: 'devops', runtimeRole: 'DevOps' },
+      { slaveName: 'Emma', catalogRole: 'Frontend', role: 'frontend', runtimeRole: 'Frontend' },
+      { slaveName: 'Maya', catalogRole: 'QA', role: 'general', runtimeRole: 'QA' },
+      { slaveName: 'Riley', catalogRole: 'reviewer', role: 'reviewer', runtimeRole: 'reviewer' },
+      { slaveName: 'Atlas', catalogRole: 'manager', role: 'lead', runtimeRole: 'manager' },
+      { slaveName: 'Oliver', catalogRole: 'SEO', role: 'SEO', runtimeRole: 'SEO' },
+      { slaveName: 'John', catalogRole: 'Business Analyst', role: 'product', runtimeRole: 'Business Analyst' },
+      { slaveName: 'Sarah', catalogRole: 'Security', role: 'Security', runtimeRole: 'Security' },
     ])
     expect(preview.value.settings).toEqual({ maxConcurrentRuns: 4, maxAttempts: 3, autoMerge: false })
     expect(preview.value.model).toBeNull()

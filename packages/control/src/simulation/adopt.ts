@@ -18,10 +18,13 @@ export interface AdoptionPreview {
   readonly companyId: string
   readonly companyName: string
   /** One row per CURRENT roster member, in the same order `createSimulation` reads a roster
-   *  (department by name, member by name). `role` is what adoption would materialise -- the run's
-   *  own role or engineer expertise -- and `catalogRole` the template role it displaces. A member
-   *  the run never named carries the same string in both. */
-  readonly roles: readonly { readonly slaveName: string; readonly catalogRole: string; readonly role: string }[]
+   *  (department by name, member by name). `role` is the run's OWN word for what it gave this
+   *  member to do -- its role name or an engineer's expertise -- and `catalogRole` the template
+   *  role it displaces; a member the run never named carries the same string in both. `runtimeRole`
+   *  is what adoption actually WRITES to `Slave.role` (R2, `roleOverridesOf`): the translated
+   *  `lead`/`reviewer`, or `catalogRole` for everyone else -- fix round 1, so the drawer's table
+   *  reads it off control rather than re-deriving the same two-entry translation itself. */
+  readonly roles: readonly { readonly slaveName: string; readonly catalogRole: string; readonly role: string; readonly runtimeRole: string }[]
   /** `autoMerge` is `false` and stays `false` (§1 principle 3): adoption never switches on a merge
    *  a person did not ask for, so the type says so rather than the drawer remembering to. */
   readonly settings: { readonly maxConcurrentRuns: number; readonly maxAttempts: number; readonly autoMerge: false }
@@ -85,6 +88,13 @@ function runRolesOf(definition: LoadedDefinition): Readonly<Record<string, strin
  * journal.
  */
 const RUNTIME_ROLE: Readonly<Record<string, string>> = { lead: 'manager', reviewer: 'reviewer' }
+
+/** The rule {@link roleOverridesOf} and the preview's `runtimeRole` both apply: a `lead`/`reviewer`
+ *  translates, everyone else keeps the catalog role they would be materialised with anyway. One
+ *  function so the two never drift apart (fix round 1, ruling R3). */
+function runtimeRoleOf(role: string, catalogRole: string): string {
+  return RUNTIME_ROLE[role] ?? catalogRole
+}
 
 /** The `slaveName → role` map `assignCompanyTx` actually writes: the translated decision roles and
  *  nothing else. A roster member with no entry here is materialised with the catalog role, exactly
@@ -157,11 +167,10 @@ export async function adoptionPreview(simulationId: string): Promise<Result<Adop
     simulationId,
     companyId: summary.companyId,
     companyName: company.name,
-    roles: rosterOf(company.teams).map((member) => ({
-      slaveName: member.slaveName,
-      catalogRole: member.role,
-      role: runRoles[member.slaveName] ?? member.role,
-    })),
+    roles: rosterOf(company.teams).map((member) => {
+      const role = runRoles[member.slaveName] ?? member.role
+      return { slaveName: member.slaveName, catalogRole: member.role, role, runtimeRole: runtimeRoleOf(role, member.role) }
+    }),
     settings: proposedSettings(definition),
     model: modelOf(summary),
     workspaces,

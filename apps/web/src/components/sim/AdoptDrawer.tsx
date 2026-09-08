@@ -5,6 +5,12 @@ import { useRouter } from 'next/navigation'
 import { errorMessage } from '../../lib/postControl'
 import { PrimaryButton, SelectField, TextField } from '../ui/FormControls'
 
+/** Fix round 1, Minor #4: a blank field or one that is not a whole number must not silently fall
+ *  back to a default the person never chose -- it blocks the submit and says so. */
+function isWholeNumber(text: string): boolean {
+  return /^-?\d+$/.test(text.trim())
+}
+
 /** The GET `/api/sim/[id]/adoption` shape (control's `AdoptionPreview`, M33 §3). Mirrored here
  *  rather than imported from `@slave-of-ai/control`: `apps/web` reads it off the wire, the same way
  *  every other snapshot this app renders crosses the client/server boundary as plain JSON. */
@@ -12,21 +18,15 @@ export interface AdoptionPreview {
   readonly simulationId: string
   readonly companyId: string
   readonly companyName: string
-  readonly roles: readonly { readonly slaveName: string; readonly catalogRole: string; readonly role: string }[]
+  /** `runtimeRole` is what adoption actually WRITES to `Slave.role` (T1-E5 / ruling R2, control's
+   *  `roleOverridesOf`) -- read off the preview rather than re-derived here (fix round 1, ruling
+   *  R3): the run's `lead` becomes the runtime's `manager`, its `reviewer` stays `reviewer`, and
+   *  every other member -- `product`, every engineer -- keeps the CATALOG role the planner already
+   *  staffs by. */
+  readonly roles: readonly { readonly slaveName: string; readonly catalogRole: string; readonly role: string; readonly runtimeRole: string }[]
   readonly settings: { readonly maxConcurrentRuns: number; readonly maxAttempts: number; readonly autoMerge: false }
   readonly model: { readonly provider: 'claude_code' | 'cursor'; readonly model: string } | null
   readonly workspaces: readonly { readonly id: string; readonly name: string }[]
-}
-
-/** T1-E5 / ruling R2, mirrored here so the roles table can show both what the run assigned AND
- *  what adoption actually WRITES to `Slave.role` (`packages/control/src/simulation/adopt.ts`,
- *  `roleOverridesOf`): the run's `lead` becomes the runtime's `manager`, its `reviewer` stays
- *  `reviewer`, and every other member -- `product`, every engineer -- keeps the CATALOG role the
- *  planner already staffs by. Not a sector name: `lead`/`reviewer`/`manager` are the runtime's own
- *  dispatch vocabulary, the same one `SimulationSnapshot.roles` already carries onto this page. */
-const RUNTIME_ROLE: Readonly<Record<string, string>> = { lead: 'manager', reviewer: 'reviewer' }
-function runtimeRoleOf(row: { readonly catalogRole: string; readonly role: string }): string {
-  return RUNTIME_ROLE[row.role] ?? row.catalogRole
 }
 
 /**
@@ -97,16 +97,18 @@ export function AdoptDrawer({
   if (!open) return null
 
   const leadName = preview?.roles.find((row) => row.role === 'lead')?.slaveName ?? null
+  const maxConcurrentValid = isWholeNumber(maxConcurrentRuns)
+  const maxAttemptsValid = isWholeNumber(maxAttempts)
 
   const submit = async (): Promise<void> => {
-    if (pending || preview === null || workspaceId === '') return
+    if (pending || preview === null || workspaceId === '' || !maxConcurrentValid || !maxAttemptsValid) return
     setPending(true)
     setErrorText(null)
-    const body: Record<string, unknown> = { workspaceId }
-    const concurrent = Number.parseInt(maxConcurrentRuns, 10)
-    if (Number.isInteger(concurrent)) body['maxConcurrentRuns'] = concurrent
-    const attempts = Number.parseInt(maxAttempts, 10)
-    if (Number.isInteger(attempts)) body['maxAttempts'] = attempts
+    const body: Record<string, unknown> = {
+      workspaceId,
+      maxConcurrentRuns: Number.parseInt(maxConcurrentRuns, 10),
+      maxAttempts: Number.parseInt(maxAttempts, 10),
+    }
     if (applyModel) body['applyModel'] = true
     try {
       const response = await fetch(`/api/sim/${simulationId}/adopt`, {
@@ -158,7 +160,7 @@ export function AdoptDrawer({
                   <tr key={row.slaveName} data-testid="sim-adopt-role-row">
                     <td>{row.slaveName}</td>
                     <td>{row.role}</td>
-                    <td>{runtimeRoleOf(row)}</td>
+                    <td>{row.runtimeRole}</td>
                   </tr>
                 ))}
               </tbody>
@@ -183,10 +185,12 @@ export function AdoptDrawer({
               label="max concurrent runs"
               inputProps={{ 'aria-label': 'max concurrent runs', 'data-testid': 'sim-adopt-max-concurrent', value: maxConcurrentRuns, disabled: pending, inputMode: 'numeric', onChange: (event) => setMaxConcurrentRuns(event.target.value) } as React.InputHTMLAttributes<HTMLInputElement>}
             />
+            {!maxConcurrentValid && <span role="alert" data-testid="sim-adopt-max-concurrent-error" className="text-xs text-tone-blocked">enter a whole number</span>}
             <TextField
               label="max attempts"
               inputProps={{ 'aria-label': 'max attempts', 'data-testid': 'sim-adopt-max-attempts', value: maxAttempts, disabled: pending, inputMode: 'numeric', onChange: (event) => setMaxAttempts(event.target.value) } as React.InputHTMLAttributes<HTMLInputElement>}
             />
+            {!maxAttemptsValid && <span role="alert" data-testid="sim-adopt-max-attempts-error" className="text-xs text-tone-blocked">enter a whole number</span>}
             <div className="text-xs text-text-3">autoMerge <span data-testid="sim-adopt-automerge" className="text-text-2">off (locked)</span></div>
             {preview.model !== null && leadName !== null && (
               <label className="flex items-center gap-2 text-xs text-text-2">
@@ -195,7 +199,7 @@ export function AdoptDrawer({
               </label>
             )}
             <div className="flex items-center gap-3">
-              <PrimaryButton data-testid="sim-adopt-submit" disabled={pending || preview.workspaces.length === 0 || workspaceId === ''} onClick={() => void submit()}>
+              <PrimaryButton data-testid="sim-adopt-submit" disabled={pending || preview.workspaces.length === 0 || workspaceId === '' || !maxConcurrentValid || !maxAttemptsValid} onClick={() => void submit()}>
                 {pending ? 'adopting…' : 'Adopt this organisation'}
               </PrimaryButton>
               {errorText !== null && <span role="alert" data-testid="sim-adopt-error" className="text-xs text-tone-blocked">{errorText}</span>}

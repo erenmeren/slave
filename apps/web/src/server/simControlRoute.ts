@@ -1,7 +1,10 @@
 import { refusalText, type ControlRefusal } from '@slave-of-ai/control'
 import type { Result } from '@slave-of-ai/domain'
 
-const NOT_FOUND: ReadonlySet<ControlRefusal['kind']> = new Set(['simulation_not_found', 'company_not_found'])
+// `workspace_not_found` joined this set in fix round 1 (Important #2): it was the one refusal
+// still mapped to 409 on these routes despite already being 404 everywhere else a workspace id
+// can be wrong (the archive/restore routes).
+const NOT_FOUND: ReadonlySet<ControlRefusal['kind']> = new Set(['simulation_not_found', 'company_not_found', 'workspace_not_found'])
 
 /** The one status a refusal maps to across every simulation route -- 404 for a not-found id, 409
  *  for everything else the control layer declines. Exported (M33 §4) so a GET route that cannot

@@ -180,7 +180,8 @@ const USAGE = `usage: orchestrator <command> [options]
                                        settings proposal (override with --max-concurrent /
                                        --max-attempts), autoMerge off. --apply-model sets an llm
                                        run's model on the lead's roster row -- real, paid use.
-                                       Starts nothing. Only a software-sector run is adoptable.
+                                       Starts nothing. Only a run whose sector allows adoption is
+                                       adoptable.
   auto-run-simulation --simulation <id> [--every-ms <n>] [--until-day <d>]
                                        let the daemon step it (default every 1000 ms to the horizon)
   stop-auto-run --simulation <id>

@@ -188,7 +188,7 @@ describe('the simulation routes', () => {
     const missing = await adoptionGET(new Request('http://x', { method: 'GET' }), params('00000000-0000-4000-8000-00000000dead'))
     expect(missing.status).toBe(404)
   })
-  it('adopt → 200 assigns the workspace and journals it; a bad body → 400; an unknown simulation → 404, an unknown workspace → 409; an out-of-range setting → 409 (M33 §4)', async () => {
+  it('adopt → 200 assigns the workspace and journals it; a bad body → 400; an unknown simulation or workspace → 404; an out-of-range setting → 409 (M33 §4)', async () => {
     const softwareCompanyId = await seedSoftwareCompany()
     const { id } = (await (await createPOST(json({ companyId: softwareCompanyId, name: 'sw run', policy: 'A', sector: 'software' }))).json()) as { id: string }
     const workspace = await prisma.workspace.create({ data: { name: 'Alpha Project', repoPath: '/tmp/x', verifyCommands: [], setupCommands: [] } })
@@ -203,9 +203,10 @@ describe('the simulation routes', () => {
     expect(row.adoptedFromSimulationId).toBe(id)
     expect(row.companyId).toBe(softwareCompanyId)
 
-    // `workspace_not_found` is not in the sim routes' NOT_FOUND set (only `simulation_not_found`
-    // and `company_not_found` are) -- the same 409 every other refusal on this route gets.
-    expect((await adoptPOST(json({ workspaceId: '00000000-0000-4000-8000-00000000dead' }), params(id))).status).toBe(409)
+    // `workspace_not_found` is in the sim routes' NOT_FOUND set (fix round 1, Important #2): it is
+    // 404 everywhere else a workspace id can be wrong (archive/restore), and `company_not_found`
+    // was already 404 here -- an unknown workspace on this route was the one place it read 409.
+    expect((await adoptPOST(json({ workspaceId: '00000000-0000-4000-8000-00000000dead' }), params(id))).status).toBe(404)
     expect((await adoptPOST(json({ workspaceId: workspace.id }), params('00000000-0000-4000-8000-00000000dead'))).status).toBe(404)
 
     const second = await prisma.workspace.create({ data: { name: 'Beta Project', repoPath: '/tmp/y', verifyCommands: [], setupCommands: [] } })
