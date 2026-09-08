@@ -89,9 +89,10 @@ function runRolesOf(definition: LoadedDefinition): Readonly<Record<string, strin
  */
 const RUNTIME_ROLE: Readonly<Record<string, string>> = { lead: 'manager', reviewer: 'reviewer' }
 
-/** The rule {@link roleOverridesOf} and the preview's `runtimeRole` both apply: a `lead`/`reviewer`
- *  translates, everyone else keeps the catalog role they would be materialised with anyway. One
- *  function so the two never drift apart (fix round 1, ruling R3). */
+/** The preview's reading of {@link RUNTIME_ROLE}: a `lead`/`reviewer` translates, everyone else
+ *  keeps the catalog role they would be materialised with anyway. {@link roleOverridesOf} reads the
+ *  same one table (it emits an entry only where the table has one), so the two cannot drift on
+ *  what translates to what (fix round 1, ruling R3). */
 function runtimeRoleOf(role: string, catalogRole: string): string {
   return RUNTIME_ROLE[role] ?? catalogRole
 }

@@ -503,7 +503,9 @@ describe('SimulationClient', () => {
       expect(screen.queryByTestId('sim-adopt-max-concurrent-error')).toBeNull()
       expect(screen.getByTestId('sim-adopt-max-attempts-error').textContent).toBe('enter a whole number')
       expect((screen.getByTestId('sim-adopt-submit') as HTMLButtonElement).disabled).toBe(true)
-      // Only the preview GET fired -- an invalid value never reaches a POST.
+      // Clicking the disabled submit is a no-op: only the preview GET fired -- an invalid value never
+      // reaches a POST.
+      fireEvent.click(screen.getByTestId('sim-adopt-submit'))
       expect(fetchMock).toHaveBeenCalledTimes(1)
 
       fireEvent.change(screen.getByTestId('sim-adopt-max-attempts'), { target: { value: '3' } })
