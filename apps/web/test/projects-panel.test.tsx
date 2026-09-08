@@ -39,7 +39,7 @@ describe('ProjectsPanel', () => {
 
   it('shows a refusal in the alert band', async () => {
     vi.mocked(useRouter).mockReturnValue({ refresh: vi.fn(), push: vi.fn() } as never)
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: 'no directory at /nope' }), { status: 409 })))
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: 'no directory at /nope' }), { status: 404 })))
     render(<ProjectsPanel />)
     fireEvent.change(screen.getByTestId('create-workspace-name'), { target: { value: 'X' } })
     fireEvent.change(screen.getByTestId('create-workspace-repo'), { target: { value: '/nope' } })

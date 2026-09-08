@@ -520,6 +520,17 @@ describe('SimulationClient', () => {
       fireEvent.change(screen.getByTestId('sim-adopt-max-attempts'), { target: { value: '-1' } })
       expect(screen.getByTestId('sim-adopt-max-attempts-error').textContent).toBe('enter a whole number')
       expect((screen.getByTestId('sim-adopt-submit') as HTMLButtonElement).disabled).toBe(true)
+      fireEvent.click(screen.getByTestId('sim-adopt-submit'))
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+
+      // Zero is refused inline too (final review): both ranges start at 1 (`rangeRefusal`), so a
+      // bare `/^\d+$/` used to let `0` through the inline check only for the server to refuse it
+      // with a 409 -- the exact round trip this whole test guards against.
+      fireEvent.change(screen.getByTestId('sim-adopt-max-attempts'), { target: { value: '0' } })
+      expect(screen.getByTestId('sim-adopt-max-attempts-error').textContent).toBe('enter a whole number')
+      expect((screen.getByTestId('sim-adopt-submit') as HTMLButtonElement).disabled).toBe(true)
+      fireEvent.click(screen.getByTestId('sim-adopt-submit'))
+      expect(fetchMock).toHaveBeenCalledTimes(1)
     })
 
     it('a 409 on submit keeps the drawer open with sim-adopt-error', async () => {

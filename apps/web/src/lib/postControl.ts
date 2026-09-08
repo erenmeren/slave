@@ -20,8 +20,9 @@ import { onUnauthorized } from './onUnauthorized'
  * an expired or missing session lands on the door instead of a red band that never clears.
  */
 
-/** Pulls a 409 refusal's `{ error }` text, falling back to something nameable for any other
- *  non-2xx or malformed body — a control surface's error band must never render blank (spec §9). */
+/** Pulls a refusal's `{ error }` text (a 409 conflict, or a `*_not_found` refusal's 404 since
+ *  `refusalStatus`, M34 t1), falling back to something nameable for any other non-2xx or
+ *  malformed body — a control surface's error band must never render blank (spec §9). */
 export function errorMessage(data: unknown, status: number): string {
   if (data !== null && typeof data === 'object') {
     const value = (data as { error?: unknown }).error

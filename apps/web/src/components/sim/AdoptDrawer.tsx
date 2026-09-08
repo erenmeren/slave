@@ -6,11 +6,12 @@ import { errorMessage } from '../../lib/postControl'
 import { PrimaryButton, SelectField, TextField } from '../ui/FormControls'
 
 /** Fix round 1, Minor #4: a blank field or one that is not a whole number must not silently fall
- *  back to a default the person never chose -- it blocks the submit and says so. No leading minus
- *  (M34 t3): a negative value is refused here, inline, rather than reaching the server only to
- *  come back as a 409 (`rangeRefusal`, both ranges start at 1). */
+ *  back to a default the person never chose -- it blocks the submit and says so. A blank, a
+ *  non-number, a negative, or zero are all refused here, inline, rather than reaching the server
+ *  only to come back as a 409 (`rangeRefusal`, both ranges start at 1) -- final review: the old
+ *  `/^\d+$/` still let a leading-zero-free `0` through the inline check. */
 function isWholeNumber(text: string): boolean {
-  return /^\d+$/.test(text.trim())
+  return /^[1-9]\d*$/.test(text.trim())
 }
 
 /** The GET `/api/sim/[id]/adoption` shape (control's `AdoptionPreview`, M33 §3). Mirrored here

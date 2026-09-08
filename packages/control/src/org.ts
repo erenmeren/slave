@@ -330,8 +330,8 @@ export interface AssignOptions { readonly roleOverrides?: Readonly<Record<string
  * returned from an interactive `$transaction` callback still COMMITS everything written before it;
  * only a callback that REJECTS rolls back. Mirrors `adopt.ts`'s own `AdoptionRefused` idiom
  * (the two are not the same class: `assignCompany` catches THIS one directly, and `adoptSimulation`
- * -- which runs `assignCompanyTx` inside its own transaction -- converts it into its own
- * `AdoptionRefused` at the same outer catch that already handles that class, rather than every
+ * -- which runs `assignCompanyTx` inside its own transaction -- catches both classes at the same
+ * outer `catch` and unwraps either one straight to `err(error.refusal)`, rather than every
  * `assignCompanyTx` caller needing its own duplicate unwrapping).
  */
 export class AssignmentRefused extends Error {

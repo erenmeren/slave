@@ -109,7 +109,7 @@ describe('SkillsClient', () => {
   })
 
   it('shows a refusal verbatim', async (): Promise<void> => {
-    fetchMock.mockImplementationOnce(async () => new Response(JSON.stringify({ error: 'no skill with id s1' }), { status: 409 }))
+    fetchMock.mockImplementationOnce(async () => new Response(JSON.stringify({ error: 'no skill with id s1' }), { status: 404 }))
     render(<SkillsClient page={page()} />)
     await act(async () => {
       fireEvent.change(screen.getByTestId('skill-slave-s1'), { target: { value: 'a1' } })
