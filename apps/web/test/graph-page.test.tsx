@@ -142,7 +142,7 @@ const SNAPSHOT: GraphSnapshot = {
     }),
   ],
   tasks: [
-    { id: 't1', title: 'Ship the thing', status: 'running', priority: 1, attempt: 1, maxAttempts: 3, dependenciesDone: true },
+    { id: 't1', title: 'Ship the thing', status: 'running', priority: 1, attempt: 1, maxAttempts: 3, dependenciesDone: true, integratedAt: null },
   ],
   dependencies: [],
   shellFacts: SHELL_FACTS,

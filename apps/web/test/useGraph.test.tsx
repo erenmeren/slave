@@ -44,6 +44,7 @@ const SNAPSHOT: GraphSnapshot = {
       attempt: 0,
       maxAttempts: 3,
       dependenciesDone: true,
+      integratedAt: null,
     },
   ],
   dependencies: [],

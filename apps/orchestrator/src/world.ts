@@ -95,6 +95,11 @@ interface TaskWorldRow {
  * real-merge path stamps it, or a human runs `confirmIntegration`/`orchestrator
  * confirm-integration` after merging by hand -- see `Task.integratedAt`'s own doc comment in
  * `schema.prisma`.
+ *
+ * `apps/web/src/server/graph.ts`'s `loadGraphTaskRows` copies this exact `WHERE` clause for the
+ * same reason its own comment gives (the graph's read model must not disagree with the scheduler
+ * about what "ready" means) -- the two must move together; if you change one, change the other in
+ * the same commit (M35 t2 review round 1 caught this pair drifting once already).
  */
 async function loadTaskRows(
   tx: Prisma.TransactionClient,

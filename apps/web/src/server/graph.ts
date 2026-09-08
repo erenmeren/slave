@@ -70,6 +70,15 @@ export interface GraphTask {
   readonly attempt: number
   readonly maxAttempts: number
   readonly dependenciesDone: boolean
+  /**
+   * M35 t2 (review round 1): carried so `TaskNodes.tsx` can decide, PER DEPENDENCY EDGE, whether
+   * that one prerequisite is met -- `done` and integrated, the same definition `dependenciesDone`
+   * below already applies in aggregate. Without this the graph's cables and "waiting on N" badge
+   * had no way to agree with `dependenciesDone` about a `done`-but-unintegrated task: they were
+   * counting raw `status === 'done'` one dependency at a time. See `Task.integratedAt`'s own doc
+   * comment in `schema.prisma`.
+   */
+  readonly integratedAt: string | null
 }
 
 export interface GraphSnapshot {
@@ -97,6 +106,7 @@ interface GraphTaskRow {
   readonly attempt: number
   readonly maxAttempts: number
   readonly dependenciesDone: boolean
+  readonly integratedAt: Date | null
 }
 
 /** The drawer's event tail (design README "1b — Drawer": "recent events"). Eight lines is what the
@@ -105,12 +115,21 @@ const DRAWER_EVENTS_LIMIT = 8
 
 /**
  * `dependenciesDone` reuses the scheduler's own `NOT EXISTS` SQL shape (`apps/orchestrator/src/
- * world.ts`'s `loadTaskRows`, lines 90-109) rather than fetching `TaskDependency` rows and
- * reducing "every dependency done" in JS a second time -- the read model must agree with the
- * scheduler's own definition of ready-to-run, not a hand-rolled approximation of it that could
- * drift. `apps/orchestrator` is a separate app from `apps/web` (not a shared package), so the
- * query is copied here rather than imported, extended with the columns the graph view needs
- * (`title`, `attempt`, `maxAttempts`) that the scheduler's own row shape does not carry.
+ * world.ts`'s `loadTaskRows`) rather than fetching `TaskDependency` rows and reducing "every
+ * dependency done" in JS a second time -- the read model must agree with the scheduler's own
+ * definition of ready-to-run, not a hand-rolled approximation of it that could drift.
+ * `apps/orchestrator` is a separate app from `apps/web` (not a shared package), so the query is
+ * copied here rather than imported, extended with the columns the graph view needs (`title`,
+ * `attempt`, `maxAttempts`) that the scheduler's own row shape does not carry.
+ *
+ * M35 t2 (review round 1): this copy drifted from `world.ts` when that gate grew a second
+ * condition -- `dep."integratedAt" IS NULL` alongside `dep.status <> 'done'` (a `done` task under
+ * `workspace.autoMerge = false` has no git merge behind it yet; see `Task.integratedAt`'s own doc
+ * comment in `schema.prisma`). The predicate below must be kept byte-for-byte in step with
+ * `world.ts`'s `WHERE` clause -- there is no third option that avoids the duplication (this app
+ * has no dependency on `apps/orchestrator`, and pulling the predicate into a shared package for
+ * one `WHERE` clause used by exactly two raw-SQL call sites would be more layering than the fix is
+ * worth) so if you touch one, touch the other in the same change.
  */
 async function loadGraphTaskRows(workspaceId: string): Promise<readonly GraphTaskRow[]> {
   return prisma.$queryRaw<GraphTaskRow[]>`
@@ -121,11 +140,12 @@ async function loadGraphTaskRows(workspaceId: string): Promise<readonly GraphTas
       t.priority,
       t.attempt,
       t."maxAttempts",
+      t."integratedAt",
       NOT EXISTS (
         SELECT 1
         FROM "TaskDependency" td
         JOIN "Task" dep ON dep.id = td."dependsOnTaskId"
-        WHERE td."taskId" = t.id AND dep.status <> 'done'
+        WHERE td."taskId" = t.id AND (dep.status <> 'done' OR dep."integratedAt" IS NULL)
       ) AS "dependenciesDone"
     FROM "Task" t
     WHERE t."workspaceId" = ${workspaceId}
@@ -275,6 +295,7 @@ export async function buildGraphSnapshot(workspaceId: string): Promise<GraphSnap
       attempt: row.attempt,
       maxAttempts: row.maxAttempts,
       dependenciesDone: row.dependenciesDone,
+      integratedAt: row.integratedAt?.toISOString() ?? null,
     })),
     dependencies: dependencyRows.map((row) => ({ taskId: row.taskId, dependsOnTaskId: row.dependsOnTaskId })),
   }

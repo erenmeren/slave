@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ReactFlowProvider, type Node, type NodeProps } from 'reactflow'
 import type { GraphSnapshot } from '../src/server/graph.js'
 import type { GraphCanvasProps } from '../src/components/graph/GraphCanvas.js'
+import { buildDepsGraph } from '../src/components/graph/TaskNodes.js'
 
 // `DepsMode` renders through the real `GraphCanvas` in production, but `GraphCanvas` is just a
 // thin passthrough onto React Flow (verified in the Task 5 report) -- the actual drag-to-connect
@@ -91,6 +92,7 @@ function task(overrides: Partial<GraphSnapshot['tasks'][number]>): GraphSnapshot
     attempt: 0,
     maxAttempts: 3,
     dependenciesDone: true,
+    integratedAt: null,
     ...overrides,
   }
 }
@@ -110,17 +112,63 @@ const SNAPSHOT: GraphSnapshot = {
   teams: [],
   slaves: [],
   tasks: [
-    task({ id: 't1', title: 'Set up DB schema', status: 'done', attempt: 1, maxAttempts: 3, dependenciesDone: true }),
+    // M35 t2: `integratedAt` set -- t1 is done AND integrated, the only way a `done` dependency
+    // now counts as met (review round 1: it used to be raw `status === 'done'`).
+    task({ id: 't1', title: 'Set up DB schema', status: 'done', attempt: 1, maxAttempts: 3, dependenciesDone: true, integratedAt: '2026-09-08T00:00:00.000Z' }),
     task({ id: 't2', title: 'Write the API', status: 'running', attempt: 1, maxAttempts: 3, dependenciesDone: true }),
     task({ id: 't3', title: 'Ship the UI', status: 'ready', attempt: 0, maxAttempts: 3, dependenciesDone: false }),
   ],
-  // t3 depends on both t1 (done -- doesn't count) and t2 (not done -- counts): "waiting on 1", not
-  // a naive "waiting on 2" off the raw dependency count.
+  // t3 depends on both t1 (done AND integrated -- doesn't count) and t2 (not done -- counts):
+  // "waiting on 1", not a naive "waiting on 2" off the raw dependency count.
   dependencies: [
     { taskId: 't3', dependsOnTaskId: 't1' },
     { taskId: 't3', dependsOnTaskId: 't2' },
   ],
 }
+
+// M35 t2 (review round 1): `buildDepsGraph` is the one place that turns "is this dependency met"
+// into what the operator sees (the cable's `active` flag, the "waiting on N" badge) -- and it used
+// to disagree with the scheduler (`apps/orchestrator/src/world.ts`) and the read model
+// (`server/graph.ts`'s `dependenciesDone`) by checking raw `status === 'done'` instead of done AND
+// integrated. Tested directly against the pure builder, not through the `GraphCanvas`-stubbed
+// `DepsMode` above, because that stub never reaches the real `CableEdge` -- there is nothing in
+// `DepsMode`'s rendered DOM to assert `active` against.
+describe('buildDepsGraph: a dependency is met only when it is done AND integrated', () => {
+  function graphWith(dependency: Partial<GraphSnapshot['tasks'][number]>): { readonly nodes: ReturnType<typeof buildDepsGraph>['nodes']; readonly edges: ReturnType<typeof buildDepsGraph>['edges'] } {
+    const snapshot: GraphSnapshot = {
+      shellFacts: SHELL_FACTS,
+      workspace: { id: 'w1', name: 'W', haltedReason: null },
+      teams: [],
+      slaves: [],
+      tasks: [
+        task({ id: 'dep', title: 'Set up DB schema', status: 'done', dependenciesDone: true, integratedAt: null, ...dependency }),
+        task({ id: 'dependent', title: 'Ship the UI', status: 'ready', dependenciesDone: false }),
+      ],
+      dependencies: [{ taskId: 'dependent', dependsOnTaskId: 'dep' }],
+    }
+    return buildDepsGraph(snapshot)
+  }
+
+  it('reads UNMET -- inactive cable, counted in "waiting on N" -- for a done task whose integratedAt is null', () => {
+    const { nodes, edges } = graphWith({ status: 'done', integratedAt: null })
+
+    const cable = edges.find((edge) => edge.id === 'task:dep->task:dependent')!
+    expect((cable.data as { active: boolean }).active).toBe(false)
+
+    const dependentNode = nodes.find((node) => node.id === 'task:dependent')!
+    expect((dependentNode.data as { waitingOn: number | null }).waitingOn).toBe(1)
+  })
+
+  it('reads MET -- active cable, no longer counted -- once integratedAt is set', () => {
+    const { nodes, edges } = graphWith({ status: 'done', integratedAt: '2026-09-08T00:00:00.000Z' })
+
+    const cable = edges.find((edge) => edge.id === 'task:dep->task:dependent')!
+    expect((cable.data as { active: boolean }).active).toBe(true)
+
+    const dependentNode = nodes.find((node) => node.id === 'task:dependent')!
+    expect((dependentNode.data as { waitingOn: number | null }).waitingOn).toBe(0)
+  })
+})
 
 describe('DepsMode', () => {
   let DepsMode: (props: { workspaceId: string; snapshot: GraphSnapshot }) => ReactElement

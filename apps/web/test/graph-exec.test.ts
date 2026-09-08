@@ -38,6 +38,7 @@ function task(over: Partial<GraphSnapshot['tasks'][number]>): GraphSnapshot['tas
     attempt: 0,
     maxAttempts: 3,
     dependenciesDone: true,
+    integratedAt: null,
     ...over,
   }
 }

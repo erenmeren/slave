@@ -110,11 +110,45 @@ describe('buildGraphSnapshot', () => {
     const taskA_before = before?.tasks.find((t) => t.id === fixture.taskId)
     expect(taskA_before?.dependenciesDone).toBe(false)
 
-    await prisma.task.update({ where: { id: taskB.id }, data: { status: 'done' } })
+    // M35 t2 (review round 1): `done` alone is no longer enough -- see the dedicated test below --
+    // so this "true once it is" case stamps `integratedAt` too, matching `merge.ts`'s real-merge
+    // path (`apps/orchestrator/src/merge.ts`), the way the scheduler itself would have reached it.
+    await prisma.task.update({ where: { id: taskB.id }, data: { status: 'done', integratedAt: new Date() } })
 
     const after = await buildGraphSnapshot(fixture.workspaceId)
     const taskA_after = after?.tasks.find((t) => t.id === fixture.taskId)
     expect(taskA_after?.dependenciesDone).toBe(true)
+  })
+
+  // M35 t2 (review round 1): `graph.ts`'s `loadGraphTaskRows` is a deliberate copy of
+  // `apps/orchestrator/src/world.ts`'s scheduler gate (see that function's own doc comment) --
+  // this pins the copy against drifting the way it once did, when this predicate still read raw
+  // `status === 'done'` and disagreed with a scheduler that also required `integratedAt`.
+  it('a done-but-unintegrated dependency does NOT satisfy dependenciesDone; integratedAt is what does', async (): Promise<void> => {
+    const taskB = await prisma.task.create({
+      data: {
+        workspaceId: fixture.workspaceId,
+        title: 'Task B',
+        description: 'x',
+        status: 'done',
+        integratedAt: null,
+        requiredRole: 'backend',
+        maxAttempts: 3,
+      },
+    })
+    await prisma.taskDependency.create({ data: { taskId: fixture.taskId, dependsOnTaskId: taskB.id } })
+
+    const unintegrated = await buildGraphSnapshot(fixture.workspaceId)
+    const taskA_unintegrated = unintegrated?.tasks.find((t) => t.id === fixture.taskId)
+    expect(taskA_unintegrated?.dependenciesDone).toBe(false)
+    expect(unintegrated?.tasks.find((t) => t.id === taskB.id)?.integratedAt).toBeNull()
+
+    await prisma.task.update({ where: { id: taskB.id }, data: { integratedAt: new Date() } })
+
+    const integrated = await buildGraphSnapshot(fixture.workspaceId)
+    const taskA_integrated = integrated?.tasks.find((t) => t.id === fixture.taskId)
+    expect(taskA_integrated?.dependenciesDone).toBe(true)
+    expect(integrated?.tasks.find((t) => t.id === taskB.id)?.integratedAt).not.toBeNull()
   })
 
   it('reports dependenciesDone true for a task with no dependencies at all', async (): Promise<void> => {

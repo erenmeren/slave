@@ -107,17 +107,30 @@ export const TASK_NODE_TYPES: NodeTypes = {
 // ---- graph builder ------------------------------------------------------------------------
 
 /**
- * Unmet-dependency count for `taskId`: the subset of its `dependencies` rows whose
- * `dependsOnTaskId` task is not `done` -- the same "done or not" `server/graph.ts`'s
- * `loadGraphTaskRows` already booleans into `dependenciesDone`, just counted here instead of
- * only checked for zero/nonzero (the "waiting on N" badge needs N, `dependenciesDone` alone only
- * gives whether N is zero).
+ * A dependency is met when its task is `done` AND integrated -- the same definition
+ * `server/graph.ts`'s `loadGraphTaskRows` (and, upstream of it, `apps/orchestrator/src/
+ * world.ts`'s scheduler gate) apply, so the graph never shows a lit cable or a met dependency the
+ * scheduler still refuses to start (M35 t2, review round 1: a raw `status === 'done'` check here
+ * used to disagree with `dependenciesDone`, which already accounted for `integratedAt`).
+ * `undefined` (a dependency row pointing outside the snapshot's own task set) reads as unmet --
+ * the honest answer for a target this function cannot see.
  */
-function unmetDependencyCount(taskId: string, dependencies: GraphSnapshot['dependencies'], statusById: ReadonlyMap<string, TaskStatus>): number {
+function isDependencyMet(task: GraphSnapshot['tasks'][number] | undefined): boolean {
+  return task !== undefined && task.status === 'done' && task.integratedAt !== null
+}
+
+/**
+ * Unmet-dependency count for `taskId`: the subset of its `dependencies` rows whose
+ * `dependsOnTaskId` task is not yet met (`isDependencyMet` above) -- the same predicate
+ * `server/graph.ts`'s `loadGraphTaskRows` already booleans into `dependenciesDone`, just counted
+ * here instead of only checked for zero/nonzero (the "waiting on N" badge needs N,
+ * `dependenciesDone` alone only gives whether N is zero).
+ */
+function unmetDependencyCount(taskId: string, dependencies: GraphSnapshot['dependencies'], taskById: ReadonlyMap<string, GraphSnapshot['tasks'][number]>): number {
   let count = 0
   for (const dependency of dependencies) {
     if (dependency.taskId !== taskId) continue
-    if (statusById.get(dependency.dependsOnTaskId) !== 'done') count += 1
+    if (!isDependencyMet(taskById.get(dependency.dependsOnTaskId))) count += 1
   }
   return count
 }
@@ -135,9 +148,14 @@ function unmetDependencyCount(taskId: string, dependencies: GraphSnapshot['depen
 export function buildDepsGraph(snapshot: GraphSnapshot): { readonly nodes: Node[]; readonly edges: Edge[] } {
   const origin = { x: 0, y: 0 }
   const statusById = new Map(snapshot.tasks.map((task) => [task.id, task.status]))
+  // M35 t2 (review round 1): a second map, by full task, so `isDependencyMet` can see
+  // `integratedAt` alongside `status` -- `statusById` above stays as-is, it is also used below for
+  // the cable's TONE, which is about the target's own render state, not about whether an edge is
+  // met.
+  const taskById = new Map(snapshot.tasks.map((task) => [task.id, task]))
 
   const nodes: Node[] = snapshot.tasks.map((task) => {
-    const waitingOn = task.status === 'ready' && !task.dependenciesDone ? unmetDependencyCount(task.id, snapshot.dependencies, statusById) : null
+    const waitingOn = task.status === 'ready' && !task.dependenciesDone ? unmetDependencyCount(task.id, snapshot.dependencies, taskById) : null
     return {
       id: `task:${task.id}`,
       type: 'task',
@@ -170,10 +188,13 @@ export function buildDepsGraph(snapshot: GraphSnapshot): { readonly nodes: Node[
       type: 'cable',
       // The TARGET's tone (design README "1b -- Cables"), and "active" means the prerequisite is
       // satisfied: the way is CLEAR along this cable, which is the one thing a dependency edge
-      // has to say. An unmet prerequisite draws as the flat inactive line.
+      // has to say. An unmet prerequisite draws as the flat inactive line. M35 t2 (review round
+      // 1): "satisfied" is `isDependencyMet` -- done AND integrated -- not raw `status === 'done'`,
+      // so a hand-merged, unconfirmed dependency no longer lights a cable the scheduler still
+      // refuses to start past.
       data: {
         tone: CARD_STATE_TONE[targetStatus === undefined ? 'idle' : cardStateForTask(targetStatus)].tone,
-        active: statusById.get(dependency.dependsOnTaskId) === 'done',
+        active: isDependencyMet(taskById.get(dependency.dependsOnTaskId)),
       },
     }
   })

@@ -363,7 +363,7 @@ describe('node status flash (M5 border-flash idiom)', () => {
 // ==================================================================================================
 
 function task(overrides: Partial<GraphSnapshot['tasks'][number]>): GraphSnapshot['tasks'][number] {
-  return { id: 't1', title: 'Untitled', status: 'ready', priority: 1, attempt: 0, maxAttempts: 3, dependenciesDone: true, ...overrides }
+  return { id: 't1', title: 'Untitled', status: 'ready', priority: 1, attempt: 0, maxAttempts: 3, dependenciesDone: true, integratedAt: null, ...overrides }
 }
 
 describe('DepsMode: completion wave', () => {
@@ -513,7 +513,7 @@ const GRAPH_CLIENT_SNAPSHOT: GraphSnapshot = {
   workspace: { id: 'w1', name: 'W', haltedReason: null },
   teams: [{ id: 'team1', name: 'Eng' }],
   slaves: [slave({ id: 'a1', name: 'Alex', status: 'working', activeTaskId: 't1', activeTaskTitle: 'Ship it', activeRunId: 'run1' })],
-  tasks: [{ id: 't1', title: 'Ship it', status: 'running', priority: 1, attempt: 1, maxAttempts: 3, dependenciesDone: true }],
+  tasks: [{ id: 't1', title: 'Ship it', status: 'running', priority: 1, attempt: 1, maxAttempts: 3, dependenciesDone: true, integratedAt: null }],
   dependencies: [],
   shellFacts: SHELL_FACTS,
 }
