@@ -88,3 +88,21 @@ scripts/gate-m35-pipeline-honesty.mjs, package.json, ci.yml, README
 - [ ] Preserve the two existing behaviours: an individual review failure still leaves the task in `reviewing` for the next attempt, and a succeeded-then-invalid-verdict run still behaves as its test pins.
 - [ ] Tests first (the strand is reproducible: drive the cap to exhaustion and assert the task is no longer silently `reviewing`) → implement → `review.test.ts`, then the other orchestrator files that touch review, one at a time → typecheck.
 - [ ] Commit `fix(orchestrator): m35 t4 — an exhausted review cap escalates instead of leaving the task silently in review`.
+
+---
+
+### Task 5: A blocked task can be un-blocked
+
+**Added mid-milestone (2026-09-08) after Task 4's review, which verified the gap independently.** Four places park a task `blocked` — `tick.ts` (worktree conflict, charges an attempt), `verify.ts` (verify misconfiguration, charges nothing), the new `review.ts` (review cap exhausted, charges nothing), and `packages/control/src/stop.ts` (operator cancel) — and NOTHING moves a task out of `blocked`: not the CLI, not a web route, not `clear-halt`. `decide()`'s `STARTABLE = ['ready','rework']` excludes it, so the operator's only recourse today is editing the database by hand. Task 4 added the fourth entrance; this task builds the exit.
+
+**Files:** a control verb next to `confirmIntegration` (`packages/control/src/`), `apps/orchestrator/src/cli.ts` (`unblock-task --task <id>`, usage text), tests in `packages/control/test/integration/` and the CLI test file. A web action only if the existing task control route makes it a few lines; do NOT redesign anything.
+
+**Behaviour required:**
+- Refuses unless the task is `blocked` (reuse `task_not_found`; add a kind for "not blocked" only if none fits — `confirmIntegration`'s `task_not_done` is the shape precedent).
+- Moves the task to a status the scheduler will pick up. **Decide which, and justify it:** `ready` and `rework` are both `STARTABLE`, and they differ in what the run's context will say about prior attempts. Consider that a blocked task may have a stale `activeRunId` from the path that parked it — check each of the four parks and clear what must be cleared, or refuse when the state is inconsistent.
+- Does NOT reset `attempt`. A task blocked at its attempt ceiling that is un-blocked without a raise would be re-blocked immediately: detect that case and either refuse with a clear reason or require an explicit attempt allowance — pick one, justify it, and test it.
+- Emits an event, following the idiom of its neighbours.
+- Guarded so a concurrent pass cannot be overwritten.
+
+- [ ] Tests first (each of the four park shapes can be un-blocked and becomes schedulable; the attempt-ceiling case behaves as you decided; the refusals) → implement → the covering control and CLI test files one at a time → typecheck.
+- [ ] Commit `feat(control,cli): m35 t5 — a blocked task has a way out`.
