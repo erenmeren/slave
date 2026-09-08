@@ -243,6 +243,11 @@ export async function listMessagesForSlave(
   const rows = await prisma.slaveMessage.findMany({
     where: {
       workspaceId: slave.team.workspaceId,
+      // Never a message this slave itself SENT (own doc comment above): without this, a slave
+      // that role-broadcasts to its own role would see its own question in its own inbox --
+      // `recipientRole: slave.role` alone does not know who sent a row, only who it is addressed
+      // to (fix round 1, Important finding 2).
+      slaveId: { not: slaveId },
       OR: [{ recipientSlaveId: slaveId }, { recipientRole: slave.role }],
       ...(filter.unreadOnly === true ? { readAt: null } : {}),
       ...(filter.unansweredOnly === true
@@ -263,10 +268,19 @@ export async function markMessageRead(
 ): Promise<Result<SlaveMessageView, ControlRefusal>> {
   const [message, slave] = await Promise.all([
     prisma.slaveMessage.findUnique({ where: { id: messageId } }),
-    prisma.slave.findUnique({ where: { id: slaveId } }),
+    prisma.slave.findUnique({ where: { id: slaveId }, include: { team: true } }),
   ])
   if (message === null) return err({ kind: 'message_not_found', messageId })
   if (slave === null) return err({ kind: 'slave_not_found', slaveId })
+
+  // Scope BEFORE the direct/role check (fix round 1, Important finding 1): `addressedByRole`
+  // below compares bare role-name strings, which say nothing about which workspace either side
+  // is in -- a slave in workspace B whose role happens to match a role-addressed message's
+  // `recipientRole` in workspace A must not be able to mark it read, the same boundary
+  // `sendMessage` already enforces on write.
+  if (message.workspaceId !== slave.team.workspaceId) {
+    return err({ kind: 'not_message_recipient', messageId, slaveId })
+  }
 
   const addressedDirectly = message.recipientSlaveId === slaveId
   const addressedByRole = message.recipientRole !== null && message.recipientRole === slave.role

@@ -259,6 +259,30 @@ describe('listMessagesForSlave', () => {
     if (senderInbox.ok) expect(senderInbox.value).toEqual([])
   })
 
+  it('never lists its own role-broadcast, even though it holds the addressed role -- but a peer holding the same role sees it', async () => {
+    const { run, sender } = fixture
+    const senderRow = await prisma.slave.findUniqueOrThrow({ where: { id: sender.id } })
+    const peer = await prisma.slave.create({
+      data: { teamId: senderRow.teamId, name: 'Priya', role: sender.role },
+    })
+
+    const sent = await sendMessage(run.id, question({ recipientRole: sender.role }))
+    expect(sent.ok).toBe(true)
+    if (!sent.ok) return
+
+    const ownInbox = await listMessagesForSlave(sender.id)
+    expect(ownInbox.ok).toBe(true)
+    if (ownInbox.ok) expect(ownInbox.value).toEqual([])
+
+    const ownUnanswered = await listMessagesForSlave(sender.id, { unansweredOnly: true })
+    expect(ownUnanswered.ok).toBe(true)
+    if (ownUnanswered.ok) expect(ownUnanswered.value).toEqual([])
+
+    const peerInbox = await listMessagesForSlave(peer.id)
+    expect(peerInbox.ok).toBe(true)
+    if (peerInbox.ok) expect(peerInbox.value.map((m) => m.id)).toEqual([sent.value.id])
+  })
+
   it('unreadOnly excludes a message already marked read', async () => {
     const { run, recipient } = fixture
     const sent = await sendMessage(run.id, question({ recipientSlaveId: recipient.id }))
@@ -360,5 +384,21 @@ describe('markMessageRead', () => {
     const result = await markMessageRead(sent.value.id, sender.id)
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.error.kind).toBe('not_message_recipient')
+  })
+
+  it('refuses a slave in another workspace even when its role name matches the addressed role, and leaves readAt null', async () => {
+    const { run, outsider } = fixture
+    // `outsider` (fixture) holds the role "answerer" too, in the SECOND workspace -- same role
+    // name, different workspace. A bare string comparison of roles alone would wrongly admit it.
+    const sent = await sendMessage(run.id, question({ recipientRole: 'answerer' }))
+    expect(sent.ok).toBe(true)
+    if (!sent.ok) return
+
+    const result = await markMessageRead(sent.value.id, outsider.id)
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error.kind).toBe('not_message_recipient')
+
+    const row = await prisma.slaveMessage.findUniqueOrThrow({ where: { id: sent.value.id } })
+    expect(row.readAt).toBeNull()
   })
 })
