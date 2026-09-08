@@ -20,6 +20,11 @@ enum TaskStatus {
   done
   failed
   cancelled
+  /// M36 t2: waiting for another slave to answer a question. Distinct from `blocked`, which since
+  /// M35 means "a human must look at this" and is left only by `unblock-task`; this one resolves
+  /// itself when the answer arrives. Not startable (`decide.ts`'s `STARTABLE`), and not reset by
+  /// the sweep -- the asking run is `paused`, which the orphan pass leaves alone.
+  waiting
 }
 
 enum RunStatus {
@@ -313,6 +318,11 @@ enum PauseReason {
   human
   guardrail
   emergency_stop
+  /// M36 t2: this run stopped to wait for another slave's answer -- nobody asked it to pause and
+  /// no guardrail tripped. The category is what keeps a waiting run out of the surfaces that
+  /// present a pause as something an operator has to act on (`apps/web/src/server/overview.ts`'s
+  /// "blocked · needs you" panel).
+  waiting_for_answer
 }
 
 enum MessageCategory {

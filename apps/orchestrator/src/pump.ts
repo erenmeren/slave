@@ -14,6 +14,7 @@ import {
   type RunOutcome,
   type RuntimeEvent,
 } from '@slave-of-ai/providers'
+import { concludeWithQuestion } from './ask.js'
 import { releaseTaskAfterFailure } from './taskRelease.js'
 
 /**
@@ -24,6 +25,20 @@ import { releaseTaskAfterFailure } from './taskRelease.js'
 const execFileAsync = promisify(execFile)
 
 export const OUTPUT_CAP = 4_000
+
+/**
+ * How much of the run's OWN text this pump keeps in memory to look for M36's ask block in.
+ *
+ * Read from a rolling tail of the raw stream text rather than back from the `run.output` events,
+ * because `OUTPUT_CAP` above truncates each of those at 4 000 characters (with an ellipsis) -- a
+ * final message longer than that would have its ask block cut in half before it was ever
+ * persisted, so the log is not a faithful source for a parser. Bounded, and bounded at the END,
+ * because that is where the block is: the oldest text is what gets dropped. A block that starts
+ * more than `ASK_TAIL_CAP` characters before the stream's last byte is therefore not seen, and
+ * that run concludes the ordinary way -- an unusable ask is an ordinary run outcome, never a
+ * rescue path.
+ */
+export const ASK_TAIL_CAP = 16_000
 
 export interface PumpRunInput {
   readonly runId: RunId
@@ -236,13 +251,13 @@ async function writeCheckpoint(input: {
   readonly spawn: PumpRunInput['spawn']
   readonly pauseReason: string
   readonly requestedBy: string | null
-}): Promise<void> {
+}): Promise<boolean> {
   if (input.spawn === undefined || input.sessionId === null) {
     // No session id means the run never reached `system/init`, so there is nothing to `--resume`.
     // No spawn facts means the caller cannot support a resume anyway; recording half a checkpoint
     // would be worse than none, because `resume()` would then fail at the spawn rather than here.
     console.warn(`[pump] not writing a checkpoint for ${input.runId}: nothing could resume it`)
-    return
+    return false
   }
 
   const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: input.runId } })
@@ -313,6 +328,11 @@ async function writeCheckpoint(input: {
       requestedBy: input.requestedBy,
     },
   })
+  // Reported, not just performed (M36 t2): the ask path must not park a run in `paused` when the
+  // early return above fired -- a paused run with no checkpoint can be resumed by nobody, and the
+  // task would wait on an answer that could never be delivered. The two pause routes below ignore
+  // this, deliberately: a pause has to happen whether or not it can be resumed from.
+  return true
 }
 
 /**
@@ -576,6 +596,8 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
   // already has a session. Without this, a resumed run that pauses again bails with "nothing could
   // resume it" and silently leaves the *previous*, now-stale checkpoint for the next resume to use.
   let sessionId: string | null = startingRow.sessionId
+  /** The end of what this run said, for M36 t2's ask block. See `ASK_TAIL_CAP`. */
+  let outputTail = ''
   let unparsableLines = 0
   let paused = false
   let gateFailed = false
@@ -654,6 +676,9 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
       }
 
       case 'text': {
+        // Kept whole here, and only here: the persisted event below is capped, and M36 t2's ask
+        // block has to be read from what the slave actually said, not from the truncation of it.
+        outputTail = (outputTail + event.text).slice(-ASK_TAIL_CAP)
         // Truncated from the end, and *said* to be truncated: the beginning is what a reader
         // wants, and a sentence that simply stops reads as the slave having stopped.
         const text =
@@ -1091,6 +1116,47 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
   // still fails a genuine pause/permission-mode denial byte-identically to before this fix.
   const nonMatrixDeniedToolUseIds = outcome.deniedToolUseIds.filter((id) => !matrixDeniedToolUseIds.has(id))
   const failed = outcome.isError || nonMatrixDeniedToolUseIds.length > 0
+
+  // M36 t2: a run that ended by asking another slave a question stops here instead of concluding.
+  //
+  // The smallest possible hook, with the whole decision in `ask.ts`: this file is already large,
+  // and what belongs here is the two facts only this function has -- the run's own text (the log's
+  // is capped, see `ASK_TAIL_CAP`) and the spawn facts a `Checkpoint` needs, handed over as the
+  // closure below.
+  //
+  // Only on a CLEAN conclusion (`!failed`), and only when there was a terminal result at all
+  // (everything above this line returns before here when there was not). A stream that died, or
+  // one whose run reported an error or an unexcused denial, did not deliberately stop to ask: its
+  // text may be half a message, and treating it as an ask would turn a failure into an
+  // indefinite wait with no attempt charged. Those runs conclude below exactly as they always have.
+  if (!failed) {
+    const asked = await concludeWithQuestion({
+      runId,
+      taskId,
+      text: outputTail,
+      toolCalls,
+      writeCheckpoint: (pauseReason: string): Promise<boolean> =>
+        writeCheckpoint({
+          runId,
+          sessionId,
+          toolCalls,
+          lastToolUseId: lastToolUse?.id ?? null,
+          lastToolName: lastToolUse?.name ?? null,
+          denied,
+          spawn: input.spawn,
+          pauseReason,
+          // Nobody asked for this pause, so there is no requester to record -- unlike the two
+          // routes above, where the flag file names the operator who did.
+          requestedBy: null,
+        }),
+      emit,
+    })
+    // `null`, like every other non-conclusion this function returns: the run did not succeed, it
+    // stopped to wait. `verifyConcludedRun`, chained onto this pump by every caller, reads the row
+    // rather than this value and leaves a `paused` run alone.
+    if (asked.kind === 'waiting') return null
+  }
+
   const terminalNow = new Date()
   const concluded = await prisma.slaveRun.updateMany({
     where: { id: runId, endedAt: null },

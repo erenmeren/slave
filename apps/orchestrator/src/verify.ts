@@ -181,7 +181,12 @@ export async function runVerify(input: RunVerifyInput): Promise<VerifyResult> {
  * `releaseTaskAfterFailure` (`./taskRelease.js`), rather than left `running` forever. A `review`
  * run's task is deliberately left alone on a review failure — see the comment on that branch below
  * for why. A `stopped` run was concluded by an operator whose decision stands; a `paused` run is
- * not terminal at all — both are left alone. The status checks read the row rather than trusting
+ * not terminal at all — both are left alone. That last clause is also what covers M36 t2 with no
+ * branch of its own: a run that ended by asking another slave a question parks in `paused` (with
+ * `SlaveRun.pauseReason = waiting_for_answer`) and its task in `waiting`, so it falls out of the
+ * `succeeded`/`failed` checks below untouched — no verify pass, no release, no attempt. The
+ * detection itself cannot live here: it needs the spawn facts a `Checkpoint` is written from, and
+ * those exist only inside the pump that started the run (see `apps/orchestrator/src/ask.ts`). The status checks read the row rather than trusting
  * the caller's outcome, because the pump hands back its outcome even when something else — a
  * cancel, the sweep — concluded the run first, and their decision is the one that counts.
  */

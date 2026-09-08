@@ -5,7 +5,7 @@ import { COLUMN_FOR_STATUS, COLUMN_STATE } from './taskColumns'
 /**
  * The handoff's ten card states (`design_handoff_ai_team_os/mockups/Slave of AI Mockups.dc.html`
  * lines 912-923, `Component.meta`). This is a DISPLAY vocabulary, not a domain one: the domain
- * has `RunStatus` (nine), `SlaveStatus` (seven) and `TaskStatus` (twelve), and none of them is
+ * has `RunStatus` (nine), `SlaveStatus` (seven) and `TaskStatus` (thirteen), and none of them is
  * this list. The three derivations below are the only sanctioned way into it -- a page that
  * hand-maps a status to a tone is the defect Decision 2 forbids.
  */
@@ -104,6 +104,11 @@ export function cardStateFor(slave: SlaveStatus, task: TaskStatus | null): CardS
   switch (task) {
     case 'blocked':
       return 'blocked'
+    // M36 t2: the slave's own run IS paused, but nobody asked it to pause -- it is waiting for
+    // another slave's answer, and PAUSED would invite an operator to resume something that is
+    // resolving itself.
+    case 'waiting':
+      return 'waiting'
     case 'reviewing':
     case 'merging':
       return 'review'
@@ -124,7 +129,7 @@ export function cardStateFor(slave: SlaveStatus, task: TaskStatus | null): CardS
       return cardStateForSlave(slave)
     default: {
       // The `capabilitiesOf` idiom (`packages/providers/src/capabilities.ts:29-38`). `tsconfig.base`
-      // sets `strict` but not `noImplicitReturns`, so a thirteenth `TaskStatus` added later would
+      // sets `strict` but not `noImplicitReturns`, so a fourteenth `TaskStatus` added later would
       // otherwise fall out of this switch with no compile error, silently landing on whatever
       // `cardStateForSlave(slave)` returns -- exactly the "a status silently defaults" failure this
       // file exists to rule out. Binding `task` to `never` makes that a BUILD failure naming the
@@ -159,6 +164,12 @@ export function cardStateForTask(status: TaskStatus): CardState {
     case 'failed':
     case 'cancelled':
       return 'blocked'
+    // M36 t2, the third exception to "a task reads as its column": `waiting` sits on the In
+    // Progress column because the work is in flight, but the card must not say WORKING -- nothing
+    // is being worked on while the slave waits for an answer. `waiting` is the handoff's own amber,
+    // un-pulsed state for exactly this.
+    case 'waiting':
+      return 'waiting'
     case 'backlog':
     case 'ready':
     case 'rework':
@@ -172,7 +183,7 @@ export function cardStateForTask(status: TaskStatus): CardState {
       return COLUMN_STATE[COLUMN_FOR_STATUS[status]]
     default: {
       // The same `never` guard `cardStateFor` carries, for the same reason: `noImplicitReturns` is
-      // off, so a thirteenth `TaskStatus` would otherwise fall out of this switch as `undefined`
+      // off, so a fourteenth `TaskStatus` would otherwise fall out of this switch as `undefined`
       // and render an empty pill. This makes it a BUILD failure naming the unhandled member.
       const unhandled: never = status
       throw new Error(`cardStateForTask: unhandled TaskStatus ${JSON.stringify(unhandled)}`)

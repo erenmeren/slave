@@ -329,7 +329,18 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
   const [blockedTasks, pausedRuns, recentForPanel, mergingTasks] = await Promise.all([
     prisma.task.findMany({ where: { workspaceId, status: 'blocked' }, orderBy: { createdAt: 'asc' } }),
     prisma.slaveRun.findMany({
-      where: { slave: { team: { workspaceId } }, status: { in: ['pause_requested', 'paused'] } },
+      where: {
+        slave: { team: { workspaceId } },
+        status: { in: ['pause_requested', 'paused'] },
+        // M36 t2: a run waiting for another slave's answer is `paused` -- the same status an
+        // operator's pause lands in, and the reason `SlaveRun.pauseReason` carries the CATEGORY --
+        // but it does not need a human. Listing it under "needs you" with a resume button would
+        // invite an operator to continue a slave whose question has not been answered yet, and
+        // would report the fleet as blocked on people when it is waiting on itself. Written as an
+        // explicit two-arm OR rather than `{ not: 'waiting_for_answer' }` so the rows with NO
+        // pause reason at all (a gate-deny pause nobody requested) are unambiguously kept.
+        OR: [{ pauseReason: null }, { pauseReason: { not: 'waiting_for_answer' } }],
+      },
       orderBy: { startedAt: 'asc' },
       include: { slave: true },
     }),

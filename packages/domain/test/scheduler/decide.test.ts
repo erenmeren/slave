@@ -67,6 +67,13 @@ describe('decide', () => {
     expect(decide(world({ tasks: [task('TASK-1', { status: 'running' })] }))).toEqual([])
   })
 
+  it('never starts a task that is waiting for another slave to answer (M36 t2)', () => {
+    // `waiting` is not `blocked`: a blocked task needs a human, a waiting one resolves itself when
+    // an answer arrives -- and its run is still paused mid-session, holding the worktree. Starting
+    // a second run against it would put two slaves on one branch.
+    expect(decide(world({ tasks: [task('TASK-1', { status: 'waiting' })] }))).toEqual([])
+  })
+
   it('leaves a task unscheduled when no slave has the required role', () => {
     expect(decide(world({ tasks: [task('TASK-1', { requiredRole: 'security' })] }))).toEqual([])
   })

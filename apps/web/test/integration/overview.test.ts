@@ -522,6 +522,21 @@ describe('buildOverviewSnapshot', () => {
     expect(snapshot?.blocked.find((b) => b.kind === 'task')?.action).toBeNull()
   })
 
+  it('leaves out a run that is waiting for another slave, which needs nobody here (M36 t2)', async (): Promise<void> => {
+    // `paused` with `waiting_for_answer` is not an operator's pause: nothing is stuck on a human,
+    // and offering a resume would continue a slave whose question has not been answered yet.
+    await prisma.slaveRun.create({
+      data: { slaveId: fixture.slaveId, status: 'paused', pausedAtStep: 3, pauseReason: 'waiting_for_answer', provider: 'claude_code' },
+    })
+    // A second paused run with no reason at all -- a gate-deny pause nobody requested -- must still
+    // be listed: the filter excludes one category, not every row whose reason is null.
+    const humanPaused = await prisma.slaveRun.create({
+      data: { slaveId: fixture.slaveId, status: 'paused', pausedAtStep: 4, provider: 'claude_code' },
+    })
+    const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
+    expect(snapshot?.blocked.filter((b) => b.kind === 'run').map((b) => b.runId)).toEqual([humanPaused.id])
+  })
+
   it('reports a run that has only been ASKED to pause, and offers it no resume', async (): Promise<void> => {
     // `requestResume` refuses a `pause_requested` run — no checkpoint exists yet. The panel names
     // the state and waits; a button that always refuses is worse than none.

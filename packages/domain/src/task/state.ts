@@ -11,6 +11,14 @@ export type TaskStatus =
   | 'reviewing'
   | 'merging'
   | 'rework'
+  /**
+   * Waiting for another slave to answer a question (M36 t2). Deliberately NOT `blocked`: M35 gave
+   * `blocked` the meaning "a human must look at this", with `unblock-task` as its only exit, while
+   * this state resolves by itself the moment an answer arrives. Not startable either -- the asking
+   * run is still paused mid-session and still holds the worktree, so handing the task to a second
+   * slave would put two of them on one branch.
+   */
+  | 'waiting'
   | 'done'
   | 'failed'
   | 'cancelled'
@@ -120,6 +128,14 @@ export function applyTaskEvent(state: TaskState, event: TaskEvent): Result<TaskS
     case 'merging':
       if (event.type === 'merged') return ok({ ...state, status: 'done', lastRejectionReason: null })
       if (event.type === 'merge_failed') return reject(state, event.reason)
+      return illegal(state, event)
+
+    case 'waiting':
+      // M36 t2: no edge in or out of here, on purpose. This machine is the pure model of the
+      // events a task's own lifecycle produces; the ask/answer loop is driven from outside it --
+      // `apps/orchestrator/src/ask.ts` parks the task and Task 3's delivery releases it -- exactly
+      // as M35's `blocked` park (`review.ts`, `verify.ts`) and `unblockTask` are. Every `TaskEvent`
+      // there is arrives for a run that is paused, not concluded, so none of them is legal here.
       return illegal(state, event)
 
     case 'done':

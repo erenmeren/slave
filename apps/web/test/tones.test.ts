@@ -109,7 +109,7 @@ describe('cardStateFor', () => {
     // `TASK_STATUSES` (`@slave-of-ai/db`'s `enums.ts`) is type-pinned complete and sound against
     // the domain's `TaskStatus` union by its own `_TaskStatusesComplete`/`_TaskStatusesSound`
     // assertions -- iterating it here, rather than a hardcoded array of literals plus a
-    // `toHaveLength`, means a thirteenth `TaskStatus` moves this test's coverage (and hits
+    // `toHaveLength`, means a fourteenth `TaskStatus` moves this test's coverage (and hits
     // `cardStateFor`'s own `never` guard) automatically, with nothing in this file to remember
     // to update.
     for (const task of TASK_STATUSES) expect(typeof cardStateFor('idle', task)).toBe('string')
@@ -129,6 +129,7 @@ describe('cardStateForTask', () => {
     ['verifying', 'working'],
     ['reviewing', 'review'],
     ['merging', 'review'],
+    ['waiting', 'waiting'],
     ['blocked', 'blocked'],
     ['done', 'completed'],
     ['failed', 'blocked'],
@@ -139,17 +140,22 @@ describe('cardStateForTask', () => {
     expect(cardStateForTask(status)).toBe(expected)
   })
 
-  it('covers every TaskStatus -- a thirteenth is a hole here and a build error in the source', () => {
+  it('covers every TaskStatus -- a fourteenth is a hole here and a build error in the source', () => {
     expect(new Set(cases.map(([s]) => s))).toEqual(new Set(TASK_STATUSES))
   })
 
-  it("is the column's state for every status except the two ends that are not completions", () => {
+  it("is the column's state for every status except the three that are not their column", () => {
     for (const status of TASK_STATUSES) {
       const columnState = COLUMN_STATE[COLUMN_FOR_STATUS[status]]
       if (status === 'failed' || status === 'cancelled') {
         // Both sit on the Done column, and neither is done. The card says what happened.
         expect(COLUMN_FOR_STATUS[status]).toBe('Done')
         expect(cardStateForTask(status)).toBe('blocked')
+      } else if (status === 'waiting') {
+        // M36 t2: the work is in flight (the In Progress column) but nothing is being worked on
+        // while the slave waits for another slave's answer, so the card says WAITING, not WORKING.
+        expect(COLUMN_FOR_STATUS[status]).toBe('In Progress')
+        expect(cardStateForTask(status)).toBe('waiting')
       } else {
         expect(cardStateForTask(status)).toBe(columnState)
       }
@@ -187,7 +193,7 @@ describe('toneForTaskStatus', () => {
   // alpha stacked on top. Deriving BORDER off the alpha table would dim every graph node border
   // to ~24% opacity -- a real visual regression, not the sanctioned tone remap -- so
   // `TONE_BORDER_SOLID` exists as the plain-string counterpart for exactly this derivation.
-  it('is the single source for all twelve statuses across all four tables', () => {
+  it('is the single source for all thirteen statuses across all four tables', () => {
     for (const status of TASK_STATUSES) {
       const tone = toneForTaskStatus(status)
       expect(TASK_STATUS_DOT[status]).toBe(TONE_DOT[tone])

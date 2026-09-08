@@ -9,7 +9,7 @@ export const BOARD_COLUMNS: readonly BoardColumn[] = ['Backlog', 'Todo', 'In Pro
 
 /**
  * Every `TaskStatus` on exactly one column (spec §5.3). `Record<TaskStatus, BoardColumn>` is
- * load-bearing: a thirteenth status added to the domain fails the BUILD here rather than becoming
+ * load-bearing: a fourteenth status added to the domain fails the BUILD here rather than becoming
  * a task nobody can see on any column.
  *
  * `failed` and `cancelled` share the `Done` column with `done` and carry their own pill on the
@@ -24,6 +24,11 @@ export const COLUMN_FOR_STATUS: Record<TaskStatus, BoardColumn> = {
   verifying: 'In Progress',
   reviewing: 'Review',
   merging: 'Review',
+  // M36 t2. NOT the `Blocked` column: a waiting task is mid-flight -- its slave is paused inside a
+  // live session, holding the worktree, and the answer that releases it comes from another slave,
+  // not from the human the `Blocked` column is addressed to. The card keeps its own amber WAITING
+  // pill rather than the column's teal (see `cardStateForTask`'s third exception).
+  waiting: 'In Progress',
   blocked: 'Blocked',
   done: 'Done',
   failed: 'Done',

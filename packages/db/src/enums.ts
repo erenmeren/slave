@@ -68,6 +68,7 @@ export const TASK_STATUSES = [
   'done',
   'failed',
   'cancelled',
+  'waiting',
 ] as const
 
 /** Every RunStatus, as data. */
