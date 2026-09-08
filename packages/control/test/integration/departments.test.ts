@@ -127,6 +127,36 @@ describe('createProjectTeam', () => {
     expect(unknown.ok).toBe(false)
     if (!unknown.ok) expect(unknown.error).toEqual({ kind: 'workspace_not_found', workspaceId: UNKNOWN })
   })
+
+  // M34 t2: a sibling row created directly (`prisma.team.create`, not through this verb's own
+  // pre-check) is still refused -- the `findFirst` pre-check above already catches this ONE case
+  // (the sibling is already committed by the time it runs), so this alone is not proof the fix
+  // below did anything; the `Promise.all` case right after is the one that needs the index and
+  // catch, closing the window between the pre-check's read and its own write that this case does
+  // not exercise.
+  it('refuses a name a directly-created sibling row already holds', async () => {
+    await prisma.team.create({ data: { workspaceId: fixture.workspaceId, name: 'Design' } })
+
+    const result = await createProjectTeam(fixture.workspaceId, 'Design')
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error).toEqual({ kind: 'duplicate_name', name: 'Design' })
+    expect(await prisma.team.count({ where: { workspaceId: fixture.workspaceId, name: 'Design' } })).toBe(1)
+  })
+
+  it('two concurrent creates of the same name yield exactly one ok and one duplicate_name', async () => {
+    const [first, second] = await Promise.all([
+      createProjectTeam(fixture.workspaceId, 'Design'),
+      createProjectTeam(fixture.workspaceId, 'Design'),
+    ])
+
+    const results = [first, second]
+    expect(results.filter((r) => r.ok)).toHaveLength(1)
+    const refused = results.filter((r) => !r.ok)
+    expect(refused).toHaveLength(1)
+    if (!refused[0]?.ok) expect(refused[0]?.error).toEqual({ kind: 'duplicate_name', name: 'Design' })
+    expect(await prisma.team.count({ where: { workspaceId: fixture.workspaceId, name: 'Design' } })).toBe(1)
+  })
 })
 
 describe('moveSlave', () => {

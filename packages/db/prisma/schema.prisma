@@ -126,6 +126,12 @@ model Team {
   slaves      Slave[]
 
   @@index([workspaceId])
+  /// M34 t2: a department name is unique per project. `createProjectTeam`/`renameTeam` still run
+  /// a friendly pre-check first (it names the sibling in the refusal), but this index is what
+  /// actually closes the race a read-then-write pre-check cannot -- both verbs also catch
+  /// `isUniqueConstraintViolation` (P2002) on this index, the rule `org.ts`'s catalog verbs already
+  /// follow for their own `@@unique` indexes.
+  @@unique([workspaceId, name])
 }
 
 model Slave {

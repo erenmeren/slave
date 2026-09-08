@@ -647,7 +647,10 @@ export async function deleteSlave(
 }
 
 /** Renames a project team. Sibling names are unique per WORKSPACE, the same rule
- *  {@link renameSlave} enforces per team -- and, as there, no unique index exists to lean on. */
+ *  {@link renameSlave} enforces per team. The `findFirst` below is a friendly pre-check that names
+ *  the sibling in the refusal; the `Team_workspaceId_name_key` index (M34 t2) is what actually
+ *  closes the race it cannot -- a concurrent create/rename can still slip past the pre-check, and
+ *  the `catch` below refuses it the same way `org.ts`'s catalog verbs already do. */
 export async function renameTeam(
   teamId: string,
   name: string,
@@ -662,7 +665,12 @@ export async function renameTeam(
     const sibling = await tx.team.findFirst({ where: { workspaceId: team.workspaceId, name, NOT: { id: teamId } } })
     if (sibling !== null) return { ok: false as const, error: { kind: 'duplicate_name', name } as ControlRefusal }
 
-    await tx.team.update({ where: { id: teamId }, data: { name } })
+    try {
+      await tx.team.update({ where: { id: teamId }, data: { name } })
+    } catch (error) {
+      if (isUniqueConstraintViolation(error)) return { ok: false as const, error: { kind: 'duplicate_name', name } as ControlRefusal }
+      throw error
+    }
     return { ok: true as const, value: { workspaceId: team.workspaceId, from: team.name } }
   })
 
@@ -729,8 +737,10 @@ export async function deleteTeam(
 // event).
 
 /** Creates a department in a project with no template link (`companyTeamId: null`). Names are
- *  unique per workspace, the rule {@link renameTeam} enforces -- and, as there, there is no
- *  unique index to lean on, so the check runs inside the transaction. */
+ *  unique per workspace, the rule {@link renameTeam} enforces, backed by the same
+ *  `Team_workspaceId_name_key` index (M34 t2): the `findFirst` below is a friendly pre-check that
+ *  names the sibling in the refusal, and the `catch` closes the race it cannot, the way `org.ts`'s
+ *  catalog verbs already do. */
 export async function createProjectTeam(
   workspaceId: string,
   name: string,
@@ -745,8 +755,13 @@ export async function createProjectTeam(
     const sibling = await tx.team.findFirst({ where: { workspaceId, name } })
     if (sibling !== null) return { ok: false as const, error: { kind: 'duplicate_name', name } as ControlRefusal }
 
-    const team = await tx.team.create({ data: { workspaceId, name, companyTeamId: null } })
-    return { ok: true as const, value: { id: team.id } }
+    try {
+      const team = await tx.team.create({ data: { workspaceId, name, companyTeamId: null } })
+      return { ok: true as const, value: { id: team.id } }
+    } catch (error) {
+      if (isUniqueConstraintViolation(error)) return { ok: false as const, error: { kind: 'duplicate_name', name } as ControlRefusal }
+      throw error
+    }
   })
 
   if (!outcome.ok) return err(outcome.error)
