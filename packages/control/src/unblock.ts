@@ -36,6 +36,27 @@ export interface UnblockTaskInput {
  * `acquireWorktree` only adopts when `provisionWorktree` actually throws, so a task with a
  * genuinely clean worktree is provisioned fresh either way.
  *
+ * This reads as the opposite of `tick.ts`'s `failToStart`, which picks `blocked` SPECIFICALLY so
+ * the task is NOT `rework` -- its own comment says landing in `rework` "would hold for one tick
+ * and then invert itself", because `rework` is the exact precondition `acquireWorktree` tests for
+ * before it ADOPTS a leftover worktree/branch it just refused as someone else's wreckage. Sending
+ * the task to `rework` here reaches for precisely the adoption `failToStart` was written to defer.
+ * The two are not actually in tension: `failToStart` is deferring adoption absent a human in the
+ * loop, and an explicit call to this function IS that human -- an operator who looked at the
+ * `blocked` task, decided the leftover worktree/branch is exactly what the next attempt should
+ * pick up rather than fight, and said so. `rework` is what tells `acquireWorktree` to adopt; a
+ * human unblock is the sanction that makes that adoption the right call instead of the silent
+ * invert-in-one-tick `failToStart`'s comment warns against.
+ *
+ * That sanction is only as good as the operator's own look, though: a leftover that is only
+ * PARTIALLY there (`WorktreeExistsError.reason === 'directory'` or `'branch'`, not `'both'`) is not
+ * something `acquireWorktree` will adopt even from `rework` -- it adopts only the `'both'` case,
+ * so a partial leftover throws again on the very next tick, and that throw re-parks the task
+ * `blocked` (via `taskRelease.ts`'s park, since `failToStart` treats any `WorktreeExistsError` the
+ * same way) and burns another attempt doing it. An operator unblocking a task parked for a partial
+ * leftover should clear the stray directory/branch by hand first -- unblocking onto it merely
+ * repeats the failure at the cost of the attempt this verb was meant to spend on real progress.
+ *
  * `activeRunId` is checked, not cleared: all four parks already null it in the SAME write that
  * sets `blocked` (`taskRelease.ts`, `verify.ts`'s `advance`, `review.ts`'s cap park, and
  * `stop.ts`), so a blocked task carrying one is not a state any of them can produce. Refusing

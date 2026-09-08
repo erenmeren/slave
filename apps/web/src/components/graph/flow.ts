@@ -109,17 +109,39 @@ export function handleToolCallFrame(
 export const EDGE_FLASH_MS = 800
 
 /**
- * Task ids that transitioned TO `done` between two snapshots (spec §6's completion wave), keyed by
- * `previous` (a taskId → status map from the last snapshot `DepsMode` saw) and `current` (the new
- * snapshot's tasks). A task with no entry in `previous` at all (freshly appeared already-done, or
- * the very first snapshot) never counts -- same "no flash on initial mount/appearance" rule the M5
- * border-flash idiom applies to a first render.
+ * Same predicate as `TaskNodes.tsx`'s (private) `isDependencyMet`: a dependency is met when its
+ * task is `done` AND integrated, not on raw status alone -- duplicated here rather than imported so
+ * this module stays free of React (see the module doc comment), the same reason `server/graph.ts`'s
+ * `loadGraphTaskRows` duplicates `world.ts`'s scheduler SQL instead of importing it. Exported for
+ * the test file and for `DepsMode.tsx`, which needs it to build `previous`'s met-state map below.
+ *
+ * M35 final review (minor): this used to be `task.status === 'done'` inline in `tasksTurnedDone`
+ * below, which flashed a dependency's outgoing edges the moment its task's status turned `done` --
+ * even under `workspace.autoMerge = false` (every real workspace today: nothing in production code
+ * ever sets `autoMerge = true`), where a `done`-but-unintegrated task is NOT yet a met dependency.
+ * The flash fired once and the persistent cable correctly stayed inactive right after -- a visible
+ * disagreement between a one-time animation and the steady-state view of the exact same fact.
+ */
+export function isDependencyMet(task: { readonly status: string; readonly integratedAt: string | null }): boolean {
+  return task.status === 'done' && task.integratedAt !== null
+}
+
+/**
+ * Task ids that transitioned TO met (spec §6's completion wave -- "met" now, not raw `done`; see
+ * `isDependencyMet` above) between two snapshots, keyed by `previous` (a taskId → met-state map
+ * from the last snapshot `DepsMode` saw) and `current` (the new snapshot's tasks). A task with no
+ * entry in `previous` at all (freshly appeared already-met, or the very first snapshot) never
+ * counts -- same "no flash on initial mount/appearance" rule the M5 border-flash idiom applies to a
+ * first render. The animation itself is unchanged (`outgoingEdgeIds` + `EDGE_FLASH_MS` below) --
+ * only what counts as "just turned done" moved from raw status to `isDependencyMet`, so under
+ * `autoMerge = false` the flash now fires when a hand-merged task's `integratedAt` actually lands
+ * (`confirm-integration`), which is the only path that satisfies a dependency in practice.
  */
 export function tasksTurnedDone(
-  previous: ReadonlyMap<string, string>,
-  current: readonly { readonly id: string; readonly status: string }[],
+  previous: ReadonlyMap<string, boolean>,
+  current: readonly { readonly id: string; readonly status: string; readonly integratedAt: string | null }[],
 ): readonly string[] {
-  return current.filter((task) => task.status === 'done' && previous.get(task.id) !== 'done' && previous.has(task.id)).map((task) => task.id)
+  return current.filter((task) => isDependencyMet(task) && previous.get(task.id) !== true && previous.has(task.id)).map((task) => task.id)
 }
 
 /** `taskId`'s outgoing edges (spec §6: "its outgoing edges flash once") -- the edges where `taskId`

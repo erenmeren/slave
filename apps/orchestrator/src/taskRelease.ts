@@ -38,15 +38,29 @@ export async function releaseTaskAfterFailure(
   runId: string,
   parked: 'rework' | 'blocked',
 ): Promise<TaskRelease> {
-  await prisma.task.updateMany({
-    where: { id: task.id, activeRunId: runId },
-    data: { attempt: { increment: 1 } },
+  return prisma.$transaction(async (tx) => {
+    // Both writes inside one transaction (M35 final review, Important 2): the increment and the
+    // park used to be two separate `updateMany`s, and a crash between them left the task
+    // `attempt + 1`, still `running`, with `activeRunId` pointing at a now-terminal `failed` run --
+    // unrecoverable, because `sweep.ts` only reconciles NON-terminal runs and `unblockTask` refuses
+    // anything that is not already `blocked`. Wrapping both in `$transaction` makes the pair
+    // atomic: either the whole release lands, or neither write does and the task is exactly as it
+    // was, for the next caller (a retry, `sweep.ts`, an operator) to find and release properly.
+    await tx.task.updateMany({
+      where: { id: task.id, activeRunId: runId },
+      data: { attempt: { increment: 1 } },
+    })
+    const after = await tx.task.findUniqueOrThrow({ where: { id: task.id } })
+    const exhausted = after.attempt >= task.maxAttempts
+    // `exhausted` is reported from THIS write's own outcome, not from the read above: the read can
+    // be stale by the time this update runs (a concurrent cancel or sweep can win the race for the
+    // same `runId` in between), and reporting `exhausted: true` for a release that actually matched
+    // zero rows makes `verify.ts` (~line 211) emit a spurious `task.failed` for a task that is
+    // alive somewhere else entirely (`rework`, having been released by the winner instead).
+    const park = await tx.task.updateMany({
+      where: { id: task.id, activeRunId: runId },
+      data: { status: exhausted ? 'failed' : parked, activeRunId: null },
+    })
+    return { attempt: after.attempt, exhausted: exhausted && park.count > 0 }
   })
-  const after = await prisma.task.findUniqueOrThrow({ where: { id: task.id } })
-  const exhausted = after.attempt >= task.maxAttempts
-  await prisma.task.updateMany({
-    where: { id: task.id, activeRunId: runId },
-    data: { status: exhausted ? 'failed' : parked, activeRunId: null },
-  })
-  return { attempt: after.attempt, exhausted }
 }

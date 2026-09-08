@@ -2,6 +2,7 @@ import { prisma } from '@slave-of-ai/db/client'
 import { decide, DEFAULT_GUARDRAIL_LIMITS, slaveId, taskId, type SchedulableTask, type World } from '@slave-of-ai/domain'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { refusalText } from '../../src/refusal.js'
+import { requestStop } from '../../src/stop.js'
 import { unblockTask } from '../../src/unblock.js'
 
 interface Fixture {
@@ -79,7 +80,17 @@ describe('unblockTask', () => {
     ;({ workspaceId } = await seed())
   })
 
-  it('moves a task blocked by tick.ts (worktree conflict, attempt charged) to rework and makes it schedulable', async (): Promise<void> => {
+  // M35 final review (minor): the four cases below used to all be named "moves a task blocked by
+  // X.ts" while building the identical synthetic row (differing only in `attempt`) -- none of them
+  // actually exercised the named park. `packages/control` cannot import `apps/orchestrator` (see
+  // `git.ts`'s own doc comment on that boundary), so `tick.ts`'s worktree-conflict park and
+  // `verify.ts`'s misconfiguration park are out of reach from this package's tests; `review.ts`'s
+  // cap-exhausted park lives in `apps/orchestrator` too. `stop.ts`'s operator-cancel park DOES live
+  // in this package, though, so that one case now drives the real thing (`requestStop`) rather than
+  // a hand-built row -- the other three are renamed to say plainly that they build a row SHAPED
+  // like what that park leaves behind, not that they ran the park itself.
+
+  it('moves a task shaped like tick.ts\'s worktree-conflict park (attempt charged) to rework and makes it schedulable', async (): Promise<void> => {
     const task = await makeBlockedTask(workspaceId, { attempt: 1, maxAttempts: 3, activeRunId: null })
 
     const result = await unblockTask(task.id)
@@ -91,7 +102,7 @@ describe('unblockTask', () => {
     expect(schedulable(after)).toBe(true)
   })
 
-  it('moves a task blocked by verify.ts (misconfiguration, no attempt charged) to rework and makes it schedulable', async (): Promise<void> => {
+  it('moves a task shaped like verify.ts\'s misconfiguration park (no attempt charged) to rework and makes it schedulable', async (): Promise<void> => {
     const task = await makeBlockedTask(workspaceId, { attempt: 0, maxAttempts: 3, activeRunId: null })
 
     const result = await unblockTask(task.id)
@@ -103,7 +114,7 @@ describe('unblockTask', () => {
     expect(schedulable(after)).toBe(true)
   })
 
-  it('moves a task blocked by review.ts (review retry cap exhausted, no attempt charged) to rework and makes it schedulable', async (): Promise<void> => {
+  it('moves a task shaped like review.ts\'s cap-exhausted park (no attempt charged) to rework and makes it schedulable', async (): Promise<void> => {
     // Reaching review at all means implementation and verify already passed once.
     const task = await makeBlockedTask(workspaceId, { attempt: 1, maxAttempts: 3, activeRunId: null, lastRejectionReason: null })
 
@@ -116,8 +127,35 @@ describe('unblockTask', () => {
     expect(schedulable(after)).toBe(true)
   })
 
-  it('moves a task blocked by stop.ts (operator cancel, no attempt charged) to rework and makes it schedulable', async (): Promise<void> => {
-    const task = await makeBlockedTask(workspaceId, { attempt: 2, maxAttempts: 5, activeRunId: null })
+  it('moves a task actually parked by stop.ts (operator cancel via requestStop, no attempt charged) to rework and makes it schedulable', async (): Promise<void> => {
+    const slave = await prisma.slave.create({
+      data: { team: { create: { workspaceId, name: 'Engineering' } }, name: 'Alex', role: 'backend' },
+    })
+    const task = await prisma.task.create({
+      data: {
+        workspaceId,
+        title: 'Add the thing',
+        description: 'make it work',
+        status: 'running',
+        requiredRole: 'backend',
+        attempt: 2,
+        maxAttempts: 5,
+        branch: 'slaveofai/T-abcd1234-add-the-thing',
+      },
+    })
+    const run = await prisma.slaveRun.create({
+      data: { taskId: task.id, slaveId: slave.id, status: 'working', pid: null },
+    })
+    await prisma.task.update({ where: { id: task.id }, data: { activeRunId: run.id } })
+
+    // The real park: no pid to signal (null), so this only exercises `requestStop`'s own
+    // `blocked`/`activeRunId: null` write for the task, not the kill.
+    const stopped = await requestStop(run.id, 'meren')
+    expect(stopped.ok).toBe(true)
+    const blocked = await prisma.task.findUniqueOrThrow({ where: { id: task.id } })
+    expect(blocked.status).toBe('blocked')
+    expect(blocked.attempt).toBe(2)
+    expect(blocked.activeRunId).toBeNull()
 
     const result = await unblockTask(task.id)
     expect(result.ok).toBe(true)

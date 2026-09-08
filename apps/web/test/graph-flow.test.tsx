@@ -216,24 +216,41 @@ describe('flow.ts', () => {
   })
 
   describe('tasksTurnedDone', () => {
-    it('reports a task that transitioned to done', () => {
-      const previous = new Map([['t1', 'running']])
-      expect(tasksTurnedDone(previous, [{ id: 't1', status: 'done' }])).toEqual(['t1'])
+    it('reports a task that transitioned to done and integrated (met) in one step', () => {
+      const previous = new Map([['t1', false]])
+      expect(tasksTurnedDone(previous, [{ id: 't1', status: 'done', integratedAt: '2026-09-08T00:00:00.000Z' }])).toEqual(['t1'])
     })
 
-    it('does not report a task that was already done', () => {
-      const previous = new Map([['t1', 'done']])
-      expect(tasksTurnedDone(previous, [{ id: 't1', status: 'done' }])).toEqual([])
+    it('does not report a task that was already met', () => {
+      const previous = new Map([['t1', true]])
+      expect(tasksTurnedDone(previous, [{ id: 't1', status: 'done', integratedAt: '2026-09-08T00:00:00.000Z' }])).toEqual([])
     })
 
-    it('does not report a task done from the start (no entry in `previous` at all)', () => {
-      const previous = new Map<string, string>()
-      expect(tasksTurnedDone(previous, [{ id: 't1', status: 'done' }])).toEqual([])
+    it('does not report a task met from the start (no entry in `previous` at all)', () => {
+      const previous = new Map<string, boolean>()
+      expect(tasksTurnedDone(previous, [{ id: 't1', status: 'done', integratedAt: '2026-09-08T00:00:00.000Z' }])).toEqual([])
     })
 
     it('does not report a task still in flight', () => {
-      const previous = new Map([['t1', 'running']])
-      expect(tasksTurnedDone(previous, [{ id: 't1', status: 'verifying' }])).toEqual([])
+      const previous = new Map([['t1', false]])
+      expect(tasksTurnedDone(previous, [{ id: 't1', status: 'verifying', integratedAt: null }])).toEqual([])
+    })
+
+    // M35 final review (minor): the flash used to key on raw `status === 'done'`, which reports a
+    // false completion the instant `autoMerge = false` work finishes -- the only path in practice,
+    // since nothing in production code ever sets `autoMerge = true` (schema default `false`,
+    // adoption writes `false`, no CLI/web flag). This pins the actual bug and its fix.
+    it('does NOT report a task that turned done but is not yet integrated (autoMerge = false)', () => {
+      const previous = new Map([['t1', false]])
+      expect(tasksTurnedDone(previous, [{ id: 't1', status: 'done', integratedAt: null }])).toEqual([])
+    })
+
+    it('reports a task once `integratedAt` lands on an already-done-but-unmet task (confirm-integration after a hand merge), the previous met-state boolean being the whole signal -- `status` need not have changed at all', () => {
+      // `previous` is keyed by MET state, not status: `t1` was already `done` last snapshot but
+      // recorded `false` (unintegrated). This is the shape a real `DepsMode` sees between two
+      // polls straddling a `confirm-integration` call under `autoMerge = false`.
+      const previous = new Map([['t1', false]])
+      expect(tasksTurnedDone(previous, [{ id: 't1', status: 'done', integratedAt: '2026-09-08T00:00:00.000Z' }])).toEqual(['t1'])
     })
   })
 
@@ -383,7 +400,7 @@ describe('DepsMode: completion wave', () => {
     vi.unstubAllGlobals()
   })
 
-  it("flashes a task's outgoing edge once when it turns done, then clears the flash", async () => {
+  it("flashes a task's outgoing edge once when it becomes a met dependency (done AND integrated), then clears the flash", async () => {
     const before: GraphSnapshot = {
       workspace: { id: 'w1', name: 'W', haltedReason: null },
       teams: [],
@@ -392,7 +409,10 @@ describe('DepsMode: completion wave', () => {
       dependencies: [{ taskId: 't2', dependsOnTaskId: 't1' }],
       shellFacts: SHELL_FACTS,
     }
-    const after: GraphSnapshot = { ...before, tasks: [{ ...before.tasks[0]!, status: 'done' }, before.tasks[1]!] }
+    const after: GraphSnapshot = {
+      ...before,
+      tasks: [{ ...before.tasks[0]!, status: 'done', integratedAt: '2026-09-08T00:00:00.000Z' }, before.tasks[1]!],
+    }
 
     vi.useFakeTimers()
     const { rerender } = render(<DepsMode workspaceId="w1" snapshot={before} />)
@@ -414,12 +434,69 @@ describe('DepsMode: completion wave', () => {
     vi.useRealTimers()
   })
 
-  it('does not flash on the very first snapshot even if a task already shows done', async () => {
+  it("does NOT flash when a task turns done but is not yet integrated (autoMerge = false, the only path in practice) -- the flash must agree with the persistent cable, which stays inactive here too", async () => {
+    const before: GraphSnapshot = {
+      workspace: { id: 'w1', name: 'W', haltedReason: null },
+      teams: [],
+      slaves: [],
+      tasks: [task({ id: 't1', status: 'running' }), task({ id: 't2', status: 'ready', dependenciesDone: false })],
+      dependencies: [{ taskId: 't2', dependsOnTaskId: 't1' }],
+      shellFacts: SHELL_FACTS,
+    }
+    // Status flips to `done`, `integratedAt` stays `null` -- exactly what a hand-merged task looks
+    // like the moment verify/review/merge conclude, before a human runs `confirm-integration`.
+    const afterDoneUnintegrated: GraphSnapshot = {
+      ...before,
+      tasks: [{ ...before.tasks[0]!, status: 'done' }, before.tasks[1]!],
+    }
+
+    const { rerender } = render(<DepsMode workspaceId="w1" snapshot={before} />)
+    await waitFor(() => expect(screen.getByTestId('rf__edge-task:t1->task:t2')).toBeTruthy())
+
+    rerender(<DepsMode workspaceId="w1" snapshot={afterDoneUnintegrated} />)
+    // Give any (wrongly firing) flash effect a tick to land before asserting its absence.
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(screen.getByTestId('rf__edge-task:t1->task:t2').getAttribute('class')).not.toContain('edge-flash')
+  })
+
+  it('later flashes once `integratedAt` lands on that already-`done` task (confirm-integration after a hand merge) -- the actual completion event under autoMerge = false', async () => {
+    const before: GraphSnapshot = {
+      workspace: { id: 'w1', name: 'W', haltedReason: null },
+      teams: [],
+      slaves: [],
+      tasks: [task({ id: 't1', status: 'done' }), task({ id: 't2', status: 'ready', dependenciesDone: false })],
+      dependencies: [{ taskId: 't2', dependsOnTaskId: 't1' }],
+      shellFacts: SHELL_FACTS,
+    }
+    // Status does not change at all -- only `integratedAt` goes from `null` to set, the write
+    // `confirm-integration` makes. That alone is what a dependency becoming met looks like here.
+    const afterIntegrated: GraphSnapshot = {
+      ...before,
+      tasks: [{ ...before.tasks[0]!, integratedAt: '2026-09-08T00:00:00.000Z' }, before.tasks[1]!],
+    }
+
+    vi.useFakeTimers()
+    const { rerender } = render(<DepsMode workspaceId="w1" snapshot={before} />)
+    await vi.waitFor(() => expect(screen.getByTestId('rf__edge-task:t1->task:t2')).toBeTruthy())
+    expect(screen.getByTestId('rf__edge-task:t1->task:t2').getAttribute('class')).not.toContain('edge-flash')
+
+    rerender(<DepsMode workspaceId="w1" snapshot={afterIntegrated} />)
+    await vi.waitFor(() => expect(screen.getByTestId('rf__edge-task:t1->task:t2').getAttribute('class')).toContain('edge-flash'))
+
+    act(() => {
+      vi.advanceTimersByTime(800)
+    })
+    await vi.waitFor(() => expect(screen.getByTestId('rf__edge-task:t1->task:t2').getAttribute('class')).not.toContain('edge-flash'))
+
+    vi.useRealTimers()
+  })
+
+  it('does not flash on the very first snapshot even if a task already shows done and integrated', async () => {
     const snapshot: GraphSnapshot = {
       workspace: { id: 'w1', name: 'W', haltedReason: null },
       teams: [],
       slaves: [],
-      tasks: [task({ id: 't1', status: 'done' }), task({ id: 't2', status: 'ready' })],
+      tasks: [task({ id: 't1', status: 'done', integratedAt: '2026-09-08T00:00:00.000Z' }), task({ id: 't2', status: 'ready' })],
       dependencies: [{ taskId: 't2', dependsOnTaskId: 't1' }],
       shellFacts: SHELL_FACTS,
     }
@@ -438,7 +515,10 @@ describe('DepsMode: completion wave', () => {
       dependencies: [{ taskId: 't2', dependsOnTaskId: 't1' }],
       shellFacts: SHELL_FACTS,
     }
-    const afterDone: GraphSnapshot = { ...before, tasks: [{ ...before.tasks[0]!, status: 'done' }, before.tasks[1]!] }
+    const afterDone: GraphSnapshot = {
+      ...before,
+      tasks: [{ ...before.tasks[0]!, status: 'done', integratedAt: '2026-09-08T00:00:00.000Z' }, before.tasks[1]!],
+    }
     // A refetch landing mid-window with no NEW completion (same statuses as `afterDone`, just an
     // unrelated field change) -- exactly the shape the spec's 250ms debounce plus the completion
     // burst itself (task.done, run.succeeded, the dependent's start events) makes near-certain

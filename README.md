@@ -54,19 +54,33 @@ orchestrator keeps its worktrees and logs under `<repo>/.slaveofai/` and gitigno
 
 **Done is not the same as integrated.** A task reaches `done` once it has been reviewed and its
 verify commands pass — that is the only thing `done` means. Whether its code has actually reached
-your base branch is a separate fact, `Task.integratedAt`, and a workspace created from the CLI
-starts with `autoMerge` off: every task merges by hand, so `done` leaves the branch and worktree
-sitting there for you and `integratedAt` stays null. Any task depending on one that is `done` but
-not yet integrated waits — the scheduler will not provision it from a base branch that does not yet
-have its dependency's commits on it. Merge the branch yourself, then say so:
+your base branch is a separate fact, `Task.integratedAt`.
+
+**In practice, every workspace is hand-merge.** `autoMerge` defaults to `false` in the schema, and
+nothing in this codebase ever sets it `true`: `create-workspace` has no flag for it,
+`adopt-simulation` writes `false` explicitly and refuses to carry over a prior `true` (a project
+that had it on loses it, on purpose), and there is no web setting or other CLI verb that turns it
+on. So this is not one policy among two — it is the only one you will hit unless you reach into the
+database by hand. Every task merges by hand: `done` leaves the branch and worktree sitting there for
+you and `integratedAt` stays null. Any task depending on one that is `done` but not yet integrated
+waits — the scheduler will not provision it from a base branch that does not yet have its
+dependency's commits on it. Merge the branch yourself, then say so:
 
 ```bash
 npm run orchestrator -- confirm-integration --task <id>
 ```
 
-and its dependents become schedulable on the next tick. `autoMerge` on skips this by merging (and
-stamping `integratedAt`) for you the moment a task's review is approved — there is no CLI flag to
-turn it on yet; it is a row you set by hand for now.
+and its dependents become schedulable on the next tick. Expect to run this after every task your
+dependency graph has downstream work waiting on.
+
+`autoMerge = true` exists in the schema and is exercised by tests and simulation gates, and would
+skip the step above by merging (and stamping `integratedAt`) the moment a task's review is
+approved — but nothing ships a way to turn it on for a real workspace, so treat it as a future
+switch rather than a normal mode. One consequence worth knowing if you ever do flip it (by hand, in
+the database) on a workspace with history: turning `autoMerge` on does not retroactively stamp
+anything. Tasks that already reached `done` by hand merge keep `integratedAt` null — correct, since
+no merge happened through the new path — and stay unstamped, still blocking their dependents, until
+you run `confirm-integration` on each of them once.
 
 Staff it and give the team something to do:
 

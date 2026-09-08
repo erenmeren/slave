@@ -842,13 +842,24 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
                 endedAt: now,
               },
             })
-            // The attempt counts, so a task cannot loop forever against a gate that stays broken --
-            // via the shared release helper (M35 Task 1), not a bare increment: the bare increment
-            // this replaced left the task `running`/`reviewing` with `activeRunId` still pointing at
-            // this now-dead run, stranding it forever once the halt was cleared. Sharing the helper
-            // also means `verify.ts`'s own release-on-failure path -- chained onto this same run
-            // right after this switch returns -- finds `activeRunId` already cleared and charges no
-            // second attempt.
+            // Via the shared release helper (M35 Task 1), not a bare increment: the bare increment
+            // this replaced left the task `running` with `activeRunId` still pointing at this
+            // now-dead run, stranding it forever once the halt was cleared. `releaseTaskAfterFailure`
+            // is guarded on `activeRunId === runId`, and `activeRunId` is set in exactly one place
+            // (`tick.ts`'s implementation dispatch) and nulled the moment a task leaves `running` for
+            // `reviewing` (`verify.ts`'s advance-to-review write) -- `review.ts`'s own dispatch never
+            // sets it at all. So an IMPLEMENTATION run's gate failure charges an attempt here, same as
+            // before, but a REVIEW run's gate failure finds `activeRunId` already null (or pointing at
+            // someone else) and both of the helper's `updateMany`s match zero rows: no attempt is
+            // charged and the task -- still `reviewing` -- is left untouched. That is deliberate, not
+            // a gap: a single review failure already charges nothing (`review.ts`'s own bounded
+            // retry, `REVIEW_RETRY_CAP`, is what bounds a gate that keeps tripping on review runs, and
+            // T4's park is what escalates once that cap is spent), and this path staying silent for
+            // `reviewing` tasks is what keeps it that way rather than smuggling in a second, uncapped
+            // way to burn an attempt against review work. Sharing the helper also means `verify.ts`'s
+            // own release-on-failure path -- chained onto this same run right after this switch
+            // returns -- finds `activeRunId` already cleared (by this same call, for an implementation
+            // run) and charges no second attempt.
             // A task-less `planning` run (M8b) has no attempt counter to increment.
             if (taskId !== null) {
               const task = await prisma.task.findUniqueOrThrow({ where: { id: taskId } })

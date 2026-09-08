@@ -444,6 +444,42 @@ describe('pumpRun', () => {
     expect(workspace.haltedAt).not.toBeNull()
   })
 
+  it('charges no attempt and leaves the task untouched for a review-kind run\'s gate failure (M35 final review, Important 1)', async (): Promise<void> => {
+    // A review run's task never carries `activeRunId` -- `review.ts`'s `dispatchReview` never sets
+    // it, and `verify.ts`'s advance-to-`reviewing` write already nulled whatever the implementation
+    // run had left there. Mirror that here rather than trusting `seed()`'s implementation-shaped
+    // fixture: `kind: 'review'`, task parked `reviewing` with `activeRunId: null`.
+    await prisma.slaveRun.update({ where: { id: ids.runId }, data: { kind: 'review' } })
+    await prisma.task.update({ where: { id: ids.taskId }, data: { status: 'reviewing', activeRunId: null } })
+
+    const cancel = vi.fn(async (): Promise<void> => {})
+
+    await pumpRun({
+      ...ids,
+      cancel,
+      events: fromArray([
+        { kind: 'session_started', sessionId: 's-1' },
+        { kind: 'hook_crashed', hookName: 'PreToolUse:Bash', exitCode: 2, stderr: 'deliberate hook crash' },
+      ]),
+    })
+
+    // The run still fails and the workspace still halts -- the gate itself does not know or care
+    // what kind of run tripped it.
+    expect(cancel).toHaveBeenCalled()
+    const types = await eventTypesFor(ids.runId)
+    expect(types).toContain('run.failed')
+    expect(types).toContain('guardrail.tripped')
+    const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: ids.workspaceId } })
+    expect(workspace.haltedReason).not.toBeNull()
+
+    // But `releaseTaskAfterFailure`'s guard (`activeRunId === runId`) never matches, so the task is
+    // untouched: no attempt charged, still `reviewing`, still no `activeRunId`.
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: ids.taskId } })
+    expect(task.attempt).toBe(0)
+    expect(task.status).toBe('reviewing')
+    expect(task.activeRunId).toBeNull()
+  })
+
   it('reacts to a fail-open hook failure with a reason that must not read like the blocking crash above', async (): Promise<void> => {
     const cancel = vi.fn(async (): Promise<void> => {})
 

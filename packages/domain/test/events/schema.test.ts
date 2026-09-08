@@ -273,6 +273,17 @@ describe('parseExecutionEvent', () => {
     if (result.ok) expect(result.value.type).toBe('task.integrated')
   })
 
+  it('accepts a task.unblocked event with its attempt/maxAttempts payload', () => {
+    const result = parseExecutionEvent({
+      ...BASE,
+      type: 'task.unblocked',
+      taskId: 'TASK-1',
+      payload: { attempt: 2, maxAttempts: 3 },
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.value.type).toBe('task.unblocked')
+  })
+
   it('accepts a workspace.goal_set event', () => {
     const result = parseExecutionEvent({
       ...BASE,

@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Connection, Edge } from 'reactflow'
 import type { GraphSnapshot } from '../../server/graph'
 import { sendControl } from '../../lib/postControl'
-import { EDGE_FLASH_MS, outgoingEdgeIds, tasksTurnedDone } from './flow'
+import { EDGE_FLASH_MS, isDependencyMet, outgoingEdgeIds, tasksTurnedDone } from './flow'
 import { GraphCanvas } from './GraphCanvas'
 import { useLayoutedGraph } from './layout'
 import { buildDepsGraph, TASK_NODE_TYPES } from './TaskNodes'
@@ -36,11 +36,13 @@ export function DepsMode({ workspaceId, snapshot }: { readonly workspaceId: stri
   const { nodes: positioned, edges: visibleEdges } = useLayoutedGraph(nodes, edges, 'layered')
   const [errorText, setErrorText] = useState<string | null>(null)
 
-  // Completion wave (spec §6): when a task turns `done` between two snapshots, its outgoing edges
-  // (it as the prerequisite) flash once. `previousStatusRef` starts `null` so the very first
-  // snapshot this component ever sees never flashes anything (same "no flash on mount" rule the
-  // node border-flash idiom follows) -- only a *second* snapshot showing a new `done` counts.
-  const previousStatusRef = useRef<ReadonlyMap<string, string> | null>(null)
+  // Completion wave (spec §6): when a task's dependency becomes MET between two snapshots (`done`
+  // AND integrated -- `isDependencyMet`, M35 final review: raw `status === 'done'` used to flash
+  // this once while `autoMerge = false`'s persistent cable correctly stayed inactive right after),
+  // its outgoing edges (it as the prerequisite) flash once. `previousMetRef` starts `null` so the
+  // very first snapshot this component ever sees never flashes anything (same "no flash on mount"
+  // rule the node border-flash idiom follows) -- only a *second* snapshot showing a new met task counts.
+  const previousMetRef = useRef<ReadonlyMap<string, boolean> | null>(null)
   const [flashingEdgeIds, setFlashingEdgeIds] = useState<ReadonlySet<string>>(new Set())
   // fix-round-1, Critical: held in a ref, not this effect's own cleanup return. A snapshot refetch
   // (the 250ms debounce plus the completion burst itself -- task.done, run.succeeded, the
@@ -58,9 +60,9 @@ export function DepsMode({ workspaceId, snapshot }: { readonly workspaceId: stri
   const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
-    const currentStatusById = new Map(snapshot.tasks.map((task) => [task.id, task.status]))
-    const previous = previousStatusRef.current
-    previousStatusRef.current = currentStatusById
+    const currentMetById = new Map(snapshot.tasks.map((task) => [task.id, isDependencyMet(task)]))
+    const previous = previousMetRef.current
+    previousMetRef.current = currentMetById
 
     if (previous === null) return
     const turnedDone = tasksTurnedDone(previous, snapshot.tasks)
