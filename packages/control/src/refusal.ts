@@ -50,6 +50,26 @@ export type ControlRefusal =
   /** `confirmIntegration` on a task whose `integratedAt` is already set -- a second confirmation
    *  is a no-op the caller should know did nothing, not a silent success. */
   | { readonly kind: 'already_integrated'; readonly taskId: string }
+  /** `unblockTask` (M35 t5) on a task that is not `blocked` -- only a blocked task has anything
+   *  for this verb to do. Same shape as `task_not_done`: this milestone's precedent for "the verb
+   *  needs one specific status and the task carries a different one". */
+  | { readonly kind: 'task_not_blocked'; readonly taskId: string; readonly status: string }
+  /**
+   * `unblockTask` on a task that carries `activeRunId` despite being `blocked` -- every one of the
+   * four parks (`tick.ts`, `verify.ts`, `review.ts`, `stop.ts`) clears it in the SAME write that
+   * sets `blocked`, so a blocked task with one set is not a state this verb's own precondition
+   * checks can repair with confidence: the run it points at might still mean something to
+   * whichever path left it there. Refused rather than silently cleared (M35 t5 judgment call 2).
+   */
+  | { readonly kind: 'task_run_active'; readonly taskId: string; readonly runId: string }
+  /**
+   * `unblockTask` on a task already at (or, after a lowered `maxAttempts`, past) its attempt
+   * ceiling, with no explicit allowance given. `attempt` is never reset by this verb (M35 t5
+   * judgment call 3) -- an un-block that did not also raise the ceiling would hand the task
+   * straight back to whatever next failure re-blocks or re-fails it, so the ceiling is enforced
+   * here rather than left to repeat the trip.
+   */
+  | { readonly kind: 'attempt_ceiling_reached'; readonly taskId: string; readonly attempt: number; readonly maxAttempts: number }
   | { readonly kind: 'self_dependency'; readonly taskId: string }
   | { readonly kind: 'duplicate_dependency'; readonly taskId: string; readonly dependsOnTaskId: string }
   | { readonly kind: 'cross_workspace'; readonly taskId: string; readonly dependsOnTaskId: string }
@@ -198,6 +218,16 @@ export function refusalText(refusal: ControlRefusal): string {
       return `task ${refusal.taskId} is ${refusal.status}; only a done task can be confirmed integrated`
     case 'already_integrated':
       return `task ${refusal.taskId} is already integrated`
+    case 'task_not_blocked':
+      return `task ${refusal.taskId} is ${refusal.status}; only a blocked task can be unblocked`
+    case 'task_run_active':
+      return `task ${refusal.taskId} is blocked but still carries an active run (${refusal.runId}); this needs an operator's eyes before it is unblocked`
+    case 'attempt_ceiling_reached':
+      return (
+        `task ${refusal.taskId} is at its attempt ceiling (${refusal.attempt}/${refusal.maxAttempts}); ` +
+        `unblocking it as-is would only fail it again. Raise the ceiling by exactly one with: ` +
+        `unblock-task --task ${refusal.taskId} --allow-another-attempt`
+      )
     case 'self_dependency':
       return `task ${refusal.taskId} cannot depend on itself`
     case 'duplicate_dependency':

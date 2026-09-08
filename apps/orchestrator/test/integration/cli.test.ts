@@ -295,6 +295,62 @@ describe('the orchestrator CLI', () => {
     expect(`${result.stdout}${result.stderr}`).toMatch(/--task is required/)
   })
 
+  it('unblocks a blocked task back to rework', async (): Promise<void> => {
+    await prisma.task.update({ where: { id: fixture.taskId }, data: { status: 'blocked', attempt: 1 } })
+
+    const result = await runCli(['unblock-task', '--task', fixture.taskId])
+
+    expect(result.code).toBe(0)
+    expect(result.stdout).toMatch(/unblocked/)
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+    expect(task.status).toBe('rework')
+    expect(task.attempt).toBe(1)
+  })
+
+  it('exits non-zero for unblock-task on a task that is not blocked', async (): Promise<void> => {
+    // `fixture.taskId` seeds as `ready` (see `seed` above), not `blocked`.
+    const result = await runCli(['unblock-task', '--task', fixture.taskId])
+
+    expect(result.code).not.toBe(0)
+    expect(`${result.stdout}${result.stderr}`).toMatch(/only a blocked task can be unblocked/)
+  })
+
+  it('exits non-zero for unblock-task with no --task given', async (): Promise<void> => {
+    const result = await runCli(['unblock-task'])
+
+    expect(result.code).not.toBe(0)
+    expect(`${result.stdout}${result.stderr}`).toMatch(/--task is required/)
+  })
+
+  it('exits non-zero for unblock-task on a task at its attempt ceiling with no allowance', async (): Promise<void> => {
+    await prisma.task.update({
+      where: { id: fixture.taskId },
+      data: { status: 'blocked', attempt: 3, maxAttempts: 3 },
+    })
+
+    const result = await runCli(['unblock-task', '--task', fixture.taskId])
+
+    expect(result.code).not.toBe(0)
+    expect(`${result.stdout}${result.stderr}`).toMatch(/attempt ceiling/)
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+    expect(task.status).toBe('blocked')
+  })
+
+  it('unblocks a task at its attempt ceiling given --allow-another-attempt, raising the ceiling by exactly one', async (): Promise<void> => {
+    await prisma.task.update({
+      where: { id: fixture.taskId },
+      data: { status: 'blocked', attempt: 3, maxAttempts: 3 },
+    })
+
+    const result = await runCli(['unblock-task', '--task', fixture.taskId, '--allow-another-attempt'])
+
+    expect(result.code).toBe(0)
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+    expect(task.status).toBe('rework')
+    expect(task.attempt).toBe(3)
+    expect(task.maxAttempts).toBe(4)
+  })
+
   it('creates a template', async (): Promise<void> => {
     const result = await runCli(['create-template', '--name', 'Backend Engineer', '--role', 'backend'])
 

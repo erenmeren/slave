@@ -92,6 +92,7 @@ const PAYLOAD_BY_TYPE: Record<DomainEventType, Record<string, unknown>> = {
   'workspace.archived': { name: 'Billing', departments: 2, slaves: 5, tasks: 8, runs: 22 },
   'workspace.restored': { name: 'Billing' },
   'task.integrated': {},
+  'task.unblocked': { attempt: 2, maxAttempts: 3 },
 }
 
 function fixtureFor(type: DomainEventType): ActivityEventRow {

@@ -239,6 +239,23 @@ function TaskIntegratedCard(props: ActivityCardProps): ReactElement {
   )
 }
 
+// M35 t5: `unblockTask` moved a `blocked` task back to `rework` -- an operator's exit from one of
+// the four parks. `attempt`/`maxAttempts` are the values AFTER the write (schema.ts); shown only
+// when the ceiling was actually raised (`maxAttempts` is otherwise unremarkable, the same number
+// the task always carried).
+function TaskUnblockedCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as { attempt: number; maxAttempts: number }
+  return (
+    <ActivityCard {...props}>
+      <Transition tone="warn" label="unblocked">
+        <span className="text-text-3">
+          (attempt {payload.attempt} of {payload.maxAttempts})
+        </span>
+      </Transition>
+    </ActivityCard>
+  )
+}
+
 // ---- run.* lifecycle (schema.ts:24, 30-31, 60-66) --------------------------------------------
 
 function RunStartedCard(props: ActivityCardProps): ReactElement {
@@ -654,6 +671,7 @@ export const ACTIVITY_CARDS = {
   'task.merge_failed': TaskMergeFailedCard,
   'task.worktree_collected': TaskWorktreeCollectedCard,
   'task.integrated': TaskIntegratedCard,
+  'task.unblocked': TaskUnblockedCard,
   'workspace.goal_set': WorkspaceGoalSetCard,
   'workspace.plan_created': WorkspacePlanCreatedCard,
   'workspace.company_assigned': WorkspaceCompanyAssignedCard,

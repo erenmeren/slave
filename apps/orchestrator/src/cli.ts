@@ -53,6 +53,7 @@ import {
   syncSkillCatalog,
   tickSimulations,
   plural,
+  unblockTask,
   type ModelDecider,
 } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
@@ -83,6 +84,12 @@ const USAGE = `usage: orchestrator <command> [options]
                                        autoMerge-off workspace's own default -- so stamp it
                                        integrated and let its dependents start. Refused unless
                                        the task is done and not already integrated.
+  unblock-task --task <id> [--allow-another-attempt]
+                                       moves a blocked task back to rework so the scheduler picks
+                                       it up again. Refused unless the task is blocked. attempt is
+                                       never reset -- a task already at its attempt ceiling is
+                                       refused unless --allow-another-attempt raises the ceiling
+                                       by exactly one.
   clear-halt --workspace <id>          retract a WORKSPACE-WIDE safety halt
   emergency-stop --workspace <id> [--by <name>]
                                        halt scheduling on the WHOLE workspace AND pause every
@@ -655,6 +662,19 @@ export async function main(argv: readonly string[]): Promise<number> {
       const result = await confirmIntegration(taskIdFlag)
       if (!result.ok) throw new Error(refusalText(result.error))
       process.stdout.write(`task ${taskIdFlag} is now integrated; its dependents may start\n`)
+      return 0
+    }
+
+    case 'unblock-task': {
+      const taskIdFlag = requireFlag(flags, 'task')
+      // Same idiom as `adopt-simulation --apply-model` (`'apply-model' in flags`, not
+      // `!== undefined`): a bare `--allow-another-attempt` with no argument is exactly how
+      // `parseArgs` records a flag with no value, setting the key to `undefined` rather than
+      // leaving it absent.
+      const allowAnotherAttempt = 'allow-another-attempt' in flags
+      const result = await unblockTask(taskIdFlag, { allowAnotherAttempt })
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(`task ${taskIdFlag} is unblocked and back in rework\n`)
       return 0
     }
 

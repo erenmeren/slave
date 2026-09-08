@@ -42,6 +42,9 @@ export const TYPES_BY_KIND = {
     // M35 t2: `confirmIntegration` stamped a done, hand-merged task's `integratedAt` -- a task
     // outcome, the same chip as `task.done` and `task.merge_failed` beside it.
     'task.integrated',
+    // M35 t5: `unblockTask` moved a `blocked` task back to `rework` -- a task lifecycle event,
+    // the same chip `task.rework` sits under.
+    'task.unblocked',
   ],
   interventions: ['run.pause_requested', 'run.resume_requested', 'run.stopped', 'slave.message_sent'],
   guardrails: ['guardrail.tripped'],

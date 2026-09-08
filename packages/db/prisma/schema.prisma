@@ -587,6 +587,9 @@ enum EventType {
   /// was already `done`; this is the human saying its branch has now actually reached the base
   /// branch, unblocking whatever depends on it.
   task_integrated            @map("task.integrated")
+  /// M35 t5: `unblockTask` moved a `blocked` task back to `rework` -- an operator's exit from
+  /// one of the four places that park a task `blocked` with nothing to move it out.
+  task_unblocked             @map("task.unblocked")
 }
 
 model ExecutionEvent {

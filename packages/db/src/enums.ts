@@ -44,6 +44,7 @@ export const EVENT_TYPE_BY_DOMAIN_TYPE = {
   'task.worktree_collected': 'task_worktree_collected',
   'org.changed': 'org_changed',
   'task.integrated': 'task_integrated',
+  'task.unblocked': 'task_unblocked',
 } as const satisfies Record<DomainEventType, string>
 
 export type DbEventType = (typeof EVENT_TYPE_BY_DOMAIN_TYPE)[DomainEventType]

@@ -211,6 +211,18 @@ export const executionEventSchema = z.discriminatedUnion('type', [
   // has actually reached the base branch. Empty payload: the envelope's own `taskId` and `ts`
   // already say which task and when.
   z.object({ ...envelope, type: z.literal('task.integrated'), payload: z.object({}) }),
+  // M35 t5: `unblockTask` (packages/control/src/unblock.ts) moved a `blocked` task back to
+  // `rework` -- one of the four parks (`tick.ts`, `verify.ts`, `review.ts`,
+  // `packages/control/src/stop.ts`) had parked it and nothing moved it out. `attempt` and
+  // `maxAttempts` are the values AFTER the write: `attempt` is unchanged (this verb never resets
+  // it), `maxAttempts` is raised only when the task was at or past it and the caller passed
+  // `allowAnotherAttempt` -- carrying both here is what lets an operator reading the log tell "an
+  // ordinary unblock" from "the cap was raised to let this happen" without a second lookup.
+  z.object({
+    ...envelope,
+    type: z.literal('task.unblocked'),
+    payload: z.object({ attempt: z.number().int().nonnegative(), maxAttempts: z.number().int().positive() }),
+  }),
 ])
 
 export type ExecutionEvent = z.infer<typeof executionEventSchema>
