@@ -227,9 +227,45 @@ async function dispatchReview(deps: TickDeps, task: ReviewableTask): Promise<Run
   const reviewAttempts = await prisma.slaveRun.count({
     where: { taskId: task.id, kind: 'review', startedAt: { gt: latestImpl.startedAt } },
   })
-  // Silent: the two `run.failed` events those review attempts already wrote are the escalation.
-  // A third guardrail here would say nothing an operator cannot already see from the run history.
-  if (reviewAttempts >= REVIEW_RETRY_CAP) return null
+  // The cap is reached, not merely one review failing: a single failed review already leaves the
+  // task in `reviewing` for the next attempt (`concludeReview`'s invalid-verdict branch, deliberately
+  // -- see its own comment), and that intent survives untouched. What this cap being SPENT means is
+  // that the same implementation has now had `REVIEW_RETRY_CAP` review runs in a row that could not
+  // even produce a parseable verdict for it -- a rejected review moves the task to `rework` and
+  // starts a fresh implementation run, which resets this count (it is scoped to `startedAt: { gt:
+  // latestImpl.startedAt }`), so reaching the cap here specifically means the *reviewer* keeps
+  // failing to say anything usable, not that the *implementation* is bad.
+  //
+  // Parked `blocked`, not `failed` and not `rework`: `failed` reads as "the work failed", which is
+  // not what a reviewer producing no verdict establishes, and `rework` would spend another
+  // implementation attempt re-doing work nothing has judged wrong. `blocked` is the same "an
+  // operator has to look at this" signal `failToStart` in `tick.ts` parks a task under for a
+  // worktree conflict, and `advance()` in `verify.ts` parks it under for a verify misconfiguration
+  // -- neither is the slave's fault either, and neither is retried automatically. Guarded on the
+  // task still being `reviewing`, the same discipline `concludeReview`'s approve branch uses, so a
+  // concurrent sweep or cancel that already moved the task off `reviewing` is not overwritten.
+  if (reviewAttempts >= REVIEW_RETRY_CAP) {
+    const blocked = await prisma.task.updateMany({
+      where: { id: task.id, status: 'reviewing' },
+      data: { status: 'blocked', activeRunId: null },
+    })
+    if (blocked.count === 1) {
+      await appendEvent({
+        type: 'guardrail.tripped',
+        workspaceId: task.workspaceId,
+        taskId: task.id,
+        actor: 'system',
+        payload: {
+          guardrail: 'review_retry_cap_exhausted',
+          detail:
+            `task "${task.title}" could not be reviewed: ${reviewAttempts} review run(s) in a row ` +
+            'produced no usable verdict, and the review retry cap is spent. A human needs to look ' +
+            'at this task.',
+        },
+      })
+    }
+    return null
+  }
 
   // 3. Reviewer staffing. `role === 'reviewer'` is an exact match -- the same convention
   // `decide()` uses for `requiredRole`, and Task 8's seed data uses the same spelling.

@@ -227,9 +227,13 @@ export async function verifyConcludedRun(runId: RunId): Promise<void> {
     // is re-dispatched normally next tick. `review.ts` already has its own bounded-retry policy
     // for a review run that fails (`REVIEW_RETRY_CAP`, tested in review.test.ts's "invalid
     // verdict" and "diff itself cannot be produced" cases): it deliberately leaves `Task.status`
-    // at `reviewing` and charges no `Task.attempt` across repeated review failures. Releasing here
+    // at `reviewing` and charges no `Task.attempt` for any SINGLE review failure. Releasing here
     // too would fight that policy with an implementation-shaped rework/attempt charge for the same
-    // failure, not "handle it consistently" with it.
+    // failure, not "handle it consistently" with it. Once the cap itself is spent, `dispatchReview`
+    // parks the task `blocked` and says so (`guardrail.tripped`, M35 Task 4) on its own -- there is
+    // still nothing for this function to release, because by then `Task.status` has already moved
+    // off `reviewing` and this branch (guarded on `run.status === 'failed'`, which a `blocked` park
+    // does not touch) is not where that happens.
     // `planning`: no task to release (M8b).
     return
   }

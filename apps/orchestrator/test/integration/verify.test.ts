@@ -541,10 +541,14 @@ describe('verifyConcludedRun releases a task after a run concludes failed', () =
     // task with a dead `activeRunId` is re-dispatched normally on the next tick. `review.ts` already
     // has its own bounded-retry policy for a review run that fails (`REVIEW_RETRY_CAP`, tested in
     // review.test.ts's "invalid verdict" and "diff itself cannot be produced" cases), which
-    // deliberately leaves `Task.status` at `reviewing` and charges no `Task.attempt` across repeated
-    // review failures. Releasing here too would double that policy: an implementation-shaped
-    // rework/attempt charge fighting the review-shaped retry cap for the same failure. Consistent
-    // handling is leaving review alone, not forcing it through the implementation path.
+    // deliberately leaves `Task.status` at `reviewing` and charges no `Task.attempt` for any SINGLE
+    // review failure -- this test's own case. Releasing here too would double that policy: an
+    // implementation-shaped rework/attempt charge fighting the review-shaped retry cap for the same
+    // failure. Consistent handling is leaving review alone, not forcing it through the
+    // implementation path. Once the cap itself is spent, `dispatchReview` parks the task `blocked`
+    // on its own (M35 Task 4, `review.test.ts`'s "escalates an exhausted review cap" case) -- a
+    // park this function never sees, because by then `Task.status` has already moved off
+    // `reviewing`.
     const f = await seedFailedRun({ kind: 'review', taskStatus: 'reviewing' })
 
     await verifyConcludedRun(brandRunId(f.runId))

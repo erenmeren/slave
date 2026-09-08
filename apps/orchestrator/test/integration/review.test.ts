@@ -421,6 +421,53 @@ describe('dispatchReviews', () => {
     expect(await prisma.slaveRun.count({ where: { kind: 'review' } })).toBe(2)
   })
 
+  it('escalates an exhausted review cap to blocked instead of leaving the task silently in reviewing', async (): Promise<void> => {
+    const reviewDeps = await seedReviewingTask(fixture, 'review-invalid')
+    await addReviewer()
+
+    const first = await dispatchReviews(reviewDeps)
+    expect(first).toHaveLength(1)
+    await drainPumps()
+
+    const second = await dispatchReviews(reviewDeps)
+    expect(second).toHaveLength(1)
+    await drainPumps()
+
+    const afterSecond = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+    // The design intent `review.test.ts` already pins: an individual review failure -- even the one
+    // that brings the count level with the cap -- leaves the task in `reviewing` for the pump that
+    // concluded it. The cap is enforced on the NEXT dispatch attempt, not retroactively here.
+    expect(afterSecond.status).toBe('reviewing')
+
+    // Third dispatch: the cap is exhausted. No new review run starts, and the task must not be left
+    // silently in `reviewing` forever -- this is the strand M35 Task 4 closes.
+    const third = await dispatchReviews(reviewDeps)
+    expect(third).toEqual([])
+    expect(await prisma.slaveRun.count({ where: { kind: 'review' } })).toBe(2)
+
+    const afterThird = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+    expect(afterThird.status).toBe('blocked')
+
+    const guardrails = await prisma.executionEvent.findMany({
+      where: { workspaceId: fixture.workspaceId, taskId: fixture.taskId, type: 'guardrail_tripped' },
+    })
+    const capEvents = guardrails.filter(
+      (event) => (event.payload as { guardrail?: string }).guardrail === 'review_retry_cap_exhausted',
+    )
+    expect(capEvents).toHaveLength(1)
+    expect((capEvents[0]?.payload as { detail: string }).detail).toContain('2')
+
+    // A fourth dispatch is a no-op: `blocked` is not `reviewing`, so `dispatchReviews` no longer
+    // even considers the task, and the escalation event is not written a second time.
+    const fourth = await dispatchReviews(reviewDeps)
+    expect(fourth).toEqual([])
+    expect(
+      await prisma.executionEvent.count({
+        where: { workspaceId: fixture.workspaceId, taskId: fixture.taskId, type: 'guardrail_tripped' },
+      }),
+    ).toBe(1)
+  })
+
   it('recovers after one invalid verdict when the next review approves', async (): Promise<void> => {
     const reviewDeps = await seedReviewingTask(fixture, 'review-invalid')
     await addReviewer()
