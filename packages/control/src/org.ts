@@ -443,15 +443,24 @@ export async function assignCompanyTx(
 
       const template = await tx.slaveTemplate.findUniqueOrThrow({ where: { id: companySlave.templateId } })
       // M33 §3 (ruling R2): an override replaces the role this worker is materialized WITH, and
-      // nothing else -- `Slave.role` is what the runtime dispatches on, so the override IS the
-      // runtime role, already translated by the caller. `requiredRole` stays untouched: it names
-      // the role a TASK needs, and neither verb here creates a task.
+      // nothing else -- `Slave.role` is the persona title; `runtimeRoles` (M37 t1) is what the
+      // runtime actually dispatches on, so the override IS the runtime role, already translated
+      // by the caller. `Task.requiredRole` stays untouched: it names the role a TASK needs, and
+      // neither verb here creates a task.
+      //
+      // `runtimeRoles: [override ?? template.role]` is this task's placeholder, not the final
+      // shape: M37 Task 3 is the one that works out what a materialized worker's FULL runtime
+      // role set should be (a translated role plus the catalog role, mirroring
+      // `packages/control/src/simulation/adopt.ts`'s `RUNTIME_ROLE` dedup) -- until then, a
+      // single-entry set keeps every worker this verb creates dispatchable exactly as `role`
+      // alone did before this migration.
       const override = options?.roleOverrides?.[companySlave.name]
       const worker = await tx.slave.create({
         data: {
           teamId: team.id,
           name: companySlave.name,
           role: override ?? template.role,
+          runtimeRoles: [override ?? template.role],
           companySlaveId: companySlave.id,
         },
       })

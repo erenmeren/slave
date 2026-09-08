@@ -605,14 +605,15 @@ async function startRun(deps: TickDeps, taskId: TaskId, slaveId: SlaveId): Promi
       // write. Written here, alongside `pid`, rather than in `createRunUnlessArchived`'s insert
       // above (`runs.js`), because `resolved` is not known until the chain (and the registry)
       // have both been consulted.
-      // `suppliedMessageIds` (M36 t3) written here rather than at the insert above: the run's
-      // prompt is only real once the child is up, and a dispatch that fails before the spawn showed
-      // the slave nothing.
+      //
+      // `inbox.messageIds` is no longer recorded here: M37 t1 drops `SlaveRun.suppliedMessageIds`
+      // in favour of `RunContext`'s `inbox` manifest section, which M37 Task 2's `buildRunContext`
+      // writes. For the one commit between Task 1 and Task 2, a run's inbox ids go unrecorded --
+      // the prompt itself (built above, still carrying `inbox.section`) is unaffected.
       data: {
         pid: handle.pid,
         worktreePath: worktree.path,
         provider: resolved.provider,
-        suppliedMessageIds: [...inbox.messageIds],
       },
     })
 

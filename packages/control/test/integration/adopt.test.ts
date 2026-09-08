@@ -210,9 +210,8 @@ describe('adoptSimulation', () => {
     expect(byName.get('Maya')?.role).toBe('QA')
     expect(byName.get('Sarah')?.role).toBe('Security')
     expect(byName.get('Oliver')?.role).toBe('SEO')
-    // Adoption writes no `requiredRole` at all (R2): that column names the role a TASK needs, and
-    // adoption creates no tasks.
-    expect(slaves.every((s) => s.requiredRole === null)).toBe(true)
+    // M37 t1 drops `Slave.requiredRole` (that column named the role a TASK needs; adoption
+    // creates no tasks and never wrote it, so this assertion has nothing left to check).
 
     const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: alpha.id } })
     expect(workspace.companyId).toBe(companyId)

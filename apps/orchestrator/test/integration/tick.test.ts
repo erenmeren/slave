@@ -194,7 +194,7 @@ describe('tick', () => {
       return message.id
     }
 
-    it('puts the pending question, its id and the answer envelope in the prompt, and records the ids', async (): Promise<void> => {
+    it('puts the pending question, its id and the answer envelope in the prompt', async (): Promise<void> => {
       const messageId = await askTheFixtureSlave('Which queue should retries land on?')
       const recorder = recordingAdapter()
 
@@ -207,12 +207,11 @@ describe('tick', () => {
       expect(prompt).toContain(ANSWER_BLOCK_OPEN)
       // The task itself is still there, under the inbox.
       expect(prompt).toContain('Add the thing')
-
-      const run = await prisma.slaveRun.findFirstOrThrow({ where: { taskId: fixture.taskId } })
-      expect(run.suppliedMessageIds).toEqual([messageId])
+      // M37 t1: `SlaveRun.suppliedMessageIds` is dropped -- the durable record of which ids a
+      // run's prompt carried moves to `RunContext`'s `inbox` manifest section (M37 Task 2).
     })
 
-    it('leaves an ordinary prompt alone when nothing is pending and there is nobody to ask, and records no ids', async (): Promise<void> => {
+    it('leaves an ordinary prompt alone when nothing is pending and there is nobody to ask', async (): Promise<void> => {
       const recorder = recordingAdapter()
 
       await tick({ ...deps, registry: singleAdapterRegistry(recorder.adapter) })
@@ -220,8 +219,6 @@ describe('tick', () => {
       // The fixture's slave is the only one in this workspace, so there is no roster to offer and
       // no ask protocol to teach -- an offer the system would refuse anyway is not made.
       expect(recorder.starts[0]?.prompt).toBe('Add the thing\n\nmake it work')
-      const run = await prisma.slaveRun.findFirstOrThrow({ where: { taskId: fixture.taskId } })
-      expect(run.suppliedMessageIds).toEqual([])
     })
 
     it('teaches an implementation run the ask envelope, and names the peers it may address (final review)', async (): Promise<void> => {

@@ -1,0 +1,125 @@
+import { z } from 'zod'
+
+/**
+ * The named pieces a run's prompt is assembled from (M37 §3). Each kind is produced by exactly
+ * one part of `apps/orchestrator/src/runContext.ts` (Task 2) and rendered in a fixed order per
+ * run kind by {@link renderRunContext} (`render.ts`).
+ */
+export type SectionKind =
+  | 'profile'
+  | 'roster'
+  | 'skills'
+  | 'inbox'
+  | 'ask_protocol'
+  | 'answer_protocol'
+  | 'task'
+  | 'rejection'
+  | 'review_diff'
+  | 'planning_goal'
+
+/**
+ * One piece of a run's prompt, as the orchestrator hands it to {@link renderRunContext}: the
+ * rendered text (already `neutraliseMarkers`-treated where the milestone requires it -- the
+ * renderer itself does not touch section text) and a `source`, which is what actually gets
+ * recorded on the `RunContext` row -- `text` never is.
+ */
+export interface Section {
+  readonly kind: SectionKind
+  readonly text: string
+  readonly source: SectionSource
+}
+
+/**
+ * What produced a section, durable enough to write to `RunContext.sections` and read back later
+ * (a debugger, the Supervisor) without re-deriving it from a prompt string. Deliberately NOT the
+ * section text itself -- `RunContext.prompt` already carries that once, in full; the source is
+ * the provenance a reader wants alongside it.
+ */
+export type SectionSource =
+  | { readonly kind: 'profile'; readonly origin: 'slave' | 'company' | 'template'; readonly sha256: string }
+  | { readonly kind: 'roster'; readonly slaveIds: readonly string[] }
+  | {
+      readonly kind: 'skills'
+      readonly copied: readonly string[]
+      readonly missing: readonly string[]
+      readonly shadowedByRepo: readonly string[]
+      readonly provider_unsupported: boolean
+      readonly no_worktree: boolean
+    }
+  | { readonly kind: 'inbox'; readonly messageIds: readonly string[] }
+  | { readonly kind: 'ask_protocol' }
+  | { readonly kind: 'answer_protocol' }
+  | { readonly kind: 'task'; readonly taskId: string }
+  | { readonly kind: 'rejection'; readonly taskId: string }
+  | { readonly kind: 'review_diff'; readonly base: string; readonly head: string; readonly capped: boolean }
+  | { readonly kind: 'planning_goal'; readonly sha256: string }
+
+/** The manifest stored (as `Json`) on `RunContext.sections` -- an ordered record of what produced
+ *  the prompt, without the prompt text itself. */
+export interface Manifest {
+  readonly kind: 'implementation' | 'review' | 'planning'
+  readonly sections: readonly SectionSource[]
+}
+
+const profileSourceSchema = z.object({
+  kind: z.literal('profile'),
+  origin: z.enum(['slave', 'company', 'template']),
+  sha256: z.string(),
+})
+
+const rosterSourceSchema = z.object({
+  kind: z.literal('roster'),
+  slaveIds: z.array(z.string()),
+})
+
+const skillsSourceSchema = z.object({
+  kind: z.literal('skills'),
+  copied: z.array(z.string()),
+  missing: z.array(z.string()),
+  shadowedByRepo: z.array(z.string()),
+  provider_unsupported: z.boolean(),
+  no_worktree: z.boolean(),
+})
+
+const inboxSourceSchema = z.object({
+  kind: z.literal('inbox'),
+  messageIds: z.array(z.string()),
+})
+
+const askProtocolSourceSchema = z.object({ kind: z.literal('ask_protocol') })
+const answerProtocolSourceSchema = z.object({ kind: z.literal('answer_protocol') })
+
+const taskSourceSchema = z.object({ kind: z.literal('task'), taskId: z.string() })
+const rejectionSourceSchema = z.object({ kind: z.literal('rejection'), taskId: z.string() })
+
+const reviewDiffSourceSchema = z.object({
+  kind: z.literal('review_diff'),
+  base: z.string(),
+  head: z.string(),
+  capped: z.boolean(),
+})
+
+const planningGoalSourceSchema = z.object({ kind: z.literal('planning_goal'), sha256: z.string() })
+
+const sectionSourceSchema = z.discriminatedUnion('kind', [
+  profileSourceSchema,
+  rosterSourceSchema,
+  skillsSourceSchema,
+  inboxSourceSchema,
+  askProtocolSourceSchema,
+  answerProtocolSourceSchema,
+  taskSourceSchema,
+  rejectionSourceSchema,
+  reviewDiffSourceSchema,
+  planningGoalSourceSchema,
+])
+
+/**
+ * Validates a stored `RunContext.sections` `Json` value at read (M37 §3) -- so a hand-edited or
+ * pre-migration row cannot crash a reader (the CLI's `show-context`, Task 4's web route) that
+ * expects the {@link Manifest} shape.
+ */
+export const runContextManifestSchema: z.ZodType<Manifest> = z.object({
+  kind: z.enum(['implementation', 'review', 'planning']),
+  sections: z.array(sectionSourceSchema),
+})

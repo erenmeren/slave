@@ -143,8 +143,19 @@ model Slave {
   id             String        @id @default(uuid())
   teamId         String
   name           String
+  /// The profile's title -- display and persona only (M37 t1). No longer what the scheduler,
+  /// review pass or planning pass dispatch on; that is `runtimeRoles` now. `setSlaveRole` still
+  /// writes this column, unchanged.
   role           String
-  requiredRole   String?
+  /// The roles this slave may be dispatched as (M37 t1): the scheduler match, review/manager
+  /// staffing, and message role-addressing all read this set (Task 3), not `role`. Backfilled in
+  /// migration `20260908190000_m37_profiles_roles` from the pre-M37 `role`/`requiredRole` pair --
+  /// see that migration's own comment for the exact rule. An empty set means "cannot be
+  /// dispatched" (M37 spec §2, §7); the web warns. `@default([])`, unlike
+  /// `Workspace.verifyCommands`/`setupCommands`: an empty set is a real (if undispatchable) state,
+  /// not a refusal, so every `slave.create()` call that predates this task keeps compiling and
+  /// keeps inserting a real empty array through the migration's DB-level default.
+  runtimeRoles   String[]      @default([])
   /// The roster link (M10): null for legacy hand-made slaves created before the organization
   /// model, or for a worker whose roster row has since been deleted. `onDelete: SetNull` (not
   /// Cascade) on the relation below is a binding ruling, not an oversight -- a worker with run
@@ -159,6 +170,10 @@ model Slave {
   /// Nullable: this task only adds the column -- Task 7/8 write and resolve it, and every
   /// existing row reads back null until then.
   provider       ProviderKind?
+  /// The worker-level override of the persona Markdown (M37 §2): first non-null wins in
+  /// `slave.profile ?? companySlave.profile ?? template.profile ?? null`, the same chain `model`
+  /// already follows. Nullable: most workers read their profile from the roster/template.
+  profile        String?
 
   team         Team          @relation(fields: [teamId], references: [id], onDelete: Cascade)
   companySlave CompanySlave? @relation(fields: [companySlaveId], references: [id], onDelete: SetNull)
@@ -188,6 +203,11 @@ model SlaveTemplate {
   /// this task's migration SQL, which stamps every table's new column with the same name. Task
   /// 7/8 write and resolve it; every existing row reads back null until then.
   provider      ProviderKind?
+  /// The catalog-level persona Markdown (M37 §2) -- who a worker materialized from this template
+  /// is, its expertise, its working rules. Bottom of the `slave.profile ?? companySlave.profile ??
+  /// template.profile ?? null` chain. Distinct from `description`, which stays the short catalog
+  /// blurb; `profile` is what actually reaches a run's prompt.
+  profile       String?
   createdAt     DateTime       @default(now())
   companySlaves CompanySlave[]
 }
@@ -233,6 +253,9 @@ model CompanySlave {
   /// Roster-level provider override (M12 Task 6), mirroring `model`'s position in the chain.
   /// Nullable: this task only adds the column, Task 7/8 write and resolve it.
   provider      ProviderKind?
+  /// Roster-level override of the template persona (M37 §2): sits between
+  /// `SlaveTemplate.profile` and the worker's own `Slave.profile` in the resolution chain.
+  profile       String?
 
   companyTeam CompanyTeam   @relation(fields: [companyTeamId], references: [id], onDelete: Cascade)
   /// Deliberately NOT cascading: a template CAN be deleted now (M27 §5), and this relation carries
@@ -421,13 +444,6 @@ model SlaveRun {
   /// never sit in `resuming` without a process — the orphan sweep would destroy it.
   resumeRequestedAt DateTime?
   queuedMessage     String?
-  /// The `SlaveMessage` ids this run's prompt actually carried (M36 t3) -- the unanswered messages
-  /// addressed to its slave, as `apps/orchestrator/src/inbox.ts` rendered them at dispatch. Empty
-  /// for a run whose slave had no pending messages, which is nearly every run. Written once, in
-  /// the same update as `pid`/`provider`, so a debugger holding a run id can reconstruct what the
-  /// slave was actually shown -- the reason the milestone asks for it at all, ahead of the full
-  /// run-context builder that is a later milestone's work.
-  suppliedMessageIds String[]
   /// Stop intent (M5 gate-fix B): `requestStop` writes both columns in the same conditioned
   /// update that claims `status: stopping`, before it kills the child -- so a run's stream ending
   /// with no terminal result can tell an operator's stop (this record present) from the guardrail
@@ -480,6 +496,9 @@ model SlaveRun {
   task       Task?       @relation(fields: [taskId], references: [id], onDelete: Cascade)
   slave      Slave       @relation(fields: [slaveId], references: [id], onDelete: Cascade)
   checkpoint Checkpoint?
+  /// The recorded run-context row (M37 §2) -- exists before the child process starts (`buildRunContext`,
+  /// Task 2); a run without one never spawned.
+  context    RunContext?
 
   @@index([taskId])
   @@index([slaveId, status])
@@ -524,6 +543,23 @@ model Checkpoint {
   /// The provider the run started with (M12 Task 6), beside `model` for the same reason. Nullable
   /// -- this task only adds the column, Task 7/8 write and resolve it.
   provider          ProviderKind?
+
+  run SlaveRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+}
+
+/// One builder, one record (M37 §1, §2): what a run's prompt was assembled from, written before
+/// the child process starts -- `apps/orchestrator/src/runContext.ts` (Task 2)'s `buildRunContext`.
+/// A run with no `RunContext` row never spawned. `sections` is the `Manifest` shape
+/// (`@slave-of-ai/domain`'s `runContextManifestSchema` validates it at read, since a hand-edited
+/// row must not crash a reader); `prompt` is the exact text the model saw, in full -- this is the
+/// durable answer to "what was this worker told", the reason `SlaveRun.suppliedMessageIds` (M36
+/// t3, dropped in the same migration this table is created in) existed only as a stopgap.
+model RunContext {
+  id        String   @id @default(uuid())
+  runId     String   @unique
+  prompt    String
+  sections  Json
+  createdAt DateTime @default(now())
 
   run SlaveRun @relation(fields: [runId], references: [id], onDelete: Cascade)
 }
