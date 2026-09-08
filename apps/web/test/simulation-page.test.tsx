@@ -425,6 +425,9 @@ describe('SimulationClient', () => {
         { slaveName: 'Alex', catalogRole: 'Backend', role: 'backend', runtimeRole: 'Backend' },
         { slaveName: 'John', catalogRole: 'Business Analyst', role: 'product', runtimeRole: 'Business Analyst' },
       ],
+      // `leadName` now comes straight off control (M34 t3) -- the fixture carries it rather than
+      // the drawer finding the `lead` row itself.
+      leadName: 'Atlas' as string | null,
       settings: { maxConcurrentRuns: 4, maxAttempts: 3, autoMerge: false },
       model: null as { provider: string; model: string } | null,
       workspaces: [{ id: 'w1', name: 'Alpha Project' }, { id: 'w2', name: 'Beta Project' }],
@@ -511,6 +514,12 @@ describe('SimulationClient', () => {
       fireEvent.change(screen.getByTestId('sim-adopt-max-attempts'), { target: { value: '3' } })
       expect(screen.queryByTestId('sim-adopt-max-attempts-error')).toBeNull()
       expect((screen.getByTestId('sim-adopt-submit') as HTMLButtonElement).disabled).toBe(false)
+
+      // A negative number is refused inline, the same as blank or non-numeric (M34 t3): it must
+      // not reach the server only to come back as a 409.
+      fireEvent.change(screen.getByTestId('sim-adopt-max-attempts'), { target: { value: '-1' } })
+      expect(screen.getByTestId('sim-adopt-max-attempts-error').textContent).toBe('enter a whole number')
+      expect((screen.getByTestId('sim-adopt-submit') as HTMLButtonElement).disabled).toBe(true)
     })
 
     it('a 409 on submit keeps the drawer open with sim-adopt-error', async () => {

@@ -128,6 +128,9 @@ describe('adoptionPreview', () => {
     ])
     expect(preview.value.settings).toEqual({ maxConcurrentRuns: 4, maxAttempts: 3, autoMerge: false })
     expect(preview.value.model).toBeNull()
+    // `leadName` is `leadNameOf(definition)` published on the preview (M34 t3) -- the drawer reads
+    // it off control rather than finding the `lead` row itself.
+    expect(preview.value.leadName).toBe('Atlas')
   })
 
   it('proposes 2 attempts for policy B and carries an llm run\'s model', async () => {

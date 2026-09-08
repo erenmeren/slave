@@ -25,6 +25,10 @@ export interface AdoptionPreview {
    *  `lead`/`reviewer`, or `catalogRole` for everyone else -- fix round 1, so the drawer's table
    *  reads it off control rather than re-deriving the same two-entry translation itself. */
   readonly roles: readonly { readonly slaveName: string; readonly catalogRole: string; readonly role: string; readonly runtimeRole: string }[]
+  /** {@link leadNameOf}: the roster row `applyModel` may write, or `null` for a run with no `lead`
+   *  role. Published so the drawer reads it off control rather than finding the row itself with a
+   *  `roles.find((row) => row.role === 'lead')` lookup of its own (M34 t3). */
+  readonly leadName: string | null
   /** `autoMerge` is `false` and stays `false` (§1 principle 3): adoption never switches on a merge
    *  a person did not ask for, so the type says so rather than the drawer remembering to. */
   readonly settings: { readonly maxConcurrentRuns: number; readonly maxAttempts: number; readonly autoMerge: false }
@@ -172,6 +176,7 @@ export async function adoptionPreview(simulationId: string): Promise<Result<Adop
       const role = runRoles[member.slaveName] ?? member.role
       return { slaveName: member.slaveName, catalogRole: member.role, role, runtimeRole: runtimeRoleOf(role, member.role) }
     }),
+    leadName: leadNameOf(definition),
     settings: proposedSettings(definition),
     model: modelOf(summary),
     workspaces,

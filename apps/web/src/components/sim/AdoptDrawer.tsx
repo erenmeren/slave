@@ -6,9 +6,11 @@ import { errorMessage } from '../../lib/postControl'
 import { PrimaryButton, SelectField, TextField } from '../ui/FormControls'
 
 /** Fix round 1, Minor #4: a blank field or one that is not a whole number must not silently fall
- *  back to a default the person never chose -- it blocks the submit and says so. */
+ *  back to a default the person never chose -- it blocks the submit and says so. No leading minus
+ *  (M34 t3): a negative value is refused here, inline, rather than reaching the server only to
+ *  come back as a 409 (`rangeRefusal`, both ranges start at 1). */
 function isWholeNumber(text: string): boolean {
-  return /^-?\d+$/.test(text.trim())
+  return /^\d+$/.test(text.trim())
 }
 
 /** The GET `/api/sim/[id]/adoption` shape (control's `AdoptionPreview`, M33 §3). Mirrored here
@@ -24,6 +26,9 @@ export interface AdoptionPreview {
    *  every other member -- `product`, every engineer -- keeps the CATALOG role the planner already
    *  staffs by. */
   readonly roles: readonly { readonly slaveName: string; readonly catalogRole: string; readonly role: string; readonly runtimeRole: string }[]
+  /** The lead's slave name (control's `leadNameOf`), or `null` for a run with no `lead` role
+   *  (M34 t3) -- read off the preview rather than found here with a `roles.find` of its own. */
+  readonly leadName: string | null
   readonly settings: { readonly maxConcurrentRuns: number; readonly maxAttempts: number; readonly autoMerge: false }
   readonly model: { readonly provider: 'claude_code' | 'cursor'; readonly model: string } | null
   readonly workspaces: readonly { readonly id: string; readonly name: string }[]
@@ -96,7 +101,7 @@ export function AdoptDrawer({
 
   if (!open) return null
 
-  const leadName = preview?.roles.find((row) => row.role === 'lead')?.slaveName ?? null
+  const leadName = preview?.leadName ?? null
   const maxConcurrentValid = isWholeNumber(maxConcurrentRuns)
   const maxAttemptsValid = isWholeNumber(maxAttempts)
 

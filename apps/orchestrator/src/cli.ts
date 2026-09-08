@@ -59,7 +59,7 @@ import { workspaceId as brandWorkspaceId, type WorkspaceId } from '@slave-of-ai/
 import { sectors } from '@slave-of-ai/simulation'
 import { DEFAULT_MODEL_TIMEOUT_MS, buildRegistry, decideWithModel, type AdapterRegistry, type ProviderKind } from '@slave-of-ai/providers'
 import { runDaemon } from './daemon.js'
-import { fakeCliRefusal } from './require-fake-cli.js'
+import { claudeCommandFrom } from './claude-command.js'
 import { NON_TERMINAL_RUN_STATUSES } from './world.js'
 import { executeResume } from './resume.js'
 import { drainPumps, tick } from './tick.js'
@@ -295,19 +295,15 @@ function denyAllHookPath(): string {
  * the fake CLI and the real one down the SAME code path. Extracted (M31a Task 4) because a
  * simulation's model call (`decideWithModel`) is the second caller that must spawn exactly what an
  * adapter would -- two readings of the same two variables would drift.
+ *
+ * A thin wrapper (M34 t3) around {@link claudeCommandFrom}, the pure part -- unit-tested on its own
+ * in `claude-command.test.ts` -- so this file's one job here is reading `process.env`. The
+ * `SLAVEOFAI_REQUIRE_FAKE_CLI` refusal `claudeCommandFrom` throws propagates unchanged: `main`'s
+ * own catch turns it into a message and exit 1, so the daemon and every verb that builds an
+ * adapter or a model decider refuse together.
  */
 function claudeCommand(): { readonly command: string; readonly extraArgs?: readonly string[] } {
-  // M32 item 7: the one place that decides what gets spawned is the one place that can refuse. A
-  // caller that set `SLAVEOFAI_REQUIRE_FAKE_CLI` (every gate that drives the fake CLI, and CI
-  // job-wide) has said this process must not reach a vendor account; without the check the
-  // fallback below silently spawns the real `claude` the moment `SLAVEOFAI_CLAUDE_BIN` goes
-  // missing. Thrown, not printed: `main`'s own catch turns it into a message and exit 1, so the
-  // daemon and every verb that builds an adapter or a model decider refuse together.
-  const refusal = fakeCliRefusal(process.env)
-  if (refusal !== null) throw new Error(refusal)
-  const command = process.env['SLAVEOFAI_CLAUDE_BIN'] ?? 'claude'
-  const extra = process.env['SLAVEOFAI_CLAUDE_ARGS']
-  return { command, ...(extra === undefined || extra === '' ? {} : { extraArgs: extra.split(' ') }) }
+  return claudeCommandFrom(process.env)
 }
 
 /**
