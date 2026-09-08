@@ -169,9 +169,9 @@ describe('the org routes', () => {
       await prisma.companyTeam.findFirstOrThrow({ where: { companyId: company.id, name: 'Engineering' } })
     })
 
-    it('409s with the company-not-found refusal text on an unknown companyId', async (): Promise<void> => {
+    it('404s with the company-not-found refusal text on an unknown companyId', async (): Promise<void> => {
       const response = await teamsPOST(jsonRequest({ companyId: '00000000-0000-4000-8000-000000000000', name: 'Engineering' }))
-      expect(response.status).toBe(409)
+      expect(response.status).toBe(404)
       expect((await response.json()).error).toBe('no company with id 00000000-0000-4000-8000-000000000000')
     })
 
@@ -214,24 +214,24 @@ describe('the org routes', () => {
       ).toBeNull()
     })
 
-    it('409s with the template-not-found refusal text on an unknown templateId', async (): Promise<void> => {
+    it('404s with the template-not-found refusal text on an unknown templateId', async (): Promise<void> => {
       const company = await prisma.company.create({ data: { name: 'Acme Robotics' } })
       const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Engineering' } })
 
       const response = await slavesPOST(
         jsonRequest({ companyTeamId: companyTeam.id, templateId: '00000000-0000-4000-8000-000000000000', name: 'Atlas' }),
       )
-      expect(response.status).toBe(409)
+      expect(response.status).toBe(404)
       expect((await response.json()).error).toBe('no template with id 00000000-0000-4000-8000-000000000000')
     })
 
-    it('409s with the company-team-not-found refusal text on an unknown companyTeamId', async (): Promise<void> => {
+    it('404s with the company-team-not-found refusal text on an unknown companyTeamId', async (): Promise<void> => {
       const template = await prisma.slaveTemplate.create({ data: { name: 'Backend Engineer', role: 'backend' } })
 
       const response = await slavesPOST(
         jsonRequest({ companyTeamId: '00000000-0000-4000-8000-000000000000', templateId: template.id, name: 'Atlas' }),
       )
-      expect(response.status).toBe(409)
+      expect(response.status).toBe(404)
       expect((await response.json()).error).toBe('no company team with id 00000000-0000-4000-8000-000000000000')
     })
 
@@ -352,11 +352,11 @@ describe('the org routes', () => {
     // model-without-provider before it ever reaches the slave lookup (M12 Task 7's guard order),
     // so this exercises the not-found path the same way `setSlaveModel`'s own tests do -- via a
     // clear, the one shape this route can still send all the way to the DB write.
-    it('409s with the slave-not-found refusal text on an unknown slaveId', async (): Promise<void> => {
+    it('404s with the slave-not-found refusal text on an unknown slaveId', async (): Promise<void> => {
       const response = await modelPOST(jsonRequest({ model: null }), {
         params: Promise.resolve({ slaveId: '00000000-0000-4000-8000-000000000000' }),
       })
-      expect(response.status).toBe(409)
+      expect(response.status).toBe(404)
       expect((await response.json()).error).toBe('no slave with id 00000000-0000-4000-8000-000000000000')
     })
 
@@ -456,9 +456,9 @@ describe('the org routes', () => {
       expect((await permissionPUT(jsonPutRequest({ tool: 'repo read' }), slaveParams(slaveId))).status).toBe(400)
     })
 
-    it('409s with the slave-not-found refusal on an unknown slave', async (): Promise<void> => {
+    it('404s with the slave-not-found refusal on an unknown slave', async (): Promise<void> => {
       const response = await permissionPUT(jsonPutRequest({ tool: 'repo read', mode: 'allow' }), slaveParams('00000000-0000-4000-8000-000000000000'))
-      expect(response.status).toBe(409)
+      expect(response.status).toBe(404)
       expect((await response.json()).error).toBe('no slave with id 00000000-0000-4000-8000-000000000000')
     })
   })

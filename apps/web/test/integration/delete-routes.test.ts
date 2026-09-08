@@ -62,17 +62,17 @@ describe('catalog delete routes', () => {
     expect((await prisma.workspace.findUnique({ where: { id: f.workspaceId } }))?.companyId).toBeNull()
   })
 
-  it('409s each on an unknown id with the refusal text', async () => {
+  it('404s each on an unknown id with the refusal text', async () => {
     const companySlave = await deleteCompanySlave(req(), { params: Promise.resolve({ companySlaveId: 'nope' }) })
-    expect(companySlave.status).toBe(409)
+    expect(companySlave.status).toBe(404)
     expect(((await companySlave.json()) as { error: string }).error).toBe('no catalog slave with id nope')
 
     const template = await deleteTemplate(req(), { params: Promise.resolve({ templateId: 'nope' }) })
-    expect(template.status).toBe(409)
+    expect(template.status).toBe(404)
     expect(((await template.json()) as { error: string }).error).toBe('no template with id nope')
 
     const company = await deleteCompany(req(), { params: Promise.resolve({ companyId: 'nope' }) })
-    expect(company.status).toBe(409)
+    expect(company.status).toBe(404)
     expect(((await company.json()) as { error: string }).error).toBe('no company with id nope')
   })
 })

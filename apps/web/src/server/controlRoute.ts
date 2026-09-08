@@ -1,8 +1,11 @@
 import { prisma } from '@slave-of-ai/db/client'
 import { refusalText, type ControlRefusal } from '@slave-of-ai/control'
 import type { Result } from '@slave-of-ai/domain'
+import { refusalStatus } from './refusalStatus'
 
-/** Route shell: 404 unless the run exists in this workspace, 409 on a control refusal. */
+/** Route shell: 404 unless the run exists in this workspace, then `refusalStatus` on the verb's
+ *  own refusal -- a `run_not_found` here (the pre-check passed, the verb's own lookup then found
+ *  nothing) is a race, not a client error, and 404 is still the honest answer for it. */
 export async function runControlResponse(
   workspaceId: string,
   runId: string,
@@ -18,5 +21,5 @@ export async function runControlResponse(
     return Response.json({ error: 'no such run in this workspace' }, { status: 404 })
   }
   const result = await operate()
-  return result.ok ? Response.json({ ok: true }) : Response.json({ error: refusalText(result.error) }, { status: 409 })
+  return result.ok ? Response.json({ ok: true }) : Response.json({ error: refusalText(result.error) }, { status: refusalStatus(result.error.kind) })
 }

@@ -148,7 +148,7 @@ describe('the dependency routes', () => {
       expect(row).toBeNull()
     })
 
-    it('maps a missing dependency refusal to 409', async (): Promise<void> => {
+    it('maps a missing dependency refusal to 404 (dependency_not_found)', async (): Promise<void> => {
       const response = await removeDependencyDELETE(new Request('http://x', { method: 'DELETE' }), {
         params: Promise.resolve({
           workspaceId: fixture.workspace.id,
@@ -156,7 +156,7 @@ describe('the dependency routes', () => {
           dependsOnTaskId: fixture.otherTask.id,
         }),
       })
-      expect(response.status).toBe(409)
+      expect(response.status).toBe(404)
       expect((await response.json()).error).toContain('does not depend on')
     })
   })

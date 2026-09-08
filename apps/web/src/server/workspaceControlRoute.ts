@@ -1,6 +1,7 @@
 import { prisma } from '@slave-of-ai/db/client'
 import { refusalText, type ControlRefusal } from '@slave-of-ai/control'
 import type { Result } from '@slave-of-ai/domain'
+import { refusalStatus } from './refusalStatus'
 
 /**
  * The archived guard, standalone (fix round 1, spec gap R12): 404 `Response` unless the workspace
@@ -32,5 +33,5 @@ export async function workspaceControlResponse(
   const result = await operate()
   return result.ok
     ? Response.json({ ok: true })
-    : Response.json({ error: refusalText(result.error) }, { status: 409 })
+    : Response.json({ error: refusalText(result.error) }, { status: refusalStatus(result.error.kind) })
 }

@@ -1,4 +1,5 @@
 import { createWorkspace, refusalText, type ProviderKind } from '@slave-of-ai/control'
+import { refusalStatus } from '../../../../server/refusalStatus'
 import { requirePrincipal } from '../../../../server/principal'
 
 export const dynamic = 'force-dynamic'
@@ -34,5 +35,5 @@ export async function POST(request: Request): Promise<Response> {
   }, gate.principal ?? undefined)
   return result.ok
     ? Response.json({ ok: true, id: result.value.id }, { status: 201 })
-    : Response.json({ error: refusalText(result.error) }, { status: 409 })
+    : Response.json({ error: refusalText(result.error) }, { status: refusalStatus(result.error.kind) })
 }

@@ -1,8 +1,11 @@
 import { prisma } from '@slave-of-ai/db/client'
 import { refusalText, type ControlRefusal } from '@slave-of-ai/control'
 import type { Result } from '@slave-of-ai/domain'
+import { refusalStatus } from './refusalStatus'
 
-/** Route shell: 404 unless the task exists in this workspace, 409 on a control refusal. */
+/** Route shell: 404 unless the task exists in this workspace, then `refusalStatus` on the verb's
+ *  own refusal -- a `task_not_found`/`dependency_not_found` here is a race or a genuinely
+ *  not-found dependency, and 404 is still the honest answer for it. */
 export async function taskControlResponse(
   workspaceId: string,
   taskId: string,
@@ -16,5 +19,5 @@ export async function taskControlResponse(
     return Response.json({ error: 'no such task in this workspace' }, { status: 404 })
   }
   const result = await operate()
-  return result.ok ? Response.json({ ok: true }) : Response.json({ error: refusalText(result.error) }, { status: 409 })
+  return result.ok ? Response.json({ ok: true }) : Response.json({ error: refusalText(result.error) }, { status: refusalStatus(result.error.kind) })
 }

@@ -1,4 +1,5 @@
 import { addCompanyTeam, refusalText } from '@slave-of-ai/control'
+import { refusalStatus } from '../../../../server/refusalStatus'
 import { requirePrincipal } from '../../../../server/principal'
 
 export const dynamic = 'force-dynamic'
@@ -20,5 +21,5 @@ export async function POST(request: Request): Promise<Response> {
   const result = await addCompanyTeam(companyId, name)
   return result.ok
     ? Response.json({ ok: true, id: result.value.id })
-    : Response.json({ error: refusalText(result.error) }, { status: 409 })
+    : Response.json({ error: refusalText(result.error) }, { status: refusalStatus(result.error.kind) })
 }

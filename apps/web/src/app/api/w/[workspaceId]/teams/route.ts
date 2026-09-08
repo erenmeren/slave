@@ -1,4 +1,5 @@
 import { createProjectTeam, refusalText } from '@slave-of-ai/control'
+import { refusalStatus } from '../../../../../server/refusalStatus'
 import { archivedRefusal } from '../../../../../server/workspaceControlRoute'
 import { requirePrincipal } from '../../../../../server/principal'
 
@@ -27,5 +28,5 @@ export async function POST(
   const result = await createProjectTeam(workspaceId, name, gate.principal ?? undefined)
   return result.ok
     ? Response.json({ ok: true, id: result.value.id })
-    : Response.json({ error: refusalText(result.error) }, { status: 409 })
+    : Response.json({ error: refusalText(result.error) }, { status: refusalStatus(result.error.kind) })
 }

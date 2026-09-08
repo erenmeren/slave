@@ -144,13 +144,13 @@ describe('the /api/skills/assign route', () => {
 
   it('refuses an unknown skill with the control layer’s own words', async (): Promise<void> => {
     const response = await assignPOST(jsonRequest('POST', { slaveId, skillId: 'nope' }))
-    expect(response.status).toBe(409)
+    expect(response.status).toBe(404)
     expect(await response.json()).toEqual({ error: 'no skill with id nope' })
   })
 
   it('refuses an unknown slave on the DELETE too', async (): Promise<void> => {
     const response = await assignDELETE(jsonRequest('DELETE', { slaveId: 'nope', skillId }))
-    expect(response.status).toBe(409)
+    expect(response.status).toBe(404)
     expect(await response.json()).toEqual({ error: 'no slave with id nope' })
   })
 

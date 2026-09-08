@@ -1,5 +1,6 @@
 import { refusalText, type ControlRefusal } from '@slave-of-ai/control'
 import type { Result } from '@slave-of-ai/domain'
+import { refusalStatus } from './refusalStatus'
 
 /**
  * Route shell for the org verbs (templates/companies/teams/slaves/model): the goal route's
@@ -12,5 +13,5 @@ export async function orgControlResponse(
   const result = await operate()
   return result.ok
     ? Response.json({ ok: true })
-    : Response.json({ error: refusalText(result.error) }, { status: 409 })
+    : Response.json({ error: refusalText(result.error) }, { status: refusalStatus(result.error.kind) })
 }
