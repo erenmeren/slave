@@ -9,6 +9,7 @@ import {
   ANSWER_BLOCK_OPEN,
   ASK_BLOCK_CLOSE,
   ASK_BLOCK_OPEN,
+  SECTION_ORDER,
   runId,
   slaveId,
   taskId,
@@ -21,9 +22,19 @@ import {
 import type { RunOutcome, RuntimeEvent } from '@slave-of-ai/providers'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { deliverAnswers } from '../../src/deliver.js'
-import { askProtocol, pendingInbox, withPreamble } from '../../src/inbox.js'
+import { askProtocolSection, inboxSection, rosterSection } from '../../src/inbox.js'
 import { pumpRun } from '../../src/pump.js'
-import { buildReviewPrompt } from '../../src/review.js'
+
+/**
+ * The message ids one slave's next run would carry, the way `RunContext`'s `inbox` section source
+ * records them (M37 t2). `pendingInbox`'s `{ section, messageIds }` pair became one `Section`, and
+ * "nothing pending" became `null` rather than a pair of empties.
+ */
+async function inboxIds(slaveId: string): Promise<readonly string[]> {
+  const section = await inboxSection(slaveId)
+  if (section === null || section.source.kind !== 'inbox') return []
+  return section.source.messageIds
+}
 
 /** The adapter hands the pump an async stream; an array is the same contract without a process. */
 async function* fromArray(events: readonly RuntimeEvent[]): AsyncIterable<RuntimeEvent> {
@@ -316,13 +327,13 @@ describe('a slave answers, and the asker resumes', () => {
     it('carries an unanswered question, and drops it the moment somebody answers', async () => {
       const asked = await askAndWait(fixture, fixture.alex, 'Which queue should retries land on?')
 
-      const before = await pendingInbox(fixture.maya.slaveId)
-      expect(before.messageIds).toEqual([asked])
-      expect(before.section).toContain('Which queue should retries land on?')
+      const before = await inboxSection(fixture.maya.slaveId)
+      expect(await inboxIds(fixture.maya.slaveId)).toEqual([asked])
+      expect(before?.text).toContain('Which queue should retries land on?')
 
       await pumpEndingWith(fixture.maya, fixture.workspaceId, answer(JSON.stringify({ messageId: asked, answer: 'payments-retry' })))
 
-      expect(await pendingInbox(fixture.maya.slaveId)).toEqual({ section: null, messageIds: [] })
+      expect(await inboxSection(fixture.maya.slaveId)).toBeNull()
     })
 
     // Fix round 1, finding 1: a human answer has to close the question too. The web route
@@ -331,47 +342,47 @@ describe('a slave answers, and the asker resumes', () => {
     // every later run of every holder of the role, under a sentence that was by then false.
     it('drops the question for EVERY holder of the role once an operator answers it', async () => {
       const asked = await askAndWait(fixture, fixture.alex, 'Which queue should retries land on?')
-      expect((await pendingInbox(fixture.maya.slaveId)).messageIds).toEqual([asked])
-      expect((await pendingInbox(fixture.nina.slaveId)).messageIds).toEqual([asked])
+      expect(await inboxIds(fixture.maya.slaveId)).toEqual([asked])
+      expect(await inboxIds(fixture.nina.slaveId)).toEqual([asked])
 
       const written = await answerQuestion(asked, { body: 'payments-retry', answeredBy: 'web operator' })
       expect(written.ok).toBe(true)
 
-      expect((await pendingInbox(fixture.maya.slaveId)).messageIds).toEqual([])
-      expect((await pendingInbox(fixture.nina.slaveId)).messageIds).toEqual([])
+      expect(await inboxIds(fixture.maya.slaveId)).toEqual([])
+      expect(await inboxIds(fixture.nina.slaveId)).toEqual([])
     })
 
     it('never hands a slave its own question', async () => {
       const asked = await askAndWait(fixture, fixture.alex, 'Which queue?')
-      expect((await pendingInbox(fixture.alex.slaveId)).messageIds).not.toContain(asked)
+      expect(await inboxIds(fixture.alex.slaveId)).not.toContain(asked)
     })
   })
 
   describe('what the prompt teaches (final review, Important 2)', () => {
     it("an implementation run's prompt carries the ask envelope and the roster of who may be asked", async () => {
-      const protocol = await askProtocol(fixture.alex.slaveId, fixture.workspaceId)
-      expect(protocol).not.toBeNull()
+      const protocol = askProtocolSection()
       // The open tag itself, from the domain constant -- if the parser's marker ever moves, this
       // assertion moves with it and the prompt cannot silently teach a tag nothing reads.
-      expect(protocol).toContain(ASK_BLOCK_OPEN)
-      expect(protocol).toContain(ASK_BLOCK_CLOSE)
-      // What the slave has to be told beyond the tag: that stopping here is free, and who exists.
-      expect(protocol).toContain('costs you no attempt')
-      expect(protocol).toContain('Maya')
-      expect(protocol).toContain('answerer')
-      // And never itself: `recipientCanAnswer` refuses a slave that asks itself.
-      expect(protocol).not.toContain(fixture.alex.slaveId)
+      expect(protocol.text).toContain(ASK_BLOCK_OPEN)
+      expect(protocol.text).toContain(ASK_BLOCK_CLOSE)
+      // What the slave has to be told beyond the tag: that stopping here is free.
+      expect(protocol.text).toContain('costs you no attempt')
+      expect(protocol.text).toContain('answerer')
 
-      // Composed exactly as `tick.ts` composes it, above the task the run is actually for.
-      const prompt = withPreamble([null, protocol], 'Add checkout retry\n\nretry failed payments')
-      expect(prompt).toContain(ASK_BLOCK_OPEN)
-      expect(prompt.endsWith('retry failed payments')).toBe(true)
+      // Who exists is its own section since M37 -- ordered above the protocol, which points at it.
+      const roster = await rosterSection(fixture.alex.slaveId, fixture.workspaceId)
+      expect(roster?.text).toContain('Maya')
+      // And never itself: `recipientCanAnswer` refuses a slave that asks itself.
+      expect(roster?.text).not.toContain(fixture.alex.slaveId)
     })
 
-    it("a REVIEW run's prompt does not: a reviewer's ask is refused, so teaching it one would be a lie", async () => {
-      const prompt = buildReviewPrompt({ title: 'Add checkout retry', description: 'retry' }, 'diff --git a b')
-      expect(prompt).not.toContain(ASK_BLOCK_OPEN)
-      expect(prompt).toContain('verdict')
+    it("a REVIEW run's prompt does not: a reviewer's ask is refused, so teaching it one would be a lie", () => {
+      // Enforced by the run-kind order itself now, rather than by three prompt builders each
+      // remembering not to include it. `runContext.test.ts` asserts a real review prompt carries
+      // no `<slave-ask>`; this is the rule that makes that true.
+      expect(SECTION_ORDER.review).not.toContain('ask_protocol')
+      expect(SECTION_ORDER.planning).not.toContain('ask_protocol')
+      expect(SECTION_ORDER.implementation).toContain('ask_protocol')
     })
 
     it('offers nothing when there is nobody to ask: every recipient would be refused anyway', async () => {
@@ -381,15 +392,15 @@ describe('a slave answers, and the asker resumes', () => {
       const team = await prisma.team.create({ data: { workspaceId: alone.id, name: 'Engineering' } })
       const only = await prisma.slave.create({ data: { teamId: team.id, name: 'Robin', role: 'backend' } })
 
-      expect(await askProtocol(only.id, alone.id)).toBeNull()
-      expect(withPreamble([null, null], 'the task')).toBe('the task')
+      // No roster, and `buildRunContext` teaches the envelope only alongside one.
+      expect(await rosterSection(only.id, alone.id)).toBeNull()
     })
   })
 
   describe('a question stops pending when its asker stops waiting (final review, Important 3)', () => {
     it('leaves no zombie in the recipient inbox after an operator resumes the asker by hand', async () => {
       const asked = await askAndWait(fixture, fixture.alex, 'Which queue should retries land on?')
-      expect((await pendingInbox(fixture.maya.slaveId)).messageIds).toEqual([asked])
+      expect(await inboxIds(fixture.maya.slaveId)).toEqual([asked])
       const pendingBefore = await listPendingQuestions(fixture.workspaceId)
       expect(pendingBefore.ok && pendingBefore.value.map((row) => row.id)).toEqual([asked])
 
@@ -403,8 +414,8 @@ describe('a slave answers, and the asker resumes', () => {
       // Nobody is waiting on it any more, so nobody is told they are holding somebody up. Before
       // the fix this question was re-injected into every subsequent run of every holder of the
       // role, forever, under a sentence that had stopped being true.
-      expect(await pendingInbox(fixture.maya.slaveId)).toEqual({ section: null, messageIds: [] })
-      expect(await pendingInbox(fixture.nina.slaveId)).toEqual({ section: null, messageIds: [] })
+      expect(await inboxSection(fixture.maya.slaveId)).toBeNull()
+      expect(await inboxSection(fixture.nina.slaveId)).toBeNull()
       const pendingAfter = await listPendingQuestions(fixture.workspaceId)
       expect(pendingAfter.ok && pendingAfter.value).toEqual([])
 
@@ -414,7 +425,7 @@ describe('a slave answers, and the asker resumes', () => {
 
     it('still pends while the asker is genuinely waiting', async () => {
       const asked = await askAndWait(fixture, fixture.alex, 'Which queue?')
-      expect((await pendingInbox(fixture.maya.slaveId)).messageIds).toEqual([asked])
+      expect(await inboxIds(fixture.maya.slaveId)).toEqual([asked])
       const pending = await listPendingQuestions(fixture.workspaceId)
       expect(pending.ok && pending.value.map((row) => row.id)).toEqual([asked])
     })

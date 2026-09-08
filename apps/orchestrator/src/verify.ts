@@ -323,8 +323,8 @@ export async function rejectTask(taskId: TaskId, reason: string): Promise<Reject
       data: {
         status: exhausted ? 'failed' : 'rework',
         activeRunId: null,
-        // The slave-facing channel: `buildPrompt` puts this in front of the next run as the thing
-        // to fix first.
+        // The slave-facing channel: `buildRunContext`'s `rejection` section puts this in front of
+        // the next run as the thing to fix first.
         lastRejectionReason: reason,
       },
     })

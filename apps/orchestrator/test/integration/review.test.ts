@@ -9,7 +9,7 @@ import { prisma } from '@slave-of-ai/db/client'
 import { runId as brandRunId, workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
 import { ClaudeCodeAdapter, type AdapterRegistry } from '@slave-of-ai/providers'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { buildReviewPrompt, concludeReview, dispatchReviews } from '../../src/review.js'
+import { concludeReview, dispatchReviews } from '../../src/review.js'
 import { drainPumps, tick, type TickDeps } from '../../src/tick.js'
 
 const repoRoot = fileURLToPath(new URL('../../../../', import.meta.url))
@@ -491,19 +491,5 @@ describe('dispatchReviews', () => {
 
     const finalTask = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
     expect(finalTask.status).toBe('merging')
-  })
-})
-
-describe('buildReviewPrompt', () => {
-  it('contains the verdict marker and the diff body', () => {
-    const prompt = buildReviewPrompt(
-      { title: 'Add the thing', description: 'make it work' },
-      'diff --git a/x b/x\n+hello\n',
-    )
-
-    expect(prompt).toContain('"verdict"')
-    expect(prompt).toContain('diff --git a/x b/x')
-    expect(prompt).toContain('+hello')
-    expect(prompt).toContain('Add the thing')
   })
 })

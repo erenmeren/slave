@@ -10,17 +10,12 @@ import {
   neutraliseMarkers,
   renderRunContext,
 } from '../../src/run-context/render.js'
-// Fix round 1: cross-checks `REVIEW_VERDICT_INSTRUCTIONS`/`PLANNING_GRAPH_INSTRUCTIONS` against a
-// LIVE call to the functions they were copied from, so a future edit to `review.ts`/`planning.ts`
-// cannot drift from this copy unnoticed. A deliberate one-off reach across the package boundary
-// (packages/domain/src/ itself imports nothing from apps/orchestrator, and never will -- only
-// this TEST does, for exactly this one verbatim-fidelity check): importing `review.ts` pulls in
-// `@slave-of-ai/db/client` transitively, but that only constructs a `PrismaPg` pool object --
-// Prisma connects lazily on first query, so this import needs no live database and runs under the
-// same DB-free "unit" vitest project every other domain test does (confirmed empirically before
-// wiring this in).
-import { buildReviewPrompt } from '../../../../apps/orchestrator/src/review.js'
-import { buildPlanningPrompt } from '../../../../apps/orchestrator/src/planning.js'
+// M37 Task 2: this file used to cross-check the two constants against LIVE calls to
+// `buildReviewPrompt`/`buildPlanningPrompt` in apps/orchestrator, which is why it reached across
+// the package boundary. Those two functions are gone -- `buildRunContext` is the only builder now
+// and these constants are the source of truth for their text -- so the cross-check and its import
+// went with them. What replaced it is `apps/orchestrator/test/integration/runContext.test.ts`,
+// which asserts a REAL review/planning prompt still ends with each constant.
 
 function section(kind: Section['kind'], text: string, source: Section['source']): Section {
   return { kind, text, source }
@@ -113,58 +108,6 @@ describe('renderRunContext', () => {
         'Between 1 and 20 tasks. Keys are plan-local. dependsOn lists keys, no cycles.',
       ].join('\n'),
     )
-  })
-
-  it('REVIEW_VERDICT_INSTRUCTIONS reassembles a live buildReviewPrompt call byte-for-byte (fix round 1)', () => {
-    const task = { title: 'Fix the crash', description: 'It throws on null input.' }
-    const diff = '+ guard against null'
-
-    // The `task`/`review_diff` section text a real `buildRunContext` (M37 Task 2) would produce
-    // for this task/diff, using the exact same formatting `buildReviewPrompt`'s own array does
-    // for the pieces it still owns.
-    const taskText = `Task: ${task.title}\n\n${task.description}`
-    const diffText = `DIFF (base...branch):\n\`\`\`diff\n${diff}\n\`\`\``
-
-    const { prompt } = renderRunContext('review', [
-      section('task', taskText, { kind: 'task', taskId: 't1' }),
-      section('review_diff', diffText, { kind: 'review_diff', base: 'main', head: 'x', capped: false }),
-    ])
-    expect(prompt).toBe([taskText, diffText, REVIEW_VERDICT_INSTRUCTIONS].join('\n\n'))
-
-    // `renderRunContext` puts task/diff BEFORE the appended instructions (M37's canonical order);
-    // `buildReviewPrompt` puts its intro sentence FIRST and the verdict-format instructions LAST,
-    // with task/diff sandwiched between -- a different order by design (that reordering is the
-    // point of M37). Reassembling `REVIEW_VERDICT_INSTRUCTIONS`'s two boundary pieces (split on
-    // the triple newline the two adjacent blank-string elements produce) back into
-    // `buildReviewPrompt`'s OWN order proves the constant is missing no character of the text it
-    // was copied from, checked against a REAL call rather than a second hand-typed copy.
-    const boundary = '\n\n\n'
-    const splitAt = REVIEW_VERDICT_INSTRUCTIONS.indexOf(boundary)
-    expect(splitAt).toBeGreaterThan(-1)
-    const introPart = REVIEW_VERDICT_INSTRUCTIONS.slice(0, splitAt)
-    const finalPart = REVIEW_VERDICT_INSTRUCTIONS.slice(splitAt + boundary.length)
-
-    const reassembledInReviewTsOrder = [introPart, taskText, diffText, finalPart].join('\n\n')
-    expect(reassembledInReviewTsOrder).toBe(buildReviewPrompt(task, diff))
-  })
-
-  it('PLANNING_GRAPH_INSTRUCTIONS reassembles a live buildPlanningPrompt call byte-for-byte (fix round 1)', () => {
-    const goal = 'Ship the thing'
-    const goalText = `GOAL: ${goal}`
-
-    const { prompt } = renderRunContext('planning', [
-      section('planning_goal', goalText, { kind: 'planning_goal', sha256: 'a'.repeat(64) }),
-    ])
-    expect(prompt).toBe([goalText, PLANNING_GRAPH_INSTRUCTIONS].join('\n\n'))
-
-    const boundary = '\n\n\n'
-    const splitAt = PLANNING_GRAPH_INSTRUCTIONS.indexOf(boundary)
-    expect(splitAt).toBeGreaterThan(-1)
-    const introPart = PLANNING_GRAPH_INSTRUCTIONS.slice(0, splitAt)
-    const finalPart = PLANNING_GRAPH_INSTRUCTIONS.slice(splitAt + boundary.length)
-
-    const reassembledInPlanningTsOrder = [introPart, goalText, finalPart].join('\n\n')
-    expect(reassembledInPlanningTsOrder).toBe(buildPlanningPrompt(goal))
   })
 
   it('does not append instructions for an implementation run', () => {

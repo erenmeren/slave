@@ -22,13 +22,13 @@ import {
 import { appendEvent } from '@slave-of-ai/events'
 import type { AdapterRegistry, SlaveRuntimeAdapter, RunHandle } from '@slave-of-ai/providers'
 import { deliverAnswers } from './deliver.js'
-import { askProtocol, pendingInbox, withPreamble } from './inbox.js'
 import { runMergePass } from './merge.js'
 import { resolveRuntime, workspaceDefaultProvider } from './model.js'
 import { dispatchPlanning } from './planning.js'
 import { resolveAdapter } from './provider.js'
 import { pumpRun } from './pump.js'
 import { executeResume } from './resume.js'
+import { buildRunContext } from './runContext.js'
 import { createRunUnlessArchived } from './runs.js'
 import { dispatchReviews } from './review.js'
 import { noteTickRan } from './sweep.js'
@@ -139,22 +139,6 @@ function slugify(title: string): string {
 export function emailLocalPart(slave: { readonly id: string; readonly name: string }): string {
   const slug = slugify(slave.name)
   return slug === 'task' ? `slave-${slave.id.slice(0, 8)}` : slug
-}
-
-/**
- * The prompt a run starts from. On a rework this carries the previous attempt's rejection, which
- * is the whole point of spec §8's loop: the next run is supposed to act on why the last one failed,
- * and a rework that arrives without it is just a retry.
- */
-function buildPrompt(task: {
-  readonly title: string
-  readonly description: string
-  readonly lastRejectionReason: string | null
-}): string {
-  const base = `${task.title}\n\n${task.description}`
-  return task.lastRejectionReason === null
-    ? base
-    : `${base}\n\nA previous attempt was rejected. Address this before anything else:\n${task.lastRejectionReason}`
 }
 
 /**
@@ -568,26 +552,31 @@ async function startRun(deps: TickDeps, taskId: TaskId, slaveId: SlaveId): Promi
     // else -- is that adapter's business, reported back opaquely on `handle.runFiles` below.
     const { runDir, pauseFlagPath } = runFilePaths(workspace.repoPath, runId)
 
-    // M36 t3: the unanswered questions addressed to this slave, rendered above the task. The one
-    // place a recipient ever SEES a message -- `inbox.ts` owns what goes in it, this file owns
-    // only that it goes in front of `buildPrompt`'s output and that the ids are recorded on the
-    // run below.
-    const inbox = await pendingInbox(slave.id)
-
-    // M36 final review (Important 2): the few lines that teach this slave the `<slave-ask>`
-    // envelope, and name the peers it may address. IMPLEMENTATION runs only -- this is the one
-    // dispatch that starts one, and `ask.ts` refuses an ask from any other kind.
-    const protocol = await askProtocol(slave.id, workspace.id)
-
     // M18 Task 5: the permission matrix is resolved and snapshotted to disk HERE, at dispatch,
     // against this run's own provider -- the same resolve-once-at-spawn discipline `model` already
     // gets. `permissions.json` is written even when the deny list is empty (spec §2): the gate
     // scripts distinguish "armed with nothing denied" from "not armed at all".
     const permissionsFilePath = writePermissionsFile(runDir, resolveDenyList(slave.permissions, resolved.provider))
 
+    // M37 Task 2: the one builder. Everything this run is told -- who the slave is, who else is
+    // here, what was asked of it, which skills it has and where they now sit in its worktree, its
+    // task and the rejection that sent it back -- is assembled and RECORDED here, after the
+    // worktree exists and before anything is spawned (spec §4). A `RunContextRefused` (a profile
+    // over the cap) lands in this function's own `catch` and is recorded as a run that failed to
+    // start, exactly like an unprovisionable worktree.
+    const built = await buildRunContext({
+      runId,
+      kind: 'implementation',
+      slaveId: slave.id,
+      workspaceId: workspace.id,
+      taskId: task.id,
+      worktreePath: worktree.path,
+      provider: resolved.provider,
+    })
+
     handle = await runAdapter.start({
       runId,
-      prompt: withPreamble([inbox.section, protocol], buildPrompt(task)),
+      prompt: built.prompt,
       worktreePath: worktree.path,
       pauseFlagPath,
       runDir,
@@ -606,10 +595,9 @@ async function startRun(deps: TickDeps, taskId: TaskId, slaveId: SlaveId): Promi
       // above (`runs.js`), because `resolved` is not known until the chain (and the registry)
       // have both been consulted.
       //
-      // `inbox.messageIds` is no longer recorded here: M37 t1 drops `SlaveRun.suppliedMessageIds`
-      // in favour of `RunContext`'s `inbox` manifest section, which M37 Task 2's `buildRunContext`
-      // writes. For the one commit between Task 1 and Task 2, a run's inbox ids go unrecorded --
-      // the prompt itself (built above, still carrying `inbox.section`) is unaffected.
+      // Which inbox messages this run carried is NOT recorded here: `RunContext`'s `inbox` section
+      // source holds them (M37 §2, replacing `SlaveRun.suppliedMessageIds`), written by
+      // `buildRunContext` above -- before the spawn, where `suppliedMessageIds` was written after.
       data: {
         pid: handle.pid,
         worktreePath: worktree.path,

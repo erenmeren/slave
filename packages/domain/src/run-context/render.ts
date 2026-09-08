@@ -48,10 +48,15 @@ export function neutraliseMarkers(text: string): string {
  * the diff (now `review_diff`), in order, INCLUDING both blank-string separators (the one right
  * after the intro sentence and the one right before "Your final message...") -- dropping either
  * one silently removes a blank line from the rendered prompt relative to the text this replaces.
- * `buildReviewPrompt` itself is untouched by this task; Task 2 removes it once `renderRunContext`
- * is the one place a review prompt is built. `render.test.ts` cross-checks this constant against
- * a live call to `buildReviewPrompt` so a future edit to `review.ts`'s source strings cannot drift
- * from this copy unnoticed.
+ * `buildReviewPrompt` is gone as of M37 Task 2 -- `buildRunContext` is the one place a review
+ * prompt is built, and this constant is the source of truth for the text that function used to
+ * own. `apps/orchestrator/test/integration/runContext.test.ts` asserts a REAL review prompt still
+ * ends with it.
+ *
+ * The literal substring `"verdict"` is load-bearing beyond this text's own readability (M8a): the
+ * fake CLI (`packages/providers/test/fake-claude.mjs`, modes `m8a-flow`/`m8-flow`) keys on it to
+ * tell a review run from a work run when neither carries any other marker it can see. A rewrite
+ * that rephrased it away would silently break the fixture two gates are driven through.
  */
 export const REVIEW_VERDICT_INSTRUCTIONS = [
   'You are the QA reviewer for this task. Judge the DIFF against the task — do not rebuild or re-run it.',
@@ -66,7 +71,13 @@ export const REVIEW_VERDICT_INSTRUCTIONS = [
  * `apps/orchestrator/src/planning.ts` `buildPlanningPrompt` (lines 32-43) -- every literal array
  * element in that function that is not the goal itself (now the `planning_goal` section), in
  * order, INCLUDING both blank-string separators (the one right before `GOAL: ...` and the one
- * right after it). `buildPlanningPrompt` itself is untouched by this task; Task 2 removes it.
+ * right after it). `buildPlanningPrompt` is gone as of M37 Task 2, and this constant is now the
+ * source of truth for its text.
+ *
+ * The literal substring `"task graph"` is load-bearing for the same reason (M8b): the fake CLI's
+ * `m8-flow` mode selects the planning arm on it. This text must also never contain `"verdict"` --
+ * the same fake selects the review arm on that literal, and a planning prompt carrying it would be
+ * misrouted to the review fixture.
  */
 export const PLANNING_GRAPH_INSTRUCTIONS = [
   'You are the engineering manager. Decompose the GOAL below into a "task graph" for your team.',

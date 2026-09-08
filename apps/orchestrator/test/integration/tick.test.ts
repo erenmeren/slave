@@ -6,7 +6,12 @@ import { fileURLToPath } from 'node:url'
 import { refusalText } from '@slave-of-ai/control'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@slave-of-ai/db'
 import { prisma } from '@slave-of-ai/db/client'
-import { ANSWER_BLOCK_OPEN, ASK_BLOCK_OPEN, workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
+import {
+  ANSWER_BLOCK_OPEN,
+  ASK_BLOCK_OPEN,
+  workspaceId as brandWorkspaceId,
+  runContextManifestSchema,
+} from '@slave-of-ai/domain'
 import {
   ClaudeCodeAdapter,
   buildRegistry,
@@ -105,7 +110,14 @@ interface Recorder {
  * spawned" path deterministically. Only those methods are implemented because only those are
  * called; the cast is what says so out loud rather than stubbing four more to satisfy a type.
  */
-function recordingAdapter(options: { readonly failEvents?: boolean } = {}): Recorder {
+function recordingAdapter(
+  options: {
+    readonly failEvents?: boolean
+    /** Runs INSIDE `start`, before the child is spawned -- the only place a test can observe what
+     *  the system had already done by the time the model was handed its prompt (M37 §1). */
+    readonly onStart?: (input: StartRunInput) => Promise<void>
+  } = {},
+): Recorder {
   const inner = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'complete'], hookPath: REAL_GATE })
   const starts: StartRunInput[] = []
   const cancelled: string[] = []
@@ -114,6 +126,7 @@ function recordingAdapter(options: { readonly failEvents?: boolean } = {}): Reco
     getCapabilities: () => inner.getCapabilities(),
     start: async (input: StartRunInput) => {
       starts.push(input)
+      if (options.onStart !== undefined) await options.onStart(input)
       return inner.start(input)
     },
     events: (runId: string) => {
@@ -207,8 +220,35 @@ describe('tick', () => {
       expect(prompt).toContain(ANSWER_BLOCK_OPEN)
       // The task itself is still there, under the inbox.
       expect(prompt).toContain('Add the thing')
-      // M37 t1: `SlaveRun.suppliedMessageIds` is dropped -- the durable record of which ids a
-      // run's prompt carried moves to `RunContext`'s `inbox` manifest section (M37 Task 2).
+
+      // M37 t2: which ids the prompt carried is recorded on `RunContext`'s `inbox` section source
+      // -- the durable record `SlaveRun.suppliedMessageIds` used to be, now written BEFORE the
+      // spawn rather than after it.
+      const run = await prisma.slaveRun.findFirstOrThrow({ where: { taskId: fixture.taskId } })
+      const context = await prisma.runContext.findUniqueOrThrow({ where: { runId: run.id } })
+      expect(runContextManifestSchema.parse(context.sections).sections).toContainEqual({
+        kind: 'inbox',
+        messageIds: [messageId],
+      })
+    })
+
+    it('has recorded what the run sees before the child is spawned, and hands the model exactly that', async (): Promise<void> => {
+      await prisma.slave.update({ where: { id: fixture.slaveId }, data: { profile: 'You are Alex, and you test first.' } })
+      const observed: { readonly prompt: string; readonly recorded: string | undefined }[] = []
+      const recorder = recordingAdapter({
+        onStart: async (input): Promise<void> => {
+          // Spec §1, "record before spawn": a run without a row never spawned. Asserted from
+          // inside `start`, because after the tick returns every order is indistinguishable.
+          const row = await prisma.runContext.findUnique({ where: { runId: input.runId } })
+          observed.push({ prompt: input.prompt, recorded: row?.prompt })
+        },
+      })
+
+      await tick({ ...deps, registry: singleAdapterRegistry(recorder.adapter) })
+
+      expect(observed).toHaveLength(1)
+      expect(observed[0]?.recorded).toBe(observed[0]?.prompt)
+      expect(observed[0]?.prompt).toContain('You are Alex, and you test first.')
     })
 
     it('leaves an ordinary prompt alone when nothing is pending and there is nobody to ask', async (): Promise<void> => {
@@ -218,7 +258,7 @@ describe('tick', () => {
 
       // The fixture's slave is the only one in this workspace, so there is no roster to offer and
       // no ask protocol to teach -- an offer the system would refuse anyway is not made.
-      expect(recorder.starts[0]?.prompt).toBe('Add the thing\n\nmake it work')
+      expect(recorder.starts[0]?.prompt).toBe('Task: Add the thing\n\nmake it work')
     })
 
     it('teaches an implementation run the ask envelope, and names the peers it may address (final review)', async (): Promise<void> => {
@@ -233,7 +273,7 @@ describe('tick', () => {
       expect(prompt).toContain('Maya')
       expect(prompt).toContain('product')
       // The task is still the last thing the slave reads.
-      expect(prompt.endsWith('Add the thing\n\nmake it work')).toBe(true)
+      expect(prompt.endsWith('Task: Add the thing\n\nmake it work')).toBe(true)
     })
 
     it('does not carry a question that has already been answered', async (): Promise<void> => {
@@ -839,8 +879,8 @@ describe('tick', () => {
 
     await tick(deps)
 
-    // `lastRejectionReason` is the slave-facing channel: `buildPrompt` puts it in front of the next
-    // run as the thing to fix first. An orchestrator-side failure overwriting it both destroys the
+    // `lastRejectionReason` is the slave-facing channel: the `rejection` section puts it in front
+    // of the next run as the thing to fix first. An orchestrator-side failure overwriting it both destroys the
     // real feedback §8 requires and instructs the next slave to go and fix a setup command.
     const task = await prisma.task.findFirstOrThrow()
     expect(task.lastRejectionReason).toContain('cart.spec.ts')

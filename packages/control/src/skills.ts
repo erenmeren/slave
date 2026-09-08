@@ -1,3 +1,13 @@
+/**
+ * The skill catalog: what is on the daemon host's disk, and where each catalogued skill's files
+ * live so a dispatch can copy them into a worktree (M14 §4.3, M37 §4).
+ *
+ * **Where the roots come from.** `skillRoots()` is the one answer, and it reads the environment
+ * variable {@link SKILL_ROOTS_ENV} (`SLAVEOFAI_SKILL_ROOTS_JSON`, a JSON object with `personal`,
+ * `pluginCache` and `project` paths) before falling back to the host's own `~/.claude` layout.
+ * That seam exists for M37's gate, which drives a real daemon subprocess and can only reach it
+ * through the environment; in-process callers pass roots as arguments instead.
+ */
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -52,6 +62,48 @@ function defaultRoots(): SkillRoots {
     pluginCache: join(homedir(), '.claude', 'plugins', 'cache'),
     project: join(process.cwd(), '.claude', 'skills'),
   }
+}
+
+/**
+ * The environment variable that redirects every skill root away from the operator's real
+ * `~/.claude` (M37 Task 2, pre-flight ruling). A JSON object with all three keys:
+ *
+ * ```
+ * SLAVEOFAI_SKILL_ROOTS_JSON='{"personal":"/tmp/x/personal","pluginCache":"/tmp/x/plugins","project":"/tmp/x/project"}'
+ * ```
+ *
+ * It exists for the M37 gate, which drives a REAL daemon subprocess: a gate that read the host's
+ * own skills would copy whatever the operator happens to have installed into a slave's worktree
+ * and assert against it. In-process callers (tests, `buildRunContext`) pass roots directly instead.
+ */
+export const SKILL_ROOTS_ENV = 'SLAVEOFAI_SKILL_ROOTS_JSON'
+
+/**
+ * The three roots this process should read skills from: {@link SKILL_ROOTS_ENV} when it is set,
+ * the host's own otherwise.
+ *
+ * A malformed value THROWS rather than falling back to the defaults. Falling back would silently
+ * point a gate -- or a misconfigured daemon -- at the operator's real `~/.claude`, which is the one
+ * outcome this seam exists to make impossible, and it would do it invisibly.
+ */
+export function skillRoots(): SkillRoots {
+  const raw = process.env[SKILL_ROOTS_ENV]
+  if (raw === undefined || raw === '') return defaultRoots()
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch (error) {
+    throw new Error(`${SKILL_ROOTS_ENV} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`)
+  }
+  const field = (key: SkillRootName): string => {
+    const value = (parsed as Record<string, unknown> | null)?.[key]
+    if (typeof value !== 'string' || value === '') {
+      throw new Error(`${SKILL_ROOTS_ENV} must be an object with non-empty "personal", "pluginCache" and "project" paths`)
+    }
+    return value
+  }
+  return { personal: field('personal'), pluginCache: field('pluginCache'), project: field('project') }
 }
 
 interface Found {
@@ -164,25 +216,34 @@ function compareVersions(a: string, b: string): number {
   return 0
 }
 
-/** `<cache>/<marketplace>/<plugin>/<version>/skills/*` -- the highest version of each plugin wins. */
-function scanPluginCache(cacheDir: string): Scan {
+/**
+ * `<cache>/<marketplace>/<plugin>/<version>/skills` for every plugin in the cache, keeping the
+ * highest version of each.
+ *
+ * Extracted from `scanPluginCache` (M37 Task 2) so `highestPluginVersionDir` -- which the run
+ * builder uses to find ONE plugin's skills directory when it injects a skill into a worktree --
+ * resolves a version through exactly the code that catalogued it. Two walks of the same tree would
+ * be two answers to "which version of this plugin is live", and the prompt would then name a skill
+ * from a directory nothing copied.
+ */
+function bestPluginVersionDirs(cacheDir: string): { readonly dirs: ReadonlyMap<string, string>; readonly unreadable: string | null } {
   const marketplaces = readDirs(cacheDir)
-  if (!marketplaces.ok) return { found: [], unreadable: marketplaces.code }
+  if (!marketplaces.ok) return { dirs: new Map(), unreadable: marketplaces.code }
 
   const bestVersion = new Map<string, { version: string; dir: string }>()
   for (const marketplace of marketplaces.dirs) {
     const plugins = readDirs(join(cacheDir, marketplace))
-    if (!plugins.ok) return { found: [], unreadable: plugins.code }
+    if (!plugins.ok) return { dirs: new Map(), unreadable: plugins.code }
     for (const plugin of plugins.dirs) {
       const versions = readDirs(join(cacheDir, marketplace, plugin))
-      if (!versions.ok) return { found: [], unreadable: versions.code }
+      if (!versions.ok) return { dirs: new Map(), unreadable: versions.code }
       for (const version of versions.dirs) {
         const skillsDir = join(cacheDir, marketplace, plugin, version, 'skills')
         // Any unreadable level fails the WHOLE cache root, not just the plugin under it: a version
         // we could not see is a version whose skills we cannot vouch for, and half a cache is
         // exactly the evidence that produces a false mass-deletion.
         const skills = isDir(skillsDir)
-        if (!skills.ok) return { found: [], unreadable: skills.code }
+        if (!skills.ok) return { dirs: new Map(), unreadable: skills.code }
         if (!skills.value) continue
         const current = bestVersion.get(plugin)
         if (current === undefined || compareVersions(version, current.version) > 0) {
@@ -192,8 +253,46 @@ function scanPluginCache(cacheDir: string): Scan {
     }
   }
 
+  return { dirs: new Map([...bestVersion].map(([plugin, best]) => [plugin, best.dir])), unreadable: null }
+}
+
+/**
+ * The live skills directory of one plugin (`plugin:<name>`'s source), or `null` when the cache has
+ * no readable version of it. Same resolution the catalog scan uses -- see
+ * {@link bestPluginVersionDirs}.
+ */
+export function highestPluginVersionDir(roots: SkillRoots, plugin: string): string | null {
+  const best = bestPluginVersionDirs(roots.pluginCache)
+  if (best.unreadable !== null) return null
+  return best.dirs.get(plugin) ?? null
+}
+
+/**
+ * Where a catalogued skill's files actually live, from the provider name the catalog recorded
+ * (M37 §4). `null` means "this process cannot say" -- an unknown provider name, or a plugin whose
+ * cache entry is gone -- and the caller records the skill as missing rather than guessing a path.
+ *
+ * The returned path is not checked for existence: the caller (`buildRunContext`) has to tell
+ * "no source" from "a source that vanished" for its own manifest either way, so a stat here would
+ * be a second, weaker version of a check it already makes.
+ */
+export function skillSourceDir(roots: SkillRoots, providerName: string, skillName: string): string | null {
+  if (providerName === 'personal') return join(roots.personal, skillName)
+  if (providerName === 'project') return join(roots.project, skillName)
+  if (providerName.startsWith('plugin:')) {
+    const dir = highestPluginVersionDir(roots, providerName.slice('plugin:'.length))
+    return dir === null ? null : join(dir, skillName)
+  }
+  return null
+}
+
+/** `<cache>/<marketplace>/<plugin>/<version>/skills/*` -- the highest version of each plugin wins. */
+function scanPluginCache(cacheDir: string): Scan {
+  const best = bestPluginVersionDirs(cacheDir)
+  if (best.unreadable !== null) return { found: [], unreadable: best.unreadable }
+
   const found: Found[] = []
-  for (const [plugin, { dir }] of bestVersion) {
+  for (const [plugin, dir] of best.dirs) {
     const scan = scanSkillsDir(dir, `plugin:${plugin}`)
     if (scan.unreadable !== null) return { found: [], unreadable: scan.unreadable }
     found.push(...scan.found)
@@ -209,7 +308,10 @@ function scanPluginCache(cacheDir: string): Scan {
  * stop the daemon from starting.
  */
 export async function syncSkillCatalog(roots?: Partial<SkillRoots>): Promise<SyncResult> {
-  const resolved: SkillRoots = { ...defaultRoots(), ...roots }
+  // `skillRoots()`, not `defaultRoots()` (M37 Task 2): the catalog and the injection have to read
+  // the same disk. A daemon whose {@link SKILL_ROOTS_ENV} pointed the injection at a temp tree
+  // while the catalog still scanned `~/.claude` would offer a slave skills it then failed to copy.
+  const resolved: SkillRoots = { ...skillRoots(), ...roots }
   const scans: readonly { root: SkillRootName; path: string; scan: Scan }[] = [
     { root: 'personal', path: resolved.personal, scan: scanSkillsDir(resolved.personal, 'personal') },
     { root: 'pluginCache', path: resolved.pluginCache, scan: scanPluginCache(resolved.pluginCache) },

@@ -28,7 +28,8 @@ export interface TaskRelease {
  * zero rows.
  *
  * `lastRejectionReason` is deliberately NOT written here. It is the slave-facing channel --
- * `buildPrompt` puts it in front of the next run as the thing to fix first -- so an
+ * `buildRunContext`'s `rejection` section puts it in front of the next run as the thing to fix
+ * first -- so an
  * orchestrator-side failure landing in it both destroys the verify feedback §8 requires and
  * instructs the next slave to go and fix a setup command it cannot see. The reason lives on the
  * `SlaveRun` row and in `run.failed`, which is where an operator looks for it.

@@ -24,7 +24,7 @@ const FAKE = join(repoRoot, 'packages/providers/test/fake-claude.mjs')
  * past its old M3 finish line -- `verifying -> reviewing -> merging -> done`, unattended, driven by
  * nothing but repeated `tick`s. Task 4's `m8a-flow` fake-CLI mode is what makes that real end to
  * end: a work run leaves a real commit for the merge pass to merge, and a review run is told apart
- * from a work run by the literal `"verdict"` substring `buildReviewPrompt` always includes.
+ * from a work run by the literal `"verdict"` substring `REVIEW_VERDICT_INSTRUCTIONS` always includes.
  */
 async function runCli(args: readonly string[], extraEnv: NodeJS.ProcessEnv = {}): Promise<{
   readonly stdout: string

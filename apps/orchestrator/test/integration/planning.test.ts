@@ -9,7 +9,7 @@ import { prisma } from '@slave-of-ai/db/client'
 import { runId as brandRunId, workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
 import { ClaudeCodeAdapter, type AdapterRegistry } from '@slave-of-ai/providers'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { buildPlanningPrompt, concludePlanning, dispatchPlanning } from '../../src/planning.js'
+import { concludePlanning, dispatchPlanning } from '../../src/planning.js'
 import { drainPumps, tick, type TickDeps } from '../../src/tick.js'
 
 const repoRoot = fileURLToPath(new URL('../../../../', import.meta.url))
@@ -512,15 +512,5 @@ describe('concludePlanning', () => {
     })
     expect(core.status).toBe('running')
     expect(core.activeRunId).not.toBeNull()
-  })
-})
-
-describe('buildPlanningPrompt', () => {
-  it('(g) contains the task-graph marker and the goal text', () => {
-    const prompt = buildPlanningPrompt('Ship the checkout redesign')
-
-    expect(prompt).toContain('"task graph"')
-    expect(prompt).not.toContain('"verdict"')
-    expect(prompt).toContain('Ship the checkout redesign')
   })
 })

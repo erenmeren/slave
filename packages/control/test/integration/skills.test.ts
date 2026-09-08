@@ -1,10 +1,18 @@
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { refusalText } from '../../src/refusal.js'
-import { assignSkill, syncSkillCatalog, unassignSkill } from '../../src/skills.js'
+import {
+  SKILL_ROOTS_ENV,
+  assignSkill,
+  highestPluginVersionDir,
+  skillRoots,
+  skillSourceDir,
+  syncSkillCatalog,
+  unassignSkill,
+} from '../../src/skills.js'
 
 const TRUNCATE =
   'TRUNCATE TABLE "ExecutionEvent", "SlaveSkill", "Skill", "SkillProvider", "SlavePermission", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE'
@@ -227,5 +235,79 @@ describe('assignSkill / unassignSkill', () => {
     expect((await unassignSkill(slave.id, skill.id)).ok).toBe(true)
     expect((await unassignSkill(slave.id, skill.id)).ok).toBe(true)
     expect(await prisma.slaveSkill.count({ where: { slaveId: slave.id } })).toBe(0)
+  })
+})
+
+/**
+ * Where a catalogued skill's FILES are, which is what M37's dispatch copies into a worktree. The
+ * catalog scan and this resolver walk the plugin cache through the same helper on purpose -- two
+ * walks would be two answers to "which version is live", and a prompt could then name a skill from
+ * a directory nothing copied.
+ */
+describe('skillSourceDir', () => {
+  beforeEach((): void => {
+    root = mkdtempSync(join(tmpdir(), 'slaveofai-skills-'))
+    mkdirSync(roots().personal, { recursive: true })
+    mkdirSync(roots().pluginCache, { recursive: true })
+    mkdirSync(roots().project, { recursive: true })
+  })
+
+  afterEach((): void => {
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  it('resolves the personal and project roots by provider name', (): void => {
+    expect(skillSourceDir(roots(), 'personal', 'my-notes')).toBe(join(roots().personal, 'my-notes'))
+    expect(skillSourceDir(roots(), 'project', 'house-style')).toBe(join(roots().project, 'house-style'))
+  })
+
+  it('resolves a plugin skill to the highest version on disk, the same one the scan catalogued', async (): Promise<void> => {
+    for (const version of ['9.9.9', '10.0.1']) {
+      const dir = join(roots().pluginCache, 'marketplace/superpowers', version, 'skills')
+      mkdirSync(dir, { recursive: true })
+      writeSkill(dir, 'writing-plans', `plans things (${version})`)
+    }
+
+    const resolved = skillSourceDir(roots(), 'plugin:superpowers', 'writing-plans')
+    expect(resolved).toBe(join(roots().pluginCache, 'marketplace/superpowers/10.0.1/skills', 'writing-plans'))
+    expect(highestPluginVersionDir(roots(), 'superpowers')).toBe(
+      join(roots().pluginCache, 'marketplace/superpowers/10.0.1/skills'),
+    )
+
+    // And it is the version the catalog recorded, not merely the one this function likes.
+    await prisma.$executeRawUnsafe(TRUNCATE)
+    await syncSkillCatalog(roots())
+    const skill = await prisma.skill.findFirstOrThrow({ where: { name: 'writing-plans' } })
+    expect(skill.description).toBe('plans things (10.0.1)')
+  })
+
+  it('says nothing rather than guessing for a provider it does not know, or a plugin with no cache entry', (): void => {
+    expect(skillSourceDir(roots(), 'plugin:not-installed', 'x')).toBeNull()
+    expect(skillSourceDir(roots(), 'imported-from-somewhere', 'x')).toBeNull()
+  })
+})
+
+describe('skillRoots', () => {
+  afterEach((): void => {
+    delete process.env[SKILL_ROOTS_ENV]
+  })
+
+  it('reads the three roots out of the environment when it is set', (): void => {
+    process.env[SKILL_ROOTS_ENV] = JSON.stringify({ personal: '/a', pluginCache: '/b', project: '/c' })
+    expect(skillRoots()).toEqual({ personal: '/a', pluginCache: '/b', project: '/c' })
+  })
+
+  it('falls back to the host layout when it is not set', (): void => {
+    delete process.env[SKILL_ROOTS_ENV]
+    expect(skillRoots().personal).toBe(join(homedir(), '.claude', 'skills'))
+  })
+
+  it('throws rather than silently reading the operator\'s real skills when the value is malformed', (): void => {
+    // The whole point of the seam is that a gate never touches `~/.claude`. Falling back on a typo
+    // would do exactly that, invisibly.
+    process.env[SKILL_ROOTS_ENV] = 'not json'
+    expect(() => skillRoots()).toThrow(SKILL_ROOTS_ENV)
+    process.env[SKILL_ROOTS_ENV] = JSON.stringify({ personal: '/a' })
+    expect(() => skillRoots()).toThrow('pluginCache')
   })
 })

@@ -147,8 +147,8 @@ describe('verify and advance', () => {
 
     const t = await task()
     expect(t.status).toBe('rework')
-    // This field is the slave-facing channel: `buildPrompt` puts it in front of the next run as the
-    // thing to fix first. Verify output is exactly what it is for.
+    // This field is the slave-facing channel: `buildRunContext`'s `rejection` section puts it in
+    // front of the next run as the thing to fix first. Verify output is exactly what it is for.
     expect(t.lastRejectionReason).toContain('BOOM')
   })
 

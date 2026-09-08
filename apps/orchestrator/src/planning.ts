@@ -12,35 +12,13 @@ import type { SlaveRuntimeAdapter, RunHandle } from '@slave-of-ai/providers'
 import { resolveRuntime, workspaceDefaultProvider } from './model.js'
 import { resolveAdapter } from './provider.js'
 import { pumpRun } from './pump.js'
+import { buildRunContext } from './runContext.js'
 import { createRunUnlessArchived } from './runs.js'
 import { activePumpRunIds, emailLocalPart, pumps, type TickDeps } from './tick.js'
 import { verifyConcludedRun } from './verify.js'
 
 /** How many planning runs may fail against the current goal before dispatch stops trying (spec Decision 8). */
 const PLANNING_RETRY_CAP = 2
-
-/**
- * The prompt a planning run starts from.
- *
- * The literal substring `"task graph"` is load-bearing beyond this prompt's own readability:
- * Task 5's fake CLI (`m8-flow` mode) keys on it to tell a planning run from a review or work run
- * when neither carries any other marker the fake can see. A prompt that rephrased this away would
- * silently break the fixture the whole M8b gate is driven through. It must also never contain the
- * substring `"verdict"` -- the same fake selects the review arm on that literal, and a planning
- * prompt that accidentally carried it would be misrouted to the review fixture instead.
- */
-export function buildPlanningPrompt(goal: string): string {
-  return [
-    'You are the engineering manager. Decompose the GOAL below into a "task graph" for your team.',
-    'Read the repository for context, but do NOT modify, create, or commit any file.',
-    '',
-    `GOAL: ${goal}`,
-    '',
-    'Your final message must contain exactly one JSON object and nothing else on its line:',
-    '{"tasks":[{"key":"short-unique-key","title":"...","description":"...","role":"backend","dependsOn":["other-key"]}]}',
-    'Between 1 and 20 tasks. Keys are plan-local. dependsOn lists keys, no cycles.',
-  ].join('\n')
-}
 
 /**
  * Conclude a succeeded planning run: parse the task graph and turn it into the board.
@@ -335,9 +313,23 @@ export async function dispatchPlanning(deps: TickDeps): Promise<RunId | null> {
 
     const gitIdentity = { name: manager.name, email: `${emailLocalPart(manager)}@slaveofai.local` }
 
+    // M37 Task 2: the one builder. `worktreePath: null` because a planning run reads the primary
+    // checkout (spec Decision 5) -- skills are never injected there, and the manifest says so
+    // (erratum E4). A `RunContextRefused` lands in this function's own catch, its existing
+    // dispatch-failure path.
+    const built = await buildRunContext({
+      runId,
+      kind: 'planning',
+      slaveId: manager.id,
+      workspaceId: workspace.id,
+      taskId: null,
+      worktreePath: null,
+      provider: resolved.provider,
+    })
+
     handle = await runAdapter.start({
       runId,
-      prompt: buildPlanningPrompt(workspace.goal),
+      prompt: built.prompt,
       // The primary checkout itself, not a fresh worktree (spec Decision 5): the planner reads
       // the repository for context but never commits, so there is nothing to provision.
       worktreePath: workspace.repoPath,

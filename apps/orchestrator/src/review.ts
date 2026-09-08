@@ -13,6 +13,7 @@ import type { SlaveRuntimeAdapter, RunHandle } from '@slave-of-ai/providers'
 import { resolveRuntime, workspaceDefaultProvider } from './model.js'
 import { resolveAdapter } from './provider.js'
 import { pumpRun } from './pump.js'
+import { buildRunContext } from './runContext.js'
 import { createRunUnlessArchived } from './runs.js'
 import { activePumpRunIds, emailLocalPart, pumps, type TickDeps } from './tick.js'
 import { rejectTask, verifyConcludedRun } from './verify.js'
@@ -28,35 +29,6 @@ const REVIEW_RETRY_CAP = 2
  *  (M15 spec §3 B5): the seeded `reviewing` fixture task made this line the daemon log's loudest
  *  and least informative repetition. Bounded by the number of distinct stuck tasks. */
 const warnedUnreviewable = new Set<string>()
-
-/**
- * The prompt a review run starts from.
- *
- * The literal substring `"verdict"` is load-bearing beyond this prompt's own readability: Task 4's
- * fake CLI (`m8a-flow` mode) keys on it to tell a review run from a work run when neither carries
- * any other marker the fake can see. A prompt that rephrased this away would silently break the
- * fixture the whole M8a gate is driven through.
- */
-export function buildReviewPrompt(
-  task: { readonly title: string; readonly description: string },
-  diff: string,
-): string {
-  return [
-    'You are the QA reviewer for this task. Judge the DIFF against the task — do not rebuild or re-run it.',
-    '',
-    `Task: ${task.title}`,
-    '',
-    task.description,
-    '',
-    'DIFF (base...branch):',
-    '```diff',
-    diff,
-    '```',
-    '',
-    'Your final message must contain exactly one JSON object and nothing else on its line:',
-    '{"verdict":"approve","reason":"one paragraph"} or {"verdict":"reject","reason":"one paragraph"}',
-  ].join('\n')
-}
 
 /**
  * Conclude a succeeded review run: parse the verdict and move the task.
@@ -404,9 +376,24 @@ async function dispatchReview(deps: TickDeps, task: ReviewableTask): Promise<Run
 
     const gitIdentity = { name: reviewer.name, email: `${emailLocalPart(reviewer)}@slaveofai.local` }
 
+    // M37 Task 2: the one builder, given the diff this function just computed. Inside the same
+    // `try` as the diff itself and for the same reason -- a `RunContextRefused` (a reviewer profile
+    // over the cap) is a review that could not be produced, and the catch below is where that is
+    // already recorded. Skills are injected into the implementation worktree the reviewer reads.
+    const built = await buildRunContext({
+      runId,
+      kind: 'review',
+      slaveId: reviewer.id,
+      workspaceId: workspace.id,
+      taskId: task.id,
+      worktreePath: latestImpl.worktreePath,
+      provider: resolved.provider,
+      reviewDiff: { text: diff, base: workspace.baseBranch, head: task.branch, capped: rawDiff.length > DIFF_CHAR_LIMIT },
+    })
+
     handle = await runAdapter.start({
       runId,
-      prompt: buildReviewPrompt(task, diff),
+      prompt: built.prompt,
       // The preserved implementation worktree, not a fresh provision: the review judges what is
       // already sitting there, on the task's own branch.
       worktreePath: latestImpl.worktreePath,
