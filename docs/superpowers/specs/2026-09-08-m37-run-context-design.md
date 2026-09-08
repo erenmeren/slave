@@ -76,4 +76,8 @@ Third milestone of the Supervisor sequence (M35 pipeline honesty, M36 messaging 
 5. Gate, CI, README, full verification.
 
 ## 11. Errata — where execution corrected the plan
-(filled during execution)
+### Pre-execution (plan writing, 2026-09-08)
+- **E1 — ignore mechanism.** §4 said `<worktree>/.claude/skills/.gitignore` = `*`. A repository may TRACK its own `.claude/skills/`; deleting or ignoring that directory would show deletions in `git status` and a `.gitignore` cannot hide tracked files. Corrected: only previously injected directories (recorded in `.claude/skills/.slaveofai-injected.json`) are removed; a skill the repo already ships is not copied and is recorded as `shadowedByRepo` (the CLI discovers the repo's copy anyway); injected paths are added to the per-worktree `info/exclude` (`git rev-parse --git-path info/exclude`), which never touches the tree. §7's `overrode_repo_skill` flag becomes `shadowedByRepo: string[]`.
+- **E2 — backfill test.** §8 asked for a vitest of the `runtimeRoles` backfill. The test database is already migrated when tests run, so `requiredRole` cannot be seeded. Corrected: the implementer seeds two rows on the dev DB before `db:migrate`, reads them back after, and pastes both readings into the task report.
+- **E3 — profile-change events.** §6 said both verbs emit an event. Templates and company slaves belong to no workspace and the org layer has no event stream; `slave.profile_changed` is emitted only for slave targets.
+- **E4 — planning skills.** Planning runs execute in the primary checkout; skills are never injected there (`no_worktree: true` in the manifest).
