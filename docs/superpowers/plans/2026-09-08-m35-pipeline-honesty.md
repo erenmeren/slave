@@ -73,3 +73,18 @@ scripts/gate-m35-pipeline-honesty.mjs, package.json, ci.yml, README
 **Files:** `scripts/gate-m35-pipeline-honesty.mjs` (browser + CLI, no daemon model calls: a workspace with `autoMerge` off, two tasks where B depends on A, drive A to `done`, assert B is NOT dispatched, run `confirm-integration --task A`, assert B becomes dispatchable; copy the skeleton of `gate-m11-shell.mjs` for the repo/workspace setup), `package.json` `gate:m35-pipeline-honesty`, `.github/workflows/ci.yml`, README (the "done vs integrated" sentence and the new CLI line).
 - [ ] Full verification: typecheck, vocabulary, `npx vitest run` (full), `web:build`, gates m35, m11, m29, m33.
 - [ ] Commit `test(gates),docs: m35 t3 — gate:m35-pipeline-honesty; README`.
+
+---
+
+### Task 4: Review retries that run out must not strand the task silently
+
+**Added mid-milestone (2026-09-08) after Task 1's review.** Task 1 fixed the run-level strand (a terminal `failed` run holding a task). A second strand of the same class survives at the policy level: when `dispatchReview`'s `REVIEW_RETRY_CAP` is exhausted, the task sits in `reviewing` forever with no attempt charged and no `task.failed` event. Nothing re-dispatches it and nothing tells anyone.
+
+**Correction of record:** Task 1's report claimed a fix here "would break two existing tests" (`review.test.ts`'s "diff cannot be produced" and "invalid verdict" cases). That claim is withdrawn. The review traced both: the first never calls `pumpRun`, so `verifyConcludedRun` is never invoked for it; the second's run is `succeeded` when `verifyConcludedRun` reads it, and `concludeReview` flips the row to `failed` only afterwards. Neither reaches the branch. Those tests do establish a real design intent — an individual review failure must NOT release the task — and that intent stays. This task is about the CAP being reached, not about a single failure.
+
+**Files:** `apps/orchestrator/src/review.ts` (the cap check), tests in `apps/orchestrator/test/integration/review.test.ts`.
+
+- [ ] Investigate first and report before implementing: what should an exhausted review cap mean? A review that cannot produce a verdict repeatedly is not obviously the implementation's fault, so parking the task `failed` may be wrong. Candidates: park `blocked` with a reason (it needs a human), or `rework` with an attempt charged, or a distinct escalation. State the trade-off and pick one; the ONLY unacceptable outcome is silence.
+- [ ] Preserve the two existing behaviours: an individual review failure still leaves the task in `reviewing` for the next attempt, and a succeeded-then-invalid-verdict run still behaves as its test pins.
+- [ ] Tests first (the strand is reproducible: drive the cap to exhaustion and assert the task is no longer silently `reviewing`) → implement → `review.test.ts`, then the other orchestrator files that touch review, one at a time → typecheck.
+- [ ] Commit `fix(orchestrator): m35 t4 — an exhausted review cap escalates instead of leaving the task silently in review`.
