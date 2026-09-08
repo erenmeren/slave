@@ -168,12 +168,21 @@ async function repoTracks(worktreePath: string, relativePath: string): Promise<b
  *
  * Each line is appended at most once, so redispatches -- and every other worktree of the same
  * repository -- do not grow the file.
+ *
+ * Split in two (fix round 1) so the path is resolved ONCE per injection while lines can be
+ * appended per skill, BEFORE that skill is copied: a `cpSync` that throws half-way must leave a
+ * directory git already cannot see.
  */
-async function excludeInWorktree(worktreePath: string, lines: readonly string[]): Promise<void> {
-  if (lines.length === 0) return
+async function excludeFilePath(worktreePath: string): Promise<string> {
   const reported = (await execFileAsync('git', ['-C', worktreePath, 'rev-parse', '--git-path', 'info/exclude'])).stdout.trim()
-  const excludePath = isAbsolute(reported) ? reported : resolve(worktreePath, reported)
+  return isAbsolute(reported) ? reported : resolve(worktreePath, reported)
+}
 
+/** Appends the lines that are not already there. Re-reads the file on every call rather than
+ *  caching it: the file is shared by every worktree of the repository, so a concurrent dispatch's
+ *  lines must not be clobbered by this one's idea of what it contained. */
+function appendExcludeLines(excludePath: string, lines: readonly string[]): void {
+  if (lines.length === 0) return
   let current = ''
   try {
     current = readFileSync(excludePath, 'utf8')
@@ -181,12 +190,12 @@ async function excludeInWorktree(worktreePath: string, lines: readonly string[])
     current = ''
   }
   const present = new Set(current.split('\n'))
-  const missing = lines.filter((line) => !present.has(line))
-  if (missing.length === 0) return
+  const absent = lines.filter((line) => !present.has(line))
+  if (absent.length === 0) return
 
   mkdirSync(dirname(excludePath), { recursive: true })
   const separator = current === '' || current.endsWith('\n') ? '' : '\n'
-  writeFileSync(excludePath, `${current}${separator}${missing.join('\n')}\n`)
+  writeFileSync(excludePath, `${current}${separator}${absent.join('\n')}\n`)
 }
 
 /**
@@ -239,40 +248,65 @@ export async function injectSkills(input: {
   const copied: string[] = []
   const missing: string[] = []
   const shadowedByRepo: string[] = []
+  const excludePath = await excludeFilePath(worktreePath)
+  const markerLine = `/${SKILLS_DIR}/${INJECTED_MARKER}`
 
-  for (const skill of [...input.skills].toSorted((a, b) => a.name.localeCompare(b.name))) {
-    // A skill's name is read from its own `SKILL.md` frontmatter (`syncSkillCatalog`), so it is
-    // text from outside this system: one carrying a path separator would write outside the skills
-    // directory. Refused as missing rather than sanitised -- a skill installed under a different
-    // name from the one the catalog and the prompt use is not the skill that was assigned.
-    if (!isPlainSegment(skill.name)) {
-      missing.push(skill.name)
-      continue
-    }
-    if (await repoTracks(worktreePath, `${SKILLS_DIR}/${skill.name}`)) {
-      shadowedByRepo.push(skill.name)
-      continue
-    }
-    const source = skill.missingSince !== null ? null : skillSourceDir(input.roots, skill.providerName, skill.name)
-    if (source === null || !isDirectory(source)) {
-      missing.push(skill.name)
-      continue
-    }
-    mkdirSync(skillsDir, { recursive: true })
-    cpSync(source, join(skillsDir, skill.name), { recursive: true })
-    copied.push(skill.name)
-  }
+  try {
+    for (const skill of [...input.skills].toSorted((a, b) => a.name.localeCompare(b.name))) {
+      // A skill's name is read from its own `SKILL.md` frontmatter (`syncSkillCatalog`), so it is
+      // text from outside this system: one carrying a path separator would write outside the skills
+      // directory. Refused as missing rather than sanitised -- a skill installed under a different
+      // name from the one the catalog and the prompt use is not the skill that was assigned.
+      if (!isPlainSegment(skill.name)) {
+        missing.push(skill.name)
+        continue
+      }
+      if (await repoTracks(worktreePath, `${SKILLS_DIR}/${skill.name}`)) {
+        shadowedByRepo.push(skill.name)
+        continue
+      }
+      const source = skill.missingSince !== null ? null : skillSourceDir(input.roots, skill.providerName, skill.name)
+      if (source === null || !isDirectory(source)) {
+        missing.push(skill.name)
+        continue
+      }
 
-  // Written only when there is something to record, or something to un-record: a run with no
-  // skills at all must not create a `.claude/` directory in a repository that has none.
-  if (copied.length > 0 || markerExisted) {
-    mkdirSync(skillsDir, { recursive: true })
-    writeFileSync(markerPath, `${JSON.stringify(copied)}\n`)
+      const destination = join(skillsDir, skill.name)
+      mkdirSync(skillsDir, { recursive: true })
+      // Excluded BEFORE the copy, not after it (fix round 1): `cpSync` can throw part-way through
+      // -- an unreadable file in the source is enough -- and the half-written directory it leaves
+      // behind is untracked. Excluding it first is what keeps `git status --porcelain` empty for
+      // `Checkpoint.dirtyFiles`, the slave's own `git add`, and the merge, whatever happens next.
+      appendExcludeLines(excludePath, [markerLine, `/${SKILLS_DIR}/${skill.name}/`])
+      try {
+        cpSync(source, destination, { recursive: true })
+      } catch (error) {
+        // Best effort, and only ever this dispatch's own half-copy: leaving it would put a skill
+        // directory in the worktree that no marker names, so nothing would ever remove it and the
+        // runtime would discover a truncated skill. If the removal itself fails the directory is
+        // at least already invisible to git, which is the property that matters most.
+        try {
+          rmSync(destination, { recursive: true, force: true })
+        } catch {
+          // Nothing further this dispatch can do about it; the throw below is the real news.
+        }
+        throw error
+      }
+      copied.push(skill.name)
+    }
+  } finally {
+    // In a `finally` (fix round 1) so the marker tells the truth even when a copy threw: the
+    // previous dispatch's directories are already gone from disk, so a marker still naming them
+    // would make the NEXT dispatch's removal a lie. It names exactly what is on disk now.
+    //
+    // Written only when there is something to record, or something to un-record: a run with no
+    // skills at all must not create a `.claude/` directory in a repository that has none.
+    if (copied.length > 0 || markerExisted) {
+      mkdirSync(skillsDir, { recursive: true })
+      appendExcludeLines(excludePath, [markerLine])
+      writeFileSync(markerPath, `${JSON.stringify(copied)}\n`)
+    }
   }
-  await excludeInWorktree(worktreePath, [
-    ...(copied.length > 0 || markerExisted ? [`/${SKILLS_DIR}/${INJECTED_MARKER}`] : []),
-    ...copied.map((name) => `/${SKILLS_DIR}/${name}/`),
-  ])
 
   return { copied, missing, shadowedByRepo, provider_unsupported: false, no_worktree: false }
 }

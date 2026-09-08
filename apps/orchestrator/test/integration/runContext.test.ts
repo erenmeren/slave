@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 import { prisma } from '@slave-of-ai/db/client'
@@ -419,6 +419,54 @@ describe('buildRunContext', () => {
       expect(existsSync(join(fixture.worktreePath, '.claude/skills/new-skill'))).toBe(true)
       expect(readFileSync(join(fixture.worktreePath, '.claude/skills/hand-written/SKILL.md'), 'utf8')).toBe('not ours\n')
       expect(skillsSource(manifest)?.copied).toEqual(['new-skill'])
+    })
+
+    it('leaves the worktree clean and the marker truthful when a copy fails part-way (fix round 1)', async () => {
+      // A previous dispatch's skill, so this one has directories to remove before it copies.
+      const stale = await assign(fixture, 'old-skill')
+      await buildImplementation(fixture)
+      await prisma.slaveSkill.deleteMany({ where: { slaveId: fixture.slaveId, skillId: stale } })
+
+      // Two skills, injected in name order. The second's source carries a file the daemon cannot
+      // read, which makes `cpSync` throw AFTER it has already created the destination directory --
+      // the real shape of a half-copy, not a simulated one. (The suite runs as an ordinary user;
+      // root could read the file, and the rejection assertion below would then fail loudly rather
+      // than pass silently.)
+      await assign(fixture, 'aaa-copies-fine')
+      await assign(fixture, 'zzz-half-copies')
+      const locked = join(fixture.skillRoots.personal, 'zzz-half-copies', 'locked.md')
+      writeFileSync(locked, 'unreadable\n')
+      chmodSync(locked, 0o000)
+
+      const failure = await buildImplementation(fixture).catch((error: unknown): unknown => error)
+      expect(failure).toBeInstanceOf(Error)
+
+      // The property the exclude exists for, in the one case that used to break it.
+      expect(git(['status', '--porcelain'], fixture.worktreePath)).toBe('')
+      // The half-copied directory was excluded BEFORE the copy was attempted...
+      expect(readFileSync(excludeFileOf(fixture.worktreePath), 'utf8')).toContain('/.claude/skills/zzz-half-copies/')
+      // ...and then removed, so nothing unnamed is left sitting in the worktree.
+      expect(readdirSync(join(fixture.worktreePath, '.claude/skills')).toSorted()).toEqual([
+        '.slaveofai-injected.json',
+        'aaa-copies-fine',
+      ])
+      // The marker names what is actually there: the stale skill it removed is gone from it, and
+      // the skill that failed to copy was never added.
+      const marker = JSON.parse(readFileSync(join(fixture.worktreePath, '.claude/skills/.slaveofai-injected.json'), 'utf8')) as unknown
+      expect(marker).toEqual(['aaa-copies-fine'])
+
+      // And the next dispatch, once the source is readable, leaves one directory per assigned
+      // skill and no stray.
+      chmodSync(locked, 0o644)
+      const { manifest } = await buildImplementation(fixture)
+
+      expect(skillsSource(manifest)?.copied).toEqual(['aaa-copies-fine', 'zzz-half-copies'])
+      expect(readdirSync(join(fixture.worktreePath, '.claude/skills')).toSorted()).toEqual([
+        '.slaveofai-injected.json',
+        'aaa-copies-fine',
+        'zzz-half-copies',
+      ])
+      expect(git(['status', '--porcelain'], fixture.worktreePath)).toBe('')
     })
 
     it('leaves a skill the repository itself tracks alone, and says so', async () => {
