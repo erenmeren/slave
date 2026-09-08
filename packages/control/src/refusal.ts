@@ -44,6 +44,12 @@ export type ControlRefusal =
    */
   | { readonly kind: 'provider_cannot_resume'; readonly runId: string; readonly provider: string }
   | { readonly kind: 'task_not_found'; readonly taskId: string }
+  /** `confirmIntegration` (M35 t2) on a task that has not reached `done` yet -- only a done task's
+   *  work is even in a state that could be "integrated". */
+  | { readonly kind: 'task_not_done'; readonly taskId: string; readonly status: string }
+  /** `confirmIntegration` on a task whose `integratedAt` is already set -- a second confirmation
+   *  is a no-op the caller should know did nothing, not a silent success. */
+  | { readonly kind: 'already_integrated'; readonly taskId: string }
   | { readonly kind: 'self_dependency'; readonly taskId: string }
   | { readonly kind: 'duplicate_dependency'; readonly taskId: string; readonly dependsOnTaskId: string }
   | { readonly kind: 'cross_workspace'; readonly taskId: string; readonly dependsOnTaskId: string }
@@ -188,6 +194,10 @@ export function refusalText(refusal: ControlRefusal): string {
       return `run ${refusal.runId} is on ${refusal.provider}, which cannot continue a stopped session`
     case 'task_not_found':
       return `no task with id ${refusal.taskId}`
+    case 'task_not_done':
+      return `task ${refusal.taskId} is ${refusal.status}; only a done task can be confirmed integrated`
+    case 'already_integrated':
+      return `task ${refusal.taskId} is already integrated`
     case 'self_dependency':
       return `task ${refusal.taskId} cannot depend on itself`
     case 'duplicate_dependency':

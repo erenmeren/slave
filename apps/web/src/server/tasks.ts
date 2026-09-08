@@ -49,6 +49,12 @@ export interface TaskBoardItem {
   readonly assigneeName: string | null
   readonly branch: string | null
   readonly lastRejectionReason: string | null
+  /**
+   * M35 t2: null until the task's work actually reached the base branch -- `merge.ts`'s
+   * real-merge path stamps it, its `!autoMerge` path (done, no merge, branch left for a human)
+   * leaves it null. ISO string, same convention as every other timestamp on this DTO.
+   */
+  readonly integratedAt: string | null
   readonly runs: readonly TaskRunSummary[]
   /**
    * M23 B4 (controller ruling): computed server-side so the panel never imports `TERMINAL` from
@@ -104,6 +110,7 @@ export async function buildTasksSnapshot(workspaceId: string): Promise<TasksSnap
         assigneeName: liveRun?.slave.name ?? null,
         branch: task.branch,
         lastRejectionReason: task.lastRejectionReason,
+        integratedAt: task.integratedAt?.toISOString() ?? null,
         // M23 B4 (controller ruling): a terminal task with a worktree still standing on at least
         // one of its runs. Computed here, not in the panel -- the panel never imports `TERMINAL`
         // from `@slave-of-ai/domain`.

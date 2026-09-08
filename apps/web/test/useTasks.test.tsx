@@ -26,6 +26,7 @@ const SNAPSHOT: TasksSnapshot = {
       lastRejectionReason: null,
       collectable: false,
       artifacts: [],
+      integratedAt: null,
       runs: [
         {
           id: 'r1',

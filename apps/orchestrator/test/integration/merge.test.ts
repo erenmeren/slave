@@ -4,10 +4,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@slave-of-ai/db'
 import { prisma } from '@slave-of-ai/db/client'
-import { workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
+import { workspaceId as brandWorkspaceId, taskId as brandTaskId } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
+import { confirmIntegration } from '@slave-of-ai/control'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { runMergePass } from '../../src/merge.js'
+import { loadWorld } from '../../src/world.js'
 import { provisionWorktree } from '../../src/worktree.js'
 
 function git(args: readonly string[], cwd: string): string {
@@ -159,6 +161,9 @@ describe('runMergePass', () => {
     const task = await prisma.task.findUniqueOrThrow({ where: { id: taskId } })
     expect(task.status).toBe('done')
     expect(task.mergeClaimedAt).toBeNull()
+    // M35 t2: the real-merge path stamps `integratedAt` -- the commits genuinely reached the base
+    // branch, so a dependent is safe to unblock.
+    expect(task.integratedAt).not.toBeNull()
 
     const subjects = mergeCommitSubjects(workspace.repoPath)
     expect(subjects.some((subject) => subject.includes(taskKey))).toBe(true)
@@ -189,6 +194,9 @@ describe('runMergePass', () => {
     const task = await prisma.task.findUniqueOrThrow({ where: { id: taskId } })
     expect(task.status).toBe('done')
     expect(task.mergeClaimedAt).toBeNull()
+    // M35 t2: no real merge happened, so `integratedAt` stays null -- the task is `done` but not
+    // yet integrated, exactly the spec Decision 5 shape this path has always left it in.
+    expect(task.integratedAt).toBeNull()
 
     expect(mergeCommitSubjects(workspace.repoPath)).toEqual([])
     // The branch the human still needs is left alone.
@@ -323,5 +331,108 @@ describe('runMergePass', () => {
     const task = await prisma.task.findUniqueOrThrow({ where: { id: taskId } })
     expect(task.status).toBe('done')
     expect(mergeCommitSubjects(workspace.repoPath)).toHaveLength(1)
+  })
+})
+
+/**
+ * M35 t2: the whole point of `integratedAt` is what it does to `world.ts`'s dependency gate for a
+ * task that DOES have a dependent -- and, symmetrically, that a task with NONE is unaffected by
+ * any of this. `runMergePass` alone (the block above) can't see that; these tests span
+ * `merge.ts`, `world.ts` and `confirmIntegration` (`@slave-of-ai/control`) together.
+ */
+describe('runMergePass + loadWorld: integratedAt unblocks dependents', () => {
+  beforeEach(async (): Promise<void> => {
+    await prisma.$executeRawUnsafe(
+      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
+    )
+  })
+
+  afterAll(async (): Promise<void> => {
+    for (const repo of repos) rmSync(repo, { recursive: true, force: true })
+    await prisma.$disconnect()
+  })
+
+  /** A plain `blocked` task depending on `dependsOnTaskId` -- never provisioned, so it needs no
+   *  worktree of its own; only its `dependenciesDone` reading is what these tests watch. */
+  async function seedDependent(workspace: Workspace, dependsOnTaskId: string): Promise<{ readonly id: string }> {
+    const dependent = await prisma.task.create({
+      data: {
+        workspaceId: workspace.id,
+        title: 'Wire it up',
+        description: 'needs the other task merged first',
+        status: 'blocked',
+        requiredRole: 'backend',
+        maxAttempts: 5,
+      },
+    })
+    await prisma.taskDependency.create({ data: { taskId: dependent.id, dependsOnTaskId } })
+    return { id: dependent.id }
+  }
+
+  async function dependenciesDoneFor(workspace: Workspace, dependentId: string): Promise<boolean | undefined> {
+    const { world } = await loadWorld(brandWorkspaceId(workspace.id))
+    return world.tasks.find((t) => t.id === brandTaskId(dependentId))?.dependenciesDone
+  }
+
+  it('an auto-merged task stamps integratedAt and unblocks its dependent', async (): Promise<void> => {
+    const workspace = await seedWorkspace({ autoMerge: true })
+    const { taskId } = await seedMergingTask(workspace)
+    const dependent = await seedDependent(workspace, taskId)
+
+    expect(await dependenciesDoneFor(workspace, dependent.id)).toBe(false)
+
+    await runMergePass(brandWorkspaceId(workspace.id))
+
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: taskId } })
+    expect(task.status).toBe('done')
+    expect(task.integratedAt).not.toBeNull()
+    expect(await dependenciesDoneFor(workspace, dependent.id)).toBe(true)
+  })
+
+  it('a hand-merged task does NOT unblock its dependent until confirmIntegration', async (): Promise<void> => {
+    const workspace = await seedWorkspace({ autoMerge: false })
+    const { taskId } = await seedMergingTask(workspace)
+    const dependent = await seedDependent(workspace, taskId)
+
+    await runMergePass(brandWorkspaceId(workspace.id))
+
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: taskId } })
+    expect(task.status).toBe('done')
+    expect(task.integratedAt).toBeNull()
+    // `done`, but not integrated: the dependent stays gated, exactly the defect this task fixes.
+    expect(await dependenciesDoneFor(workspace, dependent.id)).toBe(false)
+
+    const confirmed = await confirmIntegration(taskId)
+    expect(confirmed.ok).toBe(true)
+
+    expect(await dependenciesDoneFor(workspace, dependent.id)).toBe(true)
+  })
+
+  it('a task with no dependents behaves exactly as before, whichever autoMerge path runs it', async (): Promise<void> => {
+    const workspace = await seedWorkspace({ autoMerge: false })
+    const { taskId } = await seedMergingTask(workspace)
+    // An unrelated task with no dependencies of its own, so its own vacuously-true reading is
+    // provably untouched by the merge pass over a task it has nothing to do with.
+    const bystander = await prisma.task.create({
+      data: {
+        workspaceId: workspace.id,
+        title: 'Unrelated work',
+        description: 'shares nothing with the merging task',
+        status: 'ready',
+        requiredRole: 'backend',
+        maxAttempts: 5,
+      },
+    })
+
+    await runMergePass(brandWorkspaceId(workspace.id))
+
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: taskId } })
+    // No dependents at all: `done` with a null `integratedAt` is the exact same outcome this task
+    // reached before `integratedAt` existed -- nothing reads the column for it.
+    expect(task.status).toBe('done')
+    expect(task.integratedAt).toBeNull()
+
+    const { world } = await loadWorld(brandWorkspaceId(workspace.id))
+    expect(world.tasks.find((t) => t.id === brandTaskId(bystander.id))?.dependenciesDone).toBe(true)
   })
 })

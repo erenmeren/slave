@@ -337,6 +337,15 @@ model Task {
   maxAttempts         Int
   lastRejectionReason String?
   branch              String?
+  /// M35 t2: when this task's work actually reached the base branch, distinct from `status: done`
+  /// (which only means "reviewed"). `merge.ts`'s real-merge path (`workspace.autoMerge` true)
+  /// stamps this the moment the merge commits; its `!autoMerge` path -- spec Decision 5, marking
+  /// the task `done` with no merge, branch and worktree left for a human -- leaves this `null`,
+  /// on purpose, exactly as it always has. `world.ts`'s dependency gate reads this alongside
+  /// `status` so a dependent is never provisioned from `baseBranch` while its dependency's
+  /// commits are still sitting on an unmerged branch; `confirmIntegration`
+  /// (`packages/control/src/integration.ts`) is the only other writer, for the human-merge case.
+  integratedAt        DateTime?
   createdBy           Actor      @default(human)
   /// Who caused this task to be created (M23 F6), nullable: the planner runs with no user for
   /// tasks created before this column existed, and `createdBy: slave`/`system` tasks have no
@@ -574,6 +583,10 @@ enum EventType {
   /// delete a slave, rename/delete a team) all emit this one type, distinguished by the
   /// payload's `field`.
   org_changed                @map("org.changed")
+  /// M35 t2: `confirmIntegration` stamped `Task.integratedAt` by hand -- the `!autoMerge` task
+  /// was already `done`; this is the human saying its branch has now actually reached the base
+  /// branch, unblocking whatever depends on it.
+  task_integrated            @map("task.integrated")
 }
 
 model ExecutionEvent {

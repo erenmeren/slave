@@ -10,6 +10,7 @@ import {
   claimResume,
   cloneSimulation,
   compareSimulations,
+  confirmIntegration,
   createCompany,
   createProjectTeam,
   createSimulation,
@@ -78,6 +79,10 @@ const USAGE = `usage: orchestrator <command> [options]
   pause --run <id> [--by <name>]       ask a run to stop at its next tool call
   resume --run <id> [--message <text>] continue a paused run, with an optional instruction
   cancel --run <id>                    stop a run for good; its worktree is preserved
+  confirm-integration --task <id>      a human merged a done task's branch by hand -- the
+                                       autoMerge-off workspace's own default -- so stamp it
+                                       integrated and let its dependents start. Refused unless
+                                       the task is done and not already integrated.
   clear-halt --workspace <id>          retract a WORKSPACE-WIDE safety halt
   emergency-stop --workspace <id> [--by <name>]
                                        halt scheduling on the WHOLE workspace AND pause every
@@ -642,6 +647,14 @@ export async function main(argv: readonly string[]): Promise<number> {
       if (!result.ok) throw new Error(refusalText(result.error))
       // §7.4: the worktree is the inspection surface and is deliberately left in place.
       process.stdout.write(`stopped ${runIdFlag}; its worktree is preserved\n`)
+      return 0
+    }
+
+    case 'confirm-integration': {
+      const taskIdFlag = requireFlag(flags, 'task')
+      const result = await confirmIntegration(taskIdFlag)
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(`task ${taskIdFlag} is now integrated; its dependents may start\n`)
       return 0
     }
 

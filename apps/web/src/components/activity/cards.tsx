@@ -229,6 +229,16 @@ function TaskMergeFailedCard(props: ActivityCardProps): ReactElement {
   )
 }
 
+// M35 t2: `confirmIntegration` stamped a done, hand-merged task's `integratedAt` -- empty payload
+// (schema.ts), so this card carries no extra field, just the transition itself.
+function TaskIntegratedCard(props: ActivityCardProps): ReactElement {
+  return (
+    <ActivityCard {...props}>
+      <Transition tone="working" label="integrated" />
+    </ActivityCard>
+  )
+}
+
 // ---- run.* lifecycle (schema.ts:24, 30-31, 60-66) --------------------------------------------
 
 function RunStartedCard(props: ActivityCardProps): ReactElement {
@@ -643,6 +653,7 @@ export const ACTIVITY_CARDS = {
   'task.review_rejected': TaskReviewRejectedCard,
   'task.merge_failed': TaskMergeFailedCard,
   'task.worktree_collected': TaskWorktreeCollectedCard,
+  'task.integrated': TaskIntegratedCard,
   'workspace.goal_set': WorkspaceGoalSetCard,
   'workspace.plan_created': WorkspacePlanCreatedCard,
   'workspace.company_assigned': WorkspaceCompanyAssignedCard,

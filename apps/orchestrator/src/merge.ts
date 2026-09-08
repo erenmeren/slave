@@ -145,7 +145,11 @@ export async function runMergePass(workspaceId: WorkspaceId): Promise<void> {
   if (!workspace.autoMerge) {
     await prisma.task.update({
       where: { id: task.id },
-      data: { status: 'done', mergeClaimedAt: null, lastRejectionReason: null },
+      // M35 t2: no git merge happened here, on purpose -- `integratedAt` stays null (explicit,
+      // not just the column's default) so `world.ts`'s dependency gate keeps this task's
+      // dependents, if any, waiting until a human runs `confirmIntegration` after merging the
+      // branch by hand.
+      data: { status: 'done', mergeClaimedAt: null, lastRejectionReason: null, integratedAt: null },
     })
     await appendEvent({
       type: 'task.done',
@@ -243,9 +247,11 @@ export async function runMergePass(workspaceId: WorkspaceId): Promise<void> {
     return
   }
 
+  // M35 t2: the commits genuinely reached `workspace.baseBranch` above -- `integratedAt` says so,
+  // and `world.ts`'s dependency gate reads it before letting a dependent start.
   await prisma.task.update({
     where: { id: task.id },
-    data: { status: 'done', mergeClaimedAt: null, lastRejectionReason: null },
+    data: { status: 'done', mergeClaimedAt: null, lastRejectionReason: null, integratedAt: new Date() },
   })
   await appendEvent({
     type: 'task.done',

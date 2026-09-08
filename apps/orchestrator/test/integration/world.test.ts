@@ -63,6 +63,9 @@ async function seedFixture(): Promise<Fixture> {
       title: 'doneDep',
       description: 'already merged',
       status: 'done',
+      // M35 t2: `done` alone no longer satisfies the gate -- this fixture's whole point is a
+      // dependency that genuinely IS satisfied, so it must carry the stamp too.
+      integratedAt: new Date(),
       requiredRole: 'backend',
       maxAttempts: workspace.maxAttempts,
     },
@@ -164,6 +167,24 @@ describe('loadWorld', () => {
     expect(ready?.dependenciesDone).toBe(true)
     const done = world.tasks.find((t) => t.id === taskId(fixture.doneDepTaskId))
     expect(done?.dependenciesDone).toBe(true)
+  })
+
+  it('M35 t2: a done-but-unintegrated dependency does NOT satisfy the gate, only status=done AND integratedAt does', async (): Promise<void> => {
+    // `doneDep` is `done` with no stamp -- the `!autoMerge` shape: reviewed, but its branch and
+    // worktree are still sitting there for a human. Its own single dependent (`readyTask`) must
+    // stay gated until it is.
+    await prisma.task.update({ where: { id: fixture.doneDepTaskId }, data: { integratedAt: null } })
+
+    const before = await loadWorld(workspaceId(fixture.workspaceId))
+    const readyBefore = before.world.tasks.find((t) => t.id === taskId(fixture.readyTaskId))
+    expect(readyBefore?.dependenciesDone).toBe(false)
+
+    // The stamp alone -- status stays `done`, nothing else about the row changes -- flips the gate.
+    await prisma.task.update({ where: { id: fixture.doneDepTaskId }, data: { integratedAt: new Date() } })
+
+    const after = await loadWorld(workspaceId(fixture.workspaceId))
+    const readyAfter = after.world.tasks.find((t) => t.id === taskId(fixture.readyTaskId))
+    expect(readyAfter?.dependenciesDone).toBe(true)
   })
 
   it('counts tasks with no required role instead of silently dropping them', async (): Promise<void> => {

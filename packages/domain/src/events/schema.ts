@@ -206,6 +206,11 @@ export const executionEventSchema = z.discriminatedUnion('type', [
       slaves: z.number().int().nonnegative().optional(),
     }),
   }),
+  // M35 t2: `confirmIntegration` (packages/control/src/integration.ts) stamped `Task.integratedAt`
+  // by hand -- the task was already `done` under `!autoMerge`; a human is now saying its branch
+  // has actually reached the base branch. Empty payload: the envelope's own `taskId` and `ts`
+  // already say which task and when.
+  z.object({ ...envelope, type: z.literal('task.integrated'), payload: z.object({}) }),
 ])
 
 export type ExecutionEvent = z.infer<typeof executionEventSchema>

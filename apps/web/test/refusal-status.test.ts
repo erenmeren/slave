@@ -21,6 +21,8 @@ const ALL_KINDS: Record<ControlRefusal['kind'], true> = {
   pause_unsignalled: true,
   provider_cannot_resume: true,
   task_not_found: true,
+  task_not_done: true,
+  already_integrated: true,
   self_dependency: true,
   duplicate_dependency: true,
   cross_workspace: true,

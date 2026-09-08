@@ -101,6 +101,15 @@ export function TaskDetailPanel({
           <span data-testid="detail-status" className={`text-xs ${TASK_STATUS_TEXT[task.status]}`}>
             {task.status}
           </span>
+          {/* M35 t2: `done` means reviewed, not necessarily on the base branch yet -- the
+              `!autoMerge` path leaves `integratedAt` null on purpose (branch/worktree left for a
+              human). The smallest honest marker for that: no redesign, just a line the same size
+              and place `lastRejectionReason` already uses below. */}
+          {task.status === 'done' && task.integratedAt === null && (
+            <span data-testid="awaiting-integration" className="block text-xs text-tone-waiting">
+              awaiting integration
+            </span>
+          )}
         </div>
         <Button variant="ghost" onClick={onClose} aria-label="Close task detail">
           close

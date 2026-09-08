@@ -269,6 +269,32 @@ describe('the orchestrator CLI', () => {
     expect(`${result.stdout}${result.stderr}`).toMatch(/--goal is required/)
   })
 
+  it('confirms integration on a done task', async (): Promise<void> => {
+    await prisma.task.update({ where: { id: fixture.taskId }, data: { status: 'done', integratedAt: null } })
+
+    const result = await runCli(['confirm-integration', '--task', fixture.taskId])
+
+    expect(result.code).toBe(0)
+    expect(result.stdout).toMatch(/integrated/)
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+    expect(task.integratedAt).not.toBeNull()
+  })
+
+  it('exits non-zero for confirm-integration on a task that is not done yet', async (): Promise<void> => {
+    // `fixture.taskId` seeds as `ready` (see `seed` above), not `done`.
+    const result = await runCli(['confirm-integration', '--task', fixture.taskId])
+
+    expect(result.code).not.toBe(0)
+    expect(`${result.stdout}${result.stderr}`).toMatch(/only a done task can be confirmed integrated/)
+  })
+
+  it('exits non-zero for confirm-integration with no --task given', async (): Promise<void> => {
+    const result = await runCli(['confirm-integration'])
+
+    expect(result.code).not.toBe(0)
+    expect(`${result.stdout}${result.stderr}`).toMatch(/--task is required/)
+  })
+
   it('creates a template', async (): Promise<void> => {
     const result = await runCli(['create-template', '--name', 'Backend Engineer', '--role', 'backend'])
 

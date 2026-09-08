@@ -82,10 +82,19 @@ interface TaskWorldRow {
 /**
  * Loads every `Task` row for the workspace alongside a SQL-computed `dependenciesDone`: true
  * when the task has no dependencies at all (vacuously satisfied) or when every dependency it
- * does have is `done`. Computing this with `NOT EXISTS` rather than fetching dependencies and
- * reducing in application code keeps the read to one round trip and, more importantly, keeps the
- * "every dependency done" definition in the one place a query planner can prove it against the
- * data instead of a second, hand-written traversal that could drift from it.
+ * does have is both `done` AND integrated. Computing this with `NOT EXISTS` rather than fetching
+ * dependencies and reducing in application code keeps the read to one round trip and, more
+ * importantly, keeps the "every dependency done" definition in the one place a query planner can
+ * prove it against the data instead of a second, hand-written traversal that could drift from it.
+ *
+ * M35 t2: `dep.status <> 'done'` alone used to be the whole predicate -- but `merge.ts`'s
+ * `!autoMerge` path marks a task `done` with no git merge at all (spec Decision 5), leaving its
+ * branch and worktree for a human. A dependent gated on `status` alone was scheduled and
+ * provisioned from `workspace.baseBranch` while that dependency's commits were still sitting on
+ * the unmerged branch. `dep."integratedAt" IS NULL` closes that: it is null until `merge.ts`'s
+ * real-merge path stamps it, or a human runs `confirmIntegration`/`orchestrator
+ * confirm-integration` after merging by hand -- see `Task.integratedAt`'s own doc comment in
+ * `schema.prisma`.
  */
 async function loadTaskRows(
   tx: Prisma.TransactionClient,
@@ -101,7 +110,7 @@ async function loadTaskRows(
         SELECT 1
         FROM "TaskDependency" td
         JOIN "Task" dep ON dep.id = td."dependsOnTaskId"
-        WHERE td."taskId" = t.id AND dep.status <> 'done'
+        WHERE td."taskId" = t.id AND (dep.status <> 'done' OR dep."integratedAt" IS NULL)
       ) AS "dependenciesDone"
     FROM "Task" t
     WHERE t."workspaceId" = ${workspaceId}

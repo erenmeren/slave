@@ -35,6 +35,7 @@ const task = (over: Partial<TaskBoardItem>): TaskBoardItem => ({
   runs: [],
   collectable: false,
   artifacts: [],
+  integratedAt: null,
   ...over,
 })
 
@@ -221,6 +222,29 @@ describe('TaskDetailPanel', () => {
   it('carries the motion-safe panel slide-in animation class on its root', () => {
     const { container } = render(<TaskDetailPanel workspaceId="w1" task={task({})} onClose={() => {}} />)
     expect(container.querySelector('aside')?.className).toContain('motion-safe:animate-[panel-in_160ms_ease-out]')
+  })
+})
+
+describe('TaskDetailPanel integration marker (M35 t2)', () => {
+  it("shows 'awaiting integration' on a done task whose integratedAt is null", () => {
+    render(<TaskDetailPanel workspaceId="w1" task={task({ status: 'done', integratedAt: null })} onClose={() => {}} />)
+    expect(screen.getByTestId('awaiting-integration')).toBeTruthy()
+  })
+
+  it('shows no marker for a done task once integratedAt is set', () => {
+    render(
+      <TaskDetailPanel
+        workspaceId="w1"
+        task={task({ status: 'done', integratedAt: new Date(0).toISOString() })}
+        onClose={() => {}}
+      />,
+    )
+    expect(screen.queryByTestId('awaiting-integration')).toBeNull()
+  })
+
+  it('shows no marker for a task that is not done at all', () => {
+    render(<TaskDetailPanel workspaceId="w1" task={task({ status: 'running', integratedAt: null })} onClose={() => {}} />)
+    expect(screen.queryByTestId('awaiting-integration')).toBeNull()
   })
 })
 

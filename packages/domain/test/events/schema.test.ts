@@ -262,6 +262,17 @@ describe('parseExecutionEvent', () => {
     if (result.ok) expect(result.value.type).toBe('task.merge_failed')
   })
 
+  it('accepts a task.integrated event with an empty payload', () => {
+    const result = parseExecutionEvent({
+      ...BASE,
+      type: 'task.integrated',
+      taskId: 'TASK-1',
+      payload: {},
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.value.type).toBe('task.integrated')
+  })
+
   it('accepts a workspace.goal_set event', () => {
     const result = parseExecutionEvent({
       ...BASE,

@@ -1,5 +1,5 @@
 /**
- * The activity timeline's filter vocabulary: the six user-facing "kinds" that group the 29
+ * The activity timeline's filter vocabulary: the six user-facing "kinds" that group the 30
  * `DomainEventType`s, the `ActivityFilters` shape parsed from a URL's query params, and the
  * predicate that decides whether one event matches those filters. Pure — no `prisma`, no React —
  * so it is importable from both server routes (`?slaves=`, `?tasks=`, `?types=`, `?kinds=` parsing)
@@ -39,6 +39,9 @@ export const TYPES_BY_KIND = {
     'task.review_rejected',
     'task.merge_failed',
     'task.worktree_collected',
+    // M35 t2: `confirmIntegration` stamped a done, hand-merged task's `integratedAt` -- a task
+    // outcome, the same chip as `task.done` and `task.merge_failed` beside it.
+    'task.integrated',
   ],
   interventions: ['run.pause_requested', 'run.resume_requested', 'run.stopped', 'slave.message_sent'],
   guardrails: ['guardrail.tripped'],
