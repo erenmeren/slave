@@ -85,3 +85,23 @@ Creating a workspace from the drawer, adopting trade runs, goal text, roles as r
 **T1-E7 — an idempotency key belongs to one adoption.** Replaying a key against a DIFFERENT workspace used to answer with the first workspace's id; it now refuses `invalid_simulation_input { detail: 'idempotency key already used for another workspace' }`.
 
 **T1-E8 — `adoptSimulation`'s transaction runs at `RepeatableRead`**, as §3 says. The two `FOR UPDATE` locks are what make it correct; the level matches `read.ts`'s multi-read transactions.
+
+### Task 2
+
+**T2-E1 — the run page's snapshot carries `adoptable: boolean`.** §4 says "software runs only" show the button and "a trade run shows no button", but names no field the page could read to decide. `SimulationSnapshot` (`apps/web/src/server/simulation.ts`) gained `adoptable`, set from `plugin.adoptable.ok` — the plugin's own verdict, so nothing under `apps/web/src` names a sector; `SimulationClient.tsx` renders `sim-adopt-open` and mounts `AdoptDrawer` only when it is `true`.
+
+**T2-E2 — the "adopted from" note lives in the overview component, fed by the snapshot.** §4 placed it on "the workspace overview" and the plan said to find the component under `apps/web/src/app/w/[workspaceId]`; the project header there is `OverviewClient.tsx` (`apps/web/src/components`), so the note (`ws-adopted-from`, "organisation adopted from simulation <name>" linking to `/sim/<id>`) renders there, above the top strip, off a new `OverviewSnapshot.workspace.adoptedFrom: { simulationId, name } | null` that `buildOverviewSnapshot` reads by including `adoptedFromSimulation` on its one existing workspace query — no route-level component and no second round trip.
+
+**T2-E3 — the preview route answers with the preview itself, and `refusalStatus` is exported for it.** Every other sim route wraps a mutation's small value in `{ ok: true, ... }` through `simControlResponse`; `GET /api/sim/[id]/adoption` returns `AdoptionPreview` bare, since the preview IS the payload the drawer renders. To map its refusals the same way (404 for a not-found id, 409 otherwise), the status rule inside `simControlResponse` was extracted as `refusalStatus(kind)` in `apps/web/src/server/simControlRoute.ts`.
+
+**T2-E4 — the chips have a test id, and the CLI reads the settings back.** §4 named the `adopted → <workspaceName>` chip but no test id; both the run cards (`SimulationsClient.tsx`) and the run strip (`SimulationStrip.tsx`) render it as `sim-adopted-chip`. §4 said the CLI "prints the assign report and the settings written"; `adoptSimulation`'s return carries only the assign report, so `adopt-simulation` reads `maxConcurrentRuns`/`maxAttempts`/`autoMerge` back off the workspace row it just wrote and prints those.
+
+### Task 2 fix round 1
+
+**T2-E5 (ruling R3) — `runtimeRole` is on the preview, not re-derived in the drawer.** The first cut of `AdoptDrawer.tsx` carried its own two-entry `lead → manager`, `reviewer → reviewer` table to fill the "becomes" column — a copy of control's `RUNTIME_ROLE` that would have drifted the first time either side changed. `AdoptionPreview.roles[]` now carries `runtimeRole`, computed by one function in control, `runtimeRoleOf`, which reads the same `RUNTIME_ROLE` table `roleOverridesOf` writes from; the drawer's third column is `row.runtimeRole` and nothing more. §3's interface amended above.
+
+**T2-E6 — an unknown workspace is 404 on the adopt route.** `workspace_not_found` joined the sim routes' `NOT_FOUND` set in `simControlRoute.ts`. It was the one place a wrong workspace id read 409: the archive/restore routes already answer 404 for it, and `company_not_found` already did here.
+
+**T2-E7 — the CLI help names no sector.** The `adopt-simulation` usage text said "Only a software-sector run is adoptable"; it now says "Only a run whose sector allows adoption is adoptable" — the plugin's `adoptable` verdict is the rule, and the CLI, like control and web, does not spell a sector's name outside the registry.
+
+**T2-E8 — a blank or non-numeric setting blocks submit.** A cleared `sim-adopt-max-concurrent` / `sim-adopt-max-attempts` field used to fall back silently to the proposal — a value the person had just deleted. The drawer now shows "enter a whole number" inline (`sim-adopt-max-concurrent-error` / `sim-adopt-max-attempts-error`), disables `sim-adopt-submit`, and the POST body always carries both integers; the control layer's `1..10` / `1..5` ranges still refuse anything outside them with 409, worded as in T1-E3.

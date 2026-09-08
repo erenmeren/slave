@@ -98,6 +98,18 @@ the same queue; the sector's own metrics (delivered, on time, late, tasks rework
 incidents, idle engineer-days…) come from the same journal every other sector reads.
 `docs/superpowers/specs/2026-09-07-m31b-software-sector-design.md` has the full design.
 
+**Adopt the organisation.** Once you like how a software run's crew works, you can put it on a
+real project. From the run's page, **Adopt this organisation…** takes a project that has no
+company yet (create one from Projects first) and materialises the run's roster onto it: the run's
+lead becomes the project's manager and its reviewer the reviewer; every other member keeps its
+catalog role. The drawer proposes `maxConcurrentRuns` (one per engineer) and `maxAttempts` from the
+run's policy, both editable; `autoMerge` stays off. On an `llm` run a checkbox offers to set the
+run's model on the lead's roster row — that is real, paid use, so it is only written when you tick
+it. Adoption starts nothing: no daemon, no run, no deploy — the project waits for you to start it
+as before. Afterwards the project's Overview says which simulation its organisation came from, and
+the run's card shows an **adopted →** chip naming the project. A trade run has no adopt button:
+its roles are not software roles.
+
 ### Let a model decide
 
 By default every role is decided by a fixed rules provider — no model, no cost. From the **+ New
@@ -130,7 +142,7 @@ nothing about them resumes automatically.
 | **Settings** `/w/<id>/settings` | This project's goal, its runtime (provider, budget, and the read-only concurrency/timeout/attempts limits), its own slave permissions, its emergency stop, and its danger zone to archive/restore the project. |
 | **Slaves** `/slaves` | One table + Departments: every slave, project-materialized or still catalog-only, with its department as a select, rename/re-role/delete a slave with its history and a model chosen from the provider's own list inline; **+ New slave** adds one to the catalog and, optionally, to a project; a **Departments** tab beside it to add, rename or delete a project's department, along with the slaves on it. |
 | **Skills** `/skills` | The skill catalog and its assignments. |
-| **Simulations** `/sim` | Company simulation runs (M29): create one from a catalog company — a trade company on synthetic data, decided by the rules provider, no repository and no model call; step it by day, run it to a horizon, pause, halt, add customer demand or a supplier delay; the simulated company's cash and the real model cost are two separate panels; metrics are computed from the run's own journal; clone a run under another policy, let the daemon auto-run it, compare two runs side by side (no verdict). |
+| **Simulations** `/sim` | Company simulation runs (M29): create one from a catalog company — a trade company on synthetic data, decided by the rules provider, no repository and no model call; step it by day, run it to a horizon, pause, halt, add customer demand or a supplier delay; the simulated company's cash and the real model cost are two separate panels; metrics are computed from the run's own journal; clone a run under another policy, let the daemon auto-run it, compare two runs side by side (no verdict); adopt a software run's organisation into a company-less project (M33). |
 | **Analytics** `/analytics` | Spend and throughput. |
 | **Settings** `/settings` | Provider adapters, security, and reset demo data (development only). |
 
@@ -175,6 +187,7 @@ npm run orchestrator -- clone-simulation --simulation <id> --name <n> --policy A
 npm run orchestrator -- auto-run-simulation --simulation <id> [--every-ms <n>] [--until-day <d>]  # needs `orchestrator -- daemon` running
 npm run orchestrator -- stop-auto-run --simulation <id>
 npm run orchestrator -- compare-simulations --a <id> --b <id>  # both runs' metrics and b − a deltas as JSON, no verdict
+npm run orchestrator -- adopt-simulation --simulation <id> --workspace <id> [--max-concurrent <n>] [--max-attempts <n>] [--apply-model]  # starts nothing; autoMerge stays off
 ```
 
 Every `delete-*` verb deletes what it names WITH everything under it (a slave's run history, a
