@@ -21,6 +21,7 @@ import {
 import type { RunOutcome, RuntimeEvent } from '@slave-of-ai/providers'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { deliverAnswers } from '../../src/deliver.js'
+import { pendingInbox } from '../../src/inbox.js'
 import { pumpRun } from '../../src/pump.js'
 
 /** The adapter hands the pump an async stream; an array is the same contract without a process. */
@@ -96,6 +97,9 @@ interface Fixture {
   readonly sam: Runner
   /** The slave that answers, and a run of its own to answer from. */
   readonly maya: Runner
+  /** A SECOND holder of the `answerer` role: a role-addressed question reaches both of them, and
+   *  both can conclude with a real answer in the same window. */
+  readonly nina: Runner
   /** A question in ANOTHER workspace, invisible to everyone above. */
   readonly foreignQuestionId: string
 }
@@ -138,6 +142,7 @@ async function seed(): Promise<Fixture> {
   const alex = await makeRunner(workspace, team.id, 'Alex', 'backend')
   const sam = await makeRunner(workspace, team.id, 'Sam', 'frontend')
   const maya = await makeRunner(workspace, team.id, 'Maya', 'answerer')
+  const nina = await makeRunner(workspace, team.id, 'Nina', 'answerer')
 
   // A question in the other workspace, addressed to a role Maya also holds -- the cross-workspace
   // boundary is the only thing that can refuse it.
@@ -157,7 +162,7 @@ async function seed(): Promise<Fixture> {
     },
   })
 
-  return { workspaceId: workspaceId(workspace.id), alex, sam, maya, foreignQuestionId: foreign.id }
+  return { workspaceId: workspaceId(workspace.id), alex, sam, maya, nina, foreignQuestionId: foreign.id }
 }
 
 /** One clean run on `runner` whose final message ends with `text`. */
@@ -306,6 +311,41 @@ describe('a slave answers, and the asker resumes', () => {
     })
   })
 
+  describe("the recipient's inbox", () => {
+    it('carries an unanswered question, and drops it the moment somebody answers', async () => {
+      const asked = await askAndWait(fixture, fixture.alex, 'Which queue should retries land on?')
+
+      const before = await pendingInbox(fixture.maya.slaveId)
+      expect(before.messageIds).toEqual([asked])
+      expect(before.section).toContain('Which queue should retries land on?')
+
+      await pumpEndingWith(fixture.maya, fixture.workspaceId, answer(JSON.stringify({ messageId: asked, answer: 'payments-retry' })))
+
+      expect(await pendingInbox(fixture.maya.slaveId)).toEqual({ section: null, messageIds: [] })
+    })
+
+    // Fix round 1, finding 1: a human answer has to close the question too. The web route
+    // (`apps/web/.../messages/[messageId]/answer`) is this verb behind an envelope -- before the
+    // fix the panel resumed the asker and wrote nothing, so the question kept coming back into
+    // every later run of every holder of the role, under a sentence that was by then false.
+    it('drops the question for EVERY holder of the role once an operator answers it', async () => {
+      const asked = await askAndWait(fixture, fixture.alex, 'Which queue should retries land on?')
+      expect((await pendingInbox(fixture.maya.slaveId)).messageIds).toEqual([asked])
+      expect((await pendingInbox(fixture.nina.slaveId)).messageIds).toEqual([asked])
+
+      const written = await answerQuestion(asked, { body: 'payments-retry', answeredBy: 'web operator' })
+      expect(written.ok).toBe(true)
+
+      expect((await pendingInbox(fixture.maya.slaveId)).messageIds).toEqual([])
+      expect((await pendingInbox(fixture.nina.slaveId)).messageIds).toEqual([])
+    })
+
+    it('never hands a slave its own question', async () => {
+      const asked = await askAndWait(fixture, fixture.alex, 'Which queue?')
+      expect((await pendingInbox(fixture.alex.slaveId)).messageIds).not.toContain(asked)
+    })
+  })
+
   describe('delivery', () => {
     it('resumes exactly the waiting run that asked, and no other', async () => {
       const asked = await askAndWait(fixture, fixture.alex, 'Which queue?')
@@ -364,6 +404,10 @@ describe('a slave answers, and the asker resumes', () => {
 
       // One of the two passes claimed the run; the other found nothing left to claim.
       expect(left.length + right.length).toBe(1)
+      // And the answer that lost is stamped superseded, not left looking like one still pending.
+      const answers = await prisma.slaveMessage.findMany({ where: { kind: 'answer' }, orderBy: { seq: 'asc' } })
+      expect(answers.filter((row) => row.deliveredAt !== null)).toHaveLength(1)
+      expect(answers.filter((row) => row.supersededAt !== null)).toHaveLength(1)
       expect(
         await prisma.executionEvent.count({ where: { runId: fixture.alex.runId, type: 'run_resume_requested' } }),
       ).toBe(1)
@@ -376,6 +420,53 @@ describe('a slave answers, and the asker resumes', () => {
       expect(run.status).toBe('resuming')
       // The claim path's own write, unchanged by delivery: the task comes back with the run.
       expect((await prisma.task.findUniqueOrThrow({ where: { id: fixture.alex.taskId } })).status).toBe('running')
+    })
+
+    it('stamps and logs the SECOND answer to a role-addressed question instead of dropping it', async () => {
+      // The case the role broadcast makes ordinary: Maya and Nina both hold `answerer`, both were
+      // shown the question, and both conclude with a real answer.
+      const asked = await askAndWait(fixture, fixture.alex, 'Which queue?')
+      await pumpEndingWith(fixture.maya, fixture.workspaceId, answer(JSON.stringify({ messageId: asked, answer: 'payments-retry' })))
+      await pumpEndingWith(fixture.nina, fixture.workspaceId, answer(JSON.stringify({ messageId: asked, answer: 'payments-dlq' })))
+
+      const delivered = await deliverAnswers(fixture.workspaceId)
+
+      expect(delivered).toHaveLength(1)
+      const winner = await prisma.slaveMessage.findFirstOrThrow({ where: { slaveId: fixture.maya.slaveId, kind: 'answer' } })
+      const loser = await prisma.slaveMessage.findFirstOrThrow({ where: { slaveId: fixture.nina.slaveId, kind: 'answer' } })
+      expect(winner.deliveredAt).not.toBeNull()
+      expect(winner.supersededAt).toBeNull()
+      // The point of the fix: `null` no longer means both "pending" and "will never wake anybody".
+      expect(loser.deliveredAt).toBeNull()
+      expect(loser.supersededAt).not.toBeNull()
+      expect((await prisma.slaveRun.findUniqueOrThrow({ where: { id: fixture.alex.runId } })).queuedMessage).toContain('payments-retry')
+    })
+
+    it('stamps an answer that arrives AFTER its rival was already delivered', async () => {
+      const asked = await askAndWait(fixture, fixture.alex, 'Which queue?')
+      await pumpEndingWith(fixture.maya, fixture.workspaceId, answer(JSON.stringify({ messageId: asked, answer: 'payments-retry' })))
+      await deliverAnswers(fixture.workspaceId)
+      // Nina's run was already in flight with the question in its prompt; it concludes a tick later,
+      // by which time the asker is no longer waiting and the loop above will never look at it.
+      await pumpEndingWith(fixture.nina, fixture.workspaceId, answer(JSON.stringify({ messageId: asked, answer: 'payments-dlq' })))
+
+      expect(await deliverAnswers(fixture.workspaceId)).toEqual([])
+
+      const loser = await prisma.slaveMessage.findFirstOrThrow({ where: { slaveId: fixture.nina.slaveId, kind: 'answer' } })
+      expect(loser.supersededAt).not.toBeNull()
+    })
+
+    it('leaves an answer nobody has raced alone: pending is still pending', async () => {
+      const asked = await askAndWait(fixture, fixture.alex, 'Which queue?')
+      await pumpEndingWith(fixture.maya, fixture.workspaceId, answer(JSON.stringify({ messageId: asked, answer: 'payments-retry' })))
+      // Cancelled, so delivery refuses before the claim -- the answer is genuinely still pending.
+      await prisma.task.update({ where: { id: fixture.alex.taskId }, data: { status: 'cancelled' } })
+
+      await deliverAnswers(fixture.workspaceId)
+
+      const row = await prisma.slaveMessage.findFirstOrThrow({ where: { kind: 'answer' } })
+      expect(row.deliveredAt).toBeNull()
+      expect(row.supersededAt).toBeNull()
     })
 
     it('does NOT resume a task the operator cancelled', async () => {

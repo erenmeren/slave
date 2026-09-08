@@ -202,7 +202,7 @@ describe('SlaveCard', () => {
   describe('a slave waiting for another slave (M36 t2)', () => {
     const waiting = slave({
       status: 'paused',
-      waitingFor: { recipient: 'Maya', question: 'Which queue should retries land on?' },
+      waitingFor: { recipient: 'Maya', question: 'Which queue should retries land on?', messageId: 'm-1' },
     })
 
     it('offers Answer instead of Resume, and Answer opens the panel where an answer can be typed', () => {

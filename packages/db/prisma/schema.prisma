@@ -601,8 +601,18 @@ model SlaveMessage {
   /// intent between them, and a replay of the same answer produces none at all. Cleared again if
   /// the resume it was claimed for is refused, so a transient refusal is not a permanently
   /// swallowed answer. Null on every question, every human instruction, and every answer not yet
-  /// delivered.
+  /// delivered -- and, since fix round 1, null is PENDING only: an answer that lost the race is
+  /// `supersededAt`, not null.
   deliveredAt      DateTime?
+  /// The moment `deliverAnswers` established that this answer will never wake anybody (M36 t3 fix
+  /// round 1): another answer to the same question had already been delivered by the time this one
+  /// was looked at. A role-addressed question is injected into every holder of the role, so two
+  /// workers concluding in the same window each write a real answer and only the first can close
+  /// the wait -- without this column the second is indistinguishable from one still waiting to be
+  /// delivered, on a question that has already dropped out of `listPendingQuestions`. Stamping it
+  /// (and logging it, see `deliver.ts`) is what keeps §13's "no failure is silent" true here.
+  /// Mutually exclusive with `deliveredAt` by construction: one is set, or the other, or neither.
+  supersededAt     DateTime?
   /// Monotonic, gap-permitted insertion order -- `createdAt`'s millisecond resolution is not fine
   /// enough to order two messages written in the same tick, the same reasoning
   /// `ExecutionEvent.seq` (packages/events/src/append.ts) already codifies for this codebase.

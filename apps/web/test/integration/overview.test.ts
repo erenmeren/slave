@@ -554,7 +554,7 @@ describe('buildOverviewSnapshot', () => {
         pauseReason: 'waiting_for_answer',
       },
     })
-    await prisma.slaveMessage.create({
+    const question = await prisma.slaveMessage.create({
       data: {
         taskId: fixture.taskId,
         slaveId: fixture.slaveId,
@@ -573,7 +573,12 @@ describe('buildOverviewSnapshot', () => {
     // A waiting run is `paused` like every operator pause; this field is the ONLY thing that tells
     // the two apart on screen, so the surfaces do not offer to resume a slave nobody has answered.
     expect(card?.status).toBe('paused')
-    expect(card?.waitingFor).toEqual({ recipient: 'Maya', question: 'Which queue should retries land on?' })
+    // `messageId` (M36 t3 fix round 1) is what the panel POSTs the operator's answer against.
+    expect(card?.waitingFor).toEqual({
+      recipient: 'Maya',
+      question: 'Which queue should retries land on?',
+      messageId: question.id,
+    })
   })
 
   it('names the ROLE a broadcast question was addressed to, and says nothing for an ordinary pause', async (): Promise<void> => {
@@ -585,7 +590,7 @@ describe('buildOverviewSnapshot', () => {
     ).toBeNull()
 
     await prisma.slaveRun.update({ where: { id: run.id }, data: { pauseReason: 'waiting_for_answer' } })
-    await prisma.slaveMessage.create({
+    const broadcast = await prisma.slaveMessage.create({
       data: {
         slaveId: fixture.slaveId,
         workspaceId: fixture.workspaceId,
@@ -600,7 +605,7 @@ describe('buildOverviewSnapshot', () => {
     })
     expect(
       (await buildOverviewSnapshot(fixture.workspaceId))?.slaves.find((s) => s.id === fixture.slaveId)?.waitingFor,
-    ).toEqual({ recipient: 'anyone with the answerer role', question: 'Which queue?' })
+    ).toEqual({ recipient: 'anyone with the answerer role', question: 'Which queue?', messageId: broadcast.id })
   })
 
   it('leaves out a run that is waiting for another slave, which needs nobody here (M36 t2)', async (): Promise<void> => {

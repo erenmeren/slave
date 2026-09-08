@@ -59,9 +59,14 @@ function resumePrompt(question: string, answeredBy: string, answer: string): str
  * `claimResume`'s own `paused -> resuming` `updateMany` in the tick's resume pass, which is what
  * EVERY resume in the system goes through and what finally decides which caller spawns the child.
  *
- * An answer that loses that race keeps `deliveredAt` null and is never delivered: the run it would
- * have woken has already been woken, and it stops being scanned the moment that run is no longer
- * waiting. It stays in the thread, which is where an operator reads it.
+ * An answer that loses that race is STAMPED, not left looking pending: {@link supersedeLateAnswers}
+ * runs at the end of every pass and marks every undelivered answer whose question already has a
+ * delivered one, with a log line naming the loser, the winner and the question (fix round 1,
+ * finding 2). Before that, `deliveredAt IS NULL` meant both "still waiting to be delivered" and
+ * "will never wake anybody" -- and the second happens for real, because a role-addressed question
+ * is injected into every holder of the role and two of them can conclude in the same window. The
+ * superseded answer is not thrown away: it stays in the thread, which is where an operator reads
+ * it.
  *
  * This pass never writes `Task.status`. `claimResume` flips `waiting -> running` atomically with the
  * run's own claim (M36 t2 fix round 1), and a second writer of that column here could start a task
@@ -85,7 +90,57 @@ export async function deliverAnswers(workspaceId: string): Promise<readonly Answ
     const one = await deliverToOneRun(run)
     if (one !== null) delivered.push(one)
   }
+
+  // After the loop, not inside it: an answer written in this very pass's window loses to the one
+  // just delivered above, and an answer written after a previous pass delivered its rival is never
+  // looked at by the loop at all (its run is no longer waiting, so it is not in `waiting`).
+  await supersedeLateAnswers(workspaceId)
+
   return delivered
+}
+
+/**
+ * Stamps every answer that can no longer wake anybody, and says so out loud (fix round 1).
+ *
+ * The set is exact and needs no bookkeeping: an answer with no `deliveredAt` and no `supersededAt`
+ * whose QUESTION already has a delivered answer. One `updateMany` per row, conditioned on
+ * `supersededAt: null`, so two passes racing here stamp it once between them and only the winner
+ * logs.
+ *
+ * Not a second delivery mechanism -- nothing is resumed here. It exists so that "this answer is
+ * pending" and "this answer arrived too late" stop being the same three nulls in the database, and
+ * so that a worker whose answer went nowhere leaves a line in the log rather than nothing at all.
+ */
+async function supersedeLateAnswers(workspaceId: string): Promise<void> {
+  const losers = await prisma.slaveMessage.findMany({
+    where: {
+      workspaceId,
+      kind: 'answer',
+      deliveredAt: null,
+      supersededAt: null,
+      // "my question already has a delivered answer" -- read through the parent, which is the only
+      // place that fact lives.
+      replyTo: { replies: { some: { deliveredAt: { not: null } } } },
+    },
+    select: { id: true, replyToId: true, slaveId: true },
+  })
+
+  for (const loser of losers) {
+    const stamped = await prisma.slaveMessage.updateMany({
+      where: { id: loser.id, supersededAt: null, deliveredAt: null },
+      data: { supersededAt: new Date() },
+    })
+    if (stamped.count === 0) continue
+    const winner = await prisma.slaveMessage.findFirst({
+      where: { replyToId: loser.replyToId, deliveredAt: { not: null } },
+      orderBy: { seq: 'asc' },
+      select: { id: true },
+    })
+    console.warn(
+      `[deliver] answer ${loser.id} from slave ${loser.slaveId} to question ${String(loser.replyToId)} was superseded: ` +
+        `answer ${winner?.id ?? 'unknown'} had already been delivered. Nobody was resumed with it; it stays in the thread.`,
+    )
+  }
 }
 
 async function deliverToOneRun(run: {

@@ -7,6 +7,7 @@ import { POST as pausePOST } from '../../src/app/api/w/[workspaceId]/runs/[runId
 import { POST as resumePOST } from '../../src/app/api/w/[workspaceId]/runs/[runId]/resume/route.js'
 import { POST as stopPOST } from '../../src/app/api/w/[workspaceId]/runs/[runId]/stop/route.js'
 import { POST as messagePOST } from '../../src/app/api/w/[workspaceId]/runs/[runId]/message/route.js'
+import { POST as answerPOST } from '../../src/app/api/w/[workspaceId]/messages/[messageId]/answer/route.js'
 import { POST as emergencyStopPOST } from '../../src/app/api/w/[workspaceId]/emergency-stop/route.js'
 import { POST as goalPOST } from '../../src/app/api/w/[workspaceId]/goal/route.js'
 
@@ -164,6 +165,109 @@ describe('the control routes', () => {
       })
       expect(response.status).toBe(409)
       expect((await response.json()).error).toContain('no checkpoint')
+    })
+  })
+
+  // M36 t3 fix round 1, finding 1: the panel's "answer" button used to POST the run's `resume`
+  // route, which wrote no message -- the asker resumed and its question stayed unanswered forever.
+  describe('answer', () => {
+    /** The question a waiting run is parked on, written the way the ask path writes it. */
+    async function askAQuestion(workspaceId: string): Promise<string> {
+      const question = await prisma.slaveMessage.create({
+        data: {
+          slaveId: (await prisma.slave.findFirstOrThrow({ where: { team: { workspaceId: fixture.workspace.id } } })).id,
+          workspaceId,
+          senderRunId: fixture.run.id,
+          taskId: fixture.task.id,
+          recipientRole: 'product',
+          threadId: 'thread-1',
+          kind: 'question',
+          body: 'Which queue should retries land on?',
+          actor: 'slave',
+          expectsReply: true,
+        },
+      })
+      return question.id
+    }
+
+    const post = (workspaceId: string, messageId: string, body: unknown): Promise<Response> =>
+      answerPOST(
+        new Request('http://x', { method: 'POST', body: JSON.stringify(body), headers: { 'content-type': 'application/json' } }),
+        { params: Promise.resolve({ workspaceId, messageId }) },
+      )
+
+    it('writes a human answer in the question thread and returns 200', async (): Promise<void> => {
+      const questionId = await askAQuestion(fixture.workspace.id)
+
+      const response = await post(fixture.workspace.id, questionId, { answer: 'payments-retry' })
+
+      expect(response.status).toBe(200)
+      expect(await response.json()).toEqual({ ok: true })
+      const answer = await prisma.slaveMessage.findFirstOrThrow({ where: { kind: 'answer' } })
+      expect(answer.actor).toBe('human')
+      expect(answer.replyToId).toBe(questionId)
+      expect(answer.senderRunId).toBeNull()
+      expect(answer.body).toBe('payments-retry')
+      expect(answer.threadId).toBe('thread-1')
+      expect(answer.deliveredAt).toBeNull()
+    })
+
+    it('404s a question that belongs to another workspace', async (): Promise<void> => {
+      const questionId = await askAQuestion(fixture.workspace.id)
+
+      const response = await post(fixture.otherWorkspace.id, questionId, { answer: 'payments-retry' })
+
+      expect(response.status).toBe(404)
+      expect(await prisma.slaveMessage.count({ where: { kind: 'answer' } })).toBe(0)
+    })
+
+    it('404s an unknown message', async (): Promise<void> => {
+      const response = await post(fixture.workspace.id, '00000000-0000-4000-8000-000000000000', { answer: 'x' })
+      expect(response.status).toBe(404)
+    })
+
+    it('400s a body that carries no answer string, writing nothing', async (): Promise<void> => {
+      const questionId = await askAQuestion(fixture.workspace.id)
+
+      expect((await post(fixture.workspace.id, questionId, { message: 'wrong key' })).status).toBe(400)
+      const malformed = await answerPOST(
+        new Request('http://x', { method: 'POST', body: 'not json', headers: { 'content-type': 'application/json' } }),
+        { params: Promise.resolve({ workspaceId: fixture.workspace.id, messageId: questionId }) },
+      )
+      expect(malformed.status).toBe(400)
+      expect(await prisma.slaveMessage.count({ where: { kind: 'answer' } })).toBe(0)
+    })
+
+    it('maps a control refusal to 409 with the refusal text', async (): Promise<void> => {
+      const questionId = await askAQuestion(fixture.workspace.id)
+
+      const blank = await post(fixture.workspace.id, questionId, { answer: '   ' })
+      expect(blank.status).toBe(409)
+      expect((await blank.json()).error).toContain('non-empty')
+
+      const information = await prisma.slaveMessage.create({
+        data: {
+          slaveId: (await prisma.slave.findFirstOrThrow({ where: { team: { workspaceId: fixture.workspace.id } } })).id,
+          workspaceId: fixture.workspace.id,
+          threadId: 'thread-2',
+          kind: 'information',
+          body: 'FYI',
+          actor: 'slave',
+        },
+      })
+      const notAQuestion = await post(fixture.workspace.id, information.id, { answer: 'payments-retry' })
+      expect(notAQuestion.status).toBe(409)
+      expect((await notAQuestion.json()).error).toContain('not a question')
+    })
+
+    it('writes one row when the same answer is posted twice', async (): Promise<void> => {
+      const questionId = await askAQuestion(fixture.workspace.id)
+
+      await post(fixture.workspace.id, questionId, { answer: 'payments-retry' })
+      const second = await post(fixture.workspace.id, questionId, { answer: 'payments-retry' })
+
+      expect(second.status).toBe(200)
+      expect(await prisma.slaveMessage.count({ where: { kind: 'answer' } })).toBe(1)
     })
   })
 

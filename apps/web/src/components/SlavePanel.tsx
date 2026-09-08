@@ -9,7 +9,7 @@ import { ShellOnlyMark } from './ShellOnlyMark'
 import { Button } from './ui/Button'
 import { Chip } from './ui/Chip'
 
-type ControlAction = 'pause' | 'resume' | 'stop' | 'message'
+type ControlAction = 'pause' | 'resume' | 'stop' | 'message' | 'answer'
 
 /** Seed (`slave.recentEvents`, last 20 from the DB) merged with the live buffer
  *  (`liveEvents[slave.id]`), deduplicated by seq, ascending — newest at the bottom. */
@@ -64,24 +64,45 @@ export function SlavePanel({
   const messageWritable = status === 'paused'
   // M36 t2: `paused` with `waiting_for_answer` -- the slave asked another slave and stopped, and
   // nobody asked it to pause. The controls stay reachable (typing here and pressing the button IS
-  // how a human answers, since the message is delivered to the resumed session), but they are not
-  // labelled as continuing an operator's pause, and the "paused at step N" detail gives way to
-  // what the slave is actually waiting on.
+  // how a human answers), but they are not labelled as continuing an operator's pause, and the
+  // "paused at step N" detail gives way to what the slave is actually waiting on.
   const waitingFor = slave.waitingFor
+  // Fix round 1, finding 1: the button used to POST the run's `resume` route, which wrote NO
+  // message -- the asker resumed, but the question stayed unanswered forever, was re-injected into
+  // the recipient's every later run under "cannot continue until you reply", and never reached the
+  // thread or the communication graph. It now writes a real `answer` against the question, and
+  // `deliverAnswers` resumes the asker on the next tick. `messageId` is null only when the question
+  // row is gone, and then there is nothing to reply to -- the plain resume is the honest fallback.
+  const answerMessageId = waitingFor?.messageId ?? null
+  // The halt check is the resume button's, for the same reason: `deliverAnswers` calls
+  // `requestResume`, which refuses in a halted workspace -- so an answer written now would sit
+  // undelivered with nothing on screen saying why. `resumeRequestedWhilePaused` blocks the second
+  // click: an intent is already recorded, and a second answer would only be superseded.
+  const answerEnabled = !workspaceHalted && !resumeRequestedWhilePaused && draft.trim() !== ''
 
   const feed = useMemo(() => mergeFeed(slave.recentEvents, liveEvents), [slave.recentEvents, liveEvents])
 
-  const run = async (action: ControlAction, path: string, body?: Record<string, unknown>): Promise<void> => {
-    if (runId === null) return
+  const post = async (action: ControlAction, url: string, body?: Record<string, unknown>): Promise<void> => {
     setPending((current) => new Set(current).add(action))
     setErrorText(null)
-    const result = await postControl(`/api/w/${workspaceId}/runs/${runId}/${path}`, body)
+    const result = await postControl(url, body)
     if (!result.ok) setErrorText(result.error)
     setPending((current) => {
       const next = new Set(current)
       next.delete(action)
       return next
     })
+  }
+
+  const run = async (action: ControlAction, path: string, body?: Record<string, unknown>): Promise<void> => {
+    if (runId === null) return
+    await post(action, `/api/w/${workspaceId}/runs/${runId}/${path}`, body)
+  }
+
+  /** Answers the question this run is waiting on -- addressed to the QUESTION, not to the run. */
+  const answer = async (): Promise<void> => {
+    if (answerMessageId === null) return
+    await post('answer', `/api/w/${workspaceId}/messages/${answerMessageId}/answer`, { answer: draft })
   }
 
   return (
@@ -140,9 +161,23 @@ export function SlavePanel({
         <Button variant="ghost" data-testid="pause-button" disabled={!pauseEnabled || pending.has('pause')} onClick={() => void run('pause', 'pause')}>
           pause
         </Button>
-        <Button variant="ghost" data-testid="resume-button" disabled={!resumeEnabled || pending.has('resume')} onClick={() => void run('resume', 'resume')}>
-          {waitingFor === null ? 'resume' : 'answer'}
-        </Button>
+        {answerMessageId !== null ? (
+          <Button
+            variant="ghost"
+            data-testid="answer-button"
+            // A blank answer is refused by `answerQuestion` anyway (`invalid_message_body`);
+            // disabling it here means the operator is told to type something by the control, not by
+            // an error after the round trip.
+            disabled={!answerEnabled || pending.has('answer')}
+            onClick={() => void answer()}
+          >
+            answer
+          </Button>
+        ) : (
+          <Button variant="ghost" data-testid="resume-button" disabled={!resumeEnabled || pending.has('resume')} onClick={() => void run('resume', 'resume')}>
+            resume
+          </Button>
+        )}
         <Button variant="ghost" data-testid="stop-button" disabled={!stopEnabled || pending.has('stop')} onClick={() => void run('stop', 'stop')}>
           stop
         </Button>
@@ -155,7 +190,8 @@ export function SlavePanel({
             {waitingFor.question ?? 'the question is no longer on record'}
           </p>
           <p className="text-[10.5px] text-text-3">
-            it is not waiting for you — but a message sent below is delivered as the answer.
+            it is not waiting for you — but what you type below is written as the answer, and the
+            slave is resumed with it on the next tick.
           </p>
         </section>
       )}

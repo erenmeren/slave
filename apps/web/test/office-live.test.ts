@@ -71,7 +71,7 @@ describe('liveSlavesOf / boardFromOverview', () => {
   })
   it('carries who a waiting slave is waiting on, beside its (still paused) status (M36 t3)', () => {
     const o = overview({
-      slaves: [card({ id: 's1', status: 'paused', runId: 'r1', waitingFor: { recipient: 'Maya', question: 'which queue?' } })],
+      slaves: [card({ id: 's1', status: 'paused', runId: 'r1', waitingFor: { recipient: 'Maya', question: 'which queue?', messageId: 'm-1' } })],
     })
     const live = liveSlavesOf(o).get('s1')
     expect(live?.status).toBe('paused')

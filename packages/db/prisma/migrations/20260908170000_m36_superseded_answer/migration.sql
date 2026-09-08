@@ -1,0 +1,13 @@
+-- M36 t3 fix round 1: an answer that lost the race is stamped, not silently left looking pending.
+--
+-- `deliverAnswers` delivers ONE answer per question -- the first one -- and the loser kept
+-- `deliveredAt IS NULL`, which is the same value an answer still waiting to be delivered carries.
+-- That conflation is not theoretical: a role-addressed question is injected into every holder of
+-- the role (`apps/orchestrator/src/inbox.ts`), so two workers concluding in the same window each
+-- write a real answer, and the second one had no state that said "this will never wake anybody"
+-- and no log line either -- on a question that had by then dropped out of `listPendingQuestions`.
+--
+-- Nullable with no default, and no backfill: NULL is exactly "not superseded", which is true of
+-- every row written before this migration (nothing could have been superseded without this column
+-- existing to say so).
+ALTER TABLE "SlaveMessage" ADD COLUMN "supersededAt" TIMESTAMP(3);

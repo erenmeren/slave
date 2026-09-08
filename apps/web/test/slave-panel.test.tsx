@@ -256,7 +256,7 @@ describe('SlavePanel', () => {
           slave={slave({
             status: 'paused',
             pausedAtStep: 4,
-            waitingFor: { recipient: 'Maya', question: 'Which queue should retries land on?' },
+            waitingFor: { recipient: 'Maya', question: 'Which queue should retries land on?', messageId: 'm-1' },
           })}
           liveEvents={[]}
           workspaceId="w1"
@@ -270,9 +270,10 @@ describe('SlavePanel', () => {
       expect(screen.getByTestId('waiting-for').textContent).toContain('Maya')
       expect(screen.getByTestId('waiting-question').textContent).toContain('Which queue should retries land on?')
       // The control is still reachable -- typing an answer and sending it is what a human does
-      // here -- but it is not labelled as resuming a pause somebody asked for.
-      expect(screen.getByTestId('resume-button').textContent).toBe('answer')
-      expect(screen.getByTestId('resume-button').getAttribute('disabled')).toBeNull()
+      // here -- but it is not labelled as resuming a pause somebody asked for, and it is no longer
+      // the RESUME control at all (fix round 1, finding 1).
+      expect(screen.queryByTestId('resume-button')).toBeNull()
+      expect(screen.getByTestId('answer-button').textContent).toBe('answer')
       expect(screen.getByTestId('message-input')).toBeTruthy()
     })
 
@@ -445,6 +446,69 @@ describe('SlavePanel', () => {
           body: JSON.stringify({ message: 'also update the README' }),
         }),
       )
+    })
+
+    // M36 t3 fix round 1, finding 1: the answer button used to POST the run's `resume` route, which
+    // wrote no message at all -- the asker resumed and the question stayed unanswered forever.
+    it("answering a waiting slave POSTs the typed text to the QUESTION's answer endpoint", async () => {
+      render(
+        <SlavePanel
+          slave={slave({
+            status: 'paused',
+            waitingFor: { recipient: 'Maya', question: 'Which queue?', messageId: 'm-1' },
+          })}
+          liveEvents={[]}
+          workspaceId="w1"
+          haltedReason={null}
+          onClose={() => {}}
+        />,
+      )
+
+      fireEvent.change(screen.getByTestId('message-input'), { target: { value: 'payments-retry' } })
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('answer-button'))
+      })
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/w/w1/messages/m-1/answer',
+        expect.objectContaining({ method: 'POST', body: JSON.stringify({ answer: 'payments-retry' }) }),
+      )
+      // And never the resume route: resuming without writing the answer is the bug this replaced.
+      expect(fetchMock).not.toHaveBeenCalledWith('/api/w/w1/runs/r1/resume', expect.anything())
+    })
+
+    it('refuses to send a blank answer before the round trip', () => {
+      render(
+        <SlavePanel
+          slave={slave({
+            status: 'paused',
+            waitingFor: { recipient: 'Maya', question: 'Which queue?', messageId: 'm-1' },
+          })}
+          liveEvents={[]}
+          workspaceId="w1"
+          haltedReason={null}
+          onClose={() => {}}
+        />,
+      )
+
+      expect(screen.getByTestId('answer-button').getAttribute('disabled')).not.toBeNull()
+      fireEvent.change(screen.getByTestId('message-input'), { target: { value: 'payments-retry' } })
+      expect(screen.getByTestId('answer-button').getAttribute('disabled')).toBeNull()
+    })
+
+    it('falls back to the plain resume when the question row is gone -- there is nothing to reply to', () => {
+      render(
+        <SlavePanel
+          slave={slave({ status: 'paused', waitingFor: { recipient: 'another slave', question: null, messageId: null } })}
+          liveEvents={[]}
+          workspaceId="w1"
+          haltedReason={null}
+          onClose={() => {}}
+        />,
+      )
+
+      expect(screen.queryByTestId('answer-button')).toBeNull()
+      expect(screen.getByTestId('resume-button')).toBeTruthy()
     })
 
     it('does not write state from the POST response beyond the error band (no optimistic UI)', async () => {

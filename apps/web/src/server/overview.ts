@@ -120,7 +120,16 @@ export interface SlaveCardData {
    * question this run sent, or `null` in the one case the run says it is waiting and no message
    * row can be found for it.
    */
-  readonly waitingFor: { readonly recipient: string; readonly question: string | null } | null
+  readonly waitingFor: {
+    readonly recipient: string
+    readonly question: string | null
+    /**
+     * The question's own `SlaveMessage` id (M36 t3 fix round 1) -- what the panel POSTs an answer
+     * against. `null` when the row is gone (or was never found), which is also the one case the
+     * panel must fall back to a plain resume: there is no question to reply to.
+     */
+    readonly messageId: string | null
+  } | null
 }
 
 export interface OverviewSnapshot {
@@ -283,7 +292,10 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
   const waitingRunIds = [...liveRunBySlave.values()]
     .filter((run) => run.status === 'paused' && run.pauseReason === 'waiting_for_answer')
     .map((run) => run.id)
-  const waitingFor = new Map<string, { readonly recipient: string; readonly question: string | null }>()
+  const waitingFor = new Map<
+    string,
+    { readonly recipient: string; readonly question: string | null; readonly messageId: string | null }
+  >()
   if (waitingRunIds.length > 0) {
     const nameById = new Map(slaves.map((slave) => [slave.id, slave.name]))
     const questions = await prisma.slaveMessage.findMany({
@@ -302,6 +314,7 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
               (nameById.get(message.recipientSlaveId) ?? message.recipientSlaveId)
             : `anyone with the ${message.recipientRole ?? 'unknown'} role`,
         question: message.body,
+        messageId: message.id,
       })
     }
   }
@@ -525,7 +538,7 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
         // slave back into an ordinary paused one on every surface that reads this field.
         waitingFor:
           run !== null && run.status === 'paused' && run.pauseReason === 'waiting_for_answer'
-            ? (waitingFor.get(run.id) ?? { recipient: 'another slave', question: null })
+            ? (waitingFor.get(run.id) ?? { recipient: 'another slave', question: null, messageId: null })
             : null,
       }
     }),
