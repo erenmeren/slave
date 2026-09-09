@@ -46,7 +46,16 @@ export const TYPES_BY_KIND = {
     // the same chip `task.rework` sits under.
     'task.unblocked',
   ],
-  interventions: ['run.pause_requested', 'run.resume_requested', 'run.stopped', 'slave.message_sent'],
+  // M39 t2: `slave.message_reassigned` sits beside `slave.message_sent` -- a question put in front
+  // of a different worker is an intervention in the mailbox, the same chip an operator filters to
+  // when asking "who has been made to do what", whether the Supervisor or a person moved it.
+  interventions: [
+    'run.pause_requested',
+    'run.resume_requested',
+    'run.stopped',
+    'slave.message_sent',
+    'slave.message_reassigned',
+  ],
   guardrails: ['guardrail.tripped'],
   // The workspace's own lifecycle -- the goal, the plan it became, the company later assigned to
   // run it (M10), and a change to its runtime or budget (M13). Not under `guardrails`: the kinds

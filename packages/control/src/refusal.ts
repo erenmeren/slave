@@ -197,6 +197,28 @@ export type ControlRefusal =
   /** M36 t3: `answerQuestion` was pointed at a message that is not a `question` -- an answer to an
    *  `information` or a `handoff` has nobody waiting on it, and nothing to resume. */
   | { readonly kind: 'not_a_question'; readonly messageId: string; readonly messageKind: string }
+  /** M39 t2: `reassignQuestion` was pointed at a message that is not a `question`. Its own kind,
+   *  rather than `not_a_question`'s wording: re-addressing is about WHO a row waits on, and an
+   *  `information` or a `handoff` waits on nobody, so there is nothing to move. */
+  | { readonly kind: 'message_not_question'; readonly messageId: string }
+  /** M39 t2: the question is no longer waiting on anybody -- a reply has landed, or the asking run
+   *  has stopped waiting for one (`stillPendingQuestion`'s definition, shared with the worker's own
+   *  inbox). Re-addressing it would put a settled question in a second worker's inbox. */
+  | { readonly kind: 'question_answered'; readonly messageId: string }
+  /**
+   * M39 t2: the worker named cannot answer this question, so moving it there would only hide it.
+   *
+   * The same rule `mayAnswer` (`@slave-of-ai/domain`) stamps a routine `reassign_question` with,
+   * enforced here at the write: a role-addressed question needs a holder of THAT role, and a
+   * slave-addressed one falls back to the asker's task's `requiredRole`. `reason` is a whole
+   * sentence because the cases need different fixes -- staff the role first, or pick somebody else.
+   */
+  | { readonly kind: 'reassign_not_permitted'; readonly messageId: string; readonly slaveId: string; readonly reason: string }
+  /** M39 t2: `applyDecision`/`approveDecision` on an `answer_question` decision that carries no
+   *  draft, or one whose `body` is null (erratum E2's escalated shape -- the lexicon stopped it
+   *  before a model ever saw it). There is no text to send, and the Supervisor never writes one
+   *  at apply time. Also what an EDIT is refused with when the decision is not an answer at all. */
+  | { readonly kind: 'draft_missing'; readonly decisionId: string }
   /** M37 t3: `setProfile`'s text is longer than `PROFILE_MAX_CHARS` (`@slave-of-ai/domain`),
    *  measured after trimming. `limit` and `length` are both carried so the message can say how far
    *  over it is without the caller re-measuring -- and so a web form can show it. The same cap is
@@ -412,6 +434,14 @@ export function refusalText(refusal: ControlRefusal): string {
       return `message ${refusal.messageId} is not addressed to slave ${refusal.slaveId}`
     case 'not_a_question':
       return `message ${refusal.messageId} is a ${refusal.messageKind}, not a question: there is nobody waiting on an answer to it`
+    case 'message_not_question':
+      return `message ${refusal.messageId} is not a question: there is nothing to re-address`
+    case 'question_answered':
+      return `question ${refusal.messageId} is no longer waiting on an answer`
+    case 'reassign_not_permitted':
+      return `question ${refusal.messageId} cannot be re-addressed to slave ${refusal.slaveId}: ${refusal.reason}`
+    case 'draft_missing':
+      return `supervisor decision ${refusal.decisionId} carries no drafted answer to send`
     case 'profile_too_long':
       return `a profile may be at most ${String(refusal.limit)} characters; this one is ${String(refusal.length)}`
     case 'invalid_runtime_roles':

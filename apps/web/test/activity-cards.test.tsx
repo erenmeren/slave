@@ -35,6 +35,13 @@ const PAYLOAD_BY_TYPE: Record<DomainEventType, Record<string, unknown>> = {
   'run.paused': { atStep: 4 },
   'run.resumed': { sessionId: 's1' },
   'slave.message_sent': { category: 'instruction', body: 'Please retry with the other approach.' },
+  'slave.message_reassigned': {
+    messageId: 'm-1',
+    decisionId: 'sd-0123456789',
+    from: { role: 'reviewer', slaveId: null },
+    to: { slaveId: 'ag-2' },
+    actor: 'supervisor',
+  },
   'guardrail.tripped': { guardrail: 'budget_exhausted', detail: 'Spent $20 of $20.' },
   'task.verifying': { commandCount: 3 },
   'task.verify_passed': { branch: 'feature/add-the-thing' },

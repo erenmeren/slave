@@ -1,16 +1,22 @@
 import { createHash } from 'node:crypto'
 import { type Prisma, prisma } from '@slave-of-ai/db/client'
 import {
+  ANSWER_MAX_CHARS,
   COOLDOWN_MS,
+  DECISION_RETENTION_MS,
   PENDING_TTL_MS,
   PROFILE_MAX_CHARS,
+  PRUNE_BATCH,
   actionSchema,
   candidateSchema,
+  draftSchema,
+  neutraliseMarkers,
   situationSchema,
   type Action,
   type Candidate,
   type Decider,
   type DecisionStatus,
+  type Draft,
   type Result,
   type Situation,
   type SituationKind,
@@ -19,6 +25,7 @@ import {
   ok,
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
+import { answerQuestion, reassignQuestion } from './messaging.js'
 import { setRuntimeRoles } from './profile.js'
 import type { Principal } from './principal.js'
 import { refusalText, type ControlRefusal } from './refusal.js'
@@ -66,6 +73,24 @@ export interface RecordDecisionInput {
    * still spent. The orchestrator passes it explicitly for exactly that case.
    */
   readonly modelCalled?: boolean
+  /**
+   * The answer this decision drafted (M39 §2) -- `answer_question` only, and the thing a human
+   * approves, edits or refuses. Validated with `draftSchema` before it is stored, the same
+   * treatment the situation and the catalogue get: a `Json` column must never hold a shape the
+   * panel, the CLI or {@link carryOut} cannot read.
+   */
+  readonly draft?: Draft
+  /**
+   * The FINAL tier, overriding the chosen candidate's (M39 §5).
+   *
+   * For `answer_question` alone. The catalogue stamps that action `proposed` -- the safe default a
+   * rules-only pass would store, since a pass with no model wired has no draft to send -- and the
+   * real tier is `answerTier({ sourced, critical, halted })`, which cannot be known until the
+   * second model call has come back and its citations have been checked. `status` derives from the
+   * override exactly as it derives from a candidate's tier, so an overridden `applied` is carried
+   * out at birth and an overridden `escalated` waits for a human like any other proposal.
+   */
+  readonly tier?: Tier
   /** The tick's clock. Injected so the cooldown window and `expiresAt` are computed against the
    *  same instant the caller observed the world at, rather than drifting a few milliseconds. */
   readonly now?: Date
@@ -113,7 +138,8 @@ export async function recordDecision(
     )
   }
 
-  const tier = chosen.tier
+  const draft = input.draft === undefined ? null : parsedOrThrow(draftSchema.safeParse(input.draft), 'draft')
+  const tier = input.tier ?? chosen.tier
   const status: DecisionStatus = tier === 'proposed' || tier === 'escalated' ? 'pending' : 'applied'
   const expiresAt = status === 'pending' ? new Date(now.getTime() + PENDING_TTL_MS) : null
 
@@ -171,6 +197,10 @@ export async function recordDecision(
         candidates: candidates as unknown as Prisma.InputJsonValue,
         chosenIndex: input.chosenIndex,
         action: chosen.action as unknown as Prisma.InputJsonValue,
+        // Omitted rather than written as a JSON null when there is no draft: the column is
+        // nullable and `Prisma.DbNull` would need a value import of `Prisma` this module
+        // deliberately does not take.
+        ...(draft === null ? {} : { draft: draft as unknown as Prisma.InputJsonValue }),
         rationale: input.rationale,
         tier,
         status,
@@ -263,12 +293,24 @@ export async function applyDecision(
 ): Promise<Result<void, ControlRefusal>> {
   const row = await prisma.supervisorDecision.findUnique({
     where: { id: decisionId },
-    select: { workspaceId: true, action: true },
+    select: { workspaceId: true, action: true, situation: true, draft: true },
   })
   if (row === null) return err({ kind: 'decision_not_found', decisionId })
   const action = parsedOrThrow(actionSchema.safeParse(row.action), `SupervisorDecision ${decisionId}.action`)
 
-  const outcome = await carryOut(action, origin, principal)
+  // The whole row the action came from, not the action alone: the mailbox arms need the drafted
+  // answer and the decision's own id, and the staffing arm needs the situation the decision was
+  // made on -- see {@link CarriedDecision}.
+  const outcome = await carryOut(
+    action,
+    {
+      id: decisionId,
+      situation: parsedOrThrow(situationSchema.safeParse(row.situation), `SupervisorDecision ${decisionId}.situation`),
+      draft: storedDraft(row.draft, `SupervisorDecision ${decisionId}.draft`),
+    },
+    origin,
+    principal,
+  )
   if (!outcome.ok) {
     const reason = refusalText(outcome.error)
     await prisma.supervisorDecision.update({ where: { id: decisionId }, data: { status: 'failed', failureReason: reason } })
@@ -297,10 +339,27 @@ export async function applyDecision(
  *  `no_action`) that deliberately does nothing, and gets no `supervisor.applied`. */
 type Reach = 'applied' | 'none'
 
+/**
+ * The parts of the decision row an action is carried out FROM -- everything beyond the action
+ * itself that a verb behind it needs.
+ *
+ * `situation` is what the staffing arm's delta-union reads its one role out of; `draft` is the
+ * answer an `answer_question` decision sends and `id` is what its `draft_missing` refusal names.
+ * Passed as the row rather than fetched again inside {@link carryOut} so there is exactly one read
+ * of the decision per apply, and so the draft carried out is the draft
+ * {@link approveDecision}'s edit just wrote.
+ */
+interface CarriedDecision {
+  readonly id: string
+  readonly situation: Situation
+  readonly draft: Draft | null
+}
+
 /** The whole map from the Supervisor's catalogue to this package's verbs. Every arm is an EXISTING
  *  verb: nothing here spawns a run, edits a repository or writes a prompt (spec §1). */
 async function carryOut(
   action: Action,
+  decision: CarriedDecision,
   origin: 'human' | 'system',
   principal?: Principal,
 ): Promise<Result<Reach, ControlRefusal>> {
@@ -312,24 +371,84 @@ async function carryOut(
       // exactly `attempt + 1` in the same write that unblocks. There is no separate cap verb.
       return reached(await unblockTask(action.taskId, { allowAnotherAttempt: true, origin }, principal))
     case 'set_runtime_roles':
-      return reached(await addRuntimeRoles(action.slaveId, action.roles, origin))
+      return reached(await addRuntimeRoles(action.slaveId, roleDelta(action, decision.situation), origin))
     case 'mark_task_failed':
       return reached(await failTask(action.taskId, action.reason, origin, principal))
     case 'answer_question':
+      return reached(await sendDraftedAnswer(action.messageId, decision, origin, principal))
     case 'reassign_question':
-      // M39 Task 2 replaces this: `answerQuestion` with the decision's draft, and
-      // `reassignQuestion`. Until then the mailbox actions reach the world not at all, which is the
-      // truthful thing for them to do -- there is no verb behind them yet, so there is nothing to
-      // report as applied.
-      return ok('none')
+      return reached(
+        await reassignQuestion(action.messageId, action.toSlaveId, SUPERVISOR_ACTOR, origin, principal, decision.id),
+      )
     case 'escalate_to_human':
     case 'no_action':
       return ok('none')
   }
 }
 
-const reached = (result: Result<void, ControlRefusal>): Result<Reach, ControlRefusal> =>
-  result.ok ? ok('applied') : result
+/** `unknown` rather than `void` because the mailbox verbs return what they wrote: what `carryOut`
+ *  needs from any of them is only whether the world moved. */
+const reached = (result: Result<unknown, ControlRefusal>): Result<Reach, ControlRefusal> =>
+  result.ok ? ok('applied') : err(result.error)
+
+/**
+ * The ONE place a model's words reach a worker (spec §1), and the three things that stand between
+ * them and it.
+ *
+ * `draft_missing` first: a decision with no draft at all, or one whose `body` is null -- erratum
+ * E2's escalated shape, written when the critical lexicon matched and no answer call was ever made
+ * -- has nothing to send, and this verb never writes a body of its own.
+ *
+ * Then a human's EDIT wins over the model's text whenever there is one: that is what approving
+ * with an edit means, and the model's original stays on the row beside it so a reader can see both.
+ *
+ * Then `neutraliseMarkers` and the cap, in that order. Neutralising is what stops an answer from
+ * carrying the section markers a run context is assembled from into a worker's prompt, and it can
+ * make the text no shorter, so the cap is measured on what would actually be sent. Over it, the
+ * answer is REFUSED rather than truncated: a half-sentence answer to a worker that cannot continue
+ * without one is worse than the refusal a human can act on. `ANSWER_MAX_CHARS` also bounds both
+ * bodies in `draftSchema`, so only a human edit written straight into the column, or a neutralising
+ * that grew the text past the line, can reach this.
+ */
+async function sendDraftedAnswer(
+  messageId: string,
+  decision: CarriedDecision,
+  origin: 'human' | 'system',
+  principal?: Principal,
+): Promise<Result<unknown, ControlRefusal>> {
+  const draft = decision.draft
+  if (draft === null || draft.body === null) return err({ kind: 'draft_missing', decisionId: decision.id })
+  const body = neutraliseMarkers(draft.editedBody ?? draft.body)
+  if (body.length > ANSWER_MAX_CHARS) return err({ kind: 'invalid_message_body' })
+  return answerQuestion(
+    messageId,
+    { body, answeredBy: SUPERVISOR_ACTOR, ...(principal === undefined ? {} : { principal }) },
+    origin,
+  )
+}
+
+/**
+ * The roles a `set_runtime_roles` decision actually adds (spec §4, the M38 residual).
+ *
+ * The stored `roles` array is the whole set the rules computed AT DECISION TIME -- the slave's own
+ * roles plus the missing one. {@link addRuntimeRoles} unions it with what the slave holds now, so
+ * nothing granted meanwhile is lost; what the union CANNOT undo is a role the operator deliberately
+ * REVOKED while the proposal waited, because the stale array still carries it and the union puts it
+ * straight back. The situation names the one role the decision was actually about (`observe.ts`
+ * writes `facts.role` for `no_reviewer`, `no_planner` and `ready_unstaffed`), so that is what is
+ * added and nothing else: approving "give Maya reviewer" grants reviewer, never re-grants backend.
+ *
+ * The stored array is the fallback, unchanged M38 behaviour, for a situation that names no role --
+ * there is nothing more precise to use, and dropping the arm entirely would make the approval a
+ * no-op.
+ */
+function roleDelta(
+  action: Extract<Action, { kind: 'set_runtime_roles' }>,
+  situation: Situation,
+): readonly string[] {
+  const role = situation.facts['role']
+  return typeof role === 'string' && role !== '' ? [role] : action.roles
+}
 
 /**
  * `set_runtime_roles`, applied as a UNION rather than the replacement `setRuntimeRoles` performs
@@ -391,13 +510,35 @@ async function addRuntimeRoles(
 export async function approveDecision(
   decisionId: string,
   principal?: Principal,
+  edit?: { readonly body: string },
 ): Promise<Result<void, ControlRefusal>> {
+  // Everything an edit can be refused for is checked BEFORE the row is claimed: a refusal must not
+  // consume the one pending decision a human was about to approve properly.
+  let edited: Draft | null = null
+  if (edit !== undefined) {
+    const editable = await editableDraft(decisionId)
+    if (!editable.ok) return editable
+    if (edit.body.trim() === '' || edit.body.length > ANSWER_MAX_CHARS) return err({ kind: 'invalid_message_body' })
+    edited = { ...editable.value, editedBody: edit.body }
+  }
+
   const claim = await claimPending(decisionId, {
     status: 'approved',
     resolvedAt: new Date(),
     resolvedByUserId: principal?.userId ?? null,
   })
   if (!claim.ok) return claim
+
+  if (edited !== null) {
+    // Written after the claim and before the apply, so the draft {@link applyDecision} reads back
+    // is the edited one -- and so a human who lost the race to another approver has not rewritten a
+    // draft somebody else already sent. `body` is left exactly as the model wrote it: the row keeps
+    // both texts, which is what makes "the Supervisor said this, the human sent that" readable.
+    await prisma.supervisorDecision.update({
+      where: { id: decisionId },
+      data: { draft: edited as unknown as Prisma.InputJsonValue },
+    })
+  }
 
   const applied = await applyDecision(decisionId, 'human', principal)
   if (!applied.ok) return applied
@@ -447,6 +588,27 @@ export async function rejectDecision(
     userId: principal?.userId ?? null,
   })
   return ok(undefined)
+}
+
+/**
+ * The draft an approval may edit, or the refusal that says why it may not.
+ *
+ * `draft_missing` for both cases a caller can get wrong: a decision whose action is not
+ * `answer_question` (there is no answer to rewrite -- an edited `unblock_task` means nothing) and
+ * one that carries no draft at all. Deliberately NOT `decision_not_pending`: whether the row is
+ * still open is {@link claimPending}'s question, asked separately and answered with its own kind.
+ */
+async function editableDraft(decisionId: string): Promise<Result<Draft, ControlRefusal>> {
+  const row = await prisma.supervisorDecision.findUnique({
+    where: { id: decisionId },
+    select: { action: true, draft: true },
+  })
+  if (row === null) return err({ kind: 'decision_not_found', decisionId })
+  const action = parsedOrThrow(actionSchema.safeParse(row.action), `SupervisorDecision ${decisionId}.action`)
+  if (action.kind !== 'answer_question') return err({ kind: 'draft_missing', decisionId })
+  const draft = storedDraft(row.draft, `SupervisorDecision ${decisionId}.draft`)
+  if (draft === null) return err({ kind: 'draft_missing', decisionId })
+  return ok(draft)
 }
 
 /** The one atomic "take this pending decision" both {@link approveDecision} and
@@ -512,6 +674,47 @@ export async function expirePendingDecisions(workspaceId: string, now: Date): Pr
   return expired
 }
 
+/**
+ * Deletes the decisions nobody will read again (M39 §2), on every supervised tick.
+ *
+ * A `SupervisorDecision` is an audit record, and an audit record that is older than
+ * `DECISION_RETENTION_MS` (thirty days) has outlived every question it can answer: the situation it
+ * describes has long since moved, and the panel and the CLI both read a window far shorter than
+ * that. Left alone the table grows without limit -- the Supervisor writes one row per stuck
+ * situation per cooldown, forever.
+ *
+ * Two boundaries this never crosses. PENDING rows are never pruned however old they are: a proposal
+ * still waiting on a human is the one thing in this table that is not history, and
+ * {@link expirePendingDecisions} -- which runs first on every tick -- is what retires those. And
+ * the age is measured from `resolvedAt ?? createdAt`, the same anchor the cooldown uses, so a row
+ * that was applied at birth (and therefore never resolved) ages from when it was written.
+ *
+ * Bounded to `PRUNE_BATCH` rows per call, oldest first, and deleted by id in one `deleteMany`: a
+ * tick must not turn into an unbounded delete over a table nobody has pruned for a year. A backlog
+ * simply takes several ticks to drain. Returns how many rows actually went, for the tick's report.
+ */
+export async function pruneDecisions(workspaceId: string, now: Date): Promise<number> {
+  const cutoff = new Date(now.getTime() - DECISION_RETENTION_MS)
+  const due = await prisma.supervisorDecision.findMany({
+    where: {
+      workspaceId,
+      status: { not: 'pending' },
+      OR: [{ resolvedAt: { lt: cutoff } }, { resolvedAt: null, createdAt: { lt: cutoff } }],
+    },
+    orderBy: { createdAt: 'asc' },
+    take: PRUNE_BATCH,
+    select: { id: true },
+  })
+  if (due.length === 0) return 0
+
+  // By id, and conditional on the status again: a human approving one of these in the microseconds
+  // between the read and the delete keeps their row.
+  const deleted = await prisma.supervisorDecision.deleteMany({
+    where: { id: { in: due.map((row) => row.id) }, status: { not: 'pending' } },
+  })
+  return deleted.count
+}
+
 /** One decision as a reader sees it: every `Json` column parsed back into its domain shape, every
  *  instant an ISO string, so a web route can serialise it unchanged. */
 export interface DecisionView {
@@ -523,6 +726,9 @@ export interface DecisionView {
   readonly candidates: readonly Candidate[]
   readonly chosenIndex: number
   readonly action: Action
+  /** The drafted answer an `answer_question` decision carries (M39 §2) -- the body, its citations,
+   *  the critical signals, and a human's edit once there is one. Null for every other action. */
+  readonly draft: Draft | null
   readonly rationale: string
   readonly tier: Tier
   readonly status: DecisionStatus
@@ -558,6 +764,7 @@ export async function listDecisions(
     candidates: storedCandidates(row.candidates, `SupervisorDecision ${row.id}.candidates`),
     chosenIndex: row.chosenIndex,
     action: parsedOrThrow(actionSchema.safeParse(row.action), `SupervisorDecision ${row.id}.action`),
+    draft: storedDraft(row.draft, `SupervisorDecision ${row.id}.draft`),
     rationale: row.rationale,
     tier: row.tier,
     status: row.status,
@@ -569,6 +776,14 @@ export async function listDecisions(
     expiresAt: row.expiresAt?.toISOString() ?? null,
     resolvedAt: row.resolvedAt?.toISOString() ?? null,
   }))
+}
+
+/** A `draft` column read back into its domain shape, or null when the row carries none -- which is
+ *  every action but `answer_question`. A stored draft that will not parse is the same caller bug
+ *  {@link parsedOrThrow} exists for: only `recordDecision` and {@link approveDecision} write it. */
+function storedDraft(value: unknown, what: string): Draft | null {
+  if (value === null || value === undefined) return null
+  return parsedOrThrow(draftSchema.safeParse(value), what)
 }
 
 /** `candidateSchema` one entry at a time rather than `z.array(...)`: this package does not depend

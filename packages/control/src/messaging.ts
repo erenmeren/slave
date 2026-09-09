@@ -360,7 +360,9 @@ export async function markMessageRead(
 
 export interface AnswerQuestionInput {
   readonly body: string
-  /** Who answered, for the event's own record. The CLI passes the operator's name. */
+  /** Who answered, for the event's own record. The CLI passes the operator's name; the Supervisor
+   *  passes `supervisor` (M39 §2), which is the payload's way of naming an author the envelope's
+   *  closed three-way `Actor` has no member for. */
   readonly answeredBy: string
   /**
    * Replaying the same key returns the first call's message, unwritten a second time. Defaults to
@@ -373,8 +375,8 @@ export interface AnswerQuestionInput {
 }
 
 /**
- * Answers a worker's question as a HUMAN (M36 t3) -- the operator's way to unstick a project with
- * no second worker to hand.
+ * Answers a worker's question from OUTSIDE the workforce (M36 t3) -- the operator's way to unstick
+ * a project with no second worker to hand, and (M39 §2) the Supervisor's way to answer one itself.
  *
  * The worker path is `sendMessage(runId, { kind: 'answer', replyToId })`, which derives its sender
  * from the run. A human has no run, so this is a separate verb rather than a nullable-run branch
@@ -388,8 +390,14 @@ export interface AnswerQuestionInput {
  * meant the slave the human ADDRESSED since long before M36 -- it is what the web's communication
  * fold reads to draw `operator -> slave` for every `actor: 'human'` message. So it holds the
  * ASKER: the one this answer is for, and the one who will be resumed by it. `senderRunId` stays
- * null (no run wrote it) and `actor` is `human`, which together are what tell this row apart from
- * a worker's answer.
+ * null (no run wrote it) and `actor` is `origin`, which together are what tell this row apart from
+ * a worker's answer -- and tell a person's answer apart from the Supervisor's.
+ *
+ * `origin` is the ONE thing that changes between the two callers (M39 §2): it stamps both the row's
+ * `actor` column and the `slave.message_sent` envelope, so an answer the Supervisor wrote reads as
+ * `system` everywhere a reader looks and one a human approved reads as `human` (with their
+ * `userId`). Everything else -- the thread, the idempotency key's shape, the refusals -- is the
+ * same verb doing the same thing.
  *
  * Delivery is deliberately NOT here: this writes the answer, and `deliverAnswers`
  * (`apps/orchestrator/src/deliver.ts`) is the one place that decides whether a waiting run may be
@@ -399,6 +407,7 @@ export interface AnswerQuestionInput {
 export async function answerQuestion(
   questionId: string,
   input: AnswerQuestionInput,
+  origin: 'human' | 'system' = 'human',
 ): Promise<Result<SlaveMessageView, ControlRefusal>> {
   if (input.body.trim() === '') return err({ kind: 'invalid_message_body' })
 
@@ -442,7 +451,7 @@ export async function answerQuestion(
           replyToId: question.id,
           kind: 'answer',
           body: input.body,
-          actor: 'human',
+          actor: origin,
           expectsReply: false,
           idempotencyKey: key,
         },
@@ -458,7 +467,7 @@ export async function answerQuestion(
       workspaceId,
       taskId: question.taskId,
       slaveId: question.slaveId,
-      actor: 'human',
+      actor: origin,
       payload: {
         messageId: outcome.row.id,
         kind: 'answer',
@@ -475,6 +484,140 @@ export async function answerQuestion(
   }
 
   return ok(toView(outcome.row))
+}
+
+/**
+ * Puts an unanswered question in front of a worker who can actually answer it (M39 §4).
+ *
+ * NOT a new message: nothing is sent, nothing is drafted, no model text reaches anybody. The
+ * QUESTION ROW itself moves -- `recipientSlaveId` set to the new worker and `recipientRole`
+ * cleared, so the row is addressed to exactly one worker afterwards the same way
+ * `isValidRecipient` requires of every row `sendMessage` writes. The asker keeps waiting on the
+ * same question it asked; only who is being asked changes, which is why this is the cheapest of
+ * the Supervisor's mailbox moves and the only one that is ever routine.
+ *
+ * `actor` is WHO asked for it, by name (`'supervisor'`, or an operator's name) -- the payload's
+ * record, since the envelope's `Actor` is a closed three-way enum. `origin` is the envelope actor:
+ * `'system'` when the Supervisor moved it on its own, `'human'` when a person did (directly, or by
+ * approving a proposal). `decisionId` names the `SupervisorDecision` behind it, or null when a
+ * human moved it by hand.
+ *
+ * **Who may be given a question** is `mayAnswer`'s rule (`@slave-of-ai/domain`), re-checked here
+ * because this is the write gate: a role-addressed question needs a holder of THAT role -- putting
+ * it in front of somebody who does not hold it hides it instead of answering it, and staffing the
+ * role is the proposal that has to come first -- while a slave-addressed question has no role to
+ * check, so the asker's own task supplies one (erratum E5). A task that is gone, or one that takes
+ * any role at all, leaves nothing to check and the move stands on the question's own terms. The
+ * asker itself is refused whatever roles it holds: a question re-addressed to the worker who asked
+ * it is a loop that `answer.ts` would then refuse to close, leaving the asker parked forever.
+ *
+ * The refusals are ordered as spec §4 lists them, cheapest first, and every one of them happens
+ * before anything is written. The transaction exists for the last of them: `question_answered` is
+ * the racy one -- a reply can land, or the asker's run can stop waiting, between the check and the
+ * write -- so the row is locked and the same {@link stillPendingQuestion} predicate the worker's
+ * own inbox is built from is re-read inside it.
+ */
+export async function reassignQuestion(
+  messageId: string,
+  toSlaveId: string,
+  actor: string,
+  origin: 'human' | 'system' = 'human',
+  principal?: Principal,
+  decisionId: string | null = null,
+): Promise<Result<void, ControlRefusal>> {
+  const question = await prisma.slaveMessage.findUnique({ where: { id: messageId } })
+  if (question === null) return err({ kind: 'message_not_found', messageId })
+  if (question.kind !== 'question') return err({ kind: 'message_not_question', messageId })
+
+  const workspaceId = question.workspaceId
+  if (!(await stillWaiting(messageId, workspaceId))) return err({ kind: 'question_answered', messageId })
+
+  // Scoped to the question's own workspace: a worker in another project reads back exactly like
+  // one that does not exist, the same boundary `sendMessage`'s recipient check and
+  // `markMessageRead`'s scope check enforce from their own sides.
+  const target = await prisma.slave.findFirst({
+    where: { id: toSlaveId, team: { workspaceId } },
+    select: { id: true, runtimeRoles: true },
+  })
+  if (target === null) return err({ kind: 'slave_not_found', slaveId: toSlaveId })
+
+  const refusal = await mayNotAnswer(question, target)
+  if (refusal !== null) return err({ kind: 'reassign_not_permitted', messageId, slaveId: toSlaveId, reason: refusal })
+
+  const outcome = await prisma.$transaction(
+    async (tx) => {
+      // The row being moved, not the workspace: this verb serialises against another re-address of
+      // the SAME question (and against the answer that would settle it), not against every send in
+      // the project.
+      await tx.$queryRaw`SELECT 1 FROM "SlaveMessage" WHERE id = ${messageId} FOR UPDATE`
+
+      const still = await tx.slaveMessage.findFirst({
+        where: { id: messageId, ...stillPendingQuestion(await waitingSenderRunIds(workspaceId, tx)) },
+        select: { recipientRole: true, recipientSlaveId: true },
+      })
+      if (still === null) return { moved: false as const }
+
+      await tx.slaveMessage.update({
+        where: { id: messageId },
+        // Both columns, always: exactly one of them identifies a recipient (`isValidRecipient`),
+        // so a move that set the new worker without clearing the role would leave a row addressed
+        // to both -- and every holder of the old role would keep seeing it in their inbox.
+        data: { recipientSlaveId: toSlaveId, recipientRole: null },
+      })
+      return { moved: true as const, from: { role: still.recipientRole, slaveId: still.recipientSlaveId } }
+    },
+    { timeout: SEND_TIMEOUT_MS, maxWait: SEND_MAX_WAIT_MS },
+  )
+  if (!outcome.moved) return err({ kind: 'question_answered', messageId })
+
+  await appendEvent({
+    type: 'slave.message_reassigned',
+    workspaceId,
+    taskId: question.taskId,
+    // The ASKER, the same slave `answerQuestion`'s event names: this row is the asker's question,
+    // and who it is now addressed to is what `payload.to` says.
+    slaveId: question.slaveId,
+    actor: origin,
+    payload: { messageId, decisionId, from: outcome.from, to: { slaveId: toSlaveId }, actor },
+    userId: principal?.userId ?? null,
+  })
+  return ok(undefined)
+}
+
+/** {@link stillPendingQuestion}'s definition, asked about one question: is anybody still waiting on
+ *  it? A reply has landed, or the asking run has stopped waiting, and the answer is no. */
+async function stillWaiting(messageId: string, workspaceId: string): Promise<boolean> {
+  const row = await prisma.slaveMessage.findFirst({
+    where: { id: messageId, ...stillPendingQuestion(await waitingSenderRunIds(workspaceId)) },
+    select: { id: true },
+  })
+  return row !== null
+}
+
+/** Why this worker may not be given this question, or null when it may -- `mayAnswer`'s rule
+ *  (`@slave-of-ai/domain`) read against the database rows rather than the Supervisor's world, plus
+ *  the asker's own exclusion. The sentences are what `refusalText` puts in front of an operator. */
+async function mayNotAnswer(
+  question: { readonly slaveId: string; readonly taskId: string | null; readonly recipientRole: string | null },
+  target: { readonly id: string; readonly runtimeRoles: readonly string[] },
+): Promise<string | null> {
+  if (target.id === question.slaveId) return 'it is the worker that asked the question'
+  if (question.recipientRole !== null) {
+    return target.runtimeRoles.includes(question.recipientRole)
+      ? null
+      : `it does not hold the role the question was addressed to (${question.recipientRole})`
+  }
+  // Slave-addressed: no role on the row to check, so the asking task's own requirement stands in
+  // for one (erratum E5). No task, or a task that takes any role at all, leaves nothing to check.
+  const task =
+    question.taskId === null
+      ? null
+      : await prisma.task.findUnique({ where: { id: question.taskId }, select: { requiredRole: true } })
+  const requiredRole = task?.requiredRole ?? null
+  if (requiredRole === null || requiredRole === '') return null
+  return target.runtimeRoles.includes(requiredRole)
+    ? null
+    : `it does not hold the role the asking task requires (${requiredRole})`
 }
 
 /**

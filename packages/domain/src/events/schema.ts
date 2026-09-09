@@ -66,6 +66,29 @@ export const executionEventSchema = z.discriminatedUnion('type', [
       expectsReply: z.boolean().optional(),
     }),
   }),
+  // M39 t2: `reassignQuestion` (packages/control/src/messaging.ts) put an unanswered question in
+  // front of a worker who can answer it. Deliberately NOT a `slave.message_sent`: nothing was
+  // sent. The question row itself moved -- `recipientSlaveId` set, `recipientRole` cleared -- and
+  // a reader asking "why is this question suddenly in Maya's inbox" needs to see the move, with
+  // both ends of it.
+  //
+  // `from` carries BOTH columns, each nullable, because exactly one of them was set before the
+  // move and which one is the whole difference between "the role nobody was holding" and "the
+  // worker who was busy". `decisionId` names the Supervisor decision that asked for it, or null
+  // when a human re-addressed it by hand. `actor` is WHO, by name (`slave.profile_changed`'s
+  // precedent): the envelope `actor` is the closed three-way enum, so `supervisor` -- the one
+  // caller that is neither a person nor a worker -- has nowhere else to be recorded.
+  z.object({
+    ...envelope,
+    type: z.literal('slave.message_reassigned'),
+    payload: z.object({
+      messageId: z.string().min(1),
+      decisionId: z.string().min(1).nullable(),
+      from: z.object({ role: z.string().min(1).nullable(), slaveId: z.string().min(1).nullable() }),
+      to: z.object({ slaveId: z.string().min(1) }),
+      actor: z.string().min(1),
+    }),
+  }),
   // M37 t3: `setProfile` (packages/control/src/profile.ts) wrote a persona. Only a SLAVE target
   // reaches the log (spec erratum E3) -- a template and a catalog slave belong to the company
   // catalog, which has no workspace and therefore no event stream to append to -- but the payload

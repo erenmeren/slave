@@ -58,6 +58,60 @@ describe('parseExecutionEvent', () => {
     expect(result.ok).toBe(true)
   })
 
+  // M39 t2: the question row moved rather than a message being sent, so both ends of the move are
+  // on the payload. A role-addressed question comes FROM a role and a slave-addressed one from a
+  // slave id -- one of the two is always null, and which one is the fact a reader wants.
+  it.each([
+    [{ role: 'answerer', slaveId: null }],
+    [{ role: null, slaveId: 'maya' }],
+  ])('accepts a slave.message_reassigned event moving a question from %j', (from) => {
+    const result = parseExecutionEvent({
+      ...BASE,
+      type: 'slave.message_reassigned',
+      slaveId: 'alex',
+      payload: { messageId: 'm-1', decisionId: 'sd-1', from, to: { slaveId: 'zoe' }, actor: 'supervisor' },
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok && result.value.type === 'slave.message_reassigned') {
+      expect(result.value.payload.from).toEqual(from)
+      expect(result.value.payload.to.slaveId).toBe('zoe')
+    }
+  })
+
+  it('accepts a slave.message_reassigned event a human made, which names no decision', () => {
+    const result = parseExecutionEvent({
+      ...BASE,
+      type: 'slave.message_reassigned',
+      actor: 'human',
+      payload: {
+        messageId: 'm-1',
+        decisionId: null,
+        from: { role: 'answerer', slaveId: null },
+        to: { slaveId: 'zoe' },
+        actor: 'operator',
+      },
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok && result.value.type === 'slave.message_reassigned') {
+      expect(result.value.payload.decisionId).toBeNull()
+    }
+  })
+
+  it('rejects a slave.message_reassigned event that names nobody to move the question to', () => {
+    const result = parseExecutionEvent({
+      ...BASE,
+      type: 'slave.message_reassigned',
+      payload: {
+        messageId: 'm-1',
+        decisionId: null,
+        from: { role: 'answerer', slaveId: null },
+        to: { slaveId: '' },
+        actor: 'supervisor',
+      },
+    })
+    expect(result.ok).toBe(false)
+  })
+
   // M37 t3: the two events the profile/role verbs write. Both carry the actor (envelope) and the
   // NEW value -- a hash for a profile (the text itself can be 16k characters and is already on the
   // row), the whole list for runtime roles (short, and the thing a reader actually wants).

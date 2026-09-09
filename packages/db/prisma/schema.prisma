@@ -600,6 +600,12 @@ model SupervisorDecision {
   chosenIndex      Int
   /// The chosen `Action` (kind + params).
   action           Json
+  /// M39 §2: the `Draft` an `answer_question` decision was made on -- the answer text a second
+  /// model call wrote, the citations that verified, the ones that did not, the critical signals,
+  /// and (from an approval with an edit) what a human typed instead. Null for every other action:
+  /// nothing else puts a model's words in front of a worker. Validated at read by `draftSchema`
+  /// (`@slave-of-ai/domain`), the way `action` is validated by `actionSchema` beside it.
+  draft            Json?
   rationale        String
   tier             SupervisorTier
   status           SupervisorDecisionStatus
@@ -810,6 +816,10 @@ enum EventType {
   run_resumed                 @map("run.resumed")
   run_resume_requested        @map("run.resume_requested")
   slave_message_sent          @map("slave.message_sent")
+  /// M39 t2: `reassignQuestion` put an unanswered question in front of a different worker -- the
+  /// question row itself moved (`recipientSlaveId` set, `recipientRole` cleared), so no new
+  /// message was sent and `slave.message_sent` would be a lie about what happened.
+  slave_message_reassigned    @map("slave.message_reassigned")
   /// M37 t3: `setProfile` wrote a slave's persona (slave targets only -- a template and a catalog
   /// slave have no workspace to log into); `setRuntimeRoles` changed the set the scheduler,
   /// review/planning staffing and message role-addressing all dispatch on.

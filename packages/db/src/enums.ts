@@ -17,6 +17,7 @@ export const EVENT_TYPE_BY_DOMAIN_TYPE = {
   'run.paused': 'run_paused',
   'run.resumed': 'run_resumed',
   'slave.message_sent': 'slave_message_sent',
+  'slave.message_reassigned': 'slave_message_reassigned',
   'slave.profile_changed': 'slave_profile_changed',
   'slave.runtime_roles_changed': 'slave_runtime_roles_changed',
   'guardrail.tripped': 'guardrail_tripped',

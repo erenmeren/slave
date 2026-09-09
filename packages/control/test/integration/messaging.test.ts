@@ -1,7 +1,8 @@
 import { prisma } from '@slave-of-ai/db/client'
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
-  listMessagesForSlave, markMessageRead, sendMessage, type SendMessageInput,
+  answerQuestion, listMessagesForSlave, markMessageRead, reassignQuestion, sendMessage,
+  type SendMessageInput,
 } from '../../src/messaging.js'
 
 interface Fixture {
@@ -69,6 +70,62 @@ async function seed(): Promise<Fixture> {
  */
 async function parkAsWaiting(runId: string): Promise<void> {
   await prisma.slaveRun.update({ where: { id: runId }, data: { status: 'paused', pauseReason: 'waiting_for_answer' } })
+}
+
+const reset = async (): Promise<void> => {
+  await prisma.$executeRawUnsafe(
+    'TRUNCATE TABLE "ExecutionEvent", "Approval", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
+  )
+}
+
+const eventsOfType = (type: string) =>
+  prisma.executionEvent.findMany({ where: { type: type as never }, orderBy: { seq: 'asc' } })
+
+/** The sender asks the `answerer` ROLE, and parks the way `ask.ts` does. Returns the question id. */
+async function askAsRole(fixture: Fixture): Promise<string> {
+  const sent = await sendMessage(fixture.run.id, { kind: 'question', body: 'Which queue?', expectsReply: true, recipientRole: 'answerer' })
+  if (!sent.ok) throw new Error('the fixture could not ask by role')
+  await parkAsWaiting(fixture.run.id)
+  return sent.value.id
+}
+
+/** The same, addressed to ONE worker -- and optionally carrying the task it is about, which is
+ *  where a slave-addressed question gets the role a re-address is judged against (erratum E5). */
+async function askDirectly(fixture: Fixture, toSlaveId: string, taskId: string | null): Promise<string> {
+  const sent = await sendMessage(fixture.run.id, {
+    kind: 'question',
+    body: 'Which queue?',
+    expectsReply: true,
+    recipientSlaveId: toSlaveId,
+    taskId,
+  })
+  if (!sent.ok) throw new Error('the fixture could not ask directly')
+  await parkAsWaiting(fixture.run.id)
+  return sent.value.id
+}
+
+/** A second worker in the same project holding exactly `role`. */
+async function peerHolding(fixture: Fixture, role: string, name: string): Promise<string> {
+  const team = await prisma.team.findFirstOrThrow({ where: { workspaceId: fixture.workspace.id } })
+  const peer = await prisma.slave.create({
+    data: { teamId: team.id, name, role: 'Staff Engineer', runtimeRoles: [role] },
+  })
+  return peer.id
+}
+
+/** A task in the project that can only be dispatched to holders of `role`. */
+async function taskRequiring(fixture: Fixture, role: string): Promise<string> {
+  const task = await prisma.task.create({
+    data: { workspaceId: fixture.workspace.id, title: 'Wire the queue', description: 'x', requiredRole: role, maxAttempts: 3 },
+  })
+  return task.id
+}
+
+/** The unanswered questions in a worker's inbox, by id. */
+async function inboxOf(slaveId: string): Promise<string[]> {
+  const inbox = await listMessagesForSlave(slaveId, { unansweredOnly: true })
+  if (!inbox.ok) throw new Error('the fixture could not read an inbox')
+  return inbox.value.map((message) => message.id)
 }
 
 const question = (over: Partial<SendMessageInput> = {}): SendMessageInput => ({
@@ -469,5 +526,258 @@ describe('markMessageRead', () => {
 
     const row = await prisma.slaveMessage.findUniqueOrThrow({ where: { id: sent.value.id } })
     expect(row.readAt).toBeNull()
+  })
+})
+
+/**
+ * M39 t2. Two verbs that move an EXISTING question rather than writing a new message: the
+ * Supervisor answering one itself (`answerQuestion` with `origin: 'system'`), and re-addressing one
+ * to somebody who can answer it.
+ */
+describe('answerQuestion -- who the answer comes from', () => {
+  let fixture: Fixture
+
+  beforeEach(async (): Promise<void> => {
+    await reset()
+    fixture = await seed()
+  })
+
+  it('a human answer is a human row and a human event (unchanged, by default)', async () => {
+    const questionId = await askAsRole(fixture)
+
+    const result = await answerQuestion(questionId, { body: 'the retry queue', answeredBy: 'operator' })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const row = await prisma.slaveMessage.findUniqueOrThrow({ where: { id: result.value.id } })
+    expect(row.actor).toBe('human')
+    // The LAST one: the first `slave.message_sent` in this thread is the question itself.
+    const sent = (await eventsOfType('slave_message_sent')).at(-1)
+    expect(sent?.actor).toBe('human')
+  })
+
+  it('a Supervisor answer is a system row and a system event, and says who answered', async () => {
+    const questionId = await askAsRole(fixture)
+
+    const result = await answerQuestion(
+      questionId,
+      { body: 'the retry queue', answeredBy: 'supervisor' },
+      'system',
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const row = await prisma.slaveMessage.findUniqueOrThrow({ where: { id: result.value.id } })
+    // Everything else about the row is what a human's answer would be: the asker's thread, the
+    // question as its parent, nobody waiting on IT.
+    expect(row.actor).toBe('system')
+    expect(row.kind).toBe('answer')
+    expect(row.replyToId).toBe(questionId)
+    expect(row.senderRunId).toBeNull()
+
+    const sent = (await eventsOfType('slave_message_sent')).at(-1)
+    expect(sent?.actor).toBe('system')
+    expect(sent?.payload).toMatchObject({ kind: 'answer', answeredBy: 'supervisor' })
+  })
+})
+
+describe('reassignQuestion', () => {
+  let fixture: Fixture
+
+  beforeEach(async (): Promise<void> => {
+    await reset()
+    fixture = await seed()
+  })
+
+  it('moves a role-addressed question onto one worker, and announces both ends of the move', async () => {
+    const questionId = await askAsRole(fixture)
+    const peer = await peerHolding(fixture, 'answerer', 'Zed')
+
+    const result = await reassignQuestion(questionId, peer, 'operator')
+
+    expect(result).toEqual({ ok: true, value: undefined })
+    const row = await prisma.slaveMessage.findUniqueOrThrow({ where: { id: questionId } })
+    expect(row.recipientSlaveId).toBe(peer)
+    // Cleared, not left beside the new recipient: exactly one of the two columns addresses a row.
+    expect(row.recipientRole).toBeNull()
+
+    const [moved] = await eventsOfType('slave_message_reassigned')
+    expect(moved?.actor).toBe('human')
+    expect(moved?.slaveId).toBe(fixture.sender.id)
+    expect(moved?.payload).toEqual({
+      messageId: questionId,
+      decisionId: null,
+      from: { role: 'answerer', slaveId: null },
+      to: { slaveId: peer },
+      actor: 'operator',
+    })
+  })
+
+  it('the question leaves the old role holders inbox and lands in the new workers', async () => {
+    const questionId = await askAsRole(fixture)
+    const peer = await peerHolding(fixture, 'answerer', 'Zed')
+    expect((await inboxOf(fixture.recipient.id))).toEqual([questionId])
+
+    expect((await reassignQuestion(questionId, peer, 'operator')).ok).toBe(true)
+
+    expect(await inboxOf(fixture.recipient.id)).toEqual([])
+    expect(await inboxOf(peer)).toEqual([questionId])
+  })
+
+  it('with origin system it is a system event naming the decision behind it', async () => {
+    const questionId = await askAsRole(fixture)
+    const peer = await peerHolding(fixture, 'answerer', 'Zed')
+
+    expect((await reassignQuestion(questionId, peer, 'supervisor', 'system', undefined, 'sd-1')).ok).toBe(true)
+
+    const [moved] = await eventsOfType('slave_message_reassigned')
+    expect(moved?.actor).toBe('system')
+    expect(moved?.payload).toMatchObject({ decisionId: 'sd-1', actor: 'supervisor' })
+  })
+
+  it('moves a SLAVE-addressed question to a worker holding the role the asking task requires', async () => {
+    const task = await taskRequiring(fixture, 'answerer')
+    const questionId = await askDirectly(fixture, fixture.recipient.id, task)
+    const peer = await peerHolding(fixture, 'answerer', 'Zed')
+
+    expect((await reassignQuestion(questionId, peer, 'operator')).ok).toBe(true)
+
+    const [moved] = await eventsOfType('slave_message_reassigned')
+    // The question came from a SLAVE, so that is the end the move is announced from.
+    expect(moved?.payload).toMatchObject({ from: { role: null, slaveId: fixture.recipient.id } })
+  })
+
+  it('moves a slave-addressed question freely when the asking task requires no role at all', async () => {
+    const questionId = await askDirectly(fixture, fixture.recipient.id, null)
+    const anyone = await peerHolding(fixture, 'something-else', 'Zed')
+
+    expect((await reassignQuestion(questionId, anyone, 'operator')).ok).toBe(true)
+  })
+
+  it('refuses a message id nobody wrote', async () => {
+    const peer = await peerHolding(fixture, 'answerer', 'Zed')
+    expect(await reassignQuestion('m-nope', peer, 'operator')).toEqual({
+      ok: false,
+      error: { kind: 'message_not_found', messageId: 'm-nope' },
+    })
+  })
+
+  it('refuses a message that is not a question', async () => {
+    const sent = await sendMessage(fixture.run.id, {
+      kind: 'information',
+      body: 'for your notes',
+      recipientRole: 'answerer',
+    })
+    if (!sent.ok) throw new Error('the fixture could not send')
+    const peer = await peerHolding(fixture, 'answerer', 'Zed')
+
+    expect(await reassignQuestion(sent.value.id, peer, 'operator')).toEqual({
+      ok: false,
+      error: { kind: 'message_not_question', messageId: sent.value.id },
+    })
+  })
+
+  it('refuses a question a reply has already landed for, and writes nothing', async () => {
+    const questionId = await askAsRole(fixture)
+    const peer = await peerHolding(fixture, 'answerer', 'Zed')
+    const answered = await answerQuestion(questionId, { body: 'over there', answeredBy: 'operator' })
+    if (!answered.ok) throw new Error('the fixture could not answer')
+
+    expect(await reassignQuestion(questionId, peer, 'operator')).toEqual({
+      ok: false,
+      error: { kind: 'question_answered', messageId: questionId },
+    })
+    const row = await prisma.slaveMessage.findUniqueOrThrow({ where: { id: questionId } })
+    expect(row.recipientRole).toBe('answerer')
+    expect(row.recipientSlaveId).toBeNull()
+    expect(await eventsOfType('slave_message_reassigned')).toHaveLength(0)
+  })
+
+  it('refuses a question whose asker has stopped waiting for an answer', async () => {
+    const questionId = await askAsRole(fixture)
+    const peer = await peerHolding(fixture, 'answerer', 'Zed')
+    // Resumed by something other than its answer -- `orchestrator resume --run`, the panel's
+    // fallback button. Nobody is parked on this question any more.
+    await prisma.slaveRun.update({ where: { id: fixture.run.id }, data: { status: 'working', pauseReason: null } })
+
+    expect(await reassignQuestion(questionId, peer, 'operator')).toEqual({
+      ok: false,
+      error: { kind: 'question_answered', messageId: questionId },
+    })
+  })
+
+  it('settles the question BEFORE it looks at the worker: an answered question refuses first', async () => {
+    // The order spec §4 lists, and it is the useful one: told "no such worker" about a question
+    // that was already answered, an operator goes looking for the wrong problem.
+    const questionId = await askAsRole(fixture)
+    const answered = await answerQuestion(questionId, { body: 'over there', answeredBy: 'operator' })
+    if (!answered.ok) throw new Error('the fixture could not answer')
+
+    expect(await reassignQuestion(questionId, 'ag-nope', 'operator')).toEqual({
+      ok: false,
+      error: { kind: 'question_answered', messageId: questionId },
+    })
+  })
+
+  it('refuses a worker nobody has, and one in another project (which reads back the same)', async () => {
+    const questionId = await askAsRole(fixture)
+
+    expect(await reassignQuestion(questionId, 'ag-nope', 'operator')).toEqual({
+      ok: false,
+      error: { kind: 'slave_not_found', slaveId: 'ag-nope' },
+    })
+    // Zoe holds `answerer` -- in the OTHER workspace, which is the whole point: a scoped caller
+    // cannot tell her from a worker who does not exist.
+    expect(await reassignQuestion(questionId, fixture.outsider.id, 'operator')).toEqual({
+      ok: false,
+      error: { kind: 'slave_not_found', slaveId: fixture.outsider.id },
+    })
+  })
+
+  it('refuses a worker who does not hold the role the question was addressed to', async () => {
+    const questionId = await askAsRole(fixture)
+    const stranger = await peerHolding(fixture, 'frontend', 'Zed')
+
+    const result = await reassignQuestion(questionId, stranger, 'operator')
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.error).toEqual({
+      kind: 'reassign_not_permitted',
+      messageId: questionId,
+      slaveId: stranger,
+      reason: 'it does not hold the role the question was addressed to (answerer)',
+    })
+    const row = await prisma.slaveMessage.findUniqueOrThrow({ where: { id: questionId } })
+    expect(row.recipientSlaveId).toBeNull()
+  })
+
+  it('refuses a worker who does not hold the role the asking task requires', async () => {
+    const task = await taskRequiring(fixture, 'answerer')
+    const questionId = await askDirectly(fixture, fixture.recipient.id, task)
+    const stranger = await peerHolding(fixture, 'frontend', 'Zed')
+
+    const result = await reassignQuestion(questionId, stranger, 'operator')
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.error).toMatchObject({
+      kind: 'reassign_not_permitted',
+      reason: 'it does not hold the role the asking task requires (answerer)',
+    })
+  })
+
+  it('refuses the asker itself, however many roles it holds', async () => {
+    // The asker is given the addressed role too, so the ONLY thing standing in the way is that it
+    // is the asker: a question re-addressed to whoever asked it is a loop nobody can close --
+    // `answer.ts` refuses a slave its own question, and the asker stays parked forever.
+    await prisma.slave.update({ where: { id: fixture.sender.id }, data: { runtimeRoles: ['asker', 'answerer'] } })
+    const questionId = await askAsRole(fixture)
+
+    const result = await reassignQuestion(questionId, fixture.sender.id, 'operator')
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.error).toMatchObject({
+      kind: 'reassign_not_permitted',
+      reason: 'it is the worker that asked the question',
+    })
   })
 })

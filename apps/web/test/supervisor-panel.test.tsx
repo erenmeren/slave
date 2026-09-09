@@ -20,6 +20,9 @@ const decision = (over: Partial<SupervisorView['pending'][number]>): SupervisorV
   candidates: [],
   chosenIndex: 0,
   action: { kind: 'set_runtime_roles', slaveId: 'a1', roles: ['backend', 'reviewer'] },
+  // M39 t2: every decision row carries a draft column now -- null for every action but
+  // `answer_question`, which is what a staffing proposal is.
+  draft: null,
   rationale: 'Alex is idle and their title already reads as reviewer.',
   tier: 'proposed',
   status: 'pending',

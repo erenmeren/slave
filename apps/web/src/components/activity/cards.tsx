@@ -476,7 +476,7 @@ function WorkspaceSettingsChangedCard(props: ActivityCardProps): ReactElement {
     <ActivityCard {...props}>
       <Transition tone="idle" label={SETTINGS_LABEL[payload.field] ?? 'settings changed'}>
         <span data-testid="settings-from">{settingValue(payload.field, payload.from)}</span>
-        {' \u2192 '}
+        {' → '}
         <span data-testid="settings-to">{settingValue(payload.field, payload.to)}</span>
       </Transition>
     </ActivityCard>
@@ -703,6 +703,39 @@ function SlaveMessageSentCard(props: ActivityCardProps): ReactElement {
   )
 }
 
+/**
+ * M39 t2: a question re-addressed to somebody who can answer it.
+ *
+ * Nothing was sent, so there is no body to show -- what happened is a MOVE, and the two ends of it
+ * are the whole story: away from a role nobody was holding (or a worker who was busy), and to the
+ * worker it is now addressed to. Task 4 gives this the names; until then it renders the ids the
+ * payload actually carries, which is honest and findable, rather than inventing a sentence.
+ */
+function SlaveMessageReassignedCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as {
+    messageId: string
+    decisionId: string | null
+    from: { role: string | null; slaveId: string | null }
+    to: { slaveId: string }
+    actor: string
+  }
+  return (
+    <ActivityCard {...props}>
+      <Transition tone="idle" label="question re-addressed">
+        <span data-testid="reassigned-from" className="font-mono">
+          {payload.from.role ?? payload.from.slaveId ?? 'nobody'}
+        </span>
+        {' → '}
+        <span data-testid="reassigned-to" className="font-mono">
+          {payload.to.slaveId}
+        </span>
+        {' · by '}
+        <span data-testid="reassigned-actor">{payload.actor}</span>
+      </Transition>
+    </ActivityCard>
+  )
+}
+
 // ---- supervisor.* (schema.ts, M38 t1; the real cards, M38 t5) ---------------------------------
 // A decision's full story -- the candidates it chose from, the situation snapshot, the whole
 // rationale -- lives on the Supervisor panel and in `supervisor-decisions`. What these five owe
@@ -739,7 +772,7 @@ function SupervisorDecidedCard(props: ActivityCardProps): ReactElement {
         <span data-testid="supervisor-subject" className="font-mono">
           {payload.subjectId}
         </span>
-        {' \u2192 '}
+        {' → '}
         <span data-testid="supervisor-action">{payload.action.kind}</span>{' '}
         {/* The tier is what says whether this already happened or is waiting on a human, and the
           * decider whether a model or the rules chose it -- the two things an operator scanning
@@ -848,6 +881,7 @@ export const ACTIVITY_CARDS = {
   'run.paused': RunPausedCard,
   'run.resumed': RunResumedCard,
   'slave.message_sent': SlaveMessageSentCard,
+  'slave.message_reassigned': SlaveMessageReassignedCard,
   'guardrail.tripped': GuardrailTrippedCard,
   'task.verifying': TaskVerifyingCard,
   'task.verify_passed': TaskVerifyPassedCard,
