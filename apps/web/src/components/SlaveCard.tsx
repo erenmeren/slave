@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { postControl } from '../lib/postControl'
 import { CARD_STATE_TONE, cardStateFor } from '../lib/tones'
 import type { SlaveCardData } from '../server/overview'
+import { RuntimeRoleChips } from './RuntimeRoleChips'
 import { ShellOnlyMark } from './ShellOnlyMark'
 import { AvatarTile } from './ui/AvatarTile'
 import { Chip } from './ui/Chip'
@@ -171,19 +172,7 @@ export function SlaveCard({
         * is the profile's heading and is matched by nothing since M37; these are what the
         * scheduler, review staffing and role-addressed messaging actually read. */}
       <div className="flex flex-wrap items-center gap-[5px]">
-        {slave.runtimeRoles.length === 0 ? (
-          // A worker with no runtime roles can never be picked (spec §7). An empty chip row would
-          // read as "none yet"; this says what the empty set actually means.
-          <span data-testid="card-not-dispatchable" className="text-[10.5px] text-tone-blocked">
-            cannot be dispatched — no runtime roles
-          </span>
-        ) : (
-          slave.runtimeRoles.map((role) => (
-            <Chip key={role}>
-              <span data-testid="card-runtime-role-chip">{role}</span>
-            </Chip>
-          ))
-        )}
+        <RuntimeRoleChips roles={slave.runtimeRoles} />
       </div>
 
       <div className="flex items-baseline gap-[7px]">

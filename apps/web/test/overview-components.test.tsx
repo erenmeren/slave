@@ -216,18 +216,18 @@ describe('SlaveCard', () => {
       )
 
       expect(screen.getByText('Senior Engineer')).toBeTruthy()
-      expect(screen.getAllByTestId('card-runtime-role-chip').map((chip) => chip.textContent)).toEqual([
+      expect(screen.getAllByTestId('runtime-role-chip').map((chip) => chip.textContent)).toEqual([
         'backend',
         'reviewer',
       ])
-      expect(screen.queryByTestId('card-not-dispatchable')).toBeNull()
+      expect(screen.queryByTestId('not-dispatchable')).toBeNull()
     })
 
     it('marks an empty set as parked rather than showing an empty chip row (spec §7)', () => {
       render(<SlaveCard slave={slave({ runtimeRoles: [] })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
 
-      expect(screen.queryByTestId('card-runtime-role-chip')).toBeNull()
-      expect(screen.getByTestId('card-not-dispatchable').textContent).toMatch(/cannot be dispatched/i)
+      expect(screen.queryByTestId('runtime-role-chip')).toBeNull()
+      expect(screen.getByTestId('not-dispatchable').textContent).toMatch(/cannot be dispatched/i)
     })
   })
 

@@ -324,16 +324,43 @@ function withProvider(children: React.ReactNode): ReactElement {
   return <ReactFlowProvider>{children}</ReactFlowProvider>
 }
 
+// M37 t4 fix round 1 (spec §5): the node is a LABEL, so it gets no chip list -- just the one mark
+// that says this worker can never be picked, which is what an operator scanning the org graph for
+// "why is nothing running" needs to see.
+describe('SlaveNode — a parked worker (M37 §5)', () => {
+  const data = (runtimeRoles: readonly string[]): SlaveNodeData => ({
+    kind: 'slave',
+    name: 'Alex',
+    role: 'backend',
+    runtimeRoles,
+    status: 'idle',
+    activeTaskTitle: null,
+    workspaceId: 'w1',
+  })
+
+  it('marks a slave holding no runtime roles as parked', () => {
+    render(withProvider(<SlaveNode {...nodeProps('slave:a1', data([]))} />))
+
+    expect(screen.getByTestId('node-not-dispatchable').textContent).toMatch(/parked/i)
+  })
+
+  it('marks nothing when the slave holds at least one', () => {
+    render(withProvider(<SlaveNode {...nodeProps('slave:a1', data(['backend']))} />))
+
+    expect(screen.queryByTestId('node-not-dispatchable')).toBeNull()
+  })
+})
+
 describe('node status flash (M5 border-flash idiom)', () => {
   it('SlaveNode: no flash class on initial mount', () => {
-    const data: SlaveNodeData = { kind: 'slave', name: 'Alex', role: 'backend', status: 'idle', activeTaskTitle: null, workspaceId: 'w1' }
+    const data: SlaveNodeData = { kind: 'slave', name: 'Alex', role: 'backend', runtimeRoles: ['backend'], status: 'idle', activeTaskTitle: null, workspaceId: 'w1' }
     render(withProvider(<SlaveNode {...nodeProps('slave:a1', data)} />))
 
     expect(screen.getByTestId('slave-node').className).not.toContain('animate-[border-flash')
   })
 
   it('SlaveNode: flashes its border on a status change, and carries the status colour as --flash-color', () => {
-    const data: SlaveNodeData = { kind: 'slave', name: 'Alex', role: 'backend', status: 'idle', activeTaskTitle: null, workspaceId: 'w1' }
+    const data: SlaveNodeData = { kind: 'slave', name: 'Alex', role: 'backend', runtimeRoles: ['backend'], status: 'idle', activeTaskTitle: null, workspaceId: 'w1' }
     const { rerender } = render(withProvider(<SlaveNode {...nodeProps('slave:a1', data)} />))
 
     const changed: SlaveNodeData = { ...data, status: 'working' }
@@ -574,6 +601,7 @@ function slave(overrides: Partial<GraphSlave> = {}): GraphSlave {
     id: 'a1',
     name: 'Alex',
     role: 'backend',
+    runtimeRoles: ['backend'],
     teamId: 'team1',
     status: 'idle',
     activeTaskId: null,

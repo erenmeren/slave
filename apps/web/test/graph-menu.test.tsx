@@ -138,7 +138,7 @@ describe('NodeMenu', () => {
 
 describe('node context menus wired per node type', () => {
   it('a slave node\'s trigger opens a menu targeting /w/<ws>?slave=<id> and /w/<ws>/activity?slaves=<id>', () => {
-    const data: SlaveNodeData = { kind: 'slave', name: 'Alex', role: 'backend', status: 'idle', activeTaskTitle: null, workspaceId: 'w1' }
+    const data: SlaveNodeData = { kind: 'slave', name: 'Alex', role: 'backend', runtimeRoles: ['backend'], status: 'idle', activeTaskTitle: null, workspaceId: 'w1' }
     render(withProvider(<SlaveNode {...nodeProps('slave:a1', data)} />))
 
     fireEvent.click(screen.getByTestId('node-menu-trigger'))
@@ -148,7 +148,7 @@ describe('node context menus wired per node type', () => {
   })
 
   it('right-clicking a slave node opens its menu', () => {
-    const data: SlaveNodeData = { kind: 'slave', name: 'Alex', role: 'backend', status: 'idle', activeTaskTitle: null, workspaceId: 'w1' }
+    const data: SlaveNodeData = { kind: 'slave', name: 'Alex', role: 'backend', runtimeRoles: ['backend'], status: 'idle', activeTaskTitle: null, workspaceId: 'w1' }
     render(withProvider(<SlaveNode {...nodeProps('slave:a1', data)} />))
 
     fireEvent.contextMenu(screen.getByTestId('slave-node'))

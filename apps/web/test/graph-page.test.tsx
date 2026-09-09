@@ -111,6 +111,9 @@ function slave(overrides: Partial<GraphSlave> = {}): GraphSlave {
     id: 'a1',
     name: 'Alex',
     role: 'backend',
+    // M37 t4 fix round 1: the org node reads this to mark a parked worker. A dispatchable default,
+    // so only the case that cares about the empty set states it.
+    runtimeRoles: ['backend'],
     teamId: 'team1',
     status: 'idle',
     activeTaskId: null,

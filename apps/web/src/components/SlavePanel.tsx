@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { SlaveFeedEvent } from '../lib/feedSummary'
 import type { SlaveCardData } from '../server/overview'
 import { sendControl } from '../lib/postControl'
+import { RuntimeRoleChips } from './RuntimeRoleChips'
 import { DOT } from './SlaveCard'
 import { ShellOnlyMark } from './ShellOnlyMark'
 import { Button } from './ui/Button'
@@ -327,24 +328,14 @@ export function SlavePanel({
         </Button>
       </section>
 
-      <section data-testid="runtime-roles" className="flex flex-col gap-1">
+      <section data-testid="runtime-roles-block" className="flex flex-col gap-1">
         <h3 className="text-xs uppercase tracking-wide text-text-3">Runtime roles</h3>
-        {slave.runtimeRoles.length === 0 ? (
-          // Not an empty chip row: an empty set means this worker is never a scheduler candidate,
-          // never staffed onto a review or a plan, and never a role-addressed message's recipient
-          // (spec §7). Saying nothing there would read as "no roles yet" rather than "parked".
-          <p data-testid="runtime-roles-empty" className="text-xs text-tone-blocked">
-            no runtime roles — this slave cannot be dispatched until it holds one
-          </p>
-        ) : (
-          <div className="flex flex-wrap items-center gap-[5px]">
-            {slave.runtimeRoles.map((role) => (
-              <Chip key={role}>
-                <span data-testid="runtime-role-chip">{role}</span>
-              </Chip>
-            ))}
-          </div>
-        )}
+        {/* The same chips and the same warning the card and the Slaves table show -- an empty set
+          * means this worker is never a scheduler candidate, never staffed onto a review or a
+          * plan, and never a role-addressed message's recipient (spec §7). */}
+        <div className="flex flex-wrap items-center gap-[5px]">
+          <RuntimeRoleChips roles={slave.runtimeRoles} />
+        </div>
         <input
           data-testid="runtime-roles-input"
           value={rolesDraft}

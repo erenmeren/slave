@@ -647,14 +647,14 @@ describe('SlavePanel', () => {
       render_({ runtimeRoles: ['backend', 'reviewer'] })
 
       expect(screen.getAllByTestId('runtime-role-chip').map((chip) => chip.textContent)).toEqual(['backend', 'reviewer'])
-      expect(screen.queryByTestId('runtime-roles-empty')).toBeNull()
+      expect(screen.queryByTestId('not-dispatchable')).toBeNull()
     })
 
     it('warns that an empty set is parked: it can never be dispatched (spec §7)', () => {
       render_({ runtimeRoles: [] })
 
       expect(screen.queryByTestId('runtime-role-chip')).toBeNull()
-      expect(screen.getByTestId('runtime-roles-empty').textContent).toMatch(/cannot be dispatched/i)
+      expect(screen.getByTestId('not-dispatchable').textContent).toMatch(/cannot be dispatched/i)
     })
 
     it('saving the roles PATCHes the replacement set, split on commas exactly as the CLI splits --roles', async () => {

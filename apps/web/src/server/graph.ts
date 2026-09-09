@@ -36,6 +36,10 @@ export interface GraphSlave {
   readonly id: string
   readonly name: string
   readonly role: string
+  /** The roles this slave may be DISPATCHED as (M37 §5) -- the org node marks a slave holding none
+   *  as parked, because such a worker can never be picked (spec §7) and the graph is where an
+   *  operator looks when nothing is running. `role` beside it is the title, matched by nothing. */
+  readonly runtimeRoles: readonly string[]
   readonly teamId: string
   readonly status: string // the M4 derived status vocabulary (SlaveStatus, widened per spec §3.1)
   readonly activeTaskId: string | null
@@ -265,6 +269,7 @@ export async function buildGraphSnapshot(workspaceId: string): Promise<GraphSnap
         id: slave.id,
         name: slave.name,
         role: slave.role,
+        runtimeRoles: slave.runtimeRoles,
         teamId: slave.teamId,
         // The one translator (ADR 0002): never re-derive the run→slave status mapping here.
         status: deriveSlaveStatus(run === null ? null : toRunState(run)),

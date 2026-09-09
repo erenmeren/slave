@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import type { AllSlaveRow, AllSlavesPage } from '../server/org'
 import { sendControl } from '../lib/postControl'
+import { RuntimeRoleChips } from './RuntimeRoleChips'
 import { SlaveRowActions } from './SlaveRowActions'
 import { toneForStatus } from './SlavesClient'
 import { ModelOverrideEditor } from './ModelOverrideEditor'
@@ -41,6 +42,9 @@ interface PolledWorker {
   readonly gate: AllSlaveRow['gate']
   readonly costUsd: number
   readonly unmeasuredRuns: number
+  /** M37 t4 fix round 1: the dispatch set, merged on every tick like `status` -- a `set-runtime-
+   *  roles` from the CLI or another operator's panel must reach this table without a reload. */
+  readonly runtimeRoles: readonly string[]
 }
 
 /**
@@ -118,6 +122,7 @@ export function AllSlavesTable({
               gate: w.gate,
               costUsd: w.costUsd,
               unmeasuredRuns: w.unmeasuredRuns,
+              runtimeRoles: w.runtimeRoles,
             })
           }
           // A payload worker this table has never rendered becomes a new project row.
@@ -144,6 +149,7 @@ export function AllSlavesTable({
               model: null,
               costUsd: w.costUsd,
               unmeasuredRuns: w.unmeasuredRuns,
+              runtimeRoles: w.runtimeRoles,
               // Not in the poll payload, same as `model` above -- unknown until the next full
               // reload (`AllSlaveRow.runCount`'s own docstring).
               runCount: 0,
@@ -187,7 +193,20 @@ export function AllSlavesTable({
             ) : (
               <span className="truncate text-[12.5px] font-semibold text-text-1">{row.name}</span>
             )}
-            <span className="truncate text-[11.5px] text-text-2">{row.role}</span>
+            <div className="flex min-w-0 flex-col gap-[3px]">
+              {/* The TITLE (M37 §5) -- unchanged, and still the column's own text. The testid is
+                * new: `SlaveRowActions`' re-role control renders the same text in the actions
+                * column, so a test asserting the title needs to name which of the two it means. */}
+              <span data-testid="worker-role" className="truncate text-[11.5px] text-text-2">{row.role}</span>
+              {/* The dispatch set beside it. Only a project row has one: a catalog member has no
+                * `Slave` row yet, so "cannot be dispatched" would be a warning about a worker that
+                * does not exist rather than about one nothing can pick. */}
+              {row.slaveId !== null && (
+                <div className="flex flex-wrap items-center gap-[4px]">
+                  <RuntimeRoleChips roles={row.runtimeRoles} />
+                </div>
+              )}
+            </div>
             <DepartmentCell row={row} page={initial} />
             {row.projectName === null ? (
               <span data-testid="slave-project" aria-label="project —" className="text-xs text-text-3">

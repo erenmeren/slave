@@ -30,6 +30,9 @@ function row(over: Partial<AllSlaveRow> = {}): AllSlaveRow {
     costUsd: 0,
     unmeasuredRuns: 0,
     runCount: 0,
+    // M37 t4 fix round 1: the dispatch set. The default is the parked one, so the cases below
+    // that care state their own.
+    runtimeRoles: [],
     ...over,
   }
 }
@@ -58,6 +61,7 @@ function polledWorker(over: Partial<{
   gate: AllSlaveRow['gate']
   costUsd: number
   unmeasuredRuns: number
+  runtimeRoles: readonly string[]
 }> = {}) {
   return {
     slaveId: 'a1',
@@ -73,6 +77,7 @@ function polledWorker(over: Partial<{
     gate: null,
     costUsd: 0,
     unmeasuredRuns: 0,
+    runtimeRoles: [],
     ...over,
   }
 }
@@ -129,6 +134,45 @@ describe('AllSlavesTable', () => {
 
     rerender(<AllSlavesTable initial={page([row({ provider: 'claude_code', gate: 'all-tools' })])} onOpen={() => {}} />)
     expect(screen.queryByTestId('shell-only-mark')).toBeNull()
+  })
+
+  // M37 t4 fix round 1 (spec §5): this table is the all-workers view, and a worker parked with an
+  // empty `runtimeRoles` -- the exact state an operator looks for when nothing picks up a task --
+  // was invisible here. `role` stays the title cell it always was; the dispatch set sits beside it.
+  describe('runtime roles (M37 §5)', () => {
+    it('shows one chip per dispatchable role beside the title', () => {
+      render(
+        <AllSlavesTable
+          initial={page([row({ role: 'Senior Engineer', runtimeRoles: ['backend', 'reviewer'] })])}
+          onOpen={() => {}}
+        />,
+      )
+
+      expect(screen.getByTestId('worker-role').textContent).toBe('Senior Engineer')
+      expect(screen.getAllByTestId('runtime-role-chip').map((chip) => chip.textContent)).toEqual([
+        'backend',
+        'reviewer',
+      ])
+      expect(screen.queryByTestId('not-dispatchable')).toBeNull()
+    })
+
+    it('warns that a project worker holding no runtime roles cannot be dispatched', () => {
+      render(<AllSlavesTable initial={page([row({ runtimeRoles: [] })])} onOpen={() => {}} />)
+
+      expect(screen.getByTestId('not-dispatchable').textContent).toMatch(/cannot be dispatched/i)
+    })
+
+    it('says nothing about dispatch on a catalog row: no worker exists yet to dispatch', () => {
+      render(
+        <AllSlavesTable
+          initial={page([row({ slaveId: null, companySlaveId: 'ca1', name: 'Nova', projectName: null, workspaceId: null })])}
+          onOpen={() => {}}
+        />,
+      )
+
+      expect(screen.queryByTestId('not-dispatchable')).toBeNull()
+      expect(screen.queryByTestId('runtime-role-chip')).toBeNull()
+    })
   })
 
   describe('polling', () => {

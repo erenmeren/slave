@@ -30,6 +30,7 @@ function slaveRow(over: Partial<AllSlaveRow> = {}): AllSlaveRow {
     costUsd: 0,
     unmeasuredRuns: 0,
     runCount: 0,
+    runtimeRoles: ['backend'],
     ...over,
   }
 }
@@ -132,6 +133,11 @@ describe('SlavesClient row click opens the panel', () => {
                 tokens: null,
                 costUsd: 0,
                 unmeasuredRuns: 0,
+                // M37 t4 fix round 1: carried by the real `GET /api/org/workers` payload
+                // (`listWorkers`), and merged into the table's rows on every tick. Stated here for
+                // the same reason `waitingFor` is stated in the overview literal below — this is a
+                // fetch RESPONSE body TypeScript never checks, and the table renders `.length`.
+                runtimeRoles: ['backend'],
               },
             ],
           }),

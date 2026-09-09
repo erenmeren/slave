@@ -6,6 +6,7 @@ import { Handle, Position, type Edge, type Node, type NodeProps, type NodeTypes 
 import type { SlaveStatus, TaskStatus } from '@slave-of-ai/domain'
 import { CARD_STATE_TONE, cardStateFor, cardStateForSlave } from '../../lib/tones'
 import type { GraphSnapshot } from '../../server/graph'
+import { NOT_DISPATCHABLE_TEXT } from '../RuntimeRoleChips'
 import { BORDER_FLASH_MS, DOT, FLASH_COLOR } from '../SlaveCard'
 import { TASK_STATUS_BORDER, TASK_STATUS_DOT, TASK_STATUS_FLASH_COLOR } from '../TaskCard'
 import { NodeMenu } from './NodeMenu'
@@ -27,6 +28,10 @@ export interface SlaveNodeData {
   readonly kind: 'slave'
   readonly name: string
   readonly role: string
+  /** The dispatch set (M37 §5). Carried whole rather than as a precomputed `parked` boolean so the
+   *  node reads the same field every other worker surface reads; the node renders only whether it
+   *  is EMPTY -- a node is a label, and a chip list belongs on the card, the panel and the table. */
+  readonly runtimeRoles: readonly string[]
   readonly status: SlaveStatus
   readonly activeTaskTitle: string | null
   /** Carried on the node data (rather than threaded through `GraphCanvas`/React Flow itself)
@@ -151,6 +156,13 @@ export function SlaveNode({ id, data }: NodeProps<SlaveNodeData>): React.JSX.Ele
         />
         <span className="text-sm text-text-1">{data.name}</span>
         <span className="text-xs text-text-3">{data.role}</span>
+        {/* M37 §5: one compact mark, not a chip list -- this node is a label. `title` carries the
+          * same sentence every other surface shows, so hovering explains what "parked" means. */}
+        {data.runtimeRoles.length === 0 && (
+          <span data-testid="node-not-dispatchable" title={NOT_DISPATCHABLE_TEXT} className="text-xs text-tone-blocked">
+            parked
+          </span>
+        )}
       </div>
       <div className="mt-1 truncate text-xs text-text-2">{data.activeTaskTitle ?? 'idle'}</div>
       <Handle type="source" position={Position.Bottom} />
@@ -245,6 +257,7 @@ export function buildOrgGraph(snapshot: GraphSnapshot): { readonly nodes: Node[]
         kind: 'slave',
         name: slave.name,
         role: slave.role,
+        runtimeRoles: slave.runtimeRoles,
         status: slave.status as SlaveStatus,
         activeTaskTitle: slave.activeTaskTitle,
         workspaceId: snapshot.workspace.id,

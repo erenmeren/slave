@@ -83,6 +83,16 @@ describe('buildGraphSnapshot', () => {
   // removed rather than left asserting nothing. `SlaveRun.costUsd` itself is untouched and still
   // exercised by `overview.test.ts` and `server-org.test.ts`, which actually read it.
 
+  // M37 t4 fix round 1: the org graph's node marks a parked worker, so the snapshot it renders
+  // from has to carry the dispatch set (spec §5 -- `role` is the title and matches nothing).
+  it("carries the slave's runtimeRoles", async (): Promise<void> => {
+    await prisma.slave.update({ where: { id: fixture.slaveId }, data: { runtimeRoles: ['backend', 'reviewer'] } })
+
+    const snapshot = await buildGraphSnapshot(fixture.workspaceId)
+
+    expect(snapshot?.slaves[0]?.runtimeRoles).toEqual(['backend', 'reviewer'])
+  })
+
   it('reports an idle slave with no live run as null-wired', async (): Promise<void> => {
     const snapshot = await buildGraphSnapshot(fixture.workspaceId)
     const slave = snapshot?.slaves[0]

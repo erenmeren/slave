@@ -22,6 +22,7 @@ const SNAPSHOT: GraphSnapshot = {
       id: 'a1',
       name: 'Alex',
       role: 'backend',
+      runtimeRoles: ['backend'],
       teamId: 'team1',
       status: 'idle',
       activeTaskId: null,

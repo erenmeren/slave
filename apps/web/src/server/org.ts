@@ -432,6 +432,15 @@ export interface WorkerRow {
   readonly slaveId: string
   readonly name: string
   readonly role: string
+  /**
+   * The roles this worker may be DISPATCHED as (M37 §5) -- what the scheduler, reviewer/manager
+   * staffing and role-addressed messaging match on, while `role` above is the profile's title and
+   * is matched by nothing.
+   *
+   * An empty array is a real state, not missing data: the worker is parked and can never be
+   * picked (spec §7), which is what the Slaves table warns about.
+   */
+  readonly runtimeRoles: readonly string[]
   readonly workspaceId: string
   readonly projectName: string
   readonly status: string
@@ -551,6 +560,7 @@ export async function listWorkers(options?: { readonly includeArchived?: boolean
       slaveId: slave.id,
       name: slave.name,
       role: slave.role,
+      runtimeRoles: slave.runtimeRoles,
       workspaceId: slave.team.workspaceId,
       projectName: slave.team.workspace.name,
       status: info?.status ?? 'idle',
@@ -578,6 +588,16 @@ export interface AllSlaveRow {
   readonly companySlaveId: string | null
   readonly name: string
   readonly role: string
+  /**
+   * `WorkerRow.runtimeRoles` for a project row (M37 t4 fix round 1).
+   *
+   * ALWAYS empty on a catalog row, and it means something different there: a catalog member has no
+   * `Slave` row at all, so it has no dispatch set to be parked out of -- which is why
+   * `AllSlavesTable` renders the parked warning only for a row that has a `slaveId`. The field is
+   * not nullable, because "no worker yet" is already said by `slaveId === null` and a second way
+   * of saying it is a second thing to keep in step.
+   */
+  readonly runtimeRoles: readonly string[]
   /** The row's department name -- a project row's `Team.name`, or a catalog row's
    *  `CompanyTeam.name` (M25 Task 6: was `teamName`, renamed once the Slaves table's department
    *  column became a `<select>` that reads/writes the department, not just names it). */
@@ -683,6 +703,7 @@ export async function listAllSlaves(options?: { readonly includeArchived?: boole
     companySlaveId: null, // filled below from the roster when the worker is roster-linked
     name: w.name,
     role: w.role,
+    runtimeRoles: w.runtimeRoles,
     departmentName: w.department,
     projectName: w.projectName,
     workspaceId: w.workspaceId,
@@ -712,6 +733,9 @@ export async function listAllSlaves(options?: { readonly includeArchived?: boole
     member: (typeof roster)[number]['teams'][number]['members'][number],
   ): AllSlaveRow => ({
     slaveId: null, companySlaveId: member.companySlaveId, name: member.name, role: member.role,
+    // A catalog member is not a worker yet, so it has no dispatch set of its own -- see the field's
+    // own docstring for why that is `[]` rather than `null`.
+    runtimeRoles: [],
     departmentName: team.teamName, projectName: null, workspaceId: null,
     teamId: null, companyId: company.companyId, companyTeamId: team.companyTeamId,
     status: 'idle', currentTask: null,

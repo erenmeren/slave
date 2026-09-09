@@ -122,6 +122,27 @@ describe('listAllSlaves', () => {
 
   // M27 §3.3: the Slaves page hides an archived project's rows by default, the same rule every
   // other list read follows.
+  // M37 t4 fix round 1: the Slaves page shows the dispatch set beside the title, so the row it
+  // renders has to carry it. A catalog row has no `Slave` of its own, and so no dispatch set: the
+  // empty array there means "no worker yet", which is why the table renders nothing for it rather
+  // than the parked warning a project row's empty set earns.
+  it('carries each project row\'s runtimeRoles, and an empty set for a catalog row', async (): Promise<void> => {
+    const company = await prisma.company.create({ data: { name: 'Acme Robotics' } })
+    const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Eng' } })
+    const template = await prisma.slaveTemplate.create({ data: { name: 'Backend Engineer', role: 'backend' } })
+    const member = await prisma.companySlave.create({
+      data: { companyTeamId: companyTeam.id, templateId: template.id, name: 'Nova' },
+    })
+    const worker = await prisma.slave.create({
+      data: { teamId: fixture.teamId, name: 'Alex', role: 'Senior Engineer', runtimeRoles: ['backend', 'reviewer'] },
+    })
+
+    const { rows } = await listAllSlaves()
+
+    expect(rows.find((r) => r.slaveId === worker.id)?.runtimeRoles).toEqual(['backend', 'reviewer'])
+    expect(rows.find((r) => r.companySlaveId === member.id)?.runtimeRoles).toEqual([])
+  })
+
   it('hides an archived project\'s rows unless includeArchived is set', async (): Promise<void> => {
     await prisma.slave.create({ data: { teamId: fixture.teamId, name: 'Blair', role: 'frontend' } })
     await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { archivedAt: new Date() } })
