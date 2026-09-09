@@ -259,6 +259,29 @@ describe('targeted card bodies', () => {
     expect(screen.getByTestId('runtime-roles').textContent).toBe('none (cannot be dispatched)')
   })
 
+  // M38 t2: the settings card grew the Supervisor's two fields. A switch reads as on/off rather
+  // than as `true`/`false`, and the profile is carried (and shown) as a sha256 prefix -- the
+  // payload never holds the persona's text, so the card has none to leak.
+  it('workspace.settings_changed says on and off for the supervisor switch', () => {
+    const Card = ACTIVITY_CARDS['workspace.settings_changed']
+    const event = baseEvent('workspace.settings_changed', { field: 'supervisorEnabled', from: true, to: false })
+    render(<Card event={event} {...CARD_PROPS} />)
+    expect(screen.getByTestId('transition-label').textContent).toBe('supervisor switched')
+    expect(screen.getByTestId('settings-from').textContent).toBe('on')
+    expect(screen.getByTestId('settings-to').textContent).toBe('off')
+  })
+
+  it('workspace.settings_changed shows a supervisor profile as a short hash, not the whole one', () => {
+    const Card = ACTIVITY_CARDS['workspace.settings_changed']
+    const sha256 = 'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789'
+    const event = baseEvent('workspace.settings_changed', { field: 'supervisorProfile', from: null, to: sha256 })
+    render(<Card event={event} {...CARD_PROPS} />)
+    expect(screen.getByTestId('transition-label').textContent).toBe('supervisor profile changed')
+    expect(screen.getByTestId('settings-from').textContent).toBe('none')
+    expect(screen.getByTestId('settings-to').textContent).toBe('abcdef01\u2026')
+    expect(screen.getByTestId('settings-to').textContent).not.toBe(sha256)
+  })
+
   it('org.changed shows the label for its field and the from/to values', () => {
     const Card = ACTIVITY_CARDS['org.changed']
     render(<Card event={fixtureFor('org.changed')} {...CARD_PROPS} />)

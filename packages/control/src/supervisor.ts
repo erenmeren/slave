@@ -324,6 +324,11 @@ const reached = (result: Result<void, ControlRefusal>): Result<Reach, ControlRef
  *
  * No `supervisor.resolved` on a refusal: `supervisor.failed` is the truer event there, and saying
  * "resolved: approved" about an action the world turned down would be the log's only lie.
+ *
+ * The `supervisor.resolved` this emits is the ONE `supervisor.*` event whose envelope actor is not
+ * `system` (fix round 1): a person resolved this, and that is what the log should say. The verb the
+ * approval applies already runs with `origin: 'human'` for the same reason. `expirePendingDecisions`
+ * keeps `system`, because nobody acted there.
  */
 export async function approveDecision(
   decisionId: string,
@@ -342,9 +347,12 @@ export async function approveDecision(
   await appendEvent({
     type: 'supervisor.resolved',
     workspaceId: claim.value.workspaceId,
-    // `system` like every other `supervisor.*` event: the Supervisor's own log of its own
-    // decision's life. WHO resolved it is `userId` here and `resolvedByUserId` on the row.
-    actor: 'system',
+    // `human`, unlike the rest of the `supervisor.*` events (fix round 1). An approval is a
+    // PERSON's act -- the one moment in a proposal's life the Supervisor did not author -- and the
+    // envelope actor is what every reader of the log filters on. `userId` names which person, and
+    // `resolvedByUserId` keeps the same fact on the row. Only an EXPIRY stays `system`: nobody
+    // acted there, which is the whole fact it records.
+    actor: 'human',
     payload: { decisionId, outcome: 'approved', reason: null },
     userId: principal.userId,
   })
@@ -373,7 +381,9 @@ export async function rejectDecision(
   await appendEvent({
     type: 'supervisor.resolved',
     workspaceId: claim.value.workspaceId,
-    actor: 'system',
+    // A person's act, like an approval -- see {@link approveDecision} for why this one event
+    // departs from the `system` actor the other `supervisor.*` events carry.
+    actor: 'human',
     payload: { decisionId, outcome: 'rejected', reason: trimmed === undefined || trimmed === '' ? null : trimmed },
     userId: principal.userId,
   })

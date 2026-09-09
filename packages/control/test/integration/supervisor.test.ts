@@ -464,10 +464,10 @@ describe('approveDecision', () => {
       'reviewer',
     ])
 
-    // Every supervisor.* event is the Supervisor's own log of its own decision, so the envelope
-    // actor is 'system'; WHO approved is userId here and resolvedByUserId on the row.
+    // A person resolved this, so the envelope says so -- the one supervisor.* event that is not
+    // 'system'. WHICH person is userId here and resolvedByUserId on the row.
     const [resolved] = await eventsOfType('supervisor_resolved')
-    expect(resolved?.actor).toBe('system')
+    expect(resolved?.actor).toBe('human')
     expect(resolved?.userId).toBe(f.userId)
     expect(resolved?.payload).toEqual({ decisionId: decision.id, outcome: 'approved', reason: null })
   })
@@ -536,7 +536,7 @@ describe('rejectDecision', () => {
     expect((await prisma.slave.findUniqueOrThrow({ where: { id: f.slaveId } })).runtimeRoles).toEqual(['backend'])
 
     const [resolved] = await eventsOfType('supervisor_resolved')
-    expect(resolved?.actor).toBe('system')
+    expect(resolved?.actor).toBe('human')
     expect(resolved?.userId).toBe(f.userId)
     expect(resolved?.payload).toEqual({ decisionId: decision.id, outcome: 'rejected', reason: 'Maya is on leave' })
   })
@@ -589,8 +589,10 @@ describe('expirePendingDecisions', () => {
     expect(staleRow.resolvedByUserId).toBeNull()
     expect((await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: fresh.id } })).status).toBe('pending')
 
+    // Nobody acted on this one -- the expiry IS the fact -- so this stays the Supervisor's own event.
     const [resolved] = await eventsOfType('supervisor_resolved')
     expect(resolved?.actor).toBe('system')
+    expect(resolved?.userId).toBeNull()
     expect(resolved?.payload).toEqual({ decisionId: stale.id, outcome: 'expired', reason: null })
   })
 
