@@ -330,9 +330,21 @@ concurrency cap is busy, not stuck, and nothing is frozen for it.
 **The model picks, the rules offer.** Where a model is wired and the budget allows it, the
 Supervisor asks for an *index into the catalogue* and a rationale — it can never add an action,
 and an answer that will not parse or points outside the list falls back to the rules. It asks
-about at most three situations per tick; the rest wait for the next one. A situation already in
-front of you is not asked again, and one decided in the last fifteen minutes is left alone;
-proposals nobody answers expire after a day.
+about at most three situations per tick; the rest are decided by the rules in the same pass, not
+held over. A situation already in front of you is not asked again, and one decided in the last
+fifteen minutes is left alone; proposals nobody answers expire after a day.
+
+**Upgrading turns it on.** The Supervisor is on by default, so the first time the daemon starts
+after this upgrade it begins supervising **every project you already have** — including the pass
+that may call a model. A project with a **budget** stops calling the model the moment the budget
+guardrail says the money is gone, so its unattended spend is bounded by the budget you already
+set. A project with **no budget** (`budgetUsd` cleared) has no such ceiling: nothing but the $1
+per-call cap and the three-calls-per-tick limit stands between it and a model call on every tick.
+To switch it off:
+
+```bash
+npm run orchestrator -- set-supervisor --workspace <id> --disable
+```
 
 **Its spend is the project's spend.** A Supervisor call is capped at $1, and a call whose cost the
 provider never reported is charged at that cap rather than counted as free — so the budget

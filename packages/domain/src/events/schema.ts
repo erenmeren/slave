@@ -284,10 +284,13 @@ export const executionEventSchema = z.discriminatedUnion('type', [
     type: z.literal('task.unblocked'),
     payload: z.object({ attempt: z.number().int().nonnegative(), maxAttempts: z.number().int().positive() }),
   }),
-  // M38 t1: the five events the Supervisor's control verbs write (spec section 2). Every one is
-  // appended by `packages/control/src/supervisor.ts` with `actor: 'system'` -- the envelope enum
-  // has no `supervisor` member and gaining one would touch every reader (spec erratum E4); the
-  // Supervisor names itself in the payload the verbs it calls write instead.
+  // M38 t1: the five events the Supervisor's control verbs write (spec section 2). All appended by
+  // `packages/control/src/supervisor.ts`, and all with `actor: 'system'` EXCEPT the
+  // `supervisor.resolved` that an approve or a reject emits, which says `actor: 'human'` because a
+  // person resolved it (the expiry sweep's `supervisor.resolved` is `system`, as nobody resolved
+  // that one). The envelope enum has no `supervisor` member and gaining one would touch every
+  // reader (spec erratum E4); the Supervisor names itself in the payload the verbs it calls write
+  // instead.
   //
   // `situationKind`, `action.kind`, `tier` and `decidedBy` validate against the DOMAIN unions
   // (`SITUATION_KINDS`, `ACTION_KINDS`, `TIERS`, `DECIDERS`) rather than re-spelt string literals,

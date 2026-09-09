@@ -9,10 +9,10 @@ export interface WorkspaceSpend {
   readonly spentUsd: number
   /** Σ `SlaveRun.costUsd` over every run of the workspace, whatever its status. Postgres' `sum()`
    *  skips NULLs, so an unmeasured RUN contributes nothing here -- deliberately, and unchanged
-   *  from what `loadRunStats` has always summed (M12 Task 9 ruling R8: the budget guardrail must
-   *  not trip on unmeasured runs, or it would fire on every healthy tick, because a LIVE run's
-   *  cost is null until it concludes). `apps/web`'s `sumSpend` is what puts the count of those in
-   *  front of an operator. */
+   *  from what the orchestrator's own run-stats read summed before `stats.ts`'s `workspaceStats`
+   *  took it over (M12 Task 9 ruling R8: the budget guardrail must not trip on unmeasured runs, or
+   *  it would fire on every healthy tick, because a LIVE run's cost is null until it concludes).
+   *  `apps/web`'s `sumSpend` is what puts the count of those in front of an operator. */
   readonly runsMeasuredUsd: number
   /** Σ `SupervisorDecision.modelCostUsd`. */
   readonly supervisorMeasuredUsd: number
@@ -24,12 +24,14 @@ export interface WorkspaceSpend {
 /**
  * The ONE spend formula for a workspace (spec erratum E2).
  *
- * Both readers use this: `apps/orchestrator/src/world.ts`'s `loadRunStats`, so the budget
- * guardrail sees Supervisor spend and a workspace cannot be talked into an unbounded number of
- * $1 decisions by a formula that only counted runs, and `loadSupervisorWorld`, so
- * `world.budgetExhausted` -- the gate that stops the Supervisor calling a model at all -- is the
- * same number the guardrail acts on. Two spellings of it would drift, and the drift would be a
- * Supervisor that keeps spending after the guardrail has halted the workspace.
+ * Every reader goes through it. `stats.ts`'s `workspaceStats` puts it in `stats.spentUsd`, which
+ * is what the budget guardrail evaluates for BOTH of its callers -- `apps/orchestrator/src/world.ts`
+ * (whose `decide()` halts scheduling) and `loadSupervisorWorld` (whose `world.budgetExhausted` is
+ * the gate that stops the Supervisor calling a model at all) -- and `apps/web`'s `overview.ts` and
+ * `shell.ts` call it directly so every page shows the guardrail's own number. So a workspace
+ * cannot be talked into an unbounded number of $1 decisions by a formula that only counted runs.
+ * Two spellings of it would drift, and the drift would be a Supervisor that keeps spending after
+ * the guardrail has halted the workspace.
  *
  * UNMEASURED CALLS (spec erratum E6). A decision row is charged at the cap when `modelCalled` is
  * true and `modelCostUsd` is null: the call was made and its cost never came back, which is
@@ -53,7 +55,7 @@ export async function workspaceSpend(
   client: Prisma.TransactionClient = prisma,
 ): Promise<WorkspaceSpend> {
   // Joined through `Slave`/`Team`, not `Task`: a planning run (M8b) has no `Task` row and still
-  // spends real money -- `loadRunStats`' own comment has the full reasoning.
+  // spends real money -- `stats.ts`'s own `activeRuns` comment has the full reasoning.
   const runs = await client.slaveRun.aggregate({
     where: { slave: { team: { workspaceId } } },
     _sum: { costUsd: true },

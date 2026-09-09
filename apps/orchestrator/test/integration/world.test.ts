@@ -395,6 +395,30 @@ describe('loadWorld stats.consecutiveFailures', () => {
     expect(world.stats.consecutiveFailures).toBe(0)
   })
 
+  it('still trips the breaker when far more concluded runs exist than the bounded query reads', async (): Promise<void> => {
+    // `workspaceStats` reads only `consecutiveFailureLimit + 1` concluded runs (final review
+    // Important 2). Eight runs here, five of them a live failure streak, against the default limit
+    // of 3: the query sees four rows, all failures, and the breaker has to trip on that prefix.
+    // The three successes behind them exist precisely so the bound is what stops them being read.
+    const id = await seedRuns([
+      { status: 'succeeded', startedAt: at('2026-01-01T00:00:00Z') },
+      { status: 'succeeded', startedAt: at('2026-01-02T00:00:00Z') },
+      { status: 'succeeded', startedAt: at('2026-01-03T00:00:00Z') },
+      { status: 'failed', startedAt: at('2026-01-04T00:00:00Z') },
+      { status: 'failed', startedAt: at('2026-01-05T00:00:00Z') },
+      { status: 'failed', startedAt: at('2026-01-06T00:00:00Z') },
+      { status: 'failed', startedAt: at('2026-01-07T00:00:00Z') },
+      { status: 'failed', startedAt: at('2026-01-08T00:00:00Z') },
+    ])
+
+    const { world } = await loadWorld(workspaceId(id))
+    // Four, not five: the reported figure is the streak AS FAR AS THE WINDOW SEES IT, which is the
+    // documented contract. What has to hold is the comparison the guardrail makes.
+    expect(world.stats.consecutiveFailures).toBe(world.limits.consecutiveFailureLimit + 1)
+    expect(world.stats.consecutiveFailures >= world.limits.consecutiveFailureLimit).toBe(true)
+    expect(decide(world)).toEqual([{ kind: 'halt', reason: 'circuit_breaker' }])
+  })
+
   it('orders by conclusion rather than start when the two disagree', async (): Promise<void> => {
     const id = await seedRuns([
       // A long run: started first, concluded last.

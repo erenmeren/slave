@@ -134,16 +134,25 @@ export async function workspaceStats(
   //
   // Raw SQL rather than Prisma's `orderBy`, which cannot express a `COALESCE` sort key.
   //
-  // Deliberately unbounded: the loop below stops at the first non-`failed` run, but the query
-  // returns every run the workspace has ever concluded. A `LIMIT` would bound the transfer, and
-  // the only bound that is certainly safe -- the workspace's `consecutiveFailureLimit` -- would
-  // also cap the reported number, turning `stats.consecutiveFailures` from "the streak" into
-  // "the streak, up to the limit". `evaluateGuardrails` only ever compares it with `>=` so it
-  // would not notice, but a later consumer reading the figure as a count would.
+  // Bounded at `consecutiveFailureLimit + 1` rows (final review Important 2), which is EXACT for
+  // what the streak is used for rather than merely cheap. The loop below stops at the first
+  // non-`failed` run, so only a prefix is ever read; and the one consumer,
+  // `evaluateGuardrails`' circuit breaker, asks `consecutiveFailures >= consecutiveFailureLimit`.
+  // A prefix of `limit + 1` decides that question for every possible history: `limit` failures
+  // followed by anything already trips it, and any shorter prefix of failures is reported as its
+  // true length because the run that ended the streak is inside the window. The `+ 1` is the run
+  // that ENDS the streak -- without it a workspace exactly at the limit could not be told apart
+  // from one past it, which does not change the breach but does change the number printed next
+  // to it. Beyond that the figure would only ever say "and more failures before those", and
+  // nothing reads it that way. It is a streak, not a lifetime count, and no caller reads it as
+  // one -- a future consumer that wants the true total must count it itself, not widen this.
   //
   // Joined through `Slave`/`Team`, not `Task`: a `planning` run (M8b) has no `Task` row, and a
   // garbage planner must still feed the circuit breaker like any other slave (the M8a review-run
   // precedent) -- a join through `Task` alone would let it fail forever with no streak to halt it.
+  //
+  // The `::int` on the LIMIT parameter: a bare Prisma placeholder arrives untyped and Postgres
+  // will not take a double there.
   const concludedRuns = await client.$queryRaw<{ readonly status: RunStatus }[]>`
     SELECT r.status::text AS status
     FROM "SlaveRun" r
@@ -152,6 +161,7 @@ export async function workspaceStats(
     WHERE tm."workspaceId" = ${workspaceId}
       AND r.status::text = ANY(${[...CONCLUDED_RUN_STATUSES]}::text[])
     ORDER BY COALESCE(r."terminalAt", r."startedAt") DESC, r."startedAt" DESC
+    LIMIT ${workspace.consecutiveFailureLimit + 1}::int
   `
 
   let consecutiveFailures = 0

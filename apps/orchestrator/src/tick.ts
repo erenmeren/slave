@@ -80,8 +80,10 @@ export interface TickReport {
    *  otherwise. Set before anything else is decided -- the rest of the report is meaningless when
    *  this is set, since the world was never loaded. */
   readonly skipped: 'archived' | null
-  /** What the Supervisor did at the end of this tick (M38 §5). All zeros on the paths that never
-   *  reach it -- an archived project, and a halted one, both of which return before the pass. */
+  /** What the Supervisor did at the end of this tick (M38 §5). All zeros on the ONE path that
+   *  never reaches it: an archived project, which returns before the world is even loaded. A
+   *  HALTED workspace is supervised (spec §5, clarified in fix round 1) -- rules-only, every
+   *  action a proposal -- because it is the workspace an operator most needs a decision about. */
   readonly supervisor: SuperviseReport
 }
 

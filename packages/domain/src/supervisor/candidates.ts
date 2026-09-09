@@ -25,12 +25,16 @@ function subjectTask(situation: Situation, world: SupervisorWorld): SupervisorTa
  * model's pick, land on the obvious person. Ties break on slave id so the list is deterministic
  * whatever order the loader returned the roster in.
  *
+ * BOTH sides of that match are lowercased (final review Minor 7). A `requiredRole` is free text an
+ * operator typed, so `QA` or `Backend` compared against an already-lowercased title matched nothing
+ * and every candidate came back in flat slave-id order -- the ranking silently stopped ranking.
+ *
  * The roles written are the slave's CURRENT set plus the missing one: a staffing action must never
  * take a role away as a side effect of adding one.
  */
 function staffingCandidates(world: SupervisorWorld, kind: SituationKind, role: string): Candidate[] {
   const contenders = staffableSlaves(world, role)
-    .map((slave) => ({ slave, mentions: slave.role.toLowerCase().includes(role) }))
+    .map((slave) => ({ slave, mentions: slave.role.toLowerCase().includes(role.toLowerCase()) }))
     .toSorted((a, b) =>
       a.mentions === b.mentions ? a.slave.id.localeCompare(b.slave.id) : a.mentions ? -1 : 1,
     )

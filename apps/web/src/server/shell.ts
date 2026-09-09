@@ -1,3 +1,4 @@
+import { workspaceSpend } from '@slave-of-ai/control'
 import { toRunState } from '@slave-of-ai/db'
 import { prisma } from '@slave-of-ai/db/client'
 import { deriveSlaveStatus, NON_TERMINAL_RUN_STATUSES, type SpendGroup } from '@slave-of-ai/domain'
@@ -36,7 +37,22 @@ export interface ShellFacts {
    *  Published by every workspace page alongside the counts, so the header never opens a stream. */
   readonly status: {
     readonly goal: string | null
+    /**
+     * What this workspace has spent, by the ONE formula the budget guardrail uses
+     * (`workspaceSpend`, spec erratum E2): every run that reported a cost, plus the Supervisor's
+     * measured decisions, plus its unmeasured calls at `SUPERVISOR_PER_CALL_CAP_USD`.
+     *
+     * The same number Overview's spend tile shows (final review Important 3). It was
+     * `spendOfGroups`' run-only total, which Overview stopped using in M38 t5 -- so the very same
+     * header, mounted by the project layout on every page, reported one figure on `/w/:id` and a
+     * smaller one on `/w/:id/tasks` and `/activity` the moment a Supervisor decision cost
+     * anything. A budget bar that shrinks when you change tab is worse than either figure alone.
+     */
     readonly spentUsd: number
+    /** How many RUNS of this workspace have no recorded cost -- `spendOfGroups`' count, unchanged
+     *  and deliberately still about runs: {@link spentUsd} is money and this is a caveat on how
+     *  much of the run half of it could be known. The Supervisor's own unmeasured calls are not
+     *  here; they are already IN the total, charged at the per-call cap rather than unknown. */
     readonly unmeasuredRuns: number
     readonly haltedReason: string | null
   }
@@ -52,7 +68,7 @@ export async function buildShellFacts(workspaceId: string): Promise<ShellFacts |
   const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId } })
   if (workspace === null) return null
 
-  const [runs, tasksActive, spendGroups] = await Promise.all([
+  const [runs, tasksActive, spendGroups, spendTotal] = await Promise.all([
     // No `select`: `toRunState` maps a whole `SlaveRun` row, and narrowing the query to the four
     // columns it happens to read today would hand it an object the mapper's own type rejects —
     // and would have to be revisited every time the domain's `RunState` grows a field. The row
@@ -72,6 +88,11 @@ export async function buildShellFacts(workspaceId: string): Promise<ShellFacts |
       _sum: { costUsd: true },
       _count: { _all: true, costUsd: true },
     }),
+    // The TOTAL, by the guardrail's own formula -- `overview.ts` does exactly this alongside the
+    // same groups, and for the same reason: the groups stay for the unmeasured-RUN count that no
+    // aggregate can produce, while the money comes from the one place that knows about the
+    // Supervisor's spend as well as the runs'.
+    workspaceSpend(workspaceId),
   ])
 
   // `deriveSlaveStatus` rather than a `status === 'working'` filter on the row: the domain owns
@@ -91,7 +112,9 @@ export async function buildShellFacts(workspaceId: string): Promise<ShellFacts |
     rowCount: g._count._all,
     measuredCount: g._count.costUsd,
   }))
-  const { spend, unmeasuredRuns } = spendOfGroups(groups)
+  // `spend` (the groups' run-only total) is deliberately dropped: only the run COUNT is taken from
+  // here now, and `spentUsd` below is `workspaceSpend`'s.
+  const { unmeasuredRuns } = spendOfGroups(groups)
 
   return {
     workspace: { id: workspace.id, name: workspace.name },
@@ -104,7 +127,7 @@ export async function buildShellFacts(workspaceId: string): Promise<ShellFacts |
     },
     status: {
       goal: workspace.goal,
-      spentUsd: spend,
+      spentUsd: spendTotal.spentUsd,
       unmeasuredRuns,
       haltedReason: workspace.haltedReason,
     },

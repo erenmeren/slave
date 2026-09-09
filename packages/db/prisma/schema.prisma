@@ -859,8 +859,10 @@ enum EventType {
   /// decision; `supervisor.proposed` alongside it when the tier made the decision a `pending`
   /// proposal; `supervisor.applied` when the action reached the world through a control verb;
   /// `supervisor.resolved` when a pending decision was approved, rejected or expired; and
-  /// `supervisor.failed` when the verb behind an applied decision refused it. All appended with
-  /// `actor: system` -- the `Actor` enum has no `supervisor` member (spec erratum E4).
+  /// `supervisor.failed` when the verb behind an applied decision refused it. Appended with
+  /// `actor: system` except the `supervisor.resolved` of an approve or a reject, which is
+  /// `actor: human` because a person resolved it -- the `Actor` enum has no `supervisor` member
+  /// (spec erratum E4), so the Supervisor itself is always `system`.
   supervisor_decided          @map("supervisor.decided")
   supervisor_proposed         @map("supervisor.proposed")
   supervisor_applied          @map("supervisor.applied")

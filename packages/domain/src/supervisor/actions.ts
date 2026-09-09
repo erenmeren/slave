@@ -11,7 +11,10 @@ export type Action =
   | { readonly kind: 'unblock_task'; readonly taskId: string }
   /** `unblockTask` with `allowAnotherAttempt`: the same, but the cap has to move first. */
   | { readonly kind: 'raise_max_attempts'; readonly taskId: string }
-  /** `setRuntimeRoles`: the slave's current set PLUS the missing role -- never a replacement. */
+  /** `setRuntimeRoles`: the slave's current set PLUS the missing role -- never a replacement, and
+   *  applied as a union. The array stored here is what the rules computed at DECISION time; a
+   *  proposal can wait a day, so `applyDecision` re-reads the slave and writes the union of its
+   *  current set with these, which is what stops an approval taking back a role granted meanwhile. */
   | { readonly kind: 'set_runtime_roles'; readonly slaveId: string; readonly roles: readonly string[] }
   /** Records an escalation against a question's holders. M38 detects; M39 answers (spec scope split). */
   | { readonly kind: 'nudge_answer'; readonly messageId: string }

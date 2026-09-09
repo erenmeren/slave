@@ -38,6 +38,12 @@ const SUPERVISOR_ACTOR = 'supervisor'
  *  worth of history, not the whole table. */
 export const DEFAULT_DECISION_LIMIT = 50
 
+/** The most {@link listDecisions} will return however large a `limit` a caller names (final review
+ *  Minor 10). The CLI validates its `--limit`, but the web route and any other caller pass a number
+ *  straight through, and an uncapped `take` turns one request into a read of the whole table. Ten
+ *  panels' worth: far past anything a human scrolls, far short of a workspace's whole history. */
+export const MAX_DECISION_LIMIT = 500
+
 const sha256 = (text: string): string => createHash('sha256').update(text, 'utf8').digest('hex')
 
 export interface RecordDecisionInput {
@@ -305,7 +311,7 @@ async function carryOut(
       // exactly `attempt + 1` in the same write that unblocks. There is no separate cap verb.
       return reached(await unblockTask(action.taskId, { allowAnotherAttempt: true, origin }, principal))
     case 'set_runtime_roles':
-      return reached(await setRuntimeRoles(action.slaveId, [...action.roles], SUPERVISOR_ACTOR, origin))
+      return reached(await addRuntimeRoles(action.slaveId, action.roles, origin))
     case 'mark_task_failed':
       return reached(await failTask(action.taskId, action.reason, origin, principal))
     case 'nudge_answer':
@@ -320,6 +326,38 @@ async function carryOut(
 
 const reached = (result: Result<void, ControlRefusal>): Result<Reach, ControlRefusal> =>
   result.ok ? ok('applied') : result
+
+/**
+ * `set_runtime_roles`, applied as a UNION rather than the replacement `setRuntimeRoles` performs
+ * (spec §4 clarification, final review Important 1).
+ *
+ * The decision row stores the roles the rules computed AT DECISION TIME -- `[...slave.runtimeRoles,
+ * role]` in `candidates.ts`. A proposal may then sit `pending` for up to `PENDING_TTL_MS` (a day),
+ * and `setRuntimeRoles` is documented as "a replacement, not a merge": writing that stale array
+ * verbatim silently takes back every role an operator granted in the meantime. Approving "give
+ * Maya reviewer" must never be able to remove `frontend` from her.
+ *
+ * So the slave is RE-READ here and the write is its CURRENT set first, then whatever the proposal
+ * adds that it does not already hold. Every other arm re-validates at apply time through the verb
+ * it calls; this is that check for this one. The read is outside `setRuntimeRoles`' own locked
+ * transaction, so a role granted in the microseconds between the two could still be lost -- a
+ * proposal that is a day old is the case that matters, and closing the last microsecond would mean
+ * a merge mode on the operator-facing verb whose whole contract is that it replaces.
+ *
+ * `slave_not_found` when the worker is gone, which is the same refusal `setRuntimeRoles` would
+ * have produced for the same row.
+ */
+async function addRuntimeRoles(
+  slaveId: string,
+  adds: readonly string[],
+  origin: 'human' | 'system',
+): Promise<Result<void, ControlRefusal>> {
+  const slave = await prisma.slave.findUnique({ where: { id: slaveId }, select: { runtimeRoles: true } })
+  if (slave === null) return err({ kind: 'slave_not_found', slaveId })
+  const union = [...slave.runtimeRoles]
+  for (const role of adds) if (!union.includes(role)) union.push(role)
+  return setRuntimeRoles(slaveId, union, SUPERVISOR_ACTOR, origin)
+}
 
 /**
  * A human says yes to a pending proposal (M38 §4).
@@ -505,7 +543,7 @@ export async function listDecisions(
   const rows = await prisma.supervisorDecision.findMany({
     where: { workspaceId, ...(opts?.pending === true ? { status: 'pending' as const } : {}) },
     orderBy: { createdAt: 'desc' },
-    take: opts?.limit ?? DEFAULT_DECISION_LIMIT,
+    take: Math.min(opts?.limit ?? DEFAULT_DECISION_LIMIT, MAX_DECISION_LIMIT),
   })
   return rows.map((row) => ({
     id: row.id,

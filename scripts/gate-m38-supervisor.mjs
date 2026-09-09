@@ -575,6 +575,21 @@ try {
     await fail(`the workspace_halted decision recorded a cost of ${String(haltDecision.modelCostUsd)}, expected null`)
   }
   console.log(`the halt itself: ${JSON.stringify(haltDecision.situation.facts)}`)
+  // Not just THAT it escalated a halt, but that it escalated THIS one (final review Minor 8). The
+  // two fields `observe.ts` writes into a `workspace_halted` situation are `reason` -- the durable
+  // `Workspace.haltedReason` if one is set, else the guardrail name `haltOf` picked -- and
+  // `budgetExhausted`. Without this the stage passed on a circuit-breaker halt, which the failing
+  // runs earlier in the gate can genuinely produce, and would have reported the wrong cause as
+  // proof of the budget path.
+  if (haltDecision.situation.facts.reason !== 'budget_exhausted') {
+    await fail(
+      `the workspace_halted decision blames "${String(haltDecision.situation.facts.reason)}", expected budget_exhausted -- ` +
+        'the stage blew the budget, so anything else means the workspace stopped for a different reason',
+    )
+  }
+  if (haltDecision.situation.facts.budgetExhausted !== true) {
+    await fail('the workspace_halted decision does not say the budget is exhausted, though the stage spent past it')
+  }
 
   // The stronger form of the same claim: not just that THIS row cost nothing, but that nothing
   // written since the money ran out called anybody at all.

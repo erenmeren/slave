@@ -411,6 +411,33 @@ describe('applyDecision', () => {
     expect(changed?.payload).toEqual({ slaveId: f.slaveId, roles: ['backend', 'reviewer'], actor: 'supervisor' })
   })
 
+  it('set_runtime_roles applies as a UNION, keeping a role granted while the proposal waited', async () => {
+    // The proposal is computed the way `candidates.ts` computes one -- the slave's roles AT THAT
+    // MOMENT (`['backend']`) plus the missing one.
+    const decision = await record(f, { kind: 'set_runtime_roles', slaveId: f.slaveId, roles: ['backend', 'reviewer'] }, 'proposed')
+    // ...and then an operator grants `frontend` by hand while it sits pending (it may sit for a
+    // whole `PENDING_TTL_MS`). Applying the stored array verbatim would take `frontend` straight
+    // back off her, because `setRuntimeRoles` is a replacement.
+    await prisma.slave.update({ where: { id: f.slaveId }, data: { runtimeRoles: ['backend', 'frontend'] } })
+
+    expect((await approveDecision(decision.id, { userId: f.userId })).ok).toBe(true)
+
+    const roles = (await prisma.slave.findUniqueOrThrow({ where: { id: f.slaveId } })).runtimeRoles
+    expect(roles).toEqual(['backend', 'frontend', 'reviewer'])
+    const [changed] = await eventsOfType('slave_runtime_roles_changed')
+    expect(changed?.payload).toEqual({ slaveId: f.slaveId, roles: ['backend', 'frontend', 'reviewer'], actor: 'supervisor' })
+  })
+
+  it('set_runtime_roles refuses slave_not_found when the worker is gone by the time it is applied', async () => {
+    const decision = await record(f, { kind: 'set_runtime_roles', slaveId: f.slaveId, roles: ['backend', 'reviewer'] }, 'proposed')
+    await prisma.slave.delete({ where: { id: f.slaveId } })
+
+    const applied = await applyDecision(decision.id, 'system')
+    expect(applied.ok).toBe(false)
+    expect(applied.ok ? null : applied.error).toEqual({ kind: 'slave_not_found', slaveId: f.slaveId })
+    expect((await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: decision.id } })).status).toBe('failed')
+  })
+
   it('mark_task_failed fails the task and records the reason', async () => {
     const decision = await record(f, { kind: 'mark_task_failed', taskId: f.taskId, reason: 'a dead end' }, 'proposed')
     expect((await applyDecision(decision.id, 'system')).ok).toBe(true)

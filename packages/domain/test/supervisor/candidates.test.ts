@@ -140,6 +140,23 @@ describe('candidates -- the staffing situations', () => {
     expect(staffing.map((c) => (c.action.kind === 'set_runtime_roles' ? c.action.slaveId : ''))).toEqual(['s1', 's2', 's4'])
   })
 
+  it('ranks by the title with a mixed-case requiredRole, not only a lowercase one', () => {
+    // `requiredRole` is free text an operator typed. Lowercasing only the TITLE side made `QA`
+    // match no title at all, so the ranking silently collapsed to slave-id order and the obvious
+    // holder stopped being offered first (final review Minor 7). `s1` sorts before `s2` by id, so
+    // this test can only pass because the title matched.
+    const w = world({
+      tasks: [task({ status: 'ready', requiredRole: 'QA' })],
+      slaves: [
+        slave({ id: 's1', role: 'Backend Engineer', runtimeRoles: ['backend'] }),
+        slave({ id: 's2', role: 'QA Engineer', runtimeRoles: ['backend'] }),
+      ],
+    })
+    const cands = offered(w)
+    expect(cands[0]?.action).toEqual({ kind: 'set_runtime_roles', slaveId: 's2', roles: ['backend', 'QA'] })
+    expect(cands[1]?.action).toEqual({ kind: 'set_runtime_roles', slaveId: 's1', roles: ['backend', 'QA'] })
+  })
+
   it('falls back to the escalation alone when there is nobody to staff', () => {
     const w = world({ tasks: [task({ status: 'reviewing' })], slaves: [slave({ busy: true })] })
     expect(kinds(offered(w))).toEqual(['escalate_to_human', 'no_action'])
