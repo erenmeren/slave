@@ -208,10 +208,11 @@ export type ControlRefusal =
   /**
    * M39 t2: the worker named cannot answer this question, so moving it there would only hide it.
    *
-   * The same rule `mayAnswer` (`@slave-of-ai/domain`) stamps a routine `reassign_question` with,
-   * enforced here at the write: a role-addressed question needs a holder of THAT role, and a
-   * slave-addressed one falls back to the asker's task's `requiredRole`. `reason` is a whole
-   * sentence because the cases need different fixes -- staff the role first, or pick somebody else.
+   * The same rule `answerBar` (`@slave-of-ai/domain`) stamps a routine `reassign_question` with --
+   * literally the same function, called from both sides -- enforced here at the write: the asker
+   * never, a role-addressed question needs a holder of THAT role, and a slave-addressed one falls
+   * back to the asker's task's `requiredRole`. `reason` is a whole sentence because the cases need
+   * different fixes -- staff the role first, or pick somebody else.
    */
   | { readonly kind: 'reassign_not_permitted'; readonly messageId: string; readonly slaveId: string; readonly reason: string }
   /** M39 t2: `applyDecision`/`approveDecision` on an `answer_question` decision that carries no

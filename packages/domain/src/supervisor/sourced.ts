@@ -62,7 +62,15 @@ function sourceText(source: Source, question: SupervisorQuestion, world: Supervi
       // the whole point of the check is that the answer came from somewhere the asker did not.
       if (source.ref === question.messageId) return null
       const message = question.thread.find((entry) => entry.messageId === source.ref)
-      return message?.body ?? null
+      if (message === undefined) return null
+      // NOTHING THE ASKER WROTE IS EVIDENCE EITHER (erratum E8). The line above is one message
+      // wide, and a worker that wants an automatic answer only has to post a `note` in its own
+      // thread first -- "the port is 9999" -- and then ask the question whose answer it planted.
+      // That citation would verify against a real message body and the answer would go out
+      // unread. The rule is the asker, not the question: a colleague's note, an earlier answer,
+      // and anything the system itself wrote are all still quotable.
+      if (message.senderSlaveId === question.askerSlaveId) return null
+      return message.body
     }
   }
 }
@@ -76,10 +84,11 @@ function sourceText(source: Source, question: SupervisorQuestion, world: Supervi
  * none at all -- is `unknown_ref`, since the model pointed at something rather than nothing;
  * everything else that fails is `quote_not_found`.
  *
- * One `message` ref is rejected on principle rather than for being absent: THE QUESTION'S OWN id.
- * The question is not evidence for its own answer -- it is in the thread, so quoting it would
- * verify, and an answer built out of the words it was asked in would go out automatically. It is
- * reported as `unknown_ref`, the reason for every message citation that points nowhere usable.
+ * Two classes of `message` ref are rejected on principle rather than for being absent, and both
+ * come to the same thing: NOTHING THE ASKER WROTE IS EVIDENCE (errata E4, E8). The question's own
+ * id, and any thread message whose sender is the asker. Either would let an answer be built out of
+ * words the asker put in the thread itself and sent automatically. Both are reported as
+ * `unknown_ref`, the reason for every message citation that points nowhere usable.
  */
 export function verifySources(
   sources: readonly Source[],

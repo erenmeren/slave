@@ -1,5 +1,10 @@
 import { prisma } from '@slave-of-ai/db/client'
-import { RUN_PROMPT_MAX_CHARS, SUPERVISOR_PER_CALL_CAP_USD, THREAD_BODY_MAX_CHARS } from '@slave-of-ai/domain'
+import {
+  RUN_PROMPT_MAX_CHARS,
+  SUPERVISOR_PER_CALL_CAP_USD,
+  THREAD_BODY_MAX_CHARS,
+  THREAD_MESSAGES_MAX,
+} from '@slave-of-ai/domain'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { workspaceSpend } from '../../src/spend.js'
 import { workspaceStats } from '../../src/stats.js'
@@ -411,6 +416,135 @@ describe('loadSupervisorWorld', () => {
 
     const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
     expect(world.questions[0]?.holders.toSorted()).toEqual([addressed.id, peer.id].toSorted())
+  })
+
+  /**
+   * Erratum E8, the final review's Important 4. The asker holds the asking task's role by
+   * construction -- that is how it came to be doing the task it asked about -- so it fell straight
+   * into `holders` on this branch, and the panel told an operator "2 workers could answer it" about
+   * a question exactly one worker could answer. Nobody answers their own question.
+   */
+  it('never counts the ASKER as a holder, even though it holds the asking task\'s own role', async (): Promise<void> => {
+    const fixture = await seed()
+    // The asker holds `backend`, the very role its task requires.
+    const asker = await prisma.slave.create({
+      data: { teamId: fixture.teamId, name: 'Maya', role: 'Backend', runtimeRoles: ['backend'] },
+    })
+    const addressed = await prisma.slave.create({
+      data: { teamId: fixture.teamId, name: 'Robin', role: 'QA', runtimeRoles: ['reviewer'] },
+    })
+    const taskId = await makeTask(fixture, { title: 'Wire the database', status: 'running', requiredRole: 'backend' })
+    const waitingRun = await prisma.slaveRun.create({
+      data: { slaveId: asker.id, status: 'paused', pauseReason: 'waiting_for_answer', kind: 'implementation', taskId },
+    })
+    await prisma.slaveMessage.create({
+      data: {
+        slaveId: asker.id,
+        workspaceId: fixture.workspaceId,
+        taskId,
+        senderRunId: waitingRun.id,
+        recipientSlaveId: addressed.id,
+        threadId: 'thread-1',
+        kind: 'question',
+        body: 'which port?',
+        actor: 'slave',
+        expectsReply: true,
+      },
+    })
+
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
+    expect(world.questions[0]?.holders).toEqual([addressed.id])
+  })
+
+  it('never counts the asker as a holder of a ROLE-addressed question it happens to hold', async (): Promise<void> => {
+    const fixture = await seed()
+    const asker = await prisma.slave.create({
+      data: { teamId: fixture.teamId, name: 'Maya', role: 'Reviewer', runtimeRoles: ['reviewer'] },
+    })
+    const reviewer = await prisma.slave.create({
+      data: { teamId: fixture.teamId, name: 'Robin', role: 'QA', runtimeRoles: ['reviewer'] },
+    })
+    const waitingRun = await prisma.slaveRun.create({
+      data: { slaveId: asker.id, status: 'paused', pauseReason: 'waiting_for_answer', kind: 'implementation' },
+    })
+    await prisma.slaveMessage.create({
+      data: {
+        slaveId: asker.id,
+        workspaceId: fixture.workspaceId,
+        senderRunId: waitingRun.id,
+        recipientRole: 'reviewer',
+        threadId: 'thread-1',
+        kind: 'question',
+        body: 'which port?',
+        actor: 'slave',
+        expectsReply: true,
+      },
+    })
+
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
+    expect(world.questions[0]?.holders).toEqual([reviewer.id])
+  })
+
+  /**
+   * Erratum E9. Nothing bounded a thread before this: a conversation two workers had been having
+   * for a week went into the world entire and from there into an answer call, so the size of the
+   * prompt was whatever they had typed at each other.
+   */
+  it('carries at most THREAD_MESSAGES_MAX thread messages, newest last, question always among them', async (): Promise<void> => {
+    const fixture = await seed()
+    const asker = await prisma.slave.create({
+      data: { teamId: fixture.teamId, name: 'Maya', role: 'product', runtimeRoles: ['product'] },
+    })
+    const peer = await prisma.slave.create({
+      data: { teamId: fixture.teamId, name: 'Robin', role: 'QA', runtimeRoles: ['reviewer'] },
+    })
+    const waitingRun = await prisma.slaveRun.create({
+      data: { slaveId: asker.id, status: 'paused', pauseReason: 'waiting_for_answer', kind: 'implementation' },
+    })
+    // The QUESTION first, so it is the OLDEST of the 45 and falls outside a plain newest-40 window.
+    const question = await prisma.slaveMessage.create({
+      data: {
+        slaveId: asker.id,
+        workspaceId: fixture.workspaceId,
+        senderRunId: waitingRun.id,
+        recipientRole: 'reviewer',
+        threadId: 'thread-1',
+        kind: 'question',
+        body: 'which port?',
+        actor: 'slave',
+        expectsReply: true,
+      },
+    })
+    const notes: string[] = []
+    for (let index = 0; index < 44; index += 1) {
+      const note = await prisma.slaveMessage.create({
+        data: {
+          slaveId: peer.id,
+          workspaceId: fixture.workspaceId,
+          threadId: 'thread-1',
+          kind: 'information',
+          body: `note-${String(index)}`,
+          actor: 'slave',
+        },
+      })
+      notes.push(note.id)
+    }
+
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
+    const thread = world.questions[0]?.thread ?? []
+    expect(thread).toHaveLength(THREAD_MESSAGES_MAX)
+    // The question is kept however old it is: `verifySources` looks it up IN the thread to refuse a
+    // citation of it, so a window that dropped it would re-open the hole erratum E4 closed.
+    expect(thread[0]?.messageId).toBe(question.id)
+    // Newest last, and the messages that went are the OLDEST notes -- the five just after the
+    // question, since the question itself takes the place of the sixth.
+    expect(thread[1]?.messageId).toBe(notes[5])
+    expect(thread.at(-1)?.messageId).toBe(notes.at(-1))
+    const bodies = thread.map((message) => message.body)
+    expect(bodies).not.toContain('note-0')
+    // notes[4] is the message the question displaced -- the window is still exactly the cap wide.
+    expect(bodies).not.toContain('note-4')
+    expect(bodies).toContain('note-5')
   })
 
   it('adds nobody for a slave-addressed question whose task takes any role at all', async (): Promise<void> => {

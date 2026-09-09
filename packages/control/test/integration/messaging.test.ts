@@ -769,6 +769,11 @@ describe('reassignQuestion', () => {
     // The asker is given the addressed role too, so the ONLY thing standing in the way is that it
     // is the asker: a question re-addressed to whoever asked it is a loop nobody can close --
     // `answer.ts` refuses a slave its own question, and the asker stays parked forever.
+    //
+    // This clause now lives in the DOMAIN's `answerBar`, which this verb calls (final review
+    // Important 3): the same function stamps a `reassign_question` routine, so there is no second
+    // spelling of the rule that can disagree with this refusal. `policy.test.ts` covers the other
+    // side of it.
     await prisma.slave.update({ where: { id: fixture.sender.id }, data: { runtimeRoles: ['asker', 'answerer'] } })
     const questionId = await askAsRole(fixture)
 

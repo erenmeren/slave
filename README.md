@@ -361,12 +361,17 @@ A **questions waiting** block under it lists every pending question with who it 
 shell, `approve-decision --id <id> --body-file <path>` sends your own words instead of the
 Supervisor's (read untrimmed — it is also how you answer a question it escalated with an empty
 draft), and `reassign-question --message <id> --to <slaveId>` moves a question by hand. Decisions
-are kept for **30 days** after they are resolved and then deleted on an ordinary tick; a proposal
-still waiting on you is never deleted, however old.
+are kept for **30 days** — counted from when they were resolved, or from when they were written if
+they never waited on you — and then deleted on an ordinary tick. Two kinds are kept for good: a
+proposal still waiting on you, however old, and **any decision that called a model**, because those
+rows are the record of what the Supervisor spent and the budget guardrail reads them with no time
+limit.
 
 **Upgrading turns it on.** The Supervisor is on by default, so the first time the daemon starts
 after this upgrade it begins supervising **every project you already have** — including the pass
-that may call a model. A project with a **budget** stops calling the model the moment the budget
+that may call a model. Every question that has already been waiting longer than **30 minutes**
+counts as stale on the very first tick after the upgrade, so the Supervisor starts working through
+the backlog at up to **three model decisions per tick** until it is clear. A project with a **budget** stops calling the model the moment the budget
 guardrail says the money is gone, so its unattended spend is bounded by the budget you already
 set. A project with **no budget** (`budgetUsd` cleared) has no such ceiling: nothing but the $1
 per-call cap and the three-calls-per-tick limit stands between it and a model call on every tick.

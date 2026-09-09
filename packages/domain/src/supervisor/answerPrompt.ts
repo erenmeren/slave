@@ -8,7 +8,7 @@ import {
   THREAD_BODY_MAX_CHARS,
 } from './constants.js'
 import { PROFILE_HEADING, firstJsonObject } from './prompt.js'
-import type { SupervisorQuestion, SupervisorWorld, ThreadMessage } from './world.js'
+import { boundThread, type SupervisorQuestion, type SupervisorWorld, type ThreadMessage } from './world.js'
 
 /**
  * The four places an answer may come from (M39 §1). Closed, and each one is a text the loader
@@ -181,9 +181,11 @@ export function buildAnswerPrompt(input: {
     'SOURCE "run_context" -- the instructions the asker was given for this run',
     `  ${question.askerRunPrompt === null ? NONE : cap(question.askerRunPrompt, RUN_PROMPT_MAX_CHARS)}`,
     '',
-    'SOURCE "message" -- the thread, oldest first; cite one by its [id]. Do NOT cite the question',
-    'itself: it is not evidence for its own answer, and a citation of it is thrown away.',
-    threadLines(question.thread),
+    'SOURCE "message" -- the thread, oldest first; cite one by its [id]. Do NOT cite ANYTHING the',
+    `asker (${question.askerSlaveId}) wrote -- neither the question itself nor any earlier message`,
+    'of its own: what the asker said is not evidence for its own answer, and such a citation is',
+    'thrown away.',
+    threadLines(boundThread(question.thread, question.messageId)),
     '',
     'ROSTER (context only -- never a source)',
     rosterLines(world),

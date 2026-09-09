@@ -486,6 +486,11 @@ describe('SupervisorPanel', () => {
       })
 
       const call = fetchMock.mock.calls.find((one) => one[0] === '/api/w/w1/supervisor/decisions/d-answer/approve')
+      // FIRST that the approve fired at all (final review Minor 8): `call?.[1]?.body` is undefined
+      // for a POST with no body AND for a button that did nothing, so without this line a panel
+      // whose Approve had stopped working would pass this test.
+      expect(call).toBeDefined()
+      expect((call?.[1] as { method?: unknown } | undefined)?.method).toBe('POST')
       expect((call?.[1] as { body?: unknown } | undefined)?.body).toBeUndefined()
     })
 

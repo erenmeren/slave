@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { type Prisma, prisma } from '@slave-of-ai/db/client'
 import {
-  type MessageKind, type Result, type SlaveMessageView, err, isValidRecipient, ok,
+  type MessageKind, type Result, type SlaveMessageView, answerBar, err, isValidRecipient, ok,
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import type { Principal } from './principal.js'
@@ -502,8 +502,9 @@ export async function answerQuestion(
  * approving a proposal). `decisionId` names the `SupervisorDecision` behind it, or null when a
  * human moved it by hand.
  *
- * **Who may be given a question** is `mayAnswer`'s rule (`@slave-of-ai/domain`), re-checked here
- * because this is the write gate: a role-addressed question needs a holder of THAT role -- putting
+ * **Who may be given a question** is the domain's `answerBar` rule (`@slave-of-ai/domain`), CALLED
+ * here rather than restated, because this is the write gate: a role-addressed question needs a
+ * holder of THAT role -- putting
  * it in front of somebody who does not hold it hides it instead of answering it, and staffing the
  * role is the proposal that has to come first -- while a slave-addressed question has no role to
  * check, so the asker's own task supplies one (erratum E5). A task that is gone, or one that takes
@@ -552,8 +553,7 @@ export async function reassignQuestion(
   const outcome = await prisma.$transaction(
     async (tx) => {
       // The row being moved, not the workspace: this verb serialises against another re-address of
-      // the SAME question (and against the answer that would settle it), not against every send in
-      // the project.
+      // the SAME question, not against every send in the project.
       await tx.$queryRaw`SELECT 1 FROM "SlaveMessage" WHERE id = ${messageId} FOR UPDATE`
 
       const still = await tx.slaveMessage.findFirst({
@@ -599,30 +599,45 @@ async function stillWaiting(messageId: string, workspaceId: string): Promise<boo
   return row !== null
 }
 
-/** Why this worker may not be given this question, or null when it may -- `mayAnswer`'s rule
- *  (`@slave-of-ai/domain`) read against the database rows rather than the Supervisor's world, plus
- *  the asker's own exclusion. The sentences are what `refusalText` puts in front of an operator. */
+/**
+ * Why this worker may not be given this question, or null when it may.
+ *
+ * The rule itself is the DOMAIN's `answerBar` (`@slave-of-ai/domain`), called rather than restated
+ * (final review Important 3). This function's whole job is the translation either side of it: rows
+ * from Postgres in, and out the sentence `refusalText` puts in front of an operator. When the two
+ * sides each spelled the rule out for themselves they had already drifted -- control refused the
+ * asker and the domain's `mayAnswer` did not -- so a re-address the Supervisor stamped routine
+ * could be refused by the verb it was stamped for.
+ */
 async function mayNotAnswer(
   question: { readonly slaveId: string; readonly taskId: string | null; readonly recipientRole: string | null },
   target: { readonly id: string; readonly runtimeRoles: readonly string[] },
 ): Promise<string | null> {
-  if (target.id === question.slaveId) return 'it is the worker that asked the question'
-  if (question.recipientRole !== null) {
-    return target.runtimeRoles.includes(question.recipientRole)
-      ? null
-      : `it does not hold the role the question was addressed to (${question.recipientRole})`
-  }
-  // Slave-addressed: no role on the row to check, so the asking task's own requirement stands in
-  // for one (erratum E5). No task, or a task that takes any role at all, leaves nothing to check.
+  // Only the slave-addressed branch of the rule reads the task's role, so the read happens only
+  // there: a role-addressed question is settled by the roles on the row itself.
   const task =
-    question.taskId === null
+    question.recipientRole !== null || question.taskId === null
       ? null
       : await prisma.task.findUnique({ where: { id: question.taskId }, select: { requiredRole: true } })
-  const requiredRole = task?.requiredRole ?? null
-  if (requiredRole === null || requiredRole === '') return null
-  return target.runtimeRoles.includes(requiredRole)
-    ? null
-    : `it does not hold the role the asking task requires (${requiredRole})`
+
+  const bar = answerBar(
+    {
+      askerSlaveId: question.slaveId,
+      recipientRole: question.recipientRole,
+      taskRequiredRole: task?.requiredRole ?? null,
+    },
+    target,
+  )
+  switch (bar) {
+    case null:
+      return null
+    case 'asker':
+      return 'it is the worker that asked the question'
+    case 'recipient_role':
+      return `it does not hold the role the question was addressed to (${question.recipientRole ?? ''})`
+    case 'task_role':
+      return `it does not hold the role the asking task requires (${task?.requiredRole ?? ''})`
+  }
 }
 
 /**

@@ -6,6 +6,7 @@ import {
   SOURCES_MAX,
   SOURCE_QUOTE_MAX_CHARS,
   THREAD_BODY_MAX_CHARS,
+  THREAD_MESSAGES_MAX,
 } from '../../src/supervisor/constants.js'
 import { PROFILE_HEADING } from '../../src/supervisor/prompt.js'
 import { question, slave, threadMessage, world } from './fixtures.js'
@@ -101,9 +102,32 @@ describe('buildAnswerPrompt', () => {
     expect(prompt).not.toContain('r'.repeat(RUN_PROMPT_MAX_CHARS + 1))
   })
 
-  it('tells the model not to cite the question it is answering', () => {
-    const prompt = buildAnswerPrompt({ question: question(), world: WORLD, profile: null })
-    expect(prompt).toContain('Do NOT cite the question')
+  it('tells the model not to cite ANYTHING the asker wrote, and names it', () => {
+    const prompt = buildAnswerPrompt({ question: question({ askerSlaveId: 's7' }), world: WORLD, profile: null })
+    // Erratum E8: the instruction is as wide as `verifySources` is. Telling the model only about
+    // the question would leave it citing a note the asker planted and having that thrown away
+    // silently -- and, worse, reads as permission to do exactly that.
+    expect(prompt).toContain('Do NOT cite ANYTHING the')
+    expect(prompt).toContain('asker (s7) wrote')
+  })
+
+  it('prints at most THREAD_MESSAGES_MAX thread messages, and always the question (erratum E9)', () => {
+    const thread = Array.from({ length: 45 }, (_unused, index) =>
+      threadMessage({ messageId: `t${String(index)}`, kind: index === 0 ? 'question' : 'note', body: `body-${String(index)}` }),
+    )
+    const prompt = buildAnswerPrompt({
+      question: question({ messageId: 't0', thread }),
+      world: WORLD,
+      profile: null,
+    })
+    const printed = thread.filter((message) => prompt.includes(`[${message.messageId}]`))
+    expect(printed).toHaveLength(THREAD_MESSAGES_MAX)
+    // The question is the oldest message of the 45 and is kept anyway; the five that went are the
+    // ones just after it.
+    expect(prompt).toContain('[t0]')
+    expect(prompt).not.toContain('[t5]')
+    expect(prompt).toContain('[t6]')
+    expect(prompt).toContain('[t44]')
   })
 
   it('says so rather than pretending when a source is simply not recorded', () => {

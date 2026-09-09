@@ -5,6 +5,7 @@ import {
   PENDING_TTL_MS,
   RUN_PROMPT_MAX_CHARS,
   THREAD_BODY_MAX_CHARS,
+  boundThread,
   evaluateGuardrails,
   type ActionKind,
   type DecisionStatus,
@@ -220,7 +221,13 @@ interface ThreadRow {
  *
  * `senderSlaveId` comes off the ENVELOPE actor, not off `slaveId`. A human's or the Supervisor's
  * answer carries the ASKER in `slaveId` (the pre-M36 convention for a row nobody's run wrote), so
- * reading that column would tell the model that the asker answered its own question.
+ * reading that column would tell the model that the asker answered its own question. Erratum E8
+ * rests on this column being right: it is what tells a note the asker planted from a colleague's.
+ *
+ * The `THREAD_MESSAGES_MAX` window (erratum E9) is NOT applied here, but one message later, per
+ * QUESTION -- two pending questions can share a thread, and each needs a window that keeps its own
+ * question in view. This returns the thread; `boundThread` decides how much of it each question
+ * carries.
  */
 async function loadThreads(
   tx: Prisma.TransactionClient,
@@ -295,18 +302,31 @@ async function loadQuestionTasks(
  * `requiredRole` adds nobody: there is no role to match on, and the empty string ("any role will
  * do") must not read as "everybody".
  *
+ * Either way, never the ASKER (erratum E8): nobody answers their own question, and the domain's
+ * `answerBar` refuses it from the other side.
+ *
  * Built by filtering the roster, so a slave who has left the workspace is never here (the roster is
  * this workspace's slaves) and the order is the roster's own id order, deterministic across passes.
  */
 function holdersOf(
-  question: { readonly recipientRole: string | null; readonly recipientSlaveId: string | null },
+  question: {
+    readonly slaveId: string
+    readonly recipientRole: string | null
+    readonly recipientSlaveId: string | null
+  },
   taskRole: string | null,
   slaves: readonly SupervisorSlave[],
 ): string[] {
+  // THE ASKER IS NEVER A HOLDER OF ITS OWN QUESTION (erratum E8). It holds the asking task's role
+  // by construction -- that is how it came to be doing the task it asked about -- so on the
+  // slave-addressed branch it fell straight into this list, and the panel told an operator "2
+  // workers could answer it" about a question exactly one worker could answer. It is a filter over
+  // both branches rather than one, because a worker can be a holder of a role it also asked about.
+  const eligible = slaves.filter((slave) => slave.id !== question.slaveId)
   if (question.recipientRole !== null) {
-    return slaves.filter((slave) => slave.runtimeRoles.includes(question.recipientRole as string)).map((slave) => slave.id)
+    return eligible.filter((slave) => slave.runtimeRoles.includes(question.recipientRole as string)).map((slave) => slave.id)
   }
-  return slaves
+  return eligible
     .filter(
       (slave) =>
         slave.id === question.recipientSlaveId ||
@@ -514,9 +534,10 @@ export async function loadSupervisorWorld(
             senderRunId: row.senderRunId,
             threadId: row.threadId,
             // INCLUDING the question itself: `verifySources` needs it in the thread precisely so
-            // it can refuse a citation of it (erratum E4 -- the question is not evidence for its
-            // own answer).
-            thread: threads.get(row.threadId) ?? [],
+            // it can refuse a citation of it (errata E4/E8 -- nothing the asker wrote is evidence).
+            // BOUNDED to the newest `THREAD_MESSAGES_MAX` (E9) by the domain's own rule, which is
+            // what keeps the question present even when it has fallen out of that window.
+            thread: boundThread(threads.get(row.threadId) ?? [], row.id),
             askerRunPrompt: row.senderRunId === null ? null : runPrompts.get(row.senderRunId) ?? null,
             holders: holdersOf(row, task?.requiredRole ?? null, slaves),
           }

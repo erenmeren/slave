@@ -1,5 +1,6 @@
 import type { TaskStatus } from '../task/state.js'
 import type { ActionKind, DecisionStatus, Tier } from './actions.js'
+import { THREAD_MESSAGES_MAX } from './constants.js'
 import type { SituationKind } from './situations.js'
 
 /**
@@ -105,7 +106,13 @@ export interface SupervisorQuestion {
   /** The asker's run, whose recorded `RunContext.prompt` is the `run_context` source. */
   readonly senderRunId: string | null
   readonly threadId: string
-  /** The thread this question belongs to, oldest first, INCLUDING the question itself. */
+  /**
+   * The thread this question belongs to, oldest first, INCLUDING the question itself.
+   *
+   * LOADER CONTRACT: at most {@link THREAD_MESSAGES_MAX} messages -- the NEWEST that many by `seq`,
+   * with the question kept whatever its age (erratum E9). {@link boundThread} is the rule, applied
+   * by the loader and again where the prompt is built.
+   */
   readonly thread: readonly ThreadMessage[]
   /** The asker run's recorded run context, capped at {@link RUN_PROMPT_MAX_CHARS} by the loader;
    *  null when the run recorded none (a pre-M37 run, or a run that never started). */
@@ -125,6 +132,11 @@ export interface SupervisorQuestion {
    *   dispatched the asking task can answer a question about it, which is what makes re-addressing
    *   a question away from a busy or departed slave possible at all. A null or empty
    *   `requiredRole` adds nobody: there is no role to match on.
+   *
+   * The ASKER is never here (erratum E8), on either branch. It holds the asking task's role by
+   * construction and would otherwise be counted among the workers who could answer -- making the
+   * panel say "2 could answer it" about a question one worker can answer, and offering a
+   * re-address the `reassign_not_permitted` rule refuses. Nobody answers their own question.
    *
    * A slave who has left the workspace is never here, so an id in this list is always in
    * `SupervisorWorld.slaves`.
@@ -182,4 +194,37 @@ export interface SupervisorWorld {
   /** Recent decisions -- the window {@link filterFresh} needs to honour the cooldown and
    *  {@link summarise} counts. Not the whole history. */
   readonly decisions: readonly SupervisorDecisionRecord[]
+}
+
+/**
+ * The last {@link THREAD_MESSAGES_MAX} messages of a thread, oldest first, with the QUESTION kept
+ * however old it is (erratum E9).
+ *
+ * Nothing bounded a thread before this: a conversation two workers had been having for a week went
+ * into the world entire and from there into an answer call, so the size of the prompt was whatever
+ * they had typed at each other. The newest messages are the ones an answer is built from, which is
+ * why the window is taken from the END.
+ *
+ * The question is the exception, and it is not cosmetic: `verifySources` refuses a citation of the
+ * question by looking it up IN the thread, so a window that dropped it would quietly re-open the
+ * hole erratum E4 closed. When it falls outside the window it takes the place of the oldest message
+ * that would have been kept, so the length is still the cap and the order is still oldest-first.
+ *
+ * Applied by the loader (`packages/control/src/supervisorWorld.ts`) and AGAIN by
+ * `buildAnswerPrompt`, for the same reason the body cap is applied twice: the cap that bounds a
+ * model call belongs where the call is built, not upstream of it.
+ */
+export function boundThread(
+  thread: readonly ThreadMessage[],
+  questionMessageId: string,
+): readonly ThreadMessage[] {
+  if (thread.length <= THREAD_MESSAGES_MAX) return thread
+  const kept = thread.slice(thread.length - THREAD_MESSAGES_MAX)
+  if (kept.some((message) => message.messageId === questionMessageId)) return kept
+  const question = thread.find((message) => message.messageId === questionMessageId)
+  // A thread that does not contain its own question is a loader bug, not a state to repair here:
+  // the window stands as it is, and `verifySources` rejects a citation of a question it cannot find
+  // exactly as it rejects any other unknown ref.
+  if (question === undefined) return kept
+  return [question, ...kept.slice(1)]
 }

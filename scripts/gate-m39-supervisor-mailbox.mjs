@@ -62,8 +62,10 @@
 //      holder idle: the rules apply `reassign_question` themselves, the QUESTION ROW moves
 //      (`recipientSlaveId` set, `recipientRole` cleared) and `slave.message_reassigned` names the
 //      decision behind it.
-//   5. Decisions are history, and history is not kept forever. A resolved row 31 days old is gone
-//      after a tick; a PENDING row of the same age is still there.
+//   5. Decisions are history, and history is not kept forever -- except the ones that are money.
+//      A resolved row 31 days old that called no model is gone after a tick; a PENDING row of the
+//      same age is still there; and a resolved row of the same age that DID call a model is still
+//      there with its cost, leaving `workspaceSpend` exactly where it was (erratum E7).
 //
 // Shape borrowed from `gate-m38-supervisor.mjs` (temp git repo + `prisma.workspace.create` setup,
 // `preflightCleanup()`/`dumpGateRows()`/`fail()`/`waitUntil()`, the daemon lifecycle and its
@@ -81,7 +83,7 @@ import { fileURLToPath } from 'node:url'
 import { loopbackChildEnv } from './lib/child-env.mjs'
 import { findRealDaemonPids } from './lib/daemon-process.mjs'
 import { prisma } from '../packages/db/dist/client.js'
-import { isAlive, sendMessage } from '../packages/control/dist/index.js'
+import { isAlive, sendMessage, workspaceSpend } from '../packages/control/dist/index.js'
 
 const POLL_INTERVAL_MS = 50
 const DAEMON_PERIOD_MS = 500
@@ -128,11 +130,16 @@ const ASKED_ROLE = 'qa'
 const STALE_BY_MS = 45 * 60_000
 const BACKEND_QUESTION = 'Which migration should the new column go in?'
 
-/** Stage 5's two synthetic rows, and the age that makes one of them history.
+/** Stage 5's three synthetic rows, and the age that makes history of the one that is prunable.
  *  `DECISION_RETENTION_MS` is 30 days. */
 const RETENTION_AGE_MS = 31 * 86_400_000
 const PRUNED_SUBJECT = 'gate-m39-resolved-31-days-old'
 const KEPT_SUBJECT = 'gate-m39-pending-31-days-old'
+/** Resolved 31 days ago like the prunable row, and different in exactly one column: it called a
+ *  model and carries what that cost. Erratum E7 keeps it -- `workspaceSpend` sums these rows over
+ *  all time, so pruning one would erase money a project really spent. */
+const PAID_SUBJECT = 'gate-m39-resolved-31-days-old-with-a-cost'
+const PAID_COST_USD = 0.42
 
 /** Same as `gate-m38-supervisor.mjs`'s -- a real repository, because the tick provisions a real
  *  worktree in it and the fake CLI commits into that worktree. */
@@ -860,8 +867,21 @@ try {
   })
 
   const prunable = await prisma.supervisorDecision.create({
-    // Resolved 31 days ago, which is the anchor `pruneDecisions` measures from.
-    data: { ...oldRow(PRUNED_SUBJECT, 'rejected'), resolvedAt: longAgo },
+    // Resolved 31 days ago, which is the anchor `pruneDecisions` measures from, and `modelCalled`
+    // false (the column default) -- a decision the RULES made, which cost nothing and is therefore
+    // nothing but history once it is this old.
+    data: { ...oldRow(PRUNED_SUBJECT, 'rejected'), resolvedAt: longAgo, modelCalled: false },
+  })
+  const paid = await prisma.supervisorDecision.create({
+    // The same age, the same resolved status, and a model call behind it. Erratum E7: this row is
+    // the Supervisor's spend, not its history.
+    data: {
+      ...oldRow(PAID_SUBJECT, 'rejected'),
+      resolvedAt: longAgo,
+      decidedBy: 'model',
+      modelCalled: true,
+      modelCostUsd: PAID_COST_USD,
+    },
   })
   const kept = await prisma.supervisorDecision.create({
     // Still pending at 31 days old. `expiresAt` is deliberately in the FUTURE so the expiry sweep --
@@ -870,7 +890,11 @@ try {
     // pending row, and a row the sweep had already retired would prove nothing about that.
     data: { ...oldRow(KEPT_SUBJECT, 'pending'), expiresAt: new Date(Date.now() + 86_400_000) },
   })
-  console.log(`stage 5 seeded: ${describeDecision(prunable)}\n  ${describeDecision(kept)}`)
+  console.log(
+    `stage 5 seeded: ${describeDecision(prunable)}\n  ${describeDecision(paid)}\n  ${describeDecision(kept)}`,
+  )
+  const spendBefore = await workspaceSpend(workspaceId)
+  console.log(`stage 5 spend before the tick: ${JSON.stringify(spendBefore)}`)
 
   const pruneTick = runCli(['tick', '--workspace', workspaceId])
   console.log(`stage 5 tick printed:\n${pruneTick}`)
@@ -881,15 +905,35 @@ try {
   }
 
   const prunableAfter = await prisma.supervisorDecision.findUnique({ where: { id: prunable.id } })
+  const paidAfter = await prisma.supervisorDecision.findUnique({ where: { id: paid.id } })
   const keptAfter = await prisma.supervisorDecision.findUnique({ where: { id: kept.id } })
   console.log(`stage 5 after the tick: resolved row ${prunableAfter === null ? 'GONE' : describeDecision(prunableAfter)}`)
+  console.log(`stage 5 after the tick: paid row ${paidAfter === null ? 'GONE' : describeDecision(paidAfter)}`)
   console.log(`stage 5 after the tick: pending row ${keptAfter === null ? 'GONE' : describeDecision(keptAfter)}`)
-  if (prunableAfter !== null) await fail('stage 5: a decision resolved 31 days ago is still in the table')
+  if (prunableAfter !== null) await fail('stage 5: a decision resolved 31 days ago that cost nothing is still in the table')
+  if (paidAfter === null) {
+    await fail('stage 5: a month-old decision that CALLED A MODEL was pruned -- that row is the project\'s spend (erratum E7)')
+  }
+  if (paidAfter.modelCostUsd !== PAID_COST_USD) {
+    await fail(`stage 5's paid row now costs ${String(paidAfter.modelCostUsd)}, expected ${String(PAID_COST_USD)}`)
+  }
   if (keptAfter === null) await fail('stage 5: a PENDING decision was pruned -- an unanswered proposal is not history')
   if (keptAfter.status !== 'pending') {
     await fail(`stage 5's kept row is ${keptAfter.status}, expected it to be left exactly as it was`)
   }
-  console.log('stage 5 complete: a month-old resolved decision is gone and a month-old question to a human is still waiting')
+
+  const spendAfter = await workspaceSpend(workspaceId)
+  console.log(`stage 5 spend after the tick: ${JSON.stringify(spendAfter)}`)
+  if (spendAfter.spentUsd !== spendBefore.spentUsd) {
+    await fail(
+      `stage 5: the prune moved the project's recorded spend from ${String(spendBefore.spentUsd)} to ` +
+        `${String(spendAfter.spentUsd)} -- retention must never erase money that was spent`,
+    )
+  }
+  console.log(
+    'stage 5 complete: a month-old resolved decision that cost nothing is gone, the one that called a model is still there with ' +
+      'its cost, the project\'s spend is unchanged, and a month-old question to a human is still waiting',
+  )
 
   const finalDecisions = await prisma.supervisorDecision.findMany({ where: { workspaceId }, orderBy: { createdAt: 'asc' } })
   console.log(`every decision this gate produced (${String(finalDecisions.length)}):\n  ${finalDecisions.map(describeDecision).join('\n  ')}`)

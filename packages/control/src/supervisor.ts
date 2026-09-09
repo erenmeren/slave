@@ -89,6 +89,9 @@ export interface RecordDecisionInput {
    * second model call has come back and its citations have been checked. `status` derives from the
    * override exactly as it derives from a candidate's tier, so an overridden `applied` is carried
    * out at birth and an overridden `escalated` waits for a human like any other proposal.
+   *
+   * Passing it for any other action THROWS (final review Minor 12) -- "answer_question only" is a
+   * rule about which tiers may be bypassed, and a rule nothing checks is a comment.
    */
   readonly tier?: Tier
   /** The tick's clock. Injected so the cooldown window and `expiresAt` are computed against the
@@ -139,6 +142,17 @@ export async function recordDecision(
   }
 
   const draft = input.draft === undefined ? null : parsedOrThrow(draftSchema.safeParse(input.draft), 'draft')
+  // The override is documented as `answer_question` only (M39 §5) and now enforced as such (final
+  // review Minor 12). It is the ONE input that can turn a catalogue's `proposed` into a row that is
+  // carried out at birth, and `answerTier` -- with the sourced check behind it -- is the only thing
+  // entitled to do that. A caller that passed `tier: 'applied'` beside a `mark_task_failed` would
+  // silently route around every tier the rules fixed, so this is loud, like the schema violations
+  // above it: a programming error, not an operator's input.
+  if (input.tier !== undefined && chosen.action.kind !== 'answer_question') {
+    throw new TypeError(
+      `recordDecision: a tier override is for answer_question only, not ${chosen.action.kind}`,
+    )
+  }
   const tier = input.tier ?? chosen.tier
   const status: DecisionStatus = tier === 'proposed' || tier === 'escalated' ? 'pending' : 'applied'
   const expiresAt = status === 'pending' ? new Date(now.getTime() + PENDING_TTL_MS) : null
@@ -704,17 +718,26 @@ export async function expirePendingDecisions(workspaceId: string, now: Date): Pr
 /**
  * Deletes the decisions nobody will read again (M39 §2), on every supervised tick.
  *
- * A `SupervisorDecision` is an audit record, and an audit record that is older than
+ * A `SupervisorDecision` is an audit record, and a FREE audit record that is older than
  * `DECISION_RETENTION_MS` (thirty days) has outlived every question it can answer: the situation it
  * describes has long since moved, and the panel and the CLI both read a window far shorter than
  * that. Left alone the table grows without limit -- the Supervisor writes one row per stuck
  * situation per cooldown, forever.
  *
- * Two boundaries this never crosses. PENDING rows are never pruned however old they are: a proposal
- * still waiting on a human is the one thing in this table that is not history, and
- * {@link expirePendingDecisions} -- which runs first on every tick -- is what retires those. And
- * the age is measured from `resolvedAt ?? createdAt`, the same anchor the cooldown uses, so a row
- * that was applied at birth (and therefore never resolved) ages from when it was written.
+ * THREE boundaries this never crosses, and the third is the one the final review found missing
+ * (erratum E7):
+ * - PENDING rows are never pruned however old they are: a proposal still waiting on a human is the
+ *   one thing in this table that is not history, and {@link expirePendingDecisions} -- which runs
+ *   first on every tick -- is what retires those.
+ * - The age is measured from `resolvedAt ?? createdAt`, the same anchor the cooldown uses, so a row
+ *   that was applied at birth (and therefore never resolved) ages from when it was written.
+ * - **A row with `modelCalled` is never pruned, whatever its status or age.** These rows ARE the
+ *   Supervisor's spend: `workspaceSpend` (`./spend.ts`) sums `modelCostUsd` and counts the
+ *   unmeasured calls over every decision row in the project with NO time window, so deleting one
+ *   erases money that was really spent. A workspace halted by its budget guardrail would have
+ *   watched its recorded spend fall month by month until the halt lifted itself. Storage is not the
+ *   argument against keeping them: a call costs money, so cost-bearing rows are exactly the ones a
+ *   workspace produces slowly.
  *
  * Bounded to `PRUNE_BATCH` rows per call, oldest first, and deleted by id in one `deleteMany`: a
  * tick must not turn into an unbounded delete over a table nobody has pruned for a year. A backlog
@@ -726,6 +749,7 @@ export async function pruneDecisions(workspaceId: string, now: Date): Promise<nu
     where: {
       workspaceId,
       status: { not: 'pending' },
+      modelCalled: false,
       OR: [{ resolvedAt: { lt: cutoff } }, { resolvedAt: null, createdAt: { lt: cutoff } }],
     },
     orderBy: { createdAt: 'asc' },
@@ -734,10 +758,11 @@ export async function pruneDecisions(workspaceId: string, now: Date): Promise<nu
   })
   if (due.length === 0) return 0
 
-  // By id, and conditional on the status again: a human approving one of these in the microseconds
-  // between the read and the delete keeps their row.
+  // By id, and conditional on the status AND `modelCalled` again: a human approving one of these
+  // in the microseconds between the read and the delete keeps their row, and so does a row that
+  // somehow acquired a cost in the same window.
   const deleted = await prisma.supervisorDecision.deleteMany({
-    where: { id: { in: due.map((row) => row.id) }, status: { not: 'pending' } },
+    where: { id: { in: due.map((row) => row.id) }, status: { not: 'pending' }, modelCalled: false },
   })
   return deleted.count
 }

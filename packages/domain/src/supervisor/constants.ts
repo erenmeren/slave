@@ -69,6 +69,18 @@ export const ANSWER_MAX_CHARS = 4_000
  *  question: ten messages at this cap still leave the question itself the biggest thing in view. */
 export const THREAD_BODY_MAX_CHARS = 2_000
 
+/**
+ * How many thread messages a question carries into the world, and therefore into the answer call
+ * (erratum E9). Forty: nothing bounded the thread before this, and a conversation that had run for
+ * a week was a `findMany` with no `take` on the tick's hot path and, past that, a prompt whose size
+ * was whatever the workers had typed at each other.
+ *
+ * The NEWEST forty, by `seq` -- a question is answered from what was said most recently, not from
+ * how the thread opened -- and always with the QUESTION itself among them however old it is, since
+ * `verifySources` needs it present to refuse a citation of it (E4/E8).
+ */
+export const THREAD_MESSAGES_MAX = 40
+
 /** How much of the asker run's recorded `RunContext.prompt` the answer prompt quotes. A run
  *  context is the largest single source and the one most likely to hold the answer, so it gets the
  *  most room -- but a bounded amount, so a huge repository brief cannot blow the call's budget. */
@@ -83,11 +95,15 @@ export const SOURCE_QUOTE_MAX_CHARS = 300
 export const SOURCES_MAX = 8
 
 /**
- * How long a RESOLVED `SupervisorDecision` is kept before `pruneDecisions` deletes it (M39 section
- * 2). Thirty days: long enough that a month's worth of "why did the Supervisor do that" is
- * answerable from the rows themselves, short enough that a busy workspace's decision table does not
- * grow without limit. Pending rows are never pruned, however old -- an unanswered proposal is not
- * history.
+ * How long a RESOLVED `SupervisorDecision` that cost nothing is kept before `pruneDecisions`
+ * deletes it (M39 section 2). Thirty days: long enough that a month's worth of "why did the
+ * Supervisor do that" is answerable from the rows themselves, short enough that a busy workspace's
+ * decision table does not grow without limit.
+ *
+ * Two kinds of row this age never reaches (erratum E7). Pending rows are never pruned, however old
+ * -- an unanswered proposal is not history. And a row with `modelCalled` is never pruned either,
+ * whatever its status: `workspaceSpend` sums those rows over ALL time, so deleting one would erase
+ * money that was really spent and let a budget halt lift itself after a month.
  */
 export const DECISION_RETENTION_MS = 30 * 86_400_000
 

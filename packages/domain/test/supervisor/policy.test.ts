@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Action, Candidate, Tier } from '../../src/supervisor/actions.js'
-import { answerTier, chooseByRules, tierOf } from '../../src/supervisor/policy.js'
+import { answerBar, answerTier, chooseByRules, mayAnswer, tierOf } from '../../src/supervisor/policy.js'
 import { question, slave, task, world } from './fixtures.js'
 
 const RUNNING = world()
@@ -109,6 +109,59 @@ describe('tierOf -- reassign_question', () => {
       halted: { reason: 'budget_exhausted' },
     })
     expect(tierOf(reassign('s2'), w, 'waiting_stale')).toBe('proposed')
+  })
+})
+
+/**
+ * The rule both sides share (final review Important 3). Control's `reassignQuestion` calls
+ * `answerBar` too, so the cases here are the cases the write gate refuses -- there is no second
+ * spelling of the rule that can drift from this one.
+ */
+describe('answerBar / mayAnswer', () => {
+  const ASKER = slave({ id: 's1', name: 'Alex', runtimeRoles: ['backend'] })
+  const OPS = slave({ id: 's2', name: 'Ops', runtimeRoles: ['backend'] })
+
+  /**
+   * Erratum E8. The asker holds the asking task's role by construction -- it is doing the task it
+   * asked about -- so every other clause of the rule waves it through, and a question re-addressed
+   * to whoever asked it is a loop `answer.ts` refuses to close: the asker stays parked forever.
+   * This clause was in control alone until now, and the domain's agreement rested on a filter in
+   * `candidates` happening to exclude it as well.
+   */
+  it('never permits the ASKER, however many of the roles it holds', () => {
+    const w = world({ questions: [question({ recipientRole: 'backend' })], slaves: [ASKER, OPS] })
+    const q = question({ recipientRole: 'backend' })
+    expect(mayAnswer(q, ASKER, w)).toBe(false)
+    expect(mayAnswer(q, OPS, w)).toBe(true)
+    expect(answerBar({ askerSlaveId: 's1', recipientRole: 'backend', taskRequiredRole: 'backend' }, ASKER)).toBe('asker')
+  })
+
+  it('refuses the asker on the slave-addressed branch too, where no role is checked at all', () => {
+    const w = world({ questions: [], slaves: [ASKER], tasks: [task({ id: 't1', requiredRole: '' })] })
+    const q = question({ recipientRole: null, recipientSlaveId: 's9', taskId: 't1' })
+    // The empty `requiredRole` is the "any role will do" case, which permits everybody else.
+    expect(mayAnswer(q, ASKER, w)).toBe(false)
+    expect(mayAnswer(q, OPS, w)).toBe(true)
+  })
+
+  it('names WHICH bar stopped a worker, so control can say it in a sentence', () => {
+    expect(answerBar({ askerSlaveId: 's1', recipientRole: 'backend', taskRequiredRole: null }, OPS)).toBe(null)
+    expect(
+      answerBar({ askerSlaveId: 's1', recipientRole: 'qa', taskRequiredRole: null }, OPS),
+    ).toBe('recipient_role')
+    expect(
+      answerBar({ askerSlaveId: 's1', recipientRole: null, taskRequiredRole: 'qa' }, OPS),
+    ).toBe('task_role')
+    // No task, and a task that takes any role at all, leave nothing to check.
+    expect(answerBar({ askerSlaveId: 's1', recipientRole: null, taskRequiredRole: null }, OPS)).toBe(null)
+    expect(answerBar({ askerSlaveId: 's1', recipientRole: null, taskRequiredRole: '' }, OPS)).toBe(null)
+  })
+
+  it('is the rule tierOf stamps a re-address with -- an asker target is never routine', () => {
+    const w = world({ questions: [question({ recipientRole: 'backend' })], slaves: [ASKER, OPS] })
+    const reassign = (toSlaveId: string): Action => ({ kind: 'reassign_question', messageId: 'm1', toSlaveId })
+    expect(tierOf(reassign('s1'), w, 'waiting_stale')).toBe('proposed')
+    expect(tierOf(reassign('s2'), w, 'waiting_stale')).toBe('applied')
   })
 })
 

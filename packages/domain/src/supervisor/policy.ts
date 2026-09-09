@@ -60,21 +60,77 @@ export function tierOf(action: Action, world: SupervisorWorld, situationKind: Si
 }
 
 /**
- * May this slave answer this question at all? The same rule control's `reassign_not_permitted`
- * refusal enforces (M39 section 4), kept here so a decision the rules stamped `applied` cannot be
- * turned down by the verb it was stamped for.
+ * The three facts {@link answerBar} decides on, and the whole of what the rule reads.
  *
- * A role-addressed question needs a holder of THAT role -- putting it in front of somebody who does
- * not hold it is what the staffing proposals exist to fix first. A slave-addressed one has no role
- * to check, so the asker's own task supplies it: whoever could be dispatched the asking task can
- * answer a question about it. A task that is gone, or one that takes any role at all (the empty
- * `requiredRole`), leaves nothing to check and the re-address stands on the question's own terms.
+ * Deliberately NOT a `SupervisorQuestion`: control asks the same question of a `SlaveMessage` row
+ * and a `Task` row, and a shape it can build from those is what lets both sides run one rule
+ * instead of two that drift (final review Important 3).
+ */
+export interface AnswerEligibility {
+  /** Who asked. Nobody answers their own question (erratum E8). */
+  readonly askerSlaveId: string
+  /** The role the question was addressed to, or null when it was addressed to a slave. */
+  readonly recipientRole: string | null
+  /** The asking task's `requiredRole` -- null when there is no task, or the task recorded none.
+   *  Read only on the slave-addressed branch; the empty string means "any role will do". */
+  readonly taskRequiredRole: string | null
+}
+
+/** What stands between a worker and this question, or null when nothing does. */
+export type AnswerBar = 'asker' | 'recipient_role' | 'task_role'
+
+/**
+ * THE may-answer rule, in one place (M39 section 4, final review Important 3).
+ *
+ * Three callers depend on it agreeing with itself: {@link tierOf} stamps a `reassign_question`
+ * routine with it, `candidates.reassignTarget` only offers a target that passes it, and control's
+ * `reassignQuestion` refuses `reassign_not_permitted` with it. When the domain and control each
+ * spelled the rule out for themselves they disagreed about the asker -- control refused it, the
+ * domain did not -- and the invariant survived only because a third filter happened to catch it.
+ *
+ * - **The asker, never.** It holds the asking task's role by construction, so every other clause
+ *   would wave it through; a question re-addressed back to the worker that asked it is a worker
+ *   asked to answer itself.
+ * - **Role-addressed**: a holder of THAT role. Putting the question in front of somebody who does
+ *   not hold it is what the staffing proposals exist to fix first.
+ * - **Slave-addressed**: no role on the question, so the asker's own task supplies one -- whoever
+ *   could be dispatched the asking task can answer a question about it. A task that is gone, or
+ *   one that takes any role at all (the empty `requiredRole`), leaves nothing to check and the
+ *   re-address stands on the question's own terms.
+ */
+export function answerBar(
+  question: AnswerEligibility,
+  slave: { readonly id: string; readonly runtimeRoles: readonly string[] },
+): AnswerBar | null {
+  if (slave.id === question.askerSlaveId) return 'asker'
+  if (question.recipientRole !== null) {
+    return slave.runtimeRoles.includes(question.recipientRole) ? null : 'recipient_role'
+  }
+  const required = question.taskRequiredRole
+  if (required === null || required === '') return null
+  return slave.runtimeRoles.includes(required) ? null : 'task_role'
+}
+
+/**
+ * May this slave answer this question at all? {@link answerBar} read against the Supervisor's own
+ * world, which is where the asking task's required role comes from.
+ *
+ * Kept as its own name because that is what the two domain callers want -- a boolean about a world
+ * they already hold -- while control, which has rows rather than a world, calls `answerBar`
+ * directly and turns its reason into the sentence an operator reads.
  */
 export function mayAnswer(question: SupervisorQuestion, slave: SupervisorSlave, world: SupervisorWorld): boolean {
-  if (question.recipientRole !== null) return slave.runtimeRoles.includes(question.recipientRole)
   const task = question.taskId === null ? undefined : world.tasks.find((candidate) => candidate.id === question.taskId)
-  if (task === undefined || task.requiredRole === '') return true
-  return slave.runtimeRoles.includes(task.requiredRole)
+  return (
+    answerBar(
+      {
+        askerSlaveId: question.askerSlaveId,
+        recipientRole: question.recipientRole,
+        taskRequiredRole: task?.requiredRole ?? null,
+      },
+      slave,
+    ) === null
+  )
 }
 
 /**

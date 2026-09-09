@@ -7,6 +7,7 @@ import {
   PENDING_TTL_MS,
   PROFILE_MAX_CHARS,
   PRUNE_BATCH,
+  SUPERVISOR_PER_CALL_CAP_USD,
   type Action,
   type Candidate,
   type Draft,
@@ -15,6 +16,7 @@ import {
 } from '@slave-of-ai/domain'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { sendMessage } from '../../src/messaging.js'
+import { workspaceSpend } from '../../src/spend.js'
 import { refusalText } from '../../src/refusal.js'
 import {
   applyDecision,
@@ -476,6 +478,30 @@ describe('recordDecision', () => {
     expect(row.expiresAt === null).toBe(!expires)
     const [decided] = await eventsOfType('supervisor_decided')
     expect(decided?.payload).toMatchObject({ tier: finalTier })
+  })
+
+  /**
+   * Final review Minor 12. "The override is for `answer_question` only" was a docstring and nothing
+   * else, and it is the ONE input that can turn a catalogue's tier into a row carried out at birth
+   * -- `answerTier`, with the sourced check behind it, is the only thing entitled to do that. A
+   * caller that passed `tier: 'applied'` beside a `mark_task_failed` would route around every tier
+   * the rules fixed. It throws, like the schema violations beside it: a programming error.
+   */
+  it('throws when a tier override is passed for any action but answer_question', async () => {
+    await expect(
+      recordDecision({
+        workspaceId: f.workspaceId,
+        situation: situationFor(f.taskId),
+        candidates: [cand({ kind: 'mark_task_failed', taskId: f.taskId, reason: 'no way out' }, 'proposed')],
+        chosenIndex: 0,
+        rationale: 'nope',
+        decidedBy: 'rules',
+        modelCostUsd: null,
+        tier: 'applied',
+      }),
+    ).rejects.toThrow(/answer_question only/)
+    // And nothing was written on the way out.
+    expect(await prisma.supervisorDecision.count()).toBe(0)
   })
 
   it('cools only its own key -- another subject and another kind are free', async () => {
@@ -1056,7 +1082,15 @@ describe('pruneDecisions', () => {
   /** Rows written straight to the table: `recordDecision`'s cooldown allows one decision per key, and
    *  what this verb is about is a table with a year of history in it. */
   async function rows(
-    entries: readonly { readonly status: 'applied' | 'approved' | 'pending'; readonly createdAt: Date; readonly resolvedAt?: Date; readonly workspaceId?: string }[],
+    entries: readonly {
+      readonly status: 'applied' | 'approved' | 'pending'
+      readonly createdAt: Date
+      readonly resolvedAt?: Date
+      readonly workspaceId?: string
+      /** Erratum E7's one distinguishing column: a row that called a model is spend, not history. */
+      readonly modelCalled?: boolean
+      readonly modelCostUsd?: number
+    }[],
   ): Promise<void> {
     await prisma.supervisorDecision.createMany({
       data: entries.map((entry, index) => ({
@@ -1071,7 +1105,8 @@ describe('pruneDecisions', () => {
         tier: 'noop' as const,
         status: entry.status,
         decidedBy: 'rules' as const,
-        modelCostUsd: null,
+        modelCostUsd: entry.modelCostUsd ?? null,
+        modelCalled: entry.modelCalled ?? false,
         createdAt: entry.createdAt,
         ...(entry.resolvedAt === undefined ? {} : { resolvedAt: entry.resolvedAt }),
         ...(entry.status === 'pending' ? { expiresAt: new Date(entry.createdAt.getTime() + PENDING_TTL_MS) } : {}),
@@ -1093,6 +1128,48 @@ describe('pruneDecisions', () => {
 
     expect(await pruneDecisions(f.workspaceId, NOW)).toBe(2)
     expect(await prisma.supervisorDecision.count()).toBe(2)
+  })
+
+  /**
+   * Erratum E7, the final review's Critical 1. These rows ARE the Supervisor's spend:
+   * `workspaceSpend` sums `modelCostUsd` and counts the unmeasured calls over every decision row in
+   * the project with NO time window. Deleting a resolved one after thirty days erased money that
+   * had really been spent -- so a project halted by its budget guardrail would have watched its
+   * recorded spend fall month by month until the halt lifted itself.
+   */
+  it('never prunes a row that CALLED A MODEL, however old and however resolved', async () => {
+    await rows([
+      { status: 'approved', createdAt: OLD, resolvedAt: OLD, modelCalled: true, modelCostUsd: 0.42 },
+      // Unmeasured: no cost recorded, and `workspaceSpend` still charges it at the per-call cap.
+      { status: 'applied', createdAt: OLD, modelCalled: true },
+      // The control: same age, same status, no call behind it.
+      { status: 'approved', createdAt: OLD, resolvedAt: OLD },
+    ])
+
+    expect(await pruneDecisions(f.workspaceId, NOW)).toBe(1)
+    const left = await prisma.supervisorDecision.findMany({
+      orderBy: { subjectId: 'asc' },
+      select: { subjectId: true, modelCalled: true, modelCostUsd: true },
+    })
+    expect(left).toEqual([
+      { subjectId: 'subject-0', modelCalled: true, modelCostUsd: 0.42 },
+      { subjectId: 'subject-1', modelCalled: true, modelCostUsd: null },
+    ])
+  })
+
+  it('leaves workspaceSpend exactly where it was -- retention never erases money', async () => {
+    await rows([
+      { status: 'approved', createdAt: OLD, resolvedAt: OLD, modelCalled: true, modelCostUsd: 0.42 },
+      { status: 'applied', createdAt: OLD, modelCalled: true },
+      { status: 'approved', createdAt: OLD, resolvedAt: OLD },
+    ])
+    const before = await workspaceSpend(f.workspaceId)
+    // The unmeasured call is charged at the cap, and the free row contributes nothing -- which is
+    // exactly why pruning it must not move the figure.
+    expect(before.spentUsd).toBe(0.42 + SUPERVISOR_PER_CALL_CAP_USD)
+
+    expect(await pruneDecisions(f.workspaceId, NOW)).toBe(1)
+    expect(await workspaceSpend(f.workspaceId)).toEqual(before)
   })
 
   it('never prunes a PENDING row, however old it is', async () => {

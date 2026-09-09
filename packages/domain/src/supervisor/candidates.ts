@@ -65,6 +65,11 @@ function candidate(action: Action, world: SupervisorWorld, kind: SituationKind, 
  * answer it at all -- `holders` is the loader's own "who may answer this today", and
  * {@link mayAnswer} is the rule control will re-check before the re-address is allowed to land.
  *
+ * The asker is now excluded THREE times over -- here, by the loader's `holders`, and by `mayAnswer`
+ * itself (erratum E8) -- and the line stays. It is one comparison, it is the exclusion whose
+ * absence in `mayAnswer` this filter was silently covering for until the final review, and a
+ * catalogue that offered "ask Alex the question Alex asked" would be wrong on its face.
+ *
  * The currently addressed slave is excluded too, unless they are unavailable: re-addressing a
  * question away from somebody who is sitting idle with it is not a fix, it is a shuffle. So when
  * the addressed slave is present and free, no re-address is offered at all (spec section 3, "to an

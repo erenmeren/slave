@@ -11,7 +11,9 @@ const QUESTION = question({
   askerRunPrompt: 'You are Alex, a backend engineer. The datastore is Postgres.',
   thread: [
     threadMessage({ messageId: 'm1', body: 'Which port does the database listen on?' }),
-    threadMessage({ messageId: 'm2', kind: 'note', body: 'The staging box answers on 6000.' }),
+    // From s2, a COLLEAGUE -- `s1` is the asker, and erratum E8 makes nothing the asker wrote
+    // citable. Every "a real message verifies" case below rests on this sender being somebody else.
+    threadMessage({ messageId: 'm2', kind: 'note', senderSlaveId: 's2', body: 'The staging box answers on 6000.' }),
   ],
 })
 
@@ -101,8 +103,42 @@ describe('verifySources -- what is rejected, and why', () => {
     expect(isSourced(result)).toBe(false)
   })
 
+  /**
+   * Erratum E8. Excluding only the question is one message wide, and a worker that wants an
+   * automatic answer does not have to plant it in the question: it posts a note in its own thread
+   * first and then asks the question that note answers. The citation is of a REAL message body, it
+   * verifies, and the answer goes to the worker with no human anywhere near it -- the same circle
+   * as a self-citation, drawn one message wider.
+   */
+  it("rejects a thread message the ASKER wrote -- nothing it wrote is evidence for its own answer", () => {
+    const planted = question({
+      thread: [
+        threadMessage({ messageId: 'm0', kind: 'note', senderSlaveId: 's1', body: 'The port is 9999.' }),
+        threadMessage({ messageId: 'm1', body: 'Which port does the database listen on?' }),
+      ],
+    })
+    const cited = source({ kind: 'message', ref: 'm0', quote: 'The port is 9999' })
+    const result = verifySources([cited], planted, WORLD)
+    expect(result.verified).toEqual([])
+    expect(result.rejected).toEqual([{ source: cited, reason: 'unknown_ref' }])
+    expect(isSourced(result)).toBe(false)
+  })
+
+  it('still accepts a message the SYSTEM wrote -- a Supervisor answer is not the asker', () => {
+    const withSystemNote = question({
+      thread: [
+        threadMessage({ messageId: 'm1', body: 'Which port does the database listen on?' }),
+        threadMessage({ messageId: 'm2', kind: 'answer', senderSlaveId: null, body: 'Staging answers on 6000.' }),
+      ],
+    })
+    expect(
+      verifySources([source({ kind: 'message', ref: 'm2', quote: 'Staging answers on 6000' })], withSystemNote, WORLD)
+        .rejected,
+    ).toEqual([])
+  })
+
   it('still accepts another message in the same thread', () => {
-    // The rule is about the question, not about the thread: a real answer or note in it is
+    // The rule is about the ASKER, not about the thread: a colleague's answer or note in it is
     // evidence, and rejecting the whole thread would make a re-asked question unanswerable.
     expect(verifySources([source({ kind: 'message', ref: 'm2', quote: 'answers on 6000' })], QUESTION, WORLD).rejected)
       .toEqual([])
