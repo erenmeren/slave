@@ -142,6 +142,14 @@ describe('observe -- ready_unstaffed', () => {
     expect(observe(w)).toEqual([])
   })
 
+  it('stays silent for a ready task whose required role is the empty string -- "any role" is not a missing role', () => {
+    // '' is a real `requiredRole` (`SchedulableSlave.runtimeRoles` in scheduler/decide.ts reasons
+    // about it). Keying a situation on it would put an empty `subjectId` on the row, which
+    // `situationSchema` rejects and which every such task would collide on.
+    const w = world({ tasks: [task({ status: 'ready', requiredRole: '', dependenciesDone: true })], slaves: [] })
+    expect(observe(w)).toEqual([])
+  })
+
   it('stays silent for a ready task whose dependencies are not done -- it is not startable yet', () => {
     const w = world({ tasks: [task({ status: 'ready', requiredRole: 'frontend', dependenciesDone: false })], slaves: [] })
     expect(observe(w)).toEqual([])
@@ -268,6 +276,9 @@ describe('observe -- what it produces is storable', () => {
         task({ id: 't3', status: 'failed', dependents: 1 }),
         task({ id: 't4', status: 'reviewing' }),
         task({ id: 't5', status: 'ready', requiredRole: 'frontend' }),
+        // '' must not become a situation at all -- if it ever did, its empty `subjectId` would
+        // fail the sweep below, which is the point of leaving it in this fixture.
+        task({ id: 't7', status: 'ready', requiredRole: '' }),
         task({ id: 't6', status: 'done', dependents: 1, statusSince: 0 }),
       ],
       questions: [question({ recipientRole: 'security' }), question({ messageId: 'm2', createdAt: 0 })],

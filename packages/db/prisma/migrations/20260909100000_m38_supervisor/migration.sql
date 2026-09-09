@@ -5,8 +5,9 @@
 
 -- The four closed vocabularies the decision row is typed on. `SupervisorSituationKind` mirrors
 -- `SITUATION_KINDS` and the tier/status/decider enums mirror `TIERS`, `DECISION_STATUSES` and
--- `DECIDERS` in `packages/domain/src/supervisor/` -- member for member, in the same order, which
--- is what `packages/db/test/integration/enum-parity.test.ts`'s idiom exists to keep honest.
+-- `DECIDERS` in `packages/domain/src/supervisor/` -- member for member, in the same order. Nothing
+-- in TypeScript enforces that; `packages/db/test/integration/enum-parity.test.ts` reads all four
+-- back out of Postgres and compares them to the domain arrays, which is what keeps it honest.
 CREATE TYPE "SupervisorSituationKind" AS ENUM ('no_reviewer', 'no_planner', 'review_cap_blocked', 'task_failed', 'task_blocked_human', 'waiting_stale', 'unanswerable_question', 'ready_unstaffed', 'done_not_integrated_stale', 'workspace_halted');
 
 CREATE TYPE "SupervisorTier" AS ENUM ('applied', 'proposed', 'escalated', 'noop');

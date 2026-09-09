@@ -178,6 +178,12 @@ export function observe(world: SupervisorWorld): readonly Situation[] {
   const unstaffedRoles = new Map<string, SupervisorTask[]>()
   for (const task of world.tasks) {
     if (task.status !== 'ready' || !task.dependenciesDone) continue
+    // An empty `requiredRole` is a real value -- "any role will do" (see `SchedulableSlave.
+    // runtimeRoles` in `../scheduler/decide.ts`, which reasons about exactly this string). Such a
+    // task cannot be "unstaffed BY ROLE", and keying a situation on it would put an empty
+    // `subjectId` on the row -- which `situationSchema`'s `min(1)` rejects, and which would make
+    // the situation key `(workspaceId, kind, '')` collide across every such task.
+    if (task.requiredRole === '') continue
     if (roleHasHolder(world, task.requiredRole)) continue
     const waiting = unstaffedRoles.get(task.requiredRole)
     if (waiting === undefined) unstaffedRoles.set(task.requiredRole, [task])

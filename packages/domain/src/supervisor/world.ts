@@ -16,7 +16,16 @@ export interface SupervisorTask {
   readonly status: TaskStatusName
   readonly attempt: number
   readonly maxAttempts: number
-  /** The runtime role a slave must hold to be dispatched this task (M37 §5). */
+  /**
+   * The runtime role a slave must hold to be dispatched this task (M37 §5).
+   *
+   * LOADER CONTRACT: never null. `Task.requiredRole` is nullable in Prisma, and the scheduler's own
+   * loader (`apps/orchestrator/src/world.ts`) DROPS a null-role task rather than inventing a role
+   * for it; `loadSupervisorWorld` must do the same. The EMPTY STRING is a different, real value --
+   * "any role will do", the case `SchedulableSlave.runtimeRoles` in `../scheduler/decide.ts`
+   * reasons about -- and `observe` skips it for `ready_unstaffed` rather than reporting a situation
+   * about a role nobody asked for.
+   */
   readonly requiredRole: string
   /** Epoch ms of `Task.integratedAt`, or null while the branch has not reached the base branch. */
   readonly integratedAt: number | null
