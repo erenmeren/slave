@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Action, Candidate, Tier } from '../../src/supervisor/actions.js'
 import { answerBar, answerTier, chooseByRules, mayAnswer, tierOf } from '../../src/supervisor/policy.js'
+import { SITUATION_KINDS } from '../../src/supervisor/situations.js'
 import { question, slave, task, world } from './fixtures.js'
 
 const RUNNING = world()
@@ -13,6 +14,7 @@ const ACTIONS: Readonly<Record<Action['kind'], Action>> = {
   answer_question: { kind: 'answer_question', messageId: 'm1' },
   reassign_question: { kind: 'reassign_question', messageId: 'm1', toSlaveId: 's2' },
   mark_task_failed: { kind: 'mark_task_failed', taskId: 't1', reason: 'dead end' },
+  cancel_task: { kind: 'cancel_task', taskId: 't1', reason: 'the new goal no longer needs it' },
   escalate_to_human: { kind: 'escalate_to_human', summary: 'a human must look' },
   no_action: { kind: 'no_action' },
 }
@@ -35,6 +37,8 @@ describe('tierOf', () => {
     ['raise_max_attempts', 'proposed', 'proposed'],
     ['set_runtime_roles', 'proposed', 'proposed'],
     ['mark_task_failed', 'proposed', 'proposed'],
+    // M40 ruling R1: a cancellation is never automatic -- a wrong deletion costs real planned work.
+    ['cancel_task', 'proposed', 'proposed'],
     ['escalate_to_human', 'escalated', 'escalated'],
     ['no_action', 'noop', 'noop'],
   ]
@@ -54,6 +58,15 @@ describe('tierOf', () => {
     expect(tierOf(ACTIONS.unblock_task, RUNNING, 'task_blocked_human')).toBe('proposed')
     expect(tierOf(ACTIONS.unblock_task, RUNNING, 'task_failed')).toBe('proposed')
     expect(tierOf(ACTIONS.unblock_task, RUNNING, 'review_cap_blocked')).toBe('applied')
+  })
+
+  // The tier of a cancellation is the one thing about it that must not depend on anything: not the
+  // situation it was offered for, not whether the workspace is halted, not the task's own state.
+  it('tiers cancel_task as a PROPOSAL for every situation kind, running or halted', () => {
+    for (const kind of SITUATION_KINDS) {
+      expect(tierOf(ACTIONS.cancel_task, RUNNING, kind)).toBe('proposed')
+      expect(tierOf(ACTIONS.cancel_task, HALTED, kind)).toBe('proposed')
+    }
   })
 
   it('leaves the other tiers alone whatever the situation kind is', () => {

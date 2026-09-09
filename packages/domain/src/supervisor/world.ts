@@ -42,6 +42,16 @@ export interface SupervisorTask {
   readonly dependenciesDone: boolean
   /** The guardrail of the newest `guardrail.tripped` for this task, if any. */
   readonly latestGuardrail: string | null
+  /**
+   * The goal version the plan that created this task derived from (M40 §1); NULL for a hand-made
+   * task, which no plan produced and which therefore can never be "stale" against a goal it was
+   * never derived from.
+   *
+   * Read by {@link summarise}'s `next.stale` count and by the `stale_task` proposals the
+   * orchestrator records -- never by a predicate in `observe`, which must not guess that a task
+   * behind the current goal version is unwanted (see `SITUATION_KINDS`' `stale_task`).
+   */
+  readonly goalVersion: number | null
 }
 
 export interface SupervisorSlave {
@@ -184,6 +194,9 @@ export interface SupervisorWorld {
    *  of this, which is what makes `observe` testable and a decision reproducible. */
   readonly now: number
   readonly goal: string | null
+  /** `Workspace.goalVersion` (M40 §1): which `GoalVersion` the `goal` above IS. 0 means the goal
+   *  was never set, which is also the only state in which it is null. */
+  readonly goalVersion: number
   /** Non-null while the budget/failure guardrail has halted scheduling. */
   readonly halted: { readonly reason: string } | null
   readonly budgetExhausted: boolean

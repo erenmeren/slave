@@ -1,3 +1,4 @@
+import { REPLAN_INSTRUCTIONS } from '../planning/delta.js'
 import type { Manifest, Section, SectionKind } from './sections.js'
 
 /**
@@ -8,7 +9,10 @@ import type { Manifest, Section, SectionKind } from './sections.js'
 export const SECTION_ORDER: Readonly<Record<Manifest['kind'], readonly SectionKind[]>> = {
   implementation: ['profile', 'roster', 'skills', 'inbox', 'ask_protocol', 'task', 'rejection'],
   review: ['profile', 'skills', 'task', 'review_diff'],
-  planning: ['profile', 'planning_goal'],
+  // `replan` is present only when the goal CHANGED on a non-empty board (M40 §3). It comes last,
+  // after the new goal it is about, so the prompt reads "here is the goal, here is what changed
+  // about it, here is what to return" -- and `renderRunContext`'s trailer choice keys on it.
+  planning: ['profile', 'planning_goal', 'replan'],
 }
 
 /**
@@ -104,9 +108,9 @@ export const PLANNING_GRAPH_INSTRUCTIONS = [
  * section whose `text` is empty is omitted from both the prompt and the manifest -- "no effective
  * profile" and "no pending inbox" are the ordinary shape of most runs, not a blank paragraph. The
  * review and planning kinds append their fixed instruction text ({@link REVIEW_VERDICT_INSTRUCTIONS},
- * {@link PLANNING_GRAPH_INSTRUCTIONS}) after their sections; that text is not itself a section and
- * carries no manifest entry -- it is fixed and static, not something a debugger needs a
- * provenance record for.
+ * {@link PLANNING_GRAPH_INSTRUCTIONS}, or `REPLAN_INSTRUCTIONS` when the planning run carries a
+ * `replan` section) after their sections; that text is not itself a section and carries no manifest
+ * entry -- it is fixed and static, not something a debugger needs a provenance record for.
  */
 export function renderRunContext(
   kind: Manifest['kind'],
@@ -125,7 +129,18 @@ export function renderRunContext(
     .filter((section) => section.text !== '')
     .toSorted((a, b) => orderIndex.get(a.kind)! - orderIndex.get(b.kind)!)
 
-  const trailer = kind === 'review' ? REVIEW_VERDICT_INSTRUCTIONS : kind === 'planning' ? PLANNING_GRAPH_INSTRUCTIONS : null
+  // A re-plan run keeps `kind: 'planning'` (spec erratum E2): the trailer is what differs, and the
+  // `replan` section is what says so. Read off `present` rather than `sections`, so the trailer and
+  // the manifest can never disagree -- a `replan` section whose text came back empty is in neither.
+  const replanning = present.some((section) => section.kind === 'replan')
+  const trailer =
+    kind === 'review'
+      ? REVIEW_VERDICT_INSTRUCTIONS
+      : kind === 'planning'
+        ? replanning
+          ? REPLAN_INSTRUCTIONS
+          : PLANNING_GRAPH_INSTRUCTIONS
+        : null
 
   const parts = present.map((section) => section.text)
   const prompt = (trailer === null ? parts : [...parts, trailer]).join('\n\n')

@@ -420,6 +420,47 @@ function WorkspacePlanCreatedCard(props: ActivityCardProps): ReactElement {
 
 // `workers` deliberately has NO `.min(1)` on the wire (schema.ts) — a pure re-sync that added
 // nobody still emits with an empty array (M10 spec §5 step 4), hence the "no new workers" line.
+// M40 t1: the three requirement-versioning events. Minimal cards -- Task 4 gives them the goal
+// version, the diff and the stale badge the milestone's web work is actually about.
+function WorkspaceReplanStartedCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as { version: number }
+  return (
+    <ActivityCard {...props}>
+      <Transition tone="idle" label={`re-plan started for goal v${String(payload.version)}`} />
+    </ActivityCard>
+  )
+}
+
+function WorkspaceReplannedCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as {
+    version: number
+    added: readonly string[]
+    proposedCancellations: readonly string[]
+    droppedCancellations: readonly { taskId: string; status: string }[]
+  }
+  return (
+    <ActivityCard {...props}>
+      <Transition tone="idle" label={`re-planned for goal v${String(payload.version)}`}>
+        <span data-testid="replanned-counts">
+          {payload.added.length} added, {payload.proposedCancellations.length} cancellations proposed,{' '}
+          {payload.droppedCancellations.length} dropped
+        </span>
+      </Transition>
+    </ActivityCard>
+  )
+}
+
+function TaskCancelledCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as { reason: string }
+  return (
+    <ActivityCard {...props}>
+      <Transition tone="warn" label="cancelled">
+        <span data-testid="task-cancelled-reason">{payload.reason}</span>
+      </Transition>
+    </ActivityCard>
+  )
+}
+
 function WorkspaceCompanyAssignedCard(props: ActivityCardProps): ReactElement {
   const payload = props.event.payload as {
     company: string
@@ -917,6 +958,9 @@ export const ACTIVITY_CARDS = {
   'task.unblocked': TaskUnblockedCard,
   'workspace.goal_set': WorkspaceGoalSetCard,
   'workspace.plan_created': WorkspacePlanCreatedCard,
+  'workspace.replan_started': WorkspaceReplanStartedCard,
+  'workspace.replanned': WorkspaceReplannedCard,
+  'task.cancelled': TaskCancelledCard,
   'workspace.company_assigned': WorkspaceCompanyAssignedCard,
   'workspace.settings_changed': WorkspaceSettingsChangedCard,
   'workspace.created': WorkspaceCreatedCard,

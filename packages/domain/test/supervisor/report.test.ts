@@ -31,7 +31,43 @@ describe('summarise -- next', () => {
       ],
       slaves: [slave({ runtimeRoles: ['backend'] })],
     })
-    expect(summarise(w).next).toEqual({ ready: 2, running: 1, waiting: 1, blocked: 1 })
+    expect(summarise(w).next).toEqual({ ready: 2, running: 1, waiting: 1, blocked: 1, stale: 0 })
+  })
+
+  // M40 §4: the "stale" count behind the web's badge -- planned work the goal has moved past.
+  it('counts non-terminal tasks whose goalVersion is behind the workspace goal version', () => {
+    const w = world({
+      goalVersion: 2,
+      tasks: [
+        task({ id: 't1', status: 'backlog', goalVersion: 1 }),
+        task({ id: 't2', status: 'running', goalVersion: 1 }),
+        task({ id: 't3', status: 'ready', goalVersion: 2 }),
+      ],
+    })
+    expect(summarise(w).next.stale).toBe(2)
+  })
+
+  it('never counts a hand-made task -- a null goalVersion was derived from no goal at all', () => {
+    const w = world({ goalVersion: 3, tasks: [task({ id: 't1', status: 'backlog', goalVersion: null })] })
+    expect(summarise(w).next.stale).toBe(0)
+  })
+
+  it.each(['done', 'failed', 'cancelled'] as const)('never counts a %s task -- staleness is about work still ahead', (status) => {
+    const w = world({ goalVersion: 2, tasks: [task({ id: 't1', status, goalVersion: 1 })] })
+    expect(summarise(w).next.stale).toBe(0)
+  })
+
+  it('counts nothing while the board is at the current goal version', () => {
+    const w = world({
+      goalVersion: 2,
+      tasks: [task({ id: 't1', status: 'backlog', goalVersion: 2 }), task({ id: 't2', status: 'ready', goalVersion: 2 })],
+    })
+    expect(summarise(w).next.stale).toBe(0)
+  })
+
+  it('never counts a task AHEAD of the workspace version -- only behind is stale', () => {
+    const w = world({ goalVersion: 1, tasks: [task({ id: 't1', status: 'backlog', goalVersion: 2 })] })
+    expect(summarise(w).next.stale).toBe(0)
   })
 })
 

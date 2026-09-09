@@ -16,6 +16,10 @@ export type SectionKind =
   | 'rejection'
   | 'review_diff'
   | 'planning_goal'
+  /** M40 §3: present only on a RE-plan run -- the run kind stays `planning`, and this section is
+   *  what tells the two apart (spec erratum E2/E4), for `renderRunContext`'s trailer choice and
+   *  for `concludePlanning`'s routing. */
+  | 'replan'
 
 /**
  * One piece of a run's prompt, as the orchestrator hands it to {@link renderRunContext}: the
@@ -49,10 +53,26 @@ export type SectionSource =
   | { readonly kind: 'inbox'; readonly messageIds: readonly string[] }
   | { readonly kind: 'ask_protocol' }
   | { readonly kind: 'answer_protocol' }
-  | { readonly kind: 'task'; readonly taskId: string }
+  /** M40 §1, "the hash is the hook": `sha256` of the task's `title + '\n' + description` as the
+   *  run actually saw it. Task text is immutable today, so this is provenance a reader can check
+   *  rather than a change detector -- and the moment editing arrives it becomes both. */
+  | { readonly kind: 'task'; readonly taskId: string; readonly sha256: string }
   | { readonly kind: 'rejection'; readonly taskId: string }
   | { readonly kind: 'review_diff'; readonly base: string; readonly head: string; readonly capped: boolean }
-  | { readonly kind: 'planning_goal'; readonly sha256: string }
+  /** `version` is `Workspace.goalVersion` at dispatch (M40 §1) -- which `GoalVersion` row this
+   *  prompt's goal text IS, so a plan can be traced to the requirement that produced it. */
+  | { readonly kind: 'planning_goal'; readonly sha256: string; readonly version: number }
+  /** M40 §3: the goal CHANGED and the board is not empty. Both ends of the move (version and hash)
+   *  plus the board the delta was read against, so a `workspace.replanned` can be checked against
+   *  the exact list of ids the manager was shown. */
+  | {
+      readonly kind: 'replan'
+      readonly previousVersion: number
+      readonly version: number
+      readonly previousSha256: string
+      readonly sha256: string
+      readonly boardTaskIds: readonly string[]
+    }
 
 /** The manifest stored (as `Json`) on `RunContext.sections` -- an ordered record of what produced
  *  the prompt, without the prompt text itself. */
@@ -89,7 +109,7 @@ const inboxSourceSchema = z.object({
 const askProtocolSourceSchema = z.object({ kind: z.literal('ask_protocol') })
 const answerProtocolSourceSchema = z.object({ kind: z.literal('answer_protocol') })
 
-const taskSourceSchema = z.object({ kind: z.literal('task'), taskId: z.string() })
+const taskSourceSchema = z.object({ kind: z.literal('task'), taskId: z.string(), sha256: z.string() })
 const rejectionSourceSchema = z.object({ kind: z.literal('rejection'), taskId: z.string() })
 
 const reviewDiffSourceSchema = z.object({
@@ -99,7 +119,20 @@ const reviewDiffSourceSchema = z.object({
   capped: z.boolean(),
 })
 
-const planningGoalSourceSchema = z.object({ kind: z.literal('planning_goal'), sha256: z.string() })
+const planningGoalSourceSchema = z.object({
+  kind: z.literal('planning_goal'),
+  sha256: z.string(),
+  version: z.number().int().nonnegative(),
+})
+
+const replanSourceSchema = z.object({
+  kind: z.literal('replan'),
+  previousVersion: z.number().int().nonnegative(),
+  version: z.number().int().nonnegative(),
+  previousSha256: z.string(),
+  sha256: z.string(),
+  boardTaskIds: z.array(z.string()),
+})
 
 const sectionSourceSchema = z.discriminatedUnion('kind', [
   profileSourceSchema,
@@ -112,6 +145,7 @@ const sectionSourceSchema = z.discriminatedUnion('kind', [
   rejectionSourceSchema,
   reviewDiffSourceSchema,
   planningGoalSourceSchema,
+  replanSourceSchema,
 ])
 
 /**

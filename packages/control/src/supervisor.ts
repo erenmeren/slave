@@ -394,6 +394,13 @@ async function carryOut(
       return reached(
         await reassignQuestion(action.messageId, action.toSlaveId, SUPERVISOR_ACTOR, origin, principal, decision.id),
       )
+    case 'cancel_task':
+      // M40 Task 2 replaces this with `cancelTask(action.taskId, action.reason, origin, principal)`.
+      // UNREACHABLE until then, by two independent facts: the only situation whose catalogue offers
+      // `cancel_task` is `stale_task`, and `observe` never produces one -- only Task 3's
+      // `concludeReplan` records it. Thrown rather than answered with `ok('none')`, which would
+      // report an approved cancellation as carried out while the task stayed on the board.
+      throw new Error('cancel_task has no control verb yet (M40 Task 2 wires it to cancelTask)')
     case 'escalate_to_human':
     case 'no_action':
       return ok('none')

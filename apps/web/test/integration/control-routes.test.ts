@@ -442,7 +442,8 @@ describe('the control routes', () => {
       sections: [
         { kind: 'profile', origin: 'slave', sha256: 'a'.repeat(64) },
         { kind: 'skills', copied: ['writing-plans'], missing: ['brainstorming'], shadowedByRepo: [], provider_unsupported: false, no_worktree: false },
-        { kind: 'task', taskId: 'task-1' },
+        // M40 t1: the `task` source carries the sha256 of the task text the run saw.
+        { kind: 'task', taskId: 'task-1', sha256: 'd'.repeat(64) },
       ],
     }
 

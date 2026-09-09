@@ -1135,7 +1135,11 @@ describe('the orchestrator CLI', () => {
         data: {
           runId: run.id,
           prompt: 'THE PROMPT THE MODEL SAW',
-          sections: { kind: 'implementation', sections: [{ kind: 'task', taskId: fixture.taskId }] },
+          // M40 t1: the `task` source carries the sha256 of the task text the run saw.
+          sections: {
+            kind: 'implementation',
+            sections: [{ kind: 'task', taskId: fixture.taskId, sha256: 'd'.repeat(64) }],
+          },
         },
       })
 
@@ -1143,7 +1147,7 @@ describe('the orchestrator CLI', () => {
       expect(bare.code).toBe(0)
       expect(JSON.parse(bare.stdout)).toEqual({
         kind: 'implementation',
-        sections: [{ kind: 'task', taskId: fixture.taskId }],
+        sections: [{ kind: 'task', taskId: fixture.taskId, sha256: 'd'.repeat(64) }],
       })
       expect(bare.stdout).not.toContain('THE PROMPT THE MODEL SAW')
 

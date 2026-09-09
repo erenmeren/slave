@@ -83,7 +83,7 @@ const view = (over?: Partial<SupervisorView>): SupervisorView => ({
         facts: { role: 'reviewer' },
       },
     ],
-    next: { ready: 3, running: 1, waiting: 0, blocked: 2 },
+    next: { ready: 3, running: 1, waiting: 0, blocked: 2, stale: 0 },
     supervisor: { applied: 4, pending: 1, escalated: 0, failed: 0, lastDecisionAt: 1_757_412_000_000 },
     // M39 Task 4 renders this block; Task 1 only added it to the report the view carries.
     mailbox: { pendingQuestions: 0, draftsAwaiting: 0, answeredBySupervisor24h: 0 },

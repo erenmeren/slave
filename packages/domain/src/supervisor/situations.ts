@@ -16,6 +16,18 @@ export const SITUATION_KINDS = [
   'review_cap_blocked',
   'task_failed',
   'task_blocked_human',
+  /**
+   * M40 §3: a task the CHANGED goal no longer needs. `subjectId` is the task id; facts are
+   * `{ goalVersion, currentVersion, reason: 'replan_cancel' }`.
+   *
+   * THE ONE KIND {@link observe} NEVER EMITS, and the exception is the point: every other
+   * situation is a predicate over the world, re-derivable on any tick from rows alone. This one is
+   * a JUDGEMENT the manager's own re-plan run made -- "the new goal does not need this task" is
+   * not readable off a `Task` row, and a rule that guessed it from `goalVersion < currentVersion`
+   * would propose cancelling every task on the board the moment a goal was edited. It is recorded
+   * directly by the orchestrator's `concludeReplan` (spec §5), which has the delta in hand.
+   */
+  'stale_task',
   'waiting_stale',
   'unanswerable_question',
   'ready_unstaffed',
@@ -29,7 +41,8 @@ export type SituationKind = (typeof SITUATION_KINDS)[number]
  * One thing that is stuck, as the rules saw it.
  *
  * `subjectId` is the second half of the situation KEY `(workspaceId, kind, subjectId)` (spec §2):
- * the task id for the task situations, the message id for the question situations, the ROLE NAME
+ * the task id for the task situations (`stale_task` included), the message id for the question
+ * situations, the ROLE NAME
  * for `no_reviewer`/`no_planner`/`ready_unstaffed` (so ten ready tasks missing one role are one
  * situation, not ten), and the workspace id for `workspace_halted`.
  *

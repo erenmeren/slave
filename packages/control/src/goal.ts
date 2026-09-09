@@ -1,5 +1,5 @@
 import { prisma } from '@slave-of-ai/db/client'
-import { type Result, err, ok } from '@slave-of-ai/domain'
+import { goalSha256, type Result, err, ok } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import type { Principal } from './principal.js'
 import type { ControlRefusal } from './refusal.js'
@@ -30,7 +30,12 @@ export async function setGoal(
     type: 'workspace.goal_set',
     workspaceId,
     actor: 'human',
-    payload: { goal },
+    // M40 t1: the content hash of the goal just set -- the one field this verb can already say
+    // truthfully. `version` is deliberately ABSENT until M40 Task 2 makes this verb transactional
+    // and versioned: no `GoalVersion` row is inserted here yet, and naming a version this write
+    // did not create would be a claim the table does not back. The payload schema keeps both
+    // fields optional, so a pre-M40 row and this interim one both read back.
+    payload: { goal, sha256: goalSha256(goal) },
     userId: principal?.userId ?? null,
   })
 

@@ -590,6 +590,159 @@ describe('parseExecutionEvent', () => {
     }
   })
 
+  // ---- M40 t1: goal versions, the delta re-plan and a cancelled task -----------------------
+
+  it('accepts a workspace.goal_set event carrying its version and content hash', () => {
+    const result = parseExecutionEvent({
+      ...BASE,
+      actor: 'human',
+      type: 'workspace.goal_set',
+      payload: { goal: 'Ship the API', version: 2, sha256: 'a'.repeat(64) },
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok && result.value.type === 'workspace.goal_set') {
+      expect(result.value.payload.version).toBe(2)
+      expect(result.value.payload.sha256).toBe('a'.repeat(64))
+    }
+  })
+
+  it('still accepts a pre-M40 workspace.goal_set with neither field -- read.ts throws on a row it cannot parse', () => {
+    const result = parseExecutionEvent({ ...BASE, actor: 'human', type: 'workspace.goal_set', payload: { goal: 'Ship it' } })
+    expect(result.ok).toBe(true)
+    if (result.ok && result.value.type === 'workspace.goal_set') {
+      expect(result.value.payload.version).toBeUndefined()
+    }
+  })
+
+  it('rejects a workspace.goal_set whose version is zero -- a set always makes a version', () => {
+    const result = parseExecutionEvent({
+      ...BASE,
+      actor: 'human',
+      type: 'workspace.goal_set',
+      payload: { goal: 'Ship it', version: 0, sha256: 'a'.repeat(64) },
+    })
+    expect(result.ok).toBe(false)
+  })
+
+  it('accepts a task.created event carrying the goal version it was planned from, and a null one', () => {
+    const planned = parseExecutionEvent({
+      ...BASE,
+      type: 'task.created',
+      taskId: 't1',
+      payload: { title: 'Document the endpoint', goalVersion: 2 },
+    })
+    expect(planned.ok).toBe(true)
+    if (planned.ok && planned.value.type === 'task.created') expect(planned.value.payload.goalVersion).toBe(2)
+
+    const handMade = parseExecutionEvent({
+      ...BASE,
+      type: 'task.created',
+      taskId: 't1',
+      payload: { title: 'Fix the typo', goalVersion: null },
+    })
+    expect(handMade.ok).toBe(true)
+    if (handMade.ok && handMade.value.type === 'task.created') expect(handMade.value.payload.goalVersion).toBeNull()
+  })
+
+  it('still accepts a pre-M40 task.created with only a title', () => {
+    expect(parseExecutionEvent({ ...BASE, type: 'task.created', taskId: 't1', payload: { title: 'x' } }).ok).toBe(true)
+  })
+
+  it('accepts a workspace.plan_created event carrying the goal version its tasks were stamped with', () => {
+    const result = parseExecutionEvent({
+      ...BASE,
+      type: 'workspace.plan_created',
+      payload: {
+        goal: 'Ship the API',
+        goalVersion: 1,
+        tasks: [{ id: 't1', title: 'Build it', role: 'backend' }],
+      },
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok && result.value.type === 'workspace.plan_created') expect(result.value.payload.goalVersion).toBe(1)
+  })
+
+  it('accepts a workspace.replan_started event naming the version and the run', () => {
+    const result = parseExecutionEvent({
+      ...BASE,
+      type: 'workspace.replan_started',
+      runId: 'run-9',
+      payload: { version: 2, runId: 'run-9' },
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok && result.value.type === 'workspace.replan_started') {
+      expect(result.value.payload).toEqual({ version: 2, runId: 'run-9' })
+    }
+  })
+
+  it('rejects a workspace.replan_started with no run to attribute it to', () => {
+    expect(parseExecutionEvent({ ...BASE, type: 'workspace.replan_started', payload: { version: 2 } }).ok).toBe(false)
+  })
+
+  it('accepts a workspace.replanned event with all three lists, dropped cancellations included', () => {
+    const result = parseExecutionEvent({
+      ...BASE,
+      type: 'workspace.replanned',
+      runId: 'run-9',
+      payload: {
+        version: 2,
+        runId: 'run-9',
+        added: ['t9'],
+        proposedCancellations: ['t1'],
+        droppedCancellations: [{ taskId: 't2', status: 'running' }],
+      },
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok && result.value.type === 'workspace.replanned') {
+      expect(result.value.payload.droppedCancellations).toEqual([{ taskId: 't2', status: 'running' }])
+    }
+  })
+
+  it('accepts a workspace.replanned event whose three lists are all empty', () => {
+    const result = parseExecutionEvent({
+      ...BASE,
+      type: 'workspace.replanned',
+      payload: { version: 2, runId: 'run-9', added: [], proposedCancellations: [], droppedCancellations: [] },
+    })
+    expect(result.ok).toBe(true)
+  })
+
+  it('rejects a workspace.replanned whose dropped cancellation has no status -- the refusal is the point', () => {
+    const result = parseExecutionEvent({
+      ...BASE,
+      type: 'workspace.replanned',
+      payload: { version: 2, runId: 'run-9', added: [], proposedCancellations: [], droppedCancellations: [{ taskId: 't2' }] },
+    })
+    expect(result.ok).toBe(false)
+  })
+
+  it('accepts a task.cancelled event carrying the goal version whose work was dropped', () => {
+    const result = parseExecutionEvent({
+      ...BASE,
+      actor: 'human',
+      type: 'task.cancelled',
+      taskId: 't1',
+      payload: { reason: 'the re-plan for goal v2 no longer needs it', goalVersion: 1 },
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok && result.value.type === 'task.cancelled') expect(result.value.payload.goalVersion).toBe(1)
+  })
+
+  it('accepts a task.cancelled event for a hand-made task, whose goal version is null', () => {
+    const result = parseExecutionEvent({
+      ...BASE,
+      actor: 'human',
+      type: 'task.cancelled',
+      taskId: 't1',
+      payload: { reason: 'not needed', goalVersion: null },
+    })
+    expect(result.ok).toBe(true)
+  })
+
+  it('rejects a task.cancelled event with no reason -- a cancellation always says why', () => {
+    expect(parseExecutionEvent({ ...BASE, type: 'task.cancelled', taskId: 't1', payload: { goalVersion: null } }).ok).toBe(false)
+  })
+
   it('rejects an empty workspaceId', () => {
     const result = parseExecutionEvent({
       ...BASE,

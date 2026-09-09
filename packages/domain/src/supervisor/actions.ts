@@ -26,6 +26,10 @@ export type Action =
   | { readonly kind: 'reassign_question'; readonly messageId: string; readonly toSlaveId: string }
   /** `failTask`: a dead end declared dead, so dependents stop waiting on it. */
   | { readonly kind: 'mark_task_failed'; readonly taskId: string; readonly reason: string }
+  /** `cancelTask`: work the changed goal no longer needs, taken off the board (M40 §4). ALWAYS a
+   *  proposal ({@link tierOf}, ruling R1) -- the model asked for it inside a re-plan delta, and a
+   *  wrong deletion costs real planned work while a wrong addition costs one backlog row. */
+  | { readonly kind: 'cancel_task'; readonly taskId: string; readonly reason: string }
   /** No verb at all -- a row a human is asked to look at. The always-available last resort. */
   | { readonly kind: 'escalate_to_human'; readonly summary: string }
   /** Deliberately nothing: the situation is real but waiting is the right move. */
@@ -39,6 +43,7 @@ export const ACTION_KINDS = [
   'answer_question',
   'reassign_question',
   'mark_task_failed',
+  'cancel_task',
   'escalate_to_human',
   'no_action',
 ] as const
@@ -60,6 +65,7 @@ export const actionSchema: z.ZodType<Action> = z.discriminatedUnion('kind', [
     toSlaveId: z.string().min(1),
   }),
   z.object({ kind: z.literal('mark_task_failed'), taskId: z.string().min(1), reason: z.string().min(1) }),
+  z.object({ kind: z.literal('cancel_task'), taskId: z.string().min(1), reason: z.string().min(1) }),
   z.object({ kind: z.literal('escalate_to_human'), summary: z.string().min(1) }),
   z.object({ kind: z.literal('no_action') }),
 ])

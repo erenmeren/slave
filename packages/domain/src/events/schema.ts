@@ -18,7 +18,17 @@ const envelope = {
 
 /** One member per event type. The payload shape is bound to the type by construction. */
 export const executionEventSchema = z.discriminatedUnion('type', [
-  z.object({ ...envelope, type: z.literal('task.created'), payload: z.object({ title: z.string() }) }),
+  // M40 t1: `goalVersion` is the plan version the task was derived from, `null` for a hand-made
+  // one. OPTIONAL, like every other widening of an existing arm in this file (M19 B1, M23 F6, M27,
+  // M36 t1): `packages/events/src/read.ts` THROWS on a row this schema cannot parse -- "the write
+  // gate guarantees every row parses, so a failure here means that guarantee has been bypassed" --
+  // so a required field would make every `task.created` written before this milestone unreadable
+  // and take the activity stream down with it. Every writer as of M40 always sets it.
+  z.object({
+    ...envelope,
+    type: z.literal('task.created'),
+    payload: z.object({ title: z.string(), goalVersion: z.number().int().nonnegative().nullable().optional() }),
+  }),
   z.object({ ...envelope, type: z.literal('task.started'), payload: z.object({ title: z.string() }) }),
   z.object({ ...envelope, type: z.literal('task.done'), payload: z.object({ branch: z.string() }) }),
   z.object({
@@ -187,20 +197,63 @@ export const executionEventSchema = z.discriminatedUnion('type', [
     type: z.literal('task.merge_failed'),
     payload: z.object({ reason: z.string() }),
   }),
+  // M40 t1: which `GoalVersion` row this set created, and the sha256 of its text -- the two facts
+  // that make a goal edit traceable without reading the `GoalVersion` table. Optional for the same
+  // back-compat reason as `task.created` above: every `workspace.goal_set` row written before M40
+  // carries neither.
   z.object({
     ...envelope,
     type: z.literal('workspace.goal_set'),
-    payload: z.object({ goal: z.string().min(1) }),
+    payload: z.object({
+      goal: z.string().min(1),
+      version: z.number().int().positive().optional(),
+      sha256: z.string().min(1).optional(),
+    }),
   }),
   z.object({
     ...envelope,
     type: z.literal('workspace.plan_created'),
     payload: z.object({
       goal: z.string().min(1),
+      // M40 t1: the goal version the plan derived from -- the version every task it created is
+      // stamped with. Optional for back-compat; always written from M40 on.
+      goalVersion: z.number().int().nonnegative().optional(),
       tasks: z
         .array(z.object({ id: z.string().min(1), title: z.string().min(1), role: z.string().min(1) }))
         .min(1),
     }),
+  }),
+  // M40 §2: a re-plan run started, because the goal moved on a board that already had tasks. The
+  // dedup key for "one re-plan per goal version" (spec §1) is this event's `version`, and `runId`
+  // is what lets a later tick tell a re-plan still in flight from one that failed and may retry.
+  z.object({
+    ...envelope,
+    type: z.literal('workspace.replan_started'),
+    payload: z.object({ version: z.number().int().positive(), runId: z.string().min(1) }),
+  }),
+  // The re-plan concluded. All three lists are ids, and all three may be empty: `added` is the
+  // tasks that were created at once, `proposedCancellations` the ones a human is now being asked to
+  // approve, and `droppedCancellations` the ones the model asked for that the status rule REFUSED
+  // -- carried with the status that refused them, so a refused cancellation is recorded rather than
+  // silently forgotten (spec §1).
+  z.object({
+    ...envelope,
+    type: z.literal('workspace.replanned'),
+    payload: z.object({
+      version: z.number().int().positive(),
+      runId: z.string().min(1),
+      added: z.array(z.string().min(1)),
+      proposedCancellations: z.array(z.string().min(1)),
+      droppedCancellations: z.array(z.object({ taskId: z.string().min(1), status: z.string().min(1) })),
+    }),
+  }),
+  // M40 §4: `cancelTask` took a task off the board -- an operator's own call, or an approved
+  // `stale_task` proposal. `goalVersion` is the task's own stamp (null for a hand-made task), so
+  // the log says which requirement's work was dropped.
+  z.object({
+    ...envelope,
+    type: z.literal('task.cancelled'),
+    payload: z.object({ reason: z.string().min(1), goalVersion: z.number().int().nonnegative().nullable() }),
   }),
   z.object({
     ...envelope,

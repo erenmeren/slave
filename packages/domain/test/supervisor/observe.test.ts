@@ -77,10 +77,13 @@ describe('observe -- task_failed', () => {
 })
 
 describe('observe -- waiting_stale', () => {
+  // The holder is `s2`, not the default `s1`: `s1` is the fixture's ASKER, and a role held only by
+  // the asker has no holder who could answer (M39 residual R2 -- see the asker-exclusion cases in
+  // the `unanswerable_question` block below).
   it('reports a question older than WAITING_STALE_MS whose recipient role has a holder', () => {
     const w = world({
       questions: [question({ createdAt: NOW - WAITING_STALE_MS - 1, recipientRole: 'backend' })],
-      slaves: [slave({ runtimeRoles: ['backend'] })],
+      slaves: [slave(), slave({ id: 's2', runtimeRoles: ['backend'] })],
     })
     expect(keys(observe(w))).toEqual([['waiting_stale', 'm1']])
   })
@@ -88,7 +91,7 @@ describe('observe -- waiting_stale', () => {
   it('stays silent at exactly WAITING_STALE_MS -- the threshold is strictly greater-than', () => {
     const w = world({
       questions: [question({ createdAt: NOW - WAITING_STALE_MS, recipientRole: 'backend' })],
-      slaves: [slave({ runtimeRoles: ['backend'] })],
+      slaves: [slave(), slave({ id: 's2', runtimeRoles: ['backend'] })],
     })
     expect(observe(w)).toEqual([])
   })
@@ -119,9 +122,47 @@ describe('observe -- unanswerable_question', () => {
     expect(keys(observe(w))).toEqual([['unanswerable_question', 'm1']])
   })
 
-  it('stays silent for a fresh question whose role has a holder', () => {
-    const w = world({ questions: [question({ recipientRole: 'backend' })], slaves: [slave({ runtimeRoles: ['backend'] })] })
+  it('stays silent for a fresh question whose role has a holder other than the asker', () => {
+    const w = world({
+      questions: [question({ recipientRole: 'backend' })],
+      slaves: [slave(), slave({ id: 's2', runtimeRoles: ['backend'] })],
+    })
     expect(observe(w)).toEqual([])
+  })
+
+  /**
+   * M39 residual R2 (M40 t1). Control's `holdersOf` has excluded the asker since erratum E8 --
+   * nobody answers their own question -- while this file's `roleHasHolder` did not. A question
+   * addressed to a role whose ONLY holder is the worker that asked it therefore read as
+   * deliverable: no situation, no proposal, and a panel saying "0 workers could answer it" beside
+   * nothing at all. It is unanswerable, and now it says so.
+   */
+  it('reports a question whose recipient role is held only by the asker', () => {
+    const w = world({
+      questions: [question({ askerSlaveId: 's1', recipientRole: 'backend' })],
+      slaves: [slave({ id: 's1', runtimeRoles: ['backend'] })],
+    })
+    expect(keys(observe(w))).toEqual([['unanswerable_question', 'm1']])
+  })
+
+  it('stays silent when the asker holds the role AND somebody else does too', () => {
+    const w = world({
+      questions: [question({ askerSlaveId: 's1', recipientRole: 'backend' })],
+      slaves: [slave({ id: 's1', runtimeRoles: ['backend'] }), slave({ id: 's2', runtimeRoles: ['backend'] })],
+    })
+    expect(observe(w)).toEqual([])
+  })
+
+  it('never excludes the asker from the staffing predicates -- a reviewer who asked still reviews', () => {
+    // `no_reviewer` is about who can be DISPATCHED, not about who can answer a question, so the
+    // asker exclusion must not leak into it: one slave holding `reviewer` is a reviewer, whatever
+    // questions they have asked.
+    const w = world({
+      tasks: [task({ status: 'reviewing' })],
+      questions: [question({ askerSlaveId: 's1', recipientRole: 'backend' })],
+      slaves: [slave({ id: 's1', runtimeRoles: ['reviewer'] })],
+    })
+    expect(keys(observe(w))).toEqual([['unanswerable_question', 'm1']])
   })
 
   /**

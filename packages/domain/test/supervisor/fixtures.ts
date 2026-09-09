@@ -30,6 +30,9 @@ export function task(overrides: Partial<SupervisorTask> = {}): SupervisorTask {
     dependents: 0,
     dependenciesDone: true,
     latestGuardrail: null,
+    // The board's tasks come from a plan by default, stamped with the same version the default
+    // world carries -- so nothing is stale until a test says the goal moved.
+    goalVersion: 0,
     ...overrides,
   }
 }
@@ -87,6 +90,8 @@ export function world(overrides: Partial<SupervisorWorld> = {}): SupervisorWorld
     workspaceId: 'ws-1',
     now: NOW,
     goal: null,
+    // 0 is "the goal was never set" (M40 §1), which is what `goal: null` above means.
+    goalVersion: 0,
     halted: null,
     budgetExhausted: false,
     tasks: [],

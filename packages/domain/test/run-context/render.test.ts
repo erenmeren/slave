@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { parseSlaveAnswers } from '../../src/messaging/answer.js'
 import { parseSlaveAsk } from '../../src/messaging/ask.js'
 import type { Section } from '../../src/run-context/sections.js'
+import { REPLAN_INSTRUCTIONS } from '../../src/planning/delta.js'
 import {
   MARKERS,
   PLANNING_GRAPH_INSTRUCTIONS,
@@ -17,6 +18,10 @@ import {
 // went with them. What replaced it is `apps/orchestrator/test/integration/runContext.test.ts`,
 // which asserts a REAL review/planning prompt still ends with each constant.
 
+const TASK_SHA = 'd'.repeat(64)
+const GOAL_SHA = 'c'.repeat(64)
+const PREVIOUS_GOAL_SHA = 'a'.repeat(64)
+
 function section(kind: Section['kind'], text: string, source: Section['source']): Section {
   return { kind, text, source }
 }
@@ -26,7 +31,7 @@ describe('SECTION_ORDER', () => {
     expect(SECTION_ORDER).toEqual({
       implementation: ['profile', 'roster', 'skills', 'inbox', 'ask_protocol', 'task', 'rejection'],
       review: ['profile', 'skills', 'task', 'review_diff'],
-      planning: ['profile', 'planning_goal'],
+      planning: ['profile', 'planning_goal', 'replan'],
     })
   })
 })
@@ -35,7 +40,7 @@ describe('renderRunContext', () => {
   it('orders implementation sections per SECTION_ORDER regardless of input order', () => {
     const sections: Section[] = [
       section('rejection', 'rejected: missing tests', { kind: 'rejection', taskId: 't1' }),
-      section('task', 'Task: do the thing', { kind: 'task', taskId: 't1' }),
+      section('task', 'Task: do the thing', { kind: 'task', taskId: 't1', sha256: TASK_SHA }),
       section('profile', 'You are Maya.', { kind: 'profile', origin: 'slave', sha256: 'a'.repeat(64) }),
       section('inbox', 'pending question from Riley', { kind: 'inbox', messageIds: ['m1'] }),
     ]
@@ -46,7 +51,7 @@ describe('renderRunContext', () => {
       sections: [
         { kind: 'profile', origin: 'slave', sha256: 'a'.repeat(64) },
         { kind: 'inbox', messageIds: ['m1'] },
-        { kind: 'task', taskId: 't1' },
+        { kind: 'task', taskId: 't1', sha256: TASK_SHA },
         { kind: 'rejection', taskId: 't1' },
       ],
     })
@@ -55,11 +60,11 @@ describe('renderRunContext', () => {
   it('drops sections whose text is empty from both the prompt and the manifest', () => {
     const sections: Section[] = [
       section('profile', '', { kind: 'profile', origin: 'slave', sha256: 'a'.repeat(64) }),
-      section('task', 'Task: do the thing', { kind: 'task', taskId: 't1' }),
+      section('task', 'Task: do the thing', { kind: 'task', taskId: 't1', sha256: TASK_SHA }),
     ]
     const { prompt, manifest } = renderRunContext('implementation', sections)
     expect(prompt).toBe('Task: do the thing')
-    expect(manifest.sections).toEqual([{ kind: 'task', taskId: 't1' }])
+    expect(manifest.sections).toEqual([{ kind: 'task', taskId: 't1', sha256: TASK_SHA }])
   })
 
   it('throws for a section kind not in the given run kind\'s order', () => {
@@ -72,7 +77,7 @@ describe('renderRunContext', () => {
   it('appends the verdict instructions, verbatim from review.ts, after a review run\'s sections', () => {
     const sections: Section[] = [
       section('profile', 'You are Riley.', { kind: 'profile', origin: 'slave', sha256: 'a'.repeat(64) }),
-      section('task', 'Task: do the thing', { kind: 'task', taskId: 't1' }),
+      section('task', 'Task: do the thing', { kind: 'task', taskId: 't1', sha256: TASK_SHA }),
       section('review_diff', 'DIFF (base...branch):\n```diff\n+x\n```', { kind: 'review_diff', base: 'main', head: 'x', capped: false }),
     ]
     const { prompt } = renderRunContext('review', sections)
@@ -92,7 +97,7 @@ describe('renderRunContext', () => {
   })
 
   it('appends the graph instructions, verbatim from planning.ts, after a planning run\'s sections', () => {
-    const sections: Section[] = [section('planning_goal', 'GOAL: ship it', { kind: 'planning_goal', sha256: 'a'.repeat(64) })]
+    const sections: Section[] = [section('planning_goal', 'GOAL: ship it', { kind: 'planning_goal', sha256: GOAL_SHA, version: 1 })]
     const { prompt } = renderRunContext('planning', sections)
     expect(prompt.endsWith(PLANNING_GRAPH_INSTRUCTIONS)).toBe(true)
     // Fix round 1: both blank-string separators from `buildPlanningPrompt`'s own array (the one
@@ -127,8 +132,90 @@ describe('renderRunContext', () => {
     expect(PLANNING_GRAPH_INSTRUCTIONS).not.toContain('"verdict"')
   })
 
+  // M40 t1 (spec erratum E2): the trailer, not the run kind, is what makes a re-plan a re-plan.
+  it('appends the re-plan instructions instead of the graph instructions when a replan section is present', () => {
+    const sections: Section[] = [
+      section('planning_goal', 'GOAL: ship it, and now also document it', { kind: 'planning_goal', sha256: GOAL_SHA, version: 2 }),
+      section('replan', 'The GOAL changed. Previous goal (v1): ship it', {
+        kind: 'replan',
+        previousVersion: 1,
+        version: 2,
+        previousSha256: PREVIOUS_GOAL_SHA,
+        sha256: GOAL_SHA,
+        boardTaskIds: ['t1'],
+      }),
+    ]
+    const { prompt, manifest } = renderRunContext('planning', sections)
+    expect(prompt.endsWith(REPLAN_INSTRUCTIONS)).toBe(true)
+    expect(prompt).not.toContain(PLANNING_GRAPH_INSTRUCTIONS)
+    // The run kind is unchanged -- only the manifest and the trailer say this was a re-plan.
+    expect(manifest.kind).toBe('planning')
+    expect(manifest.sections).toEqual([
+      { kind: 'planning_goal', sha256: GOAL_SHA, version: 2 },
+      {
+        kind: 'replan',
+        previousVersion: 1,
+        version: 2,
+        previousSha256: PREVIOUS_GOAL_SHA,
+        sha256: GOAL_SHA,
+        boardTaskIds: ['t1'],
+      },
+    ])
+  })
+
+  it('puts the replan section AFTER the goal it is about, whatever order the caller passed', () => {
+    const sections: Section[] = [
+      section('replan', 'The GOAL changed.', {
+        kind: 'replan',
+        previousVersion: 1,
+        version: 2,
+        previousSha256: PREVIOUS_GOAL_SHA,
+        sha256: GOAL_SHA,
+        boardTaskIds: [],
+      }),
+      section('planning_goal', 'GOAL: ship it', { kind: 'planning_goal', sha256: GOAL_SHA, version: 2 }),
+    ]
+    const { prompt } = renderRunContext('planning', sections)
+    expect(prompt.indexOf('GOAL: ship it')).toBeLessThan(prompt.indexOf('The GOAL changed.'))
+  })
+
+  it('falls back to the graph instructions when the replan section rendered no text', () => {
+    // The trailer is read off the PRESENT sections, so an empty `replan` section is in neither the
+    // manifest nor the trailer choice -- the two can never disagree about what this run was.
+    const sections: Section[] = [
+      section('planning_goal', 'GOAL: ship it', { kind: 'planning_goal', sha256: GOAL_SHA, version: 2 }),
+      section('replan', '', {
+        kind: 'replan',
+        previousVersion: 1,
+        version: 2,
+        previousSha256: PREVIOUS_GOAL_SHA,
+        sha256: GOAL_SHA,
+        boardTaskIds: [],
+      }),
+    ]
+    const { prompt, manifest } = renderRunContext('planning', sections)
+    expect(prompt.endsWith(PLANNING_GRAPH_INSTRUCTIONS)).toBe(true)
+    expect(manifest.sections).toEqual([{ kind: 'planning_goal', sha256: GOAL_SHA, version: 2 }])
+  })
+
+  it('throws for a replan section on an implementation run', () => {
+    const sections: Section[] = [
+      section('replan', 'The GOAL changed.', {
+        kind: 'replan',
+        previousVersion: 1,
+        version: 2,
+        previousSha256: PREVIOUS_GOAL_SHA,
+        sha256: GOAL_SHA,
+        boardTaskIds: [],
+      }),
+    ]
+    expect(() => renderRunContext('implementation', sections)).toThrow(
+      'unknown section replan for run kind implementation',
+    )
+  })
+
   it('does not append instructions for an implementation run', () => {
-    const sections: Section[] = [section('task', 'Task: do the thing', { kind: 'task', taskId: 't1' })]
+    const sections: Section[] = [section('task', 'Task: do the thing', { kind: 'task', taskId: 't1', sha256: TASK_SHA })]
     const { prompt } = renderRunContext('implementation', sections)
     expect(prompt).toBe('Task: do the thing')
   })

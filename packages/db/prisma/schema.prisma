@@ -70,6 +70,12 @@ model Workspace {
   /// unlike `verifyCommands`/`setupCommands` above, an unset goal is a perfectly ordinary state
   /// (no planning run has run yet), so this stays on Prisma's conventional nullable-String DDL.
   goal                    String?
+  /// M40 §1: which `GoalVersion` row the `goal` cache above IS -- the latest version, mirrored on
+  /// the workspace so a reader never has to aggregate the history table. 0 means the goal has
+  /// never been set (and is the only state in which `goal` is null); `setGoal` inserts version
+  /// `goalVersion + 1` under a row lock and moves this in the same transaction, so the two can
+  /// never disagree. Backfilled to 1 for every workspace that already had a goal.
+  goalVersion             Int       @default(0)
   /// The company assigned to run this project (M10 §5), nullable: the engine never required a
   /// company, and existing seeded workspaces keep their hand-made teams/slaves untouched
   /// (Decision 7). Assignment is one-way in M10 -- no un-assignment or re-assignment to a
@@ -122,8 +128,32 @@ model Workspace {
   providerConfigurations ProviderConfiguration[]
   tasks                  Task[]
   supervisorDecisions    SupervisorDecision[]
+  goalVersions           GoalVersion[]
 
   @@index([adoptedFromSimulationId])
+}
+
+/// One immutable version of a workspace's goal (M40 §2). `setGoal` never overwrites history: it
+/// inserts a row here with `version = Workspace.goalVersion + 1` and updates the workspace's cache
+/// in the same transaction. `sha256` is the hash of `text` -- what `setGoal` compares a new goal
+/// against to refuse `goal_unchanged`, and what a run's `planning_goal` section records so a plan
+/// can be traced to the exact requirement text that produced it.
+model GoalVersion {
+  id          String   @id @default(uuid())
+  workspaceId String
+  version     Int
+  text        String
+  sha256      String
+  /// Who set it, nullable for the same reason as `Workspace.goalSetByUserId`: the CLI and the
+  /// orchestrator act with no user, and the backfilled v1 rows carry whatever that column held.
+  setByUserId String?
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  /// The version sequence is per workspace, and it is the constraint that makes two concurrent
+  /// `setGoal` calls impossible to interleave into a duplicate version rather than merely unlikely.
+  @@unique([workspaceId, version])
 }
 
 model Team {
@@ -402,6 +432,12 @@ model Task {
   /// (`packages/control/src/integration.ts`) is the only other writer, for the human-merge case.
   integratedAt        DateTime?
   createdBy           Actor      @default(human)
+  /// M40 §1: the goal version the PLAN that produced this task derived from -- provenance, not a
+  /// foreign key (a `GoalVersion` is never deleted while its workspace lives, and a task must
+  /// survive a history a cascade could not reach anyway). NULL for a hand-made task: no plan
+  /// derived it from a goal, so it can never be "stale" against one. Backfilled to 1 for every
+  /// task whose workspace already had a goal -- the only version that could have produced it.
+  goalVersion         Int?
   /// Who caused this task to be created (M23 F6), nullable: the planner runs with no user for
   /// tasks created before this column existed, and `createdBy: slave`/`system` tasks have no
   /// human to attribute either. `onDelete: SetNull` -- a task must survive the deletion of the
@@ -649,6 +685,9 @@ enum SupervisorSituationKind {
   review_cap_blocked
   task_failed
   task_blocked_human
+  /// M40 §3. The one kind `observe` never produces: it is the manager's own judgement from a
+  /// re-plan run's delta, recorded by `concludeReplan`, not a predicate over rows.
+  stale_task
   waiting_stale
   unanswerable_question
   ready_unstaffed
@@ -844,6 +883,15 @@ enum EventType {
   task_merge_failed           @map("task.merge_failed")
   workspace_goal_set          @map("workspace.goal_set")
   workspace_plan_created      @map("workspace.plan_created")
+  /// M40 §2: the goal moved on a board that already had tasks, so the tick started a DELTA re-plan
+  /// run (`workspace.replan_started`, whose `version` is the dedup key for "one re-plan per goal
+  /// version"), and that run concluded (`workspace.replanned`, which names what was added, what
+  /// was proposed for cancellation and what cancellation the status rule refused).
+  workspace_replan_started    @map("workspace.replan_started")
+  workspace_replanned         @map("workspace.replanned")
+  /// M40 §4: `cancelTask` took a `backlog`/`ready`/`blocked` task off the board -- an operator's
+  /// own call, or an approved `stale_task` proposal from a re-plan.
+  task_cancelled              @map("task.cancelled")
   workspace_company_assigned  @map("workspace.company_assigned")
   workspace_settings_changed  @map("workspace.settings_changed")
   /// M23 A1: the first event a workspace ever logs, from `createWorkspace`.

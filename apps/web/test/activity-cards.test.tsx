@@ -75,11 +75,21 @@ const PAYLOAD_BY_TYPE: Record<DomainEventType, Record<string, unknown>> = {
   'workspace.goal_set': { goal: 'Ship the checkout flow' },
   'workspace.plan_created': {
     goal: 'Ship the checkout flow',
+    goalVersion: 1,
     tasks: [
       { id: 'TASK-1', title: 'Build the API', role: 'backend' },
       { id: 'TASK-2', title: 'Wire up the form', role: 'frontend' },
     ],
   },
+  'workspace.replan_started': { version: 2, runId: 'r1' },
+  'workspace.replanned': {
+    version: 2,
+    runId: 'r1',
+    added: ['TASK-3'],
+    proposedCancellations: ['TASK-1'],
+    droppedCancellations: [{ taskId: 'TASK-2', status: 'running' }],
+  },
+  'task.cancelled': { reason: 'the re-plan for goal v2 no longer needs it', goalVersion: 1 },
   'workspace.company_assigned': {
     company: 'Acme Corp',
     workers: [

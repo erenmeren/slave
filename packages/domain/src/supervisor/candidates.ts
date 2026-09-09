@@ -144,6 +144,24 @@ export function candidates(situation: Situation, world: SupervisorWorld): readon
       break
     }
 
+    case 'stale_task': {
+      // The one situation the rules did not observe: `concludeReplan` recorded it because a
+      // re-plan run asked for this task to go (spec §3). The offer is the model's own request,
+      // stamped `proposed` by `tierOf` -- never `applied`, whatever the workspace is doing.
+      const task = subjectTask(situation, world)
+      if (task !== undefined) {
+        offers.push(
+          candidate(
+            { kind: 'cancel_task', taskId: task.id, reason: situation.summary },
+            world,
+            situation.kind,
+            `The re-plan for the current goal no longer needs "${task.title}", and it has not started, so cancelling it takes planned work off the board rather than throwing any away.`,
+          ),
+        )
+      }
+      break
+    }
+
     case 'task_failed':
       // Deliberately no verb: nothing in the control layer re-opens a `failed` task, and inventing
       // one here would be the Supervisor doing work rather than deciding (spec section 1). A human

@@ -1,3 +1,4 @@
+import { TERMINAL } from '../task/state.js'
 import { observe } from './observe.js'
 import type { Situation, SituationKind } from './situations.js'
 import type { SupervisorWorld } from './world.js'
@@ -17,7 +18,23 @@ const DAY_MS = 24 * 3_600_000
 export interface SupervisorReport {
   done: { integrated: number; awaitingIntegration: number }
   stuck: readonly Situation[]
-  next: { ready: number; running: number; waiting: number; blocked: number }
+  next: {
+    ready: number
+    running: number
+    waiting: number
+    blocked: number
+    /**
+     * Tasks a PLAN produced that are behind the workspace's current goal version and have not
+     * finished (M40 §4) -- what the web's "stale" badge counts. A hand-made task
+     * (`goalVersion: null`) is never stale: no plan derived it from a goal, so there is no version
+     * for it to be behind.
+     *
+     * A count, not a proposal: being stale is not by itself a reason to cancel anything (that is
+     * `stale_task`, which only a re-plan run's delta can produce). It is how an operator sees that
+     * a goal moved and the board has not caught up yet.
+     */
+    stale: number
+  }
   supervisor: {
     applied: number
     pending: number
@@ -58,6 +75,10 @@ export function summarise(world: SupervisorWorld): SupervisorReport {
     world.tasks.filter((task) => task.status === status).length
 
   const done = world.tasks.filter((task) => task.status === 'done')
+  const stale = world.tasks.filter(
+    (task) =>
+      !TERMINAL.includes(task.status) && task.goalVersion !== null && task.goalVersion < world.goalVersion,
+  )
   const decisions = world.decisions
   // Both halves have to agree before a row counts as mailbox work: the situation is about a
   // question AND the action was an answer. A stored `answer_question` on any other situation kind
@@ -77,6 +98,7 @@ export function summarise(world: SupervisorWorld): SupervisorReport {
       running: countStatus('running'),
       waiting: countStatus('waiting'),
       blocked: countStatus('blocked'),
+      stale: stale.length,
     },
     supervisor: {
       applied: decisions.filter((decision) => decision.status === 'applied').length,

@@ -63,7 +63,8 @@ export function sectionLine(source: SectionSource): SectionLine {
     case 'answer_protocol':
       return { kind: source.kind, detail: 'how to answer a question it was asked', missing: [] }
     case 'task':
-      return { kind: source.kind, detail: `TASK-${short(source.taskId)}`, missing: [] }
+      // M40 t1: the hash of the task text this run saw, beside the task it names.
+      return { kind: source.kind, detail: `TASK-${short(source.taskId)} (sha ${short(source.sha256)})`, missing: [] }
     case 'rejection':
       return { kind: source.kind, detail: `why TASK-${short(source.taskId)} came back`, missing: [] }
     case 'review_diff':
@@ -73,6 +74,17 @@ export function sectionLine(source: SectionSource): SectionLine {
         missing: [],
       }
     case 'planning_goal':
-      return { kind: source.kind, detail: `the workspace goal (sha ${short(source.sha256)})`, missing: [] }
+      return {
+        kind: source.kind,
+        detail: `the workspace goal v${String(source.version)} (sha ${short(source.sha256)})`,
+        missing: [],
+      }
+    // M40 t1, minimal: a re-plan run's own section. Task 4 gives it the diff a human reads.
+    case 'replan':
+      return {
+        kind: source.kind,
+        detail: `the goal changed from v${String(source.previousVersion)} to v${String(source.version)}, over ${plural(source.boardTaskIds.length, 'task')}`,
+        missing: [],
+      }
   }
 }

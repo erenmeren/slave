@@ -67,8 +67,15 @@ function validateStructure(graph: PlanGraph): Result<PlanGraph, string> {
  * Kahn's algorithm: count in-degrees (each task's dependsOn length) over the plan-local keys,
  * then repeatedly remove zero-in-degree nodes. Whatever is left never reached zero in-degree,
  * meaning it sits on (or downstream of) a cycle.
+ *
+ * Exported as of M40 (spec erratum E1) for `delta.ts`, which validates a re-plan's `add` list the
+ * same way but cannot reuse `validateStructure`: a delta's `dependsOn` may also name an EXISTING
+ * task id, which is not a plan-local key. CONTRACT for that second caller -- every `dependsOn`
+ * entry must be one of the passed tasks' own keys, because the in-degree count is
+ * `dependsOn.length` and an entry naming something outside the set is never decremented, so it
+ * reads as a cycle. `delta.ts` projects the plan-local subset of each `dependsOn` before calling.
  */
-function findCycle(tasks: readonly PlanTask[]): readonly string[] | null {
+export function findCycle(tasks: readonly PlanTask[]): readonly string[] | null {
   const inDegree = new Map<string, number>()
   const dependents = new Map<string, string[]>()
   for (const task of tasks) {

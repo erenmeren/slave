@@ -50,6 +50,9 @@ export function actionText(action: Action): string {
       return `re-address question ${action.messageId} to ${action.toSlaveId}`
     case 'mark_task_failed':
       return `mark task ${action.taskId} failed: ${action.reason}`
+    // M40 t1, minimal: Task 4 names the task and the two goal versions instead of the raw id.
+    case 'cancel_task':
+      return `cancel task ${action.taskId}: ${action.reason}`
     case 'escalate_to_human':
       return `escalate to a human: ${action.summary}`
     case 'no_action':

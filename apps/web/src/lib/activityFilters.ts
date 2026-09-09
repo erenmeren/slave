@@ -45,6 +45,9 @@ export const TYPES_BY_KIND = {
     // M35 t5: `unblockTask` moved a `blocked` task back to `rework` -- a task lifecycle event,
     // the same chip `task.rework` sits under.
     'task.unblocked',
+    // M40 t1: a task taken off the board is a task outcome, beside `task.failed` -- it carries a
+    // taskId and it is the end of that task's life.
+    'task.cancelled',
   ],
   // M39 t2: `slave.message_reassigned` sits beside `slave.message_sent` -- a question put in front
   // of a different worker is an intervention in the mailbox, the same chip an operator filters to
@@ -71,6 +74,11 @@ export const TYPES_BY_KIND = {
     'workspace.created',
     'workspace.goal_set',
     'workspace.plan_created',
+    // M40 t1: a goal change on a non-empty board starts a delta re-plan, and both ends of that are
+    // workspace lifecycle for the same reason `workspace.plan_created` is -- neither carries a
+    // taskId, and an operator asking "what changed about this project" is who reads them.
+    'workspace.replan_started',
+    'workspace.replanned',
     'workspace.company_assigned',
     'workspace.settings_changed',
     'org.changed',

@@ -9,9 +9,22 @@ import {
 import { SITUATION_KINDS, type Situation, type SituationKind } from './situations.js'
 import type { SupervisorQuestion, SupervisorSlave, SupervisorTask, SupervisorWorld } from './world.js'
 
-/** Does anyone in this workspace hold `role` as a RUNTIME role (M37 section 5)? */
-function roleHasHolder(world: SupervisorWorld, role: string): boolean {
-  return world.slaves.some((slave) => slave.runtimeRoles.includes(role))
+/**
+ * Does anyone in this workspace hold `role` as a RUNTIME role (M37 section 5)?
+ *
+ * `exceptSlaveId` is the ASKER, on the question path only, and it is M39's residual R2: control's
+ * `holdersOf` has excluded the asker from a question's holders since erratum E8 -- nobody answers
+ * their own question -- while this predicate did not, so a question addressed to a role that only
+ * its own asker holds read as deliverable here and as answerable by NOBODY there. The situation
+ * that names it (`unanswerable_question`) never fired, the panel showed "0 could answer it" beside
+ * no situation at all, and the staffing proposal that would have fixed it was never offered.
+ *
+ * Deliberately a parameter rather than a second function: the three staffing predicates below
+ * (`no_reviewer`, `no_planner`, `ready_unstaffed`) are about who can be DISPATCHED and have no
+ * asker to exclude, so they pass nothing and read exactly as they always did.
+ */
+function roleHasHolder(world: SupervisorWorld, role: string, exceptSlaveId?: string): boolean {
+  return world.slaves.some((slave) => slave.id !== exceptSlaveId && slave.runtimeRoles.includes(role))
 }
 
 /**
@@ -22,7 +35,9 @@ function roleHasHolder(world: SupervisorWorld, role: string): boolean {
  */
 function questionHasRecipient(world: SupervisorWorld, question: SupervisorQuestion): boolean {
   if (question.recipientSlaveId !== null) return world.slaves.some((slave) => slave.id === question.recipientSlaveId)
-  if (question.recipientRole !== null) return roleHasHolder(world, question.recipientRole)
+  // The asker is excluded (M39 residual R2): a role whose only holder is the worker that asked the
+  // question has nobody who can answer it, which is exactly what `unanswerable_question` means.
+  if (question.recipientRole !== null) return roleHasHolder(world, question.recipientRole, question.askerSlaveId)
   return false
 }
 
@@ -75,6 +90,11 @@ function bySubjectId(a: Situation, b: Situation): number {
  * Output order is part of the contract: {@link SITUATION_KINDS} order, then `subjectId` ascending
  * within a kind. Callers (the tick loop's per-tick model-call cap, the report's "stuck" column)
  * depend on the first N situations being the same N every time.
+ *
+ * `stale_task` is NEVER emitted here (M40 §3), and that is not an omission: it is the manager's own
+ * judgement from a re-plan run, recorded by `concludeReplan`, not a predicate over rows. A rule
+ * that fired it from `goalVersion < world.goalVersion` would propose cancelling every task on the
+ * board the moment a goal was edited -- which is the opposite of a delta re-plan.
  */
 export function observe(world: SupervisorWorld): readonly Situation[] {
   const byKind = new Map<SituationKind, Situation[]>()

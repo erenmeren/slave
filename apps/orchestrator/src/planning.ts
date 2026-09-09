@@ -99,6 +99,12 @@ export async function concludePlanning(runId: RunId): Promise<void> {
           createdBy: 'slave',
           createdByUserId: workspace.goalSetByUserId,
           maxAttempts: workspace.maxAttempts,
+          // M40 §1: which requirement produced this task. `workspace.goalVersion` IS the version
+          // of the `goal` this run was given (Task 3 adds the delta re-plan, where the version a
+          // task is stamped with is the one the re-plan derived from rather than simply the
+          // latest). 0 only on a workspace whose goal predates M40's backfill, which cannot
+          // happen: the backfill stamped every workspace that had a goal.
+          goalVersion: workspace.goalVersion,
         },
       })
       idByKey.set(planTask.key, task.id)
@@ -124,7 +130,7 @@ export async function concludePlanning(runId: RunId): Promise<void> {
       workspaceId,
       taskId: task.id,
       actor: 'slave',
-      payload: { title: task.title },
+      payload: { title: task.title, goalVersion: workspace.goalVersion },
     })
   }
 
@@ -136,6 +142,7 @@ export async function concludePlanning(runId: RunId): Promise<void> {
     actor: 'slave',
     payload: {
       goal: workspace.goal,
+      goalVersion: workspace.goalVersion,
       tasks: created.map((task) => ({ id: task.id, title: task.title, role: task.role })),
     },
   })

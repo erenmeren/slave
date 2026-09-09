@@ -379,7 +379,12 @@ export async function buildRunContext(input: BuildRunContextInput): Promise<Buil
         })
   const workspace =
     input.kind === 'planning'
-      ? await prisma.workspace.findUniqueOrThrow({ where: { id: input.workspaceId }, select: { goal: true } })
+      ? await prisma.workspace.findUniqueOrThrow({
+          where: { id: input.workspaceId },
+          // M40 t1: `goalVersion` rides along so the `planning_goal` source can say WHICH
+          // `GoalVersion` row this prompt's goal text is (Task 3 adds the `replan` section itself).
+          select: { goal: true, goalVersion: true },
+        })
       : null
 
   const order = SECTION_ORDER[input.kind]
@@ -454,7 +459,10 @@ export async function buildRunContext(input: BuildRunContextInput): Promise<Buil
     sections.push({
       kind: 'task',
       text: `Task: ${task.title}\n\n${task.description}`,
-      source: { kind: 'task', taskId: task.id },
+      // M40 §1, "the hash is the hook": the hash of the task text this run actually saw --
+      // `title + '\n' + description`, which is NOT the rendered section text (that carries the
+      // `Task: ` label and a blank line), so the same task hashes the same from any builder.
+      source: { kind: 'task', taskId: task.id, sha256: sha256(`${task.title}\n${task.description}`) },
     })
     // The whole point of spec §8's loop: a rework is supposed to act on why the last attempt was
     // rejected, and one that arrives without it is just a retry. Never on a review run, whose
@@ -482,7 +490,7 @@ export async function buildRunContext(input: BuildRunContextInput): Promise<Buil
     sections.push({
       kind: 'planning_goal',
       text: goal === '' ? '' : `GOAL: ${goal}`,
-      source: { kind: 'planning_goal', sha256: sha256(goal) },
+      source: { kind: 'planning_goal', sha256: sha256(goal), version: workspace.goalVersion },
     })
   }
 

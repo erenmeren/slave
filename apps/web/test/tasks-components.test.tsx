@@ -286,7 +286,8 @@ describe('TaskDetailPanel — what a run saw (M37 §6)', () => {
         no_worktree: false,
       },
       { kind: 'inbox', messageIds: ['m-1', 'm-2'] },
-      { kind: 'task', taskId: '3f9a21c8-0000-4000-8000-000000000000' },
+      // M40 t1: the `task` source carries the sha256 of the task text the run saw.
+      { kind: 'task', taskId: '3f9a21c8-0000-4000-8000-000000000000', sha256: 'd'.repeat(64) },
     ],
   }
 

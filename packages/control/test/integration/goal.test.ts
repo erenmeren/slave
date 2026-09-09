@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { prisma } from '@slave-of-ai/db/client'
+import { goalSha256 } from '@slave-of-ai/domain'
 import { setGoal } from '../../src/goal.js'
 
 // A real directory, not a placeholder (M23 G3): runFilePaths' statSync preflight refuses a repo path that does not exist, and a reboot clears /tmp -- the trap emergency.test.ts fell into at ce48adc.
@@ -50,7 +51,13 @@ describe('setGoal', () => {
       where: { workspaceId: workspace.id, type: 'workspace_goal_set' },
     })
     expect(events).toHaveLength(1)
-    expect(events[0]?.payload).toEqual({ goal: 'Ship the checkout redesign' })
+    // M40 t1: the payload gained the goal's content hash -- the same one `goalSha256` computes and
+    // the migration's backfill wrote into `GoalVersion.sha256`. `version` is deliberately not here
+    // yet: this verb becomes transactional and versioned in M40 Task 2.
+    expect(events[0]?.payload).toEqual({
+      goal: 'Ship the checkout redesign',
+      sha256: goalSha256('Ship the checkout redesign'),
+    })
     expect(events[0]?.actor).toBe('human')
   })
 

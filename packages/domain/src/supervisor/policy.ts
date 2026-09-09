@@ -33,8 +33,8 @@ const ROUTINELY_UNBLOCKABLE: SituationKind = 'review_cap_blocked'
  * - Otherwise: routine actions (`unblock_task` on a `review_cap_blocked` task -- attempts remain,
  *   that is why `candidates` offers `raise_max_attempts` instead when they do not -- and a
  *   `reassign_question` whose target {@link mayAnswer} the question) apply immediately. Everything
- *   that raises a cap, rewrites a roster, declares work dead, puts a model's words in front of a
- *   worker, or reverses a person's own park is a proposal.
+ *   that raises a cap, rewrites a roster, declares work dead, takes planned work off the board,
+ *   puts a model's words in front of a worker, or reverses a person's own park is a proposal.
  * - `answer_question` is ALWAYS `proposed` here, and that is deliberately not the last word: the
  *   catalogue's tier is the safe default a rules-only pass would store, while the final tier of an
  *   answer decision comes from {@link answerTier} alone, once the draft exists and its sources have
@@ -55,6 +55,10 @@ export function tierOf(action: Action, world: SupervisorWorld, situationKind: Si
     case 'raise_max_attempts':
     case 'set_runtime_roles':
     case 'mark_task_failed':
+    // `cancel_task` is `proposed` on BOTH branches of the halt check above and would be even if
+    // the halt short-circuit were removed (ruling R1): a cancellation is never automatic, whatever
+    // the workspace is doing.
+    case 'cancel_task':
       return 'proposed'
   }
 }

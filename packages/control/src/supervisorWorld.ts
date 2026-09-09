@@ -91,6 +91,9 @@ interface TaskRow {
   readonly createdAt: Date
   readonly dependents: number
   readonly dependenciesDone: boolean
+  /** M40 §1: the goal version the plan that produced this task derived from; null for a hand-made
+   *  one. Read straight through -- the domain's `summarise` compares it with `world.goalVersion`. */
+  readonly goalVersion: number | null
 }
 
 /**
@@ -118,6 +121,7 @@ async function loadTaskRows(tx: Prisma.TransactionClient, workspaceId: string): 
       t."requiredRole",
       t."integratedAt",
       t."createdAt",
+      t."goalVersion",
       (SELECT COUNT(*)::int FROM "TaskDependency" td WHERE td."dependsOnTaskId" = t.id) AS dependents,
       NOT EXISTS (
         SELECT 1
@@ -390,7 +394,7 @@ export async function loadSupervisorWorld(
         where: { id: workspaceId },
         // The halt, the limits and the spend come from `workspaceStats` below (erratum E7), so
         // this read is narrowed to what only the Supervisor cares about.
-        select: { id: true, goal: true, supervisorEnabled: true, supervisorProfile: true },
+        select: { id: true, goal: true, goalVersion: true, supervisorEnabled: true, supervisorProfile: true },
       })
 
       const taskRows = await loadTaskRows(tx, workspaceId)
@@ -487,6 +491,7 @@ export async function loadSupervisorWorld(
           dependents: row.dependents,
           dependenciesDone: row.dependenciesDone,
           latestGuardrail: guardrails.get(row.id) ?? null,
+          goalVersion: row.goalVersion,
         })
       }
 
@@ -502,6 +507,7 @@ export async function loadSupervisorWorld(
         workspaceId: workspace.id,
         now: now.getTime(),
         goal: workspace.goal,
+        goalVersion: workspace.goalVersion,
         halted: haltOf(snapshot),
         // The same comparison `evaluateGuardrails` makes, on the same total: an UNBUDGETED
         // workspace (`budgetUsd` null) is never exhausted, however much it has spent. Kept as its

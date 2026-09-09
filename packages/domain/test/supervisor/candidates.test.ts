@@ -3,6 +3,7 @@ import { candidateSchema, type Action, type Candidate } from '../../src/supervis
 import { candidates } from '../../src/supervisor/candidates.js'
 import { WAITING_STALE_MS } from '../../src/supervisor/constants.js'
 import { observe } from '../../src/supervisor/observe.js'
+import type { Situation } from '../../src/supervisor/situations.js'
 import type { SupervisorWorld } from '../../src/supervisor/world.js'
 import { NOW, question, slave, task, world } from './fixtures.js'
 
@@ -341,5 +342,68 @@ describe('candidates -- the escalate-only situations', () => {
     const halted = world({ halted: { reason: 'budget_exhausted' } })
     const escalation = offered(halted)[0]?.action
     expect(escalation?.kind === 'escalate_to_human' && escalation.summary).toContain('budget_exhausted')
+  })
+})
+
+/**
+ * M40 §3. `stale_task` is the one situation `observe` never produces -- `concludeReplan` records it
+ * from a re-plan run's delta -- so every case here builds the {@link Situation} by hand, the way
+ * the orchestrator does, rather than through {@link offered}.
+ */
+describe('candidates -- stale_task', () => {
+  function staleTask(taskId = 't1'): Situation {
+    return {
+      kind: 'stale_task',
+      subjectId: taskId,
+      summary: `The re-plan for goal v2 no longer needs "Add the thing".`,
+      facts: { goalVersion: 1, currentVersion: 2, reason: 'replan_cancel' },
+    }
+  }
+
+  it('offers cancel_task first, then the two last resorts', () => {
+    const w = world({ goalVersion: 2, tasks: [task({ id: 't1', status: 'backlog', goalVersion: 1 })] })
+    const cands = candidates(staleTask(), w)
+    expect(kinds(cands)).toEqual(['cancel_task', 'escalate_to_human', 'no_action'])
+    expect(cands[0]?.action).toEqual({
+      kind: 'cancel_task',
+      taskId: 't1',
+      reason: 'The re-plan for goal v2 no longer needs "Add the thing".',
+    })
+    expect(cands[0]?.why).toContain('Add the thing')
+  })
+
+  it('stamps cancel_task proposed -- never applied, whatever the workspace is doing (ruling R1)', () => {
+    const running = world({ goalVersion: 2, tasks: [task({ id: 't1', status: 'backlog', goalVersion: 1 })] })
+    expect(candidates(staleTask(), running)[0]?.tier).toBe('proposed')
+
+    const halted = world({
+      goalVersion: 2,
+      halted: { reason: 'budget_exhausted' },
+      tasks: [task({ id: 't1', status: 'backlog', goalVersion: 1 })],
+    })
+    expect(candidates(staleTask(), halted)[0]?.tier).toBe('proposed')
+  })
+
+  it('offers nothing but the last resorts when the world no longer holds the task', () => {
+    expect(kinds(candidates(staleTask('gone'), world({ goalVersion: 2 })))).toEqual([
+      'escalate_to_human',
+      'no_action',
+    ])
+  })
+
+  it('produces candidates that validate against candidateSchema', () => {
+    const w = world({ goalVersion: 2, tasks: [task({ id: 't1', status: 'backlog', goalVersion: 1 })] })
+    for (const candidate of candidates(staleTask(), w)) {
+      expect(candidateSchema.safeParse(candidate).success).toBe(true)
+    }
+  })
+
+  it('is never produced by observe, however far behind the board is', () => {
+    const w = world({
+      goalVersion: 5,
+      tasks: [task({ id: 't1', status: 'backlog', goalVersion: 1 }), task({ id: 't2', status: 'ready', goalVersion: 1 })],
+      slaves: [slave({ runtimeRoles: ['backend'] })],
+    })
+    expect(observe(w).map((situation) => situation.kind)).not.toContain('stale_task')
   })
 })
