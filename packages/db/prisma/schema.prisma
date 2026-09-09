@@ -606,8 +606,16 @@ model SupervisorDecision {
   decidedBy        SupervisorDecider
   /// What the decision call cost. null is UNMEASURED, the same rule as `SlaveRun.costUsd` -- an
   /// unmeasured call is charged at `SUPERVISOR_PER_CALL_CAP_USD` when spend is summed, never at 0.
-  /// Always null for a `rules` decision, which makes no call at all.
+  /// Always null when `modelCalled` is false, which is a decision that made no call at all.
   modelCostUsd     Float?
+  /// Whether a model call was actually MADE for this decision (spec erratum E6).
+  ///
+  /// Not derivable from `decidedBy`: a call that came back unusable -- failed, an isolation breach,
+  /// or an answer that would not parse -- falls back to the rules, so the row honestly says
+  /// `decidedBy: rules` while the money was still spent. Without this column such a call with a
+  /// null cost was indistinguishable from a decision that never called anybody, and so was never
+  /// charged. Unmeasured, in `workspaceSpend`, is `modelCalled && modelCostUsd == null`.
+  modelCalled      Boolean                  @default(false)
   /// The `refusalText` of the verb that refused an applied action (status `failed`).
   failureReason    String?
   createdAt        DateTime                 @default(now())

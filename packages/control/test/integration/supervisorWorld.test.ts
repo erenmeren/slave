@@ -257,6 +257,7 @@ describe('loadSupervisorWorld', () => {
         tier: 'noop',
         status: 'applied',
         decidedBy: 'model',
+        modelCalled: true,
         modelCostUsd: 2.5,
       },
     })
@@ -303,18 +304,30 @@ describe('workspaceSpend', () => {
       tier: 'noop' as const,
       status: 'applied' as const,
     }
-    await prisma.supervisorDecision.create({ data: { ...decision, decidedBy: 'model', modelCostUsd: 0.25 } })
+    await prisma.supervisorDecision.create({
+      data: { ...decision, decidedBy: 'model', modelCalled: true, modelCostUsd: 0.25 },
+    })
     // A model call whose cost never came back: charged at the cap, never at zero.
-    await prisma.supervisorDecision.create({ data: { ...decision, decidedBy: 'model', modelCostUsd: null } })
-    // A rules decision makes no call at all and must add nothing.
-    await prisma.supervisorDecision.create({ data: { ...decision, decidedBy: 'rules', modelCostUsd: null } })
+    await prisma.supervisorDecision.create({
+      data: { ...decision, decidedBy: 'model', modelCalled: true, modelCostUsd: null },
+    })
+    // Erratum E6, and the reason `modelCalled` exists at all: the call was MADE, came back
+    // unusable, and the rules chose -- so the row says `rules` while the money was still spent. It
+    // is charged exactly like the model row above.
+    await prisma.supervisorDecision.create({
+      data: { ...decision, decidedBy: 'rules', modelCalled: true, modelCostUsd: null },
+    })
+    // A rules decision that called nobody adds nothing.
+    await prisma.supervisorDecision.create({
+      data: { ...decision, decidedBy: 'rules', modelCalled: false, modelCostUsd: null },
+    })
 
     const spend = await workspaceSpend(fixture.workspaceId)
     expect(spend).toEqual({
       runsMeasuredUsd: 1.5,
       supervisorMeasuredUsd: 0.25,
-      supervisorUnmeasuredCalls: 1,
-      spentUsd: 1.5 + 0.25 + SUPERVISOR_PER_CALL_CAP_USD,
+      supervisorUnmeasuredCalls: 2,
+      spentUsd: 1.5 + 0.25 + 2 * SUPERVISOR_PER_CALL_CAP_USD,
     })
   })
 

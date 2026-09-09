@@ -557,6 +557,44 @@ describe('tick', () => {
       expect(decision.modelCostUsd).toBe(0.02)
     })
 
+    it('supervises a halted workspace too, by the rules, and escalates the halt itself', async (): Promise<void> => {
+      // Spec §5 as clarified in fix round 1: the halt branch returns early, and the Supervisor
+      // still runs on it -- a halted workspace is the one an operator most needs a decision about.
+      await prisma.workspace.update({
+        where: { id: fixture.workspaceId },
+        data: { haltedReason: 'consecutive_failures', haltedAt: new Date() },
+      })
+      const prompts: string[] = []
+      const supervisorDecider: ModelDecider = (input) => {
+        prompts.push(input.prompt)
+        return Promise.resolve({
+          kind: 'answer',
+          text: '{"candidateIndex": 0, "rationale": "never asked"}',
+          costUsd: 1,
+          tokens: null,
+          numTurns: 1,
+        })
+      }
+
+      const report = await tick({ ...deps, supervisorDecider, supervisorModel: 'claude-sonnet-5' })
+
+      expect(report.halted).not.toBeNull()
+      expect(report.supervisor).toMatchObject({ decided: 1, proposed: 1, applied: 0, modelCalls: 0, rulesOnly: true })
+      // Not one model call: spending money to think about a workspace a guardrail has already
+      // stopped is exactly the wrong move, and the gate is what says so.
+      expect(prompts).toEqual([])
+      const rows = await prisma.supervisorDecision.findMany({ where: { workspaceId: fixture.workspaceId } })
+      expect(rows).toHaveLength(1)
+      expect(rows[0]).toMatchObject({
+        situationKind: 'workspace_halted',
+        tier: 'escalated',
+        status: 'pending',
+        decidedBy: 'rules',
+        modelCalled: false,
+      })
+      expect(rows[0]?.action).toMatchObject({ kind: 'escalate_to_human' })
+    })
+
     it('reports a supervisor that decided nothing on the paths that never reach it', async (): Promise<void> => {
       await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { archivedAt: new Date() } })
 
@@ -905,17 +943,6 @@ describe('tick', () => {
   })
 
   it('does not turn the leftovers it refused into leftovers it will adopt', async (): Promise<void> => {
-    // The Supervisor is switched OFF for this one workspace, and the reason is the finding this
-    // test would otherwise hide (M38 t3): the refusal parks the task `blocked` on purpose -- "an
-    // operator has to look at this" -- and `task_blocked_human`'s catalogue offers `unblock_task`
-    // as a ROUTINE action while attempts remain, so the Supervisor moves it to `rework` at the end
-    // of the very tick that refused it, and the next tick adopts the tree this one called
-    // wreckage. That is exactly the "hold for one tick and then invert itself" failure
-    // `failStartedRun`'s own comment describes, reintroduced through the Supervisor rather than
-    // through the status. It is the specified M38 behaviour (spec §3's tier table), not a bug in
-    // this file, so the property under test is measured with the Supervisor out of the way and the
-    // interaction is reported for M38's own follow-up.
-    await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { supervisorEnabled: false } })
     await tick(deps)
     await drainPumps()
     await prisma.slaveRun.deleteMany({})
@@ -932,6 +959,13 @@ describe('tick', () => {
     const report = await tick(deps)
 
     expect(report.started).toEqual([])
+    // And the Supervisor -- running at the end of every one of those ticks -- did not undo the
+    // park either (erratum E5). `task_blocked_human` is a person's park, so its `unblock_task` is
+    // a PROPOSAL: the row waits for a human and the task stays `blocked`, where the guard put it.
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })).status).toBe('blocked')
+    const proposals = await prisma.supervisorDecision.findMany({ where: { workspaceId: fixture.workspaceId } })
+    expect(proposals.length).toBeGreaterThan(0)
+    expect(proposals.every((row) => row.status === 'pending')).toBe(true)
   })
 
   it('re-runs the setup commands when it adopts a worktree', async (): Promise<void> => {

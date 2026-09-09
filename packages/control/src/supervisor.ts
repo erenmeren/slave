@@ -47,9 +47,19 @@ export interface RecordDecisionInput {
   readonly chosenIndex: number
   readonly rationale: string
   readonly decidedBy: Decider
-  /** `null` is UNMEASURED (charged at `SUPERVISOR_PER_CALL_CAP_USD` when spend is summed), and is
-   *  also what a `rules` decision always carries -- it makes no call at all. */
+  /** `null` is UNMEASURED: charged at `SUPERVISOR_PER_CALL_CAP_USD` when spend is summed, but only
+   *  when {@link RecordDecisionInput.modelCalled} says a call was actually made. */
   readonly modelCostUsd: number | null
+  /**
+   * Whether a model call was actually made for this decision (spec erratum E6).
+   *
+   * Optional, and it defaults to `decidedBy === 'model'` -- a model decision cannot have happened
+   * without a call. The reason it is a separate input at all is the case that default gets WRONG:
+   * a call that came back unusable (failed, an isolation breach, an answer that would not parse)
+   * falls back to the rules, so the row honestly reads `decidedBy: 'rules'` while the money was
+   * still spent. The orchestrator passes it explicitly for exactly that case.
+   */
+  readonly modelCalled?: boolean
   /** The tick's clock. Injected so the cooldown window and `expiresAt` are computed against the
    *  same instant the caller observed the world at, rather than drifting a few milliseconds. */
   readonly now?: Date
@@ -160,6 +170,7 @@ export async function recordDecision(
         status,
         decidedBy: input.decidedBy,
         modelCostUsd: input.modelCostUsd,
+        modelCalled: input.modelCalled ?? input.decidedBy === 'model',
         // Written explicitly rather than left to the column default: `createdAt` is the cooldown
         // ANCHOR for a row that never resolves, so it has to be the clock the caller decided on.
         createdAt: now,
@@ -469,6 +480,10 @@ export interface DecisionView {
   readonly status: DecisionStatus
   readonly decidedBy: Decider
   readonly modelCostUsd: number | null
+  /** Whether a model call was made -- true even on a rules row whose call came back unusable
+   *  (erratum E6). `modelCalled && modelCostUsd === null` is what `workspaceSpend` charges at the
+   *  per-call cap. */
+  readonly modelCalled: boolean
   readonly failureReason: string | null
   readonly createdAt: string
   readonly expiresAt: string | null
@@ -500,6 +515,7 @@ export async function listDecisions(
     status: row.status,
     decidedBy: row.decidedBy,
     modelCostUsd: row.modelCostUsd,
+    modelCalled: row.modelCalled,
     failureReason: row.failureReason,
     createdAt: row.createdAt.toISOString(),
     expiresAt: row.expiresAt?.toISOString() ?? null,

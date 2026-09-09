@@ -1,27 +1,47 @@
 import type { Action, Candidate, Tier } from './actions.js'
+import type { SituationKind } from './situations.js'
 import type { SupervisorWorld } from './world.js'
 
 /**
- * What would happen if this action were chosen (M38 section 3, "tiers are fixed in code"). Pure
- * and total: the model never sees this function, and a workspace setting can only turn the
- * Supervisor OFF, never widen what it may do by itself.
+ * The one situation an `unblock_task` may be carried out ROUTINELY on (spec erratum E5).
+ *
+ * `blocked` has meant "a human must look at this" since M35, and two of the four entrances to it
+ * are deliberate operator parks: `cancel` ("stops a run for good") and `failStartedRun`'s
+ * leftover-worktree refusal, which parks `blocked` precisely so the next tick cannot adopt the
+ * tree it just called wreckage. A routine unblock undid BOTH one tick later -- and since a cancel
+ * costs no attempt, repeated cancels would never reach the cap either. The review cap is the one
+ * park the Supervisor knows a safe exit from: the task was parked by a policy counter, not by a
+ * person, and sending it back to rework is what the counter was for.
+ */
+const ROUTINELY_UNBLOCKABLE: SituationKind = 'review_cap_blocked'
+
+/**
+ * What would happen if this action were chosen for this SITUATION (M38 section 3, "tiers are fixed
+ * in code"). Pure and total: the model never sees this function, and a workspace setting can only
+ * turn the Supervisor OFF, never widen what it may do by itself.
+ *
+ * The situation kind is an argument, not a convenience: erratum E5 makes the tier of one action
+ * (`unblock_task`) depend on WHY the task is stuck, and a tier derived from the action alone would
+ * have to be either wrong for one of the two kinds or computed somewhere else -- which is exactly
+ * how a stored tier and `tierOf` come to disagree about a row a human is being asked to approve.
  *
  * - `escalate_to_human` is always `escalated` and `no_action` always `noop` -- neither touches the
  *   world, so a halt cannot make either riskier than it already is.
  * - While the workspace is HALTED, every other action is `proposed`. A halt means a guardrail has
  *   already decided this workspace should not be moving; the Supervisor may still say what it
  *   would do, but a human has to be the one who does it.
- * - Otherwise: routine actions (`unblock_task` -- attempts remain, that is why `candidates` offers
- *   `raise_max_attempts` instead when they do not -- and `nudge_answer`, which writes no state at
- *   all) apply immediately. Everything that raises a cap, rewrites a roster or declares work dead
- *   is a proposal.
+ * - Otherwise: routine actions (`unblock_task` on a `review_cap_blocked` task -- attempts remain,
+ *   that is why `candidates` offers `raise_max_attempts` instead when they do not -- and
+ *   `nudge_answer`, which writes no state at all) apply immediately. Everything that raises a cap,
+ *   rewrites a roster, declares work dead, or reverses a person's own park is a proposal.
  */
-export function tierOf(action: Action, world: SupervisorWorld): Tier {
+export function tierOf(action: Action, world: SupervisorWorld, situationKind: SituationKind): Tier {
   if (action.kind === 'escalate_to_human') return 'escalated'
   if (action.kind === 'no_action') return 'noop'
   if (world.halted !== null) return 'proposed'
   switch (action.kind) {
     case 'unblock_task':
+      return situationKind === ROUTINELY_UNBLOCKABLE ? 'applied' : 'proposed'
     case 'nudge_answer':
       return 'applied'
     case 'raise_max_attempts':

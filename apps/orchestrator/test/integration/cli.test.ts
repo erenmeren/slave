@@ -889,14 +889,6 @@ describe('the orchestrator CLI', () => {
   }, 60_000)
 
   it('does not hand a cancelled task straight back to a new slave', async (): Promise<void> => {
-    // The Supervisor is switched OFF for this workspace, and the reason is the finding it would
-    // otherwise hide (M38 t3): `cancel` parks the task `blocked` because a human has to look at
-    // it, and M38's `task_blocked_human` catalogue offers `unblock_task` as a ROUTINE action while
-    // attempts remain -- so the Supervisor moves it to `rework` at the end of the next tick and
-    // the tick after that hands it to a fresh slave, which is precisely what this test forbids.
-    // That is the specified M38 behaviour (spec §3's tier table), not a bug in the CLI, so the
-    // property is measured with the Supervisor out of the way and the collision is reported.
-    await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { supervisorEnabled: false } })
     await runCli(['tick'])
     const run = await prisma.slaveRun.findFirstOrThrow()
     await prisma.slaveRun.update({
@@ -916,6 +908,13 @@ describe('the orchestrator CLI', () => {
     // cancelling does not count an attempt, repeated cancels never reach the cap.
     expect(JSON.parse(report.stdout)).toMatchObject({ started: [] })
     expect((await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })).status).toBe('blocked')
+    // The Supervisor runs at the end of that same tick and does not undo the park (erratum E5):
+    // `cancel` is a person's decision, so `task_blocked_human`'s unblock is a PROPOSAL waiting on a
+    // human, not an action. Without E5 the task was back in `rework` here and the next tick handed
+    // it to a fresh slave -- and since cancelling costs no attempt, that could repeat forever.
+    const decisions = await prisma.supervisorDecision.findMany({ where: { workspaceId: fixture.workspaceId } })
+    expect(decisions.length).toBeGreaterThan(0)
+    expect(decisions.every((row) => row.status === 'pending' && row.tier !== 'applied')).toBe(true)
   }, 60_000)
 
   it('defaults to help rather than to doing something', async (): Promise<void> => {

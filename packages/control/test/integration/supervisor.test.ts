@@ -101,6 +101,41 @@ describe('recordDecision', () => {
     f = await seed()
   })
 
+  /**
+   * Erratum E6. The three states of `modelCalled`, and the middle one is why the column exists: a
+   * call was made, came back unusable, and the RULES chose -- the row is honest about who decided
+   * and honest about the money having been spent, which `decidedBy` alone cannot be.
+   */
+  it('records whether a model call was actually made, independently of who decided', async () => {
+    const record = async (decidedBy: 'model' | 'rules', modelCalled: boolean | undefined, subjectId: string) =>
+      recordDecision({
+        workspaceId: f.workspaceId,
+        situation: situationFor(subjectId),
+        candidates: [cand({ kind: 'no_action' }, 'noop')],
+        chosenIndex: 0,
+        rationale: 'nothing to do',
+        decidedBy,
+        modelCostUsd: null,
+        ...(modelCalled === undefined ? {} : { modelCalled }),
+      })
+
+    const fellBack = await record('rules', true, 'task-fell-back')
+    const neverCalled = await record('rules', undefined, 'task-never-called')
+    const model = await record('model', undefined, 'task-model')
+    for (const result of [fellBack, neverCalled, model]) expect(result.ok).toBe(true)
+    if (!fellBack.ok || !neverCalled.ok || !model.ok) return
+
+    const rowOf = async (id: string): Promise<boolean> =>
+      (await prisma.supervisorDecision.findUniqueOrThrow({ where: { id } })).modelCalled
+    expect(await rowOf(fellBack.value.id)).toBe(true)
+    expect(await rowOf(neverCalled.value.id)).toBe(false)
+    expect(await rowOf(model.value.id)).toBe(true)
+
+    const views = await listDecisions(f.workspaceId)
+    expect(views.find((view) => view.id === fellBack.value.id)).toMatchObject({ decidedBy: 'rules', modelCalled: true })
+    expect(views.find((view) => view.id === neverCalled.value.id)).toMatchObject({ modelCalled: false })
+  })
+
   it('records an applied-tier decision as applied with no expiry, and emits only supervisor.decided', async () => {
     const result = await recordDecision({
       workspaceId: f.workspaceId,
@@ -122,6 +157,9 @@ describe('recordDecision', () => {
     expect(row.resolvedAt).toBeNull()
     expect(row.decidedBy).toBe('model')
     expect(row.modelCostUsd).toBe(0.42)
+    // Erratum E6: not passed, and true anyway -- a model decision cannot have happened without a
+    // call, so the input only has to be given for the case that default gets wrong.
+    expect(row.modelCalled).toBe(true)
     expect(row.situationKind).toBe('review_cap_blocked')
     expect(row.subjectId).toBe(f.taskId)
 

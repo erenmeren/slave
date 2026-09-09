@@ -16,8 +16,8 @@ export interface WorkspaceSpend {
   readonly runsMeasuredUsd: number
   /** Σ `SupervisorDecision.modelCostUsd`. */
   readonly supervisorMeasuredUsd: number
-  /** Supervisor model calls whose cost never came back -- see {@link workspaceSpend} for the rule
-   *  that decides which rows count. Each is charged at `SUPERVISOR_PER_CALL_CAP_USD`. */
+  /** Supervisor model calls that were MADE and whose cost never came back (`modelCalled &&
+   *  modelCostUsd === null`). Each is charged at `SUPERVISOR_PER_CALL_CAP_USD`. */
   readonly supervisorUnmeasuredCalls: number
 }
 
@@ -31,17 +31,18 @@ export interface WorkspaceSpend {
  * same number the guardrail acts on. Two spellings of it would drift, and the drift would be a
  * Supervisor that keeps spending after the guardrail has halted the workspace.
  *
- * UNMEASURED CALLS. A decision row is charged at the cap when `decidedBy: 'model'` and
- * `modelCostUsd` is null: the call was made and its cost never came back, which is exactly the
- * `SlaveRun.costUsd` rule one table over. A `rules` row is not charged -- it makes no call at all.
- * The one case this under-counts is a model call that came back unusable (failed, breached, or an
- * answer that would not parse) WITH no cost: the row is honestly recorded as `decidedBy: 'rules'`,
- * because the rules are what chose, and nothing on the row distinguishes it from a decision that
- * never called anybody. Correcting that would need a column (`modelCalls`, or a nullable
- * `modelAttemptedAt`), which M38 deliberately does not add; the exposure is bounded by
- * `SUPERVISOR_MAX_MODEL_DECISIONS_PER_TICK` calls per tick and only bites when the provider both
- * fails AND reports no cost, which is the same case `decideWithModel` returns `costUsd: null` for
- * on a timeout.
+ * UNMEASURED CALLS (spec erratum E6). A decision row is charged at the cap when `modelCalled` is
+ * true and `modelCostUsd` is null: the call was made and its cost never came back, which is
+ * exactly the `SlaveRun.costUsd` rule one table over. The predicate is `modelCalled`, NOT
+ * `decidedBy: 'model'`, because those differ in the case that matters -- a call that came back
+ * unusable (failed, an isolation breach, an unparseable answer) falls back to the rules, so the
+ * row honestly says `decidedBy: 'rules'` while the money was still spent. That case is exactly
+ * when a provider reports no cost either (`decideWithModel` returns `costUsd: null` on a timeout),
+ * so keying the charge on `decidedBy` would have missed precisely the calls it needed to catch.
+ *
+ * ONE `groupBy`, not an aggregate plus a count: this runs inside `loadWorld`'s transaction on the
+ * tick's hot path, and `_count._all` minus `_count.modelCostUsd` (Prisma counts NON-NULL values
+ * for a named field) is the unmeasured tally without a second round trip.
  *
  * `client` exists so the caller can run this INSIDE its own snapshot: `loadWorld` reads the world
  * in one `RepeatableRead` transaction, and a spend figure fetched on the shared client afterwards
@@ -57,18 +58,21 @@ export async function workspaceSpend(
     where: { slave: { team: { workspaceId } } },
     _sum: { costUsd: true },
   })
-  const supervisor = await client.supervisorDecision.aggregate({
+  const supervisor = await client.supervisorDecision.groupBy({
+    by: ['modelCalled'],
     where: { workspaceId },
     _sum: { modelCostUsd: true },
-  })
-  const supervisorUnmeasuredCalls = await client.supervisorDecision.count({
-    where: { workspaceId, decidedBy: 'model', modelCostUsd: null },
+    _count: { _all: true, modelCostUsd: true },
   })
 
   // `?? 0` is the empty-aggregate case and only that: `_sum` returns null when NO ROWS matched,
   // never because some row's value was null (those are skipped, not folded in as zeros).
   const runsMeasuredUsd = runs._sum.costUsd ?? 0
-  const supervisorMeasuredUsd = supervisor._sum.modelCostUsd ?? 0
+  const called = supervisor.find((group) => group.modelCalled)
+  // Summed across BOTH groups. A row with `modelCalled: false` should never carry a cost, and if
+  // one somehow does, money that was spent belongs in the total rather than filtered out of it.
+  const supervisorMeasuredUsd = supervisor.reduce((total, group) => total + (group._sum.modelCostUsd ?? 0), 0)
+  const supervisorUnmeasuredCalls = called === undefined ? 0 : called._count._all - called._count.modelCostUsd
   return {
     runsMeasuredUsd,
     supervisorMeasuredUsd,

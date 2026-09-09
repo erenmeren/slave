@@ -101,34 +101,66 @@ async function loadTaskRows(tx: Prisma.TransactionClient, workspaceId: string): 
  * `LIKE 'task.%'` on the DB VALUE, not the Prisma enum member: the column stores the mapped string
  * (`task.created`, `task.rework`, …), and matching the family by prefix is what keeps a task status
  * event added next milestone from silently falling out of this without anybody noticing.
+ *
+ * Keyed on the task ids the caller ALREADY HOLDS rather than on `taskId IS NOT NULL` (fix round 1):
+ * the log's index is `(workspaceId, taskId, seq)`, so `= ANY(...)` gives Postgres one bounded index
+ * scan per task instead of a scan over every event the workspace has ever written. Same rows, same
+ * semantics -- the caller only ever looks up ids it passed in.
  */
 async function loadStatusSince(
   tx: Prisma.TransactionClient,
   workspaceId: string,
+  taskIds: readonly string[],
 ): Promise<ReadonlyMap<string, Date>> {
   const rows = await tx.$queryRaw<{ readonly taskId: string; readonly ts: Date }[]>`
     SELECT DISTINCT ON (e."taskId") e."taskId" AS "taskId", e.ts AS ts
     FROM "ExecutionEvent" e
-    WHERE e."workspaceId" = ${workspaceId} AND e."taskId" IS NOT NULL AND e.type::text LIKE 'task.%'
+    WHERE e."workspaceId" = ${workspaceId}
+      AND e."taskId" = ANY(${[...taskIds]}::text[])
+      AND e.type::text LIKE 'task.%'
     ORDER BY e."taskId", e.seq DESC
   `
   return new Map(rows.map((row) => [row.taskId, row.ts]))
 }
 
-/** The newest `guardrail.tripped` per task -- what tells `review_cap_blocked` (a park the
- *  Supervisor knows a routine exit from) from `task_blocked_human` (one it must not guess at). A
- *  workspace-level guardrail carries no `taskId` and is skipped by the `IS NOT NULL`. */
+/** The newest `guardrail.tripped` per task -- what tells `review_cap_blocked` (the one park the
+ *  Supervisor may leave routinely, erratum E5) from `task_blocked_human` (a person's park, which it
+ *  may only propose leaving). Bounded to the caller's task ids for the reason
+ *  {@link loadStatusSince} gives; a workspace-level guardrail carries no `taskId` and matches none
+ *  of them. */
 async function loadLatestGuardrails(
   tx: Prisma.TransactionClient,
   workspaceId: string,
+  taskIds: readonly string[],
 ): Promise<ReadonlyMap<string, string>> {
   const rows = await tx.$queryRaw<{ readonly taskId: string; readonly guardrail: string | null }[]>`
     SELECT DISTINCT ON (e."taskId") e."taskId" AS "taskId", e.payload->>'guardrail' AS guardrail
     FROM "ExecutionEvent" e
-    WHERE e."workspaceId" = ${workspaceId} AND e."taskId" IS NOT NULL AND e.type::text = 'guardrail.tripped'
+    WHERE e."workspaceId" = ${workspaceId}
+      AND e."taskId" = ANY(${[...taskIds]}::text[])
+      AND e.type::text = 'guardrail.tripped'
     ORDER BY e."taskId", e.seq DESC
   `
   return new Map(rows.flatMap((row) => (row.guardrail === null ? [] : [[row.taskId, row.guardrail] as const])))
+}
+
+/**
+ * Just the two Supervisor settings, in one indexed read (fix round 1).
+ *
+ * `null` means there is no such project. The caller that matters is `supervise()`, which asks this
+ * BEFORE {@link loadSupervisorWorld}: a switched-off Supervisor must not pay for a world it will
+ * never look at, and on a daemon that is a dozen queries a second, forever, for a project whose
+ * operator has explicitly said "report only". `loadSupervisorWorld` reads the same two columns off
+ * the same row it already fetches, so nothing is read twice on the path that does proceed.
+ */
+export async function supervisorSettings(
+  workspaceId: string,
+): Promise<{ readonly enabled: boolean; readonly profile: string | null } | null> {
+  const row = await prisma.workspace.findUnique({
+    where: { id: workspaceId },
+    select: { supervisorEnabled: true, supervisorProfile: true },
+  })
+  return row === null ? null : { enabled: row.supervisorEnabled, profile: row.supervisorProfile }
 }
 
 /**
@@ -161,8 +193,9 @@ export async function loadSupervisorWorld(workspaceId: string, now: Date): Promi
       })
 
       const taskRows = await loadTaskRows(tx, workspaceId)
-      const statusSince = await loadStatusSince(tx, workspaceId)
-      const guardrails = await loadLatestGuardrails(tx, workspaceId)
+      const taskIds = taskRows.map((row) => row.id)
+      const statusSince = await loadStatusSince(tx, workspaceId, taskIds)
+      const guardrails = await loadLatestGuardrails(tx, workspaceId, taskIds)
 
       const slaveRows = await tx.slave.findMany({
         where: { team: { workspaceId } },

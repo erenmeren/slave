@@ -21,6 +21,8 @@ function candidate(action: Action, tier: Tier): Candidate {
 }
 
 describe('tierOf', () => {
+  // Every row is read against `review_cap_blocked`, the one situation an `unblock_task` is routine
+  // on (erratum E5); the two cases below hold the rest of that rule.
   const table: [Action['kind'], Tier, Tier][] = [
     // action kind            running    halted
     ['unblock_task', 'applied', 'proposed'],
@@ -33,8 +35,29 @@ describe('tierOf', () => {
   ]
 
   it.each(table)('tiers %s as %s while running and %s while halted', (kind, running, halted) => {
-    expect(tierOf(ACTIONS[kind], RUNNING)).toBe(running)
-    expect(tierOf(ACTIONS[kind], HALTED)).toBe(halted)
+    expect(tierOf(ACTIONS[kind], RUNNING, 'review_cap_blocked')).toBe(running)
+    expect(tierOf(ACTIONS[kind], HALTED, 'review_cap_blocked')).toBe(halted)
+  })
+
+  /**
+   * Erratum E5. `blocked` means "a human must look at this" (M35), and two of its entrances are
+   * deliberate operator parks -- `cancel` and the leftover-worktree refusal -- which a routine
+   * unblock reversed one tick later. Only the review cap, a policy counter rather than a person,
+   * keeps the routine exit.
+   */
+  it('makes an unblock a PROPOSAL for every stuck-task situation except the review cap', () => {
+    expect(tierOf(ACTIONS.unblock_task, RUNNING, 'task_blocked_human')).toBe('proposed')
+    expect(tierOf(ACTIONS.unblock_task, RUNNING, 'task_failed')).toBe('proposed')
+    expect(tierOf(ACTIONS.unblock_task, RUNNING, 'review_cap_blocked')).toBe('applied')
+  })
+
+  it('leaves the other tiers alone whatever the situation kind is', () => {
+    for (const kind of ['review_cap_blocked', 'task_blocked_human', 'waiting_stale'] as const) {
+      expect(tierOf(ACTIONS.nudge_answer, RUNNING, kind)).toBe('applied')
+      expect(tierOf(ACTIONS.mark_task_failed, RUNNING, kind)).toBe('proposed')
+      expect(tierOf(ACTIONS.escalate_to_human, RUNNING, kind)).toBe('escalated')
+      expect(tierOf(ACTIONS.no_action, RUNNING, kind)).toBe('noop')
+    }
   })
 })
 

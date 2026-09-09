@@ -250,6 +250,14 @@ export async function tick(deps: TickDeps): Promise<TickReport> {
         await pauseActiveRuns(deps.workspaceId, 'budget guardrail', 'guardrail')
       }
     }
+    // The Supervisor still runs on this branch (spec §5, clarified in fix round 1). A halted
+    // workspace is precisely the one an operator most needs a decision about -- `workspace_halted`
+    // is a situation in its own right -- and returning before the pass meant the daemon could never
+    // produce that escalation, only the CLI one-shot could. Nothing is spent doing it: the model
+    // gate refuses to call anybody while `halted` is set, so this is a rules-only pass, and
+    // `tierOf` makes every action a proposal while halted, so the Supervisor cannot move a
+    // workspace a guardrail has stopped.
+    const supervisor = await superviseQuietly(deps)
     return {
       started: [],
       halted: halt.reason,
@@ -257,7 +265,7 @@ export async function tick(deps: TickDeps): Promise<TickReport> {
       planningStarted: null,
       reviewsStarted: [],
       skipped: null,
-      supervisor: NO_SUPERVISION,
+      supervisor,
     }
   }
   haltAnnounced.set(deps.workspaceId, false)

@@ -462,16 +462,29 @@ describe('loadWorld stats.activeRuns and stats.spentUsd', () => {
       tier: 'noop' as const,
       status: 'applied' as const,
     }
-    await prisma.supervisorDecision.create({ data: { ...decision, decidedBy: 'model', modelCostUsd: 0.25 } })
+    await prisma.supervisorDecision.create({
+      data: { ...decision, decidedBy: 'model', modelCalled: true, modelCostUsd: 0.25 },
+    })
     // The call happened and its cost never came back: charged at the cap, never at zero.
-    await prisma.supervisorDecision.create({ data: { ...decision, decidedBy: 'model', modelCostUsd: null } })
-    // A rules decision calls nobody and must add nothing at all.
-    await prisma.supervisorDecision.create({ data: { ...decision, decidedBy: 'rules', modelCostUsd: null } })
+    await prisma.supervisorDecision.create({
+      data: { ...decision, decidedBy: 'model', modelCalled: true, modelCostUsd: null },
+    })
+    // Erratum E6: the call happened, came back unusable, and the RULES chose -- the money was
+    // still spent, so this is charged at the cap exactly like the row above. Keying the charge on
+    // `decidedBy` (as this did before the fix round) missed precisely this case, which is also the
+    // case a provider is most likely to report no cost for.
+    await prisma.supervisorDecision.create({
+      data: { ...decision, decidedBy: 'rules', modelCalled: true, modelCostUsd: null },
+    })
+    // A rules decision that called nobody adds nothing at all.
+    await prisma.supervisorDecision.create({
+      data: { ...decision, decidedBy: 'rules', modelCalled: false, modelCostUsd: null },
+    })
 
     const { world, supervisorSpend } = await loadWorld(workspaceId(id))
 
-    expect(world.stats.spentUsd).toBe(2 + 0.25 + SUPERVISOR_PER_CALL_CAP_USD)
-    expect(supervisorSpend).toEqual({ measuredUsd: 0.25, unmeasuredCalls: 1 })
+    expect(world.stats.spentUsd).toBe(2 + 0.25 + 2 * SUPERVISOR_PER_CALL_CAP_USD)
+    expect(supervisorSpend).toEqual({ measuredUsd: 0.25, unmeasuredCalls: 2 })
   })
 
   it('reports zero spend rather than null when a workspace has no runs at all', async (): Promise<void> => {

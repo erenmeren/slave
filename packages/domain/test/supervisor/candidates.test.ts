@@ -51,9 +51,22 @@ describe('candidates -- the shape every list shares', () => {
     }
   })
 
-  it('stamps each candidate with the tier the policy gives its action', () => {
-    const cands = offered(world({ tasks: [task({ status: 'blocked' })] }))
-    expect(cands.map((c) => [c.action.kind, c.tier])).toEqual([
+  it('stamps each candidate with the tier the policy gives its action IN THIS SITUATION', () => {
+    // A `blocked` task with no guardrail behind it is `task_blocked_human` -- a person parked it,
+    // so the unblock is a proposal (erratum E5).
+    expect(offered(world({ tasks: [task({ status: 'blocked' })] })).map((c) => [c.action.kind, c.tier])).toEqual([
+      ['unblock_task', 'proposed'],
+      ['mark_task_failed', 'proposed'],
+      ['escalate_to_human', 'escalated'],
+      ['no_action', 'noop'],
+    ])
+    // The same action, the same world shape, one guardrail different: the review cap is a policy
+    // counter, and going back to rework is what the counter was for.
+    expect(
+      offered(world({ tasks: [task({ status: 'blocked', latestGuardrail: 'review_retry_cap_exhausted' })] })).map(
+        (c) => [c.action.kind, c.tier],
+      ),
+    ).toEqual([
       ['unblock_task', 'applied'],
       ['mark_task_failed', 'proposed'],
       ['escalate_to_human', 'escalated'],

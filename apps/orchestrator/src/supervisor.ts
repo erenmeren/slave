@@ -4,6 +4,8 @@ import {
   loadSupervisorWorld,
   recordDecision,
   refusalText,
+  supervisorSettings,
+  type LoadedSupervisorWorld,
   type ModelDecider,
 } from '@slave-of-ai/control'
 import {
@@ -37,6 +39,13 @@ export interface SuperviseDeps {
   /** The tick's clock. One instant for the whole pass: the world is observed at it, the cooldown
    *  is measured from it and every row this pass writes is stamped with it. */
   readonly now?: () => Date
+  /**
+   * How the world is read. Defaults to control's `loadSupervisorWorld`; production never passes
+   * anything else. It is a seam because "a switched-off Supervisor never loads a world" is a
+   * property about a call that DOES NOT HAPPEN, and the only honest way to assert that is to hand
+   * the loop a loader it can watch (fix round 1, Important 1).
+   */
+  readonly loadWorld?: (workspaceId: string, now: Date) => Promise<LoadedSupervisorWorld>
 }
 
 export interface SuperviseReport {
@@ -69,8 +78,8 @@ export interface SuperviseReport {
   readonly rulesOnly: boolean
 }
 
-/** What a pass that decided nothing reports -- and what `tick()` returns for the paths that never
- *  reach the Supervisor at all (an archived project, a halted one). */
+/** What a pass that decided nothing reports -- and what `tick()` returns for the one path that
+ *  never reaches the Supervisor at all: an archived project, whose world is never loaded. */
 export const NO_SUPERVISION: SuperviseReport = {
   situations: 0,
   decided: 0,
@@ -88,8 +97,12 @@ interface Choice {
   readonly decidedBy: Decider
   /** The cost of the call that was made, `null` when none was or when the provider reported none.
    *  Recorded even when the answer was unusable and the RULES chose -- the money was spent either
-   *  way (see `workspaceSpend`'s note on what that null costs the accounting). */
+   *  way. */
   readonly modelCostUsd: number | null
+  /** Whether a call was made at all (spec erratum E6). The pair (`decidedBy: 'rules'`,
+   *  `modelCalled: true`) is the fallback case, and it is what `workspaceSpend` charges at the cap
+   *  when the cost came back null. */
+  readonly modelCalled: boolean
 }
 
 /**
@@ -112,17 +125,20 @@ interface Choice {
 export async function supervise(deps: SuperviseDeps): Promise<SuperviseReport> {
   const now = deps.now?.() ?? new Date()
 
-  // First, before the world is read: an expired proposal must not still be blocking its situation
-  // key when `filterFresh` looks at the decisions this instant. Runs even for a switched-off
-  // Supervisor -- a proposal a human never answered has to stop waiting either way.
+  // The switch FIRST, in one indexed read, and before anything expensive (fix round 1, Important
+  // 1). Report only (spec §1) means exactly that: no world, no rows, no events, no model calls.
+  // `recordDecision` would refuse each situation anyway, but a daemon ticking once a second
+  // against a switched-off project would still be paying for a full world load every second to
+  // learn nothing. A missing project stops here too -- there is nothing to supervise and no reason
+  // to let the loader throw about it.
+  const settings = await supervisorSettings(deps.workspaceId)
+  if (settings === null || !settings.enabled) return NO_SUPERVISION
+
+  // Before the world is read: an expired proposal must not still be blocking its situation key
+  // when `filterFresh` looks at the decisions this instant.
   await expirePendingDecisions(deps.workspaceId, now)
 
-  const { world, settings } = await loadSupervisorWorld(deps.workspaceId, now)
-  // Report only (spec §1): a project may narrow the Supervisor to nothing. `recordDecision` would
-  // refuse every one of these anyway; stopping here means a switched-off project costs one read
-  // rather than one refused transaction per situation, and makes "no rows, no events, no model
-  // calls" a property of the loop rather than of a downstream check.
-  if (!settings.enabled) return NO_SUPERVISION
+  const { world } = await (deps.loadWorld ?? loadSupervisorWorld)(deps.workspaceId, now)
 
   const situations = filterFresh(observe(world), world)
   // The seam, resolved once for the pass: a decider AND a model to aim it at, a budget that is not
@@ -158,7 +174,7 @@ export async function supervise(deps: SuperviseDeps): Promise<SuperviseReport> {
     // Every road that is not a usable model answer ends here: no decider, no model, budget gone,
     // halted, over the per-tick cap, a call that failed or breached, an answer that would not
     // parse or pointed outside the catalogue. The cost of a call that DID happen still rides along.
-    const decision = choice ?? { ...byTheRules(catalogue), modelCostUsd: null }
+    const decision = choice ?? { ...byTheRules(catalogue), modelCostUsd: null, modelCalled: false }
 
     const recorded = await recordDecision({
       workspaceId: deps.workspaceId,
@@ -168,6 +184,7 @@ export async function supervise(deps: SuperviseDeps): Promise<SuperviseReport> {
       rationale: decision.rationale,
       decidedBy: decision.decidedBy,
       modelCostUsd: decision.modelCostUsd,
+      modelCalled: decision.modelCalled,
       now,
     })
     if (!recorded.ok) {
@@ -213,8 +230,9 @@ export async function supervise(deps: SuperviseDeps): Promise<SuperviseReport> {
 /**
  * One model call, and the answer only if it is usable.
  *
- * Returns `null` for every unusable outcome EXCEPT the cost, which the caller still records: a
- * timeout that burned real tokens is spend whether or not its answer was worth anything. A decider
+ * Every unusable outcome falls back to the rules and still carries the cost AND `modelCalled: true`
+ * (erratum E6): a timeout that burned real tokens is spend whether or not its answer was worth
+ * anything, and a null cost on such a call is charged at the per-call cap rather than lost. A decider
  * that THROWS is treated as a failed call rather than allowed out of the tick -- `decideWithModel`
  * spawns a child process, and a spawn that explodes must cost the workspace a rules decision, not
  * its whole scheduling pass.
@@ -241,32 +259,42 @@ async function askTheModel(input: {
     console.warn(
       `[supervise] the model call for ${input.situation.kind} threw: ${error instanceof Error ? error.message : String(error)}`,
     )
-    return { ...byTheRules(input.catalogue), modelCostUsd: null }
+    return { ...byTheRules(input.catalogue), modelCostUsd: null, modelCalled: true }
   }
 
   if (outcome.kind !== 'answer') {
     const why = outcome.kind === 'failed' ? outcome.reason : `isolation breach (${outcome.tools.join(', ')})`
-    return { ...byTheRules(input.catalogue, why), modelCostUsd: outcome.costUsd }
+    return { ...byTheRules(input.catalogue, why), modelCostUsd: outcome.costUsd, modelCalled: true }
   }
 
   const answer = parseDecisionAnswer(outcome.text, input.catalogue.length)
-  if (answer === null) return { ...byTheRules(input.catalogue, 'the answer was not a usable candidate index'), modelCostUsd: outcome.costUsd }
+  if (answer === null) {
+    return {
+      ...byTheRules(input.catalogue, 'the answer was not a usable candidate index'),
+      modelCostUsd: outcome.costUsd,
+      modelCalled: true,
+    }
+  }
 
   return {
     chosenIndex: answer.candidateIndex,
     rationale: answer.rationale,
     decidedBy: 'model',
     modelCostUsd: outcome.costUsd,
+    modelCalled: true,
   }
 }
 
 /**
  * The rules' own choice, with the chosen candidate's `why` as the rationale -- so a row decided by
  * the rules reads like one decided by a model, and the panel needs no second rendering for it.
- * `fallbackFrom` names the model failure when there was one, which is the only place the "we asked
- * and could not use the answer" fact survives (nothing on the row distinguishes it otherwise).
+ * `fallbackFrom` names the model failure when there was one, so the rationale says out loud that
+ * a model WAS asked -- the row's own `modelCalled` (erratum E6) is what the accounting reads.
  */
-function byTheRules(catalogue: readonly Candidate[], fallbackFrom?: string): Omit<Choice, 'modelCostUsd'> {
+function byTheRules(
+  catalogue: readonly Candidate[],
+  fallbackFrom?: string,
+): Omit<Choice, 'modelCostUsd' | 'modelCalled'> {
   const chosenIndex = chooseByRules(catalogue)
   const why = catalogue[chosenIndex]?.why ?? 'the rules chose this action.'
   return {

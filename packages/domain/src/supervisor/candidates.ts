@@ -1,7 +1,7 @@
 import type { Action, Candidate } from './actions.js'
 import { staffableSlaves } from './observe.js'
 import { tierOf } from './policy.js'
-import type { Situation } from './situations.js'
+import type { Situation, SituationKind } from './situations.js'
 import type { SupervisorTask, SupervisorWorld } from './world.js'
 
 /**
@@ -28,7 +28,7 @@ function subjectTask(situation: Situation, world: SupervisorWorld): SupervisorTa
  * The roles written are the slave's CURRENT set plus the missing one: a staffing action must never
  * take a role away as a side effect of adding one.
  */
-function staffingCandidates(world: SupervisorWorld, role: string): Candidate[] {
+function staffingCandidates(world: SupervisorWorld, kind: SituationKind, role: string): Candidate[] {
   const contenders = staffableSlaves(world, role)
     .map((slave) => ({ slave, mentions: slave.role.toLowerCase().includes(role) }))
     .toSorted((a, b) =>
@@ -40,6 +40,7 @@ function staffingCandidates(world: SupervisorWorld, role: string): Candidate[] {
     candidate(
       { kind: 'set_runtime_roles', slaveId: slave.id, roles: [...slave.runtimeRoles, role] },
       world,
+      kind,
       mentions
         ? `${slave.name} is titled "${slave.role}", which already reads as the "${role}" role -- giving them the runtime role makes them dispatchable for it.`
         : `${slave.name} is idle and could take the "${role}" role alongside their current ones.`,
@@ -47,8 +48,8 @@ function staffingCandidates(world: SupervisorWorld, role: string): Candidate[] {
   )
 }
 
-function candidate(action: Action, world: SupervisorWorld, why: string): Candidate {
-  return { action, tier: tierOf(action, world), why }
+function candidate(action: Action, world: SupervisorWorld, kind: SituationKind, why: string): Candidate {
+  return { action, tier: tierOf(action, world, kind), why }
 }
 
 /**
@@ -77,11 +78,13 @@ export function candidates(situation: Situation, world: SupervisorWorld): readon
             ? candidate(
                 { kind: 'unblock_task', taskId: task.id },
                 world,
+                situation.kind,
                 `The task has attempt ${task.attempt} of ${task.maxAttempts} left, so it can go back to rework as it is.`,
               )
             : candidate(
                 { kind: 'raise_max_attempts', taskId: task.id },
                 world,
+                situation.kind,
                 `The task is at its cap (attempt ${task.attempt} of ${task.maxAttempts}); another try needs the cap raised.`,
               ),
         )
@@ -89,6 +92,7 @@ export function candidates(situation: Situation, world: SupervisorWorld): readon
           candidate(
             { kind: 'mark_task_failed', taskId: task.id, reason: `Supervisor: ${situation.summary}` },
             world,
+            situation.kind,
             'Declaring the task failed stops its dependents waiting on work that is not coming.',
           ),
         )
@@ -106,7 +110,7 @@ export function candidates(situation: Situation, world: SupervisorWorld): readon
     case 'no_planner':
     case 'ready_unstaffed':
       // `subjectId` IS the missing role for all three kinds (spec section 2).
-      offers.push(...staffingCandidates(world, situation.subjectId))
+      offers.push(...staffingCandidates(world, situation.kind, situation.subjectId))
       break
 
     case 'waiting_stale':
@@ -115,6 +119,7 @@ export function candidates(situation: Situation, world: SupervisorWorld): readon
         candidate(
           { kind: 'nudge_answer', messageId: situation.subjectId },
           world,
+          situation.kind,
           'Recording an escalation against the question puts it in front of whoever can answer it.',
         ),
       )
@@ -128,8 +133,8 @@ export function candidates(situation: Situation, world: SupervisorWorld): readon
   }
 
   offers.push(
-    candidate({ kind: 'escalate_to_human', summary: situation.summary }, world, 'A human decides what happens next.'),
-    candidate({ kind: 'no_action' }, world, 'The situation is real but waiting one more tick is reasonable.'),
+    candidate({ kind: 'escalate_to_human', summary: situation.summary }, world, situation.kind, 'A human decides what happens next.'),
+    candidate({ kind: 'no_action' }, world, situation.kind, 'The situation is real but waiting one more tick is reasonable.'),
   )
   return offers
 }

@@ -1,4 +1,4 @@
-import type { ModelDecider, ModelOutcome } from '@slave-of-ai/control'
+import { loadSupervisorWorld, type ModelDecider, type ModelOutcome } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import {
   SUPERVISOR_MAX_MODEL_DECISIONS_PER_TICK,
@@ -6,7 +6,7 @@ import {
   WAITING_STALE_MS,
 } from '@slave-of-ai/domain'
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { supervise } from '../../src/supervisor.js'
+import { NO_SUPERVISION, supervise } from '../../src/supervisor.js'
 
 const NOW = new Date('2026-09-09T12:00:00.000Z')
 const ago = (ms: number): Date => new Date(NOW.getTime() - ms)
@@ -155,6 +155,7 @@ describe('supervise', () => {
       tier: 'applied',
       status: 'applied',
       decidedBy: 'model',
+      modelCalled: true,
       modelCostUsd: 0.01,
       rationale: 'the task has an attempt left, so rework is the cheap exit',
       action: { kind: 'unblock_task', taskId: fixture.taskId },
@@ -199,7 +200,7 @@ describe('supervise', () => {
 
     expect(report).toMatchObject({ decided: 1, applied: 1, modelCalls: 0, rulesOnly: true })
     const rows = await decisions(fixture.workspaceId)
-    expect(rows[0]).toMatchObject({ decidedBy: 'rules', modelCostUsd: null, tier: 'applied' })
+    expect(rows[0]).toMatchObject({ decidedBy: 'rules', modelCalled: false, modelCostUsd: null, tier: 'applied' })
     expect(rows[0]?.action).toMatchObject({ kind: 'unblock_task' })
   })
 
@@ -230,7 +231,11 @@ describe('supervise', () => {
 
     expect(recorder.calls).toHaveLength(0)
     expect(report).toMatchObject({ decided: 1, modelCalls: 0, rulesOnly: true })
-    expect((await decisions(fixture.workspaceId))[0]).toMatchObject({ decidedBy: 'rules', modelCostUsd: null })
+    expect((await decisions(fixture.workspaceId))[0]).toMatchObject({
+      decidedBy: 'rules',
+      modelCalled: false,
+      modelCostUsd: null,
+    })
   })
 
   it('escalates a halted workspace to a human without calling a model', async (): Promise<void> => {
@@ -273,7 +278,14 @@ describe('supervise', () => {
 
     expect(recorder.calls).toHaveLength(1)
     expect(report).toMatchObject({ decided: 1, modelCalls: 1, rulesOnly: false })
-    expect((await decisions(fixture.workspaceId))[0]).toMatchObject({ decidedBy: 'rules', modelCostUsd: 0.02, tier: 'applied' })
+    expect((await decisions(fixture.workspaceId))[0]).toMatchObject({
+      decidedBy: 'rules',
+      // Erratum E6: the rules chose, and the call still happened -- which is what makes the money
+      // findable later even when the provider reported no cost.
+      modelCalled: true,
+      modelCostUsd: 0.02,
+      tier: 'applied',
+    })
   })
 
   it('falls back to the rules on an index outside the catalogue', async (): Promise<void> => {
@@ -282,7 +294,11 @@ describe('supervise', () => {
 
     await supervise({ workspaceId: fixture.workspaceId, decider: recorder.decider, model: 'claude-sonnet-5', now: clock })
 
-    expect((await decisions(fixture.workspaceId))[0]).toMatchObject({ decidedBy: 'rules', modelCostUsd: 0.03 })
+    expect((await decisions(fixture.workspaceId))[0]).toMatchObject({
+      decidedBy: 'rules',
+      modelCalled: true,
+      modelCostUsd: 0.03,
+    })
   })
 
   it('falls back to the rules on a failed call and on an isolation breach, keeping each cost', async (): Promise<void> => {
@@ -303,6 +319,7 @@ describe('supervise', () => {
     expect(report).toMatchObject({ situations: 2, decided: 2, modelCalls: 2 })
     const rows = await decisions(fixture.workspaceId)
     expect(rows.map((row) => row.decidedBy)).toEqual(['rules', 'rules'])
+    expect(rows.map((row) => row.modelCalled)).toEqual([true, true])
     expect(rows.map((row) => row.modelCostUsd)).toEqual(expect.arrayContaining([null, 0.05]))
   })
 
@@ -319,7 +336,12 @@ describe('supervise', () => {
     warn.mockRestore()
 
     expect(report).toMatchObject({ decided: 1, modelCalls: 1 })
-    expect((await decisions(fixture.workspaceId))[0]).toMatchObject({ decidedBy: 'rules', modelCostUsd: null })
+    // The call was made and blew up with no cost reported: charged at the cap (erratum E6).
+    expect((await decisions(fixture.workspaceId))[0]).toMatchObject({
+      decidedBy: 'rules',
+      modelCalled: true,
+      modelCostUsd: null,
+    })
   })
 
   it('caps model decisions per pass and decides the rest by the rules', async (): Promise<void> => {
@@ -341,16 +363,28 @@ describe('supervise', () => {
     expect(rows.filter((row) => row.decidedBy === 'rules')).toHaveLength(1)
   })
 
-  it('writes nothing at all while the Supervisor is switched off', async (): Promise<void> => {
+  it('writes nothing at all while the Supervisor is switched off, and does not even load a world', async (): Promise<void> => {
     const fixture = await seed({ supervisorEnabled: false })
     const recorder = recordingDecider(answering('{"candidateIndex": 0, "rationale": "never asked"}'))
+    // Fix round 1, Important 1: "report only" has to be cheap. A daemon ticks once a second, and a
+    // world load is a dozen round trips including two scans of the event log -- so the switch is
+    // read first and nothing else happens. The loader is handed in so a call that must NOT happen
+    // can be asserted on.
+    const loads: string[] = []
+    const loadWorld = async (workspaceId: string, now: Date) => {
+      loads.push(workspaceId)
+      return loadSupervisorWorld(workspaceId, now)
+    }
 
     const report = await supervise({
       workspaceId: fixture.workspaceId,
       decider: recorder.decider,
       model: 'claude-sonnet-5',
       now: clock,
+      loadWorld,
     })
+
+    expect(loads).toEqual([])
 
     expect(report).toEqual({
       situations: 0,
@@ -364,6 +398,30 @@ describe('supervise', () => {
     expect(recorder.calls).toHaveLength(0)
     expect(await decisions(fixture.workspaceId)).toHaveLength(0)
     expect(await prisma.executionEvent.count({ where: { workspaceId: fixture.workspaceId, type: 'supervisor_decided' } })).toBe(0)
+  })
+
+  it('loads exactly one world when the Supervisor is on', async (): Promise<void> => {
+    // The other half of the check above: the seam is real, the default is the control loader, and
+    // an enabled pass does reach it -- once.
+    const fixture = await seed()
+    const loads: string[] = []
+    const report = await supervise({
+      workspaceId: fixture.workspaceId,
+      now: clock,
+      loadWorld: async (workspaceId, now) => {
+        loads.push(workspaceId)
+        return loadSupervisorWorld(workspaceId, now)
+      },
+    })
+
+    expect(loads).toEqual([fixture.workspaceId])
+    expect(report.decided).toBe(1)
+  })
+
+  it('reports nothing for a workspace that no longer exists, rather than throwing', async (): Promise<void> => {
+    expect(await supervise({ workspaceId: '00000000-0000-4000-8000-000000000000', now: clock })).toEqual(
+      NO_SUPERVISION,
+    )
   })
 
   it('does not decide the same situation twice inside the cooldown', async (): Promise<void> => {
