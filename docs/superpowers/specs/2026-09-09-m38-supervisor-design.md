@@ -100,4 +100,8 @@ Domain: unit tests per rule in `observe`, per kind in `candidates`, the tier tab
 Answering or routing questions; thresholds as workspace settings; decision retention; a Supervisor that edits the goal or creates tasks; org-wide (multi-workspace) supervision.
 
 ## 9. Errata — where execution corrects this spec
-(appended during execution)
+### Plan writing (2026-09-09)
+- **E1 — `statusChangedAt` does not exist.** `Task` has no such column and adding one would touch every status write. `SupervisorWorld.tasks[].statusSince` is derived from the latest `task.*` `ExecutionEvent` for the task (else `createdAt`).
+- **E2 — where the report lives.** §4 put `supervisorReport` in control; the world loader `loadSupervisorWorld(workspaceId, now)` lives in `packages/control/src/supervisorWorld.ts` (control may read Prisma; `apps/web` must not import the orchestrator), and the report is `summarise(world)` computed by whoever holds the world (the web view builder, the CLI). `workspaceSpend(workspaceId)` is the one exported spend formula both `world.ts` and the loader use.
+- **E3 — the Supervisor's model.** `SUPERVISOR_DEFAULT_MODEL = 'claude-sonnet-5'` (domain constant), overridable by `SLAVEOFAI_SUPERVISOR_MODEL`; M31a takes its model from the simulation intent, so there was nothing to reuse.
+- **E4 — event actor.** `unblockTask` and `setRuntimeRoles` gain `origin: 'human' | 'system'` so a Supervisor-applied action's event envelope says `actor: 'system'` (the envelope enum has no `supervisor`); the payload `actor` string stays `'supervisor'`.
