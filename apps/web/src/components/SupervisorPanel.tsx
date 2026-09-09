@@ -26,6 +26,8 @@ import { Panel } from './ui/Panel'
 export const SUPERVISOR_PANEL_MIN_REFRESH_MS = 5_000
 
 type Decision = SupervisorView['pending'][number]
+type Draft = NonNullable<Decision['draft']>
+type Question = SupervisorView['questions'][number]
 
 /**
  * One chosen action in a sentence, with its subject (M38 §6).
@@ -55,21 +57,130 @@ export function actionText(action: Action): string {
   }
 }
 
+/**
+ * What a drafted answer is made of (M39 §6), under the proposal it belongs to: the question it
+ * would answer, the answer itself in a box a human may rewrite, and the evidence behind it.
+ *
+ * The box is a textarea and the citations are JSX children, so a model's words -- and a worker's
+ * question -- are characters on the page and never elements (spec §1: another party's text is
+ * data). The same reason `SlavePanel`'s profile box and the settings box below are textareas.
+ *
+ * Owned by {@link ProposalRow} rather than by itself: the Approve button lives on the row, and the
+ * row is what decides whether the text has been touched, so the state has to sit above both.
+ */
+function DraftEditor({
+  draft,
+  question,
+  body,
+  onBody,
+}: {
+  readonly draft: Draft
+  /** The pending question this answers, when it is still in the world -- `undefined` once it has
+   *  been settled by somebody else, in which case the row shows the situation summary alone
+   *  rather than inventing a question that is no longer outstanding. */
+  readonly question: Question | undefined
+  readonly body: string
+  readonly onBody: (text: string) => void
+}): React.JSX.Element {
+  // Both signals, named separately and joined only when both fired: the lexicon's own words are
+  // what a human checks against the question, and "the model asked for a human" is a different
+  // claim that stands on its own (spec §1 records both, never one instead of the other).
+  const criticalParts = [
+    ...(draft.critical.lexicon.length > 0 ? [draft.critical.lexicon.join(', ')] : []),
+    ...(draft.critical.model ? ['the model asked for a human'] : []),
+  ]
+  return (
+    <div data-testid="supervisor-draft" className="flex flex-col gap-1 rounded border border-line bg-bg-0 p-2">
+      {question !== undefined && (
+        <span data-testid="supervisor-draft-question" className="text-[11px] text-text-2">
+          {question.body}
+        </span>
+      )}
+      {criticalParts.length > 0 && (
+        <span data-testid="supervisor-draft-critical" className="text-[11px] text-tone-blocked">
+          critical: {criticalParts.join(' · ')}
+        </span>
+      )}
+      <textarea
+        data-testid="supervisor-draft-body"
+        value={body}
+        onChange={(event) => onBody(event.target.value)}
+        placeholder="the answer this slave receives"
+        className="rounded border border-line bg-bg-0 p-2 text-xs text-text-1"
+        rows={4}
+      />
+      <span data-testid="supervisor-draft-confidence" className="font-mono text-[10px] text-text-3">
+        {draft.confidence}
+        {draft.confidence === 'sourced' ? '' : ' — nothing verified it; read it before you send it'}
+      </span>
+      {/* What actually verified, quoted, with the source it was found in -- the one thing that
+        * tells a reader whether the answer is the project's own words or the model's. */}
+      {draft.sources.map((source, index) => (
+        <span key={`${source.kind}-${String(index)}`} data-testid="supervisor-draft-source" className="text-[11px] text-text-2">
+          <span className="font-mono text-text-3">{source.kind}</span>
+          {source.ref === null ? '' : ` ${source.ref}`}
+          {' · '}
+          {source.quote}
+        </span>
+      ))}
+      {/* And what did NOT: "the model quoted something that is not there" is the single most
+        * useful thing a human can know when judging a draft (`Draft.rejectedSources`). */}
+      {draft.rejectedSources.map((rejected, index) => (
+        <span
+          key={`${rejected.source.kind}-${String(index)}`}
+          data-testid="supervisor-draft-rejected"
+          className="text-[11px] text-tone-waiting"
+        >
+          <span className="font-mono text-text-3">{rejected.source.kind}</span>
+          {' · '}
+          {rejected.source.quote}
+          {' — '}
+          {rejected.reason}
+        </span>
+      ))}
+      {draft.editedBody !== undefined && (
+        <span data-testid="supervisor-draft-edited" className="text-[11px] text-text-2">
+          edited by a human: {draft.editedBody}
+        </span>
+      )}
+    </div>
+  )
+}
+
 /** One proposal, with everything a person needs to answer it: the situation it was made on, what
  *  would happen, and why the Supervisor picked that. Split out of the panel so the pending list
  *  and its per-row reject box stay readable. */
 function ProposalRow({
   decision,
+  questions,
   busy,
   onApprove,
   onReject,
 }: {
   readonly decision: Decision
+  /** Every pending question. The row picks its own out by the action's message id -- passed whole
+   *  rather than pre-matched by the panel so the one `answer_question` narrowing lives here, beside
+   *  the draft it also governs. */
+  readonly questions: readonly Question[]
   readonly busy: boolean
-  readonly onApprove: () => void
+  /** `body` is the human's replacement text, and `undefined` means "send what the Supervisor
+   *  drafted" -- the route tells those two apart, and an untouched box must not be sent as an
+   *  edit. */
+  readonly onApprove: (body?: string) => void
   readonly onReject: (reason: string) => void
 }): React.JSX.Element {
   const [reason, setReason] = useState('')
+  const answering = decision.action.kind === 'answer_question' ? decision.action.messageId : null
+  // A draft only means anything on an answer decision (every other action's column is null anyway
+  // -- this is the reading that says so out loud).
+  const draft = answering === null ? null : decision.draft
+  const question = answering === null ? undefined : questions.find((one) => one.messageId === answering)
+  // A human's earlier edit first, then the model's own body, then nothing at all -- erratum E2's
+  // escalated draft has no body until somebody types one, and an empty box is exactly the right
+  // invitation there. Seeded ONCE (a `useState` initial value): the panel re-reads itself every
+  // few seconds, and a refetch that reset this box would delete what an operator was typing.
+  const seed = draft?.editedBody ?? draft?.body ?? ''
+  const [body, setBody] = useState(seed)
   return (
     <li data-testid="supervisor-proposal" className="flex flex-col gap-1 rounded border border-line p-2">
       <div className="flex items-baseline gap-2">
@@ -89,6 +200,7 @@ function ProposalRow({
       <span data-testid="supervisor-proposal-rationale" className="text-[11px] text-text-2">
         {decision.rationale}
       </span>
+      {draft !== null && <DraftEditor draft={draft} question={question} body={body} onBody={setBody} />}
       <div className="flex items-center gap-2">
         <input
           data-testid="supervisor-reject-reason"
@@ -97,7 +209,15 @@ function ProposalRow({
           onChange={(event) => setReason(event.target.value)}
           className="min-w-0 flex-1 rounded border border-line bg-bg-0 px-2 py-1 text-[11px] text-text-1"
         />
-        <Button variant="primary" data-testid="supervisor-approve" disabled={busy} onClick={onApprove}>
+        <Button
+          variant="primary"
+          data-testid="supervisor-approve"
+          disabled={busy}
+          // An untouched box is not an edit. Sending it anyway would record every approval as a
+          // human rewrite of the model's answer -- including the ones where the operator only read
+          // it and said yes.
+          onClick={() => onApprove(body === seed ? undefined : body)}
+        >
           approve
         </Button>
         <Button variant="ghost" data-testid="supervisor-reject" disabled={busy} onClick={() => onReject(reason)}>
@@ -105,6 +225,48 @@ function ProposalRow({
         </Button>
       </div>
     </li>
+  )
+}
+
+/**
+ * The mailbox (M39 §6): every question still waiting on an answer, whether or not the Supervisor
+ * has decided anything about it yet.
+ *
+ * Read-only, deliberately. Answering, re-addressing and approving a draft all happen through a
+ * verb -- the answer box on the slave panel, `reassign-question` on the CLI, the Approve above --
+ * and a fourth control here would be a fourth place to keep in step. What this block owes an
+ * operator is the fact the panel otherwise cannot show: somebody is stuck, on whom, and since when.
+ */
+function QuestionsWaiting({ questions }: { readonly questions: readonly Question[] }): React.JSX.Element {
+  return (
+    <div className="flex flex-col gap-1">
+      <h4 className="text-[10px] uppercase tracking-wide text-text-3">questions waiting</h4>
+      {questions.length === 0 ? (
+        <span data-testid="supervisor-questions-empty" className="text-xs text-text-3">
+          no question is waiting on an answer
+        </span>
+      ) : (
+        <ul className="flex flex-col gap-1">
+          {questions.map((question) => (
+            <li key={question.messageId} data-testid="supervisor-question-row" className="flex flex-col gap-0.5">
+              <span className="font-mono text-[10px] text-text-3">
+                {/* The STAMP, trimmed to minutes, the same convention the `supervisor.*` timeline
+                  * cards use -- a "2 hours ago" computed against now would be wrong the moment
+                  * this panel stopped refreshing. */}
+                {question.askerName} → {question.waitingOn} · asked {question.since.slice(0, 16).replace('T', ' ')}
+                {' · '}
+                {/* Zero holders is the `unanswerable_question` shape: nobody in this project may be
+                  * dispatched the question, so no re-address can fix it -- staffing (or a human)
+                  * has to. Said in words rather than left as a bare "0". */}
+                {question.holders === 0 ? 'nobody can answer it' : `${String(question.holders)} could answer it`}
+              </span>
+              {/* Another slave's words, as characters (spec §1). */}
+              <span className="text-xs text-text-1">{question.body}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   )
 }
 
@@ -230,7 +392,7 @@ export function SupervisorPanel({
   // claim, and one this component cannot make yet.
   if (view === null) return null
 
-  const { report, pending, recent, settings } = view
+  const { report, pending, recent, questions, settings } = view
   const profileText = profileDraft ?? settings.profile ?? ''
   const decisions = `/api/w/${workspaceId}/supervisor/decisions`
 
@@ -285,8 +447,16 @@ export function SupervisorPanel({
                 <ProposalRow
                   key={decision.id}
                   decision={decision}
+                  questions={questions}
                   busy={busy}
-                  onApprove={() => void send(`${decisions}/${decision.id}/approve`, { method: 'POST' })}
+                  onApprove={(body) =>
+                    void send(`${decisions}/${decision.id}/approve`, {
+                      method: 'POST',
+                      // No body at all unless the operator actually rewrote the draft: an absent
+                      // body is legal on this route and means "send what the Supervisor wrote".
+                      ...(body === undefined ? {} : { body: { body } }),
+                    })
+                  }
                   onReject={(reason) =>
                     void send(`${decisions}/${decision.id}/reject`, {
                       method: 'POST',
@@ -300,6 +470,8 @@ export function SupervisorPanel({
             </ul>
           )}
         </div>
+
+        <QuestionsWaiting questions={questions} />
 
         <div className="flex flex-col gap-1">
           <h4 className="text-[10px] uppercase tracking-wide text-text-3">recent decisions</h4>

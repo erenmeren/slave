@@ -37,6 +37,7 @@ import {
   moveSlave,
   moveCompanySlave,
   pauseSimulation,
+  reassignQuestion,
   refusalText,
   rejectDecision,
   renameSlave,
@@ -118,6 +119,14 @@ const USAGE = `usage: orchestrator <command> [options]
                                        answer a slave's question as a human, and hand the answer
                                        to the run that is waiting for it. The waiting run is
                                        queued to resume; the daemon (or one tick) continues it.
+  reassign-question --message <id> --to <slaveId> [--by <name>]
+                                       put an unanswered question in front of a different slave --
+                                       the one who can actually answer it. Refused unless that
+                                       slave holds the role the question was addressed to (or, for
+                                       a question addressed to a slave by name, a role the asker's
+                                       task requires), and refused once the question has been
+                                       answered. Nothing is answered and nobody is resumed: the
+                                       asker keeps waiting until the new recipient replies.
   clear-halt --workspace <id>          retract a WORKSPACE-WIDE safety halt
   emergency-stop --workspace <id> [--by <name>]
                                        halt scheduling on the WHOLE workspace AND pause every
@@ -192,9 +201,16 @@ const USAGE = `usage: orchestrator <command> [options]
                                        JSON -- the situation each was made on, the candidates it
                                        chose from and why. --pending narrows to what is still
                                        waiting on a human; --limit caps how many come back
-                                       (default 50).
-  approve-decision --id <id>           a human says yes to a pending proposal: carries out its
-                                       action and marks it approved.
+                                       (default 50). An answer decision also carries the DRAFT it
+                                       proposes -- the body, the citations that verified and the
+                                       ones that did not, its confidence (sourced or
+                                       interpretation) and the critical flags that stopped it.
+  approve-decision --id <id> [--body-file <path>]
+                                       a human says yes to a pending proposal: carries out its
+                                       action and marks it approved. --body-file replaces a drafted
+                                       ANSWER with your own words, read from a file untrimmed and
+                                       kept on the decision as the edit; it is also how you answer
+                                       a question the Supervisor escalated instead of drafting.
   reject-decision --id <id> [--reason <text>]
                                        a human says no to a pending proposal: its action never
                                        reaches the world. --reason is kept with the decision.
@@ -804,6 +820,25 @@ export async function main(argv: readonly string[]): Promise<number> {
       return 0
     }
 
+    case 'reassign-question': {
+      // The human's own half of the Supervisor's `reassign_question` (M39 §6): the same verb, with
+      // `origin: 'human'` so the event reads as a person's act, and no decision id -- nothing
+      // proposed this, an operator did it. `--by` names them on the payload exactly as `answer`'s
+      // does; there is no session here to name instead (see `approve-decision` below).
+      const messageId = requireFlag(flags, 'message')
+      const toSlaveId = requireFlag(flags, 'to')
+      const result = await reassignQuestion(messageId, toSlaveId, flagText(flags, 'by') ?? 'operator', 'human')
+      if (!result.ok) throw new Error(refusalText(result.error))
+      // No delivery pass, unlike `answer` above: re-addressing writes no answer, so nobody is
+      // resumed by it. The question is now in another worker's inbox, and that worker reads it on
+      // its next dispatch.
+      process.stdout.write(
+        `question ${messageId} is now addressed to ${toSlaveId}. Nothing was answered and nobody was resumed: ` +
+          `the asker keeps waiting until that slave replies.\n`,
+      )
+      return 0
+    }
+
     case 'clear-halt': {
       const workspaceId = await resolveWorkspace({ ...flags, workspace: requireFlag(flags, 'workspace') })
       await prisma.workspace.update({
@@ -1135,9 +1170,19 @@ export async function main(argv: readonly string[]): Promise<number> {
       // -- the row's `resolvedByUserId` and the `supervisor.resolved` event's `userId` are honestly
       // null; the envelope actor is still `'human'`, because a human ran this command.
       const decisionId = requireFlag(flags, 'id')
-      const result = await approveDecision(decisionId)
+      // `--body-file`, not a `--body` flag, and read UNTRIMMED -- `set-profile --file`'s rule for
+      // the same reason (M39 §6): an answer is up to `ANSWER_MAX_CHARS` of prose that an operator
+      // writes in an editor, and the newline that editor leaves at the end is their text, not
+      // noise for this command to tidy away. Absent, the model's own draft is what goes out.
+      const bodyFile = flagText(flags, 'body-file')
+      const body = bodyFile === undefined ? undefined : readFileSync(bodyFile, 'utf8')
+      const result = await approveDecision(decisionId, undefined, body === undefined ? undefined : { body })
       if (!result.ok) throw new Error(refusalText(result.error))
-      process.stdout.write(`decision ${decisionId} approved\n`)
+      process.stdout.write(
+        body === undefined
+          ? `decision ${decisionId} approved\n`
+          : `decision ${decisionId} approved with your own answer (${plural(body.length, 'character')})\n`,
+      )
       return 0
     }
 

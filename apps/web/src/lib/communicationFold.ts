@@ -4,6 +4,12 @@ import type { DomainEventType } from '@slave-of-ai/db'
  *  E1): no event carries an operator id, so every human message collapses onto one node. */
 export const OPERATOR = 'operator'
 
+/** The literal node every `slave.message_sent` edge with `actor: 'system'` renders from (M39 §6):
+ *  an answer the SUPERVISOR wrote itself. Its own node, never folded onto {@link OPERATOR} -- a
+ *  person did not write it, and a graph that said so would credit an operator with every answer
+ *  the machine sent while they were asleep. */
+export const SUPERVISOR = 'supervisor'
+
 /** One event, reduced to exactly what the fold reads. Independent of `AppendableEvent`/the DB
  *  row shape on purpose -- this is the fold's own contract, not a reflection of either. */
 export interface FoldEvent {
@@ -37,6 +43,8 @@ export interface CommunicationEdge {
  *   slave sent back to rework it -> `reviewer -> implementer, 'rework'`.
  * - `slave.message_sent` with `actor: 'human'` and a `slaveId` -> `operator -> slaveId,
  *   'message'` (a human message's `slaveId` is who the operator addressed).
+ * - `slave.message_sent` with `actor: 'system'` -> `supervisor -> slaveId, 'message'` (M39): a
+ *   Supervisor answer's `slaveId` is the ASKER it was written for, the same reading as a human's.
  * - `slave.message_sent` with `actor: 'slave'` -> `slaveId -> payload.recipientSlaveId, 'message'`
  *   (M36 t3): here `slaveId` is the SENDER and the recipient is on the event. A role-addressed
  *   message draws no edge -- see the case itself for why.
@@ -107,6 +115,16 @@ export function foldCommunication(events: readonly FoldEvent[]): { edges: Commun
         // told apart by `actor` and by nothing else.
         if (event.actor === 'human') {
           bump(OPERATOR, event.slaveId, 'message')
+          break
+        }
+        // `system` is the Supervisor answering a question itself (`answerQuestion` with
+        // `origin: 'system'`, M39 §2). Its `slaveId` is the asker -- the row's own "who this is
+        // for" column, the same one a human's answer fills -- so the edge is read exactly like the
+        // operator's above, from the Supervisor's node instead. An answer a human APPROVED is
+        // written with `origin: 'human'` and draws from the operator, which is the truth: a person
+        // sent it.
+        if (event.actor === 'system') {
+          bump(SUPERVISOR, event.slaveId, 'message')
           break
         }
         const recipient = (event.payload as { recipientSlaveId?: unknown } | null)?.recipientSlaveId

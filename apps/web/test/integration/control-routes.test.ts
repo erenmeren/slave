@@ -661,10 +661,65 @@ describe('the control routes', () => {
     const get = (workspaceId: string): Promise<Response> =>
       supervisorGET(new Request('http://x'), { params: Promise.resolve({ workspaceId }) })
 
-    const approve = (workspaceId: string, decisionId: string): Promise<Response> =>
-      approvePOST(new Request('http://x', { method: 'POST' }), {
-        params: Promise.resolve({ workspaceId, decisionId }),
+    /** An `answer_question` proposal carrying the drafted answer a human is asked to approve
+     *  (M39 §6), plus the question it would answer. Same "write the row directly" reasoning as
+     *  `proposal` above: what is under test is the ROUTE's optional edit, not the pass that
+     *  drafted the answer. */
+    const answerProposal = async (): Promise<{ readonly decisionId: string; readonly questionId: string }> => {
+      const question = await prisma.slaveMessage.create({
+        data: {
+          slaveId: fixture.slave.id,
+          workspaceId: fixture.workspace.id,
+          senderRunId: fixture.run.id,
+          taskId: fixture.task.id,
+          recipientRole: 'product',
+          threadId: 'thread-answer',
+          kind: 'question',
+          body: 'Which queue should retries land on?',
+          actor: 'slave',
+          expectsReply: true,
+        },
       })
+      const action = { kind: 'answer_question', messageId: question.id }
+      const row = await prisma.supervisorDecision.create({
+        data: {
+          workspaceId: fixture.workspace.id,
+          situationKind: 'waiting_stale',
+          subjectId: question.id,
+          situation: {
+            kind: 'waiting_stale',
+            subjectId: question.id,
+            summary: 'A slave has been waiting on an answer for two hours.',
+            facts: { messageId: question.id },
+          },
+          candidates: [{ action, tier: 'proposed', why: 'the task description looks like it answers this.' }],
+          chosenIndex: 0,
+          action,
+          draft: {
+            body: 'the model would have said this',
+            sources: [],
+            rejectedSources: [],
+            critical: { lexicon: [], model: false },
+            confidence: 'interpretation',
+          },
+          rationale: 'the citations did not verify, so a human should read this first.',
+          tier: 'proposed',
+          status: 'pending',
+          decidedBy: 'model',
+          modelCalled: true,
+          expiresAt: new Date(Date.now() + 60_000),
+        },
+      })
+      return { decisionId: row.id, questionId: question.id }
+    }
+
+    const approve = (workspaceId: string, decisionId: string, body?: unknown): Promise<Response> =>
+      approvePOST(
+        body === undefined
+          ? new Request('http://x', { method: 'POST' })
+          : new Request('http://x', { method: 'POST', body: JSON.stringify(body), headers: { 'content-type': 'application/json' } }),
+        { params: Promise.resolve({ workspaceId, decisionId }) },
+      )
 
     const reject = (workspaceId: string, decisionId: string, body?: unknown): Promise<Response> =>
       rejectPOST(
@@ -696,6 +751,32 @@ describe('the control routes', () => {
       expect(body.pending[0].situation.summary).toContain('no worker holds the reviewer role')
       expect(body.recent.map((d: { id: string }) => d.id)).toEqual([decisionId])
       expect(body.settings).toEqual({ enabled: true, profile: null })
+    })
+
+    // M39 §6: the mailbox block. The panel reads the questions off the SAME world the report is
+    // computed from, so what is outstanding and what the report counts cannot disagree.
+    it('GET carries every question still waiting, with who asked it, who it waits on and how many could answer', async (): Promise<void> => {
+      // A question is only pending while its asker is still parked on it (`stillPendingQuestion`).
+      await prisma.slaveRun.update({
+        where: { id: fixture.run.id },
+        data: { status: 'paused', pauseReason: 'waiting_for_answer' },
+      })
+      const { questionId } = await answerProposal()
+
+      const body = await (await get(fixture.workspace.id)).json()
+
+      expect(body.questions).toHaveLength(1)
+      expect(body.questions[0]).toMatchObject({
+        messageId: questionId,
+        body: 'Which queue should retries land on?',
+        askerName: 'Alex (Backend)',
+        waitingOn: 'anyone with the product role',
+        // Nobody in this project holds the `product` role, which is the `unanswerable_question`
+        // shape -- no re-address can fix it.
+        holders: 0,
+      })
+      expect(typeof body.questions[0].since).toBe('string')
+      expect(body.report.mailbox.pendingQuestions).toBe(1)
     })
 
     it('GET 404s a workspace that does not exist', async (): Promise<void> => {
@@ -756,6 +837,51 @@ describe('the control routes', () => {
       expect((await reject(fixture.workspace.id, decisionId)).status).toBe(200)
       const resolved = await prisma.executionEvent.findFirstOrThrow({ where: { type: 'supervisor_resolved' } })
       expect(resolved.payload).toMatchObject({ outcome: 'rejected', reason: null })
+    })
+
+    // M39 §6: the one route body an approval takes. A drafted answer is the Supervisor's words
+    // until a human replaces them, and this is where they do it.
+    it('approving a drafted answer with an edited body sends the human text, and keeps the model draft beside it', async (): Promise<void> => {
+      const { decisionId, questionId } = await answerProposal()
+
+      const response = await approve(fixture.workspace.id, decisionId, { body: 'land them on payments-retry' })
+
+      expect(response.status).toBe(200)
+      const answer = await prisma.slaveMessage.findFirstOrThrow({ where: { kind: 'answer' } })
+      expect(answer.body).toBe('land them on payments-retry')
+      expect(answer.replyToId).toBe(questionId)
+      // A human approved it, so the answer reads as a person's -- not the Supervisor's.
+      expect(answer.actor).toBe('human')
+      const row = await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: decisionId } })
+      expect(row.status).toBe('approved')
+      expect(row.draft).toMatchObject({ body: 'the model would have said this', editedBody: 'land them on payments-retry' })
+    })
+
+    it('approving a drafted answer with no body at all is legal: the model draft is what goes out', async (): Promise<void> => {
+      const { decisionId } = await answerProposal()
+
+      expect((await approve(fixture.workspace.id, decisionId)).status).toBe(200)
+
+      expect((await prisma.slaveMessage.findFirstOrThrow({ where: { kind: 'answer' } })).body).toBe(
+        'the model would have said this',
+      )
+      expect((await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: decisionId } })).draft).not.toHaveProperty(
+        'editedBody',
+      )
+    })
+
+    it('400s a malformed approve body, approving nothing', async (): Promise<void> => {
+      const { decisionId } = await answerProposal()
+
+      expect((await approve(fixture.workspace.id, decisionId, { body: 7 })).status).toBe(400)
+      const malformed = await approvePOST(
+        new Request('http://x', { method: 'POST', body: 'not json', headers: { 'content-type': 'application/json' } }),
+        { params: Promise.resolve({ workspaceId: fixture.workspace.id, decisionId }) },
+      )
+      expect(malformed.status).toBe(400)
+
+      expect((await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: decisionId } })).status).toBe('pending')
+      expect(await prisma.slaveMessage.count({ where: { kind: 'answer' } })).toBe(0)
     })
 
     it('400s a malformed reject body and a malformed settings body', async (): Promise<void> => {

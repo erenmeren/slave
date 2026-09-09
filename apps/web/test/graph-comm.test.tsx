@@ -114,6 +114,28 @@ describe('buildCommunicationGraph', () => {
     expect(edges).toEqual([])
   })
 
+  // M39 t4: a Supervisor answer folds to an edge from its own `supervisor` node
+  // (`communicationFold.ts`'s `SUPERVISOR`). Unlike the operator's, the node appears only when an
+  // edge actually touches it -- a project whose Supervisor has never spoken is not owed a landmark
+  // for it, and an edge whose endpoint had no node would simply not draw.
+  it('emits the supervisor node when an edge touches it, and maps that edge onto it', () => {
+    const graph = commGraph({
+      slaves: [{ id: 'a1', name: 'Alex', role: 'backend' }],
+      edges: [{ from: 'supervisor', to: 'a1', count: 2, kind: 'message' }],
+    })
+
+    const { nodes, edges } = buildCommunicationGraph(graph)
+
+    expect(nodes.map((node) => node.id)).toEqual(['slave:a1', 'operator', 'supervisor'])
+    expect(nodes.find((node) => node.id === 'supervisor')?.type).toBe('supervisor')
+    expect(edges.map((edge) => [edge.source, edge.target])).toEqual([['supervisor', 'slave:a1']])
+  })
+
+  it('emits no supervisor node when nothing it sent is in the window', () => {
+    const { nodes } = buildCommunicationGraph(GRAPH)
+    expect(nodes.some((node) => node.id === 'supervisor')).toBe(false)
+  })
+
   it('builds one cable edge per graph.edges entry, id `<source>-><target>:<kind>`, type cable', () => {
     const { edges } = buildCommunicationGraph(GRAPH)
     expect(edges.map((edge) => edge.id)).toEqual(['slave:a1->slave:a2:plan', 'operator->slave:a1:message'])

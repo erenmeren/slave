@@ -2072,6 +2072,137 @@ describe('the orchestrator CLI', () => {
       expect((resolved.payload as { outcome: string; reason: string | null }).reason).toBe('not now')
     }, 30_000)
 
+    /**
+     * A `pending` `answer_question` proposal on the question `seedAWaitingRun` left behind (M39
+     * t4): the interpretation tier the Supervisor records when the model's citations did not
+     * verify, with the drafted answer a human is expected to read, edit and approve.
+     */
+    async function seedPendingAnswerProposal(questionId: string): Promise<string> {
+      const situation: Situation = {
+        kind: 'waiting_stale',
+        subjectId: questionId,
+        summary: 'A slave has been waiting on an answer for two hours.',
+        facts: { messageId: questionId },
+      }
+      const action = { kind: 'answer_question' as const, messageId: questionId }
+      const candidates: Candidate[] = [
+        { action, tier: 'proposed', why: 'the task description looks like it answers this.' },
+        { action: { kind: 'escalate_to_human', summary: situation.summary }, tier: 'escalated', why: 'a human decides.' },
+      ]
+      const recorded = await recordDecision({
+        workspaceId: fixture.workspaceId,
+        situation,
+        candidates,
+        chosenIndex: 0,
+        rationale: 'the answer is in the task description.',
+        decidedBy: 'model',
+        modelCostUsd: 0.01,
+        draft: {
+          body: 'the model would have said this',
+          sources: [],
+          rejectedSources: [{ source: { kind: 'task', ref: null, quote: 'not in the task' }, reason: 'quote_not_found' }],
+          critical: { lexicon: [], model: false },
+          confidence: 'interpretation',
+        },
+        tier: 'proposed',
+      })
+      if (!recorded.ok) throw new Error(`seedPendingAnswerProposal: recordDecision refused: ${JSON.stringify(recorded.error)}`)
+      return recorded.value.id
+    }
+
+    it('approves a drafted answer with an edited body read from --body-file: the answer the slave receives is the human text', async (): Promise<void> => {
+      const { questionId } = await seedAWaitingRun()
+      const decisionId = await seedPendingAnswerProposal(questionId)
+      const file = join(mkdtempSync(join(tmpdir(), 'slaveofai-answer-')), 'answer.md')
+      // Untrimmed, like `set-profile --file`: the trailing newline an editor leaves is the
+      // operator's text, and this is what proves the CLI does not quietly rewrite it.
+      writeFileSync(file, 'land them on payments-retry\n')
+
+      const result = await runCli(['approve-decision', '--id', decisionId, '--body-file', file])
+
+      expect(result.code).toBe(0)
+      const answer = await prisma.slaveMessage.findFirstOrThrow({ where: { kind: 'answer' } })
+      expect(answer.body).toBe('land them on payments-retry\n')
+      expect(answer.replyToId).toBe(questionId)
+      // A human approved it, so the row and its envelope read `human` -- not `system`.
+      expect(answer.actor).toBe('human')
+      const decision = await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: decisionId } })
+      expect(decision.status).toBe('approved')
+      expect((decision.draft as { body: string; editedBody: string }).editedBody).toBe('land them on payments-retry\n')
+      // The model's own words stay on the row beside the edit, so a reader can see both.
+      expect((decision.draft as { body: string }).body).toBe('the model would have said this')
+    }, 30_000)
+
+    it('approves a drafted answer with no --body-file at all: the model draft is what goes out', async (): Promise<void> => {
+      const { questionId } = await seedAWaitingRun()
+      const decisionId = await seedPendingAnswerProposal(questionId)
+
+      const result = await runCli(['approve-decision', '--id', decisionId])
+
+      expect(result.code).toBe(0)
+      const answer = await prisma.slaveMessage.findFirstOrThrow({ where: { kind: 'answer' } })
+      expect(answer.body).toBe('the model would have said this')
+      expect((await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: decisionId } })).draft).not.toHaveProperty('editedBody')
+    }, 30_000)
+
+    it('prints the drafted answer with its confidence and critical flags in supervisor-decisions', async (): Promise<void> => {
+      const { questionId } = await seedAWaitingRun()
+      await seedPendingAnswerProposal(questionId)
+
+      const result = await runCli(['supervisor-decisions', '--workspace', fixture.workspaceId])
+
+      expect(result.code).toBe(0)
+      const decisions = JSON.parse(result.stdout) as readonly {
+        draft: { confidence: string; critical: { lexicon: string[]; model: boolean }; body: string } | null
+      }[]
+      expect(decisions).toHaveLength(1)
+      expect(decisions[0]?.draft?.confidence).toBe('interpretation')
+      expect(decisions[0]?.draft?.critical).toEqual({ lexicon: [], model: false })
+      expect(decisions[0]?.draft?.body).toBe('the model would have said this')
+    }, 30_000)
+
+    it('re-addresses a question by hand to a slave who holds the role, moving the row and appending the event', async (): Promise<void> => {
+      const { questionId } = await seedAWaitingRun()
+      const maya = await prisma.slave.create({
+        data: { teamId: fixture.teamId, name: 'Maya', role: 'product', runtimeRoles: ['product'] },
+      })
+
+      const result = await runCli(['reassign-question', '--message', questionId, '--to', maya.id, '--by', 'eren'])
+
+      expect(result.code).toBe(0)
+      expect(result.stdout).toContain(maya.id)
+      const question = await prisma.slaveMessage.findUniqueOrThrow({ where: { id: questionId } })
+      expect(question.recipientSlaveId).toBe(maya.id)
+      // Both columns, always: a row addressed to a worker AND a role would still sit in every
+      // holder of the old role's inbox.
+      expect(question.recipientRole).toBeNull()
+      const event = await prisma.executionEvent.findFirstOrThrow({ where: { type: 'slave_message_reassigned' } })
+      expect(event.actor).toBe('human')
+      expect(event.payload).toMatchObject({
+        messageId: questionId,
+        decisionId: null,
+        from: { role: 'product', slaveId: null },
+        to: { slaveId: maya.id },
+        actor: 'eren',
+      })
+    }, 30_000)
+
+    it('exits non-zero when the re-address target may not answer the question, moving nothing', async (): Promise<void> => {
+      const { questionId } = await seedAWaitingRun()
+      // Holds no role at all, so the question would land in front of a worker that can never be
+      // dispatched it -- `reassign_not_permitted`.
+      const parked = await prisma.slave.create({ data: { teamId: fixture.teamId, name: 'Parked', role: 'design', runtimeRoles: [] } })
+
+      const result = await runCli(['reassign-question', '--message', questionId, '--to', parked.id])
+
+      expect(result.code).not.toBe(0)
+      expect(`${result.stdout}${result.stderr}`).toMatch(/cannot be re-addressed/)
+      const question = await prisma.slaveMessage.findUniqueOrThrow({ where: { id: questionId } })
+      expect(question.recipientSlaveId).toBeNull()
+      expect(question.recipientRole).toBe('product')
+      expect(await prisma.executionEvent.count({ where: { type: 'slave_message_reassigned' } })).toBe(0)
+    }, 30_000)
+
     it('exits non-zero for approve-decision on an unknown id', async (): Promise<void> => {
       const result = await runCli(['approve-decision', '--id', 'nope'])
 

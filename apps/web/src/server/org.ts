@@ -5,6 +5,7 @@ import {
   deriveSlaveStatus,
   sumSpendFromGroups,
   NON_TERMINAL_RUN_STATUSES,
+  SUPERVISOR_PER_CALL_CAP_USD,
   type SlaveStatus,
   type SpendGroup,
 } from '@slave-of-ai/domain'
@@ -91,7 +92,14 @@ export interface ProjectRow {
    *  to. The FULL team, uncapped -- `ProjectsClient.tsx` owns the six-avatar cap and the `+N`
    *  overflow tile that reads past it (fix round 1). */
   readonly team: readonly { readonly slaveId: string; readonly name: string; readonly status: string }[]
-  /** KNOWN spend: every run of this project that reported a cost, summed. */
+  /**
+   * KNOWN spend: every run of this project that reported a cost, plus what its SUPERVISOR's model
+   * calls cost (M39 §4) -- a measured call at its recorded cost, a call that was made and reported
+   * nothing at `SUPERVISOR_PER_CALL_CAP_USD`, exactly as `workspaceSpend`
+   * (`packages/control/src/spend.ts`) charges them for the budget guardrail. The SAME number the
+   * overview's bar, the shell and the guardrail read, because a project that looks cheaper on this
+   * list than it does on its own page is a list nobody can act on.
+   */
   readonly spend: number
   /**
    * How many of this project's runs actually ran, finished, and left no cost figure behind (M12
@@ -114,7 +122,7 @@ export async function listProjects(options?: { readonly includeArchived?: boolea
     orderBy: { name: 'asc' },
   })
 
-  const [taskGroups, slaveRows, spendGroups] = await Promise.all([
+  const [taskGroups, slaveRows, spendGroups, decisionGroups] = await Promise.all([
     prisma.task.groupBy({ by: ['workspaceId', 'status'], _count: { _all: true } }),
     // `slave -> team -> workspaceId`, matching overview.ts's budget-bar spend source exactly (Task
     // 13, M17): a `planning` run (no Task row) still counts toward the workspace it ran under.
@@ -130,6 +138,18 @@ export async function listProjects(options?: { readonly includeArchived?: boolea
       by: ['slaveId', 'provider', 'status'],
       _sum: { costUsd: true },
       _count: { _all: true, costUsd: true },
+    }),
+    // ONE query for EVERY project's Supervisor spend, not one per project (M39 §4): `workspaceId`
+    // is a real column on `SupervisorDecision` (unlike a run's, which has to be resolved through
+    // its slave's team above), so the database groups the whole list in a single round trip.
+    // `modelCalled` is the second `by` column because it is the predicate the unmeasured charge
+    // keys on, and `_count._all` minus `_count.modelCostUsd` (Prisma counts NON-NULL values for a
+    // named field) is that tally without a second read -- `workspaceSpend`'s own idiom, kept
+    // identical so the two cannot drift.
+    prisma.supervisorDecision.groupBy({
+      by: ['workspaceId', 'modelCalled'],
+      _sum: { modelCostUsd: true },
+      _count: { _all: true, modelCostUsd: true },
     }),
   ])
 
@@ -162,6 +182,31 @@ export async function listProjects(options?: { readonly includeArchived?: boolea
     const list = groupsByWorkspace.get(workspaceId)
     if (list === undefined) groupsByWorkspace.set(workspaceId, [group])
     else list.push(group)
+  }
+
+  // `workspaceSpend`'s formula, merged per workspace out of the one grouped read above. Summed
+  // across BOTH `modelCalled` groups for the same reason it is there: a row that says no call was
+  // made should carry no cost, and money that was somehow recorded on one belongs in the total
+  // rather than filtered out of it.
+  const supervisorByWorkspace = new Map<string, { measuredUsd: number; unmeasuredCalls: number }>()
+  for (const group of decisionGroups) {
+    const running = supervisorByWorkspace.get(group.workspaceId) ?? { measuredUsd: 0, unmeasuredCalls: 0 }
+    running.measuredUsd += group._sum.modelCostUsd ?? 0
+    if (group.modelCalled) running.unmeasuredCalls += group._count._all - group._count.modelCostUsd
+    supervisorByWorkspace.set(group.workspaceId, running)
+  }
+
+  /** One project's two spend figures. `spend` is the whole workspace's money -- runs and Supervisor
+   *  together, `workspaceSpend`'s `spentUsd`. `unmeasuredRuns` stays a count of RUNS: a Supervisor
+   *  call nobody measured is already IN the total at the cap, and counting it here as well would
+   *  answer a question this stat does not ask. */
+  const spendOf = (workspaceId: string): { readonly spend: number; readonly unmeasuredRuns: number } => {
+    const runs = spendOfGroups(groupsByWorkspace.get(workspaceId) ?? [])
+    const supervisor = supervisorByWorkspace.get(workspaceId) ?? { measuredUsd: 0, unmeasuredCalls: 0 }
+    return {
+      spend: runs.spend + supervisor.measuredUsd + supervisor.unmeasuredCalls * SUPERVISOR_PER_CALL_CAP_USD,
+      unmeasuredRuns: runs.unmeasuredRuns,
+    }
   }
 
   // The avatar row's live status, via the SAME `deriveSlaveStatus` translator every other status
@@ -210,9 +255,9 @@ export async function listProjects(options?: { readonly includeArchived?: boolea
     team: workspace.teams
       .flatMap((team) => team.slaves)
       .map((slave) => ({ slaveId: slave.id, name: slave.name, status: teamSlaveLiveInfo.get(slave.id)?.status ?? 'idle' })),
-    // `?? []` here is the case `?? 0` was always right about: a workspace with no runs at all has
-    // spent nothing and has nothing unmeasured -- `sumSpendFromGroups([])` says exactly that.
-    ...spendOfGroups(groupsByWorkspace.get(workspace.id) ?? []),
+    // A workspace with no runs and no decisions at all has spent nothing and has nothing
+    // unmeasured -- `sumSpendFromGroups([])` and an absent Supervisor entry both say exactly that.
+    ...spendOf(workspace.id),
   }))
 }
 

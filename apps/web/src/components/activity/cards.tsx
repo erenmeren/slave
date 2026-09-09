@@ -704,12 +704,19 @@ function SlaveMessageSentCard(props: ActivityCardProps): ReactElement {
 }
 
 /**
- * M39 t2: a question re-addressed to somebody who can answer it.
+ * M39: a question re-addressed to somebody who can answer it.
  *
- * Nothing was sent, so there is no body to show -- what happened is a MOVE, and the two ends of it
- * are the whole story: away from a role nobody was holding (or a worker who was busy), and to the
- * worker it is now addressed to. Task 4 gives this the names; until then it renders the ids the
- * payload actually carries, which is honest and findable, rather than inventing a sentence.
+ * Nothing was sent, so there is no body to show -- what happened is a MOVE, and its ends are the
+ * whole story: away from a role nobody was holding (or a worker who was busy or gone), and to the
+ * worker it is now addressed to, by whoever made the call. `from` names a ROLE in words ("the
+ * reviewer role") because a role and a worker id are different kinds of thing and a bare
+ * `reviewer` beside a `ag-2` reads as though both were workers.
+ *
+ * The decision id is the link back: a re-address the Supervisor made carries the id every
+ * `supervisor.*` row of that decision's life carries, so the proposal, the approval and the move
+ * tie together by eye ({@link DecisionRef}, defined with the `supervisor.*` cards below). A human
+ * who ran `reassign-question` proposed nothing, so their row carries `null` and shows no link
+ * rather than an empty one.
  */
 function SlaveMessageReassignedCard(props: ActivityCardProps): ReactElement {
   const payload = props.event.payload as {
@@ -723,14 +730,20 @@ function SlaveMessageReassignedCard(props: ActivityCardProps): ReactElement {
     <ActivityCard {...props}>
       <Transition tone="idle" label="question re-addressed">
         <span data-testid="reassigned-from" className="font-mono">
-          {payload.from.role ?? payload.from.slaveId ?? 'nobody'}
+          {payload.from.role !== null ? `the ${payload.from.role} role` : (payload.from.slaveId ?? 'nobody')}
         </span>
-        {' → '}
+        {' \u2192 '}
         <span data-testid="reassigned-to" className="font-mono">
           {payload.to.slaveId}
         </span>
-        {' · by '}
+        {' \u00b7 by '}
         <span data-testid="reassigned-actor">{payload.actor}</span>
+        {payload.decisionId !== null && (
+          <>
+            {' \u00b7 '}
+            <DecisionRef id={payload.decisionId} />
+          </>
+        )}
       </Transition>
     </ActivityCard>
   )

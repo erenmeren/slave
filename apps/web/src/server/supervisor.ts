@@ -1,5 +1,5 @@
 import { listDecisions, loadSupervisorWorld, supervisorSettings, type DecisionView } from '@slave-of-ai/control'
-import { summarise, type SupervisorReport } from '@slave-of-ai/domain'
+import { displayName, summarise, type SupervisorQuestion, type SupervisorSlave, type SupervisorReport } from '@slave-of-ai/domain'
 
 /**
  * How many past decisions the panel carries. Twenty is what fits under the pending list without
@@ -19,7 +19,32 @@ export interface SupervisorView {
    *  `pending` deliberately: a proposal is a decision, and hiding it from the history until
    *  somebody answers it would make the list read as though nothing had happened. */
   readonly recent: readonly DecisionView[]
+  /** Every question still waiting on an answer (M39 §6) -- the panel's mailbox block, and what a
+   *  drafted answer's proposal row shows the question of. Straight off the world the report was
+   *  computed from, so the two cannot disagree about what is outstanding. */
+  readonly questions: readonly SupervisorQuestionView[]
   readonly settings: { readonly enabled: boolean; readonly profile: string | null }
+}
+
+/** One pending question, flattened for a browser (M39 §6). The world's own `SupervisorQuestion`
+ *  carries the whole thread, the asker's recorded run prompt and every holder id -- a model's
+ *  input, not a panel's -- so this is the narrow read of it: what was asked, by whom, who it waits
+ *  on, how many workers could take it, and since when. */
+export interface SupervisorQuestionView {
+  readonly messageId: string
+  readonly body: string
+  /** `displayName` (`@slave-of-ai/domain`), the ONE formatting of a worker's identity -- the same
+   *  string the CLI's `messages` and the ask roster print. The bare id when the asker has left the
+   *  roster, which is findable rather than invented. */
+  readonly askerName: string
+  /** Who owes the answer: the role it was addressed to, or the worker it was addressed to by name. */
+  readonly waitingOn: string
+  /** How many workers may answer it today (`SupervisorQuestion.holders`). Zero is the
+   *  `unanswerable_question` shape -- nobody holds the role, and no re-address can fix it. */
+  readonly holders: number
+  /** When it was asked, ISO -- the world speaks epoch ms, and nothing but a string survives the
+   *  route's `Response.json` unchanged. */
+  readonly since: string
 }
 
 /**
@@ -46,5 +71,35 @@ export async function buildSupervisorView(workspaceId: string, now: Date = new D
     listDecisions(workspaceId, { limit: RECENT_DECISION_LIMIT }),
   ])
 
-  return { report: summarise(loaded.world), pending, recent, settings: loaded.settings }
+  return {
+    report: summarise(loaded.world),
+    pending,
+    recent,
+    questions: loaded.world.questions.map((one) => toQuestionView(one, loaded.world.slaves)),
+    settings: loaded.settings,
+  }
+}
+
+/** One world question as the panel reads it. `roster` is the world's own slave list -- the same
+ *  snapshot the question came from, so a name here can never belong to a worker who was not there
+ *  when the question was loaded. */
+function toQuestionView(question: SupervisorQuestion, roster: readonly SupervisorSlave[]): SupervisorQuestionView {
+  const nameOf = (slaveId: string): string => {
+    const slave = roster.find((one) => one.id === slaveId)
+    return slave === undefined ? slaveId : displayName(slave)
+  }
+  return {
+    messageId: question.messageId,
+    body: question.body,
+    askerName: nameOf(question.askerSlaveId),
+    // Exactly one of the two columns identifies a recipient (`isValidRecipient`), and the role case
+    // is worded the way the CLI's `messages` words it -- an operator reading both must not have to
+    // learn two vocabularies for the same fact.
+    waitingOn:
+      question.recipientSlaveId !== null
+        ? nameOf(question.recipientSlaveId)
+        : `anyone with the ${question.recipientRole ?? 'unknown'} role`,
+    holders: question.holders.length,
+    since: new Date(question.createdAt).toISOString(),
+  }
 }

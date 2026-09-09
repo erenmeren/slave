@@ -26,6 +26,13 @@ export interface OperatorNodeData {
   readonly kind: 'operator'
 }
 
+/** The Supervisor's own node (M39 §6) -- where every answer it wrote itself
+ *  (`communicationFold.ts`'s `SUPERVISOR`) comes from. Data-less for the same reason the
+ *  operator's is: there is one of it, and its identity is the whole of what it carries. */
+export interface SupervisorNodeData {
+  readonly kind: 'supervisor'
+}
+
 // ---- node renderers ------------------------------------------------------------------------
 
 /** `slave:<id>` -- distinct from every other mode's node-id space, same prefix `OrgNodes.tsx`
@@ -34,6 +41,11 @@ export const COMM_SLAVE_NODE_PREFIX = 'slave:'
 
 /** The one node every human-originated edge collapses onto (`communicationFold.ts`'s `OPERATOR`). */
 export const OPERATOR_NODE_ID = 'operator'
+
+/** The one node every Supervisor-originated edge collapses onto (`communicationFold.ts`'s
+ *  `SUPERVISOR`). Kept in step with that constant by `commNodeId` below, which is the only place
+ *  either literal is compared against an edge endpoint. */
+export const SUPERVISOR_NODE_ID = 'supervisor'
 
 /**
  * The chip-styled slave node: name + role, nothing else -- this graph has no live status to show
@@ -63,9 +75,22 @@ export function OperatorNode(_props: NodeProps<OperatorNodeData>): React.JSX.Ele
   )
 }
 
+/** The Supervisor's node -- present only when this window's edges actually touch it (see
+ *  {@link buildCommunicationGraph}), unlike the operator's always-present landmark. */
+export function SupervisorNode(_props: NodeProps<SupervisorNodeData>): React.JSX.Element {
+  return (
+    <div data-testid="supervisor-node" className="rounded border border-line bg-bg-1 px-3 py-2 text-center">
+      <Handle type="target" position={Position.Left} />
+      <div className="text-sm text-text-1">supervisor</div>
+      <Handle type="source" position={Position.Right} />
+    </div>
+  )
+}
+
 export const COMM_NODE_TYPES: NodeTypes = {
   commSlave: CommSlaveNode,
   operator: OperatorNode,
+  supervisor: SupervisorNode,
 } as NodeTypes
 
 // ---- graph builder ------------------------------------------------------------------------
@@ -83,10 +108,11 @@ const TONE_BY_KIND: Record<CommunicationEdgeKind, StatusTone> = {
   message: 'idle',
 }
 
-/** `CommunicationEdge.from`/`.to` are either a slave id or the literal `'operator'`
- *  (`communicationFold.ts`'s `OPERATOR`) -- this maps either to the node id space above. */
+/** `CommunicationEdge.from`/`.to` are a slave id or one of the two literals the fold can emit --
+ *  `'operator'` and `'supervisor'` (`communicationFold.ts`'s `OPERATOR`/`SUPERVISOR`) -- and this
+ *  maps any of them to the node id space above. */
 function commNodeId(rawId: string): string {
-  return rawId === OPERATOR_NODE_ID ? OPERATOR_NODE_ID : `${COMM_SLAVE_NODE_PREFIX}${rawId}`
+  return rawId === OPERATOR_NODE_ID || rawId === SUPERVISOR_NODE_ID ? rawId : `${COMM_SLAVE_NODE_PREFIX}${rawId}`
 }
 
 /**
@@ -126,6 +152,16 @@ export function buildCommunicationGraph(graph: CommunicationGraph): { readonly n
     data: { kind: 'operator' } satisfies OperatorNodeData,
   }
 
+  // Conditional, unlike the operator's landmark above (M39 §6): the Supervisor is a participant
+  // only once it has actually written something, and an empty node labelled `supervisor` on a
+  // project whose Supervisor is switched off would be a claim this graph cannot make. An edge
+  // whose endpoint had no node would simply not draw, which is why this is not optional.
+  const supervisorNodes: Node[] = graph.edges.some(
+    (edge) => edge.from === SUPERVISOR_NODE_ID || edge.to === SUPERVISOR_NODE_ID,
+  )
+    ? [{ id: SUPERVISOR_NODE_ID, type: 'supervisor', position: origin, data: { kind: 'supervisor' } satisfies SupervisorNodeData }]
+    : []
+
   const edges: Edge[] = graph.edges.map((edge) => {
     const source = commNodeId(edge.from)
     const target = commNodeId(edge.to)
@@ -138,5 +174,5 @@ export function buildCommunicationGraph(graph: CommunicationGraph): { readonly n
     }
   })
 
-  return { nodes: [...slaveNodes, operatorNode], edges }
+  return { nodes: [...slaveNodes, operatorNode, ...supervisorNodes], edges }
 }

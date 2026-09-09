@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { foldCommunication, type FoldEvent } from '../src/lib/communicationFold.js'
+import { SUPERVISOR, foldCommunication, type FoldEvent } from '../src/lib/communicationFold.js'
 
 describe('foldCommunication', () => {
   it('planner -> implementer: a plan\'s first run.started on each planned task', () => {
@@ -87,6 +87,33 @@ describe('foldCommunication', () => {
       },
     ]
     expect(foldCommunication(events)).toEqual({ edges: [{ from: 'maya', to: 'alex', kind: 'message', count: 1 }] })
+  })
+
+  // M39 t4: the Supervisor answers a question itself, through `answerQuestion` with
+  // `origin: 'system'`. The event's `slaveId` is the ASKER (the one the answer is addressed to),
+  // exactly as it is for a human's answer -- so this reads like the operator case, from the
+  // Supervisor's own node.
+  it('supervisor -> slave: a message_sent with actor system (a Supervisor answer)', () => {
+    const events: FoldEvent[] = [
+      {
+        type: 'slave.message_sent',
+        slaveId: 'alex',
+        taskId: 't1',
+        actor: 'system',
+        payload: { kind: 'answer', body: 'payments-retry', recipientSlaveId: 'alex', answeredBy: 'supervisor' },
+        seq: 1,
+      },
+    ]
+    expect(foldCommunication(events)).toEqual({ edges: [{ from: SUPERVISOR, to: 'alex', kind: 'message', count: 1 }] })
+    // Labelled as the Supervisor, never folded onto the operator's node: a person did not write it.
+    expect(SUPERVISOR).not.toBe('operator')
+  })
+
+  it('a Supervisor answer with no slave on it draws nothing', () => {
+    const events: FoldEvent[] = [
+      { type: 'slave.message_sent', slaveId: null, taskId: 't1', actor: 'system', payload: { kind: 'answer', body: 'x' }, seq: 1 },
+    ]
+    expect(foldCommunication(events)).toEqual({ edges: [] })
   })
 
   it('counts accumulate across repeats of the same edge', () => {

@@ -201,6 +201,35 @@ describe('targeted card bodies', () => {
     expect(screen.getByTestId('message-body').textContent).toBe('Please retry with the other approach.')
   })
 
+  // M39 t4: the real card. Nothing was SENT, so there is no body -- what happened is a move, and
+  // the card owes a reader its two ends, who made it, and the decision it came from.
+  it('slave.message_reassigned shows who moved the question, from where to whom, and the decision behind it', () => {
+    const Card = ACTIVITY_CARDS['slave.message_reassigned']
+    render(<Card event={fixtureFor('slave.message_reassigned')} {...CARD_PROPS} />)
+    expect(screen.getByTestId('transition-label').textContent).toBe('question re-addressed')
+    expect(screen.getByTestId('reassigned-from').textContent).toBe('the reviewer role')
+    expect(screen.getByTestId('reassigned-to').textContent).toBe('ag-2')
+    expect(screen.getByTestId('reassigned-actor').textContent).toBe('supervisor')
+    // The same short id every `supervisor.*` row of this decision's life carries, so the move and
+    // the decision that proposed it can be tied together by eye.
+    expect(screen.getByTestId('supervisor-decision').textContent).toBe('sd-01234')
+  })
+
+  it('slave.message_reassigned names the slave it was taken from when it was addressed by name, and links no decision when a human moved it', () => {
+    const Card = ACTIVITY_CARDS['slave.message_reassigned']
+    const event = baseEvent('slave.message_reassigned', {
+      messageId: 'm-1',
+      decisionId: null,
+      from: { role: null, slaveId: 'ag-1' },
+      to: { slaveId: 'ag-2' },
+      actor: 'eren',
+    })
+    render(<Card event={event} {...CARD_PROPS} />)
+    expect(screen.getByTestId('reassigned-from').textContent).toBe('ag-1')
+    expect(screen.getByTestId('reassigned-actor').textContent).toBe('eren')
+    expect(screen.queryByTestId('supervisor-decision')).toBeNull()
+  })
+
   it('task.dependency_added shows the dependency title and requester', () => {
     const Card = ACTIVITY_CARDS['task.dependency_added']
     render(<Card event={fixtureFor('task.dependency_added')} {...CARD_PROPS} />)

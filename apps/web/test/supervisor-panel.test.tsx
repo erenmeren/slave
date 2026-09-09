@@ -36,6 +36,42 @@ const decision = (over: Partial<SupervisorView['pending'][number]>): SupervisorV
   ...over,
 })
 
+/** An `answer_question` proposal with the drafted answer a human is asked to read, edit and
+ *  approve (M39 §6) -- the shape `recordDecision` writes for an interpretation the citations of
+ *  which did not all verify. */
+const answerDecision = (over?: Partial<SupervisorView['pending'][number]>): SupervisorView['pending'][number] =>
+  decision({
+    id: 'd-answer',
+    situationKind: 'waiting_stale',
+    subjectId: 'm-1',
+    situation: {
+      kind: 'waiting_stale',
+      subjectId: 'm-1',
+      summary: 'A slave has been waiting on an answer for two hours.',
+      facts: { messageId: 'm-1' },
+    },
+    action: { kind: 'answer_question', messageId: 'm-1' },
+    draft: {
+      body: 'Land them on the payments-retry queue.',
+      sources: [{ kind: 'task', ref: null, quote: 'retries go to payments-retry' }],
+      rejectedSources: [{ source: { kind: 'goal', ref: null, quote: 'ship by friday' }, reason: 'quote_not_found' }],
+      critical: { lexicon: ['spend'], model: true },
+      confidence: 'interpretation',
+    },
+    rationale: 'the task description looks like it answers this.',
+    ...over,
+  })
+
+const question = (over?: Partial<SupervisorView['questions'][number]>): SupervisorView['questions'][number] => ({
+  messageId: 'm-1',
+  body: 'Which queue should retries land on?',
+  askerName: 'Alex (backend)',
+  waitingOn: 'anyone with the product role',
+  holders: 0,
+  since: '2026-09-09T08:00:00.000Z',
+  ...over,
+})
+
 const view = (over?: Partial<SupervisorView>): SupervisorView => ({
   report: {
     done: { integrated: 2, awaitingIntegration: 1 },
@@ -57,6 +93,9 @@ const view = (over?: Partial<SupervisorView>): SupervisorView => ({
   // that the row carries both cannot be satisfied by one of them printed twice.
   recent: [decision({}), decision({ id: 'd0', tier: 'proposed', status: 'approved', decidedBy: 'rules', rationale: 'The review cap was the only thing holding it.' })],
   settings: { enabled: true, profile: 'Prefer unblocking over failing.' },
+  // M39 t4: the mailbox block -- every question still waiting on somebody, whether or not the
+  // Supervisor has drafted anything for it.
+  questions: [question()],
   ...over,
 })
 
@@ -356,5 +395,157 @@ describe('SupervisorPanel', () => {
     expect(screen.getByRole('alert').textContent).toContain('the database is down')
     // The proposal is still on screen: a failed read replaces nothing.
     expect(screen.getByTestId('supervisor-proposal-summary')).toBeTruthy()
+  })
+
+  // ---- M39 t4: the drafted answer, its evidence, and the edit box ------------------------------
+
+  describe('a drafted answer', () => {
+    const withDraft = (decisionOver?: Partial<SupervisorView['pending'][number]>): Partial<SupervisorView> => ({
+      pending: [answerDecision(decisionOver)],
+    })
+
+    it('shows the question it would answer, the draft in an editable box, and how confident it is', async () => {
+      await mount(withDraft())
+
+      expect(screen.getByTestId('supervisor-draft-question').textContent).toBe('Which queue should retries land on?')
+      expect((screen.getByTestId('supervisor-draft-body') as HTMLTextAreaElement).value).toBe(
+        'Land them on the payments-retry queue.',
+      )
+      expect(screen.getByTestId('supervisor-draft-confidence').textContent).toContain('interpretation')
+    })
+
+    it('quotes every verified source with where it came from, and marks a rejected one with its reason', async () => {
+      await mount(withDraft())
+
+      const verified = screen.getAllByTestId('supervisor-draft-source')
+      expect(verified).toHaveLength(1)
+      expect(verified[0]?.textContent).toContain('retries go to payments-retry')
+      expect(verified[0]?.textContent).toContain('task')
+      const rejected = screen.getAllByTestId('supervisor-draft-rejected')
+      expect(rejected).toHaveLength(1)
+      expect(rejected[0]?.textContent).toContain('ship by friday')
+      expect(rejected[0]?.textContent).toContain('quote_not_found')
+    })
+
+    it('names both critical signals -- the lexicon match and the model flag', async () => {
+      await mount(withDraft())
+
+      const critical = screen.getByTestId('supervisor-draft-critical').textContent ?? ''
+      expect(critical).toContain('spend')
+      expect(critical).toMatch(/model/i)
+    })
+
+    it('says nothing about critical when neither signal fired', async () => {
+      await mount(
+        withDraft({
+          draft: { ...answerDecision().draft!, critical: { lexicon: [], model: false } },
+        }),
+      )
+
+      expect(screen.queryByTestId('supervisor-draft-critical')).toBeNull()
+    })
+
+    it("seeds the box from a human's earlier edit when the row carries one, and shows it as the edit", async () => {
+      await mount(
+        withDraft({ draft: { ...answerDecision().draft!, editedBody: 'Use the retry topic, not the queue.' } }),
+      )
+
+      expect((screen.getByTestId('supervisor-draft-body') as HTMLTextAreaElement).value).toBe(
+        'Use the retry topic, not the queue.',
+      )
+      expect(screen.getByTestId('supervisor-draft-edited').textContent).toContain('Use the retry topic, not the queue.')
+    })
+
+    it('offers an empty box on an escalated draft that has no body at all, so a human can answer it', async () => {
+      await mount(withDraft({ draft: { ...answerDecision().draft!, body: null } }))
+
+      expect((screen.getByTestId('supervisor-draft-body') as HTMLTextAreaElement).value).toBe('')
+    })
+
+    it('approving an edited draft POSTs the typed body', async () => {
+      await mount(withDraft())
+
+      fireEvent.change(screen.getByTestId('supervisor-draft-body'), { target: { value: 'Use the retry topic.' } })
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('supervisor-approve'))
+      })
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/w/w1/supervisor/decisions/d-answer/approve',
+        expect.objectContaining({ method: 'POST', body: JSON.stringify({ body: 'Use the retry topic.' }) }),
+      )
+      // The write is followed by a re-read, exactly as every other action on this panel is.
+      expect(reads()).toHaveLength(2)
+    })
+
+    it('approving an untouched draft posts no body at all -- the Supervisor\'s own words go out', async () => {
+      await mount(withDraft())
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('supervisor-approve'))
+      })
+
+      const call = fetchMock.mock.calls.find((one) => one[0] === '/api/w/w1/supervisor/decisions/d-answer/approve')
+      expect((call?.[1] as { body?: unknown } | undefined)?.body).toBeUndefined()
+    })
+
+    it('renders a draft, a quote and a question as text, never as markup', async () => {
+      await mount(
+        withDraft({
+          draft: {
+            ...answerDecision().draft!,
+            body: '<img src=x onerror="boom()">',
+            sources: [{ kind: 'task', ref: null, quote: '<script>boom()</script>' }],
+          },
+        }),
+      )
+
+      const box = screen.getByTestId('supervisor-draft-body') as HTMLTextAreaElement
+      expect(box.value).toBe('<img src=x onerror="boom()">')
+      expect(box.querySelector('img')).toBeNull()
+      const source = screen.getByTestId('supervisor-draft-source')
+      expect(source.textContent).toContain('<script>boom()</script>')
+      expect(source.querySelector('script')).toBeNull()
+    })
+
+    it('shows no draft block on a proposal that is not an answer', async () => {
+      await mount()
+
+      expect(screen.queryByTestId('supervisor-draft-body')).toBeNull()
+    })
+  })
+
+  describe('the questions waiting', () => {
+    it('lists every question with who asked it, who it waits on, how many could answer and since when', async () => {
+      await mount({ questions: [question({ holders: 2 })] })
+
+      const rows = screen.getAllByTestId('supervisor-question-row')
+      expect(rows).toHaveLength(1)
+      expect(rows[0]?.textContent).toContain('Which queue should retries land on?')
+      expect(rows[0]?.textContent).toContain('Alex (backend)')
+      expect(rows[0]?.textContent).toContain('anyone with the product role')
+      expect(rows[0]?.textContent).toContain('2')
+    })
+
+    it('says so when nobody is waiting on an answer', async () => {
+      await mount({ questions: [] })
+
+      expect(screen.queryByTestId('supervisor-question-row')).toBeNull()
+      expect(screen.getByTestId('supervisor-questions-empty').textContent).toMatch(/no question/i)
+    })
+
+    it("says when a question nobody holds the role for cannot be answered by anybody", async () => {
+      await mount({ questions: [question({ holders: 0 })] })
+
+      expect(screen.getByTestId('supervisor-question-row').textContent).toMatch(/nobody/i)
+    })
+
+    it('renders a question body as text, never as markup', async () => {
+      await mount({ questions: [question({ body: '<img src=x onerror="boom()">' })] })
+
+      const row = screen.getByTestId('supervisor-question-row')
+      expect(row.textContent).toContain('<img src=x onerror="boom()">')
+      expect(row.querySelector('img')).toBeNull()
+    })
   })
 })
