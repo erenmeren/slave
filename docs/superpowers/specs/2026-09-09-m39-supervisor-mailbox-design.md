@@ -52,4 +52,7 @@ For a question situation the pass runs: candidates → if the chosen (by model o
 Changing dispatch order for a stale question's holder; thresholds as settings; multi-workspace supervision; answering questions a human asked; the rotating model cursor (E8) and the remaining panel polish.
 
 ## 8. Errata — where execution corrects this spec
-(appended during execution)
+### Plan writing (2026-09-09)
+- **E1 — `Source.ref`.** Required only for `kind: 'message'` (the thread message id); `task`, `goal` and `run_context` are single-valued for a question and `ref` is ignored — a test fixture cannot know a task id.
+- **E2 — the lexicon short-circuits.** When `criticalMatches(body)` is non-empty no answer call is made: the decision is `escalated` with `draft: { body: null, sources: [], critical: { lexicon, model: false }, confidence: 'interpretation' }`. The model's `critical` flag is only consulted when an answer call happened.
+- **E3 — fake CLI answer arm.** Keys on the literal `"sources"` in the prompt and replays the fixture named by `FAKE_CLAUDE_ANSWER_FIXTURE` (default `supervisor-answer`), so a gate chooses sourced vs unsourced per daemon spawn.
