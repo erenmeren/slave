@@ -20,8 +20,10 @@ CREATE UNIQUE INDEX "GoalVersion_workspaceId_version_key" ON "GoalVersion"("work
 ALTER TABLE "GoalVersion" ADD CONSTRAINT "GoalVersion_workspaceId_fkey"
     FOREIGN KEY ("workspaceId") REFERENCES "Workspace"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
--- The latest version, mirrored on the workspace beside the `goal` cache it belongs to. 0 means the
--- goal has never been set, which is also the only state in which `goal` is null.
+-- The latest version, mirrored on the workspace beside the `goal` cache it belongs to. 0 means "no
+-- version recorded". The backfill below makes that "the goal has never been set" for every row that
+-- exists today; it only BECOMES an invariant once M40 Task 2 makes `setGoal` versioned, since until
+-- then that verb writes `goal` without moving this column.
 ALTER TABLE "Workspace" ADD COLUMN "goalVersion" INTEGER NOT NULL DEFAULT 0;
 
 -- Which plan version produced this task. Nullable, and null is a real value: a hand-made task was

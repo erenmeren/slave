@@ -83,13 +83,50 @@ describe('runContextManifestSchema', () => {
     expect(runContextManifestSchema.safeParse(manifest).success).toBe(true)
   })
 
-  it('rejects a task source missing its sha256 -- a pre-M40 row is a row this version cannot read', () => {
-    const malformed = { kind: 'implementation', sections: [{ kind: 'task', taskId: 't1' }] }
+  /**
+   * Fix round 1, Important 1. The two fields M40 added to EXISTING source kinds are optional on
+   * read. Every `RunContext` row written before this milestone carries neither, and both readers --
+   * `show-context` (`apps/orchestrator/src/cli.ts`) and the web's run-context route -- turn a parse
+   * failure into a hard error rather than a degraded render, so requiring them would have made
+   * every historical run's context unreadable. The write site stays strict (Task 3 asserts it).
+   */
+  it('accepts a pre-M40 task source with no sha256', () => {
+    const preM40 = { kind: 'implementation', sections: [{ kind: 'task', taskId: 't1' }] }
+    const parsed = runContextManifestSchema.safeParse(preM40)
+    expect(parsed.success).toBe(true)
+    if (parsed.success) expect(parsed.data.sections[0]).toEqual({ kind: 'task', taskId: 't1' })
+  })
+
+  it('accepts a pre-M40 planning_goal source with no version', () => {
+    const preM40 = { kind: 'planning', sections: [{ kind: 'planning_goal', sha256: 'c'.repeat(64) }] }
+    const parsed = runContextManifestSchema.safeParse(preM40)
+    expect(parsed.success).toBe(true)
+    if (parsed.success) expect(parsed.data.sections[0]).toEqual({ kind: 'planning_goal', sha256: 'c'.repeat(64) })
+  })
+
+  // Absent and WRONG are different states: tolerating a missing field is not tolerating a
+  // malformed one, and a hand-edited row must still be refused.
+  it('rejects a task source whose sha256 is not a string', () => {
+    const malformed = { kind: 'implementation', sections: [{ kind: 'task', taskId: 't1', sha256: 42 }] }
     expect(runContextManifestSchema.safeParse(malformed).success).toBe(false)
   })
 
-  it('rejects a planning_goal source missing its version', () => {
-    const malformed = { kind: 'planning', sections: [{ kind: 'planning_goal', sha256: 'c'.repeat(64) }] }
+  it('rejects a planning_goal source whose version is negative', () => {
+    const malformed = { kind: 'planning', sections: [{ kind: 'planning_goal', sha256: 'c'.repeat(64), version: -1 }] }
+    expect(runContextManifestSchema.safeParse(malformed).success).toBe(false)
+  })
+
+  it('rejects a planning_goal source whose version is not a whole number', () => {
+    const malformed = { kind: 'planning', sections: [{ kind: 'planning_goal', sha256: 'c'.repeat(64), version: 1.5 }] }
+    expect(runContextManifestSchema.safeParse(malformed).success).toBe(false)
+  })
+
+  // The `replan` source is M40's OWN kind: no row predates it, so nothing about it is optional.
+  it('still rejects a replan source missing a field -- there is no pre-M40 replan row to tolerate', () => {
+    const malformed = {
+      kind: 'planning',
+      sections: [{ kind: 'replan', previousVersion: 1, version: 2, previousSha256: 'a', boardTaskIds: [] }],
+    }
     expect(runContextManifestSchema.safeParse(malformed).success).toBe(false)
   })
 

@@ -53,15 +53,27 @@ export type SectionSource =
   | { readonly kind: 'inbox'; readonly messageIds: readonly string[] }
   | { readonly kind: 'ask_protocol' }
   | { readonly kind: 'answer_protocol' }
-  /** M40 §1, "the hash is the hook": `sha256` of the task's `title + '\n' + description` as the
-   *  run actually saw it. Task text is immutable today, so this is provenance a reader can check
-   *  rather than a change detector -- and the moment editing arrives it becomes both. */
-  | { readonly kind: 'task'; readonly taskId: string; readonly sha256: string }
+  /**
+   * M40 §1, "the hash is the hook": `sha256` of the task's `title + '\n' + description` as the
+   * run actually saw it. Task text is immutable today, so this is provenance a reader can check
+   * rather than a change detector -- and the moment editing arrives it becomes both.
+   *
+   * OPTIONAL, and only on READ (M40 t1 fix round 1, Important 1). Every `RunContext` row written
+   * before M40 records a `task` source with no hash, and this schema's whole job is that "a
+   * hand-edited or pre-migration row cannot crash a reader" -- both readers (`show-context` in
+   * `apps/orchestrator/src/cli.ts`, the web's run-context route) turn a parse failure into a hard
+   * error, so requiring it made every historical run's context unreadable. The WRITE site is
+   * strict: `buildRunContext` always sets it, and M40 Task 3 asserts that every manifest it builds
+   * carries both this and {@link SectionSource}'s `planning_goal.version`.
+   */
+  | { readonly kind: 'task'; readonly taskId: string; readonly sha256?: string | undefined }
   | { readonly kind: 'rejection'; readonly taskId: string }
   | { readonly kind: 'review_diff'; readonly base: string; readonly head: string; readonly capped: boolean }
   /** `version` is `Workspace.goalVersion` at dispatch (M40 §1) -- which `GoalVersion` row this
-   *  prompt's goal text IS, so a plan can be traced to the requirement that produced it. */
-  | { readonly kind: 'planning_goal'; readonly sha256: string; readonly version: number }
+   *  prompt's goal text IS, so a plan can be traced to the requirement that produced it. OPTIONAL
+   *  on read for the same reason as `task.sha256` above: a pre-M40 planning run recorded no
+   *  version, and a reader must still be able to show what that run saw. */
+  | { readonly kind: 'planning_goal'; readonly sha256: string; readonly version?: number | undefined }
   /** M40 §3: the goal CHANGED and the board is not empty. Both ends of the move (version and hash)
    *  plus the board the delta was read against, so a `workspace.replanned` can be checked against
    *  the exact list of ids the manager was shown. */
@@ -109,7 +121,9 @@ const inboxSourceSchema = z.object({
 const askProtocolSourceSchema = z.object({ kind: z.literal('ask_protocol') })
 const answerProtocolSourceSchema = z.object({ kind: z.literal('answer_protocol') })
 
-const taskSourceSchema = z.object({ kind: z.literal('task'), taskId: z.string(), sha256: z.string() })
+// `sha256` optional on read (fix round 1), NOT loose: a row that carries the key must carry a
+// string, so a hand-edited `sha256: 42` is still refused. Absent and wrong are different states.
+const taskSourceSchema = z.object({ kind: z.literal('task'), taskId: z.string(), sha256: z.string().optional() })
 const rejectionSourceSchema = z.object({ kind: z.literal('rejection'), taskId: z.string() })
 
 const reviewDiffSourceSchema = z.object({
@@ -119,10 +133,12 @@ const reviewDiffSourceSchema = z.object({
   capped: z.boolean(),
 })
 
+// Same rule as `task.sha256`: absent parses (a pre-M40 row), present-and-malformed does not -- a
+// negative or fractional version is not a `GoalVersion` any workspace can have.
 const planningGoalSourceSchema = z.object({
   kind: z.literal('planning_goal'),
   sha256: z.string(),
-  version: z.number().int().nonnegative(),
+  version: z.number().int().nonnegative().optional(),
 })
 
 const replanSourceSchema = z.object({
@@ -152,6 +168,11 @@ const sectionSourceSchema = z.discriminatedUnion('kind', [
  * Validates a stored `RunContext.sections` `Json` value at read (M37 §3) -- so a hand-edited or
  * pre-migration row cannot crash a reader (the CLI's `show-context`, Task 4's web route) that
  * expects the {@link Manifest} shape.
+ *
+ * READ-tolerant, WRITE-strict (M40 t1 fix round 1): a field this milestone added to an EXISTING
+ * source kind is optional here, because rows predating it exist and both readers turn a parse
+ * failure into a hard error. A field on a source kind M40 itself introduced (`replan`) is required
+ * -- there is no history of it to be tolerant of.
  */
 export const runContextManifestSchema: z.ZodType<Manifest> = z.object({
   kind: z.enum(['implementation', 'review', 'planning']),

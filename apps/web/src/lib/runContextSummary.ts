@@ -63,8 +63,14 @@ export function sectionLine(source: SectionSource): SectionLine {
     case 'answer_protocol':
       return { kind: source.kind, detail: 'how to answer a question it was asked', missing: [] }
     case 'task':
-      // M40 t1: the hash of the task text this run saw, beside the task it names.
-      return { kind: source.kind, detail: `TASK-${short(source.taskId)} (sha ${short(source.sha256)})`, missing: [] }
+      // M40 t1: the hash of the task text this run saw, beside the task it names. Absent on a
+      // pre-M40 row (fix round 1: the field is optional on read), and the honest render of that is
+      // the task reference alone -- not "(sha undefined)".
+      return {
+        kind: source.kind,
+        detail: source.sha256 === undefined ? `TASK-${short(source.taskId)}` : `TASK-${short(source.taskId)} (sha ${short(source.sha256)})`,
+        missing: [],
+      }
     case 'rejection':
       return { kind: source.kind, detail: `why TASK-${short(source.taskId)} came back`, missing: [] }
     case 'review_diff':
@@ -76,7 +82,11 @@ export function sectionLine(source: SectionSource): SectionLine {
     case 'planning_goal':
       return {
         kind: source.kind,
-        detail: `the workspace goal v${String(source.version)} (sha ${short(source.sha256)})`,
+        // Same rule: a pre-M40 planning run recorded no version, so it is simply not named.
+        detail:
+          source.version === undefined
+            ? `the workspace goal (sha ${short(source.sha256)})`
+            : `the workspace goal v${String(source.version)} (sha ${short(source.sha256)})`,
         missing: [],
       }
     // M40 t1, minimal: a re-plan run's own section. Task 4 gives it the diff a human reads.

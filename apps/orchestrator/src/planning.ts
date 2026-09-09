@@ -102,8 +102,15 @@ export async function concludePlanning(runId: RunId): Promise<void> {
           // M40 §1: which requirement produced this task. `workspace.goalVersion` IS the version
           // of the `goal` this run was given (Task 3 adds the delta re-plan, where the version a
           // task is stamped with is the one the re-plan derived from rather than simply the
-          // latest). 0 only on a workspace whose goal predates M40's backfill, which cannot
-          // happen: the backfill stamped every workspace that had a goal.
+          // latest).
+          //
+          // 0 IS REACHABLE until M40 Task 2 (fix round 1, Minor 1): the migration's backfill
+          // stamped every workspace that had a goal at the time it ran, but `setGoal` does not yet
+          // insert a `GoalVersion` or move this column, so a goal set in the Task 1 -> Task 2
+          // window leaves a workspace at 0 with a real goal. Stamped as it is rather than guarded:
+          // 0 is a truthful "no version was recorded for this", every reader tolerates it
+          // (`summarise`'s stale count needs `goalVersion < world.goalVersion`, which 0 < 0 is
+          // not), and inventing a 1 here would name a `GoalVersion` row that does not exist.
           goalVersion: workspace.goalVersion,
         },
       })

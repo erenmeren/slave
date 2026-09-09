@@ -130,6 +130,11 @@ describe('renderRunContext', () => {
     // arm, and `"verdict"` -- which this text must never contain -- would misroute it to review.
     expect(PLANNING_GRAPH_INSTRUCTIONS).toContain('"task graph"')
     expect(PLANNING_GRAPH_INSTRUCTIONS).not.toContain('"verdict"')
+    // Fix round 1, Minor 2: the guard cuts BOTH ways. `delta.test.ts` proves the re-plan trailer
+    // carries no `"task graph"`; this proves the first-plan trailer carries no `replan`. The fake
+    // CLI checks `"replan"` FIRST, so a first-plan prompt that merely mentioned the word would be
+    // answered with a delta fixture -- and the one-sided assertion would not have noticed.
+    expect(PLANNING_GRAPH_INSTRUCTIONS).not.toContain('replan')
   })
 
   // M40 t1 (spec erratum E2): the trailer, not the run kind, is what makes a re-plan a re-plan.
