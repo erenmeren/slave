@@ -125,20 +125,29 @@ interface Choice {
 export async function supervise(deps: SuperviseDeps): Promise<SuperviseReport> {
   const now = deps.now?.() ?? new Date()
 
-  // The switch FIRST, in one indexed read, and before anything expensive (fix round 1, Important
-  // 1). Report only (spec §1) means exactly that: no world, no rows, no events, no model calls.
-  // `recordDecision` would refuse each situation anyway, but a daemon ticking once a second
-  // against a switched-off project would still be paying for a full world load every second to
-  // learn nothing. A missing project stops here too -- there is nothing to supervise and no reason
-  // to let the loader throw about it.
-  const settings = await supervisorSettings(deps.workspaceId)
-  if (settings === null || !settings.enabled) return NO_SUPERVISION
-
-  // Before the world is read: an expired proposal must not still be blocking its situation key
-  // when `filterFresh` looks at the decisions this instant.
+  // The expiry sweep runs FIRST and runs ALWAYS -- before the switch, before the world (fix round 2,
+  // spec §5). Two reasons, and the second is the one that made this a regression when it briefly
+  // sat behind the enabled check: a proposal past its TTL must not still be blocking its situation
+  // key when `filterFresh` looks at the decisions this instant, and a proposal in a SWITCHED-OFF
+  // workspace must not stay `pending` -- and approvable -- forever. Switching the Supervisor off
+  // stops it deciding; it does not freeze the questions it already asked. One indexed `findMany`
+  // and, almost always, nothing to do.
   await expirePendingDecisions(deps.workspaceId, now)
 
-  const { world } = await (deps.loadWorld ?? loadSupervisorWorld)(deps.workspaceId, now)
+  // The switch next, in one indexed read, and before anything expensive (fix round 1, Important 1).
+  // Report only (spec §1) means exactly that: no world, no decisions, no events, no model calls.
+  // `recordDecision` would refuse each situation anyway, but a daemon ticking once a second against
+  // a switched-off project would still be paying for a full world load every second to learn
+  // nothing. A missing project stops here too -- there is nothing to supervise and no reason to let
+  // the loader throw about it.
+  const enabled = await supervisorSettings(deps.workspaceId)
+  if (enabled === null || !enabled.enabled) return NO_SUPERVISION
+
+  // From here on the SNAPSHOT's settings are the ones that count (fix round 2, spec §5). The read
+  // above decided only whether to load a world at all; the profile that goes into a prompt has to
+  // be the one that was true inside the world the decision is made on, not one read a few
+  // milliseconds earlier on a different connection.
+  const { world, settings } = await (deps.loadWorld ?? loadSupervisorWorld)(deps.workspaceId, now)
 
   const situations = filterFresh(observe(world), world)
   // The seam, resolved once for the pass: a decider AND a model to aim it at, a budget that is not

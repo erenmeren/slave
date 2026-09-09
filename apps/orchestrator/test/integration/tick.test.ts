@@ -595,6 +595,116 @@ describe('tick', () => {
       expect(rows[0]?.action).toMatchObject({ kind: 'escalate_to_human' })
     })
 
+    /** A decider that answers if it is ever asked -- so "no model call" is a fact about the gate,
+     *  not about the fixture having nothing to say. */
+    function watchfulDecider(): { readonly decider: ModelDecider; readonly prompts: string[] } {
+      const prompts: string[] = []
+      return {
+        prompts,
+        decider: (input) => {
+          prompts.push(input.prompt)
+          return Promise.resolve({
+            kind: 'answer',
+            text: '{"candidateIndex": 0, "rationale": "never asked"}',
+            costUsd: 1,
+            tokens: null,
+            numTurns: 1,
+          })
+        },
+      }
+    }
+
+    /** Spends `usd` on a concluded run of this workspace -- what the budget guardrail reads. */
+    async function spend(usd: number): Promise<void> {
+      await prisma.slaveRun.create({
+        data: { slaveId: fixture.slaveId, status: 'succeeded', kind: 'implementation', costUsd: usd, terminalAt: new Date() },
+      })
+    }
+
+    /**
+     * Erratum E7. `tick()` halts on five guardrail breaches and only ONE of them (an emergency
+     * stop) writes `Workspace.haltedReason` -- so before this, a budget-exhausted or circuit-broken
+     * workspace reached the Supervisor looking perfectly healthy: no `workspace_halted`, routine
+     * actions applying, and the model seam open. The halt the Supervisor sees is now the
+     * scheduler's own guardrail evaluation, minus concurrency.
+     */
+    it('sees an exhausted budget as a halt even though nothing wrote haltedReason', async (): Promise<void> => {
+      const blocked = await parkedAtTheReviewCap()
+      await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { budgetUsd: 1 } })
+      await spend(2)
+      const watcher = watchfulDecider()
+
+      const report = await tick({ ...deps, supervisorDecider: watcher.decider, supervisorModel: 'claude-sonnet-5' })
+
+      expect(report.halted).toBe('budget_exhausted')
+      expect(report.supervisor).toMatchObject({ decided: 2, applied: 0, proposed: 2, modelCalls: 0, rulesOnly: true })
+      expect(watcher.prompts).toEqual([])
+      const rows = await prisma.supervisorDecision.findMany({ where: { workspaceId: fixture.workspaceId } })
+      const halt = rows.find((row) => row.situationKind === 'workspace_halted')
+      expect(halt).toMatchObject({ tier: 'escalated', status: 'pending', decidedBy: 'rules', modelCalled: false })
+      expect(halt?.action).toMatchObject({ kind: 'escalate_to_human' })
+      // And the action that WOULD have been routine here is offered as a proposal instead: a halted
+      // workspace is one a guardrail stopped, so the Supervisor may only say what it would do. With
+      // no routine candidate left to pick, the rules escalate rather than choose a proposal on a
+      // human's behalf -- so the row is an escalation whose catalogue records the unblock as
+      // `proposed`, and nothing was applied.
+      const capped = rows.find((row) => row.situationKind === 'review_cap_blocked')
+      expect(capped?.status).toBe('pending')
+      expect(capped?.tier).not.toBe('applied')
+      expect((capped?.candidates as { action: { kind: string }; tier: string }[])[0]).toMatchObject({
+        action: { kind: 'unblock_task' },
+        tier: 'proposed',
+      })
+      expect((await prisma.task.findUniqueOrThrow({ where: { id: blocked } })).status).toBe('blocked')
+    })
+
+    it('sees a tripped circuit breaker as a halt too', async (): Promise<void> => {
+      const blocked = await parkedAtTheReviewCap()
+      for (let index = 0; index < 3; index += 1) {
+        await prisma.slaveRun.create({
+          data: {
+            slaveId: fixture.slaveId,
+            status: 'failed',
+            kind: 'implementation',
+            terminalAt: new Date(Date.now() - index * 60_000),
+          },
+        })
+      }
+      const watcher = watchfulDecider()
+
+      const report = await tick({ ...deps, supervisorDecider: watcher.decider, supervisorModel: 'claude-sonnet-5' })
+
+      expect(report.halted).toBe('circuit_breaker')
+      expect(watcher.prompts).toEqual([])
+      const rows = await prisma.supervisorDecision.findMany({ where: { workspaceId: fixture.workspaceId } })
+      expect(rows.find((row) => row.situationKind === 'workspace_halted')).toMatchObject({
+        tier: 'escalated',
+        status: 'pending',
+        decidedBy: 'rules',
+        modelCalled: false,
+      })
+      expect((await prisma.task.findUniqueOrThrow({ where: { id: blocked } })).status).toBe('blocked')
+    })
+
+    it('does not call a workspace merely at its concurrency cap halted, and still applies a routine unblock', async (): Promise<void> => {
+      const blocked = await parkedAtTheReviewCap()
+      await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { maxConcurrentRuns: 1 } })
+      await prisma.slaveRun.create({
+        data: { slaveId: fixture.slaveId, status: 'working', kind: 'implementation' },
+      })
+
+      const report = await tick(deps)
+
+      // `decide()` HAS halted scheduling -- and the Supervisor deliberately disagrees: a workspace
+      // at its run cap is busy, not stuck. Escalating that would put a proposal in front of a human
+      // every time the machine was working, and freeze every routine action while it did.
+      expect(report.halted).toBe('concurrency')
+      const rows = await prisma.supervisorDecision.findMany({ where: { workspaceId: fixture.workspaceId } })
+      expect(rows.map((row) => row.situationKind)).toEqual(['review_cap_blocked'])
+      expect(rows[0]).toMatchObject({ tier: 'applied', status: 'applied' })
+      expect((await prisma.task.findUniqueOrThrow({ where: { id: blocked } })).status).toBe('rework')
+    })
+
     it('reports a supervisor that decided nothing on the paths that never reach it', async (): Promise<void> => {
       await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { archivedAt: new Date() } })
 

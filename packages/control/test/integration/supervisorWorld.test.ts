@@ -2,6 +2,7 @@ import { prisma } from '@slave-of-ai/db/client'
 import { SUPERVISOR_PER_CALL_CAP_USD } from '@slave-of-ai/domain'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { workspaceSpend } from '../../src/spend.js'
+import { workspaceStats } from '../../src/stats.js'
 import { loadSupervisorWorld } from '../../src/supervisorWorld.js'
 
 const NOW = new Date('2026-09-09T12:00:00.000Z')
@@ -278,6 +279,102 @@ describe('loadSupervisorWorld', () => {
 
     const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
     expect(world.budgetExhausted).toBe(false)
+  })
+})
+
+describe('the halt the Supervisor sees (erratum E7)', () => {
+  beforeEach(reset)
+
+  /** Spends `usd` on a concluded run, which is what a budget guardrail reads. */
+  async function spend(fixture: Fixture, usd: number): Promise<void> {
+    const slave = await prisma.slave.create({
+      data: { teamId: fixture.teamId, name: `Spender ${String(Math.random()).slice(2)}`, role: 'backend', runtimeRoles: ['backend'] },
+    })
+    await prisma.slaveRun.create({ data: { slaveId: slave.id, status: 'succeeded', kind: 'implementation', costUsd: usd } })
+  }
+
+  it('prefers the durable reason when the workspace carries one', async (): Promise<void> => {
+    const fixture = await seed({ haltedReason: 'verify command failed: npm test' })
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
+    expect(world.halted).toEqual({ reason: 'verify command failed: npm test' })
+  })
+
+  it('halts on an exhausted budget even though nothing wrote haltedReason', async (): Promise<void> => {
+    // The regression this erratum fixes: only an emergency stop (and the pause/verify/merge halts)
+    // ever writes `haltedReason`, so a workspace `decide()` had stopped scheduling entirely looked
+    // perfectly healthy to the Supervisor -- routine actions applying, the model seam open.
+    const fixture = await seed({ budgetUsd: 1 })
+    await spend(fixture, 2)
+
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
+    expect(world.halted).toEqual({ reason: 'budget_exhausted' })
+    expect(world.budgetExhausted).toBe(true)
+  })
+
+  it('halts on the circuit breaker', async (): Promise<void> => {
+    const fixture = await seed()
+    const slave = await prisma.slave.create({
+      data: { teamId: fixture.teamId, name: 'Unlucky', role: 'backend', runtimeRoles: ['backend'] },
+    })
+    for (let index = 0; index < 3; index += 1) {
+      await prisma.slaveRun.create({
+        data: { slaveId: slave.id, status: 'failed', kind: 'implementation', terminalAt: ago(index * 60_000) },
+      })
+    }
+
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
+    expect(world.halted).toEqual({ reason: 'circuit_breaker' })
+  })
+
+  it('does NOT halt on a concurrency cap -- a busy workspace is not a stuck one', async (): Promise<void> => {
+    const fixture = await seed()
+    await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { maxConcurrentRuns: 1 } })
+    const slave = await prisma.slave.create({
+      data: { teamId: fixture.teamId, name: 'Busy', role: 'backend', runtimeRoles: ['backend'] },
+    })
+    await prisma.slaveRun.create({ data: { slaveId: slave.id, status: 'working', kind: 'implementation' } })
+
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
+    // `decide()` HAS halted scheduling here (concurrency halts it), and the Supervisor deliberately
+    // does not agree: escalating "this workspace is halted" every time it is at its run cap would
+    // put a proposal in front of a human for ordinary operation, and freeze every routine action
+    // while it did.
+    expect(world.halted).toBeNull()
+  })
+
+  it('leaves an idle, solvent, unbroken workspace unhalted', async (): Promise<void> => {
+    const fixture = await seed({ budgetUsd: 100 })
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
+    expect(world.halted).toBeNull()
+    expect(world.budgetExhausted).toBe(false)
+  })
+})
+
+describe('workspaceStats', () => {
+  beforeEach(reset)
+
+  it('reads the limits, the run counts, the streak and the halt in one go', async (): Promise<void> => {
+    const fixture = await seed({ budgetUsd: 5, haltedReason: 'emergency stop' })
+    const slave = await prisma.slave.create({
+      data: { teamId: fixture.teamId, name: 'Alex', role: 'backend', runtimeRoles: ['backend'] },
+    })
+    await prisma.slaveRun.create({ data: { slaveId: slave.id, status: 'working', kind: 'implementation' } })
+    await prisma.slaveRun.create({
+      data: { slaveId: slave.id, status: 'failed', kind: 'implementation', costUsd: 1.25, terminalAt: NOW },
+    })
+
+    const snapshot = await workspaceStats(fixture.workspaceId)
+
+    expect(snapshot.limits).toMatchObject({ budgetUsd: 5, maxConcurrentRuns: 3, maxGlobalConcurrentRuns: 6 })
+    expect(snapshot.stats).toMatchObject({
+      activeRuns: 1,
+      spentUsd: 1.25,
+      consecutiveFailures: 1,
+      emergencyStopped: true,
+    })
+    expect(snapshot.stats.globalActiveRuns).toBeGreaterThanOrEqual(1)
+    expect(snapshot.haltedReason).toBe('emergency stop')
+    expect(snapshot.spend.runsMeasuredUsd).toBe(1.25)
   })
 })
 

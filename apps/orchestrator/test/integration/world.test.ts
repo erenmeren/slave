@@ -1,4 +1,5 @@
 import { SUPERVISOR_PER_CALL_CAP_USD, decide, slaveId, taskId, workspaceId } from '@slave-of-ai/domain'
+import { workspaceStats } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { loadWorld } from '../../src/world.js'
@@ -485,6 +486,25 @@ describe('loadWorld stats.activeRuns and stats.spentUsd', () => {
 
     expect(world.stats.spentUsd).toBe(2 + 0.25 + 2 * SUPERVISOR_PER_CALL_CAP_USD)
     expect(supervisorSpend).toEqual({ measuredUsd: 0.25, unmeasuredCalls: 2 })
+  })
+
+  /**
+   * Erratum E7: `loadWorld`'s limits and stats now come from control's `workspaceStats`, the same
+   * helper `loadSupervisorWorld` reads, so the halt the scheduler acts on and the halt the
+   * Supervisor sees cannot be two different halts. This is the parity assertion for that move --
+   * the helper must return exactly what `loadWorld` puts in front of `decide()`.
+   */
+  it('reads its limits and stats from the same control helper the Supervisor does', async (): Promise<void> => {
+    const id = await seedRuns([
+      { status: 'working', startedAt: at('2026-01-01T00:00:00Z'), costUsd: 1 },
+      { status: 'failed', startedAt: at('2026-01-02T00:00:00Z'), terminalAt: at('2026-01-02T01:00:00Z'), costUsd: 2 },
+    ])
+
+    const { world } = await loadWorld(workspaceId(id))
+    const snapshot = await workspaceStats(id)
+
+    expect(snapshot.stats).toEqual(world.stats)
+    expect(snapshot.limits).toEqual(world.limits)
   })
 
   it('reports zero spend rather than null when a workspace has no runs at all', async (): Promise<void> => {

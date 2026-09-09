@@ -1,63 +1,21 @@
+import { workspaceStats } from '@slave-of-ai/control'
+import { prisma, type Prisma } from '@slave-of-ai/db/client'
 import {
   slaveId,
   taskId,
   NON_TERMINAL_RUN_STATUSES,
-  type RunStatus,
   type SchedulableSlave,
   type SchedulableTask,
   type TaskStatus,
   type WorkspaceId,
   type World,
 } from '@slave-of-ai/domain'
-import { workspaceSpend } from '@slave-of-ai/control'
-import { prisma, type Prisma } from '@slave-of-ai/db/client'
 
 // Re-exported so `cli.ts` and `sweep.ts` keep importing it from here -- the statuses an
 // `SlaveRun` can still leave (a slave holding one of these is busy) now live in
 // `packages/domain/src/run/state.ts`, the one place the web and the orchestrator both read them
 // from, so the two cannot drift onto different definitions of "not finished".
 export { NON_TERMINAL_RUN_STATUSES } from '@slave-of-ai/domain'
-
-type RunStatusKind = 'non_terminal' | 'concluded' | 'terminal_uncounted'
-
-/**
- * Every `RunStatus` classified exactly once. `CONCLUDED_RUN_STATUSES` below is *derived* from
- * this map rather than written out independently, so a tenth `RunStatus` added to
- * `packages/domain` breaks this build -- `satisfies Record<RunStatus, …>` demands a key per
- * member -- instead of quietly falling outside every list, where it would stay invisible to the
- * failure breaker.
- *
- * `non_terminal` here must still agree with `NON_TERMINAL_RUN_STATUSES`, imported above from
- * `packages/domain/src/run/state.ts` -- this map no longer derives that constant (it is the
- * domain's now), but it still has to classify every `RunStatus` to stay exhaustive, and "busy"
- * and "non-terminal" are the same question asked of two different tables.
- *
- * `stopped` is deliberately neither kind: it is terminal, so it releases the slave that held it,
- * but an operator stopping a run is not the run failing. It must not count toward the failure
- * streak, and it must not break one either -- a single stop should not launder away a real streak.
- */
-const RUN_STATUS_KIND = {
-  starting: 'non_terminal',
-  working: 'non_terminal',
-  pause_requested: 'non_terminal',
-  paused: 'non_terminal',
-  resuming: 'non_terminal',
-  stopping: 'non_terminal',
-  stopped: 'terminal_uncounted',
-  succeeded: 'concluded',
-  failed: 'concluded',
-} satisfies Record<RunStatus, RunStatusKind>
-
-function statusesOfKind(kind: RunStatusKind): readonly RunStatus[] {
-  return (Object.keys(RUN_STATUS_KIND) as RunStatus[]).filter((status) => RUN_STATUS_KIND[status] === kind)
-}
-
-/**
- * The only statuses a run's `consecutiveFailures` streak can be counted from -- a run still in
- * progress has not concluded either way, so it contributes nothing to the streak and must not
- * break it either.
- */
-const CONCLUDED_RUN_STATUSES: readonly RunStatus[] = statusesOfKind('concluded')
 
 export interface LoadedWorld {
   readonly world: World
@@ -160,112 +118,6 @@ async function loadSlaveRows(
 }
 
 /**
- * `stats.activeRuns` and `stats.spentUsd` are aggregated from every `SlaveRun` belonging to the
- * workspace's tasks -- there is no `SlaveRun.workspaceId` column, so both queries join through
- * `Task`. Spend is summed across *every* run regardless of status, not just non-terminal ones:
- * spec §4 notes that summing `costUsd` across a task's run segments is the correct accounting
- * (ADR 0001 Q3 measured each segment's `total_cost_usd` as that segment's own total, not a
- * running session total), and a run that already finished still spent real money.
- */
-async function loadRunStats(
-  tx: Prisma.TransactionClient,
-  workspaceId: WorkspaceId,
-): Promise<{
-  readonly activeRuns: number
-  readonly globalActiveRuns: number
-  readonly spentUsd: number
-  readonly consecutiveFailures: number
-  /** The Supervisor's share of `spentUsd`, split for the surfaces -- see `LoadedWorld`. */
-  readonly supervisorSpend: { readonly measuredUsd: number; readonly unmeasuredCalls: number }
-}> {
-  // `slave: { team: { workspaceId } }`, not `task: { workspaceId }`: a `planning` run (M8b) has no
-  // `Task` row, and it still occupies a concurrency slot and spends real money -- scoping through
-  // `Task` would silently drop it from both figures below.
-  const activeRuns = await tx.slaveRun.count({
-    where: { status: { in: [...NON_TERMINAL_RUN_STATUSES] }, slave: { team: { workspaceId } } },
-  })
-  const globalActiveRuns = await tx.slaveRun.count({
-    where: { status: { in: [...NON_TERMINAL_RUN_STATUSES] } },
-  })
-  // Aggregates, not `sumSpend` -- unlike `overview.ts` and `org.ts`, which read the same spend
-  // through it (M12 Task 9, ruling R3, corrected in fix round F3). The difference is the CONSUMER,
-  // not the arithmetic:
-  //
-  // This figure feeds `evaluateGuardrails`, and ruling R8 keeps `unknownRuns` out of the guardrail
-  // deliberately -- a breach keyed on unmeasured RUNS would fire on every healthy tick, because a
-  // live run's cost is null until it concludes. So the second half of `sumSpend`'s pair would be
-  // computed and thrown away here, while the first half is numerically identical to what `_sum`
-  // already returns: Postgres' `sum()` skips NULLs, which is the same rule `sumSpend.known`
-  // applies. Paying for it would mean transferring one float per run of the workspace's ENTIRE
-  // history, inside `loadWorld`'s transaction with a cumulative 15 s budget, on the tick's hot
-  // path, to compute a number that does not change.
-  //
-  // M38 §5: the sum now runs in `packages/control/src/spend.ts` (`workspaceSpend`), and includes
-  // the SUPERVISOR's own model calls -- measured, plus every unmeasured one at
-  // `SUPERVISOR_PER_CALL_CAP_USD`. That is the whole point of putting it there: `loadSupervisorWorld`
-  // reads the identical formula for `budgetExhausted`, so the guardrail that halts scheduling and
-  // the gate that stops the Supervisor calling a model can never disagree about what a workspace
-  // has spent. It runs on `tx`, so it is read from this snapshot and not a later one. An unmeasured
-  // supervisor CALL is charged (unlike an unmeasured run) because it is finished: nothing will ever
-  // report its cost, so zero would be the wrong guess and the cap is the honest ceiling.
-  const spend = await workspaceSpend(workspaceId, tx)
-
-  // Most recently concluded first, so the leading run of the list is the one the streak counts
-  // from. `SlaveRun.terminalAt` is written by the event pump as of Task 12 -- when this was first
-  // written nothing populated it, and the COALESCE below was defensive; it is now load-bearing for
-  // every run the pump concludes, while rows written before it still carry `null`. A bare
-  // `ORDER BY "terminalAt" DESC` is therefore not merely imprecise, it is a trap: Postgres sorts
-  // `DESC` as NULLS FIRST, so the moment a later task starts populating the column, every legacy
-  // null row jumps to the front and *inverts* the streak -- three ancient failures ahead of
-  // today's success reads as `consecutiveFailures: 3`, which trips the circuit breaker into a
-  // permanent halt on a workspace that is succeeding. `COALESCE` states what is actually true: a
-  // run's position in the streak is when it concluded, and `startedAt` is the stand-in for rows
-  // that predate the pump writing the column. `startedAt DESC` then breaks ties.
-  //
-  // Raw SQL rather than Prisma's `orderBy`, which cannot express a `COALESCE` sort key.
-  //
-  // Deliberately unbounded: the loop below stops at the first non-`failed` run, but the query
-  // returns every run the workspace has ever concluded. A `LIMIT` would bound the transfer, and
-  // the only bound that is certainly safe -- the workspace's `consecutiveFailureLimit` -- would
-  // also cap the reported number, turning `stats.consecutiveFailures` from "the streak" into
-  // "the streak, up to the limit". `evaluateGuardrails` only ever compares it with `>=` so it
-  // would not notice, but a later consumer reading the figure as a count would. One status column
-  // per concluded run is cheap enough that the trade is not worth making blind; revisit it against
-  // a workspace with a real run history rather than a fixture.
-  // Joined through `Slave`/`Team`, not `Task`: a `planning` run (M8b) has no `Task` row, and a
-  // garbage planner must still feed the circuit breaker like any other slave (the M8a review-run
-  // precedent) -- a join through `Task` alone would let it fail forever with no streak to halt it.
-  const concludedRuns = await tx.$queryRaw<{ readonly status: RunStatus }[]>`
-    SELECT r.status::text AS status
-    FROM "SlaveRun" r
-    JOIN "Slave" a ON a.id = r."slaveId"
-    JOIN "Team" tm ON tm.id = a."teamId"
-    WHERE tm."workspaceId" = ${workspaceId}
-      AND r.status::text = ANY(${[...CONCLUDED_RUN_STATUSES]}::text[])
-    ORDER BY COALESCE(r."terminalAt", r."startedAt") DESC, r."startedAt" DESC
-  `
-
-  let consecutiveFailures = 0
-  for (const run of concludedRuns) {
-    if (run.status !== 'failed') break
-    consecutiveFailures += 1
-  }
-
-  // No unmeasured-run count in `WorkspaceStats`, deliberately (M12 Task 9, ruling R8): admission
-  // already keeps a cost-blind runtime out of a budgeted workspace, and every LIVE run has a null
-  // cost until it concludes -- so a guardrail keyed on unmeasured runs would trip on every healthy
-  // tick of every healthy workspace. The figure belongs on the surfaces, where `apps/web`'s
-  // `sumSpend` calls put it in front of an operator.
-  return {
-    activeRuns,
-    globalActiveRuns,
-    spentUsd: spend.spentUsd,
-    consecutiveFailures,
-    supervisorSpend: { measuredUsd: spend.supervisorMeasuredUsd, unmeasuredCalls: spend.supervisorUnmeasuredCalls },
-  }
-}
-
-/**
  * How long `loadWorld`'s snapshot transaction may take, and how long it may wait for a pooled
  * connection before giving up. Prisma's own defaults are 5000/2000 ms; these are deliberately
  * looser. A `loadWorld` that genuinely needs more than 15 s means something is badly wrong and
@@ -283,14 +135,6 @@ const LOAD_WORLD_TIMEOUT_MS = 15_000
 const LOAD_WORLD_MAX_WAIT_MS = 5_000
 
 /**
- * Spec §5: a hard cap on non-terminal `SlaveRun`s across every workspace at once, not per
- * workspace. A `Workspace` column would let N workspaces each configure their own limit and
- * collectively blow the machine's real capacity for concurrent `claude` processes -- the whole
- * point is a ceiling nothing on a per-workspace path can raise.
- */
-const MAX_GLOBAL_CONCURRENT_RUNS = 6
-
-/**
  * Maps the database onto the domain's `World` (spec §4). This is the only place that translation
  * happens: `decide()` stays pure and never sees a `Prisma` type, and every field below traces to
  * a named source in spec §4's table rather than an inferred default.
@@ -305,16 +149,21 @@ export async function loadWorld(workspaceId: WorkspaceId): Promise<LoadedWorld> 
   // decides from*. A torn read -- `slaves` from one instant, `stats` from another -- lets
   // `decide()` emit a `start_run` for a slave that became busy between two of the reads, and
   // that spawns a real `claude` process spending real money.
-  const { workspace, taskRows, slaveRows, runStats } = await prisma.$transaction(
+  const { snapshot, taskRows, slaveRows } = await prisma.$transaction(
     async (tx) => {
       // Sequential rather than `Promise.all`: an interactive transaction is pinned to a single
       // connection, so queries issued concurrently on `tx` serialize anyway, and under
       // RepeatableRead the order they run in cannot change what they see.
-      const workspace = await tx.workspace.findUniqueOrThrow({ where: { id: workspaceId } })
+      //
+      // The workspace row, the limits and every guardrail statistic come from control's
+      // `workspaceStats` as of M38 t3 fix round 2 (spec erratum E7) -- the same helper
+      // `loadSupervisorWorld` reads, so the halt the scheduler acts on and the halt the Supervisor
+      // sees are computed from one reading of one workspace. It runs on `tx`, so it is this
+      // snapshot's reading and not a later one.
+      const snapshot = await workspaceStats(workspaceId, tx)
       const taskRows = await loadTaskRows(tx, workspaceId)
       const slaveRows = await loadSlaveRows(tx, workspaceId)
-      const runStats = await loadRunStats(tx, workspaceId)
-      return { workspace, taskRows, slaveRows, runStats }
+      return { snapshot, taskRows, slaveRows }
     },
     {
       isolationLevel: 'RepeatableRead',
@@ -350,30 +199,14 @@ export async function loadWorld(workspaceId: WorkspaceId): Promise<LoadedWorld> 
     busy: row.runs.length > 0,
   }))
 
-  const world: World = {
-    tasks,
-    slaves,
-    limits: {
-      maxConcurrentRuns: workspace.maxConcurrentRuns,
-      budgetUsd: workspace.budgetUsd,
-      runTimeoutMs: workspace.runTimeoutMs,
-      maxToolCallsPerRun: workspace.maxToolCallsPerRun,
-      maxAttempts: workspace.maxAttempts,
-      consecutiveFailureLimit: workspace.consecutiveFailureLimit,
-      maxGlobalConcurrentRuns: MAX_GLOBAL_CONCURRENT_RUNS,
-    },
-    stats: {
-      activeRuns: runStats.activeRuns,
-      globalActiveRuns: runStats.globalActiveRuns,
-      spentUsd: runStats.spentUsd,
-      consecutiveFailures: runStats.consecutiveFailures,
-      // Not hardcoded: a pause gate failure sets `Workspace.haltedReason` (spec §13.1), and M8's
-      // human-facing emergency stop is deliberately built on this same column rather than a
-      // second one. Reading it live here is what lets a persistent halt survive a daemon
-      // restart -- there is no in-memory latch anywhere for it to be lost from.
-      emergencyStopped: workspace.haltedReason !== null,
+  const world: World = { tasks, slaves, limits: snapshot.limits, stats: snapshot.stats }
+
+  return {
+    world,
+    skippedNoRole,
+    supervisorSpend: {
+      measuredUsd: snapshot.spend.supervisorMeasuredUsd,
+      unmeasuredCalls: snapshot.spend.supervisorUnmeasuredCalls,
     },
   }
-
-  return { world, skippedNoRole, supervisorSpend: runStats.supervisorSpend }
 }

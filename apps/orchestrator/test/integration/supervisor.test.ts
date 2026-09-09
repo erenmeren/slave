@@ -230,12 +230,16 @@ describe('supervise', () => {
     })
 
     expect(recorder.calls).toHaveLength(0)
-    expect(report).toMatchObject({ decided: 1, modelCalls: 0, rulesOnly: true })
-    expect((await decisions(fixture.workspaceId))[0]).toMatchObject({
-      decidedBy: 'rules',
-      modelCalled: false,
-      modelCostUsd: null,
-    })
+    // Two situations now, not one (erratum E7): an exhausted budget IS a halt to the Supervisor,
+    // even though nothing wrote `haltedReason` -- so the workspace itself is escalated alongside
+    // the blocked task, and the task's routine unblock becomes a proposal because a halted
+    // workspace may only be proposed at.
+    expect(report).toMatchObject({ situations: 2, decided: 2, applied: 0, proposed: 2, modelCalls: 0, rulesOnly: true })
+    const rows = await decisions(fixture.workspaceId)
+    expect(rows.every((row) => row.decidedBy === 'rules' && !row.modelCalled && row.modelCostUsd === null)).toBe(true)
+    expect(rows.every((row) => row.status === 'pending')).toBe(true)
+    expect(rows.map((row) => row.situationKind).toSorted()).toEqual(['review_cap_blocked', 'workspace_halted'])
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })).status).toBe('blocked')
   })
 
   it('escalates a halted workspace to a human without calling a model', async (): Promise<void> => {
@@ -376,6 +380,27 @@ describe('supervise', () => {
       return loadSupervisorWorld(workspaceId, now)
     }
 
+    // Fix round 2: the switch stops it DECIDING, it does not freeze the questions it already
+    // asked. A proposal past its TTL is retired even here -- otherwise a switched-off workspace
+    // would keep stale proposals `pending`, and approvable, forever.
+    const stale = await prisma.supervisorDecision.create({
+      data: {
+        workspaceId: fixture.workspaceId,
+        situationKind: 'review_cap_blocked',
+        subjectId: fixture.taskId,
+        situation: {},
+        candidates: [],
+        chosenIndex: 0,
+        action: { kind: 'no_action' },
+        rationale: 'asked while the Supervisor was still on',
+        tier: 'escalated',
+        status: 'pending',
+        decidedBy: 'rules',
+        createdAt: ago(48 * 3_600_000),
+        expiresAt: ago(24 * 3_600_000),
+      },
+    })
+
     const report = await supervise({
       workspaceId: fixture.workspaceId,
       decider: recorder.decider,
@@ -383,8 +408,6 @@ describe('supervise', () => {
       now: clock,
       loadWorld,
     })
-
-    expect(loads).toEqual([])
 
     expect(report).toEqual({
       situations: 0,
@@ -395,9 +418,39 @@ describe('supervise', () => {
       modelCalls: 0,
       rulesOnly: true,
     })
+    expect(loads).toEqual([])
     expect(recorder.calls).toHaveLength(0)
-    expect(await decisions(fixture.workspaceId)).toHaveLength(0)
+    // The expired proposal is the ONLY row, and the only thing that changed.
+    const rows = await decisions(fixture.workspaceId)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ id: stale.id, status: 'expired' })
     expect(await prisma.executionEvent.count({ where: { workspaceId: fixture.workspaceId, type: 'supervisor_decided' } })).toBe(0)
+  })
+
+  it("builds the prompt from the SNAPSHOT's profile, not the one read before the transaction", async (): Promise<void> => {
+    // Fix round 2. The pre-transaction read decides only whether to load a world at all; the
+    // profile that reaches a model has to be the one that was true inside the world the decision is
+    // made on. The seam stands in for the operator who edits the profile between the two reads.
+    const fixture = await seed()
+    await prisma.workspace.update({
+      where: { id: fixture.workspaceId },
+      data: { supervisorProfile: 'the profile read before the transaction' },
+    })
+    const recorder = recordingDecider(answering('{"candidateIndex": 0, "rationale": "rework it"}'))
+
+    await supervise({
+      workspaceId: fixture.workspaceId,
+      decider: recorder.decider,
+      model: 'claude-sonnet-5',
+      now: clock,
+      loadWorld: async (workspaceId, now) => {
+        const loaded = await loadSupervisorWorld(workspaceId, now)
+        return { ...loaded, settings: { ...loaded.settings, profile: 'the profile inside the snapshot' } }
+      },
+    })
+
+    expect(recorder.calls[0]?.prompt).toContain('the profile inside the snapshot')
+    expect(recorder.calls[0]?.prompt).not.toContain('the profile read before the transaction')
   })
 
   it('loads exactly one world when the Supervisor is on', async (): Promise<void> => {
