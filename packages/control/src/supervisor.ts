@@ -395,12 +395,15 @@ const reached = (result: Result<unknown, ControlRefusal>): Result<Reach, Control
  * The ONE place a model's words reach a worker (spec §1), and the three things that stand between
  * them and it.
  *
- * `draft_missing` first: a decision with no draft at all, or one whose `body` is null -- erratum
- * E2's escalated shape, written when the critical lexicon matched and no answer call was ever made
- * -- has nothing to send, and this verb never writes a body of its own.
+ * A human's EDIT wins over the model's text whenever there is one: that is what approving with an
+ * edit means, and the model's original stays on the row beside it so a reader can see both.
  *
- * Then a human's EDIT wins over the model's text whenever there is one: that is what approving
- * with an edit means, and the model's original stays on the row beside it so a reader can see both.
+ * `draft_missing` only when there is NOTHING to send -- no draft at all, or a draft whose two
+ * bodies are both absent. The order matters (fix round 1): erratum E2's escalated draft is exactly
+ * `{ body: null, … }`, written when the critical lexicon matched and no answer call was ever made,
+ * and a human MAY answer a critical question by typing into that draft. Testing `body` before
+ * consulting `editedBody` would refuse the one shape this path exists for, after the approval had
+ * already claimed the row.
  *
  * Then `neutraliseMarkers` and the cap, in that order. Neutralising is what stops an answer from
  * carrying the section markers a run context is assembled from into a worker's prompt, and it can
@@ -416,9 +419,9 @@ async function sendDraftedAnswer(
   origin: 'human' | 'system',
   principal?: Principal,
 ): Promise<Result<unknown, ControlRefusal>> {
-  const draft = decision.draft
-  if (draft === null || draft.body === null) return err({ kind: 'draft_missing', decisionId: decision.id })
-  const body = neutraliseMarkers(draft.editedBody ?? draft.body)
+  const written = sendableBody(decision.draft)
+  if (written === null) return err({ kind: 'draft_missing', decisionId: decision.id })
+  const body = neutraliseMarkers(written)
   if (body.length > ANSWER_MAX_CHARS) return err({ kind: 'invalid_message_body' })
   return answerQuestion(
     messageId,
@@ -426,6 +429,12 @@ async function sendDraftedAnswer(
     origin,
   )
 }
+
+/** The text a draft would actually send, or null when it would send nothing -- a human's edit
+ *  first, the model's own body behind it. The ONE definition of "this answer decision has a body",
+ *  shared by {@link sendDraftedAnswer} and {@link approveDecision}'s pre-claim check so the two can
+ *  never disagree about a row (fix round 1). */
+const sendableBody = (draft: Draft | null): string | null => draft?.editedBody ?? draft?.body ?? null
 
 /**
  * The roles a `set_runtime_roles` decision actually adds (spec §4, the M38 residual).
@@ -506,20 +515,39 @@ async function addRuntimeRoles(
  * a name borrowed from a local account that did not actually act). The verb the approval applies
  * already runs with `origin: 'human'` for the same reason. `expirePendingDecisions` keeps
  * `system`, because nobody acted there.
+ *
+ * `edit` (M39 §4) is the answer path's one addition: a human approving an `answer_question`
+ * proposal may send their own words instead of the model's, recorded on the row as
+ * `draft.editedBody` before the apply reads it back. It is how a human answers a question the
+ * Supervisor would not answer itself -- a critical one, whose draft (erratum E2) has no body at all
+ * until somebody types one. Every reason an approval could be refused is established BEFORE
+ * {@link claimPending} runs, so a refused approval leaves the proposal exactly as open as it found
+ * it (fix round 1).
  */
 export async function approveDecision(
   decisionId: string,
   principal?: Principal,
   edit?: { readonly body: string },
 ): Promise<Result<void, ControlRefusal>> {
-  // Everything an edit can be refused for is checked BEFORE the row is claimed: a refusal must not
-  // consume the one pending decision a human was about to approve properly.
+  // Everything this approval can be refused for is checked BEFORE the row is claimed -- with an
+  // edit AND without one (fix round 1): a refusal must not consume the one pending decision a human
+  // was about to resolve properly, and an answer decision with nothing to send would otherwise be
+  // claimed, marked `approved`, and then rewritten `failed` by the apply.
+  const loaded = await answerDraft(decisionId)
+  if (!loaded.ok) return loaded
+
   let edited: Draft | null = null
   if (edit !== undefined) {
-    const editable = await editableDraft(decisionId)
-    if (!editable.ok) return editable
+    // An edit only means anything on an answer decision that has a draft to edit: there is no
+    // rewriting an `unblock_task`. A draft whose `body` is null is editable -- that is E2's
+    // escalated shape, and typing into it is exactly how a human answers a critical question.
+    if (loaded.value === 'not_an_answer' || loaded.value === null) return err({ kind: 'draft_missing', decisionId })
     if (edit.body.trim() === '' || edit.body.length > ANSWER_MAX_CHARS) return err({ kind: 'invalid_message_body' })
-    edited = { ...editable.value, editedBody: edit.body }
+    edited = { ...loaded.value, editedBody: edit.body }
+  } else if (loaded.value !== 'not_an_answer' && sendableBody(loaded.value) === null) {
+    // A plain yes to an answer decision that carries no text to send: nothing would reach the
+    // worker, so the proposal stays open for a human who has something to type.
+    return err({ kind: 'draft_missing', decisionId })
   }
 
   const claim = await claimPending(decisionId, {
@@ -591,24 +619,23 @@ export async function rejectDecision(
 }
 
 /**
- * The draft an approval may edit, or the refusal that says why it may not.
+ * What an approval of this decision would be answering FROM: the row's draft, `null` when it is an
+ * answer decision carrying none, and `'not_an_answer'` for every other action -- which is not a
+ * problem at all, only a decision an edit means nothing to.
  *
- * `draft_missing` for both cases a caller can get wrong: a decision whose action is not
- * `answer_question` (there is no answer to rewrite -- an edited `unblock_task` means nothing) and
- * one that carries no draft at all. Deliberately NOT `decision_not_pending`: whether the row is
- * still open is {@link claimPending}'s question, asked separately and answered with its own kind.
+ * One read, three answers, so {@link approveDecision} can decide both of its branches before it
+ * claims anything. `decision_not_found` is the only refusal it raises: whether the row is still
+ * open is {@link claimPending}'s question, asked separately and answered with its own kind.
  */
-async function editableDraft(decisionId: string): Promise<Result<Draft, ControlRefusal>> {
+async function answerDraft(decisionId: string): Promise<Result<Draft | null | 'not_an_answer', ControlRefusal>> {
   const row = await prisma.supervisorDecision.findUnique({
     where: { id: decisionId },
     select: { action: true, draft: true },
   })
   if (row === null) return err({ kind: 'decision_not_found', decisionId })
   const action = parsedOrThrow(actionSchema.safeParse(row.action), `SupervisorDecision ${decisionId}.action`)
-  if (action.kind !== 'answer_question') return err({ kind: 'draft_missing', decisionId })
-  const draft = storedDraft(row.draft, `SupervisorDecision ${decisionId}.draft`)
-  if (draft === null) return err({ kind: 'draft_missing', decisionId })
-  return ok(draft)
+  if (action.kind !== 'answer_question') return ok('not_an_answer')
+  return ok(storedDraft(row.draft, `SupervisorDecision ${decisionId}.draft`))
 }
 
 /** The one atomic "take this pending decision" both {@link approveDecision} and

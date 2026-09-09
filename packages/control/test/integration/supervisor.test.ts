@@ -957,6 +957,52 @@ describe('approveDecision -- with an edited answer', () => {
     expect((await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: decision.id } })).status).toBe('pending')
   })
 
+  /**
+   * Fix round 1. A critical question never gets an automatic answer -- erratum E2 records the
+   * decision `escalated` with a draft that has NO body, because no answer call was ever made. That
+   * draft is exactly what a human types into, and the approval has to send what they typed.
+   */
+  it('sends the human text for an escalated draft that has no body of its own', async () => {
+    const asked = await askAQuestion(f)
+    const decision = await record(f, { kind: 'answer_question', messageId: asked.questionId }, 'proposed', {
+      subjectId: asked.questionId,
+      situation: questionSituation(asked.questionId),
+      draft: draftOf({ body: null, sources: [], confidence: 'interpretation', critical: { lexicon: ['secrets'], model: false } }),
+      finalTier: 'escalated',
+    })
+
+    expect((await approveDecision(decision.id, { userId: f.userId }, { body: 'Use the staging key.' })).ok).toBe(true)
+
+    expect((await answerTo(asked.questionId))?.body).toBe('Use the staging key.')
+    // A person answered, so the row and the event say a person did.
+    expect((await answerTo(asked.questionId))?.actor).toBe('human')
+    const [view] = await listDecisions(f.workspaceId)
+    expect(view?.status).toBe('approved')
+    expect(view?.draft?.editedBody).toBe('Use the staging key.')
+    // The model never wrote one, and the row keeps saying so.
+    expect(view?.draft?.body).toBeNull()
+  })
+
+  it.each([
+    ['an escalated draft with no body', draftOf({ body: null })],
+    ['no draft at all', undefined],
+  ])('refuses a plain yes to an answer decision with nothing to send (%s), leaving it pending', async (_case, draft) => {
+    const asked = await askAQuestion(f)
+    const decision = await record(f, { kind: 'answer_question', messageId: asked.questionId }, 'proposed', {
+      subjectId: asked.questionId,
+      situation: questionSituation(asked.questionId),
+      ...(draft === undefined ? {} : { draft }),
+    })
+
+    expect(await approveDecision(decision.id, { userId: f.userId })).toEqual({
+      ok: false,
+      error: { kind: 'draft_missing', decisionId: decision.id },
+    })
+    // Refused BEFORE the claim: the proposal is still there for a human who has something to type.
+    expect((await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: decision.id } })).status).toBe('pending')
+    expect(await answerTo(asked.questionId)).toBeNull()
+  })
+
   it('refuses an edit on an answer decision that carries no draft', async () => {
     const asked = await askAQuestion(f)
     const decision = await record(f, { kind: 'answer_question', messageId: asked.questionId }, 'proposed', {

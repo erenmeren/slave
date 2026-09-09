@@ -512,10 +512,15 @@ export async function answerQuestion(
  * it is a loop that `answer.ts` would then refuse to close, leaving the asker parked forever.
  *
  * The refusals are ordered as spec §4 lists them, cheapest first, and every one of them happens
- * before anything is written. The transaction exists for the last of them: `question_answered` is
- * the racy one -- a reply can land, or the asker's run can stop waiting, between the check and the
- * write -- so the row is locked and the same {@link stillPendingQuestion} predicate the worker's
- * own inbox is built from is re-read inside it.
+ * before anything is written. The transaction serialises this verb against ANOTHER RE-ADDRESS of
+ * the same question: two of them racing would otherwise both read the old recipient and write the
+ * new one, and the event pair would describe a move that never happened. The lock does NOT
+ * serialise against an answer -- `answerQuestion` and `sendMessage` lock the `Workspace` row, and
+ * the worker's own answer path checks its permission outside any transaction -- and it does not
+ * need to: the in-transaction {@link stillPendingQuestion} re-read refuses a re-address of a
+ * question that has just been answered, and an answer that lands just AFTER the move still unparks
+ * the asker (it replies to the same question row) while the moved question drops out of the new
+ * recipient's inbox on the same predicate. Neither order leaves anybody waiting on nothing.
  */
 export async function reassignQuestion(
   messageId: string,
