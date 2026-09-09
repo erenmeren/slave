@@ -43,6 +43,11 @@ export const ACTION_KINDS = [
   'no_action',
 ] as const
 
+/** The NAME of an action, as a stored decision row carries it -- what a reader (the mailbox
+ *  counts, the panel's filters) needs when it wants to know WHAT was decided without parsing the
+ *  whole action back out of its `Json` column. */
+export type ActionKind = (typeof ACTION_KINDS)[number]
+
 /** Validates a `SupervisorDecision.action` `Json` value at read. */
 export const actionSchema: z.ZodType<Action> = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('unblock_task'), taskId: z.string().min(1) }),

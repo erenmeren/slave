@@ -1,5 +1,5 @@
 import { prisma } from '@slave-of-ai/db/client'
-import { SUPERVISOR_PER_CALL_CAP_USD } from '@slave-of-ai/domain'
+import { RUN_PROMPT_MAX_CHARS, SUPERVISOR_PER_CALL_CAP_USD, THREAD_BODY_MAX_CHARS } from '@slave-of-ai/domain'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { workspaceSpend } from '../../src/spend.js'
 import { workspaceStats } from '../../src/stats.js'
@@ -41,7 +41,7 @@ async function makeTask(
   fixture: Fixture,
   data: {
     readonly title: string
-    readonly status: 'ready' | 'blocked' | 'done' | 'failed' | 'reviewing'
+    readonly status: 'ready' | 'running' | 'blocked' | 'done' | 'failed' | 'reviewing'
     readonly requiredRole?: string | null
     readonly integratedAt?: Date | null
     readonly createdAt?: Date
@@ -207,6 +207,299 @@ describe('loadSupervisorWorld', () => {
     })
   })
 
+  it('carries the whole question: its body, its task, its thread, the asker run context and who may answer', async (): Promise<void> => {
+    const fixture = await seed({ goal: 'ship checkout' })
+    const asker = await prisma.slave.create({
+      data: { teamId: fixture.teamId, name: 'Maya', role: 'product', runtimeRoles: ['product'] },
+    })
+    const reviewer = await prisma.slave.create({
+      data: { teamId: fixture.teamId, name: 'Robin', role: 'QA', runtimeRoles: ['reviewer', 'backend'] },
+    })
+    const taskId = await makeTask(fixture, { title: 'Wire the database', status: 'running' })
+    const waitingRun = await prisma.slaveRun.create({
+      data: { slaveId: asker.id, status: 'paused', pauseReason: 'waiting_for_answer', kind: 'implementation', taskId },
+    })
+    await prisma.runContext.create({
+      data: { runId: waitingRun.id, prompt: 'You are Maya. The database listens on 5433.', sections: [] },
+    })
+    const question = await prisma.slaveMessage.create({
+      data: {
+        slaveId: asker.id,
+        workspaceId: fixture.workspaceId,
+        taskId,
+        senderRunId: waitingRun.id,
+        recipientRole: 'reviewer',
+        threadId: 'thread-1',
+        kind: 'question',
+        body: 'Which port does the database listen on?',
+        actor: 'slave',
+        expectsReply: true,
+        createdAt: ago(45 * 60_000),
+      },
+    })
+    // Two more messages in the SAME thread: a worker's note (a `note` to the Supervisor) and a
+    // system-authored one, whose sender is nobody.
+    const note = await prisma.slaveMessage.create({
+      data: {
+        slaveId: reviewer.id,
+        workspaceId: fixture.workspaceId,
+        recipientSlaveId: asker.id,
+        threadId: 'thread-1',
+        kind: 'information',
+        body: 'I looked at the compose file earlier.',
+        actor: 'slave',
+        createdAt: ago(40 * 60_000),
+      },
+    })
+    const operatorNote = await prisma.slaveMessage.create({
+      data: {
+        slaveId: asker.id,
+        workspaceId: fixture.workspaceId,
+        recipientSlaveId: asker.id,
+        threadId: 'thread-1',
+        kind: 'information',
+        body: 'The operator is looking into it.',
+        actor: 'human',
+        createdAt: ago(35 * 60_000),
+      },
+    })
+    // A different thread entirely: never in this question's thread.
+    await prisma.slaveMessage.create({
+      data: {
+        slaveId: asker.id,
+        workspaceId: fixture.workspaceId,
+        threadId: 'thread-2',
+        kind: 'information',
+        body: 'unrelated chatter',
+        actor: 'slave',
+      },
+    })
+
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
+
+    expect(world.questions).toHaveLength(1)
+    const loaded = world.questions[0]
+    expect(loaded).toMatchObject({
+      messageId: question.id,
+      askerSlaveId: asker.id,
+      recipientRole: 'reviewer',
+      recipientSlaveId: null,
+      createdAt: ago(45 * 60_000).getTime(),
+      body: 'Which port does the database listen on?',
+      taskId,
+      taskTitle: 'Wire the database',
+      taskDescription: 'a task',
+      senderRunId: waitingRun.id,
+      threadId: 'thread-1',
+      askerRunPrompt: 'You are Maya. The database listens on 5433.',
+    })
+    // The thread is oldest first and INCLUDES the question itself -- `verifySources` needs it there
+    // precisely so it can refuse a citation of it.
+    expect(loaded?.thread).toEqual([
+      { messageId: question.id, kind: 'question', senderSlaveId: asker.id, body: 'Which port does the database listen on?', createdAt: ago(45 * 60_000).getTime() },
+      { messageId: note.id, kind: 'note', senderSlaveId: reviewer.id, body: 'I looked at the compose file earlier.', createdAt: ago(40 * 60_000).getTime() },
+      // Nobody's run wrote this one, so it has no sender slave.
+      { messageId: operatorNote.id, kind: 'note', senderSlaveId: null, body: 'The operator is looking into it.', createdAt: ago(35 * 60_000).getTime() },
+    ])
+    // Role-addressed: whoever holds "reviewer", and nobody else.
+    expect(loaded?.holders).toEqual([reviewer.id])
+  })
+
+  it('caps a thread body and a run prompt rather than putting a pasted file into a prompt', async (): Promise<void> => {
+    const fixture = await seed()
+    const asker = await prisma.slave.create({
+      data: { teamId: fixture.teamId, name: 'Maya', role: 'product', runtimeRoles: ['product'] },
+    })
+    const waitingRun = await prisma.slaveRun.create({
+      data: { slaveId: asker.id, status: 'paused', pauseReason: 'waiting_for_answer', kind: 'implementation' },
+    })
+    await prisma.runContext.create({
+      data: { runId: waitingRun.id, prompt: 'p'.repeat(RUN_PROMPT_MAX_CHARS + 500), sections: [] },
+    })
+    await prisma.slaveMessage.create({
+      data: {
+        slaveId: asker.id,
+        workspaceId: fixture.workspaceId,
+        senderRunId: waitingRun.id,
+        recipientRole: 'reviewer',
+        threadId: 'thread-1',
+        kind: 'question',
+        body: 'q'.repeat(THREAD_BODY_MAX_CHARS + 500),
+        actor: 'slave',
+        expectsReply: true,
+      },
+    })
+
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
+    const loaded = world.questions[0]
+    expect(loaded?.askerRunPrompt).toHaveLength(RUN_PROMPT_MAX_CHARS)
+    expect(loaded?.thread[0]?.body).toHaveLength(THREAD_BODY_MAX_CHARS)
+    // The question's OWN body is the lexicon's input, and it is capped by the same rule.
+    expect(loaded?.body).toHaveLength(THREAD_BODY_MAX_CHARS)
+  })
+
+  it('gives a question with no task, no run context and no holder the empty values rather than guesses', async (): Promise<void> => {
+    const fixture = await seed()
+    const asker = await prisma.slave.create({
+      data: { teamId: fixture.teamId, name: 'Maya', role: 'product', runtimeRoles: ['product'] },
+    })
+    const waitingRun = await prisma.slaveRun.create({
+      data: { slaveId: asker.id, status: 'paused', pauseReason: 'waiting_for_answer', kind: 'planning' },
+    })
+    await prisma.slaveMessage.create({
+      data: {
+        slaveId: asker.id,
+        workspaceId: fixture.workspaceId,
+        senderRunId: waitingRun.id,
+        recipientRole: 'reviewer',
+        threadId: 'thread-1',
+        kind: 'question',
+        body: 'anyone?',
+        actor: 'slave',
+        expectsReply: true,
+      },
+    })
+
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
+    expect(world.questions[0]).toMatchObject({
+      taskId: null,
+      taskTitle: null,
+      taskDescription: null,
+      askerRunPrompt: null,
+      holders: [],
+    })
+  })
+
+  it('holds a slave-addressed question for the addressee plus every peer who could take the asking task', async (): Promise<void> => {
+    // Erratum E5, the case the two halves of `holders` differ on: a question addressed to ONE
+    // worker may also be answered by anybody who could have been dispatched the asking task.
+    const fixture = await seed()
+    const asker = await prisma.slave.create({
+      data: { teamId: fixture.teamId, name: 'Maya', role: 'product', runtimeRoles: ['product'] },
+    })
+    const addressed = await prisma.slave.create({
+      data: { teamId: fixture.teamId, name: 'Robin', role: 'QA', runtimeRoles: ['reviewer'] },
+    })
+    const peer = await prisma.slave.create({
+      data: { teamId: fixture.teamId, name: 'Sam', role: 'Backend', runtimeRoles: ['backend'] },
+    })
+    // Holds neither the addressee's identity nor the task's role.
+    await prisma.slave.create({
+      data: { teamId: fixture.teamId, name: 'Kim', role: 'Design', runtimeRoles: ['design'] },
+    })
+    const taskId = await makeTask(fixture, { title: 'Wire the database', status: 'running', requiredRole: 'backend' })
+    const waitingRun = await prisma.slaveRun.create({
+      data: { slaveId: asker.id, status: 'paused', pauseReason: 'waiting_for_answer', kind: 'implementation', taskId },
+    })
+    await prisma.slaveMessage.create({
+      data: {
+        slaveId: asker.id,
+        workspaceId: fixture.workspaceId,
+        taskId,
+        senderRunId: waitingRun.id,
+        recipientSlaveId: addressed.id,
+        threadId: 'thread-1',
+        kind: 'question',
+        body: 'which port?',
+        actor: 'slave',
+        expectsReply: true,
+      },
+    })
+
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
+    expect(world.questions[0]?.holders.toSorted()).toEqual([addressed.id, peer.id].toSorted())
+  })
+
+  it('adds nobody for a slave-addressed question whose task takes any role at all', async (): Promise<void> => {
+    // Erratum E5's parenthesis: a null or EMPTY `requiredRole` is not a role to match on, so the
+    // addressee is the only holder -- the empty string must not read as "everybody".
+    const fixture = await seed()
+    const asker = await prisma.slave.create({
+      data: { teamId: fixture.teamId, name: 'Maya', role: 'product', runtimeRoles: ['product'] },
+    })
+    const addressed = await prisma.slave.create({
+      data: { teamId: fixture.teamId, name: 'Robin', role: 'QA', runtimeRoles: ['reviewer'] },
+    })
+    await prisma.slave.create({
+      data: { teamId: fixture.teamId, name: 'Sam', role: 'Backend', runtimeRoles: ['backend'] },
+    })
+    const taskId = await makeTask(fixture, { title: 'Anything goes', status: 'running', requiredRole: '' })
+    const waitingRun = await prisma.slaveRun.create({
+      data: { slaveId: asker.id, status: 'paused', pauseReason: 'waiting_for_answer', kind: 'implementation', taskId },
+    })
+    await prisma.slaveMessage.create({
+      data: {
+        slaveId: asker.id,
+        workspaceId: fixture.workspaceId,
+        taskId,
+        senderRunId: waitingRun.id,
+        recipientSlaveId: addressed.id,
+        threadId: 'thread-1',
+        kind: 'question',
+        body: 'which port?',
+        actor: 'slave',
+        expectsReply: true,
+      },
+    })
+
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
+    expect(world.questions[0]?.holders).toEqual([addressed.id])
+  })
+
+  it('never lists a slave from another workspace as a holder', async (): Promise<void> => {
+    const fixture = await seed()
+    const other = await seed()
+    await prisma.slave.create({
+      data: { teamId: other.teamId, name: 'Stranger', role: 'QA', runtimeRoles: ['reviewer'] },
+    })
+    const asker = await prisma.slave.create({
+      data: { teamId: fixture.teamId, name: 'Maya', role: 'product', runtimeRoles: ['product'] },
+    })
+    const waitingRun = await prisma.slaveRun.create({
+      data: { slaveId: asker.id, status: 'paused', pauseReason: 'waiting_for_answer', kind: 'implementation' },
+    })
+    await prisma.slaveMessage.create({
+      data: {
+        slaveId: asker.id,
+        workspaceId: fixture.workspaceId,
+        senderRunId: waitingRun.id,
+        recipientRole: 'reviewer',
+        threadId: 'thread-1',
+        kind: 'question',
+        body: 'which port?',
+        actor: 'slave',
+        expectsReply: true,
+      },
+    })
+
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
+    expect(world.questions[0]?.holders).toEqual([])
+  })
+
+  it('reuses a stats snapshot the caller already read instead of reading its own', async (): Promise<void> => {
+    // One reading of the limits and the spend per tick (M39 §4). The sentinel says something the
+    // database does NOT: an unhalted, unbudgeted workspace comes back halted and exhausted, which
+    // is only possible if the loader used what it was handed.
+    const fixture = await seed()
+    const real = await workspaceStats(fixture.workspaceId)
+    const sentinel = {
+      ...real,
+      haltedReason: 'the snapshot the tick already had',
+      limits: { ...real.limits, budgetUsd: 1 },
+      stats: { ...real.stats, spentUsd: 99 },
+    }
+
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW, { stats: sentinel })
+
+    expect(world.halted).toEqual({ reason: 'the snapshot the tick already had' })
+    expect(world.budgetExhausted).toBe(true)
+
+    // And without it, the database's own reading stands.
+    const fresh = await loadSupervisorWorld(fixture.workspaceId, NOW)
+    expect(fresh.world.halted).toBeNull()
+    expect(fresh.world.budgetExhausted).toBe(false)
+  })
+
   it('carries the last 24 hours of decisions with their tier, and nothing older', async (): Promise<void> => {
     const fixture = await seed()
     const row = {
@@ -232,11 +525,39 @@ describe('loadSupervisorWorld', () => {
     expect(world.decisions[0]).toMatchObject({
       situationKind: 'review_cap_blocked',
       subjectId: 'task-1',
+      actionKind: 'no_action',
       status: 'pending',
       tier: 'escalated',
       createdAt: ago(60 * 60_000).getTime(),
       resolvedAt: null,
     })
+  })
+
+  it('names the action each decision took, and calls one nobody can read any more no_action', async (): Promise<void> => {
+    const fixture = await seed()
+    const row = {
+      workspaceId: fixture.workspaceId,
+      situationKind: 'waiting_stale' as const,
+      situation: {},
+      candidates: [],
+      chosenIndex: 0,
+      rationale: 'nothing to do',
+      decidedBy: 'rules' as const,
+      tier: 'proposed' as const,
+      status: 'pending' as const,
+    }
+    await prisma.supervisorDecision.create({
+      data: { ...row, subjectId: 'm1', action: { kind: 'answer_question', messageId: 'm1' } },
+    })
+    // An M38 row whose action left the catalogue in M39. A tick must not throw over it.
+    await prisma.supervisorDecision.create({
+      data: { ...row, subjectId: 'm2', action: { kind: 'nudge_answer', messageId: 'm2' } },
+    })
+
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
+    const bySubject = new Map(world.decisions.map((decision) => [decision.subjectId, decision.actionKind]))
+    expect(bySubject.get('m1')).toBe('answer_question')
+    expect(bySubject.get('m2')).toBe('no_action')
   })
 
   it('reports the goal, the halt, the settings, and a budget exhausted by supervisor spend alone', async (): Promise<void> => {

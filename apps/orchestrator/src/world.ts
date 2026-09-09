@@ -1,4 +1,4 @@
-import { workspaceStats } from '@slave-of-ai/control'
+import { workspaceStats, type WorkspaceStatsSnapshot } from '@slave-of-ai/control'
 import { prisma, type Prisma } from '@slave-of-ai/db/client'
 import {
   slaveId,
@@ -37,6 +37,17 @@ export interface LoadedWorld {
    * as one, the same way `apps/web`'s `unmeasuredRuns` note does for runs.
    */
   readonly supervisorSpend: { readonly measuredUsd: number; readonly unmeasuredCalls: number }
+  /**
+   * The reading of the limits, the run counts, the streak and the halt this load was built from
+   * (M39 section 4), handed on so the tick's Supervisor pass can decide from the SAME one.
+   *
+   * `workspaceStats` is the most expensive part of both this loader and `loadSupervisorWorld`, and
+   * a tick ran it twice: once here for `decide()` and once again, milliseconds later, inside the
+   * Supervisor's own snapshot. Passing it through is not only cheaper -- it is the more honest
+   * reading, because the halt the Supervisor sees is then literally the halt the scheduler acted on
+   * this tick rather than a second one taken after the pass had already moved work.
+   */
+  readonly statsSnapshot: WorkspaceStatsSnapshot
 }
 
 interface TaskWorldRow {
@@ -208,5 +219,6 @@ export async function loadWorld(workspaceId: WorkspaceId): Promise<LoadedWorld> 
       measuredUsd: snapshot.spend.supervisorMeasuredUsd,
       unmeasuredCalls: snapshot.spend.supervisorUnmeasuredCalls,
     },
+    statsSnapshot: snapshot,
   }
 }

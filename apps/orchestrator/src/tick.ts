@@ -7,6 +7,7 @@ import {
   resolveDenyList,
   runFilePaths,
   writePermissionsFile,
+  type WorkspaceStatsSnapshot,
 } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import {
@@ -230,7 +231,7 @@ export async function tick(deps: TickDeps): Promise<TickReport> {
     }
   }
 
-  const { world, skippedNoRole } = await loadWorld(deps.workspaceId)
+  const { world, skippedNoRole, statsSnapshot } = await loadWorld(deps.workspaceId)
   const commands = decide(world)
 
   const halt = commands.find((command) => command.kind === 'halt')
@@ -259,7 +260,7 @@ export async function tick(deps: TickDeps): Promise<TickReport> {
     // gate refuses to call anybody while `halted` is set, so this is a rules-only pass, and
     // `tierOf` makes every action a proposal while halted, so the Supervisor cannot move a
     // workspace a guardrail has stopped.
-    const supervisor = await superviseQuietly(deps)
+    const supervisor = await superviseQuietly(deps, statsSnapshot)
     return {
       started: [],
       halted: halt.reason,
@@ -334,7 +335,7 @@ export async function tick(deps: TickDeps): Promise<TickReport> {
   // Last, after every pass that could have changed what is stuck: the Supervisor decides about the
   // workspace this tick leaves behind, not the one it found. A run started, a review dispatched or
   // a merge landed above all remove situations it would otherwise have decided about.
-  const supervisor = await superviseQuietly(deps)
+  const supervisor = await superviseQuietly(deps, statsSnapshot)
 
   return { started, halted: null, skippedNoRole, planningStarted, reviewsStarted, skipped: null, supervisor }
 }
@@ -347,14 +348,20 @@ export async function tick(deps: TickDeps): Promise<TickReport> {
  * time this runs. A decision loop that threw here would lose nothing of that work but would fail
  * the tick, and a daemon whose every tick throws stops scheduling entirely. So a failure is
  * logged in the tick's own shape and reported as a pass that decided nothing.
+ *
+ * `stats` is the reading `loadWorld` already made this tick (M39 section 4), so `workspaceStats`
+ * runs ONCE per tick rather than once for the scheduler and again for the Supervisor. It is
+ * optional because one branch above never loads a world at all: an archived project returns before
+ * `loadWorld`, and that path does not reach this function either.
  */
-async function superviseQuietly(deps: TickDeps): Promise<SuperviseReport> {
+async function superviseQuietly(deps: TickDeps, stats?: WorkspaceStatsSnapshot): Promise<SuperviseReport> {
   try {
     return await supervise({
       workspaceId: deps.workspaceId,
       ...(deps.supervisorDecider === undefined ? {} : { decider: deps.supervisorDecider }),
       ...(deps.supervisorModel === undefined ? {} : { model: deps.supervisorModel }),
       ...(deps.now === undefined ? {} : { now: deps.now }),
+      ...(stats === undefined ? {} : { stats }),
     })
   } catch (error) {
     console.error(`[tick] the supervisor pass for workspace ${deps.workspaceId} failed:`, error)

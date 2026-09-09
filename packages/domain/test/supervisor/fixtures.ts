@@ -71,6 +71,9 @@ export function decision(overrides: Partial<SupervisorDecisionRecord> = {}): Sup
   return {
     situationKind: 'workspace_halted',
     subjectId: 'ws-1',
+    // The neutral default: a decision that did nothing. A test about the mailbox says
+    // `actionKind: 'answer_question'` for itself rather than inheriting one by accident.
+    actionKind: 'no_action',
     status: 'applied',
     tier: 'applied',
     createdAt: NOW,

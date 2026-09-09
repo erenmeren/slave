@@ -235,6 +235,87 @@ describe('fake-claude', () => {
     })
   })
 
+  describe('the answer arm (M39)', () => {
+    /** A prompt with the one literal `buildAnswerPrompt` always carries. */
+    const PROMPT = 'Reply with {"answer": "...", "sources": [{"kind": "task", "ref": null, "quote": "..."}], "critical": false}'
+    const SOURCED = '"quote":"PostgreSQL on port 5433"'
+    const UNSOURCED = '"quote":"this sentence appears nowhere"'
+
+    let repoDir: string
+
+    beforeEach(() => {
+      repoDir = mkdtempSync(path.join(tmpdir(), 'fake-claude-answer-'))
+      execFileSync('git', ['init', '-q'], { cwd: repoDir })
+      execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q', '--allow-empty', '-m', 'initial commit'], {
+        cwd: repoDir,
+      })
+    })
+
+    afterEach(() => {
+      rmSync(repoDir, { recursive: true, force: true })
+    })
+
+    it('replays both answer fixtures as static modes, with the cost a second call adds', async (): Promise<void> => {
+      for (const [name, quote] of [
+        ['supervisor-answer', SOURCED],
+        ['supervisor-answer-unsourced', UNSOURCED],
+      ] as const) {
+        const { stdout } = await run('node', [FAKE, '--fixture', name])
+        const result = parseLines(stdout).find((l) => l.type === 'result') as
+          | { result?: string; total_cost_usd?: number }
+          | undefined
+        expect(result?.result, name).toContain(quote)
+        expect(result?.total_cost_usd, name).toBe(0.02)
+      }
+    })
+
+    it('is armed in every prompt-sniffing mode, and makes no commit doing it', async (): Promise<void> => {
+      for (const mode of ['m8-flow', 'm8a-flow', 'm36-flow']) {
+        const { stdout } = await run('node', [FAKE, '--fixture', mode, '-p', `${PROMPT} "verdict" "task graph"`], {
+          cwd: repoDir,
+        })
+        const result = parseLines(stdout).find((l) => l.type === 'result') as { result?: string } | undefined
+        expect(result?.result, mode).toContain(SOURCED)
+      }
+      // An answer call is a read. A work run would have left a commit behind in the gate's worktree.
+      expect(execFileSync('git', ['log', '--oneline'], { cwd: repoDir }).toString().trim().split('\n')).toHaveLength(1)
+      expect(execFileSync('git', ['status', '--porcelain'], { cwd: repoDir }).toString().trim()).toBe('')
+    })
+
+    it('replays the fixture FAKE_CLAUDE_ANSWER_FIXTURE names, which is how a gate chooses unsourced', async (): Promise<void> => {
+      const { stdout } = await run('node', [FAKE, '--fixture', 'm36-flow', '-p', PROMPT], {
+        cwd: repoDir,
+        env: { ...process.env, FAKE_CLAUDE_ANSWER_FIXTURE: 'supervisor-answer-unsourced' },
+      })
+      const result = parseLines(stdout).find((l) => l.type === 'result') as { result?: string } | undefined
+      expect(result?.result).toContain(UNSOURCED)
+    })
+
+    it('reads the prompt off STDIN, which is where a real answer call puts it', async (): Promise<void> => {
+      const stdout = execFileSync(
+        'node',
+        [FAKE, '--fixture', 'm8a-flow', '-p', '--restricted', '--no-session-persistence', '--tools', ''],
+        { cwd: repoDir, input: PROMPT, encoding: 'utf8' },
+      )
+      const result = parseLines(stdout).find((l) => l.type === 'result') as { result?: string } | undefined
+      expect(result?.result).toContain(SOURCED)
+    })
+
+    it('leaves a choose-a-candidate prompt to the supervisor arm', async (): Promise<void> => {
+      // The two decision arms sit next to each other; the choose prompt carries no `"sources"`, so
+      // it must still reach `supervisor-decision` with the answer arm in front of nothing.
+      const { stdout } = await run('node', [
+        FAKE,
+        '--fixture',
+        'm36-flow',
+        '-p',
+        'Reply with {"candidateIndex": <0..3>, "rationale": "..."}',
+      ], { cwd: repoDir })
+      const result = parseLines(stdout).find((l) => l.type === 'result') as { result?: string } | undefined
+      expect(result?.result).toContain('"candidateIndex":0')
+    })
+  })
+
   describe('m8-flow', () => {
     let repoDir: string
 

@@ -1,14 +1,20 @@
 import { type Prisma, prisma } from '@slave-of-ai/db/client'
 import {
+  ACTION_KINDS,
   NON_TERMINAL_RUN_STATUSES,
   PENDING_TTL_MS,
+  RUN_PROMPT_MAX_CHARS,
+  THREAD_BODY_MAX_CHARS,
   evaluateGuardrails,
+  type ActionKind,
   type DecisionStatus,
   type SituationKind,
+  type SupervisorQuestion,
   type SupervisorSlave,
   type SupervisorTask,
   type SupervisorWorld,
   type TaskStatusName,
+  type ThreadMessage,
   type Tier,
 } from '@slave-of-ai/domain'
 import { stillPendingQuestion, waitingSenderRunIds } from './messaging.js'
@@ -178,6 +184,146 @@ async function loadLatestGuardrails(
   return new Map(rows.flatMap((row) => (row.guardrail === null ? [] : [[row.taskId, row.guardrail] as const])))
 }
 
+/** `text` at most `max` characters. Every foreign text this loader puts into the world is bounded
+ *  HERE, at the edge, so a worker that pasted a log file into a question cannot decide how large
+ *  the Supervisor's next prompt is. `buildAnswerPrompt` caps again on its own side, because the
+ *  cap that bounds a call belongs where the call is built. */
+const cap = (text: string, max: number): string => (text.length <= max ? text : text.slice(0, max))
+
+/** The row's `kind`, flattened to the three-way shape `ThreadMessage` reasons about: what was
+ *  asked, what replied, and everything else the workers can send -- context worth quoting, but not
+ *  part of the ask-and-answer pair. */
+function threadKind(kind: string): ThreadMessage['kind'] {
+  return kind === 'question' || kind === 'answer' ? kind : 'note'
+}
+
+interface ThreadRow {
+  readonly id: string
+  readonly threadId: string
+  readonly slaveId: string
+  readonly actor: string
+  readonly kind: string
+  readonly body: string
+  readonly createdAt: Date
+}
+
+/**
+ * Every message of every thread named, grouped by thread and oldest first (M39 section 3).
+ *
+ * ONE query for all of them, keyed on the thread ids the caller already holds -- a loop per
+ * question would be a scan of the message table per pending question, on the tick's hot path, for
+ * a workspace whose whole mailbox is usually two rows.
+ *
+ * `seq` is the ordering key, not `createdAt`, for the reason every other reader of these rows uses
+ * it: two messages written in the same millisecond share a wall clock, and thread order is the
+ * order they were actually appended in.
+ *
+ * `senderSlaveId` comes off the ENVELOPE actor, not off `slaveId`. A human's or the Supervisor's
+ * answer carries the ASKER in `slaveId` (the pre-M36 convention for a row nobody's run wrote), so
+ * reading that column would tell the model that the asker answered its own question.
+ */
+async function loadThreads(
+  tx: Prisma.TransactionClient,
+  workspaceId: string,
+  threadIds: readonly string[],
+): Promise<ReadonlyMap<string, ThreadMessage[]>> {
+  if (threadIds.length === 0) return new Map()
+  const rows = await tx.slaveMessage.findMany({
+    where: { workspaceId, threadId: { in: [...threadIds] } },
+    select: { id: true, threadId: true, slaveId: true, actor: true, kind: true, body: true, createdAt: true },
+    orderBy: { seq: 'asc' },
+  })
+
+  const byThread = new Map<string, ThreadMessage[]>()
+  for (const row of rows as readonly ThreadRow[]) {
+    const thread = byThread.get(row.threadId) ?? []
+    thread.push({
+      messageId: row.id,
+      kind: threadKind(row.kind),
+      senderSlaveId: row.actor === 'slave' ? row.slaveId : null,
+      body: cap(row.body, THREAD_BODY_MAX_CHARS),
+      createdAt: row.createdAt.getTime(),
+    })
+    byThread.set(row.threadId, thread)
+  }
+  return byThread
+}
+
+/** The recorded run context of each asking run (M37), capped -- the `run_context` source an answer
+ *  may quote. One `findMany` over the run ids the questions name; a run with no `RunContext` row
+ *  (a pre-M37 run, or one that never started) is simply absent, and reads back as `null`. */
+async function loadRunPrompts(
+  tx: Prisma.TransactionClient,
+  runIds: readonly string[],
+): Promise<ReadonlyMap<string, string>> {
+  if (runIds.length === 0) return new Map()
+  const rows = await tx.runContext.findMany({
+    where: { runId: { in: [...runIds] } },
+    select: { runId: true, prompt: true },
+  })
+  return new Map(rows.map((row) => [row.runId, cap(row.prompt, RUN_PROMPT_MAX_CHARS)]))
+}
+
+/** The title, description and required role of each asking task -- the `task` source, plus the
+ *  role {@link holdersOf} reads for a slave-addressed question. Read separately from
+ *  {@link loadTaskRows} because that one carries no description and DROPS a task with no required
+ *  role, and a question asked from such a task still has a task text worth quoting. */
+async function loadQuestionTasks(
+  tx: Prisma.TransactionClient,
+  workspaceId: string,
+  taskIds: readonly string[],
+): Promise<ReadonlyMap<string, { readonly title: string; readonly description: string; readonly requiredRole: string | null }>> {
+  if (taskIds.length === 0) return new Map()
+  const rows = await tx.task.findMany({
+    where: { workspaceId, id: { in: [...taskIds] } },
+    select: { id: true, title: true, description: true, requiredRole: true },
+  })
+  return new Map(rows.map((row) => [row.id, { title: row.title, description: row.description, requiredRole: row.requiredRole }]))
+}
+
+/**
+ * Who may answer this question TODAY (spec erratum E5) -- the loader contract
+ * `SupervisorQuestion.holders` states, and the same rule control's `reassign_not_permitted`
+ * enforces from the other side, so a re-address the rules stamp routine is one the verb accepts.
+ *
+ * Role-addressed: every slave whose RUNTIME roles include that role. Nobody else can be dispatched
+ * the question, which is why an `unanswerable_question` about a role has an empty list by
+ * construction and is fixed by staffing rather than by a re-address.
+ *
+ * Slave-addressed: the addressed slave, plus every slave who could have been dispatched the ASKING
+ * task -- a colleague who could do the work can answer a question about it. A null or EMPTY
+ * `requiredRole` adds nobody: there is no role to match on, and the empty string ("any role will
+ * do") must not read as "everybody".
+ *
+ * Built by filtering the roster, so a slave who has left the workspace is never here (the roster is
+ * this workspace's slaves) and the order is the roster's own id order, deterministic across passes.
+ */
+function holdersOf(
+  question: { readonly recipientRole: string | null; readonly recipientSlaveId: string | null },
+  taskRole: string | null,
+  slaves: readonly SupervisorSlave[],
+): string[] {
+  if (question.recipientRole !== null) {
+    return slaves.filter((slave) => slave.runtimeRoles.includes(question.recipientRole as string)).map((slave) => slave.id)
+  }
+  return slaves
+    .filter(
+      (slave) =>
+        slave.id === question.recipientSlaveId ||
+        (taskRole !== null && taskRole !== '' && slave.runtimeRoles.includes(taskRole)),
+    )
+    .map((slave) => slave.id)
+}
+
+/** The `kind` off a stored `SupervisorDecision.action`, or `no_action` when today's catalogue has
+ *  no such action (an M38 `nudge_answer`, a hand-edited column). Only the kind is read, never the
+ *  whole action: naming what a decision did must not depend on every field of it still validating,
+ *  and a tick must not throw over history nobody can read any more. */
+function actionKindOf(action: unknown): ActionKind {
+  const kind = (action as { readonly kind?: unknown } | null)?.kind
+  return typeof kind === 'string' && (ACTION_KINDS as readonly string[]).includes(kind) ? (kind as ActionKind) : 'no_action'
+}
+
 /**
  * Just the two Supervisor settings, in one indexed read (fix round 1).
  *
@@ -213,7 +359,11 @@ export async function supervisorSettings(
  * Everything is epoch ms by the time it reaches the domain: `SupervisorWorld` holds no `Date`, so
  * a fixture is a literal and a stored `situation` is comparable months later.
  */
-export async function loadSupervisorWorld(workspaceId: string, now: Date): Promise<LoadedSupervisorWorld> {
+export async function loadSupervisorWorld(
+  workspaceId: string,
+  now: Date,
+  opts: { readonly stats?: WorkspaceStatsSnapshot } = {},
+): Promise<LoadedSupervisorWorld> {
   return prisma.$transaction(
     async (tx): Promise<LoadedSupervisorWorld> => {
       const workspace = await tx.workspace.findUniqueOrThrow({
@@ -248,17 +398,55 @@ export async function loadSupervisorWorld(workspaceId: string, now: Date): Promi
       const waitingRunIds = await waitingSenderRunIds(workspaceId, tx)
       const questionRows = await tx.slaveMessage.findMany({
         where: { workspaceId, ...stillPendingQuestion(waitingRunIds) },
-        select: { id: true, slaveId: true, recipientRole: true, recipientSlaveId: true, createdAt: true },
+        select: {
+          id: true,
+          slaveId: true,
+          taskId: true,
+          senderRunId: true,
+          threadId: true,
+          body: true,
+          createdAt: true,
+          recipientRole: true,
+          recipientSlaveId: true,
+        },
         orderBy: { seq: 'asc' },
       })
 
+      // The four sources an answer may be quoted from, loaded for ALL the pending questions at
+      // once (M39 section 3). Each is one query keyed on ids this transaction already holds --
+      // never a loop per question, which on a workspace with a busy mailbox would be three scans
+      // of the message table per tick.
+      const questionTasks = await loadQuestionTasks(
+        tx,
+        workspaceId,
+        [...new Set(questionRows.flatMap((row) => (row.taskId === null ? [] : [row.taskId])))],
+      )
+      const threads = await loadThreads(tx, workspaceId, [...new Set(questionRows.map((row) => row.threadId))])
+      const runPrompts = await loadRunPrompts(
+        tx,
+        [...new Set(questionRows.flatMap((row) => (row.senderRunId === null ? [] : [row.senderRunId])))],
+      )
+
       const decisionRows = await tx.supervisorDecision.findMany({
         where: { workspaceId, createdAt: { gte: new Date(now.getTime() - DECISION_WINDOW_MS) } },
-        select: { situationKind: true, subjectId: true, status: true, tier: true, createdAt: true, resolvedAt: true },
+        select: {
+          situationKind: true,
+          subjectId: true,
+          action: true,
+          status: true,
+          tier: true,
+          createdAt: true,
+          resolvedAt: true,
+        },
         orderBy: { createdAt: 'desc' },
       })
 
-      const snapshot = await workspaceStats(workspaceId, tx)
+      // The tick's own reading when it has one (M39 section 4). `loadWorld` already ran
+      // `workspaceStats` a few milliseconds ago for the scheduler, on the same numbers, and the
+      // limits, the run counts and the spend are the most expensive part of this load. Reusing it
+      // is also the more HONEST reading: the halt the Supervisor sees is then literally the halt
+      // `decide()` acted on this tick, not a second one taken after the pass moved work.
+      const snapshot = opts.stats ?? (await workspaceStats(workspaceId, tx))
 
       const tasks: SupervisorTask[] = []
       for (const row of taskRows) {
@@ -304,29 +492,35 @@ export async function loadSupervisorWorld(workspaceId: string, now: Date): Promi
           snapshot.limits.budgetUsd !== null && snapshot.stats.spentUsd >= snapshot.limits.budgetUsd,
         tasks,
         slaves,
-        questions: questionRows.map((row) => ({
-          messageId: row.id,
-          askerSlaveId: row.slaveId,
-          recipientRole: row.recipientRole,
-          recipientSlaveId: row.recipientSlaveId,
-          createdAt: row.createdAt.getTime(),
-          // M39 Task 3 loads these: the question body, the asking task's text, the thread, the
-          // asker run's recorded context and the slaves who could answer today. Until it does they
-          // are deliberately EMPTY rather than guessed -- `verifySources` treats a missing source as
-          // one no answer may cite, so nothing here can make an unsourced answer look sourced.
-          body: '',
-          taskId: null,
-          taskTitle: null,
-          taskDescription: null,
-          senderRunId: null,
-          threadId: '',
-          thread: [],
-          askerRunPrompt: null,
-          holders: [],
-        })),
+        questions: questionRows.map((row): SupervisorQuestion => {
+          const task = row.taskId === null ? undefined : questionTasks.get(row.taskId)
+          return {
+            messageId: row.id,
+            askerSlaveId: row.slaveId,
+            recipientRole: row.recipientRole,
+            recipientSlaveId: row.recipientSlaveId,
+            createdAt: row.createdAt.getTime(),
+            // The question's own body is capped by the SAME rule as a thread message's -- it is
+            // one, it is in the thread below under the same cap, and a worker that pasted a file
+            // into its question must not be able to spend the whole answer call on it.
+            body: cap(row.body, THREAD_BODY_MAX_CHARS),
+            taskId: row.taskId,
+            taskTitle: task?.title ?? null,
+            taskDescription: task?.description ?? null,
+            senderRunId: row.senderRunId,
+            threadId: row.threadId,
+            // INCLUDING the question itself: `verifySources` needs it in the thread precisely so
+            // it can refuse a citation of it (erratum E4 -- the question is not evidence for its
+            // own answer).
+            thread: threads.get(row.threadId) ?? [],
+            askerRunPrompt: row.senderRunId === null ? null : runPrompts.get(row.senderRunId) ?? null,
+            holders: holdersOf(row, task?.requiredRole ?? null, slaves),
+          }
+        }),
         decisions: decisionRows.map((row) => ({
           situationKind: row.situationKind as SituationKind,
           subjectId: row.subjectId,
+          actionKind: actionKindOf(row.action),
           status: row.status as DecisionStatus,
           tier: row.tier as Tier,
           createdAt: row.createdAt.getTime(),

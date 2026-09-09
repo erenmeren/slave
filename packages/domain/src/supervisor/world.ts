@@ -1,5 +1,5 @@
 import type { TaskStatus } from '../task/state.js'
-import type { DecisionStatus, Tier } from './actions.js'
+import type { ActionKind, DecisionStatus, Tier } from './actions.js'
 import type { SituationKind } from './situations.js'
 
 /**
@@ -128,6 +128,20 @@ export interface SupervisorQuestion {
 export interface SupervisorDecisionRecord {
   readonly situationKind: SituationKind
   readonly subjectId: string
+  /**
+   * WHAT was decided, as opposed to what it was decided ABOUT (M39 Task 1 review ruling).
+   *
+   * The situation alone cannot tell an answer the Supervisor drafted from a re-address or an
+   * escalation on the very same question, and {@link summarise}'s mailbox counts are exactly that
+   * distinction -- "the Supervisor answered eleven questions today" must not silently include the
+   * ones it merely handed to somebody else.
+   *
+   * LOADER CONTRACT: the `kind` off the row's stored `action`. A row whose action names something
+   * today's catalogue no longer has (an M38 `nudge_answer`, a hand-edited column) is reported as
+   * `no_action` -- true of it in the only sense that still matters, and cheaper than crashing a
+   * tick over history nobody can read any more.
+   */
+  readonly actionKind: ActionKind
   readonly status: DecisionStatus
   /** The tier the decision was recorded under -- what tells an escalation from a routine apply
    *  after the fact, since both can sit in `pending`. */

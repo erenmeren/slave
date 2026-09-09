@@ -2,25 +2,37 @@ import {
   applyDecision,
   expirePendingDecisions,
   loadSupervisorWorld,
+  pruneDecisions,
   recordDecision,
   refusalText,
   supervisorSettings,
   type LoadedSupervisorWorld,
   type ModelDecider,
+  type WorkspaceStatsSnapshot,
 } from '@slave-of-ai/control'
 import {
   SUPERVISOR_MAX_MODEL_DECISIONS_PER_TICK,
   SUPERVISOR_PER_CALL_CAP_USD,
+  answerTier,
+  buildAnswerPrompt,
   buildDecisionPrompt,
   candidates,
   chooseByRules,
+  criticalMatches,
   filterFresh,
+  isSourced,
+  neutraliseMarkers,
   observe,
+  parseAnswer,
   parseDecisionAnswer,
+  verifySources,
+  type Action,
   type Candidate,
   type Decider,
+  type Draft,
   type Situation,
   type SupervisorWorld,
+  type Tier,
 } from '@slave-of-ai/domain'
 
 export interface SuperviseDeps {
@@ -45,7 +57,19 @@ export interface SuperviseDeps {
    * property about a call that DOES NOT HAPPEN, and the only honest way to assert that is to hand
    * the loop a loader it can watch (fix round 1, Important 1).
    */
-  readonly loadWorld?: (workspaceId: string, now: Date) => Promise<LoadedSupervisorWorld>
+  readonly loadWorld?: (
+    workspaceId: string,
+    now: Date,
+    opts?: { readonly stats?: WorkspaceStatsSnapshot },
+  ) => Promise<LoadedSupervisorWorld>
+  /**
+   * The reading of the workspace's limits, run counts and halt the TICK already made (M39 §4),
+   * passed straight through to the loader so `workspaceStats` runs once per tick instead of twice.
+   *
+   * Absent is an ordinary state: a one-shot `orchestrator tick` and every test that calls this
+   * loop directly pass none, and the loader reads its own inside its own snapshot.
+   */
+  readonly stats?: WorkspaceStatsSnapshot
 }
 
 export interface SuperviseReport {
@@ -76,6 +100,18 @@ export interface SuperviseReport {
    *  `modelCalls === 0`: a pass with a model available and nothing stuck also makes no calls, and
    *  those two are different facts about the daemon's wiring. */
   readonly rulesOnly: boolean
+  /** Questions this pass ANSWERED itself (M39 §5): `answer_question` decisions whose final tier was
+   *  `applied`, so `answerQuestion` ran and a waiting worker will be resumed by the next tick's
+   *  `deliverAnswers`. A subset of {@link SuperviseReport.applied}. */
+  readonly answered: number
+  /** Questions this pass DRAFTED an answer to and left for a human -- an interpretation
+   *  (`proposed`) or a critical question (`escalated`). A subset of
+   *  {@link SuperviseReport.proposed}, and the number an operator reads as "there is mail". */
+  readonly drafted: number
+  /** Decision rows deleted as history past `DECISION_RETENTION_MS` (M39 §2). Counted on every pass,
+   *  including one a switched-off Supervisor makes: retention is a promise about the TABLE, not
+   *  about deciding, and rows written while it was on must still age out after it is off. */
+  readonly pruned: number
 }
 
 /** What a pass that decided nothing reports -- and what `tick()` returns for the one path that
@@ -88,6 +124,9 @@ export const NO_SUPERVISION: SuperviseReport = {
   skippedCooldown: 0,
   modelCalls: 0,
   rulesOnly: true,
+  answered: 0,
+  drafted: 0,
+  pruned: 0,
 }
 
 /** What one situation was decided by, before it becomes a row. */
@@ -134,6 +173,13 @@ export async function supervise(deps: SuperviseDeps): Promise<SuperviseReport> {
   // and, almost always, nothing to do.
   await expirePendingDecisions(deps.workspaceId, now)
 
+  // And the retention sweep right behind it (M39 §2), for the same reason it runs before the
+  // switch: `SupervisorDecision` grows by one row per stuck situation per cooldown, forever, and a
+  // project whose Supervisor was switched off last month must still stop holding the rows it wrote
+  // the month before. Bounded to `PRUNE_BATCH` rows and it never touches a `pending` one -- the
+  // sweep above is what retires those.
+  const pruned = await pruneDecisions(deps.workspaceId, now)
+
   // The switch next, in one indexed read, and before anything expensive (fix round 1, Important 1).
   // Report only (spec §1) means exactly that: no world, no decisions, no events, no model calls.
   // `recordDecision` would refuse each situation anyway, but a daemon ticking once a second against
@@ -141,13 +187,15 @@ export async function supervise(deps: SuperviseDeps): Promise<SuperviseReport> {
   // nothing. A missing project stops here too -- there is nothing to supervise and no reason to let
   // the loader throw about it.
   const enabled = await supervisorSettings(deps.workspaceId)
-  if (enabled === null || !enabled.enabled) return NO_SUPERVISION
+  if (enabled === null || !enabled.enabled) return { ...NO_SUPERVISION, pruned }
 
   // From here on the SNAPSHOT's settings are the ones that count (fix round 2, spec §5). The read
   // above decided only whether to load a world at all; the profile that goes into a prompt has to
   // be the one that was true inside the world the decision is made on, not one read a few
   // milliseconds earlier on a different connection.
-  const { world, settings } = await (deps.loadWorld ?? loadSupervisorWorld)(deps.workspaceId, now)
+  const { world, settings } = await (deps.loadWorld ?? loadSupervisorWorld)(deps.workspaceId, now, {
+    ...(deps.stats === undefined ? {} : { stats: deps.stats }),
+  })
 
   const situations = filterFresh(observe(world), world)
   // The seam, resolved once for the pass: a decider AND a model to aim it at, a budget that is not
@@ -163,6 +211,8 @@ export async function supervise(deps: SuperviseDeps): Promise<SuperviseReport> {
   let proposed = 0
   let skippedCooldown = 0
   let modelCalls = 0
+  let answered = 0
+  let drafted = 0
 
   for (const situation of situations) {
     const catalogue = candidates(situation, world)
@@ -183,7 +233,34 @@ export async function supervise(deps: SuperviseDeps): Promise<SuperviseReport> {
     // Every road that is not a usable model answer ends here: no decider, no model, budget gone,
     // halted, over the per-tick cap, a call that failed or breached, an answer that would not
     // parse or pointed outside the catalogue. The cost of a call that DID happen still rides along.
-    const decision = choice ?? { ...byTheRules(catalogue), modelCostUsd: null, modelCalled: false }
+    let decision = choice ?? { ...byTheRules(catalogue), modelCostUsd: null, modelCalled: false }
+
+    // The SECOND call (M39 §5). An `answer_question` offer is not a decision yet -- it is a
+    // promise to go and find the answer -- so before the row is written the pass drafts one,
+    // checks its citations in code and computes the tier that draft actually earns. Everything
+    // that comes back from here is still only ARGUMENTS to `recordDecision`: this file records and
+    // applies, it never calls a verb (spec §1).
+    const action = catalogue[decision.chosenIndex]?.action
+    let draft: Draft | undefined
+    let tier: Tier | undefined
+    if (action !== undefined && action.kind === 'answer_question') {
+      const outcome = await decideQuestion({
+        action,
+        catalogue,
+        choice: decision,
+        world,
+        profile: settings.profile,
+        // The answer call counts against the SAME per-tick cap the choice call does (spec §1,
+        // "two model calls per question at most, both counted"): the seam is withheld once the cap
+        // is spent, and what comes back says how many calls were made -- including one that THREW,
+        // which is money spent whatever it produced.
+        seam: seam !== null && modelCalls < SUPERVISOR_MAX_MODEL_DECISIONS_PER_TICK ? seam : null,
+      })
+      modelCalls += outcome.calls
+      decision = outcome.choice
+      draft = outcome.draft
+      tier = outcome.tier
+    }
 
     const recorded = await recordDecision({
       workspaceId: deps.workspaceId,
@@ -194,6 +271,8 @@ export async function supervise(deps: SuperviseDeps): Promise<SuperviseReport> {
       decidedBy: decision.decidedBy,
       modelCostUsd: decision.modelCostUsd,
       modelCalled: decision.modelCalled,
+      ...(draft === undefined ? {} : { draft }),
+      ...(tier === undefined ? {} : { tier }),
       now,
     })
     if (!recorded.ok) {
@@ -210,10 +289,17 @@ export async function supervise(deps: SuperviseDeps): Promise<SuperviseReport> {
       continue
     }
     decided += 1
-    if (recorded.value.status === 'pending') proposed += 1
+    if (recorded.value.status === 'pending') {
+      proposed += 1
+      // A drafted answer waiting on a human -- an interpretation at `proposed`, or a critical
+      // question at `escalated`. Both put a text in front of a person; the pair is exactly what
+      // `summarise`'s `draftsAwaiting` counts off the stored rows.
+      if (draft !== undefined) drafted += 1
+    }
 
     if (recorded.value.tier !== 'applied') continue
     applied += 1
+    if (draft !== undefined) answered += 1
     const carried = await applyDecision(recorded.value.id, 'system')
     if (!carried.ok) {
       // `applyDecision` has already flipped the row to `failed` and appended `supervisor.failed`.
@@ -233,6 +319,159 @@ export async function supervise(deps: SuperviseDeps): Promise<SuperviseReport> {
     skippedCooldown,
     modelCalls,
     rulesOnly: seam === null,
+    answered,
+    drafted,
+    pruned,
+  }
+}
+
+/** What the question path hands back to the loop: the choice as it now stands (possibly replaced
+ *  by a rules escalation), the draft to store beside it, the FINAL tier `answerTier` computed, and
+ *  how many model calls it made -- so the pass's own per-tick counter stays the one authority on
+ *  how many calls this workspace has paid for. */
+interface QuestionOutcome {
+  readonly choice: Choice
+  readonly draft?: Draft
+  readonly tier?: Tier
+  readonly calls: number
+}
+
+/**
+ * The whole of an `answer_question` decision, from the offer to the draft (M39 §5).
+ *
+ * Five roads out, in this order, and the order is the point:
+ *
+ * 1. **The question is gone.** Nothing to answer, nothing to draft: the rules escalate. Defensive
+ *    -- `candidates` builds the offer from this same world -- but a fabricated draft about a
+ *    question nobody holds would be far worse than a wasted escalation.
+ * 2. **The lexicon fired** (erratum E2). NO answer call is made at all: a question about a
+ *    credential or a spend must not be answerable even by a model that was about to be careful
+ *    about it. The row is `escalated` with a bodiless draft naming the keys that matched, which is
+ *    the thing a human then types their own answer into (Task 2 fix round 1).
+ * 3. **No model to ask, or the per-tick cap is spent.** The Supervisor never writes an answer
+ *    without a model (spec §5), so the situation is escalated BY THE RULES -- deliberately not
+ *    `chooseByRules`, which would fall through to a routine re-address the model never chose.
+ * 4. **The call came back unusable** -- failed, an isolation breach, a reply that will not parse.
+ *    The rules escalate and the cost of the call rides along, exactly as {@link askTheModel} does
+ *    for the choice call.
+ * 5. **A drafted answer.** Its citations are checked in code ({@link verifySources}), the tier is
+ *    {@link answerTier}'s and nobody else's, and the model's `critical` flag is recorded beside the
+ *    lexicon's (empty here -- road 2 is the only way a lexicon hit reaches a row).
+ *
+ * The cost on the row is the SUM of both calls: the workspace paid for the choice and the answer,
+ * and a reader looking at what this decision cost must see both. `null + a number` is that number
+ * (one call reported a cost and the other did not); two nulls stay null, which is what
+ * `workspaceSpend` charges at the per-call cap.
+ */
+async function decideQuestion(input: {
+  readonly action: Extract<Action, { kind: 'answer_question' }>
+  readonly catalogue: readonly Candidate[]
+  readonly choice: Choice
+  readonly world: SupervisorWorld
+  readonly profile: string | null
+  readonly seam: { readonly decider: ModelDecider; readonly model: string } | null
+}): Promise<QuestionOutcome> {
+  const { action, catalogue, choice, world, seam } = input
+  const question = world.questions.find((pending) => pending.messageId === action.messageId)
+  if (question === undefined) {
+    return { choice: escalateByRules(catalogue, choice, 'the question is no longer pending'), calls: 0 }
+  }
+
+  const lexicon = criticalMatches(question.body)
+  if (lexicon.length > 0) {
+    return {
+      choice,
+      tier: 'escalated',
+      draft: {
+        body: null,
+        sources: [],
+        rejectedSources: [],
+        critical: { lexicon, model: false },
+        confidence: 'interpretation',
+      },
+      calls: 0,
+    }
+  }
+
+  if (seam === null) {
+    return {
+      choice: escalateByRules(catalogue, choice, 'there was no model call left to draft an answer with'),
+      calls: 0,
+    }
+  }
+
+  const prompt = buildAnswerPrompt({ question, world, profile: input.profile })
+  let outcome
+  try {
+    outcome = await seam.decider({ model: seam.model, prompt, maxBudgetUsd: SUPERVISOR_PER_CALL_CAP_USD })
+  } catch (error) {
+    console.warn(
+      `[supervise] the answer call for question ${action.messageId} threw: ${error instanceof Error ? error.message : String(error)}`,
+    )
+    return { choice: escalateByRules(catalogue, { ...choice, modelCalled: true }, 'the answer call threw'), calls: 1 }
+  }
+
+  const spent = { ...choice, modelCostUsd: addCosts(choice.modelCostUsd, outcome.costUsd), modelCalled: true }
+
+  if (outcome.kind !== 'answer') {
+    const why = outcome.kind === 'failed' ? outcome.reason : `isolation breach (${outcome.tools.join(', ')})`
+    return { choice: escalateByRules(catalogue, spent, `the answer call was unusable (${why})`), calls: 1 }
+  }
+
+  const model = parseAnswer(outcome.text)
+  if (model === null) {
+    return { choice: escalateByRules(catalogue, spent, 'the drafted answer would not parse'), calls: 1 }
+  }
+
+  const check = verifySources(model.sources, question, world)
+  const sourced = isSourced(check)
+  return {
+    choice: spent,
+    tier: answerTier({ sourced, critical: model.critical, halted: world.halted !== null }),
+    draft: {
+      // Neutralised HERE as well as in `sendDraftedAnswer`, because this text is stored and shown
+      // to a human long before (or instead of) being sent: a draft in the panel must not be able
+      // to carry a run-context marker either.
+      body: neutraliseMarkers(model.answer),
+      sources: check.verified,
+      rejectedSources: check.rejected,
+      // The lexicon is empty by construction on this road -- a hit would have short-circuited
+      // above -- and it is written out rather than omitted so every stored draft has one shape.
+      critical: { lexicon: [], model: model.critical },
+      confidence: sourced ? 'sourced' : 'interpretation',
+    },
+    calls: 1,
+  }
+}
+
+/**
+ * Two costs added as MONEY rather than as numbers: a null is "nothing was reported", not zero, so
+ * one reported cost beside one unreported is that cost, and two unreported stay unreported --
+ * which is the state `workspaceSpend` charges at `SUPERVISOR_PER_CALL_CAP_USD` per call.
+ */
+function addCosts(first: number | null, second: number | null): number | null {
+  if (first === null) return second
+  if (second === null) return first
+  return first + second
+}
+
+/**
+ * The one road out of a question the Supervisor could not answer: `escalate_to_human`, decided by
+ * the rules, with whatever the model calls have already cost still on it.
+ *
+ * Deliberately NOT {@link byTheRules}: `chooseByRules` prefers a single routine candidate, so on a
+ * stale question with an idle holder it would quietly turn "answer this" into "re-address it to
+ * Robin" -- an action nobody chose, taken because the answer call could not be made. Spec §5 says
+ * the fallback is the escalation, and `candidates` guarantees there is always one.
+ */
+function escalateByRules(catalogue: readonly Candidate[], spent: Choice, why: string): Choice {
+  const index = catalogue.findIndex((candidate) => candidate.action.kind === 'escalate_to_human')
+  return {
+    chosenIndex: index === -1 ? catalogue.length - 1 : index,
+    rationale: `The Supervisor could not draft an answer (${why}); a human decides what happens next.`,
+    decidedBy: 'rules',
+    modelCostUsd: spent.modelCostUsd,
+    modelCalled: spent.modelCalled,
   }
 }
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { observe } from '../../src/supervisor/observe.js'
 import { summarise } from '../../src/supervisor/report.js'
+import type { SupervisorDecisionRecord } from '../../src/supervisor/world.js'
 import { NOW, decision, question, slave, task, world } from './fixtures.js'
 
 describe('summarise -- done', () => {
@@ -91,21 +92,28 @@ describe('summarise -- supervisor', () => {
 
 describe('summarise -- mailbox', () => {
   const DAY_MS = 24 * 60 * 60 * 1000
+  /** A question decision, the only kind the mailbox counts. `actionKind` is what tells an ANSWER
+   *  the Supervisor drafted from a re-address or an escalation on the same situation. */
+  const answerDecision = (overrides: Partial<SupervisorDecisionRecord>): SupervisorDecisionRecord =>
+    decision({ situationKind: 'waiting_stale', actionKind: 'answer_question', ...overrides })
 
   it('counts the questions still waiting, the drafts a human owes an answer to, and what was closed today', () => {
     const w = world({
       slaves: [slave({ runtimeRoles: ['backend'] })],
       questions: [question({ messageId: 'm1' }), question({ messageId: 'm2' })],
       decisions: [
-        // A drafted answer waiting on a human.
-        decision({ situationKind: 'waiting_stale', subjectId: 'm3', status: 'pending', tier: 'proposed' }),
-        // An escalation is pending too, but nobody is being asked to approve a DRAFT.
-        decision({ situationKind: 'unanswerable_question', subjectId: 'm4', status: 'pending', tier: 'escalated' }),
+        // A drafted answer waiting on a human -- an interpretation.
+        answerDecision({ subjectId: 'm3', status: 'pending', tier: 'proposed' }),
+        // An escalated draft is waiting on a human too: erratum E2's lexicon draft is exactly this
+        // row, and a human answers the question by editing it (Task 2 fix round 1).
+        answerDecision({ situationKind: 'unanswerable_question', subjectId: 'm4', status: 'pending', tier: 'escalated' }),
+        // A pending re-address on a question situation is NOT a draft: nobody is approving a text.
+        decision({ situationKind: 'waiting_stale', actionKind: 'reassign_question', subjectId: 'm8', status: 'pending', tier: 'proposed' }),
         // A proposal about something that is not a question at all.
-        decision({ situationKind: 'ready_unstaffed', subjectId: 'backend', status: 'pending', tier: 'proposed' }),
-        // Closed by the Supervisor itself, and closed by a human, both inside the window.
-        decision({ situationKind: 'waiting_stale', subjectId: 'm5', status: 'applied', tier: 'applied', createdAt: NOW - 1000 }),
-        decision({
+        decision({ situationKind: 'ready_unstaffed', actionKind: 'set_runtime_roles', subjectId: 'backend', status: 'pending', tier: 'proposed' }),
+        // Answered by the Supervisor itself, and by a human approving its draft, both in the window.
+        answerDecision({ subjectId: 'm5', status: 'applied', tier: 'applied', createdAt: NOW - 1000 }),
+        answerDecision({
           situationKind: 'unanswerable_question',
           subjectId: 'm6',
           status: 'approved',
@@ -113,19 +121,15 @@ describe('summarise -- mailbox', () => {
           createdAt: NOW - 2000,
         }),
         // The same thing, a day and a half ago: outside the window.
-        decision({
-          situationKind: 'waiting_stale',
-          subjectId: 'm7',
-          status: 'applied',
-          tier: 'applied',
-          createdAt: NOW - DAY_MS - 1,
-        }),
+        answerDecision({ subjectId: 'm7', status: 'applied', tier: 'applied', createdAt: NOW - DAY_MS - 1 }),
+        // A re-address that WAS applied moved the question along, but nobody answered it.
+        decision({ situationKind: 'waiting_stale', actionKind: 'reassign_question', subjectId: 'm9', status: 'applied', tier: 'applied' }),
         // Closed, but not about a question.
-        decision({ situationKind: 'review_cap_blocked', subjectId: 't1', status: 'applied', tier: 'applied' }),
+        decision({ situationKind: 'review_cap_blocked', actionKind: 'unblock_task', subjectId: 't1', status: 'applied', tier: 'applied' }),
       ],
     })
 
-    expect(summarise(w).mailbox).toEqual({ pendingQuestions: 2, draftsAwaiting: 1, answeredBySupervisor24h: 2 })
+    expect(summarise(w).mailbox).toEqual({ pendingQuestions: 2, draftsAwaiting: 2, answeredBySupervisor24h: 2 })
   })
 
   it('reports an empty mailbox as zeroes rather than leaving the block out', () => {
@@ -138,10 +142,19 @@ describe('summarise -- mailbox', () => {
 
   it('counts a decision exactly 24 hours old as still inside the window', () => {
     const w = world({
-      decisions: [
-        decision({ situationKind: 'waiting_stale', subjectId: 'm1', status: 'applied', tier: 'applied', createdAt: NOW - DAY_MS }),
-      ],
+      decisions: [answerDecision({ subjectId: 'm1', status: 'applied', tier: 'applied', createdAt: NOW - DAY_MS })],
     })
     expect(summarise(w).mailbox.answeredBySupervisor24h).toBe(1)
+  })
+
+  it('does not count an answer decision on a situation that is not a question', () => {
+    // Belt and braces: the action names an answer, but the situation is a blocked task. Both
+    // halves have to agree before the mailbox claims a question was answered.
+    const w = world({
+      decisions: [
+        decision({ situationKind: 'review_cap_blocked', actionKind: 'answer_question', subjectId: 't1', status: 'applied', tier: 'applied' }),
+      ],
+    })
+    expect(summarise(w).mailbox).toEqual({ pendingQuestions: 0, draftsAwaiting: 0, answeredBySupervisor24h: 0 })
   })
 })

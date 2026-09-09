@@ -23,6 +23,28 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 import { createRunUnlessArchived } from '../../src/runs.js'
 import { drainPumps, tick, type TickDeps } from '../../src/tick.js'
 
+/**
+ * Every `workspaceStats` call this file makes, in order (M39 §4).
+ *
+ * The leaf module is mocked rather than the package entry because BOTH readers have to be seen at
+ * once: `apps/orchestrator/src/world.ts` imports it through `@slave-of-ai/control`, and
+ * `packages/control/src/supervisorWorld.ts` imports it as `./stats.js` from inside that same
+ * package. They resolve to one file, so one pass-through wrapper counts both -- which is the only
+ * way "the tick reads the workspace once" is a claim a test can actually check rather than assert.
+ * The wrapper changes nothing: it records the workspace id and delegates.
+ */
+const statsCalls: string[] = []
+vi.mock('../../../../packages/control/dist/stats.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../../packages/control/dist/stats.js')>()
+  return {
+    ...actual,
+    workspaceStats: (...args: Parameters<typeof actual.workspaceStats>) => {
+      statsCalls.push(args[0])
+      return actual.workspaceStats(...args)
+    },
+  }
+})
+
 const repoRoot = fileURLToPath(new URL('../../../../', import.meta.url))
 const FAKE = join(repoRoot, 'packages/providers/test/fake-claude.mjs')
 const REAL_GATE = join(repoRoot, 'scripts/pause-gate.sh')
@@ -719,7 +741,25 @@ describe('tick', () => {
         skippedCooldown: 0,
         modelCalls: 0,
         rulesOnly: true,
+        answered: 0,
+        drafted: 0,
+        pruned: 0,
       })
+    })
+
+    it('reads the workspace stats ONCE per tick, and the Supervisor decides from that reading', async (): Promise<void> => {
+      // M39 §4. The scheduler's `loadWorld` and the Supervisor's `loadSupervisorWorld` both need
+      // the limits, the run counts, the streak and the halt, and before this the tick paid for both
+      // -- the most expensive query in either loader, twice a second on a daemon. Passing the
+      // snapshot through is also the more honest reading: the halt the Supervisor sees is the one
+      // `decide()` acted on this tick.
+      await parkedAtTheReviewCap()
+      statsCalls.length = 0
+
+      const report = await tick(deps)
+
+      expect(report.supervisor).toMatchObject({ decided: 1 })
+      expect(statsCalls).toEqual([fixture.workspaceId])
     })
   })
 

@@ -28,8 +28,9 @@ export interface SupervisorReport {
   }
   /**
    * The Supervisor's mailbox (M39 section 3): how many questions are waiting, how many drafted
-   * answers a human has been asked to look at, and how many question situations the Supervisor
-   * closed by itself in the last day.
+   * answers a human has been asked to look at, and how many questions the Supervisor ANSWERED by
+   * itself in the last day. The last two are about `answer_question` decisions specifically, not
+   * about every decision on a question -- see the fields' own comments in {@link summarise}.
    */
   mailbox: {
     pendingQuestions: number
@@ -58,7 +59,12 @@ export function summarise(world: SupervisorWorld): SupervisorReport {
 
   const done = world.tasks.filter((task) => task.status === 'done')
   const decisions = world.decisions
-  const mailboxDecisions = decisions.filter((decision) => QUESTION_KINDS.includes(decision.situationKind))
+  // Both halves have to agree before a row counts as mailbox work: the situation is about a
+  // question AND the action was an answer. A stored `answer_question` on any other situation kind
+  // is a shape the catalogue never builds, and counting it would be trusting one field over two.
+  const answerDecisions = decisions.filter(
+    (decision) => QUESTION_KINDS.includes(decision.situationKind) && decision.actionKind === 'answer_question',
+  )
 
   return {
     done: {
@@ -84,23 +90,21 @@ export function summarise(world: SupervisorWorld): SupervisorReport {
       // The world's `questions` are the PENDING ones by contract, so this is the mailbox itself
       // rather than a count of decisions about it.
       pendingQuestions: world.questions.length,
-      // A question decision sitting `pending` at tier `proposed` is a DRAFT: `answerTier` gives an
-      // unsourced answer exactly that pair, and so does a re-address a halt held back. An
-      // `escalated` pending row is not a draft -- nobody is being asked to approve a text.
-      draftsAwaiting: mailboxDecisions.filter(
-        (decision) => decision.status === 'pending' && decision.tier === 'proposed',
-      ).length,
-      // Question situations the Supervisor's own machinery closed within the day: `applied` (it
-      // acted by itself) and `approved` (a human said yes to what it drafted).
-      //
-      // `SupervisorDecisionRecord` carries the SITUATION, not the action, so an applied re-address
-      // is counted here beside an answer that was sent -- both are a question that stopped waiting
-      // because the Supervisor did something about it, which is what an operator reads the number
-      // for. Distinguishing the two would mean carrying the action kind on every record; if that
-      // ever matters, that is the change to make rather than a second guess here.
+      // Every `answer_question` decision still waiting on a human, whatever tier it was recorded
+      // at. An unsourced answer is `proposed` and a critical one `escalated`, and BOTH put a draft
+      // in front of a person to approve, edit or refuse -- erratum E2's lexicon draft has no body
+      // at all, and a human answers the question by typing into it (Task 2 fix round 1). A pending
+      // re-address on the same question is not counted: nobody is being asked to approve a text.
+      draftsAwaiting: answerDecisions.filter((decision) => decision.status === 'pending').length,
+      // Questions the Supervisor's own ANSWER closed within the day: `applied` (it sent the answer
+      // itself) and `approved` (a human said yes to its draft). `actionKind` is what makes this
+      // the number an operator reads it as -- an applied RE-ADDRESS also stops a question waiting,
+      // but nobody answered it, and counting the two together (which is all a record carrying only
+      // the situation could do, before the Task 1 review added the action kind) overstated what the
+      // Supervisor had actually said.
       //
       // The window is closed at its far end, so a fixed clock cannot straddle it.
-      answeredBySupervisor24h: mailboxDecisions.filter(
+      answeredBySupervisor24h: answerDecisions.filter(
         (decision) =>
           (decision.status === 'applied' || decision.status === 'approved') &&
           world.now - decision.createdAt <= DAY_MS,

@@ -506,10 +506,20 @@ describe('loadWorld stats.activeRuns and stats.spentUsd', () => {
       data: { ...decision, decidedBy: 'rules', modelCalled: false, modelCostUsd: null },
     })
 
-    const { world, supervisorSpend } = await loadWorld(workspaceId(id))
+    const { world, supervisorSpend, statsSnapshot } = await loadWorld(workspaceId(id))
 
     expect(world.stats.spentUsd).toBe(2 + 0.25 + 2 * SUPERVISOR_PER_CALL_CAP_USD)
     expect(supervisorSpend).toEqual({ measuredUsd: 0.25, unmeasuredCalls: 2 })
+    // M39 §4: the reading itself is handed on, so the tick's Supervisor pass can decide from it
+    // instead of paying for a second one. It is the SAME numbers `decide()` just saw.
+    expect(statsSnapshot.limits).toBe(world.limits)
+    expect(statsSnapshot.stats).toBe(world.stats)
+    expect(statsSnapshot.spend).toEqual({
+      runsMeasuredUsd: 2,
+      supervisorMeasuredUsd: 0.25,
+      supervisorUnmeasuredCalls: 2,
+      spentUsd: 2 + 0.25 + 2 * SUPERVISOR_PER_CALL_CAP_USD,
+    })
   })
 
   /**

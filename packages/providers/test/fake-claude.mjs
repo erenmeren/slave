@@ -64,6 +64,11 @@
 //   prompt can never be mistaken for a review or a planning run, and it is
 //   in every mode because a gate picks its mode for the RUNS it wants and
 //   the Supervisor's call arrives on whatever mode that turned out to be.
+//   Right behind it sits M39's ANSWER arm: a prompt containing the literal
+//   `"sources"` (which `buildAnswerPrompt` always emits) replays the fixture
+//   named by `FAKE_CLAUDE_ANSWER_FIXTURE`, defaulting to
+//   `supervisor-answer` -- so a gate chooses a sourced or an unsourced
+//   answer per daemon spawn (erratum E3) without a mode of its own.
 //   anything else  replays `fixtures/<name>.ndjson` verbatim, exit 0 -- real
 //                  captures show process exit code 0 even for hook-crash,
 //                  hook-deny, and permission-denied runs, so the fake matches
@@ -148,6 +153,19 @@ async function supervisorArm(prompt) {
   return true
 }
 
+/** M39 (erratum E3): the Supervisor's ANSWER call -- the second call it makes about a question,
+ *  recognised by the one literal `buildAnswerPrompt` guarantees. Which fixture it replays comes
+ *  from the environment, not from this file, so one gate can spawn a daemon that answers from a
+ *  real quote and another that cites words nobody wrote -- the two halves of "sourced" -- without
+ *  a second flow mode. Sits right after `supervisorArm` in every sniffing mode: both are decision
+ *  calls, neither is a run, and the choose prompt carries no `"sources"` so the order between them
+ *  is belt and braces rather than a discriminator. */
+async function answerArm(prompt) {
+  if (!prompt.includes('"sources"')) return false
+  await replayFixture(process.env.FAKE_CLAUDE_ANSWER_FIXTURE ?? 'supervisor-answer')
+  return true
+}
+
 async function main() {
   if (fixtureName === 'hang') {
     // Write nothing and never exit on its own. Without something keeping
@@ -208,6 +226,7 @@ async function main() {
   if (fixtureName === 'm36-flow') {
     const prompt = await promptText()
     if (await supervisorArm(prompt)) return
+    if (await answerArm(prompt)) return
     if (prompt.includes('"verdict"')) {
       await replayFixture('review-approve')
       return
@@ -255,6 +274,7 @@ async function main() {
   if (fixtureName === 'm8-flow') {
     const prompt = await promptText()
     if (await supervisorArm(prompt)) return
+    if (await answerArm(prompt)) return
     if (prompt.includes('"task graph"')) {
       await replayFixture('plan-graph')
       return
@@ -275,6 +295,7 @@ async function main() {
   if (fixtureName === 'm8a-flow') {
     const prompt = await promptText()
     if (await supervisorArm(prompt)) return
+    if (await answerArm(prompt)) return
     if (prompt.includes('"verdict"')) {
       await replayFixture('review-approve')
       return
