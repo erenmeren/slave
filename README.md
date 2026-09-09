@@ -299,6 +299,71 @@ In the UI, every run in the task panel has a **What this run saw** button (serve
 `GET /api/w/<id>/runs/<runId>/context`): the same section list, with any missing skills highlighted,
 and the full prompt in a collapsed block underneath.
 
+## The Supervisor
+
+Every project has one, and it is not a slave: no `Slave` row, no runs, no worktree, no prompt of
+its own written for anybody else. At the end of every tick it looks at the project, names what is
+stuck, picks an action for each stuck thing out of a catalogue **the rules built**, does the
+routine ones itself through the ordinary control verbs, and puts the risky ones in front of you as
+proposals. Every decision is a row you can read afterwards, with the situation it was made on, the
+whole catalogue it chose from, and why.
+
+**What it watches for.** A task waiting in review with nobody holding `reviewer`; a goal with no
+tasks and nobody holding `manager`; a task parked at the review retry cap; a failed task other
+tasks depend on; a task blocked for any other reason; a question that has waited half an hour, or
+one addressed to a role nobody holds; a startable task whose required role has no holder; work
+that has been done but unmerged for six hours with dependents waiting; and a project whose
+scheduling has stopped.
+
+**Two tiers, fixed in code.** Routine actions apply immediately: sending a task parked *by the
+review retry cap* back to `rework` while it still has attempts, and nudging an unanswered
+question. Everything else is a proposal that waits for you — raising an attempt cap, writing a
+worker's runtime roles, declaring a task failed, and **unblocking a task that anything else
+parked**. That last one is the rule worth knowing: `blocked` means a human has to look at this,
+and two of the ways a task gets there are deliberate (a cancelled run, a worktree the daemon
+refused to adopt), so the review cap is the one park the Supervisor knows a safe exit from. While
+the project is **halted** every action is a proposal — a guardrail has already said this project
+should not be moving, so the Supervisor may say what it would do and nothing more. "Halted" here
+means an emergency stop, a spent budget or a tripped circuit breaker; a project merely at its
+concurrency cap is busy, not stuck, and nothing is frozen for it.
+
+**The model picks, the rules offer.** Where a model is wired and the budget allows it, the
+Supervisor asks for an *index into the catalogue* and a rationale — it can never add an action,
+and an answer that will not parse or points outside the list falls back to the rules. It asks
+about at most three situations per tick; the rest wait for the next one. A situation already in
+front of you is not asked again, and one decided in the last fifteen minutes is left alone;
+proposals nobody answers expire after a day.
+
+**Its spend is the project's spend.** A Supervisor call is capped at $1, and a call whose cost the
+provider never reported is charged at that cap rather than counted as free — so the budget
+guardrail sees it. The Overview's spend tile names the Supervisor's share beside the total. When
+the budget guardrail halts the project, or no model is wired, the Supervisor decides by the rules
+and calls nobody at all.
+
+**In the UI**, the Overview page carries a **Supervisor** panel under the halt banner: *done* /
+*stuck* / *next*, then *waiting on you* — each pending proposal with what it would do, why, and
+**Approve** / **Reject** (with an optional reason) — then the recent decisions with their tier,
+status, who decided (model or rules) and the rationale, and finally a switch that turns the
+Supervisor down to report-only and a box for its own profile (its persona and house rules, which
+go into the decision prompt). The five `supervisor.*` events have their own cards on Activity.
+
+**From the shell:**
+
+```bash
+npm run orchestrator -- supervise --workspace <id>              # one pass, with the model seam
+npm run orchestrator -- supervise --workspace <id> --dry-run    # what it WOULD decide; writes nothing
+npm run orchestrator -- supervisor-decisions --workspace <id> [--pending] [--limit <n>]
+npm run orchestrator -- approve-decision --id <id>              # carry the proposal out
+npm run orchestrator -- reject-decision --id <id> [--reason <text>]
+npm run orchestrator -- set-supervisor --workspace <id> (--enable | --disable)
+npm run orchestrator -- set-supervisor --workspace <id> (--profile-file <path> | --clear-profile)
+```
+
+`supervise` is the one command that spends on a model call by hand; the daemon's own pass does the
+same thing on every tick. `--dry-run` writes no decision row, no event and makes no call, so it
+costs nothing to look. A switched-off Supervisor still reports and still retires stale proposals —
+it just stops deciding.
+
 ## When a slave asks a question
 
 A slave that hits a decision it cannot make alone can ask another slave instead of guessing. Every
@@ -368,11 +433,14 @@ The `npm run gate:*` scripts are end-to-end proofs of each milestone against fak
 they spend nothing. CI runs `gate:m26-vocabulary`, `gate:m15-boundary`, `gate:m20-auth`,
 `gate:m21-loose-ends`, `gate:m23-onboarding`, `gate:m29-simulation`, `gate:m30-simulation-compare`,
 `gate:m31a-llm-decisions`, `gate:m31b-software-sector`, `gate:m33-adopt`,
-`gate:m35-pipeline-honesty`, `gate:m36-messaging` and `gate:m37-run-context` on every push —
-`m36` stops the orchestrator and starts it again mid-scenario, to prove a waiting slave's question
-survives a restart, and `m37` reads a real run's prompt and worktree back to prove a slave was
-given the persona and the skills it was assigned. Tests and gates share one Postgres — run one at a
-time.
+`gate:m35-pipeline-honesty`, `gate:m36-messaging`, `gate:m37-run-context` and
+`gate:m38-supervisor` on every push — `m36` stops the orchestrator and starts it again
+mid-scenario, to prove a waiting slave's question survives a restart, `m37` reads a real run's
+prompt and worktree back to prove a slave was given the persona and the skills it was assigned, and
+`m38` drives a real daemon until the Supervisor proposes the staffing a reviewer-less project needs,
+waits for a human to approve it, unblocks a review-capped task by itself, and escalates a project
+whose budget is gone without spending a cent to decide that. Tests and gates share one Postgres —
+run one at a time.
 
 ## Learn more
 
