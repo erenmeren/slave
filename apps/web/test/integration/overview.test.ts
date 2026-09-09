@@ -40,7 +40,7 @@ describe('buildOverviewSnapshot', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Approval", "Artifact", "Checkpoint", "SlaveMessage", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Approval", "Artifact", "Checkpoint", "SlaveMessage", "RunContext", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
   })
@@ -771,5 +771,66 @@ describe('buildOverviewSnapshot', () => {
     expect(snapshot?.blocked).toEqual([])
     expect(snapshot?.liveEvents).toEqual([])
     expect(snapshot?.mergeQueue).toEqual([])
+  })
+  // M37 t4: the panel's Profile block and role chips read these two fields, so the chain is walked
+  // ONCE here, server-side, with `effectiveProfile` -- never a second copy in a component.
+  describe('the profile and runtime roles a panel shows (M37 §6)', () => {
+    /** Links the fixture's worker to a roster row on a template, so all three levels of the
+     *  override chain exist and each can be given (or denied) a profile per case. */
+    async function linkToRoster(profiles: {
+      readonly slave: string | null
+      readonly company: string | null
+      readonly template: string | null
+    }): Promise<void> {
+      const company = await prisma.company.create({ data: { name: 'Acme Robotics' } })
+      const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Eng' } })
+      const template = await prisma.slaveTemplate.create({
+        data: { name: 'Backend Engineer', role: 'backend', profile: profiles.template },
+      })
+      const companySlave = await prisma.companySlave.create({
+        data: { companyTeamId: companyTeam.id, templateId: template.id, name: 'Atlas', profile: profiles.company },
+      })
+      await prisma.slave.update({
+        where: { id: fixture.slaveId },
+        data: { companySlaveId: companySlave.id, profile: profiles.slave },
+      })
+    }
+
+    it("reports the worker's own profile with origin 'slave'", async (): Promise<void> => {
+      await linkToRoster({ slave: 'You are careful with payments.', company: 'roster text', template: 'template text' })
+
+      const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
+
+      expect(snapshot?.slaves[0]?.profile).toEqual({ text: 'You are careful with payments.', origin: 'slave' })
+    })
+
+    it("falls through to the roster row with origin 'company', then the template with origin 'template'", async (): Promise<void> => {
+      await linkToRoster({ slave: null, company: 'roster text', template: 'template text' })
+      expect((await buildOverviewSnapshot(fixture.workspaceId))?.slaves[0]?.profile).toEqual({
+        text: 'roster text',
+        origin: 'company',
+      })
+
+      await prisma.companySlave.updateMany({ data: { profile: null } })
+      expect((await buildOverviewSnapshot(fixture.workspaceId))?.slaves[0]?.profile).toEqual({
+        text: 'template text',
+        origin: 'template',
+      })
+    })
+
+    it('reports null when no level of the chain carries one — including a worker with no roster link', async (): Promise<void> => {
+      expect((await buildOverviewSnapshot(fixture.workspaceId))?.slaves[0]?.profile).toBeNull()
+
+      await linkToRoster({ slave: null, company: null, template: null })
+      expect((await buildOverviewSnapshot(fixture.workspaceId))?.slaves[0]?.profile).toBeNull()
+    })
+
+    it('reports the runtime roles as they are stored, empty set included', async (): Promise<void> => {
+      expect((await buildOverviewSnapshot(fixture.workspaceId))?.slaves[0]?.runtimeRoles).toEqual([])
+
+      await prisma.slave.update({ where: { id: fixture.slaveId }, data: { runtimeRoles: ['backend', 'reviewer'] } })
+
+      expect((await buildOverviewSnapshot(fixture.workspaceId))?.slaves[0]?.runtimeRoles).toEqual(['backend', 'reviewer'])
+    })
   })
 })

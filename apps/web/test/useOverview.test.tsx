@@ -36,6 +36,8 @@ const SNAPSHOT: OverviewSnapshot = {
       toolCalls: 0,
       pausedAtStep: null,
       waitingFor: null,
+      profile: null,
+      runtimeRoles: [],
     },
   ],
   tasks: { active: 1, ready: 0, blocked: 0, done: 0, failed: 0 },

@@ -35,7 +35,9 @@ export function errorMessage(data: unknown, status: number): string {
  *  the refusal's message otherwise -- never throws, so a caller never needs its own try/catch. */
 export async function sendControl(
   url: string,
-  options: { method: 'POST' | 'PUT' | 'DELETE'; body?: Record<string, unknown> },
+  // `PATCH` joined the set in M37 t4: the profile and runtime-role routes each replace ONE field
+  // of a worker that has many, which is the verb HTTP has for that.
+  options: { method: 'POST' | 'PUT' | 'PATCH' | 'DELETE'; body?: Record<string, unknown> },
 ): Promise<string | null> {
   try {
     const response =

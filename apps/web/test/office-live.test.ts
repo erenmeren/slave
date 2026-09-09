@@ -6,7 +6,8 @@ function card(over: Partial<SlaveCardData> = {}): SlaveCardData {
   return {
     id: 's1', name: 'Alex', role: 'backend', provider: null, gate: null, status: 'idle', taskTitle: null, taskId: null,
     taskStatus: null, progressPct: 0, stepLabel: null, skill: null, actionLine: null, runId: null, queuedMessage: null,
-    resumeRequestedAt: null, recentEvents: [], costUsd: null, toolCalls: 0, pausedAtStep: null, waitingFor: null, ...over,
+    resumeRequestedAt: null, recentEvents: [], costUsd: null, toolCalls: 0, pausedAtStep: null, waitingFor: null,
+    profile: null, runtimeRoles: [], ...over,
   }
 }
 

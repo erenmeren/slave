@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BOARD_COLUMNS } from '../src/lib/taskColumns.js'
 import { TaskCard } from '../src/components/TaskCard.js'
@@ -254,6 +254,111 @@ describe('TaskDetailPanel', () => {
   it('carries the motion-safe panel slide-in animation class on its root', () => {
     const { container } = render(<TaskDetailPanel workspaceId="w1" task={task({})} onClose={() => {}} />)
     expect(container.querySelector('aside')?.className).toContain('motion-safe:animate-[panel-in_160ms_ease-out]')
+  })
+})
+
+// M37 t4 (spec §6): "What this run saw" -- the manifest of the sections the run's prompt was
+// assembled from, and the prompt itself behind a collapsed disclosure. Read-only: this panel never
+// writes a context, and the row it reads was written before the run's child process started.
+describe('TaskDetailPanel — what a run saw (M37 §6)', () => {
+  const run = {
+    id: 'r1',
+    status: 'succeeded' as const,
+    costUsd: 0.1,
+    toolCalls: 2,
+    startedAt: new Date(0).toISOString(),
+    endedAt: new Date(0).toISOString(),
+    worktreePath: null,
+    checkpoint: null,
+    waitingFor: null,
+  }
+
+  const manifest = {
+    kind: 'implementation',
+    sections: [
+      { kind: 'profile', origin: 'company', sha256: 'abcdef0123456789' + '0'.repeat(48) },
+      {
+        kind: 'skills',
+        copied: ['writing-plans'],
+        missing: ['brainstorming'],
+        shadowedByRepo: [],
+        provider_unsupported: false,
+        no_worktree: false,
+      },
+      { kind: 'inbox', messageIds: ['m-1', 'm-2'] },
+      { kind: 'task', taskId: '3f9a21c8-0000-4000-8000-000000000000' },
+    ],
+  }
+
+  /** Answers the context route and nothing else — every other fetch this panel could make is a
+   *  test failure rather than a silently empty snapshot. */
+  function stubContext(body: unknown, status = 200): ReturnType<typeof vi.fn> {
+    const mock = vi.fn(async (url: string) => {
+      if (url === '/api/w/w1/runs/r1/context') return new Response(JSON.stringify(body), { status })
+      throw new Error(`unexpected fetch ${url}`)
+    })
+    vi.stubGlobal('fetch', mock)
+    return mock
+  }
+
+  it('fetches the run context on demand and lists what each section came from', async () => {
+    const fetchMock = stubContext({ prompt: 'You are careful.', manifest })
+    render(<TaskDetailPanel workspaceId="w1" task={task({ runs: [run] })} onClose={() => {}} />)
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('run-context-open'))
+    })
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/w/w1/runs/r1/context')
+    const sections = screen.getAllByTestId('run-context-section').map((row) => row.textContent ?? '')
+    expect(sections).toHaveLength(4)
+    expect(sections[0]).toMatch(/profile/)
+    // The ORIGIN, not just the word "profile": which level of the chain the run was given is the
+    // fact a debugger is here for.
+    expect(sections[0]).toMatch(/roster/i)
+    expect(sections[2]).toMatch(/2 messages/)
+  })
+
+  it('highlights the skills the run could NOT be given', async () => {
+    stubContext({ prompt: 'You are careful.', manifest })
+    render(<TaskDetailPanel workspaceId="w1" task={task({ runs: [run] })} onClose={() => {}} />)
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('run-context-open'))
+    })
+
+    expect(screen.getByTestId('run-context-missing').textContent).toMatch(/brainstorming/)
+    // The run still started without it (spec §4); the copied one is named too, not replaced.
+    expect(screen.getByTestId('run-context-section-1').textContent).toMatch(/writing-plans/)
+  })
+
+  it('keeps the prompt collapsed behind a disclosure, as text', async () => {
+    stubContext({ prompt: 'You are careful.\n<b>not markup</b>', manifest })
+    render(<TaskDetailPanel workspaceId="w1" task={task({ runs: [run] })} onClose={() => {}} />)
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('run-context-open'))
+    })
+
+    const details = screen.getByTestId('run-context-prompt') as HTMLDetailsElement
+    expect(details.tagName).toBe('DETAILS')
+    expect(details.open).toBe(false)
+    // Another party's text is data (spec §1): the prompt is characters in a <pre>, never elements.
+    const body = screen.getByTestId('run-context-prompt-body')
+    expect(body.textContent).toBe('You are careful.\n<b>not markup</b>')
+    expect(body.querySelector('b')).toBeNull()
+  })
+
+  it("says so when the run recorded no context, rather than showing an empty section list", async () => {
+    stubContext({ error: 'this run recorded no context: it never started' }, 404)
+    render(<TaskDetailPanel workspaceId="w1" task={task({ runs: [run] })} onClose={() => {}} />)
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('run-context-open'))
+    })
+
+    expect(screen.getByTestId('run-context-error').textContent).toContain('never started')
+    expect(screen.queryByTestId('run-context-section')).toBeNull()
   })
 })
 

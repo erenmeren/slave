@@ -48,6 +48,10 @@ const slave = (over: Partial<SlaveCardData>): SlaveCardData => ({
   toolCalls: 0,
   pausedAtStep: null,
   waitingFor: null,
+  // M37 t4: the persona and the dispatchable role set. The card's own M37 assertions below set
+  // `runtimeRoles` per case; this default is the parked worker.
+  profile: null,
+  runtimeRoles: [],
   ...over,
 })
 
@@ -195,6 +199,36 @@ describe('SlaveCard', () => {
     rerender(<SlaveCard slave={slave({ status: 'paused' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
     // Motion carries information (spec §7): a pulsing paused slave is a lie on screen.
     expect(dot().className).not.toContain('status-pulse')
+  })
+
+  // M37 t4 (spec §5): `role` is the profile's TITLE and is matched by nothing; `runtimeRoles` is
+  // what the scheduler, the review pass and the planning pass dispatch on. The title stays where it
+  // was, and the dispatch set gets chips of its own beside it.
+  describe('runtime-role chips (M37 §5)', () => {
+    it('keeps the title under the name and adds one chip per dispatchable role', () => {
+      render(
+        <SlaveCard
+          slave={slave({ role: 'Senior Engineer', runtimeRoles: ['backend', 'reviewer'] })}
+          liveActionLine={null}
+          workspaceId="w1"
+          onOpen={() => {}}
+        />,
+      )
+
+      expect(screen.getByText('Senior Engineer')).toBeTruthy()
+      expect(screen.getAllByTestId('card-runtime-role-chip').map((chip) => chip.textContent)).toEqual([
+        'backend',
+        'reviewer',
+      ])
+      expect(screen.queryByTestId('card-not-dispatchable')).toBeNull()
+    })
+
+    it('marks an empty set as parked rather than showing an empty chip row (spec §7)', () => {
+      render(<SlaveCard slave={slave({ runtimeRoles: [] })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
+
+      expect(screen.queryByTestId('card-runtime-role-chip')).toBeNull()
+      expect(screen.getByTestId('card-not-dispatchable').textContent).toMatch(/cannot be dispatched/i)
+    })
   })
 
   // M36 t2 fix round 1, finding 1: a waiting run is `paused`, and a footer offering a bare

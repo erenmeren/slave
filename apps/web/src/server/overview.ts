@@ -3,6 +3,7 @@ import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, toRunState } from '@slave-of-ai/db'
 import { capabilitiesOf, workspaceDefaultProvider, type ProviderCapabilities, type ProviderKind } from '@slave-of-ai/control'
 import {
   deriveSlaveStatus,
+  effectiveProfile,
   mergeQueueOrder,
   sumSpend,
   NON_TERMINAL_RUN_STATUSES,
@@ -45,6 +46,30 @@ export interface SlaveCardData {
    * `listRoster` derives a worker's gate -- one capability table, never recomputed per renderer.
    */
   readonly gate: ProviderCapabilities['gate'] | null
+  /**
+   * The persona that actually applies to this worker, and which level of the override chain it
+   * came from (M37 §2, §6) -- `slave.profile ?? companySlave.profile ?? template.profile`, walked
+   * once here by `@slave-of-ai/domain`'s `effectiveProfile`, the SAME function `buildRunContext`
+   * walks at dispatch. One function, so the text the panel shows and the text the model is given
+   * cannot drift apart; server-side, so no component ever re-derives an override chain.
+   *
+   * `null` when no level carries one: the run then gets no profile section at all (spec §7), and
+   * the panel says so rather than showing an empty box that looks like a saved blank.
+   *
+   * `origin` is what makes the panel's edit honest: a `company` or `template` text is inherited,
+   * and typing over it writes a `slave`-level OVERRIDE rather than editing what was shown.
+   */
+  readonly profile: { readonly text: string; readonly origin: 'slave' | 'company' | 'template' } | null
+  /**
+   * The roles this worker may be DISPATCHED as (M37 §5) -- the scheduler match, reviewer/manager
+   * staffing and role-addressed messaging all read this set, and `role` above is now only the
+   * profile's title.
+   *
+   * An empty array is a real state, not missing data: it means the worker is parked and can never
+   * be picked (spec §7), which is why the card and the panel render it as a warning instead of an
+   * absent chip row.
+   */
+  readonly runtimeRoles: readonly string[]
   readonly status: SlaveStatus
   readonly taskTitle: string | null
   /** The live run's task id — the card renders `TASK-<first 8 chars>` from it (the handoff's mono
@@ -255,6 +280,10 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
   const slaves = await prisma.slave.findMany({
     where: { team: { workspaceId } },
     orderBy: { name: 'asc' },
+    // The roster/template legs of the profile override chain (M37 t4), included rather than
+    // queried per worker: `effectiveProfile` needs both levels below the worker's own column, and
+    // a second round trip per row is how a roster of thirty becomes thirty-one queries.
+    include: { companySlave: { select: { profile: true, template: { select: { profile: true } } } } },
   })
 
   // One live run per slave at most (the scheduler enforces it); latest by startedAt breaks any
@@ -501,6 +530,10 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
         id: slave.id,
         name: slave.name,
         role: slave.role,
+        // Walked by the domain's own function, not restated here (M37 t4): this is the same call
+        // `buildRunContext` makes, so what the panel shows is what the next dispatch will send.
+        profile: effectiveProfile(slave),
+        runtimeRoles: slave.runtimeRoles,
         // The run's own column, not a constant (M12 Task 9, ruling R10). `SlaveRun.provider` has
         // been written by every dispatch since Task 8, so the surface finally has real data where
         // it used to have `'claude-code' as const` -- which was not even the `ProviderKind`

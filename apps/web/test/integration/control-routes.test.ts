@@ -2,6 +2,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { prisma } from '@slave-of-ai/db/client'
+import { PROFILE_MAX_CHARS } from '@slave-of-ai/domain'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { POST as pausePOST } from '../../src/app/api/w/[workspaceId]/runs/[runId]/pause/route.js'
 import { POST as resumePOST } from '../../src/app/api/w/[workspaceId]/runs/[runId]/resume/route.js'
@@ -10,12 +11,17 @@ import { POST as messagePOST } from '../../src/app/api/w/[workspaceId]/runs/[run
 import { POST as answerPOST } from '../../src/app/api/w/[workspaceId]/messages/[messageId]/answer/route.js'
 import { POST as emergencyStopPOST } from '../../src/app/api/w/[workspaceId]/emergency-stop/route.js'
 import { POST as goalPOST } from '../../src/app/api/w/[workspaceId]/goal/route.js'
+import { PATCH as profilePATCH } from '../../src/app/api/w/[workspaceId]/slaves/[slaveId]/profile/route.js'
+import { PATCH as runtimeRolesPATCH } from '../../src/app/api/w/[workspaceId]/slaves/[slaveId]/runtime-roles/route.js'
+import { GET as runContextGET } from '../../src/app/api/w/[workspaceId]/runs/[runId]/context/route.js'
 
 interface Fixture {
   readonly workspace: { readonly id: string; readonly repoPath: string }
   readonly otherWorkspace: { readonly id: string }
   readonly task: { readonly id: string }
   readonly run: { readonly id: string }
+  /** M37 t4: the profile and runtime-role routes are addressed at the SLAVE, not at a run. */
+  readonly slave: { readonly id: string }
 }
 
 async function seed(): Promise<Fixture> {
@@ -39,6 +45,7 @@ async function seed(): Promise<Fixture> {
     otherWorkspace: { id: otherWorkspace.id },
     task: { id: task.id },
     run: { id: run.id },
+    slave: { id: slave.id },
   }
 }
 
@@ -72,7 +79,7 @@ describe('the control routes', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Approval", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Approval", "SlaveMessage", "Artifact", "Checkpoint", "RunContext", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
   })
@@ -268,6 +275,182 @@ describe('the control routes', () => {
 
       expect(second.status).toBe(200)
       expect(await prisma.slaveMessage.count({ where: { kind: 'answer' } })).toBe(1)
+    })
+  })
+
+  // M37 t4. Spec §1: model output never writes a profile -- the route calls `setProfile` and
+  // nothing else, so every rule about what a profile may be lives in the verb and is only
+  // TRANSLATED here (400 for a body this route cannot read, `refusalStatus` for the rest).
+  describe('profile', () => {
+    const patch = (workspaceId: string, slaveId: string, body: unknown): Promise<Response> =>
+      profilePATCH(
+        new Request('http://x', { method: 'PATCH', body: JSON.stringify(body), headers: { 'content-type': 'application/json' } }),
+        { params: Promise.resolve({ workspaceId, slaveId }) },
+      )
+
+    it('writes the slave-level profile and records one slave.profile_changed event', async (): Promise<void> => {
+      const response = await patch(fixture.workspace.id, fixture.slave.id, { profile: 'You are careful with payments.' })
+
+      expect(response.status).toBe(200)
+      expect(await response.json()).toEqual({ ok: true })
+      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id } })).profile).toBe(
+        'You are careful with payments.',
+      )
+      expect(await prisma.executionEvent.count({ where: { type: 'slave_profile_changed' } })).toBe(1)
+    })
+
+    it('clears the override on an explicit null', async (): Promise<void> => {
+      await patch(fixture.workspace.id, fixture.slave.id, { profile: 'You are careful with payments.' })
+
+      const response = await patch(fixture.workspace.id, fixture.slave.id, { profile: null })
+
+      expect(response.status).toBe(200)
+      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id } })).profile).toBeNull()
+    })
+
+    it('404s a slave in another workspace, and an unknown slave, writing nothing', async (): Promise<void> => {
+      const crossWorkspace = await patch(fixture.otherWorkspace.id, fixture.slave.id, { profile: 'not yours' })
+      expect(crossWorkspace.status).toBe(404)
+
+      const unknown = await patch(fixture.workspace.id, '00000000-0000-4000-8000-000000000000', { profile: 'nobody' })
+      expect(unknown.status).toBe(404)
+
+      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id } })).profile).toBeNull()
+      expect(await prisma.executionEvent.count({ where: { type: 'slave_profile_changed' } })).toBe(0)
+    })
+
+    it('400s a body that carries no profile field, a non-string profile, and unparseable JSON', async (): Promise<void> => {
+      expect((await patch(fixture.workspace.id, fixture.slave.id, {})).status).toBe(400)
+      expect((await patch(fixture.workspace.id, fixture.slave.id, { profile: 5 })).status).toBe(400)
+
+      const malformed = await profilePATCH(
+        new Request('http://x', { method: 'PATCH', body: 'not json', headers: { 'content-type': 'application/json' } }),
+        { params: Promise.resolve({ workspaceId: fixture.workspace.id, slaveId: fixture.slave.id }) },
+      )
+      expect(malformed.status).toBe(400)
+      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id } })).profile).toBeNull()
+    })
+
+    it("maps the verb's own refusal to 409 with its text", async (): Promise<void> => {
+      const response = await patch(fixture.workspace.id, fixture.slave.id, { profile: 'x'.repeat(PROFILE_MAX_CHARS + 1) })
+
+      expect(response.status).toBe(409)
+      expect((await response.json()).error).toContain(String(PROFILE_MAX_CHARS))
+      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id } })).profile).toBeNull()
+    })
+  })
+
+  // M37 t4. `runtimeRoles` is the one dispatch match (spec §5), so this route is how a worker
+  // becomes dispatchable at all -- including the empty set, which is a real (parked) state and
+  // never a refusal.
+  describe('runtime-roles', () => {
+    const patch = (workspaceId: string, slaveId: string, body: unknown): Promise<Response> =>
+      runtimeRolesPATCH(
+        new Request('http://x', { method: 'PATCH', body: JSON.stringify(body), headers: { 'content-type': 'application/json' } }),
+        { params: Promise.resolve({ workspaceId, slaveId }) },
+      )
+
+    it('replaces the set and records one slave.runtime_roles_changed event', async (): Promise<void> => {
+      const response = await patch(fixture.workspace.id, fixture.slave.id, { roles: ['backend', 'reviewer'] })
+
+      expect(response.status).toBe(200)
+      expect(await response.json()).toEqual({ ok: true })
+      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id } })).runtimeRoles).toEqual([
+        'backend',
+        'reviewer',
+      ])
+      expect(await prisma.executionEvent.count({ where: { type: 'slave_runtime_roles_changed' } })).toBe(1)
+    })
+
+    it('accepts the empty set: parked is a state, not a refusal', async (): Promise<void> => {
+      await patch(fixture.workspace.id, fixture.slave.id, { roles: ['backend'] })
+
+      const response = await patch(fixture.workspace.id, fixture.slave.id, { roles: [] })
+
+      expect(response.status).toBe(200)
+      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id } })).runtimeRoles).toEqual([])
+    })
+
+    it('404s a slave in another workspace, and an unknown slave, writing nothing', async (): Promise<void> => {
+      expect((await patch(fixture.otherWorkspace.id, fixture.slave.id, { roles: ['backend'] })).status).toBe(404)
+      expect(
+        (await patch(fixture.workspace.id, '00000000-0000-4000-8000-000000000000', { roles: ['backend'] })).status,
+      ).toBe(404)
+
+      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id } })).runtimeRoles).toEqual([])
+      expect(await prisma.executionEvent.count({ where: { type: 'slave_runtime_roles_changed' } })).toBe(0)
+    })
+
+    it('400s a body with no roles array, a non-string entry, and unparseable JSON', async (): Promise<void> => {
+      expect((await patch(fixture.workspace.id, fixture.slave.id, {})).status).toBe(400)
+      expect((await patch(fixture.workspace.id, fixture.slave.id, { roles: 'backend' })).status).toBe(400)
+      expect((await patch(fixture.workspace.id, fixture.slave.id, { roles: ['backend', 7] })).status).toBe(400)
+
+      const malformed = await runtimeRolesPATCH(
+        new Request('http://x', { method: 'PATCH', body: 'not json', headers: { 'content-type': 'application/json' } }),
+        { params: Promise.resolve({ workspaceId: fixture.workspace.id, slaveId: fixture.slave.id }) },
+      )
+      expect(malformed.status).toBe(400)
+      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id } })).runtimeRoles).toEqual([])
+    })
+
+    it("maps the verb's own refusal to 409 with its reason", async (): Promise<void> => {
+      const response = await patch(fixture.workspace.id, fixture.slave.id, { roles: ['backend', 'backend'] })
+
+      expect(response.status).toBe(409)
+      expect((await response.json()).error).toContain('named twice')
+      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id } })).runtimeRoles).toEqual([])
+    })
+  })
+
+  // M37 t4: what a run was told, read back. The row is written before the spawn (Task 2), so a
+  // run that started always has one -- and a run without one is indistinguishable from a run that
+  // does not exist as far as this read is concerned.
+  describe('run context', () => {
+    const manifest = {
+      kind: 'implementation',
+      sections: [
+        { kind: 'profile', origin: 'slave', sha256: 'a'.repeat(64) },
+        { kind: 'skills', copied: ['writing-plans'], missing: ['brainstorming'], shadowedByRepo: [], provider_unsupported: false, no_worktree: false },
+        { kind: 'task', taskId: 'task-1' },
+      ],
+    }
+
+    const get = (workspaceId: string, runId: string): Promise<Response> =>
+      runContextGET(new Request('http://x'), { params: Promise.resolve({ workspaceId, runId }) })
+
+    it('returns the recorded prompt and manifest', async (): Promise<void> => {
+      await prisma.runContext.create({ data: { runId: fixture.run.id, prompt: 'You are careful.', sections: manifest } })
+
+      const response = await get(fixture.workspace.id, fixture.run.id)
+
+      expect(response.status).toBe(200)
+      expect(await response.json()).toEqual({ prompt: 'You are careful.', manifest })
+    })
+
+    it('404s a run in another workspace', async (): Promise<void> => {
+      await prisma.runContext.create({ data: { runId: fixture.run.id, prompt: 'You are careful.', sections: manifest } })
+
+      expect((await get(fixture.otherWorkspace.id, fixture.run.id)).status).toBe(404)
+    })
+
+    it('404s an unknown run, and a run that recorded no context', async (): Promise<void> => {
+      expect((await get(fixture.workspace.id, '00000000-0000-4000-8000-000000000000')).status).toBe(404)
+
+      const noContext = await get(fixture.workspace.id, fixture.run.id)
+      expect(noContext.status).toBe(404)
+      expect((await noContext.json()).error).toEqual(expect.any(String))
+    })
+
+    it('refuses a stored manifest this version cannot read rather than serving a shape nobody validated', async (): Promise<void> => {
+      await prisma.runContext.create({
+        data: { runId: fixture.run.id, prompt: 'You are careful.', sections: { kind: 'implementation', sections: [{ kind: 'not_a_section' }] } },
+      })
+
+      const response = await get(fixture.workspace.id, fixture.run.id)
+
+      expect(response.status).toBe(500)
+      expect((await response.json()).error).toContain('cannot read')
     })
   })
 

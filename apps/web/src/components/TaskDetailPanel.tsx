@@ -1,7 +1,9 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
+import type { Manifest } from '@slave-of-ai/domain'
 import { onUnauthorized } from '../lib/onUnauthorized'
 import { errorMessage, sendControl } from '../lib/postControl'
+import { sectionLine } from '../lib/runContextSummary'
 import { priorityChip } from '../lib/taskColumns'
 import type { TaskBoardItem } from '../server/tasks'
 import { TASK_STATUS_TEXT } from './TaskCard'
@@ -14,6 +16,14 @@ interface OpenArtifact {
   readonly id: string
   readonly text: string
   readonly truncated: boolean
+}
+
+/** The context of ONE run, opened at a time (M37 §6) -- `runId` is what keys it to the row it was
+ *  opened from, so opening a second run's context replaces the first rather than stacking. */
+interface OpenRunContext {
+  readonly runId: string
+  readonly prompt: string
+  readonly manifest: Manifest
 }
 
 export function TaskDetailPanel({
@@ -32,6 +42,9 @@ export function TaskDetailPanel({
   const [artifact, setArtifact] = useState<OpenArtifact | null>(null)
   const [artifactPending, setArtifactPending] = useState(false)
   const [artifactError, setArtifactError] = useState<string | null>(null)
+  const [runContext, setRunContext] = useState<OpenRunContext | null>(null)
+  const [runContextPending, setRunContextPending] = useState(false)
+  const [runContextError, setRunContextError] = useState<string | null>(null)
 
   // M23 B4 (controller ruling): `task.collectable` is computed server-side on the DTO
   // (`buildTasksSnapshot`) -- this panel never imports `TERMINAL` from `@slave-of-ai/domain`.
@@ -74,6 +87,40 @@ export function TaskDetailPanel({
       setArtifactError(cause instanceof Error ? cause.message : String(cause))
     } finally {
       setArtifactPending(false)
+    }
+  }
+
+  /**
+   * Reads what one run was told (M37 §6). Same shape as `openArtifact` above -- a plain `fetch`,
+   * because a 200 here is `{ prompt, manifest }` rather than the `{ ok: true }` envelope
+   * `sendControl` decodes, and the same try/catch/finally so the pending flag always clears.
+   *
+   * The body is taken as the route's own shape rather than re-validated: the route parses the
+   * stored `Json` with `runContextManifestSchema` before serving it and refuses a row it cannot
+   * read, so a second parse here would only pull the domain's zod schemas into the browser bundle
+   * to re-answer a question already answered server-side.
+   */
+  const openRunContext = async (runId: string): Promise<void> => {
+    setRunContextPending(true)
+    setRunContextError(null)
+    try {
+      const response = await fetch(`/api/w/${workspaceId}/runs/${runId}/context`)
+      if (response.status === 401) {
+        onUnauthorized()
+        return
+      }
+      const data: unknown = await response.json().catch(() => null)
+      if (!response.ok) {
+        // A run that never started has no row (spec §4: the row is written BEFORE the spawn), and
+        // the route's own sentence for that is better than anything this panel could invent.
+        setRunContextError(errorMessage(data, response.status))
+        return
+      }
+      setRunContext({ runId, ...(data as { prompt: string; manifest: Manifest }) })
+    } catch (cause) {
+      setRunContextError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setRunContextPending(false)
     }
   }
 
@@ -197,9 +244,64 @@ export function TaskDetailPanel({
                     during pause · {run.checkpoint.deniedDuringPause.map((denied) => denied.summary ?? `${denied.id.slice(0, 8)}…`).join(', ')}
                   </div>
                 )}
+                {/* M37 §6. Fetched on demand rather than with the snapshot: a prompt is the whole
+                  * text a model was given, and shipping one per run into every board poll would
+                  * dwarf the snapshot it rides in. */}
+                <button
+                  type="button"
+                  data-testid="run-context-open"
+                  disabled={runContextPending}
+                  onClick={() => void openRunContext(run.id)}
+                  className="mt-1 text-left text-[10.5px] text-text-3 underline decoration-dotted hover:text-text-1 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  What this run saw
+                </button>
+                {runContext !== null && runContext.runId === run.id && (
+                  <div data-testid="run-context" className="mt-1 flex flex-col gap-1">
+                    <ul className="flex flex-col gap-0.5">
+                      {runContext.manifest.sections.map((source, index) => {
+                        const line = sectionLine(source)
+                        return (
+                          // The index belongs in the key: the manifest is an ORDERED record and a
+                          // kind can legitimately repeat, so `kind` alone is not a stable identity.
+                          <li key={`${line.kind}-${String(index)}`} data-testid="run-context-section" className="text-[10.5px]">
+                            <span data-testid={`run-context-section-${String(index)}`}>
+                              <span className="font-mono text-text-3">{line.kind}</span> {line.detail}
+                            </span>
+                            {line.missing.length > 0 && (
+                              // The one thing on this list an operator may have to act on: a skill
+                              // the worker was assigned that its run never got (spec §4 -- the run
+                              // proceeds without it).
+                              <span data-testid="run-context-missing" className="text-tone-blocked">
+                                {' '}
+                                · missing: {line.missing.join(', ')}
+                              </span>
+                            )}
+                          </li>
+                        )
+                      })}
+                    </ul>
+                    <details data-testid="run-context-prompt">
+                      <summary className="cursor-pointer text-[10.5px] text-text-3">the prompt, in full</summary>
+                      {/* A `<pre>`, so another party's text is characters and never elements
+                        * (spec §1: another party's text is data). */}
+                      <pre
+                        data-testid="run-context-prompt-body"
+                        className="mt-1 max-h-64 overflow-auto rounded border border-line bg-bg-2 p-2 font-mono text-[10px] text-text-2"
+                      >
+                        {runContext.prompt}
+                      </pre>
+                    </details>
+                  </div>
+                )}
               </li>
             ))}
           </ul>
+        )}
+        {runContextError !== null && (
+          <span role="alert" data-testid="run-context-error" className="text-xs text-tone-blocked">
+            {runContextError}
+          </span>
         )}
       </section>
 

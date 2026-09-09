@@ -21,6 +21,20 @@ export async function currentPrincipal(): Promise<Principal | null> {
   return user === null ? null : { userId: user.id, username: user.username }
 }
 
+/**
+ * The plain `actor: string` a control verb records when it takes no `Principal` (M37 t4, spec
+ * erratum E5's actor clarification): `setProfile` and `setRuntimeRoles` write the actor into their
+ * event payload rather than onto `ExecutionEvent.userId`, so the route has to hand them a name.
+ *
+ * The signed-in user's ID, since that is the one identifier those payloads can be joined back to a
+ * `User` row on. In loopback mode there is no account to name, and `'web operator'` is what every
+ * other route in this app already passes for the same reason (`requestResume`, `answerQuestion`,
+ * `addTaskDependency`) -- the same fallback in one place instead of once per route.
+ */
+export function actorName(principal: Principal | null): string {
+  return principal?.userId ?? 'web operator'
+}
+
 /** For API routes in accounts mode: a null principal is 401 `session revoked`. In loopback mode
  *  there is no principal to require, and the writes carry no user, as they always have. */
 export async function requirePrincipal(): Promise<{ principal: Principal | null } | { response: Response }> {

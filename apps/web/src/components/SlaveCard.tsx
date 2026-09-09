@@ -167,6 +167,25 @@ export function SlaveCard({
         <StatusPill tone={tone} label={label} pulse={pulse} />
       </div>
 
+      {/* M37 §5: the dispatch set, beside the title rather than instead of it. `slave.role` above
+        * is the profile's heading and is matched by nothing since M37; these are what the
+        * scheduler, review staffing and role-addressed messaging actually read. */}
+      <div className="flex flex-wrap items-center gap-[5px]">
+        {slave.runtimeRoles.length === 0 ? (
+          // A worker with no runtime roles can never be picked (spec §7). An empty chip row would
+          // read as "none yet"; this says what the empty set actually means.
+          <span data-testid="card-not-dispatchable" className="text-[10.5px] text-tone-blocked">
+            cannot be dispatched — no runtime roles
+          </span>
+        ) : (
+          slave.runtimeRoles.map((role) => (
+            <Chip key={role}>
+              <span data-testid="card-runtime-role-chip">{role}</span>
+            </Chip>
+          ))
+        )}
+      </div>
+
       <div className="flex items-baseline gap-[7px]">
         <span data-testid="card-task-ref" className="shrink-0 font-mono text-[10px] text-text-3">
           {slave.taskId === null ? '—' : taskRef(slave.taskId)}

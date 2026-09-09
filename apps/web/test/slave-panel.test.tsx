@@ -34,6 +34,10 @@ const slave = (over: Partial<SlaveCardData>): SlaveCardData => ({
   toolCalls: 0,
   pausedAtStep: null,
   waitingFor: null,
+  // M37 t4 widened `SlaveCardData` with the persona and the dispatchable role set; the panel's
+  // own M37 block below is what exercises them, so the default here is the empty pair.
+  profile: null,
+  runtimeRoles: [],
   ...over,
 })
 
@@ -563,5 +567,125 @@ describe('SlavePanel', () => {
   it('carries the motion-safe panel slide-in animation class on its root', () => {
     const { container } = render(<SlavePanel slave={slave({})} liveEvents={[]} workspaceId="w1" haltedReason={null} onClose={() => {}} />)
     expect(container.querySelector('aside')?.className).toContain('motion-safe:animate-[panel-in_160ms_ease-out]')
+  })
+  // M37 t4. Spec §1: model output never writes a profile or a role set -- these two controls call
+  // the control verbs through their routes, and nothing else in this panel writes either field.
+  describe('profile and runtime roles (M37 §6)', () => {
+    const render_ = (over: Partial<SlaveCardData>): void => {
+      render(
+        <SlavePanel slave={slave(over)} liveEvents={[]} workspaceId="w1" haltedReason={null} onClose={() => {}} />,
+      )
+    }
+
+    it("shows the effective profile as TEXT in a textarea, with the level it came from", () => {
+      render_({ profile: { text: '# Persona\n<b>careful</b> with payments', origin: 'company' } })
+
+      const input = screen.getByTestId('profile-input') as HTMLTextAreaElement
+      // Another party's text is data (spec §1): the markup arrives as characters in a form
+      // control, never as elements.
+      expect(input.value).toBe('# Persona\n<b>careful</b> with payments')
+      expect(input.querySelector('b')).toBeNull()
+      expect(screen.getByTestId('profile-origin').textContent).toMatch(/roster/i)
+    })
+
+    it("names the worker-level profile as the worker's own", () => {
+      render_({ profile: { text: 'mine', origin: 'slave' } })
+
+      expect(screen.getByTestId('profile-origin').textContent).toMatch(/own/i)
+    })
+
+    it('says when no level of the chain carries a profile, and leaves the box empty', () => {
+      render_({ profile: null })
+
+      expect(screen.getByTestId('profile-origin').textContent).toMatch(/no profile/i)
+      expect((screen.getByTestId('profile-input') as HTMLTextAreaElement).value).toBe('')
+    })
+
+    it('saving the profile PATCHes the slave profile route with the typed text', async () => {
+      render_({ profile: { text: 'inherited text', origin: 'template' } })
+
+      fireEvent.change(screen.getByTestId('profile-input'), { target: { value: 'You are careful with payments.' } })
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('profile-save'))
+      })
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/w/w1/slaves/a1/profile',
+        expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ profile: 'You are careful with payments.' }) }),
+      )
+    })
+
+    it('clearing the textarea and saving sends an explicit null — the override goes, the level below shows through', async () => {
+      render_({ profile: { text: 'my override', origin: 'slave' } })
+
+      fireEvent.change(screen.getByTestId('profile-input'), { target: { value: '   ' } })
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('profile-save'))
+      })
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/w/w1/slaves/a1/profile',
+        expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ profile: null }) }),
+      )
+    })
+
+    it("renders a 409 refusal from the profile save in the panel's error band", async () => {
+      fetchMock.mockImplementationOnce(
+        async () => new Response(JSON.stringify({ error: 'a profile may be at most 16000 characters; this one is 16001' }), { status: 409 }),
+      )
+      render_({ profile: null })
+
+      fireEvent.change(screen.getByTestId('profile-input'), { target: { value: 'x' } })
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('profile-save'))
+      })
+
+      expect(screen.getByRole('alert').textContent).toContain('at most 16000 characters')
+    })
+
+    it('renders one chip per runtime role', () => {
+      render_({ runtimeRoles: ['backend', 'reviewer'] })
+
+      expect(screen.getAllByTestId('runtime-role-chip').map((chip) => chip.textContent)).toEqual(['backend', 'reviewer'])
+      expect(screen.queryByTestId('runtime-roles-empty')).toBeNull()
+    })
+
+    it('warns that an empty set is parked: it can never be dispatched (spec §7)', () => {
+      render_({ runtimeRoles: [] })
+
+      expect(screen.queryByTestId('runtime-role-chip')).toBeNull()
+      expect(screen.getByTestId('runtime-roles-empty').textContent).toMatch(/cannot be dispatched/i)
+    })
+
+    it('saving the roles PATCHes the replacement set, split on commas exactly as the CLI splits --roles', async () => {
+      render_({ runtimeRoles: ['backend'] })
+
+      fireEvent.change(screen.getByTestId('runtime-roles-input'), { target: { value: 'backend, reviewer' } })
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('runtime-roles-save'))
+      })
+
+      // The pieces go over the wire untrimmed on purpose: `setRuntimeRoles`'s own `normaliseRoles`
+      // trims entry by entry (the CLI's `--roles a, b` reaches it the same way), so the trim rule
+      // lives in the verb rather than being restated -- differently -- in a component.
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/w/w1/slaves/a1/runtime-roles',
+        expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ roles: ['backend', ' reviewer'] }) }),
+      )
+    })
+
+    it('emptying the roles field parks the slave rather than sending one blank role', async () => {
+      render_({ runtimeRoles: ['backend'] })
+
+      fireEvent.change(screen.getByTestId('runtime-roles-input'), { target: { value: '  ' } })
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('runtime-roles-save'))
+      })
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/w/w1/slaves/a1/runtime-roles',
+        expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ roles: [] }) }),
+      )
+    })
   })
 })

@@ -168,6 +168,11 @@ describe('SlavesClient row click opens the panel', () => {
                 // body, so TypeScript never checks it -- without the field `SlavePanel` reads
                 // `undefined`, which is not `null`, and crashes on `waitingFor.recipient`.
                 waitingFor: null,
+                // M37 t4 added these two; like `waitingFor` above they are stated because this
+                // literal is a fetch RESPONSE body TypeScript never checks, and `SlavePanel` reads
+                // `runtimeRoles.length` -- `undefined` there is a crash, not an empty set.
+                profile: null,
+                runtimeRoles: [],
               },
             ],
           }),

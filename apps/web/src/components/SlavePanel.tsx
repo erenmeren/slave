@@ -3,13 +3,36 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { SlaveFeedEvent } from '../lib/feedSummary'
 import type { SlaveCardData } from '../server/overview'
-import { postControl } from '../lib/postControl'
+import { sendControl } from '../lib/postControl'
 import { DOT } from './SlaveCard'
 import { ShellOnlyMark } from './ShellOnlyMark'
 import { Button } from './ui/Button'
 import { Chip } from './ui/Chip'
 
-type ControlAction = 'pause' | 'resume' | 'stop' | 'message' | 'answer'
+type ControlAction = 'pause' | 'resume' | 'stop' | 'message' | 'answer' | 'profile' | 'runtime-roles'
+
+/**
+ * What the Profile block says about where the text in its box came from, and what saving over it
+ * will do (M37 §6).
+ *
+ * The origin is the whole point of showing it: only a `slave` text is this worker's OWN, and
+ * saving over an inherited one writes a worker-level override rather than editing the roster row
+ * or the template -- which is what those two routes would need, and this panel is not addressed at
+ * them (spec erratum E3: the catalog levels have no workspace to be scoped by).
+ */
+const PROFILE_ORIGIN_TEXT: Record<'slave' | 'company' | 'template', string> = {
+  slave: "this worker's own profile",
+  company: 'inherited from its roster row — saving writes an override on this worker',
+  template: 'inherited from its template — saving writes an override on this worker',
+}
+
+/** The one parse of a typed role set, mirroring `set-runtime-roles`'s own (`cli.ts`): an empty
+ *  field is the PARKED state (spec §7), not one blank role the verb would refuse. The pieces stay
+ *  untrimmed -- `setRuntimeRoles` trims entry by entry, and a second, differently-worded trim in a
+ *  component is how the two surfaces drift apart. */
+function parseRoles(typed: string): readonly string[] {
+  return typed.trim() === '' ? [] : typed.split(',')
+}
 
 /** Seed (`slave.recentEvents`, last 20 from the DB) merged with the live buffer
  *  (`liveEvents[slave.id]`), deduplicated by seq, ascending — newest at the bottom. */
@@ -38,6 +61,14 @@ export function SlavePanel({
   const [pending, setPending] = useState<ReadonlySet<ControlAction>>(new Set())
   const [errorText, setErrorText] = useState<string | null>(null)
   const [draft, setDraft] = useState(slave.queuedMessage ?? '')
+  // The effective text, so the box shows what the next dispatch will actually send -- inherited or
+  // not. `profileText`/`rolesText` are strings rather than the objects they come from, so the
+  // resync effects below fire on a CHANGED value instead of on every snapshot's fresh object
+  // identity, which would wipe what an operator is halfway through typing.
+  const profileText = slave.profile?.text ?? ''
+  const rolesText = slave.runtimeRoles.join(', ')
+  const [profileDraft, setProfileDraft] = useState(profileText)
+  const [rolesDraft, setRolesDraft] = useState(rolesText)
 
   // Resync the draft from the snapshot's queued message whenever it changes for this slave — a
   // resume consuming it, or another client overwriting it. Not optimistic UI: this reads what the
@@ -49,6 +80,16 @@ export function SlavePanel({
   useEffect((): void => {
     setDraft(slave.queuedMessage ?? '')
   }, [slave.queuedMessage])
+
+  // The same resync rule as the message box above, for the same reason: what the snapshot carried
+  // in is the truth, and a write from the CLI or another client must reach this box.
+  useEffect((): void => {
+    setProfileDraft(profileText)
+  }, [profileText])
+
+  useEffect((): void => {
+    setRolesDraft(rolesText)
+  }, [rolesText])
 
   const runId = slave.runId
   const status = slave.status
@@ -82,17 +123,31 @@ export function SlavePanel({
 
   const feed = useMemo(() => mergeFeed(slave.recentEvents, liveEvents), [slave.recentEvents, liveEvents])
 
-  const post = async (action: ControlAction, url: string, body?: Record<string, unknown>): Promise<void> => {
+  /** The one place this panel writes: mark the control busy, clear the last refusal, dial the
+   *  shared `sendControl`, and show whatever it refused with. Every button below goes through it,
+   *  so the pending set and the error band cannot get out of step per control. */
+  const send = async (
+    action: ControlAction,
+    url: string,
+    options: { method: 'POST' | 'PATCH'; body?: Record<string, unknown> },
+  ): Promise<void> => {
     setPending((current) => new Set(current).add(action))
     setErrorText(null)
-    const result = await postControl(url, body)
-    if (!result.ok) setErrorText(result.error)
+    const error = await sendControl(url, options)
+    if (error !== null) setErrorText(error)
     setPending((current) => {
       const next = new Set(current)
       next.delete(action)
       return next
     })
   }
+
+  const post = (action: ControlAction, url: string, body?: Record<string, unknown>): Promise<void> =>
+    send(action, url, body === undefined ? { method: 'POST' } : { method: 'POST', body })
+
+  /** The two M37 writes: PATCH, because each replaces ONE field of a worker that has many. */
+  const patch = (action: ControlAction, url: string, body: Record<string, unknown>): Promise<void> =>
+    send(action, url, { method: 'PATCH', body })
 
   const run = async (action: ControlAction, path: string, body?: Record<string, unknown>): Promise<void> => {
     if (runId === null) return
@@ -237,6 +292,81 @@ export function SlavePanel({
           )}
         </section>
       )}
+
+      {/* M37 §6. The persona a run is given, and the roles it can be dispatched as -- both written
+        * only by their control verbs, through the two routes below. */}
+      <section data-testid="profile-block" className="flex flex-col gap-1">
+        <h3 className="text-xs uppercase tracking-wide text-text-3">Profile</h3>
+        <p data-testid="profile-origin" className="text-[10.5px] text-text-3">
+          {slave.profile === null ? 'no profile — this worker is sent no persona' : PROFILE_ORIGIN_TEXT[slave.profile.origin]}
+        </p>
+        {/* A textarea, so another party's Markdown is characters in a form control and never
+          * elements (spec §1: another party's text is data). */}
+        <textarea
+          data-testid="profile-input"
+          value={profileDraft}
+          onChange={(event) => setProfileDraft(event.target.value)}
+          className="rounded border border-line bg-bg-0 p-2 text-xs text-text-1"
+          rows={6}
+        />
+        <Button
+          variant="ghost"
+          data-testid="profile-save"
+          disabled={pending.has('profile')}
+          // A blank box means "clear my override", which only an explicit `null` expresses: an
+          // empty string would win the `??` chain and render nothing, leaving the roster row and
+          // the template unable to show through again.
+          onClick={() =>
+            void patch('profile', `/api/w/${workspaceId}/slaves/${slave.id}/profile`, {
+              profile: profileDraft.trim() === '' ? null : profileDraft,
+            })
+          }
+          className="self-end"
+        >
+          save
+        </Button>
+      </section>
+
+      <section data-testid="runtime-roles" className="flex flex-col gap-1">
+        <h3 className="text-xs uppercase tracking-wide text-text-3">Runtime roles</h3>
+        {slave.runtimeRoles.length === 0 ? (
+          // Not an empty chip row: an empty set means this worker is never a scheduler candidate,
+          // never staffed onto a review or a plan, and never a role-addressed message's recipient
+          // (spec §7). Saying nothing there would read as "no roles yet" rather than "parked".
+          <p data-testid="runtime-roles-empty" className="text-xs text-tone-blocked">
+            no runtime roles — this slave cannot be dispatched until it holds one
+          </p>
+        ) : (
+          <div className="flex flex-wrap items-center gap-[5px]">
+            {slave.runtimeRoles.map((role) => (
+              <Chip key={role}>
+                <span data-testid="runtime-role-chip">{role}</span>
+              </Chip>
+            ))}
+          </div>
+        )}
+        <input
+          data-testid="runtime-roles-input"
+          value={rolesDraft}
+          onChange={(event) => setRolesDraft(event.target.value)}
+          aria-label="Runtime roles, comma separated"
+          placeholder="backend, reviewer"
+          className="rounded border border-line bg-bg-0 p-2 text-xs text-text-1"
+        />
+        <Button
+          variant="ghost"
+          data-testid="runtime-roles-save"
+          disabled={pending.has('runtime-roles')}
+          onClick={() =>
+            void patch('runtime-roles', `/api/w/${workspaceId}/slaves/${slave.id}/runtime-roles`, {
+              roles: parseRoles(rolesDraft),
+            })
+          }
+          className="self-end"
+        >
+          save
+        </Button>
+      </section>
 
       <section className="flex flex-1 flex-col gap-1 overflow-y-auto">
         <h3 className="text-xs uppercase tracking-wide text-text-3">Live feed</h3>
