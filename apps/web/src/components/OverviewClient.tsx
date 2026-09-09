@@ -220,8 +220,10 @@ export function OverviewClient({
         {/* M38 §6: the Supervisor sits directly under the halt banner, because a halted workspace
           * is exactly when its "what is stuck / what comes next" is worth reading, and because
           * every action it proposes while halted is a proposal a human has to answer here. It
-          * reads its own route; `view` is passed only as the poll tick, so it refreshes on the
-          * same beat the rest of this page does. */}
+          * reads its own route; `view` is passed only as a WAKE-UP -- its identity changes on
+          * every SSE-driven refetch -- and the panel throttles its own reads from there
+          * (`SUPERVISOR_PANEL_MIN_REFRESH_MS`), because this stream fires several times a second
+          * while a run is live. */}
         <SupervisorPanel workspaceId={workspaceId} refreshKey={view} />
         {error !== null && (
           <div role="alert" className="border-b border-tone-waiting/40 bg-tone-waiting/10 px-4 py-1.5 text-xs text-tone-waiting">

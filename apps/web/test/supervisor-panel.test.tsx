@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { SupervisorPanel } from '../src/components/SupervisorPanel.js'
+import { SUPERVISOR_PANEL_MIN_REFRESH_MS, SupervisorPanel } from '../src/components/SupervisorPanel.js'
 import type { SupervisorView } from '../src/server/supervisor.js'
 
 const GET_URL = '/api/w/w1/supervisor'
@@ -48,7 +48,9 @@ const view = (over?: Partial<SupervisorView>): SupervisorView => ({
     supervisor: { applied: 4, pending: 1, escalated: 0, failed: 0, lastDecisionAt: 1_757_412_000_000 },
   },
   pending: [decision({})],
-  recent: [decision({}), decision({ id: 'd0', status: 'applied', tier: 'applied', decidedBy: 'rules', rationale: 'The review cap was the only thing holding it.' })],
+  // Fix round 1, Minor 3: the tier and the status are DIFFERENT literals here, so an assertion
+  // that the row carries both cannot be satisfied by one of them printed twice.
+  recent: [decision({}), decision({ id: 'd0', tier: 'proposed', status: 'approved', decidedBy: 'rules', rationale: 'The review cap was the only thing holding it.' })],
   settings: { enabled: true, profile: 'Prefer unblocking over failing.' },
   ...over,
 })
@@ -79,7 +81,12 @@ describe('SupervisorPanel', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals()
+    vi.useRealTimers()
+    vi.restoreAllMocks()
   })
+
+  /** Every read this panel made, in order -- the writes are POSTs and PATCHes to other URLs. */
+  const reads = (): unknown[][] => fetchMock.mock.calls.filter((call) => call[0] === GET_URL)
 
   it('reads the view once on mount', async () => {
     await mount()
@@ -126,7 +133,7 @@ describe('SupervisorPanel', () => {
     })
 
     expect(fetchMock).toHaveBeenCalledWith('/api/w/w1/supervisor/decisions/d1/approve', expect.objectContaining({ method: 'POST' }))
-    expect(fetchMock.mock.calls.filter((call) => call[0] === GET_URL)).toHaveLength(2)
+    expect(reads()).toHaveLength(2)
   })
 
   it('rejecting POSTs the reject route with the typed reason', async () => {
@@ -168,7 +175,8 @@ describe('SupervisorPanel', () => {
 
     const rows = screen.getAllByTestId('supervisor-decision-row')
     expect(rows).toHaveLength(2)
-    expect(rows[1]?.textContent).toContain('applied')
+    expect(rows[1]?.textContent).toContain('proposed')
+    expect(rows[1]?.textContent).toContain('approved')
     expect(rows[1]?.textContent).toContain('rules')
     expect(screen.getAllByTestId('supervisor-decision-rationale')[1]?.textContent).toBe(
       'The review cap was the only thing holding it.',
@@ -240,15 +248,108 @@ describe('SupervisorPanel', () => {
     expect(screen.getByRole('alert').textContent).toContain('already applied')
   })
 
-  it("re-reads the view when the overview's poll tick changes", async () => {
-    respondWith(view())
-    const { rerender } = render(<SupervisorPanel workspaceId="w1" refreshKey={1} />)
-    await act(async () => {})
+  it('refetches immediately after its own write, without waiting out the throttle window', async () => {
+    await mount()
 
     await act(async () => {
-      rerender(<SupervisorPanel workspaceId="w1" refreshKey={2} />)
+      fireEvent.click(screen.getByTestId('supervisor-approve'))
     })
 
-    expect(fetchMock.mock.calls.filter((call) => call[0] === GET_URL)).toHaveLength(2)
+    // Two reads a few milliseconds apart, well inside `SUPERVISOR_PANEL_MIN_REFRESH_MS`: the
+    // throttle governs the stream's wake-ups, never the result of a click.
+    expect(reads()).toHaveLength(2)
+  })
+
+  // Fix round 1, Important 2 + the controller's ruling. `refreshKey` is the SSE refetch, which
+  // fires several times a second while a run is live; each read here is a `RepeatableRead` world
+  // load plus two decision queries.
+  it('reads at most once per window however often the stream wakes it, and carries the last wake-up across', async () => {
+    vi.useFakeTimers()
+    respondWith(view())
+    const { rerender } = render(<SupervisorPanel workspaceId="w1" refreshKey={0} />)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(reads()).toHaveLength(1)
+
+    for (const key of [1, 2, 3, 4]) {
+      await act(async () => {
+        rerender(<SupervisorPanel workspaceId="w1" refreshKey={key} />)
+        await vi.advanceTimersByTimeAsync(100)
+      })
+    }
+    expect(reads()).toHaveLength(1)
+
+    // The trailing read: the last wake-up inside the window still lands, once the window is over.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SUPERVISOR_PANEL_MIN_REFRESH_MS)
+    })
+    expect(reads()).toHaveLength(2)
+  })
+
+  // Fix round 1, Important 1: the same monotonic guard `useWorkspaceStream`'s refetch carries.
+  it('ignores a slow read that lands after a newer one', async () => {
+    vi.useFakeTimers()
+    let releaseFirst: (() => void) | null = null
+    const answer = (rationale: string): Response =>
+      new Response(JSON.stringify(view({ pending: [decision({ rationale })] })), { status: 200 })
+    fetchMock
+      .mockImplementationOnce(async () => {
+        await new Promise<void>((resolve) => {
+          releaseFirst = resolve
+        })
+        return answer('the read that started FIRST')
+      })
+      .mockImplementationOnce(async () => answer('the read that started SECOND'))
+
+    const { rerender } = render(<SupervisorPanel workspaceId="w1" refreshKey={0} />)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    // Past the throttle window, so the next wake-up issues its read straight away -- while the
+    // first one is still hanging.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SUPERVISOR_PANEL_MIN_REFRESH_MS)
+    })
+    await act(async () => {
+      rerender(<SupervisorPanel workspaceId="w1" refreshKey={1} />)
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(screen.getByTestId('supervisor-proposal-rationale').textContent).toBe('the read that started SECOND')
+
+    await act(async () => {
+      releaseFirst?.()
+      await vi.advanceTimersByTimeAsync(0)
+    })
+
+    expect(screen.getByTestId('supervisor-proposal-rationale').textContent).toBe('the read that started SECOND')
+  })
+
+  // Fix round 1, Minor 2: a read that fails is named, and an expired session lands on the door
+  // rather than on a band that never clears (M20 §3.4) -- this read dials `fetch` itself, so it
+  // owes the same `onUnauthorized` call every other control surface makes.
+  it('sends the operator to /login when the read comes back 401', async () => {
+    const assign = vi.fn()
+    Object.defineProperty(window, 'location', { configurable: true, value: { assign, pathname: '/w/w1', search: '' } })
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify({ error: 'session revoked' }), { status: 401 }))
+
+    await act(async () => {
+      render(<SupervisorPanel workspaceId="w1" refreshKey={0} />)
+    })
+
+    expect(assign).toHaveBeenCalledWith('/login?next=%2Fw%2Fw1')
+  })
+
+  it('names a failed read in the error band instead of going quiet, keeping the last good view', async () => {
+    await mount()
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify({ error: 'the database is down' }), { status: 500 }))
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('supervisor-approve'))
+    })
+
+    expect(screen.getByRole('alert').textContent).toContain('the database is down')
+    // The proposal is still on screen: a failed read replaces nothing.
+    expect(screen.getByTestId('supervisor-proposal-summary')).toBeTruthy()
   })
 })

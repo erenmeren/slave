@@ -1,14 +1,29 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { PROFILE_MAX_CHARS, type Action } from '@slave-of-ai/domain'
 // Type-only, so nothing from `server/supervisor.ts` (and nothing it imports -- control, and the
 // Prisma client under it) reaches the client bundle. The same rule `useOverview.ts` states for
 // `OverviewSnapshot`.
 import type { SupervisorView } from '../server/supervisor'
-import { sendControl } from '../lib/postControl'
+import { errorMessage, sendControl } from '../lib/postControl'
+import { onUnauthorized } from '../lib/onUnauthorized'
 import { Button } from './ui/Button'
 import { Panel } from './ui/Panel'
+
+/**
+ * The shortest interval between two reads this panel will make on its own (fix round 1, Important
+ * 2 + the controller's ruling).
+ *
+ * `refreshKey` is the overview's SSE-driven refetch, debounced at 250 ms -- during an active run
+ * that fires several times a second, and each read here is a `RepeatableRead` world load plus two
+ * decision queries, per open tab. A Supervisor decision is made at most once per tick and answered
+ * by a human at human speed, so five seconds of staleness costs nothing that a wake-up every
+ * quarter-second buys. The last wake-up inside a window still lands, as a TRAILING read after it,
+ * so the panel never settles on a snapshot older than the window; and the panel's own writes
+ * bypass this entirely, because an operator who just clicked Approve must see the result now.
+ */
+export const SUPERVISOR_PANEL_MIN_REFRESH_MS = 5_000
 
 type Decision = SupervisorView['pending'][number]
 
@@ -97,8 +112,11 @@ function ProposalRow({
  * It owns its own read rather than riding the overview snapshot: the whole view is one route
  * (`GET …/supervisor`), it is worthless when nothing is stuck, and folding a `RepeatableRead`
  * world load plus two decision queries into the overview's own snapshot would make every poll of
- * every project pay for it. It re-reads on `refreshKey` -- the overview's poll tick -- so an
- * action taken in the CLI, or a decision the daemon recorded, shows up here without a reload.
+ * every project pay for it. `refreshKey` is the overview's SSE-driven refetch -- an event on the
+ * workspace stream, debounced at 250 ms, NOT a fixed poll -- so a decision the daemon recorded or
+ * an approval taken on the CLI shows up here without a reload, throttled to one read per
+ * {@link SUPERVISOR_PANEL_MIN_REFRESH_MS} with a trailing read for the last wake-up inside a
+ * window.
  *
  * Every write goes through a control route; this component has no idea what a decision does, only
  * which URL says yes to it.
@@ -118,33 +136,89 @@ export function SupervisorPanel({
   // to be replaced. Approving two proposals is two deliberate acts, a beat apart.
   const [busy, setBusy] = useState(false)
   const [profileDraft, setProfileDraft] = useState<string | null>(null)
+  /** Monotonic guard, the same one `useWorkspaceStream`'s refetch uses: only the most recently
+   *  ISSUED read may write state. Without it a slow read started before an approve can land after
+   *  the read that followed the approve, and the proposal reappears under "waiting on you" having
+   *  already been carried out. */
+  const loadSeq = useRef(0)
+  /** When the last read was issued (not when it resolved): this throttles REQUESTS. */
+  const lastLoadAt = useRef(Number.NEGATIVE_INFINITY)
+  const trailing = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const load = useCallback(async (): Promise<void> => {
+    const seq = ++loadSeq.current
+    lastLoadAt.current = Date.now()
+    // A read is happening now, so a trailing one booked for later has nothing left to catch up on.
+    if (trailing.current !== null) {
+      clearTimeout(trailing.current)
+      trailing.current = null
+    }
     try {
       const response = await fetch(`/api/w/${workspaceId}/supervisor`)
-      if (!response.ok) return
-      setView((await response.json()) as SupervisorView)
-    } catch {
-      // A failed read leaves the last good view on screen: this panel is a passenger on the
-      // overview's poll, and a red band per dropped poll would be noise about nothing. A failed
-      // WRITE is different -- that one an operator has to see, and `send` below shows it.
+      if (!response.ok) {
+        // An expired session lands on the door rather than on a red band that never clears (M20
+        // §3.4) -- this read dials `fetch` directly, so it owes the same call `sendControl` makes.
+        if (response.status === 401) onUnauthorized()
+        const data: unknown = await response.json().catch(() => null)
+        if (seq !== loadSeq.current) return
+        // Named rather than swallowed (fix round 1, Minor 2): a panel that has silently stopped
+        // updating is indistinguishable from a project where nothing is happening, which is the
+        // one thing this panel exists to tell apart. The last good view stays on screen under it.
+        setErrorText(errorMessage(data, response.status))
+        return
+      }
+      const parsed = (await response.json()) as SupervisorView
+      if (seq !== loadSeq.current) return
+      setView(parsed)
+      setErrorText(null)
+    } catch (cause) {
+      if (seq !== loadSeq.current) return
+      setErrorText(cause instanceof Error ? cause.message : String(cause))
     }
   }, [workspaceId])
 
+  /** The throttled entry the wake-ups use: read now if the window has passed, otherwise book the
+   *  one trailing read that will carry the latest wake-up across it. */
+  const requestRefresh = useCallback((): void => {
+    const waited = Date.now() - lastLoadAt.current
+    if (waited >= SUPERVISOR_PANEL_MIN_REFRESH_MS) {
+      void load()
+      return
+    }
+    if (trailing.current !== null) return
+    trailing.current = setTimeout((): void => {
+      trailing.current = null
+      void load()
+    }, SUPERVISOR_PANEL_MIN_REFRESH_MS - waited)
+  }, [load])
+
   useEffect((): void => {
-    void load()
-  }, [load, refreshKey])
+    requestRefresh()
+  }, [requestRefresh, refreshKey])
+
+  // Its own effect, keyed on nothing: a booked trailing read must not outlive the panel.
+  useEffect(
+    (): (() => void) => () => {
+      if (trailing.current !== null) clearTimeout(trailing.current)
+    },
+    [],
+  )
 
   /** The one place this panel writes: mark it busy, clear the last refusal, dial the shared
-   *  `sendControl`, show whatever it refused with, and re-read either way -- an approve that was
-   *  refused still moved the row (`applyDecision` records a `failed` status), so the list on
-   *  screen is stale whichever way it went. */
+   *  `sendControl`, re-read either way -- an approve that was refused still moved the row
+   *  (`applyDecision` records a `failed` status), so the list on screen is stale whichever way it
+   *  went -- and then show whatever the WRITE refused with.
+   *
+   *  The re-read is `load()` directly, not `requestRefresh()`: the throttle governs the poll's
+   *  wake-ups, and an operator who just clicked Approve is owed the result now. Setting the error
+   *  after the read is deliberate for the same reason a successful read clears the band: the
+   *  write's refusal is the newer, more specific fact and must outrank it. */
   const send = async (url: string, options: { method: 'POST' | 'PATCH'; body?: Record<string, unknown> }): Promise<void> => {
     setBusy(true)
     setErrorText(null)
     const error = await sendControl(url, options)
-    if (error !== null) setErrorText(error)
     await load()
+    if (error !== null) setErrorText(error)
     setBusy(false)
   }
 
