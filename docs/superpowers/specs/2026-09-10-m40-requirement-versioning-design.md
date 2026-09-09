@@ -67,3 +67,7 @@ Editing a task's title/description after creation (still immutable); versioning 
 - **E3 — fixture substitution.** The fake CLI has no placeholder mechanism; `replanArm` replaces the `$CANCEL_ID` token in the fixture's lines from `--replan-cancel <id>` in argv (M39 E6: argv reaches the scrubbed decision child, env does not).
 - **E4 — routing.** `concludePlanning` decides first-plan vs re-plan from the run's recorded manifest (a `replan` section), not from `run.kind`.
 - **E5 — `goal_unchanged`.** `setGoal` refuses with `goal_unchanged { workspaceId; version }` when the new text's sha256 equals the current version's; no row, no event.
+### Task 1 (2026-09-10)
+- **E6 — `stale_task` candidates.** §3 said `[cancel_task, no_action]`; `candidates` keeps its never-empty tail, so the list is `[cancel_task, escalate_to_human, no_action]`. `concludeReplan` picks index 0.
+- **§1 clarified — widened payloads are optional on read.** `version`/`sha256`/`goalVersion` on the widened events are optional in the zod arms (rows written before M40 must stay readable); every writer after M40 sets them.
+- **§3 clarified — `goalSha256` is hand-rolled** in the domain because `node:crypto` breaks the web bundle; a test cross-checks it against `node:crypto`.
