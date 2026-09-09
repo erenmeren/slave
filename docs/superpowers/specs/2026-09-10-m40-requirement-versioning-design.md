@@ -71,3 +71,4 @@ Editing a task's title/description after creation (still immutable); versioning 
 - **E6 — `stale_task` candidates.** §3 said `[cancel_task, no_action]`; `candidates` keeps its never-empty tail, so the list is `[cancel_task, escalate_to_human, no_action]`. `concludeReplan` picks index 0.
 - **§1 clarified — widened payloads are optional on read.** `version`/`sha256`/`goalVersion` on the widened events are optional in the zod arms (rows written before M40 must stay readable); every writer after M40 sets them.
 - **§3 clarified — `goalSha256` is hand-rolled** in the domain because `node:crypto` breaks the web bundle; a test cross-checks it against `node:crypto`.
+- **§3 clarified — manifest widenings are optional on read.** `task.sha256` and `planning_goal.version` are optional in `runContextManifestSchema` (pre-M40 `RunContext` rows must stay readable by the web context route and `show-context`); every builder after M40 sets them (Task 1 review ruling).
