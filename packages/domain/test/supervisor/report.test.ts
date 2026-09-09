@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { observe } from '../../src/supervisor/observe.js'
 import { summarise } from '../../src/supervisor/report.js'
-import { NOW, decision, slave, task, world } from './fixtures.js'
+import { NOW, decision, question, slave, task, world } from './fixtures.js'
 
 describe('summarise -- done', () => {
   it('separates integrated work from work still waiting for its merge', () => {
@@ -86,5 +86,62 @@ describe('summarise -- supervisor', () => {
       ],
     })
     expect(summarise(w).supervisor.lastDecisionAt).toBe(NOW - 1000)
+  })
+})
+
+describe('summarise -- mailbox', () => {
+  const DAY_MS = 24 * 60 * 60 * 1000
+
+  it('counts the questions still waiting, the drafts a human owes an answer to, and what was closed today', () => {
+    const w = world({
+      slaves: [slave({ runtimeRoles: ['backend'] })],
+      questions: [question({ messageId: 'm1' }), question({ messageId: 'm2' })],
+      decisions: [
+        // A drafted answer waiting on a human.
+        decision({ situationKind: 'waiting_stale', subjectId: 'm3', status: 'pending', tier: 'proposed' }),
+        // An escalation is pending too, but nobody is being asked to approve a DRAFT.
+        decision({ situationKind: 'unanswerable_question', subjectId: 'm4', status: 'pending', tier: 'escalated' }),
+        // A proposal about something that is not a question at all.
+        decision({ situationKind: 'ready_unstaffed', subjectId: 'backend', status: 'pending', tier: 'proposed' }),
+        // Closed by the Supervisor itself, and closed by a human, both inside the window.
+        decision({ situationKind: 'waiting_stale', subjectId: 'm5', status: 'applied', tier: 'applied', createdAt: NOW - 1000 }),
+        decision({
+          situationKind: 'unanswerable_question',
+          subjectId: 'm6',
+          status: 'approved',
+          tier: 'proposed',
+          createdAt: NOW - 2000,
+        }),
+        // The same thing, a day and a half ago: outside the window.
+        decision({
+          situationKind: 'waiting_stale',
+          subjectId: 'm7',
+          status: 'applied',
+          tier: 'applied',
+          createdAt: NOW - DAY_MS - 1,
+        }),
+        // Closed, but not about a question.
+        decision({ situationKind: 'review_cap_blocked', subjectId: 't1', status: 'applied', tier: 'applied' }),
+      ],
+    })
+
+    expect(summarise(w).mailbox).toEqual({ pendingQuestions: 2, draftsAwaiting: 1, answeredBySupervisor24h: 2 })
+  })
+
+  it('reports an empty mailbox as zeroes rather than leaving the block out', () => {
+    expect(summarise(world()).mailbox).toEqual({
+      pendingQuestions: 0,
+      draftsAwaiting: 0,
+      answeredBySupervisor24h: 0,
+    })
+  })
+
+  it('counts a decision exactly 24 hours old as still inside the window', () => {
+    const w = world({
+      decisions: [
+        decision({ situationKind: 'waiting_stale', subjectId: 'm1', status: 'applied', tier: 'applied', createdAt: NOW - DAY_MS }),
+      ],
+    })
+    expect(summarise(w).mailbox.answeredBySupervisor24h).toBe(1)
   })
 })

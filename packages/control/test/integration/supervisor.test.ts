@@ -450,13 +450,21 @@ describe('applyDecision', () => {
     expect(failed?.payload).toEqual({ reason: 'a dead end' })
   })
 
-  it('nudge_answer writes nothing but the supervisor.applied event', async () => {
-    const decision = await record(f, { kind: 'nudge_answer', messageId: 'm-1' }, 'applied')
-    expect((await applyDecision(decision.id, 'system')).ok).toBe(true)
+  // M39 Task 2 replaces this: `answer_question` becomes `answerQuestion` with the row's draft and
+  // `reassign_question` becomes `reassignQuestion`. Task 1 removed `nudge_answer` (the M38
+  // placeholder this case used to cover) and put the two mailbox actions in the catalogue with no
+  // verbs behind them yet, so what is asserted here is exactly that: they change nothing and claim
+  // nothing.
+  it('the mailbox actions reach the world not at all until their verbs land', async () => {
+    const answer = await record(f, { kind: 'answer_question', messageId: 'm-1' }, 'applied')
+    expect((await applyDecision(answer.id, 'system')).ok).toBe(true)
+    const reassign = await record(f, { kind: 'reassign_question', messageId: 'm-1', toSlaveId: 's-2' }, 'applied', {
+      subjectId: 'm-2',
+    })
+    expect((await applyDecision(reassign.id, 'system')).ok).toBe(true)
 
     expect((await prisma.task.findUniqueOrThrow({ where: { id: f.taskId } })).status).toBe('blocked')
-    const [applied] = await eventsOfType('supervisor_applied')
-    expect(applied?.payload).toEqual({ decisionId: decision.id, action: { kind: 'nudge_answer' } })
+    expect(await eventsOfType('supervisor_applied')).toHaveLength(0)
   })
 
   it('escalate_to_human and no_action reach the world not at all -- and record no supervisor.applied', async () => {

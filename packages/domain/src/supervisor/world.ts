@@ -54,14 +54,61 @@ export interface SupervisorSlave {
   readonly busy: boolean
 }
 
-/** A question still waiting for an answer -- control's `stillPendingQuestion` semantics, resolved
- *  by the loader; the domain never re-derives "is it answered". */
+/**
+ * One message of the question's thread, oldest first (M39 section 3).
+ *
+ * LOADER CONTRACT: `kind` is the THREE-way shape the Supervisor reasons about, not `MessageKind`
+ * itself -- a `question` is what was asked, an `answer` is a reply, and everything else a workspace
+ * can send (`information`, `blocker`, `handoff`) is a `note`: context worth quoting, but not part
+ * of the ask-and-answer pair. `body` arrives already capped at {@link THREAD_BODY_MAX_CHARS}; the
+ * prompt builder caps it again rather than trusting that, since the cap is what bounds the call.
+ */
+export interface ThreadMessage {
+  readonly messageId: string
+  readonly kind: 'question' | 'answer' | 'note'
+  /** Null for a message the system itself wrote (a Supervisor answer, an operator's note). */
+  readonly senderSlaveId: string | null
+  readonly body: string
+  readonly createdAt: number
+}
+
+/**
+ * A question still waiting for an answer -- control's `stillPendingQuestion` semantics, resolved
+ * by the loader; the domain never re-derives "is it answered".
+ *
+ * Everything below `createdAt` is what M39 added so the Supervisor can ANSWER rather than just
+ * notice: the question itself, and the four sources an answer may be quoted from (the asking task,
+ * the workspace goal on {@link SupervisorWorld}, the asker run's recorded context, and the thread).
+ * `verifySources` reads exactly these fields -- a source the loader did not fill is a source no
+ * answer can cite, which is why every one of them is explicitly nullable rather than defaulted.
+ */
 export interface SupervisorQuestion {
   readonly messageId: string
   readonly askerSlaveId: string
   readonly recipientRole: string | null
   readonly recipientSlaveId: string | null
   readonly createdAt: number
+  /** What was asked. The critical lexicon reads THIS, never the thread or the summary. */
+  readonly body: string
+  /** The task the asking run was working on, if it had one -- the `task` source's identity. */
+  readonly taskId: string | null
+  readonly taskTitle: string | null
+  readonly taskDescription: string | null
+  /** The asker's run, whose recorded `RunContext.prompt` is the `run_context` source. */
+  readonly senderRunId: string | null
+  readonly threadId: string
+  /** The thread this question belongs to, oldest first, INCLUDING the question itself. */
+  readonly thread: readonly ThreadMessage[]
+  /** The asker run's recorded run context, capped at {@link RUN_PROMPT_MAX_CHARS} by the loader;
+   *  null when the run recorded none (a pre-M37 run, or a run that never started). */
+  readonly askerRunPrompt: string | null
+  /**
+   * The slave ids that may answer this question TODAY: the addressed slave, or every holder of the
+   * addressed role. Resolved by the loader against the same rule delivery uses, so the domain
+   * never has to re-derive "who could take this" from the roster -- and a re-address is offered
+   * only to somebody on this list.
+   */
+  readonly holders: readonly string[]
 }
 
 /** A recent `SupervisorDecision`, as much of it as {@link filterFresh} and {@link summarise} need. */

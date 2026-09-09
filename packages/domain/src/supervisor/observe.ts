@@ -39,6 +39,13 @@ function questionFacts(question: SupervisorQuestion, world: SupervisorWorld): Si
     askerSlaveId: question.askerSlaveId,
     recipientRole: question.recipientRole,
     recipientSlaveId: question.recipientSlaveId,
+    // The asking task (M39): the `task` source an answer is quoted from, and the thing that says
+    // what this question is even about when the row is read back months later.
+    taskId: question.taskId,
+    // How many slaves could answer it today -- a COUNT, not the id list: facts are flat scalars
+    // (`situationSchema`), and "nobody could have answered this" is the fact that explains an
+    // escalation to a reader who no longer has the roster of that day.
+    holders: question.holders.length,
     waitingMs: world.now - question.createdAt,
   }
 }

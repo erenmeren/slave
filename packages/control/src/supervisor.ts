@@ -247,8 +247,9 @@ const cooldown = (situation: Situation, until: Date): ControlRefusal => ({
  *
  * `escalate_to_human` and `no_action` reach the world not at all, so they emit no
  * `supervisor.applied` either -- there is nothing to say was applied, and the decision row plus
- * its `supervisor.decided` event already say everything that happened. `nudge_answer` is the one
- * action whose whole effect IS the event (M38 detects stale questions; M39 answers them).
+ * its `supervisor.decided` event already say everything that happened. The two mailbox actions
+ * (`answer_question`, `reassign_question`) are in the same position until M39 Task 2 gives them
+ * their verbs.
  *
  * Deliberately does not check the row's status. A pending decision is claimed by
  * {@link approveDecision} before this is called, and the orchestrator calls it only for a row it
@@ -314,10 +315,13 @@ async function carryOut(
       return reached(await addRuntimeRoles(action.slaveId, action.roles, origin))
     case 'mark_task_failed':
       return reached(await failTask(action.taskId, action.reason, origin, principal))
-    case 'nudge_answer':
-      // No verb: M38 escalates a stale question, it does not answer or re-route one (spec §8).
-      // The `supervisor.applied` event IS the nudge -- the record that the question was noticed.
-      return ok('applied')
+    case 'answer_question':
+    case 'reassign_question':
+      // M39 Task 2 replaces this: `answerQuestion` with the decision's draft, and
+      // `reassignQuestion`. Until then the mailbox actions reach the world not at all, which is the
+      // truthful thing for them to do -- there is no verb behind them yet, so there is nothing to
+      // report as applied.
+      return ok('none')
     case 'escalate_to_human':
     case 'no_action':
       return ok('none')

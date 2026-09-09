@@ -1,8 +1,8 @@
 import type { Action, Candidate } from './actions.js'
 import { staffableSlaves } from './observe.js'
-import { tierOf } from './policy.js'
+import { mayAnswer, tierOf } from './policy.js'
 import type { Situation, SituationKind } from './situations.js'
-import type { SupervisorTask, SupervisorWorld } from './world.js'
+import type { SupervisorQuestion, SupervisorSlave, SupervisorTask, SupervisorWorld } from './world.js'
 
 /**
  * How many staffing offers one situation may carry. Three is a list a human can read in a glance
@@ -54,6 +54,41 @@ function staffingCandidates(world: SupervisorWorld, kind: SituationKind, role: s
 
 function candidate(action: Action, world: SupervisorWorld, kind: SituationKind, why: string): Candidate {
   return { action, tier: tierOf(action, world, kind), why }
+}
+
+/**
+ * The one slave a question would be re-addressed to, or nobody.
+ *
+ * Three exclusions, each of which would otherwise produce an offer that cannot help: a BUSY slave
+ * (whose run is not reading its inbox now, which is how the question got stale in the first place),
+ * the ASKER (a question re-addressed to the person who asked it is a loop), and anyone who cannot
+ * answer it at all -- `holders` is the loader's own "who may answer this today", and
+ * {@link mayAnswer} is the rule control will re-check before the re-address is allowed to land.
+ *
+ * The currently addressed slave is excluded too, unless they are unavailable: re-addressing a
+ * question away from somebody who is sitting idle with it is not a fix, it is a shuffle. So when
+ * the addressed slave is present and free, no re-address is offered at all (spec section 3, "to an
+ * idle holder when the addressed one is busy").
+ *
+ * Ties break on slave id, so the same world always offers the same target.
+ */
+function reassignTarget(question: SupervisorQuestion, world: SupervisorWorld): SupervisorSlave | undefined {
+  const addressed =
+    question.recipientSlaveId === null
+      ? undefined
+      : world.slaves.find((slave) => slave.id === question.recipientSlaveId)
+  if (addressed !== undefined && !addressed.busy) return undefined
+
+  return world.slaves
+    .filter(
+      (slave) =>
+        !slave.busy &&
+        slave.id !== question.askerSlaveId &&
+        slave.id !== question.recipientSlaveId &&
+        question.holders.includes(slave.id) &&
+        mayAnswer(question, slave, world),
+    )
+    .toSorted((a, b) => a.id.localeCompare(b.id))[0]
 }
 
 /**
@@ -118,16 +153,45 @@ export function candidates(situation: Situation, world: SupervisorWorld): readon
       break
 
     case 'waiting_stale':
-    case 'unanswerable_question':
+    case 'unanswerable_question': {
+      // `subjectId` IS the message id for both question kinds (spec section 2). A situation whose
+      // question the world no longer holds cannot be answered or re-addressed -- there is nothing
+      // to build a prompt from and nobody to re-address to -- so it falls through to the last
+      // resorts rather than offering an action against a question that is not there.
+      const question = world.questions.find((pending) => pending.messageId === situation.subjectId)
+      if (question === undefined) break
+
       offers.push(
         candidate(
-          { kind: 'nudge_answer', messageId: situation.subjectId },
+          { kind: 'answer_question', messageId: question.messageId },
           world,
           situation.kind,
-          'Recording an escalation against the question puts it in front of whoever can answer it.',
+          'The workspace goal, the asking task, the thread and the asker\'s own run context may already hold the answer; the Supervisor drafts one and sends it only if every quote it cites is really there.',
         ),
       )
+
+      const target = reassignTarget(question, world)
+      if (target !== undefined) {
+        offers.push(
+          candidate(
+            { kind: 'reassign_question', messageId: question.messageId, toSlaveId: target.id },
+            world,
+            situation.kind,
+            `${target.name} could answer this question and is not busy, so re-addressing it puts it in front of somebody who can reply now.`,
+          ),
+        )
+      }
+
+      // An unanswerable question is unanswerable because NOBODY holds the role it was addressed to
+      // (that is the predicate), so the re-address above almost never fires for one and the M38
+      // staffing offers are what actually fix it: give the role to somebody, and the next pass can
+      // deliver the question normally. They come after the mailbox actions -- answering now beats
+      // rewriting a roster to answer later.
+      if (situation.kind === 'unanswerable_question' && question.recipientRole !== null) {
+        offers.push(...staffingCandidates(world, situation.kind, question.recipientRole))
+      }
       break
+    }
 
     case 'done_not_integrated_stale':
     case 'workspace_halted':

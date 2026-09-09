@@ -56,3 +56,41 @@ export const MANAGER_ROLE = 'manager'
  * `task_blocked_human` (a park it does not).
  */
 export const REVIEW_CAP_GUARDRAIL = 'review_retry_cap_exhausted'
+
+/**
+ * The longest answer body a Supervisor model call may hand back, and therefore the longest text
+ * that can ever reach the world through `answerQuestion` (M39 section 1). Four thousand characters
+ * is a long answer to a colleague's question and a short essay -- past it the model has stopped
+ * answering and started writing the task.
+ */
+export const ANSWER_MAX_CHARS = 4_000
+
+/** How much of one thread message the answer prompt quotes. The thread is context, not the
+ *  question: ten messages at this cap still leave the question itself the biggest thing in view. */
+export const THREAD_BODY_MAX_CHARS = 2_000
+
+/** How much of the asker run's recorded `RunContext.prompt` the answer prompt quotes. A run
+ *  context is the largest single source and the one most likely to hold the answer, so it gets the
+ *  most room -- but a bounded amount, so a huge repository brief cannot blow the call's budget. */
+export const RUN_PROMPT_MAX_CHARS = 16_000
+
+/** The longest quote a model may cite from a source. A citation is evidence, not a copy: three
+ *  hundred characters is a sentence or two, which is what `verifySources` can meaningfully check. */
+export const SOURCE_QUOTE_MAX_CHARS = 300
+
+/** The most sources one answer may cite. An answer that needs nine quotes is not sourced, it is
+ *  assembled -- and every extra citation is another verbatim check a human has to read back. */
+export const SOURCES_MAX = 8
+
+/**
+ * How long a RESOLVED `SupervisorDecision` is kept before `pruneDecisions` deletes it (M39 section
+ * 2). Thirty days: long enough that a month's worth of "why did the Supervisor do that" is
+ * answerable from the rows themselves, short enough that a busy workspace's decision table does not
+ * grow without limit. Pending rows are never pruned, however old -- an unanswered proposal is not
+ * history.
+ */
+export const DECISION_RETENTION_MS = 30 * 86_400_000
+
+/** The most rows one prune pass deletes. The pass runs on every supervised tick, so a backlog
+ *  drains over several ticks rather than one tick holding a long delete transaction open. */
+export const PRUNE_BATCH = 500

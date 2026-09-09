@@ -478,8 +478,12 @@ describe('supervise', () => {
   })
 
   it('does not decide the same situation twice inside the cooldown', async (): Promise<void> => {
-    // A stale question the Supervisor nudges: the nudge writes no state, so the SITUATION is still
-    // there on the next pass and only the cooldown can stop a second decision.
+    // A stale question with no decider wired. M39 Task 1 removed `nudge_answer`, so the rules now
+    // offer an answer (a PROPOSAL -- `answerTier` decides an answer's real tier, and there is no
+    // draft without a model call) and a re-address only to somebody who could take it; with
+    // neither routine, `chooseByRules` escalates. Nothing about the question changes, so the
+    // SITUATION is still there on the next pass and only the open row can stop a second decision.
+    // M39 Task 3 makes the answer call itself; this case is about the cooldown either way.
     const workspace = await prisma.workspace.create({
       data: { name: 'Waiting Platform', repoPath: '/tmp/waiting', verifyCommands: ['npm test'], setupCommands: [] },
     })
@@ -508,8 +512,8 @@ describe('supervise', () => {
     })
 
     const first = await supervise({ workspaceId: workspace.id, now: clock })
-    expect(first).toMatchObject({ situations: 1, decided: 1, applied: 1 })
-    expect((await decisions(workspace.id))[0]).toMatchObject({ situationKind: 'waiting_stale', tier: 'applied' })
+    expect(first).toMatchObject({ situations: 1, decided: 1, applied: 0, proposed: 1 })
+    expect((await decisions(workspace.id))[0]).toMatchObject({ situationKind: 'waiting_stale', tier: 'escalated' })
 
     const second = await supervise({ workspaceId: workspace.id, now: clock })
     expect(second).toMatchObject({ situations: 0, decided: 0, skippedCooldown: 0 })

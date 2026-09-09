@@ -175,16 +175,82 @@ describe('candidates -- the staffing situations', () => {
 })
 
 describe('candidates -- questions', () => {
-  it('offers nudge_answer for a stale question', () => {
-    const w = world({ questions: [question({ createdAt: NOW - WAITING_STALE_MS - 1 })], slaves: [slave()] })
+  const STALE = NOW - WAITING_STALE_MS - 1
+  const BUSY_HOLDER = slave({ id: 's1', name: 'Alex', runtimeRoles: ['backend'], busy: true })
+  const IDLE_HOLDER = slave({ id: 's2', name: 'Ops', role: 'Operator', runtimeRoles: ['backend'], busy: false })
+
+  it('offers an answer first for a stale question, and it is never routine on its own', () => {
+    const w = world({ questions: [question({ createdAt: STALE })], slaves: [slave()] })
     const cands = offered(w)
-    expect(kinds(cands)).toEqual(['nudge_answer', 'escalate_to_human', 'no_action'])
-    expect(cands[0]?.action).toEqual({ kind: 'nudge_answer', messageId: 'm1' })
+    expect(kinds(cands)).toEqual(['answer_question', 'escalate_to_human', 'no_action'])
+    expect(cands[0]?.action).toEqual({ kind: 'answer_question', messageId: 'm1' })
+    expect(cands[0]?.tier).toBe('proposed')
   })
 
-  it('offers nudge_answer for an unanswerable question too', () => {
-    const w = world({ questions: [question({ recipientRole: 'security' })] })
-    expect(kinds(offered(w))).toEqual(['nudge_answer', 'escalate_to_human', 'no_action'])
+  it('offers a re-address to an idle holder when the addressed slave cannot take it', () => {
+    const w = world({
+      questions: [question({ createdAt: STALE, recipientSlaveId: 's1', recipientRole: null, holders: ['s1', 's2'] })],
+      slaves: [BUSY_HOLDER, IDLE_HOLDER],
+      tasks: [task({ id: 't1', requiredRole: 'backend' })],
+    })
+    const cands = offered(w)
+    expect(kinds(cands)).toEqual(['answer_question', 'reassign_question', 'escalate_to_human', 'no_action'])
+    expect(cands[1]?.action).toEqual({ kind: 'reassign_question', messageId: 'm1', toSlaveId: 's2' })
+    expect(cands[1]?.tier).toBe('applied')
+    expect(cands[1]?.why).toContain('Ops')
+  })
+
+  it('does not re-address a question whose addressed slave is sitting there idle', () => {
+    const w = world({
+      questions: [question({ createdAt: STALE, recipientSlaveId: 's1', recipientRole: null, holders: ['s1', 's2'] })],
+      slaves: [slave({ id: 's1', busy: false }), IDLE_HOLDER],
+    })
+    expect(kinds(offered(w))).toEqual(['answer_question', 'escalate_to_human', 'no_action'])
+  })
+
+  it('re-addresses only to a slave who could actually answer -- an idle stranger is not offered', () => {
+    const w = world({
+      questions: [question({ createdAt: STALE, holders: ['s1'] })],
+      slaves: [BUSY_HOLDER, slave({ id: 's3', name: 'Sam', role: 'Sales', runtimeRoles: ['sales'] })],
+    })
+    expect(kinds(offered(w))).toEqual(['answer_question', 'escalate_to_human', 'no_action'])
+  })
+
+  it('never re-addresses a question back to the slave who asked it', () => {
+    const w = world({
+      questions: [question({ createdAt: STALE, askerSlaveId: 's2', holders: ['s1', 's2'] })],
+      slaves: [BUSY_HOLDER, IDLE_HOLDER],
+    })
+    expect(kinds(offered(w))).toEqual(['answer_question', 'escalate_to_human', 'no_action'])
+  })
+
+  it('keeps the staffing offers after the answer for an unanswerable question', () => {
+    const w = world({ questions: [question({ recipientRole: 'security' })], slaves: [slave()] })
+    const cands = offered(w)
+    expect(kinds(cands)).toEqual(['answer_question', 'set_runtime_roles', 'escalate_to_human', 'no_action'])
+    expect(cands[1]?.action).toEqual({ kind: 'set_runtime_roles', slaveId: 's1', roles: ['backend', 'security'] })
+  })
+
+  it('offers a re-address for a question whose named slave has left, when somebody else can take it', () => {
+    const w = world({
+      questions: [
+        question({ recipientRole: null, recipientSlaveId: 'gone', holders: ['s2'], taskId: 't1' }),
+      ],
+      slaves: [IDLE_HOLDER],
+      tasks: [task({ id: 't1', requiredRole: 'backend' })],
+    })
+    const cands = offered(w)
+    expect(kinds(cands)).toEqual(['answer_question', 'reassign_question', 'escalate_to_human', 'no_action'])
+    expect(cands[1]?.tier).toBe('applied')
+  })
+
+  it('offers nothing but the last resorts when the world no longer holds the question', () => {
+    // `observe` only ever names a question the world has, so this is a defensive shape rather than
+    // a state a tick can reach -- but a catalogue that indexed into `undefined` would throw inside
+    // the decider, and an empty list would break `chooseByRules`.
+    const w = world({ questions: [question({ createdAt: STALE })], slaves: [slave()] })
+    const situation = observe(w)[0]!
+    expect(kinds(candidates(situation, world({ slaves: [slave()] })))).toEqual(['escalate_to_human', 'no_action'])
   })
 })
 

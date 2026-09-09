@@ -310,6 +310,19 @@ export async function loadSupervisorWorld(workspaceId: string, now: Date): Promi
           recipientRole: row.recipientRole,
           recipientSlaveId: row.recipientSlaveId,
           createdAt: row.createdAt.getTime(),
+          // M39 Task 3 loads these: the question body, the asking task's text, the thread, the
+          // asker run's recorded context and the slaves who could answer today. Until it does they
+          // are deliberately EMPTY rather than guessed -- `verifySources` treats a missing source as
+          // one no answer may cite, so nothing here can make an unsourced answer look sourced.
+          body: '',
+          taskId: null,
+          taskTitle: null,
+          taskDescription: null,
+          senderRunId: null,
+          threadId: '',
+          thread: [],
+          askerRunPrompt: null,
+          holders: [],
         })),
         decisions: decisionRows.map((row) => ({
           situationKind: row.situationKind as SituationKind,

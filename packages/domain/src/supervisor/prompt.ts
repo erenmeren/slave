@@ -85,8 +85,11 @@ export function buildDecisionPrompt(input: {
  * The first `{...}` object in `text`, brace-matched with string awareness so a `{` inside a quoted
  * rationale does not end the scan early. Models wrap their JSON in prose and code fences; this is
  * what lets an otherwise correct answer through without accepting free text as an answer.
+ *
+ * Exported for `./answerPrompt.js`, the milestone's second model call, so both parsers agree
+ * exactly on what "the model's JSON" means -- including that only the FIRST object counts.
  */
-function firstJsonObject(text: string): string | null {
+export function firstJsonObject(text: string): string | null {
   const start = text.indexOf('{')
   if (start === -1) return null
   let depth = 0

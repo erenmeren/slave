@@ -16,8 +16,14 @@ export type Action =
    *  proposal can wait a day, so `applyDecision` re-reads the slave and writes the union of its
    *  current set with these, which is what stops an approval taking back a role granted meanwhile. */
   | { readonly kind: 'set_runtime_roles'; readonly slaveId: string; readonly roles: readonly string[] }
-  /** Records an escalation against a question's holders. M38 detects; M39 answers (spec scope split). */
-  | { readonly kind: 'nudge_answer'; readonly messageId: string }
+  /** `answerQuestion` with `answeredBy: 'supervisor'`: the Supervisor answers a slave's question
+   *  itself, in a body a SECOND model call drafted and `verifySources` checked. This is the one
+   *  action whose stored tier is not the last word: the catalogue stamps it `proposed` and
+   *  {@link answerTier} decides the final tier from the draft (M39 section 5). */
+  | { readonly kind: 'answer_question'; readonly messageId: string }
+  /** `reassignQuestion`: the same question, put in front of a slave who can actually answer it --
+   *  no new message, no model text, just a re-addressed row. */
+  | { readonly kind: 'reassign_question'; readonly messageId: string; readonly toSlaveId: string }
   /** `failTask`: a dead end declared dead, so dependents stop waiting on it. */
   | { readonly kind: 'mark_task_failed'; readonly taskId: string; readonly reason: string }
   /** No verb at all -- a row a human is asked to look at. The always-available last resort. */
@@ -30,7 +36,8 @@ export const ACTION_KINDS = [
   'unblock_task',
   'raise_max_attempts',
   'set_runtime_roles',
-  'nudge_answer',
+  'answer_question',
+  'reassign_question',
   'mark_task_failed',
   'escalate_to_human',
   'no_action',
@@ -41,7 +48,12 @@ export const actionSchema: z.ZodType<Action> = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('unblock_task'), taskId: z.string().min(1) }),
   z.object({ kind: z.literal('raise_max_attempts'), taskId: z.string().min(1) }),
   z.object({ kind: z.literal('set_runtime_roles'), slaveId: z.string().min(1), roles: z.array(z.string().min(1)) }),
-  z.object({ kind: z.literal('nudge_answer'), messageId: z.string().min(1) }),
+  z.object({ kind: z.literal('answer_question'), messageId: z.string().min(1) }),
+  z.object({
+    kind: z.literal('reassign_question'),
+    messageId: z.string().min(1),
+    toSlaveId: z.string().min(1),
+  }),
   z.object({ kind: z.literal('mark_task_failed'), taskId: z.string().min(1), reason: z.string().min(1) }),
   z.object({ kind: z.literal('escalate_to_human'), summary: z.string().min(1) }),
   z.object({ kind: z.literal('no_action') }),

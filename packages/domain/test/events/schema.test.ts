@@ -496,7 +496,7 @@ describe('parseExecutionEvent', () => {
     const result = parseExecutionEvent({
       ...BASE,
       type: 'supervisor.applied',
-      payload: { decisionId: 'd-1', action: { kind: 'nudge_answer' } },
+      payload: { decisionId: 'd-1', action: { kind: 'answer_question' } },
     })
     expect(result.ok).toBe(true)
     if (result.ok) expect(result.value.type).toBe('supervisor.applied')

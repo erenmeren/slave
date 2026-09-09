@@ -42,8 +42,10 @@ export function actionText(action: Action): string {
       return `raise the attempt cap on task ${action.taskId} and unblock it`
     case 'set_runtime_roles':
       return `set the runtime roles of ${action.slaveId} to ${action.roles.length === 0 ? 'none' : action.roles.join(', ')}`
-    case 'nudge_answer':
-      return `nudge the holders of question ${action.messageId}`
+    case 'answer_question':
+      return `answer question ${action.messageId}`
+    case 'reassign_question':
+      return `re-address question ${action.messageId} to ${action.toSlaveId}`
     case 'mark_task_failed':
       return `mark task ${action.taskId} failed: ${action.reason}`
     case 'escalate_to_human':

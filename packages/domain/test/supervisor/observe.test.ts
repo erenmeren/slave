@@ -123,6 +123,40 @@ describe('observe -- unanswerable_question', () => {
     const w = world({ questions: [question({ recipientRole: 'backend' })], slaves: [slave({ runtimeRoles: ['backend'] })] })
     expect(observe(w)).toEqual([])
   })
+
+  /**
+   * The facts are the evidence the row keeps for months (they survive into `SupervisorDecision.
+   * situation`), so the two M39 additions are asserted as VALUES: `taskId` is what the answer
+   * prompt's task text is loaded from, and `holders` is a COUNT rather than the id list -- facts
+   * are flat scalars, and "how many people could answer this" is the fact a reader of the row
+   * wants a year later.
+   */
+  it('records the asking task and how many slaves could answer, on both question situations', () => {
+    const unanswerable = observe(
+      world({ questions: [question({ recipientRole: 'security', taskId: 't7', holders: [] })], slaves: [slave()] }),
+    )[0]
+    expect(unanswerable?.kind).toBe('unanswerable_question')
+    expect(unanswerable?.facts).toEqual({
+      messageId: 'm1',
+      askerSlaveId: 's1',
+      recipientRole: 'security',
+      recipientSlaveId: null,
+      taskId: 't7',
+      holders: 0,
+      waitingMs: 0,
+    })
+
+    const stale = observe(
+      world({
+        questions: [question({ createdAt: NOW - WAITING_STALE_MS - 1, taskId: null, holders: ['s1', 's2'] })],
+        slaves: [slave({ id: 's1' }), slave({ id: 's2' })],
+      }),
+    )[0]
+    expect(stale?.kind).toBe('waiting_stale')
+    expect(stale?.facts.taskId).toBeNull()
+    expect(stale?.facts.holders).toBe(2)
+    expect(stale?.facts.waitingMs).toBe(WAITING_STALE_MS + 1)
+  })
 })
 
 describe('observe -- ready_unstaffed', () => {

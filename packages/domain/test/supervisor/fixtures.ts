@@ -12,6 +12,7 @@ import type {
   SupervisorSlave,
   SupervisorTask,
   SupervisorWorld,
+  ThreadMessage,
 } from '../../src/supervisor/world.js'
 
 export const NOW = Date.parse('2026-09-09T12:00:00.000Z')
@@ -37,8 +38,33 @@ export function slave(overrides: Partial<SupervisorSlave> = {}): SupervisorSlave
   return { id: 's1', name: 'Alex', role: 'Backend Engineer', runtimeRoles: ['backend'], busy: false, ...overrides }
 }
 
+export function threadMessage(overrides: Partial<ThreadMessage> = {}): ThreadMessage {
+  return { messageId: 'm1', kind: 'question', senderSlaveId: 's1', body: 'Which port?', createdAt: NOW, ...overrides }
+}
+
+/**
+ * A pending question. The M39 fields default to the emptiest thing that is still a real question:
+ * no thread, no recorded run prompt and NO holders, so a test that wants a re-address candidate has
+ * to say who could take it rather than getting one by accident.
+ */
 export function question(overrides: Partial<SupervisorQuestion> = {}): SupervisorQuestion {
-  return { messageId: 'm1', askerSlaveId: 's1', recipientRole: 'backend', recipientSlaveId: null, createdAt: NOW, ...overrides }
+  return {
+    messageId: 'm1',
+    askerSlaveId: 's1',
+    recipientRole: 'backend',
+    recipientSlaveId: null,
+    createdAt: NOW,
+    body: 'Which port does the database listen on?',
+    taskId: 't1',
+    taskTitle: 'Add the thing',
+    taskDescription: 'Connect to PostgreSQL on port 5433.',
+    senderRunId: 'run-1',
+    threadId: 'th-1',
+    thread: [],
+    askerRunPrompt: null,
+    holders: [],
+    ...overrides,
+  }
 }
 
 export function decision(overrides: Partial<SupervisorDecisionRecord> = {}): SupervisorDecisionRecord {
