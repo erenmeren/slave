@@ -123,7 +123,7 @@ async function seed(overrides: { readonly name?: string } = {}): Promise<Fixture
   await prisma.providerConfiguration.create({ data: { workspaceId: workspace.id, kind: 'claude_code', settings: {} } })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
   const emptyTeam = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Design' } })
-  const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend', runtimeRoles: ['backend'] } })
   const task = await prisma.task.create({
     data: {
       workspaceId: workspace.id,
@@ -1020,6 +1020,111 @@ describe('the orchestrator CLI', () => {
     }
   }, 40_000)
 
+  // M37 t3: the three verbs that put a profile, a runtime role set and a run's recorded context
+  // on the command line. Real subprocess, like everything else in this file.
+  describe('profiles, runtime roles and run context (M37 t3)', () => {
+    it('sets a slave profile from a file and clears it again', async (): Promise<void> => {
+      const file = join(mkdtempSync(join(tmpdir(), 'slaveofai-profile-')), 'persona.md')
+      writeFileSync(file, '# Maya\n\nYou are careful with payments.\n')
+
+      const set = await runCli(['set-profile', '--slave', fixture.slaveId, '--file', file])
+      expect(set.code).toBe(0)
+      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId } })).profile).toBe(
+        '# Maya\n\nYou are careful with payments.',
+      )
+
+      const cleared = await runCli(['set-profile', '--slave', fixture.slaveId, '--clear'])
+      expect(cleared.code).toBe(0)
+      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId } })).profile).toBeNull()
+    }, 30_000)
+
+    it('sets a template and a catalog slave profile too', async (): Promise<void> => {
+      const template = await prisma.slaveTemplate.create({ data: { name: 'Engineer', role: 'backend' } })
+      const company = await prisma.company.create({ data: { name: 'Acme' } })
+      const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Engineering' } })
+      const companySlave = await prisma.companySlave.create({
+        data: { companyTeamId: companyTeam.id, templateId: template.id, name: 'Maya' },
+      })
+      const file = join(mkdtempSync(join(tmpdir(), 'slaveofai-profile-')), 'persona.md')
+      writeFileSync(file, 'catalog persona')
+
+      expect((await runCli(['set-profile', '--template', template.id, '--file', file])).code).toBe(0)
+      expect((await runCli(['set-profile', '--company-slave', companySlave.id, '--file', file])).code).toBe(0)
+      expect((await prisma.slaveTemplate.findUniqueOrThrow({ where: { id: template.id } })).profile).toBe('catalog persona')
+      expect((await prisma.companySlave.findUniqueOrThrow({ where: { id: companySlave.id } })).profile).toBe('catalog persona')
+    }, 30_000)
+
+    it('exits non-zero for an unknown slave, and for neither --file nor --clear', async (): Promise<void> => {
+      const file = join(mkdtempSync(join(tmpdir(), 'slaveofai-profile-')), 'persona.md')
+      writeFileSync(file, 'text')
+      const unknown = await runCli(['set-profile', '--slave', 'nope', '--file', file])
+      expect(unknown.code).not.toBe(0)
+      expect(unknown.stderr).toContain('nope')
+
+      const neither = await runCli(['set-profile', '--slave', fixture.slaveId])
+      expect(neither.code).not.toBe(0)
+    }, 30_000)
+
+    it('sets runtime roles, and an empty --roles parks the slave', async (): Promise<void> => {
+      const set = await runCli(['set-runtime-roles', '--slave', fixture.slaveId, '--roles', 'backend, reviewer'])
+      expect(set.code).toBe(0)
+      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId } })).runtimeRoles).toEqual([
+        'backend',
+        'reviewer',
+      ])
+
+      const parked = await runCli(['set-runtime-roles', '--slave', fixture.slaveId, '--roles', ''])
+      expect(parked.code).toBe(0)
+      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId } })).runtimeRoles).toEqual([])
+
+      // And the parked slave is genuinely undispatchable: a tick starts nothing for it.
+      expect((await runCli(['tick'])).code).toBe(0)
+      expect(await prisma.slaveRun.count()).toBe(0)
+    }, 60_000)
+
+    it('exits non-zero for a duplicated runtime role', async (): Promise<void> => {
+      const result = await runCli(['set-runtime-roles', '--slave', fixture.slaveId, '--roles', 'backend,backend'])
+      expect(result.code).not.toBe(0)
+      expect(result.stderr).toContain('backend')
+      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId } })).runtimeRoles).toEqual(['backend'])
+    }, 30_000)
+
+    it('prints a run context manifest, and its prompt after a rule with --prompt', async (): Promise<void> => {
+      const run = await prisma.slaveRun.create({
+        data: { taskId: fixture.taskId, slaveId: fixture.slaveId, status: 'succeeded' },
+      })
+      await prisma.runContext.create({
+        data: {
+          runId: run.id,
+          prompt: 'THE PROMPT THE MODEL SAW',
+          sections: { kind: 'implementation', sections: [{ kind: 'task', taskId: fixture.taskId }] },
+        },
+      })
+
+      const bare = await runCli(['show-context', '--run', run.id])
+      expect(bare.code).toBe(0)
+      expect(JSON.parse(bare.stdout)).toEqual({
+        kind: 'implementation',
+        sections: [{ kind: 'task', taskId: fixture.taskId }],
+      })
+      expect(bare.stdout).not.toContain('THE PROMPT THE MODEL SAW')
+
+      const withPrompt = await runCli(['show-context', '--run', run.id, '--prompt'])
+      expect(withPrompt.code).toBe(0)
+      expect(withPrompt.stdout).toContain('-'.repeat(40))
+      expect(withPrompt.stdout).toContain('THE PROMPT THE MODEL SAW')
+    }, 30_000)
+
+    it('exits non-zero for a run with no recorded context', async (): Promise<void> => {
+      const run = await prisma.slaveRun.create({
+        data: { taskId: fixture.taskId, slaveId: fixture.slaveId, status: 'succeeded' },
+      })
+      const result = await runCli(['show-context', '--run', run.id])
+      expect(result.code).not.toBe(0)
+      expect(result.stderr).toContain(run.id)
+    }, 30_000)
+  })
+
   describe('create-workspace', () => {
     it('creates a workspace from a real repo and prints its id', async () => {
       const dir = makeRepo()
@@ -1083,12 +1188,17 @@ describe('the orchestrator CLI', () => {
       expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId } })).name).toBe('Jordan')
     })
 
-    it('sets a slave role', async () => {
+    it("sets a slave's title, and says it is not what the slave is dispatched as (M37 t3)", async () => {
       const result = await runCli(['set-role', '--slave', fixture.slaveId, '--role', 'frontend'])
 
       expect(result.code).toBe(0)
-      expect(result.stdout).toMatch(new RegExp(`^role set to frontend on ${fixture.slaveId}$`, 'm'))
+      expect(result.stdout).toMatch(new RegExp(`^title set to frontend on ${fixture.slaveId} `, 'm'))
+      expect(result.stdout).toContain('set-runtime-roles')
       expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId } })).role).toBe('frontend')
+      // And it left the dispatch set alone: `role` is the heading now, nothing more.
+      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId } })).runtimeRoles).toEqual([
+        'backend',
+      ])
     })
 
     it('deletes a slave with --yes', async () => {

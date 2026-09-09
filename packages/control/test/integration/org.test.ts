@@ -507,6 +507,38 @@ describe('assignCompany', () => {
     expect(await prisma.slave.count()).toBe(1)
   })
 
+  // M37 t3: a materialized worker's runtime role set is BOTH the override and the catalog role,
+  // deduplicated. The override is a TRANSLATION (adoption maps a simulation's `lead` onto
+  // `manager` so a planning pass can find it), not a replacement of what the worker can do -- a
+  // worker that stopped being dispatchable as its catalog role would drop off every task whose
+  // `requiredRole` the planner emits, and the planner emits CATALOG roles.
+  it('writes both the overridden role and the catalog role as runtimeRoles, deduplicated', async (): Promise<void> => {
+    const workspace = await seedWorkspace()
+    const { companyId } = await seedCompanyWithRoster(2)
+
+    const result = await assignCompany(workspace.id, companyId, undefined, {
+      // `Worker 0` is translated; `Worker 1` is overridden with the role it already had.
+      roleOverrides: { 'Worker 0': 'manager', 'Worker 1': 'role-1' },
+    })
+    expect(result.ok).toBe(true)
+
+    const slaves = await prisma.slave.findMany({ where: { team: { workspaceId: workspace.id } }, orderBy: { name: 'asc' } })
+    expect(slaves.map((slave) => slave.role)).toEqual(['manager', 'role-1'])
+    expect(slaves[0]?.runtimeRoles).toEqual(['manager', 'role-0'])
+    // Deduplicated, not doubled, when the override says what the catalog already said.
+    expect(slaves[1]?.runtimeRoles).toEqual(['role-1'])
+  })
+
+  it('gives an un-overridden worker the one-element set its catalog role names', async (): Promise<void> => {
+    const workspace = await seedWorkspace()
+    const { companyId } = await seedCompanyWithRoster(1)
+
+    await assignCompany(workspace.id, companyId)
+
+    const slave = await prisma.slave.findFirstOrThrow({ where: { team: { workspaceId: workspace.id } } })
+    expect(slave.runtimeRoles).toEqual([slave.role])
+  })
+
   it('keeps a pre-existing hand-made team and slave, materializing alongside them', async (): Promise<void> => {
     const workspace = await seedWorkspace()
     const legacyTeam = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Legacy Ops' } })

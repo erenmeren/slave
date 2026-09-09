@@ -40,7 +40,7 @@ const EMPTY: AnswerConclusion = { sent: [], refused: [] }
  */
 async function questionThisSlaveMayAnswer(
   messageId: string,
-  slave: { readonly id: string; readonly role: string },
+  slave: { readonly id: string; readonly runtimeRoles: readonly string[] },
   workspaceId: string,
 ): Promise<{ readonly refusal: string } | { readonly question: { id: string; slaveId: string; taskId: string | null } }> {
   const message = await prisma.slaveMessage.findFirst({
@@ -54,7 +54,10 @@ async function questionThisSlaveMayAnswer(
   if (message.slaveId === slave.id) return { refusal: `message ${messageId} is this slave's own question` }
 
   const addressedDirectly = message.recipientSlaveId === slave.id
-  const addressedByRole = message.recipientRole !== null && message.recipientRole === slave.role
+  // `runtimeRoles`, not `role` (M37 §5): the question reached this run's prompt through
+  // `listMessagesForSlave`, which matches the same set -- the two must agree, or a slave would be
+  // shown a question it is then refused permission to answer.
+  const addressedByRole = message.recipientRole !== null && slave.runtimeRoles.includes(message.recipientRole)
   if (!addressedDirectly && !addressedByRole) {
     return { refusal: `question ${messageId} is not addressed to this slave` }
   }
@@ -119,7 +122,7 @@ type OneAnswer = { readonly written: true; readonly messageId: string } | { read
 async function writeOneAnswer(
   input: AnswerConclusionInput,
   answer: SlaveAnswer,
-  slave: { readonly id: string; readonly role: string },
+  slave: { readonly id: string; readonly runtimeRoles: readonly string[] },
   workspaceId: string,
 ): Promise<OneAnswer> {
   const checked = await questionThisSlaveMayAnswer(answer.messageId, slave, workspaceId)

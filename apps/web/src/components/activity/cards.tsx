@@ -572,6 +572,60 @@ function OrgChangedCard(props: ActivityCardProps): ReactElement {
   )
 }
 
+// M37 t3: the two operator writes the run-context milestone added. Both sit beside `org.changed`
+// in the `workspace` filter chip and share its `idle` tone -- a change to how a worker is
+// configured, never a run outcome (spec §1 forbids model output from writing either).
+
+/** Which level of the profile override chain was written, in the words the panel uses. */
+const PROFILE_TARGET_LABEL: Record<'slave' | 'template' | 'company_slave', string> = {
+  slave: 'this worker',
+  template: 'its template',
+  company_slave: 'its roster row',
+}
+
+function SlaveProfileChangedCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as {
+    target: 'slave' | 'template' | 'company_slave'
+    targetId: string
+    // `null` is a CLEARED profile -- the level below the written one shows through again.
+    sha256: string | null
+    actor: string
+  }
+  return (
+    <ActivityCard {...props}>
+      <Transition tone="idle" label={payload.sha256 === null ? 'profile cleared' : 'profile set'}>
+        <span data-testid="profile-target">{PROFILE_TARGET_LABEL[payload.target]}</span>
+        {' · by '}
+        <span data-testid="profile-actor">{payload.actor}</span>
+        {payload.sha256 !== null && (
+          // The first 12 characters only: the whole hash says nothing more to a reader, and it is
+          // the same prefix the run-context panel shows, so the two can be compared by eye.
+          <span data-testid="profile-sha" className="font-mono">
+            {' · '}
+            {payload.sha256.slice(0, 12)}
+          </span>
+        )}
+      </Transition>
+    </ActivityCard>
+  )
+}
+
+function SlaveRuntimeRolesChangedCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as { slaveId: string; roles: string[]; actor: string }
+  return (
+    <ActivityCard {...props}>
+      <Transition tone="idle" label="runtime roles changed">
+        {/* An empty set is the parked state (spec §7), and it is exactly what a reader asking
+            "why is nothing being dispatched to this worker" came here to see -- so it is said in
+            words, not rendered as an empty line. */}
+        <span data-testid="runtime-roles">{payload.roles.length === 0 ? 'none (cannot be dispatched)' : payload.roles.join(', ')}</span>
+        {' · by '}
+        <span data-testid="runtime-roles-actor">{payload.actor}</span>
+      </Transition>
+    </ActivityCard>
+  )
+}
+
 // ---- interventions (schema.ts:32-39, 54-59) ----------------------------------------------------
 // `event.actor` (human/slave/system) is already on the shared shell's actor badge; these bodies
 // add the payload's own record of *who* intervened (`requestedBy`) and *what* they said
@@ -680,4 +734,6 @@ export const ACTIVITY_CARDS = {
   'workspace.archived': WorkspaceArchivedCard,
   'workspace.restored': WorkspaceRestoredCard,
   'org.changed': OrgChangedCard,
+  'slave.profile_changed': SlaveProfileChangedCard,
+  'slave.runtime_roles_changed': SlaveRuntimeRolesChangedCard,
 } satisfies Record<DomainEventType, (props: ActivityCardProps) => ReactElement>

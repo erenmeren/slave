@@ -179,8 +179,8 @@ try {
   console.log(`workspace ${workspaceId} (${WORKSPACE_NAME}), autoMerge ${workspace.autoMerge}, repo ${repoPath}`)
 
   const team = await prisma.team.create({ data: { workspaceId, name: 'Engineering' } })
-  const backendSlave = await prisma.slave.create({ data: { teamId: team.id, name: 'Gate Backend', role: 'backend' } })
-  const qaSlave = await prisma.slave.create({ data: { teamId: team.id, name: 'Gate QA', role: 'qa' } })
+  const backendSlave = await prisma.slave.create({ data: { teamId: team.id, name: 'Gate Backend', role: 'backend', runtimeRoles: ['backend'] } })
+  const qaSlave = await prisma.slave.create({ data: { teamId: team.id, name: 'Gate QA', role: 'qa', runtimeRoles: ['qa'] } })
   console.log(`backend slave ${backendSlave.id} (idle), qa slave ${qaSlave.id} (idle)`)
 
   // ================= Stage 1: done does not unblock a dependent until integrated =================

@@ -239,15 +239,19 @@ async function dispatchReview(deps: TickDeps, task: ReviewableTask): Promise<Run
     return null
   }
 
-  // 3. Reviewer staffing. `role === 'reviewer'` is an exact match -- the same convention
-  // `decide()` uses for `requiredRole`, and Task 8's seed data uses the same spelling.
+  // 3. Reviewer staffing. `'reviewer' ∈ runtimeRoles` (M37 §5), not `role === 'reviewer'`: `role`
+  // is the profile's TITLE since M37, so a worker whose persona heading reads "Senior Engineer"
+  // is staffable here exactly when an operator has said it may be dispatched as a reviewer. The
+  // literal spelling is the same convention `decide()` uses for `requiredRole`, and Task 8's seed
+  // data uses it too. A worker with an empty `runtimeRoles` set matches nothing and is never
+  // staffed.
   // `companySlave -> template` included so `resolveRuntime` (M12 Task 8) can walk the whole override
   // chain for whichever reviewer is actually picked below.
   // `permissions` included alongside `companySlave -> template` (M18 Task 5) -- see `tick.ts`'s
   // own `startRun` for why: the resolved deny list is snapshotted at dispatch, from this run's own
   // slave row.
   const reviewers = await prisma.slave.findMany({
-    where: { role: 'reviewer', team: { workspaceId: task.workspaceId } },
+    where: { runtimeRoles: { has: 'reviewer' }, team: { workspaceId: task.workspaceId } },
     orderBy: { id: 'asc' },
     include: { companySlave: { include: { template: true } }, permissions: true },
   })

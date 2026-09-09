@@ -1,4 +1,4 @@
-import { realpathSync } from 'node:fs'
+import { readFileSync, realpathSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
@@ -42,6 +42,8 @@ import {
   requestStop,
   restoreWorkspace,
   resumeSimulation,
+  setProfile,
+  setRuntimeRoles,
   setSlaveModel,
   setSlaveRole,
   setGoal,
@@ -57,9 +59,15 @@ import {
   plural,
   unblockTask,
   type ModelDecider,
+  type ProfileTarget,
 } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
-import { workspaceId as brandWorkspaceId, type WorkspaceId } from '@slave-of-ai/domain'
+import {
+  displayName,
+  runContextManifestSchema,
+  workspaceId as brandWorkspaceId,
+  type WorkspaceId,
+} from '@slave-of-ai/domain'
 import { sectors } from '@slave-of-ai/simulation'
 import { DEFAULT_MODEL_TIMEOUT_MS, buildRegistry, decideWithModel, type AdapterRegistry, type ProviderKind } from '@slave-of-ai/providers'
 import { runDaemon } from './daemon.js'
@@ -139,8 +147,24 @@ const USAGE = `usage: orchestrator <command> [options]
                                        template's default. A model only means something inside the
                                        provider that runs it, so --model requires --provider.
   rename-slave --slave <id> --name <n> rename a project slave
-  set-role --slave <id> --role <r>     change a project slave's role -- refused while the slave
-                                       holds a live run
+  set-role --slave <id> --role <r>     change a project slave's TITLE -- the heading of its
+                                       persona, not what it is dispatched as. Refused while the
+                                       slave holds a live run.
+  set-profile --slave <id> | --template <id> | --company-slave <id>
+              (--file <path> | --clear)
+                                       set (or clear) the persona Markdown at one level of the
+                                       override chain: the worker's own, its roster row's, or its
+                                       template's. First non-null wins at dispatch. Read from a
+                                       file, not a flag -- it can be 16k characters.
+  set-runtime-roles --slave <id> --roles a,b,c
+                                       replace the roles this slave may be DISPATCHED as -- the
+                                       scheduler's match, reviewer/manager staffing, and message
+                                       role-addressing all read this set. --roles '' parks the
+                                       slave: it can be dispatched as nothing until it holds a
+                                       role again.
+  show-context --run <id> [--prompt]   what this run was told: the manifest of the sections its
+                                       prompt was assembled from, and with --prompt the prompt
+                                       itself after a rule
   delete-slave --slave <id> --yes      remove a project slave WITH its run history -- refused
                                        only while it holds a live run. Omit --yes to see what
                                        would be deleted without doing it.
@@ -699,7 +723,9 @@ export async function main(argv: readonly string[]): Promise<number> {
         where: { team: { workspaceId } },
         select: { id: true, name: true, role: true },
       })
-      const nameById = new Map(roster.map((slave) => [slave.id, `${slave.name} (${slave.role})`]))
+      // `displayName` (`@slave-of-ai/domain`), not a local `${name} (${role})` -- M37 §3 made that
+      // one function so the CLI, the inbox, the ask roster and delivery cannot drift apart.
+      const nameById = new Map(roster.map((slave) => [slave.id, displayName(slave)]))
       // The id first on every line: it is the one thing an operator has to copy into `answer`.
       for (const message of result.value) {
         const from = nameById.get(message.senderSlaveId) ?? message.senderSlaveId
@@ -921,9 +947,87 @@ export async function main(argv: readonly string[]): Promise<number> {
     case 'set-role': {
       const slaveId = requireFlag(flags, 'slave')
       const role = requireFlag(flags, 'role')
+      // The TITLE, not what the slave is dispatched as (M37 §5) -- `set-runtime-roles` below is
+      // the verb for that. Printed as such so an operator who reaches for this one expecting the
+      // scheduler to notice is told, in the confirmation itself, that it will not.
       const result = await setSlaveRole(slaveId, role)
       if (!result.ok) throw new Error(refusalText(result.error))
-      process.stdout.write(`role set to ${role} on ${slaveId}\n`)
+      process.stdout.write(
+        `title set to ${role} on ${slaveId} — this is the profile's heading, not what it is ` +
+          'dispatched as; use set-runtime-roles for that\n',
+      )
+      return 0
+    }
+
+    // ---- M37 t3: the persona, the dispatchable roles, and what a run was actually told ----------
+
+    case 'set-profile': {
+      // Exactly one target, checked here rather than left to `setProfile`'s union: the union makes
+      // an ambiguous call unrepresentable in TypeScript, and `flags` is not TypeScript.
+      const targets: ProfileTarget[] = [
+        ...(flagText(flags, 'slave') !== undefined ? [{ slaveId: requireFlag(flags, 'slave') }] : []),
+        ...(flagText(flags, 'template') !== undefined ? [{ templateId: requireFlag(flags, 'template') }] : []),
+        ...(flagText(flags, 'company-slave') !== undefined ? [{ companySlaveId: requireFlag(flags, 'company-slave') }] : []),
+      ]
+      if (targets.length !== 1 || targets[0] === undefined) {
+        throw new Error('exactly one of --slave, --template or --company-slave is required')
+      }
+      const target = targets[0]
+
+      // `--file`, never `--text`: a persona is Markdown of up to 16k characters, and a shell
+      // argument that long is the wrong tool -- it lands in history, in `ps`, and in whatever the
+      // shell decides to do with its newlines. `'clear' in flags` (not `!== undefined`) is the
+      // repo's own idiom for a bare flag, whose recorded value is `undefined`.
+      const clear = 'clear' in flags
+      const file = flagText(flags, 'file')
+      if (clear === (file !== undefined)) throw new Error('exactly one of --file <path> or --clear is required')
+      const profile = clear ? null : readFileSync(requireFlag(flags, 'file'), 'utf8')
+
+      const result = await setProfile(target, profile, flagText(flags, 'by') ?? 'operator')
+      if (!result.ok) throw new Error(refusalText(result.error))
+      const which = 'slaveId' in target ? target.slaveId : 'templateId' in target ? target.templateId : target.companySlaveId
+      process.stdout.write(clear ? `profile cleared on ${which}\n` : `profile set on ${which}\n`)
+      return 0
+    }
+
+    case 'set-runtime-roles': {
+      const slaveId = requireFlag(flags, 'slave')
+      // `--roles ''` is how a slave is PARKED (spec §7): an empty set is a real state, so an empty
+      // string splits to nothing rather than to one blank entry the verb would refuse.
+      const raw = requireFlag(flags, 'roles')
+      const roles = raw.trim() === '' ? [] : raw.split(',')
+      const result = await setRuntimeRoles(slaveId, roles, flagText(flags, 'by') ?? 'operator')
+      if (!result.ok) throw new Error(refusalText(result.error))
+      const after = await prisma.slave.findUniqueOrThrow({ where: { id: slaveId }, select: { runtimeRoles: true } })
+      process.stdout.write(
+        after.runtimeRoles.length === 0
+          ? `${slaveId} now holds no runtime roles: it cannot be dispatched until it holds one\n`
+          : `runtime roles set to ${after.runtimeRoles.join(', ')} on ${slaveId}\n`,
+      )
+      return 0
+    }
+
+    case 'show-context': {
+      const runIdFlag = requireFlag(flags, 'run')
+      const row = await prisma.runContext.findUnique({ where: { runId: runIdFlag } })
+      // Not a `ControlRefusal`: this is a read, and the one thing that can go wrong with it is
+      // that the run never recorded a context -- which for a run that started is impossible (the
+      // row is written before the spawn), so the honest message says which two things it can mean.
+      if (row === null) {
+        throw new Error(`no recorded context for run ${runIdFlag}: either no such run, or it never started`)
+      }
+      // Validated rather than cast (M37 §3): `sections` is a `Json` column, and a hand-edited or
+      // pre-M37 row must produce a clear error here instead of a confusing one downstream.
+      const manifest = runContextManifestSchema.safeParse(row.sections)
+      if (!manifest.success) {
+        throw new Error(`run ${runIdFlag} has a context manifest this version cannot read: ${manifest.error.message}`)
+      }
+      process.stdout.write(`${JSON.stringify(manifest.data, null, 2)}\n`)
+      if ('prompt' in flags) {
+        // A rule between the manifest and the prompt so the two are separable by eye and by
+        // `sed`: the prompt is free text and can contain anything, including JSON.
+        process.stdout.write(`${'-'.repeat(40)}\n${row.prompt}\n`)
+      }
       return 0
     }
 

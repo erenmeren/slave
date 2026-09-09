@@ -79,11 +79,15 @@ function runRolesOf(definition: LoadedDefinition): Readonly<Record<string, strin
 }
 
 /**
- * The run's decision roles in the RUNTIME's vocabulary (controller ruling R2). `Slave.role` is not
- * a label: the scheduler matches `Task.requiredRole` to it by equality, `planning.ts` staffs
- * `role === 'manager'` and `review.ts` staffs `role === 'reviewer'` -- so a worker materialised as
- * `'lead'` would be a manager no planning pass could find. Adoption therefore TRANSLATES rather
- * than copies.
+ * The run's decision roles in the RUNTIME's vocabulary (controller ruling R2). A materialised
+ * worker's role is not just a label: the scheduler matches `Task.requiredRole` against its
+ * `runtimeRoles`, `planning.ts` staffs `'manager' ∈ runtimeRoles` and `review.ts` staffs
+ * `'reviewer' ∈ runtimeRoles` -- so a worker materialised as `'lead'` would be a manager no
+ * planning pass could find. Adoption therefore TRANSLATES rather than copies.
+ *
+ * The translation is what this table names; `assignCompanyTx` writes it into BOTH columns (M37
+ * t3): `role` as the worker's title, and `runtimeRoles` as `[translated, catalog]` deduped, so a
+ * translated worker stays dispatchable as the catalog role the planner emits too.
  *
  * Only two entries have a translation. `product` has no runtime counterpart, and an engineer's
  * expertise (`backend`, `general`) is not a role at all -- the planner emits CATALOG roles as a

@@ -69,6 +69,12 @@ export const TYPES_BY_KIND = {
     // `workspace.created` -- not a run outcome and not a guardrail trip.
     'workspace.archived',
     'workspace.restored',
+    // M37 t3: a persona rewritten and a runtime role set replaced are both operator changes to
+    // the roster, the same chip `org.changed` sits under -- what an operator looks at when a
+    // worker stops being dispatched, or starts answering differently. Not `runs`: neither can be
+    // written by a run (spec §1), and neither carries a taskId.
+    'slave.profile_changed',
+    'slave.runtime_roles_changed',
   ],
 } as const satisfies Record<ActivityKind, readonly DomainEventType[]>
 

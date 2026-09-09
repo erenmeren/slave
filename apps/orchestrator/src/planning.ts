@@ -193,15 +193,16 @@ export async function dispatchPlanning(deps: TickDeps): Promise<RunId | null> {
   })
   if (failedSinceGoal >= PLANNING_RETRY_CAP) return null
 
-  // 5. Staffing. `role === 'manager'` is an exact match -- the same convention `dispatchReview`
-  // uses for `role === 'reviewer'`.
+  // 5. Staffing. `'manager' ∈ runtimeRoles` (M37 §5) -- the same convention `dispatchReview` uses
+  // for `'reviewer'`, and for the same reason: `Slave.role` is the profile's title now, so what
+  // may be dispatched as a manager is what an operator put in the runtime role set.
   // `companySlave -> template` included so `resolveRuntime` (M12 Task 8) can walk the whole override
   // chain for whichever manager is actually picked below.
   // `permissions` included alongside `companySlave -> template` (M18 Task 5) -- see `tick.ts`'s
   // own `startRun` for why: the resolved deny list is snapshotted at dispatch, from this run's own
   // slave row.
   const managers = await prisma.slave.findMany({
-    where: { role: 'manager', team: { workspaceId: deps.workspaceId } },
+    where: { runtimeRoles: { has: 'manager' }, team: { workspaceId: deps.workspaceId } },
     orderBy: { id: 'asc' },
     include: { companySlave: { include: { template: true } }, permissions: true },
   })

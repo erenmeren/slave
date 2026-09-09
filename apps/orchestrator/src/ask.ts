@@ -96,8 +96,11 @@ async function recipientCanAnswer(
   // every slave in the workspace as a holder of the empty role.
   if (role === null) return 'the ask names no recipient'
 
+  // A holder of a role is a slave that may be DISPATCHED as one (M37 §5): the roster this run was
+  // shown lists `runtimeRoles`, so what it may address has to be counted the same way, or the ask
+  // would be refused for a role the prompt itself offered.
   const holders = await prisma.slave.count({
-    where: { role, id: { not: senderSlaveId }, team: { workspaceId } },
+    where: { runtimeRoles: { has: role }, id: { not: senderSlaveId }, team: { workspaceId } },
   })
   return holders > 0 ? null : `no other slave in this workspace holds the role "${role}"`
 }

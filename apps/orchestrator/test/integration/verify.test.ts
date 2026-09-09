@@ -48,7 +48,7 @@ async function seed(): Promise<Fixture> {
     },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend', runtimeRoles: ['backend'] } })
   const task = await prisma.task.create({
     data: {
       workspaceId: workspace.id,
@@ -454,7 +454,7 @@ async function seedFailedRun(options: {
     data: { name: 'Checkout Platform', repoPath, verifyCommands: ['true'], setupCommands: [], maxAttempts: 5 },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend', runtimeRoles: ['backend'] } })
   const task = await prisma.task.create({
     data: {
       workspaceId: workspace.id,
@@ -566,7 +566,7 @@ describe('verifyConcludedRun releases a task after a run concludes failed', () =
       data: { name: 'Checkout Platform', repoPath, verifyCommands: ['true'], setupCommands: [], maxAttempts: 5 },
     })
     const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-    const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
+    const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend', runtimeRoles: ['backend'] } })
     const run = await prisma.slaveRun.create({
       data: { slaveId: slave.id, kind: 'planning', status: 'failed', terminalAt: new Date(), endedAt: new Date() },
     })

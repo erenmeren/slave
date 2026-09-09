@@ -713,7 +713,7 @@ try {
   const officeDepartmentB = await prisma.team.findFirst({ where: { workspaceId: workspaceIdB } })
   if (officeDepartmentB === null) await fail(`"${workspaceNameB}" has no department to add the office fixture slave to`)
   const officeFixtureSlave = await prisma.slave.create({
-    data: { teamId: officeDepartmentB.id, name: 'M11 Gate Second Slave', role: 'qa' },
+    data: { teamId: officeDepartmentB.id, name: 'M11 Gate Second Slave', role: 'qa', runtimeRoles: ['qa'] },
   })
   console.log(`created a second "${workspaceNameB}" slave directly for the office floor: ${officeFixtureSlave.id}`)
 

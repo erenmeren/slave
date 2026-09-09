@@ -8,6 +8,7 @@ import { prisma, type Prisma } from '@slave-of-ai/db/client'
 import {
   PROFILE_MAX_CHARS,
   SECTION_ORDER,
+  effectiveProfile,
   neutraliseMarkers,
   renderRunContext,
   type Manifest,
@@ -84,30 +85,6 @@ export interface BuildRunContextInput {
 export interface BuiltRunContext {
   readonly prompt: string
   readonly manifest: Manifest
-}
-
-/**
- * The profile that actually applies to a slave, and which level it came from (M37 §2).
- *
- * The same override chain `model` and `provider` already walk: the worker's own column, then its
- * roster link's, then the template's. An empty string is treated as no profile at that level's
- * OWN position (it wins the `??` chain and then renders nothing), which is what "cleared" means on
- * a column whose absent value is `null` -- see `setProfile`'s `--clear` (M37 Task 3).
- */
-export function effectiveProfile(slave: {
-  readonly profile: string | null
-  readonly companySlave: {
-    readonly profile: string | null
-    readonly template: { readonly profile: string | null }
-  } | null
-}): { readonly text: string; readonly origin: 'slave' | 'company' | 'template' } | null {
-  if (slave.profile !== null) return slave.profile === '' ? null : { text: slave.profile, origin: 'slave' }
-  if (slave.companySlave === null) return null
-  const company = slave.companySlave
-  if (company.profile !== null) return company.profile === '' ? null : { text: company.profile, origin: 'company' }
-  const template = company.template.profile
-  if (template !== null) return template === '' ? null : { text: template, origin: 'template' }
-  return null
 }
 
 const sha256 = (text: string): string => createHash('sha256').update(text, 'utf8').digest('hex')

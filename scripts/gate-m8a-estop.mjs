@@ -86,11 +86,11 @@ try {
     data: { workspaceId: workspace.id, kind: 'claude_code', settings: {} },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Gate Team' } })
-  await prisma.slave.create({ data: { teamId: team.id, name: 'Worker', role: 'backend' } })
+  await prisma.slave.create({ data: { teamId: team.id, name: 'Worker', role: 'backend', runtimeRoles: ['backend'] } })
   // A second, idle worker: step 6 seeds a fresh ready task AFTER the halt engages, and this slave
   // is who a broken halt would hand it to. With one worker (busy, paused) the no-new-run check
   // could never fail -- there would be nobody to start work for even with scheduling wide open.
-  await prisma.slave.create({ data: { teamId: team.id, name: 'Idle Worker', role: 'backend' } })
+  await prisma.slave.create({ data: { teamId: team.id, name: 'Idle Worker', role: 'backend', runtimeRoles: ['backend'] } })
   const task = await prisma.task.create({
     data: {
       workspaceId: workspace.id,

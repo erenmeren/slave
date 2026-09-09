@@ -26,12 +26,15 @@ describe('parseActivityFilters', () => {
     if (!result.ok) throw new Error(result.error)
     expect([...result.filters.types].sort()).toEqual(['run.output', 'run.tool_call', 'run.tool_denied'])
   })
-  // M27 §3.2 widened this chip with the project archive/restore lifecycle events.
-  it('expands kinds=workspace to the created, goal, plan, company-assigned, settings-changed, org-changed, archived and restored event types', () => {
+  // M27 §3.2 widened this chip with the project archive/restore lifecycle events; M37 t3 widened
+  // it again with the two roster writes (a persona rewritten, a runtime role set replaced).
+  it('expands kinds=workspace to the created, goal, plan, company-assigned, settings-changed, org-changed, archived, restored and slave-configuration event types', () => {
     const result = parseActivityFilters(new URLSearchParams('kinds=workspace'))
     if (!result.ok) throw new Error(result.error)
     expect([...result.filters.types].sort()).toEqual([
       'org.changed',
+      'slave.profile_changed',
+      'slave.runtime_roles_changed',
       'workspace.archived',
       'workspace.company_assigned',
       'workspace.created',

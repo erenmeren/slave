@@ -93,6 +93,13 @@ const PAYLOAD_BY_TYPE: Record<DomainEventType, Record<string, unknown>> = {
   'workspace.restored': { name: 'Billing' },
   'task.integrated': {},
   'task.unblocked': { attempt: 2, maxAttempts: 3 },
+  'slave.profile_changed': {
+    target: 'slave',
+    targetId: 'ag-1',
+    sha256: 'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789',
+    actor: 'eren',
+  },
+  'slave.runtime_roles_changed': { slaveId: 'ag-1', roles: ['backend', 'reviewer'], actor: 'eren' },
 }
 
 function fixtureFor(type: DomainEventType): ActivityEventRow {
@@ -196,6 +203,38 @@ describe('targeted card bodies', () => {
     render(<Card event={fixtureFor('task.worktree_collected')} {...CARD_PROPS} />)
     expect(screen.getByTestId('worktree-collected-path').textContent).toBe('/repo/.slaveofai/worktrees/T-abc')
     expect(screen.getByTestId('transition-label').textContent).toBe('worktree collected')
+  })
+
+  // M37 t3: the two profile/role events. The hash is shown by its first 12 characters only, and a
+  // cleared profile (`sha256: null`) shows no hash at all -- there is no text to point at.
+  it('slave.profile_changed names the level written, the actor and the hash prefix', () => {
+    const Card = ACTIVITY_CARDS['slave.profile_changed']
+    render(<Card event={fixtureFor('slave.profile_changed')} {...CARD_PROPS} />)
+    expect(screen.getByTestId('transition-label').textContent).toBe('profile set')
+    expect(screen.getByTestId('profile-target').textContent).toBe('this worker')
+    expect(screen.getByTestId('profile-actor').textContent).toBe('eren')
+    expect(screen.getByTestId('profile-sha').textContent).toBe(' · abcdef012345')
+  })
+
+  it('slave.profile_changed says cleared, and shows no hash, for a null sha256', () => {
+    const Card = ACTIVITY_CARDS['slave.profile_changed']
+    const event = baseEvent('slave.profile_changed', { target: 'template', targetId: 'st-1', sha256: null, actor: 'eren' })
+    render(<Card event={event} {...CARD_PROPS} />)
+    expect(screen.getByTestId('transition-label').textContent).toBe('profile cleared')
+    expect(screen.getByTestId('profile-target').textContent).toBe('its template')
+    expect(screen.queryByTestId('profile-sha')).toBeNull()
+  })
+
+  it('slave.runtime_roles_changed lists the new set, and says so when it is empty', () => {
+    const Card = ACTIVITY_CARDS['slave.runtime_roles_changed']
+    const { unmount } = render(<Card event={fixtureFor('slave.runtime_roles_changed')} {...CARD_PROPS} />)
+    expect(screen.getByTestId('transition-label').textContent).toBe('runtime roles changed')
+    expect(screen.getByTestId('runtime-roles').textContent).toBe('backend, reviewer')
+    unmount()
+
+    const parked = baseEvent('slave.runtime_roles_changed', { slaveId: 'ag-1', roles: [], actor: 'eren' })
+    render(<Card event={parked} {...CARD_PROPS} />)
+    expect(screen.getByTestId('runtime-roles').textContent).toBe('none (cannot be dispatched)')
   })
 
   it('org.changed shows the label for its field and the from/to values', () => {

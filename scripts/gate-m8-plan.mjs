@@ -69,9 +69,9 @@ try {
     data: { workspaceId: workspace.id, kind: 'claude_code', settings: {} },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Gate Team' } })
-  await prisma.slave.create({ data: { teamId: team.id, name: 'Manager', role: 'manager' } })
-  await prisma.slave.create({ data: { teamId: team.id, name: 'Worker', role: 'backend' } })
-  await prisma.slave.create({ data: { teamId: team.id, name: 'Reviewer', role: 'reviewer' } })
+  await prisma.slave.create({ data: { teamId: team.id, name: 'Manager', role: 'manager', runtimeRoles: ['manager'] } })
+  await prisma.slave.create({ data: { teamId: team.id, name: 'Worker', role: 'backend', runtimeRoles: ['backend'] } })
+  await prisma.slave.create({ data: { teamId: team.id, name: 'Reviewer', role: 'reviewer', runtimeRoles: ['reviewer'] } })
   console.log(`workspace: ${workspace.id}`)
 
   // 2. Set the goal via the real CLI, the human's own path -- and the one that emits the

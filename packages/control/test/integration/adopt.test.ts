@@ -195,12 +195,10 @@ describe('adoptSimulation', () => {
     const slaves = await prisma.slave.findMany({ where: { team: { workspaceId: alpha.id } }, orderBy: { name: 'asc' } })
     const byName = new Map(slaves.map((s) => [s.name, s]))
     expect(slaves).toHaveLength(9)
-    // Ruling R2: `Slave.role` is what the RUNTIME dispatches on -- `planning.ts` staffs
-    // `role === 'manager'`, `review.ts` staffs `role === 'reviewer'`, and the scheduler matches
-    // `Task.requiredRole` to it by equality. So the run's decision roles are TRANSLATED, not
-    // copied: its lead becomes the manager the planner can find, its reviewer the reviewer the
-    // review pass can find, and everyone else keeps the catalog role the planner emits as a
-    // `requiredRole`. Exactly one of each, so neither pass has two candidates it never had before.
+    // Ruling R2, as M37 t3 leaves it: the run's decision roles are TRANSLATED, not copied -- its
+    // lead becomes the manager `planning.ts` can find, its reviewer the reviewer `review.ts` can
+    // find -- and `role` carries that translation as the worker's TITLE, exactly as it did before
+    // M37.
     expect(slaves.filter((s) => s.role === 'manager').map((s) => s.name)).toEqual(['Atlas'])
     expect(slaves.filter((s) => s.role === 'reviewer').map((s) => s.name)).toEqual(['Riley'])
     expect(byName.get('John')?.role).toBe('Business Analyst')
@@ -210,6 +208,15 @@ describe('adoptSimulation', () => {
     expect(byName.get('Maya')?.role).toBe('QA')
     expect(byName.get('Sarah')?.role).toBe('Security')
     expect(byName.get('Oliver')?.role).toBe('SEO')
+
+    // What the runtime ACTUALLY dispatches on since M37 t3: `runtimeRoles`, and for an adopted
+    // worker that is BOTH roles -- the translated one and the catalog one, deduplicated. Atlas is
+    // staffable as a manager AND still a candidate for a `manager`-titled catalog task; a worker
+    // with no translation gets the one-element set adoption always wrote.
+    expect(byName.get('Atlas')?.runtimeRoles).toEqual(['manager'])
+    expect(byName.get('Riley')?.runtimeRoles).toEqual(['reviewer'])
+    expect(byName.get('Alex')?.runtimeRoles).toEqual(['Backend'])
+    expect(byName.get('Sarah')?.runtimeRoles).toEqual(['Security'])
     // M37 t1 drops `Slave.requiredRole` (that column named the role a TASK needs; adoption
     // creates no tasks and never wrote it, so this assertion has nothing left to check).
 

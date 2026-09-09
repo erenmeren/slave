@@ -448,19 +448,22 @@ export async function assignCompanyTx(
       // by the caller. `Task.requiredRole` stays untouched: it names the role a TASK needs, and
       // neither verb here creates a task.
       //
-      // `runtimeRoles: [override ?? template.role]` is this task's placeholder, not the final
-      // shape: M37 Task 3 is the one that works out what a materialized worker's FULL runtime
-      // role set should be (a translated role plus the catalog role, mirroring
-      // `packages/control/src/simulation/adopt.ts`'s `RUNTIME_ROLE` dedup) -- until then, a
-      // single-entry set keeps every worker this verb creates dispatchable exactly as `role`
-      // alone did before this migration.
+      // The runtime role set is BOTH (M37 t3): the overridden role and the catalog one, in that
+      // order, deduplicated -- which is a one-element set whenever there is no override, exactly
+      // what this verb wrote before. Both, and not just the override, because an override is a
+      // TRANSLATION and not a replacement of what the worker can do: adoption
+      // (`packages/control/src/simulation/adopt.ts`) maps a simulation's `lead` onto `manager` so
+      // a planning pass can find it, and a worker that stopped being dispatchable as its catalog
+      // role in the process would silently drop off every task whose `requiredRole` the planner
+      // emits -- the planner emits CATALOG roles. `role` itself keeps the override, unchanged from
+      // M33: it is the title an operator reads on the roster.
       const override = options?.roleOverrides?.[companySlave.name]
       const worker = await tx.slave.create({
         data: {
           teamId: team.id,
           name: companySlave.name,
           role: override ?? template.role,
-          runtimeRoles: [override ?? template.role],
+          runtimeRoles: [...new Set([override ?? template.role, template.role])],
           companySlaveId: companySlave.id,
         },
       })
@@ -644,10 +647,19 @@ export async function renameSlave(
 }
 
 /**
- * Changes a project slave's role -- the exact-match string the scheduler's `decide()` compares
- * against `Task.requiredRole`. Refused while the slave holds any run in a
- * `NON_TERMINAL_RUN_STATUSES` status: re-rolling a slave mid-dispatch would silently strand the
- * scheduler's decision, which was made against the role the run started with.
+ * Changes a project slave's TITLE -- the heading of its persona, and nothing the runtime dispatches
+ * on (M37 §5).
+ *
+ * It used to be both: before M37, `Slave.role` was the exact-match string `decide()` compared
+ * against `Task.requiredRole` and the literal `review.ts`/`planning.ts` staffing queries searched
+ * for. That is `Slave.runtimeRoles` now, and `setRuntimeRoles`
+ * (`packages/control/src/profile.ts`) is the verb that writes it. This one writes `role` only.
+ *
+ * Still refused while the slave holds any run in a `NON_TERMINAL_RUN_STATUSES` status. The
+ * original reason is gone with the dispatch match, but a better one replaced it: `role` is
+ * rendered into a run's prompt (`displayName`, the ask roster, message envelopes), and the
+ * `RunContext` row records what the model was told -- so renaming the title under a live run
+ * would leave the record and the roster disagreeing about who that run is.
  */
 export async function setSlaveRole(
   slaveId: string,

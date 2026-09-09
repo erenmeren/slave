@@ -122,7 +122,7 @@ async function makeRunner(
   name: string,
   role: string,
 ): Promise<Runner> {
-  const slave = await prisma.slave.create({ data: { teamId, name, role } })
+  const slave = await prisma.slave.create({ data: { teamId, name, role, runtimeRoles: [role] } })
   const task = await prisma.task.create({
     data: {
       workspaceId: workspace.id,
@@ -158,7 +158,7 @@ async function seed(): Promise<Fixture> {
 
   // A question in the other workspace, addressed to a role Maya also holds -- the cross-workspace
   // boundary is the only thing that can refuse it.
-  const zoe = await prisma.slave.create({ data: { teamId: otherTeam.id, name: 'Zoe', role: 'backend' } })
+  const zoe = await prisma.slave.create({ data: { teamId: otherTeam.id, name: 'Zoe', role: 'backend', runtimeRoles: ['backend'] } })
   const zoeRun = await prisma.slaveRun.create({ data: { slaveId: zoe.id, status: 'working', kind: 'planning' } })
   const foreign = await prisma.slaveMessage.create({
     data: {
@@ -299,6 +299,23 @@ describe('a slave answers, and the asker resumes', () => {
       expect(await prisma.slaveMessage.count({ where: { kind: 'answer' } })).toBe(0)
     })
 
+    it('refuses a slave whose TITLE is the addressed role but whose runtime roles are not (M37 t3)', async () => {
+      // Sam is retitled "answerer" and keeps `runtimeRoles: ['frontend']`. Role addressing is
+      // `runtimeRoles` on both sides -- the inbox never showed Sam this question, so answering it
+      // must be refused too, or a slave could close a wait it was never asked to.
+      await prisma.slave.update({ where: { id: fixture.sam.slaveId }, data: { role: 'answerer' } })
+      const questionId = await askAndWait(fixture, fixture.alex, 'Which queue?')
+
+      const outcome = await pumpEndingWith(
+        fixture.sam,
+        fixture.workspaceId,
+        answer(JSON.stringify({ messageId: questionId, answer: 'I have no idea' })),
+      )
+
+      expect(outcome).not.toBeNull()
+      expect(await prisma.slaveMessage.count({ where: { kind: 'answer' } })).toBe(0)
+    })
+
     it('refuses to answer a question in another workspace', async () => {
       const outcome = await pumpEndingWith(
         fixture.maya,
@@ -390,7 +407,7 @@ describe('a slave answers, and the asker resumes', () => {
         data: { name: 'Solo', repoPath: '/tmp/solo', verifyCommands: ['true'], setupCommands: [] },
       })
       const team = await prisma.team.create({ data: { workspaceId: alone.id, name: 'Engineering' } })
-      const only = await prisma.slave.create({ data: { teamId: team.id, name: 'Robin', role: 'backend' } })
+      const only = await prisma.slave.create({ data: { teamId: team.id, name: 'Robin', role: 'backend', runtimeRoles: ['backend'] } })
 
       // No roster, and `buildRunContext` teaches the envelope only alongside one.
       expect(await rosterSection(only.id, alone.id)).toBeNull()

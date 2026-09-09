@@ -58,6 +58,58 @@ describe('parseExecutionEvent', () => {
     expect(result.ok).toBe(true)
   })
 
+  // M37 t3: the two events the profile/role verbs write. Both carry the actor (envelope) and the
+  // NEW value -- a hash for a profile (the text itself can be 16k characters and is already on the
+  // row), the whole list for runtime roles (short, and the thing a reader actually wants).
+  it('accepts a slave.profile_changed event for each target kind', () => {
+    for (const target of ['slave', 'template', 'company_slave'] as const) {
+      const result = parseExecutionEvent({
+        ...BASE,
+        type: 'slave.profile_changed',
+        slaveId: 'alex',
+        actor: 'human',
+        payload: { target, targetId: 'id-1', sha256: 'a'.repeat(64), actor: 'operator' },
+      })
+      expect(result.ok).toBe(true)
+    }
+  })
+
+  it('accepts a cleared profile as sha256: null', () => {
+    const result = parseExecutionEvent({
+      ...BASE,
+      type: 'slave.profile_changed',
+      actor: 'human',
+      payload: { target: 'slave', targetId: 'id-1', sha256: null, actor: 'operator' },
+    })
+    expect(result.ok).toBe(true)
+  })
+
+  it('rejects a slave.profile_changed with an unknown target', () => {
+    const result = parseExecutionEvent({
+      ...BASE,
+      type: 'slave.profile_changed',
+      actor: 'human',
+      payload: { target: 'workspace', targetId: 'id-1', sha256: null, actor: 'operator' },
+    })
+    expect(result.ok).toBe(false)
+  })
+
+  it('accepts a slave.runtime_roles_changed event, including an emptied set', () => {
+    for (const roles of [['backend', 'reviewer'], []]) {
+      const result = parseExecutionEvent({
+        ...BASE,
+        type: 'slave.runtime_roles_changed',
+        slaveId: 'alex',
+        actor: 'human',
+        payload: { slaveId: 'alex', roles, actor: 'operator' },
+      })
+      expect(result.ok).toBe(true)
+      if (result.ok && result.value.type === 'slave.runtime_roles_changed') {
+        expect(result.value.payload.roles).toEqual(roles)
+      }
+    }
+  })
+
   it('rejects an unknown event type', () => {
     const result = parseExecutionEvent({ ...BASE, type: 'nonsense.happened', payload: {} })
     expect(result.ok).toBe(false)

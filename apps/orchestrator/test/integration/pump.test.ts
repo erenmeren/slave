@@ -123,7 +123,7 @@ async function seed(): Promise<Ids> {
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
   const slave = await prisma.slave.create({
-    data: { teamId: team.id, name: 'Alex', role: 'backend' },
+    data: { teamId: team.id, name: 'Alex', role: 'backend', runtimeRoles: ['backend'] },
   })
   const task = await prisma.task.create({
     data: {
@@ -159,6 +159,7 @@ async function seedSecondRun(ids: Ids): Promise<Ids> {
       teamId: (await prisma.team.findFirstOrThrow()).id,
       name: 'Blair',
       role: 'backend',
+      runtimeRoles: ['backend'],
     },
   })
   const task = await prisma.task.create({

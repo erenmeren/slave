@@ -75,7 +75,7 @@ async function seedTask(
 ): Promise<TaskFixture> {
   const worktreePath = overrides.worktreePath ?? addWorktree(repoPath, n)
   const team = await prisma.team.create({ data: { workspaceId, name: `Engineering ${n}` } })
-  const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend', runtimeRoles: ['backend'] } })
   const task = await prisma.task.create({
     data: {
       workspaceId,

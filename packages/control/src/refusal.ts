@@ -110,9 +110,15 @@ export type ControlRefusal =
   /** A role was set (or re-set) to blank text (M23 D1). */
   | { readonly kind: 'invalid_role' }
   /**
-   * `setSlaveRole` on a slave that holds a run in a `NON_TERMINAL_RUN_STATUSES` status (M23 D1):
-   * the scheduler matches `Task.requiredRole` to `Slave.role` by equality, so re-rolling a slave
-   * mid-run would silently strand its dispatch decision.
+   * `setSlaveRole` (and `deleteSlave`) on a slave that holds a run in a
+   * `NON_TERMINAL_RUN_STATUSES` status (M23 D1).
+   *
+   * The original reason was dispatch: the scheduler matched `Task.requiredRole` to `Slave.role` by
+   * equality, so re-rolling mid-run stranded the decision the run started with. M37 t3 moved that
+   * match to `Slave.runtimeRoles` and left the refusal standing on a better reason: `role` is the
+   * TITLE rendered into a live run's prompt (`displayName`, the ask roster, message envelopes) and
+   * recorded verbatim in its `RunContext` row, so renaming it under a live run leaves the record
+   * and the roster disagreeing about who that run is.
    */
   | { readonly kind: 'slave_run_active'; readonly slaveId: string; readonly runId: string }
   /** `renameTeam`/`deleteTeam` on a `teamId` no `Team` row carries (M23 D1). */
@@ -191,6 +197,18 @@ export type ControlRefusal =
   /** M36 t3: `answerQuestion` was pointed at a message that is not a `question` -- an answer to an
    *  `information` or a `handoff` has nobody waiting on it, and nothing to resume. */
   | { readonly kind: 'not_a_question'; readonly messageId: string; readonly messageKind: string }
+  /** M37 t3: `setProfile`'s text is longer than `PROFILE_MAX_CHARS` (`@slave-of-ai/domain`),
+   *  measured after trimming. `limit` and `length` are both carried so the message can say how far
+   *  over it is without the caller re-measuring -- and so a web form can show it. The same cap is
+   *  re-checked at dispatch by `buildRunContext`, which is the only way a stored profile can be
+   *  over it (the constant was lowered after the text was written). */
+  | { readonly kind: 'profile_too_long'; readonly limit: number; readonly length: number }
+  /** M37 t3: `setRuntimeRoles` was given a set it will not write -- a blank entry, a duplicate
+   *  (after trimming), or more than `MAX_RUNTIME_ROLES` of them. NOT for an empty set, which is a
+   *  real, deliberate state: a worker with no runtime roles cannot be dispatched, and
+   *  `set-runtime-roles --roles ''` is how an operator parks one. The `reason` is a whole
+   *  sentence, because the three cases need three different fixes. */
+  | { readonly kind: 'invalid_runtime_roles'; readonly reason: string }
 
 /**
  * The word a person reads for `live_runs`'s `entity` (M27 final review, Important finding 3).
@@ -367,5 +385,9 @@ export function refusalText(refusal: ControlRefusal): string {
       return `message ${refusal.messageId} is not addressed to slave ${refusal.slaveId}`
     case 'not_a_question':
       return `message ${refusal.messageId} is a ${refusal.messageKind}, not a question: there is nobody waiting on an answer to it`
+    case 'profile_too_long':
+      return `a profile may be at most ${String(refusal.limit)} characters; this one is ${String(refusal.length)}`
+    case 'invalid_runtime_roles':
+      return `invalid runtime roles: ${refusal.reason}`
   }
 }

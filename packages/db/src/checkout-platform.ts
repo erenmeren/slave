@@ -29,15 +29,17 @@ export const CHECKOUT_PLATFORM_COMPANY_NAME = 'Checkout Platform'
  * name (`Backend` / `Frontend` / `DevOps`, anything else `general`).
  */
 export const CHECKOUT_PLATFORM_ROSTER: readonly { readonly slaveName: string; readonly departmentName: CheckoutPlatformTeam; readonly role: string }[] = [
-  // Lowercase, matching the M8b planning dispatch's exact-match `role === 'manager'` -- the same
-  // convention `dispatchReview` uses for `role === 'reviewer'`.
+  // Lowercase, matching the M8b planning dispatch's staffing role `manager` -- the same
+  // convention `dispatchReview` uses for `reviewer`. Since M37 t3 those queries match a worker's
+  // `runtimeRoles`, which `assignCompanyTx` seeds from this catalog role.
   { slaveName: 'Atlas', departmentName: 'Management', role: 'manager' },
   { slaveName: 'Alex', departmentName: 'Engineering', role: 'Backend' },
   { slaveName: 'Emma', departmentName: 'Engineering', role: 'Frontend' },
   { slaveName: 'Daniel', departmentName: 'Engineering', role: 'DevOps' },
   { slaveName: 'Maya', departmentName: 'Engineering', role: 'QA' },
-  // Lowercase, unlike the other roles here: M1 Task 5's review dispatch matches `role ===
-  // 'reviewer'` exactly, the same convention `decide()` uses for `requiredRole`.
+  // Lowercase, unlike the other roles here: M1 Task 5's review dispatch staffs the exact role
+  // `reviewer`, the same convention `decide()` uses for `requiredRole` -- matched, since M37 t3,
+  // against the worker's `runtimeRoles`.
   { slaveName: 'Riley', departmentName: 'Engineering', role: 'reviewer' },
   { slaveName: 'Sarah', departmentName: 'Security', role: 'Security' },
   { slaveName: 'John', departmentName: 'Product', role: 'Business Analyst' },

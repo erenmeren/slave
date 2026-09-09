@@ -13,7 +13,7 @@ import {
   type Manifest,
 } from '@slave-of-ai/domain'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
-import { RunContextRefused, buildRunContext, effectiveProfile, injectSkills } from '../../src/runContext.js'
+import { RunContextRefused, buildRunContext, injectSkills } from '../../src/runContext.js'
 import { provisionWorktree } from '../../src/worktree.js'
 
 const TRUNCATE =
@@ -171,27 +171,6 @@ const skillsSource = (manifest: Manifest): Extract<Manifest['sections'][number],
     | Extract<Manifest['sections'][number], { kind: 'skills' }>
     | undefined
 
-describe('effectiveProfile', () => {
-  it('prefers the slave, then the company slave, then the template, then nothing', () => {
-    const template = { profile: 'template text' }
-    expect(effectiveProfile({ profile: 'slave text', companySlave: { profile: 'company text', template } })).toEqual({
-      text: 'slave text',
-      origin: 'slave',
-    })
-    expect(effectiveProfile({ profile: null, companySlave: { profile: 'company text', template } })).toEqual({
-      text: 'company text',
-      origin: 'company',
-    })
-    expect(effectiveProfile({ profile: null, companySlave: { profile: null, template } })).toEqual({
-      text: 'template text',
-      origin: 'template',
-    })
-    expect(effectiveProfile({ profile: null, companySlave: { profile: null, template: { profile: null } } })).toBeNull()
-    // A slave with no roster link resolves through its own column alone.
-    expect(effectiveProfile({ profile: null, companySlave: null })).toBeNull()
-  })
-})
-
 describe('buildRunContext', () => {
   let fixture: Fixture
 
@@ -278,13 +257,13 @@ describe('buildRunContext', () => {
       expect(alone.prompt).not.toContain(ASK_BLOCK_OPEN)
       expect(alone.manifest.sections.some((section) => section.kind === 'ask_protocol')).toBe(false)
 
-      await prisma.slave.create({ data: { teamId: fixture.teamId, name: 'Maya', role: 'Product Lead' } })
+      await prisma.slave.create({ data: { teamId: fixture.teamId, name: 'Maya', role: 'Product Lead', runtimeRoles: ['product'] } })
       const withPeer = await buildImplementation(fixture)
       expect(withPeer.prompt).toContain(ASK_BLOCK_OPEN)
     })
 
     it('carries a pending question, its id and the answer envelope, and neutralises what the asker wrote', async () => {
-      const maya = await prisma.slave.create({ data: { teamId: fixture.teamId, name: 'Maya', role: 'Product Lead' } })
+      const maya = await prisma.slave.create({ data: { teamId: fixture.teamId, name: 'Maya', role: 'Product Lead', runtimeRoles: ['product'] } })
       const askerRun = await prisma.slaveRun.create({
         data: { slaveId: maya.id, status: 'paused', pauseReason: 'waiting_for_answer', kind: 'planning' },
       })
@@ -543,7 +522,7 @@ describe('buildRunContext', () => {
 
   describe('a review run', () => {
     it('carries the reviewer profile, the task and the diff, and never an inbox or an ask', async () => {
-      await prisma.slave.create({ data: { teamId: fixture.teamId, name: 'Maya', role: 'Product Lead' } })
+      await prisma.slave.create({ data: { teamId: fixture.teamId, name: 'Maya', role: 'Product Lead', runtimeRoles: ['product'] } })
       await assign(fixture, 'writing-plans')
       const reviewRun = await prisma.slaveRun.create({
         data: { taskId: fixture.taskId, slaveId: fixture.slaveId, status: 'starting', kind: 'review' },

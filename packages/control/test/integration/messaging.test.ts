@@ -7,6 +7,8 @@ import {
 interface Fixture {
   readonly workspace: { readonly id: string }
   readonly otherWorkspace: { readonly id: string }
+  /** `role` here is the RUNTIME role a message addresses (M37 t3), not `Slave.role` -- the two
+   *  are deliberately different strings on every row this fixture makes. */
   readonly sender: { readonly id: string; readonly role: string }
   readonly recipient: { readonly id: string; readonly role: string }
   readonly outsider: { readonly id: string }
@@ -14,9 +16,13 @@ interface Fixture {
 }
 
 /**
- * One workspace with a sender and a named recipient (roles "asker"/"answerer" so the role-based
- * addressing tests are unambiguous), a run that sender is mid-way through, and one slave in a
- * SECOND workspace for the cross-workspace refusal.
+ * One workspace with a sender and a named recipient (runtime roles "asker"/"answerer" so the
+ * role-based addressing tests are unambiguous), a run that sender is mid-way through, and one slave
+ * in a SECOND workspace for the cross-workspace refusal.
+ *
+ * Every slave's TITLE (`Slave.role`) is deliberately a different string from its runtime role
+ * (M37 t3): role addressing matches `runtimeRoles` now, so a fixture where the two agreed would
+ * pass whichever column the implementation happened to read.
  */
 async function seed(): Promise<Fixture> {
   const workspace = await prisma.workspace.create({
@@ -28,9 +34,15 @@ async function seed(): Promise<Fixture> {
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
   const otherTeam = await prisma.team.create({ data: { workspaceId: otherWorkspace.id, name: 'Engineering' } })
 
-  const sender = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'asker' } })
-  const recipient = await prisma.slave.create({ data: { teamId: team.id, name: 'Maya', role: 'answerer' } })
-  const outsider = await prisma.slave.create({ data: { teamId: otherTeam.id, name: 'Zoe', role: 'answerer' } })
+  const sender = await prisma.slave.create({
+    data: { teamId: team.id, name: 'Alex', role: 'Senior Engineer', runtimeRoles: ['asker'] },
+  })
+  const recipient = await prisma.slave.create({
+    data: { teamId: team.id, name: 'Maya', role: 'Product Lead', runtimeRoles: ['answerer'] },
+  })
+  const outsider = await prisma.slave.create({
+    data: { teamId: otherTeam.id, name: 'Zoe', role: 'Product Lead', runtimeRoles: ['answerer'] },
+  })
 
   const task = await prisma.task.create({
     data: { workspaceId: workspace.id, title: 'Add checkout retry', description: 'Retry failed payments', maxAttempts: workspace.maxAttempts },
@@ -40,8 +52,8 @@ async function seed(): Promise<Fixture> {
   return {
     workspace: { id: workspace.id },
     otherWorkspace: { id: otherWorkspace.id },
-    sender: { id: sender.id, role: sender.role },
-    recipient: { id: recipient.id, role: recipient.role },
+    sender: { id: sender.id, role: sender.runtimeRoles[0] ?? '' },
+    recipient: { id: recipient.id, role: recipient.runtimeRoles[0] ?? '' },
     outsider: { id: outsider.id },
     run: { id: run.id },
   }
@@ -196,6 +208,48 @@ describe('sendMessage', () => {
     if (inbox.ok) expect(inbox.value.map((m) => m.id)).toEqual([result.value.id])
   })
 
+  // M37 t3: the two halves of "role addressing is `runtimeRoles`". The recipient's TITLE is
+  // "Product Lead" and reaches nobody; a second holder of the same runtime role, whose title is
+  // different again, is reached by the same one message.
+  it('reaches every holder of a RUNTIME role, and nobody by their title', async () => {
+    const { run, recipient } = fixture
+    const recipientRow = await prisma.slave.findUniqueOrThrow({ where: { id: recipient.id } })
+    const second = await prisma.slave.create({
+      data: { teamId: recipientRow.teamId, name: 'Noor', role: 'Support Engineer', runtimeRoles: ['answerer', 'triage'] },
+    })
+
+    const byTitle = await sendMessage(run.id, question({ recipientRole: 'Product Lead' }))
+    expect(byTitle.ok).toBe(true)
+    if (!byTitle.ok) return
+    const sent = await sendMessage(run.id, question({ recipientRole: 'answerer' }))
+    expect(sent.ok).toBe(true)
+    if (!sent.ok) return
+
+    for (const holder of [recipient.id, second.id]) {
+      const inbox = await listMessagesForSlave(holder)
+      expect(inbox.ok).toBe(true)
+      // Only the runtime-role broadcast; the title-addressed one reached nobody at all.
+      if (inbox.ok) expect(inbox.value.map((m) => m.id)).toEqual([sent.value.id])
+    }
+  })
+
+  it('never lets an empty runtime role set be reached by any broadcast', async () => {
+    const { run, recipient } = fixture
+    await prisma.slave.update({ where: { id: recipient.id }, data: { runtimeRoles: [] } })
+    const sent = await sendMessage(run.id, question({ recipientRole: 'answerer' }))
+    expect(sent.ok).toBe(true)
+    if (!sent.ok) return
+
+    const inbox = await listMessagesForSlave(recipient.id)
+    expect(inbox.ok).toBe(true)
+    if (inbox.ok) expect(inbox.value).toEqual([])
+
+    // And it may not mark it read either -- the two reads share one definition of "addressed to".
+    const read = await markMessageRead(sent.value.id, recipient.id)
+    expect(read.ok).toBe(false)
+    if (!read.ok) expect(read.error.kind).toBe('not_message_recipient')
+  })
+
   it('a reply inherits its parent thread, and the thread reads back in order', async () => {
     const { run, recipient } = fixture
     const opener = await sendMessage(run.id, question({ recipientSlaveId: recipient.id, body: 'first' }))
@@ -275,7 +329,7 @@ describe('listMessagesForSlave', () => {
     const { run, sender } = fixture
     const senderRow = await prisma.slave.findUniqueOrThrow({ where: { id: sender.id } })
     const peer = await prisma.slave.create({
-      data: { teamId: senderRow.teamId, name: 'Priya', role: sender.role },
+      data: { teamId: senderRow.teamId, name: 'Priya', role: 'Staff Engineer', runtimeRoles: [sender.role] },
     })
 
     const sent = await sendMessage(run.id, question({ recipientRole: sender.role }))
@@ -402,8 +456,9 @@ describe('markMessageRead', () => {
 
   it('refuses a slave in another workspace even when its role name matches the addressed role, and leaves readAt null', async () => {
     const { run, outsider } = fixture
-    // `outsider` (fixture) holds the role "answerer" too, in the SECOND workspace -- same role
-    // name, different workspace. A bare string comparison of roles alone would wrongly admit it.
+    // `outsider` (fixture) holds the runtime role "answerer" too, in the SECOND workspace -- same
+    // role name, different workspace. A bare string comparison of roles alone would wrongly admit
+    // it.
     const sent = await sendMessage(run.id, question({ recipientRole: 'answerer' }))
     expect(sent.ok).toBe(true)
     if (!sent.ok) return

@@ -9,8 +9,8 @@ import {
   type World,
 } from '../../src/scheduler/decide.js'
 
-const alex: SchedulableSlave = { id: slaveId('alex'), role: 'backend', busy: false }
-const emma: SchedulableSlave = { id: slaveId('emma'), role: 'frontend', busy: false }
+const alex: SchedulableSlave = { id: slaveId('alex'), runtimeRoles: ['backend'], busy: false }
+const emma: SchedulableSlave = { id: slaveId('emma'), runtimeRoles: ['frontend'], busy: false }
 
 /** Command is a union; narrow before reading taskId so the tests type-check. */
 function startedTaskIds(commands: readonly Command[]): readonly string[] {
@@ -76,6 +76,31 @@ describe('decide', () => {
 
   it('leaves a task unscheduled when no slave has the required role', () => {
     expect(decide(world({ tasks: [task('TASK-1', { requiredRole: 'security' })] }))).toEqual([])
+  })
+
+  // M37 t3: the match is `runtimeRoles`, not the profile title. A slave whose title says
+  // "Senior Engineer" is dispatchable as everything its runtime role set names -- which is the
+  // whole point of splitting the two columns, since `Slave.role` is now a persona heading a
+  // human wrote and nothing a scheduler should be comparing for equality.
+  it('matches a slave whose runtime roles hold the required role, whatever its title says', () => {
+    const senior: SchedulableSlave = { id: slaveId('senior'), runtimeRoles: ['backend', 'reviewer'], busy: false }
+    const commands = decide(world({ slaves: [senior], tasks: [task('TASK-1')] }))
+    expect(commands).toEqual([{ kind: 'start_run', taskId: 'TASK-1', slaveId: 'senior' }])
+  })
+
+  it('matches on any role in the set, not only the first', () => {
+    const senior: SchedulableSlave = { id: slaveId('senior'), runtimeRoles: ['backend', 'reviewer'], busy: false }
+    const commands = decide(world({ slaves: [senior], tasks: [task('TASK-1', { requiredRole: 'reviewer' })] }))
+    expect(commands).toEqual([{ kind: 'start_run', taskId: 'TASK-1', slaveId: 'senior' }])
+  })
+
+  // M37 §7: an empty set means "cannot be dispatched" -- the state `set-runtime-roles --roles ''`
+  // parks a worker in, and the one the web warns about. It must never be a candidate for anything,
+  // including a task whose `requiredRole` is itself the empty string.
+  it('never starts anything on a slave with no runtime roles', () => {
+    const parked: SchedulableSlave = { id: slaveId('parked'), runtimeRoles: [], busy: false }
+    expect(decide(world({ slaves: [parked], tasks: [task('TASK-1')] }))).toEqual([])
+    expect(decide(world({ slaves: [parked], tasks: [task('TASK-1', { requiredRole: '' })] }))).toEqual([])
   })
 
   it('does not assign two tasks to the same slave in one tick', () => {

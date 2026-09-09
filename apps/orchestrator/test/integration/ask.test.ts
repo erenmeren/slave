@@ -101,9 +101,11 @@ async function seed(): Promise<Fixture> {
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
   const otherTeam = await prisma.team.create({ data: { workspaceId: other.id, name: 'Engineering' } })
-  const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
-  const answerer = await prisma.slave.create({ data: { teamId: team.id, name: 'Maya', role: 'answerer' } })
-  const outsider = await prisma.slave.create({ data: { teamId: otherTeam.id, name: 'Zoe', role: 'answerer' } })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend', runtimeRoles: ['backend'] } })
+  // Titles that are NOT the runtime role (M37 t3): `recipientCanAnswer` counts holders by
+  // `runtimeRoles`, so a fixture where the two agreed would pass whichever column it read.
+  const answerer = await prisma.slave.create({ data: { teamId: team.id, name: 'Maya', role: 'Product Lead', runtimeRoles: ['answerer'] } })
+  const outsider = await prisma.slave.create({ data: { teamId: otherTeam.id, name: 'Zoe', role: 'Product Lead', runtimeRoles: ['answerer'] } })
   const task = await prisma.task.create({
     data: {
       workspaceId: workspace.id,
@@ -371,6 +373,13 @@ describe('a slave that asks, and waits', () => {
 
     it('the asker itself is not a recipient -- nobody would ever see it, and the task would wait forever', async (): Promise<void> => {
       await pumpEndingWith(ids, ask(`{"slaveId":"${ids.slaveId}","question":"Which queue?"}`))
+      await expectOrdinaryConclusion(ids, 'succeeded')
+    })
+
+    it('a TITLE somebody holds is not a role (M37 t3)', async (): Promise<void> => {
+      // "Product Lead" is Maya's `Slave.role`. Role addressing is `runtimeRoles`, so nobody holds
+      // it and the ask reaches nobody -- the run concludes as though it had never asked.
+      await pumpEndingWith(ids, ask('{"role":"Product Lead","question":"Which queue?"}'))
       await expectOrdinaryConclusion(ids, 'succeeded')
     })
 

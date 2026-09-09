@@ -64,6 +64,44 @@ export const executionEventSchema = z.discriminatedUnion('type', [
       expectsReply: z.boolean().optional(),
     }),
   }),
+  // M37 t3: `setProfile` (packages/control/src/profile.ts) wrote a persona. Only a SLAVE target
+  // reaches the log (spec erratum E3) -- a template and a catalog slave belong to the company
+  // catalog, which has no workspace and therefore no event stream to append to -- but the payload
+  // still names which of the three levels was written, because the effective profile a slave runs
+  // with is resolved through all three and a reader of one workspace's log needs to know that the
+  // text it is looking at is the worker's own override rather than something inherited.
+  //
+  // The HASH, not the text: a profile is up to `PROFILE_MAX_CHARS` (16k) characters and is already
+  // stored on its own row; what a log reader wants from it is "did this change, and is it the same
+  // text run 41 saw" -- which is exactly what the `RunContext` manifest's own `profile.sha256`
+  // answers, computed the same way over the same raw text. `null` is a cleared profile.
+  z.object({
+    ...envelope,
+    type: z.literal('slave.profile_changed'),
+    payload: z.object({
+      target: z.enum(['slave', 'template', 'company_slave']),
+      targetId: z.string().min(1),
+      sha256: z.string().min(1).nullable(),
+      /** WHO, by name -- `answerQuestion`'s `answeredBy` precedent, not the envelope's `actor`,
+       *  which is the three-way category (`human` for every write of this event, since spec §1
+       *  forbids model output from touching a profile at all). */
+      actor: z.string().min(1),
+    }),
+  }),
+  // M37 t3: `setRuntimeRoles` changed the set the scheduler, the review/planning staffing queries
+  // and message role-addressing all match on. The whole list rather than a hash: it is short, and
+  // an operator reading "why did nothing get dispatched to Maya" needs to SEE it. An empty array is
+  // a real value -- the parked, undispatchable state (spec §7).
+  z.object({
+    ...envelope,
+    type: z.literal('slave.runtime_roles_changed'),
+    payload: z.object({
+      slaveId: z.string().min(1),
+      roles: z.array(z.string().min(1)),
+      /** WHO, by name -- see `slave.profile_changed`'s own field. */
+      actor: z.string().min(1),
+    }),
+  }),
   z.object({
     ...envelope,
     type: z.literal('guardrail.tripped'),

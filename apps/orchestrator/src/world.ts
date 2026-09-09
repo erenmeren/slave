@@ -124,7 +124,9 @@ async function loadTaskRows(
 
 interface SlaveWorldRow {
   readonly id: string
-  readonly role: string
+  /** M37 §5: what the scheduler matches `Task.requiredRole` against. `Slave.role` is the profile's
+   *  title and is deliberately NOT selected here -- nothing in a scheduling decision reads it. */
+  readonly runtimeRoles: readonly string[]
   readonly runs: readonly { readonly id: string }[]
 }
 
@@ -141,7 +143,7 @@ async function loadSlaveRows(
     where: { team: { workspaceId } },
     select: {
       id: true,
-      role: true,
+      runtimeRoles: true,
       runs: { where: { status: { in: [...NON_TERMINAL_RUN_STATUSES] } }, select: { id: true }, take: 1 },
     },
   })
@@ -326,7 +328,7 @@ export async function loadWorld(workspaceId: WorkspaceId): Promise<LoadedWorld> 
 
   const slaves: SchedulableSlave[] = slaveRows.map((row) => ({
     id: slaveId(row.id),
-    role: row.role,
+    runtimeRoles: row.runtimeRoles,
     busy: row.runs.length > 0,
   }))
 

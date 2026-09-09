@@ -59,14 +59,21 @@ async function seed(goal: string | null, goalSetByUserId?: string | null): Promi
   return { workspaceId: workspace.id, teamId: team.id, repoPath }
 }
 
+/**
+ * A slave staffable as a manager. Its TITLE is deliberately not "manager" (M37 t3): staffing
+ * matches `runtimeRoles`, so a fixture where the two agreed would pass whichever column
+ * `dispatchPlanning` happened to read.
+ */
 async function addManager(teamId: string, name = 'Atlas'): Promise<string> {
-  const slave = await prisma.slave.create({ data: { teamId, name, role: 'manager' } })
+  const slave = await prisma.slave.create({
+    data: { teamId, name, role: 'Engineering Lead', runtimeRoles: ['manager'] },
+  })
   return slave.id
 }
 
 /** A `backend` slave -- the role every task the `plan-graph` fixture describes requires. */
 async function addBackendSlave(teamId: string, name = 'Beryl'): Promise<string> {
-  const slave = await prisma.slave.create({ data: { teamId, name, role: 'backend' } })
+  const slave = await prisma.slave.create({ data: { teamId, name, role: 'backend', runtimeRoles: ['backend'] } })
   return slave.id
 }
 
@@ -223,6 +230,26 @@ describe('dispatchPlanning', () => {
     expect(noPlannerEvents).toHaveLength(1)
     expect(noPlannerEvents[0]?.taskId).toBeNull()
   })
+
+  // M37 t3: the counterpart of `addManager` above. A slave whose title is literally "manager" but
+  // whose runtime role set is empty has been taken out of rotation by an operator and must not be
+  // staffed -- the escalation fires exactly as it does for a workspace with no manager at all.
+  it('never staffs a slave titled manager whose runtime role set is empty', async (): Promise<void> => {
+    const fixture = await seed('Ship the checkout redesign')
+    repos.push(fixture.repoPath)
+    await prisma.slave.create({
+      data: { teamId: fixture.teamId, name: 'Parked', role: 'manager', runtimeRoles: [] },
+    })
+
+    expect(await dispatchPlanning(depsFor(fixture.workspaceId))).toBeNull()
+    expect(await prisma.slaveRun.count({ where: { kind: 'planning' } })).toBe(0)
+    const guardrails = await prisma.executionEvent.findMany({
+      where: { workspaceId: fixture.workspaceId, type: 'guardrail_tripped' },
+    })
+    expect(
+      guardrails.filter((event) => (event.payload as { guardrail?: string }).guardrail === 'no_planner'),
+    ).toHaveLength(1)
+  }, 60_000)
 
   it('(f) starts nothing once two planning runs newer than the goal have failed', async (): Promise<void> => {
     const fixture = await seed('Ship the checkout redesign')

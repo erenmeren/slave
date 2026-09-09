@@ -375,7 +375,7 @@ try {
   }
   const budgetedTeam = await prisma.team.create({ data: { workspaceId: budgeted.id, name: 'Gate Team' } })
   await prisma.slave.create({
-    data: { teamId: budgetedTeam.id, name: CURSOR_WORKER, role: 'backend', model: CURSOR_MODEL, provider: 'cursor' },
+    data: { teamId: budgetedTeam.id, name: CURSOR_WORKER, role: 'backend', runtimeRoles: ['backend'], model: CURSOR_MODEL, provider: 'cursor' },
   })
   const budgetedTask = await prisma.task.create({
     data: {
@@ -466,10 +466,10 @@ try {
   // so a worker with a null model would fall through to the workspace default and both would
   // resolve to `claude_code` -- the seam this stage exists to prove would be invisible.
   const claudeSlave = await prisma.slave.create({
-    data: { teamId: team.id, name: CLAUDE_WORKER, role: 'backend', model: CLAUDE_MODEL, provider: 'claude_code' },
+    data: { teamId: team.id, name: CLAUDE_WORKER, role: 'backend', runtimeRoles: ['backend'], model: CLAUDE_MODEL, provider: 'claude_code' },
   })
   const cursorSlave = await prisma.slave.create({
-    data: { teamId: team.id, name: CURSOR_WORKER, role: 'backend', model: CURSOR_MODEL, provider: 'cursor' },
+    data: { teamId: team.id, name: CURSOR_WORKER, role: 'backend', runtimeRoles: ['backend'], model: CURSOR_MODEL, provider: 'cursor' },
   })
   // Two tasks, one per worker, both `maxAttempts: 1` for the spend reason stage 4's task gives.
   for (const suffix of ['A', 'B']) {

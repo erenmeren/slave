@@ -577,7 +577,7 @@ try {
   teamId = (await prisma.team.create({ data: { workspaceId, name: 'Engineering' } })).id
   slaveId = (
     await prisma.slave.create({
-      data: { teamId, name: WORKER_NAME, role: 'backend', provider: WORKER_PROVIDER, model: WORKER_MODEL },
+      data: { teamId, name: WORKER_NAME, role: 'backend', runtimeRoles: ['backend'], provider: WORKER_PROVIDER, model: WORKER_MODEL },
     })
   ).id
   taskId = (

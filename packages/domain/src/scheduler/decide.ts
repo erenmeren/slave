@@ -16,7 +16,15 @@ export interface SchedulableTask {
 
 export interface SchedulableSlave {
   readonly id: SlaveId
-  readonly role: string
+  /**
+   * The roles this slave may be DISPATCHED as (M37 §5) -- not `Slave.role`, which since M37 is
+   * the profile's title and says nothing about what the scheduler may put in front of it.
+   *
+   * An empty set is a real state and means "cannot be dispatched": `.includes` on it is false for
+   * every `requiredRole`, including the empty string, so a parked worker is never a candidate
+   * without a second guard saying so.
+   */
+  readonly runtimeRoles: readonly string[]
   readonly busy: boolean
 }
 
@@ -60,7 +68,7 @@ export function decide(world: World): readonly Command[] {
   for (const candidate of candidates) {
     if (slots <= 0) break
 
-    const slave = [...availableSlaves.values()].find((a) => a.role === candidate.requiredRole)
+    const slave = [...availableSlaves.values()].find((a) => a.runtimeRoles.includes(candidate.requiredRole))
     if (slave === undefined) continue
 
     commands.push({ kind: 'start_run', taskId: candidate.id, slaveId: slave.id })

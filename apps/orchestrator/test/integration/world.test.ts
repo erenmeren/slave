@@ -1,4 +1,4 @@
-import { slaveId, taskId, workspaceId } from '@slave-of-ai/domain'
+import { decide, slaveId, taskId, workspaceId } from '@slave-of-ai/domain'
 import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { loadWorld } from '../../src/world.js'
@@ -48,13 +48,13 @@ async function seedFixture(): Promise<Fixture> {
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
 
   const slaveWithRun = await prisma.slave.create({
-    data: { teamId: team.id, name: 'Alex', role: 'backend' },
+    data: { teamId: team.id, name: 'Alex', role: 'backend', runtimeRoles: ['backend'] },
   })
   const idleSlave = await prisma.slave.create({
-    data: { teamId: team.id, name: 'Blair', role: 'backend' },
+    data: { teamId: team.id, name: 'Blair', role: 'backend', runtimeRoles: ['backend'] },
   })
   const retiredRunSlave = await prisma.slave.create({
-    data: { teamId: team.id, name: 'Casey', role: 'backend' },
+    data: { teamId: team.id, name: 'Casey', role: 'backend', runtimeRoles: ['backend'] },
   })
 
   const doneDep = await prisma.task.create({
@@ -204,6 +204,32 @@ describe('loadWorld', () => {
     expect(world.slaves.find((a) => a.id === slaveId(fixture.retiredRunSlaveId))?.busy).toBe(false)
   })
 
+  // M37 t3: the world carries `runtimeRoles` and not `Slave.role` -- `decide()` matches
+  // `Task.requiredRole` against the set, so a title that happens to read "backend" must not be
+  // able to stand in for a role an operator never granted, and a set that names the role must work
+  // whatever the title says.
+  it('carries each slave\'s runtimeRoles, not its title', async (): Promise<void> => {
+    const team = await prisma.team.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })
+    const titled = await prisma.slave.create({
+      data: { teamId: team.id, name: 'Senior', role: 'backend', runtimeRoles: ['reviewer'] },
+    })
+    const parked = await prisma.slave.create({
+      data: { teamId: team.id, name: 'Parked', role: 'backend', runtimeRoles: [] },
+    })
+
+    const { world } = await loadWorld(workspaceId(fixture.workspaceId))
+
+    expect(world.slaves.find((a) => a.id === slaveId(titled.id))?.runtimeRoles).toEqual(['reviewer'])
+    expect(world.slaves.find((a) => a.id === slaveId(parked.id))?.runtimeRoles).toEqual([])
+    // And the scheduler acts on it: neither of the two is a candidate for a `backend` task, even
+    // though `Slave.role` says "backend" on both.
+    const commands = decide({
+      ...world,
+      slaves: world.slaves.filter((a) => a.id === slaveId(titled.id) || a.id === slaveId(parked.id)),
+    })
+    expect(commands).toEqual([])
+  })
+
   it('reports stats.emergencyStopped from Workspace.haltedReason, never a hardcoded value', async (): Promise<void> => {
     const { world: unhalted } = await loadWorld(workspaceId(fixture.workspaceId))
     expect(unhalted.stats.emergencyStopped).toBe(false)
@@ -252,7 +278,7 @@ async function seedRuns(specs: readonly RunSpec[]): Promise<string> {
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
   const slave = await prisma.slave.create({
-    data: { teamId: team.id, name: 'Dana', role: 'backend' },
+    data: { teamId: team.id, name: 'Dana', role: 'backend', runtimeRoles: ['backend'] },
   })
 
   for (const [index, spec] of specs.entries()) {
@@ -443,7 +469,7 @@ describe('loadWorld stats.activeRuns and stats.spentUsd', () => {
       },
     })
     const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-    const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Planner', role: 'planner' } })
+    const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Planner', role: 'planner', runtimeRoles: ['planner'] } })
     await prisma.slaveRun.create({
       data: { slaveId: slave.id, kind: 'planning', status: 'working', costUsd: 2.5 },
     })
@@ -482,7 +508,7 @@ describe('loadWorld stats.globalActiveRuns', () => {
       data: { workspaceId: otherWorkspace.id, name: 'Other Team' },
     })
     const otherSlave = await prisma.slave.create({
-      data: { teamId: otherTeam.id, name: 'Other Slave', role: 'backend' },
+      data: { teamId: otherTeam.id, name: 'Other Slave', role: 'backend', runtimeRoles: ['backend'] },
     })
     const otherTask = await prisma.task.create({
       data: {

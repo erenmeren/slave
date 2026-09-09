@@ -722,7 +722,7 @@ try {
   }
   const budgetedTeam = await prisma.team.create({ data: { workspaceId: budgeted.id, name: 'Gate Team' } })
   await prisma.slave.create({
-    data: { teamId: budgetedTeam.id, name: CURSOR_WORKER, role: 'backend', model: CURSOR_MODEL, provider: 'cursor' },
+    data: { teamId: budgetedTeam.id, name: CURSOR_WORKER, role: 'backend', runtimeRoles: ['backend'], model: CURSOR_MODEL, provider: 'cursor' },
   })
   const budgetedTask = await prisma.task.create({
     data: {
@@ -928,10 +928,10 @@ try {
   // (now `cursor`, thanks to stage 1) and both runs would land on the same runtime -- which is the
   // one thing this stage cannot afford.
   const claudeSlave = await prisma.slave.create({
-    data: { teamId: team.id, name: CLAUDE_WORKER, role: 'backend', model: CLAUDE_MODEL, provider: 'claude_code' },
+    data: { teamId: team.id, name: CLAUDE_WORKER, role: 'backend', runtimeRoles: ['backend'], model: CLAUDE_MODEL, provider: 'claude_code' },
   })
   const cursorSlave = await prisma.slave.create({
-    data: { teamId: team.id, name: CURSOR_WORKER, role: 'backend', model: CURSOR_MODEL, provider: 'cursor' },
+    data: { teamId: team.id, name: CURSOR_WORKER, role: 'backend', runtimeRoles: ['backend'], model: CURSOR_MODEL, provider: 'cursor' },
   })
   for (const suffix of ['A', 'B']) {
     await prisma.task.create({
@@ -1586,7 +1586,7 @@ try {
   // pass is what claims it, and `concludeFailedResume` is what has to count the attempt.
   // ============================================================================================
   const attemptSlave = await prisma.slave.create({
-    data: { teamId: team.id, name: ATTEMPT_WORKER, role: 'stage5', model: CLAUDE_MODEL, provider: 'claude_code' },
+    data: { teamId: team.id, name: ATTEMPT_WORKER, role: 'stage5', runtimeRoles: ['stage5'], model: CLAUDE_MODEL, provider: 'claude_code' },
   })
   const attemptTask = await prisma.task.create({
     data: {

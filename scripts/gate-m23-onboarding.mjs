@@ -381,9 +381,9 @@ try {
   let taskB
   {
     team = await prisma.team.create({ data: { workspaceId, name: 'Gate Team' } })
-    worker = await prisma.slave.create({ data: { teamId: team.id, name: 'Worker', role: 'backend' } })
-    reviewer = await prisma.slave.create({ data: { teamId: team.id, name: 'Reviewer', role: 'reviewer' } })
-    idle = await prisma.slave.create({ data: { teamId: team.id, name: 'Idle', role: 'analyst' } })
+    worker = await prisma.slave.create({ data: { teamId: team.id, name: 'Worker', role: 'backend', runtimeRoles: ['backend'] } })
+    reviewer = await prisma.slave.create({ data: { teamId: team.id, name: 'Reviewer', role: 'reviewer', runtimeRoles: ['reviewer'] } })
+    idle = await prisma.slave.create({ data: { teamId: team.id, name: 'Idle', role: 'analyst', runtimeRoles: ['analyst'] } })
     const workspaceRow = await prisma.workspace.findUniqueOrThrow({ where: { id: workspaceId } })
     taskA = await prisma.task.create({
       data: {

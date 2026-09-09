@@ -275,7 +275,7 @@ function stillPendingQuestion(waitingRunIds: string[]): {
   }
 }
 
-/** Every message addressed to `slaveId` -- directly, or by every role it currently holds -- in
+/** Every message addressed to `slaveId` -- directly, or by every RUNTIME role it currently holds -- in
  *  its own workspace, oldest first (thread order, not wall-clock order: see `seq` on the schema).
  *  Never messages this slave SENT; only ones addressed TO it. */
 export async function listMessagesForSlave(
@@ -296,7 +296,12 @@ export async function listMessagesForSlave(
       // `recipientRole: slave.role` alone does not know who sent a row, only who it is addressed
       // to (fix round 1, Important finding 2).
       slaveId: { not: slaveId },
-      OR: [{ recipientSlaveId: slaveId }, { recipientRole: slave.role }],
+      // Role addressing is `runtimeRoles`, not `role` (M37 §5): `Slave.role` is the profile's
+      // title, and addressing "the reviewer" has to reach whoever may actually be dispatched as
+      // one. `in` rather than an equality, because a slave holds a SET of them -- and a slave with
+      // an empty set is reachable by name only, which is the same "cannot be dispatched" state the
+      // scheduler reads it as.
+      OR: [{ recipientSlaveId: slaveId }, { recipientRole: { in: [...slave.runtimeRoles] } }],
       ...(filter.unreadOnly === true ? { readAt: null } : {}),
       ...(filter.unansweredOnly === true ? stillPendingQuestion(waitingRunIds) : {}),
     },
@@ -329,7 +334,9 @@ export async function markMessageRead(
   }
 
   const addressedDirectly = message.recipientSlaveId === slaveId
-  const addressedByRole = message.recipientRole !== null && message.recipientRole === slave.role
+  // `runtimeRoles`, not `role` (M37 §5) -- and the same set `listMessagesForSlave` builds this
+  // slave's inbox from, so a message it was shown is a message it may mark read.
+  const addressedByRole = message.recipientRole !== null && slave.runtimeRoles.includes(message.recipientRole)
   if (!addressedDirectly && !addressedByRole) {
     return err({ kind: 'not_message_recipient', messageId, slaveId })
   }

@@ -56,7 +56,7 @@ async function seed(): Promise<Fixture> {
   await prisma.providerConfiguration.create({ data: { workspaceId: workspace.id, kind: 'claude_code', settings: {} } })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
   const slave = await prisma.slave.create({
-    data: { teamId: team.id, name: 'Alex', role: 'backend' },
+    data: { teamId: team.id, name: 'Alex', role: 'backend', runtimeRoles: ['backend'] },
   })
   const task = await prisma.task.create({
     data: {
@@ -115,10 +115,15 @@ async function seedReviewingTask(fixture: Fixture, reviewFixture = 'review-appro
   }
 }
 
-/** Adds a `reviewer`-role slave to the fixture's one team, idle and ready to be picked up. */
+/**
+ * Adds a slave staffable as a reviewer to the fixture's one team, idle and ready to be picked up.
+ *
+ * Its TITLE is deliberately not "reviewer" (M37 t3): staffing matches `runtimeRoles`, so a fixture
+ * where the two agreed would pass whichever column `dispatchReview` happened to read.
+ */
 async function addReviewer(): Promise<void> {
   const team = await prisma.team.findFirstOrThrow()
-  await prisma.slave.create({ data: { teamId: team.id, name: 'Riley', role: 'reviewer' } })
+  await prisma.slave.create({ data: { teamId: team.id, name: 'Riley', role: 'Senior Engineer', runtimeRoles: ['reviewer'] } })
 }
 
 async function eventsOf(
@@ -152,7 +157,7 @@ describe('dispatchReviews', () => {
   it('starts a review run for a reviewing task with an idle reviewer', async (): Promise<void> => {
     const reviewDeps = await seedReviewingTask(fixture)
     const team = await prisma.team.findFirstOrThrow()
-    await prisma.slave.create({ data: { teamId: team.id, name: 'Riley', role: 'reviewer' } })
+    await prisma.slave.create({ data: { teamId: team.id, name: 'Riley', role: 'Senior Engineer', runtimeRoles: ['reviewer'] } })
 
     const started = await dispatchReviews(reviewDeps)
 
@@ -178,7 +183,7 @@ describe('dispatchReviews', () => {
     // reached review rather than that the review itself was refused.
     const reviewDeps = await seedReviewingTask(fixture)
     const team = await prisma.team.findFirstOrThrow()
-    const reviewer = await prisma.slave.create({ data: { teamId: team.id, name: 'Riley', role: 'reviewer' } })
+    const reviewer = await prisma.slave.create({ data: { teamId: team.id, name: 'Riley', role: 'Senior Engineer', runtimeRoles: ['reviewer'] } })
     await prisma.slave.update({ where: { id: reviewer.id }, data: { model: 'whatever', provider: 'cursor' } })
     await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { budgetUsd: 20 } })
 
@@ -199,7 +204,7 @@ describe('dispatchReviews', () => {
   it('starts nothing a second time while the review run it started is still live', async (): Promise<void> => {
     const reviewDeps = await seedReviewingTask(fixture)
     const team = await prisma.team.findFirstOrThrow()
-    await prisma.slave.create({ data: { teamId: team.id, name: 'Riley', role: 'reviewer' } })
+    await prisma.slave.create({ data: { teamId: team.id, name: 'Riley', role: 'Senior Engineer', runtimeRoles: ['reviewer'] } })
 
     const first = await dispatchReviews(reviewDeps)
     expect(first).toHaveLength(1)
@@ -251,11 +256,32 @@ describe('dispatchReviews', () => {
     expect(noReviewerEvents).toHaveLength(1)
   })
 
+  // M37 t3, the other half of the staffing change: a slave whose TITLE is literally "reviewer"
+  // but whose runtime role set is empty is not a candidate. Before M37 this row was the only kind
+  // of reviewer there was; now it is a parked worker, and staffing it would put a run in front of
+  // somebody an operator has deliberately taken out of rotation.
+  it('never staffs a slave titled reviewer whose runtime role set is empty', async (): Promise<void> => {
+    const reviewDeps = await seedReviewingTask(fixture)
+    const team = await prisma.team.findFirstOrThrow()
+    await prisma.slave.create({ data: { teamId: team.id, name: 'Parked', role: 'reviewer', runtimeRoles: [] } })
+
+    const started = await dispatchReviews(reviewDeps)
+
+    expect(started).toEqual([])
+    expect(await prisma.slaveRun.count({ where: { kind: 'review' } })).toBe(0)
+    const guardrails = await prisma.executionEvent.findMany({
+      where: { workspaceId: fixture.workspaceId, type: 'guardrail_tripped' },
+    })
+    expect(
+      guardrails.filter((event) => (event.payload as { guardrail?: string }).guardrail === 'no_reviewer'),
+    ).toHaveLength(1)
+  }, 60_000)
+
   it('starts nothing once two review runs newer than the implementation run have failed', async (): Promise<void> => {
     const reviewDeps = await seedReviewingTask(fixture)
     const team = await prisma.team.findFirstOrThrow()
-    await prisma.slave.create({ data: { teamId: team.id, name: 'Riley', role: 'reviewer' } })
-    const reviewer = await prisma.slave.findFirstOrThrow({ where: { role: 'reviewer' } })
+    await prisma.slave.create({ data: { teamId: team.id, name: 'Riley', role: 'Senior Engineer', runtimeRoles: ['reviewer'] } })
+    const reviewer = await prisma.slave.findFirstOrThrow({ where: { runtimeRoles: { has: 'reviewer' } } })
 
     const latestImpl = await prisma.slaveRun.findFirstOrThrow({ where: { kind: 'implementation' } })
     const after = (offsetMs: number): Date => new Date(latestImpl.startedAt.getTime() + offsetMs)
@@ -291,7 +317,7 @@ describe('dispatchReviews', () => {
   it('concludes the run failed instead of throwing when the diff itself cannot be produced', async (): Promise<void> => {
     const reviewDeps = await seedReviewingTask(fixture)
     const team = await prisma.team.findFirstOrThrow()
-    await prisma.slave.create({ data: { teamId: team.id, name: 'Riley', role: 'reviewer' } })
+    await prisma.slave.create({ data: { teamId: team.id, name: 'Riley', role: 'Senior Engineer', runtimeRoles: ['reviewer'] } })
     // A branch recorded on the task but gone from git itself -- the step-2 null check cannot catch
     // it, so the dispatch reaches `git diff` and the diff fails.
     await prisma.task.update({ where: { id: fixture.taskId }, data: { branch: 'no-such-branch' } })

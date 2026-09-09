@@ -389,7 +389,7 @@ try {
   workspaceId = workspace.id
   const team = await prisma.team.create({ data: { workspaceId, name: 'Engineering' } })
   const slave = await prisma.slave.create({
-    data: { teamId: team.id, name: WORKER_NAME, role: 'backend', provider: WORKER_PROVIDER, model: WORKER_MODEL },
+    data: { teamId: team.id, name: WORKER_NAME, role: 'backend', runtimeRoles: ['backend'], provider: WORKER_PROVIDER, model: WORKER_MODEL },
   })
   // `gate-m18-skill-and-teeth.mjs:504`'s seed, verbatim: 'run tests' resolves to `Bash` for
   // `claude_code` (`CAPABILITY_TOOLS`), which is exactly the tool the task below is certain to try.

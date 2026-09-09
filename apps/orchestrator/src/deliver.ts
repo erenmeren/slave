@@ -1,5 +1,6 @@
 import { requestResume } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
+import { displayName } from '@slave-of-ai/domain'
 import { WAITING_FOR_ANSWER } from './ask.js'
 
 const CLAIM_TIMEOUT_MS = 5_000
@@ -243,5 +244,8 @@ async function claimTheAnswer(questionId: string): Promise<ClaimedAnswer | null>
 async function describeAnswerer(answer: { readonly slaveId: string; readonly actor: string }): Promise<string> {
   if (answer.actor === 'human') return 'the operator'
   const slave = await prisma.slave.findUnique({ where: { id: answer.slaveId }, select: { name: true, role: true } })
-  return slave === null ? 'another slave' : `${slave.name} (${slave.role})`
+  // `displayName` (`@slave-of-ai/domain`), not a local `${name} (${role})`: M37 §3 made that
+  // formatting one function so the inbox, the ask roster, delivery and the CLI cannot drift. The
+  // TITLE is right here -- the answer's envelope introduces a person, not a dispatch target.
+  return slave === null ? 'another slave' : displayName(slave)
 }

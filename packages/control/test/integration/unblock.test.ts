@@ -62,7 +62,7 @@ function schedulable(task: { readonly id: string; readonly status: string }): bo
   }
   const world: World = {
     tasks: [schedulableTask],
-    slaves: [{ id: slaveId('alex'), role: 'backend', busy: false }],
+    slaves: [{ id: slaveId('alex'), runtimeRoles: ['backend'], busy: false }],
     limits: DEFAULT_GUARDRAIL_LIMITS,
     stats: { activeRuns: 0, globalActiveRuns: 0, spentUsd: 0, consecutiveFailures: 0, emergencyStopped: false },
   }

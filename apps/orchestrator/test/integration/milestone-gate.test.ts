@@ -93,7 +93,7 @@ async function seed(options: {
   // starting the run under test.
   await prisma.providerConfiguration.create({ data: { workspaceId: workspace.id, kind: 'claude_code', settings: {} } })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
+  await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend', runtimeRoles: ['backend'] } })
   const task = await prisma.task.create({
     data: {
       workspaceId: workspace.id,
@@ -123,7 +123,7 @@ function expectOrdered(types: readonly DomainEventType[], earlier: DomainEventTy
 /** Adds a `reviewer`-role slave to the fixture's one team, idle and ready to be picked up. */
 async function addReviewer(): Promise<void> {
   const team = await prisma.team.findFirstOrThrow()
-  await prisma.slave.create({ data: { teamId: team.id, name: 'Riley', role: 'reviewer' } })
+  await prisma.slave.create({ data: { teamId: team.id, name: 'Riley', role: 'reviewer', runtimeRoles: ['reviewer'] } })
 }
 
 describe('the M3/M8a milestone gate', () => {
