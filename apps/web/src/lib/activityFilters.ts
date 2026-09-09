@@ -75,6 +75,16 @@ export const TYPES_BY_KIND = {
     // written by a run (spec §1), and neither carries a taskId.
     'slave.profile_changed',
     'slave.runtime_roles_changed',
+    // M38 t1: the Supervisor's five events. This chip, for the same reason `org.changed` sits
+    // here: a Supervisor decision is something that happened TO the workspace's configuration and
+    // pipeline, not a run outcome, and none of the five carries a runId. Not `guardrails` either
+    // -- the Supervisor is what an operator reaches for AFTER a guardrail trip, and a user
+    // filtering to trips must not have the decisions about them mixed in.
+    'supervisor.decided',
+    'supervisor.proposed',
+    'supervisor.applied',
+    'supervisor.resolved',
+    'supervisor.failed',
   ],
 } as const satisfies Record<ActivityKind, readonly DomainEventType[]>
 

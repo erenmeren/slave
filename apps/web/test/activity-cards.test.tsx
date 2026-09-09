@@ -100,6 +100,28 @@ const PAYLOAD_BY_TYPE: Record<DomainEventType, Record<string, unknown>> = {
     actor: 'eren',
   },
   'slave.runtime_roles_changed': { slaveId: 'ag-1', roles: ['backend', 'reviewer'], actor: 'eren' },
+  'supervisor.decided': {
+    decisionId: 'sd-0123456789',
+    situationKind: 'review_cap_blocked',
+    subjectId: 't1',
+    tier: 'applied',
+    decidedBy: 'model',
+    action: { kind: 'unblock_task' },
+  },
+  'supervisor.proposed': {
+    decisionId: 'sd-0123456789',
+    situationKind: 'no_reviewer',
+    subjectId: 'reviewer',
+    action: { kind: 'set_runtime_roles' },
+    expiresAt: '2026-08-23T10:00:00.000Z',
+  },
+  'supervisor.applied': { decisionId: 'sd-0123456789', action: { kind: 'unblock_task' } },
+  'supervisor.resolved': { decisionId: 'sd-0123456789', outcome: 'approved', reason: null },
+  'supervisor.failed': {
+    decisionId: 'sd-0123456789',
+    action: { kind: 'mark_task_failed' },
+    reason: 'task_not_failable',
+  },
 }
 
 function fixtureFor(type: DomainEventType): ActivityEventRow {

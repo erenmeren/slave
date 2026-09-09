@@ -433,6 +433,109 @@ describe('parseExecutionEvent', () => {
     expect(result.ok).toBe(false)
   })
 
+  // M38 t1: the five events the Supervisor's control verbs write (spec §2). Every one is
+  // appended with `actor: 'system'` -- the envelope enum has no `supervisor` member (spec E4).
+  it('accepts a supervisor.decided event', () => {
+    const result = parseExecutionEvent({
+      ...BASE,
+      type: 'supervisor.decided',
+      taskId: 'TASK-1',
+      payload: {
+        decisionId: 'd-1',
+        situationKind: 'review_cap_blocked',
+        subjectId: 'TASK-1',
+        tier: 'applied',
+        decidedBy: 'model',
+        action: { kind: 'unblock_task' },
+      },
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok && result.value.type === 'supervisor.decided') {
+      expect(result.value.payload.action.kind).toBe('unblock_task')
+    }
+  })
+
+  it('rejects a supervisor.decided event naming a situation kind or action the domain has no rule for', () => {
+    const base = {
+      ...BASE,
+      type: 'supervisor.decided',
+      payload: {
+        decisionId: 'd-1',
+        situationKind: 'review_cap_blocked',
+        subjectId: 'TASK-1',
+        tier: 'applied',
+        decidedBy: 'model',
+        action: { kind: 'unblock_task' },
+      },
+    }
+    expect(parseExecutionEvent({ ...base, payload: { ...base.payload, situationKind: 'invented' } }).ok).toBe(false)
+    expect(parseExecutionEvent({ ...base, payload: { ...base.payload, action: { kind: 'rm_rf' } } }).ok).toBe(false)
+    expect(parseExecutionEvent({ ...base, payload: { ...base.payload, decidedBy: 'vibes' } }).ok).toBe(false)
+    expect(parseExecutionEvent({ ...base, payload: { ...base.payload, decisionId: '' } }).ok).toBe(false)
+  })
+
+  it('accepts a supervisor.proposed event with its expiry', () => {
+    const result = parseExecutionEvent({
+      ...BASE,
+      type: 'supervisor.proposed',
+      payload: {
+        decisionId: 'd-1',
+        situationKind: 'no_reviewer',
+        subjectId: 'reviewer',
+        action: { kind: 'set_runtime_roles' },
+        expiresAt: '2026-09-10T17:01:00.000Z',
+      },
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok && result.value.type === 'supervisor.proposed') {
+      expect(result.value.payload.expiresAt).toBe('2026-09-10T17:01:00.000Z')
+    }
+  })
+
+  it('accepts a supervisor.applied event', () => {
+    const result = parseExecutionEvent({
+      ...BASE,
+      type: 'supervisor.applied',
+      payload: { decisionId: 'd-1', action: { kind: 'nudge_answer' } },
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.value.type).toBe('supervisor.applied')
+  })
+
+  it.each([['approved'], ['rejected'], ['expired']])('accepts a supervisor.resolved event with outcome %s', (outcome) => {
+    const result = parseExecutionEvent({
+      ...BASE,
+      type: 'supervisor.resolved',
+      actor: 'human',
+      payload: { decisionId: 'd-1', outcome, reason: null },
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok && result.value.type === 'supervisor.resolved') {
+      expect(result.value.payload.reason).toBeNull()
+    }
+  })
+
+  it('rejects a supervisor.resolved event with an outcome the verbs never write', () => {
+    const result = parseExecutionEvent({
+      ...BASE,
+      type: 'supervisor.resolved',
+      payload: { decisionId: 'd-1', outcome: 'ignored', reason: null },
+    })
+    expect(result.ok).toBe(false)
+  })
+
+  it('accepts a supervisor.failed event carrying the refusal that stopped it', () => {
+    const result = parseExecutionEvent({
+      ...BASE,
+      type: 'supervisor.failed',
+      payload: { decisionId: 'd-1', action: { kind: 'mark_task_failed' }, reason: 'task_not_failable' },
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok && result.value.type === 'supervisor.failed') {
+      expect(result.value.payload.reason).toBe('task_not_failable')
+    }
+  })
+
   it('rejects an empty workspaceId', () => {
     const result = parseExecutionEvent({
       ...BASE,

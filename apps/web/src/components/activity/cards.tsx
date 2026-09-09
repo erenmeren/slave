@@ -689,6 +689,109 @@ function SlaveMessageSentCard(props: ActivityCardProps): ReactElement {
   )
 }
 
+// ---- supervisor.* (schema.ts, M38 t1) ---------------------------------------------------------
+// Minimal but honest: M38 Task 5 owns the Supervisor's real timeline treatment, alongside the
+// panel these cards will link into. Until then each body renders exactly what its own payload
+// carries -- the decision it belongs to, the action, and the outcome or reason -- so the registry
+// is complete and the timeline tells the truth in the commits before Task 5 lands.
+
+/** The first 8 characters of a decision id: enough to tie a run of supervisor.* rows together by
+ *  eye, short enough not to swamp the line. */
+function DecisionRef({ id }: { readonly id: string }): ReactElement {
+  return (
+    <span data-testid="supervisor-decision" className="font-mono">
+      {id.slice(0, 8)}
+    </span>
+  )
+}
+
+function SupervisorDecidedCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as {
+    decisionId: string
+    situationKind: string
+    subjectId: string
+    tier: string
+    decidedBy: string
+    action: { kind: string }
+  }
+  return (
+    <ActivityCard {...props}>
+      <Transition tone="idle" label="supervisor decided">
+        <span data-testid="supervisor-situation">{payload.situationKind}</span>
+        {' \u2192 '}
+        <span data-testid="supervisor-action">{payload.action.kind}</span>
+        {` (${payload.tier}, by ${payload.decidedBy}) \u00b7 `}
+        <DecisionRef id={payload.decisionId} />
+      </Transition>
+    </ActivityCard>
+  )
+}
+
+function SupervisorProposedCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as {
+    decisionId: string
+    situationKind: string
+    subjectId: string
+    action: { kind: string }
+    expiresAt: string
+  }
+  return (
+    <ActivityCard {...props}>
+      <Transition tone="warn" label="supervisor proposed">
+        <span data-testid="supervisor-action">{payload.action.kind}</span>
+        {' for '}
+        <span data-testid="supervisor-situation">{payload.situationKind}</span>
+        {' \u00b7 awaiting a human \u00b7 '}
+        <DecisionRef id={payload.decisionId} />
+      </Transition>
+    </ActivityCard>
+  )
+}
+
+function SupervisorAppliedCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as { decisionId: string; action: { kind: string } }
+  return (
+    <ActivityCard {...props}>
+      <Transition tone="working" label="supervisor applied">
+        <span data-testid="supervisor-action">{payload.action.kind}</span>
+        {' \u00b7 '}
+        <DecisionRef id={payload.decisionId} />
+      </Transition>
+    </ActivityCard>
+  )
+}
+
+function SupervisorResolvedCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as {
+    decisionId: string
+    outcome: 'approved' | 'rejected' | 'expired'
+    reason: string | null
+  }
+  return (
+    <ActivityCard {...props}>
+      <Transition tone={payload.outcome === 'approved' ? 'idle' : 'warn'} label={`supervisor ${payload.outcome}`}>
+        <DecisionRef id={payload.decisionId} />
+        {payload.reason !== null && <span data-testid="supervisor-reason">{` \u00b7 ${payload.reason}`}</span>}
+      </Transition>
+    </ActivityCard>
+  )
+}
+
+function SupervisorFailedCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as { decisionId: string; action: { kind: string }; reason: string }
+  return (
+    <ActivityCard {...props}>
+      <Transition tone="danger" label="supervisor action failed">
+        <span data-testid="supervisor-action">{payload.action.kind}</span>
+        {' \u00b7 '}
+        <span data-testid="supervisor-reason">{payload.reason}</span>
+        {' \u00b7 '}
+        <DecisionRef id={payload.decisionId} />
+      </Transition>
+    </ActivityCard>
+  )
+}
+
 /**
  * One card component per `DomainEventType`. `satisfies` (not a type annotation) is load-bearing:
  * it keeps each entry's own component type while still failing the build the moment a type is
@@ -736,4 +839,9 @@ export const ACTIVITY_CARDS = {
   'org.changed': OrgChangedCard,
   'slave.profile_changed': SlaveProfileChangedCard,
   'slave.runtime_roles_changed': SlaveRuntimeRolesChangedCard,
+  'supervisor.decided': SupervisorDecidedCard,
+  'supervisor.proposed': SupervisorProposedCard,
+  'supervisor.applied': SupervisorAppliedCard,
+  'supervisor.resolved': SupervisorResolvedCard,
+  'supervisor.failed': SupervisorFailedCard,
 } satisfies Record<DomainEventType, (props: ActivityCardProps) => ReactElement>

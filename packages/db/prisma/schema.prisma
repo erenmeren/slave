@@ -83,6 +83,16 @@ model Workspace {
   /// workspace assigned by hand. SetNull: deleting the run must not touch the project.
   adoptedFromSimulationId String?
 
+  /// M38 section 1: a workspace may only NARROW the Supervisor, never widen it. `false` means
+  /// report only -- `recordDecision` refuses `supervisor_disabled` and nothing is ever applied or
+  /// proposed. Defaults to true: an existing project gets a Supervisor the moment this milestone
+  /// lands, which is the point of it.
+  supervisorEnabled Boolean @default(true)
+  /// The persona and standing rules prepended to the decision prompt (M38 section 2). Same shape
+  /// and same limits as M37's profiles: `PROFILE_MAX_CHARS` on write and `neutraliseMarkers` on
+  /// render. Null is the ordinary state -- the rules decide perfectly well without one.
+  supervisorProfile String?
+
   maxConcurrentRuns       Int    @default(3)
   /// The spend ceiling this workspace's budget guardrail enforces (spec §9.2). Nullable as of
   /// M12 Task 9, and the `@default(20)` deliberately STAYS: a workspace is budgeted unless an
@@ -111,6 +121,7 @@ model Workspace {
   teams                  Team[]
   providerConfigurations ProviderConfiguration[]
   tasks                  Task[]
+  supervisorDecisions    SupervisorDecision[]
 
   @@index([adoptedFromSimulationId])
 }
@@ -564,6 +575,97 @@ model RunContext {
   run SlaveRun @relation(fields: [runId], references: [id], onDelete: Cascade)
 }
 
+/// M38 section 2: one Supervisor decision -- the situation it was made on, the catalogue the rules
+/// offered, the index chosen, the action, and what became of it. The decision RECORD is the
+/// Supervisor's only output: every effect on the world goes through an existing control verb
+/// (spec section 1, "a decision is not work"), so this row plus its `supervisor.*` events are the
+/// whole audit trail.
+///
+/// `situation`, `candidates` and `action` are `Json` because they are domain shapes, not relations
+/// -- `situationSchema`, `candidateSchema` and `actionSchema` (`@slave-of-ai/domain`) validate them
+/// at read, the same way `RunContext.sections` is validated. Storing the catalogue as it was
+/// offered is what lets a human months later see the choice that was actually available, not the
+/// one today's rules would build.
+model SupervisorDecision {
+  id               String                   @id @default(uuid())
+  workspaceId      String
+  situationKind    SupervisorSituationKind
+  /// The second half of the situation key `(workspaceId, situationKind, subjectId)`: the task id,
+  /// the message id, the role name, or the workspace id -- which one depends on the kind.
+  subjectId        String
+  /// The `Situation` snapshot the decision was made on.
+  situation        Json
+  /// The `Candidate[]` the rules offered, tiers included.
+  candidates       Json
+  chosenIndex      Int
+  /// The chosen `Action` (kind + params).
+  action           Json
+  rationale        String
+  tier             SupervisorTier
+  status           SupervisorDecisionStatus
+  decidedBy        SupervisorDecider
+  /// What the decision call cost. null is UNMEASURED, the same rule as `SlaveRun.costUsd` -- an
+  /// unmeasured call is charged at `SUPERVISOR_PER_CALL_CAP_USD` when spend is summed, never at 0.
+  /// Always null for a `rules` decision, which makes no call at all.
+  modelCostUsd     Float?
+  /// The `refusalText` of the verb that refused an applied action (status `failed`).
+  failureReason    String?
+  createdAt        DateTime                 @default(now())
+  /// `pending` only: `createdAt + PENDING_TTL_MS`, after which `expirePendingDecisions` retires it.
+  expiresAt        DateTime?
+  /// When a `pending` decision left that state. Null for one still open AND for the `applied` and
+  /// `failed` rows that were never pending -- `filterFresh` cools those from `createdAt` instead.
+  resolvedAt       DateTime?
+  resolvedByUserId String?
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  /// The web panel's and the CLI's "recent decisions for this project", newest first.
+  @@index([workspaceId, createdAt])
+  /// The situation key: what `recordDecision` checks for an open decision or a live cooldown, and
+  /// what the world loader reads the recent-decisions window from.
+  @@index([workspaceId, situationKind, subjectId, createdAt])
+}
+
+/// The closed set of stuck situations the rules can see (`SITUATION_KINDS` in
+/// `packages/domain/src/supervisor/situations.ts`).
+enum SupervisorSituationKind {
+  no_reviewer
+  no_planner
+  review_cap_blocked
+  task_failed
+  task_blocked_human
+  waiting_stale
+  unanswerable_question
+  ready_unstaffed
+  done_not_integrated_stale
+  workspace_halted
+}
+
+/// What happens to a chosen action -- fixed in code by `tierOf`, never chosen by the model.
+enum SupervisorTier {
+  applied
+  proposed
+  escalated
+  noop
+}
+
+/// The life of a decision row. `pending` is the only OPEN state.
+enum SupervisorDecisionStatus {
+  applied
+  pending
+  approved
+  rejected
+  expired
+  failed
+}
+
+/// Who picked the candidate: the model, or `chooseByRules`.
+enum SupervisorDecider {
+  model
+  rules
+}
+
 model Artifact {
   id        String   @id @default(uuid())
   taskId    String
@@ -690,61 +792,72 @@ model Approval {
 }
 
 enum EventType {
-  task_created               @map("task.created")
-  task_started               @map("task.started")
-  task_done                  @map("task.done")
-  task_rework                @map("task.rework")
-  run_started                @map("run.started")
-  run_tool_call              @map("run.tool_call")
-  run_paused                 @map("run.paused")
-  run_resumed                @map("run.resumed")
-  run_resume_requested       @map("run.resume_requested")
-  slave_message_sent         @map("slave.message_sent")
+  task_created                @map("task.created")
+  task_started                @map("task.started")
+  task_done                   @map("task.done")
+  task_rework                 @map("task.rework")
+  run_started                 @map("run.started")
+  run_tool_call               @map("run.tool_call")
+  run_paused                  @map("run.paused")
+  run_resumed                 @map("run.resumed")
+  run_resume_requested        @map("run.resume_requested")
+  slave_message_sent          @map("slave.message_sent")
   /// M37 t3: `setProfile` wrote a slave's persona (slave targets only -- a template and a catalog
   /// slave have no workspace to log into); `setRuntimeRoles` changed the set the scheduler,
   /// review/planning staffing and message role-addressing all dispatch on.
-  slave_profile_changed      @map("slave.profile_changed")
+  slave_profile_changed       @map("slave.profile_changed")
   slave_runtime_roles_changed @map("slave.runtime_roles_changed")
-  guardrail_tripped          @map("guardrail.tripped")
-  task_verifying             @map("task.verifying")
-  task_verify_passed         @map("task.verify_passed")
-  task_verify_failed         @map("task.verify_failed")
-  task_failed                @map("task.failed")
-  run_output                 @map("run.output")
-  run_pause_requested        @map("run.pause_requested")
-  run_stopped                @map("run.stopped")
-  run_succeeded              @map("run.succeeded")
-  run_failed                 @map("run.failed")
-  run_tool_denied            @map("run.tool_denied")
-  task_dependency_added      @map("task.dependency_added")
-  task_dependency_removed    @map("task.dependency_removed")
-  task_review_started        @map("task.review_started")
-  task_review_approved       @map("task.review_approved")
-  task_review_rejected       @map("task.review_rejected")
-  task_merge_failed          @map("task.merge_failed")
-  workspace_goal_set         @map("workspace.goal_set")
-  workspace_plan_created     @map("workspace.plan_created")
-  workspace_company_assigned @map("workspace.company_assigned")
-  workspace_settings_changed @map("workspace.settings_changed")
+  guardrail_tripped           @map("guardrail.tripped")
+  task_verifying              @map("task.verifying")
+  task_verify_passed          @map("task.verify_passed")
+  task_verify_failed          @map("task.verify_failed")
+  task_failed                 @map("task.failed")
+  run_output                  @map("run.output")
+  run_pause_requested         @map("run.pause_requested")
+  run_stopped                 @map("run.stopped")
+  run_succeeded               @map("run.succeeded")
+  run_failed                  @map("run.failed")
+  run_tool_denied             @map("run.tool_denied")
+  task_dependency_added       @map("task.dependency_added")
+  task_dependency_removed     @map("task.dependency_removed")
+  task_review_started         @map("task.review_started")
+  task_review_approved        @map("task.review_approved")
+  task_review_rejected        @map("task.review_rejected")
+  task_merge_failed           @map("task.merge_failed")
+  workspace_goal_set          @map("workspace.goal_set")
+  workspace_plan_created      @map("workspace.plan_created")
+  workspace_company_assigned  @map("workspace.company_assigned")
+  workspace_settings_changed  @map("workspace.settings_changed")
   /// M23 A1: the first event a workspace ever logs, from `createWorkspace`.
-  workspace_created          @map("workspace.created")
+  workspace_created           @map("workspace.created")
   /// M27 §3: the project was archived / restored; the archive payload carries the footprint.
-  workspace_archived         @map("workspace.archived")
-  workspace_restored         @map("workspace.restored")
+  workspace_archived          @map("workspace.archived")
+  workspace_restored          @map("workspace.restored")
   /// M23 B2: `collectTaskWorktree` removed a terminal task's worktree -- aged out or by an
   /// operator's button.
-  task_worktree_collected    @map("task.worktree_collected")
+  task_worktree_collected     @map("task.worktree_collected")
   /// M23 D1: an operator edited the roster -- `org.ts`'s five control verbs (rename/re-role/
   /// delete a slave, rename/delete a team) all emit this one type, distinguished by the
   /// payload's `field`.
-  org_changed                @map("org.changed")
+  org_changed                 @map("org.changed")
   /// M35 t2: `confirmIntegration` stamped `Task.integratedAt` by hand -- the `!autoMerge` task
   /// was already `done`; this is the human saying its branch has now actually reached the base
   /// branch, unblocking whatever depends on it.
-  task_integrated            @map("task.integrated")
+  task_integrated             @map("task.integrated")
   /// M35 t5: `unblockTask` moved a `blocked` task back to `rework` -- an operator's exit from
   /// one of the four places that park a task `blocked` with nothing to move it out.
-  task_unblocked             @map("task.unblocked")
+  task_unblocked              @map("task.unblocked")
+  /// M38 section 2: the Supervisor's own five events. `supervisor.decided` is written for every
+  /// decision; `supervisor.proposed` alongside it when the tier made the decision a `pending`
+  /// proposal; `supervisor.applied` when the action reached the world through a control verb;
+  /// `supervisor.resolved` when a pending decision was approved, rejected or expired; and
+  /// `supervisor.failed` when the verb behind an applied decision refused it. All appended with
+  /// `actor: system` -- the `Actor` enum has no `supervisor` member (spec erratum E4).
+  supervisor_decided          @map("supervisor.decided")
+  supervisor_proposed         @map("supervisor.proposed")
+  supervisor_applied          @map("supervisor.applied")
+  supervisor_resolved         @map("supervisor.resolved")
+  supervisor_failed           @map("supervisor.failed")
 }
 
 model ExecutionEvent {

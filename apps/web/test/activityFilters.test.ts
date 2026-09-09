@@ -27,14 +27,20 @@ describe('parseActivityFilters', () => {
     expect([...result.filters.types].sort()).toEqual(['run.output', 'run.tool_call', 'run.tool_denied'])
   })
   // M27 §3.2 widened this chip with the project archive/restore lifecycle events; M37 t3 widened
-  // it again with the two roster writes (a persona rewritten, a runtime role set replaced).
-  it('expands kinds=workspace to the created, goal, plan, company-assigned, settings-changed, org-changed, archived, restored and slave-configuration event types', () => {
+  // it again with the two roster writes (a persona rewritten, a runtime role set replaced); M38 t1
+  // with the Supervisor's five decision events.
+  it('expands kinds=workspace to the created, goal, plan, company-assigned, settings-changed, org-changed, archived, restored, slave-configuration and supervisor event types', () => {
     const result = parseActivityFilters(new URLSearchParams('kinds=workspace'))
     if (!result.ok) throw new Error(result.error)
     expect([...result.filters.types].sort()).toEqual([
       'org.changed',
       'slave.profile_changed',
       'slave.runtime_roles_changed',
+      'supervisor.applied',
+      'supervisor.decided',
+      'supervisor.failed',
+      'supervisor.proposed',
+      'supervisor.resolved',
       'workspace.archived',
       'workspace.company_assigned',
       'workspace.created',

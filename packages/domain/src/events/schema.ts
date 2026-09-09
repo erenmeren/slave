@@ -1,5 +1,7 @@
 import { z } from 'zod'
 import { err, ok, type Result } from '../result.js'
+import { ACTION_KINDS, DECIDERS, TIERS } from '../supervisor/actions.js'
+import { SITUATION_KINDS } from '../supervisor/situations.js'
 
 const envelope = {
   seq: z.number().int().nonnegative(),
@@ -274,6 +276,73 @@ export const executionEventSchema = z.discriminatedUnion('type', [
     ...envelope,
     type: z.literal('task.unblocked'),
     payload: z.object({ attempt: z.number().int().nonnegative(), maxAttempts: z.number().int().positive() }),
+  }),
+  // M38 t1: the five events the Supervisor's control verbs write (spec section 2). Every one is
+  // appended by `packages/control/src/supervisor.ts` with `actor: 'system'` -- the envelope enum
+  // has no `supervisor` member and gaining one would touch every reader (spec erratum E4); the
+  // Supervisor names itself in the payload the verbs it calls write instead.
+  //
+  // `situationKind`, `action.kind`, `tier` and `decidedBy` validate against the DOMAIN unions
+  // (`SITUATION_KINDS`, `ACTION_KINDS`, `TIERS`, `DECIDERS`) rather than re-spelt string literals,
+  // so a new situation or action becomes writable to the timeline the moment the rules can produce
+  // it -- and a value the rules can NEVER produce can never be appended.
+  //
+  // `action` carries the kind only, not its parameters: the whole `Action` (with its task/slave/
+  // message ids) is already on the `SupervisorDecision` row this event's `decisionId` points at,
+  // and duplicating it here would give a reader two copies to disagree about.
+  z.object({
+    ...envelope,
+    type: z.literal('supervisor.decided'),
+    payload: z.object({
+      decisionId: z.string().min(1),
+      situationKind: z.enum(SITUATION_KINDS),
+      subjectId: z.string().min(1),
+      tier: z.enum(TIERS),
+      decidedBy: z.enum(DECIDERS),
+      action: z.object({ kind: z.enum(ACTION_KINDS) }),
+    }),
+  }),
+  // Written alongside `supervisor.decided` when the tier made the decision a `pending` proposal:
+  // the one event an operator's "what is waiting on me" view can filter on, carrying the deadline
+  // after which `expirePendingDecisions` retires it unanswered.
+  z.object({
+    ...envelope,
+    type: z.literal('supervisor.proposed'),
+    payload: z.object({
+      decisionId: z.string().min(1),
+      situationKind: z.enum(SITUATION_KINDS),
+      subjectId: z.string().min(1),
+      action: z.object({ kind: z.enum(ACTION_KINDS) }),
+      expiresAt: z.string().datetime(),
+    }),
+  }),
+  // The action actually reached the world through a control verb.
+  z.object({
+    ...envelope,
+    type: z.literal('supervisor.applied'),
+    payload: z.object({ decisionId: z.string().min(1), action: z.object({ kind: z.enum(ACTION_KINDS) }) }),
+  }),
+  // A `pending` decision left that state. `reason` is the rejecting human's words where there are
+  // any, and null otherwise -- an approval and an expiry both carry none.
+  z.object({
+    ...envelope,
+    type: z.literal('supervisor.resolved'),
+    payload: z.object({
+      decisionId: z.string().min(1),
+      outcome: z.enum(['approved', 'rejected', 'expired']),
+      reason: z.string().nullable(),
+    }),
+  }),
+  // The verb behind an applied decision refused it. `reason` is the `refusalText` of that refusal:
+  // a Supervisor action that cannot be carried out is recorded, never thrown (spec section 4).
+  z.object({
+    ...envelope,
+    type: z.literal('supervisor.failed'),
+    payload: z.object({
+      decisionId: z.string().min(1),
+      action: z.object({ kind: z.enum(ACTION_KINDS) }),
+      reason: z.string().min(1),
+    }),
   }),
 ])
 
