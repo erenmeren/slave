@@ -46,7 +46,8 @@
     "gate:m31b-software-sector": "tsc --build && node --env-file=.env scripts/gate-m31b-software-sector.mjs",
     "gate:m33-adopt": "tsc --build && node --env-file=.env scripts/gate-m33-adopt.mjs",
     "gate:m35-pipeline-honesty": "tsc --build && node --env-file=.env scripts/gate-m35-pipeline-honesty.mjs",
-    "gate:m36-messaging": "tsc --build && node --env-file=.env scripts/gate-m36-messaging.mjs"
+    "gate:m36-messaging": "tsc --build && node --env-file=.env scripts/gate-m36-messaging.mjs",
+    "gate:m37-run-context": "tsc --build && node --env-file=.env scripts/gate-m37-run-context.mjs"
   },
   "devDependencies": {
     "@testing-library/react": "^16.0.0",

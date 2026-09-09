@@ -33,8 +33,9 @@
 // selected, submit, and the URL becoming `/w/<workspaceId>`.
 //
 // Stage 5 (the workspace page and rows): `ws-adopted-from` names the run and links to its page;
-// seven `slave-card`s; seven `Slave` rows with the translated roles, `requiredRole` null on every
-// one; the workspace's `companyId`, `adoptedFromSimulationId`, `maxConcurrentRuns 4`, `maxAttempts
+// seven `slave-card`s; seven `Slave` rows with the translated roles and a `runtimeRoles` set
+// holding each worker's own roster role (M37 §5, replacing this stage's pre-M37 `requiredRole`
+// reading); the workspace's `companyId`, `adoptedFromSimulationId`, `maxConcurrentRuns 4`, `maxAttempts
 // 3`, `autoMerge false`, `budgetUsd` untouched.
 //
 // Stage 6 (nothing started): zero `SlaveRun`s reachable from the workspace, zero `Task`s, zero
@@ -167,7 +168,7 @@ async function dumpGateRows() {
   })
   const workspaces = await prisma.workspace.findMany({
     where: { name: WORKSPACE_NAME },
-    select: { id: true, companyId: true, adoptedFromSimulationId: true, maxConcurrentRuns: true, maxAttempts: true, autoMerge: true, budgetUsd: true, haltedReason: true, teams: { select: { name: true, slaves: { select: { name: true, role: true, requiredRole: true } } } } },
+    select: { id: true, companyId: true, adoptedFromSimulationId: true, maxConcurrentRuns: true, maxAttempts: true, autoMerge: true, budgetUsd: true, haltedReason: true, teams: { select: { name: true, slaves: { select: { name: true, role: true, runtimeRoles: true } } } } },
   })
   return JSON.stringify({ templates, companies, workspaces })
 }
@@ -439,16 +440,28 @@ try {
     console.log(`workspace page shows ${cardCount} slave-card(s)`)
     if (cardCount !== ROSTER.length) await fail(`the workspace page shows ${cardCount} slave-card(s), expected ${ROSTER.length}`)
 
-    const slaves = await prisma.slave.findMany({ where: { team: { workspaceId } }, select: { name: true, role: true, requiredRole: true, team: { select: { name: true } } }, orderBy: { name: 'asc' } })
-    console.log(`Slave rows for the workspace: ${JSON.stringify(slaves.map((s) => ({ name: s.name, team: s.team.name, role: s.role, requiredRole: s.requiredRole })))}`)
+    const slaves = await prisma.slave.findMany({ where: { team: { workspaceId } }, select: { name: true, role: true, runtimeRoles: true, team: { select: { name: true } } }, orderBy: { name: 'asc' } })
+    console.log(`Slave rows for the workspace: ${JSON.stringify(slaves.map((s) => ({ name: s.name, team: s.team.name, role: s.role, runtimeRoles: s.runtimeRoles })))}`)
     if (slaves.length !== ROSTER.length) await fail(`the workspace has ${slaves.length} Slave row(s), expected ${ROSTER.length}`)
     for (const [slaveName, expectedRole] of Object.entries(EXPECTED_SLAVE_ROLES)) {
       const slave = slaves.find((s) => s.name === slaveName)
       if (slave === undefined) await fail(`no Slave row named ${slaveName} on the workspace`)
       if (slave.role !== expectedRole) await fail(`${slaveName}'s Slave.role is ${JSON.stringify(slave.role)}, expected ${JSON.stringify(expectedRole)}`)
     }
-    const withRequiredRole = slaves.filter((s) => s.requiredRole !== null).map((s) => s.name)
-    if (withRequiredRole.length > 0) await fail(`adoption wrote requiredRole on ${JSON.stringify(withRequiredRole)}, expected null on every Slave row (R2: that column names the role a task needs)`)
+    // M37 t1 dropped `Slave.requiredRole`, which this stage used to assert adoption left null; the
+    // question it was asking -- "is an adopted worker dispatchable, and as what?" -- is answered by
+    // `runtimeRoles` now (M37 §5: the scheduler, reviewer/manager staffing and role-addressed
+    // messaging all read that set, and an empty one parks the worker). `assignCompanyTx` writes
+    // `[override ?? catalogRole, catalogRole]` deduplicated, and every role this roster overrides
+    // is already the catalog role it translates to -- so each adopted worker holds exactly its own
+    // roster role.
+    for (const [, catalogRole, slaveName] of ROSTER) {
+      const slave = slaves.find((s) => s.name === slaveName)
+      if (slave === undefined) await fail(`no Slave row named ${slaveName} on the workspace`)
+      if (JSON.stringify(slave.runtimeRoles) !== JSON.stringify([catalogRole])) {
+        await fail(`${slaveName}'s runtimeRoles are ${JSON.stringify(slave.runtimeRoles)}, expected ${JSON.stringify([catalogRole])} -- adoption must leave every worker dispatchable as its roster role`)
+      }
+    }
 
     const workspaceAfter = await prisma.workspace.findUnique({ where: { id: workspaceId } })
     console.log(`workspace after adoption: companyId ${JSON.stringify(workspaceAfter.companyId)}, adoptedFromSimulationId ${JSON.stringify(workspaceAfter.adoptedFromSimulationId)}, maxConcurrentRuns ${workspaceAfter.maxConcurrentRuns}, maxAttempts ${workspaceAfter.maxAttempts}, autoMerge ${workspaceAfter.autoMerge}, budgetUsd ${JSON.stringify(workspaceAfter.budgetUsd)}, haltedReason ${JSON.stringify(workspaceAfter.haltedReason)}`)
@@ -496,7 +509,7 @@ try {
   console.log(
     'PASS: a software run created from the drawer was adopted from its page into a workspace the CLI created with no company; ' +
       'the drawer showed the run\'s roles and what they become, the proposal and autoMerge locked; the workspace page names the run, ' +
-      'its seven slaves carry the translated roles with requiredRole untouched, its settings and provenance are written and its budget ' +
+      'its seven slaves carry the translated roles and are each dispatchable as their roster role, its settings and provenance are written and its budget ' +
       'is not; no run, task or run.started event exists; the run journals exactly one adoption',
   )
   exitCode = 0

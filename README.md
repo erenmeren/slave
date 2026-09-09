@@ -200,7 +200,10 @@ npm run orchestrator -- archive-workspace --workspace <id>  # nothing runs until
 npm run orchestrator -- restore-workspace --workspace <id>
 npm run orchestrator -- list-workspaces                     # every project, archived ones marked
 npm run orchestrator -- rename-slave --slave <id> --name <n>
-npm run orchestrator -- set-role --slave <id> --role <r>
+npm run orchestrator -- set-role --slave <id> --role <r>    # the TITLE only; dispatch reads set-runtime-roles
+npm run orchestrator -- set-runtime-roles --slave <id> --roles backend,reviewer   # --roles '' parks it
+npm run orchestrator -- set-profile --slave <id> | --template <id> | --company-slave <id> (--file <path> | --clear)
+npm run orchestrator -- show-context --run <id> [--prompt]  # the manifest of what a run was told
 npm run orchestrator -- delete-slave --slave <id> --yes
 npm run orchestrator -- delete-team --team <id> --yes       # a department WITH its slaves and their history
 npm run orchestrator -- delete-company-team --team <companyTeamId> --yes
@@ -230,6 +233,71 @@ live run is in the way. Omit `--yes` on any of them to preview the footprint it 
 without deleting it.
 
 `--workspace <id>` can be left out while there is exactly one workspace.
+
+## What a slave is told
+
+Every run's prompt is assembled in one place, from named sections, and the assembled text is
+recorded before the model is started — so you can always read exactly what a slave saw.
+
+**Its persona is a profile.** Markdown, up to 16k characters: who this worker is, what it is good
+at, how it works. It resolves through the same override chain as the model — **the worker's own
+profile, else its roster row's, else its template's** — so you can write one persona for a template
+and override it on a single project's copy:
+
+```bash
+npm run orchestrator -- set-profile --template <id> --file atlas.md   # the catalog persona
+npm run orchestrator -- set-profile --slave <id> --file atlas-here.md # this project's copy only
+npm run orchestrator -- set-profile --slave <id> --clear              # back to the inherited one
+```
+
+The slave panel has a **Profile** block that shows the effective text with where it came from
+(*this worker's own profile*, *inherited from its roster row*, *inherited from its template*);
+saving there always writes an override on the worker, never on the roster row or the template.
+
+**A title is not a role.** `Slave.role` — what `set-role` writes and what the UI prints under a
+name — is the heading of the persona, read by humans. What the system matches on is
+`runtimeRoles`: the scheduler picks a slave for a task when the task's required role is in that
+set, reviewer and manager staffing look for `reviewer` and `manager` in it, and a message
+addressed to a role is delivered by it. So a worker titled *Senior Engineer* can be dispatched as
+`backend` and staffed as the reviewer, and nothing anywhere matches the words "Senior Engineer".
+
+```bash
+npm run orchestrator -- set-runtime-roles --slave <id> --roles backend,reviewer
+npm run orchestrator -- set-runtime-roles --slave <id> --roles ''    # parks it
+```
+
+An empty set means the worker **cannot be dispatched at all** — that is a real state, not a
+mistake, and it is how you bench somebody without deleting them. The role chips appear wherever a
+worker is listed (its card on the Overview, its panel, the all-workers table on `/slaves`), and a
+parked worker shows *cannot be dispatched — no runtime roles* instead of chips, with a compact mark
+on its node in the org graph.
+
+**Its skills are really there.** The skills you assign on `/skills` are copied into
+`<worktree>/.claude/skills/<name>` before the run starts, so the runtime actually finds them. A
+skill the catalog knows but the disk no longer has is *not* named in the prompt — the run starts
+without it and the manifest records it under `missing`, rather than sending the slave looking for
+something that is not there. A skill your repository ships itself is left alone and recorded as
+`shadowedByRepo`: the runtime discovers the repo's own copy anyway, and overwriting it would put a
+diff in front of your merge.
+
+Nothing that is copied in shows up in `git status`, because the injected paths are added to **the
+repository's `info/exclude`** (`git rev-parse --git-path info/exclude`) rather than to a
+`.gitignore`, which would itself be a file in the tree. Two consequences worth knowing, both
+accepted deliberately: that file is repository-wide, so it accumulates one line per skill name ever
+injected and never removes one, and an *untracked* `.claude/skills/<name>/` of your own in the main
+checkout is hidden from `git status` too. Tracked files are never affected — git does not ignore
+what it already tracks.
+
+**And you can read back what any run saw.**
+
+```bash
+npm run orchestrator -- show-context --run <id>            # the manifest: section by section, where each came from
+npm run orchestrator -- show-context --run <id> --prompt   # and the prompt itself, after a rule
+```
+
+In the UI, every run in the task panel has a **What this run saw** button (served by
+`GET /api/w/<id>/runs/<runId>/context`): the same section list, with any missing skills highlighted,
+and the full prompt in a collapsed block underneath.
 
 ## When a slave asks a question
 
@@ -300,9 +368,11 @@ The `npm run gate:*` scripts are end-to-end proofs of each milestone against fak
 they spend nothing. CI runs `gate:m26-vocabulary`, `gate:m15-boundary`, `gate:m20-auth`,
 `gate:m21-loose-ends`, `gate:m23-onboarding`, `gate:m29-simulation`, `gate:m30-simulation-compare`,
 `gate:m31a-llm-decisions`, `gate:m31b-software-sector`, `gate:m33-adopt`,
-`gate:m35-pipeline-honesty` and `gate:m36-messaging` on every push — the last of those stops the
-orchestrator and starts it again mid-scenario, to prove a waiting slave's question survives a
-restart. Tests and gates share one Postgres — run one at a time.
+`gate:m35-pipeline-honesty`, `gate:m36-messaging` and `gate:m37-run-context` on every push —
+`m36` stops the orchestrator and starts it again mid-scenario, to prove a waiting slave's question
+survives a restart, and `m37` reads a real run's prompt and worktree back to prove a slave was
+given the persona and the skills it was assigned. Tests and gates share one Postgres — run one at a
+time.
 
 ## Learn more
 
