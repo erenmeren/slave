@@ -6,6 +6,7 @@ import {
   addCompanyTeam,
   adoptSimulation,
   answerQuestion,
+  approveDecision,
   archiveWorkspace,
   assignCompany,
   claimResume,
@@ -28,13 +29,16 @@ import {
   emergencyStop,
   haltSimulation,
   injectExternalEvent,
+  listDecisions,
   listPendingQuestions,
   listUsers,
   loadSimulation,
+  loadSupervisorWorld,
   moveSlave,
   moveCompanySlave,
   pauseSimulation,
   refusalText,
+  rejectDecision,
   renameSlave,
   renameCompanyTeam,
   renameTeam,
@@ -48,6 +52,7 @@ import {
   setSlaveRole,
   setGoal,
   setPassword,
+  setSupervisorSettings,
   describeSync,
   DEFAULT_MAX_MODEL_CALLS,
   simulationStatus,
@@ -59,12 +64,17 @@ import {
   plural,
   unblockTask,
   type ModelDecider,
+  type Principal,
   type ProfileTarget,
 } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import {
   SUPERVISOR_DEFAULT_MODEL,
+  candidates,
+  chooseByRules,
   displayName,
+  filterFresh,
+  observe,
   runContextManifestSchema,
   workspaceId as brandWorkspaceId,
   type WorkspaceId,
@@ -76,6 +86,7 @@ import { deliverAnswers } from './deliver.js'
 import { claudeCommandFrom } from './claude-command.js'
 import { NON_TERMINAL_RUN_STATUSES } from './world.js'
 import { executeResume } from './resume.js'
+import { supervise } from './supervisor.js'
 import { drainPumps, tick } from './tick.js'
 
 // Every sector the platform knows, from the registry itself -- a literal `trade|software` here
@@ -167,6 +178,38 @@ const USAGE = `usage: orchestrator <command> [options]
   show-context --run <id> [--prompt]   what this run was told: the manifest of the sections its
                                        prompt was assembled from, and with --prompt the prompt
                                        itself after a rule
+
+  supervise --workspace <id> [--dry-run]
+                                       one pass of the Supervisor over this workspace: observes
+                                       stuck situations, decides an action for each from a fixed
+                                       catalogue (a model when one is wired, the rules otherwise),
+                                       applies the routine ones and records the risky ones as
+                                       proposals for a human. --dry-run prints what it WOULD
+                                       decide -- every fresh situation, its candidates and the
+                                       rules' own choice -- and writes nothing at all: no decision
+                                       row, no event, no model call.
+  supervisor-decisions --workspace <id> [--pending] [--limit <n>]
+                                       the workspace's Supervisor decisions, newest first, as
+                                       JSON -- the situation each was made on, the candidates it
+                                       chose from and why. --pending narrows to what is still
+                                       waiting on a human; --limit caps how many come back
+                                       (default 50).
+  approve-decision --id <id> [--by <name>]
+                                       a human says yes to a pending proposal: carries out its
+                                       action and marks it approved. --by names the local account
+                                       (create-user) the approval is attributed to -- default
+                                       "operator" -- and is refused if no such account exists.
+  reject-decision --id <id> [--reason <text>] [--by <name>]
+                                       a human says no to a pending proposal: its action never
+                                       reaches the world. --reason is kept with the decision.
+                                       --by as above.
+  set-supervisor --workspace <id> [--enable | --disable]
+                 [--profile-file <path> | --clear-profile]
+                                       switch a workspace's Supervisor on or off, and/or set (from
+                                       a file) or clear its persona/house-rules profile. Refused
+                                       with no flag at all, with both --enable and --disable, or
+                                       with both --profile-file and --clear-profile.
+
   delete-slave --slave <id> --yes      remove a project slave WITH its run history -- refused
                                        only while it holds a live run. Omit --yes to see what
                                        would be deleted without doing it.
@@ -516,6 +559,28 @@ async function readSecretLine(): Promise<string> {
 
 const STDIN_PASSWORD_ERROR =
   'the password is read from stdin: printf "%s\\n" "$PW" | orchestrator create-user --name ada'
+
+/**
+ * The `Principal` an `approve-decision`/`reject-decision` call acts as (M38 t4).
+ *
+ * `approveDecision`/`rejectDecision` take a real `Principal`, unlike almost every verb in this
+ * file -- which the CLI has always called with none at all (`Workspace.goalSetByUserId`'s own
+ * comment: "the CLI and the orchestrator act with no user"). An approval is a PERSON's act, and
+ * the event it produces stamps `actor: 'human'` and a `userId` the log can point back to, so the
+ * CLI needs one that is real: `ExecutionEvent.userId` is a foreign key, and a name that matches no
+ * account would fail the write with a constraint violation instead of a readable refusal.
+ *
+ * `--by <name>` therefore names a LOCAL ACCOUNT (`create-user`/`list-users`), not a free-text
+ * label the way `set-profile --by` or `pause --by` use it -- resolved here rather than left to
+ * Postgres, so a name that does not exist yet is refused with the one command that fixes it.
+ */
+async function cliPrincipal(name: string): Promise<Principal> {
+  const user = await prisma.user.findUnique({ where: { username: name }, select: { id: true } })
+  if (user === null) {
+    throw new Error(`no local account named "${name}": create one first with create-user --name ${name}`)
+  }
+  return { userId: user.id }
+}
 
 async function mustGetRun(runId: string) {
   // `slave -> team`, not `task`: a `planning` run (M8b) has no `Task` row, and `slave -> team ->
@@ -1035,6 +1100,103 @@ export async function main(argv: readonly string[]): Promise<number> {
         // `sed`: the prompt is free text and can contain anything, including JSON.
         process.stdout.write(`${'-'.repeat(40)}\n${row.prompt}\n`)
       }
+      return 0
+    }
+
+    // ---- M38 t4: the Supervisor's CLI verbs ------------------------------------------------------
+    // `supervise` is a SEPARATE one-shot from `tick` -- `tick`'s own supervisor pass (wired in
+    // `tick.ts`) always runs rules-only, because a command an operator runs by hand must never
+    // spend on a model call by itself (the same discipline `buildModelDecider` is kept off `tick`
+    // for). This verb is the one place an operator asks for a supervised pass WITH the model seam,
+    // or previews one with none of it at all.
+
+    case 'supervise': {
+      const workspaceId = await resolveWorkspace({ ...flags, workspace: requireFlag(flags, 'workspace') })
+
+      if ('dry-run' in flags) {
+        // The dry-run building blocks, called directly rather than through `supervise()` --
+        // `recordDecision`/`applyDecision`/`expirePendingDecisions` and the model are never
+        // reached, which is the whole point: an operator previewing what the Supervisor would do
+        // must not spend a cooldown, a proposal's TTL, or a cent finding out.
+        const { world } = await loadSupervisorWorld(workspaceId, new Date())
+        const situations = filterFresh(observe(world), world)
+        const preview = situations.map((situation) => {
+          const situationCandidates = candidates(situation, world)
+          return { situation, candidates: situationCandidates, ruleChoice: chooseByRules(situationCandidates) }
+        })
+        process.stdout.write(`${JSON.stringify(preview, null, 2)}\n`)
+        return 0
+      }
+
+      const report = await supervise({
+        workspaceId,
+        decider: buildModelDecider(),
+        // Same expression `daemon`'s case reads above (spec erratum E3): an operator's one-shot
+        // pass thinks with the same model the daemon would, unless the environment says otherwise.
+        model: process.env['SLAVEOFAI_SUPERVISOR_MODEL'] ?? SUPERVISOR_DEFAULT_MODEL,
+      })
+      process.stdout.write(`${JSON.stringify(report, null, 2)}\n`)
+      return 0
+    }
+
+    case 'supervisor-decisions': {
+      const workspaceId = await resolveWorkspace({ ...flags, workspace: requireFlag(flags, 'workspace') })
+      const limitText = flagText(flags, 'limit')
+      let limit: number | undefined
+      if (limitText !== undefined) {
+        limit = Number(limitText)
+        if (!Number.isInteger(limit) || limit <= 0) throw new Error('--limit must be a positive integer')
+      }
+      const decisions = await listDecisions(workspaceId, {
+        ...('pending' in flags ? { pending: true } : {}),
+        ...(limit !== undefined ? { limit } : {}),
+      })
+      process.stdout.write(`${JSON.stringify(decisions, null, 2)}\n`)
+      return 0
+    }
+
+    case 'approve-decision': {
+      const decisionId = requireFlag(flags, 'id')
+      const principal = await cliPrincipal(flagText(flags, 'by') ?? 'operator')
+      const result = await approveDecision(decisionId, principal)
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(`decision ${decisionId} approved\n`)
+      return 0
+    }
+
+    case 'reject-decision': {
+      const decisionId = requireFlag(flags, 'id')
+      const principal = await cliPrincipal(flagText(flags, 'by') ?? 'operator')
+      const result = await rejectDecision(decisionId, principal, flagText(flags, 'reason'))
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(`decision ${decisionId} rejected\n`)
+      return 0
+    }
+
+    case 'set-supervisor': {
+      const workspaceId = await resolveWorkspace({ ...flags, workspace: requireFlag(flags, 'workspace') })
+      // `'enable' in flags`, not `flagText(...) !== undefined`: same idiom as `set-model --clear`
+      // above -- a bare `--enable`/`--disable` (no value following it) is exactly how `parseArgs`
+      // records a flag with no argument, setting the key to `undefined` rather than leaving it
+      // absent.
+      const enableFlag = 'enable' in flags
+      const disableFlag = 'disable' in flags
+      if (enableFlag && disableFlag) throw new Error('--enable and --disable are exclusive')
+      const profileFile = flagText(flags, 'profile-file')
+      const clearProfile = 'clear-profile' in flags
+      if (profileFile !== undefined && clearProfile) throw new Error('exactly one of --profile-file or --clear-profile is allowed, not both')
+      if (!enableFlag && !disableFlag && profileFile === undefined && !clearProfile) {
+        throw new Error('one of --enable, --disable, --profile-file or --clear-profile is required')
+      }
+
+      const result = await setSupervisorSettings(workspaceId, {
+        ...(enableFlag ? { enabled: true } : {}),
+        ...(disableFlag ? { enabled: false } : {}),
+        ...(profileFile !== undefined ? { profile: readFileSync(profileFile, 'utf8') } : {}),
+        ...(clearProfile ? { profile: null } : {}),
+      })
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(`supervisor settings updated on ${workspaceId}\n`)
       return 0
     }
 

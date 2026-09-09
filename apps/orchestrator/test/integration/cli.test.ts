@@ -4,8 +4,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
-import { createSimulation, loadSimulation, startAutoRun, verifyCredentials } from '@slave-of-ai/control'
+import { createSimulation, loadSimulation, recordDecision, startAutoRun, verifyCredentials } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
+import type { Candidate, Situation } from '@slave-of-ai/domain'
+import { appendEvent } from '@slave-of-ai/events'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 
 const execFileAsync = promisify(execFile)
@@ -137,12 +139,41 @@ async function seed(overrides: { readonly name?: string } = {}): Promise<Fixture
   return { workspaceId: workspace.id, taskId: task.id, slaveId: slave.id, teamId: team.id, emptyTeamId: emptyTeam.id, repoPath }
 }
 
+/**
+ * Parks `taskId` `blocked` at the review cap, exactly the way `review.ts`'s `dispatchReview`
+ * does it when the review retry cap is spent -- the ONE park (spec erratum E5) the Supervisor may
+ * unblock routinely. `attempt` stays below `maxAttempts` so `unblock_task` (not
+ * `raise_max_attempts`) is the routine candidate.
+ */
+async function blockOnReviewCap(workspaceId: string, taskId: string): Promise<void> {
+  await prisma.task.update({
+    where: { id: taskId },
+    data: { status: 'blocked', activeRunId: null, attempt: 1, maxAttempts: 3 },
+  })
+  await appendEvent({
+    type: 'guardrail.tripped',
+    workspaceId,
+    taskId,
+    actor: 'system',
+    payload: { guardrail: 'review_retry_cap_exhausted', detail: 'review retries exhausted' },
+  })
+}
+
+/** Parks `taskId` `blocked` for a reason that is NOT the review cap -- `task_blocked_human`, the
+ *  park a human's own decision moves, never one the Supervisor may unblock by itself. */
+async function blockForHuman(taskId: string): Promise<void> {
+  await prisma.task.update({
+    where: { id: taskId },
+    data: { status: 'blocked', activeRunId: null, attempt: 1, maxAttempts: 3 },
+  })
+}
+
 describe('the orchestrator CLI', () => {
   let fixture: Fixture
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "SimulationModelUsage", "SimulationJournalEntry", "SimulationRun", "ExecutionEvent", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate", "User" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "SimulationModelUsage", "SimulationJournalEntry", "SimulationRun", "SupervisorDecision", "ExecutionEvent", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate", "User" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
   })
@@ -1889,6 +1920,252 @@ describe('the orchestrator CLI', () => {
         expect(missingSimulation.code).toBe(1)
         expect(missingSimulation.stderr).toContain('--simulation is required')
       }, 30_000)
+    })
+  })
+
+  describe('the Supervisor CLI verbs (M38 t4)', () => {
+    it('supervise --dry-run prints the fresh situations and their rule choice, and writes nothing', async (): Promise<void> => {
+      await blockOnReviewCap(fixture.workspaceId, fixture.taskId)
+
+      const result = await runCli(['supervise', '--workspace', fixture.workspaceId, '--dry-run'])
+
+      expect(result.code).toBe(0)
+      const preview = JSON.parse(result.stdout) as readonly { situation: Situation; candidates: Candidate[]; ruleChoice: number }[]
+      expect(preview).toHaveLength(1)
+      expect(preview[0]?.situation.kind).toBe('review_cap_blocked')
+      expect(preview[0]?.situation.subjectId).toBe(fixture.taskId)
+      expect(preview[0]?.candidates.some((c) => c.action.kind === 'unblock_task')).toBe(true)
+      expect(typeof preview[0]?.ruleChoice).toBe('number')
+      const chosen = preview[0]?.candidates[preview[0].ruleChoice]
+      expect(chosen?.action.kind).toBe('unblock_task')
+
+      // Writes NOTHING: no decision row, no new event beyond the one `blockOnReviewCap` itself
+      // wrote, and the task is untouched.
+      expect(await prisma.supervisorDecision.count()).toBe(0)
+      expect(await prisma.executionEvent.count({ where: { type: 'guardrail_tripped' } })).toBe(1)
+      const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+      expect(task.status).toBe('blocked')
+    }, 30_000)
+
+    it('supervise --dry-run prints an empty list and writes nothing when the workspace has nothing stuck', async (): Promise<void> => {
+      const result = await runCli(['supervise', '--workspace', fixture.workspaceId, '--dry-run'])
+
+      expect(result.code).toBe(0)
+      expect(JSON.parse(result.stdout)).toEqual([])
+      expect(await prisma.supervisorDecision.count()).toBe(0)
+    })
+
+    it('supervise applies the routine unblock_task on a review-cap-blocked task', async (): Promise<void> => {
+      await blockOnReviewCap(fixture.workspaceId, fixture.taskId)
+
+      const result = await runCli(['supervise', '--workspace', fixture.workspaceId])
+
+      expect(result.code).toBe(0)
+      const report = JSON.parse(result.stdout)
+      expect(report).toMatchObject({ situations: 1, decided: 1, applied: 1, proposed: 0 })
+
+      const decision = await prisma.supervisorDecision.findFirstOrThrow({
+        where: { workspaceId: fixture.workspaceId, situationKind: 'review_cap_blocked' },
+      })
+      expect(decision.status).toBe('applied')
+      expect(decision.tier).toBe('applied')
+      expect((decision.action as { kind: string }).kind).toBe('unblock_task')
+
+      const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+      expect(task.status).toBe('rework')
+    }, 30_000)
+
+    it('exits non-zero for supervise with no --workspace given, even with exactly one workspace', async (): Promise<void> => {
+      const result = await runCli(['supervise'])
+
+      expect(result.code).not.toBe(0)
+      expect(`${result.stdout}${result.stderr}`).toMatch(/--workspace is required/)
+    })
+
+    it('lists Supervisor decisions, newest first, narrowed by --pending and --limit', async (): Promise<void> => {
+      await blockOnReviewCap(fixture.workspaceId, fixture.taskId)
+      const applied = await runCli(['supervise', '--workspace', fixture.workspaceId])
+      expect(applied.code).toBe(0)
+
+      const all = await runCli(['supervisor-decisions', '--workspace', fixture.workspaceId])
+      expect(all.code).toBe(0)
+      const decisions = JSON.parse(all.stdout)
+      expect(decisions).toHaveLength(1)
+      expect(decisions[0].situationKind).toBe('review_cap_blocked')
+      expect(decisions[0].status).toBe('applied')
+
+      // The one decision above is `applied`, not `pending` -- `--pending` narrows to nothing.
+      const pending = await runCli(['supervisor-decisions', '--workspace', fixture.workspaceId, '--pending'])
+      expect(pending.code).toBe(0)
+      expect(JSON.parse(pending.stdout)).toEqual([])
+
+      const limited = await runCli(['supervisor-decisions', '--workspace', fixture.workspaceId, '--limit', '0'])
+      expect(limited.code).not.toBe(0)
+    }, 30_000)
+
+    /** Records a `pending` `unblock_task` proposal on `fixture.taskId` directly through
+     *  `recordDecision`, the way `task_blocked_human` (a park no `unblock_task` may leave
+     *  routinely -- spec erratum E5) would actually be proposed. Bypasses `observe`/`candidates`
+     *  so the approve/reject tests exercise the CLI verb, not the rules that would have produced
+     *  the same shape. */
+    async function seedPendingUnblockProposal(): Promise<string> {
+      await blockForHuman(fixture.taskId)
+      const situation: Situation = {
+        kind: 'task_blocked_human',
+        subjectId: fixture.taskId,
+        summary: 'Task is blocked and nothing but a human decision moves it.',
+        facts: { taskId: fixture.taskId },
+      }
+      const candidates: Candidate[] = [
+        { action: { kind: 'unblock_task', taskId: fixture.taskId }, tier: 'proposed', why: 'the task still has attempts left.' },
+        { action: { kind: 'escalate_to_human', summary: situation.summary }, tier: 'escalated', why: 'a human decides.' },
+        { action: { kind: 'no_action' }, tier: 'noop', why: 'waiting is reasonable.' },
+      ]
+      const recorded = await recordDecision({
+        workspaceId: fixture.workspaceId,
+        situation,
+        candidates,
+        chosenIndex: 0,
+        rationale: 'a human should look at this.',
+        decidedBy: 'rules',
+        modelCostUsd: null,
+      })
+      if (!recorded.ok) throw new Error(`seedPendingUnblockProposal: recordDecision refused: ${JSON.stringify(recorded.error)}`)
+      return recorded.value.id
+    }
+
+    it('approves a pending proposal: the action is carried out and the row reads approved', async (): Promise<void> => {
+      const decisionId = await seedPendingUnblockProposal()
+      await prisma.user.create({ data: { username: 'approver', passwordHash: 'x' } })
+
+      const result = await runCli(['approve-decision', '--id', decisionId, '--by', 'approver'])
+
+      expect(result.code).toBe(0)
+      expect(result.stdout).toMatch(/approved/)
+      const decision = await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: decisionId } })
+      expect(decision.status).toBe('approved')
+      expect(decision.resolvedByUserId).not.toBeNull()
+      const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+      expect(task.status).toBe('rework')
+      const resolved = await prisma.executionEvent.findFirstOrThrow({ where: { type: 'supervisor_resolved' } })
+      expect(resolved.actor).toBe('human')
+      expect((resolved.payload as { outcome: string }).outcome).toBe('approved')
+    }, 30_000)
+
+    it('rejects a pending proposal: the action never runs and the row reads rejected', async (): Promise<void> => {
+      const decisionId = await seedPendingUnblockProposal()
+      await prisma.user.create({ data: { username: 'rejector', passwordHash: 'x' } })
+
+      const result = await runCli(['reject-decision', '--id', decisionId, '--by', 'rejector', '--reason', 'not now'])
+
+      expect(result.code).toBe(0)
+      expect(result.stdout).toMatch(/rejected/)
+      const decision = await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: decisionId } })
+      expect(decision.status).toBe('rejected')
+      // The action is never carried out on a rejection -- the task stays exactly where it was.
+      const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+      expect(task.status).toBe('blocked')
+      const resolved = await prisma.executionEvent.findFirstOrThrow({ where: { type: 'supervisor_resolved' } })
+      expect((resolved.payload as { outcome: string; reason: string | null }).reason).toBe('not now')
+    }, 30_000)
+
+    it('refuses approve-decision when --by names no local account, rather than a raw constraint error', async (): Promise<void> => {
+      const decisionId = await seedPendingUnblockProposal()
+
+      const result = await runCli(['approve-decision', '--id', decisionId])
+
+      expect(result.code).not.toBe(0)
+      expect(result.stderr).toMatch(/no local account named "operator"/)
+      const decision = await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: decisionId } })
+      expect(decision.status).toBe('pending')
+    })
+
+    it('exits non-zero for approve-decision on an unknown id', async (): Promise<void> => {
+      await prisma.user.create({ data: { username: 'operator', passwordHash: 'x' } })
+
+      const result = await runCli(['approve-decision', '--id', 'nope'])
+
+      expect(result.code).not.toBe(0)
+      expect(result.stderr).toMatch(/decision_not_found|nope/)
+    })
+
+    it('set-supervisor --disable stops supervise from deciding or writing anything', async (): Promise<void> => {
+      await blockOnReviewCap(fixture.workspaceId, fixture.taskId)
+
+      const disabled = await runCli(['set-supervisor', '--workspace', fixture.workspaceId, '--disable'])
+      expect(disabled.code).toBe(0)
+      expect((await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspaceId } })).supervisorEnabled).toBe(false)
+
+      const result = await runCli(['supervise', '--workspace', fixture.workspaceId])
+      expect(result.code).toBe(0)
+      expect(JSON.parse(result.stdout)).toMatchObject({ situations: 0, decided: 0, applied: 0, proposed: 0 })
+      expect(await prisma.supervisorDecision.count()).toBe(0)
+      const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+      expect(task.status).toBe('blocked')
+    }, 30_000)
+
+    it('set-supervisor --enable turns it back on', async (): Promise<void> => {
+      await runCli(['set-supervisor', '--workspace', fixture.workspaceId, '--disable'])
+
+      const result = await runCli(['set-supervisor', '--workspace', fixture.workspaceId, '--enable'])
+
+      expect(result.code).toBe(0)
+      expect((await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspaceId } })).supervisorEnabled).toBe(true)
+    })
+
+    it('set-supervisor --profile-file writes the profile from the file', async (): Promise<void> => {
+      const dir = mkdtempSync(join(tmpdir(), 'slaveofai-supervisor-profile-'))
+      const profilePath = join(dir, 'profile.md')
+      writeFileSync(profilePath, 'Be terse. Never raise attempt caps without asking.\n')
+
+      const result = await runCli(['set-supervisor', '--workspace', fixture.workspaceId, '--profile-file', profilePath])
+
+      expect(result.code).toBe(0)
+      const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspaceId } })
+      expect(workspace.supervisorProfile).toBe('Be terse. Never raise attempt caps without asking.')
+      rmSync(dir, { recursive: true, force: true })
+    })
+
+    it('set-supervisor --clear-profile clears a previously set profile', async (): Promise<void> => {
+      await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { supervisorProfile: 'old persona' } })
+
+      const result = await runCli(['set-supervisor', '--workspace', fixture.workspaceId, '--clear-profile'])
+
+      expect(result.code).toBe(0)
+      const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspaceId } })
+      expect(workspace.supervisorProfile).toBeNull()
+    })
+
+    it('refuses set-supervisor with no flag at all', async (): Promise<void> => {
+      const result = await runCli(['set-supervisor', '--workspace', fixture.workspaceId])
+
+      expect(result.code).not.toBe(0)
+      expect(result.stderr).toMatch(/one of --enable, --disable, --profile-file or --clear-profile is required/)
+    })
+
+    it('refuses set-supervisor given both --profile-file and --clear-profile', async (): Promise<void> => {
+      const dir = mkdtempSync(join(tmpdir(), 'slaveofai-supervisor-profile-'))
+      const profilePath = join(dir, 'profile.md')
+      writeFileSync(profilePath, 'x')
+
+      const result = await runCli(['set-supervisor', '--workspace', fixture.workspaceId, '--profile-file', profilePath, '--clear-profile'])
+
+      expect(result.code).not.toBe(0)
+      expect(result.stderr).toMatch(/exactly one of --profile-file or --clear-profile/)
+      rmSync(dir, { recursive: true, force: true })
+    })
+
+    it('refuses set-supervisor given both --enable and --disable', async (): Promise<void> => {
+      // The `--flag=value` form, not two bare flags back to back: `parseArgs`'s own documented
+      // idiom (`--workspace=<id>`'s test above) is what lets both register here at all -- a bare
+      // `--enable` immediately followed by another `--flag` reads that flag's own name as
+      // `--enable`'s VALUE (`setFlag`'s "whatever follows, even if it starts with `--`"), so two
+      // adjacent bare booleans can never both land in `flags`. Neither flag's stated behaviour
+      // consults its value, only its presence, so `=1` exercises the exclusivity check exactly.
+      const result = await runCli(['set-supervisor', '--workspace', fixture.workspaceId, '--enable=1', '--disable=1'])
+
+      expect(result.code).not.toBe(0)
+      expect(result.stderr).toMatch(/--enable and --disable are exclusive/)
     })
   })
 })
