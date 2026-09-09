@@ -100,9 +100,16 @@ export interface SuperviseReport {
    *  `modelCalls === 0`: a pass with a model available and nothing stuck also makes no calls, and
    *  those two are different facts about the daemon's wiring. */
   readonly rulesOnly: boolean
-  /** Questions this pass ANSWERED itself (M39 §5): `answer_question` decisions whose final tier was
-   *  `applied`, so `answerQuestion` ran and a waiting worker will be resumed by the next tick's
-   *  `deliverAnswers`. A subset of {@link SuperviseReport.applied}. */
+  /**
+   * Questions this pass ANSWERED itself (M39 §5): `answer_question` decisions whose final tier was
+   * `applied` AND whose `answerQuestion` actually went through, so a waiting worker will be resumed
+   * by the next tick's `deliverAnswers`.
+   *
+   * A strict subset of {@link SuperviseReport.applied}, and strict in both directions is the point
+   * (fix round 1, Minor 2): `applied` counts the attempt, this counts the outcome. A decision whose
+   * verb refused -- the question was answered by somebody else while the pass was drafting -- is an
+   * `applied` attempt and a `failed` row, and nobody was answered.
+   */
   readonly answered: number
   /** Questions this pass DRAFTED an answer to and left for a human -- an interpretation
    *  (`proposed`) or a critical question (`escalated`). A subset of
@@ -299,8 +306,14 @@ export async function supervise(deps: SuperviseDeps): Promise<SuperviseReport> {
 
     if (recorded.value.tier !== 'applied') continue
     applied += 1
-    if (draft !== undefined) answered += 1
     const carried = await applyDecision(recorded.value.id, 'system')
+    // Counted AFTER the verb, and only when it agreed (fix round 1, Minor 2). `applied` is what
+    // this pass ATTEMPTED -- a refusal is still something the tick did -- but `answered` is a claim
+    // about the world: that a worker now has an answer it did not have before. `answerQuestion` can
+    // refuse (the question was answered while the pass was drafting), and a report saying it
+    // answered a question it did not would be exactly the kind of lie the decision row exists to
+    // prevent.
+    if (carried.ok && draft !== undefined) answered += 1
     if (!carried.ok) {
       // `applyDecision` has already flipped the row to `failed` and appended `supervisor.failed`.
       // Not retried in this pass: the world that refused it is the world this pass observed, and
@@ -380,7 +393,14 @@ async function decideQuestion(input: {
   const lexicon = criticalMatches(question.body)
   if (lexicon.length > 0) {
     return {
-      choice,
+      // The RATIONALE is replaced, not just the tier (fix round 1, Minor 6). The model's own
+      // sentence was written about the action it chose -- "the task text says which port" -- and
+      // leaving it on an escalated, body-null row tells a human the opposite of what happened: that
+      // an answer was drafted and is waiting for approval. What actually happened is that a
+      // deterministic list of words stopped the call, and the row now says so, naming the words.
+      // The model's sentence is not kept: it describes a draft that does not exist, and the draft
+      // beside it already carries the only fact worth keeping -- `critical.lexicon`.
+      choice: { ...choice, rationale: escalatedByLexicon(lexicon) },
       tier: 'escalated',
       draft: {
         body: null,
@@ -442,6 +462,15 @@ async function decideQuestion(input: {
     },
     calls: 1,
   }
+}
+
+/** Why an E2 row is an escalation, in the row's own words: the lexicon keys that fired, in the
+ *  catalogue's order. `and` rather than a bare list because this is the sentence a human reads in
+ *  the panel beside a draft with no body in it. */
+function escalatedByLexicon(lexicon: readonly string[]): string {
+  const keys =
+    lexicon.length === 1 ? lexicon[0] : `${lexicon.slice(0, -1).join(', ')} and ${lexicon[lexicon.length - 1] ?? ''}`
+  return `Escalated without asking a model: the question mentions ${String(keys)}, which only a human may answer.`
 }
 
 /**

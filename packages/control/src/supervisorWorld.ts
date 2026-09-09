@@ -500,10 +500,14 @@ export async function loadSupervisorWorld(
             recipientRole: row.recipientRole,
             recipientSlaveId: row.recipientSlaveId,
             createdAt: row.createdAt.getTime(),
-            // The question's own body is capped by the SAME rule as a thread message's -- it is
-            // one, it is in the thread below under the same cap, and a worker that pasted a file
-            // into its question must not be able to spend the whole answer call on it.
-            body: cap(row.body, THREAD_BODY_MAX_CHARS),
+            // UNCAPPED, unlike the copy of it in `thread` below (fix round 1, Important 1). The
+            // critical lexicon reads THIS field, and a lexicon that read a truncated question would
+            // miss "which api key do I use?" written past the two-thousandth character -- and then
+            // pay for a second model call to answer the very question it exists to stop. Nothing is
+            // unbounded by it: `buildAnswerPrompt` caps the body where the PROMPT is built, which is
+            // where the cap actually bounds a call, and the thread copy carries the cap for the
+            // quoting the model does.
+            body: row.body,
             taskId: row.taskId,
             taskTitle: task?.title ?? null,
             taskDescription: task?.description ?? null,

@@ -88,7 +88,15 @@ export interface SupervisorQuestion {
   readonly recipientRole: string | null
   readonly recipientSlaveId: string | null
   readonly createdAt: number
-  /** What was asked. The critical lexicon reads THIS, never the thread or the summary. */
+  /**
+   * What was asked. The critical lexicon reads THIS, never the thread or the summary -- and reads
+   * ALL of it.
+   *
+   * LOADER CONTRACT: uncapped, deliberately, unlike the same message's copy in {@link thread}. A
+   * truncated body would let a question whose "api key" or "force-push" wording falls past the cap
+   * slip the E2 short-circuit entirely. The cap that bounds a model call is applied where the call
+   * is built (`buildAnswerPrompt`), which is the only place it means anything.
+   */
   readonly body: string
   /** The task the asking run was working on, if it had one -- the `task` source's identity. */
   readonly taskId: string | null

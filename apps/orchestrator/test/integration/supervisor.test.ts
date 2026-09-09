@@ -4,6 +4,7 @@ import {
   DECISION_RETENTION_MS,
   SUPERVISOR_MAX_MODEL_DECISIONS_PER_TICK,
   SUPERVISOR_PER_CALL_CAP_USD,
+  THREAD_BODY_MAX_CHARS,
   WAITING_STALE_MS,
   type Draft,
 } from '@slave-of-ai/domain'
@@ -797,11 +798,18 @@ describe('supervise -- the mailbox (M39)', () => {
     expect(rows[0]).toMatchObject({
       tier: 'escalated',
       status: 'pending',
-      // The MODEL still chose to answer; what the lexicon overrode is the tier, not the choice.
+      // The MODEL still chose to answer; what the lexicon overrode is the tier and the RATIONALE.
       decidedBy: 'model',
       modelCostUsd: 0.01,
       action: { kind: 'answer_question', messageId: fixture.questionId },
     })
+    // Fix round 1, Minor 6: the row says why it is an escalation, in the lexicon's own words. The
+    // model's "the task text says which port" described a draft that was never made, and on a
+    // body-null escalation it would tell a human the opposite of what happened.
+    expect(rows[0]?.rationale).toBe(
+      'Escalated without asking a model: the question mentions secrets, which only a human may answer.',
+    )
+    expect(rows[0]?.rationale).not.toContain('the task text says which port')
     expect(draftOf(rows[0]!)).toEqual({
       body: null,
       sources: [],
@@ -809,6 +817,67 @@ describe('supervise -- the mailbox (M39)', () => {
       critical: { lexicon: ['secrets'], model: false },
       confidence: 'interpretation',
     })
+    expect(await answersIn(fixture.workspaceId)).toHaveLength(0)
+  })
+
+  it('reads the WHOLE question: wording past the thread cap still short-circuits the call', async (): Promise<void> => {
+    // Fix round 1, Important 1. The loader used to cap the question's own body the way it caps a
+    // thread message's, so a long question whose "api key" fell past the two-thousandth character
+    // slipped the lexicon entirely -- and the Supervisor paid for a second call to answer exactly
+    // the question the lexicon exists to stop.
+    const filler = 'The migration notes go on at some length here. '
+    const body = `${filler.repeat(Math.ceil((THREAD_BODY_MAX_CHARS + 200) / filler.length))} And which api key should I use?`
+    expect(body.length).toBeGreaterThan(THREAD_BODY_MAX_CHARS)
+    expect(body.slice(0, THREAD_BODY_MAX_CHARS)).not.toContain('api key')
+
+    const fixture = await seedQuestion({ body })
+    const recorder = recordingDecider(script(answering(SOURCED_ANSWER, 0.02)))
+
+    const report = await supervise({
+      workspaceId: fixture.workspaceId,
+      decider: recorder.decider,
+      model: 'claude-sonnet-5',
+      now: clock,
+    })
+
+    expect(recorder.calls).toHaveLength(1)
+    expect(report).toMatchObject({ applied: 0, proposed: 1, drafted: 1, answered: 0, modelCalls: 1 })
+    const rows = await decisions(fixture.workspaceId)
+    expect(rows[0]).toMatchObject({ tier: 'escalated', status: 'pending' })
+    expect(draftOf(rows[0]!).critical).toEqual({ lexicon: ['secrets'], model: false })
+    expect(draftOf(rows[0]!).body).toBeNull()
+    expect(await answersIn(fixture.workspaceId)).toHaveLength(0)
+  })
+
+  it('does not claim it answered a question the verb refused', async (): Promise<void> => {
+    // Fix round 1, Minor 2. `applied` counts the attempt; `answered` is a claim about the world.
+    // The verb refuses, the row is `failed` with the refusal on it -- and nobody was answered, so
+    // the report must not say anybody was.
+    const fixture = await seedQuestion()
+    const recorder = recordingDecider(script(answering(SOURCED_ANSWER, 0.02)))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const report = await supervise({
+      workspaceId: fixture.workspaceId,
+      decider: recorder.decider,
+      model: 'claude-sonnet-5',
+      now: clock,
+      // The world changing under the pass, at the one instant that matters: between the snapshot
+      // the decision was made on and the verb that carries it out. The question is gone by the time
+      // `answerQuestion` looks for it, which is what a cascaded delete of its asker leaves behind.
+      loadWorld: async (workspaceId, now, opts) => {
+        const loaded = await loadSupervisorWorld(workspaceId, now, opts)
+        await prisma.slaveMessage.delete({ where: { id: fixture.questionId } })
+        return loaded
+      },
+    })
+    warn.mockRestore()
+
+    expect(report).toMatchObject({ decided: 1, applied: 1, answered: 0 })
+    const rows = await decisions(fixture.workspaceId)
+    expect(rows[0]).toMatchObject({ tier: 'applied', status: 'failed' })
+    expect(rows[0]?.failureReason).not.toBeNull()
+    // Nothing was written into the thread: the report's `answered` and the world agree.
     expect(await answersIn(fixture.workspaceId)).toHaveLength(0)
   })
 

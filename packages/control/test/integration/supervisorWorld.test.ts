@@ -334,8 +334,11 @@ describe('loadSupervisorWorld', () => {
     const loaded = world.questions[0]
     expect(loaded?.askerRunPrompt).toHaveLength(RUN_PROMPT_MAX_CHARS)
     expect(loaded?.thread[0]?.body).toHaveLength(THREAD_BODY_MAX_CHARS)
-    // The question's OWN body is the lexicon's input, and it is capped by the same rule.
-    expect(loaded?.body).toHaveLength(THREAD_BODY_MAX_CHARS)
+    // The question's OWN body is NOT capped (fix round 1, Important 1): the critical lexicon reads
+    // this field, and a truncated body would let "which api key?" written past the cap slip the E2
+    // short-circuit and buy a second model call. The cap that bounds a call lives in
+    // `buildAnswerPrompt`; the thread copy above carries the one that bounds quoting.
+    expect(loaded?.body).toHaveLength(THREAD_BODY_MAX_CHARS + 500)
   })
 
   it('gives a question with no task, no run context and no holder the empty values rather than guesses', async (): Promise<void> => {
