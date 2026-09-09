@@ -105,9 +105,14 @@ const TEMPLATE_MARK = 'THE TEMPLATE TEXT MUST NOT REACH A RUN'
 const SLAVE_MARK = 'THIS WORKER OVERRODE ITS TEMPLATE'
 
 // The skill that exists on disk, and the one the catalog remembers and the disk has forgotten.
+// Their DESCRIPTIONS are what `preflightCleanup` identifies a leftover row by: the names alone are
+// ordinary words an operator could have installed for real, and deleting a real `Skill` row
+// cascades its `SlaveSkill` assignments away silently. These two strings are written by this file
+// and by nothing else, so a row carrying one is unambiguously a previous run of this gate.
 const PRESENT_SKILL = 'alpha'
 const MISSING_SKILL = 'ghost'
 const PRESENT_SKILL_DESCRIPTION = "the gate's temp-root skill: proof that an assigned skill reaches a run"
+const MISSING_SKILL_DESCRIPTION = 'a catalogued skill whose files are not on disk'
 
 /** Same as `gate-m36-messaging.mjs`'s `makeRepo` -- a real repository, because the tick provisions
  *  a real worktree in it and the fake CLI commits into that worktree. */
@@ -163,6 +168,26 @@ async function preflightCleanup() {
     console.log(`preflight: removing a leftover ${TEMPLATE_NAME} (${staleTemplate.id})`)
     await prisma.companySlave.deleteMany({ where: { templateId: staleTemplate.id } }).catch(() => {})
     await prisma.slaveTemplate.delete({ where: { id: staleTemplate.id } }).catch(() => {})
+  }
+
+  // The catalog rows, which the `finally` block alone used to remove -- and a `finally` does not
+  // run on SIGINT (review fix round 1). A Ctrl-C during this gate's several-minute wait left a
+  // `ghost` row behind, and `Skill` is `@@unique([providerId, name])`, so the NEXT run died on a
+  // P2002 inside `prisma.skill.create` before it had a workspace to clean up -- a gate that could
+  // only be recovered with hand-written SQL against the shared dev database. Matched on the
+  // description as well as the name, so a skill an operator genuinely installed under either name
+  // is never deleted out from under them (that would cascade its `SlaveSkill` assignments too).
+  const staleSkills = await prisma.skill.deleteMany({
+    where: {
+      provider: { name: 'personal' },
+      OR: [
+        { name: PRESENT_SKILL, description: PRESENT_SKILL_DESCRIPTION },
+        { name: MISSING_SKILL, description: MISSING_SKILL_DESCRIPTION },
+      ],
+    },
+  })
+  if (staleSkills.count > 0) {
+    console.log(`preflight: removing ${staleSkills.count} leftover gate skill row(s) under the personal provider`)
   }
 }
 
@@ -247,6 +272,10 @@ try {
   skillsPresentBefore = (await prisma.skill.findMany({ where: { missingSince: null }, select: { id: true } })).map(
     (row) => row.id,
   )
+  const alphaBeforeSync = await prisma.skill.findFirst({
+    where: { name: PRESENT_SKILL, provider: { name: 'personal' } },
+    select: { id: true },
+  })
   const synced = await syncSkillCatalog()
   console.log(
     `catalog synced against the temp roots: ${JSON.stringify(synced)} (${skillsPresentBefore.length} skill(s) were present ` +
@@ -254,11 +283,16 @@ try {
   )
 
   const presentSkill = await prisma.skill.findFirstOrThrow({ where: { name: PRESENT_SKILL, provider: { name: 'personal' } } })
-  if (!skillsPresentBefore.includes(presentSkill.id)) ownSkillIds.push(presentSkill.id)
+  // Owned by this gate exactly when the sync above CREATED it -- read before the sync rather than
+  // inferred from `skillsPresentBefore` (review fix round 1). A previous run interrupted between
+  // its sync and its teardown leaves an `alpha` row whose `missingSince` is null, which the
+  // membership test would read as "somebody else's, leave it alone" -- and a row pointing at a
+  // temp directory that no longer exists would then live in the catalog forever.
+  if (alphaBeforeSync === null) ownSkillIds.push(presentSkill.id)
   // The catalog row with nothing under it. Inserted, not deleted from disk: this is what an
   // uninstalled skill leaves behind, and it is the only way to produce one.
   const missingSkill = await prisma.skill.create({
-    data: { providerId: presentSkill.providerId, name: MISSING_SKILL, description: 'a catalogued skill whose files are not on disk' },
+    data: { providerId: presentSkill.providerId, name: MISSING_SKILL, description: MISSING_SKILL_DESCRIPTION },
   })
   ownSkillIds.push(missingSkill.id)
   console.log(`skills: ${PRESENT_SKILL} ${presentSkill.id} (on disk), ${MISSING_SKILL} ${missingSkill.id} (no directory)`)
