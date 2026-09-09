@@ -87,6 +87,27 @@ describe('verifySources -- what is rejected, and why', () => {
     expect(verifySources([invented], QUESTION, WORLD).rejected).toEqual([{ source: invented, reason: 'unknown_ref' }])
   })
 
+  /**
+   * The question is IN the thread, so without this rule a model could answer "which port?" by
+   * quoting the words "which port?" back, have that citation verify, and have the answer sent to a
+   * worker automatically with no human anywhere near it. Circular by construction: the check exists
+   * to prove the answer came from somewhere the asker did not.
+   */
+  it('rejects a citation of the question itself -- it is not evidence for its own answer', () => {
+    const selfCited = source({ kind: 'message', ref: 'm1', quote: 'Which port does the database listen on?' })
+    const result = verifySources([selfCited], QUESTION, WORLD)
+    expect(result.verified).toEqual([])
+    expect(result.rejected).toEqual([{ source: selfCited, reason: 'unknown_ref' }])
+    expect(isSourced(result)).toBe(false)
+  })
+
+  it('still accepts another message in the same thread', () => {
+    // The rule is about the question, not about the thread: a real answer or note in it is
+    // evidence, and rejecting the whole thread would make a re-asked question unanswerable.
+    expect(verifySources([source({ kind: 'message', ref: 'm2', quote: 'answers on 6000' })], QUESTION, WORLD).rejected)
+      .toEqual([])
+  })
+
   it('rejects a message source with no ref at all', () => {
     const refless = source({ kind: 'message', ref: null, quote: 'answers on 6000' })
     expect(verifySources([refless], QUESTION, WORLD).rejected[0]?.reason).toBe('unknown_ref')

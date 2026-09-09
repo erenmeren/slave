@@ -103,10 +103,23 @@ export interface SupervisorQuestion {
    *  null when the run recorded none (a pre-M37 run, or a run that never started). */
   readonly askerRunPrompt: string | null
   /**
-   * The slave ids that may answer this question TODAY: the addressed slave, or every holder of the
-   * addressed role. Resolved by the loader against the same rule delivery uses, so the domain
-   * never has to re-derive "who could take this" from the roster -- and a re-address is offered
-   * only to somebody on this list.
+   * The slave ids that may answer this question TODAY, resolved by the loader so the domain never
+   * re-derives "who could take this" from the roster. A re-address is offered only to somebody on
+   * this list, and `mayAnswer` (`./policy.js`) re-checks the same rule the loader applied.
+   *
+   * LOADER CONTRACT (M39 Task 3 implements it), and the two cases are NOT the same:
+   * - **Role-addressed** (`recipientRole !== null`): every slave whose `runtimeRoles` include that
+   *   role. Nobody else can be dispatched the question, so nobody else is a holder -- which is why
+   *   an `unanswerable_question` about a role has an EMPTY list by construction (that is the
+   *   predicate) and is fixed by a staffing proposal rather than a re-address.
+   * - **Slave-addressed** (`recipientSlaveId !== null`): the addressed slave, PLUS every slave
+   *   whose `runtimeRoles` include the asker task's `requiredRole`. A colleague who could be
+   *   dispatched the asking task can answer a question about it, which is what makes re-addressing
+   *   a question away from a busy or departed slave possible at all. A null or empty
+   *   `requiredRole` adds nobody: there is no role to match on.
+   *
+   * A slave who has left the workspace is never here, so an id in this list is always in
+   * `SupervisorWorld.slaves`.
    */
   readonly holders: readonly string[]
 }

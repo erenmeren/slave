@@ -31,11 +31,19 @@ export interface Source {
   readonly quote: string
 }
 
-/** Validates one citation. Input is `unknown` -- a missing `ref` becomes `null` rather than a
- *  refusal, since erratum E1 makes it meaningless for three of the four kinds. */
+/**
+ * Validates one citation. Input is `unknown` -- a `ref` that is missing, null OR EMPTY becomes
+ * `null` rather than a refusal, since erratum E1 makes it meaningless for three of the four kinds:
+ * a model that wrote `"ref": ""` for a `task` citation said nothing wrong, and failing the parse
+ * would throw away a whole well-sourced answer over a field that source kind ignores. An empty ref
+ * on a `message` citation is the same as no ref -- `verifySources` rejects it as `unknown_ref`.
+ */
 export const sourceSchema: z.ZodType<Source, z.ZodTypeDef, unknown> = z.object({
   kind: z.enum(SOURCE_KINDS),
-  ref: z.string().min(1).nullish().transform((ref) => ref ?? null),
+  ref: z
+    .string()
+    .nullish()
+    .transform((ref) => (ref === undefined || ref === null || ref === '' ? null : ref)),
   quote: z.string().min(1).max(SOURCE_QUOTE_MAX_CHARS),
 })
 
@@ -78,16 +86,22 @@ export interface Draft {
 /** Validates a `SupervisorDecision.draft` `Json` value at read, the way `actionSchema` validates
  *  the action beside it -- a hand-edited or pre-migration row must not crash the panel or the CLI. */
 export const draftSchema: z.ZodType<Draft, z.ZodTypeDef, unknown> = z.object({
-  body: z.string().nullable(),
+  // Both bodies carry the same cap the model's own answer was held to. `body` is what
+  // `answerQuestion` sends and `editedBody` is what a human sent instead; a row that stored more
+  // than `ANSWER_MAX_CHARS` would be a way past the one limit on how much text reaches a worker.
+  // `body` stays NULLABLE -- erratum E2's escalated draft has no body at all.
+  body: z.string().max(ANSWER_MAX_CHARS).nullable(),
   sources: z.array(sourceSchema),
   rejectedSources: z.array(z.object({ source: sourceSchema, reason: z.string().min(1) })),
   critical: z.object({ lexicon: z.array(z.string().min(1)), model: z.boolean() }),
   confidence: z.enum(['sourced', 'interpretation']),
-  editedBody: z.string().optional(),
+  editedBody: z.string().max(ANSWER_MAX_CHARS).optional(),
 })
 
 /** `text` at most `max` characters. The loader caps too; this is the cap that actually bounds the
- *  call, applied where the prompt is built rather than trusted from upstream. */
+ *  call, applied where the prompt is built rather than trusted from upstream. The question's own
+ *  body is capped by the same rule as a thread message's: it IS one, and a worker that pasted a
+ *  file into its question must not be able to spend the whole call on it. */
 function cap(text: string, max: number): string {
   return text.length <= max ? text : text.slice(0, max)
 }
@@ -155,7 +169,7 @@ export function buildAnswerPrompt(input: {
     'QUESTION',
     `  from: ${question.askerSlaveId}`,
     `  to: ${question.recipientSlaveId ?? (question.recipientRole === null ? 'nobody' : `the "${question.recipientRole}" role`)}`,
-    `  body: ${question.body}`,
+    `  body: ${cap(question.body, THREAD_BODY_MAX_CHARS)}`,
     '',
     'SOURCE "task" -- the task the asker is working on',
     `  title: ${question.taskTitle ?? NONE}`,
@@ -167,7 +181,8 @@ export function buildAnswerPrompt(input: {
     'SOURCE "run_context" -- the instructions the asker was given for this run',
     `  ${question.askerRunPrompt === null ? NONE : cap(question.askerRunPrompt, RUN_PROMPT_MAX_CHARS)}`,
     '',
-    'SOURCE "message" -- the thread, oldest first; cite one by its [id]',
+    'SOURCE "message" -- the thread, oldest first; cite one by its [id]. Do NOT cite the question',
+    'itself: it is not evidence for its own answer, and a citation of it is thrown away.',
     threadLines(question.thread),
     '',
     'ROSTER (context only -- never a source)',

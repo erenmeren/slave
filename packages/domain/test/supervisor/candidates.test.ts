@@ -40,15 +40,38 @@ describe('candidates -- the shape every list shares', () => {
   })
 
   it('offers candidates that survive candidateSchema, the validator that reads them back off the row', () => {
-    const w = world({
+    // Two worlds, because one cannot hold both a blocked task and a question situation without the
+    // second hiding the first: the task world covers the task actions, the question world covers
+    // the two the M39 catalogue added.
+    const taskWorld = world({
       tasks: [task({ status: 'blocked' })],
       slaves: [slave({ id: 's1', role: 'QA Reviewer', runtimeRoles: ['qa'] })],
     })
-    for (const situation of observe(w)) {
-      for (const candidate of candidates(situation, w)) {
-        expect(candidateSchema.safeParse(candidate).success, `${candidate.action.kind} did not validate`).toBe(true)
+    const questionWorld = world({
+      questions: [
+        question({
+          createdAt: NOW - WAITING_STALE_MS - 1,
+          askerSlaveId: 's9',
+          recipientRole: 'backend',
+          holders: ['s1', 's2'],
+        }),
+      ],
+      slaves: [
+        slave({ id: 's1', name: 'Alex', runtimeRoles: ['backend'], busy: true }),
+        slave({ id: 's2', name: 'Ops', runtimeRoles: ['backend'] }),
+        slave({ id: 's9', name: 'Maya', role: 'Product', runtimeRoles: ['product'] }),
+      ],
+    })
+    const seen = new Set<string>()
+    for (const w of [taskWorld, questionWorld]) {
+      for (const situation of observe(w)) {
+        for (const candidate of candidates(situation, w)) {
+          seen.add(candidate.action.kind)
+          expect(candidateSchema.safeParse(candidate).success, `${candidate.action.kind} did not validate`).toBe(true)
+        }
       }
     }
+    expect(seen.has('answer_question') && seen.has('reassign_question')).toBe(true)
   })
 
   it('stamps each candidate with the tier the policy gives its action IN THIS SITUATION', () => {
@@ -174,10 +197,21 @@ describe('candidates -- the staffing situations', () => {
   })
 })
 
+/**
+ * Every world here is one Task 3's loader could really produce, and `holders` is filled by the
+ * loader contract in `world.ts` rather than by whatever would make the case pass: for a
+ * ROLE-addressed question, every holder of that role; for a SLAVE-addressed one, the addressed
+ * slave plus every holder of the asker task's `requiredRole`. The asker is always a third slave --
+ * a question addressed to the slave who asked it is not a state M36 can create.
+ */
 describe('candidates -- questions', () => {
   const STALE = NOW - WAITING_STALE_MS - 1
   const BUSY_HOLDER = slave({ id: 's1', name: 'Alex', runtimeRoles: ['backend'], busy: true })
   const IDLE_HOLDER = slave({ id: 's2', name: 'Ops', role: 'Operator', runtimeRoles: ['backend'], busy: false })
+  const ASKER = slave({ id: 's9', name: 'Maya', role: 'Product Owner', runtimeRoles: ['product'] })
+  /** The asking task, whose `requiredRole` is what makes a peer a holder of a slave-addressed
+   *  question (the loader contract's second limb). */
+  const ASKING_TASK = task({ id: 't1', requiredRole: 'backend' })
 
   it('offers an answer first for a stale question, and it is never routine on its own', () => {
     const w = world({ questions: [question({ createdAt: STALE })], slaves: [slave()] })
@@ -187,11 +221,13 @@ describe('candidates -- questions', () => {
     expect(cands[0]?.tier).toBe('proposed')
   })
 
-  it('offers a re-address to an idle holder when the addressed slave cannot take it', () => {
+  it('offers a re-address to an idle holder of the role when the question has waited', () => {
+    // The reachable case: Maya asked the "backend" role, Alex holds it and is busy, Ops holds it
+    // and is not. Role-addressed, so `holders` is exactly the two backend holders.
     const w = world({
-      questions: [question({ createdAt: STALE, recipientSlaveId: 's1', recipientRole: null, holders: ['s1', 's2'] })],
-      slaves: [BUSY_HOLDER, IDLE_HOLDER],
-      tasks: [task({ id: 't1', requiredRole: 'backend' })],
+      questions: [question({ createdAt: STALE, askerSlaveId: 's9', recipientRole: 'backend', holders: ['s1', 's2'] })],
+      slaves: [BUSY_HOLDER, IDLE_HOLDER, ASKER],
+      tasks: [ASKING_TASK],
     })
     const cands = offered(w)
     expect(kinds(cands)).toEqual(['answer_question', 'reassign_question', 'escalate_to_human', 'no_action'])
@@ -200,26 +236,61 @@ describe('candidates -- questions', () => {
     expect(cands[1]?.why).toContain('Ops')
   })
 
+  it('offers a re-address to a task-role peer when the addressed slave cannot take it', () => {
+    // Slave-addressed to Alex, who is busy. `holders` is Alex plus the holders of the asking task's
+    // required role -- which is how Ops, whom the question never named, is allowed to answer it.
+    const w = world({
+      questions: [
+        question({
+          createdAt: STALE,
+          askerSlaveId: 's9',
+          recipientSlaveId: 's1',
+          recipientRole: null,
+          holders: ['s1', 's2'],
+        }),
+      ],
+      slaves: [BUSY_HOLDER, IDLE_HOLDER, ASKER],
+      tasks: [ASKING_TASK],
+    })
+    const cands = offered(w)
+    expect(kinds(cands)).toEqual(['answer_question', 'reassign_question', 'escalate_to_human', 'no_action'])
+    expect(cands[1]?.action).toEqual({ kind: 'reassign_question', messageId: 'm1', toSlaveId: 's2' })
+    expect(cands[1]?.tier).toBe('applied')
+  })
+
   it('does not re-address a question whose addressed slave is sitting there idle', () => {
     const w = world({
-      questions: [question({ createdAt: STALE, recipientSlaveId: 's1', recipientRole: null, holders: ['s1', 's2'] })],
-      slaves: [slave({ id: 's1', busy: false }), IDLE_HOLDER],
+      questions: [
+        question({
+          createdAt: STALE,
+          askerSlaveId: 's9',
+          recipientSlaveId: 's1',
+          recipientRole: null,
+          holders: ['s1', 's2'],
+        }),
+      ],
+      slaves: [slave({ id: 's1', name: 'Alex', runtimeRoles: ['backend'], busy: false }), IDLE_HOLDER, ASKER],
+      tasks: [ASKING_TASK],
     })
     expect(kinds(offered(w))).toEqual(['answer_question', 'escalate_to_human', 'no_action'])
   })
 
   it('re-addresses only to a slave who could actually answer -- an idle stranger is not offered', () => {
     const w = world({
-      questions: [question({ createdAt: STALE, holders: ['s1'] })],
-      slaves: [BUSY_HOLDER, slave({ id: 's3', name: 'Sam', role: 'Sales', runtimeRoles: ['sales'] })],
+      questions: [question({ createdAt: STALE, askerSlaveId: 's9', recipientRole: 'backend', holders: ['s1'] })],
+      slaves: [BUSY_HOLDER, slave({ id: 's3', name: 'Sam', role: 'Sales', runtimeRoles: ['sales'] }), ASKER],
+      tasks: [ASKING_TASK],
     })
     expect(kinds(offered(w))).toEqual(['answer_question', 'escalate_to_human', 'no_action'])
   })
 
   it('never re-addresses a question back to the slave who asked it', () => {
+    // Ops asked the "backend" role a question and holds it herself; Alex, the only other holder, is
+    // busy. There is nobody left to re-address to, and Ops is not it.
     const w = world({
-      questions: [question({ createdAt: STALE, askerSlaveId: 's2', holders: ['s1', 's2'] })],
+      questions: [question({ createdAt: STALE, askerSlaveId: 's2', recipientRole: 'backend', holders: ['s1', 's2'] })],
       slaves: [BUSY_HOLDER, IDLE_HOLDER],
+      tasks: [ASKING_TASK],
     })
     expect(kinds(offered(w))).toEqual(['answer_question', 'escalate_to_human', 'no_action'])
   })
@@ -232,15 +303,18 @@ describe('candidates -- questions', () => {
   })
 
   it('offers a re-address for a question whose named slave has left, when somebody else can take it', () => {
+    // A departed slave is never a holder, so `holders` is the task-role peers alone -- which is the
+    // only reason this question is answerable by anybody at all.
     const w = world({
       questions: [
-        question({ recipientRole: null, recipientSlaveId: 'gone', holders: ['s2'], taskId: 't1' }),
+        question({ askerSlaveId: 's9', recipientRole: null, recipientSlaveId: 'gone', holders: ['s2'], taskId: 't1' }),
       ],
-      slaves: [IDLE_HOLDER],
-      tasks: [task({ id: 't1', requiredRole: 'backend' })],
+      slaves: [IDLE_HOLDER, ASKER],
+      tasks: [ASKING_TASK],
     })
     const cands = offered(w)
     expect(kinds(cands)).toEqual(['answer_question', 'reassign_question', 'escalate_to_human', 'no_action'])
+    expect(cands[1]?.action).toEqual({ kind: 'reassign_question', messageId: 'm1', toSlaveId: 's2' })
     expect(cands[1]?.tier).toBe('applied')
   })
 

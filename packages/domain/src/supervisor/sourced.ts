@@ -55,6 +55,12 @@ function sourceText(source: Source, question: SupervisorQuestion, world: Supervi
         : question.askerRunPrompt
     case 'message': {
       if (source.ref === null) return null
+      // THE QUESTION IS NOT EVIDENCE FOR ITS OWN ANSWER. The thread includes the question itself
+      // (`SupervisorQuestion.thread`), so a model could otherwise quote the very words it was asked
+      // -- "which port? the one on 5433" -- and that citation would verify, make the answer
+      // `sourced`, and send it to a worker with no human ever seeing it. Circular by construction:
+      // the whole point of the check is that the answer came from somewhere the asker did not.
+      if (source.ref === question.messageId) return null
       const message = question.thread.find((entry) => entry.messageId === source.ref)
       return message?.body ?? null
     }
@@ -69,6 +75,11 @@ function sourceText(source: Source, question: SupervisorQuestion, world: Supervi
  * recorded run context); a `message` citation naming an id that is not in the thread -- or naming
  * none at all -- is `unknown_ref`, since the model pointed at something rather than nothing;
  * everything else that fails is `quote_not_found`.
+ *
+ * One `message` ref is rejected on principle rather than for being absent: THE QUESTION'S OWN id.
+ * The question is not evidence for its own answer -- it is in the thread, so quoting it would
+ * verify, and an answer built out of the words it was asked in would go out automatically. It is
+ * reported as `unknown_ref`, the reason for every message citation that points nowhere usable.
  */
 export function verifySources(
   sources: readonly Source[],

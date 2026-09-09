@@ -82,9 +82,12 @@ describe('buildAnswerPrompt', () => {
     expect(prompt).toContain('‹slave-ask>')
   })
 
-  it('caps a thread body and the recorded run prompt rather than pasting a novel into the call', () => {
+  it('caps the question body, a thread body and the recorded run prompt rather than pasting a novel into the call', () => {
     const prompt = buildAnswerPrompt({
       question: question({
+        // The question is a thread message like any other, and a worker that pasted a file into it
+        // must not be able to spend the whole call on it.
+        body: `${'q'.repeat(THREAD_BODY_MAX_CHARS + 500)}QEND`,
         askerRunPrompt: `${'r'.repeat(RUN_PROMPT_MAX_CHARS + 500)}TAIL`,
         thread: [threadMessage({ body: `${'t'.repeat(THREAD_BODY_MAX_CHARS + 500)}TAIL` })],
       }),
@@ -92,8 +95,15 @@ describe('buildAnswerPrompt', () => {
       profile: null,
     })
     expect(prompt).not.toContain('TAIL')
+    expect(prompt).not.toContain('QEND')
+    expect(prompt).not.toContain('q'.repeat(THREAD_BODY_MAX_CHARS + 1))
     expect(prompt).not.toContain('t'.repeat(THREAD_BODY_MAX_CHARS + 1))
     expect(prompt).not.toContain('r'.repeat(RUN_PROMPT_MAX_CHARS + 1))
+  })
+
+  it('tells the model not to cite the question it is answering', () => {
+    const prompt = buildAnswerPrompt({ question: question(), world: WORLD, profile: null })
+    expect(prompt).toContain('Do NOT cite the question')
   })
 
   it('says so rather than pretending when a source is simply not recorded', () => {
@@ -170,6 +180,17 @@ describe('sourceSchema and draftSchema', () => {
     expect(sourceSchema.safeParse({ kind: 'message', ref: 'm2' }).success).toBe(false)
   })
 
+  it('coerces an empty ref to null rather than throwing a whole good answer away', () => {
+    // A model that wrote `"ref": ""` for a `task` citation said nothing wrong (erratum E1 ignores
+    // the ref for three of the four kinds), and failing the parse would lose every other source
+    // with it. On a `message` citation an empty ref is the same as none: `verifySources` rejects it.
+    const parsed = sourceSchema.safeParse({ kind: 'task', ref: '', quote: 'PostgreSQL on port 5433' })
+    expect(parsed.success && parsed.data.ref).toBeNull()
+    expect(parseAnswer(answerJson({ sources: [{ kind: 'task', ref: '', quote: 'x' }] }))?.sources).toEqual([
+      { kind: 'task', ref: null, quote: 'x' },
+    ])
+  })
+
   it('validates the draft a decision row stores, edited body and all', () => {
     const draft = {
       body: 'The database listens on port 5433.',
@@ -192,6 +213,20 @@ describe('sourceSchema and draftSchema', () => {
     ).toBe(true)
     expect(draftSchema.safeParse({ ...draft, confidence: 'guess' }).success).toBe(false)
     expect(draftSchema.safeParse({ ...draft, critical: { lexicon: [] } }).success).toBe(false)
+  })
+
+  it('holds both bodies to the same cap the model answer was held to', () => {
+    const draft = {
+      body: 'a'.repeat(ANSWER_MAX_CHARS),
+      sources: [],
+      rejectedSources: [],
+      critical: { lexicon: [], model: false },
+      confidence: 'interpretation' as const,
+    }
+    expect(draftSchema.safeParse(draft).success).toBe(true)
+    expect(draftSchema.safeParse({ ...draft, body: 'a'.repeat(ANSWER_MAX_CHARS + 1) }).success).toBe(false)
+    expect(draftSchema.safeParse({ ...draft, editedBody: 'h'.repeat(ANSWER_MAX_CHARS) }).success).toBe(true)
+    expect(draftSchema.safeParse({ ...draft, editedBody: 'h'.repeat(ANSWER_MAX_CHARS + 1) }).success).toBe(false)
   })
 
   it('keeps a rejected source and its reason on the draft', () => {
