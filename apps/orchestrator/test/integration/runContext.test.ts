@@ -448,6 +448,38 @@ describe('buildRunContext', () => {
       expect(git(['status', '--porcelain'], fixture.worktreePath)).toBe('')
     })
 
+    it('never removes an injected directory the repository has since begun tracking (final review)', async () => {
+      // Dispatch one: `alpha` is copied in, and the marker names it as this orchestrator's.
+      await assign(fixture, 'alpha', { description: 'the alpha skill' })
+      await buildImplementation(fixture)
+      expect(existsSync(join(fixture.worktreePath, '.claude/skills/alpha/SKILL.md'))).toBe(true)
+
+      // Between the two dispatches the run itself force-adds the injected directory and commits
+      // it -- the exclude line makes `git add` skip it, so `-f` is exactly how a slave that wanted
+      // the skill in the repository would do it. From here on the directory is the REPOSITORY's.
+      git(['add', '-f', '.claude/skills/alpha'], fixture.worktreePath)
+      git(
+        ['-c', 'user.name=Fixture', '-c', 'user.email=f@example.com', 'commit', '-q', '-m', 'adopt the alpha skill'],
+        fixture.worktreePath,
+      )
+      const committed = git(['rev-parse', 'HEAD'], fixture.worktreePath)
+
+      // Dispatch two. The removal loop reads `alpha` out of its own marker and used to `rmSync` it,
+      // which showed up as a DELETION in the slave's tree, in `Checkpoint.dirtyFiles` and in the
+      // run's own commit.
+      const { manifest } = await buildImplementation(fixture)
+
+      expect(existsSync(join(fixture.worktreePath, '.claude/skills/alpha/SKILL.md'))).toBe(true)
+      expect(git(['status', '--porcelain'], fixture.worktreePath)).toBe('')
+      expect(git(['rev-parse', 'HEAD'], fixture.worktreePath)).toBe(committed)
+      // Not copied (the repository's copy is what the runtime finds), not missing, and named as
+      // shadowed exactly once even though both loops asked about it.
+      expect(skillsSource(manifest)).toMatchObject({ copied: [], missing: [], shadowedByRepo: ['alpha'] })
+      // And the marker no longer claims it, so no later dispatch believes it may remove it.
+      const marker = JSON.parse(readFileSync(join(fixture.worktreePath, '.claude/skills/.slaveofai-injected.json'), 'utf8')) as unknown
+      expect(marker).toEqual([])
+    })
+
     it('leaves a skill the repository itself tracks alone, and says so', async () => {
       // The repo ships its own `.claude/skills/house-style`, committed on the branch this worktree
       // is on. Overwriting it would put a diff in the slave's own tree.
@@ -491,7 +523,7 @@ describe('buildRunContext', () => {
     it('copies nothing for a Cursor run and says why', async () => {
       await assign(fixture, 'writing-plans')
 
-      const { manifest } = await buildRunContext({
+      const { prompt, manifest } = await buildRunContext({
         runId: fixture.runId,
         kind: 'implementation',
         slaveId: fixture.slaveId,
@@ -504,6 +536,10 @@ describe('buildRunContext', () => {
 
       expect(skillsSource(manifest)).toMatchObject({ copied: [], provider_unsupported: true })
       expect(existsSync(join(fixture.worktreePath, '.claude/skills/writing-plans'))).toBe(false)
+      // And it is told WHY (final review). "Not installed in this checkout" is false here and
+      // invites the run to look for a mechanism Cursor does not have.
+      expect(prompt).toContain('This runtime has no skills mechanism, so none were installed for you.')
+      expect(prompt).not.toContain('installed in this checkout')
     })
 
     it('injects nothing into a run with no worktree of its own (spec erratum E4)', async () => {

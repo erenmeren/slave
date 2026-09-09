@@ -151,12 +151,13 @@ const USAGE = `usage: orchestrator <command> [options]
                                        persona, not what it is dispatched as. Refused while the
                                        slave holds a live run.
   set-profile --slave <id> | --template <id> | --company-slave <id>
-              (--file <path> | --clear)
+              (--file <path> | --clear) [--by <name>]
                                        set (or clear) the persona Markdown at one level of the
                                        override chain: the worker's own, its roster row's, or its
                                        template's. First non-null wins at dispatch. Read from a
-                                       file, not a flag -- it can be 16k characters.
-  set-runtime-roles --slave <id> --roles a,b,c
+                                       file, not a flag -- it can be 16k characters. --by names
+                                       the operator on the event.
+  set-runtime-roles --slave <id> --roles a,b,c [--by <name>]
                                        replace the roles this slave may be DISPATCHED as -- the
                                        scheduler's match, reviewer/manager staffing, and message
                                        role-addressing all read this set. --roles '' parks the

@@ -78,9 +78,14 @@ export const REVIEW_VERDICT_INSTRUCTIONS = [
  * `m8-flow` mode selects the planning arm on it. This text must also never contain `"verdict"` --
  * the same fake selects the review arm on that literal, and a planning prompt carrying it would be
  * misrouted to the review fixture.
+ *
+ * **The one word that is NOT verbatim** (spec erratum E6, final review): `below` is `above` here.
+ * `buildPlanningPrompt` put the goal after this text; {@link SECTION_ORDER}`.planning` puts the
+ * `planning_goal` section BEFORE the trailer, so a prompt still saying "the GOAL below" would end
+ * with an instruction pointing at nothing and contradict the prompt it is part of.
  */
 export const PLANNING_GRAPH_INSTRUCTIONS = [
-  'You are the engineering manager. Decompose the GOAL below into a "task graph" for your team.',
+  'You are the engineering manager. Decompose the GOAL above into a "task graph" for your team.',
   'Read the repository for context, but do NOT modify, create, or commit any file.',
   '',
   '',

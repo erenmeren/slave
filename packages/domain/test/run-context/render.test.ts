@@ -97,9 +97,15 @@ describe('renderRunContext', () => {
     expect(prompt.endsWith(PLANNING_GRAPH_INSTRUCTIONS)).toBe(true)
     // Fix round 1: both blank-string separators from `buildPlanningPrompt`'s own array (the one
     // before `GOAL: ...`, the one after it) are present.
+    //
+    // Final review (spec erratum E6): ONE word deviates from `buildPlanningPrompt`'s text. That
+    // function put the goal after this trailer; `SECTION_ORDER.planning` puts it before, so the
+    // constant says "the GOAL above". Asserted as a deviation rather than quietly folded into the
+    // expectation, so the next reader knows the reassembly is one word off the pre-M37 source and
+    // exactly which word.
     expect(PLANNING_GRAPH_INSTRUCTIONS).toBe(
       [
-        'You are the engineering manager. Decompose the GOAL below into a "task graph" for your team.',
+        'You are the engineering manager. Decompose the GOAL above into a "task graph" for your team.',
         'Read the repository for context, but do NOT modify, create, or commit any file.',
         '',
         '',
@@ -108,6 +114,17 @@ describe('renderRunContext', () => {
         'Between 1 and 20 tasks. Keys are plan-local. dependsOn lists keys, no cycles.',
       ].join('\n'),
     )
+    // The deviation, spelled out: the pre-M37 source is this text with `above` replaced by `below`,
+    // and nothing else differs.
+    const preM37 = PLANNING_GRAPH_INSTRUCTIONS.replace('the GOAL above', 'the GOAL below')
+    expect(preM37.split('\n')[0]).toBe(
+      'You are the engineering manager. Decompose the GOAL below into a "task graph" for your team.',
+    )
+    expect(preM37.split('\n').slice(1)).toEqual(PLANNING_GRAPH_INSTRUCTIONS.split('\n').slice(1))
+    // Both literals the fake CLI's `m8-flow` mode selects on: `"task graph"` picks the planning
+    // arm, and `"verdict"` -- which this text must never contain -- would misroute it to review.
+    expect(PLANNING_GRAPH_INSTRUCTIONS).toContain('"task graph"')
+    expect(PLANNING_GRAPH_INSTRUCTIONS).not.toContain('"verdict"')
   })
 
   it('does not append instructions for an implementation run', () => {

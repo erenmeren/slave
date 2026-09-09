@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { prisma } from '@slave-of-ai/db/client'
 import { PROFILE_MAX_CHARS, err, ok, type Result } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
+import { lockSlave } from './org.js'
 import type { ControlRefusal } from './refusal.js'
 
 /**
@@ -97,14 +98,15 @@ export async function setProfile(
   }
 
   // A slave target needs its workspace for the event, so the read and the write go in one
-  // transaction -- `setSlaveRole`'s shape. The refusal is returned from the callback rather than
-  // thrown because nothing has been written when it is reached; a refusal AFTER a write in here
-  // would have to throw, or the transaction would commit.
+  // transaction -- `setSlaveRole`'s shape, through `lockSlave` itself (final review). The plain
+  // `findUnique` this used to open with left a window: a slave deleted between the two statements
+  // made the `update` throw a Prisma `P2025` that nothing catches, which the web layer serves as a
+  // 500 where the `slave_not_found` 404 below belongs. `SELECT ... FOR UPDATE` closes it. The
+  // refusal is returned from the callback rather than thrown because nothing has been written when
+  // it is reached; a refusal AFTER a write in here would have to throw, or the transaction would
+  // commit.
   const outcome = await prisma.$transaction(async (tx) => {
-    const slave = await tx.slave.findUnique({
-      where: { id: target.slaveId },
-      select: { id: true, team: { select: { workspaceId: true } } },
-    })
+    const slave = await lockSlave(tx, target.slaveId)
     if (slave === null) return null
     await tx.slave.update({ where: { id: target.slaveId }, data: { profile: text } })
     return { workspaceId: slave.team.workspaceId }
@@ -180,14 +182,12 @@ export async function setRuntimeRoles(
   const normalised = normaliseRoles(roles)
   if (!normalised.ok) return normalised
 
-  // One transaction for the read and the write, as `setProfile`'s slave branch above: the event
-  // needs the workspace the read found, and the refusal is returned (not thrown) because it is
-  // reached before anything has been written.
+  // One locked transaction for the read and the write, as `setProfile`'s slave branch above: the
+  // event needs the workspace the read found, the `FOR UPDATE` inside `lockSlave` keeps a row
+  // deleted mid-verb a `slave_not_found` rather than an uncaught `P2025` (final review), and the
+  // refusal is returned (not thrown) because it is reached before anything has been written.
   const outcome = await prisma.$transaction(async (tx) => {
-    const slave = await tx.slave.findUnique({
-      where: { id: slaveId },
-      select: { id: true, team: { select: { workspaceId: true } } },
-    })
+    const slave = await lockSlave(tx, slaveId)
     if (slave === null) return null
     await tx.slave.update({ where: { id: slaveId }, data: { runtimeRoles: normalised.value } })
     return { workspaceId: slave.team.workspaceId }

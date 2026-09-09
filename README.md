@@ -201,8 +201,8 @@ npm run orchestrator -- restore-workspace --workspace <id>
 npm run orchestrator -- list-workspaces                     # every project, archived ones marked
 npm run orchestrator -- rename-slave --slave <id> --name <n>
 npm run orchestrator -- set-role --slave <id> --role <r>    # the TITLE only; dispatch reads set-runtime-roles
-npm run orchestrator -- set-runtime-roles --slave <id> --roles backend,reviewer   # --roles '' parks it
-npm run orchestrator -- set-profile --slave <id> | --template <id> | --company-slave <id> (--file <path> | --clear)
+npm run orchestrator -- set-runtime-roles --slave <id> --roles backend,reviewer [--by <name>]   # --roles '' parks it
+npm run orchestrator -- set-profile --slave <id> | --template <id> | --company-slave <id> (--file <path> | --clear) [--by <name>]
 npm run orchestrator -- show-context --run <id> [--prompt]  # the manifest of what a run was told
 npm run orchestrator -- delete-slave --slave <id> --yes
 npm run orchestrator -- delete-team --team <id> --yes       # a department WITH its slaves and their history

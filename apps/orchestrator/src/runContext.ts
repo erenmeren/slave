@@ -215,16 +215,29 @@ export async function injectSkills(input: {
     // Either way there is nothing this dispatch may claim to have put there, so it removes nothing.
     previouslyInjected = []
   }
+  const copied: string[] = []
+  const missing: string[] = []
+  // A set, not an array: one name reaches it from both loops below when a skill that is still
+  // assigned is also one the repository has started tracking since the last dispatch.
+  const shadowed = new Set<string>()
+
   for (const name of previouslyInjected) {
     // The marker is written by this function and lives inside the worktree, but it is still a file
     // on disk: a `..` in it must not be able to delete anything outside the skills directory.
     if (!isPlainSegment(name)) continue
+    // Trackedness can change UNDER a directory this orchestrator injected (final review): the run
+    // itself can `git add -f .claude/skills/<name>` and commit it, or a branch that ships that
+    // directory can be checked out into this worktree. Removing it then would put a DELETION in
+    // the slave's own `git status` -- and therefore in `Checkpoint.dirtyFiles`, in the run's own
+    // commit, and in the merge. It is the repository's directory now, not this dispatch's, so it
+    // is left exactly where the copy path leaves a tracked skill: alone, and named in the manifest.
+    if (await repoTracks(worktreePath, `${SKILLS_DIR}/${name}`)) {
+      shadowed.add(name)
+      continue
+    }
     rmSync(join(skillsDir, name), { recursive: true, force: true })
   }
 
-  const copied: string[] = []
-  const missing: string[] = []
-  const shadowedByRepo: string[] = []
   const excludePath = await excludeFilePath(worktreePath)
   const markerLine = `/${SKILLS_DIR}/${INJECTED_MARKER}`
 
@@ -239,7 +252,7 @@ export async function injectSkills(input: {
         continue
       }
       if (await repoTracks(worktreePath, `${SKILLS_DIR}/${skill.name}`)) {
-        shadowedByRepo.push(skill.name)
+        shadowed.add(skill.name)
         continue
       }
       const source = skill.missingSince !== null ? null : skillSourceDir(input.roots, skill.providerName, skill.name)
@@ -285,6 +298,9 @@ export async function injectSkills(input: {
     }
   }
 
+  // Sorted, because the two loops that fill it visit names in different orders (the marker's, then
+  // the assignment's) and the manifest is read by a human comparing one run against another.
+  const shadowedByRepo = [...shadowed].toSorted((a, b) => a.localeCompare(b))
   return { copied, missing, shadowedByRepo, provider_unsupported: false, no_worktree: false }
 }
 
@@ -301,13 +317,23 @@ const block = (heading: string, body: readonly string[]): string => [heading, ''
  * vanishing: `renderRunContext` drops an empty section from the manifest too, and that is exactly
  * the case where an operator most needs `missing`/`provider_unsupported` on the record. No missing
  * skill is ever NAMED to the model (spec §4) -- naming one would send the run looking for it.
+ *
+ * "Nothing is installed" has two different reasons and therefore two different sentences (final
+ * review). On a Cursor run nothing is installed because the RUNTIME has no skills mechanism at all
+ * (spec §9), and telling that run its skills "are not installed in this checkout" invites it to go
+ * looking for a mechanism that does not exist. The wording matches the operator-facing one in
+ * `apps/web/src/lib/runContextSummary.ts`, so the prompt and the run page say the same thing.
  */
 function skillsSectionText(
   offered: readonly { readonly name: string; readonly description: string }[],
   assignedCount: number,
+  injection: SkillInjection,
 ): string {
   if (assignedCount === 0) return ''
   if (offered.length === 0) {
+    if (injection.provider_unsupported) {
+      return block('SKILLS', ['This runtime has no skills mechanism, so none were installed for you. Work without them.'])
+    }
     return block('SKILLS', ['None of the skills assigned to you are installed in this checkout. Work without them.'])
   }
   return block('SKILLS AVAILABLE IN THIS CHECKOUT', [
@@ -407,12 +433,18 @@ export async function buildRunContext(input: BuildRunContextInput): Promise<Buil
     // Both halves are discoverable by the runtime: one because this dispatch copied it, the other
     // because the repository ships it. A missing skill is deliberately absent -- naming a skill
     // that is not there would send the run looking for it.
+    //
+    // Filtered to what is actually ASSIGNED (final review): `shadowedByRepo` can now also name a
+    // directory an earlier dispatch injected that the repository has since begun tracking, and
+    // that skill may no longer be assigned to this worker -- offering it here would advertise a
+    // capability nobody gave this run, under an empty description.
     const offered = [...injection.copied, ...injection.shadowedByRepo]
+      .filter((name) => descriptionOf.has(name))
       .toSorted((a, b) => a.localeCompare(b))
       .map((name) => ({ name, description: descriptionOf.get(name) ?? '' }))
     sections.push({
       kind: 'skills',
-      text: skillsSectionText(offered, assigned.length),
+      text: skillsSectionText(offered, assigned.length, injection),
       source: { kind: 'skills', ...injection },
     })
   }

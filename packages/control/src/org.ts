@@ -576,6 +576,16 @@ export async function setSlaveModel(
 // `principal?: Principal` is accepted on all five (M23 F6): its `userId`, if any, rides the
 // `org.changed` event each of them appends, the same as every other control verb.
 
+/** What {@link lockSlave} returns. Spelled out rather than inferred because the inference names a
+ *  type inside the generated Prisma client, which is not portable across package boundaries now
+ *  that this function is exported. */
+export type LockedSlave = Prisma.SlaveGetPayload<{
+  include: {
+    team: { select: { id: true; workspaceId: true } }
+    runs: { select: { id: true; status: true } }
+  }
+}>
+
 /**
  * Locks and loads one `Slave` row for an editing verb, with exactly what every caller below
  * needs: its team (for the workspace id an `org.changed` event carries) and its runs (for the
@@ -584,9 +594,14 @@ export async function setSlaveModel(
  *
  * `SELECT ... FOR UPDATE` first, not a plain `findUnique`: two operators editing the same slave
  * at once must serialise rather than race a lost update, the same `dependency.ts`/`world.ts`
- * idiom this package already uses for a single contested row.
+ * idiom this package already uses for a single contested row. It is also what makes the
+ * `null` return meaningful: a row deleted between the read and the update is reported as
+ * "not found" rather than surfacing as a Prisma `P2025` nobody catches.
+ *
+ * Exported (final review) for `profile.ts`'s `setProfile`/`setRuntimeRoles`, which had grown their
+ * own unlocked `findUnique`-then-`update` copies of this shape.
  */
-async function lockSlave(tx: Prisma.TransactionClient, slaveId: string) {
+export async function lockSlave(tx: Prisma.TransactionClient, slaveId: string): Promise<LockedSlave | null> {
   await tx.$queryRaw`SELECT id FROM "Slave" WHERE id = ${slaveId} FOR UPDATE`
   return tx.slave.findUnique({
     where: { id: slaveId },

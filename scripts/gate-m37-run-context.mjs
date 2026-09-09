@@ -63,7 +63,7 @@
 // `gate-m35-pipeline-honesty.mjs` for building a review's preconditions without a model call.
 
 import { execFileSync, spawn } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -72,7 +72,7 @@ import { loopbackChildEnv } from './lib/child-env.mjs'
 import { findRealDaemonPids } from './lib/daemon-process.mjs'
 import { prisma } from '../packages/db/dist/client.js'
 import { runContextManifestSchema } from '../packages/domain/dist/index.js'
-import { isAlive, syncSkillCatalog } from '../packages/control/dist/index.js'
+import { isAlive, skillRoots, skillSourceDir, syncSkillCatalog } from '../packages/control/dist/index.js'
 
 const POLL_INTERVAL_MS = 50
 const DAEMON_PERIOD_MS = 500
@@ -189,6 +189,51 @@ async function preflightCleanup() {
   if (staleSkills.count > 0) {
     console.log(`preflight: removing ${staleSkills.count} leftover gate skill row(s) under the personal provider`)
   }
+
+  await restoreStampedSkills('preflight')
+}
+
+/**
+ * Clears the `missingSince` stamps this gate's temp-root sync put on the operator's REAL skills.
+ *
+ * The `finally` block does this from `skillsPresentBefore`, the exact ids it read before syncing.
+ * That is the precise answer and it is the one used when the gate finishes -- but a `finally` does
+ * not run on SIGINT (the same hole that used to leave the gate's own `Skill` rows behind), and a
+ * Ctrl-C between the sync and teardown leaves every real skill on the machine marked missing, in a
+ * shared dev database, with nothing that ever puts them back. So the pre-flight repairs it too.
+ *
+ * Pre-flight has no `skillsPresentBefore` to work from -- it belongs to a process that is gone --
+ * so it asks the question that list was a shortcut for: is this row stamped missing while its
+ * files are right there under the real roots? Only a row the gate (or something else pointing the
+ * catalog at a tree that is not the machine's) stamped can answer yes; a skill the operator really
+ * uninstalled has no directory and is left stamped, which is the truth.
+ */
+async function restoreStampedSkills(label) {
+  let roots
+  try {
+    roots = skillRoots()
+  } catch (error) {
+    // A malformed `SLAVEOFAI_SKILL_ROOTS_JSON` in the operator's own environment. Nothing to
+    // repair against, and the run below sets its own value anyway.
+    console.log(`${label}: cannot read the real skill roots (${error.message}); leaving missingSince stamps alone`)
+    return
+  }
+  const stamped = await prisma.skill.findMany({
+    where: { missingSince: { not: null } },
+    select: { id: true, name: true, provider: { select: { name: true } } },
+  })
+  const restorable = stamped
+    .filter((skill) => {
+      const source = skillSourceDir(roots, skill.provider.name, skill.name)
+      return source !== null && statSync(source, { throwIfNoEntry: false })?.isDirectory() === true
+    })
+    .map((skill) => skill.id)
+  if (restorable.length === 0) return
+  await prisma.skill.updateMany({ where: { id: { in: restorable } }, data: { missingSince: null } }).catch(() => {})
+  console.log(
+    `${label}: cleared missingSince on ${restorable.length} skill(s) whose files are on disk -- an earlier interrupted run ` +
+      'left them stamped against a temp tree',
+  )
 }
 
 let exitCode = 1
