@@ -198,11 +198,18 @@ export const executionEventSchema = z.discriminatedUnion('type', [
      * than two typed members because the two fields carry different shapes -- a `ProviderKind`
      * string or a USD number -- and `null` is a real value on both: "no provider configured" and
      * "this workspace is not budgeted".
+     *
+     * M38 t2 adds the Supervisor's two settings to the same event rather than inventing a second
+     * one: they are project configuration, they move through the same kind of verb, and an
+     * operator reading "what changed about this project" wants one stream. `supervisorEnabled`
+     * is what widened `from`/`to` to booleans. `supervisorProfile` never carries its TEXT -- the
+     * persona can be long and is the model's instructions, so the payload carries its sha256 (or
+     * `null` for cleared), the same shape `slave.profile_changed` uses.
      */
     payload: z.object({
-      field: z.enum(['provider', 'budgetUsd']),
-      from: z.union([z.string(), z.number(), z.null()]),
-      to: z.union([z.string(), z.number(), z.null()]),
+      field: z.enum(['provider', 'budgetUsd', 'supervisorEnabled', 'supervisorProfile']),
+      from: z.union([z.string(), z.number(), z.boolean(), z.null()]),
+      to: z.union([z.string(), z.number(), z.boolean(), z.null()]),
     }),
   }),
   z.object({

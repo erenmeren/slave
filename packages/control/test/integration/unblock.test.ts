@@ -178,6 +178,19 @@ describe('unblockTask', () => {
     expect(events[0]?.payload).toEqual({ attempt: 1, maxAttempts: 3 })
   })
 
+  it('stamps the envelope actor system when the Supervisor is the one unblocking (M38 t2)', async (): Promise<void> => {
+    const task = await makeBlockedTask(workspaceId, { attempt: 1, maxAttempts: 3 })
+
+    const result = await unblockTask(task.id, { origin: 'system' })
+    expect(result.ok).toBe(true)
+
+    const events = await prisma.executionEvent.findMany({ where: { taskId: task.id, type: 'task_unblocked' } })
+    expect(events[0]?.actor).toBe('system')
+    // Nothing else about the verb moves with the origin: the same write, the same payload.
+    expect(events[0]?.payload).toEqual({ attempt: 1, maxAttempts: 3 })
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: task.id } })).status).toBe('rework')
+  })
+
   it('refuses a task that does not exist', async (): Promise<void> => {
     const result = await unblockTask('does-not-exist')
     expect(result.ok).toBe(false)

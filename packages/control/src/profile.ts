@@ -173,11 +173,18 @@ function normaliseRoles(roles: readonly string[]): Result<string[], ControlRefus
  *
  * A replacement, not a merge: an operator naming two roles means the worker holds exactly those
  * two afterwards. Anything else would make "take reviewer away from Maya" impossible to express.
+ *
+ * `actor` and `origin` are two different facts (M38 t2, spec erratum E4). `actor` is the NAME of
+ * whoever asked, carried in the payload, and the Supervisor's staffing decisions pass
+ * `'supervisor'` there. `origin` is the event ENVELOPE actor, which is a closed enum with no
+ * `supervisor` member -- so a Supervisor-applied change says `'system'`, and everything else says
+ * `'human'`. Nothing else about the verb moves with it.
  */
 export async function setRuntimeRoles(
   slaveId: string,
   roles: readonly string[],
   actor: string,
+  origin: 'human' | 'system' = 'human',
 ): Promise<Result<void, ControlRefusal>> {
   const normalised = normaliseRoles(roles)
   if (!normalised.ok) return normalised
@@ -198,7 +205,7 @@ export async function setRuntimeRoles(
     type: 'slave.runtime_roles_changed',
     workspaceId: outcome.workspaceId,
     slaveId,
-    actor: 'human',
+    actor: origin,
     payload: { slaveId, roles: normalised.value, actor },
   })
   return ok(undefined)

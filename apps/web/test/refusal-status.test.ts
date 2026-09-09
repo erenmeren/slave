@@ -83,6 +83,11 @@ const ALL_KINDS: Record<ControlRefusal['kind'], true> = {
   not_a_question: true,
   profile_too_long: true,
   invalid_runtime_roles: true,
+  decision_not_found: true,
+  decision_not_pending: true,
+  supervisor_cooldown: true,
+  supervisor_disabled: true,
+  task_not_failable: true,
 }
 
 const ALL = Object.keys(ALL_KINDS) as ControlRefusal['kind'][]
@@ -109,13 +114,14 @@ const TODAYS_NOT_FOUND_KINDS = [
   'user_not_found',
   'simulation_not_found',
   'message_not_found',
+  'decision_not_found',
 ] as const satisfies readonly ControlRefusal['kind'][]
 
 describe('refusalStatus', () => {
-  it('is 404 for exactly the sixteen kinds ending in _not_found today', () => {
+  it('is 404 for exactly the seventeen kinds ending in _not_found today', () => {
     const bySuffix = ALL.filter((kind) => kind.endsWith('_not_found')).sort()
     expect(bySuffix).toEqual([...TODAYS_NOT_FOUND_KINDS].sort())
-    expect(bySuffix).toHaveLength(16)
+    expect(bySuffix).toHaveLength(17)
   })
 
   it('maps every kind in the taxonomy to 404 iff it ends in _not_found, 409 otherwise', () => {

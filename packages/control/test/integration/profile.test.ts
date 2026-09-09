@@ -163,6 +163,16 @@ describe('setRuntimeRoles', () => {
     expect(event?.payload).toEqual({ slaveId: fixture.slaveId, roles: ['backend', 'reviewer'], actor: 'operator' })
   })
 
+  it('stamps the envelope actor system when the Supervisor is the one staffing (M38 t2)', async () => {
+    expect((await setRuntimeRoles(fixture.slaveId, ['backend', 'reviewer'], 'supervisor', 'system')).ok).toBe(true)
+
+    const [event] = await prisma.executionEvent.findMany({ where: { type: 'slave_runtime_roles_changed' } })
+    expect(event?.actor).toBe('system')
+    // The PAYLOAD actor is still the name of whoever asked for it -- 'supervisor' here, which the
+    // envelope enum has no member for (spec erratum E4).
+    expect(event?.payload).toEqual({ slaveId: fixture.slaveId, roles: ['backend', 'reviewer'], actor: 'supervisor' })
+  })
+
   it('allows an empty set -- the parked, undispatchable state', async () => {
     expect((await setRuntimeRoles(fixture.slaveId, [], 'operator')).ok).toBe(true)
     expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId } })).runtimeRoles).toEqual([])

@@ -209,6 +209,33 @@ export type ControlRefusal =
    *  `set-runtime-roles --roles ''` is how an operator parks one. The `reason` is a whole
    *  sentence, because the three cases need three different fixes. */
   | { readonly kind: 'invalid_runtime_roles'; readonly reason: string }
+  /** M38 t2: `approveDecision`/`rejectDecision`/`applyDecision` was pointed at a decision id no
+   *  `SupervisorDecision` row has -- including one in another project, which reads back the same
+   *  as "does not exist" from a scoped caller's side of the boundary (`message_not_found`'s rule). */
+  | { readonly kind: 'decision_not_found'; readonly decisionId: string }
+  /** M38 t2: the decision exists but has already left `pending` -- approved, rejected, expired,
+   *  applied at birth, or failed. `status` is what it is NOW, which is the whole answer to "why
+   *  can I not approve this": someone (or `expirePendingDecisions`) got there first. */
+  | { readonly kind: 'decision_not_pending'; readonly decisionId: string; readonly status: string }
+  /**
+   * M38 t2: the Supervisor is already on this situation key (spec §1, "idempotent and quiet").
+   * Either an open `pending` proposal is waiting on a human, or the last decision for the key
+   * stopped being open less than `COOLDOWN_MS` ago. `untilTs` is the ISO instant after which the
+   * key is free again, so a caller can say when rather than only that.
+   */
+  | {
+      readonly kind: 'supervisor_cooldown'
+      readonly situationKind: string
+      readonly subjectId: string
+      readonly untilTs: string
+    }
+  /** M38 t2: `Workspace.supervisorEnabled` is false -- the one narrowing a project may apply
+   *  (spec §1). The Supervisor still REPORTS; it records no decision and applies nothing. */
+  | { readonly kind: 'supervisor_disabled'; readonly workspaceId: string }
+  /** M38 t2: `failTask` was pointed at a task that is not `rework` or `blocked`. Declaring work
+   *  dead is only ever the exit from a park a human (or the Supervisor) has looked at; every
+   *  other status either has the pipeline still moving it or is already terminal. */
+  | { readonly kind: 'task_not_failable'; readonly taskId: string; readonly status: string }
 
 /**
  * The word a person reads for `live_runs`'s `entity` (M27 final review, Important finding 3).
@@ -389,5 +416,15 @@ export function refusalText(refusal: ControlRefusal): string {
       return `a profile may be at most ${String(refusal.limit)} characters; this one is ${String(refusal.length)}`
     case 'invalid_runtime_roles':
       return `invalid runtime roles: ${refusal.reason}`
+    case 'decision_not_found':
+      return `no supervisor decision with id ${refusal.decisionId}`
+    case 'decision_not_pending':
+      return `supervisor decision ${refusal.decisionId} is ${refusal.status}, not pending: there is nothing left to approve or reject`
+    case 'supervisor_cooldown':
+      return `the supervisor has already decided ${refusal.situationKind} for ${refusal.subjectId}; the next decision on it can be made after ${refusal.untilTs}`
+    case 'supervisor_disabled':
+      return `the supervisor is switched off for project ${refusal.workspaceId}`
+    case 'task_not_failable':
+      return `task ${refusal.taskId} is ${refusal.status}: only a task in rework or blocked can be failed`
   }
 }

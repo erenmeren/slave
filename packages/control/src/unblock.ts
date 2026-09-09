@@ -11,6 +11,14 @@ export interface UnblockTaskInput {
    * ceiling actually applies: passing it on a task comfortably under its cap changes nothing.
    */
   readonly allowAnotherAttempt?: boolean
+  /**
+   * Who is unblocking, as the `task.unblocked` ENVELOPE actor (M38 t2, spec erratum E4). `'human'`
+   * -- the default, and every caller that predates M38 -- is an operator or a web request;
+   * `'system'` is the Supervisor applying a decision of its own. Nothing else about the verb
+   * moves with it: the same checks, the same write, the same payload. The envelope enum has no
+   * `supervisor` member, and the `SupervisorDecision` row is where that authorship is recorded.
+   */
+  readonly origin?: 'human' | 'system'
 }
 
 /**
@@ -111,7 +119,7 @@ export async function unblockTask(
     type: 'task.unblocked',
     workspaceId: task.workspaceId,
     taskId,
-    actor: 'human',
+    actor: input.origin ?? 'human',
     payload: { attempt: task.attempt, maxAttempts },
     userId: principal?.userId ?? null,
   })

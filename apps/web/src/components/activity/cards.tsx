@@ -455,16 +455,26 @@ function WorkspaceCompanyAssignedCard(props: ActivityCardProps): ReactElement {
 // this event covers carry different shapes, and `null` is a REAL value on both -- "no provider
 // configured" and "this workspace is not budgeted" -- so it is rendered as a word rather than
 // hidden behind a falsy check that would also swallow a budget of `0`.
+type SettingsField = 'provider' | 'budgetUsd' | 'supervisorEnabled' | 'supervisorProfile'
+
+/** M38 t2 widened this event to the Supervisor's two settings, so the label is a table rather
+ *  than the ternary it was while there were only two fields. */
+const SETTINGS_LABEL: Record<SettingsField, string> = {
+  provider: 'provider changed',
+  budgetUsd: 'budget changed',
+  supervisorEnabled: 'supervisor switched',
+  supervisorProfile: 'supervisor profile changed',
+}
+
 function WorkspaceSettingsChangedCard(props: ActivityCardProps): ReactElement {
   const payload = props.event.payload as {
-    field: 'provider' | 'budgetUsd'
-    from: string | number | null
-    to: string | number | null
+    field: SettingsField
+    from: string | number | boolean | null
+    to: string | number | boolean | null
   }
-  const label = payload.field === 'provider' ? 'provider changed' : 'budget changed'
   return (
     <ActivityCard {...props}>
-      <Transition tone="idle" label={label}>
+      <Transition tone="idle" label={SETTINGS_LABEL[payload.field] ?? 'settings changed'}>
         <span data-testid="settings-from">{settingValue(payload.field, payload.from)}</span>
         {' \u2192 '}
         <span data-testid="settings-to">{settingValue(payload.field, payload.to)}</span>
@@ -474,9 +484,13 @@ function WorkspaceSettingsChangedCard(props: ActivityCardProps): ReactElement {
 }
 
 /** `null` is a state an operator chose, not a missing field, so it gets a name of its own. */
-function settingValue(field: 'provider' | 'budgetUsd', value: string | number | null): string {
+function settingValue(field: SettingsField, value: string | number | boolean | null): string {
+  if (field === 'supervisorEnabled') return value === true ? 'on' : 'off'
+  // A profile is carried as a sha256, never as its text (M38 t2) -- the first eight characters are
+  // enough to tell two versions apart, which is all this card is for.
+  if (field === 'supervisorProfile') return value === null ? 'none' : `${String(value).slice(0, 8)}\u2026`
   if (value === null) return field === 'provider' ? 'none' : 'no budget'
-  return field === 'budgetUsd' ? `$${value}` : String(value)
+  return field === 'budgetUsd' ? `$${String(value)}` : String(value)
 }
 
 // M27 §3.2: `archiveWorkspace` sets `archivedAt` -- the payload is the footprint the confirm
