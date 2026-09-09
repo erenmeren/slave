@@ -58,6 +58,9 @@ const slave = (over: Partial<SlaveCardData>): SlaveCardData => ({
 const snapshot = (slaves: readonly SlaveCardData[]): OverviewSnapshot => ({
   workspace: {
     id: 'w1', name: 'W', haltedReason: null, haltedAt: null, budgetUsd: 100, spentUsd: 3, unmeasuredRuns: 0,
+    // M38 t5: the Supervisor's share of `spentUsd`. Nothing here, so the strip claims nothing --
+    // the two cases that do are below.
+    supervisorSpend: { measuredUsd: 0, unmeasuredCalls: 0 },
     goal: null, provider: 'claude_code', costBlindBudgeted: false,
     // M14 Task 8: the three guardrail columns the project header/tab strip read (M24 §2.2). They
     // live on the overview snapshot so the page can PROVIDE `ShellFacts` from the stream it
@@ -145,6 +148,23 @@ describe('TopStrip \u2014 the handoff 6-up', () => {
     expect(screen.getByTestId('strip-value-spend').textContent).toBe('$3.00')
     // Nothing unmeasured in this fixture, so nothing is claimed about a hole in the total.
     expect(screen.queryByTestId('strip-unmeasured')).toBeNull()
+  })
+
+  // M38 t5: the total is the guardrail's own figure now, so the part of it no run explains has to
+  // be nameable -- and an unmeasured supervisor call is charged at the cap, not measured.
+  it("names the Supervisor's share of spend, and what its unmeasured calls were charged", () => {
+    const view = snapshot([])
+    render(
+      <TopStrip
+        snapshot={{ ...view, workspace: { ...view.workspace, supervisorSpend: { measuredUsd: 0.25, unmeasuredCalls: 2 } } }}
+      />,
+    )
+    expect(screen.getByTestId('strip-supervisor-spend').textContent).toBe('supervisor $0.25 \u00b7 2 at $1.00')
+  })
+
+  it('claims nothing about the Supervisor when it has never called anybody', () => {
+    render(<TopStrip snapshot={snapshot([])} />)
+    expect(screen.queryByTestId('strip-supervisor-spend')).toBeNull()
   })
 
   it('says how many runs went unmeasured, rather than letting known spend read as total spend', () => {

@@ -282,6 +282,64 @@ describe('targeted card bodies', () => {
     expect(screen.getByTestId('settings-to').textContent).not.toBe(sha256)
   })
 
+  // M38 t5: the five `supervisor.*` cards, replacing Task 1's honest placeholders. Each says what
+  // its own payload carries and nothing it does not -- the panel is where a decision's full
+  // rationale lives; the timeline's job is to make a decision findable and its shape readable.
+  it('supervisor.decided names the situation, its subject, the action and the tier', () => {
+    const Card = ACTIVITY_CARDS['supervisor.decided']
+    render(<Card event={fixtureFor('supervisor.decided')} {...CARD_PROPS} />)
+    expect(screen.getByTestId('transition-label').textContent).toBe('supervisor decided')
+    expect(screen.getByTestId('supervisor-situation').textContent).toBe('review_cap_blocked')
+    expect(screen.getByTestId('supervisor-subject').textContent).toBe('t1')
+    expect(screen.getByTestId('supervisor-action').textContent).toBe('unblock_task')
+    expect(screen.getByTestId('supervisor-tier').textContent).toContain('applied')
+    expect(screen.getByTestId('supervisor-tier').textContent).toContain('model')
+    expect(screen.getByTestId('supervisor-decision').textContent).toBe('sd-01234')
+  })
+
+  it('supervisor.proposed names the action and when the proposal expires unanswered', () => {
+    const Card = ACTIVITY_CARDS['supervisor.proposed']
+    render(<Card event={fixtureFor('supervisor.proposed')} {...CARD_PROPS} />)
+    expect(screen.getByTestId('transition-label').textContent).toBe('supervisor proposed')
+    expect(screen.getByTestId('supervisor-action').textContent).toBe('set_runtime_roles')
+    expect(screen.getByTestId('supervisor-situation').textContent).toBe('no_reviewer')
+    // The stamp, not a duration: this card is read weeks later as often as live, and "in 24h"
+    // would then be a lie about a proposal that expired long ago.
+    expect(screen.getByTestId('supervisor-expires').textContent).toContain('2026-08-23')
+  })
+
+  it('supervisor.applied names the action that reached the world', () => {
+    const Card = ACTIVITY_CARDS['supervisor.applied']
+    render(<Card event={fixtureFor('supervisor.applied')} {...CARD_PROPS} />)
+    expect(screen.getByTestId('transition-label').textContent).toBe('supervisor applied')
+    expect(screen.getByTestId('supervisor-action').textContent).toBe('unblock_task')
+  })
+
+  it('supervisor.resolved says the outcome, and carries a rejection reason when there is one', () => {
+    const Card = ACTIVITY_CARDS['supervisor.resolved']
+    const { unmount } = render(<Card event={fixtureFor('supervisor.resolved')} {...CARD_PROPS} />)
+    expect(screen.getByTestId('transition-label').textContent).toBe('supervisor approved')
+    expect(screen.queryByTestId('supervisor-reason')).toBeNull()
+    unmount()
+
+    const rejected = baseEvent('supervisor.resolved', {
+      decisionId: 'sd-0123456789',
+      outcome: 'rejected',
+      reason: 'Alex is on the payments rewrite',
+    })
+    render(<Card event={rejected} {...CARD_PROPS} />)
+    expect(screen.getByTestId('transition-label').textContent).toBe('supervisor rejected')
+    expect(screen.getByTestId('supervisor-reason').textContent).toContain('Alex is on the payments rewrite')
+  })
+
+  it('supervisor.failed names the action and why the verb refused it', () => {
+    const Card = ACTIVITY_CARDS['supervisor.failed']
+    render(<Card event={fixtureFor('supervisor.failed')} {...CARD_PROPS} />)
+    expect(screen.getByTestId('transition-label').textContent).toBe('supervisor action failed')
+    expect(screen.getByTestId('supervisor-action').textContent).toBe('mark_task_failed')
+    expect(screen.getByTestId('supervisor-reason').textContent).toBe('task_not_failable')
+  })
+
   it('org.changed shows the label for its field and the from/to values', () => {
     const Card = ACTIVITY_CARDS['org.changed']
     render(<Card event={fixtureFor('org.changed')} {...CARD_PROPS} />)

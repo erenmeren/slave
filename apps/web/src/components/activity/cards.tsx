@@ -703,11 +703,12 @@ function SlaveMessageSentCard(props: ActivityCardProps): ReactElement {
   )
 }
 
-// ---- supervisor.* (schema.ts, M38 t1) ---------------------------------------------------------
-// Minimal but honest: M38 Task 5 owns the Supervisor's real timeline treatment, alongside the
-// panel these cards will link into. Until then each body renders exactly what its own payload
-// carries -- the decision it belongs to, the action, and the outcome or reason -- so the registry
-// is complete and the timeline tells the truth in the commits before Task 5 lands.
+// ---- supervisor.* (schema.ts, M38 t1; the real cards, M38 t5) ---------------------------------
+// A decision's full story -- the candidates it chose from, the situation snapshot, the whole
+// rationale -- lives on the Supervisor panel and in `supervisor-decisions`. What these five owe
+// the timeline is different: enough to make a decision FINDABLE (its short id, repeated on every
+// row of its life) and its shape readable at a glance (which situation, on what, chosen how, and
+// what happened next). Each renders exactly what its own payload carries and nothing it does not.
 
 /** The first 8 characters of a decision id: enough to tie a run of supervisor.* rows together by
  *  eye, short enough not to swamp the line. */
@@ -732,9 +733,21 @@ function SupervisorDecidedCard(props: ActivityCardProps): ReactElement {
     <ActivityCard {...props}>
       <Transition tone="idle" label="supervisor decided">
         <span data-testid="supervisor-situation">{payload.situationKind}</span>
+        {' on '}
+        {/* The subject, not just the kind: `review_cap_blocked` is a sentence about SOME task, and
+          * without the id the row cannot be tied to the task rows around it. */}
+        <span data-testid="supervisor-subject" className="font-mono">
+          {payload.subjectId}
+        </span>
         {' \u2192 '}
-        <span data-testid="supervisor-action">{payload.action.kind}</span>
-        {` (${payload.tier}, by ${payload.decidedBy}) \u00b7 `}
+        <span data-testid="supervisor-action">{payload.action.kind}</span>{' '}
+        {/* The tier is what says whether this already happened or is waiting on a human, and the
+          * decider whether a model or the rules chose it -- the two things an operator scanning
+          * the timeline judges a decision by. */}
+        <span data-testid="supervisor-tier" className="text-text-3">
+          ({payload.tier}, by {payload.decidedBy})
+        </span>
+        {' \u00b7 '}
         <DecisionRef id={payload.decisionId} />
       </Transition>
     </ActivityCard>
@@ -755,7 +768,19 @@ function SupervisorProposedCard(props: ActivityCardProps): ReactElement {
         <span data-testid="supervisor-action">{payload.action.kind}</span>
         {' for '}
         <span data-testid="supervisor-situation">{payload.situationKind}</span>
-        {' \u00b7 awaiting a human \u00b7 '}
+        {' on '}
+        <span data-testid="supervisor-subject" className="font-mono">
+          {payload.subjectId}
+        </span>
+        {' \u00b7 awaiting a human until '}
+        {/* The STAMP, not "in 24h": this row is read weeks later as often as live, and a duration
+          * computed against now would then describe a proposal that expired long ago. Trimmed to
+          * minutes -- `expirePendingDecisions` runs per tick, so seconds are a precision the
+          * deadline does not have. */}
+        <span data-testid="supervisor-expires" className="font-mono">
+          {payload.expiresAt.slice(0, 16).replace('T', ' ')}
+        </span>
+        {' \u00b7 '}
         <DecisionRef id={payload.decisionId} />
       </Transition>
     </ActivityCard>

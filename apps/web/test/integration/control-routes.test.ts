@@ -3,7 +3,27 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { prisma } from '@slave-of-ai/db/client'
 import { PROFILE_MAX_CHARS } from '@slave-of-ai/domain'
-import { afterAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+/**
+ * The one module this file mocks, and only so the Supervisor routes can be watched attributing a
+ * write to a REAL signed-in user (M38 t5): `requirePrincipal` reads `next/headers` directly, and
+ * nothing else here reaches Next's request context.
+ *
+ * Inert by default. With no `SLAVEOFAI_SESSION_SECRET` in the environment `requirePrincipal`
+ * short-circuits to `{ principal: null }` before ever calling `cookies()`, which is the loopback
+ * mode every other test in this file has always run in -- see `route-principal.test.ts`'s first
+ * case, which pins that fact. Only the `records the signed-in user` case below stubs the secret
+ * and fills the holder.
+ */
+const { cookieValue } = vi.hoisted(() => ({ cookieValue: { current: null as string | null } }))
+
+vi.mock('next/headers', () => ({
+  cookies: async () => ({
+    get: (name: string) =>
+      name === 'slaveofai_session' && cookieValue.current !== null ? { name, value: cookieValue.current } : undefined,
+  }),
+}))
 import { POST as pausePOST } from '../../src/app/api/w/[workspaceId]/runs/[runId]/pause/route.js'
 import { POST as resumePOST } from '../../src/app/api/w/[workspaceId]/runs/[runId]/resume/route.js'
 import { POST as stopPOST } from '../../src/app/api/w/[workspaceId]/runs/[runId]/stop/route.js'
@@ -14,6 +34,11 @@ import { POST as goalPOST } from '../../src/app/api/w/[workspaceId]/goal/route.j
 import { PATCH as profilePATCH } from '../../src/app/api/w/[workspaceId]/slaves/[slaveId]/profile/route.js'
 import { PATCH as runtimeRolesPATCH } from '../../src/app/api/w/[workspaceId]/slaves/[slaveId]/runtime-roles/route.js'
 import { GET as runContextGET } from '../../src/app/api/w/[workspaceId]/runs/[runId]/context/route.js'
+import { GET as supervisorGET } from '../../src/app/api/w/[workspaceId]/supervisor/route.js'
+import { POST as approvePOST } from '../../src/app/api/w/[workspaceId]/supervisor/decisions/[decisionId]/approve/route.js'
+import { POST as rejectPOST } from '../../src/app/api/w/[workspaceId]/supervisor/decisions/[decisionId]/reject/route.js'
+import { PATCH as supervisorSettingsPATCH } from '../../src/app/api/w/[workspaceId]/supervisor/settings/route.js'
+import { mintSession } from '../../src/lib/session.js'
 
 interface Fixture {
   readonly workspace: { readonly id: string; readonly repoPath: string }
@@ -79,9 +104,14 @@ describe('the control routes', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Approval", "SlaveMessage", "Artifact", "Checkpoint", "RunContext", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Approval", "SlaveMessage", "Artifact", "Checkpoint", "RunContext", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "SupervisorDecision", "Workspace", "User" RESTART IDENTITY CASCADE',
     )
+    cookieValue.current = null
     fixture = await seed()
+  })
+
+  afterEach((): void => {
+    vi.unstubAllEnvs()
   })
 
   afterAll(async (): Promise<void> => {
@@ -586,6 +616,198 @@ describe('the control routes', () => {
     it('(d) 404s an unknown workspace', async (): Promise<void> => {
       const response = await post('00000000-0000-4000-8000-000000000000', { goal: 'ship it' })
       expect(response.status).toBe(404)
+    })
+  })
+
+  /**
+   * The Supervisor's four routes (M38 §6): one read of the whole panel, approve, reject, and the
+   * two workspace settings. Every mutating one hands the verb the REAL `Principal` -- the last
+   * case here is what proves it, because in loopback mode (every other case in this file) a null
+   * principal and a dropped one look identical on the row.
+   */
+  describe('supervisor', () => {
+    const SECRET = '0123456789abcdef0123456789abcdef'
+
+    /** A `pending` proposal shaped exactly as `recordDecision` writes one. Written directly rather
+     *  than through the verb because `recordDecision` needs a whole observed world to get to the
+     *  same row, and what is under test here is the ROUTES -- `listDecisions` validates every Json
+     *  column at read, so a shape that drifted from the domain's would fail loudly. */
+    const proposal = async (over?: { readonly status?: 'applied' | 'approved' }): Promise<string> => {
+      const action = { kind: 'set_runtime_roles', slaveId: fixture.slave.id, roles: ['reviewer'] }
+      const row = await prisma.supervisorDecision.create({
+        data: {
+          workspaceId: fixture.workspace.id,
+          situationKind: 'no_reviewer',
+          subjectId: 'reviewer',
+          situation: {
+            kind: 'no_reviewer',
+            subjectId: 'reviewer',
+            summary: 'A task is in review and no worker holds the reviewer role.',
+            facts: { role: 'reviewer', tasksWaiting: 1 },
+          },
+          candidates: [{ action, tier: 'proposed', why: 'Alex is idle and could take the "reviewer" role.' }],
+          chosenIndex: 0,
+          action,
+          rationale: 'Nobody can review, and Alex is idle.',
+          tier: 'proposed',
+          status: over?.status ?? 'pending',
+          decidedBy: 'rules',
+          expiresAt: new Date(Date.now() + 60_000),
+        },
+      })
+      return row.id
+    }
+
+    const get = (workspaceId: string): Promise<Response> =>
+      supervisorGET(new Request('http://x'), { params: Promise.resolve({ workspaceId }) })
+
+    const approve = (workspaceId: string, decisionId: string): Promise<Response> =>
+      approvePOST(new Request('http://x', { method: 'POST' }), {
+        params: Promise.resolve({ workspaceId, decisionId }),
+      })
+
+    const reject = (workspaceId: string, decisionId: string, body?: unknown): Promise<Response> =>
+      rejectPOST(
+        body === undefined
+          ? new Request('http://x', { method: 'POST' })
+          : new Request('http://x', { method: 'POST', body: JSON.stringify(body), headers: { 'content-type': 'application/json' } }),
+        { params: Promise.resolve({ workspaceId, decisionId }) },
+      )
+
+    const patchSettings = (workspaceId: string, body: unknown): Promise<Response> =>
+      supervisorSettingsPATCH(
+        new Request('http://x', { method: 'PATCH', body: JSON.stringify(body), headers: { 'content-type': 'application/json' } }),
+        { params: Promise.resolve({ workspaceId }) },
+      )
+
+    it('GET returns the report, what is pending, what is recent and the two settings', async (): Promise<void> => {
+      await prisma.task.update({ where: { id: fixture.task.id }, data: { status: 'ready', requiredRole: 'backend' } })
+      const decisionId = await proposal()
+
+      const response = await get(fixture.workspace.id)
+
+      expect(response.status).toBe(200)
+      const body = await response.json()
+      expect(body.report.next.ready).toBe(1)
+      expect(body.report.done).toEqual({ integrated: 0, awaitingIntegration: 0 })
+      expect(Array.isArray(body.report.stuck)).toBe(true)
+      expect(body.pending.map((d: { id: string }) => d.id)).toEqual([decisionId])
+      expect(body.pending[0].rationale).toBe('Nobody can review, and Alex is idle.')
+      expect(body.pending[0].situation.summary).toContain('no worker holds the reviewer role')
+      expect(body.recent.map((d: { id: string }) => d.id)).toEqual([decisionId])
+      expect(body.settings).toEqual({ enabled: true, profile: null })
+    })
+
+    it('GET 404s a workspace that does not exist', async (): Promise<void> => {
+      expect((await get('00000000-0000-4000-8000-000000000000')).status).toBe(404)
+    })
+
+    it('approving carries the action out and records the approval', async (): Promise<void> => {
+      const decisionId = await proposal()
+
+      const response = await approve(fixture.workspace.id, decisionId)
+
+      expect(response.status).toBe(200)
+      expect(await response.json()).toEqual({ ok: true })
+      const row = await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: decisionId } })
+      expect(row.status).toBe('approved')
+      expect(row.resolvedAt).not.toBeNull()
+      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id } })).runtimeRoles).toEqual(['reviewer'])
+      expect(await prisma.executionEvent.count({ where: { type: 'supervisor_resolved' } })).toBe(1)
+    })
+
+    it('404s a decision in another workspace and an unknown one, carrying nothing out', async (): Promise<void> => {
+      const decisionId = await proposal()
+
+      expect((await approve(fixture.otherWorkspace.id, decisionId)).status).toBe(404)
+      expect((await reject(fixture.otherWorkspace.id, decisionId)).status).toBe(404)
+      expect((await approve(fixture.workspace.id, '00000000-0000-4000-8000-000000000000')).status).toBe(404)
+
+      expect((await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: decisionId } })).status).toBe('pending')
+      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id } })).runtimeRoles).toEqual([])
+      expect(await prisma.executionEvent.count()).toBe(0)
+    })
+
+    it("409s a decision that is no longer pending, with the verb's own reason", async (): Promise<void> => {
+      const decisionId = await proposal({ status: 'applied' })
+
+      const response = await approve(fixture.workspace.id, decisionId)
+
+      expect(response.status).toBe(409)
+      expect((await response.json()).error).toContain('applied')
+      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id } })).runtimeRoles).toEqual([])
+    })
+
+    it('rejecting keeps the action out of the world and keeps the reason', async (): Promise<void> => {
+      const decisionId = await proposal()
+
+      const response = await reject(fixture.workspace.id, decisionId, { reason: 'Alex is on the payments rewrite' })
+
+      expect(response.status).toBe(200)
+      expect((await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: decisionId } })).status).toBe('rejected')
+      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id } })).runtimeRoles).toEqual([])
+      const resolved = await prisma.executionEvent.findFirstOrThrow({ where: { type: 'supervisor_resolved' } })
+      expect(resolved.payload).toMatchObject({ outcome: 'rejected', reason: 'Alex is on the payments rewrite' })
+    })
+
+    it('rejects with no body at all: a reason is optional', async (): Promise<void> => {
+      const decisionId = await proposal()
+
+      expect((await reject(fixture.workspace.id, decisionId)).status).toBe(200)
+      const resolved = await prisma.executionEvent.findFirstOrThrow({ where: { type: 'supervisor_resolved' } })
+      expect(resolved.payload).toMatchObject({ outcome: 'rejected', reason: null })
+    })
+
+    it('400s a malformed reject body and a malformed settings body', async (): Promise<void> => {
+      const decisionId = await proposal()
+
+      expect((await reject(fixture.workspace.id, decisionId, { reason: 7 })).status).toBe(400)
+      expect((await patchSettings(fixture.workspace.id, { enabled: 'yes' })).status).toBe(400)
+      expect((await patchSettings(fixture.workspace.id, { profile: 7 })).status).toBe(400)
+
+      const malformed = await supervisorSettingsPATCH(
+        new Request('http://x', { method: 'PATCH', body: 'not json', headers: { 'content-type': 'application/json' } }),
+        { params: Promise.resolve({ workspaceId: fixture.workspace.id }) },
+      )
+      expect(malformed.status).toBe(400)
+      expect((await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: decisionId } })).status).toBe('pending')
+    })
+
+    it('switches the Supervisor off, and 404s a workspace that does not exist', async (): Promise<void> => {
+      expect((await patchSettings(fixture.workspace.id, { enabled: false })).status).toBe(200)
+
+      const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspace.id } })
+      expect(workspace.supervisorEnabled).toBe(false)
+      expect((await patchSettings('00000000-0000-4000-8000-000000000000', { enabled: false })).status).toBe(404)
+    })
+
+    it('409s a profile over the cap with profile_too_long', async (): Promise<void> => {
+      const response = await patchSettings(fixture.workspace.id, { profile: 'x'.repeat(PROFILE_MAX_CHARS + 1) })
+
+      expect(response.status).toBe(409)
+      expect((await response.json()).error).toContain(String(PROFILE_MAX_CHARS))
+      expect((await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspace.id } })).supervisorProfile).toBeNull()
+    })
+
+    // The one thing a loopback-mode case cannot see: the web ALWAYS has a session to hand the verb
+    // (the CLI, which has none, is why `approveDecision`'s principal is optional at all), so the
+    // row and the event must name the person who clicked.
+    it('records the signed-in user on the resolved row, the resolution event and a settings change', async (): Promise<void> => {
+      vi.stubEnv('SLAVEOFAI_SESSION_SECRET', SECRET)
+      const user = await prisma.user.create({ data: { username: 'ada', passwordHash: 'irrelevant-for-this-test' } })
+      cookieValue.current = await mintSession(SECRET, user.id, new Date())
+      const decisionId = await proposal()
+
+      expect((await approve(fixture.workspace.id, decisionId)).status).toBe(200)
+      expect((await patchSettings(fixture.workspace.id, { enabled: false })).status).toBe(200)
+
+      const row = await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: decisionId } })
+      expect(row.resolvedByUserId).toBe(user.id)
+      const resolved = await prisma.executionEvent.findFirstOrThrow({ where: { type: 'supervisor_resolved' } })
+      expect(resolved.userId).toBe(user.id)
+      expect(resolved.actor).toBe('human')
+      const settingsChanged = await prisma.executionEvent.findFirstOrThrow({ where: { type: 'workspace_settings_changed' } })
+      expect(settingsChanged.userId).toBe(user.id)
     })
   })
 })

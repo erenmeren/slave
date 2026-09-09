@@ -134,6 +134,53 @@ describe('buildOverviewSnapshot', () => {
     expect(snapshot?.workspace.unmeasuredRuns).toBe(2)
   })
 
+  // M38 t5. `spentUsd` here used to be run spend alone, while the budget guardrail (and the gate
+  // that stops the Supervisor calling a model) had already moved to `workspaceSpend` -- so the
+  // figure on the overview was smaller than the one the workspace was actually halted on. Both
+  // read the same formula now, and the Supervisor's share is named beside it rather than folded
+  // in silently: a $1 charge nobody can account for is the same lie Decision 6 forbids.
+  it("includes the Supervisor's spend in the total and says how much of it is the Supervisor's", async (): Promise<void> => {
+    await prisma.slaveRun.create({
+      data: { taskId: fixture.taskId, slaveId: fixture.slaveId, status: 'succeeded', costUsd: 1.5 },
+    })
+    const decision = {
+      workspaceId: fixture.workspaceId,
+      situationKind: 'workspace_halted' as const,
+      subjectId: fixture.workspaceId,
+      situation: { kind: 'workspace_halted', subjectId: fixture.workspaceId, summary: 'The workspace is halted.', facts: {} },
+      candidates: [{ action: { kind: 'escalate_to_human', summary: 'halted' }, tier: 'escalated', why: 'nothing else applies' }],
+      chosenIndex: 0,
+      action: { kind: 'escalate_to_human', summary: 'halted' },
+      rationale: 'A halted workspace needs a person.',
+      tier: 'escalated' as const,
+      status: 'pending' as const,
+      decidedBy: 'model' as const,
+    }
+    // One measured call, and one that was MADE and never reported a cost -- charged at
+    // `SUPERVISOR_PER_CALL_CAP_USD` ($1), exactly as `workspaceSpend` charges it for the guardrail.
+    await prisma.supervisorDecision.create({ data: { ...decision, modelCalled: true, modelCostUsd: 0.25 } })
+    await prisma.supervisorDecision.create({ data: { ...decision, modelCalled: true, modelCostUsd: null } })
+
+    const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
+
+    expect(snapshot?.workspace.spentUsd).toBeCloseTo(2.75)
+    expect(snapshot?.workspace.supervisorSpend).toEqual({ measuredUsd: 0.25, unmeasuredCalls: 1 })
+    // Unchanged and separate: an unmeasured RUN is still counted in runs, never in the Supervisor's
+    // tally, and the two notes beside the spend figure say different things.
+    expect(snapshot?.workspace.unmeasuredRuns).toBe(0)
+  })
+
+  it("reports no Supervisor spend when the Supervisor has never called anybody", async (): Promise<void> => {
+    await prisma.slaveRun.create({
+      data: { taskId: fixture.taskId, slaveId: fixture.slaveId, status: 'succeeded', costUsd: 1.5 },
+    })
+
+    const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
+
+    expect(snapshot?.workspace.spentUsd).toBeCloseTo(1.5)
+    expect(snapshot?.workspace.supervisorSpend).toEqual({ measuredUsd: 0, unmeasuredCalls: 0 })
+  })
+
   it('does not count a run that is merely in flight as unmeasured -- unfinished is not unmeasured', async (): Promise<void> => {
     // Fix round F1. `pump.ts` writes `costUsd` only at terminal conclusion, so a `working` run
     // ALWAYS has a null cost. Counting it made a healthy workspace with three slaves working read

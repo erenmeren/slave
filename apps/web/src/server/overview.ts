@@ -1,6 +1,6 @@
 import { prisma } from '@slave-of-ai/db/client'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, toRunState } from '@slave-of-ai/db'
-import { capabilitiesOf, workspaceDefaultProvider, type ProviderCapabilities, type ProviderKind } from '@slave-of-ai/control'
+import { capabilitiesOf, workspaceDefaultProvider, workspaceSpend, type ProviderCapabilities, type ProviderKind } from '@slave-of-ai/control'
 import {
   deriveSlaveStatus,
   effectiveProfile,
@@ -169,8 +169,25 @@ export interface OverviewSnapshot {
      * `ProjectHeader` as known spend with no ratio and no bar, never as a budget of zero.
      */
     readonly budgetUsd: number | null
-    /** KNOWN spend: every run that reported a cost, summed. Never includes a guess. */
+    /**
+     * What this workspace has spent, by the ONE formula the budget guardrail uses
+     * (`workspaceSpend`, spec erratum E2): every run that reported a cost, plus the Supervisor's
+     * measured decisions, plus its unmeasured calls at `SUPERVISOR_PER_CALL_CAP_USD`.
+     *
+     * M38 t5 moved it here from `sumSpend(spendRows).known`, which counted RUNS only. The two
+     * figures had drifted the moment a Supervisor decision cost anything: `decide()` halts a
+     * workspace on the guardrail's total, so the overview could show $4 of a $5 budget on a
+     * project that had already stopped. `unmeasuredRuns` below is still `sumSpend`'s, because
+     * that count is about runs and this total is about money.
+     */
     readonly spentUsd: number
+    /**
+     * How much of {@link spentUsd} is the Supervisor's, split the way the run figures are: what
+     * was measured, and how many calls were made whose cost never came back (each charged at
+     * `SUPERVISOR_PER_CALL_CAP_USD`). Rendered beside the spend tile, because a total that grew
+     * without a run to explain it is exactly the kind of figure an operator cannot account for.
+     */
+    readonly supervisorSpend: { readonly measuredUsd: number; readonly unmeasuredCalls: number }
     /**
      * How many of this workspace's runs actually ran, finished, and left no cost figure behind
      * (M12 Task 9, ruling R11; corrected in fix round F1). Rendered beside the budget bar, because
@@ -406,12 +423,17 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
   // Selected rather than filtered in SQL, deliberately: a pre-M12 row has a real recorded cost and
   // a null `provider`, so a `WHERE` would take its money out of `spentUsd` in order to fix the
   // count beside it.
-  const [spendRows, taskGroups] = await Promise.all([
+  //
+  // `workspaceSpend` alongside them (M38 t5): the TOTAL is its formula, so that this page and the
+  // budget guardrail cannot disagree, while these rows stay for the unmeasured-RUN count that no
+  // aggregate can produce.
+  const [spendRows, taskGroups, spendTotal] = await Promise.all([
     prisma.slaveRun.findMany({
       where: { slave: { team: { workspaceId } } },
       select: { costUsd: true, provider: true, status: true },
     }),
     prisma.task.groupBy({ by: ['status'], where: { workspaceId }, _count: { _all: true } }),
+    workspaceSpend(workspaceId),
   ])
   const spend = sumSpend(spendRows)
   const countOf = (statuses: readonly string[]): number =>
@@ -509,7 +531,11 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
       haltedReason: workspace.haltedReason,
       haltedAt: workspace.haltedAt?.toISOString() ?? null,
       budgetUsd: workspace.budgetUsd,
-      spentUsd: spend.known,
+      spentUsd: spendTotal.spentUsd,
+      supervisorSpend: {
+        measuredUsd: spendTotal.supervisorMeasuredUsd,
+        unmeasuredCalls: spendTotal.supervisorUnmeasuredCalls,
+      },
       unmeasuredRuns: spend.unknownRuns,
       goal: workspace.goal,
       provider,

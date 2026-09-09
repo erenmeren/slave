@@ -1,3 +1,4 @@
+import { SUPERVISOR_PER_CALL_CAP_USD } from '@slave-of-ai/domain'
 import type { OverviewSnapshot } from '../server/overview'
 import { CARD_STATE_TONE } from '../lib/tones'
 import { TONE_TEXT, type StatusTone } from './ui/StatusPill'
@@ -18,6 +19,11 @@ import { TONE_TEXT, type StatusTone } from './ui/StatusPill'
  */
 export function TopStrip({ snapshot }: { readonly snapshot: OverviewSnapshot }): React.JSX.Element {
   const working = snapshot.slaves.filter((a) => a.status === 'working').length
+  // M38 t5: `spentUsd` now includes the Supervisor's own model calls (it is the guardrail's own
+  // formula), so the tile has to be able to say how much of it is not a run -- otherwise the
+  // total grows with no slave to account for it, which is Decision 6's lie in a third hat.
+  const supervisor = snapshot.workspace.supervisorSpend
+  const supervisorSpent = supervisor.measuredUsd > 0 || supervisor.unmeasuredCalls > 0
   const { active, ready, done, blocked } = snapshot.tasks
   const tiles: ReadonlyArray<{
     readonly key: string
@@ -54,6 +60,16 @@ export function TopStrip({ snapshot }: { readonly snapshot: OverviewSnapshot }):
           {tile.key === 'spend' && snapshot.workspace.unmeasuredRuns > 0 && (
             <span data-testid="strip-unmeasured" className="font-mono text-[9.5px] text-tone-waiting">
               {snapshot.workspace.unmeasuredRuns} unmeasured
+            </span>
+          )}
+          {tile.key === 'spend' && supervisorSpent && (
+            <span data-testid="strip-supervisor-spend" className="font-mono text-[9.5px] text-text-3">
+              {`supervisor $${supervisor.measuredUsd.toFixed(2)}`}
+              {/* The unmeasured calls are NAMED with what they were charged, not folded into the
+                * figure beside them: `workspaceSpend` bills each at the per-call cap, and a
+                * reader has to be able to tell an estimate from a measurement. */}
+              {supervisor.unmeasuredCalls > 0 &&
+                ` · ${supervisor.unmeasuredCalls} at $${SUPERVISOR_PER_CALL_CAP_USD.toFixed(2)}`}
             </span>
           )}
         </div>

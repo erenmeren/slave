@@ -10,6 +10,7 @@ import type { OverviewSnapshot } from '../server/overview'
 import { SlaveCard } from './SlaveCard'
 import { SlavePanel } from './SlavePanel'
 import { HaltBanner } from './HaltBanner'
+import { SupervisorPanel } from './SupervisorPanel'
 import { postControl } from '../lib/postControl'
 import { TopStrip } from './TopStrip'
 import { Button } from './ui/Button'
@@ -216,6 +217,12 @@ export function OverviewClient({
     <>
       <div className={`flex flex-1 flex-col ${error !== null ? 'opacity-60' : ''}`}>
         {view.workspace.haltedReason !== null && <HaltBanner reason={view.workspace.haltedReason} />}
+        {/* M38 §6: the Supervisor sits directly under the halt banner, because a halted workspace
+          * is exactly when its "what is stuck / what comes next" is worth reading, and because
+          * every action it proposes while halted is a proposal a human has to answer here. It
+          * reads its own route; `view` is passed only as the poll tick, so it refreshes on the
+          * same beat the rest of this page does. */}
+        <SupervisorPanel workspaceId={workspaceId} refreshKey={view} />
         {error !== null && (
           <div role="alert" className="border-b border-tone-waiting/40 bg-tone-waiting/10 px-4 py-1.5 text-xs text-tone-waiting">
             showing stale data: {error}
