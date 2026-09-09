@@ -61,4 +61,9 @@ Events: `workspace.goal_set` payload gains `version` and `sha256` (additive); `w
 Editing a task's title/description after creation (still immutable); versioning profiles (M37 note) — separate; re-prioritisation by the model; automatic cancellation of running work; multi-workspace requirements; requirement "acceptance criteria" objects (M41's scenario gate will say what it needs).
 
 ## 8. Errata — where execution corrects this spec
-(appended during execution)
+### Plan writing (2026-09-10)
+- **E1 — delta validation.** `validateStructure` in `graph.ts` is module-private; `delta.ts` has its own `validateDelta(delta, existingTaskIds)` reusing an exported `findCycle`, allowing `dependsOn` entries that are existing task ids.
+- **E2 — the trailer.** The trailer is chosen in `render.ts` by kind; a re-plan run keeps `kind: 'planning'` and `renderRunContext` appends `REPLAN_INSTRUCTIONS` when a `replan` section is present.
+- **E3 — fixture substitution.** The fake CLI has no placeholder mechanism; `replanArm` replaces the `$CANCEL_ID` token in the fixture's lines from `--replan-cancel <id>` in argv (M39 E6: argv reaches the scrubbed decision child, env does not).
+- **E4 — routing.** `concludePlanning` decides first-plan vs re-plan from the run's recorded manifest (a `replan` section), not from `run.kind`.
+- **E5 — `goal_unchanged`.** `setGoal` refuses with `goal_unchanged { workspaceId; version }` when the new text's sha256 equals the current version's; no row, no event.
