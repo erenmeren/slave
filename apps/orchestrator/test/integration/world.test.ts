@@ -1,4 +1,4 @@
-import { decide, slaveId, taskId, workspaceId } from '@slave-of-ai/domain'
+import { SUPERVISOR_PER_CALL_CAP_USD, decide, slaveId, taskId, workspaceId } from '@slave-of-ai/domain'
 import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { loadWorld } from '../../src/world.js'
@@ -441,6 +441,37 @@ describe('loadWorld stats.activeRuns and stats.spentUsd', () => {
     // sum, so binary64 represents the total exactly. A tolerance would be covering for nothing and
     // would quietly weaken the assertion.
     expect(world.stats.spentUsd).toBe(10)
+  })
+
+  /**
+   * M38 §5: a Supervisor model call is workspace spend. Without this the budget guardrail would
+   * watch only the runs, and a Supervisor could keep deciding -- one model call at a time -- long
+   * after the money it was given had run out.
+   */
+  it('adds the Supervisor\'s measured decisions and charges every unmeasured call at the cap', async (): Promise<void> => {
+    const id = await seedRuns([{ status: 'succeeded', startedAt: at('2026-01-01T00:00:00Z'), costUsd: 2 }])
+    const decision = {
+      workspaceId: id,
+      situationKind: 'review_cap_blocked' as const,
+      subjectId: 'task-1',
+      situation: {},
+      candidates: [],
+      chosenIndex: 0,
+      action: { kind: 'no_action' },
+      rationale: 'x',
+      tier: 'noop' as const,
+      status: 'applied' as const,
+    }
+    await prisma.supervisorDecision.create({ data: { ...decision, decidedBy: 'model', modelCostUsd: 0.25 } })
+    // The call happened and its cost never came back: charged at the cap, never at zero.
+    await prisma.supervisorDecision.create({ data: { ...decision, decidedBy: 'model', modelCostUsd: null } })
+    // A rules decision calls nobody and must add nothing at all.
+    await prisma.supervisorDecision.create({ data: { ...decision, decidedBy: 'rules', modelCostUsd: null } })
+
+    const { world, supervisorSpend } = await loadWorld(workspaceId(id))
+
+    expect(world.stats.spentUsd).toBe(2 + 0.25 + SUPERVISOR_PER_CALL_CAP_USD)
+    expect(supervisorSpend).toEqual({ measuredUsd: 0.25, unmeasuredCalls: 1 })
   })
 
   it('reports zero spend rather than null when a workspace has no runs at all', async (): Promise<void> => {

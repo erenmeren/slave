@@ -49,6 +49,21 @@ describe('decideWithModel (fake CLI)', () => {
     expect(outcome.tokens).toEqual({ input: 900, output: 120 })
     expect(outcome.numTurns).toBe(1)
   })
+  it('gets M38\'s supervisor answer out of a flow mode, prompt and all, exactly as the gate will', async () => {
+    // The whole seam in one call: `decisionArgs` puts the prompt on STDIN behind a bare `-p`, the
+    // fake CLI is in a FLOW mode (which is what a gate sets for its runs, not a static fixture),
+    // and the supervisor arm has to recognise the prompt anyway and replay the decision fixture
+    // instead of the work body.
+    const outcome = await decideWithModel({
+      ...base,
+      prompt: 'CANDIDATE ACTIONS\n0. unblock_task\n\nReply with {"candidateIndex": <0..3>, "rationale": "..."}',
+      extraArgs: [FAKE, '--fixture', 'm8a-flow'],
+    })
+    expect(outcome.kind).toBe('answer')
+    if (outcome.kind !== 'answer') return
+    expect(outcome.text).toContain('"candidateIndex":0')
+    expect(outcome.costUsd).toBeCloseTo(0.01, 6)
+  })
   it('reports an isolation breach when the stream shows a tool call, keeping the cost', async () => {
     const outcome = await decideWithModel({ ...base, extraArgs: [FAKE, '--fixture', 'decision-breach'] })
     expect(outcome).toMatchObject({ kind: 'isolation_breach', tools: ['Bash'], costUsd: 0.0121 })

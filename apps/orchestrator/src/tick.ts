@@ -1,5 +1,6 @@
 import {
   admitProvider,
+  type ModelDecider,
   claimResume,
   pauseActiveRuns,
   refusalText,
@@ -31,6 +32,7 @@ import { executeResume } from './resume.js'
 import { buildRunContext } from './runContext.js'
 import { createRunUnlessArchived } from './runs.js'
 import { dispatchReviews } from './review.js'
+import { NO_SUPERVISION, supervise, type SuperviseReport } from './supervisor.js'
 import { noteTickRan } from './sweep.js'
 import { releaseTaskAfterFailure, type TaskRelease } from './taskRelease.js'
 import { verifyConcludedRun } from './verify.js'
@@ -51,6 +53,20 @@ export interface TickDeps {
    * to whatever `resolveRuntime` (`model.ts`) actually decided for that run.
    */
   readonly registry: AdapterRegistry
+  /**
+   * M38 §5: how the Supervisor's decision point reaches a model, the same `ModelDecider` seam M31a
+   * gave the simulation. Optional and absent in every test that only exercises scheduling -- a
+   * tick with no decider still supervises, by the rules, and spends nothing. `daemon.ts` passes
+   * its own `modelDecider` through; nothing else in production wires one.
+   */
+  readonly supervisorDecider?: ModelDecider
+  /** The model a Supervisor decision is asked of. Read from the environment in `cli.ts`
+   *  (`SLAVEOFAI_SUPERVISOR_MODEL`, default `SUPERVISOR_DEFAULT_MODEL`), never defaulted here:
+   *  this file must not be a second place a model name lives. Without it there is no call. */
+  readonly supervisorModel?: string
+  /** The tick's clock, for the Supervisor's staleness and cooldown windows. Injectable so a test
+   *  can put a workspace an hour in the past without waiting an hour. */
+  readonly now?: () => Date
 }
 
 export interface TickReport {
@@ -64,6 +80,9 @@ export interface TickReport {
    *  otherwise. Set before anything else is decided -- the rest of the report is meaningless when
    *  this is set, since the world was never loaded. */
   readonly skipped: 'archived' | null
+  /** What the Supervisor did at the end of this tick (M38 §5). All zeros on the paths that never
+   *  reach it -- an archived project, and a halted one, both of which return before the pass. */
+  readonly supervisor: SuperviseReport
 }
 
 /**
@@ -198,7 +217,15 @@ export async function tick(deps: TickDeps): Promise<TickReport> {
   // before the world is loaded, so nothing under it can be dispatched.
   const archived = await prisma.workspace.findUnique({ where: { id: deps.workspaceId }, select: { archivedAt: true } })
   if (archived?.archivedAt != null) {
-    return { started: [], halted: null, skippedNoRole: 0, planningStarted: null, reviewsStarted: [], skipped: 'archived' }
+    return {
+      started: [],
+      halted: null,
+      skippedNoRole: 0,
+      planningStarted: null,
+      reviewsStarted: [],
+      skipped: 'archived',
+      supervisor: NO_SUPERVISION,
+    }
   }
 
   const { world, skippedNoRole } = await loadWorld(deps.workspaceId)
@@ -223,7 +250,15 @@ export async function tick(deps: TickDeps): Promise<TickReport> {
         await pauseActiveRuns(deps.workspaceId, 'budget guardrail', 'guardrail')
       }
     }
-    return { started: [], halted: halt.reason, skippedNoRole, planningStarted: null, reviewsStarted: [], skipped: null }
+    return {
+      started: [],
+      halted: halt.reason,
+      skippedNoRole,
+      planningStarted: null,
+      reviewsStarted: [],
+      skipped: null,
+      supervisor: NO_SUPERVISION,
+    }
   }
   haltAnnounced.set(deps.workspaceId, false)
 
@@ -286,7 +321,35 @@ export async function tick(deps: TickDeps): Promise<TickReport> {
   // `runMergePass` itself.
   await runMergePass(deps.workspaceId)
 
-  return { started, halted: null, skippedNoRole, planningStarted, reviewsStarted, skipped: null }
+  // Last, after every pass that could have changed what is stuck: the Supervisor decides about the
+  // workspace this tick leaves behind, not the one it found. A run started, a review dispatched or
+  // a merge landed above all remove situations it would otherwise have decided about.
+  const supervisor = await superviseQuietly(deps)
+
+  return { started, halted: null, skippedNoRole, planningStarted, reviewsStarted, skipped: null, supervisor }
+}
+
+/**
+ * The Supervisor pass, wrapped so it can never take the tick down.
+ *
+ * The Supervisor is an ADVISOR on the scheduling loop, not part of it: everything that actually
+ * moves work -- dispatch, resume, review, merge -- has already happened and been written by the
+ * time this runs. A decision loop that threw here would lose nothing of that work but would fail
+ * the tick, and a daemon whose every tick throws stops scheduling entirely. So a failure is
+ * logged in the tick's own shape and reported as a pass that decided nothing.
+ */
+async function superviseQuietly(deps: TickDeps): Promise<SuperviseReport> {
+  try {
+    return await supervise({
+      workspaceId: deps.workspaceId,
+      ...(deps.supervisorDecider === undefined ? {} : { decider: deps.supervisorDecider }),
+      ...(deps.supervisorModel === undefined ? {} : { model: deps.supervisorModel }),
+      ...(deps.now === undefined ? {} : { now: deps.now }),
+    })
+  } catch (error) {
+    console.error(`[tick] the supervisor pass for workspace ${deps.workspaceId} failed:`, error)
+    return NO_SUPERVISION
+  }
 }
 
 /**

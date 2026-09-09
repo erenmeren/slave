@@ -889,6 +889,14 @@ describe('the orchestrator CLI', () => {
   }, 60_000)
 
   it('does not hand a cancelled task straight back to a new slave', async (): Promise<void> => {
+    // The Supervisor is switched OFF for this workspace, and the reason is the finding it would
+    // otherwise hide (M38 t3): `cancel` parks the task `blocked` because a human has to look at
+    // it, and M38's `task_blocked_human` catalogue offers `unblock_task` as a ROUTINE action while
+    // attempts remain -- so the Supervisor moves it to `rework` at the end of the next tick and
+    // the tick after that hands it to a fresh slave, which is precisely what this test forbids.
+    // That is the specified M38 behaviour (spec §3's tier table), not a bug in the CLI, so the
+    // property is measured with the Supervisor out of the way and the collision is reported.
+    await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { supervisorEnabled: false } })
     await runCli(['tick'])
     const run = await prisma.slaveRun.findFirstOrThrow()
     await prisma.slaveRun.update({

@@ -5,7 +5,7 @@ import { subscribeEvents, type EventSubscription } from '@slave-of-ai/events'
 import type { AdapterRegistry } from '@slave-of-ai/providers'
 import { collectWorktrees } from './collect.js'
 import { reconcileOrphans, sweep } from './sweep.js'
-import { activePumpRunIds, drainPumps, tick } from './tick.js'
+import { activePumpRunIds, drainPumps, tick, type TickDeps } from './tick.js'
 
 /**
  * Spec §3 B3: ten minutes, not the coalescer's ~1 Hz sweep. Ageing is measured in days
@@ -38,6 +38,13 @@ export interface DaemonDeps {
    * `DEFAULT_MAX_MODEL_CALLS`, which is the same number.
    */
   readonly maxConcurrentModelCalls?: number
+  /**
+   * M38 §5: the model the SUPERVISOR's decisions are asked of, read from the environment by
+   * `cli.ts`. Separate from `modelDecider` because they are different facts -- the decider is HOW
+   * a call is made, this is WHAT is asked -- and because M31a's simulation calls take their model
+   * from the simulation intent, so there was no shared name to reuse (spec erratum E3).
+   */
+  readonly supervisorModel?: string
 }
 
 /**
@@ -135,14 +142,28 @@ export async function runDaemon(deps: DaemonDeps): Promise<void> {
   }
   await runCollect()
 
+  // The daemon is the one production caller that hands the tick a model seam, and it hands over
+  // the SAME decider M31a's simulations use (spec §5): one isolation contract, one deny-all hook,
+  // one place the child process is configured. Built once rather than per tick -- it is a plain
+  // object, and rebuilding it every second would say it could change between ticks.
+  const tickDeps: TickDeps = {
+    workspaceId: deps.workspaceId,
+    registry: deps.registry,
+    ...(deps.modelDecider === undefined ? {} : { supervisorDecider: deps.modelDecider }),
+    ...(deps.supervisorModel === undefined ? {} : { supervisorModel: deps.supervisorModel }),
+  }
+
   const coalescer = createCoalescer(async (): Promise<void> => {
     try {
-      const report = await tick(deps)
+      const report = await tick(tickDeps)
       if (
         report.started.length > 0 ||
         report.halted !== null ||
         report.planningStarted !== null ||
-        report.reviewsStarted.length > 0
+        report.reviewsStarted.length > 0 ||
+        // A Supervisor decision is a change to the workspace nobody asked for -- an operator
+        // reading the daemon's log must see the tick it happened on.
+        report.supervisor.decided > 0
       ) {
         process.stdout.write(`${JSON.stringify(report)}\n`)
       }

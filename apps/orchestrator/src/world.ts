@@ -9,6 +9,7 @@ import {
   type WorkspaceId,
   type World,
 } from '@slave-of-ai/domain'
+import { workspaceSpend } from '@slave-of-ai/control'
 import { prisma, type Prisma } from '@slave-of-ai/db/client'
 
 // Re-exported so `cli.ts` and `sweep.ts` keep importing it from here -- the statuses an
@@ -69,6 +70,15 @@ export interface LoadedWorld {
    * with dependencies or guardrails.
    */
   readonly skippedNoRole: number
+  /**
+   * The Supervisor's share of `world.stats.spentUsd` (M38 §5), split so a surface can say what it
+   * is made of. NOT on `world.stats`: that is the domain's `WorkspaceStats`, which `decide()` and
+   * `evaluateGuardrails` read, and neither of them has any business knowing WHO spent the money --
+   * only how much. `unmeasuredCalls` are already charged into `spentUsd` at
+   * `SUPERVISOR_PER_CALL_CAP_USD` each; the count is here so an operator sees an estimate labelled
+   * as one, the same way `apps/web`'s `unmeasuredRuns` note does for runs.
+   */
+  readonly supervisorSpend: { readonly measuredUsd: number; readonly unmeasuredCalls: number }
 }
 
 interface TaskWorldRow {
@@ -165,6 +175,8 @@ async function loadRunStats(
   readonly globalActiveRuns: number
   readonly spentUsd: number
   readonly consecutiveFailures: number
+  /** The Supervisor's share of `spentUsd`, split for the surfaces -- see `LoadedWorld`. */
+  readonly supervisorSpend: { readonly measuredUsd: number; readonly unmeasuredCalls: number }
 }> {
   // `slave: { team: { workspaceId } }`, not `task: { workspaceId }`: a `planning` run (M8b) has no
   // `Task` row, and it still occupies a concurrency slot and spends real money -- scoping through
@@ -175,28 +187,28 @@ async function loadRunStats(
   const globalActiveRuns = await tx.slaveRun.count({
     where: { status: { in: [...NON_TERMINAL_RUN_STATUSES] } },
   })
-  // A `_sum` aggregate, and it stays one -- unlike `overview.ts` and `org.ts`, which read the same
-  // spend through `sumSpend` (M12 Task 9, ruling R3, corrected in fix round F3). The difference is
-  // the CONSUMER, not the arithmetic:
+  // Aggregates, not `sumSpend` -- unlike `overview.ts` and `org.ts`, which read the same spend
+  // through it (M12 Task 9, ruling R3, corrected in fix round F3). The difference is the CONSUMER,
+  // not the arithmetic:
   //
   // This figure feeds `evaluateGuardrails`, and ruling R8 keeps `unknownRuns` out of the guardrail
-  // deliberately -- a breach keyed on unmeasured runs would fire on every healthy tick. So the
-  // second half of `sumSpend`'s pair would be computed and thrown away here, while the first half
-  // is numerically identical to what `_sum` already returns: Postgres' `sum()` skips NULLs, which
-  // is the same rule `sumSpend.known` applies. Paying for it would mean transferring one float per
-  // run of the workspace's ENTIRE history, inside `loadWorld`'s five-statement transaction with a
-  // cumulative 15 s budget, on the tick's hot path, to compute a number that does not change.
+  // deliberately -- a breach keyed on unmeasured RUNS would fire on every healthy tick, because a
+  // live run's cost is null until it concludes. So the second half of `sumSpend`'s pair would be
+  // computed and thrown away here, while the first half is numerically identical to what `_sum`
+  // already returns: Postgres' `sum()` skips NULLs, which is the same rule `sumSpend.known`
+  // applies. Paying for it would mean transferring one float per run of the workspace's ENTIRE
+  // history, inside `loadWorld`'s transaction with a cumulative 15 s budget, on the tick's hot
+  // path, to compute a number that does not change.
   //
-  // `?? 0` here is the case a coalesce is right about and the one the marker this replaces was
-  // never aimed at: `_sum` returns `null` only when the aggregate matched NO ROWS AT ALL, which is
-  // a workspace that has genuinely spent nothing. It cannot return `null` because some row's cost
-  // was unknown -- those rows are already excluded from the sum, not folded into it as zeros. The
-  // count of them is what was invisible, and it is now visible on the two surfaces that display
-  // spend to an operator.
-  const spend = await tx.slaveRun.aggregate({
-    where: { slave: { team: { workspaceId } } },
-    _sum: { costUsd: true },
-  })
+  // M38 §5: the sum now runs in `packages/control/src/spend.ts` (`workspaceSpend`), and includes
+  // the SUPERVISOR's own model calls -- measured, plus every unmeasured one at
+  // `SUPERVISOR_PER_CALL_CAP_USD`. That is the whole point of putting it there: `loadSupervisorWorld`
+  // reads the identical formula for `budgetExhausted`, so the guardrail that halts scheduling and
+  // the gate that stops the Supervisor calling a model can never disagree about what a workspace
+  // has spent. It runs on `tx`, so it is read from this snapshot and not a later one. An unmeasured
+  // supervisor CALL is charged (unlike an unmeasured run) because it is finished: nothing will ever
+  // report its cost, so zero would be the wrong guess and the cap is the honest ceiling.
+  const spend = await workspaceSpend(workspaceId, tx)
 
   // Most recently concluded first, so the leading run of the list is the one the streak counts
   // from. `SlaveRun.terminalAt` is written by the event pump as of Task 12 -- when this was first
@@ -244,7 +256,13 @@ async function loadRunStats(
   // cost until it concludes -- so a guardrail keyed on unmeasured runs would trip on every healthy
   // tick of every healthy workspace. The figure belongs on the surfaces, where `apps/web`'s
   // `sumSpend` calls put it in front of an operator.
-  return { activeRuns, globalActiveRuns, spentUsd: spend._sum.costUsd ?? 0, consecutiveFailures }
+  return {
+    activeRuns,
+    globalActiveRuns,
+    spentUsd: spend.spentUsd,
+    consecutiveFailures,
+    supervisorSpend: { measuredUsd: spend.supervisorMeasuredUsd, unmeasuredCalls: spend.supervisorUnmeasuredCalls },
+  }
 }
 
 /**
@@ -357,5 +375,5 @@ export async function loadWorld(workspaceId: WorkspaceId): Promise<LoadedWorld> 
     },
   }
 
-  return { world, skippedNoRole }
+  return { world, skippedNoRole, supervisorSpend: runStats.supervisorSpend }
 }

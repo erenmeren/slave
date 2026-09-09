@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSyn
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { refusalText } from '@slave-of-ai/control'
+import { refusalText, type ModelDecider } from '@slave-of-ai/control'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@slave-of-ai/db'
 import { prisma } from '@slave-of-ai/db/client'
 import {
@@ -495,6 +495,86 @@ describe('tick', () => {
     expect(await warningEvents()).toBe(1)
   })
 
+  describe('the Supervisor runs at the end of the tick (M38 t3)', () => {
+    /** A second task, parked `blocked` at the review cap -- one situation, whose catalogue starts
+     *  with the routine `unblock_task`. */
+    async function parkedAtTheReviewCap(): Promise<string> {
+      const task = await prisma.task.create({
+        data: {
+          workspaceId: fixture.workspaceId,
+          title: 'Fix the flake',
+          description: 'it fails on CI only',
+          status: 'blocked',
+          requiredRole: 'backend',
+          attempt: 1,
+          maxAttempts: 3,
+        },
+      })
+      await prisma.executionEvent.create({
+        data: {
+          workspaceId: fixture.workspaceId,
+          taskId: task.id,
+          type: 'guardrail_tripped',
+          actor: 'system',
+          payload: { guardrail: 'review_retry_cap_exhausted', detail: 'out of review retries' },
+        },
+      })
+      return task.id
+    }
+
+    it('decides by the rules when the daemon wired no decider, and reports what it did', async (): Promise<void> => {
+      const blocked = await parkedAtTheReviewCap()
+
+      const report = await tick(deps)
+
+      expect(report.supervisor).toMatchObject({ situations: 1, decided: 1, applied: 1, modelCalls: 0, rulesOnly: true })
+      const decision = await prisma.supervisorDecision.findFirstOrThrow()
+      expect(decision.decidedBy).toBe('rules')
+      expect((await prisma.task.findUniqueOrThrow({ where: { id: blocked } })).status).toBe('rework')
+    })
+
+    it('asks the decider the daemon threaded through, with the model the CLI named', async (): Promise<void> => {
+      await parkedAtTheReviewCap()
+      const prompts: string[] = []
+      const supervisorDecider: ModelDecider = (input) => {
+        prompts.push(input.prompt)
+        return Promise.resolve({
+          kind: 'answer',
+          text: '{"candidateIndex": 0, "rationale": "an attempt is left, so send it back to rework"}',
+          costUsd: 0.02,
+          tokens: { input: 10, output: 5 },
+          numTurns: 1,
+        })
+      }
+
+      const report = await tick({ ...deps, supervisorDecider, supervisorModel: 'claude-sonnet-5' })
+
+      expect(report.supervisor).toMatchObject({ decided: 1, modelCalls: 1, rulesOnly: false })
+      expect(prompts).toHaveLength(1)
+      expect(prompts[0]).toContain('"candidateIndex"')
+      const decision = await prisma.supervisorDecision.findFirstOrThrow()
+      expect(decision.decidedBy).toBe('model')
+      expect(decision.modelCostUsd).toBe(0.02)
+    })
+
+    it('reports a supervisor that decided nothing on the paths that never reach it', async (): Promise<void> => {
+      await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { archivedAt: new Date() } })
+
+      const report = await tick(deps)
+
+      expect(report.skipped).toBe('archived')
+      expect(report.supervisor).toEqual({
+        situations: 0,
+        decided: 0,
+        applied: 0,
+        proposed: 0,
+        skippedCooldown: 0,
+        modelCalls: 0,
+        rulesOnly: true,
+      })
+    })
+  })
+
   it('records a provisioning failure as a failed run that counts as an attempt', async (): Promise<void> => {
     await prisma.workspace.update({
       where: { id: fixture.workspaceId },
@@ -825,6 +905,17 @@ describe('tick', () => {
   })
 
   it('does not turn the leftovers it refused into leftovers it will adopt', async (): Promise<void> => {
+    // The Supervisor is switched OFF for this one workspace, and the reason is the finding this
+    // test would otherwise hide (M38 t3): the refusal parks the task `blocked` on purpose -- "an
+    // operator has to look at this" -- and `task_blocked_human`'s catalogue offers `unblock_task`
+    // as a ROUTINE action while attempts remain, so the Supervisor moves it to `rework` at the end
+    // of the very tick that refused it, and the next tick adopts the tree this one called
+    // wreckage. That is exactly the "hold for one tick and then invert itself" failure
+    // `failStartedRun`'s own comment describes, reintroduced through the Supervisor rather than
+    // through the status. It is the specified M38 behaviour (spec §3's tier table), not a bug in
+    // this file, so the property under test is measured with the Supervisor out of the way and the
+    // interaction is reported for M38's own follow-up.
+    await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { supervisorEnabled: false } })
     await tick(deps)
     await drainPumps()
     await prisma.slaveRun.deleteMany({})

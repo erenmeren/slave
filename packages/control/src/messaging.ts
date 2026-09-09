@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { prisma } from '@slave-of-ai/db/client'
+import { type Prisma, prisma } from '@slave-of-ai/db/client'
 import {
   type MessageKind, type Result, type SlaveMessageView, err, isValidRecipient, ok,
 } from '@slave-of-ai/domain'
@@ -250,9 +250,17 @@ export interface ListMessagesFilter {
  * relation filter because `SlaveMessage.senderRunId` deliberately carries no Prisma relation (see
  * its own doc comment: a second FK to `SlaveRun` would fight `slaveId`'s cascade). The set is one
  * indexed read of the waiting runs in one workspace -- usually none.
+ *
+ * Exported, with an optional `client`, for `supervisorWorld.ts` (M38 t3): the Supervisor's world
+ * carries the same pending questions this filter defines, and it reads them inside its own
+ * `RepeatableRead` snapshot -- a second definition of "still pending" over there would be a second
+ * thing to keep in step with this one.
  */
-async function waitingSenderRunIds(workspaceId: string): Promise<string[]> {
-  const runs = await prisma.slaveRun.findMany({
+export async function waitingSenderRunIds(
+  workspaceId: string,
+  client: Prisma.TransactionClient = prisma,
+): Promise<string[]> {
+  const runs = await client.slaveRun.findMany({
     where: { status: 'paused', pauseReason: 'waiting_for_answer', slave: { team: { workspaceId } } },
     select: { id: true },
   })
@@ -261,7 +269,7 @@ async function waitingSenderRunIds(workspaceId: string): Promise<string[]> {
 
 /** The `where` fragment {@link waitingSenderRunIds} feeds. A question whose `senderRunId` is null
  *  (no run ever asked it) can park nobody and is never pending. */
-function stillPendingQuestion(waitingRunIds: string[]): {
+export function stillPendingQuestion(waitingRunIds: string[]): {
   kind: 'question'
   expectsReply: true
   replies: { none: Record<string, never> }

@@ -56,6 +56,14 @@
 //                  (`ClaudeCodeAdapter.resume` appends it); keying off the
 //                  resume prompt's wording would make this fake agree with a
 //                  sentence in `deliver.ts` rather than with the protocol.
+//   Every prompt-sniffing mode above also carries M38's SUPERVISOR arm,
+//   checked FIRST: a prompt containing the literal `"candidateIndex"`
+//   (which `buildDecisionPrompt` always emits) replays the
+//   `supervisor-decision` fixture and does nothing else -- no commit, no
+//   file. It is checked before `"verdict"`/`"task graph"` so a supervisor
+//   prompt can never be mistaken for a review or a planning run, and it is
+//   in every mode because a gate picks its mode for the RUNS it wants and
+//   the Supervisor's call arrives on whatever mode that turned out to be.
 //   anything else  replays `fixtures/<name>.ndjson` verbatim, exit 0 -- real
 //                  captures show process exit code 0 even for hook-crash,
 //                  hook-deny, and permission-denied runs, so the fake matches
@@ -108,6 +116,36 @@ async function replayFixture(name) {
   const lines = readFixtureLines(name)
   await writeLines(lines)
   process.exit(0)
+}
+
+/**
+ * The prompt this invocation was given, wherever the caller put it.
+ *
+ * A RUN carries it in argv (`-p <prompt>`, `ClaudeCodeAdapter.spawnRun`). A DECISION call --
+ * M31a's `decideWithModel`, which is how the Supervisor's model call is made -- passes a BARE
+ * `-p` and writes the prompt to stdin, so `args[after -p]` is the next flag and there is nothing
+ * in argv to sniff. Reading stdin is gated on `--no-session-persistence`, a flag only
+ * `decisionArgs` ever passes: a run's stdin is never written to and never ended, so a mode that
+ * read it unconditionally would hang forever on the first work run.
+ */
+async function promptText() {
+  const index = args.indexOf('-p')
+  const inline = index === -1 ? undefined : args[index + 1]
+  if (inline !== undefined && !inline.startsWith('-')) return inline
+  if (!args.includes('--no-session-persistence')) return ''
+  process.stdin.setEncoding('utf8')
+  let text = ''
+  for await (const chunk of process.stdin) text += chunk
+  return text
+}
+
+/** M38: the Supervisor's decision call, recognised by the one literal `buildDecisionPrompt`
+ *  guarantees. Returns true when it replayed (and so never returns at all -- `replayFixture`
+ *  exits), so each mode reads as `if (await supervisorArm(prompt)) return`. */
+async function supervisorArm(prompt) {
+  if (!prompt.includes('"candidateIndex"')) return false
+  await replayFixture('supervisor-decision')
+  return true
 }
 
 async function main() {
@@ -168,8 +206,8 @@ async function main() {
   }
 
   if (fixtureName === 'm36-flow') {
-    const promptIndex = args.indexOf('-p')
-    const prompt = promptIndex === -1 ? '' : (args[promptIndex + 1] ?? '')
+    const prompt = await promptText()
+    if (await supervisorArm(prompt)) return
     if (prompt.includes('"verdict"')) {
       await replayFixture('review-approve')
       return
@@ -215,8 +253,8 @@ async function main() {
   }
 
   if (fixtureName === 'm8-flow') {
-    const promptIndex = args.indexOf('-p')
-    const prompt = promptIndex === -1 ? '' : (args[promptIndex + 1] ?? '')
+    const prompt = await promptText()
+    if (await supervisorArm(prompt)) return
     if (prompt.includes('"task graph"')) {
       await replayFixture('plan-graph')
       return
@@ -235,8 +273,8 @@ async function main() {
   }
 
   if (fixtureName === 'm8a-flow') {
-    const promptIndex = args.indexOf('-p')
-    const prompt = promptIndex === -1 ? '' : (args[promptIndex + 1] ?? '')
+    const prompt = await promptText()
+    if (await supervisorArm(prompt)) return
     if (prompt.includes('"verdict"')) {
       await replayFixture('review-approve')
       return

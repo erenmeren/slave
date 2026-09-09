@@ -171,6 +171,70 @@ describe('fake-claude', () => {
     expect(result?.result).toContain('"key":"core"')
   })
 
+  describe('the supervisor arm (M38)', () => {
+    const ANSWER = '"candidateIndex":0'
+    /** A prompt with the one literal `buildDecisionPrompt` always emits. */
+    const PROMPT = 'CANDIDATE ACTIONS\n0. unblock_task\n\nReply with {"candidateIndex": <0..3>, "rationale": "..."}'
+
+    let repoDir: string
+
+    beforeEach(() => {
+      repoDir = mkdtempSync(path.join(tmpdir(), 'fake-claude-supervisor-'))
+      execFileSync('git', ['init', '-q'], { cwd: repoDir })
+      execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q', '--allow-empty', '-m', 'initial commit'], {
+        cwd: repoDir,
+      })
+    })
+
+    afterEach(() => {
+      rmSync(repoDir, { recursive: true, force: true })
+    })
+
+    it('replays the supervisor fixture as a static mode', async (): Promise<void> => {
+      const { stdout } = await run('node', [FAKE, '--fixture', 'supervisor-decision'])
+      const result = parseLines(stdout).find((l) => l.type === 'result') as
+        | { result?: string; total_cost_usd?: number }
+        | undefined
+      expect(result?.result).toContain(ANSWER)
+      expect(result?.total_cost_usd).toBe(0.01)
+    })
+
+    it('answers a decision prompt inside a flow mode, and makes no commit doing it', async (): Promise<void> => {
+      const { stdout } = await run('node', [FAKE, '--fixture', 'm8a-flow', '-p', PROMPT], { cwd: repoDir })
+
+      const result = parseLines(stdout).find((l) => l.type === 'result') as { result?: string } | undefined
+      expect(result?.result).toContain(ANSWER)
+      // A work run would have left one; a decision is a read, and the arm must not fall through to
+      // the work body.
+      expect(execFileSync('git', ['log', '--oneline'], { cwd: repoDir }).toString().trim().split('\n')).toHaveLength(1)
+      expect(execFileSync('git', ['status', '--porcelain'], { cwd: repoDir }).toString().trim()).toBe('')
+    })
+
+    it('reads the prompt off STDIN, which is where a real decision call puts it', async (): Promise<void> => {
+      // Exactly how `decideWithModel` spawns: extra args first, then a BARE `-p` with the prompt
+      // on stdin. Nothing in argv carries it, so a mode that only sniffed argv would fall through
+      // to the work body and commit in the gate's worktree.
+      const stdout = execFileSync(
+        'node',
+        [FAKE, '--fixture', 'm8a-flow', '-p', '--restricted', '--no-session-persistence', '--tools', ''],
+        { cwd: repoDir, input: PROMPT, encoding: 'utf8' },
+      )
+      const result = parseLines(stdout).find((l) => l.type === 'result') as { result?: string } | undefined
+      expect(result?.result).toContain(ANSWER)
+      expect(execFileSync('git', ['log', '--oneline'], { cwd: repoDir }).toString().trim().split('\n')).toHaveLength(1)
+    })
+
+    it('is armed in every prompt-sniffing mode, ahead of the verdict and task-graph checks', async (): Promise<void> => {
+      for (const mode of ['m8-flow', 'm8a-flow', 'm36-flow']) {
+        const { stdout } = await run('node', [FAKE, '--fixture', mode, '-p', `${PROMPT} "verdict" "task graph"`], {
+          cwd: repoDir,
+        })
+        const result = parseLines(stdout).find((l) => l.type === 'result') as { result?: string } | undefined
+        expect(result?.result, mode).toContain(ANSWER)
+      }
+    })
+  })
+
   describe('m8-flow', () => {
     let repoDir: string
 

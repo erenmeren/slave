@@ -63,6 +63,7 @@ import {
 } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import {
+  SUPERVISOR_DEFAULT_MODEL,
   displayName,
   runContextManifestSchema,
   workspaceId as brandWorkspaceId,
@@ -563,6 +564,11 @@ export async function main(argv: readonly string[]): Promise<number> {
         // not -- a command an operator runs by hand must never start spending on model calls -- so
         // it reports `skippedNoDecider` instead and the llm runs wait for the daemon.
         modelDecider: buildModelDecider(),
+        // M38 §5 / spec erratum E3: the Supervisor's own model. Read here, where the environment
+        // is read, rather than defaulted inside the tick -- and overridable per host, because a
+        // decision prompt is small and cheap and an operator may want a smaller model on it than
+        // M31a's simulation calls use (those take theirs from the simulation intent).
+        supervisorModel: process.env['SLAVEOFAI_SUPERVISOR_MODEL'] ?? SUPERVISOR_DEFAULT_MODEL,
         maxConcurrentModelCalls: maxConcurrentModelCalls(),
       })
       return 0
