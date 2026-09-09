@@ -86,6 +86,14 @@ export type ControlRefusal =
   | { readonly kind: 'dependency_cycle'; readonly taskId: string; readonly dependsOnTaskId: string }
   | { readonly kind: 'workspace_not_found'; readonly workspaceId: string }
   | { readonly kind: 'invalid_goal' }
+  /**
+   * M40 erratum E5: `setGoal` was handed text that hashes to the CURRENT goal version's, so there
+   * is nothing to record -- no row, no event, no cache move. A refusal rather than a silent
+   * success because a version is what the re-plan trigger counts: manufacturing one for a re-save
+   * of an unedited goal would dispatch a re-plan run for a requirement that did not change.
+   * `version` is the version it is unchanged FROM.
+   */
+  | { readonly kind: 'goal_unchanged'; readonly workspaceId: string; readonly version: number }
   | { readonly kind: 'duplicate_name'; readonly name: string }
   | { readonly kind: 'template_not_found'; readonly templateId: string }
   | { readonly kind: 'company_not_found'; readonly companyId: string }
@@ -259,6 +267,11 @@ export type ControlRefusal =
    *  dead is only ever the exit from a park a human (or the Supervisor) has looked at; every
    *  other status either has the pipeline still moving it or is already terminal. */
   | { readonly kind: 'task_not_failable'; readonly taskId: string; readonly status: string }
+  /** M40 §4: `cancelTask` was pointed at a task that is not `backlog`, `ready` or `blocked`.
+   *  Cancelling is for work nobody has started; a task in the pipeline is the pipeline's own to
+   *  move, `rework`/`waiting` are attempts already spent (`failTask` is their exit), and `done`,
+   *  `failed` and `cancelled` are already terminal. */
+  | { readonly kind: 'task_not_cancellable'; readonly taskId: string; readonly status: string }
 
 /**
  * The word a person reads for `live_runs`'s `entity` (M27 final review, Important finding 3).
@@ -336,6 +349,8 @@ export function refusalText(refusal: ControlRefusal): string {
       return `no workspace with id ${refusal.workspaceId}`
     case 'invalid_goal':
       return 'a goal must be a non-empty text'
+    case 'goal_unchanged':
+      return `the goal of project ${refusal.workspaceId} already reads exactly this at version ${String(refusal.version)}: nothing was recorded`
     case 'duplicate_name':
       return `the name "${refusal.name}" is already taken`
     case 'template_not_found':
@@ -457,5 +472,7 @@ export function refusalText(refusal: ControlRefusal): string {
       return `the supervisor is switched off for project ${refusal.workspaceId}`
     case 'task_not_failable':
       return `task ${refusal.taskId} is ${refusal.status}: only a task in rework or blocked can be failed`
+    case 'task_not_cancellable':
+      return `task ${refusal.taskId} is ${refusal.status}: only a task in backlog, ready or blocked can be cancelled`
   }
 }

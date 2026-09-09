@@ -77,6 +77,15 @@ const situationFor = (subjectId: string, kind: Situation['kind'] = 'review_cap_b
 
 const cand = (action: Action, tier: Tier): Candidate => ({ action, tier, why: 'because the rules said so' })
 
+/** M40: the situation `concludeReplan` records for a task the re-plan asked to drop. It is never
+ *  OBSERVED from the world -- the delta is the only thing that knows a task went stale. */
+const staleTaskSituation = (taskId: string): Situation => ({
+  kind: 'stale_task',
+  subjectId: taskId,
+  summary: 'the re-plan for the current goal no longer needs this task',
+  facts: { goalVersion: 1, currentVersion: 2, reason: 'replan_cancel' },
+})
+
 /** Records one decision the way the orchestrator would, with a single-candidate catalogue. */
 async function record(
   fixture: Fixture,
@@ -633,6 +642,79 @@ describe('applyDecision', () => {
     expect(failed?.payload).toEqual({ reason: 'a dead end' })
   })
 
+  // M40 t2: the `cancel_task` arm. The whole of ruling R1 is that this NEVER runs by itself -- the
+  // proposal is recorded by `concludeReplan` (Task 3) and a human approves it -- so the test drives
+  // it the way a human does, through `approveDecision`, not through `applyDecision` directly.
+  it('cancel_task takes an approved stale task off the board through cancelTask', async () => {
+    const backlog = await prisma.task.create({
+      data: {
+        workspaceId: f.workspaceId,
+        title: 'Write the old receipts exporter',
+        description: 'the goal used to ask for this',
+        status: 'backlog',
+        requiredRole: 'backend',
+        maxAttempts: 3,
+        goalVersion: 1,
+      },
+    })
+    const decision = await record(
+      f,
+      { kind: 'cancel_task', taskId: backlog.id, reason: 'the re-plan for goal v2 no longer needs this task' },
+      'proposed',
+      { subjectId: backlog.id, situation: staleTaskSituation(backlog.id) },
+    )
+    // It really was PROPOSED: the row waits for a human rather than having acted at birth.
+    expect(decision.status).toBe('pending')
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: backlog.id } })).status).toBe('backlog')
+
+    expect((await approveDecision(decision.id, { userId: f.userId })).ok).toBe(true)
+
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: backlog.id } })
+    expect(task.status).toBe('cancelled')
+    expect(task.lastRejectionReason).toBe('the re-plan for goal v2 no longer needs this task')
+    const [cancelled] = await eventsOfType('task_cancelled')
+    // A human approved it, so the ENVELOPE actor is the human -- the decision row is where the
+    // Supervisor's own authorship is recorded (erratum E4, the same rule `mark_task_failed` keeps).
+    expect(cancelled?.actor).toBe('human')
+    expect(cancelled?.taskId).toBe(backlog.id)
+    expect(cancelled?.payload).toEqual({
+      reason: 'the re-plan for goal v2 no longer needs this task',
+      goalVersion: 1,
+    })
+    expect((await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: decision.id } })).status).toBe('approved')
+  })
+
+  it('cancel_task refuses -- and marks the decision failed -- when the task started while the proposal waited', async () => {
+    const backlog = await prisma.task.create({
+      data: {
+        workspaceId: f.workspaceId,
+        title: 'Write the old receipts exporter',
+        description: 'the goal used to ask for this',
+        status: 'backlog',
+        requiredRole: 'backend',
+        maxAttempts: 3,
+      },
+    })
+    const decision = await record(f, { kind: 'cancel_task', taskId: backlog.id, reason: 'stale' }, 'proposed', {
+      subjectId: backlog.id,
+      situation: staleTaskSituation(backlog.id),
+    })
+    // The pipeline picked it up while the human was thinking: cancelling it now would throw away
+    // work in flight, which is exactly what `task_not_cancellable` exists to stop.
+    await prisma.task.update({ where: { id: backlog.id }, data: { status: 'running' } })
+
+    const applied = await applyDecision(decision.id, 'system')
+    expect(applied.ok).toBe(false)
+    expect(applied.ok ? null : applied.error).toEqual({
+      kind: 'task_not_cancellable',
+      taskId: backlog.id,
+      status: 'running',
+    })
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: backlog.id } })).status).toBe('running')
+    expect((await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: decision.id } })).status).toBe('failed')
+    expect(await eventsOfType('task_cancelled')).toHaveLength(0)
+  })
+
   // M39 t2: the two mailbox arms. Both go through an EXISTING messaging verb -- `answerQuestion`
   // with the decision's own draft, `reassignQuestion` with the target the decision named -- and
   // neither writes a word the decision row does not already carry.
@@ -1169,6 +1251,29 @@ describe('pruneDecisions', () => {
     expect(before.spentUsd).toBe(0.42 + SUPERVISOR_PER_CALL_CAP_USD)
 
     expect(await pruneDecisions(f.workspaceId, NOW)).toBe(1)
+    expect(await workspaceSpend(f.workspaceId)).toEqual(before)
+  })
+
+  /**
+   * Ruling R2. `modelCalled` and `modelCostUsd` are written together, so a row with a cost and no
+   * call is a row somebody hand-edited or a writer wrote wrong -- and the money on it is still
+   * money. The filter reads BOTH columns rather than trusting the flag: a recorded cost is spend
+   * `workspaceSpend` sums, and pruning it would make a project's recorded spend fall on its own.
+   */
+  it('never prunes a row that carries a COST, even one whose modelCalled flag says false (R2)', async () => {
+    await rows([
+      // The impossible-but-real row: no call recorded, a cost recorded anyway.
+      { status: 'approved', createdAt: OLD, resolvedAt: OLD, modelCalled: false, modelCostUsd: 0.17 },
+      // The control: same age, same status, no cost either.
+      { status: 'approved', createdAt: OLD, resolvedAt: OLD },
+    ])
+    const before = await workspaceSpend(f.workspaceId)
+    expect(before.spentUsd).toBe(0.17)
+
+    expect(await pruneDecisions(f.workspaceId, NOW)).toBe(1)
+    expect(
+      await prisma.supervisorDecision.findMany({ select: { subjectId: true, modelCostUsd: true } }),
+    ).toEqual([{ subjectId: 'subject-0', modelCostUsd: 0.17 }])
     expect(await workspaceSpend(f.workspaceId)).toEqual(before)
   })
 

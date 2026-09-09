@@ -29,7 +29,7 @@ import { answerQuestion, reassignQuestion } from './messaging.js'
 import { setRuntimeRoles } from './profile.js'
 import type { Principal } from './principal.js'
 import { refusalText, type ControlRefusal } from './refusal.js'
-import { failTask } from './task.js'
+import { cancelTask, failTask } from './task.js'
 import { unblockTask } from './unblock.js'
 
 /**
@@ -395,12 +395,11 @@ async function carryOut(
         await reassignQuestion(action.messageId, action.toSlaveId, SUPERVISOR_ACTOR, origin, principal, decision.id),
       )
     case 'cancel_task':
-      // M40 Task 2 replaces this with `cancelTask(action.taskId, action.reason, origin, principal)`.
-      // UNREACHABLE until then, by two independent facts: the only situation whose catalogue offers
-      // `cancel_task` is `stale_task`, and `observe` never produces one -- only Task 3's
-      // `concludeReplan` records it. Thrown rather than answered with `ok('none')`, which would
-      // report an approved cancellation as carried out while the task stayed on the board.
-      throw new Error('cancel_task has no control verb yet (M40 Task 2 wires it to cancelTask)')
+      // M40 §4. `tierOf` pins this to `proposed` on every branch (ruling R1), so the only way here
+      // is a human approving the proposal `concludeReplan` recorded -- a cancellation is never
+      // automatic. `cancelTask` re-checks the status under its own row lock, so a task the pipeline
+      // picked up while the proposal waited is refused rather than cancelled out from under a run.
+      return reached(await cancelTask(action.taskId, action.reason, origin, principal))
     case 'escalate_to_human':
     case 'no_action':
       return ok('none')
@@ -757,6 +756,11 @@ export async function pruneDecisions(workspaceId: string, now: Date): Promise<nu
       workspaceId,
       status: { not: 'pending' },
       modelCalled: false,
+      // Ruling R2: BOTH columns, not just the flag. `modelCalled` and `modelCostUsd` are written
+      // together, so a row with a cost and no call is hand-edited or wrong -- and the money on it
+      // is still money `workspaceSpend` sums with no time window. Reading the cost too means a
+      // recorded cost survives retention whatever the flag beside it says.
+      modelCostUsd: null,
       OR: [{ resolvedAt: { lt: cutoff } }, { resolvedAt: null, createdAt: { lt: cutoff } }],
     },
     orderBy: { createdAt: 'asc' },
@@ -769,7 +773,12 @@ export async function pruneDecisions(workspaceId: string, now: Date): Promise<nu
   // in the microseconds between the read and the delete keeps their row, and so does a row that
   // somehow acquired a cost in the same window.
   const deleted = await prisma.supervisorDecision.deleteMany({
-    where: { id: { in: due.map((row) => row.id) }, status: { not: 'pending' }, modelCalled: false },
+    where: {
+      id: { in: due.map((row) => row.id) },
+      status: { not: 'pending' },
+      modelCalled: false,
+      modelCostUsd: null,
+    },
   })
   return deleted.count
 }

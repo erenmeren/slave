@@ -74,12 +74,11 @@ model Workspace {
   /// the workspace so a reader never has to aggregate the history table. Backfilled to 1 for every
   /// workspace that already had a goal when the migration ran.
   ///
-  /// 0 means "no version recorded". From M40 Task 2 on that is exactly "the goal has never been
-  /// set", because `setGoal` inserts version `goalVersion + 1` under a row lock and moves this
-  /// column in the same transaction. UNTIL Task 2 lands there is one more way to be 0: `setGoal`
-  /// still writes only `goal`, so a goal set in the Task 1 -> Task 2 window leaves a real goal at
-  /// version 0. Every reader tolerates it -- nothing treats 0 as "unset" beyond reporting no
-  /// version -- and Task 2 closes the window.
+  /// 0 means "no version recorded", which since M40 Task 2 is exactly "the goal has never been
+  /// set": `setGoal` is the only writer of `goal`, and it inserts version `goalVersion + 1` under
+  /// a row lock and moves this column in the same transaction. A row hand-seeded straight into the
+  /// table with a `goal` and no version is the one remaining way to be 0 with a real goal; every
+  /// reader tolerates it -- nothing treats 0 as "unset" beyond reporting no version.
   goalVersion             Int       @default(0)
   /// The company assigned to run this project (M10 §5), nullable: the engine never required a
   /// company, and existing seeded workspaces keep their hand-made teams/slaves untouched

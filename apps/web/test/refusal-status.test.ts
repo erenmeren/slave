@@ -33,6 +33,7 @@ const ALL_KINDS: Record<ControlRefusal['kind'], true> = {
   dependency_cycle: true,
   workspace_not_found: true,
   invalid_goal: true,
+  goal_unchanged: true,
   duplicate_name: true,
   template_not_found: true,
   company_not_found: true,
@@ -92,6 +93,7 @@ const ALL_KINDS: Record<ControlRefusal['kind'], true> = {
   supervisor_cooldown: true,
   supervisor_disabled: true,
   task_not_failable: true,
+  task_not_cancellable: true,
 }
 
 const ALL = Object.keys(ALL_KINDS) as ControlRefusal['kind'][]

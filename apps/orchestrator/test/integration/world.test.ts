@@ -188,6 +188,30 @@ describe('loadWorld', () => {
     expect(readyAfter?.dependenciesDone).toBe(true)
   })
 
+  /**
+   * M40 ruling R3, proved on the gate itself rather than asserted in a comment. `cancelTask` takes
+   * a task off the board without touching its dependents' `TaskDependency` rows, and this SQL asks
+   * for `status = 'done' AND integratedAt IS NOT NULL` -- so a dependent of a cancelled task is
+   * unmet, and stays unschedulable until a human removes the dependency. That is deliberate: the
+   * work the dependency stood for was never done, and quietly starting the dependent would be the
+   * scheduler deciding a requirement no longer matters.
+   */
+  it('M40 R3: a CANCELLED dependency leaves its dependent unmet, exactly as an unfinished one does', async (): Promise<void> => {
+    // `doneDep` is `done` and integrated, so `readyTask` is currently schedulable.
+    const before = await loadWorld(workspaceId(fixture.workspaceId))
+    expect(before.world.tasks.find((t) => t.id === taskId(fixture.readyTaskId))?.dependenciesDone).toBe(true)
+
+    await prisma.task.update({
+      where: { id: fixture.doneDepTaskId },
+      data: { status: 'cancelled', integratedAt: null },
+    })
+
+    const after = await loadWorld(workspaceId(fixture.workspaceId))
+    expect(after.world.tasks.find((t) => t.id === taskId(fixture.readyTaskId))?.dependenciesDone).toBe(false)
+    // The edge itself is untouched -- removing it is a human's call, not the canceller's.
+    expect(await prisma.taskDependency.count({ where: { taskId: fixture.readyTaskId } })).toBe(1)
+  })
+
   it('counts tasks with no required role instead of silently dropping them', async (): Promise<void> => {
     const { world, skippedNoRole } = await loadWorld(workspaceId(fixture.workspaceId))
 

@@ -25,7 +25,12 @@ interface Fixture {
 }
 
 async function seed(
-  data: { readonly goal?: string; readonly haltedReason?: string; readonly budgetUsd?: number | null } = {},
+  data: {
+    readonly goal?: string
+    readonly goalVersion?: number
+    readonly haltedReason?: string
+    readonly budgetUsd?: number | null
+  } = {},
 ): Promise<Fixture> {
   const workspace = await prisma.workspace.create({
     data: {
@@ -34,6 +39,7 @@ async function seed(
       verifyCommands: ['npm test'],
       setupCommands: [],
       ...(data.goal === undefined ? {} : { goal: data.goal }),
+      ...(data.goalVersion === undefined ? {} : { goalVersion: data.goalVersion }),
       ...(data.haltedReason === undefined ? {} : { haltedReason: data.haltedReason, haltedAt: NOW }),
       ...(data.budgetUsd === undefined ? {} : { budgetUsd: data.budgetUsd }),
     },
@@ -50,6 +56,7 @@ async function makeTask(
     readonly requiredRole?: string | null
     readonly integratedAt?: Date | null
     readonly createdAt?: Date
+    readonly goalVersion?: number | null
   },
 ): Promise<string> {
   const task = await prisma.task.create({
@@ -63,6 +70,7 @@ async function makeTask(
       attempt: 1,
       ...(data.integratedAt === undefined ? {} : { integratedAt: data.integratedAt }),
       ...(data.createdAt === undefined ? {} : { createdAt: data.createdAt }),
+      ...(data.goalVersion === undefined ? {} : { goalVersion: data.goalVersion }),
     },
   })
   return task.id
@@ -70,6 +78,34 @@ async function makeTask(
 
 describe('loadSupervisorWorld', () => {
   beforeEach(reset)
+
+  /**
+   * M40 §4. Both stamps come off real columns, not a placeholder: `world.goalVersion` is the
+   * workspace's cache of the newest `GoalVersion`, and each task carries the version the plan that
+   * produced it derived from -- null for a hand-made one. The domain's `summarise` compares the
+   * two to count STALE tasks, so a loader that answered 0 for either would make every task look
+   * current forever.
+   */
+  it('carries the workspace goal version and each task\'s own, null for a hand-made task', async (): Promise<void> => {
+    const fixture = await seed({ goal: 'Ship the checkout redesign', goalVersion: 2 })
+    const current = await makeTask(fixture, { title: 'planned by v2', status: 'ready', goalVersion: 2 })
+    const stale = await makeTask(fixture, { title: 'planned by v1', status: 'ready', goalVersion: 1 })
+    const handMade = await makeTask(fixture, { title: 'typed in by a human', status: 'ready' })
+
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
+
+    expect(world.goalVersion).toBe(2)
+    const versionOf = (id: string): number | null | undefined => world.tasks.find((task) => task.id === id)?.goalVersion
+    expect(versionOf(current)).toBe(2)
+    expect(versionOf(stale)).toBe(1)
+    expect(versionOf(handMade)).toBeNull()
+  })
+
+  it('reports goal version 0 for a project whose goal has never been set', async (): Promise<void> => {
+    const fixture = await seed()
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
+    expect(world.goalVersion).toBe(0)
+  })
 
   it('maps tasks with their dependents, integration-gated dependenciesDone, statusSince and latest guardrail', async (): Promise<void> => {
     const fixture = await seed()

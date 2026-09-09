@@ -75,3 +75,72 @@ export async function failTask(
   })
   return ok(undefined)
 }
+
+/**
+ * Takes a task nobody has started off the board (M40 §4).
+ *
+ * The counterpart to {@link failTask}, and the distinction between them is the whole point of
+ * having two verbs: failing says "this was attempted and there is no way forward"; cancelling says
+ * "this was never attempted and is no longer wanted". A re-plan produces the second (ruling R1: it
+ * PROPOSES one, and a human approves it), and so does an operator who changed their mind.
+ *
+ * Only from `backlog`, `ready` or `blocked`. `assigned` through `merging` are the pipeline's own
+ * and it moves them itself; `rework` and `waiting` are attempts already spent, and `failTask` is
+ * their exit; `done`, `failed` and `cancelled` are already terminal. Every one of those is refused
+ * with `task_not_cancellable` rather than forced, because cancelling work in flight would throw
+ * away real work -- exactly what ruling R1 is protecting.
+ *
+ * `activeRunId` is checked, not cleared, for `failTask`'s reason: a task carrying one is a task
+ * something is still holding.
+ *
+ * DEPENDENTS are deliberately untouched (ruling R3). The `TaskDependency` rows stay, and the
+ * scheduler's integration gate (`apps/orchestrator/src/world.ts`, `dep.status = 'done' AND
+ * integratedAt IS NOT NULL`) therefore treats a cancelled dependency as unmet: a task that depends
+ * on cancelled work stays unschedulable until a human removes the dependency. The work the
+ * dependency stood for was never done, and starting the dependent anyway would be the scheduler
+ * deciding on its own that a requirement no longer matters.
+ *
+ * `origin` sets the ENVELOPE actor of `task.cancelled`, as it does for `failTask` (erratum E4):
+ * `'human'` for an operator or a web caller, `'system'` when the Supervisor applied a `cancel_task`
+ * decision by itself. The decision row is where the Supervisor's own authorship is recorded.
+ */
+export async function cancelTask(
+  taskId: string,
+  reason: string,
+  origin: 'human' | 'system' = 'human',
+  principal?: Principal,
+): Promise<Result<void, ControlRefusal>> {
+  const outcome = await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM "Task" WHERE id = ${taskId} FOR UPDATE`
+    const task = await tx.task.findUnique({
+      where: { id: taskId },
+      select: { id: true, workspaceId: true, status: true, activeRunId: true, goalVersion: true },
+    })
+    if (task === null) return { ok: false as const, error: { kind: 'task_not_found', taskId } as ControlRefusal }
+    if (task.activeRunId !== null) {
+      return { ok: false as const, error: { kind: 'task_run_active', taskId, runId: task.activeRunId } as ControlRefusal }
+    }
+    if (task.status !== 'backlog' && task.status !== 'ready' && task.status !== 'blocked') {
+      return {
+        ok: false as const,
+        error: { kind: 'task_not_cancellable', taskId, status: task.status } as ControlRefusal,
+      }
+    }
+    await tx.task.update({ where: { id: taskId }, data: { status: 'cancelled', lastRejectionReason: reason } })
+    return { ok: true as const, workspaceId: task.workspaceId, goalVersion: task.goalVersion }
+  })
+  if (!outcome.ok) return err(outcome.error)
+
+  // `goalVersion` is the task's OWN stamp -- the goal version whose plan produced it, null for a
+  // hand-made task -- so the log says which requirement's work was dropped, without a reader
+  // having to join the task row that now says `cancelled` and nothing about why it existed.
+  await appendEvent({
+    type: 'task.cancelled',
+    workspaceId: outcome.workspaceId,
+    taskId,
+    actor: origin,
+    payload: { reason, goalVersion: outcome.goalVersion },
+    userId: principal?.userId ?? null,
+  })
+  return ok(undefined)
+}
