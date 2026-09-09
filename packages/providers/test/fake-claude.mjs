@@ -66,9 +66,16 @@
 //   the Supervisor's call arrives on whatever mode that turned out to be.
 //   Right behind it sits M39's ANSWER arm: a prompt containing the literal
 //   `"sources"` (which `buildAnswerPrompt` always emits) replays the fixture
-//   named by `FAKE_CLAUDE_ANSWER_FIXTURE`, defaulting to
+//   named by `--answer-fixture <name>` in ARGV, or by
+//   `FAKE_CLAUDE_ANSWER_FIXTURE` in the environment, defaulting to
 //   `supervisor-answer` -- so a gate chooses a sourced or an unsourced
-//   answer per daemon spawn (erratum E3) without a mode of its own.
+//   answer per daemon spawn (erratum E3) without a mode of its own. Argv is
+//   what a GATE has to use (erratum E6): a decision call's child is spawned
+//   with `buildDecisionEnv()` -- exactly PATH, HOME, LANG and TERM, never
+//   the parent's environment (M31a §4 ruling R1) -- so an env var set on the
+//   daemon can never reach this arm through one. `SLAVEOFAI_CLAUDE_ARGS`
+//   can: it is passed through as `extraArgs` on every decision call, which
+//   is already how `--fixture` itself arrives.
 //   anything else  replays `fixtures/<name>.ndjson` verbatim, exit 0 -- real
 //                  captures show process exit code 0 even for hook-crash,
 //                  hook-deny, and permission-denied runs, so the fake matches
@@ -162,8 +169,27 @@ async function supervisorArm(prompt) {
  *  is belt and braces rather than a discriminator. */
 async function answerArm(prompt) {
   if (!prompt.includes('"sources"')) return false
-  await replayFixture(process.env.FAKE_CLAUDE_ANSWER_FIXTURE ?? 'supervisor-answer')
+  await replayFixture(answerFixtureName())
   return true
+}
+
+/**
+ * Which fixture {@link answerArm} replays: `--answer-fixture <name>` from ARGV first, then
+ * `FAKE_CLAUDE_ANSWER_FIXTURE` from the environment, then the sourced default.
+ *
+ * Argv leads because it is the only channel that reaches a real daemon's decision call (erratum
+ * E6). `decideWithModel` spawns its child with `buildDecisionEnv()` -- PATH, HOME, LANG and TERM
+ * and nothing else, deliberately, so a simulation actor never sees `DATABASE_URL` (M31a §4 ruling
+ * R1) -- so a gate that exported `FAKE_CLAUDE_ANSWER_FIXTURE` on the daemon would silently get the
+ * default here and measure a sourced answer while believing it had asked for an unsourced one.
+ * `SLAVEOFAI_CLAUDE_ARGS` rides through as `extraArgs`, which is how `--fixture` already arrives.
+ * The env var stays supported for a caller that spawns this script directly.
+ */
+function answerFixtureName() {
+  const index = args.indexOf('--answer-fixture')
+  const named = index === -1 ? undefined : args[index + 1]
+  if (named !== undefined && !named.startsWith('-')) return named
+  return process.env.FAKE_CLAUDE_ANSWER_FIXTURE ?? 'supervisor-answer'
 }
 
 async function main() {

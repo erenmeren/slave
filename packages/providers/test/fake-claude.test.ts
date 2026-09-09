@@ -291,6 +291,31 @@ describe('fake-claude', () => {
       expect(result?.result).toContain(UNSOURCED)
     })
 
+    it('replays the fixture --answer-fixture names, which is how a GATE chooses unsourced', async (): Promise<void> => {
+      // Argv, not the environment (erratum E6): a decision call's child is spawned with
+      // `buildDecisionEnv()` -- PATH, HOME, LANG, TERM and nothing else (M31a §4 ruling R1) -- so
+      // `FAKE_CLAUDE_ANSWER_FIXTURE` set on a daemon never reaches this script, while
+      // `SLAVEOFAI_CLAUDE_ARGS` rides through as `extraArgs` exactly as `--fixture` does. The flag
+      // is placed BEFORE the mode's own flags, which is where `decisionArgs` puts extra args.
+      const { stdout } = await run(
+        'node',
+        [FAKE, '--answer-fixture', 'supervisor-answer-unsourced', '--fixture', 'm36-flow', '-p', PROMPT],
+        { cwd: repoDir },
+      )
+      const result = parseLines(stdout).find((l) => l.type === 'result') as { result?: string } | undefined
+      expect(result?.result).toContain(UNSOURCED)
+    })
+
+    it('prefers the flag over the environment when a caller sets both', async (): Promise<void> => {
+      const { stdout } = await run(
+        'node',
+        [FAKE, '--answer-fixture', 'supervisor-answer', '--fixture', 'm36-flow', '-p', PROMPT],
+        { cwd: repoDir, env: { ...process.env, FAKE_CLAUDE_ANSWER_FIXTURE: 'supervisor-answer-unsourced' } },
+      )
+      const result = parseLines(stdout).find((l) => l.type === 'result') as { result?: string } | undefined
+      expect(result?.result).toContain(SOURCED)
+    })
+
     it('reads the prompt off STDIN, which is where a real answer call puts it', async (): Promise<void> => {
       const stdout = execFileSync(
         'node',

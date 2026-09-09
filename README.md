@@ -316,10 +316,11 @@ that has been done but unmerged for six hours with dependents waiting; and a pro
 scheduling has stopped.
 
 **Two tiers, fixed in code.** Routine actions apply immediately: sending a task parked *by the
-review retry cap* back to `rework` while it still has attempts, and nudging an unanswered
-question. Everything else is a proposal that waits for you — raising an attempt cap, writing a
-worker's runtime roles, declaring a task failed, and **unblocking a task that anything else
-parked**. That last one is the rule worth knowing: `blocked` means a human has to look at this,
+review retry cap* back to `rework` while it still has attempts, re-addressing an unanswered
+question to somebody who can answer it, and sending an answer it can *prove* (see below).
+Everything else is a proposal that waits for you — raising an attempt cap, writing a worker's
+runtime roles, declaring a task failed, and **unblocking a task that anything else parked**. That
+last one is the rule worth knowing: `blocked` means a human has to look at this,
 and two of the ways a task gets there are deliberate (a cancelled run, a worktree the daemon
 refused to adopt), so the review cap is the one park the Supervisor knows a safe exit from. While
 the project is **halted** every action is a proposal — a guardrail has already said this project
@@ -333,6 +334,35 @@ and an answer that will not parse or points outside the list falls back to the r
 about at most three situations per tick; the rest are decided by the rules in the same pass, not
 held over. A situation already in front of you is not asked again, and one decided in the last
 fifteen minutes is left alone; proposals nobody answers expire after a day.
+
+**Its mailbox.** A question one slave asked another no longer waits on you by default. Every tick
+the Supervisor reads the questions still waiting for an answer and, for each one, does one of four
+things. It **answers it itself** when it can prove the answer: the model is asked for an answer
+*and its sources*, and the answer is only sent when every quote it cites is found **verbatim** in
+the thing it named — the asking task's title or description, the project goal, a message in the
+thread (never the question itself), or the asker's own recorded run context. That is a **sourced**
+answer, and it goes out immediately as `system`, waking the waiting slave on the next tick. Any
+other answer is an **interpretation**: written down as a proposal with the citations that failed
+and *why*, and sent to nobody until you approve it — you can rewrite it first, and the row keeps
+both texts. It **re-addresses** a question instead, routinely, when the slave it was sent to is
+busy and somebody else holds the role that can answer it. And it **escalates** — never answers —
+when a blunt, deterministic word list matches the question: `scope` (scope changes and new
+requirements), `permissions` (credentials, tokens, sudo, admin), `secrets` (API keys, passwords,
+private keys), `spend` (budget, cost, pay), `destructive` (delete, drop, force-push, `rm -rf`), and
+`external` (email, contact, a customer or client). That check runs *before* the model is asked, so
+a question about an API key never reaches one; the model can also flag a question critical itself,
+and both signals are recorded. The list is deliberately blunt — a false positive costs one
+escalation.
+
+**In the UI**, a drafted answer appears in *waiting on you* as the question, an editable box seeded
+with the draft, its confidence, each verified quote with the source it was found in, each rejected
+quote with the reason, and the critical flags; **Approve** sends your edit only if you changed it.
+A **questions waiting** block under it lists every pending question with who it waits on. From the
+shell, `approve-decision --id <id> --body-file <path>` sends your own words instead of the
+Supervisor's (read untrimmed — it is also how you answer a question it escalated with an empty
+draft), and `reassign-question --message <id> --to <slaveId>` moves a question by hand. Decisions
+are kept for **30 days** after they are resolved and then deleted on an ordinary tick; a proposal
+still waiting on you is never deleted, however old.
 
 **Upgrading turns it on.** The Supervisor is on by default, so the first time the daemon starts
 after this upgrade it begins supervising **every project you already have** — including the pass
@@ -366,7 +396,9 @@ npm run orchestrator -- supervise --workspace <id>              # one pass, with
 npm run orchestrator -- supervise --workspace <id> --dry-run    # what it WOULD decide; writes nothing
 npm run orchestrator -- supervisor-decisions --workspace <id> [--pending] [--limit <n>]
 npm run orchestrator -- approve-decision --id <id>              # carry the proposal out
+npm run orchestrator -- approve-decision --id <id> --body-file <path>   # ...with your own answer
 npm run orchestrator -- reject-decision --id <id> [--reason <text>]
+npm run orchestrator -- reassign-question --message <id> --to <slaveId> [--by <name>]
 npm run orchestrator -- set-supervisor --workspace <id> (--enable | --disable)
 npm run orchestrator -- set-supervisor --workspace <id> (--profile-file <path> | --clear-profile)
 ```
@@ -391,7 +423,12 @@ before anything can move. `waiting` usually resolves itself: the slave who was a
 own next run, and the asker is resumed inside its original session — same conversation, same
 worktree — with the answer in front of it. Answering is the way to unstick it *early*, not a duty.
 
-Two ways to answer:
+**You are not the first responder.** On every tick the Supervisor reads the pending questions and
+may answer this one itself — but only from a quote it can find in the task, the goal, the thread or
+the asker's own context — draft an answer for you to approve or rewrite, or put the question in
+front of a colleague who can reply. See [Its mailbox](#the-supervisor).
+
+Two ways to answer yourself:
 
 ```bash
 npm run orchestrator -- messages                                    # the pending questions, with their ids
@@ -445,13 +482,17 @@ The `npm run gate:*` scripts are end-to-end proofs of each milestone against fak
 they spend nothing. CI runs `gate:m26-vocabulary`, `gate:m15-boundary`, `gate:m20-auth`,
 `gate:m21-loose-ends`, `gate:m23-onboarding`, `gate:m29-simulation`, `gate:m30-simulation-compare`,
 `gate:m31a-llm-decisions`, `gate:m31b-software-sector`, `gate:m33-adopt`,
-`gate:m35-pipeline-honesty`, `gate:m36-messaging`, `gate:m37-run-context` and
-`gate:m38-supervisor` on every push — `m36` stops the orchestrator and starts it again
+`gate:m35-pipeline-honesty`, `gate:m36-messaging`, `gate:m37-run-context`, `gate:m38-supervisor`
+and `gate:m39-supervisor-mailbox` on every push — `m36` stops the orchestrator and starts it again
 mid-scenario, to prove a waiting slave's question survives a restart, `m37` reads a real run's
-prompt and worktree back to prove a slave was given the persona and the skills it was assigned, and
+prompt and worktree back to prove a slave was given the persona and the skills it was assigned,
 `m38` drives a real daemon until the Supervisor proposes the staffing a reviewer-less project needs,
 waits for a human to approve it, unblocks a review-capped task by itself, and escalates a project
-whose budget is gone without spending a cent to decide that. Tests and gates share one Postgres —
+whose budget is gone without spending a cent to decide that, and `m39` drives one until the
+Supervisor answers a question from a quote in the asking task and wakes the slave that was waiting,
+drafts an answer it cannot prove and sends only the words a human typed over it, refuses to answer a
+question about an API key at all, re-addresses a stale one to a colleague who can, and deletes a
+month-old decision while leaving a month-old proposal alone. Tests and gates share one Postgres —
 run one at a time.
 
 ## Learn more
