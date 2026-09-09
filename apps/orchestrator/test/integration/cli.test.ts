@@ -2034,55 +2034,45 @@ describe('the orchestrator CLI', () => {
       return recorded.value.id
     }
 
-    it('approves a pending proposal: the action is carried out and the row reads approved', async (): Promise<void> => {
+    it('approves a pending proposal: the action is carried out and the row reads approved, with no principal to name', async (): Promise<void> => {
       const decisionId = await seedPendingUnblockProposal()
-      await prisma.user.create({ data: { username: 'approver', passwordHash: 'x' } })
 
-      const result = await runCli(['approve-decision', '--id', decisionId, '--by', 'approver'])
+      const result = await runCli(['approve-decision', '--id', decisionId])
 
       expect(result.code).toBe(0)
       expect(result.stdout).toMatch(/approved/)
       const decision = await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: decisionId } })
       expect(decision.status).toBe('approved')
-      expect(decision.resolvedByUserId).not.toBeNull()
+      // The CLI has no session and passes no `Principal` (fix round 2) -- the row honestly
+      // carries no resolver rather than a name borrowed from an account that did not actually act.
+      expect(decision.resolvedByUserId).toBeNull()
       const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
       expect(task.status).toBe('rework')
       const resolved = await prisma.executionEvent.findFirstOrThrow({ where: { type: 'supervisor_resolved' } })
       expect(resolved.actor).toBe('human')
+      expect(resolved.userId).toBeNull()
       expect((resolved.payload as { outcome: string }).outcome).toBe('approved')
     }, 30_000)
 
-    it('rejects a pending proposal: the action never runs and the row reads rejected', async (): Promise<void> => {
+    it('rejects a pending proposal: the action never runs and the row reads rejected, with no principal to name', async (): Promise<void> => {
       const decisionId = await seedPendingUnblockProposal()
-      await prisma.user.create({ data: { username: 'rejector', passwordHash: 'x' } })
 
-      const result = await runCli(['reject-decision', '--id', decisionId, '--by', 'rejector', '--reason', 'not now'])
+      const result = await runCli(['reject-decision', '--id', decisionId, '--reason', 'not now'])
 
       expect(result.code).toBe(0)
       expect(result.stdout).toMatch(/rejected/)
       const decision = await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: decisionId } })
       expect(decision.status).toBe('rejected')
+      expect(decision.resolvedByUserId).toBeNull()
       // The action is never carried out on a rejection -- the task stays exactly where it was.
       const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
       expect(task.status).toBe('blocked')
       const resolved = await prisma.executionEvent.findFirstOrThrow({ where: { type: 'supervisor_resolved' } })
+      expect(resolved.userId).toBeNull()
       expect((resolved.payload as { outcome: string; reason: string | null }).reason).toBe('not now')
     }, 30_000)
 
-    it('refuses approve-decision when --by names no local account, rather than a raw constraint error', async (): Promise<void> => {
-      const decisionId = await seedPendingUnblockProposal()
-
-      const result = await runCli(['approve-decision', '--id', decisionId])
-
-      expect(result.code).not.toBe(0)
-      expect(result.stderr).toMatch(/no local account named "operator"/)
-      const decision = await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: decisionId } })
-      expect(decision.status).toBe('pending')
-    })
-
     it('exits non-zero for approve-decision on an unknown id', async (): Promise<void> => {
-      await prisma.user.create({ data: { username: 'operator', passwordHash: 'x' } })
-
       const result = await runCli(['approve-decision', '--id', 'nope'])
 
       expect(result.code).not.toBe(0)

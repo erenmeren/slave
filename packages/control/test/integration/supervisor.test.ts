@@ -510,6 +510,20 @@ describe('approveDecision', () => {
     expect(resolved?.payload).toEqual({ decisionId: decision.id, outcome: 'approved', reason: null })
   })
 
+  it('with no principal (the CLI has no session): applies, approves, and names no resolver', async () => {
+    const decision = await record(f, { kind: 'unblock_task', taskId: f.taskId }, 'proposed')
+    expect(await approveDecision(decision.id)).toEqual({ ok: true, value: undefined })
+
+    const row = await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: decision.id } })
+    expect(row.status).toBe('approved')
+    expect(row.resolvedByUserId).toBeNull()
+
+    // A human still acted -- the envelope actor says so -- but the CLI had no session to name.
+    const [resolved] = await eventsOfType('supervisor_resolved')
+    expect(resolved?.actor).toBe('human')
+    expect(resolved?.userId).toBeNull()
+  })
+
   it('refuses an unknown decision and a decision that is not pending', async () => {
     expect(await approveDecision('nope', { userId: f.userId })).toEqual({
       ok: false,

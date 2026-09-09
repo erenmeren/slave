@@ -337,18 +337,23 @@ const reached = (result: Result<void, ControlRefusal>): Result<Reach, ControlRef
  * "resolved: approved" about an action the world turned down would be the log's only lie.
  *
  * The `supervisor.resolved` this emits is the ONE `supervisor.*` event whose envelope actor is not
- * `system` (fix round 1): a person resolved this, and that is what the log should say. The verb the
- * approval applies already runs with `origin: 'human'` for the same reason. `expirePendingDecisions`
- * keeps `system`, because nobody acted there.
+ * `system` (fix round 1): a person resolved this, and that is what the log should say -- whether
+ * or not the caller could name WHICH person. `principal?` follows the M23 F6 convention every
+ * other verb in this package uses (`unblockTask`, `setRuntimeRoles`, …): accepted, optional, and
+ * its `userId`, if any, rides the event (fix round 2 -- a CLI call, which has no session, passes
+ * none, and the row's `resolvedByUserId` and the event's `userId` are honestly `null` rather than
+ * a name borrowed from a local account that did not actually act). The verb the approval applies
+ * already runs with `origin: 'human'` for the same reason. `expirePendingDecisions` keeps
+ * `system`, because nobody acted there.
  */
 export async function approveDecision(
   decisionId: string,
-  principal: Principal,
+  principal?: Principal,
 ): Promise<Result<void, ControlRefusal>> {
   const claim = await claimPending(decisionId, {
     status: 'approved',
     resolvedAt: new Date(),
-    resolvedByUserId: principal.userId,
+    resolvedByUserId: principal?.userId ?? null,
   })
   if (!claim.ok) return claim
 
@@ -360,12 +365,12 @@ export async function approveDecision(
     workspaceId: claim.value.workspaceId,
     // `human`, unlike the rest of the `supervisor.*` events (fix round 1). An approval is a
     // PERSON's act -- the one moment in a proposal's life the Supervisor did not author -- and the
-    // envelope actor is what every reader of the log filters on. `userId` names which person, and
-    // `resolvedByUserId` keeps the same fact on the row. Only an EXPIRY stays `system`: nobody
-    // acted there, which is the whole fact it records.
+    // envelope actor is what every reader of the log filters on, whether or not `userId` can name
+    // which person (fix round 2). `resolvedByUserId` keeps the same fact on the row. Only an
+    // EXPIRY stays `system`: nobody acted there, which is the whole fact it records.
     actor: 'human',
     payload: { decisionId, outcome: 'approved', reason: null },
-    userId: principal.userId,
+    userId: principal?.userId ?? null,
   })
   return ok(undefined)
 }
@@ -378,14 +383,14 @@ export async function approveDecision(
  */
 export async function rejectDecision(
   decisionId: string,
-  principal: Principal,
+  principal?: Principal,
   reason?: string,
 ): Promise<Result<void, ControlRefusal>> {
   const trimmed = reason?.trim()
   const claim = await claimPending(decisionId, {
     status: 'rejected',
     resolvedAt: new Date(),
-    resolvedByUserId: principal.userId,
+    resolvedByUserId: principal?.userId ?? null,
   })
   if (!claim.ok) return claim
 
@@ -393,10 +398,11 @@ export async function rejectDecision(
     type: 'supervisor.resolved',
     workspaceId: claim.value.workspaceId,
     // A person's act, like an approval -- see {@link approveDecision} for why this one event
-    // departs from the `system` actor the other `supervisor.*` events carry.
+    // departs from the `system` actor the other `supervisor.*` events carry, and for why `userId`
+    // may honestly be null (fix round 2).
     actor: 'human',
     payload: { decisionId, outcome: 'rejected', reason: trimmed === undefined || trimmed === '' ? null : trimmed },
-    userId: principal.userId,
+    userId: principal?.userId ?? null,
   })
   return ok(undefined)
 }
@@ -406,7 +412,7 @@ export async function rejectDecision(
  *  conditional on `status: 'pending'` is what actually decides who won. */
 async function claimPending(
   decisionId: string,
-  data: { readonly status: DecisionStatus; readonly resolvedAt: Date; readonly resolvedByUserId: string },
+  data: { readonly status: DecisionStatus; readonly resolvedAt: Date; readonly resolvedByUserId: string | null },
 ): Promise<Result<{ readonly workspaceId: string }, ControlRefusal>> {
   const row = await prisma.supervisorDecision.findUnique({
     where: { id: decisionId },

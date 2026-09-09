@@ -64,7 +64,6 @@ import {
   plural,
   unblockTask,
   type ModelDecider,
-  type Principal,
   type ProfileTarget,
 } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
@@ -194,15 +193,11 @@ const USAGE = `usage: orchestrator <command> [options]
                                        chose from and why. --pending narrows to what is still
                                        waiting on a human; --limit caps how many come back
                                        (default 50).
-  approve-decision --id <id> [--by <name>]
-                                       a human says yes to a pending proposal: carries out its
-                                       action and marks it approved. --by names the local account
-                                       (create-user) the approval is attributed to -- default
-                                       "operator" -- and is refused if no such account exists.
-  reject-decision --id <id> [--reason <text>] [--by <name>]
+  approve-decision --id <id>           a human says yes to a pending proposal: carries out its
+                                       action and marks it approved.
+  reject-decision --id <id> [--reason <text>]
                                        a human says no to a pending proposal: its action never
                                        reaches the world. --reason is kept with the decision.
-                                       --by as above.
   set-supervisor --workspace <id> [--enable | --disable]
                  [--profile-file <path> | --clear-profile]
                                        switch a workspace's Supervisor on or off, and/or set (from
@@ -559,28 +554,6 @@ async function readSecretLine(): Promise<string> {
 
 const STDIN_PASSWORD_ERROR =
   'the password is read from stdin: printf "%s\\n" "$PW" | orchestrator create-user --name ada'
-
-/**
- * The `Principal` an `approve-decision`/`reject-decision` call acts as (M38 t4).
- *
- * `approveDecision`/`rejectDecision` take a real `Principal`, unlike almost every verb in this
- * file -- which the CLI has always called with none at all (`Workspace.goalSetByUserId`'s own
- * comment: "the CLI and the orchestrator act with no user"). An approval is a PERSON's act, and
- * the event it produces stamps `actor: 'human'` and a `userId` the log can point back to, so the
- * CLI needs one that is real: `ExecutionEvent.userId` is a foreign key, and a name that matches no
- * account would fail the write with a constraint violation instead of a readable refusal.
- *
- * `--by <name>` therefore names a LOCAL ACCOUNT (`create-user`/`list-users`), not a free-text
- * label the way `set-profile --by` or `pause --by` use it -- resolved here rather than left to
- * Postgres, so a name that does not exist yet is refused with the one command that fixes it.
- */
-async function cliPrincipal(name: string): Promise<Principal> {
-  const user = await prisma.user.findUnique({ where: { username: name }, select: { id: true } })
-  if (user === null) {
-    throw new Error(`no local account named "${name}": create one first with create-user --name ${name}`)
-  }
-  return { userId: user.id }
-}
 
 async function mustGetRun(runId: string) {
   // `slave -> team`, not `task`: a `planning` run (M8b) has no `Task` row, and `slave -> team ->
@@ -1156,18 +1129,22 @@ export async function main(argv: readonly string[]): Promise<number> {
     }
 
     case 'approve-decision': {
+      // No `Principal`: the CLI has no session, and every verb here has always acted with none
+      // (`Workspace.goalSetByUserId`'s own comment -- "the CLI and the orchestrator act with no
+      // user"). `approveDecision`'s `principal?` is optional for exactly this caller (fix round 2)
+      // -- the row's `resolvedByUserId` and the `supervisor.resolved` event's `userId` are honestly
+      // null; the envelope actor is still `'human'`, because a human ran this command.
       const decisionId = requireFlag(flags, 'id')
-      const principal = await cliPrincipal(flagText(flags, 'by') ?? 'operator')
-      const result = await approveDecision(decisionId, principal)
+      const result = await approveDecision(decisionId)
       if (!result.ok) throw new Error(refusalText(result.error))
       process.stdout.write(`decision ${decisionId} approved\n`)
       return 0
     }
 
     case 'reject-decision': {
+      // No `Principal`, same reasoning as `approve-decision` above.
       const decisionId = requireFlag(flags, 'id')
-      const principal = await cliPrincipal(flagText(flags, 'by') ?? 'operator')
-      const result = await rejectDecision(decisionId, principal, flagText(flags, 'reason'))
+      const result = await rejectDecision(decisionId, undefined, flagText(flags, 'reason'))
       if (!result.ok) throw new Error(refusalText(result.error))
       process.stdout.write(`decision ${decisionId} rejected\n`)
       return 0
