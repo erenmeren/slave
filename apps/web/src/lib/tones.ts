@@ -1,26 +1,16 @@
+import { USER_CARD_LABEL, userRunStatus, userSlaveStatus, type UserCardState } from '@slave-of-ai/domain'
 import type { SlaveStatus, RunStatus, TaskStatus } from '@slave-of-ai/domain'
 import type { StatusTone } from '../components/ui/StatusPill'
 import { COLUMN_FOR_STATUS, COLUMN_STATE } from './taskColumns'
 
 /**
- * The handoff's ten card states (`design_handoff_ai_team_os/mockups/Slave of AI Mockups.dc.html`
- * lines 912-923, `Component.meta`). This is a DISPLAY vocabulary, not a domain one: the domain
- * has `RunStatus` (nine), `SlaveStatus` (seven) and `TaskStatus` (thirteen), and none of them is
- * this list. The three derivations below are the only sanctioned way into it -- a page that
- * hand-maps a status to a tone is the defect Decision 2 forbids.
+ * The ten card states, now owned by `packages/domain/src/status/user.ts` (M44 R4). This file keeps
+ * the half the domain cannot have: which TONE a state is painted in and whether its dot breathes.
+ * `StatusTone` is a `components/ui/StatusPill` type and `packages/domain` may not import an app
+ * (M44 erratum E2), so the split runs exactly there -- and every LABEL below is read out of
+ * `USER_CARD_LABEL` rather than restated, so the word and the colour cannot drift.
  */
-export type CardState =
-  | 'working'
-  | 'planning'
-  | 'waiting'
-  | 'review'
-  | 'paused'
-  | 'pause_requested'
-  | 'resuming'
-  | 'blocked'
-  | 'cancelled'
-  | 'idle'
-  | 'completed'
+export type CardState = UserCardState
 
 export interface ToneSpec {
   readonly tone: StatusTone
@@ -33,70 +23,54 @@ export interface ToneSpec {
   readonly pulse: boolean
 }
 
-export const CARD_STATE_TONE: Record<CardState, ToneSpec> = {
-  working: { tone: 'working', label: 'WORKING', pulse: true },
-  planning: { tone: 'planning', label: 'PLANNING', pulse: true },
-  waiting: { tone: 'waiting', label: 'WAITING', pulse: false },
-  review: { tone: 'review', label: 'REVIEW', pulse: true },
-  paused: { tone: 'paused', label: 'PAUSED', pulse: false },
-  pause_requested: { tone: 'waiting', label: 'PAUSING', pulse: true },
-  resuming: { tone: 'working', label: 'RESUMING', pulse: true },
-  blocked: { tone: 'blocked', label: 'BLOCKED', pulse: false },
+const TONE_AND_PULSE: Record<CardState, { readonly tone: StatusTone; readonly pulse: boolean }> = {
+  working: { tone: 'working', pulse: true },
+  planning: { tone: 'planning', pulse: true },
+  waiting: { tone: 'waiting', pulse: false },
+  review: { tone: 'review', pulse: true },
+  paused: { tone: 'paused', pulse: false },
+  pause_requested: { tone: 'waiting', pulse: true },
+  resuming: { tone: 'working', pulse: true },
+  blocked: { tone: 'blocked', pulse: false },
   // M40 §6: a cancelled task is not a broken one. It rides the muted `idle` grey rather than
   // `blocked`'s red, because red is the colour of something that needs an operator and a task
-  // somebody took off the board needs nothing at all. Its own CARD STATE rather than a second
-  // `idle` spelling, so the pill still says what happened; no new `StatusTone`, because the tone
-  // set is the handoff's palette and this is a new state in it, not a new colour.
-  cancelled: { tone: 'idle', label: 'CANCELLED', pulse: false },
-  idle: { tone: 'idle', label: 'IDLE', pulse: false },
-  completed: { tone: 'done', label: 'DONE', pulse: false },
+  // somebody took off the board needs nothing at all.
+  cancelled: { tone: 'idle', pulse: false },
+  idle: { tone: 'idle', pulse: false },
+  completed: { tone: 'done', pulse: false },
 }
 
-/** A run's own status. `null` means "no live run", which is `idle` -- the same statement
- *  `deriveSlaveStatus(null)` makes. */
+export const CARD_STATE_TONE: Record<CardState, ToneSpec> = Object.fromEntries(
+  (Object.keys(TONE_AND_PULSE) as CardState[]).map((state) => [
+    state,
+    { ...TONE_AND_PULSE[state], label: USER_CARD_LABEL[state] },
+  ]),
+) as Record<CardState, ToneSpec>
+
+/** A run's own status. `null` means "no live run", which is `idle`. Thin adapter over the domain's
+ *  `userRunStatus` -- kept so the ~20 existing call sites read the same as they always did. */
 export function cardStateForRun(status: RunStatus | null): CardState {
-  if (status === null) return 'idle'
-  switch (status) {
-    case 'starting':
-      return 'planning'
-    case 'working':
-      return 'working'
-    case 'pause_requested':
-      return 'pause_requested'
-    case 'paused':
-      return 'paused'
-    case 'resuming':
-      return 'resuming'
-    case 'stopping':
-      return 'waiting'
-    case 'stopped':
-      return 'idle'
-    case 'succeeded':
-      return 'completed'
-    case 'failed':
-      return 'blocked'
-  }
+  return userRunStatus(status).state
 }
 
-/** `deriveSlaveStatus`'s output. Exhaustive over all seven members -- a new one is a build error
- *  here, not a silent fall-through to `idle` at render time. */
+/** `deriveSlaveStatus`'s output, through the domain. */
 export function cardStateForSlave(status: SlaveStatus): CardState {
-  switch (status) {
-    case 'idle':
-      return 'idle'
-    case 'starting':
-      return 'planning'
-    case 'working':
-      return 'working'
-    case 'pausing':
-      return 'pause_requested'
-    case 'paused':
-      return 'paused'
-    case 'resuming':
-      return 'resuming'
-    case 'stopping':
-      return 'waiting'
-  }
+  return userSlaveStatus(status).state
+}
+
+/**
+ * The tone for a worker row's `StatusPill`, from the SAME derivation its label comes from (M44
+ * erratum E18). Moved here from `components/SlavesClient.tsx`, whose `SLAVE_STATUS_TONE` was a
+ * second status->tone table living beside `CARD_STATE_TONE` -- exactly the drift this file exists
+ * to end. `AllSlaveRow` types `status` as a bare `string` (`server/org.ts`) even though it is
+ * always `deriveSlaveStatus`'s output, so anything outside the vocabulary falls back to `idle`
+ * rather than throwing at render time.
+ */
+export function toneForStatus(status: string): StatusTone {
+  const known = (['idle', 'starting', 'working', 'pausing', 'paused', 'resuming', 'stopping'] as const).find(
+    (member) => member === status,
+  )
+  return CARD_STATE_TONE[known === undefined ? 'idle' : cardStateForSlave(known)].tone
 }
 
 /**

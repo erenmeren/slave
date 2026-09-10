@@ -1,10 +1,8 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import type { SlaveStatus } from '@slave-of-ai/domain'
 import type { AllSlavesPage, ProjectTeamRow, RosterCompany } from '../server/org'
 import type { SlaveCardData, OverviewSnapshot } from '../server/overview'
-import type { StatusTone } from './ui/StatusPill'
 import { SlavePanel } from './SlavePanel'
 import { NewSlaveDrawer } from './slaves/NewSlaveDrawer'
 import { AllSlavesTable } from './AllSlavesTable'
@@ -13,31 +11,6 @@ import type { TemplateRow } from './TemplateCatalog'
 import { PrimaryButton } from './ui/FormControls'
 
 type Tab = 'slaves' | 'departments'
-
-/**
- * The M11 Task 8 status→tone mapping (controller ruling): every value `deriveSlaveStatus`
- * (`packages/domain/src/slave/derived.ts`) can return, mapped onto the `ui/` tone vocabulary.
- * The ONE place this page derives a worker's `StatusPill` tone -- `AllSlavesTable` imports
- * `toneForStatus` below rather than re-deriving it. `satisfies` keeps this exhaustive: a future
- * `SlaveStatus` member fails to compile here, not silently falls through to a default tone at
- * render time.
- */
-export const SLAVE_STATUS_TONE = {
-  idle: 'idle',
-  starting: 'planning',
-  working: 'working',
-  pausing: 'paused',
-  paused: 'paused',
-  resuming: 'planning',
-  stopping: 'waiting',
-} satisfies Record<SlaveStatus, StatusTone>
-
-/** `AllSlaveRow` types a row's `status` as a bare `string` (`server/org.ts`), even though it is
- *  always produced by `deriveSlaveStatus` -- this looks it up defensively, falling back to
- *  `'idle'` for anything outside the known vocabulary rather than throwing. */
-export function toneForStatus(status: string): StatusTone {
-  return (SLAVE_STATUS_TONE as Record<string, StatusTone>)[status] ?? 'idle'
-}
 
 /** The Slaves page's two tabs (M24 §5.3, Task 7; renamed in M25 §4.2 Task 7): Slaves, the one
  *  table (every project slave plus every catalog member no project has materialized yet), and

@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { SlavesClient, toneForStatus } from '../src/components/SlavesClient.js'
+import { SlavesClient } from '../src/components/SlavesClient.js'
+import { toneForStatus } from '../src/lib/tones.js'
 import type { AllSlaveRow, AllSlavesPage } from '../src/server/org.js'
 
 const routerRefresh = vi.fn()
@@ -48,12 +49,16 @@ afterEach(() => {
 })
 
 describe('toneForStatus', () => {
-  it('maps every SlaveStatus to a StatusTone', () => {
+  it('maps every SlaveStatus to a StatusTone, through the same derivation CARD_STATE_TONE uses (erratum E18)', () => {
     expect(toneForStatus('working')).toBe('working')
     expect(toneForStatus('starting')).toBe('planning')
-    expect(toneForStatus('resuming')).toBe('planning')
+    // `resuming` and `pausing` used to read through SlavesClient's own SLAVE_STATUS_TONE table
+    // (planning / paused respectively) -- a second status->tone mapping that disagreed with
+    // CARD_STATE_TONE's own `resuming` (working) and `pause_requested` (waiting) tones. `toneForStatus`
+    // now derives through `cardStateForSlave` into `CARD_STATE_TONE`, the one table this file has.
+    expect(toneForStatus('resuming')).toBe('working')
     expect(toneForStatus('paused')).toBe('paused')
-    expect(toneForStatus('pausing')).toBe('paused')
+    expect(toneForStatus('pausing')).toBe('waiting')
     expect(toneForStatus('stopping')).toBe('waiting')
     expect(toneForStatus('idle')).toBe('idle')
   })
