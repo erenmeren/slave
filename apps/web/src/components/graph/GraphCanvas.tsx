@@ -123,7 +123,7 @@ export function GraphCanvas({
         * rather than configured to reach these exact numbers. */}
       <div
         data-testid="graph-canvas"
-        className="relative h-full w-full bg-[#08090c] bg-[radial-gradient(rgba(255,255,255,.055)_1px,transparent_1px)] [background-size:26px_26px]"
+        className="relative h-full w-full bg-bg-canvas bg-[radial-gradient(rgba(255,255,255,.055)_1px,transparent_1px)] [background-size:26px_26px]"
       >
         {/* The soft teal radial wash across the top (design README "1b -- Canvas"). */}
         <span

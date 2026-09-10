@@ -84,7 +84,7 @@ function ProjectCard({
                 </span>
               )}
             </div>
-            <div data-testid="project-description" className="mt-[2px] truncate text-[11px] text-[#7c8697]">
+            <div data-testid="project-description" className="mt-[2px] truncate text-[11px] text-text-dim">
               {project.goal ?? 'no goal set'}
             </div>
             {/* The count behind the WAITING FOR YOU pill, said in words (M44 R1). A floor, never a

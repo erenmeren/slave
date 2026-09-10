@@ -202,7 +202,8 @@ describe('SlavePanel', () => {
           onClose={() => {}}
         />,
       )
-      expect(screen.getByTestId('provider-chip').textContent).toBe('cursor')
+      expect(screen.getByTestId('provider-chip').textContent).toBe('Cursor')
+      expect(screen.getByTestId('provider-chip').getAttribute('title')).toBe('cursor')
       rerender(
         <SlavePanel
           slave={slave({ provider: null, gate: null })}
@@ -213,6 +214,22 @@ describe('SlavePanel', () => {
         />,
       )
       expect(screen.getByTestId('provider-chip').textContent).toBe('—')
+    })
+
+    // M44 final review, item I3: the panel read the bare `claude_code` column value as visible
+    // text. The label is the word; the kind stays in `title`.
+    it('reads the provider label, with the raw kind kept in title', () => {
+      render(
+        <SlavePanel
+          slave={slave({ provider: 'claude_code', gate: 'all-tools' })}
+          liveEvents={[]}
+          workspaceId="w1"
+          haltedReason={null}
+          onClose={() => {}}
+        />,
+      )
+      expect(screen.getByTestId('provider-chip').textContent).toBe('Claude Code')
+      expect(screen.getByTestId('provider-chip').getAttribute('title')).toBe('claude_code')
     })
 
     // M12 Task 13 fix round 1, spec §8 / finding 4a: the shell-only gate mark, on the panel too.

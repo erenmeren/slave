@@ -58,6 +58,7 @@ import { createSimulation } from '../packages/control/dist/index.js'
 import { prisma } from '../packages/db/dist/client.js'
 import { EVENT_TYPE_BY_DOMAIN_TYPE, RUN_STATUSES, TASK_STATUSES } from '../packages/db/dist/enums.js'
 import { DECISION_STATUSES, SITUATION_KINDS, TIERS } from '../packages/domain/dist/index.js'
+import { PROVIDER_KINDS } from '../packages/providers/dist/index.js'
 
 const ACTION_TIMEOUT_MS = 30_000
 const NEXT_READY_TIMEOUT_MS = 180_000
@@ -102,9 +103,9 @@ const SIM_ROSTER = [
 const EVENT_PREFIX_WORDS = ['Tasks', 'Runs', 'Messages', 'Guardrails', 'Project', 'Organisation', 'Supervisor']
 
 /**
- * The forbidden tokens, DERIVED from the domain's own unions rather than typed here (plan decision
- * D7): every member that carries an underscore or a dot, which is every member a person could not
- * have written by accident.
+ * The forbidden tokens, DERIVED from the shipped packages' own unions rather than typed here (plan
+ * decision D7): every member that carries an underscore or a dot, which is every member a person
+ * could not have written by accident.
  *
  * A bare English word that happens to be an enum member (`working`, `paused`, `ready`, `done`,
  * `failed`, `blocked`, `merging`, `idle`, `model`, `rules`) is the product's own vocabulary and is
@@ -114,8 +115,19 @@ const RAW_TOKENS = [
   ...TASK_STATUSES,
   ...RUN_STATUSES,
   ...SITUATION_KINDS,
+  // TIERS and DECISION_STATUSES contribute NOTHING to this list today, and are enumerated anyway.
+  // Every member of both is a single bare English word (`applied`, `proposed`, `escalated`,
+  // `noop`; `pending`, `approved`, `rejected`, `expired`, `failed`), so the `_`/`.` filter below
+  // drops all ten. They are here because the filter, not this array, is what decides -- a
+  // fifth `SupervisorTier` or a sixth decision status spelled `needs_human` joins the blocklist
+  // the moment it is added, with no edit here. Removing them would make that a silent gap.
   ...DECISION_STATUSES,
   ...TIERS,
+  // `claude_code` (M44 final review, item I3): a provider kind is a column value like any other,
+  // and it was visible text on four surfaces. From the providers package's own canonical list --
+  // this gate is a plain node script, so the `node:child_process` imports that keep `apps/web`
+  // from reaching that barrel are no obstacle here.
+  ...PROVIDER_KINDS,
   ...Object.values(EVENT_TYPE_BY_DOMAIN_TYPE),
   ...Object.keys(EVENT_TYPE_BY_DOMAIN_TYPE),
 ].filter((token) => token.includes('_') || token.includes('.'))

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { postControl } from '../lib/postControl'
+import { providerLabel } from '../lib/providerLabel'
 import { CARD_STATE_TONE, cardStateFor } from '../lib/tones'
 import type { SlaveCardData } from '../server/overview'
 import { RuntimeRoleChips } from './RuntimeRoleChips'
@@ -136,7 +137,7 @@ export function SlaveCard({
       // `TONE_BORDER` is `StatusPill`'s own `3d`-alpha border map, imported rather than restated:
       // the card's border and the pill's border are the SAME recipe in the handoff, and a second
       // literal copy of eight class strings is the duplication Decision 2 forbids.
-      className={`relative flex flex-col gap-[9px] overflow-hidden rounded-card border bg-bg-2 px-[13px] py-[12px] transition-colors hover:border-white/20 ${
+      className={`relative flex flex-col gap-[9px] overflow-hidden rounded-card border bg-bg-2 px-[13px] py-[12px] transition-colors hover:border-line-hover ${
         TONE_BORDER[tone]
       } ${flashing ? 'motion-safe:animate-[border-flash_800ms_ease-out]' : ''}`}
       style={flashing ? ({ '--flash-color': FLASH_COLOR[slave.status] } as React.CSSProperties) : undefined}
@@ -163,7 +164,7 @@ export function SlaveCard({
           className="min-w-0 flex-1 text-left"
         >
           <span className="block truncate text-[13px] font-semibold text-text-1">{slave.name}</span>
-          <span className="block truncate text-[10.5px] text-[#7c8697]">{slave.role}</span>
+          <span className="block truncate text-[10.5px] text-text-dim">{slave.role}</span>
         </button>
         <StatusPill tone={tone} label={label} pulse={pulse} />
       </div>
@@ -179,7 +180,7 @@ export function SlaveCard({
         <span data-testid="card-task-ref" className="shrink-0 font-mono text-[10px] text-text-3">
           {slave.taskId === null ? '—' : taskRef(slave.taskId)}
         </span>
-        <span data-testid="card-task-title" className="min-w-0 truncate text-[11.5px] text-[#c8cfda]">
+        <span data-testid="card-task-title" className="min-w-0 truncate text-[11.5px] text-text-body">
           {slave.taskTitle ?? 'no task'}
         </span>
       </div>
@@ -211,9 +212,12 @@ export function SlaveCard({
           <span data-testid="card-queue-chip">{slave.queuedMessage === null ? '—' : 'queued'}</span>
         </Chip>
         <Chip>
-          {/* The bare `ProviderKind` and `—` when no run has resolved one (M12 Task 9, ruling R10):
-            * real data, unlabelled. The shell-only gate mark beside it is spec §8's. */}
-          <span data-testid="provider-chip">{slave.provider ?? '—'}</span>
+          {/* The runtime's WORD (M44 R4, final review item I3) and `—` when no run has resolved
+            * one (M12 Task 9, ruling R10). The raw `ProviderKind` stays in `title`, the same rule
+            * the status pill beside it follows. The shell-only gate mark is spec §8's. */}
+          <span data-testid="provider-chip" title={slave.provider ?? undefined}>
+            {providerLabel(slave.provider)}
+          </span>
         </Chip>
         <ShellOnlyMark gate={slave.gate} />
       </div>
@@ -266,7 +270,7 @@ export function SlaveCard({
 /** The card footer's ghost button. Not `ui/Button`: that component fixes
  *  `data-testid="button"` for every instance and this footer needs three distinguishable ones,
  *  and its `px-3 py-1.5` is wider than the handoff's three-up equal-thirds footer. Same ghost
- *  recipe (`border-line`, `hover:border-white/20`, `hover:text-text-1`), one size down. */
+ *  recipe (`border-line`, `hover:border-line-hover`, `hover:text-text-1`), one size down. */
 function FooterButton({
   testId,
   disabled,
@@ -284,7 +288,7 @@ function FooterButton({
       data-testid={testId}
       disabled={disabled}
       onClick={onClick}
-      className="flex-1 rounded-chip border border-line py-[5px] text-center text-[10.5px] font-medium text-text-2 transition-colors hover:border-white/20 hover:text-text-1 disabled:cursor-not-allowed disabled:opacity-50"
+      className="flex-1 rounded-chip border border-line py-[5px] text-center text-[10.5px] font-medium text-text-2 transition-colors hover:border-line-hover hover:text-text-1 disabled:cursor-not-allowed disabled:opacity-50"
     >
       {children}
     </button>

@@ -16,7 +16,12 @@ export function DataTable({
   readonly children: React.ReactNode
 }): React.JSX.Element {
   return (
-    <div data-testid="data-table" className="flex flex-col overflow-hidden rounded-card border border-line bg-bg-2">
+    // `overflow-x-auto`, not `overflow-hidden` (M44 final review, minor c): the Slaves table's
+    // nine tracks add up to ~1030px of FIXED width, and a hidden overflow simply CUT the last
+    // three columns off a narrow window with no way to reach them. Clipping is unchanged wherever
+    // the table fits -- a non-`visible` overflow on one axis computes the other to `auto`, so the
+    // rounded card still clips its rows' corners.
+    <div data-testid="data-table" className="flex flex-col overflow-x-auto rounded-card border border-line bg-bg-2">
       <div data-testid="data-table-header" className="grid gap-2 border-b border-line px-3 py-2" style={{ gridTemplateColumns: columns }}>
         {header.map((label) => (
           <span key={label} data-testid="data-table-header-cell" className={SECTION_LABEL_CLASS}>

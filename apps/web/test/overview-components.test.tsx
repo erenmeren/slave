@@ -84,10 +84,21 @@ describe('SlaveCard provider chip', () => {
     // mark belong to Task 13 (spec §8), and inventing either here would be that task's decision
     // taken by the wrong task.
     const { rerender } = render(<SlaveCard slave={slave({ provider: 'cursor', gate: 'all-tools' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
-    expect(screen.getByTestId('provider-chip').textContent).toBe('cursor')
+    expect(screen.getByTestId('provider-chip').textContent).toBe('Cursor')
+    expect(screen.getByTestId('provider-chip').getAttribute('title')).toBe('cursor')
 
     rerender(<SlaveCard slave={slave({ provider: null, gate: null })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
     expect(screen.getByTestId('provider-chip').textContent).toBe('—')
+  })
+
+  // M44 final review, item I3: `claude_code` is a COLUMN VALUE, and it was visible text on this
+  // card, on the panel, in the workforce table and in every provider `<select>`. The word a person
+  // reads is `PROVIDER_LABEL`'s; the raw kind stays in `title`, the same rule every other
+  // projection in this milestone follows.
+  it('reads the provider label, with the raw kind kept in title', () => {
+    render(<SlaveCard slave={slave({ provider: 'claude_code', gate: 'all-tools' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
+    expect(screen.getByTestId('provider-chip').textContent).toBe('Claude Code')
+    expect(screen.getByTestId('provider-chip').getAttribute('title')).toBe('claude_code')
   })
 
   // M12 Task 13 fix round 1, spec §8 / finding 4a: "wherever a worker's runtime is shown, a
@@ -417,7 +428,9 @@ describe('SlaveCard — the handoff anatomy', () => {
     expect(card.className).toContain('rounded-card')
     expect(card.className).toContain('px-[13px]')
     expect(card.className).toContain('py-[12px]')
-    expect(card.className).toContain('hover:border-white/20')
+    // The `.20` hover hairline, as its token (M44 final review, item I2): `border-line-hover`
+    // computes to the same `rgba(255,255,255,.20)` the literal did.
+    expect(card.className).toContain('hover:border-line-hover')
     // The README's 3px bar, the one number the first round left at `ProgressBar`'s 6px default.
     expect(screen.getByTestId('progress-bar').className).toContain('h-[3px]')
   })
@@ -468,7 +481,7 @@ describe('SlaveCard — the handoff anatomy', () => {
     )
     expect(screen.getByTestId('card-skill-chip').textContent).toBe('superpowers:test-driven-development')
     expect(screen.getByTestId('card-queue-chip').textContent).toBe('queued')
-    expect(screen.getByTestId('provider-chip').textContent).toBe('cursor')
+    expect(screen.getByTestId('provider-chip').textContent).toBe('Cursor')
 
     rerender(<SlaveCard slave={slave({ skill: null, queuedMessage: null, provider: null })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
     expect(screen.getByTestId('card-skill-chip').textContent).toBe('—')

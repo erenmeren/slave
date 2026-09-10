@@ -40,7 +40,7 @@ describe('org query module', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "SupervisorDecision", "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
   })
@@ -248,6 +248,40 @@ describe('org query module', () => {
 
       const autoMerge = (await listProjects()).find((p) => p.id === fixture.workspaceId)
       expect(autoMerge?.needsYou).toBe(1)
+    })
+
+    // The clause E19 names and the first implementation dropped (M44 final review, item I1): a
+    // proposal the Supervisor put in front of a human is the third thing that needs a person, and
+    // the old count -- `blocked` + un-integrated `done` -- could not see it. This fixture has
+    // NEITHER of those two: every task is `running`, so a needsYou of 0 here is exactly what the
+    // old arithmetic answered, and a 1 is the new clause and nothing else.
+    it('counts a pending Supervisor decision, with no blocked task and nothing to integrate', async (): Promise<void> => {
+      const before = (await listProjects()).find((p) => p.id === fixture.workspaceId)
+      expect(before?.taskCounts.blocked).toBe(0)
+      expect(before?.needsYou).toBe(0)
+
+      const action = { kind: 'no_action' }
+      const base = {
+        workspaceId: fixture.workspaceId,
+        situationKind: 'ready_unstaffed' as const,
+        situation: { kind: 'ready_unstaffed', subjectId: 'backend', summary: 'nobody holds backend', facts: {} },
+        candidates: [{ action, tier: 'proposed', why: 'a person should say.' }],
+        chosenIndex: 0,
+        action,
+        rationale: 'a person should say.',
+        tier: 'proposed' as const,
+        decidedBy: 'rules' as const,
+      }
+      await prisma.supervisorDecision.create({ data: { ...base, subjectId: 'backend', status: 'pending' } })
+      // A decision that is NOT pending needs nobody: it has already been answered.
+      await prisma.supervisorDecision.create({ data: { ...base, subjectId: 'frontend', status: 'applied' } })
+
+      const withPending = (await listProjects()).find((p) => p.id === fixture.workspaceId)
+      expect(withPending?.needsYou).toBe(1)
+
+      await prisma.supervisorDecision.create({ data: { ...base, subjectId: 'design', status: 'pending' } })
+      const withTwo = (await listProjects()).find((p) => p.id === fixture.workspaceId)
+      expect(withTwo?.needsYou).toBe(2)
     })
   })
 

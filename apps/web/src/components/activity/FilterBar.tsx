@@ -47,7 +47,7 @@ function KindChip({
       data-testid={`kind-chip-${kind}`}
       aria-pressed={active}
       onClick={onToggle}
-      className={`rounded-[14px] border px-[9px] py-[3px] font-mono text-[10px] font-medium transition-colors ${
+      className={`rounded-bubble border px-[9px] py-[3px] font-mono text-[10px] font-medium transition-colors ${
         active ? 'border-text-1 bg-bg-2 text-text-1' : 'border-line bg-bg-1 text-text-3 hover:text-text-2'
       }`}
     >

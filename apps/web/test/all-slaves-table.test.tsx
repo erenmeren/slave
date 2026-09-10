@@ -151,6 +151,19 @@ describe('AllSlavesTable', () => {
     expect(screen.queryByTestId('shell-only-mark')).toBeNull()
   })
 
+  // M44 final review, item I3: this table printed the bare `claude_code` column value.
+  it('reads the provider label, with the raw kind kept in title', () => {
+    const { rerender } = render(<AllSlavesTable initial={page([row({ provider: 'claude_code', gate: 'all-tools' })])} onOpen={() => {}} />)
+    expect(screen.getByTestId('worker-provider').textContent).toBe('Claude Code')
+    expect(screen.getByTestId('worker-provider').getAttribute('title')).toBe('claude_code')
+
+    rerender(<AllSlavesTable initial={page([row({ provider: 'cursor', gate: 'all-tools' })])} onOpen={() => {}} />)
+    expect(screen.getByTestId('worker-provider').textContent).toBe('Cursor')
+
+    rerender(<AllSlavesTable initial={page([row({ provider: null, gate: null })])} onOpen={() => {}} />)
+    expect(screen.getByTestId('worker-provider').textContent).toBe('—')
+  })
+
   // M37 t4 fix round 1 (spec §5): this table is the all-workers view, and a worker parked with an
   // empty `runtimeRoles` -- the exact state an operator looks for when nothing picks up a task --
   // was invisible here. `role` stays the title cell it always was; the dispatch set sits beside it.

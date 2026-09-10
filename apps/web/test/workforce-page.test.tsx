@@ -265,6 +265,44 @@ describe('WorkforceClient row click opens the panel', () => {
 
     expect(await screen.findByRole('heading', { name: 'Alex' })).toBeTruthy()
   })
+
+  /**
+   * M44 final review, minor b. The panel's fetch had exactly one rendered outcome: the panel, or
+   * nothing at all. A click on a row therefore looked identical while the request was in flight
+   * and after it had FAILED -- an operator clicked a slave and the page did nothing, twice, for
+   * two different reasons. `LoadingState` and `Alert` are the two primitives R3 minted for
+   * precisely this, and this page had neither.
+   */
+  it('says the panel is loading while its fetch is in flight, and says so when it fails', async () => {
+    let release: ((response: Response) => void) | null = null
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/org/workers') return new Response(JSON.stringify({ workers: [] }), { status: 200 })
+      if (url === '/api/w/w1/overview') {
+        return await new Promise<Response>((resolve) => {
+          release = resolve
+        })
+      }
+      throw new Error(`unexpected fetch ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<TestWorkforceClient slaves={page([slaveRow({ slaveId: 'a1', workspaceId: 'w1', name: 'Alex', status: 'working' })])} />)
+    fireEvent.click(screen.getByTestId('worker-row-button'))
+
+    expect(await screen.findByTestId('workforce-panel-loading')).toBeTruthy()
+    expect(screen.getByTestId('workforce-panel-loading').getAttribute('role')).toBe('status')
+    expect(screen.queryByTestId('workforce-panel-error')).toBeNull()
+
+    await act(async () => {
+      release?.(new Response('nope', { status: 500 }))
+    })
+
+    const alert = await screen.findByTestId('workforce-panel-error')
+    expect(alert.getAttribute('role')).toBe('alert')
+    expect(alert.getAttribute('data-variant')).toBe('error')
+    expect(screen.queryByTestId('workforce-panel-loading')).toBeNull()
+  })
 })
 
 // MOVED from `projects-page.test.tsx` (M44 t3): the catalog these assertions describe left the

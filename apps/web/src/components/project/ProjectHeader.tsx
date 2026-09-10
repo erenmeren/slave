@@ -118,7 +118,7 @@ export function ProjectHeader({
            *  an empty track would read as "0% of something" rather than "there is no
            *  something" (M12 Task 9 / ruling R11). */}
           {budgetUsd !== null && (
-            <span className="h-[3px] w-[150px] overflow-hidden rounded-[2px] bg-white/[0.08]">
+            <span className="h-[3px] w-[150px] overflow-hidden rounded-hair bg-white/[0.08]">
               <span className={`block h-full motion-safe:[transition:width_.5s_ease] ${barColor}`} style={{ width: `${Math.min(100, ratio * 100)}%` }} />
             </span>
           )}

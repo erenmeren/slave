@@ -918,7 +918,8 @@ describe('GraphClient: cables carry particles', () => {
     await waitFor(() => expect(screen.getByTestId('graph-canvas')).toBeTruthy())
 
     const canvas = screen.getByTestId('graph-canvas')
-    expect(canvas.className).toContain('bg-[#08090c]')
+    // #08090c, as `--bg-canvas` (erratum E15, applied in the final fix wave).
+    expect(canvas.className).toContain('bg-bg-canvas')
     expect(canvas.className).toContain('[background-size:26px_26px]')
     expect(screen.getByTestId('graph-wash')).toBeTruthy()
   })

@@ -17,14 +17,20 @@
   --text-faint: #69727f; /* faint */
   --text-3: #5b6472; /* label */
 
-  /* The rest of the handoff's text ramp (design_handoff README "Design Tokens"), previously
-   * scattered through SlaveCard/TaskCard/ProjectsClient/Sidebar/ProjectSwitcher as hex literals
-   * -- a shadow palette beside the declared one (M44 R3). */
-  --text-strong: #f2f5f9;
+  /* The rest of the handoff's text ramp that this app ACTUALLY paints with (design_handoff README
+   * "Design Tokens"), previously scattered through SlaveCard/TaskCard/ProjectsClient/OfficeHud/
+   * FocusCard/ActivityCard/AllSlavesTable/AnalyticsClient as hex literals -- a shadow palette
+   * beside the declared one (M44 R3).
+   *
+   * The ramp's other three rungs (`--text-strong #f2f5f9`, `--text-secondary #a8b0bd`,
+   * `--text-ghost #3f4650`) and the `.05` inner hairline were minted by erratum E15 and are NOT
+   * here: applying the census found no literal anywhere in `src/` computing to any of them, so
+   * they were four tokens naming nothing this product draws (M44 final review, item I2). A token
+   * with no call site is a colour a future edit reaches for because it exists, not because the
+   * design asks for it. They are in the handoff README, which is where an unused rung belongs;
+   * the day a surface needs one it comes back with its call site. */
   --text-body: #c8cfda;
-  --text-secondary: #a8b0bd;
   --text-dim: #7c8697;
-  --text-ghost: #3f4650;
 
   /* The surfaces the handoff names beside the three declared ones. */
   --bg-selected: #151a21; /* a selected row/card */
@@ -32,8 +38,8 @@
   --bg-canvas: #08090c;   /* the graph canvas */
   --bg-floor: #07080b;    /* the office floor */
 
-  /* Two more hairlines the handoff names: `.05` inner rows, and the `.20` a hover raises to. */
-  --line-inner: rgba(255, 255, 255, 0.05);
+  /* The hairline a hover raises the structural `.07` to. (The handoff's `.05` inner-row rule is
+   * not here -- nothing in `src/` draws one; see the note on the text ramp above.) */
   --line-hover: rgba(255, 255, 255, 0.2);
 
   /* Handoff status tones (spec §3): the eight `StatusTone` values the `ui/` component library
@@ -77,16 +83,12 @@
   --color-text-2: var(--text-2);
   --color-text-faint: var(--text-faint);
   --color-text-3: var(--text-3);
-  --color-text-strong: var(--text-strong);
   --color-text-body: var(--text-body);
-  --color-text-secondary: var(--text-secondary);
   --color-text-dim: var(--text-dim);
-  --color-text-ghost: var(--text-ghost);
   --color-bg-selected: var(--bg-selected);
   --color-bg-card-alt: var(--bg-card-alt);
   --color-bg-canvas: var(--bg-canvas);
   --color-bg-floor: var(--bg-floor);
-  --color-line-inner: var(--line-inner);
   --color-line-hover: var(--line-hover);
   --color-tone-working: var(--tone-working);
   --color-tone-planning: var(--tone-planning);

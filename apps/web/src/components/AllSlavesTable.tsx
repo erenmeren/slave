@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { userSlaveStatus } from '@slave-of-ai/domain'
 import type { AllSlaveRow, AllSlavesPage } from '../server/org'
 import { sendControl } from '../lib/postControl'
+import { providerLabel } from '../lib/providerLabel'
 import { RuntimeRoleChips } from './RuntimeRoleChips'
 import { SlaveRowActions } from './SlaveRowActions'
 import { KNOWN_SLAVE_STATUSES, toneForStatus } from '../lib/tones'
@@ -230,13 +231,16 @@ export function AllSlavesTable({
                 <span className="text-xs text-text-3">—</span>
               ) : (
                 <>
-                  <span className="block truncate text-[11.5px] text-[#c8cfda]">{row.currentTask.title}</span>
+                  <span className="block truncate text-[11.5px] text-text-body">{row.currentTask.title}</span>
                   <ProgressBar pct={row.currentTask.pct} tone={tone} />
                 </>
               )}
             </div>
             <span className="flex items-center gap-1 font-mono text-[11px] text-text-2">
-              <span data-testid="worker-provider">{row.provider ?? '—'}</span>
+              {/* The runtime's WORD, raw kind in `title` (M44 R4, final review item I3). */}
+              <span data-testid="worker-provider" title={row.provider ?? undefined}>
+                {providerLabel(row.provider)}
+              </span>
               <ShellOnlyMark gate={row.gate} />
             </span>
             {/* The KPI tile's own idiom (M14 fix wave, review I1 / Decision 4: "a sum over

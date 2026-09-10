@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { userSlaveStatus } from '@slave-of-ai/domain'
 import type { SlaveFeedEvent } from '../lib/feedSummary'
+import { providerLabel } from '../lib/providerLabel'
 import type { SlaveCardData } from '../server/overview'
 import { sendControl } from '../lib/postControl'
 import { RuntimeRoleChips } from './RuntimeRoleChips'
@@ -189,11 +190,13 @@ export function SlavePanel({
           >
             {userSlaveStatus(slave.status).label}
           </span>
-          {/* The bare kind here, `—` when no run has resolved one (M12 Task 9, ruling R10).
-            *  The shell-only gate mark (spec §8) is `ShellOnlyMark` (M12 Task 13 fix round 1,
-            *  finding 4a) -- a human-readable provider LABEL is still nobody's brief. */}
+          {/* The runtime's WORD (M44 R4, final review item I3), `—` when no run has resolved
+            *  one (M12 Task 9, ruling R10), raw kind in `title`. The shell-only gate mark (spec
+            *  §8) is `ShellOnlyMark` (M12 Task 13 fix round 1, finding 4a). */}
           <Chip>
-            <span data-testid="provider-chip">{slave.provider ?? '—'}</span>
+            <span data-testid="provider-chip" title={slave.provider ?? undefined}>
+              {providerLabel(slave.provider)}
+            </span>
           </Chip>
           <ShellOnlyMark gate={slave.gate} />
         </div>

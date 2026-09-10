@@ -81,7 +81,7 @@ export function TaskCard({
       // Greyed, not reddened (M40 §6): a cancelled card is still readable and still selectable --
       // an operator has to be able to open it and read why -- but it recedes, because the work it
       // stands for is not coming back.
-      className={`flex w-full flex-col gap-1 rounded-tile border bg-[#0f1116] p-[10px] text-left transition-colors hover:border-white/[0.22] ${
+      className={`flex w-full flex-col gap-1 rounded-tile border bg-bg-card-alt p-[10px] text-left transition-colors hover:border-white/[0.22] ${
         task.status === 'blocked' ? 'border-tone-blocked/30' : 'border-line'
       } ${task.status === 'cancelled' ? 'opacity-60' : ''}`}
     >
@@ -114,13 +114,13 @@ export function TaskCard({
       )}
       <span className="mt-[8px] flex items-center gap-[6px]">
         {task.assigneeName === null ? (
-          <span data-testid="task-assignee" className="text-[10px] text-[#7c8697]">
+          <span data-testid="task-assignee" className="text-[10px] text-text-dim">
             unassigned
           </span>
         ) : (
           <>
             <AvatarTile name={task.assigneeName} tone={tone} />
-            <span data-testid="task-assignee" className="truncate text-[10px] text-[#7c8697]">
+            <span data-testid="task-assignee" className="truncate text-[10px] text-text-dim">
               {task.assigneeName}
             </span>
           </>

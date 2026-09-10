@@ -122,9 +122,10 @@ function taskStateOf(facts: UserTaskFacts): UserTaskState {
  *     asked is gone, so the wait resolves only if a person answers it.
  *   - `done` and not integrated on a hand-merge project (`autoMerge === false`) -- the work is
  *     finished and sitting on a branch nothing will merge by itself. "Ready to integrate."
- *   - a pending Supervisor decision, in ANY non-terminal state. The spec writes this clause under
- *     `waiting`; a proposal waiting for approval needs a person whatever the task is doing
- *     meanwhile, so it is widened here (M44 plan erratum E4).
+ *   - a pending Supervisor decision, in ANY non-terminal state -- `done` and `blocked` included,
+ *     and whatever the project's merge policy says. The spec writes this clause under `waiting`;
+ *     a proposal waiting for approval needs a person whatever the task is doing meanwhile, so it
+ *     is widened here (M44 plan erratum E4). Only `failed`, `cancelled` and `integrated` are out.
  *
  * `failed` is deliberately NOT `needsYou`. The spec's list is closed, a FAILED task already reads
  * red on every surface, and whether an exhausted task joins a needs-you queue is M45's call.
@@ -132,10 +133,14 @@ function taskStateOf(facts: UserTaskFacts): UserTaskState {
 export function needsYou(facts: UserTaskFacts): boolean {
   const state = taskStateOf(facts)
   if (TERMINAL_TASK_STATES.includes(state)) return false
+  // FIRST, and above every other clause: a pending decision needs a person in EVERY non-terminal
+  // state, `done` included. Read last it was unreachable from `done` -- that branch returned
+  // `autoMerge === false` and stopped, so a proposal waiting for approval on an auto-merge
+  // project's finished-but-unintegrated task answered `false` (M44 final review, item I1).
+  if (facts.decisionPending === true) return true
   if (state === 'blocked') return true
   if (state === 'done') return facts.autoMerge === false
-  if (state === 'waiting' && facts.questionHolder === 'nobody') return true
-  return facts.decisionPending === true
+  return state === 'waiting' && facts.questionHolder === 'nobody'
 }
 
 export function userTaskStatus(facts: UserTaskFacts): UserStatus<UserTaskState> {

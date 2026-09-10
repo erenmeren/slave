@@ -62,7 +62,7 @@ export function ProjectSwitcher({
               aria-current={workspace.id === current.id ? 'true' : undefined}
               onClick={() => setOpen(false)}
               className={`truncate rounded-nav px-[9px] py-[6px] text-[12.5px] ${
-                workspace.id === current.id ? 'bg-[#151a21] text-text-1' : 'text-text-2 hover:bg-white/[0.045] hover:text-text-1'
+                workspace.id === current.id ? 'bg-bg-selected text-text-1' : 'text-text-2 hover:bg-white/[0.045] hover:text-text-1'
               }`}
             >
               {workspace.name}

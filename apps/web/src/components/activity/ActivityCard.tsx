@@ -253,7 +253,7 @@ export function ActivityCard({
             {readableEventType(event.type)}
           </span>
         </div>
-        <div className="mt-[1px] text-[12px] text-[#c8cfda]">{children}</div>
+        <div className="mt-[1px] text-[12px] text-text-body">{children}</div>
         <PayloadDetails payload={event.payload} />
       </div>
       {/* "ref": the task this row belongs to, or the unknown mark when it belongs to none. */}

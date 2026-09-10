@@ -123,7 +123,7 @@ export function SkillsClient({ page }: { readonly page: SkillsPage }): React.JSX
                       <p className="truncate text-[11px] text-text-3" title={skill.description}>
                         {skill.description}
                       </p>
-                      <div className="mt-2 h-[3px] overflow-hidden rounded-[2px] bg-white/[0.07]">
+                      <div className="mt-2 h-[3px] overflow-hidden rounded-hair bg-white/[0.07]">
                         {/* `ui/ProgressBar` is a fraction of a CEILING and colours itself from the
                             status vocabulary; this is a comparison against the busiest skill, in
                             the skill's own ready/missing colour. Same recipe, different meaning —

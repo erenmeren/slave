@@ -49,7 +49,7 @@ export function FocusCard({
     setError(await onRun(view.runId, action))
     setPending(false)
   }
-  const button = 'flex-1 rounded-[5px] border border-[rgba(255,255,255,.12)] bg-transparent py-1 text-[10.5px] font-medium text-[#c8cfda] disabled:opacity-40'
+  const button = 'flex-1 rounded-chip border border-[rgba(255,255,255,.12)] bg-transparent py-1 text-[10.5px] font-medium text-text-body disabled:opacity-40'
   return (
     <div
       data-testid="office-focus"
@@ -64,7 +64,7 @@ export function FocusCard({
         </div>
         <div className="min-w-0">
           <div className="truncate text-[12.5px] font-semibold">{view.name}</div>
-          <div className="truncate text-[10px] text-[#7c8697]">
+          <div className="truncate text-[10px] text-text-dim">
             {view.role} · {view.department}
           </div>
         </div>
@@ -72,14 +72,14 @@ export function FocusCard({
           ● {view.status}
         </span>
       </div>
-      <div className="truncate text-[11px] text-[#c8cfda]">
-        <span className="font-mono text-[10px] text-[#5b6472]">{view.taskKey}</span> {view.taskTitle}
+      <div className="truncate text-[11px] text-text-body">
+        <span className="font-mono text-[10px] text-text-3">{view.taskKey}</span> {view.taskTitle}
       </div>
       <div className="h-[3px] rounded-sm bg-[rgba(255,255,255,.06)]">
         <div className="h-full rounded-sm transition-[width] duration-500" style={{ width: `${view.pct}%`, background: view.statusColor, boxShadow: `0 0 8px ${view.statusColor}` }} />
       </div>
       {waitingFor !== null && (
-        <span data-testid="office-focus-waiting" className="truncate text-[10px] text-[#f5b34a]">
+        <span data-testid="office-focus-waiting" className="truncate text-[10px] text-tone-waiting">
           waiting for {waitingFor}
         </span>
       )}
@@ -98,14 +98,14 @@ export function FocusCard({
             data-testid="office-focus-stop"
             disabled={pending || view.runId === null}
             onClick={() => void runAction('stop')}
-            className="rounded-[5px] border border-[#f871713d] bg-transparent px-[9px] py-1 text-[10.5px] font-medium text-[#f87171] disabled:opacity-40"
+            className="rounded-chip border border-[#f871713d] bg-transparent px-[9px] py-1 text-[10.5px] font-medium text-tone-blocked disabled:opacity-40"
           >
             Stop
           </button>
         )}
       </div>
       {error !== null && (
-        <span role="alert" data-testid="office-focus-error" className="text-[10px] text-[#f87171]">
+        <span role="alert" data-testid="office-focus-error" className="text-[10px] text-tone-blocked">
           {error}
         </span>
       )}

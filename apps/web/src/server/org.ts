@@ -8,11 +8,13 @@ import {
 } from '@slave-of-ai/control'
 import {
   deriveSlaveStatus,
+  needsYou,
   sumSpendFromGroups,
   NON_TERMINAL_RUN_STATUSES,
   SUPERVISOR_PER_CALL_CAP_USD,
   type SlaveStatus,
   type SpendGroup,
+  type TaskStatus,
 } from '@slave-of-ai/domain'
 
 /** A worker's resolved gate, from `capabilitiesOf(worker.provider).gate` (M12 Task 13) -- `null`
@@ -115,14 +117,21 @@ export interface ProjectRow {
    */
   readonly unmeasuredRuns: number
   /**
-   * How many of this project's tasks need a PERSON before they move -- `userTaskStatus(...).needsYou`
-   * (M44 R1/R4), counted here so the Projects home does not have to fetch a board per card.
+   * How many of this project's tasks need a PERSON before they move (M44 R1/R4, E19), counted here
+   * so the Projects home does not have to fetch a board per card.
    *
-   * Two of the projection's three inputs are cheap counts this function already makes: `blocked`,
-   * and `done` with `integratedAt: null` on a hand-merge project (`autoMerge === false`). The
-   * third -- a `waiting` task whose question nobody can answer (M39's unanswerable case) -- is a
-   * per-task join that is NOT made here; M45's needs-you queue is where a task-level read of this
-   * belongs. `docs/ia.md` records the narrower definition so nobody reads this as a total.
+   * DERIVED THROUGH THE PROJECTION, not restated: every status group is put through the domain's
+   * own `needsYou(...)` (fix wave, review item I1). The old arithmetic spelled two of that
+   * function's clauses out here as `blocked + un-integrated done`, which read the same on the day
+   * it was written and was a second place for the rule to live -- a fourth clause, or a change to
+   * one of the three, would have moved one of the two copies and not the other.
+   *
+   * Three of the four clauses are answerable from grouped counts: `blocked`, `done` with
+   * `integratedAt: null` against the workspace's own `autoMerge`, and a `pending`
+   * `SupervisorDecision` (one grouped read below). The fourth -- a `waiting` task whose question
+   * nobody can answer (M39's unanswerable case) -- is a per-task join that is NOT made here;
+   * M45's needs-you queue is where a task-level read of this belongs. `docs/ia.md` records what
+   * the number does and does not contain, so nobody reads it as a total.
    */
   readonly needsYou: number
 }
@@ -138,7 +147,7 @@ export async function listProjects(options?: { readonly includeArchived?: boolea
     orderBy: { name: 'asc' },
   })
 
-  const [taskGroups, unintegratedDoneGroups, slaveRows, spendGroups, decisionGroups] = await Promise.all([
+  const [taskGroups, unintegratedDoneGroups, slaveRows, spendGroups, decisionGroups, pendingDecisionGroups] = await Promise.all([
     prisma.task.groupBy({ by: ['workspaceId', 'status'], _count: { _all: true } }),
     // The second half of `needsYou` (M44 R1): finished work sitting on a branch nothing will merge
     // by itself. `integratedAt` is not a `by` column and cannot be counted out of the group above,
@@ -171,6 +180,24 @@ export async function listProjects(options?: { readonly includeArchived?: boolea
       by: ['workspaceId', 'modelCalled'],
       _sum: { modelCostUsd: true },
       _count: { _all: true, modelCostUsd: true },
+    }),
+    // `needsYou`'s third clause (E19): a proposal the Supervisor put in front of a human. ONE
+    // grouped read for every project, in the same pre-pass as the four above -- the spend group
+    // beside it cannot answer this, because it groups by `modelCalled` and carries no `status`.
+    //
+    // It counts DECISIONS, not the tasks they are about, and that is the honest number rather
+    // than the convenient one: `SupervisorDecision` has no task column at all. Its `subjectId` is
+    // a task id, a message id, a role name OR the workspace's own id depending on
+    // `situationKind`, so "tasks with a pending decision" is not derivable from this table
+    // without knowing which kinds are task-shaped -- and half of the pending decisions a person
+    // has to answer are about no task whatsoever (`ready_unstaffed` is about a ROLE). Counting
+    // rows never claims a task needs a person that does not; it can only overlap with the two
+    // task clauses, and `recordDecision` keeps at most one open decision per situation key, so
+    // it does not double-count one question either. `docs/ia.md` says which number this is.
+    prisma.supervisorDecision.groupBy({
+      by: ['workspaceId'],
+      where: { status: 'pending' },
+      _count: { _all: true },
     }),
   ])
 
@@ -252,6 +279,38 @@ export async function listProjects(options?: { readonly includeArchived?: boolea
     taskGroups.filter((g) => g.workspaceId === workspaceId).reduce((n, g) => n + g._count._all, 0)
   const unintegratedDoneOf = (workspaceId: string): number =>
     unintegratedDoneGroups.find((g) => g.workspaceId === workspaceId)?._count._all ?? 0
+  const pendingDecisionsOf = (workspaceId: string): number =>
+    pendingDecisionGroups.find((g) => g.workspaceId === workspaceId)?._count._all ?? 0
+
+  /**
+   * `needsYou`, THROUGH the domain's own projection (review item I1) rather than restated here.
+   *
+   * Every status group is put to `needsYou({ status, autoMerge, integrated })` and contributes its
+   * whole count when the answer is true, so this function's arithmetic cannot disagree with the
+   * word a task's own pill reads. `done` is the one group that has to be split: `integratedAt` is
+   * not a `by` column, so the group carries integrated and un-integrated work together, and
+   * `unintegratedDoneOf` (its own grouped read) separates the two halves -- each then asked
+   * SEPARATELY, integrated and not, rather than assumed.
+   *
+   * `questionHolder` and `decisionPending` are deliberately not passed: neither is a per-task fact
+   * any of these grouped reads has. The waiting-on-nobody clause therefore contributes zero (M45),
+   * and the pending-decision clause is added on top from its own workspace-level count.
+   */
+  const needsYouOf = (workspaceId: string, autoMerge: boolean): number => {
+    let tasks = 0
+    for (const group of taskGroups) {
+      if (group.workspaceId !== workspaceId) continue
+      const status = group.status as TaskStatus
+      if (status === 'done') {
+        const unintegrated = unintegratedDoneOf(workspaceId)
+        if (needsYou({ status, autoMerge, integrated: false })) tasks += unintegrated
+        if (needsYou({ status, autoMerge, integrated: true })) tasks += group._count._all - unintegrated
+        continue
+      }
+      if (needsYou({ status, autoMerge })) tasks += group._count._all
+    }
+    return tasks + pendingDecisionsOf(workspaceId)
+  }
 
   return workspaces.map((workspace) => ({
     id: workspace.id,
@@ -278,11 +337,7 @@ export async function listProjects(options?: { readonly includeArchived?: boolea
     team: workspace.teams
       .flatMap((team) => team.slaves)
       .map((slave) => ({ slaveId: slave.id, name: slave.name, status: teamSlaveLiveInfo.get(slave.id)?.status ?? 'idle' })),
-    // `needsYou(...)`'s two countable clauses, in the projection's own words: a `blocked` task
-    // needs a human by definition (M35), and `done`-but-not-integrated needs one only where
-    // nothing merges by itself. An auto-merge project contributes zero from the second clause,
-    // exactly as `userTaskStatus({ status: 'done', integrated: false, autoMerge: true })` says.
-    needsYou: countOf(workspace.id, ['blocked']) + (workspace.autoMerge ? 0 : unintegratedDoneOf(workspace.id)),
+    needsYou: needsYouOf(workspace.id, workspace.autoMerge),
     // A workspace with no runs and no decisions at all has spent nothing and has nothing
     // unmeasured -- `sumSpendFromGroups([])` and an absent Supervisor entry both say exactly that.
     ...spendOf(workspace.id),

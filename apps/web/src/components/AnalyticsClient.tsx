@@ -89,7 +89,7 @@ export function AnalyticsClient({
                   <AvatarTile name={row.name} tone="idle" />
                   <span className="min-w-0">
                     <span className="block truncate text-[12.5px] font-semibold text-text-1">{row.name}</span>
-                    <span className="block truncate text-[10px] text-[#7c8697]">{row.role}</span>
+                    <span className="block truncate text-[10px] text-text-dim">{row.role}</span>
                   </span>
                 </span>
                 <span className="font-mono text-[11px] text-text-2">{row.runs}</span>

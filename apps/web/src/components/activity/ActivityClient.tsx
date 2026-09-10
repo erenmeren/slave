@@ -235,7 +235,7 @@ export function ActivityClient({
                   </span>
                   <span className="text-text-3">{volume.count}</span>
                 </div>
-                <div className="mt-[4px] h-[4px] overflow-hidden rounded-[2px] bg-white/[0.06]">
+                <div className="mt-[4px] h-[4px] overflow-hidden rounded-hair bg-white/[0.06]">
                   {/* Normalized to the BUSIEST kind, not to a fixed ceiling: the rail compares
                     * kinds against each other, and a fixed scale would flatten a quiet day into
                     * six invisible bars. `width .5s ease` is the handoff's own bar transition. */}
@@ -268,7 +268,7 @@ export function ActivityClient({
                     onClick={() => setRosterSlaveId((current) => (current === slave.id ? null : slave.id))}
                     // The mockup's roster row is 7px (rounded-tile per the radius scale).
                     className={`w-full truncate rounded-tile px-2 py-1 text-left text-[12.5px] transition-colors ${
-                      rosterSlaveId === slave.id ? 'bg-[#151a21] text-text-1' : 'text-text-2 hover:text-text-1'
+                      rosterSlaveId === slave.id ? 'bg-bg-selected text-text-1' : 'text-text-2 hover:text-text-1'
                     }`}
                   >
                     {slave.name}

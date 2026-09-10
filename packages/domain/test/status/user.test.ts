@@ -112,6 +112,19 @@ describe('needsYou', () => {
     expect(needsYou({ status: 'waiting', decisionPending: true })).toBe(true)
   })
 
+  // The gap erratum E4 declared and the first implementation left open: `done` returned
+  // `autoMerge === false` and RETURNED, so a proposal waiting for approval on an auto-merge
+  // project's finished-but-unintegrated task answered `false`. `done` is not terminal -- only
+  // `integrated` is -- so the decision clause has to be read there too.
+  it('is true on a done-but-not-integrated task with a pending decision, even where the project auto-merges (erratum E4)', () => {
+    expect(needsYou({ status: 'done', integrated: false, autoMerge: true, decisionPending: true })).toBe(true)
+    expect(needsYou({ status: 'done', integrated: false, autoMerge: true, decisionPending: false })).toBe(false)
+    expect(needsYou({ status: 'blocked', decisionPending: true })).toBe(true)
+    expect(needsYou({ status: 'merging', decisionPending: true })).toBe(true)
+    expect(needsYou({ status: 'verifying', decisionPending: true })).toBe(true)
+    expect(needsYou({ status: 'reviewing', decisionPending: true })).toBe(true)
+  })
+
   it('is false on a terminal task, decision or not -- nothing a person does moves it (erratum E4)', () => {
     expect(needsYou({ status: 'cancelled', decisionPending: true })).toBe(false)
     expect(needsYou({ status: 'failed', decisionPending: true })).toBe(false)

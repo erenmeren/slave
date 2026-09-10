@@ -197,9 +197,17 @@ function ProposalRow({
     <li data-testid="supervisor-proposal" className="flex flex-col gap-1 rounded border border-line p-2">
       <div className="flex items-baseline gap-2">
         {/* R5 leak 5: this chip printed the `SituationKind` member. The domain's own label says
-          * what is stuck; the raw kind stays in `title`. */}
+          * what is stuck; the raw kind stays in `title`.
+          *
+          * `?? decision.situationKind` (final review, minor a) is a RUNTIME guard, not a type one:
+          * `SITUATION_LABEL` is a `Record<SituationKind, string>`, so the compiler says this
+          * lookup is total, but the value arrives from a database column and a row written by a
+          * newer build carries a kind this bundle's table has never heard of. Unguarded that
+          * renders as NOTHING -- an empty chip beside a summary, with no way to tell a missing
+          * label from a missing situation. The fallback shows the member, which is the same text
+          * `title` already carries here. */}
         <span data-testid="supervisor-proposal-kind" title={decision.situationKind} className="shrink-0 font-mono text-[10px] text-text-3">
-          {SITUATION_LABEL[decision.situationKind]}
+          {SITUATION_LABEL[decision.situationKind] ?? decision.situationKind}
         </span>
         {/* Every one of these is another party's text -- the situation the rules wrote, and a
           * rationale a MODEL may have written. Interpolated as JSX children, so it is characters
@@ -506,8 +514,12 @@ export function SupervisorPanel({
                     title={`${decision.situationKind} · ${decision.tier} · ${decision.status} · ${decision.decidedBy}`}
                     className="text-[10px] text-text-3"
                   >
-                    {SITUATION_LABEL[decision.situationKind]} · {DECISION_STATUS_LABEL[decision.status]} · decided by{' '}
-                    {DECIDER_LABEL[decision.decidedBy]}
+                    {/* Each with the same runtime fallback as the proposal chip above (final
+                      * review, minor a): a row whose kind, status or decider this bundle has no
+                      * label for reads as the raw member rather than as a gap in the sentence. */}
+                    {SITUATION_LABEL[decision.situationKind] ?? decision.situationKind} ·{' '}
+                    {DECISION_STATUS_LABEL[decision.status] ?? decision.status} · decided by{' '}
+                    {DECIDER_LABEL[decision.decidedBy] ?? decision.decidedBy}
                     {decision.failureReason === null ? '' : ` · ${decision.failureReason}`}
                   </span>
                   <span data-testid="supervisor-decision-rationale" className="text-[11px] text-text-2">

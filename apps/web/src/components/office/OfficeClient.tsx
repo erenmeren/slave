@@ -311,7 +311,7 @@ export function OfficeClient({
         })()
 
   return (
-    <div ref={wrapRef} className="relative h-[calc(100vh-52px-41px)] min-h-[360px] w-full overflow-hidden bg-[#07080b]">
+    <div ref={wrapRef} className="relative h-[calc(100vh-52px-41px)] min-h-[360px] w-full overflow-hidden bg-bg-floor">
       <canvas
         ref={canvasRef}
         data-testid="office-canvas"

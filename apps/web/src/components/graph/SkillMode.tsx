@@ -66,7 +66,7 @@ function RunSelectorStrip({
           type="button"
           data-testid="skill-focus-clear"
           onClick={onClear}
-          className="pointer-events-auto shrink-0 rounded-chip border border-line bg-bg-1 px-2 py-1 font-mono text-[10px] text-text-2 hover:border-white/20 hover:text-text-1"
+          className="pointer-events-auto shrink-0 rounded-chip border border-line bg-bg-1 px-2 py-1 font-mono text-[10px] text-text-2 hover:border-line-hover hover:text-text-1"
         >
           ← aggregate
         </button>
@@ -81,7 +81,7 @@ function RunSelectorStrip({
             aria-current={selected ? 'true' : undefined}
             onClick={() => onSelect(run.runId)}
             className={`pointer-events-auto flex shrink-0 items-center gap-1.5 rounded-chip border px-2 py-1 font-mono text-[10px] ${
-              selected ? 'border-tone-planning/40 bg-tone-planning/10 text-tone-planning' : 'border-line bg-bg-1 text-text-2 hover:border-white/20 hover:text-text-1'
+              selected ? 'border-tone-planning/40 bg-tone-planning/10 text-tone-planning' : 'border-line bg-bg-1 text-text-2 hover:border-line-hover hover:text-text-1'
             }`}
           >
             <span

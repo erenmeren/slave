@@ -13,7 +13,9 @@ import { SkillsClient } from '../SkillsClient'
 import { SlavePanel } from '../SlavePanel'
 import { TemplateCatalog, type TemplateRow } from '../TemplateCatalog'
 import { NewSlaveDrawer } from '../slaves/NewSlaveDrawer'
+import { Alert } from '../ui/Alert'
 import { Button } from '../ui/Button'
+import { LoadingState } from '../ui/LoadingState'
 import { PageShell } from '../ui/PageShell'
 import { Panel } from '../ui/Panel'
 import { Tabs } from '../ui/Tabs'
@@ -75,20 +77,38 @@ export function WorkforceClient({
    * `slaves` at all.
    */
   const [selected, setSelected] = useState<{ readonly slaveId: string; readonly workspaceId: string } | null>(null)
-  const [panelSlave, setPanelSlave] = useState<SlaveCardData | null>(null)
+  /**
+   * THREE outcomes, not two (M44 final review, minor b). This was a single
+   * `SlaveCardData | null`, which rendered the panel or rendered nothing -- and "nothing" was
+   * both "the request is in flight" and "the request failed". An operator clicked a row and the
+   * page did not move, and could not tell which of those had happened. `LoadingState` and `Alert`
+   * are the two primitives R3 minted for exactly this pair of states.
+   *
+   * `error` also covers a 200 whose snapshot does not contain the slave: the row came from
+   * `AllSlavesTable`'s own five-second poll, so a worker an operator can see and click may have
+   * left its workspace's overview by the time this fetch answers. That is a failure to open the
+   * panel, and it now says so instead of silently doing nothing.
+   */
+  const [panel, setPanel] = useState<
+    { readonly kind: 'idle' } | { readonly kind: 'loading' } | { readonly kind: 'error' } | { readonly kind: 'ready'; readonly slave: SlaveCardData }
+  >({ kind: 'idle' })
 
   useEffect((): void => {
     if (selected === null) {
-      setPanelSlave(null)
+      setPanel({ kind: 'idle' })
       return
     }
+    setPanel({ kind: 'loading' })
     // The panel renders from the OVERVIEW snapshot of the slave's own workspace -- the one place
     // a `SlaveCardData` is built. Fetching it here rather than widening `AllSlaveRow` into an
     // `SlaveCardData` keeps one builder for that shape.
     void fetch(`/api/w/${selected.workspaceId}/overview`)
       .then(async (response) => (response.ok ? ((await response.json()) as OverviewSnapshot) : null))
-      .then((snapshot) => setPanelSlave(snapshot?.slaves.find((a) => a.id === selected.slaveId) ?? null))
-      .catch(() => setPanelSlave(null))
+      .then((snapshot) => {
+        const slave = snapshot?.slaves.find((a) => a.id === selected.slaveId) ?? null
+        setPanel(slave === null ? { kind: 'error' } : { kind: 'ready', slave })
+      })
+      .catch(() => setPanel({ kind: 'error' }))
   }, [selected])
 
   const select = (next: WorkforceTab): void => {
@@ -145,10 +165,16 @@ export function WorkforceClient({
         templates={templates}
         workspaces={workspaces}
       />
-      {panelSlave !== null && selected !== null && (
+      {panel.kind === 'loading' && <LoadingState testId="workforce-panel-loading" message="opening this slave…" />}
+      {panel.kind === 'error' && (
+        <Alert variant="error" testId="workforce-panel-error">
+          could not open this slave — its project may have moved on. Try clicking the row again.
+        </Alert>
+      )}
+      {panel.kind === 'ready' && selected !== null && (
         <SlavePanel
-          key={panelSlave.id}
-          slave={panelSlave}
+          key={panel.slave.id}
+          slave={panel.slave}
           liveEvents={[]}
           workspaceId={selected.workspaceId}
           haltedReason={null}

@@ -10,8 +10,12 @@ before adding a surface.
    on it. A new page needs a question no existing page answers.
 2. **Nothing is removed, only moved.** Every capability below is still reachable — by a tab, by a
    menu, or by its own unchanged URL. This table is where you find out which.
-3. **One vocabulary.** A status a person reads comes from `packages/domain/src/status/user.ts`. The
-   raw value stays available — in `title`, in a `data-` attribute, or in the expanded view.
+3. **One vocabulary.** Task, run, slave and workspace STATUSES a person reads come from
+   `packages/domain/src/status/user.ts`. Everything else a surface must put a word to keeps its own
+   label table beside the thing it names — skills, simulations, event families, Supervisor
+   situations and tiers, provider kinds. What is not negotiable is the second half of the rule: the
+   raw value stays available — in `title`, in a `data-` attribute, or in the expanded view — and no
+   surface prints a bare enum member as its visible text.
 4. **Real is not simulated.** Simulations live under `/sim`, carry a SIMULATION chip, and their
    money is never shown beside model cost.
 5. **Advanced is a promise, not a graveyard.** Anything under Advanced keeps working, keeps its
@@ -49,6 +53,7 @@ before adding a surface.
 | `/w/:id/settings` Settings | Goal, runtime, permissions, danger | keep (tab 4) | Emergency stop uses the one destructive recipe | — |
 | `/w/:id/graph` Graph | Five structural views of the project | **demoted to Advanced ▾** | Reachable from `Advanced ▾ → Graph` and by URL; all five modes intact; the mode nav is a real tablist now | M45 lifts the org mode's content into an Organization tab; Graph stays |
 | `/w/:id/office` Office | The team as a pixel office | **demoted to Advanced ▾** | Reachable from `Advanced ▾ → Office` and by URL; the canvas gains a label and a text line saying what it shows | — |
+| `/analytics?workspace=:id` Analytics | Spend and throughput for THIS project | **reached from the project** | The third item in `Advanced ▾`, carrying the project's `?workspace=` scope; the route and the scope are the global page's, unchanged and bookmarkable | M53 replaces the tiles with per-profile evidence |
 
 ## Panels that stay where they are, deliberately
 
@@ -61,7 +66,19 @@ before adding a surface.
 
 ## What "needs you" counts, exactly
 
-Today: tasks that are `blocked`, plus work that is `done` and not integrated on a project that does
-not merge by itself. Not yet: a task waiting on a question nobody can answer — that needs a per-task
-read, and it arrives with M45's needs-you queue. The number is honest about being a floor, and no
-surface calls it a total.
+Every project card's number is `needsYou(...)` from `packages/domain/src/status/user.ts`, asked per
+task-status group rather than restated in the query — three of its four clauses are answerable from
+grouped counts:
+
+- tasks that are `blocked`;
+- work that is `done` and not integrated, on a project that does not merge by itself;
+- **`SupervisorDecision` rows that are `pending`** — DECISIONS, not the tasks they are about. That
+  table has no task column: its `subjectId` is a task id, a message id, a role name or the
+  workspace's own id depending on the situation, and plenty of pending decisions are about no task
+  at all (`ready_unstaffed` is about a role). Counting rows never claims a task needs a person that
+  does not, and at most one decision per situation is open at a time, so one question is never
+  counted twice.
+
+Not yet: a task waiting on a question nobody can answer — that needs a per-task read, and it
+arrives with M45's needs-you queue. The number is honest about being a floor, and no surface calls
+it a total.

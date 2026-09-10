@@ -1,27 +1,7 @@
 'use client'
 
 import type { ProviderKind } from '@slave-of-ai/control'
-
-/**
- * Every `ProviderKind`, as `<option>` values -- guarded the same way
- * `packages/providers/src/types.ts`'s canonical `PROVIDER_KINDS` is (`satisfies` + the
- * `Exclude<..., never>` completeness check): a third `ProviderKind` added to that union without a
- * matching entry here now fails the BUILD, not just this file's compile, so both copies go stale
- * together or not at all.
- *
- * This is a SEPARATE list from that canonical one, not an import of it (M12 Task 13 fix round 1,
- * Important finding 1's remedy weighed against the client/server boundary the same review praised
- * elsewhere): `@slave-of-ai/providers`'s package entry (`index.ts`) re-exports `claude/adapter.ts`
- * and `cursor/adapter.ts`, both of which import `node:child_process` at module scope with no
- * `sideEffects: false` escape hatch, so a VALUE import of anything from that barrel -- even this
- * two-string list -- would force a client bundle to evaluate (and likely fail on) Node-only code.
- * `@slave-of-ai/control`'s barrel re-exports the same list for exactly this reason: safe for a
- * SERVER caller, not for this file. Two independently compiler-guarded lists is the deliberate
- * trade against that risk, not an oversight.
- */
-const PROVIDER_KINDS = ['claude_code', 'cursor'] as const satisfies readonly ProviderKind[]
-type _AssertNever<T extends never> = T
-type _ProviderKindsComplete = _AssertNever<Exclude<ProviderKind, (typeof PROVIDER_KINDS)[number]>>
+import { PROVIDER_KINDS, PROVIDER_LABEL } from '../lib/providerLabel'
 
 /**
  * The shared `(provider, model)` pair's provider half (M12 Task 13 fix round 1, Important finding
@@ -59,9 +39,12 @@ export function ProviderSelect({
       className={className}
     >
       <option value="">{placeholder}</option>
+      {/* The WORD is `PROVIDER_LABEL`'s (M44 R4, final review item I3); the raw kind stays the
+        * option's `value` -- what this form posts and what the column stores -- and is repeated
+        * in `title` so an operator can still read the exact enum member off the control. */}
       {PROVIDER_KINDS.map((kind) => (
-        <option key={kind} value={kind}>
-          {kind}
+        <option key={kind} value={kind} title={kind}>
+          {PROVIDER_LABEL[kind]}
         </option>
       ))}
     </select>

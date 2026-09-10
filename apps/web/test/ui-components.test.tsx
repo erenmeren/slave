@@ -180,6 +180,26 @@ describe('DataTable', () => {
     expect(screen.getByText('Alex')).toBeTruthy()
     expect(screen.getByText('working')).toBeTruthy()
   })
+
+  // M44 final review, minor c. The nine-column Slaves table is laid out on ~1030px of FIXED
+  // tracks; below that the columns had nowhere to go and `overflow-hidden` simply cut them off,
+  // with no way for a person on a narrow window to reach the last three. `overflow-x-auto` scrolls
+  // instead, and clips exactly as before at every width where the table fits (CSS: a non-`visible`
+  // overflow on one axis computes the other to `auto`, so the rounded card still clips its rows).
+  it('scrolls sideways rather than cutting a wide table off', () => {
+    render(
+      <DataTable columns="1fr 1fr" header={['Name', 'Status']}>
+        <Row columns="1fr 1fr">
+          <span>Alex</span>
+        </Row>
+      </DataTable>,
+    )
+    const table = screen.getByTestId('data-table')
+    expect(table.className).toContain('overflow-x-auto')
+    expect(table.className).not.toContain('overflow-hidden')
+    // The card's own rounding is unchanged -- this is a scroll fix, not a shape change (D8).
+    expect(table.className).toContain('rounded-card')
+  })
 })
 
 describe('ProgressBar', () => {

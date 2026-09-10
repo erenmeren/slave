@@ -40,7 +40,8 @@ const ADVANCED = [
 
 /**
  * The project's tab strip (M24 §2.2, rebuilt by M44 R2): four route links plus an `Advanced ▾`
- * menu holding Graph and Office. Only Tasks carries a badge -- the one live number in the strip.
+ * menu holding Graph, Office and this project's scoped Analytics (`ADVANCED`, above -- `docs/ia.md`
+ * lists all three). Only Tasks carries a badge -- the one live number in the strip.
  *
  * The menu copies `ProjectSwitcher`'s idiom, which is in the same header (erratum E22): a plain
  * popover with `role="menu"`, NOT a `Dialog`. A menu is not a modal -- it does not trap focus and

@@ -71,7 +71,8 @@ describe('ProjectHeader', () => {
     const html = screen.getByTestId('budget').innerHTML
     expect(html).toContain('w-[150px]')
     expect(html).toContain('h-[3px]')
-    expect(html).toContain('rounded-[2px]')
+    // 2px, as `--radius-hair` (erratum E14, applied in the final fix wave).
+    expect(html).toContain('rounded-hair')
     expect(html).toContain('bg-white/[0.08]')
     expect(html).toContain('shadow-[0_0_8px_var(--color-tone-working)]')
   })

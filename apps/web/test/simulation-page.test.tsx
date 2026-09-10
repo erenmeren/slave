@@ -297,7 +297,11 @@ describe('SimulationClient', () => {
 
     it('the strip names the model provider and model', () => {
       render(<SimulationClient initial={llmSnapshot()} />)
-      expect(screen.getByTestId('sim-strip').textContent).toContain('llm provider · claude_code · claude-sonnet-4-5')
+      // M44 final review, item I3 -- and the gate found this fifth surface itself, which is what
+      // widening the blocklist to `PROVIDER_KINDS` is for. The word, with the kind in `title`.
+      expect(screen.getByTestId('sim-strip').textContent).toContain('llm provider · Claude Code · claude-sonnet-4-5')
+      expect(screen.getByTestId('sim-strip').textContent).not.toContain('claude_code')
+      expect(screen.getByTestId('sim-model-provider').getAttribute('title')).toBe('claude_code')
     })
 
     it('the model panel reads $spent of $cap with the unmeasured count and what it charges (ruling R10)', () => {
