@@ -47,6 +47,20 @@ const SNAPSHOT: OverviewSnapshot = {
   blocked: [],
   liveEvents: [],
   mergeQueue: [],
+  // M45 R1/R2: the brief, the needs-you queue and the timeline ride on this snapshot (plan
+  // erratum E19). Empty here -- this fixture asserts nothing about them.
+  brief: {
+    objective: { text: null, version: 0 },
+    supervisor: { state: 'idle', label: 'IDLE', needsYou: false },
+    work: { working: 0, verifying: 0, review: 0, waiting: 0, done: 0 },
+    team: [],
+    needsYou: [],
+    latestVerified: null,
+    cost: { spentUsd: 0, measuredUsd: 0, unmeasuredCalls: 0, budgetUsd: null },
+    recentChanges: [],
+  },
+  needsYou: [],
+  timeline: [],
 }
 
 /** Minimal EventSource stand-in: capture instances, let tests push messages and errors. */

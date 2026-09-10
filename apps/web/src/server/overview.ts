@@ -12,6 +12,9 @@ import {
 } from '@slave-of-ai/domain'
 import { feedSummary, type SlaveFeedEvent } from '../lib/feedSummary'
 import { skillNameOf } from '../lib/skillName'
+import { buildProjectBrief, type ProjectBrief } from './brief'
+import { type NeedsYouItem } from './needsYou'
+import { buildSupervisorTimeline, type TimelineEntry } from './timeline'
 
 // Re-exported so callers that already import from `server/overview.ts` keep working; the
 // definition itself lives in the pure `lib/feedSummary.ts` module (controller ruling R3) so the
@@ -278,6 +281,22 @@ export interface OverviewSnapshot {
      */
     readonly hasApproval: boolean
   }[]
+  /**
+   * The eight facts the project view answers in ten seconds (M45 R1), the queue of things waiting
+   * on a person (R1), and the Supervisor timeline (R2).
+   *
+   * ON THIS SNAPSHOT rather than behind `/api/w/:id/brief` and `/api/w/:id/timeline`, deliberately
+   * (M45 plan erratum E19): `useWorkspaceStream` refetches exactly ONE endpoint on every event,
+   * and this page owns exactly one `EventSource` -- the header reads a module store rather than
+   * opening a second (`hooks/useShellFacts.ts`). Two more routes would have meant two more streams
+   * or a second hook, for three fields that change on the same events as everything else here.
+   *
+   * `needsYou` is deliberately BOTH a member of `brief` and a top-level field: the brief's tile
+   * shows the count, the DECISION REQUIRED lane shows the list, and ONE build feeds both.
+   */
+  readonly brief: ProjectBrief
+  readonly needsYou: readonly NeedsYouItem[]
+  readonly timeline: readonly TimelineEntry[]
 }
 
 // A task under review or in the merge queue is still active work, not a vanished one — widened
@@ -436,20 +455,28 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
   // `workspaceSpend` alongside them (M38 t5): the TOTAL is its formula, so that this page and the
   // budget guardrail cannot disagree, while these rows stay for the unmeasured-RUN count that no
   // aggregate can produce.
-  const [spendRows, taskGroups, spendTotal] = await Promise.all([
+  //
+  // `buildProjectBrief` joins this round rather than opening one of its own (M45 R1): it is one
+  // more parallel read on a page that already makes several, and it is what carries the needs-you
+  // queue the timeline below reuses instead of building a second copy of it.
+  const [spendRows, taskGroups, spendTotal, brief] = await Promise.all([
     prisma.slaveRun.findMany({
       where: { slave: { team: { workspaceId } } },
       select: { costUsd: true, provider: true, status: true },
     }),
     prisma.task.groupBy({ by: ['status'], where: { workspaceId }, _count: { _all: true } }),
     workspaceSpend(workspaceId),
+    buildProjectBrief(workspaceId),
   ])
+  // Dead in practice -- the missing-workspace case returned above -- but the compiler cannot see
+  // that across two reads, and narrowing is honest where a cast would not be.
+  if (brief === null) return null
   const spend = sumSpend(spendRows)
   const countOf = (statuses: readonly string[]): number =>
     taskGroups.filter((g) => statuses.includes(g.status)).reduce((n, g) => n + g._count._all, 0)
 
   // The bottom row's three panels, in one round with everything else loaded.
-  const [blockedTasks, pausedRuns, recentForPanel, mergingTasks] = await Promise.all([
+  const [blockedTasks, pausedRuns, recentForPanel, mergingTasks, timeline] = await Promise.all([
     prisma.task.findMany({ where: { workspaceId, status: 'blocked' }, orderBy: { createdAt: 'asc' } }),
     prisma.slaveRun.findMany({
       where: {
@@ -469,6 +496,9 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
     }),
     prisma.executionEvent.findMany({ where: { workspaceId }, orderBy: { seq: 'desc' }, take: LIVE_EVENTS_LIMIT }),
     prisma.task.findMany({ where: { workspaceId, status: 'merging' } }),
+    // Handed the queue the brief already built: building it twice would mean two
+    // `loadSupervisorWorld` transactions per refetch, for one list (M45 R2).
+    buildSupervisorTimeline(workspaceId, { needsYou: brief.needsYou }),
   ])
 
   const blocked = [
@@ -628,5 +658,8 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
       ),
     })),
     mergeQueue: [...approvedQueue, ...unapprovedQueue],
+    brief,
+    needsYou: brief.needsYou,
+    timeline,
   }
 }

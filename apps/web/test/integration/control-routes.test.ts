@@ -32,6 +32,8 @@ import { POST as answerPOST } from '../../src/app/api/w/[workspaceId]/messages/[
 import { POST as emergencyStopPOST } from '../../src/app/api/w/[workspaceId]/emergency-stop/route.js'
 import { POST as goalPOST } from '../../src/app/api/w/[workspaceId]/goal/route.js'
 import { GET as goalHistoryGET } from '../../src/app/api/w/[workspaceId]/goal/history/route.js'
+import { POST as goalRequestPOST } from '../../src/app/api/w/[workspaceId]/goal/request/route.js'
+import { POST as unblockPOST } from '../../src/app/api/w/[workspaceId]/tasks/[taskId]/unblock/route.js'
 import { PATCH as profilePATCH } from '../../src/app/api/w/[workspaceId]/slaves/[slaveId]/profile/route.js'
 import { PATCH as runtimeRolesPATCH } from '../../src/app/api/w/[workspaceId]/slaves/[slaveId]/runtime-roles/route.js'
 import { GET as runContextGET } from '../../src/app/api/w/[workspaceId]/runs/[runId]/context/route.js'
@@ -1003,6 +1005,127 @@ describe('the control routes', () => {
       expect(resolved.actor).toBe('human')
       const settingsChanged = await prisma.executionEvent.findFirstOrThrow({ where: { type: 'workspace_settings_changed' } })
       expect(settingsChanged.userId).toBe(user.id)
+    })
+  })
+  /**
+   * M45 R3: "Tell the Supervisor what changed". The words a person typed become the next goal
+   * VERSION through `composeGoal` -- there is no second write path and no new autonomy, and M40's
+   * trigger re-plans off the version bump exactly as a goal edit does.
+   */
+  describe('goal request', () => {
+    const post = (workspaceId: string, body: unknown): Promise<Response> =>
+      goalRequestPOST(
+        new Request('http://x', { method: 'POST', body: JSON.stringify(body), headers: { 'content-type': 'application/json' } }),
+        { params: Promise.resolve({ workspaceId }) },
+      )
+
+    it('(a) writes a version carrying the request words and returns it with the composed goal', async (): Promise<void> => {
+      const response = await post(fixture.workspace.id, { request: 'Add Apple Pay' })
+
+      expect(response.status).toBe(200)
+      const body = (await response.json()) as { ok: boolean; version: number; sha256: string; goal: string }
+      expect(body.ok).toBe(true)
+      expect(body.version).toBe(1)
+      expect(body.sha256).toMatch(/^[0-9a-f]{64}$/)
+      expect(body.goal).toBe('Add Apple Pay')
+
+      const version = await prisma.goalVersion.findFirstOrThrow({ where: { workspaceId: fixture.workspace.id } })
+      expect(version.request).toBe('Add Apple Pay')
+    })
+
+    it('(b) 400s on a non-string request and on an unparseable body', async (): Promise<void> => {
+      expect((await post(fixture.workspace.id, { request: 5 })).status).toBe(400)
+
+      const malformed = await goalRequestPOST(
+        new Request('http://x', { method: 'POST', body: 'not json', headers: { 'content-type': 'application/json' } }),
+        { params: Promise.resolve({ workspaceId: fixture.workspace.id }) },
+      )
+      expect(malformed.status).toBe(400)
+    })
+
+    it('(c) 409s a blank request with invalid_request, naming the kind', async (): Promise<void> => {
+      const response = await post(fixture.workspace.id, { request: '   ' })
+
+      expect(response.status).toBe(409)
+      const body = (await response.json()) as { error: string; kind: string }
+      expect(body.kind).toBe('invalid_request')
+      expect(body.error).toBe('a change request must be a non-empty text')
+    })
+
+    it('(d) 409s the same request twice as duplicate_request, writing one version', async (): Promise<void> => {
+      await post(fixture.workspace.id, { request: 'Add Apple Pay' })
+
+      const response = await post(fixture.workspace.id, { request: 'Add Apple Pay' })
+
+      expect(response.status).toBe(409)
+      expect(((await response.json()) as { kind: string }).kind).toBe('duplicate_request')
+      expect(await prisma.goalVersion.count({ where: { workspaceId: fixture.workspace.id } })).toBe(1)
+    })
+
+    it('(e) 404s an unknown workspace -- the archived guard answers before the verb', async (): Promise<void> => {
+      const response = await post('00000000-0000-4000-8000-000000000000', { request: 'Add Apple Pay' })
+
+      expect(response.status).toBe(404)
+    })
+
+    it('(f) 401s with no session when the app is in accounts mode', async (): Promise<void> => {
+      vi.stubEnv('SLAVEOFAI_SESSION_SECRET', '0123456789abcdef0123456789abcdef')
+
+      const response = await post(fixture.workspace.id, { request: 'Add Apple Pay' })
+
+      expect(response.status).toBe(401)
+      expect(await prisma.goalVersion.count({ where: { workspaceId: fixture.workspace.id } })).toBe(0)
+    })
+  })
+
+  /** M45 plan erratum E10: `unblockTask` has existed since M35 and only the CLI could reach it. */
+  describe('unblock', () => {
+    const post = (workspaceId: string, taskId: string): Promise<Response> =>
+      unblockPOST(new Request('http://x', { method: 'POST' }), { params: Promise.resolve({ workspaceId, taskId }) })
+
+    const park = (): Promise<unknown> =>
+      prisma.task.update({
+        where: { id: fixture.task.id },
+        data: { status: 'blocked', activeRunId: null, lastRejectionReason: 'no credentials' },
+      })
+
+    it('(a) moves a blocked task back onto the board and records the event', async (): Promise<void> => {
+      await park()
+      await prisma.slaveRun.update({ where: { id: fixture.run.id }, data: { status: 'failed', terminalAt: new Date(), endedAt: new Date() } })
+
+      const response = await post(fixture.workspace.id, fixture.task.id)
+
+      expect(response.status).toBe(200)
+      expect(await response.json()).toEqual({ ok: true })
+      const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.task.id } })
+      expect(task.status).not.toBe('blocked')
+      expect(await prisma.executionEvent.count({ where: { type: 'task_unblocked', taskId: fixture.task.id } })).toBe(1)
+    })
+
+    it('(b) 409s a task that is not blocked -- the verb refuses, and the suffix rule maps it', async (): Promise<void> => {
+      const response = await post(fixture.workspace.id, fixture.task.id)
+
+      expect(response.status).toBe(409)
+      expect(((await response.json()) as { error: string }).error).toContain('only a blocked task can be unblocked')
+    })
+
+    it('(c) 404s a task that belongs to another project', async (): Promise<void> => {
+      await park()
+
+      const response = await post(fixture.otherWorkspace.id, fixture.task.id)
+
+      expect(response.status).toBe(404)
+      expect((await prisma.task.findUniqueOrThrow({ where: { id: fixture.task.id } })).status).toBe('blocked')
+    })
+
+    it('(d) 401s with no session when the app is in accounts mode', async (): Promise<void> => {
+      await park()
+      vi.stubEnv('SLAVEOFAI_SESSION_SECRET', '0123456789abcdef0123456789abcdef')
+
+      const response = await post(fixture.workspace.id, fixture.task.id)
+
+      expect(response.status).toBe(401)
+      expect((await prisma.task.findUniqueOrThrow({ where: { id: fixture.task.id } })).status).toBe('blocked')
     })
   })
 })

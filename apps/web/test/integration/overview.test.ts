@@ -892,4 +892,29 @@ describe('buildOverviewSnapshot', () => {
       expect((await buildOverviewSnapshot(fixture.workspaceId))?.slaves[0]?.runtimeRoles).toEqual(['backend', 'reviewer'])
     })
   })
+
+  // M45 R1/R2, plan erratum E19: the brief, the needs-you queue and the Supervisor timeline ride on
+  // the snapshot the page's ONE `EventSource` already refetches -- no `/brief`, no `/timeline`, no
+  // second stream and no polling.
+  it('carries the brief, the needs-you queue and the timeline on the same snapshot the stream refetches', async (): Promise<void> => {
+    await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { goal: 'Ship it' } })
+    await appendEvent({
+      type: 'workspace.goal_set',
+      workspaceId: fixture.workspaceId,
+      actor: 'human',
+      payload: { goal: 'Ship it', version: 1, sha256: 'a' },
+    })
+
+    const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
+    expect(snapshot).not.toBeNull()
+    if (snapshot === null) return
+
+    expect(snapshot.brief.objective.text).toBe('Ship it')
+    expect(Array.isArray(snapshot.needsYou)).toBe(true)
+    expect(snapshot.timeline.some((entry) => entry.lane === 'user_request')).toBe(true)
+    // No model chatter on the Supervisor's own river.
+    expect(snapshot.timeline.some((entry) => entry.eventType === 'run.tool_call')).toBe(false)
+    // One snapshot, one queue: the tile's count and the lane's list are the same build.
+    expect(snapshot.needsYou).toEqual(snapshot.brief.needsYou)
+  })
 })
