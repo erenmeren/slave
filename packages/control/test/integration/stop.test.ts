@@ -69,6 +69,31 @@ describe('requestStop', () => {
     expect(isAlive(pid)).toBe(false)
   })
 
+  // M41 Task 3b fix round 1. Since a review run claims its task (`review.ts`'s `dispatchReview`,
+  // mirroring `startRun`), the guard on this release -- `activeRunId === run.id` -- matches for a
+  // review run where it never used to. That is deliberate and it is the right answer: stopping the
+  // reviewer parks the task for a human, exactly as stopping an implementation run does. Before the
+  // claim, the task stayed `reviewing` with nothing live against it, and the very next tick
+  // dispatched a REPLACEMENT reviewer onto the same branch -- an operator's cancel that cancelled
+  // nothing and cost another provider run. `unblockTask` is the documented way back.
+  it("parks a reviewing task blocked when the run it stops is that task's review run", async () => {
+    const { task, run } = fixture
+    await prisma.slaveRun.update({ where: { id: run.id }, data: { kind: 'review', pid: 999_999_999 } })
+    await prisma.task.update({ where: { id: task.id }, data: { status: 'reviewing', activeRunId: run.id } })
+
+    const result = await requestStop(run.id, 'meren')
+
+    expect(result.ok).toBe(true)
+    const after = await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })
+    expect(after.status).toBe('stopped')
+    const taskAfter = await prisma.task.findUniqueOrThrow({ where: { id: task.id } })
+    expect(taskAfter.status).toBe('blocked')
+    expect(taskAfter.activeRunId).toBeNull()
+    // No attempt: an operator's cancel is not the reviewer judging the work, and `review.ts`'s own
+    // `REVIEW_RETRY_CAP` is what bounds review anyway.
+    expect(taskAfter.attempt).toBe(0)
+  })
+
   it('still concludes a run whose process is already gone', async () => {
     const { run } = fixture
     await prisma.slaveRun.update({ where: { id: run.id }, data: { pid: 999_999_999 } })

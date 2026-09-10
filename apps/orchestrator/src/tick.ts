@@ -400,7 +400,9 @@ async function resumeRequestedRuns(deps: TickDeps): Promise<void> {
       resumeRequestedAt: { not: null },
       slave: { team: { workspaceId: deps.workspaceId } },
     },
-    select: { id: true, taskId: true, slaveId: true },
+    // `kind` because `concludeFailedResume` releases a `review` run's task differently from an
+    // `implementation` run's -- see its own comment (M41 Task 3b fix round 1).
+    select: { id: true, taskId: true, slaveId: true, kind: true },
   })
 
   for (const intent of intents) {
@@ -437,7 +439,12 @@ async function resumeRequestedRuns(deps: TickDeps): Promise<void> {
  */
 async function concludeFailedResume(
   deps: TickDeps,
-  run: { readonly id: string; readonly taskId: string | null; readonly slaveId: string },
+  run: {
+    readonly id: string
+    readonly taskId: string | null
+    readonly slaveId: string
+    readonly kind: 'implementation' | 'review' | 'planning'
+  },
   error: unknown,
 ): Promise<void> {
   const now = new Date()
@@ -456,10 +463,29 @@ async function concludeFailedResume(
   //
   // As of M13 the release COUNTS (Decision 4): a resume that cannot spawn is an attempted run that
   // failed, and a task whose resume can never spawn was otherwise re-dispatched every tick forever.
+  //
+  // For an `implementation` run. A `review` run's task gets its CLAIM back and nothing else -- no
+  // status change, no attempt (M41 Task 3b fix round 1, the second of the two `releaseTaskAfterFailure`
+  // sites; `pump.ts`'s gate-failure arm is the other). Since a review run holds `Task.activeRunId`
+  // from dispatch, the helper's `activeRunId === runId` guard MATCHES here now, where it used to
+  // miss -- so an unfiltered release would charge a `Task.attempt` against a `reviewing` task and
+  // park it `rework`, re-doing an implementation nobody has judged wrong, and emit `task.failed` at
+  // the cap. Neither `pause.ts` nor `resume.ts` refuses a review run, so this is reachable: a review
+  // run that paused (an operator's pause, a gate pause) and whose resume then cannot spawn. Review
+  // failures are governed by `dispatchReview`'s own `REVIEW_RETRY_CAP`, not by the task's attempt
+  // budget, and `release` staying `null` is also what keeps the `task.failed` announcement below
+  // out of a review's way.
   let release: TaskRelease | null = null
   if (run.taskId !== null) {
-    const task = await prisma.task.findUniqueOrThrow({ where: { id: run.taskId } })
-    release = await releaseTaskAfterFailure(task, run.id, 'rework')
+    if (run.kind === 'review') {
+      await prisma.task.updateMany({
+        where: { id: run.taskId, activeRunId: run.id },
+        data: { activeRunId: null },
+      })
+    } else {
+      const task = await prisma.task.findUniqueOrThrow({ where: { id: run.taskId } })
+      release = await releaseTaskAfterFailure(task, run.id, 'rework')
+    }
   }
 
   await appendEvent({

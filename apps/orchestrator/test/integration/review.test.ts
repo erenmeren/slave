@@ -229,15 +229,28 @@ describe('dispatchReviews', () => {
     const [first, second] = await Promise.all([dispatchReviews(reviewDeps), dispatchReviews(reviewDeps)])
 
     // Read before anything else: the winner's pump is live, and an approve conclusion would move
-    // the task off the claim we are here to observe.
+    // the task off the claim.
     const runs = await prisma.slaveRun.findMany({ where: { kind: 'review' } })
     const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
 
+    // The primary signal, and the one that is not racing anything: one dispatch started a review,
+    // the other started nothing, and the loser left no `SlaveRun` row behind -- a `failed` row here
+    // would read as a review attempt against `REVIEW_RETRY_CAP` for a run that never spawned.
     expect([...first, ...second]).toHaveLength(1)
     expect(runs).toHaveLength(1)
-    // The loser attempted nothing, so it must leave no `failed` row to read as a review attempt
-    // against `REVIEW_RETRY_CAP`.
-    expect(task.activeRunId).toBe(runs[0]?.id)
+
+    // Two legitimate end states, because the winner's pump IS racing this read: either the review is
+    // still live and the task carries its claim, or the pump has already concluded an approve and
+    // the task moved to `merging` with the claim released. Both say a review run owns this task.
+    // What neither of them is -- and what this whole task exists to stop -- is the third state: a
+    // `reviewing` task with no claim, which is the state the second reviewer was dispatched from.
+    const ownership =
+      task.status === 'reviewing' && task.activeRunId === runs[0]?.id
+        ? 'claimed by the live review'
+        : task.status === 'merging' && task.activeRunId === null
+          ? 'concluded and released'
+          : `${task.status} with activeRunId ${String(task.activeRunId)}`
+    expect(['claimed by the live review', 'concluded and released']).toContain(ownership)
 
     await drainPumps()
     const startedEvents = await prisma.executionEvent.findMany({
@@ -552,6 +565,26 @@ describe('dispatchReviews', () => {
     // concluded it. The cap is enforced on the NEXT dispatch attempt, not retroactively here.
     expect(afterSecond.status).toBe('reviewing')
 
+    // Fix round 1: the park is guarded on the claim being free. Put the task back in the measured
+    // window first -- the second review run is terminal but its conclusion has not landed, so the
+    // task still carries its claim -- and the tick that window wakes must NOT park a task whose
+    // live review is about to conclude.
+    const reviewRuns = await prisma.slaveRun.findMany({ where: { kind: 'review' }, orderBy: { startedAt: 'asc' } })
+    await prisma.task.update({ where: { id: fixture.taskId }, data: { activeRunId: reviewRuns[1]?.id ?? null } })
+
+    const parkedUnderClaim = await dispatchReviews(reviewDeps)
+    expect(parkedUnderClaim).toEqual([])
+    const stillReviewing = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+    expect(stillReviewing.status).toBe('reviewing')
+    expect(
+      await prisma.executionEvent.count({
+        where: { workspaceId: fixture.workspaceId, taskId: fixture.taskId, type: 'guardrail_tripped' },
+      }),
+    ).toBe(0)
+
+    // The conclusion lands and releases the claim. NOW the cap parks it.
+    await prisma.task.update({ where: { id: fixture.taskId }, data: { activeRunId: null } })
+
     // Third dispatch: the cap is exhausted. No new review run starts, and the task must not be left
     // silently in `reviewing` forever -- this is the strand M35 Task 4 closes.
     const third = await dispatchReviews(reviewDeps)
@@ -631,6 +664,73 @@ describe('dispatchReviews', () => {
     const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
     expect(task.activeRunId).toBe(secondRunId)
     expect(task.status).toBe('reviewing')
+
+    await drainPumps()
+  }, 60_000)
+
+  // Fix round 1, the approve half of the same guard: an older run's approval must not march a task
+  // whose review is still live into `merging`, nor clear that live review's claim on the way past.
+  it('a replayed approve conclusion cannot move a task a newer review run has claimed', async (): Promise<void> => {
+    const reviewDeps = await seedReviewingTask(fixture, 'review-approve')
+    await addReviewer()
+
+    const first = await dispatchReviews(reviewDeps)
+    expect(first).toHaveLength(1)
+    await drainPumps()
+    const firstRun = await prisma.slaveRun.findFirstOrThrow({ where: { kind: 'review' } })
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })).status).toBe('merging')
+
+    // Back under review -- the shape a rejected-then-reworked-then-verified task arrives in -- and a
+    // real dispatch takes the new claim.
+    await prisma.task.update({ where: { id: fixture.taskId }, data: { status: 'reviewing' } })
+    const second = await dispatchReviews(reviewDeps)
+    expect(second).toHaveLength(1)
+    const secondRunId = second[0]
+
+    await concludeReview(brandRunId(firstRun.id))
+
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+    expect(task.status).toBe('reviewing')
+    expect(task.activeRunId).toBe(secondRunId)
+    // And no second approval announced for a task that was never approved twice.
+    expect(await eventsOf(fixture.workspaceId, 'task_review_approved')).toHaveLength(1)
+
+    await drainPumps()
+  }, 60_000)
+
+  // Fix round 1. `rejectTask` writes `activeRunId: null` unconditionally -- it has to, because
+  // `verify.ts`'s other callers reject a task whose claim is an implementation run's -- so the guard
+  // that keeps an older run's verdict off a replacement review's task lives at `concludeReview`'s
+  // call site. Without it, a replayed reject charges a second attempt AND clears a live reviewer's
+  // claim, which is the double-reviewer bug again with a rejection in front of it.
+  it('a replayed reject conclusion charges nothing and leaves a newer review run claim intact', async (): Promise<void> => {
+    const reviewDeps = await seedReviewingTask(fixture, 'review-reject')
+    await addReviewer()
+
+    const first = await dispatchReviews(reviewDeps)
+    expect(first).toHaveLength(1)
+    await drainPumps()
+    const firstRun = await prisma.slaveRun.findFirstOrThrow({ where: { kind: 'review' } })
+
+    // The reject sent the task to `rework`; a fresh implementation run and a green verify would put
+    // it back in `reviewing` for a second review. Put it there directly -- this test is about the
+    // replay, not about the round trip -- and let a real dispatch take the new claim.
+    await prisma.task.update({
+      where: { id: fixture.taskId },
+      data: { status: 'reviewing', attempt: 0, lastRejectionReason: null },
+    })
+    const second = await dispatchReviews(reviewDeps)
+    expect(second).toHaveLength(1)
+    const secondRunId = second[0]
+
+    await concludeReview(brandRunId(firstRun.id))
+
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+    expect(task.status).toBe('reviewing')
+    expect(task.activeRunId).toBe(secondRunId)
+    expect(task.attempt).toBe(0)
+    // The first run's own rejection event stands; the replay adds no second one.
+    expect(await eventsOf(fixture.workspaceId, 'task_review_rejected')).toHaveLength(1)
 
     await drainPumps()
   }, 60_000)

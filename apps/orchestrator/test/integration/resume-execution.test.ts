@@ -354,5 +354,43 @@ describe('executing a resume intent from the daemon', () => {
       // A `failed` task is not startable: the next tick must not hand it to a slave again.
       expect(await prisma.slaveRun.count({ where: { taskId: fixture.taskId } })).toBe(runsBefore)
     }, 60_000)
+
+    // M41 Task 3b fix round 1. `concludeFailedResume` is the second of the two
+    // `releaseTaskAfterFailure` sites (`pump.ts`'s gate-failure arm is the other), and neither
+    // `pause.ts` nor `resume.ts` refuses a review run -- so a review run that paused and whose
+    // resume then cannot spawn reaches it. Since M41 Task 3b a review run HOLDS its task's
+    // `activeRunId`, so the helper's guard matches where it used to miss: unfiltered, this would
+    // charge a `Task.attempt` against a `reviewing` task, park it `rework` -- re-doing an
+    // implementation nobody has judged wrong -- and, at `maxAttempts: 1`, announce `task.failed`.
+    // Review failures are the review retry cap's business, not the task's attempt budget.
+    it('gives a review run its claim back without charging an attempt when its resume cannot spawn', async (): Promise<void> => {
+      const runId = await pauseARun()
+      // The run this file pauses is an implementation run (it is the only kind a tick starts).
+      // Recast it as the review run it stands in for, holding the claim its dispatch would have
+      // taken. `maxAttempts: 1` makes a wrongly charged attempt loud: it would exhaust the task.
+      await prisma.slaveRun.update({ where: { id: runId }, data: { kind: 'review' } })
+      await prisma.task.update({
+        where: { id: fixture.taskId },
+        data: { status: 'reviewing', maxAttempts: 1, attempt: 0, activeRunId: runId },
+      })
+      expect((await requestResume(runId, null, 'web')).ok).toBe(true)
+
+      await tick({
+        workspaceId: brandWorkspaceId(fixture.workspaceId),
+        registry: singleAdapterRegistry(brokenAdapter()),
+      })
+      await drainPumps()
+
+      const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId } })
+      expect(run.status).toBe('failed')
+
+      const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+      expect(task.status).toBe('reviewing')
+      expect(task.activeRunId).toBeNull()
+      expect(task.attempt).toBe(0)
+      expect(await prisma.executionEvent.count({ where: { taskId: fixture.taskId, type: 'task_failed' } })).toBe(0)
+      // The run's own failure is still announced -- silence is the other way to get this wrong.
+      expect(await prisma.executionEvent.count({ where: { runId, type: 'run_failed' } })).toBe(1)
+    }, 60_000)
   })
 })

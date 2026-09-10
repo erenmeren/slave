@@ -98,8 +98,13 @@ export async function concludeReview(runId: RunId): Promise<void> {
     // disagree. `unblockTask`/`cancelTask`/`failTask` refuse a task carrying an `activeRunId`, so a
     // claim left behind here would follow the task into `merging` and refuse operator commands on
     // work that is no longer being reviewed at all.
+    // `activeRunId: runId` as well (fix round 1): every release is guarded on the run id, and the
+    // two that MOVE the task are the two that most need it. A conclusion replayed after this run's
+    // claim was released and a REPLACEMENT review claimed the task would otherwise march that live
+    // review's task into `merging` on the strength of a verdict about an older run -- and clear the
+    // replacement's claim on the way past.
     const updated = await prisma.task.updateMany({
-      where: { id: task.id, status: 'reviewing' },
+      where: { id: task.id, status: 'reviewing', activeRunId: runId },
       data: { status: 'merging', activeRunId: null },
     })
     if (updated.count === 1) {
@@ -120,12 +125,24 @@ export async function concludeReview(runId: RunId): Promise<void> {
   // operator cancelled the task must not resurrect it, and a replayed conclusion for the same run
   // (whose row legitimately stays `succeeded`) must not charge a second attempt. The approve and
   // invalid branches get this from their conditioned updates; a bare `rejectTask` would not.
-  if (task.status !== 'reviewing') {
-    console.warn(`[review] ignoring a reject verdict for task ${task.id}, which is ${task.status}`)
-    // The verdict is ignored; the claim is not. A task that left `reviewing` while still pointing
-    // at THIS run (an operator's stop of the run parks the task `blocked` and clears it, but a
-    // status move that did not go through a release would not) is a task no dispatch can claim
-    // again. Guarded on the run id, so a replay cannot clear a newer run's claim (M41 Task 3b).
+  //
+  // The CLAIM is checked here too (fix round 1), not just the status. `rejectTask` writes
+  // `activeRunId: null` unconditionally -- deliberately, because `verify.ts`'s other callers reject
+  // a task whose claim is an implementation run's -- so the guard that keeps a replayed conclusion
+  // off a REPLACEMENT review's task has to live at this call site: a task that is `reviewing` and
+  // claimed by a newer run is a task this older run's verdict has no authority over, and charging
+  // an attempt for it would spend the budget twice on one rejection while clearing a live
+  // reviewer's claim. Checked rather than pushed into `rejectTask`'s signature: this is the only
+  // caller that has a run id to guard with.
+  if (task.status !== 'reviewing' || task.activeRunId !== runId) {
+    const claim = task.activeRunId === null ? 'nothing' : `run ${task.activeRunId}`
+    console.warn(
+      `[review] ignoring a reject verdict for task ${task.id}, which is ${task.status} and claimed by ${claim}`,
+    )
+    // The verdict is ignored; the claim is not -- when it is still THIS run's. A task that left
+    // `reviewing` while pointing at this run (an operator's stop of the run parks it `blocked` and
+    // clears it, but a status move that did not go through a release would not) is a task no
+    // dispatch can claim again. Guarded on the run id, so a replay cannot clear a newer run's claim.
     await prisma.task.updateMany({
       where: { id: task.id, activeRunId: runId },
       data: { activeRunId: null },
@@ -242,8 +259,15 @@ async function dispatchReview(deps: TickDeps, task: ReviewableTask): Promise<Run
   // task still being `reviewing`, the same discipline `concludeReview`'s approve branch uses, so a
   // concurrent sweep or cancel that already moved the task off `reviewing` is not overwritten.
   if (reviewAttempts >= REVIEW_RETRY_CAP) {
+    // `activeRunId: null` in the `where` as well (fix round 1). Check 1 above counts NON-terminal
+    // review runs, so it does not cover the window this milestone's claim exists for: a review run
+    // that is already terminal but whose `concludeReview` has not landed yet still HOLDS the task,
+    // and the tick its own `run.succeeded` woke arrives here with the cap counting that very run.
+    // Parking then would block a task whose live review is about to approve it. An unclaimed
+    // `reviewing` task is the only one with nothing left in flight to wait for, and the next
+    // dispatch after the conclusion releases the claim parks it properly.
     const blocked = await prisma.task.updateMany({
-      where: { id: task.id, status: 'reviewing' },
+      where: { id: task.id, status: 'reviewing', activeRunId: null },
       data: { status: 'blocked', activeRunId: null },
     })
     if (blocked.count === 1) {
