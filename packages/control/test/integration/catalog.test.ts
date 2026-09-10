@@ -77,7 +77,7 @@ describe('importCatalog', () => {
         sourceId: `${CATALOG}/engineering/core-builder`,
         name: 'Core Builder',
         reason: 'name_taken',
-        detail: 'a template named "Core Builder" already exists and was not imported from this catalog',
+        detail: 'a template named "Core Builder" already exists and is not this persona\'s row',
       },
     ])
     expect(await prisma.slaveTemplate.count()).toBe(1)
@@ -171,6 +171,29 @@ describe('importCatalog', () => {
 
     expect(result.ok && result.value.skipped[0]?.reason).toBe('locally_edited')
     expect((await prisma.slaveTemplate.findUniqueOrThrow({ where: { id: templateId } })).profile).toBeNull()
+  })
+
+  it('(c2) an unchanged FILE wins over a locally edited profile: nothing is read further, nothing written (D11)', async (): Promise<void> => {
+    const entries = [entry('core-builder', 'Core Builder')]
+    const created = await importOne(entries)
+    if (!created.ok) return
+    const templateId = created.value.created[0]?.templateId as string
+    await setProfile({ templateId }, 'This is what I want this worker to be, in my own words.', 'operator')
+    const before = await prisma.slaveTemplate.findUniqueOrThrow({ where: { id: templateId } })
+
+    // The SAME file, re-read. The stored profile disagrees with `profileSha256` -- a person wrote
+    // it -- but the import is not being asked to replace that profile, so it has nothing to say
+    // about it. `unchanged`, not `locally_edited`: the file sha is compared FIRST (D11), and this
+    // case is the pin on that order.
+    const result = await importOne(entries)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.unchanged.map((row) => row.templateId)).toEqual([templateId])
+    expect(result.value.skipped).toEqual([])
+    expect(result.value.updated).toEqual([])
+    // Every column, byte for byte -- the operator's words included.
+    expect(await prisma.slaveTemplate.findUniqueOrThrow({ where: { id: templateId } })).toEqual(before)
   })
 
   it('(f) skips profile_too_long with the COMPOSED length, and never truncates', async (): Promise<void> => {
@@ -276,6 +299,73 @@ describe('importCatalog', () => {
     expect(result.value.created[0]?.templateId).toBeNull()
     expect(await prisma.slaveTemplate.count()).toBe(0)
     expect(await prisma.catalogImport.count()).toBe(0)
+  })
+
+  it('trims both halves of every --role-map entry before anyone reads it', async (): Promise<void> => {
+    const testing = {
+      sourceId: `${CATALOG}/testing/prober`,
+      division: 'testing',
+      slug: 'prober',
+      path: `${DIRECTORY}/testing/prober.md`,
+      text: persona('Prober', 'You probe the seams between the modules.'),
+    }
+
+    const result = await importCatalog(
+      { catalog: CATALOG, directory: DIRECTORY, entries: [testing], roleMap: { ' testing ': ' reviewer ' } },
+      'operator',
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    // Untrimmed, the key would have matched no division at all and the value would have been
+    // written as a role with its spaces intact, which no scheduler query matches.
+    expect(result.value.created[0]?.role).toBe('reviewer')
+    expect((await prisma.slaveTemplate.findFirstOrThrow()).role).toBe('reviewer')
+  })
+
+  it('refuses a --role-map that names one division twice once trimmed', async (): Promise<void> => {
+    const bad = await importCatalog(
+      {
+        catalog: CATALOG,
+        directory: DIRECTORY,
+        entries: [entry('core-builder', 'Core Builder')],
+        roleMap: { engineering: 'backend', ' engineering ': 'frontend' },
+      },
+      'operator',
+    )
+
+    expect(bad).toEqual({ ok: false, error: { kind: 'invalid_role_map', detail: 'the division "engineering" is named twice' } })
+    expect(await prisma.slaveTemplate.count()).toBe(0)
+  })
+
+  it('a dry run decides an EXISTING template correctly and still writes nothing', async (): Promise<void> => {
+    await importOne([entry('core-builder', 'Core Builder')])
+    const before = await prisma.slaveTemplate.findFirstOrThrow()
+
+    const result = await importOne([entry('core-builder', 'Core Builder', 'A rewritten body.')], { dryRun: true })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.updated.map((row) => row.templateId)).toEqual([before.id])
+    expect(result.value.created).toEqual([])
+    expect(await prisma.slaveTemplate.findFirstOrThrow()).toEqual(before)
+    // Still just the ONE row the real import above wrote: a dry run records nothing (D6).
+    expect(await prisma.catalogImport.count()).toBe(1)
+  })
+
+  it('records one CatalogImport row per RUN: two runs of the same import leave two', async (): Promise<void> => {
+    const entries = [entry('core-builder', 'Core Builder')]
+
+    await importOne(entries)
+    await importOne(entries)
+
+    // The second run created nothing -- the row is the record of a run, not of a change.
+    const rows = await prisma.catalogImport.findMany({ orderBy: { startedAt: 'asc' } })
+    expect(rows).toHaveLength(2)
+    expect(rows.map((row) => [row.created, row.unchanged])).toEqual([
+      [1, 0],
+      [0, 1],
+    ])
   })
 
   it('refuses an empty catalog and an unusable role map, writing nothing', async (): Promise<void> => {

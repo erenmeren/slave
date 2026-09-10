@@ -78,6 +78,40 @@ type Outcome =
   | { readonly kind: 'skipped'; readonly row: SkippedRow }
 
 /**
+ * The ONE place a `--role-map` is trimmed, so the map the policy validates is the map the mapper
+ * reads (fix round 1, Important 1).
+ *
+ * The verb used to validate `division.trim()` and then hand `personaToTemplate` the RAW record, so
+ * `--role-map " testing "=" reviewer "` passed the guard and then matched no division at all --
+ * and, where it did match, wrote `" reviewer "` as a role with its spaces intact, which is a role
+ * no scheduler query would ever match. Trimming at the boundary and passing the normalised map on
+ * is `normaliseRoles`' own shape: an operator's typing is cleaned once, at the edge, or it is a
+ * different value in every place that reads it.
+ *
+ * An empty half is refused rather than dropped, and so is a division named twice -- trimming can
+ * collide two keys that were distinct as typed (`" a "` and `"a"`), and silently keeping whichever
+ * `Object.entries` yielded last is exactly the "part of what the operator typed disappeared"
+ * failure the refusal exists to prevent.
+ */
+function normaliseRoleMap(
+  roleMap: Readonly<Record<string, string>> | undefined,
+): Result<Readonly<Record<string, string>> | undefined, ControlRefusal> {
+  if (roleMap === undefined) return ok(undefined)
+  const normalised: Record<string, string> = {}
+  for (const [rawDivision, rawRole] of Object.entries(roleMap)) {
+    const division = rawDivision.trim()
+    const role = rawRole.trim()
+    if (division === '') return err({ kind: 'invalid_role_map', detail: 'a division name is empty' })
+    if (role === '') return err({ kind: 'invalid_role_map', detail: `the role for "${division}" is empty` })
+    if (division in normalised) {
+      return err({ kind: 'invalid_role_map', detail: `the division "${division}" is named twice` })
+    }
+    normalised[division] = role
+  }
+  return ok(normalised)
+}
+
+/**
  * Imports a directory of personas into the template catalog (M42 §2, R2).
  *
  * **One transaction per ROW, never one for the import.** A real catalog is three hundred files; one
@@ -98,10 +132,8 @@ export async function importCatalog(
   by?: string,
 ): Promise<Result<ImportReport, ControlRefusal>> {
   if (input.entries.length === 0) return err({ kind: 'catalog_empty', directory: input.directory })
-  for (const [division, role] of Object.entries(input.roleMap ?? {})) {
-    if (division.trim() === '') return err({ kind: 'invalid_role_map', detail: 'a division name is empty' })
-    if (role.trim() === '') return err({ kind: 'invalid_role_map', detail: `the role for "${division}" is empty` })
-  }
+  const roleMap = normaliseRoleMap(input.roleMap)
+  if (!roleMap.ok) return roleMap
 
   const startedAt = new Date()
   const created: RowOutcome[] = []
@@ -110,11 +142,28 @@ export async function importCatalog(
   const skipped: SkippedRow[] = []
 
   for (const entry of input.entries) {
-    const outcome = await importRow(entry, input, startedAt)
-    if (outcome.kind === 'skipped') skipped.push(outcome.row)
-    else if (outcome.kind === 'created') created.push(outcome.row)
-    else if (outcome.kind === 'updated') updated.push(outcome.row)
-    else unchanged.push(outcome.row)
+    const outcome = await importRow(entry, input, roleMap.value, startedAt)
+    // A `switch` with a `never` default rather than an if/else chain whose last arm is a silent
+    // catch-all: a fifth outcome added later must be routed HERE deliberately, and the compiler is
+    // what says so -- an `else unchanged.push(...)` would have swallowed it into the wrong bucket.
+    switch (outcome.kind) {
+      case 'created':
+        created.push(outcome.row)
+        break
+      case 'updated':
+        updated.push(outcome.row)
+        break
+      case 'unchanged':
+        unchanged.push(outcome.row)
+        break
+      case 'skipped':
+        skipped.push(outcome.row)
+        break
+      default: {
+        const unreachable: never = outcome
+        throw new Error(`unhandled import outcome: ${JSON.stringify(unreachable)}`)
+      }
+    }
   }
 
   const report = { created, updated, unchanged, skipped }
@@ -145,7 +194,12 @@ export async function importCatalog(
 }
 
 /** One persona, decided and written (or not) on its own. */
-async function importRow(entry: CatalogEntry, input: ImportCatalogInput, importedAt: Date): Promise<Outcome> {
+async function importRow(
+  entry: CatalogEntry,
+  input: ImportCatalogInput,
+  roleMap: Readonly<Record<string, string>> | undefined,
+  importedAt: Date,
+): Promise<Outcome> {
   const parsed = parsePersona({ path: entry.path, text: entry.text })
   if (!parsed.ok) {
     return {
@@ -160,7 +214,7 @@ async function importRow(entry: CatalogEntry, input: ImportCatalogInput, importe
     slug: entry.slug,
     text: entry.text,
     importedAt,
-    ...(input.roleMap === undefined ? {} : { roleMap: input.roleMap }),
+    ...(roleMap === undefined ? {} : { roleMap }),
   })
   if (!drafted.ok) {
     return {
@@ -178,13 +232,23 @@ async function importRow(entry: CatalogEntry, input: ImportCatalogInput, importe
 
   try {
     return await prisma.$transaction(async (tx): Promise<Outcome> => {
-      // The catalog's own locking discipline (M27 §5): every verb locks the row it writes. A
+      // The catalog's own locking discipline (M27 §5): every verb locks the row it WRITES. A
       // `sourceId` nobody has imported locks nothing here -- there is no row -- and that race is
       // caught by the unique index below instead.
-      const locked = await tx.$queryRaw<{ id: string }[]>`
-        SELECT id FROM "SlaveTemplate" WHERE "sourceId" = ${draft.sourceId} FOR UPDATE
-      `
-      const existingId = locked[0]?.id ?? null
+      //
+      // A dry run reads the same rows and takes no lock at all (fix round 1, Minor 4): it writes
+      // nothing, so a row lock would buy it no consistency it can act on, and holding one over
+      // three hundred files would block a real import behind a preview. The two branches decide
+      // identically; only the lock differs.
+      const existingId =
+        input.dryRun === true
+          ? ((await tx.slaveTemplate.findUnique({ where: { sourceId: draft.sourceId }, select: { id: true } }))?.id ??
+            null)
+          : ((
+              await tx.$queryRaw<{ id: string }[]>`
+                SELECT id FROM "SlaveTemplate" WHERE "sourceId" = ${draft.sourceId} FOR UPDATE
+              `
+            )[0]?.id ?? null)
 
       if (existingId === null) {
         // (b) A hand-made template -- or one from another catalog -- already holds the name. The
@@ -198,7 +262,11 @@ async function importRow(entry: CatalogEntry, input: ImportCatalogInput, importe
               sourceId: draft.sourceId,
               name: draft.name,
               reason: 'name_taken',
-              detail: `a template named "${draft.name}" already exists and was not imported from this catalog`,
+              // Not "was not imported from this catalog": the holder may well BE an imported
+              // template, under a different `sourceId`, after its file moved between divisions or
+              // into a subfolder. What is true in every case is that it is not the row this
+              // persona owns.
+              detail: `a template named "${draft.name}" already exists and is not this persona's row`,
             },
           }
         }
@@ -311,11 +379,19 @@ export interface CatalogImportView {
   readonly skipped: number
 }
 
-/** The last few import runs, newest first (R5) -- `list-imports` and the web's panel. */
+/**
+ * The last few import runs, newest first (R5) -- `list-imports` and the web's panel.
+ *
+ * The clamp floors at ZERO, not one: a NEGATIVE `take` makes Prisma walk the cursor backwards and
+ * hand back the OLDEST rows under a `desc` order, which is the one outcome a caller asking for
+ * "the last few" must never get. `listCatalogImports(0)` therefore returns no rows, which is what
+ * asking for none means; the ceiling of 100 is there so a mistyped limit cannot pull the whole
+ * table into a web response.
+ */
 export async function listCatalogImports(limit = 10): Promise<readonly CatalogImportView[]> {
   return prisma.catalogImport.findMany({
     orderBy: { startedAt: 'desc' },
-    take: Math.max(1, Math.min(limit, 100)),
+    take: Math.max(0, Math.min(limit, 100)),
     select: {
       id: true,
       catalog: true,
