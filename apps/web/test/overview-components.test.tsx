@@ -771,6 +771,7 @@ describe('shell facts and stream state reach the project header, never the sideb
   it('M45 E16: the team strip is the same slave-card grid, under a Team label', () => {
     render(<OverviewClient workspaceId="w1" initial={PUBLISHED} />)
     const team = screen.getByTestId('team')
+    expect(screen.getByTestId('team').id).toBe('team') // the brief's '+N more' team link targets #team
     expect(team.textContent).toContain('team')
     expect(team.querySelectorAll('[data-testid="slave-card"]').length).toBe(PUBLISHED.slaves.length)
     expect(screen.getAllByTestId('slave-card').length).toBe(PUBLISHED.slaves.length)

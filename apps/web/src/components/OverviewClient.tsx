@@ -260,7 +260,7 @@ export function OverviewClient({
           <SupervisorRequest workspaceId={workspaceId} />
           {/* M45 R2 */}
           <SupervisorTimeline workspaceId={workspaceId} entries={view.timeline} needsYou={view.needsYou} />
-          <section data-testid="team" className="px-[20px] pt-[16px]">
+          <section id="team" data-testid="team" className="px-[20px] pt-[16px]">
             <SectionLabel>team</SectionLabel>
             {/* M45 erratum E16: the Team strip IS this grid. `SlaveCard` renders nowhere else in
               * the app, and six `gate:m14-fidelity` assertions live on it. R4's worker disclosure
