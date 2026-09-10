@@ -173,7 +173,11 @@ const profileSourceSchema: z.ZodType<ProfileSource> = z.object({
   path: z.string().min(1),
   revision: z.string().nullable(),
   license: z.string().nullable(),
-  importedAt: z.string().min(1),
+  /** An ISO datetime, not any non-empty string (plan erratum E21): {@link renderProfileSpec} puts
+   *  this date into the prefix line through `new Date(...)`, and a hand-edited row holding
+   *  `yesterday` would either throw at render or print a false sentence. Refused at READ instead,
+   *  where the catalog can show the row as unmapped and say why. */
+  importedAt: z.string().datetime(),
   mappingQuality: z.enum(['full', 'partial', 'none']),
 })
 
@@ -204,19 +208,30 @@ export const profileSpecSchema: z.ZodType<ProfileSpec> = z
   })
   .strict()
 
+/** Everything an operator may take over. `runtimeRole` is NOT here (plan erratum E21): it is the
+ *  role the catalog SUGGESTS, the scheduler matches `Slave.runtimeRoles` and nothing else, and an
+ *  override of it would change no behaviour anywhere -- a control that does nothing is worse than
+ *  no control. `source` is out for the same reason it is out of {@link PROFILE_SPEC_FIELDS}. */
+export type ProfileOverridableField = Exclude<ProfileSpecField, 'runtimeRole'>
+
+export const PROFILE_OVERRIDABLE_FIELDS: readonly ProfileOverridableField[] = PROFILE_SPEC_FIELDS.filter(
+  (field): field is ProfileOverridableField => field !== 'runtimeRole',
+)
+
 /** The `| undefined` is `exactOptionalPropertyTypes`, not a second state: under that flag an
  *  optional key and a key explicitly set to `undefined` are different types, and zod's inferred
  *  output is the second -- the `RunContextManifestEntry` idiom (`run-context/sections.ts`). Both
  *  mean the same thing here, and {@link overriddenFields} reads them the same way. */
-export type ProfileOverrides = { readonly [K in ProfileSpecField]?: ProfileSpec[K] | undefined }
+export type ProfileOverrides = { readonly [K in ProfileOverridableField]?: ProfileSpec[K] | undefined }
 
-/** The operator's half: the SAME shape, every key optional, and `source` refused outright. */
+/** The operator's half: the SAME shape, every key optional, and `source` and `runtimeRole` refused
+ *  outright -- `.strict()`, so either arrives as an `unrecognized_keys` refusal rather than as a
+ *  key the next reader silently drops. */
 export const profileOverridesSchema: z.ZodType<ProfileOverrides> = z
   .object({
     identity: shortText.optional(),
     summary: shortText.optional(),
     mission: shortText.optional(),
-    runtimeRole: shortText.optional(),
     capabilities: list.optional(),
     expertise: list.optional(),
     operatingPrinciples: list.optional(),
@@ -259,9 +274,9 @@ export function profileSourceId(source: ProfileSource): string {
 
 /** Which fields an operator has taken over, in `PROFILE_SPEC_FIELDS` order (never `Object.keys`
  *  order, which is insertion order and would make two equal states print differently). */
-export function overriddenFields(overrides: ProfileOverrides | null): readonly ProfileSpecField[] {
+export function overriddenFields(overrides: ProfileOverrides | null): readonly ProfileOverridableField[] {
   if (overrides === null) return []
-  return PROFILE_SPEC_FIELDS.filter((field) => overrides[field] !== undefined)
+  return PROFILE_OVERRIDABLE_FIELDS.filter((field) => overrides[field] !== undefined)
 }
 
 /**
@@ -274,12 +289,29 @@ export function overriddenFields(overrides: ProfileOverrides | null): readonly P
 export function effectiveProfileSpec(spec: ProfileSpec | null, overrides: ProfileOverrides | null): ProfileSpec {
   const base = spec ?? emptyProfileSpec()
   if (overrides === null) return base
-  const merged: Record<string, unknown> = { ...base }
-  for (const field of PROFILE_SPEC_FIELDS) {
-    const value = overrides[field]
-    if (value !== undefined) merged[field] = value
+  // Written out field by field rather than looped over `PROFILE_SPEC_FIELDS`: the loop needed a
+  // `Record<string, unknown>` and a double cast to type-check, which is exactly the cast that would
+  // have hidden a field this function forgot. Spelled out, a fifteenth field does not compile until
+  // someone decides here what an override of it means.
+  return {
+    identity: overrides.identity ?? base.identity,
+    summary: overrides.summary ?? base.summary,
+    mission: overrides.mission ?? base.mission,
+    // Never overridable (E21), and never overwritten by a stray key in a hand-edited column.
+    runtimeRole: base.runtimeRole,
+    capabilities: overrides.capabilities ?? base.capabilities,
+    expertise: overrides.expertise ?? base.expertise,
+    operatingPrinciples: overrides.operatingPrinciples ?? base.operatingPrinciples,
+    constraints: overrides.constraints ?? base.constraints,
+    workflow: overrides.workflow ?? base.workflow,
+    deliverables: overrides.deliverables ?? base.deliverables,
+    successCriteria: overrides.successCriteria ?? base.successCriteria,
+    collaborationHints: overrides.collaborationHints ?? base.collaborationHints,
+    recommendedSkills: overrides.recommendedSkills ?? base.recommendedSkills,
+    body: overrides.body ?? base.body,
+    // Provenance is upstream's alone: an operator who could edit it could make the catalog lie.
+    source: base.source,
   }
-  return merged as unknown as ProfileSpec
 }
 
 const SECTION_HEADING: Record<ProfileSpecField, string> = PROFILE_FIELD_LABEL
@@ -295,17 +327,24 @@ function sectionText(spec: ProfileSpec, field: ProfileSpecField): string | null 
   return `## ${SECTION_HEADING[field]}\n${items.map((item) => `- ${item}`).join('\n')}`
 }
 
-function compose(spec: ProfileSpec, keep: ReadonlySet<ProfileSpecField>): string {
-  const blocks: string[] = []
-  if (spec.source !== null) {
-    blocks.push(importedProfilePrefix(profileSourceId(spec.source), new Date(spec.source.importedAt)))
-  }
-  for (const field of PROFILE_SECTION_PRIORITY) {
-    if (!keep.has(field)) continue
-    const text = sectionText(spec, field)
-    if (text !== null) blocks.push(text)
-  }
-  return blocks.join('\n\n')
+const SECTION_SEPARATOR = '\n\n'
+
+/**
+ * Cut to at most `max` UTF-16 code units WITHOUT splitting a surrogate pair.
+ *
+ * `String#slice` counts code units, so a cut that lands between the two halves of an astral
+ * character (an emoji in a persona heading, a CJK extension) leaves a lone surrogate: text that is
+ * no longer valid UTF-16, that JSON round-trips into a replacement character, and that a person
+ * reads as a black diamond. One code unit less is not a loss anybody can see.
+ *
+ * Grapheme clusters are deliberately NOT preserved -- a family emoji or a combining accent may
+ * still be cut short of its full cluster. That is a cosmetic edge; a lone surrogate is malformed.
+ */
+export function sliceCodePoints(value: string, max: number): string {
+  if (value.length <= max) return value
+  const boundary = value.charCodeAt(max - 1)
+  const isHighSurrogate = boundary >= 0xd800 && boundary <= 0xdbff
+  return value.slice(0, isHighSurrogate ? max - 1 : max)
 }
 
 /**
@@ -318,15 +357,49 @@ function compose(spec: ProfileSpec, keep: ReadonlySet<ProfileSpecField>): string
  * front of a model, which is worse than not putting it there at all; dropping the lowest-priority
  * WHOLE section leaves every sentence that survives intact and true.
  *
- * The last resort is a hard slice, reached only when the single highest-priority section is
- * itself longer than the cap. It cannot happen for an imported persona (M42 refuses a file whose
- * composed profile is over the cap before the mapper ever runs, plan erratum E6); it can happen
- * for an operator who pastes 20 000 characters into one override, and the cap is not negotiable.
+ * **Why a section that does not fit is SKIPPED rather than truncating everything below it** (plan
+ * erratum E21). Keeping only a prefix of the priority order meant one oversized mid-list section
+ * threw away every shorter section beneath it -- and, when the sections above it were empty, threw
+ * away the whole profile and returned `''`: an empty prompt where a persona should be. So each
+ * section is taken in priority order if what it costs still fits, and skipped whole if it does not.
+ * A section is only ever skipped for being too big to fit, never to make room for a lower-priority
+ * one, so the order still decides who wins a contest for the same space.
+ *
+ * The last resort is a hard slice, reached only when NO section fits at all -- one section longer
+ * than the entire cap, and nothing else to say. It cannot happen for an imported persona (M42
+ * refuses a file whose composed profile is over the cap before the mapper ever runs, plan erratum
+ * E6); it can happen for an operator who pastes 20 000 characters into one override. This function
+ * never returns an empty string for a spec that has anything to say, and never returns more than
+ * `PROFILE_MAX_CHARS`.
  */
 export function renderProfileSpec(spec: ProfileSpec): string {
-  for (let end = PROFILE_SECTION_PRIORITY.length; end > 0; end -= 1) {
-    const text = compose(spec, new Set(PROFILE_SECTION_PRIORITY.slice(0, end)))
-    if (text.length <= PROFILE_MAX_CHARS) return text
+  const prefix =
+    spec.source === null
+      ? null
+      : importedProfilePrefix(profileSourceId(spec.source), new Date(spec.source.importedAt))
+
+  const kept: string[] = prefix === null ? [] : [prefix]
+  const skipped: string[] = []
+  let length = prefix === null ? 0 : prefix.length
+
+  for (const field of PROFILE_SECTION_PRIORITY) {
+    const block = sectionText(spec, field)
+    if (block === null) continue
+    const cost = (kept.length === 0 ? 0 : SECTION_SEPARATOR.length) + block.length
+    if (length + cost <= PROFILE_MAX_CHARS) {
+      kept.push(block)
+      length += cost
+    } else {
+      skipped.push(block)
+    }
   }
-  return compose(spec, new Set(PROFILE_SECTION_PRIORITY.slice(0, 1))).slice(0, PROFILE_MAX_CHARS)
+
+  // Nothing but the prefix line survived: a prefix saying whose words these are, with none of the
+  // words, is not a profile. Give the model as much of the real text as the cap allows instead.
+  const keptSections = prefix === null ? kept.length : kept.length - 1
+  if (keptSections === 0 && skipped.length > 0) {
+    const whole = [...(prefix === null ? [] : [prefix]), ...skipped].join(SECTION_SEPARATOR)
+    return sliceCodePoints(whole, PROFILE_MAX_CHARS)
+  }
+  return kept.join(SECTION_SEPARATOR)
 }

@@ -190,6 +190,32 @@ describe('personaToProfileSpec', () => {
     expect(spec.body).toContain('## 🧭 Your Learning & Memory')
   })
 
+  it('keeps ONLY the unmapped remainder in the body, never the sections it already mapped (E21)', () => {
+    const spec = personaToProfileSpec(draftOf(CANONICAL), FACTS)
+
+    // The sections the heading map did not consume, verbatim and whole.
+    expect(spec.body).toContain('## 💭 Your Communication Style\n- Short messages, and the diff attached.')
+    expect(spec.body).toContain('## 🧭 Your Learning & Memory')
+    // ...and NOTHING that already reached a field of its own: rendering both doubled every mapped
+    // constraint and made the preserved sections the first casualty of the cap.
+    expect(spec.body).not.toContain('You MUST never leave a red test behind')
+    expect(spec.body).not.toContain('## 🚨 Your Critical Rules')
+    expect(spec.body).not.toContain('## 🎯 Your Core Mission')
+    expect(spec.body).not.toContain('## 🎯 Your Success Metrics')
+    // The opening prose is kept, because nothing above took it: `summary` came from the
+    // front-matter `description` and `identity` from the Identity & Memory labels.
+    expect(spec.body).toContain('You are **Gate Core Builder**')
+  })
+
+  it('drops the opening prose from the body when the summary was taken FROM it', () => {
+    const noDescription = draftOf(CANONICAL.replace('description: Builds the core module and the tests that hold it up.\n', ''))
+    const spec = personaToProfileSpec(noDescription, FACTS)
+
+    expect(spec.summary).toContain('You are **Gate Core Builder**')
+    expect(spec.body).not.toContain('You are **Gate Core Builder**')
+    expect(spec.body).toContain('## 💭 Your Communication Style')
+  })
+
   it('records the whole source record, revision and licence included', () => {
     expect(personaToProfileSpec(draftOf(CANONICAL), FACTS).source).toEqual({
       repository: 'catalog-m46',
@@ -214,6 +240,10 @@ describe('personaToProfileSpec', () => {
     // The two sections it does not know are still the persona.
     expect(spec.body).toContain('## Tooling & Automation')
     expect(spec.body).toContain('## Decision Framework')
+    expect(spec.body).toContain('Use whatever the project already has; do not add a tool for one rollout.')
+    // ...and the ones it does know are not repeated there (E21).
+    expect(spec.body).not.toContain('## Core Capabilities')
+    expect(spec.body).not.toContain('## Success Metrics')
   })
 
   it('lifts an integration table and a loose escalation sentence into collaboration hints', () => {
@@ -239,7 +269,11 @@ describe('personaToProfileSpec', () => {
     expect(spec.summary).toBe('Writes down what happened.')
     expect(spec.identity).toBe('You write down what happened, in the order it happened, and you do not decide what it meant.')
     expect(spec.capabilities).toEqual([])
+    // Nothing was recognised, so there is no "remainder": the whole file IS the remainder, H1 and
+    // all, or a `none`-quality persona would reach a model as a two-line worker (E21).
+    expect(spec.body).toBe(draftOf(PLAIN).body)
     expect(spec.body).toContain('# Gate Note Taker')
+    expect(spec.body).toContain('You write down what happened, in the order it happened')
   })
 
   it('falls back through description then vibe for the summary', () => {
@@ -249,6 +283,62 @@ describe('personaToProfileSpec', () => {
     )
     const noProse = draftOf('---\nname: X\nvibe: One thing, well.\n---\n\n## Success Metrics\n- done\n')
     expect(personaToProfileSpec(noProse, FACTS).summary).toBe('One thing, well.')
+  })
+
+  it('cuts a long item on a code-point boundary, never through an emoji', () => {
+    // 238 characters, then an emoji whose two code units straddle the 240th.
+    const straddling = `${'m'.repeat(239)}\u{1F600} tail`
+    const spec = personaToProfileSpec(draftOf(`---\nname: X\n---\n\n# X\n\n## Success Metrics\n- ${straddling}\n`), FACTS)
+    const only = spec.successCriteria[0] ?? ''
+
+    expect(only.length).toBe(239)
+    expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(only)).toBe(false)
+    expect(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(only)).toBe(false)
+  })
+
+  it('reads a GFM table written with single-dash separators, and ignores a bare pipe line', () => {
+    const table = `---
+name: Gate Verifier
+description: Reads the work back.
+---
+
+# Gate Verifier
+
+## Working with others
+
+| Who | How |
+|-|-|
+| **Gate Core Builder** | They write it; you run it. |
+|
+| **Gate Release Steward** | Pair with them on the rehearsal. |
+`
+    const spec = personaToProfileSpec(draftOf(table), FACTS)
+
+    // A bare `|` used to look like a separator and threw away every row collected before it.
+    expect(spec.collaborationHints).toContain('Gate Core Builder: They write it; you run it.')
+    expect(spec.collaborationHints).toContain('Gate Release Steward: Pair with them on the rehearsal.')
+    // The header row is not data.
+    expect(spec.collaborationHints).not.toContain('Who: How')
+  })
+
+  it('does not end a sentence on a version number, an abbreviation or an initial', () => {
+    const persona = `---
+name: Gate Release Steward
+---
+
+# Gate Release Steward
+
+Ships v2.0 behind a flag, e.g. to one region first. The rest of the rollout follows.
+
+## Success Metrics
+- done
+`
+    expect(personaToProfileSpec(draftOf(persona), FACTS).summary).toBe(
+      'Ships v2.0 behind a flag, e.g. to one region first.',
+    )
+
+    const initial = `---\nname: X\n---\n\n# X\n\nWritten by A. Smith and nobody else. A second sentence.\n\n## Success Metrics\n- done\n`
+    expect(personaToProfileSpec(draftOf(initial), FACTS).summary).toBe('Written by A. Smith and nobody else.')
   })
 
   it('trims every item to the schema limits so a mapped spec always validates', () => {
