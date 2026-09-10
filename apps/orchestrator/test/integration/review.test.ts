@@ -7,6 +7,7 @@ import { refusalText } from '@slave-of-ai/control'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@slave-of-ai/db'
 import { prisma } from '@slave-of-ai/db/client'
 import { runId as brandRunId, workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
+import { appendEvent } from '@slave-of-ai/events'
 import { ClaudeCodeAdapter, type AdapterRegistry } from '@slave-of-ai/providers'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { concludeReview, dispatchReviews } from '../../src/review.js'
@@ -215,6 +216,81 @@ describe('dispatchReviews', () => {
     expect(await prisma.slaveRun.count({ where: { kind: 'review' } })).toBe(1)
   })
 
+  // M41 Task 3b, the race the scenario gate measured five times in seven runs. Check 1 above is a
+  // COUNT of live review runs, and neither of two overlapping passes can see the other's row before
+  // it is committed -- so both used to reach the dispatch and put two reviewers on one branch, one
+  // of them billed for nothing. `Promise.all` is the same overlap the daemon produces for free: the
+  // review run's own `run.succeeded` wakes the tick coalescer, and the CLI's `tick` can run against
+  // a live daemon at any moment.
+  it('starts exactly one review run when two dispatch passes race for the same task', async (): Promise<void> => {
+    const reviewDeps = await seedReviewingTask(fixture)
+    await addReviewer()
+
+    const [first, second] = await Promise.all([dispatchReviews(reviewDeps), dispatchReviews(reviewDeps)])
+
+    // Read before anything else: the winner's pump is live, and an approve conclusion would move
+    // the task off the claim we are here to observe.
+    const runs = await prisma.slaveRun.findMany({ where: { kind: 'review' } })
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+
+    expect([...first, ...second]).toHaveLength(1)
+    expect(runs).toHaveLength(1)
+    // The loser attempted nothing, so it must leave no `failed` row to read as a review attempt
+    // against `REVIEW_RETRY_CAP`.
+    expect(task.activeRunId).toBe(runs[0]?.id)
+
+    await drainPumps()
+    const startedEvents = await prisma.executionEvent.findMany({
+      where: { workspaceId: fixture.workspaceId, type: 'task_review_started' },
+    })
+    expect(startedEvents).toHaveLength(1)
+  }, 60_000)
+
+  // The production shape of the same race, reproduced from the daemon's side rather than by two
+  // overlapping calls: `pumpRun` writes the review run terminal and emits `run.succeeded` BEFORE the
+  // chained `verifyConcludedRun` -> `concludeReview` moves the task off `reviewing`, and `runDaemon`
+  // wakes its tick coalescer on EVERY event. So the review's own success is what dispatches its
+  // replacement, 16-45 ms later.
+  it('starts no second reviewer in the window where run.succeeded is written but the conclusion has not moved the task', async (): Promise<void> => {
+    const reviewDeps = await seedReviewingTask(fixture)
+    await addReviewer()
+
+    const started = await dispatchReviews(reviewDeps)
+    expect(started).toHaveLength(1)
+
+    const run = await prisma.slaveRun.findFirstOrThrow({ where: { kind: 'review' } })
+    const now = new Date()
+    // `count` is a precondition, not decoration: this write has to be the one that closes the run,
+    // or the pump got there first and the test is looking at a window that has already shut.
+    const terminal = await prisma.slaveRun.updateMany({
+      where: { id: run.id, endedAt: null },
+      data: { status: 'succeeded', terminalAt: now, endedAt: now },
+    })
+    expect(terminal.count).toBe(1)
+    await appendEvent({
+      type: 'run.succeeded',
+      workspaceId: fixture.workspaceId,
+      taskId: fixture.taskId,
+      slaveId: run.slaveId,
+      runId: run.id,
+      actor: 'system',
+      payload: { numTurns: 1, costUsd: null },
+    })
+
+    // The tick that event wakes. The task is still `reviewing` and no review run is non-terminal,
+    // so check 1 waves it through -- the claim is the only thing standing between this and a second
+    // billed reviewer on the same branch.
+    const second = await dispatchReviews(reviewDeps)
+    expect(second).toEqual([])
+    expect(await prisma.slaveRun.count({ where: { kind: 'review' } })).toBe(1)
+
+    // And the conclusion still lands afterwards, releasing the claim it was holding.
+    await drainPumps()
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+    expect(task.status).toBe('merging')
+    expect(task.activeRunId).toBeNull()
+  }, 60_000)
+
   it('warns once, not once per tick, for a reviewing task with no usable implementation run', async (): Promise<void> => {
     // No `seedReviewingTask`: that drives a real implementation run, which is exactly the thing
     // this task must NOT have. Flipping the fixture's own `ready` task straight to `reviewing`
@@ -332,6 +408,10 @@ describe('dispatchReviews', () => {
     expect(failures).toHaveLength(1)
     const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
     expect(task.status).toBe('reviewing')
+    // M41 Task 3b: the dispatch claimed the task before it tried to spawn, so a spawn that failed
+    // has to hand the claim back -- a `reviewing` task pointing at a terminal run is one no later
+    // dispatch could ever claim, which would make this failed review the last one it ever got.
+    expect(task.activeRunId).toBeNull()
   })
 
   it('approves: moves the task to merging and records the reason', async (): Promise<void> => {
@@ -344,6 +424,10 @@ describe('dispatchReviews', () => {
 
     const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
     expect(task.status).toBe('merging')
+    // M41 Task 3b: the claim is released in the SAME write as the status, so a task that is no
+    // longer under review never carries a review run's claim into `merging` -- where
+    // `cancelTask`/`unblockTask`/`failTask` would refuse an operator on the strength of it.
+    expect(task.activeRunId).toBeNull()
 
     const run = await prisma.slaveRun.findFirstOrThrow({ where: { kind: 'review' } })
     expect(run.status).toBe('succeeded')
@@ -426,6 +510,9 @@ describe('dispatchReviews', () => {
     expect(firstRun.status).toBe('failed')
     const afterFirst = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
     expect(afterFirst.status).toBe('reviewing')
+    // M41 Task 3b: an invalid verdict leaves the task where it is (this branch's policy) but hands
+    // the claim back, or the second dispatch below could never take it.
+    expect(afterFirst.activeRunId).toBeNull()
 
     const firstFailure = await prisma.executionEvent.findMany({ where: { runId: firstRun.id, type: 'run_failed' } })
     expect(firstFailure).toHaveLength(1)
@@ -517,5 +604,70 @@ describe('dispatchReviews', () => {
 
     const finalTask = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
     expect(finalTask.status).toBe('merging')
+  })
+
+  // M41 Task 3b. Every release in `concludeReview` is guarded on the run id, and this is the case
+  // that guard is for: a review run's row stays terminal after it concludes, so a restarted daemon
+  // (or a duplicate pump settlement) can legally conclude it a second time -- long after a
+  // replacement review has claimed the task. An unguarded release would hand that replacement's
+  // task to a third reviewer.
+  it('a replayed conclusion cannot clear a newer review run claim', async (): Promise<void> => {
+    const reviewDeps = await seedReviewingTask(fixture, 'review-invalid')
+    await addReviewer()
+
+    const first = await dispatchReviews(reviewDeps)
+    expect(first).toHaveLength(1)
+    await drainPumps()
+    const firstRun = await prisma.slaveRun.findFirstOrThrow({ where: { kind: 'review' } })
+
+    const second = await dispatchReviews(reviewDeps)
+    expect(second).toHaveLength(1)
+    const secondRunId = second[0]
+    const claimed = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+    expect(claimed.activeRunId).toBe(secondRunId)
+
+    await concludeReview(brandRunId(firstRun.id))
+
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+    expect(task.activeRunId).toBe(secondRunId)
+    expect(task.status).toBe('reviewing')
+
+    await drainPumps()
+  }, 60_000)
+
+  // M41 Task 3b. The loser of the claim race must leave NOTHING behind: a `failed` row here would
+  // read as a review attempt against `REVIEW_RETRY_CAP`, so two lost races would park a perfectly
+  // reviewable task `blocked` for something that never even spawned.
+  it('leaves no run row behind when it loses the claim', async (): Promise<void> => {
+    const reviewDeps = await seedReviewingTask(fixture)
+    await addReviewer()
+
+    // The exact shape of the measured window: a review run that is terminal (so check 1's count of
+    // NON-terminal runs waves the dispatch through) but whose conclusion has not moved the task, so
+    // the claim is still held.
+    const latestImpl = await prisma.slaveRun.findFirstOrThrow({ where: { kind: 'implementation' } })
+    const reviewer = await prisma.slave.findFirstOrThrow({ where: { runtimeRoles: { has: 'reviewer' } } })
+    const holder = await prisma.slaveRun.create({
+      data: {
+        taskId: fixture.taskId,
+        slaveId: reviewer.id,
+        kind: 'review',
+        status: 'succeeded',
+        startedAt: new Date(latestImpl.startedAt.getTime() + 1_000),
+        terminalAt: new Date(latestImpl.startedAt.getTime() + 2_000),
+        endedAt: new Date(latestImpl.startedAt.getTime() + 2_000),
+      },
+    })
+    await prisma.task.update({ where: { id: fixture.taskId }, data: { activeRunId: holder.id } })
+
+    const started = await dispatchReviews(reviewDeps)
+
+    expect(started).toEqual([])
+    expect(await prisma.slaveRun.count({ where: { kind: 'review' } })).toBe(1)
+    expect(
+      await prisma.executionEvent.count({ where: { workspaceId: fixture.workspaceId, type: 'task_review_started' } }),
+    ).toBe(0)
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+    expect(task.activeRunId).toBe(holder.id)
   })
 })

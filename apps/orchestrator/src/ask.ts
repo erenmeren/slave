@@ -167,12 +167,14 @@ export async function concludeWithQuestion(input: AskConclusionInput): Promise<A
     return { kind: 'refused', reason: `the run is ${run.status}, not working: something else owns its outcome` }
   }
   // Only a run whose TASK this path can actually park may wait (final review, Important 1). The
-  // park below is guarded on `activeRunId`, the same guard `releaseTaskAfterFailure` uses -- and
-  // `tick.ts`'s `startRun` is the only writer of that column, so a `review` run is never its task's
-  // `activeRunId`. Parking it therefore moved nothing: the task stayed `reviewing`, `deliverAnswers`
-  // refused every answer to it (it demands a `waiting` task), and `dispatchReview`'s "a review is
-  // already live" gate counted the paused run as live -- a review run paused forever on a question
-  // nobody could ever answer, and a task no replacement review would ever be dispatched for.
+  // park below is guarded on `activeRunId` AND on `status: 'running'`, and a `reviewing` task is
+  // never `running` -- so parking a review run moved nothing: the task stayed `reviewing`,
+  // `deliverAnswers` refused every answer to it (it demands a `waiting` task), and
+  // `dispatchReview`'s "a review is already live" gate counted the paused run as live -- a review
+  // run paused forever on a question nobody could ever answer, and a task no replacement review
+  // would ever be dispatched for. (Until M41 Task 3b the status filter was belt to the
+  // `activeRunId` braces, because `tick.ts`'s `startRun` was that column's only writer; a review
+  // run holds its task's claim now, so the status filter is what carries this on its own.)
   //
   // A task-LESS run (`planning`, M8b) is parkable by definition: it has no task to park, the guard
   // below is skipped entirely, and delivery matches it through `slave -> team` rather than a task.
@@ -242,10 +244,12 @@ export async function concludeWithQuestion(input: AskConclusionInput): Promise<A
   }
 
   if (input.taskId !== null) {
-    // Guarded on `activeRunId`, the same guard `releaseTaskAfterFailure` uses: this parks the task
-    // only while it is still THIS run's. A `reviewing` task whose review run asks a question is
-    // deliberately left where it is -- `dispatchReview`'s "already live" gate counts this run as
-    // live for as long as it is non-terminal, so the task is not re-dispatched while it waits.
+    // Guarded on `activeRunId` and on `status: 'running'`, the same guard `releaseTaskAfterFailure`
+    // uses plus the status: this parks the task only while it is still THIS run's AND actually
+    // being implemented. A `reviewing` task whose review run asks a question is deliberately left
+    // where it is -- it is `reviewing`, not `running`, so this write does not match it, and
+    // `dispatchReview`'s "already live" gate counts this run as live for as long as it is
+    // non-terminal, so the task is not re-dispatched while it waits.
     await prisma.task.updateMany({
       where: { id: input.taskId, activeRunId: input.runId, status: 'running' },
       data: { status: 'waiting' },

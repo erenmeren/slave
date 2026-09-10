@@ -79,12 +79,14 @@ describe('sweep and reconcileOrphans', () => {
     startedAt?: Date
     worktreePath?: string
     taskId?: string
+    kind?: 'implementation' | 'review' | 'planning'
   }) =>
     prisma.slaveRun.create({
       data: {
         taskId: data.taskId ?? fixture.taskId,
         slaveId: fixture.slaveId,
         status: data.status,
+        ...(data.kind === undefined ? {} : { kind: data.kind }),
         pid: data.pid === undefined ? DEAD_PID : data.pid,
         toolCalls: data.toolCalls ?? 0,
         ...(data.startedAt === undefined ? {} : { startedAt: data.startedAt }),
@@ -178,6 +180,30 @@ describe('sweep and reconcileOrphans', () => {
     const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
     expect(task.activeRunId).toBeNull()
     expect(task.status).toBe('rework')
+  })
+
+  // M41 Task 3b: a review run holds its task's claim now (`review.ts`'s dispatch), so this pass
+  // releases one -- and what "release" means is not what it means for an implementation run. A
+  // daemon that died is not the reviewer rejecting the work, and `rework` would spend an
+  // implementation attempt re-doing work nobody has judged wrong. The task stays `reviewing` with a
+  // null claim, which is exactly the state `dispatchReview` re-dispatches from.
+  it('hands an orphaned review run claim back to reviewing, not to rework', async (): Promise<void> => {
+    await prisma.task.update({ where: { id: fixture.taskId }, data: { status: 'reviewing' } })
+    const run = await givenRun({ status: 'working', kind: 'review' })
+    await prisma.task.update({ where: { id: fixture.taskId }, data: { activeRunId: run.id } })
+
+    await reconcileOrphans(deps)
+
+    expect((await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })).status).toBe('failed')
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+    expect(task.status).toBe('reviewing')
+    expect(task.activeRunId).toBeNull()
+    expect(task.attempt).toBe(0)
+    // No `task.rework`: the task did not go back into the implementation queue, and announcing that
+    // it had would be a lie an operator reads off the timeline.
+    expect(
+      await prisma.executionEvent.count({ where: { workspaceId: fixture.workspaceId, type: 'task_rework' } }),
+    ).toBe(0)
   })
 
   it('leaves a paused run alone: it legitimately has no process', async (): Promise<void> => {
@@ -296,6 +322,23 @@ describe('sweep and reconcileOrphans', () => {
     expect(row.terminalAt).not.toBeNull()
     expect(row.endedAt).not.toBeNull()
     expect(await eventTypesFor(fixture.workspaceId)).toEqual(['run.failed'])
+  })
+
+  // The other half of M41 Task 3b's sweep change: the per-tick dead-pid path releases a claim too,
+  // and it has to release a review claim the same way `reconcileOrphans` does -- back to
+  // `reviewing`, never to `rework`.
+  it('hands a dead review run claim back to reviewing, not to rework', async (): Promise<void> => {
+    await prisma.task.update({ where: { id: fixture.taskId }, data: { status: 'reviewing' } })
+    const run = await givenRun({ status: 'working', kind: 'review' })
+    await prisma.task.update({ where: { id: fixture.taskId }, data: { activeRunId: run.id } })
+
+    await sweep(deps)
+
+    expect((await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })).status).toBe('failed')
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+    expect(task.status).toBe('reviewing')
+    expect(task.activeRunId).toBeNull()
+    expect(task.attempt).toBe(0)
   })
 
   it('leaves a dead-pid run alone while its pump is live in this process', async (): Promise<void> => {

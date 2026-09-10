@@ -871,25 +871,28 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
             // Via the shared release helper (M35 Task 1), not a bare increment: the bare increment
             // this replaced left the task `running` with `activeRunId` still pointing at this
             // now-dead run, stranding it forever once the halt was cleared. `releaseTaskAfterFailure`
-            // is guarded on `activeRunId === runId`, and `activeRunId` is set in exactly one place
-            // (`tick.ts`'s implementation dispatch) and nulled the moment a task leaves `running` for
-            // `reviewing` (`verify.ts`'s advance-to-review write) -- `review.ts`'s own dispatch never
-            // sets it at all. So an IMPLEMENTATION run's gate failure charges an attempt here, same as
-            // before, but a REVIEW run's gate failure finds `activeRunId` already null (or pointing at
-            // someone else) and both of the helper's `updateMany`s match zero rows: no attempt is
-            // charged and the task -- still `reviewing` -- is left untouched. That is deliberate, not
-            // a gap: a single review failure already charges nothing (`review.ts`'s own bounded
-            // retry, `REVIEW_RETRY_CAP`, is what bounds a gate that keeps tripping on review runs, and
-            // T4's park is what escalates once that cap is spent), and this path staying silent for
-            // `reviewing` tasks is what keeps it that way rather than smuggling in a second, uncapped
-            // way to burn an attempt against review work. Sharing the helper also means `verify.ts`'s
-            // own release-on-failure path -- chained onto this same run right after this switch
-            // returns -- finds `activeRunId` already cleared (by this same call, for an implementation
-            // run) and charges no second attempt.
+            // is guarded on `activeRunId === runId`, so it is idempotent and cannot touch a task that
+            // has already moved on -- which also means `verify.ts`'s own release-on-failure path,
+            // chained onto this same run right after this switch returns, charges no second attempt.
+            //
+            // Only for an IMPLEMENTATION run, and explicitly so since M41 Task 3b. A review run now
+            // holds its task's `activeRunId` from dispatch (`review.ts`'s claim, which is what stops
+            // the tick its own `run.succeeded` wakes from starting a second reviewer), so the helper's
+            // guard no longer excludes review by accident the way it used to -- calling it here would
+            // charge an attempt against a `reviewing` task and send it to `rework`. That was never the
+            // policy: a single review failure charges nothing, `review.ts`'s own bounded retry
+            // (`REVIEW_RETRY_CAP`) is what bounds a gate that keeps tripping on review runs, and M35
+            // T4's park is what escalates once that cap is spent. Charging here would smuggle in a
+            // second, uncapped way to burn an attempt against review work. The review run's CLAIM is
+            // still released -- by `verify.ts`'s `failed` arm, chained onto this run, which is the one
+            // place that release lives.
             // A task-less `planning` run (M8b) has no attempt counter to increment.
             if (taskId !== null) {
-              const task = await prisma.task.findUniqueOrThrow({ where: { id: taskId } })
-              await releaseTaskAfterFailure(task, runId, 'rework')
+              const { kind } = await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId }, select: { kind: true } })
+              if (kind === 'implementation') {
+                const task = await prisma.task.findUniqueOrThrow({ where: { id: taskId } })
+                await releaseTaskAfterFailure(task, runId, 'rework')
+              }
             }
 
             // Two events, because the run failed *and* a guardrail is what failed it (§13.1).

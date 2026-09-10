@@ -179,8 +179,9 @@ export async function runVerify(input: RunVerifyInput): Promise<VerifyResult> {
  * tree anyone claims is finished, so verify never runs against it — but (M35 Task 1) an
  * `implementation` run's task must still be released, exactly as a failed resume already is by
  * `releaseTaskAfterFailure` (`./taskRelease.js`), rather than left `running` forever. A `review`
- * run's task is deliberately left alone on a review failure — see the comment on that branch below
- * for why. A `stopped` run was concluded by an operator whose decision stands; a `paused` run is
+ * run's task gets its CLAIM back and nothing else — no status change and no attempt, because the
+ * review retry cap governs review failures; see the comment on that branch below for why. A
+ * `stopped` run was concluded by an operator whose decision stands; a `paused` run is
  * not terminal at all — both are left alone. That last clause is also what covers M36 t2 with no
  * branch of its own: a run that ended by asking another slave a question parks in `paused` (with
  * `SlaveRun.pauseReason = waiting_for_answer`) and its task in `waiting`, so it falls out of the
@@ -226,19 +227,34 @@ export async function verifyConcludedRun(runId: RunId): Promise<void> {
         })
       }
     }
-    // `review`: deliberately left alone. Unlike `implementation`, a `reviewing` task with a dead
-    // `activeRunId` does not strand -- `dispatchReview`'s "already live" gate (`review.ts`) counts
-    // NON-terminal review runs for the task, never reads `Task.activeRunId`, so a `reviewing` task
-    // is re-dispatched normally next tick. `review.ts` already has its own bounded-retry policy
-    // for a review run that fails (`REVIEW_RETRY_CAP`, tested in review.test.ts's "invalid
-    // verdict" and "diff itself cannot be produced" cases): it deliberately leaves `Task.status`
-    // at `reviewing` and charges no `Task.attempt` for any SINGLE review failure. Releasing here
-    // too would fight that policy with an implementation-shaped rework/attempt charge for the same
-    // failure, not "handle it consistently" with it. Once the cap itself is spent, `dispatchReview`
-    // parks the task `blocked` and says so (`guardrail.tripped`, M35 Task 4) on its own -- there is
-    // still nothing for this function to release, because by then `Task.status` has already moved
-    // off `reviewing` and this branch (guarded on `run.status === 'failed'`, which a `blocked` park
-    // does not touch) is not where that happens.
+    if (run.kind === 'review') {
+      // The claim, and ONLY the claim. Since M41 Task 3b a review run holds `Task.activeRunId`
+      // from its dispatch (`review.ts`, mirroring `startRun`) precisely so the tick its own
+      // `run.succeeded` wakes cannot start a second reviewer on the same branch. That claim has to
+      // come back when the run ends `failed` without a conclusion -- an operator's stop, a gate
+      // failure, the sweep -- or the task sits in `reviewing` pointing at a terminal run and NO
+      // later dispatch can ever claim it again. That is the strand this arm closes.
+      //
+      // `Task.status` is deliberately untouched and NO attempt is charged, which is why this is not
+      // `releaseTaskAfterFailure`. `review.ts` has its own bounded-retry policy for a review run
+      // that fails (`REVIEW_RETRY_CAP`, tested in review.test.ts's "invalid verdict" and "diff
+      // itself cannot be produced" cases): it leaves the task in `reviewing` and charges no
+      // `Task.attempt` for any SINGLE review failure, and once the cap is spent `dispatchReview`
+      // parks the task `blocked` and says so (`guardrail.tripped`, M35 Task 4). An
+      // implementation-shaped rework/attempt charge here would fight that policy rather than
+      // handle it consistently -- the review's failure is judged by the cap, not by the task's
+      // attempt budget. So the retry policy is exactly what it was; all that changed is that the
+      // retry can now actually claim the task.
+      //
+      // Guarded on the run id, like every other release: a cancel, the sweep, or a conclusion for
+      // this run replayed a second time must not clear a newer run's claim.
+      if (run.taskId !== null) {
+        await prisma.task.updateMany({
+          where: { id: run.taskId, activeRunId: run.id },
+          data: { activeRunId: null },
+        })
+      }
+    }
     // `planning`: no task to release (M8b).
     return
   }

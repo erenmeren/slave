@@ -113,13 +113,21 @@ export async function reconcileOrphans(deps: SweepDeps): Promise<number> {
       data: { status: 'failed', terminalAt: now, endedAt: now },
     })
 
-    // Release the task the run was holding. Task 13 sets `status: running` and `activeRunId` when
-    // it starts one; failing the run and leaving the task pointing at it strands the task busy
-    // forever, and nothing else in the milestone reconciles *tasks*.
+    // Release the task the run was holding. `startRun` (tick.ts) and `dispatchReview` (review.ts,
+    // M41 Task 3b) both claim the task with `activeRunId` when they start one; failing the run and
+    // leaving the task pointing at it strands the task busy forever, and nothing else in the
+    // milestone reconciles *tasks*.
     //
-    // No attempt is counted. A daemon that died is not the slave failing, and counting it would let
-    // a crash-looping daemon exhaust every task's attempts and fail the lot — losing real work to
-    // an infrastructure problem. Same reasoning as Task 14's non-slave verify outcomes.
+    // What "released" means depends on the kind, and only since a review run holds a claim at all:
+    // an `implementation` run's task goes back to `rework` to be picked up again, but a `review`
+    // run's task gets ONLY its claim back and stays exactly where it is, in `reviewing`. A daemon
+    // that died is not the reviewer rejecting the work, and `rework` would spend an implementation
+    // attempt re-doing work nobody has judged wrong -- `dispatchReview`'s own retry cap is what
+    // bounds review, and a `reviewing` task with a null claim is precisely what it re-dispatches.
+    //
+    // No attempt is counted either way. A daemon that died is not the slave failing, and counting it
+    // would let a crash-looping daemon exhaust every task's attempts and fail the lot — losing real
+    // work to an infrastructure problem. Same reasoning as Task 14's non-slave verify outcomes.
     //
     // A `planning` run (M8b) has no task to release -- `taskId` is `null` and there is nothing
     // else in this block for it.
@@ -129,7 +137,7 @@ export async function reconcileOrphans(deps: SweepDeps): Promise<number> {
         ? { count: 0 }
         : await db.task.updateMany({
             where: { id: run.taskId, activeRunId: run.id },
-            data: { status: 'rework', activeRunId: null },
+            data: run.kind === 'review' ? { activeRunId: null } : { status: 'rework', activeRunId: null },
           })
 
     await appendEvent({
@@ -146,10 +154,12 @@ export async function reconcileOrphans(deps: SweepDeps): Promise<number> {
             : `the run's process (pid ${run.pid}) is gone but the run never concluded: it was orphaned by a restart`,
       },
     })
-    if (released.count > 0 && task !== null) {
+    if (released.count > 0 && task !== null && run.kind !== 'review') {
       // §13: no failure is silent. `failToStart` and `advance` both announce a task they park in
       // `rework`; a reader would otherwise see a run fail with no record of the task going back
-      // into the queue. Only when this pass is what released it.
+      // into the queue. Only when this pass is what released it -- and only for a kind this pass
+      // actually parked in `rework`: a released `review` claim leaves the task in `reviewing`, and
+      // announcing `task.rework` for it would be a lie about where the task went.
       await appendEvent({
         type: 'task.rework',
         workspaceId: deps.workspaceId,
@@ -305,7 +315,13 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
  */
 async function concludeDeadRun(
   deps: SweepDeps,
-  run: { readonly id: string; readonly taskId: string | null; readonly slaveId: string; readonly pid: number | null },
+  run: {
+    readonly id: string
+    readonly taskId: string | null
+    readonly slaveId: string
+    readonly pid: number | null
+    readonly kind: 'implementation' | 'review' | 'planning'
+  },
 ): Promise<void> {
   const now = new Date()
   const concluded = await db.slaveRun.updateMany({
@@ -314,11 +330,13 @@ async function concludeDeadRun(
   })
   if (concluded.count === 0) return
 
-  // A `planning` run (M8b) has no task to release.
+  // A `planning` run (M8b) has no task to release. A `review` run gets ONLY its claim back and
+  // leaves the task in `reviewing` -- see `reconcileOrphans`' own release for why `rework` would be
+  // both a lie and an implementation attempt spent on work nobody judged wrong (M41 Task 3b).
   if (run.taskId !== null) {
     await db.task.updateMany({
       where: { id: run.taskId, activeRunId: run.id },
-      data: { status: 'rework', activeRunId: null },
+      data: run.kind === 'review' ? { activeRunId: null } : { status: 'rework', activeRunId: null },
     })
   }
 

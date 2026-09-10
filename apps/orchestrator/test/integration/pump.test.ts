@@ -446,12 +446,16 @@ describe('pumpRun', () => {
   })
 
   it('charges no attempt and leaves the task untouched for a review-kind run\'s gate failure (M35 final review, Important 1)', async (): Promise<void> => {
-    // A review run's task never carries `activeRunId` -- `review.ts`'s `dispatchReview` never sets
-    // it, and `verify.ts`'s advance-to-`reviewing` write already nulled whatever the implementation
-    // run had left there. Mirror that here rather than trusting `seed()`'s implementation-shaped
-    // fixture: `kind: 'review'`, task parked `reviewing` with `activeRunId: null`.
+    // A review run's task DOES carry `activeRunId` since M41 Task 3b -- `dispatchReview` claims it
+    // exactly as `startRun` does, so that the tick the run's own `run.succeeded` wakes cannot start
+    // a second reviewer. That is what makes this case worth a test of its own rather than a
+    // coincidence: the guard `releaseTaskAfterFailure` carries (`activeRunId === runId`) would now
+    // MATCH, so the kind check in the gate-failure arm is the only thing keeping this path from
+    // charging an attempt against review work the review retry cap already governs. Mirror the real
+    // shape rather than trusting `seed()`'s implementation-shaped fixture: `kind: 'review'`, task
+    // `reviewing`, claim held by this run.
     await prisma.slaveRun.update({ where: { id: ids.runId }, data: { kind: 'review' } })
-    await prisma.task.update({ where: { id: ids.taskId }, data: { status: 'reviewing', activeRunId: null } })
+    await prisma.task.update({ where: { id: ids.taskId }, data: { status: 'reviewing', activeRunId: ids.runId } })
 
     const cancel = vi.fn(async (): Promise<void> => {})
 
@@ -473,12 +477,13 @@ describe('pumpRun', () => {
     const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: ids.workspaceId } })
     expect(workspace.haltedReason).not.toBeNull()
 
-    // But `releaseTaskAfterFailure`'s guard (`activeRunId === runId`) never matches, so the task is
-    // untouched: no attempt charged, still `reviewing`, still no `activeRunId`.
+    // But the task is untouched: no attempt charged, still `reviewing`. The claim is still held
+    // here too -- releasing it is `verify.ts`'s `failed` arm, chained onto this same run right
+    // after the pump returns, which is the one place that release lives.
     const task = await prisma.task.findUniqueOrThrow({ where: { id: ids.taskId } })
     expect(task.attempt).toBe(0)
     expect(task.status).toBe('reviewing')
-    expect(task.activeRunId).toBeNull()
+    expect(task.activeRunId).toBe(ids.runId)
   })
 
   it('reacts to a fail-open hook failure with a reason that must not read like the blocking crash above', async (): Promise<void> => {

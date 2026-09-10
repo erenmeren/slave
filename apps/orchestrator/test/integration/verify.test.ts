@@ -534,29 +534,50 @@ describe('verifyConcludedRun releases a task after a run concludes failed', () =
     expect(t.attempt).toBe(0)
   })
 
-  it('leaves a reviewing task exactly where it is when its own review run fails -- the retry cap governs review, not this path', async (): Promise<void> => {
-    // Finding (M35 Task 1): unlike an implementation task, a `reviewing` task does not strand the
-    // same way a `running` one does. `dispatchReview`'s "is one already live" gate is a count of
-    // NON-terminal review runs for the task, never a check of `Task.activeRunId` -- so a `reviewing`
-    // task with a dead `activeRunId` is re-dispatched normally on the next tick. `review.ts` already
-    // has its own bounded-retry policy for a review run that fails (`REVIEW_RETRY_CAP`, tested in
-    // review.test.ts's "invalid verdict" and "diff itself cannot be produced" cases), which
-    // deliberately leaves `Task.status` at `reviewing` and charges no `Task.attempt` for any SINGLE
-    // review failure -- this test's own case. Releasing here too would double that policy: an
-    // implementation-shaped rework/attempt charge fighting the review-shaped retry cap for the same
-    // failure. Consistent handling is leaving review alone, not forcing it through the
-    // implementation path. Once the cap itself is spent, `dispatchReview` parks the task `blocked`
-    // on its own (M35 Task 4, `review.test.ts`'s "escalates an exhausted review cap" case) -- a
-    // park this function never sees, because by then `Task.status` has already moved off
-    // `reviewing`.
+  it('gives a reviewing task its claim back when its own review run fails, and charges nothing -- the retry cap governs review, not this path', async (): Promise<void> => {
+    // The claim is released, and NOTHING else is. Since M41 Task 3b a review run holds
+    // `Task.activeRunId` from dispatch (`review.ts`'s claim, mirroring `startRun`) so that the tick
+    // its own `run.succeeded` wakes cannot start a second reviewer on the same branch -- which
+    // means a review run that ends `failed` without a conclusion (an operator's stop, a gate
+    // failure, the sweep) leaves a `reviewing` task pointing at a terminal run, and NO later
+    // dispatch could ever claim it again. That is the strand this arm closes, and it is the reason
+    // the M35 Task 1 finding this test used to record ("a reviewing task does not strand") no
+    // longer holds: back then `dispatchReview` never read `Task.activeRunId` at all.
+    //
+    // `Task.status` and `Task.attempt` are still untouched, deliberately. `review.ts` has its own
+    // bounded-retry policy for a review run that fails (`REVIEW_RETRY_CAP`, tested in
+    // review.test.ts's "invalid verdict" and "diff itself cannot be produced" cases), which leaves
+    // the task at `reviewing` and charges no attempt for any SINGLE review failure -- this test's
+    // own case. An implementation-shaped rework/attempt charge here would fight that policy rather
+    // than handle it consistently. Once the cap itself is spent, `dispatchReview` parks the task
+    // `blocked` on its own (M35 Task 4, `review.test.ts`'s "escalates an exhausted review cap"
+    // case) -- a park this function never sees.
     const f = await seedFailedRun({ kind: 'review', taskStatus: 'reviewing' })
 
     await verifyConcludedRun(brandRunId(f.runId))
 
     const t = await prisma.task.findUniqueOrThrow({ where: { id: f.taskId } })
     expect(t.status).toBe('reviewing')
-    expect(t.activeRunId).toBe(f.runId)
+    expect(t.activeRunId).toBeNull()
     expect(t.attempt).toBe(0)
+    expect(await eventTypesFor(f.workspaceId)).not.toContain('task.failed')
+  })
+
+  it('does not clear a newer review claim when an older review run of the same task concluded failed', async (): Promise<void> => {
+    const f = await seedFailedRun({ kind: 'review', taskStatus: 'reviewing' })
+    // A replacement review already claimed the task: this arm must be as guarded as every other
+    // release on the run id, or a replayed conclusion hands a live reviewer's task away.
+    const older = await prisma.slaveRun.findUniqueOrThrow({ where: { id: f.runId } })
+    const replacement = await prisma.slaveRun.create({
+      data: { taskId: f.taskId, slaveId: older.slaveId, kind: 'review', status: 'working' },
+    })
+    await prisma.task.update({ where: { id: f.taskId }, data: { activeRunId: replacement.id } })
+
+    await verifyConcludedRun(brandRunId(f.runId))
+
+    const t = await prisma.task.findUniqueOrThrow({ where: { id: f.taskId } })
+    expect(t.activeRunId).toBe(replacement.id)
+    expect(t.status).toBe('reviewing')
   })
 
   it('does nothing for a task-less planning run that fails', async (): Promise<void> => {

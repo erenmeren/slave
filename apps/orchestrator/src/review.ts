@@ -66,6 +66,18 @@ export async function concludeReview(runId: RunId): Promise<void> {
       where: { id: runId, status: 'succeeded' },
       data: { status: 'failed' },
     })
+    // Hand the claim back (M41 Task 3b) so the next dispatch can take it -- the task deliberately
+    // stays `reviewing` (this branch's own policy, below), and a `reviewing` task still pointing at
+    // this now-terminal run is one no dispatch could ever claim again. BEFORE the event, not after:
+    // `run.failed` is what wakes the daemon's tick, and a tick that arrives before the release
+    // simply finds the task still claimed and does nothing.
+    //
+    // Guarded on the run id: a REPLAYED conclusion (this row legitimately stays terminal, so a
+    // restarted daemon can call this again) must not clear a NEWER review run's claim.
+    await prisma.task.updateMany({
+      where: { id: task.id, activeRunId: runId },
+      data: { activeRunId: null },
+    })
     await appendEvent({
       type: 'run.failed',
       workspaceId: task.workspaceId,
@@ -81,9 +93,14 @@ export async function concludeReview(runId: RunId): Promise<void> {
   if (parsed.value.verdict === 'approve') {
     // `autoMerge` is NOT consulted here (spec Decision 5) -- the merge pass, not this conclusion,
     // owns whether an approved task merges itself or waits for a human.
+    // `activeRunId: null` in the same write as the status (M41 Task 3b): the claim this run took at
+    // dispatch is released exactly when the task stops being under review, so the two can never
+    // disagree. `unblockTask`/`cancelTask`/`failTask` refuse a task carrying an `activeRunId`, so a
+    // claim left behind here would follow the task into `merging` and refuse operator commands on
+    // work that is no longer being reviewed at all.
     const updated = await prisma.task.updateMany({
       where: { id: task.id, status: 'reviewing' },
-      data: { status: 'merging' },
+      data: { status: 'merging', activeRunId: null },
     })
     if (updated.count === 1) {
       await appendEvent({
@@ -105,6 +122,14 @@ export async function concludeReview(runId: RunId): Promise<void> {
   // invalid branches get this from their conditioned updates; a bare `rejectTask` would not.
   if (task.status !== 'reviewing') {
     console.warn(`[review] ignoring a reject verdict for task ${task.id}, which is ${task.status}`)
+    // The verdict is ignored; the claim is not. A task that left `reviewing` while still pointing
+    // at THIS run (an operator's stop of the run parks the task `blocked` and clears it, but a
+    // status move that did not go through a release would not) is a task no dispatch can claim
+    // again. Guarded on the run id, so a replay cannot clear a newer run's claim (M41 Task 3b).
+    await prisma.task.updateMany({
+      where: { id: task.id, activeRunId: runId },
+      data: { activeRunId: null },
+    })
     return
   }
   const counted = await rejectTask(brandTaskId(task.id), parsed.value.reason)
@@ -310,6 +335,37 @@ async function dispatchReview(deps: TickDeps, task: ReviewableTask): Promise<Run
   if (run === null) return null
   const runId = brandRunId(run.id)
 
+  // The claim (M41 Task 3b), mirroring `startRun`'s in `tick.ts` -- same atomic `updateMany`, same
+  // reason, and until this landed review was the one dispatch path without it.
+  //
+  // Check 1 above counts NON-TERMINAL review runs, which leaves a window nothing else closes:
+  // `pumpRun` writes the review run terminal and emits `run.succeeded` BEFORE the chained
+  // `verifyConcludedRun` -> `concludeReview` moves the task off `reviewing`, and `runDaemon` wakes
+  // its tick coalescer on EVERY event in the workspace. So the review's own `run.succeeded` wakes a
+  // tick that sees a `reviewing` task with no live review run and dispatches a SECOND reviewer onto
+  // the same branch, 16-45 ms later -- measured five times in seven runs of the M41 scenario gate,
+  // at one extra provider run per reviewed task. The second verdict is a no-op; the bill is not.
+  // Two overlapping passes have the same problem without any pump at all: neither's `SlaveRun` row
+  // exists when the other counts.
+  //
+  // Done in the database rather than in process for `startRun`'s reason: the CLI's `tick` can run
+  // against a live daemon, and a mutex in one process says nothing about the other. The invariant
+  // it establishes is the one everything below now relies on -- while a review run is non-terminal
+  // (or terminal but not yet concluded) `Task.activeRunId` is that run's id, and a `reviewing` task
+  // with `activeRunId: null` has no live review.
+  const claimed = await prisma.task.updateMany({
+    where: { id: task.id, status: 'reviewing', activeRunId: null },
+    data: { activeRunId: run.id },
+  })
+  if (claimed.count === 0) {
+    // Lost the race: another pass claimed the task first, or it left `reviewing` (a cancel, the
+    // cap's park) between the read at the top of `dispatchReviews` and here. Nothing was attempted,
+    // so this must not leave a `failed` row that reads as a review attempt against
+    // `REVIEW_RETRY_CAP`, and must not touch the winner's task -- exactly `startRun`'s reasoning.
+    await prisma.slaveRun.delete({ where: { id: run.id } })
+    return null
+  }
+
   // Declared outside the `try` for the same reason `startRun` does: the catch below needs to tell
   // "never spawned" from "spawned, then something else failed" so it never abandons a live slave.
   let handle: RunHandle | null = null
@@ -472,7 +528,16 @@ async function dispatchReview(deps: TickDeps, task: ReviewableTask): Promise<Run
       data: { status: 'failed', terminalAt: now, endedAt: now },
     })
     // The task stays in `reviewing` -- this is infra failing to start, not the slave's work being
-    // judged, so `attempt` (the slave-facing counter) is deliberately left untouched.
+    // judged, so `attempt` (the slave-facing counter) is deliberately left untouched. But the claim
+    // this dispatch took a few lines up must go back (M41 Task 3b): a task left pointing at a
+    // terminal run is a task no later dispatch can ever claim, so the review that failed to start
+    // would be the last one this task ever got. Guarded on the run id for the same reason every
+    // other release here is -- a cancel or the sweep that already moved the task on must not be
+    // overwritten.
+    await prisma.task.updateMany({
+      where: { id: task.id, activeRunId: run.id },
+      data: { activeRunId: null },
+    })
     await appendEvent({
       type: 'run.failed',
       workspaceId: task.workspaceId,
