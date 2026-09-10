@@ -687,6 +687,7 @@ describe('dispatchReviews', () => {
     expect(second).toHaveLength(1)
     const secondRunId = second[0]
 
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     await concludeReview(brandRunId(firstRun.id))
 
     const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
@@ -694,6 +695,16 @@ describe('dispatchReviews', () => {
     expect(task.activeRunId).toBe(secondRunId)
     // And no second approval announced for a task that was never approved twice.
     expect(await eventsOf(fixture.workspaceId, 'task_review_approved')).toHaveLength(1)
+    // The dropped verdict is warned about, not silently discarded (fix round 2): the operator can
+    // see which run's approval never took, and against which task/status/claim it collided.
+    const dropped = warn.mock.calls.filter(([msg]) => String(msg).includes('dropping an approve verdict'))
+    expect(dropped).toHaveLength(1)
+    const message = String(dropped[0]?.[0])
+    expect(message).toContain(fixture.taskId)
+    expect(message).toContain(firstRun.id)
+    expect(message).toContain('reviewing')
+    expect(message).toContain(secondRunId)
+    warn.mockRestore()
 
     await drainPumps()
   }, 60_000)

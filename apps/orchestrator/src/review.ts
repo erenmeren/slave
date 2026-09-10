@@ -116,6 +116,14 @@ export async function concludeReview(runId: RunId): Promise<void> {
         actor: 'system',
         payload: { reason: parsed.value.reason },
       })
+    } else {
+      // Dropped, not silently discarded (fix round 2), the same as the reject branch below: an
+      // approve that loses the guard is an approval nobody will ever see land, and an operator
+      // needs to know which run's verdict that was and which task/status/claim it collided with.
+      const claim = task.activeRunId === null ? 'nothing' : `run ${task.activeRunId}`
+      console.warn(
+        `[review] dropping an approve verdict for task ${task.id} from run ${runId}, which is ${task.status} and claimed by ${claim}`,
+      )
     }
     return
   }

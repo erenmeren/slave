@@ -234,15 +234,19 @@ describe('fake-claude', () => {
     it('is checked BEFORE the task-graph arm, so a re-plan is never answered with a first plan', async (): Promise<void> => {
       // The trailer a re-plan run carries names the first plan's literal nowhere -- but a prompt
       // that carried both must still reach the delta, because the re-plan arm is the more specific
-      // one and the board would otherwise be rebuilt from a graph nobody asked for.
-      const { stdout } = await run(
-        'node',
-        [FAKE, '--fixture', 'm8-flow', '-p', `${PROMPT} "task graph" "verdict"`],
-        { cwd: repoDir },
-      )
-      const result = parseLines(stdout).find((l) => l.type === 'result') as { result?: string } | undefined
-      expect(result?.result).toContain(ADDED)
-      expect(result?.result).not.toContain('"key":"core"')
+      // one and the board would otherwise be rebuilt from a graph nobody asked for. Both modes that
+      // carry a task-graph arm share this ordering (M40 adds the re-plan arm in front of it in
+      // every such mode, `m41-flow` included), so both are pinned here.
+      for (const fixtureName of ['m8-flow', 'm41-flow']) {
+        const { stdout } = await run(
+          'node',
+          [FAKE, '--fixture', fixtureName, '-p', `${PROMPT} "task graph" "verdict"`],
+          { cwd: repoDir },
+        )
+        const result = parseLines(stdout).find((l) => l.type === 'result') as { result?: string } | undefined
+        expect(result?.result).toContain(ADDED)
+        expect(result?.result).not.toContain('"key":"core"')
+      }
     })
 
     it('leaves a supervisor decision prompt to the decision arms', async (): Promise<void> => {
@@ -337,10 +341,8 @@ describe('fake-claude', () => {
       // The envelope is appended to the LAST assistant text block, not emitted as a line of its
       // own, so the pump reads it through the exact stream shape a real run produces.
       expect(stdout).toContain('<slave-ask>')
-      expect(stdout).toContain('"recipientRole"'.replace('recipientRole', 'role'))
-      // That line alone cannot fail: `"role":"assistant"` sits on every assistant line of the
-      // `complete` capture. This is the envelope itself -- the ask JSON as it is escaped inside
-      // the text block, which is the only place the pump ever reads it from.
+      // The envelope itself -- the ask JSON as it is escaped inside the text block, which is the
+      // only place the pump ever reads it from.
       expect(stdout).toContain(JSON.stringify(`<slave-ask>\n${ASK_JSON}\n</slave-ask>`).slice(1, -1))
       // An ask is not work: the run stopped to ask, so it left nothing behind.
       expect(commitCount()).toBe(1)
@@ -348,6 +350,11 @@ describe('fake-claude', () => {
     })
 
     it('a work run for ANOTHER task commits instead of asking, even with --ask-on-task set', async (): Promise<void> => {
+      // `API_PROMPT`'s description deliberately contains the token `core` ("Wire the core into the
+      // public surface.") even though its title is `Expose the API`: a whole-prompt
+      // `prompt.includes(token)` match would wrongly turn THIS run into the asking leg. This case
+      // is the line-scoped guard -- the token has to be matched inside the `Task: <title>` line,
+      // not anywhere in the prompt.
       const { stdout } = await run(
         'node',
         [FAKE, '--ask-on-task', 'core', '--fixture', 'm41-flow', '-p', API_PROMPT],

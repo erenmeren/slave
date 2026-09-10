@@ -216,6 +216,29 @@ describe('cancelTask', () => {
     expect(await cancelledEvents()).toHaveLength(0)
   })
 
+  it('refuses a reviewing task whose activeRunId names a live review run with task_run_active, not task_not_cancellable', async () => {
+    // The claim check runs before the status check (`cancelTask`'s own ordering), so a task that
+    // fails BOTH -- reviewing is not cancellable AND it is claimed -- is refused for the claim, the
+    // more specific and more urgent of the two reasons: nothing about this task's own board status
+    // should move while a run still holds it.
+    const team = await prisma.team.create({ data: { workspaceId: f.workspaceId, name: 'Engineering' } })
+    const slave = await prisma.slave.create({
+      data: { teamId: team.id, name: 'Rae', role: 'Reviewer', runtimeRoles: ['reviewer'] },
+    })
+    const task = await makeTask(f.workspaceId, { status: 'reviewing' })
+    const run = await prisma.slaveRun.create({
+      data: { slaveId: slave.id, taskId: task.id, kind: 'review', status: 'working' },
+    })
+    await prisma.task.update({ where: { id: task.id }, data: { activeRunId: run.id } })
+
+    const result = await cancelTask(task.id, 'because')
+    expect(result).toEqual({ ok: false, error: { kind: 'task_run_active', taskId: task.id, runId: run.id } })
+    const after = await prisma.task.findUniqueOrThrow({ where: { id: task.id } })
+    expect(after.status).toBe('reviewing')
+    expect(after.activeRunId).toBe(run.id)
+    expect(await cancelledEvents()).toHaveLength(0)
+  })
+
   it('refuses every status that is not backlog, ready or blocked, naming the one it found', async () => {
     for (const status of ['assigned', 'running', 'verifying', 'reviewing', 'merging', 'rework', 'waiting', 'done', 'failed', 'cancelled'] as const) {
       const task = await makeTask(f.workspaceId, { status })

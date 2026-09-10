@@ -25,7 +25,10 @@ import { buildTasksSnapshot } from '../../src/server/tasks.js'
  * builder's field IS the verb the gate reads instead of it, and together they cover every row of
  * the gate header's mapping table. A builder that starts computing something of its own fails
  * here, and whoever changes it learns in the same commit that the gate has stopped measuring the
- * surface it says it measures.
+ * surface it says it measures. One row is not a builder field at all: the header table's "stale
+ * badge" is a client-side derivation from `goalVersion` columns (erratum E8), so it is pinned here
+ * via those raw `workspace.goalVersion` / `task.goalVersion` columns rather than a builder's return
+ * value.
  *
  * The world below is deliberately NOT empty (fix round 1, minor 4c). Two lists agreeing when both
  * are `[]` proves nothing: the fixture seeds a stuck task, an integrated one, a finished run with a
