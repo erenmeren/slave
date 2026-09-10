@@ -24,8 +24,9 @@ import { INPUT_SHELL } from '../ui/FormControls'
 
 /** Which `DetailsGroup` each profile field renders inside. `runtimeRole` joins `identity` -- it is
  *  the one field the renderer never puts in a prompt (plan erratum E3), and it belongs beside who
- *  the worker is rather than in a group of its own. `body` is Advanced: it is the persona's own
- *  remaining prose, and the rendered Markdown under Advanced is where a person reads it. */
+ *  the worker is rather than in a group of its own. `body` gets a group of its own (fix round 1):
+ *  it is the persona's own remaining prose (plan erratum E1), it IS overridable, and leaving it to
+ *  the rendered Markdown under Advanced meant the API offered an edit the drawer did not. */
 const GROUP_BY_FIELD: Record<ProfileSpecField, DetailsGroupName> = {
   identity: 'identity',
   summary: 'identity',
@@ -40,7 +41,7 @@ const GROUP_BY_FIELD: Record<ProfileSpecField, DetailsGroupName> = {
   successCriteria: 'success',
   collaborationHints: 'collaboration',
   recommendedSkills: 'skills',
-  body: 'advanced',
+  body: 'body',
 }
 
 /** The order R6 names, and the title each group carries. Exhaustive by construction: a group added
@@ -59,6 +60,9 @@ const GROUPS: readonly { readonly group: DetailsGroupName; readonly title: strin
   { group: 'collaboration', title: 'Collaboration' },
   { group: 'skills', title: 'Skills' },
   { group: 'source', title: 'Source' },
+  // Thirteenth, under the twelve R6 names: the persona's own words, last for the same reason
+  // `PROFILE_SECTION_PRIORITY` renders them last -- everything above is partly a reading of them.
+  { group: 'body', title: 'In their own words' },
 ]
 
 const isOverridable = (field: ProfileSpecField): field is ProfileOverridableField =>
@@ -93,7 +97,9 @@ const fromText = (field: ProfileSpecField, text: string): string | string[] =>
  * at all: it is not in `PROFILE_OVERRIDABLE_FIELDS` (plan erratum E21), so a Save beside it would
  * be a control that answers 409 every time it is pressed.
  *
- * The raw Markdown lives under `Advanced` and only there. It is the text a run is actually given,
+ * The raw Markdown -- the rendered text a run is actually GIVEN, and the box that replaces it --
+ * lives under `Advanced` and only there. It is not the same thing as `In their own words`, which
+ * is one structured field among fourteen and composes with the rest. It is the text a run is given,
  * and putting the editor for it beside the structured fields would invite an operator to edit both
  * and lose one: the two do NOT compose -- whichever was written last is what a run sees -- so a
  * raw override that stands is announced as REPLACING the rendered profile, with the way back out
@@ -160,22 +166,36 @@ export function ProfileDrawer({
   const view = state.kind === 'ready' ? state.view : null
   const spec = view?.effective ?? null
 
-  const field = (name_: ProfileSpecField, current: ProfileSpec, overridden: readonly string[]): React.JSX.Element => {
+  /**
+   * `labelled` is false for the one group that holds a single field whose label IS the group's own
+   * title (`body` / `In their own words`): printing both would say the same four words twice, one
+   * above the other. The `customised` chip still renders, because that is not the label.
+   */
+  const field = (
+    name_: ProfileSpecField,
+    current: ProfileSpec,
+    overridden: readonly string[],
+    labelled = true,
+  ): React.JSX.Element => {
     const isOver = overridden.includes(name_)
     const value = current[name_]
     const editable = customising && isOverridable(name_)
     return (
       <div key={name_} data-testid={`profile-field-${name_}`} data-overridden={isOver} className="flex flex-col gap-1">
-        <span className="flex items-center gap-2 text-[10px] uppercase tracking-wide text-text-3">
-          {PROFILE_FIELD_LABEL[name_]}
-          {isOver && <Chip testId={`profile-field-overridden-${name_}`}>customised</Chip>}
-        </span>
+        {(labelled || isOver) && (
+          <span className="flex items-center gap-2 text-[10px] uppercase tracking-wide text-text-3">
+            {labelled && PROFILE_FIELD_LABEL[name_]}
+            {isOver && <Chip testId={`profile-field-overridden-${name_}`}>customised</Chip>}
+          </span>
+        )}
         {editable && isOverridable(name_) ? (
           <>
             <textarea
               data-testid={`profile-field-input-${name_}`}
               aria-label={PROFILE_FIELD_LABEL[name_]}
-              rows={PROFILE_FIELD_KIND[name_] === 'text' ? 2 : 4}
+              // `body` is prose measured in kilobytes, not a sentence: two rows would be a
+              // porthole onto a page. Every other text field is capped at 240 characters.
+              rows={name_ === 'body' ? 8 : PROFILE_FIELD_KIND[name_] === 'text' ? 2 : 4}
               value={drafts[name_] ?? toText(current, name_)}
               onChange={(event) => {
                 const next = event.target.value
@@ -283,7 +303,7 @@ export function ProfileDrawer({
                   )
                 })()
               : PROFILE_SPEC_FIELDS.filter((member) => GROUP_BY_FIELD[member] === group).map((member) =>
-                  field(member, spec, view.overridden),
+                  field(member, spec, view.overridden, group !== 'body'),
                 )}
           </DetailsGroup>
         ))}
@@ -313,14 +333,18 @@ export function ProfileDrawer({
             className={`w-full ${INPUT_SHELL}`}
           />
           <span className="flex gap-2">
+            {/* Disabled until the text actually differs from what is stored (fix round 1): a Save
+              * pressed on an untouched box would write the rendered profile back as a raw
+              * override and freeze the row against imports, having changed not one character. */}
             <Button
               variant="ghost"
               size="sm"
               data-testid="profile-raw-save"
+              disabled={rawDraft === null || rawDraft === (view.markdown ?? '')}
               onClick={() => {
                 void sendControl(`/api/org/templates/${templateId}/profile`, {
                   method: 'PUT',
-                  body: { profile: rawDraft ?? view.markdown ?? '' },
+                  body: { profile: rawDraft ?? '' },
                 }).then(after)
               }}
             >

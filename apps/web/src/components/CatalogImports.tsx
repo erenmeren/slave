@@ -27,7 +27,8 @@ const HEADER = ['When', 'Catalog', 'By', 'Created', 'Updated', 'Unchanged', 'Ski
  *
  * Each row is wrapped in its own `data-testid` element rather than passed one: `Row` renders a
  * fixed `data-testid="data-table-row"` and forwards nothing else, and giving it a second identity
- * would change a handle every other table's tests already read.
+ * would change a handle every other table's tests already read. The price of that wrapper is that
+ * `Row` cannot see its own position any more, which is what `last` is for.
  */
 export function CatalogImports({ imports }: { readonly imports: readonly CatalogImportRow[] }): React.JSX.Element {
   if (imports.length === 0) {
@@ -41,9 +42,12 @@ export function CatalogImports({ imports }: { readonly imports: readonly Catalog
   return (
     <div data-testid="catalog-imports">
       <DataTable columns={COLUMNS} header={[...HEADER]}>
-        {imports.map((row) => (
+        {imports.map((row, index) => (
           <div key={row.id} data-testid={`catalog-import-${row.id}`}>
-            <Row columns={COLUMNS}>
+            {/* `last` because this row is the only child of its wrapper, so `Row`'s own
+             *  `:last-child` selector would match every one of them and draw no separator at all
+             *  (M46 t4 fix round 1). */}
+            <Row columns={COLUMNS} last={index === imports.length - 1}>
               {/* The timestamp as the CLI's `list-imports` prints it, minus the `T` and the
                *  milliseconds -- the same run, told the same way in both places. */}
               <span className="font-mono text-xs text-text-2">{row.finishedAt.slice(0, 19).replace('T', ' ')}</span>

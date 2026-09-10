@@ -147,10 +147,29 @@ describe('WorkforceCatalog rows', () => {
     expect(within(screen.getByTestId('catalog-row-t2')).getByText('—')).toBeTruthy()
   })
 
-  // The row cells the old `TemplateCatalog` table asserted, on the surface that replaced it.
-  it('renders the role chip beside the name', () => {
-    render(<WorkforceCatalog initial={view([row({ role: 'backend' })])} />)
+  // The row cells the old `TemplateCatalog` table asserted, on the surface that replaced it --
+  // except that R6 files a specialist under its DIVISION, not the role string it was typed with.
+  it('files an imported row under its division, keeping the raw role one hover away', () => {
+    render(<WorkforceCatalog initial={view([row({ role: 'backend', sourceDivision: 'engineering' })])} />)
+    const chip = within(screen.getByTestId('catalog-row-t1')).getByText('engineering')
+    expect(chip.getAttribute('title')).toBe('backend')
+  })
+
+  it('falls back to the role on a hand-made row, which has no division', () => {
+    render(
+      <WorkforceCatalog
+        initial={view([row({ role: 'backend', sourceDivision: null, source: 'local', structured: false })])}
+      />,
+    )
     expect(within(screen.getByTestId('catalog-row-t1')).getByText('backend')).toBeTruthy()
+  })
+
+  // Fix round 1, minor 4: every `Row` is the only child of its wrapper, so `Row`'s own
+  // `last:border-b-0` matched ALL of them and the table drew no separator anywhere.
+  it('draws a separator under every row but the last', () => {
+    render(<WorkforceCatalog initial={view([row(), row({ id: 't2' }), row({ id: 't3' })])} />)
+    const borders = screen.getAllByTestId('data-table-row').map((node) => node.className.includes('border-b'))
+    expect(borders).toEqual([true, true, false])
   })
 
   it('never prints a bare mapping-quality token as visible text (docs/ia.md rule 3)', () => {
@@ -244,6 +263,100 @@ describe('WorkforceCatalog filters', () => {
     expect(replaceState).toHaveBeenCalledWith(null, '', '/workforce')
   })
 
+  /**
+   * Fix round 1, important 1. The search box fires one request per keystroke, so `?q=buil` and
+   * `?q=builder` are in flight together as a matter of course -- and the shorter query, matching
+   * more rows, is exactly the one likely to answer LAST. The list must show the latest request's
+   * answer, not the last one to arrive.
+   */
+  it('ignores a superseded answer that lands after a newer one', async () => {
+    const release: Record<string, (view: WorkforceCatalogView) => void> = {}
+    fetchMock.mockImplementation(
+      async (url: string) =>
+        await new Promise<Response>((resolve) => {
+          release[url] = (body) => {
+            resolve(new Response(JSON.stringify(body), { status: 200 }))
+          }
+        }),
+    )
+    render(<WorkforceCatalog initial={view([row()])} />)
+
+    await act(async () => {
+      fireEvent.change(screen.getByTestId('catalog-search'), { target: { value: 'buil' } })
+    })
+    await act(async () => {
+      fireEvent.change(screen.getByTestId('catalog-search'), { target: { value: 'builder' } })
+    })
+    await waitFor(() => expect(Object.keys(release)).toHaveLength(2))
+
+    // The LATER query answers first, then the earlier one -- the race, made deterministic.
+    await act(async () => {
+      release['/api/org/catalog?q=builder']?.(view([row({ id: 'later', name: 'The later answer' })]))
+    })
+    await act(async () => {
+      release['/api/org/catalog?q=buil']?.(view([row({ id: 'earlier', name: 'The earlier answer' })]))
+    })
+
+    expect(screen.getByTestId('catalog-row-later')).toBeTruthy()
+    expect(screen.queryByTestId('catalog-row-earlier')).toBeNull()
+    expect(screen.queryByTestId('catalog-stale')).toBeNull()
+  })
+
+  // A superseded request that FAILS says nothing either: its answer was never going to render.
+  it('stays quiet when a superseded request fails', async () => {
+    const release: Record<string, (response: Response) => void> = {}
+    fetchMock.mockImplementation(
+      async (url: string) =>
+        await new Promise<Response>((resolve) => {
+          release[url] = resolve
+        }),
+    )
+    render(<WorkforceCatalog initial={view([row()])} />)
+
+    await act(async () => {
+      fireEvent.change(screen.getByTestId('catalog-search'), { target: { value: 'buil' } })
+    })
+    await act(async () => {
+      fireEvent.change(screen.getByTestId('catalog-search'), { target: { value: 'builder' } })
+    })
+    await waitFor(() => expect(Object.keys(release)).toHaveLength(2))
+
+    await act(async () => {
+      release['/api/org/catalog?q=builder']?.(new Response(JSON.stringify(view([row()])), { status: 200 }))
+    })
+    await act(async () => {
+      release['/api/org/catalog?q=buil']?.(new Response('nope', { status: 500 }))
+    })
+
+    expect(screen.queryByTestId('catalog-stale')).toBeNull()
+  })
+
+  // Fix round 1, minor 5: a refetch in flight says so, and the previous answer stays readable
+  // underneath rather than the list emptying itself on every keystroke.
+  it('says it is reading while a refetch is in flight', async () => {
+    let release: ((response: Response) => void) | null = null
+    fetchMock.mockImplementation(
+      async () =>
+        await new Promise<Response>((resolve) => {
+          release = resolve
+        }),
+    )
+    render(<WorkforceCatalog initial={view([row()])} />)
+    expect(screen.queryByTestId('catalog-loading')).toBeNull()
+
+    await act(async () => {
+      fireEvent.change(screen.getByTestId('catalog-search'), { target: { value: 'builder' } })
+    })
+
+    expect(screen.getByTestId('catalog-loading')).toBeTruthy()
+    expect(screen.getByTestId('catalog-row-t1')).toBeTruthy()
+
+    await act(async () => {
+      release?.(new Response(JSON.stringify(view([row()])), { status: 200 }))
+    })
+    expect(screen.queryByTestId('catalog-loading')).toBeNull()
+  })
+
   it('opens with the filters the URL arrived with', async () => {
     search = 'tab=catalog&capability=Run+the+work+back'
     render(<WorkforceCatalog initial={view([row()])} />)
@@ -329,6 +442,7 @@ describe('ProfileDrawer', () => {
       'collaboration',
       'skills',
       'source',
+      'body',
       'advanced',
     ])
   })
@@ -391,6 +505,32 @@ describe('ProfileDrawer', () => {
     expect(screen.queryByTestId('profile-field-input-runtimeRole')).toBeNull()
     expect(screen.queryByTestId('profile-field-save-runtimeRole')).toBeNull()
     expect(screen.getByTestId('profile-field-input-mission')).toBeTruthy()
+  })
+
+  // Fix round 1, minor 2: `body` is overridable and had no group -- the API offered an edit the
+  // drawer did not. `Advanced`'s raw box is a different thing: it REPLACES the rendered profile,
+  // where this composes with the other thirteen fields.
+  it("gives the persona's own words a group of their own, editable like any other field", async () => {
+    await openDrawer()
+    const groups = screen.getAllByTestId('details-group')
+    const body = groups.find((node) => node.getAttribute('data-group') === 'body')
+    expect(body?.textContent).toContain('You write the module everything else stands on.')
+    expect(within(screen.getByTestId('profile-drawer')).getByText('In their own words')).toBeTruthy()
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('profile-customise'))
+    })
+    await act(async () => {
+      fireEvent.change(screen.getByTestId('profile-field-input-body'), { target: { value: 'Mine now.' } })
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('profile-field-save-body'))
+    })
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/org/templates/t1/overrides',
+      expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ patch: { body: 'Mine now.' } }) }),
+    )
   })
 
   it('badges an overridden field and offers Reset, which DELETEs it', async () => {
@@ -462,6 +602,28 @@ describe('ProfileDrawer', () => {
     )
   })
 
+  // Fix round 1, minor 6: an untouched Save would have written the rendered profile back AS a raw
+  // override -- freezing the row against every future import, having changed nothing.
+  it('will not save a raw override that has not been typed', async () => {
+    await openDrawer()
+    await act(async () => {
+      fireEvent.click(within(screen.getByTestId('profile-drawer')).getByText('Advanced'))
+    })
+
+    expect((screen.getByTestId('profile-raw-save') as HTMLButtonElement).disabled).toBe(true)
+
+    await act(async () => {
+      fireEvent.change(screen.getByTestId('profile-raw-input'), { target: { value: '# Mine' } })
+    })
+    expect((screen.getByTestId('profile-raw-save') as HTMLButtonElement).disabled).toBe(false)
+
+    // Typed back to exactly what is stored is untouched again.
+    await act(async () => {
+      fireEvent.change(screen.getByTestId('profile-raw-input'), { target: { value: profile.markdown } })
+    })
+    expect((screen.getByTestId('profile-raw-save') as HTMLButtonElement).disabled).toBe(true)
+  })
+
   it('offers no remove affordance while no raw override stands', async () => {
     await openDrawer()
     await act(async () => {
@@ -527,6 +689,30 @@ describe('the hand-made template form, kept on the tab', () => {
 
     expect(fetchMock).toHaveBeenCalledWith('/api/org/templates', expect.objectContaining({ method: 'POST' }))
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/org/catalog'))
+  })
+
+  // Fix round 1, minor 7: the row an operator just created is not in the answer already on screen,
+  // so a single failed refetch would have hidden their own template behind a stale-data band.
+  it('retries the refetch once after a creation, rather than hiding the new row', async () => {
+    render(<WorkforceCatalog initial={view([row()])} />)
+    let catalogGets = 0
+    fetchMock.mockImplementation(async (url: string) => {
+      if (!url.startsWith('/api/org/catalog')) return new Response(JSON.stringify({ ok: true }), { status: 200 })
+      catalogGets += 1
+      return catalogGets === 1
+        ? new Response('nope', { status: 500 })
+        : new Response(JSON.stringify(view([row(), row({ id: 'made', name: 'Hand Made' })])), { status: 200 })
+    })
+
+    fireEvent.change(screen.getByTestId('template-name-input'), { target: { value: 'Hand Made' } })
+    fireEvent.change(screen.getByTestId('template-role-input'), { target: { value: 'backend' } })
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('template-submit'))
+    })
+
+    await waitFor(() => expect(screen.getByTestId('catalog-row-made')).toBeTruthy())
+    expect(catalogGets).toBe(2)
+    expect(screen.queryByTestId('catalog-stale')).toBeNull()
   })
 
   it('asks twice before deleting, naming the catalog-slave count', async () => {

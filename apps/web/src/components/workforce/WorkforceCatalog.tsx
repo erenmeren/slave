@@ -13,6 +13,7 @@ import { Chip } from '../ui/Chip'
 import { DangerConfirm } from '../ui/DangerConfirm'
 import { DataTable, Row } from '../ui/DataTable'
 import { EmptyState } from '../ui/EmptyState'
+import { LoadingState } from '../ui/LoadingState'
 import { CatalogFilterBar } from './CatalogFilterBar'
 import { ProfileDrawer } from './ProfileDrawer'
 import { TemplateForm } from './TemplateForm'
@@ -24,7 +25,7 @@ import { TemplateForm } from './TemplateForm'
  * `/workforce`'s DEFAULT tab (Slaves) -- but the primitive is not.
  */
 const COLUMNS = '1fr 110px 1.6fr 1.4fr 150px 140px 90px'
-const HEADER = ['Name', 'Role', 'Summary', 'Capabilities', 'Source', 'Default model', ''] as const
+const HEADER = ['Name', 'Division', 'Summary', 'Capabilities', 'Source', 'Default model', ''] as const
 
 /** How many capability chips fit a row before the rest becomes a count. */
 const CHIPS = 3
@@ -48,22 +49,62 @@ export function WorkforceCatalog({ initial }: { readonly initial: WorkforceCatal
   const { filters, setFilters } = useCatalogFilters()
   const [page, setPage] = useState<WorkforceCatalogView>(initial)
   const [staleError, setStaleError] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
   const [open, setOpen] = useState<{ readonly id: string; readonly name: string } | null>(null)
 
-  const reload = useCallback((next: WorkforceCatalogFilters): void => {
-    const query = catalogFilterParams(next).toString()
-    void fetch(query === '' ? '/api/org/catalog' : `/api/org/catalog?${query}`)
-      .then(async (response) => (response.ok ? ((await response.json()) as WorkforceCatalogView) : null))
-      .then((view) => {
-        if (view === null) {
-          setStaleError(true)
+  /**
+   * The rows that render are the LATEST request's answer, never merely the last one to arrive
+   * (fix round 1, important 1).
+   *
+   * The search box issues one request per keystroke, so `?q=buil` and `?q=builder` are in flight
+   * together as a matter of course. Without a sequence the slower answer wins whichever query it
+   * belongs to, and the list shows rows nobody asked for under a search box that says something
+   * else -- a wrong list is worse than a slow one, because nothing on screen says it is wrong.
+   *
+   * A monotonic id rather than an `AbortController`: a superseded response here is not a resource
+   * to reclaim, it is an answer to ignore, and ignoring it is one comparison with no second code
+   * path for "the request was cancelled" to go wrong in.
+   *
+   * `attemptsLeft` is the other half of the same idea, for the one caller that cannot simply show
+   * the last answer: a template an operator just CREATED is not in the last answer, so a failed
+   * refetch there would hide the row they made behind a stale-data band. It retries once.
+   */
+  const latest = useRef(0)
+  const reload: (next: WorkforceCatalogFilters, attemptsLeft?: number) => void = useCallback(
+    (next: WorkforceCatalogFilters, attemptsLeft = 0): void => {
+      const query = catalogFilterParams(next).toString()
+      const id = latest.current + 1
+      latest.current = id
+      setRefreshing(true)
+      const failed = (): void => {
+        if (attemptsLeft > 0) {
+          reload(next, attemptsLeft - 1)
           return
         }
-        setStaleError(false)
-        setPage(view)
-      })
-      .catch(() => setStaleError(true))
-  }, [])
+        setRefreshing(false)
+        setStaleError(true)
+      }
+      void fetch(query === '' ? '/api/org/catalog' : `/api/org/catalog?${query}`)
+        .then(async (response) => (response.ok ? ((await response.json()) as WorkforceCatalogView) : null))
+        .then((view) => {
+          // Superseded: a newer request is already in flight, and its answer is the one this list
+          // is going to show. Say nothing -- not even that this one failed.
+          if (id !== latest.current) return
+          if (view === null) {
+            failed()
+            return
+          }
+          setRefreshing(false)
+          setStaleError(false)
+          setPage(view)
+        })
+        .catch(() => {
+          if (id !== latest.current) return
+          failed()
+        })
+    },
+    [],
+  )
 
   /**
    * Seeded from the server on the first render; re-read whenever the filters move. The first pass
@@ -93,12 +134,15 @@ export function WorkforceCatalog({ initial }: { readonly initial: WorkforceCatal
       <span data-testid="catalog-count" className="text-xs text-text-3">
         {plural(page.rows.length, 'template')}
       </span>
+      {/* The rows below are the PREVIOUS answer while this is up: a list that empties itself on
+        * every keystroke is harder to read than one that lags by a request. */}
+      {refreshing && <LoadingState testId="catalog-loading" message="reading the catalog…" />}
       {page.rows.length === 0 ? (
         <EmptyState testId="catalog-empty" message="no template matches these filters." />
       ) : (
         <div data-testid="workforce-catalog">
           <DataTable columns={COLUMNS} header={[...HEADER]}>
-            {page.rows.map((row) => (
+            {page.rows.map((row, index) => (
               /* The row OPENS the drawer on a click anywhere, and the name is a real button so a
                * keyboard reaches it too -- `AllSlavesTable`'s `worker-row-button` idiom. The
                * wrapper takes no `role="button"` on purpose: the delete control lives inside it,
@@ -109,7 +153,9 @@ export function WorkforceCatalog({ initial }: { readonly initial: WorkforceCatal
                 data-mapping-quality={row.mappingQuality ?? ''}
                 onClick={() => setOpen({ id: row.id, name: row.name })}
               >
-                <Row columns={COLUMNS}>
+                {/* `last` because this `Row` is the only child of its wrapper, so its own
+                  * `:last-child` selector would match every row and draw no separator at all. */}
+                <Row columns={COLUMNS} last={index === page.rows.length - 1}>
                   <span className="flex min-w-0 flex-col">
                     <button
                       type="button"
@@ -126,7 +172,10 @@ export function WorkforceCatalog({ initial }: { readonly initial: WorkforceCatal
                       {row.rawOverride && <Chip testId={`catalog-raw-override-${row.id}`}>raw override</Chip>}
                     </span>
                   </span>
-                  <Chip>{row.role}</Chip>
+                  {/* R6 says DIVISION, which is what an imported row is filed under; a
+                    * hand-made template has none, so it falls back to the role it was typed with.
+                    * The raw role stays one hover away either way (M44 R5). */}
+                  <Chip title={row.role}>{row.sourceDivision ?? row.role}</Chip>
                   <span className="truncate text-text-2">{row.summary}</span>
                   <span className="flex min-w-0 flex-wrap items-center gap-1">
                     {row.capabilities.slice(0, CHIPS).map((capability) => (
@@ -175,7 +224,9 @@ export function WorkforceCatalog({ initial }: { readonly initial: WorkforceCatal
           </DataTable>
         </div>
       )}
-      <TemplateForm onCreated={() => reload(filters)} />
+      {/* One retry: the row an operator just created is not in the answer already on screen, so
+        * a failed refetch here would hide their own template behind a stale-data band. */}
+      <TemplateForm onCreated={() => reload(filters, 1)} />
       {open !== null && (
         <ProfileDrawer
           key={open.id}

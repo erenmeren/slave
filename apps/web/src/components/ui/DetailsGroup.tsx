@@ -37,6 +37,9 @@ export type DetailsGroupName =
   | 'success'
   | 'collaboration'
   | 'source'
+  // `body` is R6's thirteenth (M46 t4 fix round 1): the persona's own remaining prose is an
+  // overridable field like any other, and it had no group to be edited in.
+  | 'body'
   | 'advanced'
 
 /**

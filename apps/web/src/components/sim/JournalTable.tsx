@@ -40,9 +40,12 @@ function summaryFor(row: JournalRow): string {
 export function JournalTable({ rows }: { readonly rows: readonly JournalRow[] }): React.JSX.Element {
   return (
     <DataTable columns={COLUMNS} header={['seq', 'day', 'kind', 'role', 'summary']}>
-      {rows.map((row) => (
+      {rows.map((row, index) => (
         <div key={row.seq} data-testid="sim-journal-row">
-          <Row columns={COLUMNS}>
+          {/* `last` because this `Row` is the only child of its wrapper, so `Row`'s own
+           *  `:last-child` selector matched every one of them and drew no separator at all
+           *  (M46 t4 fix round 1, found while fixing the same idiom in `CatalogImports`). */}
+          <Row columns={COLUMNS} last={index === rows.length - 1}>
             <span className="font-mono text-text-3">{row.seq}</span>
             <span>{row.simTime}</span>
             <span className="text-text-2">{row.kind}</span>

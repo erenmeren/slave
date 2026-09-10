@@ -36,18 +36,29 @@ export function DataTable({
   )
 }
 
-/** One `DataTable` row — a grid using the same `columns` template as the header. */
+/**
+ * One `DataTable` row — a grid using the same `columns` template as the header.
+ *
+ * `last` exists because `last:border-b-0` is a CSS `:last-child` selector, and a caller that wraps
+ * each row in its own element (`CatalogImports`, `WorkforceCatalog` — both wrap so the row can
+ * carry a second identity without renaming the `data-table-row` handle four gates read) makes
+ * every `Row` the only child of its wrapper. `:last-child` then matched ALL of them and the table
+ * lost every separator (M46 t4 fix round 1). A wrapping caller says which row is last; a caller
+ * whose rows are direct children says nothing and keeps the selector it always had.
+ */
 export function Row({
   columns,
+  last = false,
   children,
 }: {
   readonly columns: string
+  readonly last?: boolean
   readonly children: React.ReactNode
 }): React.JSX.Element {
   return (
     <div
       data-testid="data-table-row"
-      className="grid items-center gap-2 border-b border-white/[0.05] px-3 py-2 last:border-b-0"
+      className={`grid items-center gap-2 px-3 py-2 ${last ? '' : 'border-b border-white/[0.05] last:border-b-0'}`}
       style={{ gridTemplateColumns: columns }}
     >
       {children}

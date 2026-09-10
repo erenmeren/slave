@@ -49,7 +49,7 @@ export function CompareClient({ comparison }: { readonly comparison: SimulationC
       )}
 
       <DataTable columns={COLUMNS} header={['metric', 'A', 'B', 'Δ']}>
-        {Object.entries(comparison.metricLabels).map(([key, label]) => {
+        {Object.entries(comparison.metricLabels).map(([key, label], index, entries) => {
           const isMoney = label.kind === 'money'
           // M32 item 6: a sector's metrics are `unknown`-valued (trade's carry `sources`, an
           // object), so both figures are narrowed here rather than trusted -- by the same rule
@@ -61,7 +61,9 @@ export function CompareClient({ comparison }: { readonly comparison: SimulationC
           const dv = deltas[key] ?? null
           return (
             <div key={key} data-testid={`sim-compare-row-${key}`}>
-              <Row columns={COLUMNS}>
+              {/* `last` -- the wrapper above makes every `Row` a `:last-child`, so `Row`'s own
+                * selector drew no separator anywhere (M46 t4 fix round 1). */}
+              <Row columns={COLUMNS} last={index === entries.length - 1}>
                 <span className="text-text-3">{label.label}</span>
                 <span className="font-mono text-text-1">{av === null ? '—' : isMoney ? formatMinor(av, currency) : String(av)}</span>
                 <span className="font-mono text-text-1">{bv === null ? '—' : isMoney ? formatMinor(bv, currency) : String(bv)}</span>

@@ -5,10 +5,15 @@ import { CATALOG_SOURCES, type CatalogSource } from '../../lib/catalogFilters'
 import { Button } from '../ui/Button'
 import { FieldLabel, INPUT_SHELL } from '../ui/FormControls'
 
-/** docs/ia.md rule 3 -- the chip says a word, `data-source` keeps the value. */
+/**
+ * ONE vocabulary (fix round 1): the chip says exactly the word the catalog ROW says for the same
+ * fact -- `imported` and `local` -- because a filter labelled `Made here` beside rows labelled
+ * `local` is two names for one thing, and a person has to learn which is which before they can
+ * use either. `data-source` still carries the value for a gate to read.
+ */
 const SOURCE_LABEL: Record<CatalogSource, string> = {
-  imported: 'Imported',
-  local: 'Made here',
+  imported: 'imported',
+  local: 'local',
 }
 
 type FilterKey = 'q' | 'division' | 'capability' | 'source' | 'skill'
