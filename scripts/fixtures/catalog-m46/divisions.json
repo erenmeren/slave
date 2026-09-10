@@ -1,0 +1,7 @@
+{
+  "_note": "M46's own catalog. Two divisions, four personas covering the three mapping qualities, written in this project's vocabulary so nothing checked in trips gate:m26-vocabulary. Separate from catalog-m42, whose counts that gate asserts exactly.",
+  "divisions": {
+    "engineering": { "label": "Engineering" },
+    "testing": { "label": "Testing" }
+  }
+}

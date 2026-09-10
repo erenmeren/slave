@@ -173,7 +173,7 @@ one of them — `docs/ia.md` is the map, and says where anything that left a mai
 | **Office** (Advanced ▾) `/w/<id>/office` | The project's departments and slaves as a pixel office: who is working, blocked or paused, on what and how far; pause, resume or stop the focused slave's run; scroll to zoom, drag to pan, click a slave to focus. Reached from the project's `Advanced ▾` menu, or by its URL. |
 | **Activity** `/w/<id>/activity` | Every event, live, filterable by kind, slave and task; the filters live in the URL. Events made from the UI name the user who made them. |
 | **Settings** `/w/<id>/settings` | This project's goal, its runtime (provider, budget, and the read-only concurrency/timeout/attempts limits), its own slave permissions, its emergency stop, and its danger zone to archive/restore the project. |
-| **Workforce** `/workforce` | Everyone who works here, in four tabs. **Slaves**: every slave, project-materialized or still catalog-only, with its department as a select, rename/re-role/delete with its history and a model chosen from the provider's own list inline; **+ New slave** adds one to the catalog and, optionally, to a project. **Departments**: add, rename or delete a project's department and see who is on it. **Catalog**: the slave templates, the companies and their department templates, and the log of catalog imports. **Skills**: the skill catalog and its assignments. `/slaves` and `/skills` still work — they redirect here. |
+| **Workforce** `/workforce` | Everyone who works here, in four tabs. **Slaves**: every slave, project-materialized or still catalog-only, with its department as a select, rename/re-role/delete with its history and a model chosen from the provider's own list inline; **+ New slave** adds one to the catalog and, optionally, to a project. **Departments**: add, rename or delete a project's department and see who is on it. **Catalog**: every slave template as one searchable catalog — filter by division, capability, skill or where it came from, and click a row for its specialist profile: who it is, what it is for, what it must never do and where all of that came from, with any field customisable in place and the raw Markdown a run is given under `Advanced ▾` — beside the companies and their department templates, with the log of catalog imports under the tab's own `Advanced ▾`. **Skills**: the skill catalog and its assignments. `/slaves` and `/skills` still work — they redirect here. |
 | **Simulations** `/sim` | Company simulation runs (M29): create one from a catalog company — a trade company on synthetic data, decided by the rules provider, no repository and no model call; step it by day, run it to a horizon, pause, halt, add customer demand or a supplier delay; the simulated company's cash and the real model cost are two separate panels; metrics are computed from the run's own journal; clone a run under another policy, let the daemon auto-run it, compare two runs side by side (no verdict); adopt a software run's organisation into a company-less project (M33). |
 | **Analytics** `/analytics` | Spend and throughput, for every project or for one (`?workspace=`). The all-project view is also a section on the Projects page; a project's own view is one click from it. |
 | **Settings** `/settings` | Provider adapters, security, and reset demo data (development only). |
@@ -393,6 +393,41 @@ file is not a persona at all — and the whole run is recorded, so `list-imports
 page can tell you afterwards what happened.
 
 `--dry-run` does the whole thing, database reads included, and writes nothing.
+
+## Specialist profiles
+
+An imported persona is not a wall of text any more. The import reads it into a SPECIALIST PROFILE:
+who the worker is, what it is for, what it can do, what it knows, how it works, what it must never
+do, what it produces, what "done" looks like, who it works with, which skills it wants — and where
+all of that came from: the catalog, the file, the commit, the licence and the day it arrived.
+
+```bash
+npm run orchestrator -- show-profile --template <id>
+npm run orchestrator -- show-profile --template <id> --markdown
+```
+
+A persona whose headings the mapper recognises comes through in full; one written to a different
+shape comes through in part; one written to no shape at all comes through as itself. The profile
+says which of the three happened rather than pretending. **Nothing is thrown away**: the sections
+the mapper does not know are still in the profile, in the persona's own words, and they are the
+first thing dropped if a profile is too long for a prompt rather than the only thing kept.
+
+A specialist profile stays distinct from a RUNTIME ROLE. The profile says what a worker is for; the
+runtime roles (`set-runtime-roles`) are what it can be dispatched as, and they are the only thing
+the scheduler reads.
+
+**You can change any field, and your change survives the next import.** Open Workforce → Catalog,
+click a specialist, press `Customise`, edit one field and save it. Your words and the catalog's are
+kept in different places, so re-importing the file brings every other field up to date and leaves
+yours exactly as you wrote them — the import even tells you how many it kept. `Reset` on a field
+puts the catalog's version back.
+
+Under `Advanced ▾` in the same drawer is the profile as a run actually receives it, and a raw
+override: your own Markdown, replacing the rendered profile entirely. That one is all-or-nothing,
+and a template carrying it is skipped by every import until you clear it — which is exactly what
+you want when you have written a persona yourself, and exactly what you do not want when you only
+meant to change a sentence. The catalog marks the two differently: `customised` for fields,
+`raw override` for the whole text.
 
 ## The whole story
 
@@ -641,7 +676,8 @@ they spend nothing. CI runs `gate:m26-vocabulary`, `gate:m15-boundary`, `gate:m2
 `gate:m31a-llm-decisions`, `gate:m31b-software-sector`, `gate:m33-adopt`,
 `gate:m35-pipeline-honesty`, `gate:m36-messaging`, `gate:m37-run-context`, `gate:m38-supervisor`,
 `gate:m39-supervisor-mailbox`, `gate:m40-requirement-versioning`, `gate:m41-scenario`,
-`gate:m42-catalog-import`, `gate:m44-ux-foundation` and `gate:m45-project-experience` on every push — `m36` stops the orchestrator and starts it again
+`gate:m42-catalog-import`, `gate:m44-ux-foundation`, `gate:m45-project-experience` and
+`gate:m46-workforce-catalog` on every push — `m36` stops the orchestrator and starts it again
 mid-scenario, to prove a waiting slave's question survives a restart, `m37` reads a real run's prompt and worktree back to prove a slave was
 given the persona and the skills it was assigned, `m38` drives a real daemon until the Supervisor
 proposes the staffing a reviewer-less project needs, waits for a human to approve it, unblocks a
@@ -669,8 +705,15 @@ screen: the eight facts render above the fold with the words they promise, the s
 seeded entries in the right lanes with no model chatter among them, exactly four things need a
 person and every one of their links resolves, approving a proposal from the timeline really cancels
 the task, one sentence typed into the box really becomes goal v3 with your words stored and a
-re-plan armed, and a task's raw values are reachable only inside its `Details` groups. That is 20
-gates. Tests and gates share one Postgres — run one at a time.
+re-plan armed, and a task's raw values are reachable only inside its `Details` groups,
+and `m46` imports a fixture catalog out of a real git checkout and proves the profile is structure
+rather than prose: four personas map to full, partly and not at all, each one's stored Markdown is
+byte-identical to a re-render of its own spec and inside the cap, the source record carries the
+checkout's commit and the licence off its LICENSE file, one field customised in a real browser is
+still the operator's after the file behind it changes (and the import says it kept it), a raw
+Markdown override still stops an import dead while the row beside it updates, and the profile a
+worker is finally given — rendered sections, the operator's sentence and the persona's own words —
+turns up in a real run's recorded prompt. That is 21 gates. Tests and gates share one Postgres — run one at a time.
 
 ## Learn more
 
