@@ -156,8 +156,9 @@ const USAGE = `usage: orchestrator <command> [options]
                                        diff against the version it replaced (null for v1).
   replan-status --workspace <id> [--prompt]
                                        why the next tick will, or will not, start a delta re-plan:
-                                       the goal version, the highest version stamped on an
-                                       unfinished task, whether this version was already re-planned,
+                                       the goal version,
+                                       the highest version stamped on any task, terminal ones included,
+                                       whether this version was already re-planned,
                                        whether a planning run is live, the failed attempts against
                                        the cap, and willReplan. --prompt also prints the re-plan
                                        prompt such a run would be given -- rendered and thrown away,

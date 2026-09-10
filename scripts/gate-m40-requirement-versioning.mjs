@@ -825,12 +825,16 @@ try {
     console.log(`stage 3 tick ${String(pass)} printed:\n${tickOutput}`)
   }
 
-  // Erratum E8's regression guard, taken at the point the board is at its most terminal: the goal
-  // has not moved since v2, so no tick may start a planning run of any kind. The trigger used to
-  // take its board version over the NON-terminal tasks only, so a board whose tasks had all
-  // finished had nothing to take a max over, the version fell to 0, and every finished project
-  // re-planned itself on its next tick -- a real manager run told a requirement had changed when
-  // nothing had.
+  // The dedup, measured: the goal has not moved since v2, so no tick may start a planning run of
+  // any kind.
+  //
+  // NOT erratum E8's regression guard, though it was described as one when it was written. E8 is
+  // about a board whose tasks have ALL finished, and this board has not: the addition `docs` is
+  // `ready` and carries goal version 2, so `max(Task.goalVersion)` is 2 under the old rule and the
+  // new one alike, and this assertion passes either way. The RED proof for E8 is
+  // `apps/orchestrator/test/integration/planning.test.ts`'s "starts nothing on a board whose tasks
+  // have ALL finished, while the goal stands still", which sets every task `done` first and is the
+  // only test in the tree that fails when the max is taken over the non-terminal tasks.
   const planningRunsAfterTicks = await prisma.slaveRun.count({ where: { kind: 'planning', slave: { team: { workspaceId } } } })
   console.log(`stage 3 planning runs: ${String(planningRunsBeforeTicks)} before the ticks, ${String(planningRunsAfterTicks)} after`)
   if (planningRunsAfterTicks !== planningRunsBeforeTicks) {

@@ -235,6 +235,19 @@ describe('the orchestrator CLI', () => {
     expect(`${result.stdout}${result.stderr}`).toMatch(/usage/i)
   }, 30_000)
 
+  it('the replan-status help says the board version is taken over EVERY task (erratum E8)', async (): Promise<void> => {
+    const result = await runCli(['help'])
+
+    const printed = `${result.stdout}${result.stderr}`
+    // The bug this asserts against: the help promised "the highest version stamped on an
+    // unfinished task", which is what `boardVersionOf` did BEFORE erratum E8 -- and a board whose
+    // tasks had all finished then had no task to take a max over, its version fell to 0, and every
+    // finished project re-planned itself on its next tick. The code counts terminal tasks now; the
+    // sentence an operator reads has to say so, or `replan-status`'s own output is unreadable.
+    expect(printed).not.toMatch(/unfinished task/)
+    expect(printed).toMatch(/the highest version stamped on any task, terminal ones included/)
+  })
+
   it('runs skills sync and reports what it found', async (): Promise<void> => {
     const result = await runCli(['skills', 'sync'])
 

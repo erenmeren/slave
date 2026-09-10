@@ -296,8 +296,12 @@ export async function replanSectionOf(runId: RunId): Promise<ReplanSection | nul
  * costs real planned work, so every one of them goes through `recordDecision` as a `stale_task`
  * proposal a human approves, and `cancelTask` is never called from here.
  *
- * **Nothing here may throw past this function** (fix round 1, widened by the final review to the
- * three reads that used to sit outside the containment). A re-plan is deduped on
+ * **Nothing here may throw past this function, with one honest exception** (fix round 1, widened
+ * by the final review to the three reads that used to sit outside the containment): {@link failRun}
+ * itself writes to the database, so a database that is not there when a pre-commit failure is being
+ * RECORDED still throws past this function. That is the one failure this containment cannot absorb,
+ * because absorbing it would mean losing the record of the failure as well as the failure. A
+ * re-plan is deduped on
  * `workspace.replan_started`, which is written at DISPATCH: a throw that escaped would reach only
  * the pump's `console.error`, leave the run `succeeded`, and leave the version permanently counted
  * as re-planned -- additions on the board, no proposals, no `workspace.replanned`, and nothing for
@@ -442,6 +446,12 @@ interface ConcludingRun {
  * `updateMany` rather than `update`, and scoped to `succeeded`, for the reason the parse-failure
  * path always had: the run has already been concluded as a success by the pump, and only that state
  * may be walked back from here.
+ *
+ * This is the one thing {@link concludeReplan} calls that can still throw past it: both writes here
+ * are the database, and a database outage during a pre-commit failure takes the recording of that
+ * failure down with it. There is no third place to route it to -- the alternative is a swallowed
+ * throw and a run left `succeeded` with no delta and nothing saying why -- so it propagates to the
+ * pump's `console.error`, which is where an operator will at least find it.
  */
 async function failRun(run: ConcludingRun, workspaceId: string, reason: string): Promise<void> {
   await prisma.slaveRun.updateMany({ where: { id: run.id, status: 'succeeded' }, data: { status: 'failed' } })
