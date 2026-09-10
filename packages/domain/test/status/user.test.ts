@@ -12,6 +12,7 @@ import {
   userTaskStatus,
   userWorkspaceStatus,
   type UserCardState,
+  type UserSupervisorState,
   type UserTaskState,
   type UserWorkspaceState,
 } from '../../src/status/user.js'
@@ -210,6 +211,11 @@ describe('userWorkspaceStatus', () => {
   })
 })
 
+/** Every UserSupervisorState, as a compile-time-complete literal: an eighth fails to compile. */
+const ALL_SUPERVISOR_STATES: Record<UserSupervisorState, true> = {
+  halted: true, off: true, decisions: true, answering: true, working: true, watching: true, idle: true,
+}
+
 describe('userSupervisorStatus', () => {
   const base = {
     halted: false, enabled: true, pendingDecisions: 0, pendingQuestions: 0, tasksActive: 0, tasksOpen: 0,
@@ -251,5 +257,23 @@ describe('userSupervisorStatus', () => {
   it('open work with nothing active is WATCHING, and an empty board is IDLE', () => {
     expect(userSupervisorStatus({ ...base, tasksOpen: 2 }).state).toBe('watching')
     expect(userSupervisorStatus(base).state).toBe('idle')
+  })
+
+  it('every state this projection can answer is one the seven-word list names', () => {
+    const states = Object.keys(ALL_SUPERVISOR_STATES)
+    expect(states).toHaveLength(7)
+    // Each of the seven reached through the facts that produce it -- an eighth state would have no
+    // row here and no word, and the `Record` above would already have failed to compile.
+    const reached = [
+      userSupervisorStatus({ ...base, halted: true }),
+      userSupervisorStatus({ ...base, enabled: false }),
+      userSupervisorStatus({ ...base, pendingDecisions: 2 }),
+      userSupervisorStatus({ ...base, pendingQuestions: 1 }),
+      userSupervisorStatus({ ...base, tasksActive: 1 }),
+      userSupervisorStatus({ ...base, tasksOpen: 1 }),
+      userSupervisorStatus(base),
+    ]
+    expect(reached.map((status) => status.state).sort()).toEqual(states.sort())
+    for (const status of reached) expect(status.label.length).toBeGreaterThan(0)
   })
 })

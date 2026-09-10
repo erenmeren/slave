@@ -10,6 +10,11 @@ import type { ExecutionEvent } from '../events/schema.js'
  *
  * The order is the reading order: what you asked for, what was understood, what changed on the
  * board, what is happening, what needs you, what is finished.
+ *
+ * `decision` holds BOTH halves of a decision's life (spec erratum E27): the pending
+ * `SupervisorDecision` row that is waiting on a person, and the `supervisor.applied` /
+ * `supervisor.resolved` events that record the answer. A decision a person took leaves its trace
+ * where it was asked; {@link isResolvedDecision} is how a renderer tells the two apart.
  */
 export const TIMELINE_LANES = [
   'user_request',
@@ -60,6 +65,11 @@ export const LANE_BY_TYPE: Record<ExecutionEvent['type'], TimelineLane | null> =
   'run.paused': 'work',
   'run.resumed': 'work',
   'slave.message_sent': 'work',
+  // DECISION REQUIRED -- the two events that record a decision already TAKEN (erratum E27).
+  // `supervisor.proposed` and `supervisor.decided` stay off the timeline: the proposal itself is
+  // shown as the pending `SupervisorDecision` row, and showing both would double every entry.
+  'supervisor.applied': 'decision',
+  'supervisor.resolved': 'decision',
   // VERIFIED RESULT
   'task.verify_passed': 'verified',
   'task.review_approved': 'verified',
@@ -96,12 +106,17 @@ export const LANE_BY_TYPE: Record<ExecutionEvent['type'], TimelineLane | null> =
   'workspace.restored': null,
   'supervisor.decided': null,
   'supervisor.proposed': null,
-  'supervisor.applied': null,
-  'supervisor.resolved': null,
   'supervisor.failed': null,
 }
 
-/** What the timeline classifies: a stored event, or a `SupervisorDecision` waiting on a person. */
+/**
+ * What the timeline classifies (spec erratum E27).
+ *
+ * Four arms, because the DECISION REQUIRED lane has four different things in it and only one of
+ * them is an event: a pending `SupervisorDecision`, an unanswered question waiting on a person,
+ * and a blocked task are separate rows in separate tables. They get separate arms so a caller
+ * never has to dress a question up as a decision to have it classified (Task 2).
+ */
 export type TimelineSubject =
   | {
       readonly source: 'event'
@@ -109,14 +124,34 @@ export type TimelineSubject =
       readonly actor: 'human' | 'slave' | 'system'
     }
   | { readonly source: 'decision' }
+  | { readonly source: 'question' }
+  | { readonly source: 'blocked_task' }
 
 /** The lane this belongs on, or null for "not on this timeline". Pure and total. */
 export function laneFor(subject: TimelineSubject): TimelineLane | null {
-  if (subject.source === 'decision') return 'decision'
+  if (subject.source !== 'event') return 'decision'
   if (subject.type === 'task.created' || subject.type === 'task.cancelled') {
     return subject.actor === 'human' ? 'user_request' : 'plan_change'
   }
   return LANE_BY_TYPE[subject.type]
+}
+
+/**
+ * Whether this entry is a decision that has ALREADY been answered (spec erratum E27).
+ *
+ * A separate predicate rather than a field on {@link laneFor}'s result, because that result is a
+ * string union and widening it to an object would change every caller's shape for a flag only the
+ * `decision` lane can use. A renderer asks both questions: `laneFor` for where the entry goes,
+ * this for whether to mute it.
+ *
+ * True for exactly the two events that record an answer. A pending decision, an unanswered
+ * question and a blocked task are all still waiting on a person, so all three are false.
+ */
+export function isResolvedDecision(subject: TimelineSubject): boolean {
+  return (
+    subject.source === 'event' &&
+    (subject.type === 'supervisor.applied' || subject.type === 'supervisor.resolved')
+  )
 }
 
 /** The three numbers a `workspace.replanned` payload carries, plus how many tasks survived it. */

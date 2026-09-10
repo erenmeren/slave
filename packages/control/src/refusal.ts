@@ -93,6 +93,14 @@ export type ControlRefusal =
    */
   | { readonly kind: 'invalid_request' }
   /**
+   * M45 spec erratum E27: `requestChange` was handed the request the NEWEST goal version already
+   * records -- a double-submitted "Tell the Supervisor". Writing it would make a second version of
+   * a document nobody changed and arm a second delta re-plan for it, which is the expensive half.
+   * Distinct from `goal_unchanged` because the composed TEXT does differ (the entry is dated and
+   * appended); what repeats is the request.
+   */
+  | { readonly kind: 'duplicate_request'; readonly workspaceId: string; readonly version: number }
+  /**
    * M40 erratum E5: `setGoal` was handed text that hashes to the CURRENT goal version's, so there
    * is nothing to record -- no row, no event, no cache move. A refusal rather than a silent
    * success because a version is what the re-plan trigger counts: manufacturing one for a re-save
@@ -365,6 +373,8 @@ export function refusalText(refusal: ControlRefusal): string {
       return 'a goal must be a non-empty text'
     case 'invalid_request':
       return 'a change request must be a non-empty text'
+    case 'duplicate_request':
+      return `project ${refusal.workspaceId} already recorded exactly this change request at version ${String(refusal.version)}: nothing was recorded`
     case 'goal_unchanged':
       return `the goal of project ${refusal.workspaceId} already reads exactly this at version ${String(refusal.version)}: nothing was recorded`
     case 'duplicate_name':

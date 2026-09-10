@@ -4,6 +4,7 @@ import {
   LANE_BY_TYPE,
   LANE_LABEL,
   TIMELINE_LANES,
+  isResolvedDecision,
   laneFor,
   replanSentence,
   type TimelineLane,
@@ -26,12 +27,20 @@ describe('LANE_BY_TYPE', () => {
 
   it('every lane has at least one member, so no filter is dead', () => {
     const used = new Set<TimelineLane | null>(Object.values(LANE_BY_TYPE))
-    // `decision` is the one lane no EVENT reaches: it holds SupervisorDecision rows.
+    // Every lane, `decision` included: spec erratum E27 puts the two events that RESOLVE a
+    // decision on the lane the decision was asked on, so a person's answer leaves its trace there.
     for (const lane of TIMELINE_LANES) {
-      if (lane === 'decision') continue
       expect(used.has(lane), lane).toBe(true)
     }
     expect(LANE_LABEL.decision).toBe('DECISION REQUIRED')
+  })
+
+  it('a decision that was taken stays on the lane it was asked on', () => {
+    expect(LANE_BY_TYPE['supervisor.applied']).toBe('decision')
+    expect(LANE_BY_TYPE['supervisor.resolved']).toBe('decision')
+    // The PROPOSAL is not an entry: the pending `SupervisorDecision` row is, via `laneFor`.
+    expect(LANE_BY_TYPE['supervisor.proposed']).toBeNull()
+    expect(LANE_BY_TYPE['supervisor.decided']).toBeNull()
   })
 
   it('model chatter never reaches the timeline', () => {
@@ -68,8 +77,27 @@ describe('laneFor', () => {
     expect(laneFor({ source: 'event', type: 'task.verify_passed', actor: 'slave' })).toBe('verified')
   })
 
+  it('puts an unanswered question and a blocked task in DECISION REQUIRED too', () => {
+    expect(laneFor({ source: 'question' })).toBe('decision')
+    expect(laneFor({ source: 'blocked_task' })).toBe('decision')
+  })
+
   it('answers null for anything the timeline does not show', () => {
     expect(laneFor({ source: 'event', type: 'run.tool_call', actor: 'slave' })).toBeNull()
+  })
+})
+
+describe('isResolvedDecision', () => {
+  it('is true for exactly the two events that record a decision already taken', () => {
+    expect(isResolvedDecision({ source: 'event', type: 'supervisor.applied', actor: 'system' })).toBe(true)
+    expect(isResolvedDecision({ source: 'event', type: 'supervisor.resolved', actor: 'human' })).toBe(true)
+  })
+
+  it('is false for everything still waiting on a person', () => {
+    expect(isResolvedDecision({ source: 'decision' })).toBe(false)
+    expect(isResolvedDecision({ source: 'question' })).toBe(false)
+    expect(isResolvedDecision({ source: 'blocked_task' })).toBe(false)
+    expect(isResolvedDecision({ source: 'event', type: 'task.started', actor: 'slave' })).toBe(false)
   })
 })
 

@@ -19,6 +19,20 @@ describe('composeGoal', () => {
     expect(second.split(REQUESTED_CHANGES_HEADING)).toHaveLength(2)
   })
 
+  it('appends inside the matched section, not at the end of the document', () => {
+    const previous =
+      'Body.\n\n## Requested changes\n\n- 2026-09-10: Add Apple Pay\n\n## Constraints\n\n- No new dependencies\n'
+    expect(composeGoal(previous, 'Drop the gift-card page', new Date('2026-09-12T00:00:00.000Z'))).toBe(
+      'Body.\n\n## Requested changes\n\n- 2026-09-10: Add Apple Pay\n- 2026-09-12: Drop the gift-card page\n\n## Constraints\n\n- No new dependencies\n',
+    )
+  })
+
+  it('matches the heading as a LINE, so a body that merely mentions it opens a real section', () => {
+    expect(composeGoal('Do not write ## Requested changes inline.', 'Add Apple Pay', AT)).toBe(
+      'Do not write ## Requested changes inline.\n\n## Requested changes\n\n- 2026-09-10: Add Apple Pay\n',
+    )
+  })
+
   it('takes the request AS the goal when the project has none yet', () => {
     expect(composeGoal(null, 'Build a billing service', AT)).toBe('Build a billing service')
   })

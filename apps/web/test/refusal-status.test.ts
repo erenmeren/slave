@@ -34,6 +34,7 @@ const ALL_KINDS: Record<ControlRefusal['kind'], true> = {
   workspace_not_found: true,
   invalid_goal: true,
   invalid_request: true,
+  duplicate_request: true,
   goal_unchanged: true,
   duplicate_name: true,
   template_not_found: true,

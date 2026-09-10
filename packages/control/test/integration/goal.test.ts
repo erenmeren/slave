@@ -416,10 +416,68 @@ describe('requestChange', () => {
     expect(versions).toEqual([{ version: 1, request: null }, { version: 2, request: 'Add Apple Pay' }])
   })
 
-  it('composes against the goal as it stands, so a set between two requests is never dropped', async () => {
-    // The composition happens INSIDE the lock, over the text the transaction just read. A whole
-    // goal rewritten between two requests is therefore the body the second request amends -- the
-    // race a compose-then-setGoal caller would have lost silently.
+  it('refuses the same request twice -- a double submit must not arm two re-plans', async () => {
+    const { workspace } = fixture
+    await setGoal(workspace.id, 'Ship the checkout flow.')
+    expect((await requestChange(workspace.id, 'Add Apple Pay')).ok).toBe(true)
+
+    // Byte-equal after trimming: the same words, the same submit, pressed twice.
+    const again = await requestChange(workspace.id, '  Add Apple Pay ')
+    expect(again.ok).toBe(false)
+    if (again.ok) return
+    expect(again.error.kind).toBe('duplicate_request')
+
+    expect(await prisma.goalVersion.count({ where: { workspaceId: workspace.id } })).toBe(2)
+    const reloaded = await prisma.workspace.findUniqueOrThrow({ where: { id: workspace.id } })
+    expect(reloaded.goalVersion).toBe(2)
+    const events = await prisma.executionEvent.findMany({
+      where: { workspaceId: workspace.id, type: 'workspace_goal_set' },
+    })
+    expect(events).toHaveLength(2)
+  })
+
+  it('lets a DIFFERENT request through immediately after one', async () => {
+    const { workspace } = fixture
+    await setGoal(workspace.id, 'Ship the checkout flow.')
+    expect((await requestChange(workspace.id, 'Add Apple Pay')).ok).toBe(true)
+
+    const third = await requestChange(workspace.id, 'Drop the gift-card page')
+    expect(third.ok).toBe(true)
+    if (!third.ok) return
+    expect(third.value.version).toBe(3)
+    expect(third.value.goal).toContain('Add Apple Pay')
+    expect(third.value.goal).toContain('Drop the gift-card page')
+  })
+
+  it('serialises two requests raced against each other into two consecutive versions', async () => {
+    // A REAL race, not two awaited calls: both transactions open at once and `SELECT ... FOR
+    // UPDATE` decides the order. Whichever loses composes against the text the winner committed,
+    // so the later version carries BOTH requests and neither is dropped.
+    const { workspace } = fixture
+    await setGoal(workspace.id, 'Ship the checkout flow.')
+
+    const [a, b] = await Promise.all([
+      requestChange(workspace.id, 'Add Apple Pay', undefined, new Date('2026-09-10T00:00:00.000Z')),
+      requestChange(workspace.id, 'Drop the gift-card page', undefined, new Date('2026-09-10T00:00:00.000Z')),
+    ])
+    expect(a.ok && b.ok).toBe(true)
+    if (!a.ok || !b.ok) return
+    expect([a.value.version, b.value.version].sort()).toEqual([2, 3])
+
+    const [second, third] = a.value.version === 2 ? [a.value, b.value] : [b.value, a.value]
+    expect(second.goal).toContain('Ship the checkout flow.')
+    expect(third.goal).toContain('Add Apple Pay')
+    expect(third.goal).toContain('Drop the gift-card page')
+
+    const reloaded = await prisma.workspace.findUniqueOrThrow({ where: { id: workspace.id } })
+    expect(reloaded.goalVersion).toBe(3)
+    expect(reloaded.goal).toBe(third.goal)
+  })
+
+  it('composes against the goal as it stands: a whole goal set BETWEEN two requests is the body the second amends', async () => {
+    // Sequential, deliberately -- this is not the race above but the composition rule: the text a
+    // request amends is the one the lock just read, so the second request lands on the REWRITTEN
+    // goal and not on the document the first request saw.
     const { workspace } = fixture
     await setGoal(workspace.id, 'Ship the checkout flow.')
     expect((await requestChange(workspace.id, 'Add Apple Pay', undefined, new Date('2026-09-10T00:00:00.000Z'))).ok).toBe(true)

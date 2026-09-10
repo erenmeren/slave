@@ -53,6 +53,11 @@ export async function setGoal(
  *
  * `at` is a parameter so a test can pin the date the composed entry carries; it is not part of the
  * hash's meaning, only of the text.
+ *
+ * A request byte-equal to the newest version's is refused `duplicate_request` (spec erratum E27):
+ * a double submit must not write two versions and arm two delta re-plans. `goal_unchanged` and
+ * `invalid_goal` are unreachable from here -- composition always appends a dated entry, and a
+ * non-blank request always composes a non-blank document.
  */
 export async function requestChange(
   workspaceId: string,
@@ -111,8 +116,22 @@ async function writeGoalVersion(
         ? null
         : await tx.goalVersion.findUnique({
             where: { workspaceId_version: { workspaceId, version: workspace.goalVersion } },
-            select: { sha256: true },
+            select: { sha256: true, request: true },
           })
+
+    // Spec erratum E27, and the reason this read happens inside the lock too: a person who presses
+    // "Tell the Supervisor" twice must not get two versions and two delta re-plans. Byte-equality
+    // against the NEWEST version's stored request only -- asking for the same change again after
+    // something else has been asked in between is a real request, and the trigger should fire for
+    // it. Checked before `goal_unchanged` because the composed text DOES differ (the entry is
+    // dated and appended): naming the goal would name the wrong thing.
+    if (request !== null && current !== null && current.request === request) {
+      return {
+        ok: false as const,
+        error: { kind: 'duplicate_request', workspaceId, version: workspace.goalVersion } as ControlRefusal,
+      }
+    }
+
     if (current !== null && current.sha256 === sha256) {
       return {
         ok: false as const,
