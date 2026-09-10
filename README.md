@@ -167,8 +167,8 @@ one of them — `docs/ia.md` is the map, and says where anything that left a mai
 | Page | What it shows |
 |---|---|
 | **Projects** `/` | Every active project (workspace) with its status in one word, how many things need you, its spend and its team; click one to open it. **New project** attaches a repo; **show archived** also lists archived projects (an "archived" chip, no spend bar, a **restore** button); below the cards, the same all-project figures the Analytics page shows. |
-| **Overview** `/w/<id>` | One card per slave: status, current task, live action line, spend against budget. A halt banner when the workspace is stopped. |
-| **Tasks** `/w/<id>/tasks` | The board by status. Click a task for its runs and cost, its verify logs under **Artifacts**, and a **Collect worktree** button once it has finished. |
+| **Overview** `/w/<id>` | The project in one screen: what it is for and at which version, what the Supervisor is doing, what is being worked on, what it has cost, what needs you, the latest verified result, who is on the team and what changed lately — above a timeline of the project's own history in six lanes, where the things waiting on you can be answered in place. One box tells the Supervisor what changed. `Advanced ▾` on the page holds the live event river, the blocked list, the merge queue and the Supervisor's own panel. |
+| **Tasks** `/w/<id>/tasks` | The board by status. Each card says its state in one word, who has it, and one line about why it is not moving. Click one for the rest, grouped under `Details ▾`: the run, its messages, what it saw, its verification attempts, its cost, its worktree and its events. |
 | **Graph** (Advanced ▾) `/w/<id>/graph` | Five views: the org tree, live execution, the task dependency DAG (draw or delete an edge to change it), the skill chain, and who handed work to whom. Reached from the project's `Advanced ▾` menu, or by its URL. |
 | **Office** (Advanced ▾) `/w/<id>/office` | The project's departments and slaves as a pixel office: who is working, blocked or paused, on what and how far; pause, resume or stop the focused slave's run; scroll to zoom, drag to pan, click a slave to focus. Reached from the project's `Advanced ▾` menu, or by its URL. |
 | **Activity** `/w/<id>/activity` | Every event, live, filterable by kind, slave and task; the filters live in the URL. Events made from the UI name the user who made them. |
@@ -524,6 +524,47 @@ same thing on every tick. `--dry-run` writes no decision row, no event and makes
 costs nothing to look. A switched-off Supervisor still reports and still retires stale proposals —
 it just stops deciding.
 
+## One Supervisor
+
+You do not manage the workers. You talk to the project's Supervisor, and the project page is that
+conversation.
+
+The top of the page is a brief: what this project is for and at which version of that requirement,
+what the Supervisor is doing right now in one word, how much work is in flight and in what state,
+what it has cost against its budget, what is waiting on you, the last thing anybody verified, who
+is on the team, and what changed lately. Eight facts, one screen — `gate:m45-project-experience`
+measures that literally, by asserting every tile's bottom edge is above the fold at 1440×900.
+
+Under it is the project's own history, in six lanes:
+
+| Lane | What is in it |
+|---|---|
+| **USER REQUEST** | What you asked for — a goal you set, a change you requested, a task you cancelled |
+| **SUPERVISOR INTERPRETATION** | What it understood: the delta a re-plan produced, in its own words — "understood v3: +Add Apple Pay; proposes cancelling the gift-card page; 4 kept" |
+| **PLAN CHANGE** | What actually changed on the board |
+| **WORK IN PROGRESS** | What workers are doing, one line per task |
+| **DECISION REQUIRED** | What is waiting on you — pinned above everything else, and answerable here |
+| **VERIFIED RESULT** | What passed, was approved, or landed in the base branch |
+
+What a model said while it worked is not on this timeline. That is the event river, one click away
+under `Advanced ▾`, and the Activity tab keeps all of it.
+
+**Telling it what changed.** One box, one sentence: *"Also support Google Pay."* That writes a new
+version of the project's requirement — the goal document keeps its body and gains a dated line
+saying what you asked — and the next tick re-plans that version as a delta. What the re-plan adds
+becomes tasks; what it wants to cancel becomes a proposal you approve or refuse, in the DECISION
+REQUIRED lane. Your words are kept beside the version, so the timeline shows what you asked and not
+only what it produced.
+
+```bash
+npm run orchestrator -- request-change --workspace <id> --request "Also support Google Pay"
+npm run orchestrator -- replan-status --workspace <id>      # why the next tick will, or will not, re-plan
+```
+
+Nothing here is new authority. Every button on that timeline is a verb that already existed — the
+Supervisor's approve and reject, the answer that unsticks a waiting worker, the unblock that sends a
+parked task back for another attempt. The Supervisor still proposes and you still decide.
+
 ## When a slave asks a question
 
 A slave that hits a decision it cannot make alone can ask another slave instead of guessing. Every
@@ -600,7 +641,7 @@ they spend nothing. CI runs `gate:m26-vocabulary`, `gate:m15-boundary`, `gate:m2
 `gate:m31a-llm-decisions`, `gate:m31b-software-sector`, `gate:m33-adopt`,
 `gate:m35-pipeline-honesty`, `gate:m36-messaging`, `gate:m37-run-context`, `gate:m38-supervisor`,
 `gate:m39-supervisor-mailbox`, `gate:m40-requirement-versioning`, `gate:m41-scenario`,
-`gate:m42-catalog-import` and `gate:m44-ux-foundation` on every push — `m36` stops the orchestrator and starts it again
+`gate:m42-catalog-import`, `gate:m44-ux-foundation` and `gate:m45-project-experience` on every push — `m36` stops the orchestrator and starts it again
 mid-scenario, to prove a waiting slave's question survives a restart, `m37` reads a real run's prompt and worktree back to prove a slave was
 given the persona and the skills it was assigned, `m38` drives a real daemon until the Supervisor
 proposes the staffing a reviewer-less project needs, waits for a human to approve it, unblocks a
@@ -622,8 +663,14 @@ check that there are four ways into the product, that the project's own strip an
 happening" in four tabs with Graph and Office still one menu away, that nothing on any of eleven
 pages is a database value a person would have to decode, that a drawer traps the Tab key and hands
 focus back on Escape, that the skip link is the first thing the keyboard finds, that the sidebar
-collapses on a narrow window, and that simulated money is never shown beside real model cost. That
-is 19 gates. Tests and gates share one Postgres — run one at a time.
+collapses on a narrow window, and that simulated money is never shown beside real model cost,
+and `m45` opens a fixed project in a real browser and checks that you can understand it in one
+screen: the eight facts render above the fold with the words they promise, the six lanes carry the
+seeded entries in the right lanes with no model chatter among them, exactly four things need a
+person and every one of their links resolves, approving a proposal from the timeline really cancels
+the task, one sentence typed into the box really becomes goal v3 with your words stored and a
+re-plan armed, and a task's raw values are reachable only inside its `Details` groups. That is 20
+gates. Tests and gates share one Postgres — run one at a time.
 
 ## Learn more
 

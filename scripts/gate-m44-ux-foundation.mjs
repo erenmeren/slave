@@ -834,11 +834,20 @@ try {
       const meta = page.getByTestId('supervisor-decision-meta').first()
       const sentence = (await meta.textContent())?.trim() ?? ''
       const rawRecord = await meta.getAttribute('title')
-      const kindChip = page.getByTestId('supervisor-proposal-kind').first()
+      // SCOPED to the Supervisor panel under `Advanced` (M45 t5): M45 R2 renders the SAME
+      // `ProposalRow` on the Overview's own timeline, ABOVE the disclosure, so an unscoped
+      // `.first()` here resolves to the timeline's copy while the message says "the Supervisor
+      // panel". Both are read, and both have to agree -- one proposal shown in two places that
+      // disagreed about what it is would be the bug this stage exists to catch.
+      const kindChip = page.locator('[data-testid="advanced-panel-supervisor"] [data-testid="supervisor-proposal-kind"]').first()
       const kindWord = (await kindChip.textContent())?.trim() ?? ''
       const kindRaw = await kindChip.getAttribute('title')
+      const timelineChip = page.locator('[data-testid="timeline-decisions"] [data-testid="supervisor-proposal-kind"]').first()
+      const timelineWord = (await timelineChip.textContent())?.trim() ?? ''
+      const timelineRaw = await timelineChip.getAttribute('title')
       console.log(`stage 4 (overview) POSITIVE: decision row reads ${JSON.stringify(sentence)}, title=${JSON.stringify(rawRecord)}`)
-      console.log(`stage 4 (overview) POSITIVE: proposal kind reads ${JSON.stringify(kindWord)}, title=${JSON.stringify(kindRaw)}`)
+      console.log(`stage 4 (overview) POSITIVE: the panel's proposal kind reads ${JSON.stringify(kindWord)}, title=${JSON.stringify(kindRaw)}`)
+      console.log(`stage 4 (overview) POSITIVE: the timeline's proposal kind reads ${JSON.stringify(timelineWord)}, title=${JSON.stringify(timelineRaw)}`)
       if (!sentence.includes('No reviewer')) {
         await fail(`stage 4 (overview): the decision row reads ${JSON.stringify(sentence)}, expected it to name the situation "No reviewer"`)
       }
@@ -846,7 +855,13 @@ try {
         await fail(`stage 4 (overview): the decision row's title is ${JSON.stringify(rawRecord)}, expected it to keep the raw record`)
       }
       if (kindWord !== 'No reviewer' || kindRaw !== 'no_reviewer') {
-        await fail(`stage 4 (overview): the proposal kind chip is ${JSON.stringify(kindWord)}/${JSON.stringify(kindRaw)}, expected "No reviewer"/"no_reviewer"`)
+        await fail(`stage 4 (overview): the panel's proposal kind chip is ${JSON.stringify(kindWord)}/${JSON.stringify(kindRaw)}, expected "No reviewer"/"no_reviewer"`)
+      }
+      if (timelineWord !== kindWord || timelineRaw !== kindRaw) {
+        await fail(
+          `stage 4 (overview): the timeline renders the same proposal as ${JSON.stringify(timelineWord)}/${JSON.stringify(timelineRaw)} ` +
+            `while the Supervisor panel renders it as ${JSON.stringify(kindWord)}/${JSON.stringify(kindRaw)} -- one proposal, two readings`,
+        )
       }
     }
     if (target.name === 'activity') {

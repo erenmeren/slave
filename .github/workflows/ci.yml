@@ -70,3 +70,4 @@ jobs:
       - run: npm run gate:m41-scenario
       - run: npm run gate:m42-catalog-import
       - run: npm run gate:m44-ux-foundation
+      - run: npm run gate:m45-project-experience

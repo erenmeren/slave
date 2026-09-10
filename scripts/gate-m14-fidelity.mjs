@@ -59,6 +59,18 @@
 // catalog is a fact about the daemon host's disk, not about this gate's workspace, and Decision 6
 // says the catalog never deletes.
 
+// ---- ONE ROW OF STAGE 2 NOW PREPARES THE PAGE (M45 erratum E15) ----------------------------
+//
+// `NUMBERS`' rows take an optional sixth element -- a function run after navigation and before the
+// measurement -- and exactly one row uses it: the 340px `live-events` river. M45 R1 moved that
+// panel under the Overview's own `Advanced` disclosure, because it is not one of the eight facts a
+// person needs in ten seconds. The panel itself did not change -- same component, same
+// `w-[340px]`, same testid -- so the README's 340px number is still real and is still measured
+// here; what changed is that it has to be OPENED first. `getComputedStyle` on a subtree that is
+// not rendered returns `auto`, so a gate that did not click would read nothing, and a gate that
+// dropped the row would leave a documented number with nothing measuring it. NO EXPECTED VALUE IN
+// THIS FILE CHANGED.
+
 import { execFileSync, spawn } from 'node:child_process'
 import {
   accessSync,
@@ -894,7 +906,21 @@ try {
     console.log(`stage 2 (${pageName}): ${selector} ${property} = ${actual}`)
   }
 
-  // page, path, selector, property, expected -- every row is one README number. The cable's own
+  /** Opens the Overview's `Advanced` disclosure and waits for the river to be laid out (M45 E15).
+   *  Idempotent: `clickUntil` toggles a `<details>`, so a disclosure that is somehow already open
+   *  is left alone rather than clicked shut. */
+  const openOverviewAdvanced = async () => {
+    if (await page.getByTestId('live-events').first().isVisible().catch(() => false)) return
+    await clickUntil(
+      // The `<summary>`, not the `<details>`: `OverviewAdvanced` prevents the summary's own default
+      // and drives `open` from React state, so the summary is the element that toggles it.
+      page.getByTestId('overview-advanced-toggle'),
+      async () => page.getByTestId('live-events').first().isVisible(),
+      "the Overview's Advanced disclosure",
+    )
+  }
+
+  // page, path, selector, property, expected, prepare? -- every row is one README number. The cable's own
   // dasharray is NOT here: `CableEdge` draws that path only on an ACTIVE edge, which needs a live
   // run, so it is asserted as stage 2b after stage 4b dispatches one.
   const NUMBERS = [
@@ -904,16 +930,26 @@ try {
     ['overview', `/w/${workspaceId}`, '[data-testid="project-header"]', 'height', '52px'],
     ['overview', `/w/${workspaceId}`, '[data-testid="slave-card"]', 'border-radius', '8px'],
     ['overview', `/w/${workspaceId}`, '[data-testid="slave-card"]', 'padding', '12px 13px'],
-    ['overview', `/w/${workspaceId}`, '[data-testid="avatar-tile"]', 'width', '28px'],
-    ['overview', `/w/${workspaceId}`, '[data-testid="avatar-tile"]', 'height', '28px'],
+    // SCOPED to the card (M45 t5): the brief's `team` tile renders `AvatarTile` too, and it is
+    // above the SlaveCard grid on the page -- an unscoped `querySelector` would be measuring the
+    // brief's tile while claiming to measure the card's. Both are 28x28 today, which is exactly
+    // why the drift would have gone unnoticed.
+    ['overview', `/w/${workspaceId}`, '[data-testid="slave-card"] [data-testid="avatar-tile"]', 'width', '28px'],
+    ['overview', `/w/${workspaceId}`, '[data-testid="slave-card"] [data-testid="avatar-tile"]', 'height', '28px'],
     ['overview', `/w/${workspaceId}`, '[data-testid="slave-card"] [data-testid="status-pill"]', 'border-radius', '20px'],
-    ['overview', `/w/${workspaceId}`, '[data-testid="live-events"]', 'width', '340px'],
+    // M45 R1 moved the live-events river under the Overview's own `Advanced` disclosure: it is not
+    // one of the eight facts a person needs in ten seconds. The panel itself did not change -- same
+    // component, same `w-[340px]`, same testid -- so the README's 340px number is still real and is
+    // still measured here. What changed is that it has to be OPENED first: `getComputedStyle` on a
+    // subtree that is not rendered returns `auto`, so a gate that did not click would read nothing
+    // and a gate that dropped the row would leave a documented number with nothing measuring it.
+    ['overview', `/w/${workspaceId}`, '[data-testid="live-events"]', 'width', '340px', openOverviewAdvanced],
     ['activity', `/w/${workspaceId}/activity`, '[data-testid="timeline-rule"]', 'left', '88px'],
     ['graph', `/w/${workspaceId}/graph`, '[data-testid="graph-drawer"]', 'width', '352px'],
   ]
 
   let currentPath = null
-  for (const [pageName, path, selector, property, expected] of NUMBERS) {
+  for (const [pageName, path, selector, property, expected, prepare] of NUMBERS) {
     if (path !== currentPath) {
       await gotoReliably(`${baseUrl}${path}`)
       currentPath = path
@@ -931,6 +967,10 @@ try {
         )
       }
     }
+    // OUTSIDE the `path !== currentPath` block above, deliberately: the rows are grouped by path
+    // and the one row that prepares (`live-events`) is the eighth of eight on `/w/<id>`, so a hook
+    // run only on a page CHANGE would never run at all.
+    if (typeof prepare === 'function') await prepare()
     await assertComputed(pageName, selector, property, expected)
   }
 
