@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { capabilityKeySchema } from '../capability/taxonomy.js'
 import { jsonObjectsLastToFirst } from '../json/last-object.js'
 import { err, ok, type Result } from '../result.js'
 
@@ -36,8 +37,16 @@ const planTaskSchema = z.object({
   description: z.string().min(1),
   role: z.string().min(1).optional(),
   dependsOn: z.array(z.string()).default([]),
-  capabilities: z.array(z.string().min(1)).max(10).default([]),
+  // UNBOUNDED here on purpose (fix round 1): a shape violation makes `parsePlanGraph` fall back to
+  // an EARLIER candidate object in the same message, so a cap enforced at this level would silently
+  // execute a draft the planner had already revised. The count is a structural rule, checked in
+  // {@link validateStructure} with a named error, exactly as the duplicate-key and cycle rules are.
+  capabilities: z.array(capabilityKeySchema).default([]),
 })
+
+/** How many capabilities one task may ask for. A task naming eleven has not been decomposed --
+ *  the same judgement `planGraphSchema`'s 20-task cap makes about a plan. */
+export const MAX_TASK_CAPABILITIES = 10
 
 export const planGraphSchema = z.object({ tasks: z.array(planTaskSchema).min(1).max(20) })
 
@@ -68,6 +77,9 @@ function validateStructure(graph: PlanGraph): Result<PlanGraph, string> {
     // can ever see.
     if (task.role === undefined && task.capabilities.length === 0) {
       return err(`task "${task.key}" names neither a role nor a capability`)
+    }
+    if (task.capabilities.length > MAX_TASK_CAPABILITIES) {
+      return err(`task "${task.key}" asks for more than ${String(MAX_TASK_CAPABILITIES)} capabilities`)
     }
   }
 

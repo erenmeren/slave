@@ -94,24 +94,41 @@ export function formTeam(input: TeamInput): TeamPlan {
   const outstanding = new Set(missing)
 
   // 1. The existing capable worker: idle first (a busy worker's roles must not change under its
-  // own run), then slave id.
+  // own run), then slave id. Grouped BY WORKER (fix round 1) so one person who provides three of
+  // the gaps is one proposal covering three, not three proposals naming the same person -- the
+  // same minimality rule the other two tiers already followed, and the same `covers` list a reader
+  // uses to see what one decision buys.
+  const byProvider = new Map<string, { member: TeamRosterMember; covers: CapabilityKey[] }>()
   for (const capability of missing) {
+    // A capability the taxonomy does not have projects to no role, so there is no role to grant
+    // and nothing to propose: the "make them dispatchable" sentence would name an empty role.
+    // Left outstanding instead, and reported as unfillable unless somebody else provides it.
+    if (projectRoles([capability], input.taxonomy).length === 0) continue
     const provider = roster
       .filter((member) => member.capabilities.includes(capability))
       .toSorted((a, b) => (a.busy === b.busy ? a.slaveId.localeCompare(b.slaveId) : a.busy ? 1 : -1))[0]
     if (provider === undefined) continue
-    const role = projectRoles([capability], input.taxonomy)[0] ?? ''
+    const group = byProvider.get(provider.slaveId)
+    if (group === undefined) byProvider.set(provider.slaveId, { member: provider, covers: [capability] })
+    else group.covers.push(capability)
+    outstanding.delete(capability)
+  }
+
+  for (const { member, covers } of byProvider.values()) {
+    // `covers` is already in `required` order, which is sorted -- so the proposal's own key is the
+    // first of them and the plan is the same whatever order the roster came back in.
+    const roles = projectRoles(covers, input.taxonomy)
     proposals.push({
-      capability,
+      capability: covers[0] as CapabilityKey,
       source: 'existing_worker',
-      pick: { kind: 'slave', id: provider.slaveId, name: provider.name },
-      covers: [capability],
+      pick: { kind: 'slave', id: member.slaveId, name: member.name },
+      covers,
       temporary: false,
       rationale:
-        `${provider.name} already provides ${capabilityLabel(capability, input.taxonomy)} and does not hold the ` +
-        `"${role}" runtime role, so giving it to them makes them dispatchable for this work with nobody new.`,
+        `${member.name} already provides ${labelList(covers, input.taxonomy)} and does not hold the ` +
+        `${roles.map((role) => `"${role}"`).join(' and ')} runtime role${roles.length === 1 ? '' : 's'}, so ` +
+        `granting ${roles.length === 1 ? 'it' : 'them'} makes them dispatchable for this work with nobody new.`,
     })
-    outstanding.delete(capability)
   }
 
   // 2 and 3. Set cover over the company roster first, then the catalog. Both loops are the same
@@ -174,33 +191,40 @@ function coverWith(
   candidates: readonly { readonly id: string; readonly name: string; readonly capabilities: readonly CapabilityKey[]; readonly recommended: boolean }[],
   emit: (pick: { readonly id: string; readonly name: string; readonly recommended: boolean }, covers: readonly CapabilityKey[]) => void,
 ): void {
-  let progress = true
-  while (outstanding.size > 0 && progress) {
-    progress = false
-    let best: { id: string; name: string; recommended: boolean; covers: CapabilityKey[] } | null = null
+  while (outstanding.size > 0) {
+    let best: Candidate | null = null
     for (const candidate of candidates) {
       const covers = [...outstanding].filter((capability) => candidate.capabilities.includes(capability)).toSorted()
       if (covers.length === 0) continue
-      if (best === null || beats({ ...candidate, covers }, best, candidates)) {
-        best = { id: candidate.id, name: candidate.name, recommended: candidate.recommended, covers }
-      }
+      const challenger = { ...candidate, covers }
+      if (best === null || beats(challenger, best)) best = challenger
     }
+    // Nothing left that anybody here covers: every further round would find the same nothing.
     if (best === null) return
     emit(best, best.covers)
     for (const capability of best.covers) outstanding.delete(capability)
-    progress = true
   }
 }
 
-function beats(
-  challenger: { id: string; name: string; recommended: boolean; covers: readonly CapabilityKey[]; capabilities: readonly CapabilityKey[] },
-  holder: { id: string; name: string; recommended: boolean; covers: readonly CapabilityKey[] },
-  candidates: readonly { readonly id: string; readonly capabilities: readonly CapabilityKey[] }[],
-): boolean {
+/** One candidate for a round of {@link coverWith}, with the outstanding keys it would cover. */
+interface Candidate {
+  readonly id: string
+  readonly name: string
+  readonly capabilities: readonly CapabilityKey[]
+  readonly recommended: boolean
+  readonly covers: readonly CapabilityKey[]
+}
+
+/** The four tie-breaks, read off both candidates directly (fix round 1): the holder's total
+ *  capability count used to be looked up again in `candidates`, and the `?? 0` that lookup fell
+ *  back to would have let a holder nobody could find win the "most specific worker" break
+ *  unconditionally. */
+function beats(challenger: Candidate, holder: Candidate): boolean {
   if (challenger.covers.length !== holder.covers.length) return challenger.covers.length > holder.covers.length
   if (challenger.recommended !== holder.recommended) return challenger.recommended
-  const holderSize = candidates.find((candidate) => candidate.id === holder.id)?.capabilities.length ?? 0
-  if (challenger.capabilities.length !== holderSize) return challenger.capabilities.length < holderSize
+  if (challenger.capabilities.length !== holder.capabilities.length) {
+    return challenger.capabilities.length < holder.capabilities.length
+  }
   if (challenger.name !== holder.name) return challenger.name.localeCompare(holder.name) < 0
   return challenger.id.localeCompare(holder.id) < 0
 }

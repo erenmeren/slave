@@ -161,3 +161,28 @@ describe('parsePlanGraph -- capabilities (M47 R3)', () => {
     expect(out.error).toContain('neither a role nor a capability')
   })
 })
+
+describe('parsePlanGraph -- the capability cap is STRUCTURAL (fix round 1)', () => {
+  const keys = Array.from({ length: 11 }, (_v, i) => `qa.k${String(i)}`)
+
+  // A shape-level `.max(10)` made an over-capped graph fall back to an earlier candidate object in
+  // the same message -- silently executing a draft nobody signed off on. A named structural error
+  // is what the file's other limits do.
+  it('rejects eleven capabilities by name rather than falling back to an earlier draft', () => {
+    const text = [
+      JSON.stringify({ tasks: [{ key: 'a', title: 't', description: 'd', role: 'backend' }] }),
+      JSON.stringify({ tasks: [{ key: 'a', title: 't', description: 'd', capabilities: keys }] }),
+    ].join('\n')
+    const out = parsePlanGraph(text)
+    expect(out.ok).toBe(false)
+    if (out.ok) return
+    expect(out.error).toContain('more than 10 capabilities')
+  })
+
+  it('accepts exactly ten', () => {
+    const out = parsePlanGraph(
+      JSON.stringify({ tasks: [{ key: 'a', title: 't', description: 'd', capabilities: keys.slice(0, 10) }] }),
+    )
+    expect(out.ok).toBe(true)
+  })
+})

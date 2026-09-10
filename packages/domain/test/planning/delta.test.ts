@@ -266,3 +266,13 @@ describe('parsePlanDelta -- capabilities (M47 R3, E2)', () => {
     expect(out.value.add[0]?.capabilities).toEqual(['security.application'])
   })
 })
+
+describe('parsePlanDelta -- the capability cap is STRUCTURAL (fix round 1)', () => {
+  it('rejects eleven capabilities on an added task by name', () => {
+    const keys = Array.from({ length: 11 }, (_v, i) => `qa.k${String(i)}`)
+    const out = parsePlanDelta(json({ add: [addTask({ capabilities: keys })], cancel: [], keep: [] }), EXISTING)
+    expect(out.ok).toBe(false)
+    if (out.ok) return
+    expect(out.error).toContain('more than 10 capabilities')
+  })
+})

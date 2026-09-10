@@ -2,7 +2,7 @@ import { z } from 'zod'
 import { jsonObjectsLastToFirst } from '../json/last-object.js'
 import { err, ok, type Result } from '../result.js'
 import type { TaskStatus } from '../task/state.js'
-import { findCycle, planGraphSchema, type PlanTask } from './graph.js'
+import { MAX_TASK_CAPABILITIES, findCycle, planGraphSchema, type PlanTask } from './graph.js'
 
 /**
  * What a re-plan run returns (M40 §1, "re-planning is a delta, never a rebuild").
@@ -77,6 +77,9 @@ function validateDelta(delta: PlanDelta, existingTaskIds: readonly string[]): Re
     // both world loaders — unschedulable and unstaffable at once.
     if (task.role === undefined && task.capabilities.length === 0) {
       return err(`added task "${task.key}" names neither a role nor a capability`)
+    }
+    if (task.capabilities.length > MAX_TASK_CAPABILITIES) {
+      return err(`added task "${task.key}" asks for more than ${String(MAX_TASK_CAPABILITIES)} capabilities`)
     }
   }
 

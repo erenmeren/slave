@@ -35,17 +35,21 @@ export interface CapabilityRecord {
 /**
  * The one normalisation both sides of a match go through (plan erratum E12).
  *
- * Lower-cased, every run of whitespace or `-`/`_`/`.` reduced to ONE space, and trailing
- * punctuation removed -- so `backend.api-design`, `API Design` and `api_design.` are the same
- * string here and a persona bullet does not miss its key over a full stop. Deliberately NOT a
+ * Lower-cased, every run of whitespace or `-`/`_`/`.`/`/`/`,`/`&` reduced to ONE space, and the
+ * remaining punctuation removed -- so `backend.api-design`, `API Design` and `api_design.` are the
+ * same string here and a persona bullet does not miss its key over a full stop. Deliberately NOT a
  * stemmer and deliberately not applied to substrings: an inexact match would depend on the order
  * the taxonomy came back in, and this repository's rule is that the same input always produces the
  * same output.
+ *
+ * A separator SPLITS, it is never deleted (fix round 1): `/`, `,` and `&` used to fall through to
+ * the delete pass, which turned `CI/CD` into `cicd` -- a spelling no row could carry -- and would
+ * have joined the two halves of any `a, b` or `x & y` phrase into one word.
  */
 export function normaliseCapabilityText(value: string): string {
   return value
     .toLowerCase()
-    .replace(/[\s_\-.]+/g, ' ')
+    .replace(/[\s_\-./,&]+/g, ' ')
     .replace(/[^a-z0-9 ]+/g, '')
     .trim()
 }

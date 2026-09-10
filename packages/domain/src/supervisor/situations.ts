@@ -30,6 +30,21 @@ export const SITUATION_KINDS = [
   'stale_task',
   'waiting_stale',
   'unanswerable_question',
+  /**
+   * M47 R4: a startable task needs a CAPABILITY nobody in this workspace can be dispatched for.
+   * `subjectId` is the capability key, so ten tasks blocked on one gap are one situation.
+   *
+   * Supersedes {@link ready_unstaffed} for the task that raised it (plan erratum E8) -- that kind
+   * remains the role-only fallback, for a task that declared no capabilities at all and for one
+   * whose capabilities are staffed but whose hand-typed role is held by nobody.
+   *
+   * Declared in M47 Task 1, with the Postgres enum member its migration adds: `enum-parity.test.ts`
+   * asserts the two are the same list, member for member, precisely so a column and a union cannot
+   * drift apart across tasks. Nothing PRODUCES it until Task 3 -- `observe` has no predicate for it
+   * and `candidates` no arm, which is the ordinary "declared before it is emitted" state the parity
+   * test forces.
+   */
+  'capability_unstaffed',
   'ready_unstaffed',
   'done_not_integrated_stale',
   'workspace_halted',
@@ -44,7 +59,8 @@ export type SituationKind = (typeof SITUATION_KINDS)[number]
  * the task id for the task situations (`stale_task` included), the message id for the question
  * situations, the ROLE NAME
  * for `no_reviewer`/`no_planner`/`ready_unstaffed` (so ten ready tasks missing one role are one
- * situation, not ten), and the workspace id for `workspace_halted`.
+ * situation, not ten), the CAPABILITY KEY for `capability_unstaffed` (M47 R4, same rule one level
+ * more specific), and the workspace id for `workspace_halted`.
  *
  * `summary` is for a human and for the model prompt; `facts` is the evidence the predicate fired
  * on, kept as flat scalars so the whole thing survives a round trip through `SupervisorDecision.
@@ -85,6 +101,7 @@ export const SITUATION_LABEL: Record<SituationKind, string> = {
   stale_task: 'Work the goal no longer needs',
   waiting_stale: 'Waiting too long',
   unanswerable_question: 'Question nobody can answer',
+  capability_unstaffed: 'Missing a capability',
   ready_unstaffed: 'Ready work, nobody to do it',
   done_not_integrated_stale: 'Finished, not integrated',
   workspace_halted: 'Project halted',

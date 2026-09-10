@@ -131,3 +131,43 @@ describe('formTeam', () => {
     expect(plan.proposals.every((p) => p.source !== 'temporary' && !p.temporary)).toBe(true)
   })
 })
+
+describe('formTeam -- one proposal per worker (fix round 1)', () => {
+  it('offers ONE existing worker once, covering every missing capability they provide', () => {
+    const plan = formTeam(
+      input({
+        required: ['security.application', 'qa.test-automation'],
+        roster: [
+          {
+            slaveId: 's1',
+            name: 'Rae',
+            capabilities: ['security.application', 'qa.test-automation'],
+            runtimeRoles: ['backend'],
+            busy: false,
+          },
+        ],
+      }),
+    )
+    expect(plan.proposals).toHaveLength(1)
+    expect(plan.proposals[0]?.source).toBe('existing_worker')
+    expect(plan.proposals[0]?.pick.id).toBe('s1')
+    expect(plan.proposals[0]?.covers).toEqual(['qa.test-automation', 'security.application'])
+    expect(plan.proposals[0]?.capability).toBe('qa.test-automation')
+    expect(plan.proposals[0]?.rationale).toContain('Application security')
+    expect(plan.proposals[0]?.rationale).toContain('Test automation')
+    expect(plan.unfillable).toEqual([])
+  })
+
+  // A capability the taxonomy does not have projects to no role, so there is no role to grant and
+  // nothing to propose -- an empty `""` in the rationale would be the only thing produced.
+  it('proposes no existing worker for a capability that projects to no role', () => {
+    const plan = formTeam(
+      input({
+        required: ['ghost.thing'],
+        roster: [{ slaveId: 's1', name: 'Rae', capabilities: ['ghost.thing'], runtimeRoles: ['backend'], busy: false }],
+      }),
+    )
+    expect(plan.proposals).toEqual([])
+    expect(plan.unfillable).toEqual(['ghost.thing'])
+  })
+})

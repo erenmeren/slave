@@ -25,6 +25,15 @@ describe('normaliseCapabilityText', () => {
   it('keeps a dotted key recognisable by mapping its dot to a space too', () => {
     expect(normaliseCapabilityText('backend.api-design')).toBe('backend api design')
   })
+
+  // Fix round 1: `/`, `,` and `&` were DELETED rather than split on, so `CI/CD` came out as
+  // `cicd` and could never match a row spelled `ci-cd`. A separator that joins two words is the
+  // one thing this normaliser must never do.
+  it('splits on a slash, a comma and an ampersand rather than deleting them', () => {
+    expect(normaliseCapabilityText('CI/CD')).toBe('ci cd')
+    expect(normaliseCapabilityText('Queues, messaging')).toBe('queues messaging')
+    expect(normaliseCapabilityText('Research & discovery')).toBe('research discovery')
+  })
 })
 
 describe('normaliseCapabilities', () => {

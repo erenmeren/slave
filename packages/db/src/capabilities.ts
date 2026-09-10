@@ -38,7 +38,7 @@ export const CAPABILITY_SEED: readonly CapabilityRecord[] = [
   { key: 'qa.exploratory', label: 'Exploratory testing', domain: 'qa', role: 'qa', synonyms: ['manual testing'] },
   { key: 'qa.load-testing', label: 'Load testing', domain: 'qa', role: 'qa', synonyms: ['performance testing', 'stress testing'] },
   { key: 'qa.test-strategy', label: 'Test strategy', domain: 'qa', role: 'qa', synonyms: ['quality strategy'] },
-  { key: 'operations.ci-cd', label: 'CI and CD', domain: 'operations', role: 'operations', synonyms: ['continuous integration', 'build pipelines'] },
+  { key: 'operations.ci-cd', label: 'CI and CD', domain: 'operations', role: 'operations', synonyms: ['ci/cd', 'cicd', 'continuous integration', 'build pipelines'] },
   { key: 'operations.deployment', label: 'Deployment', domain: 'operations', role: 'operations', synonyms: ['release engineering', 'rollout'] },
   { key: 'operations.observability', label: 'Observability', domain: 'operations', role: 'operations', synonyms: ['monitoring', 'tracing', 'logging'] },
   { key: 'operations.incident-response', label: 'Incident response', domain: 'operations', role: 'operations', synonyms: ['on call', 'incident management'] },

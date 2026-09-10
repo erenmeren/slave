@@ -20,20 +20,28 @@ export interface CollaborationHintDraft {
 /** A whole-phrase, case-insensitive occurrence test over normalised text -- `apidesigner` does not
  *  contain `api design`, and `Consult the Gate Security Reviewer.` does contain
  *  `gate security reviewer`. Both sides go through the same normaliser, so punctuation and
- *  separators cannot decide a match. */
+ *  separators cannot decide a match.
+ *
+ *  EVERY occurrence is tested, not just the first (fix round 1): `Run the pretest automation, then
+ *  hand test automation to them.` contains `test automation` twice, and only the second one has a
+ *  word boundary in front of it. Stopping at the first hit threw the clean one away and lost the
+ *  capability the sentence was actually about. */
 function containsPhrase(haystack: string, phrase: string): boolean {
   if (phrase === '') return false
-  const index = haystack.indexOf(phrase)
-  if (index === -1) return false
-  const before = index === 0 ? ' ' : haystack[index - 1]
-  const after = index + phrase.length >= haystack.length ? ' ' : haystack[index + phrase.length]
-  return before === ' ' && after === ' '
+  for (let index = haystack.indexOf(phrase); index !== -1; index = haystack.indexOf(phrase, index + 1)) {
+    const before = index === 0 ? ' ' : haystack[index - 1]
+    const after = index + phrase.length >= haystack.length ? ' ' : haystack[index + phrase.length]
+    if (before === ' ' && after === ' ') return true
+  }
+  return false
 }
 
 /** How short a spelling may be before it is too short to search a whole sentence for. Two-letter
- *  synonyms would match half the corpus; four characters is the shortest real one in the seed
- *  taxonomy (`ci-cd` normalises to `ci cd`). */
-const MIN_SEARCHABLE = 4
+ *  spellings would match half the corpus; THREE is the shortest real one in the seed taxonomy --
+ *  `css`, `etl`, `sca` and `iOS` are all three characters, and every one of them would be invisible
+ *  at four. What makes three safe is that {@link containsPhrase} matches whole phrases only, so
+ *  `ios` never matches `iosevka` and `sca` never matches `scaffold`. */
+const MIN_SEARCHABLE = 3
 
 /**
  * Normalise one hint (R5). The TARGET is the longest template name the sentence contains (ties on
