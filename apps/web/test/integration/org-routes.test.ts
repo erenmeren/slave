@@ -5,6 +5,7 @@ import { POST as companiesPOST } from '../../src/app/api/org/companies/route.js'
 import { POST as teamsPOST } from '../../src/app/api/org/teams/route.js'
 import { POST as slavesPOST } from '../../src/app/api/org/slaves/route.js'
 import { GET as workersGET } from '../../src/app/api/org/workers/route.js'
+import { GET as catalogImportsGET } from '../../src/app/api/org/catalog-imports/route.js'
 import { POST as companyPOST } from '../../src/app/api/w/[workspaceId]/company/route.js'
 import { POST as modelPOST } from '../../src/app/api/slaves/[slaveId]/model/route.js'
 import { PUT as permissionPUT } from '../../src/app/api/slaves/[slaveId]/permission/route.js'
@@ -62,7 +63,7 @@ describe('the org routes', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "CatalogImport", "SlaveTemplate" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
   })
@@ -670,5 +671,30 @@ describe('the org routes', () => {
 
     // Cross-site refusal is now owned by the boundary middleware and `apps/web/test/boundary.test.ts`.
     // The middleware 403s any cross-site /api request before this handler runs.
+  })
+  describe('GET /api/org/catalog-imports', () => {
+    it('returns the recorded runs, newest first', async (): Promise<void> => {
+      await prisma.catalogImport.create({
+        data: {
+          catalog: 'catalog-m42',
+          directory: '/srv/catalog-m42',
+          by: 'operator',
+          startedAt: new Date('2026-09-10T08:00:00.000Z'),
+          finishedAt: new Date('2026-09-10T08:00:01.000Z'),
+          created: 2,
+          updated: 0,
+          unchanged: 0,
+          skipped: 3,
+          report: { created: [], updated: [], unchanged: [], skipped: [] },
+        },
+      })
+
+      const response = await catalogImportsGET()
+
+      expect(response.status).toBe(200)
+      const body = (await response.json()) as { imports: readonly { catalog: string; skipped: number }[] }
+      expect(body.imports).toHaveLength(1)
+      expect(body.imports[0]).toMatchObject({ catalog: 'catalog-m42', skipped: 3 })
+    })
   })
 })

@@ -29,7 +29,9 @@ import {
   deleteUser,
   emergencyStop,
   haltSimulation,
+  importCatalog,
   injectExternalEvent,
+  listCatalogImports,
   listDecisions,
   listGoalVersions,
   listPendingQuestions,
@@ -66,6 +68,7 @@ import {
   tickSimulations,
   plural,
   unblockTask,
+  type ImportReport,
   type ModelDecider,
   type ProfileTarget,
 } from '@slave-of-ai/control'
@@ -83,6 +86,7 @@ import {
 } from '@slave-of-ai/domain'
 import { sectors } from '@slave-of-ai/simulation'
 import { DEFAULT_MODEL_TIMEOUT_MS, buildRegistry, decideWithModel, type AdapterRegistry, type ProviderKind } from '@slave-of-ai/providers'
+import { readCatalogDirectory } from './catalog.js'
 import { runDaemon } from './daemon.js'
 import { PLANNING_RETRY_CAP } from './planning.js'
 import { replanVerdict } from './replan.js'
@@ -176,6 +180,18 @@ const USAGE = `usage: orchestrator <command> [options]
   list-workspaces                      every project, archived ones marked
   skills sync                          rescan the skill catalog from this host's disk:
                                        ~/.claude/skills, the plugin cache, and <repo>/.claude/skills
+  import-catalog --dir <path> [--catalog <n>] [--division <d>[,<d>]]
+                 [--role-map <division>=<role>,...] [--by <name>] [--dry-run]
+                                       import a directory of persona files into the template
+                                       catalog. Re-runnable: an unchanged file is left alone, a
+                                       changed one updates the template it created, and a profile a
+                                       person has edited since is never overwritten. --catalog
+                                       defaults to the directory's own name; --role-map translates a
+                                       division into the role the template is created with, and only
+                                       matters the first time a persona is imported. --dry-run
+                                       decides everything and writes nothing -- write it LAST, a
+                                       flag after it would be swallowed as its value.
+  list-imports [--limit <n>]           the last catalog imports, newest first, with their counts
   create-template --name <n> --role <r> [--model <m> --provider <p>] [--description <d>]
                                        add a reusable slave template to the catalog. --model and
                                        --provider are a pair: give both or neither.
@@ -630,6 +646,38 @@ async function mustGetRun(runId: string) {
   return run
 }
 
+/**
+ * The import report an operator reads (M42 §2).
+ *
+ * Counts first, then a line per row that CHANGED or was skipped -- with the reason on the skip,
+ * because "3 skipped" without them is a number nobody can act on. `unchanged` rows are summarised
+ * rather than listed: on a real catalog they are almost all of it, and an operator scanning for
+ * what moved should not have to read three hundred lines saying nothing did. A drifting role is
+ * printed on its own line: the template keeps the role it was created with, and an operator who
+ * expected --role-map to change it needs to be told it did not.
+ */
+function describeImport(report: ImportReport): string {
+  const lines: string[] = []
+  if (report.dryRun) lines.push('DRY RUN: nothing was written.')
+  lines.push(
+    `${report.catalog} (${report.directory}): created ${String(report.created.length)}, ` +
+      `updated ${String(report.updated.length)}, unchanged ${String(report.unchanged.length)}, ` +
+      `skipped ${String(report.skipped.length)}`,
+  )
+  for (const row of report.created) lines.push(`  created  ${row.name}  [${row.role}]  ${row.sourceId}`)
+  for (const row of report.updated) lines.push(`  updated  ${row.name}  [${row.role}]  ${row.sourceId}`)
+  for (const row of report.skipped) lines.push(`  skipped  ${row.reason}  ${row.name ?? row.sourceId}: ${row.detail}`)
+  for (const row of [...report.created, ...report.updated, ...report.unchanged]) {
+    if (row.roleDrift === undefined) continue
+    lines.push(
+      `  role     ${row.name} stays "${row.roleDrift.stored}" (the map said "${row.roleDrift.mapped}"): ` +
+        "a template's role is set when it is created -- delete it and import it again to change one",
+    )
+  }
+  if (report.importId !== null) lines.push(`recorded as import ${report.importId}`)
+  return `${lines.join('\n')}\n`
+}
+
 export async function main(argv: readonly string[]): Promise<number> {
   const { command, flags } = parseArgs(argv)
 
@@ -999,6 +1047,80 @@ export async function main(argv: readonly string[]): Promise<number> {
       }
       const result = await syncSkillCatalog()
       process.stdout.write(describeSync(result))
+      return 0
+    }
+
+    case 'import-catalog': {
+      const dir = requireFlag(flags, 'dir')
+      // `'dry-run' in flags`, not `!== undefined`: a bare flag's recorded value is `undefined`, the
+      // repo's own `--yes`/`--clear` idiom.
+      const dryRun = 'dry-run' in flags
+      const divisionText = flagText(flags, 'division')
+      const divisions =
+        divisionText === undefined
+          ? undefined
+          : divisionText
+              .split(',')
+              .map((division) => division.trim())
+              .filter((division) => division !== '')
+      const roleMapText = flagText(flags, 'role-map')
+      const roleMap: Record<string, string> = {}
+      for (const pair of roleMapText === undefined ? [] : roleMapText.split(',')) {
+        const [division, role] = pair.split('=')
+        if (division === undefined || role === undefined) {
+          throw new Error(`--role-map entries look like division=role; got ${JSON.stringify(pair)}`)
+        }
+        roleMap[division.trim()] = role.trim()
+      }
+
+      const walk = readCatalogDirectory(dir, {
+        ...(flagText(flags, 'catalog') !== undefined ? { catalog: requireFlag(flags, 'catalog') } : {}),
+        ...(divisions !== undefined ? { divisions } : {}),
+      })
+
+      // A `--role-map` key that matches no division in this catalog is a WARNING, not a refusal
+      // (Task 3 review, minor 3): the entry changes nothing, so the import is still the one the
+      // operator asked for -- but a silently ignored key is how somebody concludes the map does
+      // not work at all. The verb itself stays silent about this; it takes a map and applies it.
+      const present = new Set(walk.entries.map((entry) => entry.division))
+      for (const division of Object.keys(roleMap)) {
+        if (present.has(division)) continue
+        process.stderr.write(
+          `WARNING: --role-map names "${division}", which is not a division in this catalog; that entry maps nothing\n`,
+        )
+      }
+
+      const result = await importCatalog(
+        {
+          catalog: walk.catalog,
+          directory: resolve(dir),
+          entries: walk.entries,
+          ...(Object.keys(roleMap).length > 0 ? { roleMap } : {}),
+          ...(dryRun ? { dryRun: true } : {}),
+        },
+        operatorName(flags),
+      )
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(describeImport(result.value))
+      return 0
+    }
+
+    case 'list-imports': {
+      const limitText = flagText(flags, 'limit')
+      const limit = limitText === undefined ? 10 : Number.parseInt(limitText, 10)
+      if (!Number.isInteger(limit) || limit < 1) throw new Error('--limit must be a positive integer')
+      const rows = await listCatalogImports(limit)
+      if (rows.length === 0) {
+        process.stdout.write('no catalog has been imported yet\n')
+        return 0
+      }
+      for (const row of rows) {
+        process.stdout.write(
+          `${row.finishedAt.toISOString()}  ${row.catalog}  by ${row.by ?? 'nobody named'}  ` +
+            `created ${String(row.created)}, updated ${String(row.updated)}, unchanged ${String(row.unchanged)}, ` +
+            `skipped ${String(row.skipped)}  (${row.directory})\n`,
+        )
+      }
       return 0
     }
 

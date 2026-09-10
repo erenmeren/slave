@@ -1,5 +1,5 @@
 import { execFile, execFileSync, spawn } from 'node:child_process'
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -2514,6 +2514,127 @@ describe('the orchestrator CLI', () => {
 
       expect(result.code).not.toBe(0)
       expect(result.stderr).toMatch(/--enable and --disable are exclusive/)
+    })
+  })
+  // M42 t4: the import verbs. Every invocation writes `--dry-run` LAST -- `parseArgs` takes
+  // whatever follows a flag as its value (erratum E11), so `--dry-run --by me` would record
+  // `dry-run: '--by'` and drop `--by` entirely.
+  describe('import-catalog', () => {
+    const catalogDirs: string[] = []
+
+    const catalogDir = (): string => {
+      const root = mkdtempSync(join(tmpdir(), 'cli-catalog-m42-'))
+      catalogDirs.push(root)
+      mkdirSync(join(root, 'engineering'), { recursive: true })
+      writeFileSync(
+        join(root, 'divisions.json'),
+        JSON.stringify({ divisions: { engineering: { label: 'Engineering' } } }),
+      )
+      writeFileSync(
+        join(root, 'engineering', 'core-builder.md'),
+        '---\nname: CLI Core Builder\ndescription: Builds the core.\n---\n\nYou build the core module.\n',
+      )
+      writeFileSync(join(root, 'engineering', 'broken.md'), '# no front matter\n')
+      return root
+    }
+
+    beforeEach(async (): Promise<void> => {
+      await prisma.$executeRawUnsafe('TRUNCATE TABLE "CatalogImport", "SlaveTemplate" RESTART IDENTITY CASCADE')
+    })
+
+    afterAll(() => {
+      for (const dir of catalogDirs) rmSync(dir, { recursive: true, force: true })
+    })
+
+    it('imports a directory, prints a line per row, and records the run', async (): Promise<void> => {
+      const dir = catalogDir()
+
+      const result = await runCli(['import-catalog', '--dir', dir, '--by', 'operator'])
+
+      expect(result.code).toBe(0)
+      expect(result.stdout).toContain('created 1, updated 0, unchanged 0, skipped 1')
+      expect(result.stdout).toContain('created  CLI Core Builder')
+      expect(result.stdout).toContain('skipped  invalid_persona')
+      const row = await prisma.slaveTemplate.findFirstOrThrow({ where: { name: 'CLI Core Builder' } })
+      expect(row.sourceDivision).toBe('engineering')
+      expect(await prisma.catalogImport.count()).toBe(1)
+    })
+
+    it('a dry run prints what would happen and writes nothing at all', async (): Promise<void> => {
+      const dir = catalogDir()
+
+      const result = await runCli(['import-catalog', '--dir', dir, '--dry-run'])
+
+      expect(result.code).toBe(0)
+      expect(result.stdout).toContain('DRY RUN')
+      expect(result.stdout).toContain('nothing was written')
+      expect(await prisma.slaveTemplate.count()).toBe(0)
+      expect(await prisma.catalogImport.count()).toBe(0)
+    })
+
+    it('translates roles through --role-map', async (): Promise<void> => {
+      const dir = catalogDir()
+
+      await runCli(['import-catalog', '--dir', dir, '--role-map', 'engineering=backend'])
+
+      expect((await prisma.slaveTemplate.findFirstOrThrow({ where: { name: 'CLI Core Builder' } })).role).toBe('backend')
+    })
+
+    it('trims what an operator typed around a --role-map entry', async (): Promise<void> => {
+      const dir = catalogDir()
+
+      const result = await runCli(['import-catalog', '--dir', dir, '--role-map', ' engineering = backend '])
+
+      expect(result.code).toBe(0)
+      expect((await prisma.slaveTemplate.findFirstOrThrow({ where: { name: 'CLI Core Builder' } })).role).toBe('backend')
+    })
+
+    it('warns about a --role-map key that names no division in this catalog', async (): Promise<void> => {
+      const dir = catalogDir()
+
+      const result = await runCli(['import-catalog', '--dir', dir, '--role-map', 'engineering=backend,marketing=growth'])
+
+      // The import still happens: a key that matches nothing changes nothing, and refusing the
+      // whole run over a typo an operator can see in the output would be the worse trade.
+      expect(result.code).toBe(0)
+      expect(`${result.stdout}${result.stderr}`).toContain('WARNING')
+      expect(`${result.stdout}${result.stderr}`).toContain('marketing')
+      expect((await prisma.slaveTemplate.findFirstOrThrow({ where: { name: 'CLI Core Builder' } })).role).toBe('backend')
+    })
+
+    it('exits non-zero when the directory holds no persona at all', async (): Promise<void> => {
+      const empty = mkdtempSync(join(tmpdir(), 'cli-catalog-m42-empty-'))
+      catalogDirs.push(empty)
+
+      const result = await runCli(['import-catalog', '--dir', empty])
+
+      expect(result.code).not.toBe(0)
+      expect(`${result.stdout}${result.stderr}`).toContain('no persona was found')
+    })
+
+    it('list-imports prints the runs newest first', async (): Promise<void> => {
+      const dir = catalogDir()
+      await runCli(['import-catalog', '--dir', dir, '--by', 'operator'])
+
+      const result = await runCli(['list-imports'])
+
+      expect(result.code).toBe(0)
+      expect(result.stdout).toContain('created 1')
+      expect(result.stdout).toContain('operator')
+    })
+
+    it('list-imports says so when nothing has been imported', async (): Promise<void> => {
+      const result = await runCli(['list-imports'])
+
+      expect(result.code).toBe(0)
+      expect(result.stdout).toContain('no catalog has been imported yet')
+    })
+
+    it('help documents both verbs and says the boolean flag goes last', async (): Promise<void> => {
+      const printed = await runCli(['help'])
+
+      expect(`${printed.stdout}${printed.stderr}`).toContain('import-catalog --dir <path>')
+      expect(`${printed.stdout}${printed.stderr}`).toContain('list-imports')
     })
   })
 })

@@ -1,4 +1,4 @@
-import { listCompanies, listProjects, listRoster, listTemplates } from '../server/org'
+import { listCatalogImports, listCompanies, listProjects, listRoster, listTemplates } from '../server/org'
 import { ProjectsClient } from '../components/ProjectsClient'
 
 export const dynamic = 'force-dynamic'
@@ -17,11 +17,20 @@ export default async function Home({
   readonly searchParams: Promise<{ readonly archived?: string }>
 }): Promise<React.JSX.Element> {
   const { archived } = await searchParams
-  const [projects, companies, templates, roster] = await Promise.all([
+  const [projects, companies, templates, roster, catalogImports] = await Promise.all([
     listProjects({ includeArchived: archived === '1' }),
     listCompanies(),
     listTemplates(),
     listRoster(),
+    listCatalogImports(),
   ])
-  return <ProjectsClient projects={projects} companies={companies} templates={templates} roster={roster} />
+  return (
+    <ProjectsClient
+      projects={projects}
+      companies={companies}
+      templates={templates}
+      roster={roster}
+      catalogImports={catalogImports}
+    />
+  )
 }

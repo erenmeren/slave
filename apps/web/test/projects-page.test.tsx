@@ -48,9 +48,10 @@ const projects = [project({})]
 // in `props` wins over the wrapper's own default in JSX prop order.
 type ProjectsClientProps = React.ComponentProps<typeof ProjectsClient>
 function TestProjectsClient(
-  props: Omit<ProjectsClientProps, 'templates' | 'roster'> & Partial<Pick<ProjectsClientProps, 'templates' | 'roster'>>,
+  props: Omit<ProjectsClientProps, 'templates' | 'roster' | 'catalogImports'> &
+    Partial<Pick<ProjectsClientProps, 'templates' | 'roster' | 'catalogImports'>>,
 ): React.JSX.Element {
-  return <ProjectsClient templates={[]} roster={[]} {...props} />
+  return <ProjectsClient templates={[]} roster={[]} catalogImports={[]} {...props} />
 }
 
 describe('ProjectsClient', () => {
@@ -471,5 +472,62 @@ describe('the handoff project card', () => {
     ]
     render(<TestProjectsClient projects={[project({ team })]} companies={companies} />)
     expect(screen.queryByTestId('team-overflow')).toBeNull()
+  })
+  // M42 t4: where an operator reads what an import did -- the chip under an imported template's
+  // name, and the read-only list of runs.
+  describe('the catalog import surfaces', () => {
+    const imported = {
+      id: 't2',
+      name: 'Core Builder',
+      role: 'engineering',
+      description: 'Builds the core.',
+      defaultModel: null,
+      defaultProvider: null,
+      catalogSlaveCount: 0,
+      sourceId: 'catalog-m42/engineering/core-builder',
+      sourceDivision: 'engineering',
+      importedAt: '2026-09-10T08:30:00.000Z',
+    }
+
+    it('marks an imported template with its division and the date it arrived', () => {
+      render(<ProjectsClient projects={[project({})]} companies={companies} templates={[imported]} roster={[]} catalogImports={[]} />)
+
+      const chip = screen.getByTestId('template-source-t2')
+      expect(chip.textContent).toContain('engineering')
+      expect(chip.textContent).toContain('2026-09-10')
+    })
+
+    it('shows no source chip on a hand-made template', () => {
+      const handMade = { ...imported, id: 't1', name: 'Hand Made', sourceId: null, sourceDivision: null, importedAt: null }
+      render(<ProjectsClient projects={[project({})]} companies={companies} templates={[handMade]} roster={[]} catalogImports={[]} />)
+
+      expect(screen.queryByTestId('template-source-t1')).toBeNull()
+    })
+
+    it('lists the catalog imports with their counts', () => {
+      render(
+        <ProjectsClient
+          projects={[project({})]}
+          companies={companies}
+          templates={[imported]}
+          roster={[]}
+          catalogImports={[
+            { id: 'i1', catalog: 'catalog-m42', directory: '/srv/catalog-m42', by: 'operator', finishedAt: '2026-09-10T08:30:00.000Z', created: 2, updated: 1, unchanged: 3, skipped: 4 },
+          ]}
+        />,
+      )
+
+      const row = screen.getByTestId('catalog-import-i1')
+      expect(row.textContent).toContain('catalog-m42')
+      expect(row.textContent).toContain('operator')
+      expect(row.textContent).toContain('2')
+      expect(row.textContent).toContain('4')
+    })
+
+    it('says so when nothing has been imported', () => {
+      render(<ProjectsClient projects={[project({})]} companies={companies} templates={[]} roster={[]} catalogImports={[]} />)
+
+      expect(screen.getByTestId('catalog-imports').textContent).toContain('no catalog has been imported yet')
+    })
   })
 })

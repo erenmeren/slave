@@ -28,6 +28,11 @@ export interface TemplateRow {
   /** How many catalog slaves use this template (M27 §5.1) -- this row's `template-delete` confirm
    *  names it before `deleteSlaveTemplate` cascades them. */
   readonly catalogSlaveCount: number
+  /** M42 §2: provenance, present only on an imported template. Optional for the same reason
+   *  `defaultProvider` is -- the M11 fixtures that build a `TemplateRow` by hand predate it. */
+  readonly sourceId?: string | null
+  readonly sourceDivision?: string | null
+  readonly importedAt?: string | null
 }
 
 const COLUMNS = '1fr 110px 2fr 140px 120px 120px'
@@ -88,7 +93,21 @@ export function TemplateCatalog({ templates }: { readonly templates: readonly Te
         <DataTable columns={COLUMNS} header={[...HEADER]}>
           {templates.map((template) => (
             <Row key={template.id} columns={COLUMNS}>
-              <span className="truncate text-sm text-text-1">{template.name}</span>
+              {/* M42 erratum E21: provenance goes INSIDE the existing Name cell. `COLUMNS` and
+               *  `HEADER` are screenshotted by `gate:m14-fidelity`, so an eighth column -- or a
+               *  seventh here -- would be a fidelity change, not a feature. */}
+              <span className="flex min-w-0 flex-col">
+                <span className="truncate text-sm text-text-1">{template.name}</span>
+                {template.sourceId == null ? null : (
+                  <span
+                    data-testid={`template-source-${template.id}`}
+                    className="truncate font-mono text-[10px] text-text-3"
+                    title={template.sourceId}
+                  >
+                    {template.sourceDivision ?? 'imported'} · {template.importedAt?.slice(0, 10) ?? 'imported'}
+                  </span>
+                )}
+              </span>
               <Chip>{template.role}</Chip>
               <span className="truncate text-text-2">{template.description}</span>
               <span className="font-mono text-xs text-text-2">{template.defaultModel ?? '—'}</span>

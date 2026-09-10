@@ -7,6 +7,7 @@ import { CARD_STATE_TONE, cardStateForSlave, type CardState } from '../lib/tones
 import { sendControl } from '../lib/postControl'
 import type { ProjectRow, RosterCompany } from '../server/org'
 import { AssignCompanyDialog } from './AssignCompanyDialog'
+import { CatalogImports, type CatalogImportRow } from './CatalogImports'
 import { CompanyManager, type CompanyRow } from './CompanyManager'
 import { NewProjectDrawer } from './projects/NewProjectDrawer'
 import { TemplateCatalog, type TemplateRow } from './TemplateCatalog'
@@ -217,11 +218,15 @@ export function ProjectsClient({
   companies,
   templates,
   roster,
+  catalogImports,
 }: {
   readonly projects: readonly ProjectRow[]
   readonly companies: readonly CompanyRow[]
   readonly templates: readonly TemplateRow[]
   readonly roster: readonly RosterCompany[]
+  /** M42 §2: the last catalog imports, read only -- required for the same reason `templates` is,
+   *  so a caller with none passes `[]` rather than the panel silently going empty. */
+  readonly catalogImports: readonly CatalogImportRow[]
 }): React.JSX.Element {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -272,6 +277,9 @@ export function ProjectsClient({
         </Panel>
         <Panel title="Companies">
           <CompanyManager companies={companies} roster={roster} templates={templates} />
+        </Panel>
+        <Panel title="Catalog imports">
+          <CatalogImports imports={catalogImports} />
         </Panel>
       </section>
       <NewProjectDrawer
