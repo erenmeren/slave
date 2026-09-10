@@ -272,6 +272,14 @@ export type ControlRefusal =
    *  move, `rework`/`waiting` are attempts already spent (`failTask` is their exit), and `done`,
    *  `failed` and `cancelled` are already terminal. */
   | { readonly kind: 'task_not_cancellable'; readonly taskId: string; readonly status: string }
+  /** `importCatalog` with no entries at all (M42 §2): the directory has no persona in it, which is
+   *  a mistyped path far more often than an empty catalog, and writing a `CatalogImport` row saying
+   *  "nothing happened" would hide that. */
+  | { readonly kind: 'catalog_empty'; readonly directory: string }
+  /** A `--role-map` entry with an empty half. Refused rather than dropped: silently discarding part
+   *  of what an operator typed is how a template ends up dispatchable as something nobody meant --
+   *  `normaliseRoles`' own reasoning. */
+  | { readonly kind: 'invalid_role_map'; readonly detail: string }
 
 /**
  * The word a person reads for `live_runs`'s `entity` (M27 final review, Important finding 3).
@@ -474,5 +482,9 @@ export function refusalText(refusal: ControlRefusal): string {
       return `task ${refusal.taskId} is ${refusal.status}: only a task in rework or blocked can be failed`
     case 'task_not_cancellable':
       return `task ${refusal.taskId} is ${refusal.status}: only a task in backlog, ready or blocked can be cancelled`
+    case 'catalog_empty':
+      return `no persona was found under ${refusal.directory}: nothing was imported`
+    case 'invalid_role_map':
+      return `--role-map is unusable: ${refusal.detail}`
   }
 }

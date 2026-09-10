@@ -1,6 +1,11 @@
 import { prisma } from '@slave-of-ai/db/client'
 import { toRunState } from '@slave-of-ai/db'
-import { capabilitiesOf, type ProviderCapabilities, type ProviderKind } from '@slave-of-ai/control'
+import {
+  capabilitiesOf,
+  listCatalogImports as listCatalogImportRows,
+  type ProviderCapabilities,
+  type ProviderKind,
+} from '@slave-of-ai/control'
 import {
   deriveSlaveStatus,
   sumSpendFromGroups,
@@ -825,20 +830,66 @@ export async function listTemplates(): Promise<
     defaultModel: string | null
     defaultProvider: ProviderKind | null
     catalogSlaveCount: number
+    /** M42 §2: provenance. Null on a hand-made template, which is what "not imported" means.
+     *  `importedAt` is an ISO string, not a `Date`: this row is a prop of a `'use client'`
+     *  component, `GoalVersionView.createdAt`'s idiom. */
+    sourceId: string | null
+    sourceDivision: string | null
+    importedAt: string | null
   }[]
 > {
   const [templates, catalogSlaveGroups] = await Promise.all([
     prisma.slaveTemplate.findMany({
-      select: { id: true, name: true, role: true, description: true, defaultModel: true, provider: true },
+      select: {
+        id: true,
+        name: true,
+        role: true,
+        description: true,
+        defaultModel: true,
+        provider: true,
+        sourceId: true,
+        sourceDivision: true,
+        importedAt: true,
+      },
       orderBy: { name: 'asc' },
     }),
     prisma.companySlave.groupBy({ by: ['templateId'], _count: { _all: true } }),
   ])
   const catalogSlaveCountByTemplate = new Map(catalogSlaveGroups.map((g) => [g.templateId, g._count._all] as const))
-  return templates.map(({ provider, ...rest }) => ({
+  return templates.map(({ provider, importedAt, ...rest }) => ({
     ...rest,
     defaultProvider: provider,
+    importedAt: importedAt === null ? null : importedAt.toISOString(),
     catalogSlaveCount: catalogSlaveCountByTemplate.get(rest.id) ?? 0,
+  }))
+}
+
+/** M42 §2: the last ten import runs, for the catalog imports panel. Dates as ISO strings, for the
+ *  same reason `listTemplates` above hands out one. */
+export async function listCatalogImports(): Promise<
+  readonly {
+    id: string
+    catalog: string
+    directory: string
+    by: string | null
+    finishedAt: string
+    created: number
+    updated: number
+    unchanged: number
+    skipped: number
+  }[]
+> {
+  const rows = await listCatalogImportRows(10)
+  return rows.map((row) => ({
+    id: row.id,
+    catalog: row.catalog,
+    directory: row.directory,
+    by: row.by,
+    finishedAt: row.finishedAt.toISOString(),
+    created: row.created,
+    updated: row.updated,
+    unchanged: row.unchanged,
+    skipped: row.skipped,
   }))
 }
 

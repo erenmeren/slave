@@ -537,6 +537,10 @@ describe('org query module', () => {
           defaultModel: 'sonnet',
           defaultProvider: null,
           catalogSlaveCount: 0,
+          // M42 §2: a hand-made template has no provenance, which is what these three nulls mean.
+          sourceId: null,
+          sourceDivision: null,
+          importedAt: null,
         },
       ])
       expect(companies).toEqual([{ id: expect.any(String), name: 'Acme Robotics' }])
@@ -560,6 +564,35 @@ describe('org query module', () => {
       expect(templates).toEqual([
         expect.objectContaining({ id: template.id, name: 'Backend Engineer', catalogSlaveCount: 1 }),
       ])
+    })
+
+    it('carries the provenance of an imported template and nulls for a hand-made one', async (): Promise<void> => {
+      const importedAt = new Date('2026-09-10T08:30:00.000Z')
+      await prisma.slaveTemplate.create({ data: { name: 'Hand Made', role: 'backend' } })
+      await prisma.slaveTemplate.create({
+        data: {
+          name: 'Core Builder',
+          role: 'engineering',
+          sourceId: 'catalog-m42/engineering/core-builder',
+          sourceSha256: 'abc',
+          sourceDivision: 'engineering',
+          profileSha256: 'def',
+          importedAt,
+        },
+      })
+
+      const rows = await listTemplates()
+
+      expect(rows.find((row) => row.name === 'Hand Made')).toMatchObject({
+        sourceId: null,
+        sourceDivision: null,
+        importedAt: null,
+      })
+      expect(rows.find((row) => row.name === 'Core Builder')).toMatchObject({
+        sourceId: 'catalog-m42/engineering/core-builder',
+        sourceDivision: 'engineering',
+        importedAt: importedAt.toISOString(),
+      })
     })
   })
 })
