@@ -5,6 +5,7 @@ import {
   cardStateForSlave,
   cardStateForRun,
   cardStateForTask,
+  toneForStatus,
   toneForTaskStatus,
   type CardState,
 } from '../src/lib/tones.js'
@@ -85,6 +86,33 @@ describe('cardStateForSlave', () => {
 
   it('covers every SlaveStatus', () => {
     expect(new Set(cases.map(([s]) => s)).size).toBe(7)
+  })
+})
+
+// M44 t3: re-homed from `slaves-page.test.tsx` (deleted with `SlavesClient`). The subject is
+// erratum E18 -- `SlavesClient` carried its own `SLAVE_STATUS_TONE` table beside `CARD_STATE_TONE`
+// and the two disagreed on two members; `toneForStatus` derives through `cardStateForSlave` into
+// the one table, and these are the values that de-drift produced.
+describe('toneForStatus', () => {
+  it('maps every SlaveStatus to a StatusTone, through the same derivation CARD_STATE_TONE uses (erratum E18)', () => {
+    expect(toneForStatus('working')).toBe('working')
+    expect(toneForStatus('starting')).toBe('planning')
+    // `resuming` and `pausing` used to read through `SlavesClient`'s own `SLAVE_STATUS_TONE` table
+    // (planning / paused respectively) -- a second status->tone mapping that disagreed with
+    // `CARD_STATE_TONE`'s own `resuming` (working) and `pause_requested` (waiting) tones.
+    expect(toneForStatus('resuming')).toBe('working')
+    expect(toneForStatus('paused')).toBe('paused')
+    expect(toneForStatus('pausing')).toBe('waiting')
+    expect(toneForStatus('stopping')).toBe('waiting')
+    expect(toneForStatus('idle')).toBe('idle')
+  })
+
+  // `AllSlaveRow.status` is typed as a bare `string` (`server/org.ts`) even though it is always
+  // `deriveSlaveStatus`'s output, so the function has a fallback rather than throwing mid-render.
+  // Pinned here so the fallback is a decision and not an accident.
+  it('falls back to idle for anything outside the seven-member vocabulary', () => {
+    expect(toneForStatus('nonsense')).toBe('idle')
+    expect(toneForStatus('')).toBe('idle')
   })
 })
 

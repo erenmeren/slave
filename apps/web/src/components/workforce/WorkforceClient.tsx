@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { useRouter, useSearchParams } from 'next/navigation'
+import { useSearchParams } from 'next/navigation'
 import type { AllSlavesPage, ProjectTeamRow, RosterCompany } from '../../server/org'
 import type { OverviewSnapshot, SlaveCardData } from '../../server/overview'
 import type { SkillsPage } from '../../server/skills'
@@ -34,8 +34,13 @@ export const WORKFORCE_TABS: readonly { readonly id: WorkforceTab; readonly labe
  * to be a sidebar row, another sidebar row, a section on the Projects home and a panel inside a
  * project.
  *
- * The tab lives in `?tab=`, pushed with `router.replace` so a tab change does not stack history
- * entries a Back press has to walk through.
+ * The tab lives in `?tab=`, written with `window.history.replaceState` (fix round 1). It is the
+ * SMALLER of the two options: `router.replace` on an `export const dynamic = 'force-dynamic'` page
+ * re-runs all eight of `workforce/page.tsx`'s loaders -- eight queries, including `buildSkillsPage`'s
+ * disk scan -- to re-render a page whose data did not change and whose panel switch this component
+ * already made in local state. `replaceState` writes the URL and nothing else, so a reload or a
+ * shared link still lands on the tab, which is the whole contract. Neither stacks a history entry
+ * a Back press has to walk through.
  */
 export function WorkforceClient({
   initialTab,
@@ -58,7 +63,6 @@ export function WorkforceClient({
   readonly catalogImports: readonly CatalogImportRow[]
   readonly skills: SkillsPage
 }): React.JSX.Element {
-  const router = useRouter()
   const searchParams = useSearchParams()
   const [tab, setTab] = useState<WorkforceTab>(initialTab)
   const [newOpen, setNewOpen] = useState(false)
@@ -89,9 +93,11 @@ export function WorkforceClient({
 
   const select = (next: WorkforceTab): void => {
     setTab(next)
+    // MERGED into the current query, never a hard-coded `?tab=`: `ProjectsClient`'s ruling R13 --
+    // replacing the URL wholesale would silently drop any other param a link arrived with.
     const query = new URLSearchParams(searchParams)
     query.set('tab', next)
-    router.replace(`/workforce?${query.toString()}`)
+    window.history.replaceState(null, '', `/workforce?${query.toString()}`)
   }
 
   return (

@@ -7,7 +7,7 @@ import type { SlaveStatus, UserWorkspaceState } from '@slave-of-ai/domain'
 import { userWorkspaceStatus } from '@slave-of-ai/domain'
 import { CARD_STATE_TONE, cardStateForSlave } from '../lib/tones'
 import { sendControl } from '../lib/postControl'
-import type { AnalyticsSnapshot } from '../server/analytics'
+import type { Kpi } from '../server/analytics'
 import type { ProjectRow } from '../server/org'
 import { AssignCompanyDialog } from './AssignCompanyDialog'
 import { KpiStrip } from './analytics/KpiStrip'
@@ -228,14 +228,19 @@ function ProjectCard({
 export function ProjectsClient({
   projects,
   companies,
-  analytics,
+  kpis,
 }: {
   readonly projects: readonly ProjectRow[]
   readonly companies: readonly CompanyRow[]
-  /** M44 R1: the ALL-workspaces snapshot, from the same `buildAnalytics` `/analytics` calls with a
-   *  null scope. Required, not optional -- a caller with nothing to show still passes a real empty
-   *  snapshot rather than the section silently disappearing. */
-  readonly analytics: AnalyticsSnapshot
+  /**
+   * The ALL-workspaces KPI tiles (M44 R1), from the same `buildAnalytics` `/analytics` calls with a
+   * null scope. Just the tiles, not the whole `AnalyticsSnapshot` (fix round 1): this is a CLIENT
+   * component, so every field handed to it is serialized into the RSC payload and shipped to the
+   * browser -- `series` and `perSlave` would have crossed the wire on every Projects load for a
+   * section that renders neither. Required, not optional: a caller with nothing to show passes
+   * `[]` rather than the section silently disappearing.
+   */
+  readonly kpis: readonly Kpi[]
 }): React.JSX.Element {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -294,7 +299,7 @@ export function ProjectsClient({
             </Link>
           }
         >
-          <KpiStrip kpis={analytics.kpis} />
+          <KpiStrip kpis={kpis} />
         </Panel>
       </section>
       <NewProjectDrawer

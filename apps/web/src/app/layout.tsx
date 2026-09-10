@@ -24,11 +24,11 @@ const plexMono = IBM_Plex_Mono({
 
 export const metadata = { title: 'Slave of AI' }
 
-// The global shell (M11 spec §4, reduced by M24 §2.1): every page renders inside sidebar +
-// content area. The sidebar is now one unconditional list of five global rows -- it no longer
-// reads any per-route data to decide what to show (that was ProjectNav's job, removed this
-// milestone); a project's own navigation lives in `app/w/[workspaceId]/layout.tsx`'s header and
-// tab strip instead.
+// The global shell (M11 spec §4, reduced by M24 §2.1 and again by M44 R1): every page renders
+// inside sidebar + content area. The sidebar is one unconditional list of FOUR global rows --
+// Projects, Workforce, Simulations, Settings -- and reads no per-route data to decide what to show
+// (that was ProjectNav's job, removed in M24); a project's own navigation lives in
+// `app/w/[workspaceId]/layout.tsx`'s header and tab strip instead.
 export default function RootLayout({ children }: { children: React.ReactNode }): React.JSX.Element {
   return (
     <html lang="en" className={`${plexSans.variable} ${plexMono.variable}`}>

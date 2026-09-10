@@ -2,7 +2,7 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ProjectsClient } from '../src/components/ProjectsClient.js'
-import type { AnalyticsSnapshot } from '../src/server/analytics.js'
+import type { Kpi } from '../src/server/analytics.js'
 import type { ProjectRow } from '../src/server/org.js'
 
 const routerRefresh = vi.fn()
@@ -45,21 +45,23 @@ const projects = [project({})]
 
 // M44 t3: `templates`/`roster`/`catalogImports` are gone -- the team catalog they fed moved to
 // Workforce -> Catalog, and its cases moved with it (`workforce-page.test.tsx`). What arrived in
-// its place is `analytics`, the all-workspaces snapshot the KPI section renders; most of this
-// file's cases only exercise the cards grid, so the wrapper defaults it to an empty snapshot and a
+// its place is `kpis`, the all-workspaces tiles the analytics section renders (fix round 1: the
+// tiles alone, not the whole snapshot -- `series`/`perSlave` never reach this client component).
+// Most of this file's cases only exercise the cards grid, so the wrapper defaults it to `[]` and a
 // case that cares overrides it (an explicit prop in `props` wins in JSX prop order).
-const EMPTY_ANALYTICS: AnalyticsSnapshot = {
-  workspaceId: null,
-  seeded: false,
-  series: [],
-  kpis: [],
-  perSlave: [],
-}
+const KPIS: readonly Kpi[] = [
+  { label: 'tasks done', value: '42', note: null },
+  { label: 'success', value: '92%', note: null },
+  { label: 'avg', value: '14m 20s', note: null },
+  { label: 'tokens', value: '1.2M', note: null },
+  { label: 'spend', value: '$8.43', note: '3 runs unmeasured' },
+  { label: 'slaves', value: '7', note: null },
+]
 type ProjectsClientProps = React.ComponentProps<typeof ProjectsClient>
 function TestProjectsClient(
-  props: Omit<ProjectsClientProps, 'analytics'> & Partial<Pick<ProjectsClientProps, 'analytics'>>,
+  props: Omit<ProjectsClientProps, 'kpis'> & Partial<Pick<ProjectsClientProps, 'kpis'>>,
 ): React.JSX.Element {
-  return <ProjectsClient analytics={EMPTY_ANALYTICS} {...props} />
+  return <ProjectsClient kpis={[]} {...props} />
 }
 
 describe('ProjectsClient', () => {
@@ -379,23 +381,7 @@ describe('ProjectsClient', () => {
     // all-workspaces KPI strip arrived from `/analytics` in its place -- the one section on this
     // page that is not about a single project. `/analytics` keeps its route and its link.
     it('renders the all-workspaces analytics section where the team catalog used to be', () => {
-      render(
-        <TestProjectsClient
-          projects={projects}
-          companies={companies}
-          analytics={{
-            ...EMPTY_ANALYTICS,
-            kpis: [
-              { label: 'tasks done', value: '42', note: null },
-              { label: 'success', value: '92%', note: null },
-              { label: 'avg', value: '14m 20s', note: null },
-              { label: 'tokens', value: '1.2M', note: null },
-              { label: 'spend', value: '$8.43', note: '3 runs unmeasured' },
-              { label: 'slaves', value: '7', note: null },
-            ],
-          }}
-        />,
-      )
+      render(<TestProjectsClient projects={projects} companies={companies} kpis={KPIS} />)
       expect(screen.queryByTestId('team-catalog')).toBeNull()
       expect(screen.queryByTestId('template-form')).toBeNull()
       expect(screen.queryByTestId('company-form')).toBeNull()

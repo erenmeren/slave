@@ -40,6 +40,36 @@ describe('ProjectTabs', () => {
     expect(document.activeElement).toBe(screen.getByTestId('project-advanced'))
   })
 
+  // Fix round 1: `app/w/[workspaceId]/layout.tsx` mounts this component ONCE and keeps it across
+  // every project tab, so a menu with no outside-click exit floats over the next page. Escape is
+  // not enough on its own -- a person who clicks away has already stopped using the keyboard.
+  it('closes the Advanced menu on a mousedown anywhere outside it, without stealing focus back', () => {
+    pathname = '/w/w1'
+    render(<ProjectTabs workspaceId="w1" initialTasksActive={0} />)
+    fireEvent.click(screen.getByTestId('project-advanced'))
+    expect(screen.getByTestId('advanced-item-graph')).toBeTruthy()
+
+    fireEvent.mouseDown(document.body)
+
+    expect(screen.queryByTestId('advanced-item-graph')).toBeNull()
+    expect(screen.getByTestId('project-advanced').getAttribute('aria-expanded')).toBe('false')
+    // Unlike Escape, an outside click leaves focus where the person put it.
+    expect(document.activeElement).not.toBe(screen.getByTestId('project-advanced'))
+  })
+
+  it('treats a mousedown on the trigger or inside the menu as inside -- the menu does not flicker shut', () => {
+    pathname = '/w/w1'
+    render(<ProjectTabs workspaceId="w1" initialTasksActive={0} />)
+    fireEvent.click(screen.getByTestId('project-advanced'))
+
+    fireEvent.mouseDown(screen.getByTestId('advanced-item-graph'))
+    expect(screen.getByTestId('advanced-item-graph')).toBeTruthy()
+
+    // The trigger sits INSIDE the same root, so its own press does not race the toggle.
+    fireEvent.mouseDown(screen.getByTestId('project-advanced'))
+    expect(screen.getByTestId('advanced-item-graph')).toBeTruthy()
+  })
+
   it('marks Advanced current while a Graph or Office route is open, so the strip never looks empty', () => {
     pathname = '/w/w1/graph'
     const { rerender } = render(<ProjectTabs workspaceId="w1" initialTasksActive={0} />)

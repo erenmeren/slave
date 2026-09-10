@@ -139,12 +139,18 @@ describe('WorkforceClient tabs (M44 R1)', () => {
   })
 
   // The tab is in the URL the way the Graph page keeps its mode: `/skills` redirects to a tab, and
-  // a reload or a shared link keeps it. `replace`, not `push` -- a tab change is not a history step.
-  it('writes the chosen tab into ?tab= with replace, keeping any other param', () => {
+  // a reload or a shared link keeps it. Written with `history.replaceState` (fix round 1) -- it
+  // stacks no history entry a Back press has to walk through AND does not re-run the page's eight
+  // loaders for a panel switch this component already made in local state. It MERGES into the
+  // current query (ruling R13), so a link that arrived with another param keeps it.
+  it('writes the chosen tab into ?tab= without a router round trip, keeping any other param', () => {
     search = 'from=nav'
+    const replaceState = vi.spyOn(window.history, 'replaceState')
     render(<TestWorkforceClient />)
     fireEvent.click(screen.getByTestId('workforce-tab-catalog'))
-    expect(routerReplace).toHaveBeenCalledWith('/workforce?from=nav&tab=catalog')
+    expect(replaceState).toHaveBeenCalledWith(null, '', '/workforce?from=nav&tab=catalog')
+    expect(routerReplace).not.toHaveBeenCalled()
+    replaceState.mockRestore()
   })
 
   // `+ New slave` opens the catalog form (M25 Task 8) and belongs to the Slaves tab alone: it
