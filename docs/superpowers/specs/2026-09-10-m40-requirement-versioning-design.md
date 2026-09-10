@@ -72,3 +72,5 @@ Editing a task's title/description after creation (still immutable); versioning 
 - **§1 clarified — widened payloads are optional on read.** `version`/`sha256`/`goalVersion` on the widened events are optional in the zod arms (rows written before M40 must stay readable); every writer after M40 sets them.
 - **§3 clarified — `goalSha256` is hand-rolled** in the domain because `node:crypto` breaks the web bundle; a test cross-checks it against `node:crypto`.
 - **§3 clarified — manifest widenings are optional on read.** `task.sha256` and `planning_goal.version` are optional in `runContextManifestSchema` (pre-M40 `RunContext` rows must stay readable by the web context route and `show-context`); every builder after M40 sets them (Task 1 review ruling).
+### Task 3 (2026-09-10)
+- **E7 — added tasks are `ready`.** §1 said re-plan additions land as `backlog`; `concludePlanning` has always created planned tasks as `ready`, and `concludeReplan` mirrors it (one creation path). The scheduler's `dependenciesDone` gate still decides when they run.
