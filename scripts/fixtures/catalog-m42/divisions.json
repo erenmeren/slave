@@ -1,0 +1,7 @@
+{
+  "_note": "The gate's own catalog. Two divisions, five personas, written in this project's vocabulary so nothing checked in trips gate:m26-vocabulary.",
+  "divisions": {
+    "engineering": { "label": "Engineering" },
+    "testing": { "label": "Testing" }
+  }
+}

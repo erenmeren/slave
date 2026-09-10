@@ -364,6 +364,34 @@ is due and not happening: `archived`, `halted`, `dedup` (this version was alread
 `retry_cap` or `live_planning_run`. Reading the prompt starts no run and records nothing — the tick
 is the only thing that dispatches one.
 
+## Importing a catalog
+
+A team you already have written down does not have to be typed in again. Point the daemon at a
+directory of persona files and they become templates:
+
+```bash
+npm run orchestrator -- import-catalog --dir /srv/personas --by you
+npm run orchestrator -- import-catalog --dir /srv/personas --role-map engineering=backend --dry-run
+npm run orchestrator -- list-imports
+```
+
+A persona is a Markdown file with a small front matter block — `name` is the only field that is
+required — under a directory named for its division. The division becomes the template's role, and
+`--role-map` translates one into whatever your workers are dispatched as; only `manager` and
+`reviewer` mean anything to the scheduler, everything else is a label. The persona's own text
+becomes the template's profile, kept word for word, with one line in front of it saying where it
+came from and when.
+
+Re-running an import is the ordinary case, and it is safe. A file that has not changed is left
+alone. A file that has changed updates the template it created. **A profile you have edited yourself
+is never overwritten** — that row is skipped and says so. Nothing is ever deleted: a persona that
+leaves the directory leaves its template exactly where it was. Every row that is not imported is
+reported with a reason — its name is already taken, its text is longer than a profile may be, or the
+file is not a persona at all — and the whole run is recorded, so `list-imports` and the Projects
+page can tell you afterwards what happened.
+
+`--dry-run` does the whole thing, database reads included, and writes nothing.
+
 ## The whole story
 
 Every section above describes one seam. `npm run gate:m41-scenario` runs them in sequence, once,
@@ -569,9 +597,9 @@ they spend nothing. CI runs `gate:m26-vocabulary`, `gate:m15-boundary`, `gate:m2
 `gate:m21-loose-ends`, `gate:m23-onboarding`, `gate:m29-simulation`, `gate:m30-simulation-compare`,
 `gate:m31a-llm-decisions`, `gate:m31b-software-sector`, `gate:m33-adopt`,
 `gate:m35-pipeline-honesty`, `gate:m36-messaging`, `gate:m37-run-context`, `gate:m38-supervisor`,
-`gate:m39-supervisor-mailbox`, `gate:m40-requirement-versioning` and `gate:m41-scenario` on every
-push — `m36` stops the orchestrator and starts it again mid-scenario, to prove a waiting slave's
-question survives a restart, `m37` reads a real run's prompt and worktree back to prove a slave was
+`gate:m39-supervisor-mailbox`, `gate:m40-requirement-versioning`, `gate:m41-scenario` and
+`gate:m42-catalog-import` on every push — `m36` stops the orchestrator and starts it again
+mid-scenario, to prove a waiting slave's question survives a restart, `m37` reads a real run's prompt and worktree back to prove a slave was
 given the persona and the skills it was assigned, `m38` drives a real daemon until the Supervisor
 proposes the staffing a reviewer-less project needs, waits for a human to approve it, unblocks a
 review-capped task by itself, and escalates a project whose budget is gone without spending a cent
@@ -584,7 +612,10 @@ on the board and whose cancellation is still only a proposal, then approves it a
 that depended on the cancelled work still cannot start, and `m41` runs all of it as ONE story —
 plan, ask, a Supervisor answer, a resume, a review, a hand merge, a re-plan and an approval — and
 then asks every operator surface at once whether they agree about what happened
-(`docs/scenarios/e2e-software-team.md`). That is 17 gates. Tests and gates share one Postgres — run
+(`docs/scenarios/e2e-software-team.md`), and `m42` imports a directory of persona files into the
+template catalog twice over — creating what is new, skipping what an operator has edited, updating
+what changed on disk, and staffing a project from the result until the imported persona itself turns
+up in a real run's recorded prompt. That is 18 gates. Tests and gates share one Postgres — run
 one at a time.
 
 ## Learn more
