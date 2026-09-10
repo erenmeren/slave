@@ -50,6 +50,14 @@ export function actionText(action: Action, taskTitles: Readonly<Record<string, s
       return `raise the attempt cap on task ${action.taskId} and unblock it`
     case 'set_runtime_roles':
       return `set the runtime roles of ${action.slaveId} to ${action.roles.length === 0 ? 'none' : action.roles.join(', ')}`
+    // M47 R4, the three ways to fill a missing capability. Each names the CAPABILITY it is for:
+    // the situation chip says "Missing a capability" and this line says which one.
+    case 'assign_capability':
+      return `give ${action.slaveId} the "${action.role}" runtime role, for ${action.capability}`
+    case 'materialise_company_worker':
+      return `bring ${action.name} onto this project from the company roster, for ${action.capability}`
+    case 'hire_from_catalog':
+      return `hire ${action.name} from the catalog${action.temporary ? ' as a temporary specialist' : ''}, for ${action.capability}`
     case 'answer_question':
       return `answer question ${action.messageId}`
     case 'reassign_question':

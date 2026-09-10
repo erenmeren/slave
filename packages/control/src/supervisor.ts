@@ -25,6 +25,7 @@ import {
   ok,
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
+import { hireFromTemplate, materialiseCompanySlave } from './capability.js'
 import { answerQuestion, reassignQuestion } from './messaging.js'
 import { setRuntimeRoles } from './profile.js'
 import type { Principal } from './principal.js'
@@ -319,6 +320,7 @@ export async function applyDecision(
     action,
     {
       id: decisionId,
+      workspaceId: row.workspaceId,
       situation: parsedOrThrow(situationSchema.safeParse(row.situation), `SupervisorDecision ${decisionId}.situation`),
       draft: storedDraft(row.draft, `SupervisorDecision ${decisionId}.draft`),
     },
@@ -365,6 +367,11 @@ type Reach = 'applied' | 'none'
  */
 interface CarriedDecision {
   readonly id: string
+  /** The project the decision was made for (M47). Read off the row {@link applyDecision} already
+   *  fetched rather than looked up again: `hireFromTemplate` and `materialiseCompanySlave` are
+   *  workspace-scoped verbs, and a second read would be a second chance for the two to disagree
+   *  about which project a worker is joining. */
+  readonly workspaceId: string
   readonly situation: Situation
   readonly draft: Draft | null
 }
@@ -386,6 +393,25 @@ async function carryOut(
       return reached(await unblockTask(action.taskId, { allowAnotherAttempt: true, origin }, principal))
     case 'set_runtime_roles':
       return reached(await addRuntimeRoles(action.slaveId, roleDelta(action, decision.situation), origin))
+    case 'assign_capability':
+      // The UNION, like `set_runtime_roles` (spec §4): the worker keeps every role it holds and
+      // gains the one this capability projects to. A proposal can wait a day, and a role granted
+      // meanwhile must not be taken back by an approval.
+      return reached(await addRuntimeRoles(action.slaveId, [action.role], origin))
+    case 'materialise_company_worker':
+      return reached(
+        await materialiseCompanySlave(decision.workspaceId, action.companySlaveId, {
+          rationale: `Brought onto this project because the board needs ${action.capability}.`,
+        }),
+      )
+    case 'hire_from_catalog':
+      return reached(
+        await hireFromTemplate(decision.workspaceId, action.templateId, {
+          capabilities: [action.capability],
+          rationale: action.rationale,
+          ...(action.temporary ? { temporary: true } : {}),
+        }),
+      )
     case 'mark_task_failed':
       return reached(await failTask(action.taskId, action.reason, origin, principal))
     case 'answer_question':

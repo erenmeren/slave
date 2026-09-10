@@ -15,6 +15,7 @@ import {
   type Tier,
 } from '@slave-of-ai/domain'
 import { beforeEach, describe, expect, it } from 'vitest'
+import { syncCapabilityTaxonomy } from '../../src/capability.js'
 import { sendMessage } from '../../src/messaging.js'
 import { workspaceSpend } from '../../src/spend.js'
 import { refusalText } from '../../src/refusal.js'
@@ -63,8 +64,13 @@ async function seed(): Promise<Fixture> {
 }
 
 const reset = async (): Promise<void> => {
+  // M47 added the catalog and roster tables to this list. The capability arms hire from a
+  // `SlaveTemplate` and materialise a `CompanySlave`, both of which carry unique names, so a second
+  // run of this file would collide on rows the first one left behind. `Capability` is deliberately
+  // NOT here: it is the seeded taxonomy every other integration file in this database reads, and
+  // truncating it would empty it under a test in another file (the `capability.test.ts` idiom).
   await prisma.$executeRawUnsafe(
-    'TRUNCATE TABLE "ExecutionEvent", "SupervisorDecision", "SlaveMessage", "SlaveRun", "Task", "Slave", "Team", "Workspace", "User" RESTART IDENTITY CASCADE',
+    'TRUNCATE TABLE "ExecutionEvent", "SupervisorDecision", "SlaveMessage", "SlaveRun", "Task", "Slave", "Team", "Workspace", "User", "CollaborationHint", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
   )
 }
 
@@ -1522,5 +1528,131 @@ describe('setSupervisorSettings', () => {
 
     expect((await setSupervisorSettings(f.workspaceId, {})).ok).toBe(true)
     expect(await settingsEvents()).toHaveLength(2)
+  })
+})
+
+/**
+ * The three M47 arms (R4): the routine one that gives a worker who already provides a capability
+ * the runtime role it projects to, and the two that bring a WORKER onto a project and are therefore
+ * never automatic.
+ */
+describe('applyDecision -- the M47 capability actions', () => {
+  let f: Fixture
+
+  const CAPABILITY = 'security.application'
+
+  /** The situation `observe` raises for a missing capability -- keyed on the capability, with the
+   *  role it projects to in `facts`. */
+  const capabilitySituation = (): Situation => ({
+    kind: 'capability_unstaffed',
+    subjectId: CAPABILITY,
+    summary: `1 startable task(s) need "${CAPABILITY}" and no slave can be dispatched as "security".`,
+    facts: { capability: CAPABILITY, role: 'security', readyTasks: 1, firstTaskId: 't1' },
+  })
+
+  beforeEach(async () => {
+    await reset()
+    // The taxonomy is what `hireFromTemplate` validates the asked-for key against, and what the
+    // projection reads. Idempotent, and it truncates nothing.
+    await syncCapabilityTaxonomy()
+    f = await seed()
+  })
+
+  it('applies an assign_capability decision as a union of the roles (M47 R4)', async () => {
+    // Maya holds `backend` and provides the capability; nobody gave her the role it projects to.
+    await prisma.slave.update({ where: { id: f.slaveId }, data: { capabilities: [CAPABILITY] } })
+    const recorded = await record(
+      f,
+      { kind: 'assign_capability', slaveId: f.slaveId, capability: CAPABILITY, role: 'security' },
+      'applied',
+      { subjectId: CAPABILITY, situation: capabilitySituation() },
+    )
+    expect(recorded.status).toBe('applied')
+
+    const applied = await applyDecision(recorded.id, 'system')
+    expect(applied.ok).toBe(true)
+    const row = await prisma.slave.findUniqueOrThrow({ where: { id: f.slaveId } })
+    expect(row.runtimeRoles).toEqual(['backend', 'security'])
+  })
+
+  it('hires from the catalog only when a human approves, and records why on the worker', async () => {
+    const template = await prisma.slaveTemplate.create({
+      data: { name: 'Security Reviewer', role: 'security', capabilityKeys: [CAPABILITY] },
+    })
+    const before = await prisma.slave.count({ where: { team: { workspaceId: f.workspaceId } } })
+    const recorded = await record(
+      f,
+      {
+        kind: 'hire_from_catalog',
+        templateId: template.id,
+        capability: CAPABILITY,
+        name: 'Security Reviewer',
+        rationale: 'Security Reviewer provides Application security, which nobody on this project does.',
+        temporary: false,
+      },
+      'proposed',
+      { subjectId: CAPABILITY, situation: capabilitySituation() },
+    )
+    expect(recorded.status).toBe('pending')
+    expect(await prisma.slave.count({ where: { team: { workspaceId: f.workspaceId } } })).toBe(before)
+
+    const approved = await approveDecision(recorded.id, { userId: f.userId })
+    expect(approved.ok).toBe(true)
+    const hired = await prisma.slave.findFirstOrThrow({ where: { hiredFromTemplateId: template.id } })
+    expect(hired.selectionRationale).toContain('Application security')
+    expect(hired.runtimeRoles).toContain('security')
+    expect(hired.capabilities).toContain(CAPABILITY)
+  })
+
+  it('brings a company roster worker onto the project when a human approves', async () => {
+    const template = await prisma.slaveTemplate.create({
+      data: { name: 'Roster Security Reviewer', role: 'security', capabilityKeys: [CAPABILITY] },
+    })
+    const company = await prisma.company.create({ data: { name: 'Acme' } })
+    const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Security' } })
+    const rosterWorker = await prisma.companySlave.create({
+      data: { companyTeamId: companyTeam.id, templateId: template.id, name: 'Sam' },
+    })
+    await prisma.workspace.update({ where: { id: f.workspaceId }, data: { companyId: company.id } })
+
+    const recorded = await record(
+      f,
+      { kind: 'materialise_company_worker', companySlaveId: rosterWorker.id, capability: CAPABILITY, name: 'Sam' },
+      'proposed',
+      { subjectId: CAPABILITY, situation: capabilitySituation() },
+    )
+    expect(recorded.status).toBe('pending')
+
+    expect((await approveDecision(recorded.id, { userId: f.userId })).ok).toBe(true)
+    const materialised = await prisma.slave.findFirstOrThrow({ where: { companySlaveId: rosterWorker.id } })
+    expect(materialised.runtimeRoles).toContain('security')
+    expect(materialised.selectionRationale).toContain(CAPABILITY)
+  })
+
+  it('records a failed decision rather than throwing when the template has since been deleted', async () => {
+    const template = await prisma.slaveTemplate.create({
+      data: { name: 'Gone Reviewer', role: 'security', capabilityKeys: [CAPABILITY] },
+    })
+    const recorded = await record(
+      f,
+      {
+        kind: 'hire_from_catalog',
+        templateId: template.id,
+        capability: CAPABILITY,
+        name: 'Gone Reviewer',
+        rationale: 'nobody here provides Application security',
+        temporary: false,
+      },
+      'proposed',
+      { subjectId: CAPABILITY, situation: capabilitySituation() },
+    )
+    await prisma.slaveTemplate.delete({ where: { id: template.id } })
+
+    const approved = await approveDecision(recorded.id, { userId: f.userId })
+    expect(approved.ok).toBe(false)
+    const row = await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: recorded.id } })
+    expect(row.status).toBe('failed')
+    expect(row.failureReason).not.toBeNull()
+    expect(await eventsOfType('supervisor_failed')).toHaveLength(1)
   })
 })

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { COOLDOWN_MS, INTEGRATED_STALE_MS, WAITING_STALE_MS } from '../../src/supervisor/constants.js'
 import { filterFresh, observe } from '../../src/supervisor/observe.js'
 import { SITUATION_KINDS, situationSchema } from '../../src/supervisor/situations.js'
-import { NOW, decision, keys, question, slave, task, world } from './fixtures.js'
+import { NOW, TAXONOMY, decision, keys, question, slave, task, world } from './fixtures.js'
 
 describe('observe -- no_reviewer', () => {
   it('reports it when a task is reviewing and no slave holds reviewer', () => {
@@ -365,5 +365,93 @@ describe('observe -- what it produces is storable', () => {
       const parsed = situationSchema.safeParse(situation)
       expect(parsed.success, `${situation.kind} did not validate`).toBe(true)
     }
+  })
+})
+
+describe('observe -- capability_unstaffed (M47 R4)', () => {
+  it('fires per CAPABILITY when a startable task needs one nobody can be dispatched for', () => {
+    const w = world({
+      taxonomy: TAXONOMY,
+      tasks: [task({ status: 'ready', requiredRole: 'security', requiredCapabilities: ['security.application'] })],
+      slaves: [slave({ runtimeRoles: ['backend'] })],
+    })
+    expect(keys(observe(w))).toEqual([['capability_unstaffed', 'security.application']])
+    expect(observe(w)[0]?.facts).toEqual({ capability: 'security.application', role: 'security', readyTasks: 1, firstTaskId: 't1' })
+  })
+
+  it('does not fire when somebody holds the role the capability projects to', () => {
+    const w = world({
+      taxonomy: TAXONOMY,
+      tasks: [task({ status: 'ready', requiredRole: 'security', requiredCapabilities: ['security.application'] })],
+      slaves: [slave({ runtimeRoles: ['security'] })],
+    })
+    expect(observe(w)).toEqual([])
+  })
+
+  // E8: supersession is per TASK, and it is what stops one gap producing two proposals.
+  it('supersedes ready_unstaffed for the task that raised it', () => {
+    const w = world({
+      taxonomy: TAXONOMY,
+      tasks: [task({ status: 'ready', requiredRole: 'security', requiredCapabilities: ['security.application'] })],
+      slaves: [slave({ runtimeRoles: ['backend'] })],
+    })
+    expect(keys(observe(w)).map(([kind]) => kind)).not.toContain('ready_unstaffed')
+  })
+
+  it('leaves ready_unstaffed alone for a task that declared no capabilities', () => {
+    const w = world({
+      taxonomy: TAXONOMY,
+      tasks: [
+        task({ id: 't1', status: 'ready', requiredRole: 'security', requiredCapabilities: ['security.application'] }),
+        task({ id: 't2', status: 'ready', requiredRole: 'frontend', requiredCapabilities: [] }),
+      ],
+      slaves: [slave({ runtimeRoles: ['backend'] })],
+    })
+    expect(keys(observe(w))).toEqual([
+      ['capability_unstaffed', 'security.application'],
+      ['ready_unstaffed', 'frontend'],
+    ])
+  })
+
+  it('still raises ready_unstaffed for a task whose capabilities are all staffed but whose role is not held', () => {
+    // A hand-set `requiredRole` an operator typed, with capabilities somebody does hold.
+    const w = world({
+      taxonomy: TAXONOMY,
+      tasks: [task({ status: 'ready', requiredRole: 'qa', requiredCapabilities: ['backend.api-design'] })],
+      slaves: [slave({ runtimeRoles: ['backend'] })],
+    })
+    expect(keys(observe(w))).toEqual([['ready_unstaffed', 'qa']])
+  })
+
+  it('counts the tasks and names the first, and ignores a task whose dependencies are not done', () => {
+    const w = world({
+      taxonomy: TAXONOMY,
+      tasks: [
+        task({ id: 't2', status: 'ready', requiredCapabilities: ['security.application'] }),
+        task({ id: 't1', status: 'ready', requiredCapabilities: ['security.application'] }),
+        task({ id: 't3', status: 'ready', requiredCapabilities: ['security.application'], dependenciesDone: false }),
+      ],
+      slaves: [],
+    })
+    expect(observe(w)[0]?.facts.readyTasks).toBe(2)
+    expect(observe(w)[0]?.facts.firstTaskId).toBe('t2')
+  })
+
+  // R1, restated as a predicate: nothing matches on a key that is not a row, so a workspace whose
+  // taxonomy has never been synced raises the role gap it always did and nothing more.
+  it('is a no-op under an empty taxonomy, and the role gap is still reported', () => {
+    const w = world({
+      tasks: [task({ status: 'ready', requiredRole: 'security', requiredCapabilities: ['security.application'] })],
+      slaves: [slave({ runtimeRoles: ['backend'] })],
+    })
+    expect(keys(observe(w))).toEqual([['ready_unstaffed', 'security']])
+  })
+
+  it('produces a situation that validates against situationSchema', () => {
+    const w = world({
+      taxonomy: TAXONOMY,
+      tasks: [task({ status: 'ready', requiredRole: 'security', requiredCapabilities: ['security.application'] })],
+    })
+    for (const situation of observe(w)) expect(situationSchema.safeParse(situation).success).toBe(true)
   })
 })

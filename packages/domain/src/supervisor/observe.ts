@@ -1,3 +1,4 @@
+import { projectRoles } from '../capability/taxonomy.js'
 import {
   COOLDOWN_MS,
   INTEGRATED_STALE_MS,
@@ -200,6 +201,36 @@ export function observe(world: SupervisorWorld): readonly Situation[] {
     }
   }
 
+  // capability_unstaffed: keyed by the CAPABILITY, so N startable tasks blocked on one gap are one
+  // situation. "Unstaffed" is "nobody holds the role it projects to" (plan erratum E8), not
+  // "nobody has it": the whole point of the `assign_capability` offer is a worker who HAS the
+  // capability and was never given its runtime role, and a predicate that read coverage off the
+  // capability alone would call that case staffed and never offer the fix.
+  const unstaffedCapabilities = new Map<string, SupervisorTask[]>()
+  const raisedFor = new Set<string>()
+  for (const t of world.tasks) {
+    if (t.status !== 'ready' || !t.dependenciesDone) continue
+    for (const capability of t.requiredCapabilities) {
+      const role = projectRoles([capability], world.taxonomy)[0]
+      // A key the taxonomy does not have projects no role and staffs nobody: it is not a gap this
+      // workspace can act on, and a situation about it would offer nothing but an escalation.
+      if (role === undefined || roleHasHolder(world, role)) continue
+      const waiting = unstaffedCapabilities.get(capability)
+      if (waiting === undefined) unstaffedCapabilities.set(capability, [t])
+      else waiting.push(t)
+      raisedFor.add(t.id)
+    }
+  }
+  for (const [capability, waiting] of unstaffedCapabilities) {
+    const role = projectRoles([capability], world.taxonomy)[0] ?? ''
+    add({
+      kind: 'capability_unstaffed',
+      subjectId: capability,
+      summary: `${waiting.length} startable task(s) need "${capability}" and no slave can be dispatched as "${role}".`,
+      facts: { capability, role, readyTasks: waiting.length, firstTaskId: waiting[0]?.id ?? null },
+    })
+  }
+
   // ready_unstaffed: keyed by the missing ROLE, so N startable tasks blocked on one absent role
   // are one situation with one decision -- not N proposals a human has to approve N times.
   const unstaffedRoles = new Map<string, SupervisorTask[]>()
@@ -211,6 +242,9 @@ export function observe(world: SupervisorWorld): readonly Situation[] {
     // `subjectId` on the row -- which `situationSchema`'s `min(1)` rejects, and which would make
     // the situation key `(workspaceId, kind, '')` collide across every such task.
     if (task.requiredRole === '') continue
+    // E8: the capability reading of this task is already a situation of its own; reporting the
+    // role gap as well would put two proposals in front of a person for one hole.
+    if (raisedFor.has(task.id)) continue
     if (roleHasHolder(world, task.requiredRole)) continue
     const waiting = unstaffedRoles.get(task.requiredRole)
     if (waiting === undefined) unstaffedRoles.set(task.requiredRole, [task])

@@ -14,8 +14,11 @@ const NOW = new Date('2026-09-09T12:00:00.000Z')
 const ago = (ms: number): Date => new Date(NOW.getTime() - ms)
 
 const reset = async (): Promise<void> => {
+  // M47 added the catalog and roster tables: the capability cases below write a `SlaveTemplate`
+  // and a `CompanySlave`, both name-unique, so a second run of this file would collide on rows the
+  // first left behind. `Capability` stays out -- it is the seeded taxonomy other files read.
   await prisma.$executeRawUnsafe(
-    'TRUNCATE TABLE "ExecutionEvent", "SupervisorDecision", "SlaveMessage", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace", "User" RESTART IDENTITY CASCADE',
+    'TRUNCATE TABLE "ExecutionEvent", "SupervisorDecision", "SlaveMessage", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace", "User", "CollaborationHint", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
   )
 }
 
@@ -57,6 +60,7 @@ async function makeTask(
     readonly integratedAt?: Date | null
     readonly createdAt?: Date
     readonly goalVersion?: number | null
+    readonly requiredCapabilities?: readonly string[]
   },
 ): Promise<string> {
   const task = await prisma.task.create({
@@ -71,6 +75,7 @@ async function makeTask(
       ...(data.integratedAt === undefined ? {} : { integratedAt: data.integratedAt }),
       ...(data.createdAt === undefined ? {} : { createdAt: data.createdAt }),
       ...(data.goalVersion === undefined ? {} : { goalVersion: data.goalVersion }),
+      ...(data.requiredCapabilities === undefined ? {} : { requiredCapabilities: [...data.requiredCapabilities] }),
     },
   })
   return task.id
@@ -930,5 +935,102 @@ describe('workspaceSpend', () => {
       supervisorUnmeasuredCalls: 0,
       spentUsd: 0,
     })
+  })
+})
+
+/**
+ * M47 R4. Three facts the world gained, and the condition under which they are read at all: a
+ * project whose board names no capability must cost exactly the queries it cost before this
+ * milestone, so `taxonomy`, `company` and `catalog` stay empty for it.
+ */
+describe('loadSupervisorWorld -- the capability facts (M47 R4)', () => {
+  beforeEach(reset)
+
+  it('reads neither the taxonomy, the roster nor the catalog when no task asks for a capability', async () => {
+    const f = await seed()
+    await makeTask(f, { title: 'plain', status: 'ready' })
+    await prisma.slave.create({
+      data: { teamId: f.teamId, name: 'Maya', role: 'Engineer', runtimeRoles: ['backend'], capabilities: ['security.application'] },
+    })
+    await prisma.slaveTemplate.create({
+      data: { name: 'M47 World Reviewer', role: 'security', capabilityKeys: ['security.application'] },
+    })
+
+    const { world } = await loadSupervisorWorld(f.workspaceId, NOW)
+    expect(world.taxonomy).toEqual([])
+    expect(world.company).toEqual([])
+    expect(world.catalog).toEqual([])
+    // The per-row facts are carried either way -- they come off rows the loader already reads.
+    expect(world.tasks[0]?.requiredCapabilities).toEqual([])
+    expect(world.slaves[0]?.capabilities).toEqual(['security.application'])
+  })
+
+  it('reads all three the moment one task names a capability, and carries the keys through', async () => {
+    const f = await seed()
+    await makeTask(f, { title: 'harden', status: 'ready', requiredCapabilities: ['security.application'] })
+    const template = await prisma.slaveTemplate.create({
+      data: { name: 'M47 World Reviewer', role: 'security', capabilityKeys: ['security.application'], sourceDivision: 'security' },
+    })
+    // A template that provides nothing can never cover a gap, so it is not in the index.
+    await prisma.slaveTemplate.create({ data: { name: 'M47 World Generalist', role: 'backend' } })
+
+    const { world } = await loadSupervisorWorld(f.workspaceId, NOW)
+    expect(world.tasks[0]?.requiredCapabilities).toEqual(['security.application'])
+    expect(world.taxonomy.find((row) => row.key === 'security.application')?.role).toBe('security')
+    expect(world.catalog).toEqual([
+      {
+        templateId: template.id,
+        name: 'M47 World Reviewer',
+        capabilities: ['security.application'],
+        division: 'security',
+        recommended: false,
+      },
+    ])
+  })
+
+  it('offers the company roster minus whoever is already on this project', async () => {
+    const f = await seed()
+    await makeTask(f, { title: 'harden', status: 'ready', requiredCapabilities: ['security.application'] })
+    const template = await prisma.slaveTemplate.create({
+      data: { name: 'M47 World Reviewer', role: 'security', capabilityKeys: ['security.application'] },
+    })
+    const company = await prisma.company.create({ data: { name: `M47 World Co ${String(Math.random()).slice(2)}` } })
+    const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Security' } })
+    const here = await prisma.companySlave.create({
+      data: { companyTeamId: companyTeam.id, templateId: template.id, name: 'Already Here' },
+    })
+    const notHere = await prisma.companySlave.create({
+      data: { companyTeamId: companyTeam.id, templateId: template.id, name: 'Sam' },
+    })
+    await prisma.workspace.update({ where: { id: f.workspaceId }, data: { companyId: company.id } })
+    await prisma.slave.create({
+      data: { teamId: f.teamId, name: 'Already Here', role: 'security', runtimeRoles: [], companySlaveId: here.id },
+    })
+
+    const { world } = await loadSupervisorWorld(f.workspaceId, NOW)
+    expect(world.company).toEqual([
+      { companySlaveId: notHere.id, name: 'Sam', capabilities: ['security.application'] },
+    ])
+  })
+
+  it('marks a template recommended when a worker already here carries a hint pointing at it', async () => {
+    const f = await seed()
+    await makeTask(f, { title: 'harden', status: 'ready', requiredCapabilities: ['security.application'] })
+    const source = await prisma.slaveTemplate.create({
+      data: { name: 'M47 World Backend', role: 'backend', capabilityKeys: ['backend.api-design'] },
+    })
+    const target = await prisma.slaveTemplate.create({
+      data: { name: 'M47 World Reviewer', role: 'security', capabilityKeys: ['security.application'] },
+    })
+    await prisma.collaborationHint.create({
+      data: { templateId: source.id, text: 'Ask the Security Reviewer before shipping.', targetTemplateId: target.id },
+    })
+    await prisma.slave.create({
+      data: { teamId: f.teamId, name: 'Maya', role: 'backend', runtimeRoles: ['backend'], hiredFromTemplateId: source.id },
+    })
+
+    const { world } = await loadSupervisorWorld(f.workspaceId, NOW)
+    expect(world.catalog.find((entry) => entry.templateId === target.id)?.recommended).toBe(true)
+    expect(world.catalog.find((entry) => entry.templateId === source.id)?.recommended).toBe(false)
   })
 })

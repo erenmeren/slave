@@ -8,8 +8,11 @@ import {
   boundThread,
   evaluateGuardrails,
   type ActionKind,
+  type CapabilityRecord,
   type DecisionStatus,
   type SituationKind,
+  type SupervisorCatalogEntry,
+  type SupervisorCompanyWorker,
   type SupervisorQuestion,
   type SupervisorSlave,
   type SupervisorTask,
@@ -70,6 +73,79 @@ export interface LoadedSupervisorWorld {
   readonly settings: { readonly enabled: boolean; readonly profile: string | null }
 }
 
+/** The taxonomy, key ascending -- the same order `listCapabilities` returns, because the domain's
+ *  "first spelling wins" rule reads it. */
+async function loadTaxonomy(tx: Prisma.TransactionClient): Promise<readonly CapabilityRecord[]> {
+  const rows = await tx.capability.findMany({ orderBy: { key: 'asc' } })
+  return rows.map((row) => ({ key: row.key, label: row.label, domain: row.domain, role: row.role, synonyms: row.synonyms }))
+}
+
+/** The company's roster rows that are NOT already materialised into this project (R4's second
+ *  place to look). One query: the `NOT EXISTS` is Postgres's, never a filter in JavaScript over a
+ *  roster that may be a hundred people. */
+async function loadCompanyRoster(
+  tx: Prisma.TransactionClient,
+  workspaceId: string,
+): Promise<readonly SupervisorCompanyWorker[]> {
+  return tx.$queryRaw<SupervisorCompanyWorker[]>`
+    SELECT cs.id AS "companySlaveId", cs.name, t."capabilityKeys" AS capabilities
+    FROM "CompanySlave" cs
+    JOIN "CompanyTeam" ct ON ct.id = cs."companyTeamId"
+    JOIN "Workspace" w ON w."companyId" = ct."companyId"
+    JOIN "SlaveTemplate" t ON t.id = cs."templateId"
+    WHERE w.id = ${workspaceId}
+      AND NOT EXISTS (
+        SELECT 1 FROM "Slave" s JOIN "Team" tm ON tm.id = s."teamId"
+        WHERE s."companySlaveId" = cs.id AND tm."workspaceId" = ${workspaceId}
+      )
+    ORDER BY cs.id ASC
+  `
+}
+
+/** Every catalog template that provides ANY capability, plus whether a worker already here has a
+ *  profile that recommends pairing with it (R5's advisory tie-break). Two queries, both bounded:
+ *  a template with no `capabilityKeys` can never cover a gap, and the hint read is keyed on the
+ *  templates the current roster came from. */
+async function loadCatalogEntries(
+  tx: Prisma.TransactionClient,
+  slaveRows: readonly { readonly id: string }[],
+): Promise<readonly SupervisorCatalogEntry[]> {
+  const templates = await tx.slaveTemplate.findMany({
+    where: { NOT: { capabilityKeys: { isEmpty: true } } },
+    select: { id: true, name: true, capabilityKeys: true, sourceDivision: true },
+    orderBy: { id: 'asc' },
+    take: CATALOG_ENTRIES_MAX,
+  })
+  const recommended = new Set(
+    slaveRows.length === 0
+      ? []
+      : (
+          await tx.collaborationHint.findMany({
+            where: {
+              targetTemplateId: { not: null },
+              OR: [
+                { template: { hiredWorkers: { some: { id: { in: slaveRows.map((row) => row.id) } } } } },
+                { template: { companySlaves: { some: { workers: { some: { id: { in: slaveRows.map((row) => row.id) } } } } } } },
+              ],
+            },
+            select: { targetTemplateId: true },
+          })
+        ).flatMap((hint) => (hint.targetTemplateId === null ? [] : [hint.targetTemplateId])),
+  )
+  return templates.map((template) => ({
+    templateId: template.id,
+    name: template.name,
+    capabilities: template.capabilityKeys,
+    division: template.sourceDivision,
+    recommended: recommended.has(template.id),
+  }))
+}
+
+/** A bound, because a full catalog import is thousands of rows (M55) and a Supervisor world is
+ *  built once a tick. Ordered by id, so the same thousand rows come back in the same order and
+ *  `formTeam` is still deterministic when the bound bites. */
+const CATALOG_ENTRIES_MAX = 500
+
 /**
  * How far back the world's decision window reaches. `PENDING_TTL_MS` (24 h) rather than a number
  * of its own: a `pending` decision cannot outlive its own TTL by more than one tick
@@ -87,6 +163,9 @@ interface TaskRow {
   readonly attempt: number
   readonly maxAttempts: number
   readonly requiredRole: string | null
+  /** M47 R2/R3: the taxonomy keys this task asked for, verbatim -- `String[]` and never null
+   *  (`@default([])`), so a pre-M47 row reads back as "asked for none". */
+  readonly requiredCapabilities: readonly string[]
   readonly integratedAt: Date | null
   readonly createdAt: Date
   readonly dependents: number
@@ -119,6 +198,7 @@ async function loadTaskRows(tx: Prisma.TransactionClient, workspaceId: string): 
       t.attempt,
       t."maxAttempts",
       t."requiredRole",
+      t."requiredCapabilities",
       t."integratedAt",
       t."createdAt",
       t."goalVersion",
@@ -409,12 +489,24 @@ export async function loadSupervisorWorld(
           name: true,
           role: true,
           runtimeRoles: true,
+          // M47 R4: what the worker PROVIDES, which is what `assign_capability` is offered off --
+          // a worker that already provides the missing capability and was never given its role.
+          capabilities: true,
           // "Busy" is "holds a run that can still leave a non-terminal status", the same predicate
           // `world.ts` gives the scheduler -- not "has ever held one". `take: 1` answers "any?".
           runs: { where: { status: { in: [...NON_TERMINAL_RUN_STATUSES] } }, select: { id: true }, take: 1 },
         },
         orderBy: { id: 'asc' },
       })
+
+      // M47 R4. The catalog and the company roster are read ONLY when the board actually asks for
+      // a capability: a project planned before this milestone -- or one whose planner named plain
+      // roles -- gets exactly the queries it got before, and no tick scans hundreds of templates
+      // to answer a question nobody asked. One query each, never one per capability.
+      const asksForCapabilities = taskRows.some((row) => row.requiredCapabilities.length > 0)
+      const taxonomy = asksForCapabilities ? await loadTaxonomy(tx) : []
+      const companyRows = asksForCapabilities ? await loadCompanyRoster(tx, workspaceId) : []
+      const catalogRows = asksForCapabilities ? await loadCatalogEntries(tx, slaveRows) : []
 
       // On `tx`, like everything else: this is the `senderRunId` set the pending-question filter
       // is built from, so reading it outside the snapshot would let a run stop waiting between the
@@ -492,6 +584,7 @@ export async function loadSupervisorWorld(
           dependenciesDone: row.dependenciesDone,
           latestGuardrail: guardrails.get(row.id) ?? null,
           goalVersion: row.goalVersion,
+          requiredCapabilities: row.requiredCapabilities,
         })
       }
 
@@ -500,6 +593,7 @@ export async function loadSupervisorWorld(
         name: row.name,
         role: row.role,
         runtimeRoles: row.runtimeRoles,
+        capabilities: row.capabilities,
         busy: row.runs.length > 0,
       }))
 
@@ -557,6 +651,9 @@ export async function loadSupervisorWorld(
           createdAt: row.createdAt.getTime(),
           resolvedAt: row.resolvedAt?.getTime() ?? null,
         })),
+        taxonomy,
+        company: companyRows,
+        catalog: catalogRows,
       }
 
       return {

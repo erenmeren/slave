@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { candidateSchema, type Action, type Candidate } from '../../src/supervisor/actions.js'
-import { candidates } from '../../src/supervisor/candidates.js'
+import { candidates, teamPlanOf } from '../../src/supervisor/candidates.js'
 import { WAITING_STALE_MS } from '../../src/supervisor/constants.js'
 import { observe } from '../../src/supervisor/observe.js'
 import type { Situation } from '../../src/supervisor/situations.js'
 import type { SupervisorWorld } from '../../src/supervisor/world.js'
-import { NOW, question, slave, task, world } from './fixtures.js'
+import { NOW, TAXONOMY, question, slave, task, world } from './fixtures.js'
 
 /** The one situation `w` produces, with the candidates the rules offer for it. */
 function offered(w: SupervisorWorld): readonly Candidate[] {
@@ -405,5 +405,123 @@ describe('candidates -- stale_task', () => {
       slaves: [slave({ runtimeRoles: ['backend'] })],
     })
     expect(observe(w).map((situation) => situation.kind)).not.toContain('stale_task')
+  })
+})
+
+describe('candidates -- capability_unstaffed (M47 R4)', () => {
+  const situation: Situation = {
+    kind: 'capability_unstaffed',
+    subjectId: 'security.application',
+    summary: 's',
+    facts: { capability: 'security.application', role: 'security' },
+  }
+
+  it('offers the idle worker who already provides it, routinely, before anything else', () => {
+    const w = world({
+      taxonomy: TAXONOMY,
+      tasks: [task({ status: 'ready', requiredCapabilities: ['security.application'] })],
+      slaves: [slave({ id: 's1', name: 'Rae', capabilities: ['security.application'], runtimeRoles: ['backend'] })],
+      company: [{ companySlaveId: 'cs1', name: 'Sam', capabilities: ['security.application'] }],
+      catalog: [{ templateId: 'tpl1', name: 'Security Reviewer', capabilities: ['security.application'], division: 'security', recommended: false }],
+    })
+    const offers = candidates(situation, w)
+    expect(offers[0]?.action).toEqual({ kind: 'assign_capability', slaveId: 's1', capability: 'security.application', role: 'security' })
+    expect(offers[0]?.tier).toBe('applied')
+    expect(offers[0]?.why).toContain('Application security')
+  })
+
+  it('offers the company worker as a PROPOSAL when nobody on the project provides it', () => {
+    const w = world({
+      taxonomy: TAXONOMY,
+      tasks: [task({ status: 'ready', requiredCapabilities: ['security.application'] })],
+      company: [{ companySlaveId: 'cs1', name: 'Sam', capabilities: ['security.application'] }],
+      catalog: [{ templateId: 'tpl1', name: 'Security Reviewer', capabilities: ['security.application'], division: 'security', recommended: false }],
+    })
+    const offers = candidates(situation, w)
+    expect(offers[0]?.action.kind).toBe('materialise_company_worker')
+    expect(offers[0]?.tier).toBe('proposed')
+  })
+
+  it('offers the catalog hire last, with the rationale a person reads, and never applies it', () => {
+    const w = world({
+      taxonomy: TAXONOMY,
+      tasks: [task({ status: 'ready', requiredCapabilities: ['security.application'] })],
+      catalog: [{ templateId: 'tpl1', name: 'Security Reviewer', capabilities: ['security.application'], division: 'security', recommended: false }],
+    })
+    const offers = candidates(situation, w)
+    expect(offers[0]?.action).toEqual({
+      kind: 'hire_from_catalog',
+      templateId: 'tpl1',
+      capability: 'security.application',
+      name: 'Security Reviewer',
+      rationale: expect.stringContaining('Application security'),
+      temporary: false,
+    })
+    expect(offers[0]?.tier).toBe('proposed')
+  })
+
+  // The invariant the whole of M38 is built on, restated for the new kind.
+  it('always ends with escalate_to_human then no_action, even with nothing to offer', () => {
+    const offers = candidates(situation, world({ taxonomy: TAXONOMY }))
+    expect(offers.map((offer) => offer.action.kind)).toEqual(['escalate_to_human', 'no_action'])
+  })
+
+  it('produces candidates that validate against candidateSchema', () => {
+    const w = world({
+      taxonomy: TAXONOMY,
+      tasks: [task({ status: 'ready', requiredCapabilities: ['security.application'] })],
+      slaves: [slave({ id: 's1', name: 'Rae', capabilities: ['security.application'], runtimeRoles: ['backend'] })],
+      catalog: [{ templateId: 'tpl1', name: 'Security Reviewer', capabilities: ['security.application'], division: 'security', recommended: false }],
+    })
+    for (const offer of candidates(situation, w)) expect(candidateSchema.safeParse(offer).success).toBe(true)
+  })
+
+  // E9: the four existing staffing arms are untouched, and gate:m38 answers index 0.
+  it('leaves no_reviewer offering exactly the M38 staffing candidates', () => {
+    const w = world({ tasks: [task({ status: 'reviewing' })], slaves: [slave({ runtimeRoles: ['backend'] })] })
+    const offers = candidates({ kind: 'no_reviewer', subjectId: 'reviewer', summary: 's', facts: { role: 'reviewer' } }, w)
+    expect(offers[0]?.action.kind).toBe('set_runtime_roles')
+    expect(offers).toHaveLength(3)
+  })
+})
+
+describe('teamPlanOf (M47 R4)', () => {
+  it('reads the board\'s ready and blocked tasks and nothing else', () => {
+    const w = world({
+      taxonomy: TAXONOMY,
+      tasks: [
+        task({ id: 't1', status: 'ready', requiredCapabilities: ['security.application'] }),
+        task({ id: 't2', status: 'blocked', requiredCapabilities: ['backend.api-design'] }),
+        task({ id: 't3', status: 'done', requiredCapabilities: ['qa.test-automation'] }),
+      ],
+      slaves: [slave({ id: 's1', runtimeRoles: ['backend'] })],
+      catalog: [{ templateId: 'tpl1', name: 'Security Reviewer', capabilities: ['security.application'], division: 'security', recommended: false }],
+    })
+    const plan = teamPlanOf(w)
+    expect(plan.covered).toEqual([{ capability: 'backend.api-design', by: 's1' }])
+    expect(plan.proposals.map((one) => one.pick.id)).toEqual(['tpl1'])
+    expect(plan.unfillable).toEqual([])
+  })
+
+  // Fix round 1 of Task 1: one worker with two gaps is ONE proposal covering both, and each
+  // situation looks itself up by `covers`.
+  it('offers the same grouped proposal to each capability it covers', () => {
+    const w = world({
+      taxonomy: TAXONOMY,
+      tasks: [task({ status: 'ready', requiredCapabilities: ['security.application', 'backend.api-design'] })],
+      slaves: [
+        slave({ id: 's1', name: 'Rae', capabilities: ['security.application', 'backend.api-design'], runtimeRoles: [] }),
+      ],
+    })
+    expect(teamPlanOf(w).proposals).toHaveLength(1)
+    for (const key of ['security.application', 'backend.api-design']) {
+      const offers = candidates({ kind: 'capability_unstaffed', subjectId: key, summary: 's', facts: { capability: key } }, w)
+      expect(offers[0]?.action).toEqual({
+        kind: 'assign_capability',
+        slaveId: 's1',
+        capability: key,
+        role: key === 'security.application' ? 'security' : 'backend',
+      })
+    }
   })
 })

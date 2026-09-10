@@ -11,6 +11,16 @@ const ACTIONS: Readonly<Record<Action['kind'], Action>> = {
   unblock_task: { kind: 'unblock_task', taskId: 't1' },
   raise_max_attempts: { kind: 'raise_max_attempts', taskId: 't1' },
   set_runtime_roles: { kind: 'set_runtime_roles', slaveId: 's1', roles: ['reviewer'] },
+  assign_capability: { kind: 'assign_capability', slaveId: 's1', capability: 'security.application', role: 'security' },
+  materialise_company_worker: { kind: 'materialise_company_worker', companySlaveId: 'cs1', capability: 'security.application', name: 'Sam' },
+  hire_from_catalog: {
+    kind: 'hire_from_catalog',
+    templateId: 'tpl1',
+    capability: 'security.application',
+    name: 'Security Reviewer',
+    rationale: 'nobody here provides Application security',
+    temporary: false,
+  },
   answer_question: { kind: 'answer_question', messageId: 'm1' },
   reassign_question: { kind: 'reassign_question', messageId: 'm1', toSlaveId: 's2' },
   mark_task_failed: { kind: 'mark_task_failed', taskId: 't1', reason: 'dead end' },
@@ -36,6 +46,12 @@ describe('tierOf', () => {
     ['reassign_question', 'proposed', 'proposed'],
     ['raise_max_attempts', 'proposed', 'proposed'],
     ['set_runtime_roles', 'proposed', 'proposed'],
+    // M47 R4. The routine one of the three: the worker's own row is the evidence, the role granted
+    // is the one the capability projects to by definition, and nobody new arrives.
+    ['assign_capability', 'applied', 'proposed'],
+    // A roster is a person's decision and a hire is a commitment -- never automatic.
+    ['materialise_company_worker', 'proposed', 'proposed'],
+    ['hire_from_catalog', 'proposed', 'proposed'],
     ['mark_task_failed', 'proposed', 'proposed'],
     // M40 ruling R1: a cancellation is never automatic -- a wrong deletion costs real planned work.
     ['cancel_task', 'proposed', 'proposed'],
@@ -66,6 +82,25 @@ describe('tierOf', () => {
     for (const kind of SITUATION_KINDS) {
       expect(tierOf(ACTIONS.cancel_task, RUNNING, kind)).toBe('proposed')
       expect(tierOf(ACTIONS.cancel_task, HALTED, kind)).toBe('proposed')
+    }
+  })
+
+  // M47 R4: every one of the three is a PROPOSAL while the workspace is halted -- the short-circuit
+  // above the switch already does it, and this is what says so. A halt is a guardrail's verdict
+  // that this project should not be moving, and "routine" does not survive it.
+  it('proposes all three capability actions while the workspace is halted, for every situation kind', () => {
+    for (const kind of SITUATION_KINDS) {
+      expect(tierOf(ACTIONS.assign_capability, HALTED, kind)).toBe('proposed')
+      expect(tierOf(ACTIONS.materialise_company_worker, HALTED, kind)).toBe('proposed')
+      expect(tierOf(ACTIONS.hire_from_catalog, HALTED, kind)).toBe('proposed')
+    }
+  })
+
+  it('applies an assign_capability whatever situation it was offered for, and never a hire', () => {
+    for (const kind of SITUATION_KINDS) {
+      expect(tierOf(ACTIONS.assign_capability, RUNNING, kind)).toBe('applied')
+      expect(tierOf(ACTIONS.materialise_company_worker, RUNNING, kind)).toBe('proposed')
+      expect(tierOf(ACTIONS.hire_from_catalog, RUNNING, kind)).toBe('proposed')
     }
   })
 

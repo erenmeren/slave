@@ -1,3 +1,4 @@
+import type { CapabilityRecord } from '../capability/taxonomy.js'
 import type { TaskStatus } from '../task/state.js'
 import type { ActionKind, DecisionStatus, Tier } from './actions.js'
 import { THREAD_MESSAGES_MAX } from './constants.js'
@@ -52,6 +53,18 @@ export interface SupervisorTask {
    * behind the current goal version is unwanted (see `SITUATION_KINDS`' `stale_task`).
    */
   readonly goalVersion: number | null
+  /**
+   * The capabilities this work needs, in the taxonomy's vocabulary (M47 R2/R3) -- the STAFFING key,
+   * as opposed to {@link requiredRole}, which stays the dispatch key and is derived from this list
+   * when the planner did not name one.
+   *
+   * LOADER CONTRACT: `Task.requiredCapabilities` verbatim, keys and all -- including a key this
+   * workspace's taxonomy no longer has. `observe` reads every one of them against
+   * {@link SupervisorWorld.taxonomy} and a key that is not a row projects no role and staffs
+   * nobody, which is exactly R1's rule ("nothing matches on a key that is not in the table") rather
+   * than something a loader should silently filter.
+   */
+  readonly requiredCapabilities: readonly string[]
 }
 
 export interface SupervisorSlave {
@@ -62,7 +75,37 @@ export interface SupervisorSlave {
   readonly role: string
   /** The roles this slave may be DISPATCHED as. Every staffing predicate reads this, never `role`. */
   readonly runtimeRoles: readonly string[]
+  /**
+   * What this worker PROVIDES (M47 R2), as opposed to {@link runtimeRoles}, which is what it may be
+   * DISPATCHED as. The two are deliberately different facts: a capability is what the specialist
+   * can do, a runtime role is a decision about the schedule -- and the gap between them is the
+   * whole of the `assign_capability` offer, which gives a worker who already provides a capability
+   * the runtime role it projects to.
+   */
+  readonly capabilities: readonly string[]
   readonly busy: boolean
+}
+
+/**
+ * A company roster worker who is NOT already on this project (R4) -- the second place the
+ * Supervisor looks. Loaded only when the board actually asks for a capability.
+ */
+export interface SupervisorCompanyWorker {
+  readonly companySlaveId: string
+  readonly name: string
+  readonly capabilities: readonly string[]
+}
+
+/**
+ * A catalog template, with what it provides (R4) -- the third place. `recommended` is R5's advisory
+ * tie-break: some worker already here has a profile that recommends pairing with it.
+ */
+export interface SupervisorCatalogEntry {
+  readonly templateId: string
+  readonly name: string
+  readonly capabilities: readonly string[]
+  readonly division: string | null
+  readonly recommended: boolean
 }
 
 /**
@@ -207,6 +250,19 @@ export interface SupervisorWorld {
   /** Recent decisions -- the window {@link filterFresh} needs to honour the cooldown and
    *  {@link summarise} counts. Not the whole history. */
   readonly decisions: readonly SupervisorDecisionRecord[]
+  /**
+   * The taxonomy this workspace's capabilities are read against (R1). Empty is a real state -- a
+   * database whose taxonomy has never been synced -- and every capability rule is a no-op under it,
+   * which is exactly right: nothing matches on a key that is not a row.
+   */
+  readonly taxonomy: readonly CapabilityRecord[]
+  /** The company roster this project could be staffed from, minus whoever is already on it (R4).
+   *  EMPTY unless some task on the board actually asks for a capability -- the loader does not pay
+   *  for a roster query nobody's plan needs. */
+  readonly company: readonly SupervisorCompanyWorker[]
+  /** The catalog templates that provide something, bounded by the loader (R4). Empty under the
+   *  same condition as {@link company}. */
+  readonly catalog: readonly SupervisorCatalogEntry[]
 }
 
 /**

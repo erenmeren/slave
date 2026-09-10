@@ -109,6 +109,36 @@ describe('actionText', () => {
     ).toBe('cancel task Wire up the refunds form: the re-plan for goal v2 no longer needs it')
   })
 
+  // M47 R4: the three arms of the exhaustive switch. Each names the capability the offer is FOR,
+  // because the situation chip beside it only says that one is missing.
+  it('names the role an assign_capability grants and the capability it is for', () => {
+    expect(
+      actionText({ kind: 'assign_capability', slaveId: 'Rae', capability: 'security.application', role: 'security' }),
+    ).toBe('give Rae the "security" runtime role, for security.application')
+  })
+
+  it('names the worker a materialise_company_worker brings over', () => {
+    expect(
+      actionText({ kind: 'materialise_company_worker', companySlaveId: 'cs1', capability: 'security.application', name: 'Sam' }),
+    ).toBe('bring Sam onto this project from the company roster, for security.application')
+  })
+
+  it('says when a catalog hire is a temporary specialist, and says nothing when it is not', () => {
+    const hire = {
+      kind: 'hire_from_catalog',
+      templateId: 'tpl1',
+      capability: 'security.application',
+      name: 'Security Reviewer',
+      rationale: 'nobody here provides Application security',
+    } as const
+    expect(actionText({ ...hire, temporary: false })).toBe(
+      'hire Security Reviewer from the catalog, for security.application',
+    )
+    expect(actionText({ ...hire, temporary: true })).toBe(
+      'hire Security Reviewer from the catalog as a temporary specialist, for security.application',
+    )
+  })
+
   it('falls back to the id for a task the world no longer holds', () => {
     // Findable, rather than a name this function would have to invent.
     expect(actionText({ kind: 'cancel_task', taskId: 't-9', reason: 'no longer needed' }, {})).toBe(
@@ -212,6 +242,41 @@ describe('SupervisorPanel', () => {
     expect(screen.getByTestId('supervisor-proposal-kind').getAttribute('title')).toBe('stale_task')
     expect(screen.getByTestId('supervisor-proposal-action').textContent).toBe(
       'cancel task Wire up the refunds form: the re-plan for goal v2 no longer needs it',
+    )
+  })
+
+  it('reads a capability proposal in words: the label chip, the sentence and the raw kind (M47 R4)', async () => {
+    await mount({
+      pending: [
+        decision({
+          id: 'd-capability',
+          situationKind: 'capability_unstaffed',
+          subjectId: 'security.application',
+          situation: {
+            kind: 'capability_unstaffed',
+            subjectId: 'security.application',
+            summary: '1 startable task(s) need "security.application" and no slave can be dispatched as "security".',
+            facts: { capability: 'security.application', role: 'security', readyTasks: 1, firstTaskId: 't-1' },
+          },
+          action: {
+            kind: 'hire_from_catalog',
+            templateId: 'tpl1',
+            capability: 'security.application',
+            name: 'Security Reviewer',
+            rationale: 'Security Reviewer provides Application security, which nobody on this project does.',
+            temporary: false,
+          },
+          rationale: 'Security Reviewer provides Application security, which nobody on this project does.',
+        }),
+      ],
+    })
+
+    // M44 R5 leak 5 / `docs/ia.md` rule 3: the word is what a person reads, the member stays in
+    // `title` so the raw value is still available.
+    expect(screen.getByTestId('supervisor-proposal-kind').textContent).toBe('Missing a capability')
+    expect(screen.getByTestId('supervisor-proposal-kind').getAttribute('title')).toBe('capability_unstaffed')
+    expect(screen.getByTestId('supervisor-proposal-action').textContent).toBe(
+      'hire Security Reviewer from the catalog, for security.application',
     )
   })
 

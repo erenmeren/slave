@@ -1,3 +1,5 @@
+import { projectRoles } from '../capability/taxonomy.js'
+import { formTeam, type TeamPlan, type TeamProposal } from '../capability/team.js'
 import type { Action, Candidate } from './actions.js'
 import { staffableSlaves } from './observe.js'
 import { mayAnswer, tierOf } from './policy.js'
@@ -54,6 +56,69 @@ function staffingCandidates(world: SupervisorWorld, kind: SituationKind, role: s
 
 function candidate(action: Action, world: SupervisorWorld, kind: SituationKind, why: string): Candidate {
   return { action, tier: tierOf(action, world, kind), why }
+}
+
+/**
+ * The team the rules would form for this world (M47 R4), computed from the world alone so the
+ * same world always yields the same offers. Exported because the Organization view shows the same
+ * covered / proposed / unfillable summary a decision was made from, and two computations of "what
+ * is missing" would eventually disagree in front of a person.
+ */
+export function teamPlanOf(world: SupervisorWorld): TeamPlan {
+  const required = world.tasks
+    .filter((task) => task.status === 'ready' || task.status === 'blocked')
+    .flatMap((task) => task.requiredCapabilities)
+  return formTeam({
+    required,
+    roster: world.slaves.map((slave) => ({
+      slaveId: slave.id,
+      name: slave.name,
+      capabilities: slave.capabilities,
+      runtimeRoles: slave.runtimeRoles,
+      busy: slave.busy,
+    })),
+    company: world.company.map((worker) => ({
+      companySlaveId: worker.companySlaveId,
+      name: worker.name,
+      capabilities: worker.capabilities,
+    })),
+    catalog: world.catalog.map((entry) => ({
+      templateId: entry.templateId,
+      name: entry.name,
+      capabilities: entry.capabilities,
+      division: entry.division,
+    })),
+    taxonomy: world.taxonomy,
+    recommendedTemplateIds: world.catalog.filter((entry) => entry.recommended).map((entry) => entry.templateId),
+  })
+}
+
+/** One `formTeam` proposal as an {@link Action}. Returns null for the `temporary` source, which M47
+ *  never emits (M50 owns that lifecycle) -- an arm that threw on it would make a future data
+ *  change a crash rather than an offer nobody makes yet. */
+function actionOf(proposal: TeamProposal, capability: string, world: SupervisorWorld): Action | null {
+  switch (proposal.source) {
+    case 'existing_worker':
+      return {
+        kind: 'assign_capability',
+        slaveId: proposal.pick.id,
+        capability,
+        role: projectRoles([capability], world.taxonomy)[0] ?? '',
+      }
+    case 'company_worker':
+      return { kind: 'materialise_company_worker', companySlaveId: proposal.pick.id, capability, name: proposal.pick.name }
+    case 'project_worker':
+      return {
+        kind: 'hire_from_catalog',
+        templateId: proposal.pick.id,
+        capability,
+        name: proposal.pick.name,
+        rationale: proposal.rationale,
+        temporary: proposal.temporary,
+      }
+    case 'temporary':
+      return null
+  }
 }
 
 /**
@@ -174,6 +239,18 @@ export function candidates(situation: Situation, world: SupervisorWorld): readon
       // `subjectId` IS the missing role for all three kinds (spec section 2).
       offers.push(...staffingCandidates(world, situation.kind, situation.subjectId))
       break
+
+    case 'capability_unstaffed': {
+      // `subjectId` IS the capability key (spec §2 as M47 extends it). The offers are `formTeam`'s
+      // proposals for THIS capability, in the order it ranked them: an existing capable worker,
+      // then the company roster, then the catalog. Each carries its own rationale sentence, which
+      // is what a human -- and the model -- judges the offer by.
+      for (const proposal of teamPlanOf(world).proposals.filter((one) => one.covers.includes(situation.subjectId))) {
+        const action = actionOf(proposal, situation.subjectId, world)
+        if (action !== null) offers.push(candidate(action, world, situation.kind, proposal.rationale))
+      }
+      break
+    }
 
     case 'waiting_stale':
     case 'unanswerable_question': {

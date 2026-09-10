@@ -6,6 +6,7 @@
  * questions, no halt. Each test then adds exactly the one fact its predicate is about, so a
  * fixture can never pass by accident through a second situation it did not mean to create.
  */
+import type { CapabilityRecord } from '../../src/capability/taxonomy.js'
 import type {
   SupervisorDecisionRecord,
   SupervisorQuestion,
@@ -16,6 +17,17 @@ import type {
 } from '../../src/supervisor/world.js'
 
 export const NOW = Date.parse('2026-09-09T12:00:00.000Z')
+
+/**
+ * The two-row taxonomy the M47 capability cases are read against, shared by `observe.test.ts` and
+ * `candidates.test.ts` so the two files cannot disagree about what `security.application` projects
+ * to. Deliberately tiny: nothing matches on a key that is not a row (R1), so two rows are enough to
+ * say "this one is staffed and that one is not".
+ */
+export const TAXONOMY: readonly CapabilityRecord[] = [
+  { key: 'security.application', label: 'Application security', domain: 'security', role: 'security', synonyms: [] },
+  { key: 'backend.api-design', label: 'API design', domain: 'backend', role: 'backend', synonyms: [] },
+]
 
 export function task(overrides: Partial<SupervisorTask> = {}): SupervisorTask {
   return {
@@ -33,12 +45,25 @@ export function task(overrides: Partial<SupervisorTask> = {}): SupervisorTask {
     // The board's tasks come from a plan by default, stamped with the same version the default
     // world carries -- so nothing is stale until a test says the goal moved.
     goalVersion: 0,
+    // M47: a task planned before capabilities existed asks for none, which is what every fixture
+    // in this file means unless it says otherwise.
+    requiredCapabilities: [],
     ...overrides,
   }
 }
 
 export function slave(overrides: Partial<SupervisorSlave> = {}): SupervisorSlave {
-  return { id: 's1', name: 'Alex', role: 'Backend Engineer', runtimeRoles: ['backend'], busy: false, ...overrides }
+  return {
+    id: 's1',
+    name: 'Alex',
+    role: 'Backend Engineer',
+    runtimeRoles: ['backend'],
+    // M47: what the worker PROVIDES. Empty by default, so a capability situation only ever fires
+    // in a test that says which capability it is about.
+    capabilities: [],
+    busy: false,
+    ...overrides,
+  }
 }
 
 export function threadMessage(overrides: Partial<ThreadMessage> = {}): ThreadMessage {
@@ -98,6 +123,12 @@ export function world(overrides: Partial<SupervisorWorld> = {}): SupervisorWorld
     slaves: [],
     questions: [],
     decisions: [],
+    // M47: an EMPTY taxonomy is a real state -- a database whose taxonomy has never been synced --
+    // and every capability rule is a no-op under it. That is what keeps every pre-M47 case in this
+    // directory reading exactly as it always did.
+    company: [],
+    catalog: [],
+    taxonomy: [],
     ...overrides,
   }
 }

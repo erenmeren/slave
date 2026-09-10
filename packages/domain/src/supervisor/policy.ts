@@ -52,6 +52,18 @@ export function tierOf(action: Action, world: SupervisorWorld, situationKind: Si
       return 'proposed'
     case 'reassign_question':
       return reassignTier(action.messageId, action.toSlaveId, world)
+    // ROUTINE, and the one thing that makes it different from `set_runtime_roles` is EVIDENCE
+    // (M47 R4). A staffing proposal asks a human "is this the right person?"; this one asks
+    // nothing -- the worker's own row already records that it provides the capability, and the
+    // role being granted is the one that capability projects to by definition (R2). Nobody new
+    // arrives, nothing is spent, and the union never takes a role away.
+    case 'assign_capability':
+      return 'applied'
+    // Both bring a WORKER onto a project. Never automatic: a roster is a person's decision, and
+    // a hire is a commitment the Supervisor may propose and may not make.
+    case 'materialise_company_worker':
+    case 'hire_from_catalog':
+      return 'proposed'
     case 'raise_max_attempts':
     case 'set_runtime_roles':
     case 'mark_task_failed':
