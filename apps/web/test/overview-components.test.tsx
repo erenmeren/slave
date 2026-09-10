@@ -781,10 +781,11 @@ describe('shell facts and stream state reach the project header, never the sideb
   it('M45 R2/R3: the request box and the timeline sit between the strip and the team', () => {
     render(<OverviewClient workspaceId="w1" initial={PUBLISHED} />)
     const shell = screen.getByTestId('page-shell')
+    // Fix round 1, Important 2: the timeline's own root is marked, so the accepted page order is
+    // pinned in full rather than "the timeline is somewhere on the page".
     const order = [...shell.children].map((child) => child.getAttribute('data-testid')).filter((id) => id !== null)
-    expect(order).toEqual(['brief', 'strip', 'supervisor-request', 'team', 'overview-advanced'])
-    // The timeline's own root carries no testid (its `<ol>` does), so it is asserted by name.
-    expect(screen.getByTestId('timeline')).toBeTruthy()
+    expect(order).toEqual(['brief', 'strip', 'supervisor-request', 'supervisor-timeline', 'team', 'overview-advanced'])
+    expect(screen.getByTestId('supervisor-timeline').contains(screen.getByTestId('timeline'))).toBe(true)
   })
 
   // M45 plan erratum E22: NOTHING was removed. All four panels are one disclosure lower, and a

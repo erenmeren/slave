@@ -10,7 +10,7 @@ import { Chip } from '../ui/Chip'
 import { EmptyState } from '../ui/EmptyState'
 import { Panel } from '../ui/Panel'
 import { SectionLabel } from '../ui/SectionLabel'
-import { TONE_BORDER, TONE_FILL, TONE_TEXT, type StatusTone } from '../ui/StatusPill'
+import { StatusPill, TONE_TEXT, type StatusTone } from '../ui/StatusPill'
 
 /** The word each needs-you kind is announced with. The domain's `NeedsYouItem['kind']` is a raw
  *  member and never visible text (`docs/ia.md` rule 3); this is the reading of it. */
@@ -146,13 +146,17 @@ export function ProjectBrief({
 
       <Tile fact="supervisor" caption="supervisor">
         {/* The WORD, with the raw state one hover away -- `docs/ia.md` rule 3. The label is the
-          * domain's own (`userSupervisorStatus`), count and all, never assembled here. */}
-        <span
-          data-testid="brief-supervisor-state"
-          title={supervisor.state}
-          className={`inline-flex w-fit items-center rounded-pill border px-[7px] py-[3px] font-mono text-[9.5px] uppercase tracking-wide ${TONE_FILL[supervisorTone]} ${TONE_BORDER[supervisorTone]} ${TONE_TEXT[supervisorTone]}`}
-        >
-          {supervisor.label}
+          * domain's own (`userSupervisorStatus`), count and all, never assembled here.
+          *
+          * The REAL `StatusPill`, not a copy of its recipe (fix round 1, minor 4): a second
+          * hand-rolled pill is exactly how the 1a-alpha fill and the 20px radius drift apart.
+          * `gate:m14-fidelity` scopes every `status-pill` assertion on this page to
+          * `[data-testid="slave-card"] [data-testid="status-pill"]`, so a pill up here moves
+          * nothing it measures. The wrapper carries the testid and the raw state because
+          * `StatusPill`'s own `title` is for the value BEHIND a projected word, and here that
+          * value is the state the whole tile is about. */}
+        <span data-testid="brief-supervisor-state" title={supervisor.state} className="w-fit">
+          <StatusPill tone={supervisorTone} label={supervisor.label} />
         </span>
       </Tile>
 

@@ -16,6 +16,13 @@ import { TONE_TEXT, type StatusTone } from './ui/StatusPill'
  * Tones come from `lib/tones.ts`'s `CARD_STATE_TONE`, never a second hand-written map (Decision
  * 2), and only ever light up a NON-ZERO count: zero is not a state worth colouring, and a red
  * `0` beside the word "blocked" reads as an alarm about nothing.
+ *
+ * M45 erratum E17: the `work` tile of `project/ProjectBrief` directly above this strip counts the
+ * same board in the DOMAIN's user words (`userTaskStatus` -- WORKING / VERIFYING / IN REVIEW /
+ * WAITING / DONE), and this strip keeps the RAW board counts the design handoff documents and
+ * `gate:m14-fidelity` measures. The overlap is deliberate: two readings of one board, not two
+ * numbers for one fact, and deleting the strip in a milestone that must not move README pixels was
+ * not on the table.
  */
 export function TopStrip({ snapshot }: { readonly snapshot: OverviewSnapshot }): React.JSX.Element {
   const working = snapshot.slaves.filter((a) => a.status === 'working').length

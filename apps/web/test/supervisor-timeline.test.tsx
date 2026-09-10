@@ -208,12 +208,97 @@ describe('SupervisorTimeline', () => {
     expect(screen.queryByTestId('timeline-unblock')).toBeNull()
   })
 
-  it('pins nothing for work that only needs integrating', () => {
-    // `integrate` is a LINK off-page, not a thing to answer here -- but it is still the only
-    // reason to show the lane when it is the only item, so the section renders with just that row.
+  // Fix round 1, Important 1: nothing on this page can integrate anything (`confirmIntegration`
+  // has no web route), so an integrate-only queue standing under DECISION REQUIRED would be a
+  // demand nobody can satisfy here -- and a heading a person learns to ignore.
+  it('gives work waiting to be integrated its own heading, not DECISION REQUIRED', () => {
     render(<SupervisorTimeline workspaceId="w1" entries={ENTRIES} needsYou={[INTEGRATE]} />)
+    expect(screen.queryByTestId('timeline-decisions')).toBeNull()
+    const section = screen.getByTestId('timeline-integrate-section')
+    expect(section.textContent).toContain('READY TO INTEGRATE')
+    expect(within(section).getAllByTestId('timeline-integrate-row')).toHaveLength(1)
     expect(screen.queryByTestId('supervisor-proposal')).toBeNull()
     expect(screen.queryByTestId('timeline-unblock')).toBeNull()
+  })
+
+  it('shows both headings when something needs answering AND something needs integrating', () => {
+    render(<SupervisorTimeline workspaceId="w1" entries={[DECISION_ENTRY]} needsYou={[BLOCKED, INTEGRATE]} />)
+    const pinned = screen.getByTestId('timeline-decisions')
+    expect(pinned.textContent).toContain('DECISION REQUIRED')
+    expect(within(pinned).getByTestId('supervisor-proposal')).toBeTruthy()
+    expect(within(pinned).getByTestId('timeline-unblock')).toBeTruthy()
+    // And the integrate row is NOT under it.
+    expect(within(pinned).queryByTestId('timeline-integrate-row')).toBeNull()
+    expect(within(screen.getByTestId('timeline-integrate-section')).getAllByTestId('timeline-integrate-row')).toHaveLength(1)
+  })
+
+  // Fix round 1, minor 3: the queue and the timeline are two reads, and a decision recorded
+  // between them reaches the brief's needs-you tile with no `DecisionView` behind it here.
+  it('still shows a pending decision whose body never reached this page, as a link with no actions', () => {
+    const stranded = { kind: 'decision' as const, id: 'd9', title: 'No reviewer: nobody holds reviewer', href: '/w/w1#decision-d9', since: '2026-09-09T10:00:00.000Z', taskId: null, decisionId: 'd9', messageId: null }
+    render(<SupervisorTimeline workspaceId="w1" entries={ENTRIES} needsYou={[stranded]} />)
+    const row = screen.getByTestId('timeline-decision-unavailable')
+    expect(row.textContent).toContain('nobody holds reviewer')
+    expect(row.querySelector('a')?.getAttribute('href')).toBe('/w/w1#decision-d9')
+    // The anchor its own link names is rendered, so the brief's link lands on this row.
+    expect(document.getElementById('decision-d9')).toBe(row)
+    // Nothing to approve: there is no decision body to send.
+    expect(screen.queryByTestId('supervisor-approve')).toBeNull()
+  })
+
+  it('renders a decision once, not twice, when the queue and the entries both carry it', () => {
+    const queued = { kind: 'decision' as const, id: 'd1', title: 'No reviewer: nobody holds reviewer', href: '/w/w1#decision-d1', since: '2026-09-09T11:00:00.000Z', taskId: null, decisionId: 'd1', messageId: null }
+    render(<SupervisorTimeline workspaceId="w1" entries={[DECISION_ENTRY]} needsYou={[queued]} />)
+    expect(screen.getAllByTestId('supervisor-proposal')).toHaveLength(1)
+    expect(screen.queryByTestId('timeline-decision-unavailable')).toBeNull()
+  })
+
+  it('empties the answer box on success and keeps it on a refusal', async () => {
+    stubFetch({ ok: true })
+    const { unmount } = render(<SupervisorTimeline workspaceId="w1" entries={[]} needsYou={[QUESTION]} />)
+    type(screen.getByTestId('timeline-answer-input'), 'Stripe')
+    await click(screen.getByTestId('timeline-answer-send'))
+    expect((screen.getByTestId('timeline-answer-input') as HTMLTextAreaElement).value).toBe('')
+    unmount()
+
+    stubFetch({ error: 'that question was already answered' }, 409)
+    render(<SupervisorTimeline workspaceId="w1" entries={[]} needsYou={[QUESTION]} />)
+    type(screen.getByTestId('timeline-answer-input'), 'Stripe')
+    await click(screen.getByTestId('timeline-answer-send'))
+    expect((screen.getByTestId('timeline-answer-input') as HTMLTextAreaElement).value).toBe('Stripe')
+    expect(screen.getByTestId('timeline-error').textContent).toBe('that question was already answered')
+  })
+
+  it('will not send the same answer twice while the first is still in flight', async () => {
+    let release: (() => void) | null = null
+    fetchMock.mockImplementation(
+      async () =>
+        new Promise<Response>((resolve) => {
+          release = () => resolve(new Response(JSON.stringify({ ok: true }), { status: 200 }))
+        }),
+    )
+    render(<SupervisorTimeline workspaceId="w1" entries={[]} needsYou={[QUESTION]} />)
+    type(screen.getByTestId('timeline-answer-input'), 'Stripe')
+    await click(screen.getByTestId('timeline-answer-send'))
+    expect((screen.getByTestId('timeline-answer-send') as HTMLButtonElement).disabled).toBe(true)
+    await act(async () => {
+      release?.()
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  // Fix round 1, minor 7: the testid is one contract however many questions wait, so a gate that
+  // has to reach ONE of them scopes by the message it belongs to.
+  it('names the message each answer control belongs to', () => {
+    const second = { ...QUESTION, id: 'm2', title: 'Bo asked: Which currency?', href: '/w/w1#question-m2', messageId: 'm2' }
+    render(<SupervisorTimeline workspaceId="w1" entries={[]} needsYou={[QUESTION, second]} />)
+    expect(screen.getAllByTestId('timeline-answer-input').map((one) => one.getAttribute('data-message-id'))).toEqual(['m1', 'm2'])
+    expect(screen.getAllByTestId('timeline-answer-send').map((one) => one.getAttribute('data-message-id'))).toEqual(['m1', 'm2'])
+  })
+
+  it('marks its own root, so the page can pin where the timeline sits', () => {
+    render(<SupervisorTimeline workspaceId="w1" entries={ENTRIES} needsYou={[]} />)
+    expect(screen.getByTestId('supervisor-timeline')).toBeTruthy()
   })
 })
 

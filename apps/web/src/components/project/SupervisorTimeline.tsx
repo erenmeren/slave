@@ -27,6 +27,15 @@ const LANE_TONE: Readonly<Record<TimelineLane, StatusTone>> = {
   verified: 'done',
 }
 
+/**
+ * The heading `integrate` items stand under (fix round 1, Important 1).
+ *
+ * NOT a seventh `TimelineLane`: the domain's six lanes classify what the timeline SHOWS, and this
+ * is a queue heading on the page. It reads the same words `NEEDS_YOU_WORD.integrate` uses on the
+ * brief, so one thing has one name wherever it appears.
+ */
+const READY_TO_INTEGRATE_LABEL = 'READY TO INTEGRATE'
+
 /** `HH:MM:SS` off the ISO stamp, the way `LiveEventsPanel` does it. */
 function clock(iso: string): string {
   return iso.slice(11, 19)
@@ -76,7 +85,27 @@ export function SupervisorTimeline({
   const questions = needsYou.filter((item) => item.kind === 'question' && item.messageId !== null)
   const blocked = needsYou.filter((item) => item.kind === 'blocked_task' && item.taskId !== null)
   const integrate = needsYou.filter((item) => item.kind === 'integrate')
-  const waiting = decisionEntries.length + questions.length + blocked.length + integrate.length
+
+  /**
+   * A pending decision the QUEUE knows about and the timeline's own entries do not (fix round 1,
+   * minor 3).
+   *
+   * `buildSupervisorTimeline` reads the decision bodies once, and `TimelineEntry.decision` is null
+   * for any row that read missed -- a decision recorded between the two reads, or one whose row
+   * the builder could not parse. Dropping the item silently would make the brief's needs-you tile
+   * count something the page then refuses to show, and its `#decision-<id>` link land nowhere.
+   * These get a row with the title and the link and NO actions: there is no `DecisionView` to
+   * approve, and a button with nothing behind it is worse than an honest pointer.
+   */
+  const shownDecisionIds = new Set(decisionEntries.map((entry) => entry.decision?.id))
+  const strandedDecisions = needsYou.filter(
+    (item) => item.kind === 'decision' && item.decisionId !== null && !shownDecisionIds.has(item.decisionId),
+  )
+
+  /** DECISION REQUIRED is what a person can ANSWER here. `integrate` is not one of those -- there
+   *  is no web integration verb (erratum E11) -- so it gets its own heading below rather than
+   *  standing under a demand nobody can satisfy from this page (fix round 1, Important 1). */
+  const waiting = decisionEntries.length + strandedDecisions.length + questions.length + blocked.length
 
   const river = entries.filter((entry) => entry.eventType !== null && (lanes.size === 0 || lanes.has(entry.lane)))
 
@@ -87,7 +116,9 @@ export function SupervisorTimeline({
     if (entry.taskId !== null && entry.taskTitle !== null) taskTitles[entry.taskId] = entry.taskTitle
   }
 
-  const send = async (rowId: string, url: string, body?: Record<string, unknown>): Promise<void> => {
+  /** One row's write. Returns whether it landed, so a row with a box of its own can clear it on
+   *  success and keep it on a refusal (fix round 1, minor 5). */
+  const send = async (rowId: string, url: string, body?: Record<string, unknown>): Promise<boolean> => {
     setBusyId(rowId)
     setErrors((was) => {
       const { [rowId]: _gone, ...rest } = was
@@ -96,6 +127,13 @@ export function SupervisorTimeline({
     const result = await postControl(url, body)
     if (!result.ok) setErrors((was) => ({ ...was, [rowId]: result.error }))
     setBusyId(null)
+    return result.ok
+  }
+
+  /** Send an answer, and empty the box only if it was actually written. */
+  const sendAnswer = async (rowId: string, messageId: string, answer: string): Promise<void> => {
+    const sent = await send(rowId, `/api/w/${workspaceId}/messages/${messageId}/answer`, { answer })
+    if (sent) setAnswers((was) => ({ ...was, [messageId]: '' }))
   }
 
   const toggleLane = (lane: TimelineLane): void => {
@@ -107,16 +145,19 @@ export function SupervisorTimeline({
     })
   }
 
-  /** The refusal for one row, beside that row and nowhere else. */
-  const rowError = (rowId: string): React.JSX.Element | false =>
-    errors[rowId] !== undefined && (
+  /** The refusal for one row, beside that row and nowhere else -- `null` when there is none, so a
+   *  caller guards ONCE (fix round 1, minor 6). */
+  const rowError = (rowId: string): React.JSX.Element | null => {
+    const message = errors[rowId]
+    return message === undefined ? null : (
       <span role="alert" data-testid="timeline-error" className="text-[11px] text-tone-blocked">
-        {errors[rowId]}
+        {message}
       </span>
     )
+  }
 
   return (
-    <div className="flex flex-col gap-[11px] px-[20px] pt-[16px]">
+    <div data-testid="supervisor-timeline" className="flex flex-col gap-[11px] px-[20px] pt-[16px]">
       {waiting > 0 && (
         <section data-testid="timeline-decisions">
           <Panel>
@@ -127,6 +168,7 @@ export function SupervisorTimeline({
               if (decision === null) return null
               const rowId = `decision-${decision.id}`
               const url = `/api/w/${workspaceId}/supervisor/decisions/${decision.id}`
+              const error = rowError(rowId)
               return (
                 // A one-item `<ul>` per decision, because `ProposalRow` IS the `<li>` and the
                 // anchor the needs-you tile links to has to sit on an element that wraps it.
@@ -145,12 +187,28 @@ export function SupervisorTimeline({
                     onApprove={(body) => void send(rowId, `${url}/approve`, body === undefined ? undefined : { body })}
                     onReject={(reason) => void send(rowId, `${url}/reject`, reason.trim() === '' ? {} : { reason })}
                   />
-                  {errors[rowId] !== undefined && <li>{rowError(rowId)}</li>}
+                  {error !== null && <li>{error}</li>}
                 </ul>
               )
             })}
-            {questions.length + blocked.length + integrate.length > 0 && (
+            {strandedDecisions.length + questions.length + blocked.length > 0 && (
               <ul className="flex flex-col gap-2">
+                {strandedDecisions.map((item) => (
+                  // Title and link, no actions: this decision's body never reached the page, so
+                  // there is nothing to approve or reject here. The anchor is still rendered, so
+                  // the brief's `#decision-<id>` link lands on the row it names.
+                  <li
+                    key={`decision-${item.id}`}
+                    id={`decision-${item.decisionId ?? item.id}`}
+                    data-testid="timeline-decision-unavailable"
+                    className="flex items-center gap-2 rounded border border-line p-2"
+                  >
+                    <Link href={item.href} className="min-w-0 flex-1 text-xs text-text-1 underline">
+                      {item.title}
+                    </Link>
+                    <span className="shrink-0 text-[10px] text-text-3">open it on the Supervisor panel</span>
+                  </li>
+                ))}
                 {questions.map((item) => {
                   const messageId = item.messageId ?? ''
                   const rowId = `question-${messageId}`
@@ -159,8 +217,12 @@ export function SupervisorTimeline({
                     <li key={rowId} id={rowId} className="flex flex-col gap-1 rounded border border-line p-2">
                       {/* Another worker's words, as characters (spec §1). */}
                       <span className="text-xs text-text-1">{item.title}</span>
+                      {/* The testid is the same on every question row -- one contract, however
+                        * many are waiting -- so `data-message-id` is what a gate scopes by (fix
+                        * round 1, minor 7). */}
                       <textarea
                         data-testid="timeline-answer-input"
+                        data-message-id={messageId}
                         value={answer}
                         rows={2}
                         placeholder="the answer this slave receives"
@@ -171,8 +233,11 @@ export function SupervisorTimeline({
                         <Button
                           variant="primary"
                           data-testid="timeline-answer-send"
+                          data-message-id={messageId}
+                          // Down while the write is in flight, exactly like the request box: an
+                          // answer sent twice is two replies in the thread.
                           disabled={answer.trim() === '' || busyId === rowId}
-                          onClick={() => void send(rowId, `/api/w/${workspaceId}/messages/${messageId}/answer`, { answer })}
+                          onClick={() => void sendAnswer(rowId, messageId, answer)}
                         >
                           answer
                         </Button>
@@ -199,17 +264,35 @@ export function SupervisorTimeline({
                     </li>
                   )
                 })}
-                {integrate.map((item) => (
-                  // A LINK, not a button: `confirmIntegration` has no web route, and an affordance
-                  // that cannot work is worse than one that is honest about where to go (E11).
-                  <li key={`integrate-${item.id}`} className="flex items-center gap-2 rounded border border-line p-2">
-                    <Link href={item.href} className="min-w-0 flex-1 text-xs text-text-1 underline">
-                      {item.title}
-                    </Link>
-                  </li>
-                ))}
               </ul>
             )}
+          </Panel>
+        </section>
+      )}
+
+      {integrate.length > 0 && (
+        // Its OWN heading (fix round 1, Important 1). Work waiting to be integrated is not a
+        // DECISION REQUIRED: there is no web integration verb (erratum E11), so nothing on this
+        // page can satisfy it, and filing it under a demand a person cannot answer here teaches
+        // them to ignore the heading that matters.
+        <section data-testid="timeline-integrate-section">
+          <Panel>
+            <SectionLabel>{READY_TO_INTEGRATE_LABEL}</SectionLabel>
+            <ul className="flex flex-col gap-2">
+              {integrate.map((item) => (
+                // A LINK, not a button: an affordance that cannot work is worse than one that is
+                // honest about where to go.
+                <li
+                  key={`integrate-${item.id}`}
+                  data-testid="timeline-integrate-row"
+                  className="flex items-center gap-2 rounded border border-line p-2"
+                >
+                  <Link href={item.href} className="min-w-0 flex-1 text-xs text-text-1 underline">
+                    {item.title}
+                  </Link>
+                </li>
+              ))}
+            </ul>
           </Panel>
         </section>
       )}
