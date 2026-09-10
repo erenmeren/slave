@@ -98,6 +98,9 @@ const ALL_KINDS: Record<ControlRefusal['kind'], true> = {
   task_not_cancellable: true,
   catalog_empty: true,
   invalid_role_map: true,
+  profile_not_structured: true,
+  invalid_profile_overrides: true,
+  unknown_profile_field: true,
 }
 
 const ALL = Object.keys(ALL_KINDS) as ControlRefusal['kind'][]

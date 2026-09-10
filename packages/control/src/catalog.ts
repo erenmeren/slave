@@ -1,11 +1,22 @@
 import { type Prisma, prisma } from '@slave-of-ai/db/client'
+import type { ProviderKind } from '@slave-of-ai/providers'
 import {
+  effectiveProfileSpec,
   err,
   goalSha256,
   ok,
+  overriddenFields,
   parsePersona,
   personaErrorText,
+  personaToProfileSpec,
   personaToTemplate,
+  profileOverridesSchema,
+  profileSpecSchema,
+  renderProfileSpec,
+  type MappingQuality,
+  type ProfileOverridableField,
+  type ProfileOverrides,
+  type ProfileSpec,
   type Result,
 } from '@slave-of-ai/domain'
 import { isUniqueConstraintViolation } from './prisma-errors.js'
@@ -26,6 +37,11 @@ export interface ImportCatalogInput {
   readonly roleMap?: Readonly<Record<string, string>>
   /** Runs the parser AND the policy (which reads the database) and writes nothing at all. */
   readonly dryRun?: boolean
+  /** M46 R4: the commit of the catalog checkout, read once per import by the CLI's walk (the
+   *  control package touches no disk). NULL when the directory is not inside a git work tree. */
+  readonly revision?: string | null
+  /** M46 R4: the licence named by a LICENSE file at the catalog root, `MIT License` -> `MIT`. */
+  readonly license?: string | null
 }
 
 export type SkipReason = 'name_taken' | 'locally_edited' | 'profile_too_long' | 'invalid_persona'
@@ -38,6 +54,9 @@ export interface RowOutcome {
   /** M42 erratum E10: the `--role-map` said one thing and the stored row says another. Reported,
    *  never written -- a template's role is set once. */
   readonly roleDrift?: { readonly stored: string; readonly mapped: string }
+  /** M46 R2: how many of this row's fields an operator had customised, and the update kept. Only
+   *  on an `updated` row -- there is nothing to keep on a row being created. */
+  readonly overridesKept?: number
 }
 
 export interface SkippedRow {
@@ -230,6 +249,17 @@ async function importRow(
   }
   const draft = drafted.value
 
+  // The mapping is PURE and row-independent, so it happens outside the transaction: three hundred
+  // personas must not be parsed and mapped while a row lock is held.
+  const upstream = personaToProfileSpec(parsed.value, {
+    repository: input.catalog,
+    path: `${entry.division}/${entry.slug}.md`,
+    revision: input.revision ?? null,
+    license: input.license ?? null,
+    importedAt,
+    runtimeRole: draft.role,
+  })
+
   try {
     return await prisma.$transaction(async (tx): Promise<Outcome> => {
       // The catalog's own locking discipline (M27 §5): every verb locks the row it WRITES. A
@@ -279,16 +309,22 @@ async function importRow(
         }
 
         try {
+          // M46 R1: `profile` is DERIVED. A new row has no overrides, so the effective spec is the
+          // upstream one and the rendered Markdown is what a run will be given.
+          const profile = renderProfileSpec(upstream)
           const row = await tx.slaveTemplate.create({
             data: {
               name: draft.name,
               role: draft.role,
               description: draft.description,
-              profile: draft.profile,
-              profileSha256: draft.profileSha256,
+              profile,
+              profileSha256: goalSha256(profile),
+              profileSpec: upstream as unknown as Prisma.InputJsonValue,
               sourceId: draft.sourceId,
               sourceSha256: draft.sourceSha256,
               sourceDivision: draft.sourceDivision,
+              sourceRevision: input.revision ?? null,
+              sourceLicense: input.license ?? null,
               importedAt,
             },
           })
@@ -347,23 +383,36 @@ async function importRow(
         }
       }
 
-      if (input.dryRun === true) return { kind: 'updated', row: outcomeRow }
+      // M46 R2: the operator's half is read, never written, and the Markdown is re-rendered from
+      // the NEW upstream spec merged with it. This is the whole of "an override survives an
+      // upstream update": the two halves are different columns, so an import can replace one
+      // without being able to touch the other.
+      const stored = profileOverridesSchema.safeParse(existing.profileOverrides ?? {})
+      const overrides = stored.success ? stored.data : {}
+      const profile = renderProfileSpec(effectiveProfileSpec(upstream, overrides))
+      const updatedRow: RowOutcome = { ...outcomeRow, overridesKept: overriddenFields(overrides).length }
+
+      if (input.dryRun === true) return { kind: 'updated', row: updatedRow }
 
       // (d) `name` and `role` are NOT in this write (erratum E10): a template is append-only apart
       // from its profile, and `role` was copied into the runtime roles of every worker already
-      // materialised from it, which an update here could never reach.
+      // materialised from it, which an update here could never reach. `profileOverrides` is not in
+      // it either, for the M46 reason above.
       await tx.slaveTemplate.update({
         where: { id: existing.id },
         data: {
-          profile: draft.profile,
-          profileSha256: draft.profileSha256,
+          profile,
+          profileSha256: goalSha256(profile),
+          profileSpec: upstream as unknown as Prisma.InputJsonValue,
           description: draft.description,
           sourceSha256: draft.sourceSha256,
           sourceDivision: draft.sourceDivision,
+          sourceRevision: input.revision ?? null,
+          sourceLicense: input.license ?? null,
           importedAt,
         },
       })
-      return { kind: 'updated', row: outcomeRow }
+      return { kind: 'updated', row: updatedRow }
     })
   } catch (error) {
     if (error instanceof CatalogRowRefused) return { kind: 'skipped', row: error.row }
@@ -415,5 +464,202 @@ export async function listCatalogImports(limit = 10): Promise<readonly CatalogIm
       unchanged: true,
       skipped: true,
     },
+  })
+}
+
+/**
+ * One template as the Workforce Catalog reads it (M46 R6).
+ *
+ * A SUMMARY row: the fields a person scans, never the whole spec. Hundreds of rows times a three
+ * kilobyte spec is a megabyte of JSON to render a table, so the full effective profile is read one
+ * row at a time by {@link readTemplateProfile} when a drawer opens.
+ */
+export interface WorkforceCatalogRow {
+  readonly id: string
+  readonly name: string
+  readonly role: string
+  readonly description: string
+  readonly defaultModel: string | null
+  readonly defaultProvider: ProviderKind | null
+  readonly catalogSlaveCount: number
+  readonly sourceId: string | null
+  readonly sourceDivision: string | null
+  readonly importedAt: Date | null
+  readonly sourceRepository: string | null
+  readonly sourceRevision: string | null
+  readonly sourceLicense: string | null
+  /** `imported` when the row has a `sourceId`, which is what M42 made that column mean. */
+  readonly source: 'imported' | 'local'
+  /** Whether `profileSpec` parsed. A row that is not structured shows no capabilities and offers
+   *  no Customise -- there is nothing to customise (plan erratum E5). */
+  readonly structured: boolean
+  readonly summary: string
+  readonly capabilities: readonly string[]
+  readonly expertise: readonly string[]
+  readonly recommendedSkills: readonly string[]
+  readonly mappingQuality: MappingQuality | null
+  readonly overriddenFields: readonly ProfileOverridableField[]
+  /** The Markdown was written by hand over a structured profile (R5, plan erratum E4): the stored
+   *  profile's hash disagrees with the one the last write recorded. It is the same predicate
+   *  `importCatalog` uses for `locally_edited`, which is exactly the point. */
+  readonly rawOverride: boolean
+}
+
+export interface WorkforceCatalogFacets {
+  readonly divisions: readonly string[]
+  readonly capabilities: readonly string[]
+  readonly skills: readonly string[]
+}
+
+export interface WorkforceCatalogFilters {
+  readonly q?: string
+  readonly division?: string
+  readonly capability?: string
+  readonly source?: 'imported' | 'local'
+  readonly skill?: string
+}
+
+export interface WorkforceCatalogPage {
+  readonly rows: readonly WorkforceCatalogRow[]
+  readonly facets: WorkforceCatalogFacets
+}
+
+function catalogRowOf(
+  template: {
+    id: string
+    name: string
+    role: string
+    description: string
+    defaultModel: string | null
+    provider: ProviderKind | null
+    profile: string | null
+    profileSha256: string | null
+    profileSpec: unknown
+    profileOverrides: unknown
+    sourceId: string | null
+    sourceDivision: string | null
+    sourceRevision: string | null
+    sourceLicense: string | null
+    importedAt: Date | null
+  },
+  catalogSlaveCount: number,
+): WorkforceCatalogRow {
+  const spec = profileSpecSchema.safeParse(template.profileSpec)
+  const overrides = profileOverridesSchema.safeParse(template.profileOverrides ?? {})
+  const effective = spec.success ? effectiveProfileSpec(spec.data, overrides.success ? overrides.data : {}) : null
+  return {
+    id: template.id,
+    name: template.name,
+    role: template.role,
+    description: template.description,
+    defaultModel: template.defaultModel,
+    defaultProvider: template.provider,
+    catalogSlaveCount,
+    sourceId: template.sourceId,
+    sourceDivision: template.sourceDivision,
+    importedAt: template.importedAt,
+    sourceRepository: spec.success ? (spec.data.source?.repository ?? null) : (template.sourceId?.split('/')[0] ?? null),
+    sourceRevision: template.sourceRevision,
+    sourceLicense: template.sourceLicense,
+    source: template.sourceId === null ? 'local' : 'imported',
+    structured: spec.success,
+    summary: effective?.summary ?? template.description,
+    capabilities: effective?.capabilities ?? [],
+    expertise: effective?.expertise ?? [],
+    recommendedSkills: effective?.recommendedSkills ?? [],
+    mappingQuality: spec.success ? (spec.data.source?.mappingQuality ?? null) : null,
+    overriddenFields: overrides.success ? overriddenFields(overrides.data) : [],
+    rawOverride: spec.success && template.profile !== null && goalSha256(template.profile) !== template.profileSha256,
+  }
+}
+
+function matches(row: WorkforceCatalogRow, filters: WorkforceCatalogFilters): boolean {
+  if (filters.source !== undefined && row.source !== filters.source) return false
+  if (filters.division !== undefined && (row.sourceDivision ?? row.role) !== filters.division) return false
+  if (filters.capability !== undefined && !row.capabilities.includes(filters.capability)) return false
+  if (filters.skill !== undefined && !row.recommendedSkills.includes(filters.skill)) return false
+  const q = (filters.q ?? '').trim().toLowerCase()
+  if (q === '') return true
+  const haystack = [row.name, row.summary, row.description, ...row.capabilities, ...row.expertise]
+    .join('\n')
+    .toLowerCase()
+  return haystack.includes(q)
+}
+
+/**
+ * The Workforce Catalog's read model (M46 R6).
+ *
+ * **Filtered in memory, deliberately.** The facets live inside a JSON column, and the catalog is
+ * hundreds of rows even after a full import -- a page's worth of memory. Postgres JSONB operators
+ * through `$queryRaw` would buy nothing here and would put the filter vocabulary in SQL, where
+ * M47's capability taxonomy cannot reuse it. If the catalog ever outgrows this, the join tables
+ * arrive with M47's taxonomy and not before.
+ *
+ * The FACETS are computed over every row, before filtering. A filter menu built from the filtered
+ * rows collapses to whatever was already chosen, which makes it impossible to change your mind.
+ *
+ * A DIVISION is a fact about a catalog, so the division menu is built from `sourceDivision` alone
+ * and a hand-made template contributes none: its `role` is a role somebody typed, and offering it
+ * as a division would put "backend" in a menu of directories that has no such directory. The
+ * MATCH still falls back to `role`, so a division filter that happens to name one finds it.
+ */
+export async function listWorkforceCatalog(filters: WorkforceCatalogFilters = {}): Promise<WorkforceCatalogPage> {
+  const [templates, catalogSlaveGroups] = await Promise.all([
+    prisma.slaveTemplate.findMany({ orderBy: { name: 'asc' } }),
+    prisma.companySlave.groupBy({ by: ['templateId'], _count: { _all: true } }),
+  ])
+  const countByTemplate = new Map(catalogSlaveGroups.map((group) => [group.templateId, group._count._all] as const))
+  const all = templates.map((template) => catalogRowOf(template, countByTemplate.get(template.id) ?? 0))
+
+  const divisions = new Set<string>()
+  const capabilities = new Set<string>()
+  const skills = new Set<string>()
+  for (const row of all) {
+    if (row.sourceDivision !== null) divisions.add(row.sourceDivision)
+    for (const capability of row.capabilities) capabilities.add(capability)
+    for (const skill of row.recommendedSkills) skills.add(skill)
+  }
+
+  return {
+    rows: all.filter((row) => matches(row, filters)),
+    facets: {
+      divisions: [...divisions].sort(),
+      capabilities: [...capabilities].sort(),
+      skills: [...skills].sort(),
+    },
+  }
+}
+
+/** One template's whole profile, both halves and the merge (M46 R6): what a drawer opens and what
+ *  `show-profile` prints. Kept out of {@link listWorkforceCatalog}'s rows on purpose -- see its
+ *  docblock. */
+export interface TemplateProfileView {
+  readonly templateId: string
+  readonly name: string
+  readonly upstream: ProfileSpec | null
+  readonly overrides: ProfileOverrides
+  readonly effective: ProfileSpec | null
+  /** `SlaveTemplate.profile` exactly as stored -- which is the render of `effective` unless a raw
+   *  Markdown override (R5) is in force, and that is what `rawOverride` says. */
+  readonly markdown: string | null
+  readonly rawOverride: boolean
+  readonly overridden: readonly ProfileOverridableField[]
+}
+
+export async function readTemplateProfile(templateId: string): Promise<Result<TemplateProfileView, ControlRefusal>> {
+  const row = await prisma.slaveTemplate.findUnique({ where: { id: templateId } })
+  if (row === null) return err({ kind: 'template_not_found', templateId })
+  const spec = profileSpecSchema.safeParse(row.profileSpec)
+  const stored = profileOverridesSchema.safeParse(row.profileOverrides ?? {})
+  const overrides = stored.success ? stored.data : {}
+  return ok({
+    templateId: row.id,
+    name: row.name,
+    upstream: spec.success ? spec.data : null,
+    overrides,
+    effective: spec.success ? effectiveProfileSpec(spec.data, overrides) : null,
+    markdown: row.profile,
+    rawOverride: spec.success && row.profile !== null && goalSha256(row.profile) !== row.profileSha256,
+    overridden: overriddenFields(overrides),
   })
 }

@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -167,5 +168,62 @@ describe('readCatalogDirectory', () => {
     const root = makeCatalog({ 'engineering/one.md': crlf })
 
     expect(readCatalogDirectory(root).entries[0]?.text).toBe(crlf)
+  })
+})
+
+describe('readCatalogDirectory and the source record (M46 R4)', () => {
+  /** A real one-commit work tree in a temp directory. `-c user.*` on the command rather than in a
+   *  config file: this repository's own identity must not decide whether the fixture commits. */
+  const commit = (dir: string): string => {
+    execFileSync('git', ['init', '-q', dir])
+    execFileSync('git', ['-C', dir, 'add', '-A'])
+    execFileSync('git', [
+      '-C', dir,
+      '-c', 'user.email=gate@example.invalid',
+      '-c', 'user.name=Gate',
+      // `--no-verify` and an empty hooks path: the operator's global hooks are not this fixture's
+      // business, and a `commit-msg` hook somewhere on the machine must not fail the test suite.
+      '-c', 'core.hooksPath=',
+      'commit', '-q', '--no-verify', '-m', 'fixture',
+    ])
+    return execFileSync('git', ['-C', dir, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
+  }
+
+  it('reads the checkout commit when the directory is inside a git work tree', () => {
+    const dir = makeCatalog({ 'engineering/one.md': '---\nname: One\n---\n\nbody\n' })
+    const head = commit(dir)
+
+    expect(readCatalogDirectory(dir).revision).toBe(head)
+  })
+
+  it('reads a licence from the first line of LICENSE, and turns "MIT License" into "MIT"', () => {
+    const dir = makeCatalog({
+      'engineering/one.md': '---\nname: One\n---\n\nbody\n',
+      LICENSE: 'MIT License\n\nCopyright (c) 2026 Somebody\n',
+    })
+
+    expect(readCatalogDirectory(dir).license).toBe('MIT')
+  })
+
+  it('reads LICENSE.md and LICENSE.txt too, and keeps a short line that is not "<name> License"', () => {
+    const md = makeCatalog({ 'engineering/one.md': '---\nname: One\n---\n\nbody\n', 'LICENSE.md': '\n\nApache Licence\n' })
+    expect(readCatalogDirectory(md).license).toBe('Apache')
+
+    const txt = makeCatalog({ 'engineering/one.md': '---\nname: One\n---\n\nbody\n', 'LICENSE.txt': 'CC0-1.0\n' })
+    expect(readCatalogDirectory(txt).license).toBe('CC0-1.0')
+  })
+
+  it('gives null for both when there is no work tree and no LICENSE', () => {
+    const dir = makeCatalog({ 'engineering/one.md': '---\nname: One\n---\n\nbody\n' })
+
+    const walk = readCatalogDirectory(dir)
+    expect(walk.revision).toBeNull()
+    expect(walk.license).toBeNull()
+  })
+
+  it('gives null for a licence line nobody can read as one', () => {
+    const dir = makeCatalog({ 'engineering/one.md': '---\nname: One\n---\n\nbody\n', LICENSE: `${'x'.repeat(200)}\n` })
+
+    expect(readCatalogDirectory(dir).license).toBeNull()
   })
 })

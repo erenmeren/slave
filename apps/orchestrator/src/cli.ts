@@ -42,6 +42,7 @@ import {
   moveCompanySlave,
   pauseSimulation,
   reassignQuestion,
+  readTemplateProfile,
   refusalText,
   rejectDecision,
   renameSlave,
@@ -239,6 +240,11 @@ const USAGE = `usage: orchestrator <command> [options]
                                        template's. First non-null wins at dispatch. Read from a
                                        file, not a flag -- it can be 16k characters. --by names
                                        the operator on the event.
+  show-profile --template <id> [--markdown]
+                                       the specialist profile this template carries: the upstream
+                                       structure an import mapped, the fields an operator has
+                                       customised and the merge of the two, as JSON. --markdown
+                                       prints the profile text a run is actually given instead.
   set-runtime-roles --slave <id> --roles a,b,c [--by <name>]
                                        replace the roles this slave may be DISPATCHED as -- the
                                        scheduler's match, reviewer/manager staffing, and message
@@ -682,7 +688,13 @@ function describeImport(report: ImportReport): string {
       `skipped ${String(report.skipped.length)}`,
   )
   for (const row of report.created) lines.push(`  created  ${row.name}  [${row.role}]  ${row.sourceId}`)
-  for (const row of report.updated) lines.push(`  updated  ${row.name}  [${row.role}]  ${row.sourceId}`)
+  for (const row of report.updated) {
+    // M46 D10: the count only when there IS one. An operator re-importing three hundred untouched
+    // rows does not need "overrides kept 0" three hundred times; the row that DID keep somebody's
+    // customisation through an upstream change is the one worth a word.
+    const kept = row.overridesKept !== undefined && row.overridesKept > 0 ? `  (overrides kept ${String(row.overridesKept)})` : ''
+    lines.push(`  updated  ${row.name}  [${row.role}]  ${row.sourceId}${kept}`)
+  }
   for (const row of report.skipped) lines.push(`  skipped  ${row.reason}  ${row.name ?? row.sourceId}: ${row.detail}`)
   for (const row of [...report.created, ...report.updated, ...report.unchanged]) {
     if (row.roleDrift === undefined) continue
@@ -1157,11 +1169,19 @@ export async function main(argv: readonly string[]): Promise<number> {
         )
       }
 
+      // R4: printed rather than silent -- "no revision" is a fact about the operator's directory
+      // (it is not a git checkout), and somebody reading a catalog page later will ask why.
+      process.stdout.write(
+        `catalog ${walk.catalog}: revision ${walk.revision ?? 'unknown (not a git work tree)'}, licence ${walk.license ?? 'unknown (no LICENSE at the root)'}\n`,
+      )
+
       const result = await importCatalog(
         {
           catalog: walk.catalog,
           directory: resolve(dir),
           entries: walk.entries,
+          revision: walk.revision,
+          license: walk.license,
           ...(Object.keys(roleMap).length > 0 ? { roleMap } : {}),
           ...(dryRun ? { dryRun: true } : {}),
         },
@@ -1383,6 +1403,36 @@ export async function main(argv: readonly string[]): Promise<number> {
       if (!result.ok) throw new Error(refusalText(result.error))
       const which = 'slaveId' in target ? target.slaveId : 'templateId' in target ? target.templateId : target.companySlaveId
       process.stdout.write(clear ? `profile cleared on ${which}\n` : `profile set on ${which}\n`)
+      return 0
+    }
+
+    case 'show-profile': {
+      const templateId = requireFlag(flags, 'template')
+      const result = await readTemplateProfile(templateId)
+      if (!result.ok) throw new Error(refusalText(result.error))
+      const view = result.value
+      if ('markdown' in flags) {
+        process.stdout.write(view.markdown === null ? 'this template has no profile\n' : `${view.markdown}\n`)
+        return 0
+      }
+      // JSON, not a rendered report: this verb exists so a person -- or a gate -- can read the
+      // structure back exactly as it is stored, and a prose summary of a fourteen-field object
+      // would be a second, drifting rendering of it.
+      process.stdout.write(
+        `${JSON.stringify(
+          {
+            templateId: view.templateId,
+            name: view.name,
+            rawOverride: view.rawOverride,
+            overridden: view.overridden,
+            effective: view.effective,
+            upstream: view.upstream,
+            overrides: view.overrides,
+          },
+          null,
+          2,
+        )}\n`,
+      )
       return 0
     }
 

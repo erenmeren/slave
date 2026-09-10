@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { basename, join, resolve } from 'node:path'
 import type { CatalogEntry } from '@slave-of-ai/control'
@@ -17,6 +18,14 @@ export interface CatalogWalk {
    *  itself declares. Non-empty only when `options.divisions` was not given (an explicit
    *  `--division` list is checked against disk directly and never consults the manifest). */
   readonly staleManifestDivisions: readonly string[]
+  /** M46 R4: the commit of the catalog checkout, or null when the directory is not inside a git
+   *  work tree -- which is the ordinary case for a directory copied off a share. Read ONCE per
+   *  walk: `sourceId` and `sourceSha256` identify a file and its bytes, and neither says which
+   *  version of the catalog those bytes came from. */
+  readonly revision: string | null
+  /** M46 R4/E15: the licence a LICENSE file at the catalog root names, `MIT License` -> `MIT`.
+   *  Attribution in metadata; no licence text is copied anywhere and nothing is vendored. */
+  readonly license: string | null
   readonly entries: readonly CatalogEntry[]
 }
 
@@ -77,6 +86,49 @@ function divisionsOf(dir: string): { readonly usable: readonly string[]; readonl
   } catch {
     return { usable: subdirectories, stale: [] }
   }
+}
+
+/**
+ * The commit the catalog is checked out at, when there is one.
+ *
+ * `git`, in a `try`, in the APPLICATION -- never in `packages/domain`, which imports no Node
+ * built-in at all because `apps/web`'s client bundle imports it. Three ordinary situations give
+ * null and none of them is an error: the directory is not a work tree, `git` is not installed,
+ * and a fresh repository has no commit for `rev-parse HEAD` to resolve.
+ */
+function revisionOf(root: string): string | null {
+  try {
+    const head = execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim()
+    return head === '' ? null : head
+  } catch {
+    return null
+  }
+}
+
+/** The catalog's licence, from the FIRST non-empty line of the first LICENSE file at its root.
+ *  `MIT License` -> `MIT`; anything else short enough to be a licence name is kept as written;
+ *  anything longer is null, because the first line of a licence TEXT is not a licence name. */
+function licenseOf(root: string): string | null {
+  for (const name of ['LICENSE', 'LICENSE.md', 'LICENSE.txt']) {
+    let text: string
+    try {
+      text = readFileSync(join(root, name), 'utf8')
+    } catch {
+      continue
+    }
+    const first = text
+      .split('\n')
+      .map((line) => line.trim())
+      .find((line) => line !== '')
+    if (first === undefined) return null
+    const named = /^(.{1,60}?)\s+Licen[cs]e$/i.exec(first)
+    if (named !== null) return named[1] as string
+    return first.length <= 60 ? first : null
+  }
+  return null
 }
 
 /** Every `.md` persona under one division, one level of subfolder included -- some catalogs group a
@@ -156,5 +208,13 @@ export function readCatalogDirectory(
       })
     }
   }
-  return { catalog, divisions, missingDivisions, staleManifestDivisions, entries }
+  return {
+    catalog,
+    divisions,
+    missingDivisions,
+    staleManifestDivisions,
+    revision: revisionOf(root),
+    license: licenseOf(root),
+    entries,
+  }
 }

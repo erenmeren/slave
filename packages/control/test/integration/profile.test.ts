@@ -1,8 +1,14 @@
 import { createHash } from 'node:crypto'
 import { prisma } from '@slave-of-ai/db/client'
-import { PROFILE_MAX_CHARS } from '@slave-of-ai/domain'
+import {
+  PROFILE_MAX_CHARS,
+  effectiveProfileSpec,
+  emptyProfileSpec,
+  goalSha256,
+  renderProfileSpec,
+} from '@slave-of-ai/domain'
 import { beforeEach, describe, expect, it } from 'vitest'
-import { setProfile, setRuntimeRoles } from '../../src/profile.js'
+import { clearProfileOverride, setProfile, setProfileOverrides, setRuntimeRoles } from '../../src/profile.js'
 import { refusalText } from '../../src/refusal.js'
 
 interface Fixture {
@@ -199,5 +205,144 @@ describe('setRuntimeRoles', () => {
     expect(await setRuntimeRoles('nope', ['backend'], 'operator')).toEqual({
       ok: false, error: { kind: 'slave_not_found', slaveId: 'nope' },
     })
+  })
+})
+
+describe('setProfileOverrides and clearProfileOverride', () => {
+  beforeEach(async (): Promise<void> => {
+    await reset()
+  })
+
+  const spec = () => ({
+    ...emptyProfileSpec(),
+    identity: 'The slave that lays the load-bearing parts first.',
+    summary: 'Builds the core module.',
+    capabilities: ['Design the module boundary'],
+    constraints: ['You MUST never leave a red test behind'],
+    body: 'You write the module everything else stands on.',
+    source: {
+      repository: 'catalog-m46',
+      path: 'engineering/gate-canonical.md',
+      revision: null,
+      license: 'MIT',
+      importedAt: '2026-09-11T09:00:00.000Z',
+      mappingQuality: 'full' as const,
+    },
+  })
+
+  const structuredTemplate = async () => {
+    const rendered = renderProfileSpec(spec())
+    return prisma.slaveTemplate.create({
+      data: {
+        name: 'Gate Core Builder',
+        role: 'engineering',
+        profile: rendered,
+        profileSha256: goalSha256(rendered),
+        profileSpec: spec() as unknown as object,
+        sourceId: 'catalog-m46/engineering/gate-canonical',
+        sourceSha256: 'file-sha',
+        sourceDivision: 'engineering',
+        importedAt: new Date('2026-09-11T09:00:00.000Z'),
+      },
+    })
+  }
+
+  it('stores the patch, re-renders the Markdown and re-stamps its hash', async (): Promise<void> => {
+    const template = await structuredTemplate()
+
+    const result = await setProfileOverrides(template.id, { constraints: ['You MUST ship behind a flag'] }, 'operator')
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.overridden).toEqual(['constraints'])
+    const row = await prisma.slaveTemplate.findUniqueOrThrow({ where: { id: template.id } })
+    expect(row.profileOverrides).toEqual({ constraints: ['You MUST ship behind a flag'] })
+    expect(row.profile).toContain('- You MUST ship behind a flag')
+    expect(row.profile).not.toContain('never leave a red test behind')
+    // The upstream half is untouched -- that is what makes the next import able to move it.
+    expect((row.profileSpec as { constraints: string[] }).constraints).toEqual([
+      'You MUST never leave a red test behind',
+    ])
+    // The re-stamped hash is what keeps this row OUT of `locally_edited` (plan erratum E4).
+    expect(row.profileSha256).toBe(goalSha256(row.profile as string))
+    expect(row.profile).toBe(renderProfileSpec(effectiveProfileSpec(spec(), { constraints: ['You MUST ship behind a flag'] })))
+  })
+
+  it('merges a second patch into the first rather than replacing the whole object', async (): Promise<void> => {
+    const template = await structuredTemplate()
+    await setProfileOverrides(template.id, { constraints: ['One'] }, 'operator')
+
+    await setProfileOverrides(template.id, { summary: 'Mine.' }, 'operator')
+
+    const row = await prisma.slaveTemplate.findUniqueOrThrow({ where: { id: template.id } })
+    expect(row.profileOverrides).toEqual({ constraints: ['One'], summary: 'Mine.' })
+  })
+
+  it('clears one field and leaves the others overridden', async (): Promise<void> => {
+    const template = await structuredTemplate()
+    await setProfileOverrides(template.id, { constraints: ['One'], summary: 'Mine.' }, 'operator')
+
+    const result = await clearProfileOverride(template.id, 'constraints', 'operator')
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.overridden).toEqual(['summary'])
+    const row = await prisma.slaveTemplate.findUniqueOrThrow({ where: { id: template.id } })
+    expect(row.profileOverrides).toEqual({ summary: 'Mine.' })
+    // The upstream constraint is back in the Markdown, which is what "Reset" means.
+    expect(row.profile).toContain('never leave a red test behind')
+  })
+
+  it('writes null, not an empty object, when the last override is cleared', async (): Promise<void> => {
+    const template = await structuredTemplate()
+    await setProfileOverrides(template.id, { summary: 'Mine.' }, 'operator')
+
+    await clearProfileOverride(template.id, 'summary', 'operator')
+
+    const row = await prisma.slaveTemplate.findUniqueOrThrow({ where: { id: template.id } })
+    expect(row.profileOverrides).toBeNull()
+    expect(row.profile).toBe(renderProfileSpec(spec()))
+  })
+
+  it('refuses a template that has no structured profile at all', async (): Promise<void> => {
+    const handMade = await prisma.slaveTemplate.create({ data: { name: 'Hand Made', role: 'backend', profile: 'mine' } })
+
+    const result = await setProfileOverrides(handMade.id, { summary: 'x' }, 'operator')
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.error).toEqual({ kind: 'profile_not_structured', templateId: handMade.id })
+    // Nothing was written: a hand-written profile is not something this verb may re-render.
+    expect((await prisma.slaveTemplate.findUniqueOrThrow({ where: { id: handMade.id } })).profile).toBe('mine')
+  })
+
+  it('refuses a patch that is not the shape, and an unknown field on clear', async (): Promise<void> => {
+    const template = await structuredTemplate()
+
+    const bad = await setProfileOverrides(template.id, { capabilities: 'not a list' }, 'operator')
+    expect(bad.ok).toBe(false)
+    if (!bad.ok) expect(bad.error.kind).toBe('invalid_profile_overrides')
+
+    const unknown = await clearProfileOverride(template.id, 'nonsense', 'operator')
+    expect(unknown.ok).toBe(false)
+    if (!unknown.ok) expect(unknown.error).toEqual({ kind: 'unknown_profile_field', field: 'nonsense' })
+  })
+
+  it('refuses runtimeRole on both verbs: the catalog suggests a role, an operator does not override one (E21)', async (): Promise<void> => {
+    const template = await structuredTemplate()
+
+    const set = await setProfileOverrides(template.id, { runtimeRole: 'frontend' }, 'operator')
+    expect(set.ok).toBe(false)
+    if (!set.ok) expect(set.error.kind).toBe('invalid_profile_overrides')
+
+    const cleared = await clearProfileOverride(template.id, 'runtimeRole', 'operator')
+    expect(cleared.ok).toBe(false)
+    if (!cleared.ok) expect(cleared.error).toEqual({ kind: 'unknown_profile_field', field: 'runtimeRole' })
+  })
+
+  it('refuses a template id nobody has', async (): Promise<void> => {
+    const result = await setProfileOverrides('11111111-1111-1111-1111-111111111111', { summary: 'x' }, 'operator')
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error.kind).toBe('template_not_found')
   })
 })

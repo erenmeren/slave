@@ -1,8 +1,14 @@
 import { prisma } from '@slave-of-ai/db/client'
-import { goalSha256, importedProfilePrefix } from '@slave-of-ai/domain'
+import {
+  effectiveProfileSpec,
+  goalSha256,
+  importedProfilePrefix,
+  profileSpecSchema,
+  renderProfileSpec,
+} from '@slave-of-ai/domain'
 import { beforeEach, describe, expect, it } from 'vitest'
-import { importCatalog, listCatalogImports } from '../../src/catalog.js'
-import { setProfile } from '../../src/profile.js'
+import { importCatalog, listCatalogImports, listWorkforceCatalog, readTemplateProfile } from '../../src/catalog.js'
+import { setProfile, setProfileOverrides } from '../../src/profile.js'
 
 const CATALOG = 'catalog-m42'
 const DIRECTORY = '/tmp/catalog-m42'
@@ -417,5 +423,255 @@ describe('listCatalogImports', () => {
     const rows = await listCatalogImports(2)
 
     expect(rows.map((row) => row.created)).toEqual([2, 1])
+  })
+})
+
+describe('importCatalog and the structured profile (M46)', () => {
+  beforeEach(async (): Promise<void> => {
+    await prisma.$executeRawUnsafe(
+      'TRUNCATE TABLE "CatalogImport", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
+    )
+  })
+
+  const structured = (slug: string, name: string, body?: string) => entry(slug, name, body)
+
+  it('writes the mapped spec, the source columns and a profile rendered from them', async (): Promise<void> => {
+    const result = await importCatalog(
+      {
+        catalog: CATALOG,
+        directory: DIRECTORY,
+        entries: [structured('core-builder', 'Core Builder')],
+        revision: '0f1e2d3c4b5a69788796a5b4c3d2e1f0deadbeef',
+        license: 'MIT',
+      },
+      'operator',
+    )
+
+    expect(result.ok).toBe(true)
+    const row = await prisma.slaveTemplate.findUniqueOrThrow({
+      where: { sourceId: `${CATALOG}/engineering/core-builder` },
+    })
+    expect(row.sourceRevision).toBe('0f1e2d3c4b5a69788796a5b4c3d2e1f0deadbeef')
+    expect(row.sourceLicense).toBe('MIT')
+    const spec = profileSpecSchema.safeParse(row.profileSpec)
+    expect(spec.success).toBe(true)
+    if (!spec.success) return
+    expect(spec.data.source).toEqual({
+      repository: CATALOG,
+      path: 'engineering/core-builder.md',
+      revision: '0f1e2d3c4b5a69788796a5b4c3d2e1f0deadbeef',
+      license: 'MIT',
+      importedAt: (row.importedAt as Date).toISOString(),
+      mappingQuality: 'none',
+    })
+    expect(spec.data.runtimeRole).toBe('engineering')
+    // The stored Markdown is the render of the effective spec, byte for byte.
+    expect(row.profile).toBe(renderProfileSpec(spec.data))
+    expect(row.profileSha256).toBe(goalSha256(row.profile as string))
+    expect(row.profileOverrides).toBeNull()
+  })
+
+  it('re-renders an updated row from the NEW upstream and the operator\u2019s untouched overrides, and counts them', async (): Promise<void> => {
+    await importCatalog({ catalog: CATALOG, directory: DIRECTORY, entries: [structured('core-builder', 'Core Builder')] }, 'operator')
+    const template = await prisma.slaveTemplate.findFirstOrThrow()
+    await setProfileOverrides(template.id, { summary: 'Mine, and it stays mine.' }, 'operator')
+
+    const result = await importCatalog(
+      {
+        catalog: CATALOG,
+        directory: DIRECTORY,
+        entries: [structured('core-builder', 'Core Builder', 'You build the core module AND its documentation.')],
+      },
+      'operator',
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.updated).toHaveLength(1)
+    expect(result.value.updated[0]?.overridesKept).toBe(1)
+    const row = await prisma.slaveTemplate.findUniqueOrThrow({ where: { id: template.id } })
+    // The override survived...
+    expect(row.profileOverrides).toEqual({ summary: 'Mine, and it stays mine.' })
+    expect(row.profile).toContain('Mine, and it stays mine.')
+    // ...and the upstream half moved with the file.
+    expect(row.profile).toContain('AND its documentation')
+    expect(row.profileSha256).toBe(goalSha256(row.profile as string))
+  })
+
+  it('skips locally_edited for a RAW Markdown override and leaves the operator\u2019s words alone (R5)', async (): Promise<void> => {
+    await importCatalog({ catalog: CATALOG, directory: DIRECTORY, entries: [structured('core-builder', 'Core Builder')] }, 'operator')
+    const template = await prisma.slaveTemplate.findFirstOrThrow()
+    await setProfile({ templateId: template.id }, 'This is what I want this worker to be, in my own words.', 'operator')
+
+    const result = await importCatalog(
+      {
+        catalog: CATALOG,
+        directory: DIRECTORY,
+        entries: [structured('core-builder', 'Core Builder', 'A rewritten body for the same file.')],
+      },
+      'operator',
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.skipped[0]?.reason).toBe('locally_edited')
+    const row = await prisma.slaveTemplate.findUniqueOrThrow({ where: { id: template.id } })
+    expect(row.profile).toBe('This is what I want this worker to be, in my own words.')
+    // The spec is NOT advanced either: the row is frozen until the operator resolves the
+    // disagreement, exactly as M42 defined it.
+    expect((row.profileSpec as { body: string }).body).not.toContain('A rewritten body')
+  })
+
+  it('a structured customisation is NOT locally_edited -- that is what re-stamping the hash buys', async (): Promise<void> => {
+    await importCatalog({ catalog: CATALOG, directory: DIRECTORY, entries: [structured('core-builder', 'Core Builder')] }, 'operator')
+    const template = await prisma.slaveTemplate.findFirstOrThrow()
+    await setProfileOverrides(template.id, { constraints: ['Mine'] }, 'operator')
+
+    const result = await importCatalog(
+      {
+        catalog: CATALOG,
+        directory: DIRECTORY,
+        entries: [structured('core-builder', 'Core Builder', 'A rewritten body for the same file.')],
+      },
+      'operator',
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.skipped).toEqual([])
+    expect(result.value.updated[0]?.overridesKept).toBe(1)
+  })
+
+  it('reports overridesKept 0 on a row nobody has customised', async (): Promise<void> => {
+    await importCatalog({ catalog: CATALOG, directory: DIRECTORY, entries: [structured('core-builder', 'Core Builder')] }, 'operator')
+
+    const result = await importCatalog(
+      { catalog: CATALOG, directory: DIRECTORY, entries: [structured('core-builder', 'Core Builder', 'Changed.')] },
+      'operator',
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.updated[0]?.overridesKept).toBe(0)
+  })
+})
+
+describe('listWorkforceCatalog', () => {
+  beforeEach(async (): Promise<void> => {
+    await prisma.$executeRawUnsafe(
+      'TRUNCATE TABLE "CatalogImport", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
+    )
+  })
+
+  const importTwo = async () =>
+    importCatalog(
+      {
+        catalog: CATALOG,
+        directory: DIRECTORY,
+        entries: [
+          entry('core-builder', 'Core Builder', '## Core Capabilities\n- Design the module boundary\n\n## Domain Expertise\n- Load-bearing code'),
+          entry('verifier', 'Verifier', '## Core Capabilities\n- Run the work back\n'),
+        ],
+        revision: 'rev1',
+        license: 'MIT',
+      },
+      'operator',
+    )
+
+  it('returns one row per template with its summary, capabilities and source, plus the facets', async (): Promise<void> => {
+    await prisma.slaveTemplate.create({ data: { name: 'Hand Made', role: 'backend' } })
+    await importTwo()
+
+    const page = await listWorkforceCatalog()
+
+    expect(page.rows.map((row) => row.name)).toEqual(['Core Builder', 'Hand Made', 'Verifier'])
+    const core = page.rows.find((row) => row.name === 'Core Builder')
+    expect(core?.source).toBe('imported')
+    expect(core?.sourceRepository).toBe(CATALOG)
+    expect(core?.capabilities).toContain('Design the module boundary')
+    expect(core?.structured).toBe(true)
+    expect(core?.rawOverride).toBe(false)
+    expect(core?.overriddenFields).toEqual([])
+    expect(page.rows.find((row) => row.name === 'Hand Made')?.source).toBe('local')
+    expect(page.rows.find((row) => row.name === 'Hand Made')?.structured).toBe(false)
+    expect(page.facets.divisions).toEqual(['engineering'])
+    expect(page.facets.capabilities).toContain('Run the work back')
+  })
+
+  it('narrows by search text over name, summary, capabilities and expertise', async (): Promise<void> => {
+    await importTwo()
+
+    expect((await listWorkforceCatalog({ q: 'module boundary' })).rows.map((row) => row.name)).toEqual(['Core Builder'])
+    expect((await listWorkforceCatalog({ q: 'load-bearing' })).rows.map((row) => row.name)).toEqual(['Core Builder'])
+    expect((await listWorkforceCatalog({ q: 'verif' })).rows.map((row) => row.name)).toEqual(['Verifier'])
+    expect((await listWorkforceCatalog({ q: 'nothing at all' })).rows).toEqual([])
+  })
+
+  it('narrows by capability, by division and by source, and keeps the facets whole', async (): Promise<void> => {
+    await prisma.slaveTemplate.create({ data: { name: 'Hand Made', role: 'backend' } })
+    await importTwo()
+
+    expect((await listWorkforceCatalog({ capability: 'Run the work back' })).rows.map((row) => row.name)).toEqual(['Verifier'])
+    expect((await listWorkforceCatalog({ division: 'engineering' })).rows).toHaveLength(2)
+    expect((await listWorkforceCatalog({ source: 'local' })).rows.map((row) => row.name)).toEqual(['Hand Made'])
+    // Filtered rows, UNfiltered facets: a menu that collapsed to the one value already chosen
+    // would be a menu you cannot change your mind in.
+    expect((await listWorkforceCatalog({ source: 'local' })).facets.capabilities).toContain('Design the module boundary')
+  })
+
+  it('marks a raw Markdown override, and does not mark a hand-made template as one', async (): Promise<void> => {
+    await prisma.slaveTemplate.create({ data: { name: 'Hand Made', role: 'backend', profile: 'my own words' } })
+    await importTwo()
+    const core = await prisma.slaveTemplate.findFirstOrThrow({ where: { name: 'Core Builder' } })
+    await setProfile({ templateId: core.id }, 'my own words', 'operator')
+
+    const page = await listWorkforceCatalog()
+
+    expect(page.rows.find((row) => row.name === 'Core Builder')?.rawOverride).toBe(true)
+    // No spec, no upstream, nothing to override (plan erratum E5).
+    expect(page.rows.find((row) => row.name === 'Hand Made')?.rawOverride).toBe(false)
+  })
+})
+
+describe('readTemplateProfile', () => {
+  beforeEach(async (): Promise<void> => {
+    await prisma.$executeRawUnsafe(
+      'TRUNCATE TABLE "CatalogImport", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
+    )
+  })
+
+  it('hands back both halves, the merge and the stored Markdown', async (): Promise<void> => {
+    await importCatalog({ catalog: CATALOG, directory: DIRECTORY, entries: [entry('core-builder', 'Core Builder')] }, 'operator')
+    const template = await prisma.slaveTemplate.findFirstOrThrow()
+    await setProfileOverrides(template.id, { summary: 'Mine.' }, 'operator')
+
+    const result = await readTemplateProfile(template.id)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.overrides).toEqual({ summary: 'Mine.' })
+    expect(result.value.effective?.summary).toBe('Mine.')
+    expect(result.value.upstream?.summary).not.toBe('Mine.')
+    expect(result.value.markdown).toBe(renderProfileSpec(effectiveProfileSpec(result.value.upstream, result.value.overrides)))
+    expect(result.value.overridden).toEqual(['summary'])
+    expect(result.value.rawOverride).toBe(false)
+  })
+
+  it('answers for a hand-made template with a null spec rather than refusing', async (): Promise<void> => {
+    const handMade = await prisma.slaveTemplate.create({ data: { name: 'Hand Made', role: 'backend', profile: 'mine' } })
+
+    const result = await readTemplateProfile(handMade.id)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.upstream).toBeNull()
+    expect(result.value.effective).toBeNull()
+    expect(result.value.markdown).toBe('mine')
+  })
+
+  it('refuses an id nobody has', async (): Promise<void> => {
+    const result = await readTemplateProfile('11111111-1111-1111-1111-111111111111')
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error.kind).toBe('template_not_found')
   })
 })

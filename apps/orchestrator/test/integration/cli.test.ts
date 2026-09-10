@@ -2867,4 +2867,57 @@ describe('the orchestrator CLI', () => {
       expect(text).toContain('a WARNING on stderr')
     })
   })
+
+  describe('show-profile', () => {
+    it('prints the upstream spec, the overrides and the merge as JSON', async (): Promise<void> => {
+      const spec = {
+        identity: 'The slave that lays the load-bearing parts first.',
+        summary: 'Builds the core module.',
+        mission: '',
+        runtimeRole: 'engineering',
+        capabilities: ['Design the module boundary'],
+        expertise: [],
+        operatingPrinciples: [],
+        constraints: [],
+        workflow: [],
+        deliverables: [],
+        successCriteria: [],
+        collaborationHints: [],
+        recommendedSkills: [],
+        body: 'You write the module everything else stands on.',
+        source: {
+          repository: 'catalog-m46',
+          path: 'engineering/gate-canonical.md',
+          revision: null,
+          license: 'MIT',
+          importedAt: '2026-09-11T09:00:00.000Z',
+          mappingQuality: 'partial',
+        },
+      }
+      const template = await prisma.slaveTemplate.create({
+        data: { name: 'CLI Core Builder', role: 'engineering', profileSpec: spec, profileOverrides: { summary: 'Mine.' } },
+      })
+
+      const result = await runCli(['show-profile', '--template', template.id])
+
+      expect(result.code).toBe(0)
+      const printed = JSON.parse(result.stdout) as { effective: { summary: string }; overridden: string[] }
+      expect(printed.effective.summary).toBe('Mine.')
+      expect(printed.overridden).toEqual(['summary'])
+    })
+
+    it('prints the stored Markdown with --markdown, and refuses an id nobody has', async (): Promise<void> => {
+      const template = await prisma.slaveTemplate.create({
+        data: { name: 'CLI Plain', role: 'engineering', profile: 'the words a run is given' },
+      })
+
+      const shown = await runCli(['show-profile', '--template', template.id, '--markdown'])
+      expect(shown.code).toBe(0)
+      expect(shown.stdout.trim()).toBe('the words a run is given')
+
+      const missing = await runCli(['show-profile', '--template', '11111111-1111-1111-1111-111111111111'])
+      expect(missing.code).not.toBe(0)
+      expect(missing.stderr).toContain('11111111-1111-1111-1111-111111111111')
+    })
+  })
 })

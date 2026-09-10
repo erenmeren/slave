@@ -1,6 +1,20 @@
 import { createHash } from 'node:crypto'
-import { prisma } from '@slave-of-ai/db/client'
-import { PROFILE_MAX_CHARS, err, ok, type Result } from '@slave-of-ai/domain'
+import { Prisma, prisma } from '@slave-of-ai/db/client'
+import {
+  PROFILE_MAX_CHARS,
+  PROFILE_OVERRIDABLE_FIELDS,
+  effectiveProfileSpec,
+  err,
+  goalSha256,
+  ok,
+  overriddenFields,
+  profileOverridesSchema,
+  profileSpecSchema,
+  renderProfileSpec,
+  type ProfileOverridableField,
+  type ProfileOverrides,
+  type Result,
+} from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { lockSlave } from './org.js'
 import type { ControlRefusal } from './refusal.js'
@@ -209,4 +223,113 @@ export async function setRuntimeRoles(
     payload: { slaveId, roles: normalised.value, actor },
   })
   return ok(undefined)
+}
+
+/**
+ * The LOCAL half of a specialist profile (M46 R2).
+ *
+ * **Why this writes three columns and not one.** `profileOverrides` is what the operator said;
+ * `profile` is the Markdown a run is actually given, and it is DERIVED, so it is re-rendered here
+ * or it is stale; and `profileSha256` is the import's own record of what it wrote, which this verb
+ * re-stamps deliberately. That last write is the entire mechanism by which an override survives an
+ * upstream update: `importCatalog` skips a row as `locally_edited` when the stored profile's hash
+ * disagrees with `profileSha256`, so a structured customisation that did NOT re-stamp would look
+ * exactly like a hand-written profile and would freeze the row forever. A RAW Markdown override
+ * (`setProfile({ templateId })`, R5) still does not re-stamp -- and that is now the only thing
+ * `locally_edited` means.
+ *
+ * Refused on a template with no `profileSpec`: there is nothing to be a partial OF, and rendering
+ * an empty spec over a hand-written profile would delete somebody's words.
+ *
+ * No event, for the reason {@link setProfile}'s docblock already gives: `ExecutionEvent.workspaceId`
+ * is NOT NULL and a template belongs to no project (M42 R5/E3).
+ */
+export async function setProfileOverrides(
+  templateId: string,
+  patch: unknown,
+  actor: string,
+): Promise<Result<{ readonly overridden: readonly ProfileOverridableField[] }, ControlRefusal>> {
+  const parsed = profileOverridesSchema.safeParse(patch)
+  if (!parsed.success) {
+    return err({
+      kind: 'invalid_profile_overrides',
+      detail: parsed.error.issues.map((issue) => `${issue.path.join('.')} ${issue.message}`.trim()).join('; '),
+    })
+  }
+  return writeOverrides(templateId, actor, (current) => ({ ...current, ...parsed.data }))
+}
+
+/** Takes one field back to what the catalog says (R2). The whole column is written as NULL once
+ *  the last override goes, so "nothing is customised" is one value rather than two.
+ *
+ *  The field is checked against `PROFILE_OVERRIDABLE_FIELDS`, the thirteen -- not the fourteen of
+ *  `PROFILE_SPEC_FIELDS`: `runtimeRole` cannot be SET (plan erratum E21, `profileOverridesSchema`
+ *  refuses it), so accepting a request to clear it would answer `ok` for a thing that was never
+ *  there. */
+export async function clearProfileOverride(
+  templateId: string,
+  field: string,
+  actor: string,
+): Promise<Result<{ readonly overridden: readonly ProfileOverridableField[] }, ControlRefusal>> {
+  if (!(PROFILE_OVERRIDABLE_FIELDS as readonly string[]).includes(field)) {
+    return err({ kind: 'unknown_profile_field', field })
+  }
+  return writeOverrides(templateId, actor, (current) => {
+    const next: Record<string, unknown> = { ...current }
+    delete next[field]
+    return next as ProfileOverrides
+  })
+}
+
+/**
+ * The one writer both verbs share: lock the row, read both halves, apply the change, re-render.
+ *
+ * `SELECT ... FOR UPDATE` through the raw query the catalog's own verbs use, because two operators
+ * customising two different fields of the same template in the same second must not lose one of
+ * the two patches -- read-modify-write on a JSON column has no other protection.
+ *
+ * Every refusal here is reached BEFORE anything is written, so each is returned rather than
+ * thrown; a refusal after the `update` below would have to throw, or Prisma commits the write
+ * (ADR 0003).
+ */
+async function writeOverrides(
+  templateId: string,
+  actor: string,
+  change: (current: ProfileOverrides) => ProfileOverrides,
+): Promise<Result<{ readonly overridden: readonly ProfileOverridableField[] }, ControlRefusal>> {
+  // Named on the signature and unused on purpose: these two verbs write no event and record no
+  // author, for `setProfile`'s reason above, and dropping the parameter would make the web and CLI
+  // call sites the odd ones out among the profile verbs.
+  void actor
+  return prisma.$transaction(
+    async (tx): Promise<Result<{ readonly overridden: readonly ProfileOverridableField[] }, ControlRefusal>> => {
+      const locked = await tx.$queryRaw<{ id: string }[]>`
+        SELECT id FROM "SlaveTemplate" WHERE id = ${templateId} FOR UPDATE
+      `
+      if (locked[0] === undefined) return err({ kind: 'template_not_found', templateId })
+      const row = await tx.slaveTemplate.findUniqueOrThrow({ where: { id: templateId } })
+
+      const spec = profileSpecSchema.safeParse(row.profileSpec)
+      if (!spec.success) return err({ kind: 'profile_not_structured', templateId })
+
+      const stored = profileOverridesSchema.safeParse(row.profileOverrides ?? {})
+      // A stored patch this repository can no longer parse is not a reason to refuse the operator's
+      // NEW change: it is dropped, and the change is applied to an empty patch. Nothing is lost that
+      // the effective profile still had -- an unparseable override was already being ignored by
+      // every reader.
+      const next = change(stored.success ? stored.data : {})
+      const overridden = overriddenFields(next)
+      const profile = renderProfileSpec(effectiveProfileSpec(spec.data, next))
+
+      await tx.slaveTemplate.update({
+        where: { id: templateId },
+        data: {
+          profileOverrides: overridden.length === 0 ? Prisma.DbNull : (next as unknown as Prisma.InputJsonValue),
+          profile,
+          profileSha256: goalSha256(profile),
+        },
+      })
+      return ok({ overridden })
+    },
+  )
 }

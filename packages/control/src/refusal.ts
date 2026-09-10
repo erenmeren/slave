@@ -110,6 +110,17 @@ export type ControlRefusal =
   | { readonly kind: 'goal_unchanged'; readonly workspaceId: string; readonly version: number }
   | { readonly kind: 'duplicate_name'; readonly name: string }
   | { readonly kind: 'template_not_found'; readonly templateId: string }
+  /** M46 R2: `profileOverrides` are a partial of `profileSpec`, and there is no spec on this row to
+   *  be partial OF -- a hand-made template, or one whose catalog has not been imported since M46.
+   *  Refused rather than invented: writing overrides against an empty spec would re-render the
+   *  Markdown of a template whose profile a person wrote by hand. */
+  | { readonly kind: 'profile_not_structured'; readonly templateId: string }
+  /** M46 R2: the patch does not match `profileOverridesSchema`. */
+  | { readonly kind: 'invalid_profile_overrides'; readonly detail: string }
+  /** M46 R2: `clearProfileOverride` was asked for a field that is not one an operator may take
+   *  over -- `PROFILE_OVERRIDABLE_FIELDS`, the thirteen (plan erratum E21 keeps `runtimeRole` out
+   *  of them, so clearing it is as meaningless as setting it). */
+  | { readonly kind: 'unknown_profile_field'; readonly field: string }
   | { readonly kind: 'company_not_found'; readonly companyId: string }
   | { readonly kind: 'company_team_not_found'; readonly companyTeamId: string }
   /** `deleteCompanySlave` on a `companySlaveId` no `CompanySlave` row carries (M27 §5). */
@@ -502,6 +513,12 @@ export function refusalText(refusal: ControlRefusal): string {
       return `task ${refusal.taskId} is ${refusal.status}: only a task in backlog, ready or blocked can be cancelled`
     case 'catalog_empty':
       return `no persona was found under ${refusal.directory}: nothing was imported`
+    case 'profile_not_structured':
+      return `template ${refusal.templateId} has no structured profile to customise: import its catalog first, or edit its profile as Markdown`
+    case 'invalid_profile_overrides':
+      return `these profile changes cannot be stored: ${refusal.detail}`
+    case 'unknown_profile_field':
+      return `"${refusal.field}" is not a profile field`
     case 'invalid_role_map':
       return `--role-map is unusable: ${refusal.detail}`
   }
