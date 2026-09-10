@@ -2,10 +2,12 @@
 // steered entirely from the browser". `gate-m10-org.mjs` proves the org model's verbs the way an
 // operator running the CLI would; this script proves the SAME materialization/model-resolution
 // machinery the way an operator using the web shell actually would -- a real Chromium
-// (`playwright-core`, no test runner) driving a real `next dev` server through `/` (the team
-// catalog and the project cards; M24 Task 6 moved the catalog off `/settings` here) and
-// `/slaves`, with every assertion a direct `prisma` read, never anything the browser merely
-// claims.
+// (`playwright-core`, no test runner) driving a real `next dev` server through `/` (the project
+// cards) and `/workforce` (the team catalog on its Catalog tab, the one Slaves table on its
+// Slaves tab, the departments on its Departments tab), with every assertion a direct `prisma`
+// read, never anything the browser merely claims. Those surfaces have moved twice under this gate
+// -- off `/settings` onto `/` (M24 Task 6), then off `/` and `/slaves` onto `/workforce`
+// (M44 R1) -- and each time only the route moved: every claim below is the one Task 13 wrote.
 //
 // Shape borrowed verbatim from `gate-m10-org.mjs`: dist imports, everything created inside `try`,
 // `finally` kills every process this script spawned and cleans up in FK order, `exitCode` starts
@@ -327,11 +329,14 @@ try {
   page.setDefaultTimeout(ACTION_TIMEOUT_MS)
   page.on('pageerror', (error) => console.error(`[browser:pageerror] ${error}`))
 
-  // ---- Scenario stage 1: / -- template, company, team, member, all through the team-catalog
-  // forms (M24 Task 6 moved the template catalog and company manager off Settings onto the
-  // Projects page, below the project cards -- same testids, new page).
-  await page.goto(`${baseUrl}/`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
-  await waitVisible(page.getByTestId('team-catalog'), 'the Projects page team catalog')
+  // ---- Scenario stage 1: /workforce?tab=catalog -- template, company, team, member, all through
+  // the team-catalog forms. M24 Task 6 moved the template catalog and company manager off Settings
+  // onto the Projects page; M44 R1 moved them again, off the Projects page onto the Workforce
+  // page's Catalog tab (`docs/ia.md` records both hops). Same testids, third page: the CLAIMS this
+  // stage makes are untouched, only the selector that gets it there.
+  await page.goto(`${baseUrl}/workforce?tab=catalog`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
+  await waitVisible(page.getByTestId('template-form'), "the Workforce Catalog tab's template form")
+  await waitVisible(page.getByTestId('company-form'), "the Workforce Catalog tab's company form")
 
   await fillReliably(page.getByLabel('template name'), TEMPLATE_NAME, 'the template name field')
   await fillReliably(page.getByLabel('template role'), 'backend', 'the template role field')
@@ -374,11 +379,12 @@ try {
   if (companySlave === null) await fail(`the "${MEMBER_NAME}" row appeared in the browser but is missing from the DB`)
   const companySlaveId = companySlave.id
   console.log(`member created and asserted: ${companySlaveId}`)
-  console.log('stage 1 (/) complete: template, company, team and member all created and asserted through the browser')
+  console.log('stage 1 (/workforce?tab=catalog) complete: template, company, team and member all created and asserted through the browser')
 
-  // The member is not yet materialized into any project -- the Slaves page's one table (M24
-  // §5.3) shows exactly one catalog-only row for it, `slave-project` reading "—".
-  await page.goto(`${baseUrl}/slaves`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
+  // The member is not yet materialized into any project -- the Slaves table (M24 §5.3, the
+  // Workforce page's Slaves tab since M44 R1) shows exactly one catalog-only row for it,
+  // `slave-project` reading "—".
+  await page.goto(`${baseUrl}/workforce`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
   const catalogRow = page.getByTestId('data-table-row').filter({ hasText: MEMBER_NAME })
   await waitVisible(catalogRow, `a catalog-only "${MEMBER_NAME}" row before any project is assigned`)
   const catalogRowCount = await catalogRow.count()
@@ -440,13 +446,14 @@ try {
   await waitVisible(page.getByTestId('budget'), "the header's budget figure")
   console.log(`the "${workspaceNameA}" project header shows a budget figure`)
 
-  // ---- Scenario stage 3: /slaves -- the one table lists Gate Worker materialized in both projects.
-  await page.goto(`${baseUrl}/slaves`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
+  // ---- Scenario stage 3: /workforce -- the one table lists Gate Worker materialized in both
+  // projects. (`/slaves` still answers: M44 R1 made it a 307 into this page.)
+  await page.goto(`${baseUrl}/workforce`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
 
-  // `slaves-tab-slaves` is the default tab, but the click below is kept anyway (idempotent on an
-  // already-selected tab) -- requiring its own `aria-selected="true"` is what makes this stage
+  // `workforce-tab-slaves` is the default tab, but the click below is kept anyway (idempotent on
+  // an already-selected tab) -- requiring its own `aria-selected="true"` is what makes this stage
   // assert the tab rather than assume which one happened to already be selected.
-  const slavesTab = page.getByTestId('slaves-tab-slaves')
+  const slavesTab = page.getByTestId('workforce-tab-slaves')
   const memberRows = page.getByTestId('data-table-row').filter({ hasText: MEMBER_NAME })
   await clickUntil(
     slavesTab,
@@ -490,7 +497,7 @@ try {
     await fail(`"${MEMBER_NAME}"'s model select reads ${JSON.stringify(modelSelectValueBeforeProvider)}, expected "" (no override set yet)`)
   }
   console.log(`"${MEMBER_NAME}" carries no model override yet -- the disabled model-select reads empty (no provider chosen)`)
-  console.log('stage 3 (/slaves) complete: the one table shows the member materialized in both projects, with no override set')
+  console.log('stage 3 (/workforce) complete: the one table shows the member materialized in both projects, with no override set')
 
   // ---- Scenario stage 4: set gate-model-x on ONE worker via the Slaves table's ModelOverrideEditor.
   const targetWorkerRow = memberRows.filter({ hasText: workspaceNameA })
@@ -617,7 +624,7 @@ try {
   // ---- Scenario stage 6b: delete the second department through the Departments tab's
   // `department-delete` -> `department-delete-confirm` (M27 §4.2). Its one slave is already gone
   // (deleted above), so this is a plain cascade with no live-run refusal to work around.
-  const departmentsTab = page.getByTestId('slaves-tab-departments')
+  const departmentsTab = page.getByTestId('workforce-tab-departments')
   const otherDeptRow = page.getByTestId('data-table-row').filter({ hasText: 'M11 Gate Other Dept' })
   await clickUntil(
     departmentsTab,

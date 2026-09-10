@@ -314,6 +314,10 @@ describe('useOverview', () => {
       ])
     })
 
+    // M44 R5/R8: `feedSummary`'s fallback is the event type SAID OUT LOUD now (`Runs · failed`),
+    // not the bare dotted type -- the Overview page's live-events panel is where that line lands,
+    // and `gate:m44-ux-foundation`'s stage 4 reads it back off the real page. The `type` field is
+    // untouched, so nothing that keys off the raw type moves.
     it('appends a pushed run.failed event with a non-empty summary', (): void => {
       const { result } = renderHook(() => useOverview('w1', SNAPSHOT))
 
@@ -329,7 +333,7 @@ describe('useOverview', () => {
       })
 
       expect(result.current.liveEvents['a1']).toEqual([
-        { seq: 8, ts: new Date(0).toISOString(), type: 'run.failed', summary: 'run.failed' },
+        { seq: 8, ts: new Date(0).toISOString(), type: 'run.failed', summary: 'Runs · failed' },
       ])
     })
 

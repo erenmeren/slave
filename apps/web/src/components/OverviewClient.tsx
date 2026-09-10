@@ -108,6 +108,12 @@ export function LiveEventsPanel({
                 {/* `HH:MM:SS` out of the ISO stamp — the handoff's events panel is a mono time
                   * column, and the date is the same for every row a live panel ever shows. */}
                 <span className="shrink-0 text-text-3">{event.ts.slice(11, 19)}</span>
+                {/* `feedSummary`'s fallback used to print the dotted event type here, so this
+                  * glance panel read `run.started` (M44 R5/R8, found by
+                  * `gate:m44-ux-foundation`'s stage 4). It names the family now. The raw type is
+                  * deliberately NOT carried onto this row: `liveEvents` is a three-field snapshot
+                  * on the RSC wire, and the panel's own `all →` action opens the Activity page,
+                  * where every row keeps its `data-event-type` and its kind chip's `title`. */}
                 <span className="min-w-0 truncate">{event.summary}</span>
               </li>
             ))}

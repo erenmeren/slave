@@ -53,7 +53,8 @@
     "gate:m39-supervisor-mailbox": "tsc --build && node --env-file=.env scripts/gate-m39-supervisor-mailbox.mjs",
     "gate:m40-requirement-versioning": "tsc --build && node --env-file=.env scripts/gate-m40-requirement-versioning.mjs",
     "gate:m41-scenario": "tsc --build && node --env-file=.env scripts/gate-m41-scenario.mjs",
-    "gate:m42-catalog-import": "tsc --build && node --env-file=.env scripts/gate-m42-catalog-import.mjs"
+    "gate:m42-catalog-import": "tsc --build && node --env-file=.env scripts/gate-m42-catalog-import.mjs",
+    "gate:m44-ux-foundation": "tsc --build && node --env-file=.env scripts/gate-m44-ux-foundation.mjs"
   },
   "devDependencies": {
     "@testing-library/react": "^16.0.0",

@@ -1,4 +1,4 @@
-// M14's own gate (Task 17 brief, spec §6): "nine pages, one design".
+// M14's own gate (Task 17 brief, spec §6): "eleven pages, one design" (nine until M44 R8).
 //
 // `gate-m11-shell.mjs`'s shape -- a real `next dev`, a real Chromium through `playwright-core`,
 // every assertion re-read from prisma or from the DOM -- with `gate-m13-runtime.mjs`'s newer
@@ -16,7 +16,7 @@
 //   SLAVEOFAI_CLAUDE_BIN="$PWD/scripts/gate-fakes/fake-claude.sh" npm run gate:m14-fidelity
 //
 // The five stages of spec §6:
-//   1. nine pages render at 1440x900 with their structural testids, each screenshotted into
+//   1. eleven pages render at 1440x900 with their structural testids, each screenshotted into
 //      `docs/superpowers/fidelity/m14/<page>.png` and committed;
 //   2. every README number read back from `getComputedStyle`, failing by page + property;
 //   3. motion: a `working` card sweeps and an in-flight pill pulses; under emulated
@@ -112,7 +112,7 @@ const runTimestamp = new Date().toISOString()
 const WORKSPACE_PREFIX = 'M14 Gate Project'
 const WORKSPACE_NAME = `${WORKSPACE_PREFIX} ${runTimestamp.slice(11, 19)}`
 const WORKER_NAME = 'Gate Worker'
-const PASS_LINE = 'nine pages, one design'
+const PASS_LINE = 'eleven pages, one design'
 
 // The pair a dispatch resolves on. `resolveRuntime` only consults a level that NAMES a model, so
 // the worker carries both halves explicitly rather than falling through to a workspace default
@@ -570,7 +570,7 @@ try {
       autoMerge: true,
       verifyCommands: ['true'],
       setupCommands: [],
-      goal: 'prove the nine pages render on real data',
+      goal: 'prove the eleven pages render on real data',
     },
   })
   workspaceId = workspace.id
@@ -754,11 +754,14 @@ try {
   })
 
   // ============================================================================================
-  // Stage 1: nine pages render, and each is screenshotted.
+  // Stage 1: eleven pages render, and each is screenshotted.
   // ============================================================================================
   const PAGES = [
     { name: 'overview', path: () => `/w/${workspaceId}`, testId: 'strip' },
-    { name: 'slaves', path: () => '/slaves', testId: 'data-table' },
+    // M44 R8/E8: the Slaves page IS the Workforce page's Slaves tab now, and `/slaves` is a 307
+    // into it. Screenshotted at its real route, so the committed evidence shows the page a person
+    // actually lands on rather than a redirect's destination reached the long way round.
+    { name: 'workforce', path: () => '/workforce', testId: 'data-table' },
     { name: 'tasks', path: () => `/w/${workspaceId}/tasks`, testId: 'column' },
     { name: 'graph', path: () => `/w/${workspaceId}/graph`, testId: 'graph-canvas' },
     // `timeline-viewport`, not `timeline-rule`: the rule is absolutely positioned inside the
@@ -775,9 +778,20 @@ try {
     // own structural marker now (`perm-caption` is asserted separately, on `/w/<id>/settings`,
     // right after the README numbers below).
     { name: 'settings', path: () => '/settings', testId: 'security-posture' },
+    // M44 R8: the two pages M14 never covered. Office postdates M14 (M28) and the project Settings
+    // tab's numbers were only ever asserted in stage 2a -- neither had a committed screenshot, so
+    // neither had any protection against a redesign at all.
+    { name: 'office', path: () => `/w/${workspaceId}/office`, testId: 'office-canvas' },
+    { name: 'project-settings', path: () => `/w/${workspaceId}/settings`, testId: 'perm-caption' },
   ]
   /** The four pages whose content changes once a run is live; re-captured after stage 4b so the
-   *  committed evidence shows the design doing its job, not an empty board. */
+   *  committed evidence shows the design doing its job, not an empty board.
+   *
+   *  M44 R8 adds `office` and `project-settings` to `PAGES` but deliberately NOT here. Office's
+   *  canvas animates continuously, so a second capture of it would differ from the first on every
+   *  run -- a screenshot nobody can review, and a diff that says nothing about a design change.
+   *  The project Settings tab shows a form and a permission matrix, neither of which a live run
+   *  moves. Both are captured once, idle. */
   const LIVE_PAGES = new Set(['overview', 'tasks', 'graph', 'activity'])
 
   /**
@@ -844,7 +858,9 @@ try {
     await capture(target)
     console.log(`stage 1: ${target.name} rendered and captured`)
   }
-  console.log('stage 1 PASSED: nine pages rendered at 1440x900, nine screenshots written')
+  console.log(
+    `stage 1 PASSED: ${String(PAGES.length)} pages rendered at 1440x900, ${String(PAGES.length)} screenshots written`,
+  )
 
   // ============================================================================================
   // Stage 2: the README's numbers, read back off the real page.
@@ -934,52 +950,53 @@ try {
   // own reckoning and that the flexible track actually took the remaining space; the authored
   // inline value is what proves the template is the README's string and not eight coincidences.
   const SLAVES_COLUMNS = '200px 110px 150px 120px 110px 1fr 90px 90px 160px'
-  await gotoReliably(`${baseUrl}/slaves`)
+  await gotoReliably(`${baseUrl}/workforce`)
   // The Slaves page opens on the one table now (M24 Task 7): Roster and Workers were two names for
-  // the same list of slaves and are gone, folded into `slaves-tab-slaves` (default) beside
-  // `slaves-tab-departments`. The `clickUntil` below is kept anyway -- it is idempotent on an
-  // already-selected tab, and it is what makes this stage assert the template rather than assume
-  // which tab happened to be default.
+  // the same list of slaves and are gone, folded into `workforce-tab-slaves` (default) beside
+  // `workforce-tab-departments`. That table is the WORKFORCE page's Slaves tab since M44 R1, and
+  // `/slaves` is a 307 into it -- the route above is the one a person lands on. The `clickUntil`
+  // below is kept anyway -- it is idempotent on an already-selected tab, and it is what makes this
+  // stage assert the template rather than assume which tab happened to be default.
   // Keyed on the TABLE, not on its rows. `listAllSlaves()` renders every project slave AND every
   // catalog member no project has materialized yet, so a seeded development database does render
   // rows here -- but a database with no slaves at all still renders the header alone, which is the
   // same nine-column grid this stage measures, and waiting for a row would hang on a page that is
   // rendering correctly.
   await clickUntil(
-    page.getByTestId('slaves-tab-slaves'),
+    page.getByTestId('workforce-tab-slaves'),
     async () =>
       (await page.evaluate(
         () => document.querySelector('[data-testid="data-table-header"]')?.style.gridTemplateColumns ?? null,
       )) === SLAVES_COLUMNS,
-    'the Slaves tab',
+    'the Workforce page\'s Slaves tab',
   )
   const workerHeaderCells = await page.getByTestId('data-table-header-cell').count()
   if (workerHeaderCells !== 9) {
-    await fail(`stage 2 (slaves): the Slaves table has ${String(workerHeaderCells)} header cell(s), expected 9`)
+    await fail(`stage 2 (workforce): the Slaves table has ${String(workerHeaderCells)} header cell(s), expected 9`)
   }
   const slavesComputed = normalize((await computed('[data-testid="data-table-header"]', 'grid-template-columns')) ?? '')
   const slavesUsed = /^200px 110px 150px 120px 110px (\d+(?:\.\d+)?)px 90px 90px 160px$/.exec(slavesComputed)
   if (slavesUsed === null) {
     await fail(
-      `stage 2 (slaves): [data-testid="data-table-header"] grid-template-columns is ${JSON.stringify(slavesComputed)}, ` +
+      `stage 2 (workforce): [data-testid="data-table-header"] grid-template-columns is ${JSON.stringify(slavesComputed)}, ` +
         `expected the used form of ${JSON.stringify(SLAVES_COLUMNS)} -- ` +
         '`200px 110px 150px 120px 110px <the 1fr track>px 90px 90px 160px`',
     )
   }
   if (Number(slavesUsed[1]) <= 0) {
-    await fail(`stage 2 (slaves): the \`1fr\` column resolved to ${slavesUsed[1]}px at 1440x900 -- it has no room at all`)
+    await fail(`stage 2 (workforce): the \`1fr\` column resolved to ${slavesUsed[1]}px at 1440x900 -- it has no room at all`)
   }
   const slavesAuthored = await page.evaluate(
     () => document.querySelector('[data-testid="data-table-header"]')?.style.gridTemplateColumns ?? null,
   )
   if (normalize(slavesAuthored ?? '') !== SLAVES_COLUMNS) {
     await fail(
-      `stage 2 (slaves): the Slaves table is laid out on ${JSON.stringify(slavesAuthored)}, ` +
+      `stage 2 (workforce): the Slaves table is laid out on ${JSON.stringify(slavesAuthored)}, ` +
         `expected ${JSON.stringify(SLAVES_COLUMNS)}`,
     )
   }
   console.log(
-    `stage 2 (slaves): [data-testid="data-table-header"] grid-template-columns = ${JSON.stringify(SLAVES_COLUMNS)} ` +
+    `stage 2 (workforce): [data-testid="data-table-header"] grid-template-columns = ${JSON.stringify(SLAVES_COLUMNS)} ` +
       `(used: ${slavesComputed})`,
   )
   console.log(`stage 2a PASSED: ${String(NUMBERS.length + 2)} README values read back from getComputedStyle`)
@@ -1007,13 +1024,20 @@ try {
   })
   console.log(`stage 4a: the workspace reads halted -- ${JSON.stringify(haltedReason)}`)
 
-  // Only the four workspace-scoped page clients in `PAGES` render their own `HaltBanner`
-  // (`OverviewClient`, `TasksClient`, `GraphClient`, `ActivityClient` -- the project Settings tab
-  // does too since M24's final review, but `/w/<id>/settings` is not one of the pages this gate
-  // visits); the five global ones (including THIS `settings` entry, the org-wide `/settings`
-  // page) are not workspace-scoped and correctly show none. Both halves are asserted: a banner
-  // appearing on a global page would mean a page had guessed at a workspace it does not belong to.
-  const SCOPED = new Set(['overview', 'tasks', 'graph', 'activity'])
+  // Five of the page clients in `PAGES` render their own `HaltBanner`: `OverviewClient`,
+  // `TasksClient`, `GraphClient`, `ActivityClient` and -- since M24's final review, and asserted
+  // here for the first time now that M44 R8 put `/w/<id>/settings` in the page set --
+  // `ProjectSettingsClient`. The five global pages (including THIS `settings` entry, the org-wide
+  // `/settings`) are not workspace-scoped and correctly show none. Both halves are asserted: a
+  // banner appearing on a global page would mean a page had guessed at a workspace it does not
+  // belong to.
+  //
+  // `office` is the exception this gate states rather than hides: it IS workspace-scoped, and it
+  // renders no `HaltBanner` at all (`OfficeClient` is the one `/w/<id>/*` client that does not
+  // import it). So it is neither -- listed by name below, asserted to show no banner, and reported
+  // as what it is. Closing that gap is a change to Office, which M44 §3 puts out of scope.
+  const SCOPED = new Set(['overview', 'tasks', 'graph', 'activity', 'project-settings'])
+  const SCOPED_WITHOUT_BANNER = new Set(['office'])
   for (const target of PAGES) {
     await gotoReliably(`${baseUrl}${target.path()}`)
     await waitVisible(page.getByTestId(target.testId), `${target.name} while the workspace is halted`)
@@ -1025,10 +1049,20 @@ try {
       console.log(`stage 4a: ${target.name} shows the halt banner`)
     } else {
       const strays = await page.getByRole('alert').filter({ hasText: 'workspace halted' }).count()
-      if (strays > 0) {
-        await fail(`stage 4a: the global page ${target.name} shows a workspace halt banner (${String(strays)}), and owns no workspace`)
+      if (SCOPED_WITHOUT_BANNER.has(target.name)) {
+        if (strays > 0) {
+          await fail(
+            `stage 4a: ${target.name} shows a workspace halt banner (${String(strays)}) -- it renders none today, so if it ` +
+              'has grown one, move it into SCOPED and delete it from SCOPED_WITHOUT_BANNER',
+          )
+        }
+        console.log(`stage 4a: ${target.name} is workspace-scoped but renders NO halt banner -- stated, not hidden (see the comment above)`)
+      } else {
+        if (strays > 0) {
+          await fail(`stage 4a: the global page ${target.name} shows a workspace halt banner (${String(strays)}), and owns no workspace`)
+        }
+        console.log(`stage 4a: ${target.name} is global and correctly shows no halt banner`)
       }
-      console.log(`stage 4a: ${target.name} is global and correctly shows no halt banner`)
     }
   }
 

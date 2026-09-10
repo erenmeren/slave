@@ -1,6 +1,7 @@
 import type { ReactElement, ReactNode } from 'react'
 import Link from 'next/link'
 import { TONE_DOT, TONE_TEXT, type StatusTone } from '../ui/StatusPill'
+import { readableEventType } from '../../lib/eventLabels'
 import type { ActivityEventRow } from '../../server/activity'
 
 // `ui/Chip.tsx`'s exact recipe (`inline-flex items-center rounded-chip border px-2 py-0.5
@@ -243,9 +244,13 @@ export function ActivityCard({
               by {userName}
             </span>
           )}
-          {/* "event kind": the dotted type itself, mono 9.5px — the mock's `e.kind`. */}
-          <span data-testid="event-kind" className="font-mono text-[9.5px] text-text-3">
-            {event.type}
+          {/* "event kind", mono 9.5px — the mock's `e.kind`. It printed the dotted type itself
+            * until `gate:m44-ux-foundation`'s stage 4 read it back off the page (M44 R5/R8);
+            * `readableEventType` names the family and de-underscores the rest, so nothing is lost
+            * and nothing is a database identifier. The raw type is still on the row's own
+            * `data-event-type` (test-pinned) and one hover away here. */}
+          <span data-testid="event-kind" title={event.type} className="font-mono text-[9.5px] text-text-3">
+            {readableEventType(event.type)}
           </span>
         </div>
         <div className="mt-[1px] text-[12px] text-[#c8cfda]">{children}</div>

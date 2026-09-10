@@ -228,7 +228,12 @@ export function SimulationClient({ initial }: { readonly initial: SimulationSnap
         )}
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           <Panel title="Simulated company">
-            <div data-testid="sim-company" className="flex flex-col gap-1 text-xs text-text-2">
+            {/* `data-simulation` marks THE simulated-money subtree (M44 R8): the money in here is
+                a fiction the engine keeps, and the "Model usage (real)" panel beside it is the
+                operator's actual bill. `gate-m44-ux-foundation.mjs`'s stage 8 reads this marker to
+                tell the two apart -- without it the gate would have to guess which panel is which,
+                and a gate that guesses is one that passes on the day the two merge. */}
+            <div data-simulation="true" data-testid="sim-company" className="flex flex-col gap-1 text-xs text-text-2">
               {headline.map((item) => {
                 const display = item.ofHorizon === true ? `${item.value} / ${summary.horizonDays}` : item.kind === 'money' ? formatMinor(item.value, currency) : String(item.value)
                 return (
@@ -252,7 +257,13 @@ export function SimulationClient({ initial }: { readonly initial: SimulationSnap
         {tab === 'overview' && (
           <div role="tabpanel" aria-label="overview">
             <Panel title="Metrics (from the journal)">
-              <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
+              {/* Simulated money too, and marked as such (M44 R8): these tiles are computed from
+                  the run's own journal, so a `$50,000.00` here is the fictional company's cash and
+                  not a cent of anybody's bill. `gate-m44-ux-foundation.mjs`'s stage 8 found this
+                  grid rendering currency inside no marked subtree at all. The marker stays OFF the
+                  tab panel as a whole: the Decisions tab's per-decision figure is REAL model cost,
+                  and a marker up there would claim otherwise. */}
+              <div data-simulation="true" className="grid grid-cols-1 gap-2 md:grid-cols-3">
                 {Object.entries(metricLabels).map(([key, label]) => {
                   // The plugin's own labels and order drive this panel (M31b §5); trade's runtime
                   // metrics object also carries two fields no label names -- `sources` (per-metric

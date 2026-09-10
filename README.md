@@ -161,19 +161,21 @@ nothing about them resumes automatically.
 
 ## The web UI
 
+Four ways in: **Projects**, **Workforce**, **Simulations**, **Settings**. Everything else is inside
+one of them — `docs/ia.md` is the map, and says where anything that left a main path went.
+
 | Page | What it shows |
 |---|---|
-| **Projects** `/` | Every active project (workspace) with its spend and team; click one to open it. **New project** attaches a repo; **show archived** also lists archived projects (an "archived" chip, no spend bar, a **restore** button); below the cards, the team catalog (slave templates, companies and their department templates — every row there can be deleted, down to the company or template itself). |
+| **Projects** `/` | Every active project (workspace) with its status in one word, how many things need you, its spend and its team; click one to open it. **New project** attaches a repo; **show archived** also lists archived projects (an "archived" chip, no spend bar, a **restore** button); below the cards, the same all-project figures the Analytics page shows. |
 | **Overview** `/w/<id>` | One card per slave: status, current task, live action line, spend against budget. A halt banner when the workspace is stopped. |
 | **Tasks** `/w/<id>/tasks` | The board by status. Click a task for its runs and cost, its verify logs under **Artifacts**, and a **Collect worktree** button once it has finished. |
-| **Graph** `/w/<id>/graph` | Five views: the org tree, live execution, the task dependency DAG (draw or delete an edge to change it), the skill chain, and who handed work to whom. |
-| **Office** `/w/<id>/office` | The project's departments and slaves as a pixel office: who is working, blocked or paused, on what and how far; pause, resume or stop the focused slave's run; scroll to zoom, drag to pan, click a slave to focus. |
+| **Graph** (Advanced ▾) `/w/<id>/graph` | Five views: the org tree, live execution, the task dependency DAG (draw or delete an edge to change it), the skill chain, and who handed work to whom. Reached from the project's `Advanced ▾` menu, or by its URL. |
+| **Office** (Advanced ▾) `/w/<id>/office` | The project's departments and slaves as a pixel office: who is working, blocked or paused, on what and how far; pause, resume or stop the focused slave's run; scroll to zoom, drag to pan, click a slave to focus. Reached from the project's `Advanced ▾` menu, or by its URL. |
 | **Activity** `/w/<id>/activity` | Every event, live, filterable by kind, slave and task; the filters live in the URL. Events made from the UI name the user who made them. |
 | **Settings** `/w/<id>/settings` | This project's goal, its runtime (provider, budget, and the read-only concurrency/timeout/attempts limits), its own slave permissions, its emergency stop, and its danger zone to archive/restore the project. |
-| **Slaves** `/slaves` | One table + Departments: every slave, project-materialized or still catalog-only, with its department as a select, rename/re-role/delete a slave with its history and a model chosen from the provider's own list inline; **+ New slave** adds one to the catalog and, optionally, to a project; a **Departments** tab beside it to add, rename or delete a project's department, along with the slaves on it. |
-| **Skills** `/skills` | The skill catalog and its assignments. |
+| **Workforce** `/workforce` | Everyone who works here, in four tabs. **Slaves**: every slave, project-materialized or still catalog-only, with its department as a select, rename/re-role/delete with its history and a model chosen from the provider's own list inline; **+ New slave** adds one to the catalog and, optionally, to a project. **Departments**: add, rename or delete a project's department and see who is on it. **Catalog**: the slave templates, the companies and their department templates, and the log of catalog imports. **Skills**: the skill catalog and its assignments. `/slaves` and `/skills` still work — they redirect here. |
 | **Simulations** `/sim` | Company simulation runs (M29): create one from a catalog company — a trade company on synthetic data, decided by the rules provider, no repository and no model call; step it by day, run it to a horizon, pause, halt, add customer demand or a supplier delay; the simulated company's cash and the real model cost are two separate panels; metrics are computed from the run's own journal; clone a run under another policy, let the daemon auto-run it, compare two runs side by side (no verdict); adopt a software run's organisation into a company-less project (M33). |
-| **Analytics** `/analytics` | Spend and throughput. |
+| **Analytics** `/analytics` | Spend and throughput, for every project or for one (`?workspace=`). The all-project view is also a section on the Projects page; a project's own view is one click from it. |
 | **Settings** `/settings` | Provider adapters, security, and reset demo data (development only). |
 
 Every page updates itself over a live event stream. Interventions — **Pause**, **Resume** (with a
@@ -597,8 +599,8 @@ they spend nothing. CI runs `gate:m26-vocabulary`, `gate:m15-boundary`, `gate:m2
 `gate:m21-loose-ends`, `gate:m23-onboarding`, `gate:m29-simulation`, `gate:m30-simulation-compare`,
 `gate:m31a-llm-decisions`, `gate:m31b-software-sector`, `gate:m33-adopt`,
 `gate:m35-pipeline-honesty`, `gate:m36-messaging`, `gate:m37-run-context`, `gate:m38-supervisor`,
-`gate:m39-supervisor-mailbox`, `gate:m40-requirement-versioning`, `gate:m41-scenario` and
-`gate:m42-catalog-import` on every push — `m36` stops the orchestrator and starts it again
+`gate:m39-supervisor-mailbox`, `gate:m40-requirement-versioning`, `gate:m41-scenario`,
+`gate:m42-catalog-import` and `gate:m44-ux-foundation` on every push — `m36` stops the orchestrator and starts it again
 mid-scenario, to prove a waiting slave's question survives a restart, `m37` reads a real run's prompt and worktree back to prove a slave was
 given the persona and the skills it was assigned, `m38` drives a real daemon until the Supervisor
 proposes the staffing a reviewer-less project needs, waits for a human to approve it, unblocks a
@@ -615,8 +617,13 @@ then asks every operator surface at once whether they agree about what happened
 (`docs/scenarios/e2e-software-team.md`), and `m42` imports a directory of persona files into the
 template catalog twice over — creating what is new, skipping what an operator has edited, updating
 what changed on disk, and staffing a project from the result until the imported persona itself turns
-up in a real run's recorded prompt. That is 18 gates. Tests and gates share one Postgres — run
-one at a time.
+up in a real run's recorded prompt, and `m44` drives a real browser over every page at once to
+check that there are four ways into the product, that the project's own strip answers "what is
+happening" in four tabs with Graph and Office still one menu away, that nothing on any of eleven
+pages is a database value a person would have to decode, that a drawer traps the Tab key and hands
+focus back on Escape, that the skip link is the first thing the keyboard finds, that the sidebar
+collapses on a narrow window, and that simulated money is never shown beside real model cost. That
+is 19 gates. Tests and gates share one Postgres — run one at a time.
 
 ## Learn more
 
