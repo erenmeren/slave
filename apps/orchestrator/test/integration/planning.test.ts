@@ -645,6 +645,64 @@ describe('concludePlanning', () => {
     expect(task.requiredCapabilities).toEqual([])
   })
 
+  // Fix round 1, Important: a task whose every capability the taxonomy dropped derives NO role, and
+  // a null `requiredRole` is a task both world loaders exclude and `task.count` still sees -- the
+  // board is never empty again, so planning refuses forever. Refused BEFORE the transaction, so the
+  // board stays empty and the retry cap governs.
+  it('fails the run and writes no board when a task asks only for capabilities the taxonomy lacks', async (): Promise<void> => {
+    await syncCapabilityTaxonomy()
+    const fixture = await seed('Ship the checkout redesign')
+    repos.push(fixture.repoPath)
+    const runId = await concludeGraph(fixture, {
+      tasks: [
+        {
+          key: 'a',
+          title: 'Harden the login',
+          description: 'Review the authentication path.',
+          capabilities: ['nope.nothing'],
+          dependsOn: [],
+        },
+      ],
+    })
+
+    expect(await prisma.task.count({ where: { workspaceId: fixture.workspaceId } })).toBe(0)
+    const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId } })
+    expect(run.status).toBe('failed')
+    const failures = await prisma.executionEvent.findMany({ where: { runId, type: 'run_failed' } })
+    expect(failures).toHaveLength(1)
+    expect((failures[0]?.payload as { reason: string }).reason).toBe(
+      'planning run produced no valid task graph: task "a" asks only for capabilities the taxonomy does not have',
+    )
+    expect(
+      await prisma.executionEvent.count({ where: { workspaceId: fixture.workspaceId, type: 'workspace_plan_created' } }),
+    ).toBe(0)
+  })
+
+  it('keeps a task that named one unknown key beside a known one, with the known key\'s role', async (): Promise<void> => {
+    await syncCapabilityTaxonomy()
+    const fixture = await seed('Ship the checkout redesign')
+    repos.push(fixture.repoPath)
+    await concludeGraph(fixture, {
+      tasks: [
+        {
+          key: 'a',
+          title: 'Harden the login',
+          description: 'Review the authentication path.',
+          capabilities: ['nope.nothing', 'security.application'],
+          dependsOn: [],
+        },
+      ],
+    })
+
+    const task = await prisma.task.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })
+    expect(task.requiredCapabilities).toEqual(['security.application'])
+    expect(task.requiredRole).toBe('security')
+    const event = await prisma.executionEvent.findFirstOrThrow({
+      where: { workspaceId: fixture.workspaceId, type: 'workspace_plan_created' },
+    })
+    expect((event.payload as { droppedCapabilities?: string[] }).droppedCapabilities).toEqual(['nope.nothing'])
+  })
+
   it('(e) the daemon-shape follow-through: a further tick starts an implementation run for the root task', async (): Promise<void> => {
     const fixture = await seed('Ship the checkout redesign')
     repos.push(fixture.repoPath)
@@ -1344,6 +1402,35 @@ describe('a re-plan', () => {
       droppedCancellations: [],
       failedProposals: [doomedFirst.id],
     })
+  })
+
+  // Fix round 1, Important: the delta path used to commit the same null-role row and fail at
+  // NOTHING -- a silently unschedulable task, forever. Refused before the transaction now, where
+  // every other pre-commit failure of `applyDelta` goes.
+  it('fails the run and adds nothing when an added task asks only for capabilities the taxonomy lacks', async (): Promise<void> => {
+    await syncCapabilityTaxonomy()
+    const fixture = await boardAt(1)
+    expect((await setGoal(fixture.workspaceId, V2)).ok).toBe(true)
+    const existing = await prisma.task.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })
+    const runId = await seedConcludedReplan(
+      fixture,
+      `{"add":[{"key":"docs","title":"Document the new endpoint","description":"write it","capabilities":["nope.nothing"],"dependsOn":[]}],"cancel":[],"keep":["${existing.id}"]}`,
+      [existing.id],
+    )
+
+    await concludePlanning(brandRunId(runId))
+
+    expect(await prisma.task.count({ where: { workspaceId: fixture.workspaceId } })).toBe(1)
+    const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId } })
+    expect(run.status).toBe('failed')
+    const failures = await prisma.executionEvent.findMany({ where: { runId, type: 'run_failed' } })
+    expect(failures).toHaveLength(1)
+    expect((failures[0]?.payload as { reason: string }).reason).toBe(
+      'planning run produced no valid re-plan delta: added task "docs" asks only for capabilities the taxonomy does not have',
+    )
+    expect(
+      await prisma.executionEvent.count({ where: { workspaceId: fixture.workspaceId, type: 'workspace_replanned' } }),
+    ).toBe(0)
   })
 
   it('fails the run and changes no board when the re-plan output carries no valid delta', async (): Promise<void> => {

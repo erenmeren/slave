@@ -2,6 +2,7 @@ import {
   NON_TERMINAL_RUN_STATUSES,
   slaveId as brandSlaveId,
   runId as brandRunId,
+  capabilityIndex,
   parsePlanGraph,
   type CapabilityRecord,
   type RunId,
@@ -70,18 +71,7 @@ export async function concludePlanning(runId: RunId): Promise<void> {
   const parsed = parsePlanGraph(text)
 
   if (!parsed.ok) {
-    await prisma.slaveRun.updateMany({
-      where: { id: runId, status: 'succeeded' },
-      data: { status: 'failed' },
-    })
-    await appendEvent({
-      type: 'run.failed',
-      workspaceId,
-      slaveId: run.slaveId,
-      runId: run.id,
-      actor: 'system',
-      payload: { reason: `planning run produced no valid task graph: ${parsed.error}` },
-    })
+    await failPlanningRun(run, workspaceId, `planning run produced no valid task graph: ${parsed.error}`)
     return
   }
 
@@ -112,17 +102,41 @@ export async function concludePlanning(runId: RunId): Promise<void> {
   const taxonomy = await listCapabilities()
   const dropped = new Set<string>()
 
+  // The whole graph is DERIVED before a single row is written (fix round 1).
+  //
+  // `validateStructure` guarantees every task named a role or at least one capability, but it
+  // cannot know which keys the TABLE has -- so a task naming only keys the taxonomy dropped
+  // derives no role at all. A null `requiredRole` is the worst row this system can create: both
+  // world loaders exclude it and `task.count` still sees it, so the board is never "empty" again
+  // and planning refuses forever. Deriving first means such a graph is a FAILED planning attempt,
+  // exactly like an unparseable one, with the board left empty for the retry cap to govern.
+  const derived: Array<{
+    readonly planTask: (typeof parsed.value.tasks)[number]
+    readonly keys: readonly string[]
+    readonly requiredRole: string
+  }> = []
+  for (const planTask of parsed.value.tasks) {
+    const { keys, unresolved } = normaliseCapabilitiesStrict(planTask.capabilities, taxonomy)
+    for (const key of unresolved) dropped.add(key)
+    // R2's precedence: an explicit role wins (the planner said what it wanted, and the vocabulary
+    // is older than this milestone); otherwise the role of the FIRST capability the task asked for
+    // that the taxonomy knows.
+    const requiredRole = planTask.role ?? roleOfFirst(keys, taxonomy)
+    if (requiredRole === null) {
+      await failPlanningRun(
+        run,
+        workspaceId,
+        `planning run produced no valid task graph: task "${planTask.key}" asks only for capabilities the taxonomy does not have`,
+      )
+      return
+    }
+    derived.push({ planTask, keys, requiredRole })
+  }
+
   const created = await prisma.$transaction(async (tx) => {
     const idByKey = new Map<string, string>()
     const rows: Array<{ readonly id: string; readonly title: string; readonly role: string }> = []
-    for (const planTask of parsed.value.tasks) {
-      const { keys, unresolved } = normaliseCapabilitiesStrict(planTask.capabilities, taxonomy)
-      for (const key of unresolved) dropped.add(key)
-      // R2's precedence, and E1/E2's guarantee that it is total: an explicit role wins (the
-      // planner said what it wanted and the vocabulary is older than this milestone); otherwise
-      // the role of the FIRST valid capability the task asked for. `validateStructure` refuses a
-      // task with neither, so this is never null for a task a plan created.
-      const requiredRole = planTask.role ?? roleOfFirst(keys, taxonomy)
+    for (const { planTask, keys, requiredRole } of derived) {
       const task = await tx.task.create({
         data: {
           workspaceId,
@@ -150,9 +164,10 @@ export async function concludePlanning(runId: RunId): Promise<void> {
         },
       })
       idByKey.set(planTask.key, task.id)
-      // Read off the CREATED row, so the event says what was STORED. `?? ''` fails the payload
-      // schema's `min(1)`, which is the right way to find out that a task reached the board with
-      // no role at all -- E1 and E2 together are what promise it cannot, once Task 2 derives one.
+      // Read off the CREATED row, so the event says what was STORED. The `?? ''` is a type
+      // narrowing only -- Prisma types the column `string | null` and the derivation above has
+      // already refused every graph that could put a null there -- and if it ever did fire, the
+      // payload schema's `min(1)` would say so loudly rather than log an empty role.
       rows.push({ id: task.id, title: task.title, role: task.requiredRole ?? '' })
     }
     for (const planTask of parsed.value.tasks) {
@@ -198,6 +213,32 @@ export async function concludePlanning(runId: RunId): Promise<void> {
 }
 
 /**
+ * A planning attempt that produced nothing usable: the run is marked `failed` and `run.failed`
+ * records why (fix round 1).
+ *
+ * Shared by the two ways a graph can be unusable -- one that does not parse, and one whose task
+ * asks only for capabilities the table does not have -- because they have the same consequence:
+ * the board stays empty, and `dispatchPlanning`'s retry cap, not a cleared goal, is what
+ * eventually stops the redispatch. The `updateMany` is conditioned on `succeeded` for the reason
+ * it always was: a run somebody stopped in the meantime is not this function's to fail.
+ */
+async function failPlanningRun(
+  run: { readonly id: string; readonly slaveId: string },
+  workspaceId: string,
+  reason: string,
+): Promise<void> {
+  await prisma.slaveRun.updateMany({ where: { id: run.id, status: 'succeeded' }, data: { status: 'failed' } })
+  await appendEvent({
+    type: 'run.failed',
+    workspaceId,
+    slaveId: run.slaveId,
+    runId: run.id,
+    actor: 'system',
+    payload: { reason },
+  })
+}
+
+/**
  * The keys a task may keep, and the ones it may not (R3).
  *
  * A model can only be told which keys exist; it cannot be prevented from inventing one. An
@@ -227,11 +268,14 @@ export function normaliseCapabilitiesStrict(
 }
 
 /** The DERIVED dispatch role (R2): the role of the first capability the task asked for that the
- *  taxonomy knows. `null` only when the task asked for nothing the table has -- in which case the
- *  planner's own role is what stands, and `validateStructure` guaranteed there is one. */
+ *  taxonomy knows. `null` only when the task asked for nothing the table has -- and the callers
+ *  refuse the whole graph when it is, because a task with no required role is a task nothing can
+ *  ever schedule. Through `capabilityIndex` (fix round 1, minor 5) rather than a `find` per key:
+ *  one map for the graph, not a scan of fifty rows for every key of every task. */
 export function roleOfFirst(keys: readonly string[], taxonomy: readonly CapabilityRecord[]): string | null {
+  const index = capabilityIndex(taxonomy)
   for (const key of keys) {
-    const record = taxonomy.find((row) => row.key === key)
+    const record = index.get(key)
     if (record !== undefined) return record.role
   }
   return null

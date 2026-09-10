@@ -1413,11 +1413,16 @@ describe('the orchestrator CLI', () => {
       expect(listed.stdout).toContain('security.application')
       expect(listed.stdout).toContain('-> security')
 
+      // The row is real and the taxonomy is shared with every other file in this database, so it
+      // is removed whatever the assertions do (fix round 1, minor 6).
       const key = `m47cli.${String(Date.now())}`
-      const added = await runCli(['capabilities', 'add', '--key', key, '--label', 'A local thing', '--role', 'backend'])
-      expect(added.code).toBe(0)
-      expect((await runCli(['capabilities', 'list'])).stdout).toContain(key)
-      await prisma.capability.delete({ where: { key } })
+      try {
+        const added = await runCli(['capabilities', 'add', '--key', key, '--label', 'A local thing', '--role', 'backend'])
+        expect(added.code).toBe(0)
+        expect((await runCli(['capabilities', 'list'])).stdout).toContain(key)
+      } finally {
+        await prisma.capability.deleteMany({ where: { key } })
+      }
 
       const bad = await runCli(['capabilities', 'add', '--key', 'Not A Key', '--label', 'x', '--role', 'backend'])
       expect(bad.code).not.toBe(0)

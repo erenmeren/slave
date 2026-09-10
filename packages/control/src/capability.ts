@@ -11,6 +11,7 @@ import {
   type Result,
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
+import { AssignmentRefused, departmentFor } from './department.js'
 import type { ControlRefusal } from './refusal.js'
 
 /** Every taxonomy row, KEY ASCENDING -- the order every caller gets, so `normaliseCapabilities`'
@@ -179,35 +180,46 @@ export async function materialiseCompanySlave(
   })
   if (roster === null) return err({ kind: 'company_slave_not_found', companySlaveId })
 
-  const existing = await prisma.slave.findFirst({ where: { companySlaveId, team: { workspaceId } } })
-  if (existing !== null) return ok({ slaveId: existing.id, created: false })
-
   const capabilities = roster.template.capabilityKeys
   const runtimeRoles = [...new Set([roster.template.role, ...projectRoles(capabilities, taxonomy)])]
-  const created = await prisma.$transaction(async (tx) => {
-    let team = await tx.team.findFirst({ where: { workspaceId, companyTeamId: roster.companyTeamId } })
-    team ??= await tx.team.create({
-      data: {
-        workspaceId,
-        name: uniqueTeamName(await tx.team.findMany({ where: { workspaceId }, select: { name: true } }), roster.companyTeam.name),
-        companyTeamId: roster.companyTeamId,
-      },
+
+  let created: { readonly id: string; readonly name: string } | null
+  try {
+    created = await prisma.$transaction(async (tx) => {
+      // The workspace row under `FOR UPDATE` before the existence check (fix round 1, minor 2):
+      // `Slave.companySlaveId` has no unique index, so nothing else serialises two callers
+      // materialising the same roster row, and both would read "not there" and create a worker
+      // each. `assignCompanyTx` locks the same row for the same reason.
+      await tx.$queryRaw`SELECT id FROM "Workspace" WHERE id = ${workspaceId} FOR UPDATE`
+      const existing = await tx.slave.findFirst({ where: { companySlaveId, team: { workspaceId } } })
+      if (existing !== null) return null
+
+      const { team } = await departmentFor(tx, workspaceId, roster.companyTeam)
+      return tx.slave.create({
+        data: {
+          teamId: team.id,
+          name: uniqueSlaveName(
+            await tx.slave.findMany({ where: { team: { workspaceId } }, select: { name: true } }),
+            roster.name,
+          ),
+          role: roster.template.role,
+          runtimeRoles,
+          capabilities: [...capabilities],
+          companySlaveId,
+          ...(opts.rationale === undefined ? {} : { selectionRationale: opts.rationale }),
+        },
+      })
     })
-    return tx.slave.create({
-      data: {
-        teamId: team.id,
-        name: uniqueSlaveName(
-          await tx.slave.findMany({ where: { team: { workspaceId } }, select: { name: true } }),
-          roster.name,
-        ),
-        role: roster.template.role,
-        runtimeRoles,
-        capabilities: [...capabilities],
-        companySlaveId,
-        ...(opts.rationale === undefined ? {} : { selectionRationale: opts.rationale }),
-      },
-    })
-  })
+  } catch (error) {
+    // `departmentFor`'s one post-write refusal, unwrapped exactly as `assignCompany` unwraps it.
+    if (error instanceof AssignmentRefused) return err(error.refusal)
+    throw error
+  }
+
+  if (created === null) {
+    const existing = await prisma.slave.findFirstOrThrow({ where: { companySlaveId, team: { workspaceId } } })
+    return ok({ slaveId: existing.id, created: false })
+  }
 
   await appendEvent({
     type: 'org.changed',
@@ -261,25 +273,43 @@ export async function hireFromTemplate(
   const runtimeRoles = [...new Set([template.role, ...projectRoles(capabilities, taxonomy)])]
   const rationale = opts.temporary === true ? `${opts.rationale} (asked for as a temporary specialist)` : opts.rationale
 
-  const existing = await prisma.slave.findFirst({
-    where: { hiredFromTemplateId: templateId, team: { workspaceId } },
-    orderBy: { id: 'asc' },
-  })
-  if (existing !== null) {
-    const merged = [...new Set([...existing.capabilities, ...capabilities])].toSorted()
-    const roles = [...existing.runtimeRoles]
-    for (const role of runtimeRoles) if (!roles.includes(role)) roles.push(role)
-    await prisma.slave.update({ where: { id: existing.id }, data: { capabilities: merged, runtimeRoles: roles } })
-    return ok({ slaveId: existing.id, reused: true, capabilities: merged, runtimeRoles: roles })
-  }
+  // The reuse decision and the write it implies happen under ONE workspace row lock (fix round 1,
+  // minor 2). There is no unique index on `hiredFromTemplateId`, so without it two approvals of the
+  // same proposal -- which is exactly what E10 says one supervised pass can produce -- would both
+  // read "nobody hired yet" and put two copies of one specialist on the project.
+  const outcome = await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM "Workspace" WHERE id = ${workspaceId} FOR UPDATE`
+    const existing = await tx.slave.findFirst({
+      where: { hiredFromTemplateId: templateId, team: { workspaceId } },
+      orderBy: { id: 'asc' },
+    })
+    if (existing !== null) {
+      const merged = [...new Set([...existing.capabilities, ...capabilities])].toSorted()
+      const roles = [...existing.runtimeRoles]
+      for (const role of runtimeRoles) if (!roles.includes(role)) roles.push(role)
+      // Both sets only ever grow here, so a length that did not move is a set that did not move.
+      const rolesChanged = roles.length !== existing.runtimeRoles.length
+      const capabilitiesChanged = merged.length !== existing.capabilities.length
+      if (rolesChanged || capabilitiesChanged) {
+        await tx.slave.update({ where: { id: existing.id }, data: { capabilities: merged, runtimeRoles: roles } })
+      }
+      return {
+        kind: 'reused' as const,
+        slaveId: existing.id,
+        capabilities: merged,
+        runtimeRoles: roles,
+        before: existing.capabilities,
+        rolesChanged,
+        capabilitiesChanged,
+      }
+    }
 
-  const created = await prisma.$transaction(async (tx) => {
     const teams = await tx.team.findMany({ where: { workspaceId }, orderBy: { name: 'asc' } })
     // A hire needs a department. The first by name is deterministic and is the one a
     // single-department project has; a project with none gets `Specialists`, which says what it
     // is rather than borrowing a name from a company this project may not have.
     const team = teams[0] ?? (await tx.team.create({ data: { workspaceId, name: 'Specialists' } }))
-    return tx.slave.create({
+    const worker = await tx.slave.create({
       data: {
         teamId: team.id,
         name: uniqueSlaveName(
@@ -293,16 +323,49 @@ export async function hireFromTemplate(
         selectionRationale: rationale,
       },
     })
+    return { kind: 'created' as const, slaveId: worker.id, name: worker.name }
   })
 
-  await appendEvent({
-    type: 'org.changed',
-    workspaceId,
-    slaveId: created.id,
-    actor: 'system',
-    payload: { entity: 'slave', id: created.id, field: 'created', from: null, to: created.name },
-  })
-  return ok({ slaveId: created.id, reused: false, capabilities, runtimeRoles })
+  if (outcome.kind === 'created') {
+    await appendEvent({
+      type: 'org.changed',
+      workspaceId,
+      slaveId: outcome.slaveId,
+      actor: 'system',
+      payload: { entity: 'slave', id: outcome.slaveId, field: 'created', from: null, to: outcome.name },
+    })
+    return ok({ slaveId: outcome.slaveId, reused: false, capabilities, runtimeRoles })
+  }
+
+  // A reuse that CHANGED the worker is a write, and a write nobody can see in the log is how a
+  // roster grows roles nobody remembers granting (fix round 1, minor 3). The role set moving is
+  // the bigger fact -- it is what the scheduler matches -- so it takes the event `setRuntimeRoles`
+  // itself writes; a merge that only added keys takes `org.changed`. A reuse that changed neither
+  // wrote nothing, and has nothing to record.
+  if (outcome.rolesChanged) {
+    await appendEvent({
+      type: 'slave.runtime_roles_changed',
+      workspaceId,
+      slaveId: outcome.slaveId,
+      actor: 'system',
+      payload: { slaveId: outcome.slaveId, roles: outcome.runtimeRoles, actor: 'hire' },
+    })
+  } else if (outcome.capabilitiesChanged) {
+    await appendEvent({
+      type: 'org.changed',
+      workspaceId,
+      slaveId: outcome.slaveId,
+      actor: 'system',
+      payload: {
+        entity: 'slave',
+        id: outcome.slaveId,
+        field: 'capabilities',
+        from: outcome.before.length === 0 ? null : [...outcome.before].toSorted().join(', '),
+        to: outcome.capabilities.join(', '),
+      },
+    })
+  }
+  return ok({ slaveId: outcome.slaveId, reused: true, capabilities: outcome.capabilities, runtimeRoles: outcome.runtimeRoles })
 }
 
 /** `Name`, then `Name 2`, `Name 3`… -- a project may already have a worker with the template's
@@ -315,12 +378,6 @@ function uniqueSlaveName(existing: readonly { readonly name: string }[], wanted:
     const candidate = `${wanted} ${String(n)}`
     if (!taken.has(candidate)) return candidate
   }
-}
-
-/** The same rule for a department, because `Team_workspaceId_name_key` is a real unique index and
- *  a materialisation must not die on a name a hand-made department already holds. */
-function uniqueTeamName(existing: readonly { readonly name: string }[], wanted: string): string {
-  return uniqueSlaveName(existing, wanted)
 }
 
 /** Who is on this project, what they provide and why they are here (R6) -- the read behind the

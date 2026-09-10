@@ -364,7 +364,10 @@ export const executionEventSchema = z.discriminatedUnion('type', [
     payload: z.object({
       entity: z.enum(['slave', 'team']),
       id: z.string().min(1),
-      field: z.enum(['name', 'role', 'model', 'deleted', 'created', 'team']),
+      /** `capabilities` is M47 t2's: `hireFromTemplate` REUSED a worker and merged new capability
+       *  keys into it without its runtime role set moving. `from`/`to` are the key lists, comma
+       *  separated, so the timeline says what the worker gained. */
+      field: z.enum(['name', 'role', 'model', 'deleted', 'created', 'team', 'capabilities']),
       from: z.string().nullable(),
       to: z.string().nullable(),
       /** `deleteSlave`/`deleteTeam` only (M27): runs the cascade took with the row. */

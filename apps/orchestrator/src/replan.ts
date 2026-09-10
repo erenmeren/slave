@@ -550,15 +550,36 @@ async function applyDelta(runId: RunId, workspaceId: string, version: number): P
     const taxonomy = await listCapabilities()
     const dropped = new Set<string>()
 
+    // Derived BEFORE the transaction, exactly as `concludePlanning` does it and for the same
+    // reason (fix round 1): a task naming only keys the taxonomy dropped derives no role, and a
+    // null `requiredRole` on the board is a task both world loaders exclude and nothing ever
+    // schedules. On this path it used to fail at nothing at all -- the delta committed and the row
+    // was silently unschedulable forever -- so the check belongs here, with the other pre-commit
+    // failures, where a `reason` still reaches `failRun`.
+    const derived: Array<{
+      readonly planTask: (typeof parsed.value.add)[number]
+      readonly keys: readonly string[]
+      readonly requiredRole: string
+    }> = []
+    for (const planTask of parsed.value.add) {
+      const { keys, unresolved } = normaliseCapabilitiesStrict(planTask.capabilities, taxonomy)
+      for (const key of unresolved) dropped.add(key)
+      // `concludePlanning`'s precedence, character for character: an explicit role wins, and
+      // otherwise the role of the first capability the taxonomy knows.
+      const requiredRole = planTask.role ?? roleOfFirst(keys, taxonomy)
+      if (requiredRole === null) {
+        return {
+          ok: false,
+          reason: `planning run produced no valid re-plan delta: added task "${planTask.key}" asks only for capabilities the taxonomy does not have`,
+        }
+      }
+      derived.push({ planTask, keys, requiredRole })
+    }
+
     const created = await prisma.$transaction(async (tx) => {
       const idByKey = new Map<string, string>()
       const added: Array<{ readonly id: string; readonly title: string }> = []
-      for (const planTask of parsed.value.add) {
-        const { keys, unresolved } = normaliseCapabilitiesStrict(planTask.capabilities, taxonomy)
-        for (const key of unresolved) dropped.add(key)
-        // `concludePlanning`'s precedence, character for character: an explicit role wins, and
-        // otherwise the role of the first capability the taxonomy knows.
-        const requiredRole = planTask.role ?? roleOfFirst(keys, taxonomy)
+      for (const { planTask, keys, requiredRole } of derived) {
         const task = await tx.task.create({
           data: {
             workspaceId,

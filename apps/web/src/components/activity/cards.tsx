@@ -645,20 +645,25 @@ function WorkspaceCreatedCard(props: ActivityCardProps): ReactElement {
 // (rename/re-role/delete a slave, rename/delete a team, create a project department, move an
 // slave to another department) all land here, distinguished by `payload.field`. `idle` tone,
 // matching `WorkspaceSettingsChangedCard` above: an edit to configuration, not a run outcome.
-const ORG_CHANGED_LABEL: Record<'name' | 'role' | 'model' | 'deleted' | 'created' | 'team', string> = {
+const ORG_CHANGED_LABEL: Record<
+  'name' | 'role' | 'model' | 'deleted' | 'created' | 'team' | 'capabilities',
+  string
+> = {
   name: 'renamed',
   role: 'role changed',
   model: 'model changed',
   deleted: 'deleted',
   created: 'created',
   team: 'moved to department',
+  // M47: a hire REUSED this worker and merged capability keys into it.
+  capabilities: 'capabilities changed',
 }
 
 function OrgChangedCard(props: ActivityCardProps): ReactElement {
   const payload = props.event.payload as {
     entity: 'slave' | 'team'
     id: string
-    field: 'name' | 'role' | 'model' | 'deleted' | 'created' | 'team'
+    field: 'name' | 'role' | 'model' | 'deleted' | 'created' | 'team' | 'capabilities'
     // `createProjectTeam` (field: 'created') carries `from: null` -- the new department had no
     // prior name -- the same nullable shape `to` already has for `deleted`.
     from: string | null

@@ -4,6 +4,7 @@ import { appendEvent } from '@slave-of-ai/events'
 import { PROVIDER_KINDS, type ProviderKind } from '@slave-of-ai/providers'
 import { admitProvider } from './budget.js'
 import { listCapabilities } from './capability.js'
+import { AssignmentRefused, departmentFor } from './department.js'
 import type { Principal } from './principal.js'
 import { isUniqueConstraintViolation } from './prisma-errors.js'
 import type { ControlRefusal } from './refusal.js'
@@ -334,25 +335,10 @@ export interface AssignOptions {
   readonly taxonomy?: readonly CapabilityRecord[]
 }
 
-/**
- * Thrown by {@link assignCompanyTx} for the ONE refusal it can only discover after it has already
- * written to its caller's transaction (M34 t2 fix round 2) -- the `Team_workspaceId_name_key` race
- * a concurrent `createProjectTeam`/`renameTeam` (or another department's own materialization) can
- * still win. Every OTHER refusal in that function is decided before its first write and stays a
- * plain returned value (see the function's own doc comment) -- this one exists because a value
- * returned from an interactive `$transaction` callback still COMMITS everything written before it;
- * only a callback that REJECTS rolls back. Mirrors `adopt.ts`'s own `AdoptionRefused` idiom
- * (the two are not the same class: `assignCompany` catches THIS one directly, and `adoptSimulation`
- * -- which runs `assignCompanyTx` inside its own transaction -- catches both classes at the same
- * outer `catch` and unwraps either one straight to `err(error.refusal)`, rather than every
- * `assignCompanyTx` caller needing its own duplicate unwrapping).
- */
-export class AssignmentRefused extends Error {
-  constructor(readonly refusal: ControlRefusal) {
-    super('assignment refused')
-    this.name = 'AssignmentRefused'
-  }
-}
+/** M34 t2 fix round 2's post-write refusal, re-exported unchanged (M47 t2 fix round 1): the class
+ *  moved to `department.js` with the helper that throws it, and `adoptSimulation` and the tests
+ *  still import it from here. */
+export { AssignmentRefused }
 
 /**
  * {@link assignCompany}'s transaction body, on a caller's `tx` (M33 controller ruling R1). It is
@@ -411,36 +397,13 @@ export async function assignCompanyTx(
   const createdWorkers: { companySlaveId: string; name: string; role: string }[] = []
 
   for (const companyTeam of companyTeams) {
-    let team = await tx.team.findFirst({ where: { workspaceId, companyTeamId: companyTeam.id } })
-    if (team === null) {
-      const legacy = await tx.team.findFirst({
-        where: { workspaceId, name: companyTeam.name, companyTeamId: null },
-      })
-      if (legacy !== null) {
-        // Only `companyTeamId` changes here -- `workspaceId` and `name` are read off the row
-        // itself and are not part of this update's `data`, so this write cannot itself collide
-        // with `Team_workspaceId_name_key` (M34 t2): the index only ever rejects a row whose
-        // OWN `(workspaceId, name)` pair changes to match another row's, and this one does not
-        // change at all.
-        team = await tx.team.update({ where: { id: legacy.id }, data: { companyTeamId: companyTeam.id } })
-      } else {
-        // M34 t2 fix round 1: a `createProjectTeam`/`renameTeam` racing THIS create for the same
-        // `(workspaceId, name)` -- no lock here serialises against them, only `assignCompanyTx`'s
-        // own workspace-row lock -- now hits `Team_workspaceId_name_key` instead of silently
-        // duplicating. THROWN (fix round 2), not returned: `companyId` (and possibly an earlier
-        // `companyTeam` iteration's own team and workers) has already been written to THIS
-        // transaction by this point, and a value returned from an interactive `$transaction`
-        // callback still commits everything written before it -- only a throw makes Prisma roll
-        // it back. See {@link AssignmentRefused}.
-        try {
-          team = await tx.team.create({ data: { workspaceId, name: companyTeam.name, companyTeamId: companyTeam.id } })
-        } catch (error) {
-          if (isUniqueConstraintViolation(error)) throw new AssignmentRefused({ kind: 'duplicate_name', name: companyTeam.name })
-          throw error
-        }
-        createdTeams.push(team.name)
-      }
-    }
+    // Found, else adopted, else created -- one helper, shared with `materialiseCompanySlave` so a
+    // project staffed one worker at a time and one assigned wholesale end up with the same
+    // departments (M47 t2 fix round 1). It throws `AssignmentRefused` for the unique-index race,
+    // which is what makes Prisma roll back the `companyId` this transaction has already written.
+    const department = await departmentFor(tx, workspaceId, companyTeam)
+    const team = department.team
+    if (department.created) createdTeams.push(team.name)
 
     for (const companySlave of companyTeam.slaves) {
       // Scoped to the WORKSPACE, not to this template's own copied department (M25 final

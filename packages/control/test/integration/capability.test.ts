@@ -48,15 +48,22 @@ describe('syncCapabilityTaxonomy', () => {
   })
 
   it('brings a hand-edited seed row back to the checked-in list, and leaves an operator row alone', async (): Promise<void> => {
+    // `security.application` is a row OTHER files in this database read. The repair is what this
+    // case is about, so it happens either way (fix round 1, minor 6): a `finally` puts the row
+    // back even when an assertion above it throws.
     await prisma.capability.update({ where: { key: 'security.application' }, data: { label: 'wrong', role: 'backend' } })
-    await prisma.capability.create({
-      data: { key: 'local.thing', label: 'A local thing', domain: 'local', role: 'backend', synonyms: [], createdBy: 'human' },
-    })
-    const out = await syncCapabilityTaxonomy()
-    expect(out.updated).toBe(1)
-    const rows = await listCapabilities()
-    expect(rows.find((row) => row.key === 'security.application')?.role).toBe('security')
-    expect(rows.find((row) => row.key === 'local.thing')).toBeDefined()
+    try {
+      await prisma.capability.create({
+        data: { key: 'local.thing', label: 'A local thing', domain: 'local', role: 'backend', synonyms: [], createdBy: 'human' },
+      })
+      const out = await syncCapabilityTaxonomy()
+      expect(out.updated).toBe(1)
+      const rows = await listCapabilities()
+      expect(rows.find((row) => row.key === 'security.application')?.role).toBe('security')
+      expect(rows.find((row) => row.key === 'local.thing')).toBeDefined()
+    } finally {
+      await syncCapabilityTaxonomy()
+    }
   })
 })
 
@@ -144,6 +151,71 @@ describe('hireFromTemplate', () => {
     expect(row.selectionRationale).toBe('first')
   })
 
+  // Fix round 1, minor 2: the "is one already hired?" read now happens under the workspace row
+  // lock, so two concurrent hires serialise instead of both deciding "no" and creating two.
+  it('creates exactly one worker when two hires for the same template race', async (): Promise<void> => {
+    const { workspaceId } = await workspace()
+    const template = await prisma.slaveTemplate.create({
+      data: { name: 'Security Reviewer', role: 'security', capabilityKeys: ['security.application'] },
+    })
+
+    const [first, second] = await Promise.all([
+      hireFromTemplate(workspaceId, template.id, { rationale: 'first', capabilities: ['qa.test-automation'] }),
+      hireFromTemplate(workspaceId, template.id, { rationale: 'second', capabilities: ['backend.api-design'] }),
+    ])
+
+    expect(first.ok && second.ok).toBe(true)
+    if (!first.ok || !second.ok) return
+    expect(await prisma.slave.count({ where: { team: { workspaceId } } })).toBe(1)
+    // One of the two created the worker and the other reused it; which one won the lock is not
+    // something a test may assert, but that exactly one reused it is.
+    expect([first.value.reused, second.value.reused].filter(Boolean)).toHaveLength(1)
+    expect(first.value.slaveId).toBe(second.value.slaveId)
+    // Both callers' capabilities are on the row: the loser merged rather than overwrote.
+    const row = await prisma.slave.findUniqueOrThrow({ where: { id: first.value.slaveId } })
+    expect(row.capabilities).toEqual(['backend.api-design', 'qa.test-automation', 'security.application'])
+    expect([...row.runtimeRoles].toSorted()).toEqual(['backend', 'qa', 'security'])
+  })
+
+  // Fix round 1, minor 3: a reuse that CHANGES the worker is a write, and a write nobody can see
+  // in the log is how a roster grows roles no one remembers granting.
+  it('records the reuse: the roles event when the role set grew, the capability event when only the keys did', async (): Promise<void> => {
+    const { workspaceId } = await workspace()
+    const template = await prisma.slaveTemplate.create({
+      data: { name: 'Security Reviewer', role: 'security', capabilityKeys: ['security.application'] },
+    })
+    const first = await hireFromTemplate(workspaceId, template.id, { rationale: 'first' })
+    expect(first.ok).toBe(true)
+    if (!first.ok) return
+
+    // A second hire bringing a capability that projects to a role the worker did not hold.
+    const grew = await hireFromTemplate(workspaceId, template.id, { rationale: 'second', capabilities: ['qa.test-automation'] })
+    expect(grew.ok && grew.value.reused).toBe(true)
+    const roleEvents = await prisma.executionEvent.findMany({
+      where: { workspaceId, type: 'slave_runtime_roles_changed' },
+    })
+    expect(roleEvents).toHaveLength(1)
+    expect((roleEvents[0]?.payload as { roles: string[] }).roles).toEqual(['security', 'qa'])
+
+    // A third bringing a capability that projects to a role it already holds: the keys changed,
+    // the role set did not.
+    const merged = await hireFromTemplate(workspaceId, template.id, {
+      rationale: 'third',
+      capabilities: ['security.authentication'],
+    })
+    expect(merged.ok && merged.value.reused).toBe(true)
+    const orgEvents = await prisma.executionEvent.findMany({
+      where: { workspaceId, type: 'org_changed', slaveId: first.value.slaveId },
+    })
+    // One for the hire that created the worker, one for this capability merge.
+    expect(orgEvents.map((event) => (event.payload as { field: string }).field)).toEqual(['created', 'capabilities'])
+
+    // ...and a reuse that changes nothing writes nothing: there is no fact to record.
+    await hireFromTemplate(workspaceId, template.id, { rationale: 'fourth' })
+    expect(await prisma.executionEvent.count({ where: { workspaceId, type: 'org_changed' } })).toBe(2)
+    expect(await prisma.executionEvent.count({ where: { workspaceId, type: 'slave_runtime_roles_changed' } })).toBe(1)
+  })
+
   it('names a second worker from the same template distinctly when the project already has that name', async (): Promise<void> => {
     const { workspaceId, teamId } = await workspace()
     await prisma.slave.create({ data: { teamId, name: 'Security Reviewer', role: 'x', runtimeRoles: [] } })
@@ -194,6 +266,33 @@ describe('materialiseCompanySlave', () => {
     // Idempotent: the same roster row twice is the same worker.
     const again = await materialiseCompanySlave(workspaceId, rosterRow.id, {})
     expect(again.ok && again.value.created).toBe(false)
+  })
+})
+
+// Fix round 1, minor 4: the department step is `assignCompanyTx`'s own, shared rather than
+// re-implemented -- a hand-made department of the same name is ADOPTED, never shadowed by a
+// `Security 2` the operator did not ask for.
+describe('materialiseCompanySlave and a department that already exists', () => {
+  it('binds the roster team to a hand-made department of the same name', async (): Promise<void> => {
+    const { workspaceId } = await workspace()
+    const legacy = await prisma.team.create({ data: { workspaceId, name: 'Security' } })
+    const template = await prisma.slaveTemplate.create({
+      data: { name: 'Roster Security', role: 'security', capabilityKeys: ['security.application'] },
+    })
+    const company = await prisma.company.create({ data: { name: 'M47 Co' } })
+    const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Security' } })
+    const rosterRow = await prisma.companySlave.create({
+      data: { companyTeamId: companyTeam.id, templateId: template.id, name: 'Sam' },
+    })
+
+    const out = await materialiseCompanySlave(workspaceId, rosterRow.id, {})
+    expect(out.ok).toBe(true)
+    if (!out.ok) return
+
+    const row = await prisma.slave.findUniqueOrThrow({ where: { id: out.value.slaveId } })
+    expect(row.teamId).toBe(legacy.id)
+    expect((await prisma.team.findUniqueOrThrow({ where: { id: legacy.id } })).companyTeamId).toBe(companyTeam.id)
+    expect(await prisma.team.count({ where: { workspaceId, name: 'Security 2' } })).toBe(0)
   })
 })
 
