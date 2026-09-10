@@ -228,8 +228,12 @@ export function OverviewClient({
           * alerts in this sense and stay exactly as they are (erratum E21). */}
         {error !== null && <Alert variant="notice">showing stale data: {error}</Alert>}
         {view.workspace.adoptedFrom !== null && (
-          // M44 R3: the second full-width band on this page, now the same component as the first.
-          <Alert variant="notice" testId="ws-adopted-from">
+          // M44 R3: the second full-width band on this page, the same component as the first --
+          // but the `info` variant (fix round 1), which is `role="status"` on the page's own
+          // neutral surface. Where the line above is a warning that needs reading NOW, this one is
+          // standing provenance: true for the life of the project, needing nobody. Announcing it
+          // on insertion, in the same amber, was a warning about nothing.
+          <Alert variant="info" testId="ws-adopted-from">
             organisation adopted from simulation{' '}
             <Link href={`/sim/${view.workspace.adoptedFrom.simulationId}`} className="underline">
               {view.workspace.adoptedFrom.name}

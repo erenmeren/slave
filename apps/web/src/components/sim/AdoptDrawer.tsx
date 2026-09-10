@@ -140,73 +140,73 @@ export function AdoptDrawer({
     // width is written as a LITERAL Tailwind class here, in the caller's own source, because
     // Tailwind v4 only generates a utility it can find as literal text.
     <Drawer open={open} onClose={onClose} label="Adopt this organisation" testId="sim-adopt-drawer" width="w-[560px]" dismissible={!pending}>
-        <div className="flex items-center justify-between">
-          <h2 className="text-[14.5px] font-semibold tracking-[-.2px] text-text-1">Adopt this organisation</h2>
-          <button type="button" data-testid="sim-adopt-close" onClick={() => { if (!pending) onClose() }} className="text-text-3 hover:text-text-1">✕</button>
-        </div>
-        <p className="text-xs text-text-3">the current roster, materialised with the run's roles; nothing runs and autoMerge stays off</p>
-        {previewError !== null && <span role="alert" data-testid="sim-adopt-preview-error" className="text-xs text-tone-blocked">{previewError}</span>}
-        {preview !== null && (
-          <>
-            <table data-testid="sim-adopt-roles" className="w-full text-left text-xs text-text-2">
-              <thead>
-                <tr className="text-text-3">
-                  <th className="font-normal">slave</th>
-                  <th className="font-normal">run role</th>
-                  <th className="font-normal">becomes</th>
+      <div className="flex items-center justify-between">
+        <h2 className="text-[14.5px] font-semibold tracking-[-.2px] text-text-1">Adopt this organisation</h2>
+        <button type="button" data-testid="sim-adopt-close" onClick={() => { if (!pending) onClose() }} className="text-text-3 hover:text-text-1">✕</button>
+      </div>
+      <p className="text-xs text-text-3">the current roster, materialised with the run's roles; nothing runs and autoMerge stays off</p>
+      {previewError !== null && <span role="alert" data-testid="sim-adopt-preview-error" className="text-xs text-tone-blocked">{previewError}</span>}
+      {preview !== null && (
+        <>
+          <table data-testid="sim-adopt-roles" className="w-full text-left text-xs text-text-2">
+            <thead>
+              <tr className="text-text-3">
+                <th className="font-normal">slave</th>
+                <th className="font-normal">run role</th>
+                <th className="font-normal">becomes</th>
+              </tr>
+            </thead>
+            <tbody>
+              {preview.roles.map((row) => (
+                <tr key={row.slaveName} data-testid="sim-adopt-role-row">
+                  <td>{row.slaveName}</td>
+                  <td>{row.role}</td>
+                  <td>{row.runtimeRole}</td>
                 </tr>
-              </thead>
-              <tbody>
-                {preview.roles.map((row) => (
-                  <tr key={row.slaveName} data-testid="sim-adopt-role-row">
-                    <td>{row.slaveName}</td>
-                    <td>{row.role}</td>
-                    <td>{row.runtimeRole}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {preview.workspaces.length === 0 ? (
-              <p data-testid="sim-adopt-no-workspace" className="text-xs text-tone-blocked">no workspace without a company; create one from Projects first</p>
-            ) : (
-              <SelectField
-                label="workspace"
-                selectProps={{
-                  'aria-label': 'adopt workspace',
-                  'data-testid': 'sim-adopt-workspace',
-                  value: workspaceId,
-                  disabled: pending,
-                  onChange: (event) => setWorkspaceId(event.target.value),
-                } as React.SelectHTMLAttributes<HTMLSelectElement>}
-              >
-                {preview.workspaces.map((workspace) => <option key={workspace.id} value={workspace.id}>{workspace.name}</option>)}
-              </SelectField>
-            )}
-            <TextField
-              label="max concurrent runs"
-              inputProps={{ 'aria-label': 'max concurrent runs', 'data-testid': 'sim-adopt-max-concurrent', value: maxConcurrentRuns, disabled: pending, inputMode: 'numeric', onChange: (event) => setMaxConcurrentRuns(event.target.value) } as React.InputHTMLAttributes<HTMLInputElement>}
-            />
-            {!maxConcurrentValid && <span role="alert" data-testid="sim-adopt-max-concurrent-error" className="text-xs text-tone-blocked">enter a whole number</span>}
-            <TextField
-              label="max attempts"
-              inputProps={{ 'aria-label': 'max attempts', 'data-testid': 'sim-adopt-max-attempts', value: maxAttempts, disabled: pending, inputMode: 'numeric', onChange: (event) => setMaxAttempts(event.target.value) } as React.InputHTMLAttributes<HTMLInputElement>}
-            />
-            {!maxAttemptsValid && <span role="alert" data-testid="sim-adopt-max-attempts-error" className="text-xs text-tone-blocked">enter a whole number</span>}
-            <div className="text-xs text-text-3">autoMerge <span data-testid="sim-adopt-automerge" className="text-text-2">off (locked)</span></div>
-            {preview.model !== null && leadName !== null && (
-              <label className="flex items-center gap-2 text-xs text-text-2">
-                <input type="checkbox" data-testid="sim-adopt-apply-model" checked={applyModel} disabled={pending} onChange={(event) => setApplyModel(event.target.checked)} />
-                also set {preview.model.model} on {leadName}&apos;s roster row — real, paid use
-              </label>
-            )}
-            <div className="flex items-center gap-3">
-              <Button variant="primary" size="sm" data-testid="sim-adopt-submit" disabled={pending || preview.workspaces.length === 0 || workspaceId === '' || !maxConcurrentValid || !maxAttemptsValid} onClick={() => void submit()}>
-                {pending ? 'adopting…' : 'Adopt this organisation'}
-              </Button>
-              {errorText !== null && <span role="alert" data-testid="sim-adopt-error" className="text-xs text-tone-blocked">{errorText}</span>}
-            </div>
-          </>
-        )}
+              ))}
+            </tbody>
+          </table>
+          {preview.workspaces.length === 0 ? (
+            <p data-testid="sim-adopt-no-workspace" className="text-xs text-tone-blocked">no workspace without a company; create one from Projects first</p>
+          ) : (
+            <SelectField
+              label="workspace"
+              selectProps={{
+                'aria-label': 'adopt workspace',
+                'data-testid': 'sim-adopt-workspace',
+                value: workspaceId,
+                disabled: pending,
+                onChange: (event) => setWorkspaceId(event.target.value),
+              } as React.SelectHTMLAttributes<HTMLSelectElement>}
+            >
+              {preview.workspaces.map((workspace) => <option key={workspace.id} value={workspace.id}>{workspace.name}</option>)}
+            </SelectField>
+          )}
+          <TextField
+            label="max concurrent runs"
+            inputProps={{ 'aria-label': 'max concurrent runs', 'data-testid': 'sim-adopt-max-concurrent', value: maxConcurrentRuns, disabled: pending, inputMode: 'numeric', onChange: (event) => setMaxConcurrentRuns(event.target.value) } as React.InputHTMLAttributes<HTMLInputElement>}
+          />
+          {!maxConcurrentValid && <span role="alert" data-testid="sim-adopt-max-concurrent-error" className="text-xs text-tone-blocked">enter a whole number</span>}
+          <TextField
+            label="max attempts"
+            inputProps={{ 'aria-label': 'max attempts', 'data-testid': 'sim-adopt-max-attempts', value: maxAttempts, disabled: pending, inputMode: 'numeric', onChange: (event) => setMaxAttempts(event.target.value) } as React.InputHTMLAttributes<HTMLInputElement>}
+          />
+          {!maxAttemptsValid && <span role="alert" data-testid="sim-adopt-max-attempts-error" className="text-xs text-tone-blocked">enter a whole number</span>}
+          <div className="text-xs text-text-3">autoMerge <span data-testid="sim-adopt-automerge" className="text-text-2">off (locked)</span></div>
+          {preview.model !== null && leadName !== null && (
+            <label className="flex items-center gap-2 text-xs text-text-2">
+              <input type="checkbox" data-testid="sim-adopt-apply-model" checked={applyModel} disabled={pending} onChange={(event) => setApplyModel(event.target.checked)} />
+              also set {preview.model.model} on {leadName}&apos;s roster row — real, paid use
+            </label>
+          )}
+          <div className="flex items-center gap-3">
+            <Button variant="primary" size="sm" data-testid="sim-adopt-submit" disabled={pending || preview.workspaces.length === 0 || workspaceId === '' || !maxConcurrentValid || !maxAttemptsValid} onClick={() => void submit()}>
+              {pending ? 'adopting…' : 'Adopt this organisation'}
+            </Button>
+            {errorText !== null && <span role="alert" data-testid="sim-adopt-error" className="text-xs text-tone-blocked">{errorText}</span>}
+          </div>
+        </>
+      )}
     </Drawer>
   )
 }

@@ -59,6 +59,13 @@ export function cardStateForSlave(status: SlaveStatus): CardState {
 }
 
 /**
+ * `deriveSlaveStatus`'s seven members, as a value (M44 R5). Exported because the Slaves table has
+ * to narrow a bare `string` for its LABEL exactly as `toneForStatus` narrows it for its TONE, and
+ * two copies of this literal is precisely how the word and the colour drift apart again.
+ */
+export const KNOWN_SLAVE_STATUSES = ['idle', 'starting', 'working', 'pausing', 'paused', 'resuming', 'stopping'] as const
+
+/**
  * The tone for a worker row's `StatusPill`, from the SAME derivation its label comes from (M44
  * erratum E18). Moved here from `components/SlavesClient.tsx`, whose `SLAVE_STATUS_TONE` was a
  * second status->tone table living beside `CARD_STATE_TONE` -- exactly the drift this file exists
@@ -66,8 +73,6 @@ export function cardStateForSlave(status: SlaveStatus): CardState {
  * always `deriveSlaveStatus`'s output, so anything outside the vocabulary falls back to `idle`
  * rather than throwing at render time.
  */
-export const KNOWN_SLAVE_STATUSES = ['idle', 'starting', 'working', 'pausing', 'paused', 'resuming', 'stopping'] as const
-
 export function toneForStatus(status: string): StatusTone {
   const known = KNOWN_SLAVE_STATUSES.find((member) => member === status)
   return CARD_STATE_TONE[known === undefined ? 'idle' : cardStateForSlave(known)].tone

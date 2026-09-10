@@ -191,94 +191,94 @@ export function NewSlaveDrawer({
     // inert while a POST is in flight -- and `close` keeps its own copy, because the ✕ button
     // below routes through it too.
     <Drawer open={open} onClose={close} label="New slave" testId="new-slave-drawer" dismissible={!pending}>
-        <div className="flex items-center justify-between">
-          <h2 className="text-[14.5px] font-semibold tracking-[-.2px] text-text-1">New slave</h2>
-          <button type="button" data-testid="new-slave-close" onClick={close} className="text-text-3 hover:text-text-1">
-            ✕
-          </button>
-        </div>
-        <p className="text-xs text-text-3">add a slave to a company's catalog — and, if you pick a project, put it to work there now</p>
-        <form
-          className="flex flex-col gap-3"
-          onSubmit={(event) => {
-            event.preventDefault()
-            void submit()
-          }}
+      <div className="flex items-center justify-between">
+        <h2 className="text-[14.5px] font-semibold tracking-[-.2px] text-text-1">New slave</h2>
+        <button type="button" data-testid="new-slave-close" onClick={close} className="text-text-3 hover:text-text-1">
+          ✕
+        </button>
+      </div>
+      <p className="text-xs text-text-3">add a slave to a company's catalog — and, if you pick a project, put it to work there now</p>
+      <form
+        className="flex flex-col gap-3"
+        onSubmit={(event) => {
+          event.preventDefault()
+          void submit()
+        }}
+      >
+        <SelectField
+          label="Company"
+          selectProps={{ 'aria-label': 'company', 'data-testid': 'new-slave-company', value: companyId, disabled: pending, onChange: (event) => { setCompanyId(event.target.value); setCompanyTeamId('') } } as React.SelectHTMLAttributes<HTMLSelectElement>}
         >
-          <SelectField
-            label="Company"
-            selectProps={{ 'aria-label': 'company', 'data-testid': 'new-slave-company', value: companyId, disabled: pending, onChange: (event) => { setCompanyId(event.target.value); setCompanyTeamId('') } } as React.SelectHTMLAttributes<HTMLSelectElement>}
-          >
-            <option value="">select a company</option>
-            {companies.map((c) => (
-              <option key={c.id} value={c.id}>{c.name}</option>
-            ))}
-          </SelectField>
-          <SelectField
-            label="Department"
-            selectProps={{ 'aria-label': 'department template', 'data-testid': 'new-slave-department', value: companyTeamId, disabled: pending || companyId === '', onChange: (event) => setCompanyTeamId(event.target.value) } as React.SelectHTMLAttributes<HTMLSelectElement>}
-          >
-            <option value="">select a department</option>
-            {departments.map((d) => (
-              <option key={d.companyTeamId} value={d.companyTeamId}>{d.teamName}</option>
-            ))}
-            <option value={NEW_DEPARTMENT}>new department…</option>
-          </SelectField>
-          {companyTeamId === NEW_DEPARTMENT && (
-            <TextField
-              label="New department name"
-              inputProps={{ 'aria-label': 'new department name', 'data-testid': 'new-slave-department-name', value: newDepartment, disabled: pending, onChange: (event) => setNewDepartment(event.target.value) } as React.InputHTMLAttributes<HTMLInputElement>}
-            />
-          )}
-          <SelectField
-            label="Template"
-            selectProps={{ 'aria-label': 'slave template', 'data-testid': 'new-slave-template', value: templateId, disabled: pending, onChange: (event) => setTemplateId(event.target.value) } as React.SelectHTMLAttributes<HTMLSelectElement>}
-          >
-            <option value="">select a template</option>
-            {templates.map((t) => (
-              <option key={t.id} value={t.id}>{t.name}</option>
-            ))}
-          </SelectField>
+          <option value="">select a company</option>
+          {companies.map((c) => (
+            <option key={c.id} value={c.id}>{c.name}</option>
+          ))}
+        </SelectField>
+        <SelectField
+          label="Department"
+          selectProps={{ 'aria-label': 'department template', 'data-testid': 'new-slave-department', value: companyTeamId, disabled: pending || companyId === '', onChange: (event) => setCompanyTeamId(event.target.value) } as React.SelectHTMLAttributes<HTMLSelectElement>}
+        >
+          <option value="">select a department</option>
+          {departments.map((d) => (
+            <option key={d.companyTeamId} value={d.companyTeamId}>{d.teamName}</option>
+          ))}
+          <option value={NEW_DEPARTMENT}>new department…</option>
+        </SelectField>
+        {companyTeamId === NEW_DEPARTMENT && (
           <TextField
-            label="Name"
-            inputProps={{ 'aria-label': 'slave name', 'data-testid': 'new-slave-name', value: name, disabled: pending, onChange: (event) => setName(event.target.value) } as React.InputHTMLAttributes<HTMLInputElement>}
+            label="New department name"
+            inputProps={{ 'aria-label': 'new department name', 'data-testid': 'new-slave-department-name', value: newDepartment, disabled: pending, onChange: (event) => setNewDepartment(event.target.value) } as React.InputHTMLAttributes<HTMLInputElement>}
           />
-          <div className="flex flex-wrap gap-3">
-            <label className="flex flex-col gap-1">
-              <FieldLabel>Provider</FieldLabel>
-              <ProviderSelect testId="new-slave-provider" ariaLabel="provider" value={provider} onChange={setProvider} disabled={pending} placeholder="select a provider" className={`w-40 ${INPUT_SHELL}`} />
-            </label>
-            <label className="flex flex-col gap-1">
-              <FieldLabel>Model</FieldLabel>
-              <ModelSelect provider={provider} value={model} onChange={setModel} disabled={pending} ariaLabel="model" inputTestId="new-slave-model-input" className="w-52" />
-            </label>
-          </div>
-          <SelectField
-            label="Assign to project (optional)"
-            selectProps={{ 'aria-label': 'assign to project', 'data-testid': 'new-slave-project', value: workspaceId, disabled: pending, onChange: (event) => setWorkspaceId(event.target.value) } as React.SelectHTMLAttributes<HTMLSelectElement>}
-          >
-            <option value="">catalog only</option>
-            {workspaces.map((w) => (
-              <option key={w.id} value={w.id}>{w.name}</option>
-            ))}
-          </SelectField>
-          <div className="flex items-center gap-3">
-            <Button variant="primary" size="sm" type="submit" data-testid="new-slave-submit" disabled={pending || !ready || createdSlave}>
-              {createdSlave ? 'created' : pending ? 'creating…' : 'Create slave'}
-            </Button>
-            {errorText !== null && (
-              <span role="alert" data-testid="new-slave-error" className="text-xs text-tone-blocked">
-                {errorText}
-              </span>
-            )}
-            {departmentJustCreatedNote && (
-              <span data-testid="new-slave-note" className="text-xs text-text-3">
-                department template created; the slave was refused
-              </span>
-            )}
-          </div>
-          {createdButUnassigned && <p className="text-xs text-text-3">catalog slave created; assign from the project card</p>}
-        </form>
+        )}
+        <SelectField
+          label="Template"
+          selectProps={{ 'aria-label': 'slave template', 'data-testid': 'new-slave-template', value: templateId, disabled: pending, onChange: (event) => setTemplateId(event.target.value) } as React.SelectHTMLAttributes<HTMLSelectElement>}
+        >
+          <option value="">select a template</option>
+          {templates.map((t) => (
+            <option key={t.id} value={t.id}>{t.name}</option>
+          ))}
+        </SelectField>
+        <TextField
+          label="Name"
+          inputProps={{ 'aria-label': 'slave name', 'data-testid': 'new-slave-name', value: name, disabled: pending, onChange: (event) => setName(event.target.value) } as React.InputHTMLAttributes<HTMLInputElement>}
+        />
+        <div className="flex flex-wrap gap-3">
+          <label className="flex flex-col gap-1">
+            <FieldLabel>Provider</FieldLabel>
+            <ProviderSelect testId="new-slave-provider" ariaLabel="provider" value={provider} onChange={setProvider} disabled={pending} placeholder="select a provider" className={`w-40 ${INPUT_SHELL}`} />
+          </label>
+          <label className="flex flex-col gap-1">
+            <FieldLabel>Model</FieldLabel>
+            <ModelSelect provider={provider} value={model} onChange={setModel} disabled={pending} ariaLabel="model" inputTestId="new-slave-model-input" className="w-52" />
+          </label>
+        </div>
+        <SelectField
+          label="Assign to project (optional)"
+          selectProps={{ 'aria-label': 'assign to project', 'data-testid': 'new-slave-project', value: workspaceId, disabled: pending, onChange: (event) => setWorkspaceId(event.target.value) } as React.SelectHTMLAttributes<HTMLSelectElement>}
+        >
+          <option value="">catalog only</option>
+          {workspaces.map((w) => (
+            <option key={w.id} value={w.id}>{w.name}</option>
+          ))}
+        </SelectField>
+        <div className="flex items-center gap-3">
+          <Button variant="primary" size="sm" type="submit" data-testid="new-slave-submit" disabled={pending || !ready || createdSlave}>
+            {createdSlave ? 'created' : pending ? 'creating…' : 'Create slave'}
+          </Button>
+          {errorText !== null && (
+            <span role="alert" data-testid="new-slave-error" className="text-xs text-tone-blocked">
+              {errorText}
+            </span>
+          )}
+          {departmentJustCreatedNote && (
+            <span data-testid="new-slave-note" className="text-xs text-text-3">
+              department template created; the slave was refused
+            </span>
+          )}
+        </div>
+        {createdButUnassigned && <p className="text-xs text-text-3">catalog slave created; assign from the project card</p>}
+      </form>
     </Drawer>
   )
 }

@@ -111,6 +111,16 @@ describe('AvatarTile', () => {
     render(<AvatarTile name="Alex Turner" tone="idle" />)
     expect(screen.getByTestId('avatar-tile').getAttribute('title')).toBe('Alex Turner')
   })
+
+  // Same contract as `Chip`'s, for the same reason (M44 R5): the Slaves table's pill reads PAUSING
+  // and has to keep `pausing` on the node, and every pill that has nothing to keep must not render
+  // an empty tooltip.
+  it('carries a raw value in title when given one, and no title attribute at all when not', () => {
+    render(<><StatusPill tone="paused" label="PAUSING" title="pausing" /><StatusPill tone="idle" label="IDLE" /></>)
+    const [titled, plain] = screen.getAllByTestId('status-pill')
+    expect(titled?.getAttribute('title')).toBe('pausing')
+    expect(plain?.hasAttribute('title')).toBe(false)
+  })
 })
 
 describe('StatusPill pulse', () => {
@@ -247,6 +257,16 @@ describe('Chip', () => {
     render(<Chip>plain</Chip>)
     expect(screen.getByTestId('chip').textContent).toBe('plain')
   })
+
+  // M44 R5: a chip that says a projected word has to be able to say what it was projected FROM.
+  // `title=""` would be worse than nothing -- an empty tooltip on every untitled chip in the app --
+  // so the attribute is spread conditionally and its ABSENCE is what is pinned here.
+  it('carries a raw value in title when given one, and no title attribute at all when not', () => {
+    render(<><Chip title="finished">Finished</Chip><Chip>SIMULATION</Chip></>)
+    const [titled, plain] = screen.getAllByTestId('chip')
+    expect(titled?.getAttribute('title')).toBe('finished')
+    expect(plain?.hasAttribute('title')).toBe(false)
+  })
 })
 
 describe('Button', () => {
@@ -364,6 +384,23 @@ describe('Alert, EmptyState and LoadingState', () => {
     expect(band.getAttribute('role')).toBe('alert')
     expect(band.getAttribute('data-variant')).toBe('notice')
     expect(band.textContent).toBe('showing stale data')
+  })
+
+  // Fix round 1: the fourth variant is the one that is NOT an alert. `role="alert"` is assertive --
+  // a reader interrupts itself for it -- and standing provenance ("adopted from a simulation") is
+  // not something to interrupt anybody for, nor to paint in the amber the three real warnings use.
+  it('Alert info is a polite status on a neutral surface, not an alert in amber', () => {
+    render(<Alert variant="info" testId="provenance">adopted from a simulation</Alert>)
+    const band = screen.getByTestId('provenance')
+    expect(band.getAttribute('role')).toBe('status')
+    expect(band.getAttribute('data-variant')).toBe('info')
+    expect(band.className).toContain('border-line')
+    expect(band.className).toContain('bg-bg-1')
+    expect(band.className).toContain('text-text-3')
+    // Not a tone: none of the three warning surfaces leaked into it.
+    expect(band.className).not.toContain('tone-waiting')
+    expect(band.className).not.toContain('tone-blocked')
+    expect(band.className).not.toContain('tone-done')
   })
 
   it('EmptyState says the sentence and can carry one action', () => {

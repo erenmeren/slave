@@ -64,21 +64,21 @@ export function CloneDrawer({
   return (
     // M44 R3: `ui/Drawer`, with the same `!pending` guard the scrim and the Escape handler carried.
     <Drawer open={open} onClose={onClose} label="Clone simulation" testId="sim-clone-drawer" dismissible={!pending}>
-        <div className="flex items-center justify-between">
-          <h2 className="text-[14.5px] font-semibold tracking-[-.2px] text-text-1">Clone simulation</h2>
-          <button type="button" data-testid="sim-clone-close" onClick={() => { if (!pending) onClose() }} className="text-text-3 hover:text-text-1">✕</button>
-        </div>
-        <p className="text-xs text-text-3">same scenario, same roster, same start — a different policy or seed; nothing that happened in the source is carried over</p>
-        <TextField label="name" inputProps={{ 'aria-label': 'clone name', 'data-testid': 'sim-clone-name', value: name, disabled: pending, onChange: (event) => setName(event.target.value) } as React.InputHTMLAttributes<HTMLInputElement>} />
-        <SelectField label="policy" selectProps={{ 'aria-label': 'clone policy', 'data-testid': 'sim-clone-policy', value: policy, disabled: pending, onChange: (event) => setPolicy(event.target.value as 'A' | 'B') } as React.SelectHTMLAttributes<HTMLSelectElement>}>
-          <option value="A">{sectors[sector].policyLabels.A}</option>
-          <option value="B">{sectors[sector].policyLabels.B}</option>
-        </SelectField>
-        <TextField label="seed" inputProps={{ 'aria-label': 'clone seed', 'data-testid': 'sim-clone-seed', value: seed, disabled: pending, inputMode: 'numeric', onChange: (event) => setSeed(event.target.value) } as React.InputHTMLAttributes<HTMLInputElement>} />
-        <div className="flex items-center gap-3">
-          <Button variant="primary" size="sm" data-testid="sim-clone-submit" disabled={pending || name.trim() === ''} onClick={() => void submit()}>{pending ? 'cloning…' : 'Clone simulation'}</Button>
-          {errorText !== null && <span role="alert" data-testid="sim-clone-error" className="text-xs text-tone-blocked">{errorText}</span>}
-        </div>
+      <div className="flex items-center justify-between">
+        <h2 className="text-[14.5px] font-semibold tracking-[-.2px] text-text-1">Clone simulation</h2>
+        <button type="button" data-testid="sim-clone-close" onClick={() => { if (!pending) onClose() }} className="text-text-3 hover:text-text-1">✕</button>
+      </div>
+      <p className="text-xs text-text-3">same scenario, same roster, same start — a different policy or seed; nothing that happened in the source is carried over</p>
+      <TextField label="name" inputProps={{ 'aria-label': 'clone name', 'data-testid': 'sim-clone-name', value: name, disabled: pending, onChange: (event) => setName(event.target.value) } as React.InputHTMLAttributes<HTMLInputElement>} />
+      <SelectField label="policy" selectProps={{ 'aria-label': 'clone policy', 'data-testid': 'sim-clone-policy', value: policy, disabled: pending, onChange: (event) => setPolicy(event.target.value as 'A' | 'B') } as React.SelectHTMLAttributes<HTMLSelectElement>}>
+        <option value="A">{sectors[sector].policyLabels.A}</option>
+        <option value="B">{sectors[sector].policyLabels.B}</option>
+      </SelectField>
+      <TextField label="seed" inputProps={{ 'aria-label': 'clone seed', 'data-testid': 'sim-clone-seed', value: seed, disabled: pending, inputMode: 'numeric', onChange: (event) => setSeed(event.target.value) } as React.InputHTMLAttributes<HTMLInputElement>} />
+      <div className="flex items-center gap-3">
+        <Button variant="primary" size="sm" data-testid="sim-clone-submit" disabled={pending || name.trim() === ''} onClick={() => void submit()}>{pending ? 'cloning…' : 'Clone simulation'}</Button>
+        {errorText !== null && <span role="alert" data-testid="sim-clone-error" className="text-xs text-tone-blocked">{errorText}</span>}
+      </div>
     </Drawer>
   )
 }

@@ -745,6 +745,49 @@ describe('shell facts and stream state reach the project header, never the sideb
     expect(note.textContent).toBe('organisation adopted from simulation Sprint plan')
     expect(note.querySelector('a')?.getAttribute('href')).toBe('/sim/s1')
   })
+
+  // M44 Task 4 fix round 1. The provenance line briefly became a `role="alert"` amber band -- a
+  // warning about nothing, announced on insertion, sitting in the same colour as the stale-data
+  // warning right above it. It is `Alert variant="info"` now: `role="status"`, neutral surface.
+  // The second half of this case is the one that would have caught the regression -- with a REAL
+  // stale band on screen at the same time, `getByRole('alert')` has to resolve to exactly one node,
+  // and it has to be the warning.
+  it('says where the organisation came from politely, and leaves role=alert to the actual warning', async (): Promise<void> => {
+    vi.useFakeTimers()
+    // The stale band is the stream hook's `error`, which only appears when the debounced refetch
+    // that follows `onopen` fails -- the one honest way to put both bands on screen at once.
+    const fetchMock = vi.fn(async () => {
+      throw new Error('offline')
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    try {
+      const adopted = { ...PUBLISHED, workspace: { ...PUBLISHED.workspace, adoptedFrom: { simulationId: 's1', name: 'Sprint plan' } } }
+      render(<OverviewClient workspaceId="w3" initial={adopted} />)
+
+      const note = screen.getByTestId('ws-adopted-from')
+      expect(note.getAttribute('role')).toBe('status')
+      expect(note.getAttribute('data-variant')).toBe('info')
+      expect(screen.getByRole('status')).toBe(note)
+      // Nothing is warning yet, so nothing is an alert yet.
+      expect(screen.queryByRole('alert')).toBeNull()
+
+      act((): void => {
+        FakeOverviewEventSource.instances[0]?.onopen?.()
+      })
+      await act(async (): Promise<void> => {
+        await vi.advanceTimersByTimeAsync(300)
+      })
+
+      // Both bands are on screen. `getByRole` throws on more than one match, so this passing IS
+      // the assertion that the provenance line is not competing for the warning's role.
+      const alert = screen.getByRole('alert')
+      expect(alert.textContent).toContain('showing stale data')
+      expect(screen.getByRole('status')).toBe(note)
+    } finally {
+      vi.unstubAllGlobals()
+      vi.useRealTimers()
+    }
+  })
 })
 
 /** The snapshot the mount test publishes from: two working slaves, two active tasks. */

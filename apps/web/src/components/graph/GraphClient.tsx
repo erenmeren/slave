@@ -223,14 +223,20 @@ export function GraphClient({
       {/* M44 R6/D10: five buttons with an `aria-current` were never a tablist to a screen reader,
         * which is what they are to everyone else. `ui/Tabs` gives them `role="tablist"`/`"tab"`
         * and `aria-selected`; the `graph-mode-<id>` testids and the `?mode=` state are unchanged,
-        * so every gate and every bookmark keeps working. */}
-      <div className="flex gap-1 border-b border-line px-3 py-2">
+        * so every gate and every bookmark keeps working. `Tabs` brings its own `flex gap-1`, so
+        * this wrapper carries only the rule and the padding the strip had. `onSelect` hands back a
+        * plain `string`, and the id is resolved back through `MODE_TABS` rather than asserted with
+        * a cast -- an id that is not a mode cannot then set one. */}
+      <div className="border-b border-line px-3 py-2">
         <Tabs
           tabs={MODE_TABS.map((tab) => ({ id: tab.mode, label: tab.label }))}
           current={mode}
           ariaLabel="Graph mode"
           testIdPrefix="graph-mode"
-          onSelect={(id) => setMode(id as GraphMode)}
+          onSelect={(id) => {
+            const chosen = MODE_TABS.find((tab) => tab.mode === id)
+            if (chosen !== undefined) setMode(chosen.mode)
+          }}
         />
       </div>
       <div className="relative flex min-h-0 flex-1">

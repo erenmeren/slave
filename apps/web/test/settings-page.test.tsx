@@ -1022,4 +1022,50 @@ describe('the danger zone', () => {
     rerender(<DangerZone showReseed />)
     expect(screen.getByTestId('reseed')).toBeTruthy()
   })
+
+  // M44 Task 4 fix round 1: the two-step reseed moved out of this component and into
+  // `ui/DangerConfirm`, so the BEHAVIOUR that moved is pinned here -- nothing fires on the first
+  // click, the POST goes to the unchanged route on the second, and a 200 refreshes.
+  it('asks twice, then POSTs /api/dev/reseed and refreshes', async (): Promise<void> => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    try {
+      render(<DangerZone showReseed />)
+
+      fireEvent.click(screen.getByTestId('reseed'))
+      expect(screen.getByTestId('reseed-confirm').textContent).toBe('replace the data')
+      expect(screen.getByTestId('reseed-cancel')).toBeTruthy()
+      expect(fetchMock).not.toHaveBeenCalled()
+
+      await act(async (): Promise<void> => {
+        fireEvent.click(screen.getByTestId('reseed-confirm'))
+      })
+
+      expect(fetchMock).toHaveBeenCalledWith('/api/dev/reseed', expect.objectContaining({ method: 'POST' }))
+      expect(routerRefresh).toHaveBeenCalled()
+      // Back to the one-click trigger, and no refusal to show.
+      expect(screen.getByTestId('reseed')).toBeTruthy()
+      expect(screen.queryByTestId('reseed-error')).toBeNull()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('shows a refusal in place and stays on the confirm, without refreshing', async (): Promise<void> => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ error: 'reseed is development only' }), { status: 403 }))
+    vi.stubGlobal('fetch', fetchMock)
+    try {
+      render(<DangerZone showReseed />)
+      fireEvent.click(screen.getByTestId('reseed'))
+      await act(async (): Promise<void> => {
+        fireEvent.click(screen.getByTestId('reseed-confirm'))
+      })
+
+      expect(screen.getByTestId('reseed-error').textContent).toBe('reseed is development only')
+      expect(screen.getByTestId('reseed-confirm')).toBeTruthy()
+      expect(routerRefresh).not.toHaveBeenCalled()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
 })
