@@ -1,13 +1,15 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
+  capabilityIndex,
   MAPPING_QUALITY_LABEL,
   PROFILE_FIELD_KIND,
   PROFILE_FIELD_LABEL,
   PROFILE_OVERRIDABLE_FIELDS,
   PROFILE_SPEC_FIELDS,
   type ProfileOverridableField,
+  type CapabilityRecord,
   type ProfileSpec,
   type ProfileSpecField,
 } from '@slave-of-ai/domain'
@@ -21,6 +23,7 @@ import { Drawer } from '../ui/Drawer'
 import { EmptyState } from '../ui/EmptyState'
 import { LoadingState } from '../ui/LoadingState'
 import { INPUT_SHELL } from '../ui/FormControls'
+import { CapabilityChips } from '../organization/CapabilityChips'
 
 /** Which `DetailsGroup` each profile field renders inside. `runtimeRole` joins `identity` -- it is
  *  the one field the renderer never puts in a prompt (plan erratum E3), and it belongs beside who
@@ -108,11 +111,17 @@ const fromText = (field: ProfileSpecField, text: string): string | string[] =>
 export function ProfileDrawer({
   templateId,
   name,
+  capabilityKeys,
+  taxonomy,
   onClose,
   onChanged,
 }: {
   readonly templateId: string
   readonly name: string
+  /** The row's MATCHABLE capabilities (M47 R1) -- the keys `formTeam` and a catalog search read,
+   *  which are not the same thing as the persona's free-text `capabilities` bullets below them. */
+  readonly capabilityKeys: readonly string[]
+  readonly taxonomy: readonly CapabilityRecord[]
   readonly onClose: () => void
   readonly onChanged: () => void
 }): React.JSX.Element {
@@ -123,6 +132,23 @@ export function ProfileDrawer({
   const [drafts, setDrafts] = useState<Partial<Record<ProfileSpecField, string>>>({})
   const [rawDraft, setRawDraft] = useState<string | null>(null)
   const [errorText, setErrorText] = useState<string | null>(null)
+
+  /**
+   * The row's keys as words, resolved ONCE per taxonomy rather than once per chip:
+   * `capabilityLabel` builds a fresh `Map` out of the whole taxonomy on every call, and the
+   * taxonomy is a table, not a handful of rows (M47 t1 review).
+   *
+   * A key the taxonomy does not have still gets a chip -- printing the key is the honest fallback
+   * the domain's own helper takes -- and is named again under the list, because "this row says
+   * something nobody can match on" is a fact an operator can act on.
+   */
+  const { resolved, unresolved } = useMemo(() => {
+    const index = capabilityIndex(taxonomy)
+    return {
+      resolved: capabilityKeys.map((key) => ({ key, label: index.get(key)?.label ?? key })),
+      unresolved: capabilityKeys.filter((key) => !index.has(key)),
+    }
+  }, [capabilityKeys, taxonomy])
 
   /**
    * Re-read WITHOUT falling back to `loading` (fix, observed): every group in this drawer keeps
@@ -299,6 +325,20 @@ export function ProfileDrawer({
         spec !== null &&
         GROUPS.map(({ group, title }) => (
           <DetailsGroup key={group} group={group} title={title} defaultOpen>
+            {/* M47 §2: the matchable keys, as the taxonomy's own words, ABOVE the persona's
+              * free-text bullets -- the same chip the Organization tab prints, so one capability
+              * reads the same wherever it is shown. */}
+            {group === 'capabilities' && (
+              <div data-testid="profile-capability-keys" className="flex flex-col gap-1">
+                <span className="text-[10px] uppercase tracking-wide text-text-3">Matchable capabilities</span>
+                <CapabilityChips capabilities={resolved} max={resolved.length} />
+                {unresolved.length > 0 && (
+                  <span data-testid="profile-capabilities-unresolved" className="text-[11px] text-text-3">
+                    not in the taxonomy — `capabilities add` to make them matchable: {unresolved.join(', ')}
+                  </span>
+                )}
+              </div>
+            )}
             {group === 'source'
               ? (() => {
                   const source = spec.source

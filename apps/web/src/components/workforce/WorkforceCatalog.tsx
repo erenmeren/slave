@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import type { WorkforceCatalogFilters } from '@slave-of-ai/control'
+import type { CapabilityRecord } from '@slave-of-ai/domain'
 import type { WorkforceCatalogView } from '../../server/org'
 import { catalogFilterParams } from '../../lib/catalogFilters'
 import { plural } from '../../lib/plural'
@@ -47,13 +48,25 @@ const CHIPS = 3
  * handle a gate already drives to add one of our own would have been a rename dressed as a
  * feature. `CatalogImports.tsx` wraps its own rows for exactly this reason.
  */
-export function WorkforceCatalog({ initial }: { readonly initial: WorkforceCatalogView }): React.JSX.Element {
+export function WorkforceCatalog({
+  initial,
+  taxonomy = [],
+}: {
+  readonly initial: WorkforceCatalogView
+  /** The capability taxonomy, read once by the page beside the catalog (M47 §2) -- what turns the
+   *  drawer's `capabilityKeys` into words. Defaults to empty, where every key prints as itself. */
+  readonly taxonomy?: readonly CapabilityRecord[]
+}): React.JSX.Element {
   const router = useRouter()
   const { filters, setFilters } = useCatalogFilters()
   const [page, setPage] = useState<WorkforceCatalogView>(initial)
   const [staleError, setStaleError] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
-  const [open, setOpen] = useState<{ readonly id: string; readonly name: string } | null>(null)
+  const [open, setOpen] = useState<{
+    readonly id: string
+    readonly name: string
+    readonly capabilityKeys: readonly string[]
+  } | null>(null)
 
   /**
    * The rows that render are the LATEST request's answer, never merely the last one to arrive
@@ -154,7 +167,7 @@ export function WorkforceCatalog({ initial }: { readonly initial: WorkforceCatal
                 key={row.id}
                 data-testid={`catalog-row-${row.id}`}
                 data-mapping-quality={row.mappingQuality ?? ''}
-                onClick={() => setOpen({ id: row.id, name: row.name })}
+                onClick={() => setOpen({ id: row.id, name: row.name, capabilityKeys: row.capabilityKeys })}
               >
                 {/* `last` because this `Row` is the only child of its wrapper, so its own
                   * `:last-child` selector would match every row and draw no separator at all. */}
@@ -163,7 +176,7 @@ export function WorkforceCatalog({ initial }: { readonly initial: WorkforceCatal
                     <button
                       type="button"
                       data-testid={`catalog-open-${row.id}`}
-                      onClick={() => setOpen({ id: row.id, name: row.name })}
+                      onClick={() => setOpen({ id: row.id, name: row.name, capabilityKeys: row.capabilityKeys })}
                       className="truncate text-left text-sm text-text-1 hover:text-text-2"
                     >
                       {row.name}
@@ -235,6 +248,8 @@ export function WorkforceCatalog({ initial }: { readonly initial: WorkforceCatal
           key={open.id}
           templateId={open.id}
           name={open.name}
+          capabilityKeys={open.capabilityKeys}
+          taxonomy={taxonomy}
           onClose={() => setOpen(null)}
           onChanged={() => reload(filters)}
         />

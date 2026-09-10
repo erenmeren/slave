@@ -32,6 +32,9 @@ vi.mock('../src/server/org.js', () => ({
   listCompanies: async () => [],
   listRoster: async () => [],
   listCatalogImports: async () => [],
+  // M47 §2: the page reads the taxonomy beside the catalog. Empty here -- these cases are about
+  // which FILTERS reach the catalog read, and an empty taxonomy leaves every key printing itself.
+  listCapabilityTaxonomy: async () => [],
   listWorkforceCatalogPage: (filters?: unknown) => listWorkforceCatalogPage(filters),
   listTemplates: () => listTemplates(),
 }))
@@ -141,6 +144,7 @@ function TestWorkforceClient(
       catalog={catalogPage([])}
       catalogImports={[]}
       skills={skillsPage()}
+      taxonomy={[]}
       {...props}
     />
   )

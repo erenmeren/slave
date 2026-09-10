@@ -2,6 +2,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ProviderKind } from '@slave-of-ai/control'
+import type { CapabilityRecord } from '@slave-of-ai/domain'
 import type { CatalogRowView, WorkforceCatalogView } from '../src/server/org.js'
 import { clearModelSelectCache } from '../src/components/ModelSelect.js'
 import { TemplateForm } from '../src/components/workforce/TemplateForm.js'
@@ -60,6 +61,18 @@ const view = (rows: readonly CatalogRowView[]): WorkforceCatalogView => ({
     skills: ['writing-plans'],
   },
 })
+
+/** Two taxonomy rows is the whole fixture this file needs: one the drawer can resolve, and the
+ *  absence of a second is what makes an unresolved key unresolved. */
+const TAXONOMY: readonly CapabilityRecord[] = [
+  {
+    key: 'security.application',
+    label: 'Application security',
+    domain: 'security',
+    role: 'security',
+    synonyms: [],
+  },
+]
 
 let fetchMock: ReturnType<typeof vi.fn>
 
@@ -419,18 +432,45 @@ describe('ProfileDrawer', () => {
   }
   const withEffective = { ...profile, effective: profile.upstream }
 
-  const openDrawer = async (over: Partial<typeof withEffective> = {}): Promise<void> => {
+  const openDrawer = async (
+    over: Partial<typeof withEffective> = {},
+    catalogRow: CatalogRowView = row(),
+    taxonomy: readonly CapabilityRecord[] = [],
+  ): Promise<void> => {
     fetchMock.mockImplementation(async (url: string) =>
       url.includes('/profile')
         ? new Response(JSON.stringify({ ...withEffective, ...over }), { status: 200 })
-        : new Response(JSON.stringify(view([row()])), { status: 200 }),
+        : new Response(JSON.stringify(view([catalogRow])), { status: 200 }),
     )
-    render(<WorkforceCatalog initial={view([row()])} />)
+    render(<WorkforceCatalog initial={view([catalogRow])} taxonomy={taxonomy} />)
     await act(async () => {
       fireEvent.click(screen.getByTestId('catalog-row-t1'))
     })
     await waitFor(() => expect(screen.getByTestId('profile-drawer')).toBeTruthy())
   }
+
+  // M47 §2: the row's MATCHABLE keys, resolved to the taxonomy's own words, above the persona's
+  // free-text bullets -- the same `capability-chip` the Organization tab prints, so one capability
+  // reads the same in both places.
+  it('resolves the row\'s capability keys to labels, with the key still in the title', async () => {
+    await openDrawer({}, row({ capabilityKeys: ['security.application', 'nope.missing'] }), TAXONOMY)
+
+    const group = screen
+      .getAllByTestId('details-group')
+      .find((node) => node.getAttribute('data-group') === 'capabilities')
+    expect(group).toBeTruthy()
+    const chips = within(group as HTMLElement).getAllByTestId('capability-chip')
+    expect(chips.map((chip) => chip.textContent)).toEqual(['Application security', 'nope.missing'])
+    expect(chips[0]?.getAttribute('title')).toBe('security.application')
+  })
+
+  it('names the keys the taxonomy does not have, and says how to make them matchable', async () => {
+    await openDrawer({}, row({ capabilityKeys: ['security.application', 'nope.missing'] }), TAXONOMY)
+
+    const caption = screen.getByTestId('profile-capabilities-unresolved')
+    expect(caption.textContent).toContain('nope.missing')
+    expect(caption.textContent).toContain('capabilities add')
+  })
 
   it('opens on a row and shows every field group with its label', async () => {
     await openDrawer()

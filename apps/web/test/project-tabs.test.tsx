@@ -9,14 +9,21 @@ vi.mock('next/navigation', () => ({ usePathname: () => pathname }))
 
 afterEach(() => publishShellFacts('w1', null))
 
-const TAB_HREFS = ['/w/w1', '/w/w1/tasks', '/w/w1/activity', '/w/w1/settings']
+const TAB_HREFS = ['/w/w1', '/w/w1/tasks', '/w/w1/organization', '/w/w1/activity', '/w/w1/settings']
 
 describe('ProjectTabs', () => {
-  it('renders the four tabs in order with their hrefs (M44 R2)', () => {
+  // Five since M47 R6: Organization sits third, between Tasks and Activity.
+  it('renders the five tabs in order with their hrefs (M44 R2, M47 R6)', () => {
     pathname = '/w/w1'
     render(<ProjectTabs workspaceId="w1" initialTasksActive={2} />)
     const tabs = screen.getAllByRole('tab')
-    expect(tabs.map((t) => t.textContent?.replace(/\d+$/, '').trim())).toEqual(['Overview', 'Tasks', 'Activity', 'Settings'])
+    expect(tabs.map((t) => t.textContent?.replace(/\d+$/, '').trim())).toEqual([
+      'Overview',
+      'Tasks',
+      'Organization',
+      'Activity',
+      'Settings',
+    ])
     expect(tabs.map((t) => t.getAttribute('href'))).toEqual(TAB_HREFS)
   })
 

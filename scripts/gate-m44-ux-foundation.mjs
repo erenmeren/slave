@@ -27,8 +27,8 @@
 // The eight stages of R8:
 //   1. Four sidebar entries, in order, pointing where they say; /slaves and /skills land on
 //      /workforce with the right tab; /analytics still answers.
-//   2. The project strip is Overview/Tasks/Activity/Settings, and Advanced opens onto Graph and
-//      Office, whose routes still render.
+//   2. The project strip is Overview/Tasks/Organization/Activity/Settings, and Advanced opens onto
+//      Graph and Office, whose routes still render.
 //   3. Every page renders inside PageShell or its page-level equivalent, with the one main
 //      landmark and the sidebar present.
 //   4. NO RAW ENUM TOKEN is visible text on the eleven pages -- the blocklist is DERIVED from the
@@ -611,8 +611,12 @@ try {
     ),
   )
   console.log(`stage 2: project tabs = ${JSON.stringify(stripLabels)}`)
-  if (JSON.stringify(stripLabels) !== JSON.stringify(['Overview', 'Tasks', 'Activity', 'Settings'])) {
-    await fail(`stage 2: the project strip is ${JSON.stringify(stripLabels)}, expected ["Overview","Tasks","Activity","Settings"]`)
+  // FIVE since M47 R6 added the Organization tab, third. This stage of M44's gate names a later
+  // milestone deliberately: the strip is M44's contract, and whoever widens it moves this line with
+  // the component, in the same commit, or learns here that they did not.
+  const EXPECTED_TABS = ['Overview', 'Tasks', 'Organization', 'Activity', 'Settings']
+  if (JSON.stringify(stripLabels) !== JSON.stringify(EXPECTED_TABS)) {
+    await fail(`stage 2: the project strip is ${JSON.stringify(stripLabels)}, expected ${JSON.stringify(EXPECTED_TABS)}`)
   }
   const graphItemBefore = await page.getByTestId('advanced-item-graph').count()
   console.log(`stage 2: advanced-item-graph before the menu is opened = ${String(graphItemBefore)} element(s)`)
@@ -665,7 +669,7 @@ try {
   if (afterEscape.active !== 'project-advanced') {
     await fail(`stage 2: Escape left focus on ${JSON.stringify(afterEscape.active)}, expected the project-advanced trigger`)
   }
-  console.log('stage 2 PASSED: four tabs, Advanced onto Graph and Office, both routes rendering, Escape giving the keyboard back')
+  console.log('stage 2 PASSED: five tabs, Advanced onto Graph and Office, both routes rendering, Escape giving the keyboard back')
 
   // ============================================================================================
   // Stages 3 and 4, in ONE pass over the pages: the shell contract and the raw-token scan.

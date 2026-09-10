@@ -47,11 +47,12 @@ before adding a surface.
 
 | Route | User goal | Decision | M44 | Later |
 |---|---|---|---|---|
-| `/w/:id` Overview | What is happening right now, and what needs me | keep (tab 1) | M44: untouched content, and the six leaks in its panels closed. **M45**: rebuilt as a brief (eight facts), one input to the Supervisor, and a six-lane timeline whose decisions are answerable in place; the live-events river, the blocked panel, the merge queue and the Supervisor panel moved under `Advanced ▾` on the page; the team is the same card grid, under a `Team` label | M46 lifts the org graph's content into an Organization tab |
+| `/w/:id` Overview | What is happening right now, and what needs me | keep (tab 1) | M44: untouched content, and the six leaks in its panels closed. **M45**: rebuilt as a brief (eight facts), one input to the Supervisor, and a six-lane timeline whose decisions are answerable in place; the live-events river, the blocked panel, the merge queue and the Supervisor panel moved under `Advanced ▾` on the page; the team is the same card grid, under a `Team` label | M47 lifted the org graph's content into an Organization tab (M46's scope was the catalog; it did not) |
 | `/w/:id/tasks` Tasks | What work exists, in what state | keep (tab 2) | Untouched | M45 adds progressive disclosure |
-| `/w/:id/activity` Activity | What happened, in order | keep (tab 3) | The event-type rail reads words; the raw prefix is on `data-prefix` and in `title` | — |
-| `/w/:id/settings` Settings | Goal, runtime, permissions, danger | keep (tab 4) | Emergency stop uses the one destructive recipe | — |
-| `/w/:id/graph` Graph | Five structural views of the project | **demoted to Advanced ▾** | Reachable from `Advanced ▾ → Graph` and by URL; all five modes intact; the mode nav is a real tablist now | M46 lifts the org mode's content into an Organization tab; Graph stays |
+| `/w/:id/organization` Organization | Who works on this, why they were chosen, and what is missing | **new** (tab 3) | — | M47: one row per worker — kind, the capabilities they provide, why they are here and what they are doing — plus a Needs section whose proposals are answered in place, and the advisory edges a persona's profile carries |
+| `/w/:id/activity` Activity | What happened, in order | keep (tab 4) | The event-type rail reads words; the raw prefix is on `data-prefix` and in `title` | — |
+| `/w/:id/settings` Settings | Goal, runtime, permissions, danger | keep (tab 5) | Emergency stop uses the one destructive recipe | — |
+| `/w/:id/graph` Graph | Five structural views of the project | **demoted to Advanced ▾** | Reachable from `Advanced ▾ → Graph` and by URL; all five modes intact; the mode nav is a real tablist now | M47 lifted the org mode's content into an Organization tab; Graph stays |
 | `/w/:id/office` Office | The team as a pixel office | **demoted to Advanced ▾** | Reachable from `Advanced ▾ → Office` and by URL; the canvas gains a label and a text line saying what it shows | — |
 | `/analytics?workspace=:id` Analytics | Spend and throughput for THIS project | **reached from the project** | The third item in `Advanced ▾`, carrying the project's `?workspace=` scope; the route and the scope are the global page's, unchanged and bookmarkable | M53 replaces the tiles with per-profile evidence |
 

@@ -6,12 +6,14 @@ import { useEffect, useRef, useState } from 'react'
 import { Tabs, type TabSpec } from '../ui/Tabs'
 import { useShellFacts } from '../../hooks/useShellFacts'
 
-/** The four tabs a person needs to answer "what is happening" (M44 R2). Overview matches its route
- *  exactly (it is the prefix of every other tab); the rest match by prefix, so a filter in the
- *  query string still lights its tab. */
+/** The five tabs a person needs to answer "what is happening" (M44 R2; M47 R6 added Organization,
+ *  third -- who is doing this work is the question that follows what the work is). Overview matches
+ *  its route exactly (it is the prefix of every other tab); the rest match by prefix, so a filter in
+ *  the query string still lights its tab. */
 const TABS = [
   { id: 'overview', label: 'Overview', path: (id: string) => `/w/${id}`, exact: true },
   { id: 'tasks', label: 'Tasks', path: (id: string) => `/w/${id}/tasks`, exact: false },
+  { id: 'organization', label: 'Organization', path: (id: string) => `/w/${id}/organization`, exact: false },
   { id: 'activity', label: 'Activity', path: (id: string) => `/w/${id}/activity`, exact: false },
   { id: 'settings', label: 'Settings', path: (id: string) => `/w/${id}/settings`, exact: false },
 ] as const
@@ -39,9 +41,10 @@ const ADVANCED = [
 ] as const
 
 /**
- * The project's tab strip (M24 §2.2, rebuilt by M44 R2): four route links plus an `Advanced ▾`
- * menu holding Graph, Office and this project's scoped Analytics (`ADVANCED`, above -- `docs/ia.md`
- * lists all three). Only Tasks carries a badge -- the one live number in the strip.
+ * The project's tab strip (M24 §2.2, rebuilt by M44 R2, widened to five by M47 R6): five route
+ * links plus an `Advanced ▾` menu holding Graph, Office and this project's scoped Analytics
+ * (`ADVANCED`, above -- `docs/ia.md` lists all three). Only Tasks carries a badge -- the one live
+ * number in the strip.
  *
  * The menu copies `ProjectSwitcher`'s idiom, which is in the same header (erratum E22): a plain
  * popover with `role="menu"`, NOT a `Dialog`. A menu is not a modal -- it does not trap focus and

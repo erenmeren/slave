@@ -1,5 +1,6 @@
 import {
   listAllSlaves,
+  listCapabilityTaxonomy,
   listCatalogImports,
   listCompanies,
   listProjectTeams,
@@ -63,7 +64,7 @@ export default async function WorkforcePage({
   const tab = typeof params.tab === 'string' ? params.tab : undefined
   const filters = parseCatalogFilters(queryOf(params))
   const filtered = Object.keys(filters).length > 0
-  const [slaves, teams, workspaces, companies, roster, catalog, allTemplates, catalogImports, skills] =
+  const [slaves, teams, workspaces, companies, roster, catalog, allTemplates, catalogImports, skills, taxonomy] =
     await Promise.all([
       listAllSlaves(),
       listProjectTeams(),
@@ -74,6 +75,9 @@ export default async function WorkforcePage({
       filtered ? listTemplates() : Promise.resolve(null),
       listCatalogImports(),
       buildSkillsPage(),
+      // M47 §2: one read, beside the catalog it labels -- the drawer resolves a row's capability
+      // keys against it rather than opening a request of its own per profile.
+      listCapabilityTaxonomy(),
     ])
   const initialTab = TAB_IDS.find((id) => id === tab) ?? 'slaves'
   return (
@@ -88,6 +92,7 @@ export default async function WorkforcePage({
       catalog={catalog}
       catalogImports={catalogImports}
       skills={skills}
+      taxonomy={taxonomy}
     />
   )
 }

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
+import type { CapabilityRecord } from '@slave-of-ai/domain'
 import type { AllSlavesPage, CatalogRowView, ProjectTeamRow, RosterCompany, WorkforceCatalogView } from '../../server/org'
 import type { OverviewSnapshot, SlaveCardData } from '../../server/overview'
 import type { SkillsPage } from '../../server/skills'
@@ -55,6 +56,7 @@ export function WorkforceClient({
   catalog,
   catalogImports,
   skills,
+  taxonomy,
 }: {
   readonly initialTab: WorkforceTab
   readonly slaves: AllSlavesPage
@@ -66,6 +68,9 @@ export function WorkforceClient({
   readonly catalog: WorkforceCatalogView
   readonly catalogImports: readonly CatalogImportRow[]
   readonly skills: SkillsPage
+  /** The capability taxonomy (M47 §2), read once by the page: what the catalog's profile drawer
+   *  resolves a row's `capabilityKeys` into words with. */
+  readonly taxonomy: readonly CapabilityRecord[]
 }): React.JSX.Element {
   const searchParams = useSearchParams()
   const [tab, setTab] = useState<WorkforceTab>(initialTab)
@@ -148,7 +153,7 @@ export function WorkforceClient({
       {tab === 'catalog' && (
         <div className="flex flex-col gap-4">
           <Panel title="Workforce catalog">
-            <WorkforceCatalog initial={catalog} />
+            <WorkforceCatalog initial={catalog} taxonomy={taxonomy} />
           </Panel>
           <Panel title="Companies">
             <CompanyManager companies={companies} roster={roster} templates={templates} />

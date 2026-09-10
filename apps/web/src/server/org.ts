@@ -2,6 +2,7 @@ import { prisma } from '@slave-of-ai/db/client'
 import { toRunState } from '@slave-of-ai/db'
 import {
   capabilitiesOf,
+  listCapabilities,
   listCatalogImports as listCatalogImportRows,
   listWorkforceCatalog,
   readTemplateProfile,
@@ -19,6 +20,7 @@ import {
   sumSpendFromGroups,
   NON_TERMINAL_RUN_STATUSES,
   SUPERVISOR_PER_CALL_CAP_USD,
+  type CapabilityRecord,
   type Result,
   type SlaveStatus,
   type SpendGroup,
@@ -945,6 +947,17 @@ export async function readTemplateProfileView(
   templateId: string,
 ): Promise<Result<TemplateProfileView, ControlRefusal>> {
   return readTemplateProfile(templateId)
+}
+
+/**
+ * The capability taxonomy, under the web's own name for it (the `listWorkforceCatalogPage` idiom).
+ *
+ * A plain re-export of the control read: every field is already JSON (`CapabilityRecord` holds no
+ * `Date`), so there is nothing to flatten -- what this adds is one name a page and a component can
+ * import without either of them reaching into `@slave-of-ai/control` themselves.
+ */
+export async function listCapabilityTaxonomy(): Promise<readonly CapabilityRecord[]> {
+  return listCapabilities()
 }
 
 /** What `GET /api/org/templates/:id/profile` serialises, under the name the client names it: every

@@ -1,0 +1,154 @@
+import {
+  listCapabilities,
+  listDecisions,
+  listOrganization,
+  loadSupervisorWorld,
+  type DecisionView,
+} from '@slave-of-ai/control'
+import { capabilityIndex, teamPlanOf, type CapabilityRecord, type SupervisorWorld } from '@slave-of-ai/domain'
+
+/** One worker, as the Organization view reads them (R6): who, how they got here, what they
+ *  provide, and what they are doing right now. */
+export interface OrganizationRow {
+  readonly slaveId: string
+  readonly name: string
+  readonly roleLabel: string
+  /** `company` when the worker came off a company roster, `project` otherwise. The PERMANENT /
+   *  PROJECT / TEMPORARY lifecycle is M50's; this is the only distinction the schema can honestly
+   *  make today, and it is the same one `ProjectBrief.team[].company` makes. */
+  readonly kind: 'company' | 'project'
+  readonly capabilities: readonly { readonly key: string; readonly label: string }[]
+  /** WHY this worker is on this project, in one sentence -- the milestone's "why selected". The
+   *  stored `selectionRationale` when there is one, else the fact the row can support. */
+  readonly why: string
+  readonly runtimeRoles: readonly string[]
+  readonly doing: string | null
+}
+
+export interface OrganizationNeed {
+  readonly capability: string
+  readonly label: string
+  readonly summary: string
+  readonly readyTasks: number
+  /** The `pending` decisions about THIS capability -- rendered as `ProposalRow`s, so a proposal
+   *  reads and is answered here exactly as it is on the Overview (M45's rule). */
+  readonly decisions: readonly DecisionView[]
+}
+
+export interface OrganizationView {
+  readonly workers: readonly OrganizationRow[]
+  readonly needs: readonly OrganizationNeed[]
+  readonly covered: readonly { readonly capability: string; readonly label: string; readonly by: string }[]
+  readonly unfillable: readonly { readonly capability: string; readonly label: string }[]
+  readonly hints: readonly {
+    readonly slaveId: string
+    readonly text: string
+    readonly targetTemplateName: string | null
+    readonly capability: string | null
+  }[]
+  readonly taskTitles: Readonly<Record<string, string>>
+}
+
+/**
+ * The Organization tab's whole read (R6).
+ *
+ * The coverage summary comes from `teamPlanOf` -- the SAME function `candidates` builds its offers
+ * from -- rather than from a second reading of "what is missing" here: two computations of that
+ * question would eventually disagree in front of a person, and the one on the page would be the
+ * one nobody could act on.
+ */
+export async function buildOrganization(workspaceId: string, now: Date = new Date()): Promise<OrganizationView | null> {
+  const org = await listOrganization(workspaceId)
+  // A missing workspace is this builder's ONE null, and it has to be decided here: the world
+  // loader below opens a `RepeatableRead` transaction and THROWS on a workspace that is not there
+  // (right for a tick, wrong for a route, which owes its caller a 404).
+  if (!org.ok) return null
+  const taxonomy = await listCapabilities()
+  const { world } = await loadSupervisorWorld(workspaceId, now)
+  const plan = teamPlanOf(world)
+  const pending = await listDecisions(workspaceId, { pending: true })
+  const taskTitles = Object.fromEntries(world.tasks.map((task) => [task.id, task.title] as const))
+
+  // ONE index for the whole render (M47 t1 review, carried): `capabilityLabel` builds a fresh Map
+  // out of the taxonomy on every call, and this view labels a chip per capability per worker plus
+  // every need, every covered row and every unfillable one.
+  const label = labeller(taxonomy)
+
+  const covered = new Set(plan.covered.map((one) => one.capability))
+  const unfillable = new Set(plan.unfillable)
+  const needs = plan.proposals
+    .map((proposal) => proposal.capability)
+    .concat(world.tasks.flatMap((task) => task.requiredCapabilities))
+    .filter(
+      (capability, index, all) =>
+        all.indexOf(capability) === index && !covered.has(capability) && !unfillable.has(capability),
+    )
+    .toSorted()
+    .map((capability) => {
+      const decisions = pending.filter(
+        (decision) => decision.situationKind === 'capability_unstaffed' && decision.subjectId === capability,
+      )
+      return {
+        capability,
+        label: label(capability),
+        summary:
+          decisions[0]?.situation.summary ?? `Nobody on this project can be dispatched for ${label(capability)}.`,
+        readyTasks: world.tasks.filter(
+          (task) => task.status === 'ready' && task.requiredCapabilities.includes(capability),
+        ).length,
+        decisions,
+      }
+    })
+
+  return {
+    workers: org.value.workers.map((worker) => ({
+      slaveId: worker.slaveId,
+      name: worker.name,
+      roleLabel: worker.role,
+      kind: worker.kind,
+      capabilities: worker.capabilities.map((key) => ({ key, label: label(key) })),
+      why: whyHere(worker),
+      runtimeRoles: worker.runtimeRoles,
+      doing: doingNow(worker.slaveId, world),
+    })),
+    needs,
+    covered: plan.covered.map((one) => ({ capability: one.capability, label: label(one.capability), by: one.by })),
+    unfillable: plan.unfillable.map((capability) => ({ capability, label: label(capability) })),
+    hints: org.value.hints,
+    taskTitles,
+  }
+}
+
+/** `capabilityLabel`'s answer, over ONE index built once. The key itself is the fallback, exactly
+ *  as the domain's own helper has it: a row written by a newer build can carry a key this
+ *  bundle's taxonomy has never heard of, and the key is the honest thing to show. */
+function labeller(taxonomy: readonly CapabilityRecord[]): (key: string) => string {
+  const index = capabilityIndex(taxonomy)
+  return (key) => index.get(key)?.label ?? key
+}
+
+/** The sentence in the "why here" column, in the order of how much it actually says: the
+ *  Supervisor's own rationale, then the company it was assigned from, then the honest fallback for
+ *  a worker that predates all of this. Never a guess. */
+function whyHere(worker: {
+  readonly selectionRationale: string | null
+  readonly kind: 'company' | 'project'
+  readonly companyName: string | null
+}): string {
+  if (worker.selectionRationale !== null && worker.selectionRationale !== '') return worker.selectionRationale
+  if (worker.kind === 'company' && worker.companyName !== null) return `Assigned from ${worker.companyName}`
+  return 'Seeded'
+}
+
+/**
+ * What the worker is doing NOW, read off the world the rest of this view came from -- so the page
+ * cannot show a worker as free on a board that says otherwise.
+ *
+ * `SupervisorSlave` says busy but not WHICH task, and the task TITLE belongs to the Tasks tab:
+ * joining a run to a title here would be a second source of truth about what a worker is doing.
+ * The state is the honest answer, and `null` is "idle".
+ */
+function doingNow(slaveId: string, world: SupervisorWorld): string | null {
+  const slave = world.slaves.find((one) => one.id === slaveId)
+  return slave === undefined || !slave.busy ? null : 'Working'
+}
