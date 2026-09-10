@@ -479,6 +479,14 @@ export async function buildRunContext(input: BuildRunContextInput): Promise<Buil
   const order = SECTION_ORDER[input.kind]
   const sections: Section[] = []
 
+  // A re-plan is a `planning` run and nothing else (M40 §3, erratum E2). Asked for one on a kind
+  // whose order has no place for the section, this THROWS rather than dropping it (fix round 1,
+  // Minor 3): silently rendering the first-plan trailer would send a manager a board it was never
+  // shown and a prompt asking for a task graph, and the caller would have no way to know.
+  if (input.replan !== undefined && !order.includes('replan')) {
+    throw new Error(`a replan section was asked for on a ${input.kind} run, whose section order has no place for one`)
+  }
+
   // 1. Who the slave is. Re-checked against the cap here and not only at write (spec §7): a
   // profile written while the cap was higher is unsendable, and the honest thing to do with it is
   // refuse the dispatch rather than truncate a persona halfway through a sentence.
@@ -584,7 +592,7 @@ export async function buildRunContext(input: BuildRunContextInput): Promise<Buil
     // M40 §3. After the goal, never instead of it: the prompt reads "here is the requirement,
     // here is what changed about it, here is what to return", and `renderRunContext` picks the
     // re-plan trailer because this section is present (spec erratum E2).
-    if (input.replan !== undefined && order.includes('replan')) {
+    if (input.replan !== undefined) {
       sections.push(
         await replanSection({
           workspaceId: input.workspaceId,

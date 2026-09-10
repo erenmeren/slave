@@ -231,11 +231,19 @@ export const executionEventSchema = z.discriminatedUnion('type', [
     type: z.literal('workspace.replan_started'),
     payload: z.object({ version: z.number().int().positive(), runId: z.string().min(1) }),
   }),
-  // The re-plan concluded. All three lists are ids, and all three may be empty: `added` is the
+  // The re-plan concluded. All four lists are ids, and all four may be empty: `added` is the
   // tasks that were created at once, `proposedCancellations` the ones a human is now being asked to
-  // approve, and `droppedCancellations` the ones the model asked for that the status rule REFUSED
+  // approve, `droppedCancellations` the ones the model asked for that the status rule REFUSED
   // -- carried with the status that refused them, so a refused cancellation is recorded rather than
-  // silently forgotten (spec §1).
+  // silently forgotten (spec §1) -- and `failedProposals` the cancellable ones that did NOT become
+  // a proposal for any other reason: a Supervisor cooldown or a switched-off Supervisor refusing
+  // the record, or the record itself throwing. Together the three cancellation lists account for
+  // every id the model asked to cancel, which is the whole point of writing them down.
+  //
+  // `failedProposals` is OPTIONAL for the same reason every other widening in this file is: it was
+  // added in M40 t3 fix round 1, after the first `workspace.replanned` rows were already written,
+  // and `packages/events/src/read.ts` throws on a row this schema cannot parse. Absent means the
+  // empty list; every writer sets it.
   z.object({
     ...envelope,
     type: z.literal('workspace.replanned'),
@@ -245,6 +253,7 @@ export const executionEventSchema = z.discriminatedUnion('type', [
       added: z.array(z.string().min(1)),
       proposedCancellations: z.array(z.string().min(1)),
       droppedCancellations: z.array(z.object({ taskId: z.string().min(1), status: z.string().min(1) })),
+      failedProposals: z.array(z.string().min(1)).optional(),
     }),
   }),
   // M40 §4: `cancelTask` took a task off the board -- an operator's own call, or an approved

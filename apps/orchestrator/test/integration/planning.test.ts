@@ -12,6 +12,29 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 import { concludePlanning, dispatchPlanning } from '../../src/planning.js'
 import { drainPumps, tick, type TickDeps } from '../../src/tick.js'
 
+/**
+ * M40 t3 fix round 1: a `recordDecision` that THROWS rather than refuses -- a schema violation, an
+ * index violation, a database that went away mid-write. There is no honest way to provoke one from
+ * outside (`concludeReplan` builds a valid situation from a valid catalogue every time), so the one
+ * verb is wrapped, exactly as `tick.test.ts` wraps `workspaceStats`: the real implementation runs
+ * for every id except the ones a test names in `throwingProposals`. The dist path is the module
+ * `packages/control`'s barrel re-exports, so `replan.ts`'s own `@slave-of-ai/control` import
+ * resolves to this same file.
+ */
+const { throwingProposals } = vi.hoisted(() => ({ throwingProposals: new Set<string>() }))
+vi.mock('../../../../packages/control/dist/supervisor.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../../packages/control/dist/supervisor.js')>()
+  return {
+    ...actual,
+    recordDecision: (...args: Parameters<typeof actual.recordDecision>) => {
+      if (throwingProposals.has(args[0].situation.subjectId)) {
+        throw new Error('recordDecision could not write this decision')
+      }
+      return actual.recordDecision(...args)
+    },
+  }
+})
+
 const repoRoot = fileURLToPath(new URL('../../../../', import.meta.url))
 const FAKE = join(repoRoot, 'packages/providers/test/fake-claude.mjs')
 const REAL_GATE = join(repoRoot, 'scripts/pause-gate.sh')
@@ -620,6 +643,10 @@ describe('a re-plan', () => {
         title: 'Expose the API',
         description: 'wire it up',
         status: 'backlog',
+        // A required role is what puts a task in the SUPERVISOR's world (`loadSupervisorWorld`
+        // drops a task with none), and a task the world does not carry has no `cancel_task`
+        // candidate to propose -- so a board without one could never exercise a proposal at all.
+        requiredRole: 'backend',
         maxAttempts: 3,
         goalVersion: version,
       },
@@ -704,6 +731,7 @@ describe('a re-plan', () => {
       added: [added.id],
       proposedCancellations: [doomed.id],
       droppedCancellations: [],
+      failedProposals: [],
     })
   }, 60_000)
 
@@ -734,6 +762,7 @@ describe('a re-plan', () => {
       proposedCancellations: [],
       // The refusal is REPORTED, with the status that refused it -- never silently forgotten.
       droppedCancellations: [{ taskId: doomed.id, status: 'running' }],
+      failedProposals: [],
     })
   }, 60_000)
 
@@ -946,6 +975,7 @@ describe('a re-plan', () => {
       added: [added.id],
       proposedCancellations: [],
       droppedCancellations: [{ taskId: existing.id, status: 'done' }],
+      failedProposals: [],
     })
   })
 
@@ -985,6 +1015,120 @@ describe('a re-plan', () => {
       added: [added.id],
       proposedCancellations: [],
       droppedCancellations: [],
+      // The Supervisor is off, so the cancellation the model asked for never became a proposal --
+      // and says so, rather than vanishing between the three lists.
+      failedProposals: [existing.id],
+    })
+  })
+
+  it('ignores a second conclusion of the same run rather than applying its delta twice', async (): Promise<void> => {
+    const fixture = await boardAt(1)
+    expect((await setGoal(fixture.workspaceId, V2)).ok).toBe(true)
+    const existing = await prisma.task.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })
+    const runId = await seedConcludedReplan(
+      fixture,
+      `{"add":[{"key":"docs","title":"Document the new endpoint","description":"write it","role":"backend","dependsOn":[]}],"cancel":["${existing.id}"],"keep":[]}`,
+      [existing.id],
+    )
+
+    await concludePlanning(brandRunId(runId))
+    const warn = vi.spyOn(console, 'warn').mockImplementation((): void => {})
+    try {
+      await concludePlanning(brandRunId(runId))
+      expect(warn).toHaveBeenCalled()
+    } finally {
+      warn.mockRestore()
+    }
+
+    // One addition, one proposal, one event -- not two of each.
+    expect(
+      await prisma.task.count({ where: { workspaceId: fixture.workspaceId, title: 'Document the new endpoint' } }),
+    ).toBe(1)
+    expect(await prisma.supervisorDecision.count({ where: { workspaceId: fixture.workspaceId } })).toBe(1)
+    expect(
+      await prisma.executionEvent.count({ where: { workspaceId: fixture.workspaceId, type: 'workspace_replanned' } }),
+    ).toBe(1)
+  })
+
+  it('fails the run and creates nothing when the additions themselves cannot be written', async (): Promise<void> => {
+    // A dependency listed TWICE slips past `validateDelta` (which checks membership, not
+    // duplicates) and dies on `TaskDependency`'s primary key inside the transaction. Whatever
+    // throws before the additions commit, the answer is the parse-failure answer: fail the run so
+    // the retry cap governs -- never leave the version deduped with nothing to show for it.
+    const fixture = await boardAt(1)
+    expect((await setGoal(fixture.workspaceId, V2)).ok).toBe(true)
+    const existing = await prisma.task.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })
+    const runId = await seedConcludedReplan(
+      fixture,
+      `{"add":[{"key":"docs","title":"Document the new endpoint","description":"write it","role":"backend","dependsOn":["${existing.id}","${existing.id}"]}],"cancel":[],"keep":[]}`,
+      [existing.id],
+    )
+
+    await concludePlanning(brandRunId(runId))
+
+    const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId } })
+    expect(run.status).toBe('failed')
+    const failures = await prisma.executionEvent.findMany({ where: { runId, type: 'run_failed' } })
+    expect(failures).toHaveLength(1)
+    expect((failures[0]?.payload as { reason: string }).reason).toContain('could not be applied')
+    // The transaction rolled back: no half-applied version.
+    expect(await prisma.task.count({ where: { workspaceId: fixture.workspaceId } })).toBe(1)
+    expect(
+      await prisma.executionEvent.count({ where: { workspaceId: fixture.workspaceId, type: 'workspace_replanned' } }),
+    ).toBe(0)
+  })
+
+  it('keeps going when one proposal THROWS: the others land and the event names both', async (): Promise<void> => {
+    // The additions are already on the board by the time proposals are recorded, so a
+    // `recordDecision` that throws (a schema or index violation, a database that went away) must
+    // cost that ONE cancellation and nothing else -- and must still be written down.
+    const fixture = await boardAt(1)
+    const doomedFirst = await prisma.task.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })
+    const doomedSecond = await prisma.task.create({
+      data: {
+        workspaceId: fixture.workspaceId,
+        title: 'Polish the docs',
+        description: 'tidy up',
+        status: 'backlog',
+        requiredRole: 'backend',
+        maxAttempts: 3,
+        goalVersion: 1,
+      },
+    })
+    expect((await setGoal(fixture.workspaceId, V2)).ok).toBe(true)
+    const runId = await seedConcludedReplan(
+      fixture,
+      `{"add":[{"key":"docs","title":"Document the new endpoint","description":"write it","role":"backend","dependsOn":[]}],"cancel":["${doomedFirst.id}","${doomedSecond.id}"],"keep":[]}`,
+      [doomedFirst.id, doomedSecond.id],
+    )
+    throwingProposals.add(doomedFirst.id)
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation((): void => {})
+    try {
+      await concludePlanning(brandRunId(runId))
+      expect(warn).toHaveBeenCalled()
+    } finally {
+      warn.mockRestore()
+      throwingProposals.clear()
+    }
+
+    // The run is a success: it did produce a delta, and the delta was applied.
+    expect((await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId } })).status).toBe('succeeded')
+    const decisions = await prisma.supervisorDecision.findMany({ where: { workspaceId: fixture.workspaceId } })
+    expect(decisions.map((decision) => decision.subjectId)).toEqual([doomedSecond.id])
+    const added = await prisma.task.findFirstOrThrow({
+      where: { workspaceId: fixture.workspaceId, title: 'Document the new endpoint' },
+    })
+    const replanned = await prisma.executionEvent.findFirstOrThrow({
+      where: { workspaceId: fixture.workspaceId, type: 'workspace_replanned' },
+    })
+    expect(replanned.payload).toEqual({
+      version: 2,
+      runId,
+      added: [added.id],
+      proposedCancellations: [doomedSecond.id],
+      droppedCancellations: [],
+      failedProposals: [doomedFirst.id],
     })
   })
 

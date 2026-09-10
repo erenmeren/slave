@@ -698,6 +698,39 @@ describe('parseExecutionEvent', () => {
     }
   })
 
+  it('carries the cancellable ids that never became a proposal, and reads a pre-fix row without them', () => {
+    // M40 t3 fix round 1: a cooldown, a switched-off Supervisor or a `recordDecision` that threw
+    // leaves a cancellation the model asked for with nothing to show for it. `failedProposals` is
+    // where it is written down -- and optional, because the rows written before the field existed
+    // must still parse.
+    const withField = parseExecutionEvent({
+      ...BASE,
+      type: 'workspace.replanned',
+      payload: {
+        version: 2,
+        runId: 'run-9',
+        added: [],
+        proposedCancellations: ['t1'],
+        droppedCancellations: [],
+        failedProposals: ['t3'],
+      },
+    })
+    expect(withField.ok).toBe(true)
+    if (withField.ok && withField.value.type === 'workspace.replanned') {
+      expect(withField.value.payload.failedProposals).toEqual(['t3'])
+    }
+
+    const withoutField = parseExecutionEvent({
+      ...BASE,
+      type: 'workspace.replanned',
+      payload: { version: 2, runId: 'run-9', added: [], proposedCancellations: [], droppedCancellations: [] },
+    })
+    expect(withoutField.ok).toBe(true)
+    if (withoutField.ok && withoutField.value.type === 'workspace.replanned') {
+      expect(withoutField.value.payload.failedProposals).toBeUndefined()
+    }
+  })
+
   it('accepts a workspace.replanned event whose three lists are all empty', () => {
     const result = parseExecutionEvent({
       ...BASE,

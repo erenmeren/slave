@@ -768,6 +768,31 @@ describe('buildRunContext', () => {
     })
   })
 
+  describe('a replan input on a kind that has no place for it', () => {
+    it('throws rather than quietly sending the first-plan prompt', async () => {
+      // Fix round 1, Minor 3: dropping the section would leave the run with
+      // `PLANNING_GRAPH_INSTRUCTIONS` -- a manager asked for a task graph, with no board and no
+      // previous goal in front of it, and a caller with no way to know its re-plan never happened.
+      const refusal = await buildRunContext({
+        runId: fixture.runId,
+        kind: 'implementation',
+        slaveId: fixture.slaveId,
+        workspaceId: fixture.workspaceId,
+        taskId: fixture.taskId,
+        worktreePath: fixture.worktreePath,
+        provider: 'claude_code',
+        skillRoots: fixture.skillRoots,
+        replan: { previousVersion: 1, version: 2 },
+      }).catch((error: unknown): unknown => error)
+
+      expect(refusal).toBeInstanceOf(Error)
+      expect((refusal as Error).message).toContain('implementation')
+      expect((refusal as Error).message).toContain('replan')
+      // Nothing was recorded for a prompt that was never built.
+      expect(await prisma.runContext.findUnique({ where: { runId: fixture.runId } })).toBeNull()
+    })
+  })
+
   describe('what every manifest records', () => {
     // M40 §1: `task.sha256` and `planning_goal.version` are OPTIONAL on READ (a pre-M40 row must
     // stay readable), which is exactly why this is asserted over every kind the builder can
