@@ -76,6 +76,14 @@
 //   daemon can never reach this arm through one. `SLAVEOFAI_CLAUDE_ARGS`
 //   can: it is passed through as `extraArgs` on every decision call, which
 //   is already how `--fixture` itself arrives.
+//   M40 adds the RE-PLAN arm to every mode that has a `"task graph"`
+//   check (today: `m8-flow`), in front of it: a prompt containing the
+//   literal `"replan"` (which `REPLAN_INSTRUCTIONS` always emits) replays
+//   `fixtures/replan-delta.ndjson` with `$CANCEL_ID` substituted from
+//   `--replan-cancel <id>` in ARGV -- and with the placeholder ELEMENT
+//   removed, so `cancel` is `[]`, when no such flag was passed. It sits
+//   behind the two decision arms and in front of the planning one: a
+//   re-plan answered with a first plan would rebuild the board.
 //   anything else  replays `fixtures/<name>.ndjson` verbatim, exit 0 -- real
 //                  captures show process exit code 0 even for hook-crash,
 //                  hook-deny, and permission-denied runs, so the fake matches
@@ -192,6 +200,68 @@ function answerFixtureName() {
   return process.env.FAKE_CLAUDE_ANSWER_FIXTURE ?? 'supervisor-answer'
 }
 
+/**
+ * M40 (erratum E3): the RE-PLAN arm -- a planning run whose goal changed under a board that
+ * already exists, recognised by the one literal `REPLAN_INSTRUCTIONS` guarantees.
+ *
+ * Checked BEFORE the `"task graph"` arm in every mode that has one: a re-plan prompt carries the
+ * board and asks for a delta, and answering it with `plan-graph` would rebuild a board nobody
+ * asked to rebuild. It stays BEHIND the two decision arms for the same reason they lead
+ * everywhere else -- a decision call is not a run, whatever words its situation happens to quote.
+ *
+ * The one thing this fixture cannot carry statically is the id to cancel: it is a row created by
+ * whoever seeded the workspace. `$CANCEL_ID` is substituted from `--replan-cancel <id>` in ARGV
+ * (erratum E6: argv, not env, is what reaches a scrubbed child), and with no such flag the
+ * placeholder ELEMENT is removed rather than replaced, so the delta reads `"cancel":[]` -- a
+ * re-plan that adds work and cancels nothing, which is the shape most of them have.
+ */
+async function replanArm(prompt) {
+  if (!prompt.includes('"replan"')) return false
+  const cancelId = replanCancelId()
+  let substituted = false
+  const lines = readFixtureLines('replan-delta').map((line) => {
+    const patched = substituteCancelId(JSON.parse(line), cancelId, () => {
+      substituted = true
+    })
+    return JSON.stringify(patched)
+  })
+  if (!substituted) {
+    process.stderr.write('fake-claude: replan-delta.ndjson carries no $CANCEL_ID placeholder to substitute\n')
+    process.exit(2)
+  }
+  await writeLines(lines)
+  process.exit(0)
+}
+
+/** The id `--replan-cancel <id>` names, or `null` when the flag is absent -- or present with
+ *  another flag where its value should be, which is an omitted value, not an id. */
+function replanCancelId() {
+  const index = args.indexOf('--replan-cancel')
+  const named = index === -1 ? undefined : args[index + 1]
+  return named === undefined || named.startsWith('-') ? null : named
+}
+
+/** Rewrites `$CANCEL_ID` wherever it appears in a parsed fixture line's strings: replaced by the
+ *  id when there is one, and otherwise removed ARRAY ELEMENT AND ALL (`"$CANCEL_ID"`, quotes
+ *  included, since the delta lives inside a JSON string) so `cancel` comes out empty. Walks the
+ *  parsed line rather than the raw text so the escaping of the embedded JSON is JSON's problem
+ *  and not a regex's. */
+function substituteCancelId(value, cancelId, onSubstitution) {
+  if (typeof value === 'string') {
+    const token = cancelId === null ? '"$CANCEL_ID"' : '$CANCEL_ID'
+    if (!value.includes(token)) return value
+    onSubstitution()
+    return value.split(token).join(cancelId ?? '')
+  }
+  if (Array.isArray(value)) return value.map((entry) => substituteCancelId(entry, cancelId, onSubstitution))
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entry]) => [key, substituteCancelId(entry, cancelId, onSubstitution)]),
+    )
+  }
+  return value
+}
+
 async function main() {
   if (fixtureName === 'hang') {
     // Write nothing and never exit on its own. Without something keeping
@@ -301,6 +371,7 @@ async function main() {
     const prompt = await promptText()
     if (await supervisorArm(prompt)) return
     if (await answerArm(prompt)) return
+    if (await replanArm(prompt)) return
     if (prompt.includes('"task graph"')) {
       await replayFixture('plan-graph')
       return

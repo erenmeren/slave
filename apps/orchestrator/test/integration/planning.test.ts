@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { refusalText } from '@slave-of-ai/control'
+import { refusalText, setGoal } from '@slave-of-ai/control'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE } from '@slave-of-ai/db'
 import { prisma } from '@slave-of-ai/db/client'
 import { runId as brandRunId, workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
@@ -540,4 +540,474 @@ describe('concludePlanning', () => {
     expect(core.status).toBe('running')
     expect(core.activeRunId).not.toBeNull()
   })
+})
+
+/**
+ * M40 §5: the goal changed under a board that already exists.
+ *
+ * Every test here drives the REAL trigger (`dispatchPlanning`) and, where it concludes, the real
+ * `concludePlanning` routing (spec erratum E4: the run's own recorded manifest is what says a run
+ * was a re-plan, not its kind).
+ */
+describe('a re-plan', () => {
+  const repos: string[] = []
+  const V1 = 'Ship the checkout redesign'
+  const V2 = 'Ship the checkout redesign and document the new endpoint'
+
+  beforeEach(async (): Promise<void> => {
+    await prisma.$executeRawUnsafe(
+      'TRUNCATE TABLE "ExecutionEvent", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace", "User" RESTART IDENTITY CASCADE',
+    )
+  })
+
+  afterEach(async (): Promise<void> => {
+    await drainPumps()
+  })
+
+  afterAll(async (): Promise<void> => {
+    for (const repo of repos) rmSync(repo, { recursive: true, force: true })
+  })
+
+  /** `deps` for a re-plan dispatch: the fake CLI's re-plan arm needs the id to cancel in ARGV,
+   *  because no fixture can know a row the test just created (spec erratum E3/E6). */
+  function depsForReplan(workspaceId: string, cancelTaskId?: string): TickDeps {
+    return {
+      workspaceId: brandWorkspaceId(workspaceId),
+      registry: singleAdapterRegistry(
+        new ClaudeCodeAdapter({
+          command: 'node',
+          extraArgs: [
+            FAKE,
+            '--fixture',
+            'm8-flow',
+            ...(cancelTaskId === undefined ? [] : ['--replan-cancel', cancelTaskId]),
+          ],
+          hookPath: REAL_GATE,
+        }),
+      ),
+    }
+  }
+
+  /** A board built by a REAL first plan against goal v1, so the tasks under a re-plan are the
+   *  tasks a plan actually produces -- stamps, dependencies and all. */
+  async function firstPlan(): Promise<{ fixture: Fixture; tasks: { id: string; title: string }[] }> {
+    const fixture = await seed(null)
+    repos.push(fixture.repoPath)
+    await addManager(fixture.teamId)
+    const set = await setGoal(fixture.workspaceId, V1)
+    expect(set.ok).toBe(true)
+
+    const runId = await dispatchPlanning(depsFor(fixture.workspaceId))
+    expect(runId).not.toBeNull()
+    await drainPumps()
+
+    const tasks = await prisma.task.findMany({ where: { workspaceId: fixture.workspaceId }, orderBy: { createdAt: 'asc' } })
+    expect(tasks).toHaveLength(3)
+    // The first-plan path is unchanged, and it stamps the version it planned from (M40 §1).
+    for (const task of tasks) expect(task.goalVersion).toBe(1)
+    return { fixture, tasks: tasks.map((task) => ({ id: task.id, title: task.title })) }
+  }
+
+  /** A board with no run behind it: the cheap fixture for the trigger's own arithmetic. */
+  async function boardAt(version: number | null): Promise<Fixture> {
+    const fixture = await seed(null)
+    repos.push(fixture.repoPath)
+    await addManager(fixture.teamId)
+    expect((await setGoal(fixture.workspaceId, V1)).ok).toBe(true)
+    await prisma.task.create({
+      data: {
+        workspaceId: fixture.workspaceId,
+        title: 'Expose the API',
+        description: 'wire it up',
+        status: 'backlog',
+        maxAttempts: 3,
+        goalVersion: version,
+      },
+    })
+    return fixture
+  }
+
+  const replanSectionOf = async (runId: string): Promise<Record<string, unknown> | undefined> => {
+    const row = await prisma.runContext.findUniqueOrThrow({ where: { runId } })
+    const sections = (row.sections as unknown as { sections: Record<string, unknown>[] }).sections
+    return sections.find((section) => section.kind === 'replan')
+  }
+
+  it('adds what the new goal needs, proposes what it no longer needs, and touches neither itself', async (): Promise<void> => {
+    const { fixture, tasks } = await firstPlan()
+    const doomed = tasks.find((task) => task.title === 'Document and polish') as { id: string; title: string }
+    expect((await setGoal(fixture.workspaceId, V2)).ok).toBe(true)
+
+    const runId = await dispatchPlanning(depsForReplan(fixture.workspaceId, doomed.id))
+
+    expect(runId).not.toBeNull()
+    // The prompt the manager got is a re-plan prompt, and the row says so (erratum E2/E4).
+    const context = await prisma.runContext.findUniqueOrThrow({ where: { runId: runId as string } })
+    expect(context.prompt).toContain('"replan"')
+    expect(context.prompt).not.toContain('"task graph"')
+    expect(context.prompt).toContain(`- ${doomed.id} [ready] Document and polish (goal v1)`)
+    expect(await replanSectionOf(runId as string)).toMatchObject({ previousVersion: 1, version: 2 })
+
+    // The start is on the record before anything concludes -- it is what the dedup reads.
+    const started = await prisma.executionEvent.findMany({
+      where: { workspaceId: fixture.workspaceId, type: 'workspace_replan_started' },
+    })
+    expect(started).toHaveLength(1)
+    expect(started[0]?.payload).toMatchObject({ version: 2, runId: runId as string })
+
+    await drainPumps()
+
+    // The addition landed at once (M40 §1), stamped with the version that asked for it.
+    const added = await prisma.task.findFirstOrThrow({
+      where: { workspaceId: fixture.workspaceId, title: 'Document the new endpoint' },
+    })
+    expect(added.goalVersion).toBe(2)
+    expect(added.createdBy).toBe('slave')
+    expect(added.requiredRole).toBe('backend')
+    expect(await prisma.task.count({ where: { workspaceId: fixture.workspaceId } })).toBe(4)
+
+    // The cancellation is a PROPOSAL and nothing else (ruling R1): the task is exactly where it was.
+    const target = await prisma.task.findUniqueOrThrow({ where: { id: doomed.id } })
+    expect(target.status).toBe('ready')
+
+    const decisions = await prisma.supervisorDecision.findMany({ where: { workspaceId: fixture.workspaceId } })
+    expect(decisions).toHaveLength(1)
+    const decision = decisions[0]
+    expect(decision?.situationKind).toBe('stale_task')
+    expect(decision?.subjectId).toBe(doomed.id)
+    expect(decision?.status).toBe('pending')
+    expect(decision?.tier).toBe('proposed')
+    expect(decision?.action).toMatchObject({ kind: 'cancel_task', taskId: doomed.id })
+    // The manager's own run proposed it, and no model call was made to decide that (M40 §5).
+    expect(decision?.decidedBy).toBe('model')
+    expect(decision?.modelCalled).toBe(false)
+    expect(decision?.modelCostUsd).toBeNull()
+    expect((decision?.situation as unknown as { facts: Record<string, unknown> }).facts).toMatchObject({
+      goalVersion: 1,
+      currentVersion: 2,
+      reason: 'replan_cancel',
+    })
+
+    const created = await prisma.executionEvent.findMany({
+      where: { workspaceId: fixture.workspaceId, type: 'task_created', taskId: added.id },
+    })
+    expect(created).toHaveLength(1)
+    expect(created[0]?.payload).toMatchObject({ title: 'Document the new endpoint', goalVersion: 2 })
+
+    const replanned = await prisma.executionEvent.findMany({
+      where: { workspaceId: fixture.workspaceId, type: 'workspace_replanned' },
+    })
+    expect(replanned).toHaveLength(1)
+    expect(replanned[0]?.payload).toEqual({
+      version: 2,
+      runId: runId as string,
+      added: [added.id],
+      proposedCancellations: [doomed.id],
+      droppedCancellations: [],
+    })
+  }, 60_000)
+
+  it('drops a cancellation the status rule refuses, records it, and proposes nothing', async (): Promise<void> => {
+    const { fixture, tasks } = await firstPlan()
+    const doomed = tasks.find((task) => task.title === 'Document and polish') as { id: string }
+    // Work in flight is never cancellable by a re-plan (M40 §1): a wrong deletion costs real work.
+    await prisma.task.update({ where: { id: doomed.id }, data: { status: 'running' } })
+    expect((await setGoal(fixture.workspaceId, V2)).ok).toBe(true)
+
+    const runId = await dispatchPlanning(depsForReplan(fixture.workspaceId, doomed.id))
+    expect(runId).not.toBeNull()
+    await drainPumps()
+
+    expect(await prisma.supervisorDecision.count({ where: { workspaceId: fixture.workspaceId } })).toBe(0)
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: doomed.id } })).status).toBe('running')
+
+    const added = await prisma.task.findFirstOrThrow({
+      where: { workspaceId: fixture.workspaceId, title: 'Document the new endpoint' },
+    })
+    const replanned = await prisma.executionEvent.findFirstOrThrow({
+      where: { workspaceId: fixture.workspaceId, type: 'workspace_replanned' },
+    })
+    expect(replanned.payload).toEqual({
+      version: 2,
+      runId: runId as string,
+      added: [added.id],
+      proposedCancellations: [],
+      // The refusal is REPORTED, with the status that refused it -- never silently forgotten.
+      droppedCancellations: [{ taskId: doomed.id, status: 'running' }],
+    })
+  }, 60_000)
+
+  it('starts nothing while the board is already at the workspace goal version', async (): Promise<void> => {
+    const fixture = await boardAt(1)
+
+    expect(await dispatchPlanning(depsForReplan(fixture.workspaceId))).toBeNull()
+    expect(await prisma.slaveRun.count({ where: { kind: 'planning' } })).toBe(0)
+  })
+
+  it('starts nothing for an unstamped board under a goal that was never versioned', async (): Promise<void> => {
+    // `goalVersion` 0 is a hand-seeded goal (M40 §1): nothing to compare, so nothing to re-plan.
+    const fixture = await seed(V1)
+    repos.push(fixture.repoPath)
+    await addManager(fixture.teamId)
+    await prisma.task.create({
+      data: {
+        workspaceId: fixture.workspaceId,
+        title: 'Hand-made task',
+        description: 'no plan produced this',
+        status: 'backlog',
+        maxAttempts: 3,
+      },
+    })
+
+    expect(await dispatchPlanning(depsForReplan(fixture.workspaceId))).toBeNull()
+    expect(await prisma.slaveRun.count({ where: { kind: 'planning' } })).toBe(0)
+  })
+
+  it('starts one re-plan per goal version and no more (dedup on workspace.replan_started)', async (): Promise<void> => {
+    const fixture = await boardAt(1)
+    expect((await setGoal(fixture.workspaceId, V2)).ok).toBe(true)
+    const manager = await prisma.slave.findFirstOrThrow({ where: { team: { workspaceId: fixture.workspaceId } } })
+    const now = new Date()
+    const done = await prisma.slaveRun.create({
+      data: { slaveId: manager.id, kind: 'planning', status: 'succeeded', startedAt: now, terminalAt: now, endedAt: now },
+    })
+    await prisma.executionEvent.create({
+      data: {
+        type: 'workspace_replan_started',
+        workspaceId: fixture.workspaceId,
+        actor: 'system',
+        payload: { version: 2, runId: done.id },
+      },
+    })
+
+    // The board is still at v1 -- the re-plan cancelled and added nothing -- so the version
+    // comparison would fire again. The dedup is the only thing stopping it.
+    expect(await dispatchPlanning(depsForReplan(fixture.workspaceId))).toBeNull()
+    expect(await prisma.slaveRun.count({ where: { kind: 'planning' } })).toBe(1)
+  })
+
+  it('re-plans again when the run that started one FAILED', async (): Promise<void> => {
+    const fixture = await boardAt(1)
+    expect((await setGoal(fixture.workspaceId, V2)).ok).toBe(true)
+    const manager = await prisma.slave.findFirstOrThrow({ where: { team: { workspaceId: fixture.workspaceId } } })
+    const now = new Date()
+    const dead = await prisma.slaveRun.create({
+      data: { slaveId: manager.id, kind: 'planning', status: 'failed', startedAt: now, terminalAt: now, endedAt: now },
+    })
+    await prisma.executionEvent.create({
+      data: {
+        type: 'workspace_replan_started',
+        workspaceId: fixture.workspaceId,
+        actor: 'system',
+        payload: { version: 2, runId: dead.id },
+      },
+    })
+
+    // A failed re-plan is a re-plan that did not happen; the retry cap, not the dedup, is what
+    // eventually stops this.
+    expect(await dispatchPlanning(depsForReplan(fixture.workspaceId))).not.toBeNull()
+    expect(await prisma.slaveRun.count({ where: { kind: 'planning' } })).toBe(2)
+  }, 60_000)
+
+  it('stops re-planning once two runs have failed against this version', async (): Promise<void> => {
+    const fixture = await boardAt(1)
+    expect((await setGoal(fixture.workspaceId, V2)).ok).toBe(true)
+    const manager = await prisma.slave.findFirstOrThrow({ where: { team: { workspaceId: fixture.workspaceId } } })
+    const now = new Date()
+    for (let i = 0; i < 2; i += 1) {
+      await prisma.slaveRun.create({
+        data: { slaveId: manager.id, kind: 'planning', status: 'failed', startedAt: now, terminalAt: now, endedAt: now },
+      })
+    }
+
+    expect(await dispatchPlanning(depsForReplan(fixture.workspaceId))).toBeNull()
+    expect(await prisma.slaveRun.count({ where: { kind: 'planning' } })).toBe(2)
+  })
+
+  it('counts the cap from THIS version, so a further goal edit buys fresh attempts', async (): Promise<void> => {
+    const fixture = await boardAt(1)
+    const past = new Date(Date.now() - 60_000)
+    const manager = await prisma.slave.findFirstOrThrow({ where: { team: { workspaceId: fixture.workspaceId } } })
+    for (let i = 0; i < 2; i += 1) {
+      await prisma.slaveRun.create({
+        data: { slaveId: manager.id, kind: 'planning', status: 'failed', startedAt: past, terminalAt: past, endedAt: past },
+      })
+    }
+    expect((await setGoal(fixture.workspaceId, V2)).ok).toBe(true)
+
+    expect(await dispatchPlanning(depsForReplan(fixture.workspaceId))).not.toBeNull()
+    expect(await prisma.slaveRun.count({ where: { kind: 'planning' } })).toBe(3)
+  }, 60_000)
+
+
+  /**
+   * A succeeded planning run whose RECORDED context says it was a re-plan, and the text it
+   * produced -- the shape `concludePlanning` routes on (spec erratum E4), hand-seeded so the
+   * conclusion can be driven without a second real run.
+   */
+  async function seedConcludedReplan(
+    fixture: Fixture,
+    delta: string,
+    boardTaskIds: readonly string[],
+  ): Promise<string> {
+    const manager = await prisma.slave.findFirstOrThrow({ where: { team: { workspaceId: fixture.workspaceId } } })
+    const now = new Date()
+    const run = await prisma.slaveRun.create({
+      data: { slaveId: manager.id, kind: 'planning', status: 'succeeded', startedAt: now, terminalAt: now, endedAt: now },
+    })
+    await prisma.runContext.create({
+      data: {
+        runId: run.id,
+        prompt: 'the prompt this run was given',
+        sections: {
+          kind: 'planning',
+          sections: [
+            {
+              kind: 'replan',
+              previousVersion: 1,
+              version: 2,
+              previousSha256: 'previous-hash',
+              sha256: 'current-hash',
+              boardTaskIds: [...boardTaskIds],
+            },
+          ],
+        },
+      },
+    })
+    await prisma.executionEvent.create({
+      data: {
+        type: 'run_output',
+        workspaceId: fixture.workspaceId,
+        slaveId: manager.id,
+        runId: run.id,
+        actor: 'slave',
+        payload: { text: delta },
+      },
+    })
+    return run.id
+  }
+
+  it('routes on the recorded manifest, and lets an addition depend on a task already on the board', async (): Promise<void> => {
+    const fixture = await boardAt(1)
+    expect((await setGoal(fixture.workspaceId, V2)).ok).toBe(true)
+    const existing = await prisma.task.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })
+    const runId = await seedConcludedReplan(
+      fixture,
+      `{"add":[{"key":"docs","title":"Document the new endpoint","description":"write it","role":"backend","dependsOn":["${existing.id}"]}],"cancel":[],"keep":["${existing.id}"]}`,
+      [existing.id],
+    )
+
+    // The public entry point, not `concludeReplan`: a re-plan is told apart from a first plan by
+    // this run's own manifest, never by `run.kind` (both are `planning`).
+    await concludePlanning(brandRunId(runId))
+
+    const added = await prisma.task.findFirstOrThrow({
+      where: { workspaceId: fixture.workspaceId, title: 'Document the new endpoint' },
+    })
+    expect(added.goalVersion).toBe(2)
+    // Spec erratum E1: `dependsOn` may name an EXISTING task id, not only a plan-local key.
+    expect(await prisma.taskDependency.findMany({ where: { taskId: added.id } })).toEqual([
+      { taskId: added.id, dependsOnTaskId: existing.id },
+    ])
+    // The first-plan path was not taken: it would have written this event (and refused the board).
+    expect(
+      await prisma.executionEvent.count({ where: { workspaceId: fixture.workspaceId, type: 'workspace_plan_created' } }),
+    ).toBe(0)
+  })
+
+  it('drops a cancellation for work that FINISHED while the re-plan was thinking, rather than failing the delta', async (): Promise<void> => {
+    // Spec §1: a cancellation of a done task is "dropped and recorded". That is only reachable if
+    // the parse accepts the id -- a re-plan run takes minutes, and a board read at conclusion is
+    // not the board the prompt showed.
+    const fixture = await boardAt(1)
+    expect((await setGoal(fixture.workspaceId, V2)).ok).toBe(true)
+    const existing = await prisma.task.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })
+    const runId = await seedConcludedReplan(
+      fixture,
+      `{"add":[{"key":"docs","title":"Document the new endpoint","description":"write it","role":"backend","dependsOn":[]}],"cancel":["${existing.id}"],"keep":[]}`,
+      [existing.id],
+    )
+    await prisma.task.update({ where: { id: existing.id }, data: { status: 'done' } })
+
+    await concludePlanning(brandRunId(runId))
+
+    const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId } })
+    expect(run.status).toBe('succeeded')
+    expect(await prisma.supervisorDecision.count({ where: { workspaceId: fixture.workspaceId } })).toBe(0)
+    const added = await prisma.task.findFirstOrThrow({
+      where: { workspaceId: fixture.workspaceId, title: 'Document the new endpoint' },
+    })
+    const replanned = await prisma.executionEvent.findFirstOrThrow({
+      where: { workspaceId: fixture.workspaceId, type: 'workspace_replanned' },
+    })
+    expect(replanned.payload).toEqual({
+      version: 2,
+      runId,
+      added: [added.id],
+      proposedCancellations: [],
+      droppedCancellations: [{ taskId: existing.id, status: 'done' }],
+    })
+  })
+
+  it('lands its additions anyway when a proposal is refused, and says it proposed nothing', async (): Promise<void> => {
+    const fixture = await boardAt(1)
+    expect((await setGoal(fixture.workspaceId, V2)).ok).toBe(true)
+    const existing = await prisma.task.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })
+    // The project switched its Supervisor off: `recordDecision` refuses every proposal. A re-plan
+    // whose additions have already landed must not throw over that (M40 §5) -- and must not claim
+    // a proposal a human will never see.
+    await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { supervisorEnabled: false } })
+    const runId = await seedConcludedReplan(
+      fixture,
+      `{"add":[{"key":"docs","title":"Document the new endpoint","description":"write it","role":"backend","dependsOn":[]}],"cancel":["${existing.id}"],"keep":[]}`,
+      [existing.id],
+    )
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation((): void => {})
+    try {
+      await concludePlanning(brandRunId(runId))
+      expect(warn).toHaveBeenCalled()
+    } finally {
+      warn.mockRestore()
+    }
+
+    expect(await prisma.supervisorDecision.count({ where: { workspaceId: fixture.workspaceId } })).toBe(0)
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: existing.id } })).status).toBe('backlog')
+    const added = await prisma.task.findFirstOrThrow({
+      where: { workspaceId: fixture.workspaceId, title: 'Document the new endpoint' },
+    })
+    const replanned = await prisma.executionEvent.findFirstOrThrow({
+      where: { workspaceId: fixture.workspaceId, type: 'workspace_replanned' },
+    })
+    expect(replanned.payload).toEqual({
+      version: 2,
+      runId,
+      added: [added.id],
+      proposedCancellations: [],
+      droppedCancellations: [],
+    })
+  })
+
+  it('fails the run and changes no board when the re-plan output carries no valid delta', async (): Promise<void> => {
+    const fixture = await boardAt(1)
+    expect((await setGoal(fixture.workspaceId, V2)).ok).toBe(true)
+
+    // A fixture that replays a review verdict: a succeeded process that said nothing a delta can
+    // be read out of, which is a failed planning attempt and not an infrastructure problem.
+    const runId = await dispatchPlanning(depsFor(fixture.workspaceId, 'review-invalid'))
+    expect(runId).not.toBeNull()
+    await drainPumps()
+
+    const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId as string } })
+    expect(run.status).toBe('failed')
+    const failures = await prisma.executionEvent.findMany({ where: { runId: run.id, type: 'run_failed' } })
+    expect(failures).toHaveLength(1)
+    expect((failures[0]?.payload as { reason: string }).reason).toContain('no valid re-plan delta')
+
+    expect(await prisma.task.count({ where: { workspaceId: fixture.workspaceId } })).toBe(1)
+    expect(await prisma.supervisorDecision.count({ where: { workspaceId: fixture.workspaceId } })).toBe(0)
+    expect(
+      await prisma.executionEvent.count({ where: { workspaceId: fixture.workspaceId, type: 'workspace_replanned' } }),
+    ).toBe(0)
+  }, 60_000)
 })

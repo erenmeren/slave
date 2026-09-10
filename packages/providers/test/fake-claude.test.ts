@@ -171,6 +171,94 @@ describe('fake-claude', () => {
     expect(result?.result).toContain('"key":"core"')
   })
 
+  describe('the re-plan arm (M40)', () => {
+    /** A prompt with the one literal `REPLAN_INSTRUCTIONS` always carries. */
+    const PROMPT = 'The GOAL changed and this is a "replan": return {"add":[],"cancel":[],"keep":[]}'
+    const ADDED = '"key":"docs"'
+
+    let repoDir: string
+
+    beforeEach(() => {
+      repoDir = mkdtempSync(path.join(tmpdir(), 'fake-claude-replan-'))
+      execFileSync('git', ['init', '-q'], { cwd: repoDir })
+      execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q', '--allow-empty', '-m', 'initial commit'], {
+        cwd: repoDir,
+      })
+    })
+
+    afterEach(() => {
+      rmSync(repoDir, { recursive: true, force: true })
+    })
+
+    it('replays the delta fixture as a static mode, with an empty cancel array and no id to put in it', async (): Promise<void> => {
+      const { stdout } = await run('node', [FAKE, '--fixture', 'replan-delta'])
+      const result = parseLines(stdout).find((l) => l.type === 'result') as
+        | { result?: string; total_cost_usd?: number }
+        | undefined
+      expect(result?.result).toContain(ADDED)
+      expect(result?.total_cost_usd).toBe(0.03)
+      // The placeholder is what the arm substitutes; the file itself still carries it.
+      expect(result?.result).toContain('$CANCEL_ID')
+    })
+
+    it('substitutes --replan-cancel <id> into the delta, and makes no commit doing it', async (): Promise<void> => {
+      const { stdout } = await run(
+        'node',
+        [FAKE, '--replan-cancel', 'task-to-drop', '--fixture', 'm8-flow', '-p', PROMPT],
+        { cwd: repoDir },
+      )
+      const result = parseLines(stdout).find((l) => l.type === 'result') as { result?: string } | undefined
+      expect(result?.result).toContain('"cancel":["task-to-drop"]')
+      expect(result?.result).not.toContain('$CANCEL_ID')
+      // A re-plan is a read, exactly as a first plan is: no commit, no file.
+      expect(execFileSync('git', ['log', '--oneline'], { cwd: repoDir }).toString().trim().split('\n')).toHaveLength(1)
+      expect(execFileSync('git', ['status', '--porcelain'], { cwd: repoDir }).toString().trim()).toBe('')
+    })
+
+    it('leaves an EMPTY cancel array when no --replan-cancel is passed', async (): Promise<void> => {
+      const { stdout } = await run('node', [FAKE, '--fixture', 'm8-flow', '-p', PROMPT], { cwd: repoDir })
+      const result = parseLines(stdout).find((l) => l.type === 'result') as { result?: string } | undefined
+      expect(result?.result).toContain('"cancel":[]')
+      expect(result?.result).not.toContain('$CANCEL_ID')
+    })
+
+    it('ignores a --replan-cancel whose value is another flag', async (): Promise<void> => {
+      // The E6 idiom: `args.indexOf(...) + 1` is a flag, not an id, when the value was omitted.
+      const { stdout } = await run('node', [FAKE, '--replan-cancel', '--fixture', 'm8-flow', '-p', PROMPT], {
+        cwd: repoDir,
+      })
+      const result = parseLines(stdout).find((l) => l.type === 'result') as { result?: string } | undefined
+      expect(result?.result).toContain('"cancel":[]')
+    })
+
+    it('is checked BEFORE the task-graph arm, so a re-plan is never answered with a first plan', async (): Promise<void> => {
+      // The trailer a re-plan run carries names the first plan's literal nowhere -- but a prompt
+      // that carried both must still reach the delta, because the re-plan arm is the more specific
+      // one and the board would otherwise be rebuilt from a graph nobody asked for.
+      const { stdout } = await run(
+        'node',
+        [FAKE, '--fixture', 'm8-flow', '-p', `${PROMPT} "task graph" "verdict"`],
+        { cwd: repoDir },
+      )
+      const result = parseLines(stdout).find((l) => l.type === 'result') as { result?: string } | undefined
+      expect(result?.result).toContain(ADDED)
+      expect(result?.result).not.toContain('"key":"core"')
+    })
+
+    it('leaves a supervisor decision prompt to the decision arms', async (): Promise<void> => {
+      // Both decision arms stay in front of it: a decision call that happened to quote the word
+      // is still a decision, and answering it with a delta would put a plan where a candidate
+      // index belongs.
+      const { stdout } = await run(
+        'node',
+        [FAKE, '--fixture', 'm8-flow', '-p', 'a "replan" question. Reply with {"candidateIndex": <0..3>, "rationale": "..."}'],
+        { cwd: repoDir },
+      )
+      const result = parseLines(stdout).find((l) => l.type === 'result') as { result?: string } | undefined
+      expect(result?.result).toContain('"candidateIndex":0')
+    })
+  })
+
   describe('the supervisor arm (M38)', () => {
     const ANSWER = '"candidateIndex":0'
     /** A prompt with the one literal `buildDecisionPrompt` always emits. */

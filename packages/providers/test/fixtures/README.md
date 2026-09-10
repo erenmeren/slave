@@ -68,9 +68,10 @@ should be brought in line the next time they are touched.
 | `malformed.ndjson` | `b17561c` | Contains one line that is not JSON. The parser must return `unparsable` for it and keep going; a bad line must not kill a run. |
 | `review-approve.ndjson`, `review-reject.ndjson`, `review-invalid.ndjson` | `a16add4` | `complete`'s transcript with the final `result.result` replaced by the reviewer's JSON verdict — approve, reject, and a malformed verdict. They drive the fake CLI's `m8a-flow` mode. |
 | `plan-graph.ndjson` | `e8f2bb0` | Same base, with `result.result` carrying a planning task graph. Drives `m8-flow`'s planning arm. |
+| `replan-delta.ndjson` | M40 Task 3 | `plan-graph`'s transcript with its final assistant text block and `result.result` replaced by a re-plan DELTA (one `docs` addition, one `cancel` id, an empty `keep`) and `total_cost_usd` at 0.03. The `$CANCEL_ID` token is a placeholder, not JSON a model wrote: the id to cancel is a row the caller seeded, so `fake-claude.mjs`'s re-plan arm substitutes it from `--replan-cancel <id>` in argv, or removes the element entirely when no flag is passed. |
 | `permission-matrix-deny.ndjson` | M18 Task 6 fix round 1; **re-recorded from the real CLI in M19 Task A1** | A real orchestrator-driven run against a real permission matrix — see the section below for its full provenance. `Read` allowed, then `Bash` (`npm test`) met this repo's own `PreToolUse` hook denying with the M18 grammar (`permission matrix denies 'run tests' (Bash) for this slave`), the agent adapted and reported instead of retrying, and the `result` line is honest about the denial: `is_error: false` but `permission_denials` carries the denied `toolu_01LiQfhzhqKJPfrr4pAD1Xjs`, exactly as `hook-deny.ndjson` measures the real CLI doing for a hook deny of any kind. |
 
-The three review fixtures and `plan-graph` share `complete`'s `session_id`
+The three review fixtures, `plan-graph` and `replan-delta` share `complete`'s `session_id`
 (`fake-session-complete`) because they are edits of it, not separate captures.
 
 ## `permission-matrix-deny.ndjson` — the M19 capture that retired the hand-authored one

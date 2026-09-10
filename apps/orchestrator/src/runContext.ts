@@ -8,6 +8,7 @@ import { prisma, type Prisma } from '@slave-of-ai/db/client'
 import {
   PROFILE_MAX_CHARS,
   SECTION_ORDER,
+  TERMINAL,
   effectiveProfile,
   neutraliseMarkers,
   renderRunContext,
@@ -76,6 +77,19 @@ export interface BuildRunContextInput {
     readonly base: string
     readonly head: string
     readonly capped: boolean
+  }
+  /**
+   * Present only on a RE-plan run (M40 §5): the goal changed under a board that already exists,
+   * and this run is being asked for a delta rather than for a plan.
+   *
+   * The run `kind` stays `planning` (spec erratum E2) -- what differs is this section, the board
+   * it carries, and the trailer `renderRunContext` chooses because of it. `previousVersion` is
+   * `version - 1` and may be 0, which is "there is no previous version to show": a goal written
+   * straight into the column before M40, or the very first one ever set.
+   */
+  readonly replan?: {
+    readonly previousVersion: number
+    readonly version: number
   }
   /** Test seam. Production passes nothing and gets `skillRoots()` -- which is itself redirectable
    *  through `SLAVEOFAI_SKILL_ROOTS_JSON` for the gate's real daemon subprocess. */
@@ -347,6 +361,81 @@ function skillsSectionText(
 }
 
 /**
+ * What a re-plan run is told about the change it has to answer (M40 §3).
+ *
+ * Three things, in the order a manager needs them: the requirement as it WAS, the requirement as
+ * it now IS, and the board that was built for the old one. The board is every task that is not
+ * done, failed or cancelled -- the same set the trigger compares versions over, and the same set
+ * `applyCancelPolicy` will judge the answer against, so the manager is never shown a task it
+ * cannot ask anything about. Each line carries the id (which is the KEY a delta names), the
+ * status (so "you never cancel work that is running" is checkable rather than a rule on trust)
+ * and the goal version that produced it.
+ *
+ * Every foreign text goes through `neutraliseMarkers` (M37 §1): two of these are goals a human
+ * wrote and the titles are what a MODEL wrote on the last plan, and a live protocol marker in any
+ * of them would let one prompt park or answer on this run's behalf.
+ */
+async function replanSection(input: {
+  readonly workspaceId: string
+  readonly goal: string
+  readonly previousVersion: number
+  readonly version: number
+}): Promise<Section> {
+  // `previousVersion` 0 is "there is no earlier version": a goal hand-seeded into the column, or
+  // the first one ever set. A missing ROW is treated the same way, deliberately -- both mean this
+  // prompt has no previous requirement to quote, and inventing one would put a sentence nobody
+  // wrote in front of the manager.
+  const previous =
+    input.previousVersion <= 0
+      ? null
+      : await prisma.goalVersion.findUnique({
+          where: { workspaceId_version: { workspaceId: input.workspaceId, version: input.previousVersion } },
+          select: { text: true },
+        })
+  const previousText = previous?.text ?? ''
+
+  const board = await prisma.task.findMany({
+    where: { workspaceId: input.workspaceId, status: { notIn: [...TERMINAL] } },
+    orderBy: { createdAt: 'asc' },
+    select: { id: true, title: true, status: true, goalVersion: true },
+  })
+
+  const text = block('THE GOAL CHANGED', [
+    ...(previousText === ''
+      ? ['Previous goal: (no previous version recorded)']
+      : [`Previous goal (v${String(input.previousVersion)}):`, neutraliseMarkers(previousText)]),
+    '',
+    `New goal (v${String(input.version)}):`,
+    neutraliseMarkers(input.goal),
+    '',
+    'Current board (every task that is not done, failed or cancelled):',
+    ...(board.length === 0
+      ? ['(nothing unfinished is on the board)']
+      : board.map(
+          (task) =>
+            `- ${task.id} [${task.status}] ${neutraliseMarkers(task.title)} ` +
+            `(${task.goalVersion === null ? 'unstamped' : `goal v${String(task.goalVersion)}`})`,
+        )),
+  ])
+
+  return {
+    kind: 'replan',
+    text,
+    // Both hashes are of the RAW texts, like every other `sha256` in this file: they exist so a
+    // reader can tell whether two runs saw the same requirement, and that is a question about the
+    // stored text rather than about the rendering.
+    source: {
+      kind: 'replan',
+      previousVersion: input.previousVersion,
+      version: input.version,
+      previousSha256: sha256(previousText),
+      sha256: sha256(input.goal),
+      boardTaskIds: board.map((task) => task.id),
+    },
+  }
+}
+
+/**
  * The one place a run's prompt is assembled (M37 §1, "one builder"), and the one place it is
  * recorded.
  *
@@ -492,6 +581,19 @@ export async function buildRunContext(input: BuildRunContextInput): Promise<Buil
       text: goal === '' ? '' : `GOAL: ${goal}`,
       source: { kind: 'planning_goal', sha256: sha256(goal), version: workspace.goalVersion },
     })
+    // M40 §3. After the goal, never instead of it: the prompt reads "here is the requirement,
+    // here is what changed about it, here is what to return", and `renderRunContext` picks the
+    // re-plan trailer because this section is present (spec erratum E2).
+    if (input.replan !== undefined && order.includes('replan')) {
+      sections.push(
+        await replanSection({
+          workspaceId: input.workspaceId,
+          goal,
+          previousVersion: input.replan.previousVersion,
+          version: input.replan.version,
+        }),
+      )
+    }
   }
 
   const { prompt, manifest } = renderRunContext(input.kind, sections)

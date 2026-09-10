@@ -12,6 +12,7 @@ import type { SlaveRuntimeAdapter, RunHandle } from '@slave-of-ai/providers'
 import { resolveRuntime, workspaceDefaultProvider } from './model.js'
 import { resolveAdapter } from './provider.js'
 import { pumpRun } from './pump.js'
+import { concludeReplan, replanIntent, replanSectionOf, type ReplanIntent } from './replan.js'
 import { buildRunContext } from './runContext.js'
 import { createRunUnlessArchived } from './runs.js'
 import { activePumpRunIds, emailLocalPart, pumps, type TickDeps } from './tick.js'
@@ -33,6 +34,16 @@ const PLANNING_RETRY_CAP = 2
  * untouched; the cap, not a cleared goal, is what eventually stops redispatch.
  */
 export async function concludePlanning(runId: RunId): Promise<void> {
+  // M40 erratum E4: first plan or re-plan is decided by what this RUN was told, not by `run.kind`
+  // (both are `planning`) and not by what the board looks like now. The manifest is the record of
+  // the prompt that was actually sent, so a re-plan concludes as a delta even if the goal has moved
+  // again since -- and a first plan can never be concluded as one.
+  const replan = await replanSectionOf(runId)
+  if (replan !== null) {
+    await concludeReplan(runId)
+    return
+  }
+
   const run = await prisma.slaveRun.findUniqueOrThrow({
     where: { id: runId },
     include: { slave: { include: { team: true } } },
@@ -171,11 +182,16 @@ export async function dispatchPlanning(deps: TickDeps): Promise<RunId | null> {
   // 1. No goal, nothing to plan toward.
   if (workspace.goal === null) return null
 
-  // 2. Any task at all -- any status -- means the board is not empty (spec Decision: planning
-  // fires only at an empty board). A workspace with a goal and existing tasks does not get a
-  // planning run just because a task later finishes or fails.
+  // 2. Which of the two planning runs this would be. An EMPTY board is the first plan, unchanged
+  // (spec Decision: planning fires at an empty board). A non-empty one gets a run only when the
+  // goal has moved past the board that goal produced -- M40 §1's delta re-plan, whose own
+  // preconditions (one per version, retries counted since that version) live in `replanIntent`. A
+  // workspace whose board is current still does not get a planning run just because a task later
+  // finishes or fails.
   const taskCount = await prisma.task.count({ where: { workspaceId: deps.workspaceId } })
-  if (taskCount > 0) return null
+  const replan: ReplanIntent | null =
+    taskCount === 0 ? null : await replanIntent(deps.workspaceId, workspace.goalVersion, PLANNING_RETRY_CAP)
+  if (taskCount > 0 && replan === null) return null
 
   // 3. Skip if a planning run is already live -- the ordinary case on every tick after the first,
   // since a planning run routinely outlives the tick that started it. `slave: { team: { workspaceId } }`,
@@ -192,20 +208,25 @@ export async function dispatchPlanning(deps: TickDeps): Promise<RunId | null> {
   // 4. Retry cap (spec Decision 8). Counted since the goal was last (re)set -- a hand-seeded goal
   // with no `workspace.goal_set` event counts from the epoch, so every planning run against it
   // counts. Silent at the cap: the two `run.failed` events already written are the escalation.
-  const latestGoalSet = await prisma.executionEvent.findFirst({
-    where: { workspaceId: deps.workspaceId, type: 'workspace_goal_set' },
-    orderBy: { seq: 'desc' },
-  })
-  const since = latestGoalSet?.ts ?? new Date(0)
-  const failedSinceGoal = await prisma.slaveRun.count({
-    where: {
-      kind: 'planning',
-      status: 'failed',
-      startedAt: { gt: since },
-      slave: { team: { workspaceId: deps.workspaceId } },
-    },
-  })
-  if (failedSinceGoal >= PLANNING_RETRY_CAP) return null
+  // The FIRST-plan path only: a re-plan counts its own failures since its own version's
+  // `goal_set`, inside `replanIntent`, because "since the latest goal_set" would let a further
+  // goal edit reset a cap the version being re-planned had already spent.
+  if (replan === null) {
+    const latestGoalSet = await prisma.executionEvent.findFirst({
+      where: { workspaceId: deps.workspaceId, type: 'workspace_goal_set' },
+      orderBy: { seq: 'desc' },
+    })
+    const since = latestGoalSet?.ts ?? new Date(0)
+    const failedSinceGoal = await prisma.slaveRun.count({
+      where: {
+        kind: 'planning',
+        status: 'failed',
+        startedAt: { gt: since },
+        slave: { team: { workspaceId: deps.workspaceId } },
+      },
+    })
+    if (failedSinceGoal >= PLANNING_RETRY_CAP) return null
+  }
 
   // 5. Staffing. `'manager' ∈ runtimeRoles` (M37 §5) -- the same convention `dispatchReview` uses
   // for `'reviewer'`, and for the same reason: `Slave.role` is the profile's title now, so what
@@ -340,6 +361,10 @@ export async function dispatchPlanning(deps: TickDeps): Promise<RunId | null> {
       taskId: null,
       worktreePath: null,
       provider: resolved.provider,
+      // M40 §5: present only on a re-plan, and what makes this run one -- the builder renders the
+      // `replan` section (both goals and the board) and `renderRunContext` appends the re-plan
+      // trailer instead of the task-graph one because that section is there (erratum E2).
+      ...(replan === null ? {} : { replan }),
     })
 
     handle = await runAdapter.start({
@@ -361,6 +386,21 @@ export async function dispatchPlanning(deps: TickDeps): Promise<RunId | null> {
       // alongside `pid`, rather than at creation.
       data: { pid: handle.pid, worktreePath: workspace.repoPath, provider: resolved.provider },
     })
+
+    // M40 §1: written once the run is really running, because it is what "this version got its
+    // re-plan" MEANS -- the dedup reads it back and asks what became of the run it names. A
+    // dispatch that died before this point took the catch below instead, and left nothing for the
+    // dedup to find, which is correct: nothing was re-planned.
+    if (replan !== null) {
+      await appendEvent({
+        type: 'workspace.replan_started',
+        workspaceId: deps.workspaceId,
+        slaveId: manager.id,
+        runId: run.id,
+        actor: 'system',
+        payload: { version: replan.version, runId: run.id },
+      })
+    }
 
     // Chained into `tick.ts`'s own `pumps` set, exactly as `dispatchReview` chains its own pump --
     // `drainPumps` only ever waits on that one set.
