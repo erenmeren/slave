@@ -751,14 +751,71 @@ describe('shell facts and stream state reach the project header, never the sideb
     expect(publishStreamState).toHaveBeenCalledWith('w1', { connection: 'connected', latencyMs: null })
   })
 
-  // M24 §3: the goal card and the runtime card left the Overview page for the project Settings
-  // tab (a later task); this page shows the strip and the slave cards, nothing above them.
-  it('renders the strip and the slave cards and nothing else above them (M24 §3)', () => {
+  // M24 §3 kept, re-aimed by M45 R1: the goal card and the runtime card left this page for the
+  // project Settings tab and are still not here -- what changed is what is FIRST. The brief
+  // answers the ten-second questions, and the strip the design handoff documents sits directly
+  // under it (erratum E17: the overlap between the two is deliberate).
+  it('M45 R1: the brief is the first thing on the page, and the strip is directly under it', () => {
     render(<OverviewClient workspaceId="w1" initial={PUBLISHED} />)
     expect(screen.queryByTestId('goal-input')).toBeNull()
     expect(screen.queryByTestId('runtime-provider')).toBeNull()
     expect(screen.queryByTestId('goal-suggestion')).toBeNull()
+    const shell = screen.getByTestId('page-shell')
+    const order = [...shell.children].map((child) => child.getAttribute('data-testid'))
+    expect(order.filter((id) => id !== null).slice(0, 2)).toEqual(['brief', 'strip'])
+  })
+
+  // M45 erratum E16: the Team strip IS the same `SlaveCard` grid it has always been, under a
+  // label -- the cards did not move to a new component and none of their six fidelity assertions
+  // changed.
+  it('M45 E16: the team strip is the same slave-card grid, under a Team label', () => {
+    render(<OverviewClient workspaceId="w1" initial={PUBLISHED} />)
+    const team = screen.getByTestId('team')
+    expect(team.textContent).toContain('team')
+    expect(team.querySelectorAll('[data-testid="slave-card"]').length).toBe(PUBLISHED.slaves.length)
     expect(screen.getAllByTestId('slave-card').length).toBe(PUBLISHED.slaves.length)
+  })
+
+  // M45 R3/R2: the two new surfaces are on the page, in the order the spec reads them -- one
+  // input to the Supervisor, then the six-lane timeline.
+  it('M45 R2/R3: the request box and the timeline sit between the strip and the team', () => {
+    render(<OverviewClient workspaceId="w1" initial={PUBLISHED} />)
+    const shell = screen.getByTestId('page-shell')
+    const order = [...shell.children].map((child) => child.getAttribute('data-testid')).filter((id) => id !== null)
+    expect(order).toEqual(['brief', 'strip', 'supervisor-request', 'team', 'overview-advanced'])
+    // The timeline's own root carries no testid (its `<ol>` does), so it is asserted by name.
+    expect(screen.getByTestId('timeline')).toBeTruthy()
+  })
+
+  // M45 plan erratum E22: NOTHING was removed. All four panels are one disclosure lower, and a
+  // CLOSED disclosure renders none of them -- which is what keeps `SupervisorPanel`'s
+  // `RepeatableRead` world load off a page that streams several times a second.
+  it('M45 R1: the river, the blocked panel, the merge queue and the Supervisor panel are under Advanced', async (): Promise<void> => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ error: 'not in this test' }), { status: 404 }))
+    vi.stubGlobal('fetch', fetchMock)
+    try {
+      render(<OverviewClient workspaceId="w1" initial={PUBLISHED} />)
+      expect(screen.queryByTestId('live-events')).toBeNull()
+      expect(screen.queryByTestId('blocked-empty')).toBeNull()
+      expect(screen.queryByTestId('merge-empty')).toBeNull()
+      expect(screen.queryByTestId('advanced-panel-supervisor')).toBeNull()
+
+      await act(async (): Promise<void> => {
+        fireEvent.click(screen.getByTestId('overview-advanced-toggle'))
+      })
+
+      expect(screen.getByTestId('live-events')).toBeTruthy()
+      expect(screen.getByTestId('live-events').className).toContain('w-[340px]')
+      expect(screen.getByText('merge queue · serial')).toBeTruthy()
+      expect(screen.getByText('blocked · needs you')).toBeTruthy()
+      expect(screen.getByTestId('advanced-panel-supervisor')).toBeTruthy()
+      // The three destinations `docs/ia.md` lists, reachable from the page as well as the header.
+      expect(screen.getByTestId('advanced-link-graph').getAttribute('href')).toBe('/w/w1/graph')
+      expect(screen.getByTestId('advanced-link-office').getAttribute('href')).toBe('/w/w1/office')
+      expect(screen.getByTestId('advanced-link-analytics').getAttribute('href')).toBe('/analytics?workspace=w1')
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 
   it('a workspace adopted from a simulation shows the note linking back to it; a hand-assigned one shows nothing (M33 §4)', () => {

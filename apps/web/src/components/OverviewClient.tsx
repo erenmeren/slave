@@ -10,13 +10,18 @@ import type { OverviewSnapshot } from '../server/overview'
 import { SlaveCard } from './SlaveCard'
 import { SlavePanel } from './SlavePanel'
 import { HaltBanner } from './HaltBanner'
-import { SupervisorPanel } from './SupervisorPanel'
 import { postControl } from '../lib/postControl'
 import { TopStrip } from './TopStrip'
+import { OverviewAdvanced } from './project/OverviewAdvanced'
+import { ProjectBrief } from './project/ProjectBrief'
+import { SupervisorRequest } from './project/SupervisorRequest'
+import { SupervisorTimeline } from './project/SupervisorTimeline'
 import { Alert } from './ui/Alert'
 import { Button } from './ui/Button'
 import { EmptyState } from './ui/EmptyState'
+import { PageShell } from './ui/PageShell'
 import { Panel } from './ui/Panel'
+import { SectionLabel } from './ui/SectionLabel'
 
 /**
  * The "blocked · needs you" panel (design README §3a.1). `flex-1` beside the fixed 340px events
@@ -219,56 +224,66 @@ export function OverviewClient({
 
   return (
     <>
+      {/* The stale-data dim stays OUTSIDE the shell (M45 t3): `PageShell` owns the frame and takes
+        * no className, and the page-shell marker has to be the element whose direct children are
+        * the page's own sections. */}
       <div className={`flex flex-1 flex-col ${error !== null ? 'opacity-60' : ''}`}>
-        {view.workspace.haltedReason !== null && <HaltBanner reason={view.workspace.haltedReason} />}
-        {/* M38 §6: the Supervisor sits directly under the halt banner, because a halted workspace
-          * is exactly when its "what is stuck / what comes next" is worth reading, and because
-          * every action it proposes while halted is a proposal a human has to answer here. It
-          * reads its own route; `view` is passed only as a WAKE-UP -- its identity changes on
-          * every SSE-driven refetch -- and the panel throttles its own reads from there
-          * (`SUPERVISOR_PANEL_MIN_REFRESH_MS`), because this stream fires several times a second
-          * while a run is live. */}
-        <SupervisorPanel workspaceId={workspaceId} refreshKey={view} />
-        {/* M44 R3: the band three surfaces hand-rolled, each with its own class string, is
-          * `ui/Alert` now. The one-line `role="alert"` refusal sentences under forms are NOT
-          * alerts in this sense and stay exactly as they are (erratum E21). */}
-        {error !== null && <Alert variant="notice">showing stale data: {error}</Alert>}
-        {view.workspace.adoptedFrom !== null && (
-          // M44 R3: the second full-width band on this page, the same component as the first --
-          // but the `info` variant (fix round 1), which is `role="status"` on the page's own
-          // neutral surface. Where the line above is a warning that needs reading NOW, this one is
-          // standing provenance: true for the life of the project, needing nobody. Announcing it
-          // on insertion, in the same amber, was a warning about nothing.
-          <Alert variant="info" testId="ws-adopted-from">
-            organisation adopted from simulation{' '}
-            <Link href={`/sim/${view.workspace.adoptedFrom.simulationId}`} className="underline">
-              {view.workspace.adoptedFrom.name}
-            </Link>
-          </Alert>
-        )}
-        <TopStrip snapshot={view} />
-        {/* The handoff's 3-column card grid at an 11px gap (design README §3a.1), narrowing to
-          * two and then one rather than shrinking the cards past the anatomy they hold. */}
-        <div className="grid grid-cols-1 gap-[11px] px-[20px] pt-[16px] md:grid-cols-2 xl:grid-cols-3">
-          {view.slaves.map((slave) => (
-            <SlaveCard
-              key={slave.id}
-              slave={slave}
-              liveActionLine={actionLines[slave.id] ?? null}
-              workspaceId={workspaceId}
-              onOpen={selectSlave}
-            />
-          ))}
-        </div>
-        {/* The bottom row: "blocked · needs you" takes the remaining width beside the fixed 340px
-          * live-events panel, with the merge queue underneath. */}
-        <div className="flex gap-[11px] px-[20px] pt-[16px]">
-          <BlockedPanel workspaceId={workspaceId} items={view.blocked} />
-          <LiveEventsPanel workspaceId={workspaceId} events={view.liveEvents} />
-        </div>
-        <div className="px-[20px] pb-[20px] pt-[11px]">
-          <MergeQueuePanel queue={view.mergeQueue} />
-        </div>
+        {/* M45 erratum E18: `flush`, because every `/w/:id/*` page already carries the design
+          * handoff's own `px-[20px] pt-[16px]` gutters and `gate:m14-fidelity` screenshots this
+          * one. The shell is here for its LANDMARK and its marker, not for its padding. */}
+        <PageShell flush>
+          {view.workspace.haltedReason !== null && <HaltBanner reason={view.workspace.haltedReason} />}
+          {/* M44 R3: the band three surfaces hand-rolled, each with its own class string, is
+            * `ui/Alert` now. The one-line `role="alert"` refusal sentences under forms are NOT
+            * alerts in this sense and stay exactly as they are (erratum E21). */}
+          {error !== null && <Alert variant="notice">showing stale data: {error}</Alert>}
+          {view.workspace.adoptedFrom !== null && (
+            // M44 R3: the second full-width band on this page, the same component as the first --
+            // but the `info` variant (fix round 1), which is `role="status"` on the page's own
+            // neutral surface. Where the line above is a warning that needs reading NOW, this one
+            // is standing provenance: true for the life of the project, needing nobody. Announcing
+            // it on insertion, in the same amber, was a warning about nothing.
+            <Alert variant="info" testId="ws-adopted-from">
+              organisation adopted from simulation{' '}
+              <Link href={`/sim/${view.workspace.adoptedFrom.simulationId}`} className="underline">
+                {view.workspace.adoptedFrom.name}
+              </Link>
+            </Alert>
+          )}
+          {/* M45 R1: the eight facts, first, because "what is happening and what needs me" is the
+            * question this page exists to answer. */}
+          <ProjectBrief workspaceId={workspaceId} brief={view.brief} onOpenSlave={selectSlave} />
+          {/* M45 erratum E17: the raw board counts the design handoff documents and
+            * `gate:m14-fidelity` measures, kept under the brief that speaks the domain's words. */}
+          <TopStrip snapshot={view} />
+          {/* M45 R3 */}
+          <SupervisorRequest workspaceId={workspaceId} />
+          {/* M45 R2 */}
+          <SupervisorTimeline workspaceId={workspaceId} entries={view.timeline} needsYou={view.needsYou} />
+          <section data-testid="team" className="px-[20px] pt-[16px]">
+            <SectionLabel>team</SectionLabel>
+            {/* M45 erratum E16: the Team strip IS this grid. `SlaveCard` renders nowhere else in
+              * the app, and six `gate:m14-fidelity` assertions live on it. R4's worker disclosure
+              * is the EXPANDED view -- `SlavePanel`'s Details groups, Task 4.
+              *
+              * The handoff's 3-column card grid at an 11px gap (design README §3a.1), narrowing to
+              * two and then one rather than shrinking the cards past the anatomy they hold. */}
+            <div className="grid grid-cols-1 gap-[11px] pt-[8px] md:grid-cols-2 xl:grid-cols-3">
+              {view.slaves.map((slave) => (
+                <SlaveCard
+                  key={slave.id}
+                  slave={slave}
+                  liveActionLine={actionLines[slave.id] ?? null}
+                  workspaceId={workspaceId}
+                  onOpen={selectSlave}
+                />
+              ))}
+            </div>
+          </section>
+          {/* M45 plan erratum E22: the Supervisor panel, `blocked · needs you`, the live-events
+            * river and the merge queue, all four unchanged, one disclosure lower. */}
+          <OverviewAdvanced workspaceId={workspaceId} view={view} />
+        </PageShell>
       </div>
       {selectedSlave !== null && (
         <SlavePanel

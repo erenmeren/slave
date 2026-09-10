@@ -387,10 +387,20 @@ function GuardrailTrippedCard(props: ActivityCardProps): ReactElement {
 // carry a `taskId`.
 
 function WorkspaceGoalSetCard(props: ActivityCardProps): ReactElement {
-  const payload = props.event.payload as { goal: string }
+  const payload = props.event.payload as { goal: string; request?: unknown }
   return (
     <ActivityCard {...props}>
       <Transition tone="idle" label="goal set">
+        {/* M45 R3 / erratum E24: a goal version written by "tell the Supervisor what changed"
+          * carries the WORDS a person asked for, and they are the whole reason this version
+          * exists -- the goal document below is the standing goal plus a dated line composed from
+          * them. Optional: a whole-goal set through the Settings tab has no request, and this card
+          * must not invent one. Another party's text, as JSX children (spec §1). */}
+        {typeof payload.request === 'string' && payload.request !== '' && (
+          <span data-testid="goal-set-request" className="text-[11px] text-text-2">
+            requested: {payload.request}
+          </span>
+        )}
         <span data-testid="goal-text">{payload.goal}</span>
       </Transition>
     </ActivityCard>

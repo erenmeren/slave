@@ -47,11 +47,11 @@ before adding a surface.
 
 | Route | User goal | Decision | M44 | Later |
 |---|---|---|---|---|
-| `/w/:id` Overview | What is happening right now | keep (tab 1) | Untouched content; the six leaks in its panels are closed | M45 rewrites it around the Supervisor |
+| `/w/:id` Overview | What is happening right now, and what needs me | keep (tab 1) | M44: untouched content, and the six leaks in its panels closed. **M45**: rebuilt as a brief (eight facts), one input to the Supervisor, and a six-lane timeline whose decisions are answerable in place; the live-events river, the blocked panel, the merge queue and the Supervisor panel moved under `Advanced ▾` on the page; the team is the same card grid, under a `Team` label | M46 lifts the org graph's content into an Organization tab |
 | `/w/:id/tasks` Tasks | What work exists, in what state | keep (tab 2) | Untouched | M45 adds progressive disclosure |
 | `/w/:id/activity` Activity | What happened, in order | keep (tab 3) | The event-type rail reads words; the raw prefix is on `data-prefix` and in `title` | — |
 | `/w/:id/settings` Settings | Goal, runtime, permissions, danger | keep (tab 4) | Emergency stop uses the one destructive recipe | — |
-| `/w/:id/graph` Graph | Five structural views of the project | **demoted to Advanced ▾** | Reachable from `Advanced ▾ → Graph` and by URL; all five modes intact; the mode nav is a real tablist now | M45 lifts the org mode's content into an Organization tab; Graph stays |
+| `/w/:id/graph` Graph | Five structural views of the project | **demoted to Advanced ▾** | Reachable from `Advanced ▾ → Graph` and by URL; all five modes intact; the mode nav is a real tablist now | M46 lifts the org mode's content into an Organization tab; Graph stays |
 | `/w/:id/office` Office | The team as a pixel office | **demoted to Advanced ▾** | Reachable from `Advanced ▾ → Office` and by URL; the canvas gains a label and a text line saying what it shows | — |
 | `/analytics?workspace=:id` Analytics | Spend and throughput for THIS project | **reached from the project** | The third item in `Advanced ▾`, carrying the project's `?workspace=` scope; the route and the scope are the global page's, unchanged and bookmarkable | M53 replaces the tiles with per-profile evidence |
 
@@ -63,6 +63,10 @@ before adding a surface.
 - `HaltBanner` keeps its own component rather than becoming an `Alert`: four gates key off it.
 - The Tasks board's pill keeps its board vocabulary in M44. `userTaskStatus` is the domain's task
   word and is wired to one thing here — the "needs you" count on a project card.
+- The Overview's own `Advanced ▾` holds the four panels that left its first viewport — the
+  Supervisor panel, `blocked · needs you`, the live-events river and the merge queue. All four
+  keep their components, their tests and their behaviour; the river keeps its 340 px, which
+  `gate:m14-fidelity` still measures (it opens the disclosure first).
 
 ## What "needs you" counts, exactly
 

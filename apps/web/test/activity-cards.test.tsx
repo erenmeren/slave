@@ -480,6 +480,20 @@ describe('targeted card bodies', () => {
     expect(screen.getByTestId('goal-text').textContent).toBe('Ship the checkout flow')
   })
 
+  // M45 erratum E24. `PAYLOAD_BY_TYPE` is NOT changed for this: it holds minimal valid payloads
+  // and `request` is optional, so this case builds its own event.
+  it('workspace.goal_set shows the words a person requested, when there were any', () => {
+    const Card = ACTIVITY_CARDS['workspace.goal_set']
+    render(<Card event={baseEvent('workspace.goal_set', { goal: 'Ship it', version: 2, sha256: 'a', request: 'Add Apple Pay' })} {...CARD_PROPS} />)
+    expect(screen.getByTestId('goal-set-request').textContent).toContain('Add Apple Pay')
+  })
+
+  it('says nothing about a request on a goal version that had none', () => {
+    const Card = ACTIVITY_CARDS['workspace.goal_set']
+    render(<Card event={baseEvent('workspace.goal_set', { goal: 'Ship it', version: 1, sha256: 'a' })} {...CARD_PROPS} />)
+    expect(screen.queryByTestId('goal-set-request')).toBeNull()
+  })
+
   it('workspace.plan_created shows the task count and the title+role list', () => {
     const Card = ACTIVITY_CARDS['workspace.plan_created']
     render(<Card event={fixtureFor('workspace.plan_created')} {...CARD_PROPS} />)

@@ -68,3 +68,38 @@ export async function postControl(
   const error = await sendControl(url, body === undefined ? { method: 'POST' } : { method: 'POST', body })
   return error === null ? { ok: true } : { ok: false, error }
 }
+
+/**
+ * A POST whose ANSWER matters, not only whether it was refused (M45 R3).
+ *
+ * `sendControl` and `postControl` above throw the response body away, because every control verb
+ * they were written for answers `{ ok: true }` and the page's own refetch is what shows the
+ * result. `POST /goal/request` is the first that does not: it returns the goal VERSION it wrote,
+ * and "goal v3 saved" is the whole confirmation a person gets that their words landed somewhere.
+ *
+ * Added here rather than a second `fetch` idiom inside `project/SupervisorRequest.tsx`: this file
+ * is the one place this app dials `fetch` for a mutation, and the 401 handling below is exactly
+ * why that rule exists.
+ */
+export async function postJson<T>(
+  url: string,
+  body?: Record<string, unknown>,
+): Promise<{ ok: true; data: T } | { ok: false; error: string }> {
+  try {
+    const response =
+      body === undefined
+        ? await fetch(url, { method: 'POST' })
+        : await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          })
+    const data: unknown = await response.json().catch(() => null)
+    if (response.ok) return { ok: true, data: data as T }
+    // The same door every other control surface lands on (M20 §3.4).
+    if (response.status === 401) onUnauthorized()
+    return { ok: false, error: errorMessage(data, response.status) }
+  } catch (cause) {
+    return { ok: false, error: cause instanceof Error ? cause.message : String(cause) }
+  }
+}

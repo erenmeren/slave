@@ -13,16 +13,27 @@ export function PageShell({
   action,
   tabs,
   testId = 'page-shell',
+  flush,
   children,
 }: {
   readonly title?: string
   readonly action?: React.ReactNode
   readonly tabs?: React.ReactNode
   readonly testId?: string
+  /**
+   * Drop the frame's own gutters and gap (M44 erratum E25, M45 plan erratum E18).
+   *
+   * `PageShell` is `gap-4 p-3 md:p-4`, and every `/w/:id/*` page already carries its own
+   * `px-[20px] pt-[16px]` from the design handoff. Wrapping them as-is would move pixels on five
+   * pages whose design this milestone does not change -- and `gate:m14-fidelity` screenshots four
+   * of them. `flush` is how those pages get the shell's LANDMARK and its `page-shell` marker with
+   * no visual change at all; a page that has no gutters of its own should not use it.
+   */
+  readonly flush?: boolean
   readonly children: React.ReactNode
 }): React.JSX.Element {
   return (
-    <div data-testid={testId} className="flex min-w-0 flex-1 flex-col gap-4 p-3 md:p-4">
+    <div data-testid={testId} className={`flex min-w-0 flex-1 flex-col ${flush === true ? '' : 'gap-4 p-3 md:p-4'}`}>
       {(title !== undefined || action !== undefined) && (
         <div className="flex flex-wrap items-center justify-between gap-3">
           {title === undefined ? <span /> : <SectionLabel>{title}</SectionLabel>}

@@ -482,4 +482,15 @@ describe('PageShell', () => {
     expect(screen.getByTestId('advanced-shell')).toBeTruthy()
     expect(screen.queryByTestId('page-shell')).toBeNull()
   })
+
+  // M45 erratum E18: the five `/w/:id/*` pages carry the design handoff's own `px-[20px]
+  // pt-[16px]` gutters, and four of them are screenshotted by `gate:m14-fidelity`. `flush` is how
+  // they take the shell's landmark and its marker without moving a pixel.
+  it('flush drops the frame padding so a page that owns its own gutters is not moved', () => {
+    const { getByTestId, rerender } = render(<PageShell><span>x</span></PageShell>)
+    expect(getByTestId('page-shell').className).toContain('p-3')
+    rerender(<PageShell flush><span>x</span></PageShell>)
+    expect(getByTestId('page-shell').className).not.toContain('p-3')
+    expect(getByTestId('page-shell').className).not.toContain('gap-4')
+  })
 })

@@ -75,8 +75,13 @@ export function actionText(action: Action, taskTitles: Readonly<Record<string, s
  *
  * Owned by {@link ProposalRow} rather than by itself: the Approve button lives on the row, and the
  * row is what decides whether the text has been touched, so the state has to sit above both.
+ *
+ * Exported since M45: the Supervisor timeline's DECISION REQUIRED lane renders the same row, so a
+ * proposal reads and answers identically wherever it is shown. Exported IN PLACE rather than moved
+ * to a file of its own, so `apps/web/test/supervisor-panel.test.tsx` keeps testing it where it has
+ * always been tested.
  */
-function DraftEditor({
+export function DraftEditor({
   draft,
   question,
   body,
@@ -155,10 +160,17 @@ function DraftEditor({
   )
 }
 
-/** One proposal, with everything a person needs to answer it: the situation it was made on, what
- *  would happen, and why the Supervisor picked that. Split out of the panel so the pending list
- *  and its per-row reject box stay readable. */
-function ProposalRow({
+/**
+ * One proposal, with everything a person needs to answer it: the situation it was made on, what
+ * would happen, and why the Supervisor picked that. Split out of the panel so the pending list and
+ * its per-row reject box stay readable.
+ *
+ * Exported since M45: the Supervisor timeline's DECISION REQUIRED lane renders the same row, so a
+ * proposal reads and answers identically wherever it is shown. Exported IN PLACE rather than moved
+ * to a file of its own, so `apps/web/test/supervisor-panel.test.tsx` keeps testing it where it has
+ * always been tested.
+ */
+export function ProposalRow({
   decision,
   questions,
   taskTitles,
