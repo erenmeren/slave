@@ -1,5 +1,5 @@
 import { prisma } from '@slave-of-ai/db/client'
-import { listDecisions } from '@slave-of-ai/control'
+import { listDecisions, type DecisionView } from '@slave-of-ai/control'
 import { SITUATION_LABEL, needsYou, type TaskStatus } from '@slave-of-ai/domain'
 import { buildSupervisorView } from './supervisor'
 
@@ -36,9 +36,17 @@ export interface NeedsYouItem {
   readonly messageId: string | null
 }
 
+/** The pending decisions `buildOverviewSnapshot` has already listed, handed down rather than
+ *  listed again (fix round 1, review Important 8). Optional, with a fallback read, so a direct
+ *  caller still gets a correct queue from a workspace id alone. */
+export interface NeedsYouReads {
+  readonly decisions?: readonly DecisionView[]
+}
+
 export async function buildNeedsYou(
   workspaceId: string,
   now: Date = new Date(),
+  shared: NeedsYouReads = {},
 ): Promise<readonly NeedsYouItem[]> {
   const workspace = await prisma.workspace.findUnique({
     where: { id: workspaceId },
@@ -55,7 +63,13 @@ export async function buildNeedsYou(
   })
 
   const [decisions, view] = await Promise.all([
-    listDecisions(workspaceId, { pending: true }),
+    shared.decisions ?? listDecisions(workspaceId, { pending: true }),
+    // The one read this file cannot avoid making: `holdersOf` -- the rule that says a question has
+    // no live holder -- is private to `packages/control/src/supervisorWorld.ts`, so the only way to
+    // ask "which questions can nobody but a person answer" is to walk the Supervisor's world.
+    // `buildSupervisorView` lists decisions twice more of its own accord (`pending` and `recent`,
+    // for the panel it was written for); that is amplification this milestone did not introduce
+    // and does not fix, and narrowing it means a question-shaped read in `control`.
     buildSupervisorView(workspaceId, now),
   ])
 
@@ -67,21 +81,25 @@ export async function buildNeedsYou(
   const items: NeedsYouItem[] = []
 
   for (const task of tasks) {
-    const decisionPending = decidedSubjects.has(task.id)
-    // The domain decides, not this file: `needsYou` is where the four rules live, and asking it
-    // per task is what keeps the queue and the project card's count saying the same thing.
+    // E20's de-duplication, BEFORE the domain is asked: a pending decision about this task is this
+    // task's one entry, and the decision row below is the one that carries an answer a person can
+    // give in place. Passing `decisionPending: true` to `needsYou` and then dropping the task
+    // anyway (which this loop did until fix round 1) let the domain's answer look load-bearing
+    // when nothing could read it.
+    if (decidedSubjects.has(task.id)) continue
+    // The domain decides which tasks need a person, not this file: `needsYou` is where the four
+    // rules live. NOTE that the project card's own needs-you count (`server/org.ts`) does NOT
+    // agree with this queue today -- it counts decisions and tasks by its own reading -- and
+    // reconciling the two on this function is its own piece of work, not this milestone's.
     if (
       !needsYou({
         status: task.status as TaskStatus,
         integrated: task.integratedAt !== null,
         autoMerge: workspace.autoMerge,
-        decisionPending,
       })
     ) {
       continue
     }
-    // E20's de-duplication: the decision row below is this task's one entry.
-    if (decisionPending) continue
     const blocked = task.status === 'blocked'
     items.push({
       kind: blocked ? 'blocked_task' : 'integrate',

@@ -1,6 +1,6 @@
 import { prisma } from '@slave-of-ai/db/client'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, toRunState } from '@slave-of-ai/db'
-import { capabilitiesOf, workspaceDefaultProvider, workspaceSpend, type ProviderCapabilities, type ProviderKind } from '@slave-of-ai/control'
+import { capabilitiesOf, listDecisions, workspaceDefaultProvider, workspaceSpend, type ProviderCapabilities, type ProviderKind } from '@slave-of-ai/control'
 import {
   deriveSlaveStatus,
   effectiveProfile,
@@ -13,7 +13,7 @@ import {
 import { feedSummary, type SlaveFeedEvent } from '../lib/feedSummary'
 import { skillNameOf } from '../lib/skillName'
 import { buildProjectBrief, type ProjectBrief } from './brief'
-import { type NeedsYouItem } from './needsYou'
+import { buildNeedsYou, type NeedsYouItem } from './needsYou'
 import { buildSupervisorTimeline, type TimelineEntry } from './timeline'
 
 // Re-exported so callers that already import from `server/overview.ts` keep working; the
@@ -456,27 +456,24 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
   // budget guardrail cannot disagree, while these rows stay for the unmeasured-RUN count that no
   // aggregate can produce.
   //
-  // `buildProjectBrief` joins this round rather than opening one of its own (M45 R1): it is one
-  // more parallel read on a page that already makes several, and it is what carries the needs-you
-  // queue the timeline below reuses instead of building a second copy of it.
-  const [spendRows, taskGroups, spendTotal, brief] = await Promise.all([
+  // `listDecisions` joins this round for the M45 builders below (fix round 1, review Important 8):
+  // the needs-you queue and the timeline both want the pending proposals, and this page listed
+  // them FOUR times before they were passed down.
+  const [spendRows, taskGroups, spendTotal, pendingDecisions] = await Promise.all([
     prisma.slaveRun.findMany({
       where: { slave: { team: { workspaceId } } },
       select: { costUsd: true, provider: true, status: true },
     }),
     prisma.task.groupBy({ by: ['status'], where: { workspaceId }, _count: { _all: true } }),
     workspaceSpend(workspaceId),
-    buildProjectBrief(workspaceId),
+    listDecisions(workspaceId, { pending: true }),
   ])
-  // Dead in practice -- the missing-workspace case returned above -- but the compiler cannot see
-  // that across two reads, and narrowing is honest where a cast would not be.
-  if (brief === null) return null
   const spend = sumSpend(spendRows)
   const countOf = (statuses: readonly string[]): number =>
     taskGroups.filter((g) => statuses.includes(g.status)).reduce((n, g) => n + g._count._all, 0)
 
   // The bottom row's three panels, in one round with everything else loaded.
-  const [blockedTasks, pausedRuns, recentForPanel, mergingTasks, timeline] = await Promise.all([
+  const [blockedTasks, pausedRuns, recentForPanel, mergingTasks, needsYouItems] = await Promise.all([
     prisma.task.findMany({ where: { workspaceId, status: 'blocked' }, orderBy: { createdAt: 'asc' } }),
     prisma.slaveRun.findMany({
       where: {
@@ -496,10 +493,28 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
     }),
     prisma.executionEvent.findMany({ where: { workspaceId }, orderBy: { seq: 'desc' }, take: LIVE_EVENTS_LIMIT }),
     prisma.task.findMany({ where: { workspaceId, status: 'merging' } }),
-    // Handed the queue the brief already built: building it twice would mean two
-    // `loadSupervisorWorld` transactions per refetch, for one list (M45 R2).
-    buildSupervisorTimeline(workspaceId, { needsYou: brief.needsYou }),
+    // The M45 queue, built ONCE here and handed to both builders below (M45 R1): it walks the
+    // Supervisor's world, so a second copy would be a second `RepeatableRead` transaction per
+    // refetch for one list.
+    buildNeedsYou(workspaceId, new Date(), { decisions: pendingDecisions }),
   ])
+
+  // A third round, and cheaper than the two it replaces: both builders run in parallel and BOTH
+  // are handed every shared read this function already holds -- the queue, the pending decisions,
+  // the spend total and the run rows behind it. What each still reads for itself is documented on
+  // its own module: the brief's task and worker rows (a different `select` from this function's),
+  // and the timeline's event page and task titles.
+  const [brief, timeline] = await Promise.all([
+    buildProjectBrief(workspaceId, new Date(), {
+      needsYou: needsYouItems,
+      spend: spendTotal,
+      spendRows,
+    }),
+    buildSupervisorTimeline(workspaceId, { needsYou: needsYouItems, decisions: pendingDecisions }),
+  ])
+  // Dead in practice -- the missing-workspace case returned above -- but the compiler cannot see
+  // that across two reads, and narrowing is honest where a cast would not be.
+  if (brief === null) return null
 
   const blocked = [
     ...blockedTasks.map((task) => ({

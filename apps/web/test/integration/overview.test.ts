@@ -917,4 +917,52 @@ describe('buildOverviewSnapshot', () => {
     // One snapshot, one queue: the tile's count and the lane's list are the same build.
     expect(snapshot.needsYou).toEqual(snapshot.brief.needsYou)
   })
+  /**
+   * The read budget of ONE refetch (fix round 1, review Important 8).
+   *
+   * This page refetches on every event while a run is live, so a builder that quietly lists the
+   * pending decisions a fourth time or scans every `SlaveRun` a second time is a real cost. The
+   * numbers below are the CONTRACT, not a snapshot of whatever the code happens to do: each one is
+   * named, and a change to any of them is a decision somebody has to make on purpose.
+   *
+   * `prisma.supervisorDecision.findMany` = 3:
+   *   1. this function's own `listDecisions(pending)`, handed to the queue AND the timeline;
+   *   2. + 3. `buildSupervisorView`'s `pending` and `recent` lists, inside `buildNeedsYou` -- the
+   *      Supervisor panel's own read, which the queue needs only because `holdersOf` (the rule for
+   *      "nobody can answer this question") is private to `packages/control`.
+   *
+   * `prisma.slaveRun.findMany` = 3: the live runs for the slave cards, the spend rows (handed to
+   * the brief), and the paused runs for the blocked panel. `loadSupervisorWorld`'s own run reads
+   * are on its transaction client and are invisible to these spies, which is why the numbers are
+   * a floor on the truth rather than the whole of it.
+   */
+  it('makes one refetch\'s shared reads once, not once per builder', async (): Promise<void> => {
+    // Counted by hand rather than with `vi.spyOn`: a Prisma delegate is a Proxy whose
+    // `getOwnPropertyDescriptor` reports `value: undefined` for every model method, so `spyOn`
+    // captures `undefined` as the original and the spied call returns nothing. Assigning over the
+    // property works, and restoring it is the `finally` below.
+    const reads = { decisions: 0, runs: 0 }
+    const realDecisions = prisma.supervisorDecision.findMany
+    const realRuns = prisma.slaveRun.findMany
+    const decisionsDelegate = prisma.supervisorDecision as unknown as { findMany: unknown }
+    const runsDelegate = prisma.slaveRun as unknown as { findMany: unknown }
+    decisionsDelegate.findMany = (...args: unknown[]): unknown => {
+      reads.decisions += 1
+      return (realDecisions as (...a: unknown[]) => unknown)(...args)
+    }
+    runsDelegate.findMany = (...args: unknown[]): unknown => {
+      reads.runs += 1
+      return (realRuns as (...a: unknown[]) => unknown)(...args)
+    }
+
+    try {
+      expect(await buildOverviewSnapshot(fixture.workspaceId)).not.toBeNull()
+    } finally {
+      decisionsDelegate.findMany = realDecisions
+      runsDelegate.findMany = realRuns
+    }
+
+    expect(reads.decisions).toBe(3)
+    expect(reads.runs).toBe(3)
+  })
 })

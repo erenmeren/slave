@@ -1,7 +1,11 @@
 import { prisma } from '@slave-of-ai/db/client'
 import { appendEvent } from '@slave-of-ai/events'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
-import { buildSupervisorTimeline } from '../../src/server/timeline.js'
+import {
+  TIMELINE_LIMIT_DEFAULT,
+  TIMELINE_LIMIT_MAX,
+  buildSupervisorTimeline,
+} from '../../src/server/timeline.js'
 import {
   seedPendingDecision,
   seedTask,
@@ -81,7 +85,11 @@ describe('buildSupervisorTimeline', () => {
     expect(entries.map((entry) => entry.lane)).not.toContain(null)
     expect(entries.some((entry) => entry.eventType === 'run.tool_call')).toBe(false)
     expect(entries.some((entry) => entry.eventType === 'run.output')).toBe(false)
-    expect(entries[0]!.at >= entries[entries.length - 1]!.at).toBe(true)
+    // Newest first, pairwise -- comparing only the ends would pass on a list that is out of order
+    // in the middle (fix round 1, review minor 7).
+    for (let index = 1; index < entries.length; index += 1) {
+      expect(Date.parse(entries[index - 1]!.at)).toBeGreaterThanOrEqual(Date.parse(entries[index]!.at))
+    }
 
     const byType = Object.fromEntries(
       entries.filter((entry) => entry.eventType !== null).map((entry) => [entry.eventType, entry]),
@@ -211,12 +219,23 @@ describe('buildSupervisorTimeline', () => {
     expect(messages[0]?.collapsedCount).toBe(2)
   })
 
-  it('caps the page it reads', async (): Promise<void> => {
+  it('caps the page it reads, at the default and at the ceiling', async (): Promise<void> => {
     const { workspaceId } = await seedWorkspace({})
+    // More rows than either cap, so both assertions below are about a real truncation. Inserted
+    // in bulk rather than through `appendEvent`, which serialises every append process-wide: this
+    // builder reads the stored rows and validates no payload, so the rows are all it needs.
+    await prisma.executionEvent.createMany({
+      data: Array.from({ length: TIMELINE_LIMIT_MAX + 10 }, () => ({
+        workspaceId,
+        type: 'task_started' as const,
+        actor: 'slave' as const,
+        payload: { title: 'Add Apple Pay' },
+      })),
+    })
 
-    const entries = await buildSupervisorTimeline(workspaceId, { limit: 1_000 })
-
-    expect(entries.length).toBeLessThanOrEqual(200)
+    expect(await prisma.executionEvent.count({ where: { workspaceId } })).toBe(TIMELINE_LIMIT_MAX + 10)
+    expect(await buildSupervisorTimeline(workspaceId)).toHaveLength(TIMELINE_LIMIT_DEFAULT)
+    expect(await buildSupervisorTimeline(workspaceId, { limit: 1_000 })).toHaveLength(TIMELINE_LIMIT_MAX)
   })
 
   it('answers an empty list for a project that does not exist', async (): Promise<void> => {

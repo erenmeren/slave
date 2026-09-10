@@ -78,9 +78,14 @@ const SUBJECT_BY_ITEM_KIND: Readonly<Record<NeedsYouItem['kind'], TimelineSubjec
  * builder runs on every SSE-driven refetch of the Overview, several times a second while a run is
  * live.
  *
- * `options.needsYou` is how `buildOverviewSnapshot` hands over the queue it has ALREADY built for
- * the brief. Building it twice would mean two `loadSupervisorWorld` transactions per refetch, for
- * one list; without it this builder builds its own, so the function is still callable alone.
+ * `options.needsYou` and `options.decisions` are how `buildOverviewSnapshot` hands over reads it
+ * has ALREADY made. Building the queue twice would mean two `loadSupervisorWorld` transactions per
+ * refetch for one list; listing the decisions twice would fetch every pending row's JSON twice.
+ * Both have a fallback read, so the function is still callable from a workspace id alone.
+ *
+ * The decisions are listed ONCE here and only for their BODIES: the queue says which decisions are
+ * waiting, and this read is what puts the whole `DecisionView` on the entry so the lane can render
+ * `ProposalRow` unchanged.
  *
  * Refreshed by the stream the page already owns: this is a field on `OverviewSnapshot`, so
  * `useWorkspaceStream`'s debounced refetch of `/api/w/:id/overview` updates it with no second
@@ -88,7 +93,11 @@ const SUBJECT_BY_ITEM_KIND: Readonly<Record<NeedsYouItem['kind'], TimelineSubjec
  */
 export async function buildSupervisorTimeline(
   workspaceId: string,
-  options: { readonly limit?: number; readonly needsYou?: readonly NeedsYouItem[] } = {},
+  options: {
+    readonly limit?: number
+    readonly needsYou?: readonly NeedsYouItem[]
+    readonly decisions?: readonly DecisionView[]
+  } = {},
 ): Promise<readonly TimelineEntry[]> {
   const take = Math.min(options.limit ?? TIMELINE_LIMIT_DEFAULT, TIMELINE_LIMIT_MAX)
 
@@ -98,9 +107,9 @@ export async function buildSupervisorTimeline(
       orderBy: { seq: 'desc' },
       take,
     }),
-    listDecisions(workspaceId, { pending: true }),
+    options.decisions ?? listDecisions(workspaceId, { pending: true }),
     prisma.task.findMany({ where: { workspaceId }, select: { id: true, title: true } }),
-    options.needsYou === undefined ? buildNeedsYou(workspaceId) : Promise.resolve(options.needsYou),
+    options.needsYou ?? buildNeedsYou(workspaceId),
   ])
 
   const titles: Record<string, string> = Object.fromEntries(tasks.map((task) => [task.id, task.title]))

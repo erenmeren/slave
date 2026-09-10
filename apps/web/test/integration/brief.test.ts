@@ -1,8 +1,9 @@
 import { prisma } from '@slave-of-ai/db/client'
+import { SUPERVISOR_PER_CALL_CAP_USD } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { buildProjectBrief } from '../../src/server/brief.js'
-import { seedTask, seedWorkspace, truncateAll } from './projectFixture.js'
+import { seedPendingDecision, seedTask, seedWorkspace, truncateAll } from './projectFixture.js'
 
 /**
  * The eight facts a person needs to understand a project in about ten seconds (M45 R1): objective,
@@ -51,6 +52,7 @@ describe('buildProjectBrief', () => {
     expect(brief.latestVerified).toEqual({ taskTitle: 'Add Apple Pay', kind: 'integrated', at: expect.any(String) })
     expect(brief.cost.budgetUsd).toBe(25)
     expect(brief.cost.spentUsd).toBeGreaterThanOrEqual(brief.cost.measuredUsd)
+    expect(brief.cost.unmeasuredRuns).toBe(0)
     expect(brief.recentChanges.length).toBeGreaterThan(0)
     expect(brief.recentChanges.length).toBeLessThanOrEqual(6)
     // The family said out loud, never the dotted type.
@@ -103,6 +105,13 @@ describe('buildProjectBrief', () => {
     expect((await buildProjectBrief(workspaceId))?.latestVerified?.kind).toBe('approved')
     await appendEvent({ type: 'task.integrated', workspaceId, taskId: task.id, actor: 'system', payload: {} })
     expect((await buildProjectBrief(workspaceId))?.latestVerified?.kind).toBe('integrated')
+
+    // ... and the preference holds when NEWER events of the less-preferred kinds land on top of
+    // it: the one read behind this is a `DISTINCT ON (type)` page, not "the newest three rows".
+    await appendEvent({ type: 'task.verify_passed', workspaceId, taskId: task.id, actor: 'slave', payload: { branch: 'c' } })
+    await appendEvent({ type: 'task.review_approved', workspaceId, taskId: task.id, actor: 'slave', payload: { reason: 'again' } })
+    await appendEvent({ type: 'task.verify_passed', workspaceId, taskId: task.id, actor: 'slave', payload: { branch: 'd' } })
+    expect((await buildProjectBrief(workspaceId))?.latestVerified?.kind).toBe('integrated')
   })
 
   it('says nothing is verified yet rather than inventing a result', async (): Promise<void> => {
@@ -111,7 +120,12 @@ describe('buildProjectBrief', () => {
     expect((await buildProjectBrief(workspaceId))?.latestVerified).toBeNull()
   })
 
-  it('shows the measured and unmeasured halves of one total, never a second total', async (): Promise<void> => {
+  /**
+   * The two holes are DIFFERENT facts and are never added together (fix round 1, review
+   * Important 1): a Supervisor call whose cost never came back is charged at the cap and IS inside
+   * `spentUsd`; a run that spawned, finished and left no figure behind is in no total at all.
+   */
+  it('counts an unmeasured RUN apart from an unmeasured CALL, and only the call is in the total', async (): Promise<void> => {
     const { workspaceId, slaveId } = await seedWorkspace({ budgetUsd: 25 })
     await prisma.slaveRun.create({
       data: { slaveId, status: 'succeeded', costUsd: 2, provider: 'claude_code', terminalAt: new Date(), endedAt: new Date() },
@@ -121,11 +135,30 @@ describe('buildProjectBrief', () => {
       data: { slaveId, status: 'failed', costUsd: null, provider: 'claude_code', terminalAt: new Date(), endedAt: new Date() },
     })
 
-    const brief = await buildProjectBrief(workspaceId)
+    const runsOnly = await buildProjectBrief(workspaceId)
 
-    expect(brief?.cost.spentUsd).toBe(2)
-    expect(brief?.cost.measuredUsd).toBe(2)
-    expect(brief?.cost.unmeasuredCalls).toBe(1)
+    expect(runsOnly?.cost.spentUsd).toBe(2)
+    expect(runsOnly?.cost.measuredUsd).toBe(2)
+    expect(runsOnly?.cost.unmeasuredRuns).toBe(1)
+    // The unmeasured RUN did not move the total, and did not become a "call".
+    expect(runsOnly?.cost.unmeasuredCalls).toBe(0)
+
+    // A Supervisor call that was MADE and reported nothing: charged at the cap, inside the total.
+    await seedPendingDecision(workspaceId, { subjectId: 'reviewer' })
+    await prisma.supervisorDecision.updateMany({
+      where: { workspaceId },
+      data: { modelCalled: true, modelCostUsd: null },
+    })
+
+    const withCall = await buildProjectBrief(workspaceId)
+    expect(withCall).not.toBeNull()
+    if (withCall === null) return
+
+    expect(withCall.cost.unmeasuredCalls).toBe(1)
+    expect(withCall.cost.unmeasuredRuns).toBe(1)
+    expect(withCall.cost.measuredUsd).toBe(2)
+    // Charged at `SUPERVISOR_PER_CALL_CAP_USD`, so the total moved by the cap and by nothing else.
+    expect(withCall.cost.spentUsd - 2).toBeCloseTo(SUPERVISOR_PER_CALL_CAP_USD, 10)
   })
 
   it('answers null for a project that does not exist', async (): Promise<void> => {

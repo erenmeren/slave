@@ -56,7 +56,7 @@ const SNAPSHOT: OverviewSnapshot = {
     team: [],
     needsYou: [],
     latestVerified: null,
-    cost: { spentUsd: 0, measuredUsd: 0, unmeasuredCalls: 0, budgetUsd: null },
+    cost: { spentUsd: 0, measuredUsd: 0, unmeasuredCalls: 0, unmeasuredRuns: 0, budgetUsd: null },
     recentChanges: [],
   },
   needsYou: [],
