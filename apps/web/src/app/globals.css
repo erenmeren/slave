@@ -17,6 +17,25 @@
   --text-faint: #69727f; /* faint */
   --text-3: #5b6472; /* label */
 
+  /* The rest of the handoff's text ramp (design_handoff README "Design Tokens"), previously
+   * scattered through SlaveCard/TaskCard/ProjectsClient/Sidebar/ProjectSwitcher as hex literals
+   * -- a shadow palette beside the declared one (M44 R3). */
+  --text-strong: #f2f5f9;
+  --text-body: #c8cfda;
+  --text-secondary: #a8b0bd;
+  --text-dim: #7c8697;
+  --text-ghost: #3f4650;
+
+  /* The surfaces the handoff names beside the three declared ones. */
+  --bg-selected: #151a21; /* a selected row/card */
+  --bg-card-alt: #0f1116; /* the board's task card */
+  --bg-canvas: #08090c;   /* the graph canvas */
+  --bg-floor: #07080b;    /* the office floor */
+
+  /* Two more hairlines the handoff names: `.05` inner rows, and the `.20` a hover raises to. */
+  --line-inner: rgba(255, 255, 255, 0.05);
+  --line-hover: rgba(255, 255, 255, 0.2);
+
   /* Handoff status tones (spec §3): the eight `StatusTone` values the `ui/` component library
    * renders — the one tone vocabulary the app now uses end to end (the earlier M4 status
    * variables have folded into this). */
@@ -37,6 +56,11 @@
   --radius-panel: 9px;
   --radius-pill: 20px;
 
+  /* Two radii that were literals with no token at all (M44 erratum E14): the 2px bar cap and the
+   * 14px message bubble. */
+  --radius-hair: 2px;
+  --radius-bubble: 14px;
+
   /* Shadows (spec §3 / design_handoff README "Design Tokens"). */
   --shadow-resting: 0 4px 16px rgba(0, 0, 0, 0.35);
 
@@ -53,6 +77,17 @@
   --color-text-2: var(--text-2);
   --color-text-faint: var(--text-faint);
   --color-text-3: var(--text-3);
+  --color-text-strong: var(--text-strong);
+  --color-text-body: var(--text-body);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-dim: var(--text-dim);
+  --color-text-ghost: var(--text-ghost);
+  --color-bg-selected: var(--bg-selected);
+  --color-bg-card-alt: var(--bg-card-alt);
+  --color-bg-canvas: var(--bg-canvas);
+  --color-bg-floor: var(--bg-floor);
+  --color-line-inner: var(--line-inner);
+  --color-line-hover: var(--line-hover);
   --color-tone-working: var(--tone-working);
   --color-tone-planning: var(--tone-planning);
   --color-tone-review: var(--tone-review);
@@ -67,6 +102,8 @@
   --radius-card: var(--radius-card);
   --radius-panel: var(--radius-panel);
   --radius-pill: var(--radius-pill);
+  --radius-hair: var(--radius-hair);
+  --radius-bubble: var(--radius-bubble);
   --shadow-resting: var(--shadow-resting);
   --font-sans: var(--font-sans);
   --font-mono: var(--font-mono);

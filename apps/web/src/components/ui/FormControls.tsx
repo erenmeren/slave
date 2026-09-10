@@ -1,11 +1,13 @@
 import type React from 'react'
+import { Button } from './Button'
 import { SECTION_LABEL_CLASS } from './SectionLabel'
 
 /**
  * The handoff's form language, written once (M16 spec §2). Appearance only: no state, no
  * fetch — behaviour stays with the callers, and every prop spread passes the caller's
- * testids, aria contracts, handlers and values through untouched. Radii live HERE and
- * nowhere else: 7px input/tile, 5px chip/button (README "Design Tokens").
+ * testids, aria contracts, handlers and values through untouched. The FIELD radius lives here
+ * (`rounded-tile`, the 7px input/tile token); the 5px chip/button radius now lives in `ui/Button`,
+ * which the two button aliases at the bottom of this file delegate to (M44 R3/E14).
  */
 export function FieldLabel({ children }: { readonly children: React.ReactNode }): React.JSX.Element {
   return <span className={SECTION_LABEL_CLASS}>{children}</span>
@@ -15,7 +17,7 @@ export function FieldLabel({ children }: { readonly children: React.ReactNode })
 // site, e.g. ProviderSelect in RuntimePanel.tsx) can still use the exact same radius/border/text
 // shell rather than hand-copying this string.
 export const INPUT_SHELL =
-  'rounded-[7px] border border-line bg-bg-0 px-2.5 py-1.5 text-sm text-text-1 placeholder:text-text-3 focus:border-white/25 focus:outline-none'
+  'rounded-tile border border-line bg-bg-0 px-2.5 py-1.5 text-sm text-text-1 placeholder:text-text-3 focus:border-white/25 focus:outline-none'
 
 export function TextField({
   label,
@@ -57,30 +59,20 @@ export function SelectField({
   )
 }
 
-export function GhostButton({ className, ...rest }: React.ButtonHTMLAttributes<HTMLButtonElement>): React.JSX.Element {
-  return (
-    <button
-      type="button"
-      {...rest}
-      className={`rounded-[5px] border border-line bg-transparent px-2.5 py-1 text-xs text-text-2 transition-colors hover:border-white/25 hover:text-white disabled:cursor-not-allowed disabled:opacity-50 ${className ?? ''}`.trim()}
-    />
-  )
+/**
+ * M44 R3: the second button system is gone. These two are ALIASES of `ui/Button` at `size="sm"`,
+ * which is that component's name for the exact geometry these carried (`px-2.5 py-1`, radius 5) --
+ * so the thirty-five call sites did not move when the two systems became one. They stay exported
+ * so this milestone is not also a thirty-five-file rename; Task 4 migrates the call sites and
+ * these go with the last of them.
+ */
+export function GhostButton(props: React.ButtonHTMLAttributes<HTMLButtonElement>): React.JSX.Element {
+  return <Button variant="ghost" size="sm" {...props} />
 }
 
 export function PrimaryButton({
   tone = 'working',
-  className,
   ...rest
 }: React.ButtonHTMLAttributes<HTMLButtonElement> & { readonly tone?: 'working' | 'blocked' }): React.JSX.Element {
-  const tones = {
-    working: 'border-tone-working/40 bg-tone-working/15 text-tone-working',
-    blocked: 'border-tone-blocked/40 bg-tone-blocked/15 text-tone-blocked',
-  } as const
-  return (
-    <button
-      type="button"
-      {...rest}
-      className={`rounded-[5px] border px-2.5 py-1 text-xs transition-[filter] hover:brightness-[1.35] disabled:opacity-50 disabled:cursor-not-allowed ${tones[tone]} ${className ?? ''}`.trim()}
-    />
-  )
+  return <Button variant={tone === 'blocked' ? 'danger' : 'primary'} size="sm" {...rest} />
 }

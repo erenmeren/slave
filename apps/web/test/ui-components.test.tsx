@@ -1,12 +1,16 @@
 // @vitest-environment jsdom
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
+import { Alert } from '../src/components/ui/Alert.js'
 import { AvatarTile, initialsOf } from '../src/components/ui/AvatarTile.js'
 import { Button } from '../src/components/ui/Button.js'
 import { Card } from '../src/components/ui/Card.js'
 import { Chip } from '../src/components/ui/Chip.js'
 import { DataTable, Row } from '../src/components/ui/DataTable.js'
+import { EmptyState } from '../src/components/ui/EmptyState.js'
 import { EmptyTile } from '../src/components/ui/EmptyTile.js'
+import { LoadingState } from '../src/components/ui/LoadingState.js'
+import { PageShell } from '../src/components/ui/PageShell.js'
 import { Panel } from '../src/components/ui/Panel.js'
 import { ProgressBar } from '../src/components/ui/ProgressBar.js'
 import { SectionLabel } from '../src/components/ui/SectionLabel.js'
@@ -272,5 +276,106 @@ describe('EmptyTile', () => {
     fireEvent.click(screen.getByTestId('empty-tile'))
     expect(onClick).toHaveBeenCalledOnce()
     expect(screen.getByText('add source')).toBeTruthy()
+  })
+})
+
+describe('Button (M44 R3: one button, three variants, two sizes)', () => {
+  it('renders each variant with its own data-variant', () => {
+    render(
+      <>
+        <Button variant="primary">go</Button>
+        <Button variant="ghost">maybe</Button>
+        <Button variant="danger">stop</Button>
+      </>,
+    )
+    expect(screen.getAllByTestId('button').map((b) => b.getAttribute('data-variant'))).toEqual(['primary', 'ghost', 'danger'])
+  })
+
+  it('is md by default and sm on request -- sm IS the FormControls geometry, so nothing moves', () => {
+    render(
+      <>
+        <Button variant="ghost">a</Button>
+        <Button variant="ghost" size="sm">b</Button>
+      </>,
+    )
+    const [md, sm] = screen.getAllByTestId('button')
+    expect(md?.className).toContain('px-3')
+    expect(md?.className).toContain('py-1.5')
+    expect(sm?.className).toContain('px-2.5')
+    expect(sm?.className).toContain('py-1')
+    expect(md?.getAttribute('data-size')).toBe('md')
+    expect(sm?.getAttribute('data-size')).toBe('sm')
+  })
+
+  it('paints danger on the blocked tone and primary on working, at the handoff alphas', () => {
+    render(<><Button variant="danger">x</Button><Button variant="primary">y</Button></>)
+    const [danger, primary] = screen.getAllByTestId('button')
+    expect(danger?.className).toContain('bg-tone-blocked/10')
+    expect(danger?.className).toContain('border-tone-blocked/24')
+    expect(primary?.className).toContain('bg-tone-working/10')
+  })
+
+  it('lets a caller name its own testid without losing the variant attribute', () => {
+    render(<Button variant="ghost" data-testid="my-button">x</Button>)
+    expect(screen.getByTestId('my-button').getAttribute('data-variant')).toBe('ghost')
+  })
+})
+
+describe('Card (M44 R3, erratum E1: additive only)', () => {
+  it('appends a caller className and passes data attributes through', () => {
+    render(<Card className="w-40" data={{ 'data-status': 'working' }}>x</Card>)
+    const card = screen.getByTestId('card')
+    expect(card.className).toContain('w-40')
+    expect(card.getAttribute('data-status')).toBe('working')
+  })
+
+  it('lets a caller name its own testid', () => {
+    render(<Card testId="project-surface">x</Card>)
+    expect(screen.getByTestId('project-surface')).toBeTruthy()
+    expect(screen.queryByTestId('card')).toBeNull()
+  })
+})
+
+describe('Alert, EmptyState and LoadingState', () => {
+  it('Alert is a role=alert band with its variant on the node', () => {
+    render(<Alert variant="notice" testId="stale">showing stale data</Alert>)
+    const band = screen.getByTestId('stale')
+    expect(band.getAttribute('role')).toBe('alert')
+    expect(band.getAttribute('data-variant')).toBe('notice')
+    expect(band.textContent).toBe('showing stale data')
+  })
+
+  it('EmptyState says the sentence and can carry one action', () => {
+    render(<EmptyState testId="no-blocked" message="nothing is blocked" action={<Button variant="ghost">refresh</Button>} />)
+    expect(screen.getByTestId('no-blocked').textContent).toContain('nothing is blocked')
+    expect(screen.getByTestId('button')).toBeTruthy()
+  })
+
+  it('LoadingState is a polite status, not an alert', () => {
+    render(<LoadingState testId="loading" />)
+    const node = screen.getByTestId('loading')
+    expect(node.getAttribute('role')).toBe('status')
+    expect(node.getAttribute('aria-live')).toBe('polite')
+    expect(node.textContent).toBe('loading…')
+  })
+})
+
+describe('PageShell', () => {
+  it('renders the title row, an optional action, an optional tabs slot and its children', () => {
+    render(
+      <PageShell title="Workforce" action={<Button variant="primary">+ New slave</Button>} tabs={<div data-testid="tabs-slot" />}>
+        <p>body</p>
+      </PageShell>,
+    )
+    const shell = screen.getByTestId('page-shell')
+    expect(shell.textContent).toContain('Workforce')
+    expect(screen.getByTestId('tabs-slot')).toBeTruthy()
+    expect(screen.getByTestId('button').textContent).toBe('+ New slave')
+    expect(shell.textContent).toContain('body')
+  })
+
+  it('renders children alone when nothing else is given', () => {
+    render(<PageShell><p>only</p></PageShell>)
+    expect(screen.getByTestId('page-shell').textContent).toBe('only')
   })
 })

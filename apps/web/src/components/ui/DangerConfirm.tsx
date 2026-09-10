@@ -1,19 +1,25 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import { PrimaryButton } from './FormControls'
+import { useEffect, useRef, useState } from 'react'
+import { Button } from './Button'
 
 /**
  * The two-click destructive action every M27 surface uses (spec §6). The caller composes
  * `confirmText` from server counts ("deletes Alex and 14 runs of history") -- this component
  * counts nothing. `onConfirm` resolves to a refusal string (shown in `${testId}-error`, the confirm
  * stays open) or `null` (done; the caller has refreshed or navigated).
+ *
+ * M44 R3 (erratum E12) widens it into the ONE two-step destructive control: it draws its trigger
+ * and its confirm with `ui/Button`'s `danger` variant rather than a second button system, takes a
+ * `title` so a disabled trigger can say why it is disabled, announces itself as an `alertdialog`
+ * while it is asking, focuses the confirm on open and hands focus back to the trigger on Escape.
  */
 export function DangerConfirm({
   label,
   testId,
   confirmText,
   disabled = false,
+  title,
   onConfirm,
   className = '',
 }: {
@@ -21,24 +27,39 @@ export function DangerConfirm({
   readonly testId: string
   readonly confirmText: string
   readonly disabled?: boolean
+  readonly title?: string
   readonly onConfirm: () => Promise<string | null>
   readonly className?: string
 }): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const [pending, setPending] = useState(false)
   const [errorText, setErrorText] = useState<string | null>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const confirmRef = useRef<HTMLButtonElement>(null)
+  const refocusTriggerRef = useRef(false)
 
   useEffect(() => {
     if (!open) return
+    confirmRef.current?.focus()
     const onKey = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape' && !pending) {
-        setOpen(false)
-        setErrorText(null)
-      }
+      if (event.key !== 'Escape' || pending) return
+      // The idle trigger is UNMOUNTED while this is asking, so `triggerRef.current` is already
+      // null here. The flag defers the intent to the effect below, which runs once the trigger has
+      // remounted and re-attached its ref (the idiom `EmergencyStopButton` documented before M44
+      // moved it here).
+      refocusTriggerRef.current = true
+      setOpen(false)
+      setErrorText(null)
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
   }, [open, pending])
+
+  useEffect(() => {
+    if (open || !refocusTriggerRef.current) return
+    refocusTriggerRef.current = false
+    triggerRef.current?.focus()
+  }, [open])
 
   const confirm = async (): Promise<void> => {
     setPending(true)
@@ -51,16 +72,25 @@ export function DangerConfirm({
 
   if (!open) {
     return (
-      <PrimaryButton tone="blocked" data-testid={testId} disabled={disabled} onClick={() => setOpen(true)} className={className}>
+      <Button
+        ref={triggerRef}
+        variant="danger"
+        size="sm"
+        data-testid={testId}
+        disabled={disabled}
+        {...(title === undefined ? {} : { title })}
+        onClick={() => setOpen(true)}
+        className={className}
+      >
         {label}
-      </PrimaryButton>
+      </Button>
     )
   }
   return (
-    <span className={`flex flex-wrap items-center gap-2 ${className}`.trim()}>
-      <PrimaryButton tone="blocked" data-testid={`${testId}-confirm`} disabled={pending} onClick={() => void confirm()}>
+    <span role="alertdialog" aria-label={`confirm ${label}`} className={`flex flex-wrap items-center gap-2 ${className}`.trim()}>
+      <Button ref={confirmRef} variant="danger" size="sm" data-testid={`${testId}-confirm`} disabled={pending} onClick={() => void confirm()}>
         {pending ? 'working…' : confirmText}
-      </PrimaryButton>
+      </Button>
       <button type="button" data-testid={`${testId}-cancel`} disabled={pending} onClick={() => { setOpen(false); setErrorText(null) }} className="text-xs text-text-3">
         cancel
       </button>

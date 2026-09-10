@@ -63,3 +63,25 @@ describe('DangerConfirm', () => {
     expect((screen.getByTestId('y') as HTMLButtonElement).disabled).toBe(true)
   })
 })
+
+describe('DangerConfirm, widened for EmergencyStop and DangerZone (M44 R3, erratum E12)', () => {
+  it('is an alertdialog while it is asking, named after its label', () => {
+    render(<DangerConfirm label="STOP" testId="x" confirmText="stop everything" onConfirm={async () => null} />)
+    fireEvent.click(screen.getByTestId('x'))
+    expect(screen.getByRole('alertdialog', { name: /STOP/ })).toBeTruthy()
+  })
+
+  it('focuses the confirm on open and gives focus back to the trigger on Escape', () => {
+    render(<DangerConfirm label="STOP" testId="x" confirmText="stop everything" onConfirm={async () => null} />)
+    screen.getByTestId('x').focus()
+    fireEvent.click(screen.getByTestId('x'))
+    expect(document.activeElement).toBe(screen.getByTestId('x-confirm'))
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(document.activeElement).toBe(screen.getByTestId('x'))
+  })
+
+  it('carries a title on the idle trigger, for a disabled control that has to say why', () => {
+    render(<DangerConfirm label="STOP" testId="x" confirmText="c" disabled title="workspace is already halted" onConfirm={async () => null} />)
+    expect(screen.getByTestId('x').getAttribute('title')).toBe('workspace is already halted')
+  })
+})
