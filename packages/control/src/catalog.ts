@@ -382,6 +382,12 @@ export interface CatalogImportView {
 /**
  * The last few import runs, newest first (R5) -- `list-imports` and the web's panel.
  *
+ * Ordered by `finishedAt`, which is the column BOTH readers display (M42 t4 fix round 1, minor 1).
+ * It used to order by `startedAt`, and the two disagree whenever a long import overlaps a short
+ * one -- so a list whose only visible timestamp was `finishedAt` could print those timestamps out
+ * of order and look sorted by nothing at all. Sorting by the column a reader can see is the whole
+ * of the fix; no signature changed, and the web's row shape still carries `finishedAt` alone.
+ *
  * The clamp floors at ZERO, not one: a NEGATIVE `take` makes Prisma walk the cursor backwards and
  * hand back the OLDEST rows under a `desc` order, which is the one outcome a caller asking for
  * "the last few" must never get. `listCatalogImports(0)` therefore returns no rows, which is what
@@ -390,7 +396,7 @@ export interface CatalogImportView {
  */
 export async function listCatalogImports(limit = 10): Promise<readonly CatalogImportView[]> {
   return prisma.catalogImport.findMany({
-    orderBy: { startedAt: 'desc' },
+    orderBy: { finishedAt: 'desc' },
     take: Math.max(0, Math.min(limit, 100)),
     select: {
       id: true,

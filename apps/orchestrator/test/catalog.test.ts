@@ -70,10 +70,24 @@ describe('readCatalogDirectory', () => {
     expect(readCatalogDirectory(root, { divisions: ['testing'] }).entries.map((entry) => entry.slug)).toEqual(['two'])
   })
 
-  it('recurses one level for a tool subfolder and keeps it in the slug', () => {
+  it('recurses one level for a tool subfolder and keeps it in the slug and the sourceId', () => {
     const root = makeCatalog({ 'engineering/tooling/builder.md': PERSONA })
 
-    expect(readCatalogDirectory(root).entries[0]).toMatchObject({ division: 'engineering', slug: 'tooling/builder' })
+    const walk = readCatalogDirectory(root)
+
+    expect(walk.entries[0]).toMatchObject({
+      division: 'engineering',
+      slug: 'tooling/builder',
+      sourceId: `${walk.catalog}/engineering/tooling/builder`,
+    })
+  })
+
+  it('skips a dotfile inside a tool subfolder, exactly as it does beside it', () => {
+    // An editor's swap file and a half-written draft are as ordinary one level down as they are at
+    // the top of a division, and `.draft.md` ends in `.md` like everything else here.
+    const root = makeCatalog({ 'engineering/tooling/.draft.md': PERSONA, 'engineering/tooling/builder.md': PERSONA })
+
+    expect(readCatalogDirectory(root).entries.map((entry) => entry.slug)).toEqual(['tooling/builder'])
   })
 
   it('skips the catalog documentation and anything that is not Markdown', () => {
@@ -85,6 +99,32 @@ describe('readCatalogDirectory', () => {
     })
 
     expect(readCatalogDirectory(root).entries.map((entry) => entry.slug)).toEqual(['one'])
+  })
+
+  it('drops an explicit division with no directory behind it and imports the rest', () => {
+    // ENOENT on one mistyped `--division` used to abort the whole walk, so a run that named three
+    // divisions and misspelled one imported NOTHING. The typo is reported instead, and the
+    // divisions that do exist are still read.
+    const root = makeCatalog({ 'engineering/one.md': PERSONA })
+
+    const walk = readCatalogDirectory(root, { divisions: ['engineering', 'no-such-division'] })
+
+    expect(walk.entries.map((entry) => entry.slug)).toEqual(['one'])
+    expect(walk.divisions).toEqual(['engineering'])
+    expect(walk.missingDivisions).toEqual(['no-such-division'])
+  })
+
+  it('counts a real division with no persona in it as resolved, not missing', () => {
+    // What `--role-map` checks its keys against: a division that exists and happens to be empty is
+    // not a name the operator got wrong.
+    const root = makeCatalog({ 'engineering/one.md': PERSONA })
+    mkdirSync(join(root, 'design'), { recursive: true })
+
+    const walk = readCatalogDirectory(root)
+
+    expect([...walk.divisions].sort()).toEqual(['design', 'engineering'])
+    expect(walk.missingDivisions).toEqual([])
+    expect(walk.entries.map((entry) => entry.slug)).toEqual(['one'])
   })
 
   it('takes an explicit catalog name over the directory basename', () => {

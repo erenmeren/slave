@@ -2526,9 +2526,12 @@ describe('the orchestrator CLI', () => {
       const root = mkdtempSync(join(tmpdir(), 'cli-catalog-m42-'))
       catalogDirs.push(root)
       mkdirSync(join(root, 'engineering'), { recursive: true })
+      // `design` is declared and real and holds no persona: a division an operator can name
+      // correctly and get nothing from, which is what the unknown-key warning must NOT flag.
+      mkdirSync(join(root, 'design'), { recursive: true })
       writeFileSync(
         join(root, 'divisions.json'),
-        JSON.stringify({ divisions: { engineering: { label: 'Engineering' } } }),
+        JSON.stringify({ divisions: { engineering: { label: 'Engineering' }, design: { label: 'Design' } } }),
       )
       writeFileSync(
         join(root, 'engineering', 'core-builder.md'),
@@ -2612,15 +2615,149 @@ describe('the orchestrator CLI', () => {
       expect(`${result.stdout}${result.stderr}`).toContain('no persona was found')
     })
 
-    it('list-imports prints the runs newest first', async (): Promise<void> => {
+    it('says the role stays put when --role-map disagrees with a template already created', async (): Promise<void> => {
       const dir = catalogDir()
-      await runCli(['import-catalog', '--dir', dir, '--by', 'operator'])
+      await runCli(['import-catalog', '--dir', dir])
+      // The file CHANGED, so the row is updated rather than left alone -- and the role still is
+      // not: a template's role is copied into every worker materialised from it, which an update
+      // here could never reach (erratum E10).
+      writeFileSync(
+        join(dir, 'engineering', 'core-builder.md'),
+        '---\nname: CLI Core Builder\ndescription: Builds the core.\n---\n\nYou build the core module, carefully.\n',
+      )
+
+      const result = await runCli(['import-catalog', '--dir', dir, '--role-map', 'engineering=other'])
+
+      expect(result.code).toBe(0)
+      expect(result.stdout).toContain('role     CLI Core Builder stays "engineering"')
+      expect(result.stdout).toContain('the map said "other"')
+      expect(result.stdout).toContain('delete it and import it again to change one')
+      expect((await prisma.slaveTemplate.findFirstOrThrow({ where: { name: 'CLI Core Builder' } })).role).toBe(
+        'engineering',
+      )
+    })
+
+    it('does not warn about a --role-map key naming a real division that holds no persona', async (): Promise<void> => {
+      const dir = catalogDir()
+
+      const result = await runCli(['import-catalog', '--dir', dir, '--role-map', 'design=visual'])
+
+      expect(result.code).toBe(0)
+      expect(`${result.stdout}${result.stderr}`).not.toContain('WARNING')
+    })
+
+    it('warns about a --division with no directory behind it and imports the rest anyway', async (): Promise<void> => {
+      const dir = catalogDir()
+
+      const result = await runCli(['import-catalog', '--dir', dir, '--division', 'engineering,no-such-division'])
+
+      expect(result.code).toBe(0)
+      expect(`${result.stdout}${result.stderr}`).toContain('WARNING')
+      expect(`${result.stdout}${result.stderr}`).toContain('no-such-division')
+      expect(result.stdout).toContain('created 1, updated 0, unchanged 0, skipped 1')
+    })
+
+    it('takes an explicit --catalog name and limits the walk to --division', async (): Promise<void> => {
+      const root = mkdtempSync(join(tmpdir(), 'cli-catalog-m42-plumbing-'))
+      catalogDirs.push(root)
+      mkdirSync(join(root, 'engineering'), { recursive: true })
+      mkdirSync(join(root, 'testing'), { recursive: true })
+      writeFileSync(join(root, 'engineering', 'core-builder.md'), '---\nname: Plumbed Builder\n---\n\nYou build.\n')
+      writeFileSync(join(root, 'testing', 'qa-lead.md'), '---\nname: Plumbed QA Lead\n---\n\nYou test.\n')
+
+      const result = await runCli(['import-catalog', '--dir', root, '--catalog', 'named-by-hand', '--division', 'testing'])
+
+      expect(result.code).toBe(0)
+      expect(result.stdout).toContain('created 1, updated 0, unchanged 0, skipped 0')
+      expect(await prisma.slaveTemplate.count()).toBe(1)
+      const row = await prisma.slaveTemplate.findFirstOrThrow({ where: { name: 'Plumbed QA Lead' } })
+      expect(row.sourceId).toBe('named-by-hand/testing/qa-lead')
+      expect((await prisma.catalogImport.findFirstOrThrow()).catalog).toBe('named-by-hand')
+    })
+
+    /** Two recorded runs whose start order and finish order DISAGREE -- a long import that began
+     *  first and ended last, beside a short one that began later and ended sooner. `list-imports`
+     *  prints `finishedAt`, so newest-first has to mean newest by the column an operator can see;
+     *  ordering by `startedAt` while printing `finishedAt` put the visible timestamps out of
+     *  order (fix round 1, minor 1). */
+    const seedTwoRuns = async (): Promise<void> => {
+      await prisma.catalogImport.createMany({
+        data: [
+          {
+            catalog: 'started-first-finished-last',
+            directory: '/srv/one',
+            by: 'operator',
+            startedAt: new Date('2026-09-10T08:00:00.000Z'),
+            finishedAt: new Date('2026-09-10T08:10:00.000Z'),
+            created: 1,
+            updated: 0,
+            unchanged: 0,
+            skipped: 0,
+            report: { created: [], updated: [], unchanged: [], skipped: [] },
+          },
+          {
+            catalog: 'started-later-finished-sooner',
+            directory: '/srv/two',
+            by: 'somebody else',
+            startedAt: new Date('2026-09-10T08:05:00.000Z'),
+            finishedAt: new Date('2026-09-10T08:06:00.000Z'),
+            created: 2,
+            updated: 0,
+            unchanged: 0,
+            skipped: 0,
+            report: { created: [], updated: [], unchanged: [], skipped: [] },
+          },
+        ],
+      })
+    }
+
+    it('list-imports prints the runs newest first by the timestamp it shows', async (): Promise<void> => {
+      await seedTwoRuns()
 
       const result = await runCli(['list-imports'])
 
       expect(result.code).toBe(0)
-      expect(result.stdout).toContain('created 1')
-      expect(result.stdout).toContain('operator')
+      expect(result.stdout).toContain('2026-09-10T08:10:00.000Z  started-first-finished-last  by operator')
+      expect(result.stdout).toContain('2026-09-10T08:06:00.000Z  started-later-finished-sooner  by somebody else')
+      expect(result.stdout.indexOf('started-first-finished-last')).toBeLessThan(
+        result.stdout.indexOf('started-later-finished-sooner'),
+      )
+      expect(result.stdout).toContain('created 1, updated 0, unchanged 0, skipped 0  (/srv/one)')
+    })
+
+    it('list-imports takes ten by default and --limit when it is given', async (): Promise<void> => {
+      await prisma.catalogImport.createMany({
+        data: Array.from({ length: 11 }, (_unused, index) => ({
+          catalog: `run-${String(index)}`,
+          directory: '/srv/many',
+          by: 'operator',
+          startedAt: new Date(Date.UTC(2026, 8, 10, 0, index)),
+          finishedAt: new Date(Date.UTC(2026, 8, 10, 0, index, 30)),
+          created: 0,
+          updated: 0,
+          unchanged: 0,
+          skipped: 0,
+          report: { created: [], updated: [], unchanged: [], skipped: [] },
+        })),
+      })
+
+      const byDefault = await runCli(['list-imports'])
+      const limited = await runCli(['list-imports', '--limit', '3'])
+
+      expect(byDefault.stdout.trimEnd().split('\n')).toHaveLength(10)
+      expect(limited.stdout.trimEnd().split('\n')).toHaveLength(3)
+      // Newest first, so the eleventh run is in and the first is not.
+      expect(byDefault.stdout).toContain('run-10')
+      expect(byDefault.stdout).not.toContain('run-0 ')
+    })
+
+    it('refuses a --limit that is not a positive integer', async (): Promise<void> => {
+      for (const limit of ['0', 'abc']) {
+        const result = await runCli(['list-imports', '--limit', limit])
+
+        expect(result.code).not.toBe(0)
+        expect(`${result.stdout}${result.stderr}`).toContain('--limit must be a positive integer')
+      }
     })
 
     it('list-imports says so when nothing has been imported', async (): Promise<void> => {
@@ -2630,11 +2767,14 @@ describe('the orchestrator CLI', () => {
       expect(result.stdout).toContain('no catalog has been imported yet')
     })
 
-    it('help documents both verbs and says the boolean flag goes last', async (): Promise<void> => {
+    it('help documents both verbs, the boolean flag going last, and the unknown-name warning', async (): Promise<void> => {
       const printed = await runCli(['help'])
+      const text = `${printed.stdout}${printed.stderr}`
 
-      expect(`${printed.stdout}${printed.stderr}`).toContain('import-catalog --dir <path>')
-      expect(`${printed.stdout}${printed.stderr}`).toContain('list-imports')
+      expect(text).toContain('import-catalog --dir <path>')
+      expect(text).toContain('list-imports')
+      expect(text).toContain('write it LAST in the command')
+      expect(text).toContain('a WARNING on stderr')
     })
   })
 })

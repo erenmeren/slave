@@ -188,10 +188,15 @@ const USAGE = `usage: orchestrator <command> [options]
                                        person has edited since is never overwritten. --catalog
                                        defaults to the directory's own name; --role-map translates a
                                        division into the role the template is created with, and only
-                                       matters the first time a persona is imported. --dry-run
-                                       decides everything and writes nothing -- write it LAST, a
-                                       flag after it would be swallowed as its value.
-  list-imports [--limit <n>]           the last catalog imports, newest first, with their counts
+                                       matters the first time a persona is imported. A name this
+                                       catalog does not have -- in --division or in --role-map --
+                                       gets a WARNING on stderr, not a refusal: every division that
+                                       does exist is still imported. --dry-run decides everything
+                                       and writes nothing -- write it LAST in the command, a flag
+                                       after it would be swallowed as its value.
+  list-imports [--limit <n>]           the last catalog imports, newest first by the timestamp the
+                                       line shows, with their counts. --limit defaults to 10 and
+                                       must be a positive integer
   create-template --name <n> --role <r> [--model <m> --provider <p>] [--description <d>]
                                        add a reusable slave template to the catalog. --model and
                                        --provider are a pair: give both or neither.
@@ -1078,11 +1083,19 @@ export async function main(argv: readonly string[]): Promise<number> {
         ...(divisions !== undefined ? { divisions } : {}),
       })
 
-      // A `--role-map` key that matches no division in this catalog is a WARNING, not a refusal
-      // (Task 3 review, minor 3): the entry changes nothing, so the import is still the one the
-      // operator asked for -- but a silently ignored key is how somebody concludes the map does
-      // not work at all. The verb itself stays silent about this; it takes a map and applies it.
-      const present = new Set(walk.entries.map((entry) => entry.division))
+      // A name this catalog does not have is a WARNING, not a refusal: the rest of the run is
+      // still the one the operator asked for, and a silently ignored name is how somebody
+      // concludes the flag does not work at all. Both live HERE rather than in the verb -- the
+      // verb takes entries and a map and applies them, and has no idea what was on the disk.
+      for (const division of walk.missingDivisions) {
+        process.stderr.write(
+          `WARNING: --division names "${division}", which is not a directory in this catalog; nothing was read from it\n`,
+        )
+      }
+      // Against the divisions the WALK resolved, not the ones that yielded entries (fix round 1,
+      // minor 4): a real division that happens to hold no persona is a name the operator got
+      // right, and calling it unknown would send them looking for a typo that is not there.
+      const present = new Set(walk.divisions)
       for (const division of Object.keys(roleMap)) {
         if (present.has(division)) continue
         process.stderr.write(

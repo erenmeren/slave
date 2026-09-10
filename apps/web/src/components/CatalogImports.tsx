@@ -51,10 +51,21 @@ export function CatalogImports({ imports }: { readonly imports: readonly Catalog
                 {row.catalog}
               </span>
               <span className="truncate text-text-2">{row.by ?? '—'}</span>
-              <span className="text-text-2">{row.created}</span>
-              <span className="text-text-2">{row.updated}</span>
-              <span className="text-text-2">{row.unchanged}</span>
-              <span className="text-text-2">{row.skipped}</span>
+              {/* The four counts carry one shared testid so a test can read them AS A SEQUENCE:
+               *  asserting that a row's text merely contains "2" is satisfied by the year in its
+               *  own timestamp, which is no assertion at all (fix round 1, important 1). */}
+              <span data-testid="catalog-import-count" className="text-text-2">
+                {row.created}
+              </span>
+              <span data-testid="catalog-import-count" className="text-text-2">
+                {row.updated}
+              </span>
+              <span data-testid="catalog-import-count" className="text-text-2">
+                {row.unchanged}
+              </span>
+              <span data-testid="catalog-import-count" className="text-text-2">
+                {row.skipped}
+              </span>
             </Row>
           </div>
         ))}

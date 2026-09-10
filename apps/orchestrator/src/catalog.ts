@@ -1,10 +1,27 @@
-import { readFileSync, readdirSync } from 'node:fs'
+import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { basename, join, resolve } from 'node:path'
 import type { CatalogEntry } from '@slave-of-ai/control'
 
 export interface CatalogWalk {
   readonly catalog: string
+  /** The divisions this walk actually read, in the order it read them. Reported rather than
+   *  inferred from `entries`: a real division that happens to hold no persona is still a division
+   *  the operator named correctly, and `--role-map`'s "is this a division?" check must not call it
+   *  unknown. */
+  readonly divisions: readonly string[]
+  /** Explicit `--division` names with no directory behind them, dropped rather than walked. */
+  readonly missingDivisions: readonly string[]
   readonly entries: readonly CatalogEntry[]
+}
+
+/** Whether one path is a directory that can be read at all -- `statSync` in a `try`, because the
+ *  question "does this exist" and the question "may I read it" have the same answer here: no. */
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory()
+  } catch {
+    return false
+  }
 }
 
 /** The files a catalog keeps for its own readers rather than for a slave, in every catalog that
@@ -61,6 +78,9 @@ function personasUnder(divisionDir: string): readonly { readonly slug: string; r
     // `<catalog>/<division>/<slug>` -- an arbitrarily deep tree would put slashes in the slug
     // that no operator could map back to a division.
     for (const nested of readdirSync(join(divisionDir, item.name), { withFileTypes: true })) {
+      // The same dotfile guard the loop above has (fix round 1, minor 5): an editor's swap file
+      // and a half-written `.draft.md` are as ordinary one level down as they are beside it.
+      if (nested.name.startsWith('.')) continue
       if (!nested.isFile() || !nested.name.endsWith('.md') || NOT_PERSONAS.has(nested.name.toLowerCase())) continue
       found.push({ slug: `${item.name}/${nested.name.slice(0, -3)}`, path: join(divisionDir, item.name, nested.name) })
     }
@@ -90,7 +110,16 @@ export function readCatalogDirectory(
 ): CatalogWalk {
   const root = resolve(dir)
   const catalog = options?.catalog ?? basename(root)
-  const divisions = options?.divisions ?? divisionsOf(root)
+  const requested = options?.divisions ?? divisionsOf(root)
+
+  // A `--division` naming a directory that is not there is DROPPED and reported, not walked (fix
+  // round 1, minor 3): `readdirSync` throws ENOENT, and one mistyped name in
+  // `--division engineering,testng,design` used to abort the walk so that nothing at all was
+  // imported. The two divisions the operator spelled correctly still are, and the CLI prints the
+  // typo. Nothing is filtered out of the `divisionsOf` path by this -- every name there came from
+  // a `readdirSync` of the root a moment ago.
+  const divisions = requested.filter((division) => isDirectory(join(root, division)))
+  const missingDivisions = requested.filter((division) => !divisions.includes(division))
 
   const entries: CatalogEntry[] = []
   for (const division of divisions) {
@@ -104,5 +133,5 @@ export function readCatalogDirectory(
       })
     }
   }
-  return { catalog, entries }
+  return { catalog, divisions, missingDivisions, entries }
 }

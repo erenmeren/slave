@@ -504,7 +504,11 @@ describe('the handoff project card', () => {
       expect(screen.queryByTestId('template-source-t1')).toBeNull()
     })
 
-    it('lists the catalog imports with their counts', () => {
+    // Counts no other token in the row can produce: `2` was satisfied by the `2026` in the
+    // timestamp and `4` by the `m42` in the catalog name, so both assertions passed with every
+    // count span deleted (fix round 1, important 1). These four, in this order, can only come
+    // from the four cells.
+    it('lists the catalog imports with their counts, one cell per column', () => {
       render(
         <ProjectsClient
           projects={[project({})]}
@@ -512,7 +516,7 @@ describe('the handoff project card', () => {
           templates={[imported]}
           roster={[]}
           catalogImports={[
-            { id: 'i1', catalog: 'catalog-m42', directory: '/srv/catalog-m42', by: 'operator', finishedAt: '2026-09-10T08:30:00.000Z', created: 2, updated: 1, unchanged: 3, skipped: 4 },
+            { id: 'i1', catalog: 'catalog-m42', directory: '/srv/catalog-m42', by: 'operator', finishedAt: '2026-09-10T08:30:00.000Z', created: 17, updated: 5, unchanged: 23, skipped: 9 },
           ]}
         />,
       )
@@ -520,8 +524,13 @@ describe('the handoff project card', () => {
       const row = screen.getByTestId('catalog-import-i1')
       expect(row.textContent).toContain('catalog-m42')
       expect(row.textContent).toContain('operator')
-      expect(row.textContent).toContain('2')
-      expect(row.textContent).toContain('4')
+      expect(row.textContent).toContain('2026-09-10 08:30:00')
+      expect(within(row).getAllByTestId('catalog-import-count').map((cell) => cell.textContent)).toEqual([
+        '17',
+        '5',
+        '23',
+        '9',
+      ])
     })
 
     it('says so when nothing has been imported', () => {
